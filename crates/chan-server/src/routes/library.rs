@@ -104,6 +104,14 @@ pub fn launcher_router(
             "/api/library/windows/:window_id/hide",
             post(handle_hide_library_window),
         )
+        // Devserver connect is a desktop-bridge dispatch (like window open/hide),
+        // not registry CRUD, so it lives here on the host-stated router rather
+        // than the `LauncherState` devservers block. No `require_mutable` gate:
+        // a surface with no desktop bridge answers `NO_DESKTOP`/409 on its own.
+        .route(
+            "/api/library/devservers/:id/connect",
+            post(handle_connect_devserver),
+        )
         .with_state(host.clone());
     // Workspaces: list always; the mutation routes are always present but
     // refuse with 403 on the read-only surface (gated by `serve_addr` inside the
@@ -316,6 +324,23 @@ async fn handle_hide_library_window(
 ) -> Response {
     dispatch_window_op(&host, |reply| DesktopWindowOp::Hide {
         id: window_id,
+        reply,
+    })
+    .await
+}
+
+/// `POST /api/library/devservers/{id}/connect`: connect a registered devserver
+/// through the desktop bridge — run its connect command in a control terminal,
+/// scrape the token, dial the URL, and open its window. The launcher's Connect
+/// button drives this; the desktop handles the `ConnectDevserver` op. 204 on
+/// success; 409 (`NO_DESKTOP`) on a surface with no desktop attached, so the
+/// action is inert in a plain browser even if the button were shown.
+async fn handle_connect_devserver(
+    State(host): State<Arc<WorkspaceHost>>,
+    AxumPath(id): AxumPath<String>,
+) -> Response {
+    dispatch_window_op(&host, |reply| DesktopWindowOp::ConnectDevserver {
+        id,
         reply,
     })
     .await
@@ -964,7 +989,9 @@ mod window_op_route_tests {
         tokio::spawn(async move {
             while let Some(op) = rx.recv().await {
                 match op {
-                    DesktopWindowOp::Open { reply, .. } | DesktopWindowOp::Hide { reply, .. } => {
+                    DesktopWindowOp::Open { reply, .. }
+                    | DesktopWindowOp::Hide { reply, .. }
+                    | DesktopWindowOp::ConnectDevserver { reply, .. } => {
                         let _ = reply.send(Ok(()));
                     }
                     _ => {}
@@ -976,6 +1003,10 @@ mod window_op_route_tests {
             let (status, _) = post(&router, &format!("/api/library/windows/w-1/{verb}")).await;
             assert_eq!(status, StatusCode::NO_CONTENT, "{verb}");
         }
+        // Devserver connect rides the same bridge: a desktop drains it and the
+        // route maps the dispatch success to 204.
+        let (status, _) = post(&router, "/api/library/devservers/ds1/connect").await;
+        assert_eq!(status, StatusCode::NO_CONTENT, "connect");
     }
 
     #[tokio::test]
@@ -989,5 +1020,10 @@ mod window_op_route_tests {
             assert_eq!(status, StatusCode::CONFLICT, "{verb}");
             assert_eq!(body, NO_DESKTOP, "{verb}");
         }
+        // Connect is inert without a desktop too — 409 NO_DESKTOP, so the
+        // launcher button is safe to show even where it can't act.
+        let (status, body) = post(&router, "/api/library/devservers/ds1/connect").await;
+        assert_eq!(status, StatusCode::CONFLICT, "connect");
+        assert_eq!(body, NO_DESKTOP, "connect");
     }
 }

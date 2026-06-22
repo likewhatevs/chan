@@ -64,6 +64,16 @@ pub enum DesktopWindowOp {
         id: String,
         reply: oneshot::Sender<Result<(), String>>,
     },
+    /// Connect a registered devserver by id: run its connect command in a
+    /// control terminal, scrape the token, dial the URL, and open its
+    /// window. The launcher's Connect button drives this over the bridge;
+    /// the reply is `Ok(())` once the connect flow is under way (or the
+    /// error string when it fails). Inert without a desktop attached — the
+    /// route then answers [`NO_DESKTOP`], like the other window ops.
+    ConnectDevserver {
+        id: String,
+        reply: oneshot::Sender<Result<(), String>>,
+    },
 }
 
 /// Pinned refusal when no desktop is attached (standalone serve / browser).
