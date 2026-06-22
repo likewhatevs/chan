@@ -1978,26 +1978,29 @@ fn open_path(
                 select: None,
                 enter: true,
             }
-        } else if rel.ends_with(".md") {
+        } else if chan_workspace::fs_ops::is_editable_text(&rel) || workspace.sniff_is_text(&rel) {
+            // Content-aware text gate — the same judgment the editor's read
+            // route applies (the extension fast-path OR an 8 KiB content
+            // sniff), so `cs open` and the editor never disagree about what is
+            // openable text. An extensionless / odd-suffix text file opens;
+            // a binary file (image, archive, ...) is refused below rather than
+            // revealed in the browser.
             WindowCommand::OpenFile { path: rel.clone() }
         } else {
-            let parent = parent_rel(&rel);
-            WindowCommand::OpenBrowser {
-                path: parent,
-                select: Some(rel.clone()),
-                enter: false,
-            }
+            return Err(format!("cannot open binary file {rel}"));
         }
-    } else if rel.ends_with(".md") {
-        // Note before the write so the watcher's Created event is in the
-        // suppression set before it can fire (see files.rs::api_write_file).
+    } else {
+        // Nonexistent path: create it empty and open it, for ANY name (not
+        // just `.md`). `write_text`'s own editable-text gate bounds what may
+        // be created — a known-text name (.txt/.py/.log/...) succeeds, a
+        // binary-class name is refused there. Note the write before it lands
+        // so the watcher's Created event is in the suppression set before it
+        // can fire (see files.rs::api_write_file).
         self_writes.note(&rel);
         workspace
             .write_text(&rel, "")
             .map_err(|e| format!("create {rel}: {e}"))?;
         WindowCommand::OpenFile { path: rel.clone() }
-    } else {
-        return Err("file does not exist; cs open creates `.md` files only".into());
     };
 
     let frame = WindowCommandFrame {
@@ -2362,6 +2365,133 @@ mod tests {
         assert_eq!(frame["path"], "notes/sub");
         assert_eq!(frame["select"], Value::Null);
         assert_eq!(frame["enter"], true);
+    }
+
+    /// An existing plaintext file with a non-`.md` extension opens in the
+    /// editor (the content-aware gate replaced the old `.md`-only rule).
+    #[test]
+    fn open_path_opens_existing_text_file() {
+        let cfg = tempfile::tempdir().expect("config dir");
+        let root = tempfile::tempdir().expect("workspace root");
+        std::fs::write(root.path().join("notes.txt"), b"plain text\n").expect("seed txt");
+        let lib =
+            chan_workspace::Library::open_at(cfg.path().join("config.toml")).expect("library");
+        lib.register_workspace(root.path())
+            .expect("register workspace");
+        let workspace = lib.open_workspace(root.path()).expect("open workspace");
+        let self_writes = crate::self_writes::SelfWrites::new();
+        let (tx, mut rx) = broadcast::channel(4);
+
+        let message = open_path(
+            &workspace,
+            &self_writes,
+            "window-a",
+            &root.path().join("notes.txt"),
+            &tx,
+        )
+        .expect("open path");
+
+        assert!(message.contains("notes.txt"));
+        let frame: Value = serde_json::from_str(&rx.try_recv().expect("window command"))
+            .expect("window command json");
+        assert_eq!(frame["command"], "open_file");
+        assert_eq!(frame["path"], "notes.txt");
+    }
+
+    /// An extensionless file whose CONTENT sniffs as text opens too: the gate
+    /// peeks the bytes, it is not extension-only. Proves the content peek.
+    #[test]
+    fn open_path_opens_extensionless_text_by_content_sniff() {
+        let cfg = tempfile::tempdir().expect("config dir");
+        let root = tempfile::tempdir().expect("workspace root");
+        std::fs::write(root.path().join("LICENSE"), b"All rights reserved.\n").expect("seed file");
+        let lib =
+            chan_workspace::Library::open_at(cfg.path().join("config.toml")).expect("library");
+        lib.register_workspace(root.path())
+            .expect("register workspace");
+        let workspace = lib.open_workspace(root.path()).expect("open workspace");
+        let self_writes = crate::self_writes::SelfWrites::new();
+        let (tx, mut rx) = broadcast::channel(4);
+
+        let message = open_path(
+            &workspace,
+            &self_writes,
+            "window-a",
+            &root.path().join("LICENSE"),
+            &tx,
+        )
+        .expect("open path");
+
+        assert!(message.contains("LICENSE"));
+        let frame: Value = serde_json::from_str(&rx.try_recv().expect("window command"))
+            .expect("window command json");
+        assert_eq!(frame["command"], "open_file");
+        assert_eq!(frame["path"], "LICENSE");
+    }
+
+    /// An existing binary file (a NUL byte in the first 8 KiB) is refused with
+    /// a clear message, not revealed in the browser.
+    #[test]
+    fn open_path_refuses_binary_file() {
+        let cfg = tempfile::tempdir().expect("config dir");
+        let root = tempfile::tempdir().expect("workspace root");
+        std::fs::write(root.path().join("data.bin"), [0u8, 1, 2, 3]).expect("seed binary");
+        let lib =
+            chan_workspace::Library::open_at(cfg.path().join("config.toml")).expect("library");
+        lib.register_workspace(root.path())
+            .expect("register workspace");
+        let workspace = lib.open_workspace(root.path()).expect("open workspace");
+        let self_writes = crate::self_writes::SelfWrites::new();
+        let (tx, mut rx) = broadcast::channel(4);
+
+        let err = open_path(
+            &workspace,
+            &self_writes,
+            "window-a",
+            &root.path().join("data.bin"),
+            &tx,
+        )
+        .expect_err("binary file should be refused");
+
+        assert!(
+            err.contains("cannot open binary file") && err.contains("data.bin"),
+            "unexpected error: {err}"
+        );
+        // No window command was broadcast for the refusal.
+        assert!(rx.try_recv().is_err(), "no frame should be sent on refusal");
+    }
+
+    /// A nonexistent path (any plaintext name, not just `.md`) is created empty
+    /// and opened in the editor.
+    #[test]
+    fn open_path_creates_nonexistent_plaintext() {
+        let cfg = tempfile::tempdir().expect("config dir");
+        let root = tempfile::tempdir().expect("workspace root");
+        std::fs::create_dir_all(root.path().join("notes")).expect("notes dir");
+        let lib =
+            chan_workspace::Library::open_at(cfg.path().join("config.toml")).expect("library");
+        lib.register_workspace(root.path())
+            .expect("register workspace");
+        let workspace = lib.open_workspace(root.path()).expect("open workspace");
+        let self_writes = crate::self_writes::SelfWrites::new();
+        let (tx, mut rx) = broadcast::channel(4);
+
+        let message = open_path(
+            &workspace,
+            &self_writes,
+            "window-a",
+            &root.path().join("notes/foo.log"),
+            &tx,
+        )
+        .expect("open path");
+
+        assert!(message.contains("notes/foo.log"));
+        assert!(workspace.exists("notes/foo.log"));
+        assert_eq!(workspace.read_text("notes/foo.log").expect("read"), "");
+        let frame: Value = serde_json::from_str(&rx.try_recv().expect("window command"))
+            .expect("window command json");
+        assert_eq!(frame["command"], "open_file");
+        assert_eq!(frame["path"], "notes/foo.log");
     }
 
     fn test_workspace() -> (tempfile::TempDir, tempfile::TempDir, Arc<Workspace>) {
