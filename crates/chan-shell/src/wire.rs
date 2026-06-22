@@ -58,13 +58,15 @@ pub enum ControlRequest {
     },
     // Category 1: raise the Inspector upload / download action in the
     // originating window (`cs upload` / `cs download`). `path` is the
-    // CLI-absolutized target; the server relativizes it to workspace-rel and
-    // resolves is_dir via `stat` (like `OpenPath`), so it carries no is_dir.
-    // Upload targets a directory (the server falls back to the parent dir when
-    // `path` is a file, and to the workspace root when omitted -> "."); download
-    // targets a file or directory. Non-blocking: the server pushes a
-    // window_command keyed by window_id and returns immediately, exactly like
-    // the sibling open_* commands; only that window raises the (existing) UI.
+    // CLI-absolutized target; the server resolves is_dir via `stat` (like
+    // `OpenPath`), so it carries no is_dir. On a workspace tenant the server
+    // relativizes it to workspace-rel; on a standalone terminal it stays
+    // absolute (cwd / shell-uid scoped, no workspace wall). Upload targets a
+    // directory (the server falls back to the parent dir when `path` is a file;
+    // omitted -> the terminal's cwd); download targets a file or directory.
+    // Non-blocking: the server pushes a window_command keyed by window_id and
+    // returns immediately, exactly like the sibling open_* commands; only that
+    // window raises the (existing) UI.
     Upload {
         window_id: String,
         path: PathBuf,

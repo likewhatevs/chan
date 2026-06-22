@@ -76,14 +76,18 @@ pub enum ShellAction {
     /// Upload files into the current window, raising the SAME upload UI as the
     /// Inspector pill (a file picker, then a progress indicator). Targets a
     /// directory: with PATH a directory, files land there; with PATH a file,
-    /// they land in its parent; without PATH, the workspace root.
+    /// they land in its parent; without PATH, the current directory. In a
+    /// workspace window the target is workspace-relative; in a standalone
+    /// terminal it is the terminal's cwd (the shell's own reach).
     Upload {
         #[arg(value_hint = clap::ValueHint::AnyPath)]
         path: Option<PathBuf>,
     },
-    /// Download a workspace file or directory through the current window,
-    /// reusing the Inspector's download-with-progress UI (a directory downloads
-    /// as a zip). PATH defaults to the terminal's current directory.
+    /// Download a file or directory through the current window, reusing the
+    /// Inspector's download-with-progress UI (a directory downloads as a tar).
+    /// PATH defaults to the terminal's current directory. In a workspace window
+    /// the source is workspace-relative; in a standalone terminal it is resolved
+    /// against the terminal's cwd (the shell's own reach).
     Download {
         #[arg(value_hint = clap::ValueHint::AnyPath)]
         path: Option<PathBuf>,
