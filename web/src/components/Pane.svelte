@@ -99,11 +99,13 @@
   } from "../state/shortcuts";
   import { openTabMenu, tabMenu } from "../state/tabMenu.svelte";
   import {
+    api,
     dragScopeMimeToken,
     sessionWindowId,
     windowDragScope,
     windowLibraryId,
   } from "../api/client";
+  import { NAMED_PANE_HEX } from "../state/paneColor";
   import { onDestroy, onMount } from "svelte";
   import { applyPageWidthToElement, pageWidth } from "../state/pageWidth.svelte";
 
@@ -480,7 +482,20 @@
 
   function doSetFocusColor(color: FocusColor): void {
     closePaneMenus();
+    // Keep the per-window preset + checkmark behaviour intact.
     setWindowFocusColor(color);
+    // Repurposed as the per-LIBRARY pane-highlight colour. Recolour THIS
+    // window's active pane immediately (v1 only the current window updates
+    // live; other open windows pick the new colour up on their next mint via
+    // `?pane=`), then persist it to the window's own serving host so every
+    // future window of this library mints with it.
+    const hex = NAMED_PANE_HEX[color];
+    document.documentElement.style.setProperty("--pane-highlight-color", hex);
+    // Best-effort: a read-only / no-store serving surface answers 403/404.
+    // Swallow it — a failed persist must never break the menu or throw.
+    void api.setLocalColor(hex).catch((err: unknown) => {
+      console.warn("setLocalColor failed", err);
+    });
   }
 
   function doPaneModeSplit(direction: "row" | "column"): void {

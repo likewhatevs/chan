@@ -102,6 +102,7 @@
     paneModeSplit,
     paneModeStageDraftEditor,
     paneModeSwap,
+    setWindowFocusColor,
     splitActive,
     toggleActiveFileTabMode,
   } from "./state/tabs.svelte";
@@ -115,7 +116,7 @@
     applyInitialPageWidth,
     watchPageWidth,
   } from "./state/pageWidth.svelte";
-  import { applyInitialPaneColor } from "./state/paneColor";
+  import { applyInitialPaneColor, seedInitialFocusColor } from "./state/paneColor";
   import { installIdleTracker, setReadMode } from "./state/idle.svelte";
   import {
     installScreensaverTracker,
@@ -274,6 +275,11 @@
     // + focus halo in Pane.svelte) when the param is a valid hex; a no-op
     // otherwise, so the `data-focus-color` presets stay in effect.
     applyInitialPaneColor();
+    // Match the focus-colour menu's checkmark to the library colour this
+    // window opened with: if `?pane=` is one of the four preset hexes, select
+    // that preset so `focusColorForWindow()` agrees with the colour shown. A
+    // custom or absent colour leaves the menu at its default.
+    seedInitialFocusColor(setWindowFocusColor);
     // While in "system" mode, follow OS-level theme changes live.
     // The listener stays alive for the whole app's lifetime.
     watchSystemTheme();

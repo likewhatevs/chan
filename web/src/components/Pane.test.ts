@@ -636,7 +636,7 @@ describe("Pane cross-window tab DnD (pane-id collision fix)", () => {
       /TAB_DRAG_MIME,[\s\S]{1,160}fromWindow: sessionWindowId\(\)/,
     );
     expect(paneSource).toMatch(
-      /import \{\s*dragScopeMimeToken,\s*sessionWindowId,\s*windowDragScope,\s*windowLibraryId,\s*\} from "\.\.\/api\/client"/,
+      /import \{\s*api,\s*dragScopeMimeToken,\s*sessionWindowId,\s*windowDragScope,\s*windowLibraryId,\s*\} from "\.\.\/api\/client"/,
     );
   });
 
@@ -660,7 +660,7 @@ describe("Pane cross-kind / cross-workspace tab DnD guard", () => {
     // (when payload values are not readable).
     expect(paneSource).toMatch(/scopeMime\(currentDragScope\(\)\), "1"/);
     expect(paneSource).toMatch(
-      /import \{\s*dragScopeMimeToken,\s*sessionWindowId,\s*windowDragScope,\s*windowLibraryId,\s*\} from "\.\.\/api\/client"/,
+      /import \{\s*api,\s*dragScopeMimeToken,\s*sessionWindowId,\s*windowDragScope,\s*windowLibraryId,\s*\} from "\.\.\/api\/client"/,
     );
   });
 

@@ -1276,6 +1276,16 @@ export const api = {
   /// timed out / was answered (caller ignores it: a query has no UI).
   windowReply: (reply: WindowReplyRequest) =>
     req<void>("POST", "/api/window/reply", reply),
+
+  /// Persist the pane-highlight colour for the library this window is served
+  /// from. The path is RELATIVE so the PUT always reaches the window's own
+  /// serving origin (the desktop for local windows, that devserver for
+  /// devserver windows) — i.e. the library that minted the window. The store
+  /// returns 204; surfaces without a writable color store answer 403
+  /// (read-only) or 404 (no store). Callers treat this as best-effort: the
+  /// menu must not break when the route is absent, so they catch + swallow.
+  setLocalColor: (color: string) =>
+    req<void>("PUT", "/api/library/local-color", { color }),
 };
 
 /// Wire shape for `Workspace::create_team` /
