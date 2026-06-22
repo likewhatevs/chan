@@ -74,23 +74,25 @@ pub enum ShellAction {
         carousel_off: bool,
     },
     /// Upload files into the current window, raising the SAME upload UI as the
-    /// Inspector pill (a file picker, then a progress indicator). Targets a
-    /// directory: with PATH a directory, files land there; with PATH a file,
-    /// they land in its parent; without PATH, the current directory. In a
-    /// workspace window the target is workspace-relative; in a standalone
-    /// terminal it is the terminal's cwd (the shell's own reach).
+    /// Inspector pill (a file picker, then a progress indicator). PATH is
+    /// required and names the target directory (`.` = the current directory):
+    /// with a directory, files land there; with a file, they land in its
+    /// parent. In a workspace window the target is workspace-relative and must
+    /// stay within the workspace; in a standalone terminal it is the terminal's
+    /// cwd (the shell's own reach).
     Upload {
         #[arg(value_hint = clap::ValueHint::AnyPath)]
-        path: Option<PathBuf>,
+        path: PathBuf,
     },
     /// Download a file or directory through the current window, reusing the
-    /// Inspector's download-with-progress UI (a directory downloads as a tar).
-    /// PATH defaults to the terminal's current directory. In a workspace window
-    /// the source is workspace-relative; in a standalone terminal it is resolved
-    /// against the terminal's cwd (the shell's own reach).
+    /// Inspector's download-with-progress UI (a directory downloads as a tar,
+    /// streamed on the fly). PATH is required (`.` = the current directory). In
+    /// a workspace window the source is workspace-relative and must stay within
+    /// the workspace; in a standalone terminal it resolves against the
+    /// terminal's cwd (the shell's own reach).
     Download {
         #[arg(value_hint = clap::ValueHint::AnyPath)]
-        path: Option<PathBuf>,
+        path: PathBuf,
     },
     /// Terminal operations against the current window's live sessions.
     ///
@@ -693,9 +695,10 @@ pub async fn dispatch(action: ShellAction) -> Result<()> {
         }
         ShellAction::Upload { path } => {
             let env = open_env()?;
-            // No path -> target the terminal's cwd (the server relativizes it
-            // to a workspace dir, falling back to the root).
-            let abs = absolutize(path.unwrap_or(PathBuf::from(".")))?;
+            // PATH is required (`.` for the current dir). absolutize resolves it
+            // against the CLI's cwd; the server relativizes it to the workspace
+            // (bounded) or keeps it cwd-scoped on a standalone terminal.
+            let abs = absolutize(path)?;
             let message = send_control_request(
                 &env.control_socket,
                 ControlRequest::Upload {
@@ -709,7 +712,7 @@ pub async fn dispatch(action: ShellAction) -> Result<()> {
         }
         ShellAction::Download { path } => {
             let env = open_env()?;
-            let abs = absolutize(path.unwrap_or(PathBuf::from(".")))?;
+            let abs = absolutize(path)?;
             let message = send_control_request(
                 &env.control_socket,
                 ControlRequest::Download {
@@ -1813,6 +1816,25 @@ mod tests {
         // A bare "h" is ambiguous (help vs hide); confirm it's rejected so
         // the comment above stays honest.
         assert!(CsCli::try_parse_from(["cs", "window", "h", "id-0"]).is_err());
+    }
+
+    #[test]
+    fn upload_download_require_a_path_argument() {
+        // PATH is required on both (no default form); a bare verb is a usage error.
+        assert!(CsCli::try_parse_from(["cs", "upload"]).is_err());
+        assert!(CsCli::try_parse_from(["cs", "download"]).is_err());
+        // `.` (and any relative path) parses to the given path.
+        match CsCli::try_parse_from(["cs", "upload", "."]).unwrap().action {
+            ShellAction::Upload { path } => assert_eq!(path.to_str(), Some(".")),
+            other => panic!("unexpected parse for `cs upload .`: {other:?}"),
+        }
+        match CsCli::try_parse_from(["cs", "download", "notes/a.md"])
+            .unwrap()
+            .action
+        {
+            ShellAction::Download { path } => assert_eq!(path.to_str(), Some("notes/a.md")),
+            other => panic!("unexpected parse for `cs download notes/a.md`: {other:?}"),
+        }
     }
 
     #[test]

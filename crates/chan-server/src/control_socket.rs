@@ -2276,6 +2276,30 @@ mod tests {
         assert_eq!(parent_rel("notes/a.png"), "notes");
     }
 
+    #[test]
+    fn abs_to_workspace_rel_bounds_paths_to_the_workspace_root() {
+        // A workspace transfer must stay within the workspace root: in-root
+        // paths relativize, an escape is rejected, and the root itself (where
+        // `.` resolves) is the empty rel.
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("notes")).unwrap();
+        std::fs::write(root.path().join("notes/a.md"), b"x").unwrap();
+
+        assert_eq!(
+            abs_to_workspace_rel(root.path(), &root.path().join("notes/a.md")).unwrap(),
+            "notes/a.md"
+        );
+        assert_eq!(abs_to_workspace_rel(root.path(), root.path()).unwrap(), "");
+
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("secret"), b"x").unwrap();
+        let err = abs_to_workspace_rel(root.path(), &outside.path().join("secret")).unwrap_err();
+        assert!(err.contains("escapes workspace root"), "{err}");
+
+        // A relative path is refused — the CLI always absolutizes first.
+        assert!(abs_to_workspace_rel(root.path(), std::path::Path::new("notes/a.md")).is_err());
+    }
+
     #[tokio::test]
     async fn handle_request_reports_poisoned_workspace_cell() {
         let workspace_cell: Arc<RwLock<Option<WorkspaceCell>>> = Arc::new(RwLock::new(None));

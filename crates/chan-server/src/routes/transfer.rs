@@ -17,13 +17,17 @@
 //! before writing. [`verify_writable_dir`] also backs the workspace upload path
 //! in `files.rs`.
 
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
+use axum::body::{Body, Bytes};
 use axum::extract::{Multipart, Path as AxumPath, Query};
 use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
+use futures::stream;
 use serde::{Deserialize, Serialize};
+use tokio::sync::mpsc;
 
 use crate::error::err;
 use crate::routes::files::{
@@ -87,16 +91,70 @@ pub(crate) fn verify_writable_dir(dir: &Path) -> Result<(), String> {
         .map_err(|e| format!("destination is not writable: {} ({e})", dir.display()))
 }
 
+/// A `std::io::Write` that forwards each tar chunk to a streaming HTTP body
+/// over an mpsc channel. `blocking_send` provides backpressure (it blocks until
+/// the response reader drains) and is also the cancel signal: once the client
+/// disconnects the receiver drops, the send fails, and the tar build stops —
+/// nothing is staged on disk, so a cancelled download leaves no trace.
+pub(crate) struct TarChannelWriter {
+    tx: mpsc::Sender<std::io::Result<Bytes>>,
+}
+
+impl Write for TarChannelWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.tx
+            .blocking_send(Ok(Bytes::copy_from_slice(buf)))
+            .map_err(|_| {
+                std::io::Error::new(std::io::ErrorKind::BrokenPipe, "client disconnected")
+            })?;
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// Stream a tar archive straight to the response body, built on the fly by
+/// `build` (no staged temp file). The caller is expected to have already
+/// pre-flighted readability, so the build does not fail mid-stream under normal
+/// conditions; a client disconnect stops it cleanly (BrokenPipe), and any other
+/// late error is forwarded so the body fails rather than completing a truncated
+/// archive silently.
+pub(crate) fn stream_tar_response<F>(archive_name: String, build: F) -> Response
+where
+    F: FnOnce(&mut tar::Builder<TarChannelWriter>) -> std::io::Result<()> + Send + 'static,
+{
+    let (tx, rx) = mpsc::channel::<std::io::Result<Bytes>>(8);
+    tokio::task::spawn_blocking(move || {
+        let mut builder = tar::Builder::new(TarChannelWriter { tx: tx.clone() });
+        let result = build(&mut builder).and_then(|()| builder.finish());
+        if let Err(e) = result {
+            if e.kind() != std::io::ErrorKind::BrokenPipe {
+                let _ = tx.blocking_send(Err(e));
+            }
+        }
+    });
+    let body = Body::from_stream(stream::unfold(rx, |mut rx| async move {
+        rx.recv().await.map(|message| (message, rx))
+    }));
+    (
+        [
+            (header::CONTENT_TYPE, "application/x-tar".to_string()),
+            (
+                header::CONTENT_DISPOSITION,
+                content_disposition_archive(&archive_name),
+            ),
+        ],
+        body,
+    )
+        .into_response()
+}
+
 #[derive(Default, Deserialize)]
 pub(crate) struct TerminalDownloadQuery {
     #[serde(default)]
     download: Option<String>,
-}
-
-#[cfg_attr(test, derive(Debug))]
-enum TerminalPayload {
-    File { bytes: Vec<u8>, name: String },
-    DirectoryTar { bytes: Vec<u8>, name: String },
 }
 
 /// `GET /api/files/*path?download=1` on the terminal tenant: stream the cwd /
@@ -117,9 +175,10 @@ pub async fn api_terminal_read_file(
         );
     }
     let abs = abs_from_terminal_path(&path);
-    let result = tokio::task::spawn_blocking(move || terminal_download_sync(&abs)).await;
-    match result {
-        Ok(Ok(TerminalPayload::File { bytes, name })) => (
+    let plan_abs = abs.clone();
+    let plan = tokio::task::spawn_blocking(move || terminal_download_plan(&plan_abs)).await;
+    match plan {
+        Ok(Ok(TerminalDownload::File { bytes, name })) => (
             [
                 (header::CONTENT_TYPE, content_type_for(&name).to_string()),
                 (
@@ -130,49 +189,45 @@ pub async fn api_terminal_read_file(
             bytes,
         )
             .into_response(),
-        Ok(Ok(TerminalPayload::DirectoryTar { bytes, name })) => (
-            [
-                (header::CONTENT_TYPE, "application/x-tar".to_string()),
-                (
-                    header::CONTENT_DISPOSITION,
-                    content_disposition_archive(&name),
-                ),
-            ],
-            bytes,
-        )
-            .into_response(),
-        // Pre-flight / IO failures are reported before any partial archive is
-        // emitted (the tar is built fully in memory and dropped on error).
+        // The tree was pre-flighted readable in the plan; stream the tar on the
+        // fly so a cancel is trace-free by construction (no staged temp).
+        Ok(Ok(TerminalDownload::Directory { name })) => {
+            let build_abs = abs;
+            let build_name = name.clone();
+            stream_tar_response(name, move |builder| {
+                builder.append_dir_all(&build_name, &build_abs)
+            })
+        }
+        // Pre-flight / IO failures are reported before any archive bytes go out.
         Ok(Err(message)) => err(StatusCode::BAD_REQUEST, message),
         Err(join) => err(StatusCode::INTERNAL_SERVER_ERROR, join.to_string()),
     }
 }
 
-fn terminal_download_sync(abs: &Path) -> Result<TerminalPayload, String> {
+/// What a terminal download resolves to: a small file read into memory, or a
+/// directory whose tree has been pre-flighted readable and is ready to stream.
+#[cfg_attr(test, derive(Debug))]
+enum TerminalDownload {
+    File { bytes: Vec<u8>, name: String },
+    Directory { name: String },
+}
+
+fn terminal_download_plan(abs: &Path) -> Result<TerminalDownload, String> {
     let meta =
         std::fs::metadata(abs).map_err(|e| format!("cannot access {}: {e}", abs.display()))?;
     let name = download_filename(&abs.to_string_lossy());
     if meta.is_dir() {
-        // Pre-flight the whole tree we are about to tar so an unreadable entry
-        // fails fast instead of aborting a half-built archive.
+        // Pre-flight the whole tree before streaming so an unreadable entry
+        // fails fast with a clear status instead of truncating a streamed
+        // archive mid-flight.
         verify_readable_fs(abs)?;
-        let mut builder = tar::Builder::new(Vec::new());
-        builder
-            .append_dir_all(&name, abs)
-            .map_err(|e| format!("archive {}: {e}", abs.display()))?;
-        builder
-            .finish()
-            .map_err(|e| format!("archive {}: {e}", abs.display()))?;
-        let bytes = builder
-            .into_inner()
-            .map_err(|e| format!("archive {}: {e}", abs.display()))?;
-        Ok(TerminalPayload::DirectoryTar { bytes, name })
+        Ok(TerminalDownload::Directory { name })
     } else {
         // A single file is read into memory; a permission error surfaces here
         // with nothing sent (no partial response body).
         let bytes =
             std::fs::read(abs).map_err(|e| format!("cannot read {}: {e}", abs.display()))?;
-        Ok(TerminalPayload::File { bytes, name })
+        Ok(TerminalDownload::File { bytes, name })
     }
 }
 
@@ -358,22 +413,68 @@ mod tests {
     }
 
     #[test]
-    fn terminal_download_tars_a_directory_and_reads_a_file() {
+    fn terminal_download_plan_reads_a_file_and_marks_a_directory() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("one.txt"), b"one").unwrap();
 
-        match terminal_download_sync(&dir.path().join("one.txt")).unwrap() {
-            TerminalPayload::File { bytes, name } => {
+        match terminal_download_plan(&dir.path().join("one.txt")).unwrap() {
+            TerminalDownload::File { bytes, name } => {
                 assert_eq!(bytes, b"one");
                 assert_eq!(name, "one.txt");
             }
-            _ => panic!("expected a file payload"),
+            TerminalDownload::Directory { .. } => panic!("expected a file payload"),
         }
-        match terminal_download_sync(dir.path()).unwrap() {
-            TerminalPayload::DirectoryTar { bytes, .. } => assert!(!bytes.is_empty()),
-            _ => panic!("expected a directory tar"),
+        // A directory pre-flights readable and is marked for streaming; the
+        // stream builds a real tar via the same `append_dir_all` the handler
+        // hands `stream_tar_response`.
+        match terminal_download_plan(dir.path()).unwrap() {
+            TerminalDownload::Directory { name } => {
+                let mut buf = Vec::new();
+                {
+                    let mut b = tar::Builder::new(&mut buf);
+                    b.append_dir_all(&name, dir.path()).unwrap();
+                    b.finish().unwrap();
+                }
+                assert!(!buf.is_empty());
+            }
+            TerminalDownload::File { .. } => panic!("expected a directory"),
         }
-        let missing = terminal_download_sync(&dir.path().join("missing")).unwrap_err();
+        let missing = terminal_download_plan(&dir.path().join("missing")).unwrap_err();
         assert!(missing.contains("cannot access"), "{missing}");
+    }
+
+    #[test]
+    fn tar_channel_writer_signals_broken_pipe_when_the_receiver_is_gone() {
+        // A cancelled download drops the body receiver; the next tar write must
+        // fail so the build stops (nothing staged on disk = no trace).
+        let (tx, rx) = mpsc::channel::<std::io::Result<Bytes>>(1);
+        drop(rx);
+        let mut writer = TarChannelWriter { tx };
+        let e = writer.write(b"data").unwrap_err();
+        assert_eq!(e.kind(), std::io::ErrorKind::BrokenPipe);
+    }
+
+    #[tokio::test]
+    async fn stream_tar_response_streams_a_valid_tar_on_the_fly() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.txt"), b"a").unwrap();
+        std::fs::write(dir.path().join("b.txt"), b"b").unwrap();
+        let src = dir.path().to_path_buf();
+
+        let resp = stream_tar_response("arc".into(), move |b| b.append_dir_all("arc", &src));
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert!(!bytes.is_empty());
+        let mut archive = tar::Archive::new(std::io::Cursor::new(&bytes[..]));
+        let names: Vec<String> = archive
+            .entries()
+            .unwrap()
+            .map(|e| e.unwrap().path().unwrap().to_string_lossy().into_owned())
+            .collect();
+        assert!(
+            names.iter().any(|n| n.contains("a.txt")),
+            "streamed tar should contain the entries: {names:?}"
+        );
     }
 }

@@ -399,9 +399,11 @@ where
     }
 }
 
+/// What a workspace download resolves to: a file read into memory, or a
+/// directory whose tree has been pre-flighted readable and is ready to stream.
 enum DownloadPayload {
     File(Vec<u8>),
-    DirectoryTar(Vec<u8>),
+    Directory,
 }
 
 fn download_path_sync(
@@ -410,13 +412,11 @@ fn download_path_sync(
 ) -> chan_workspace::Result<DownloadPayload> {
     let stat = workspace.stat(path)?;
     if stat.is_dir {
-        // Pre-flight: every file in the tree we will tar is readable, before
-        // any archive work, so a download fails fast and produces no partial
-        // archive (the archive is built in memory, but this avoids the wasted
-        // work and gives a clear "cannot read X" error up front).
+        // Pre-flight the tree before streaming so an unreadable entry fails fast
+        // with a clear "cannot read X" status instead of truncating a streamed
+        // archive mid-flight.
         verify_readable_workspace_tree(workspace, path).map_err(chan_workspace::ChanError::Io)?;
-        let bytes = archive_directory_sync(workspace, path)?;
-        Ok(DownloadPayload::DirectoryTar(bytes))
+        Ok(DownloadPayload::Directory)
     } else {
         // A single file is read into memory; an unreadable file surfaces the
         // error here with no bytes sent.
@@ -426,7 +426,7 @@ fn download_path_sync(
 
 /// Pre-flight for a directory download: confirm every file in the tree we will
 /// tar is readable before any archive work. Walks via `Workspace::list` so it
-/// visits exactly the entries `archive_directory_sync` will (same `.chan` /
+/// visits exactly the entries `append_dir_to_archive` will (same `.chan` /
 /// `.git` filter), and opens each backing file to check read permission without
 /// pulling its bytes (the archive reads them next).
 fn verify_readable_workspace_tree(
@@ -489,19 +489,12 @@ pub(crate) fn content_disposition_archive(path: &str) -> String {
     )
 }
 
-fn archive_directory_sync(
-    workspace: &chan_workspace::Workspace,
-    path: &str,
-) -> chan_workspace::Result<Vec<u8>> {
-    let root_name = download_filename(path);
-    let mut builder = tar::Builder::new(Vec::new());
-    append_dir_to_archive(&mut builder, workspace, path, &root_name)?;
-    builder.finish()?;
-    Ok(builder.into_inner()?)
-}
-
-fn append_dir_to_archive(
-    builder: &mut tar::Builder<Vec<u8>>,
+/// Append a workspace directory tree to a tar builder. Generic over the writer
+/// so the same walk feeds both the on-the-fly download stream (a channel-backed
+/// writer) and tests (a `Vec`). Walks via `Workspace::list` to honor the
+/// workspace's `.chan`/`.git` filter.
+pub(crate) fn append_dir_to_archive<W: std::io::Write>(
+    builder: &mut tar::Builder<W>,
     workspace: &chan_workspace::Workspace,
     source_rel: &str,
     archive_rel: &str,
@@ -520,8 +513,8 @@ fn append_dir_to_archive(
     Ok(())
 }
 
-fn append_archive_dir(
-    builder: &mut tar::Builder<Vec<u8>>,
+fn append_archive_dir<W: std::io::Write>(
+    builder: &mut tar::Builder<W>,
     archive_rel: &str,
 ) -> chan_workspace::Result<()> {
     let mut header = tar::Header::new_gnu();
@@ -533,8 +526,8 @@ fn append_archive_dir(
     Ok(())
 }
 
-fn append_archive_file(
-    builder: &mut tar::Builder<Vec<u8>>,
+fn append_archive_file<W: std::io::Write>(
+    builder: &mut tar::Builder<W>,
     archive_rel: &str,
     bytes: Vec<u8>,
 ) -> chan_workspace::Result<()> {
@@ -576,10 +569,10 @@ pub async fn api_read_file(
         Err(e) => return err_state(&e),
     };
     if query_flag(&query.download) {
-        let path_for_download = path.clone();
+        let plan_ws = workspace.clone();
+        let plan_path = path.clone();
         let result =
-            tokio::task::spawn_blocking(move || download_path_sync(&workspace, &path_for_download))
-                .await;
+            tokio::task::spawn_blocking(move || download_path_sync(&plan_ws, &plan_path)).await;
         return match result {
             Ok(Ok(DownloadPayload::File(bytes))) => (
                 [
@@ -592,17 +585,18 @@ pub async fn api_read_file(
                 bytes,
             )
                 .into_response(),
-            Ok(Ok(DownloadPayload::DirectoryTar(bytes))) => (
-                [
-                    (header::CONTENT_TYPE, "application/x-tar".to_string()),
-                    (
-                        header::CONTENT_DISPOSITION,
-                        content_disposition_archive(&path),
-                    ),
-                ],
-                bytes,
-            )
-                .into_response(),
+            // The tree was pre-flighted readable in the plan; stream the tar on
+            // the fly so a cancel is trace-free by construction (no staged temp).
+            Ok(Ok(DownloadPayload::Directory)) => {
+                let root_name = download_filename(&path);
+                let build_ws = workspace;
+                let build_path = path;
+                let build_name = root_name.clone();
+                crate::routes::transfer::stream_tar_response(root_name, move |builder| {
+                    append_dir_to_archive(builder, &build_ws, &build_path, &build_name)
+                        .map_err(|e| std::io::Error::other(e.to_string()))
+                })
+            }
             Ok(Err(e)) => err_from(&e),
             Err(join) => err(StatusCode::INTERNAL_SERVER_ERROR, join.to_string()),
         };
@@ -1039,8 +1033,9 @@ pub(crate) fn upload_leaf_filename(original_name: &str) -> chan_workspace::Resul
 #[cfg(test)]
 mod file_browser_listing_tests {
     use super::{
-        create_target_exists, download_path_sync, list_dir_entries, list_files_sync,
-        replace_file_sync, upload_file_sync, upload_leaf_filename, DownloadPayload, ListFilesQuery,
+        append_dir_to_archive, create_target_exists, download_path_sync, list_dir_entries,
+        list_files_sync, replace_file_sync, upload_file_sync, upload_leaf_filename,
+        DownloadPayload, ListFilesQuery,
     };
 
     #[test]
@@ -1153,12 +1148,17 @@ mod file_browser_listing_tests {
         workspace.write_bytes("docs/a.txt", b"a").unwrap();
         workspace.write_bytes("docs/b.txt", b"b").unwrap();
 
-        // The readability pre-flight passes for an ordinary tree and the tar is
-        // produced.
-        match download_path_sync(&workspace, "docs").unwrap() {
-            DownloadPayload::DirectoryTar(bytes) => assert!(!bytes.is_empty()),
-            DownloadPayload::File(_) => panic!("expected a directory tar"),
+        // The readability pre-flight passes for an ordinary tree; the stream
+        // then builds the tar via the same append_dir_to_archive walk.
+        let payload = download_path_sync(&workspace, "docs").unwrap();
+        assert!(matches!(payload, DownloadPayload::Directory));
+        let mut bytes = Vec::new();
+        {
+            let mut builder = tar::Builder::new(&mut bytes);
+            append_dir_to_archive(&mut builder, &workspace, "docs", "docs").unwrap();
+            builder.finish().unwrap();
         }
+        assert!(!bytes.is_empty());
     }
 
     #[cfg(unix)]
@@ -1479,7 +1479,7 @@ mod write_tests {
 
         match payload {
             DownloadPayload::File(bytes) => assert_eq!(bytes, b"hello\n"),
-            DownloadPayload::DirectoryTar(_) => panic!("expected file download"),
+            DownloadPayload::Directory => panic!("expected file download"),
         }
     }
 
@@ -1501,10 +1501,16 @@ mod write_tests {
             .unwrap();
 
         let payload = download_path_sync(&workspace, "notes").unwrap();
+        assert!(matches!(payload, DownloadPayload::Directory));
 
-        let DownloadPayload::DirectoryTar(bytes) = payload else {
-            panic!("expected directory archive");
-        };
+        // The stream builds the archive via append_dir_to_archive; assert its
+        // contents through the same walk.
+        let mut bytes = Vec::new();
+        {
+            let mut builder = tar::Builder::new(&mut bytes);
+            append_dir_to_archive(&mut builder, &workspace, "notes", "notes").unwrap();
+            builder.finish().unwrap();
+        }
         let mut archive = tar::Archive::new(std::io::Cursor::new(bytes));
         let mut files = BTreeMap::new();
         for entry in archive.entries().unwrap() {
@@ -1552,7 +1558,7 @@ mod write_tests {
             "tokio::task::spawn_blocking(move || read_file_sync(&workspace, &path_for_read))"
         ));
         assert!(source.contains(
-            "tokio::task::spawn_blocking(move || download_path_sync(&workspace, &path_for_download))"
+            "tokio::task::spawn_blocking(move || download_path_sync(&plan_ws, &plan_path))"
         ));
     }
 
