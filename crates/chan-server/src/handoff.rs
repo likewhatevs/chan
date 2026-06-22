@@ -97,24 +97,41 @@ pub enum Request {
         cli_version: String,
         check_only: bool,
     },
+    /// Ask the desktop to register (and connect) a devserver by URL — the
+    /// `chan open {url}` handoff. The desktop writes the `{url, name, script}`
+    /// entry into the same config its launcher devserver registry reads, then
+    /// dials it. The CLI sends this from its `open` command; the desktop's
+    /// listener handles it. The bearer token is NOT carried here (same as the workspace
+    /// handoff — the desktop owns credentials), so a tokened devserver is set up
+    /// from the launcher dialog, not the CLI handoff.
+    OpenDevserver {
+        protocol: u32,
+        cli_version: String,
+        /// The full devserver URL, scheme included.
+        url: String,
+        /// Optional user label for the launcher section header.
+        name: Option<String>,
+        /// Optional connect script run before the dial.
+        script: Option<String>,
+    },
 }
 
 impl Request {
     /// The handshake protocol version carried by any request variant.
     pub fn protocol(&self) -> u32 {
         match self {
-            Request::OpenWorkspace { protocol, .. } | Request::Upgrade { protocol, .. } => {
-                *protocol
-            }
+            Request::OpenWorkspace { protocol, .. }
+            | Request::Upgrade { protocol, .. }
+            | Request::OpenDevserver { protocol, .. } => *protocol,
         }
     }
 
     /// The CLI's human version, for skew logging.
     pub fn cli_version(&self) -> &str {
         match self {
-            Request::OpenWorkspace { cli_version, .. } | Request::Upgrade { cli_version, .. } => {
-                cli_version
-            }
+            Request::OpenWorkspace { cli_version, .. }
+            | Request::Upgrade { cli_version, .. }
+            | Request::OpenDevserver { cli_version, .. } => cli_version,
         }
     }
 }
@@ -152,6 +169,10 @@ pub enum Response {
         desktop_version: String,
         available: Option<String>,
     },
+    /// The desktop registered (and is connecting) the devserver from an
+    /// `OpenDevserver`. The CLI prints a note and exits; the desktop owns the
+    /// devserver lifecycle from here.
+    DevserverRegistered { desktop_version: String },
 }
 
 /// Resolve the well-known per-user socket path. Prefers
@@ -579,12 +600,13 @@ pub async fn try_handoff(workspace_path: &Path) -> Outcome {
             desktop_protocol,
         },
         Ok(Response::Error { message }) => Outcome::DesktopError { message },
-        // A reply we can't parse, or an upgrade reply to an open-workspace
-        // request (a desktop we can't talk to sanely): fall back rather
-        // than guess.
-        Ok(Response::UpgradeStarted { .. }) | Ok(Response::UpgradeChecked { .. }) | Err(_) => {
-            Outcome::NoDesktop
-        }
+        // A reply we can't parse, or an upgrade / devserver reply to an
+        // open-workspace request (a desktop we can't talk to sanely): fall back
+        // rather than guess.
+        Ok(Response::UpgradeStarted { .. })
+        | Ok(Response::UpgradeChecked { .. })
+        | Ok(Response::DevserverRegistered { .. })
+        | Err(_) => Outcome::NoDesktop,
     }
 }
 
@@ -655,9 +677,10 @@ pub async fn try_handoff(workspace_path: &Path) -> Outcome {
             desktop_protocol,
         },
         Ok(Response::Error { message }) => Outcome::DesktopError { message },
-        Ok(Response::UpgradeStarted { .. }) | Ok(Response::UpgradeChecked { .. }) | Err(_) => {
-            Outcome::NoDesktop
-        }
+        Ok(Response::UpgradeStarted { .. })
+        | Ok(Response::UpgradeChecked { .. })
+        | Ok(Response::DevserverRegistered { .. })
+        | Err(_) => Outcome::NoDesktop,
     }
 }
 
@@ -763,9 +786,11 @@ pub async fn try_upgrade(check_only: bool) -> UpgradeOutcome {
             desktop_protocol,
         },
         Ok(Response::Error { message }) => UpgradeOutcome::DesktopError { message },
-        // An open-workspace reply to an upgrade request, or an unparseable
-        // line: a desktop we can't talk to sanely.
-        Ok(Response::Opened { .. }) | Err(_) => UpgradeOutcome::NoDesktop,
+        // An open-workspace / devserver reply to an upgrade request, or an
+        // unparseable line: a desktop we can't talk to sanely.
+        Ok(Response::Opened { .. }) | Ok(Response::DevserverRegistered { .. }) | Err(_) => {
+            UpgradeOutcome::NoDesktop
+        }
     }
 }
 
@@ -954,6 +979,9 @@ mod tests {
                     Request::Upgrade { .. } => Response::Error {
                         message: "unexpected upgrade".into(),
                     },
+                    Request::OpenDevserver { .. } => Response::Error {
+                        message: "unexpected open_devserver".into(),
+                    },
                 }
             }
         })
@@ -1003,6 +1031,9 @@ mod tests {
                 }
                 Request::OpenWorkspace { .. } => Response::Error {
                     message: "unexpected open".into(),
+                },
+                Request::OpenDevserver { .. } => Response::Error {
+                    message: "unexpected open_devserver".into(),
                 },
             }
         })

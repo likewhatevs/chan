@@ -24,7 +24,8 @@ use crate::tenant::{HostControl, TenantArtifacts, TenantBuilder, UnserveMode};
 use crate::terminal_sessions::CloseReason;
 use crate::windows::{PersistedWindow, WindowKind, WindowRecord, WindowRegistry};
 use crate::{
-    allocate_workspace_prefix, sanitize_prefix, Error, ServeConfig, ServeHandle, WorkspaceOverlay,
+    allocate_workspace_prefix, sanitize_prefix, DevserverRegistry, Error, ServeConfig, ServeHandle,
+    WorkspaceOverlay,
 };
 
 /// One workspace mounted into a [`WorkspaceHost`].
@@ -83,6 +84,13 @@ pub struct WorkspaceHost {
     /// the existence source; this is the on/off overlay over it. Empty on a host
     /// that never installs one (nothing persisted on, so nothing re-serves).
     workspace_overlay: OnceLock<Arc<WorkspaceOverlay>>,
+    /// The launcher's devserver registry, inverted like
+    /// [`workspace_overlay`](Self::workspace_overlay): the devserver set lives in
+    /// chan-desktop's config (invisible from chan-library), so the embedder
+    /// installs an `Arc<dyn DevserverRegistry>` and the launcher routes read it at
+    /// request time. Empty on the headless devserver / plain `chan serve` — the
+    /// routes then serve an empty devserver list and 404 mutation.
+    devserver_registry: OnceLock<Arc<dyn DevserverRegistry>>,
     /// This library's identity: `"local"` for the baked-in local-disk library,
     /// `lib-<hex>` for a devserver. Stamped on every window record. Set with the
     /// registry; defaults to `"local"` when unset.
@@ -167,6 +175,7 @@ impl WorkspaceHost {
             self_weak: OnceLock::new(),
             window_registry: OnceLock::new(),
             workspace_overlay: OnceLock::new(),
+            devserver_registry: OnceLock::new(),
             library_id: OnceLock::new(),
             terminal_tenant_prefix: OnceLock::new(),
             library_change_notify: Arc::new(Notify::new()),
@@ -231,6 +240,22 @@ impl WorkspaceHost {
     /// This library's persisted workspace on/off overlay, once installed.
     pub fn workspace_overlay(&self) -> Option<&Arc<WorkspaceOverlay>> {
         self.workspace_overlay.get()
+    }
+
+    /// Install the launcher's devserver registry. Idempotent set-once; chan-desktop
+    /// calls this once (next to [`install_workspace_overlay`](
+    /// Self::install_workspace_overlay)) with an impl over its config. A host that
+    /// never installs one answers [`devserver_registry`](Self::devserver_registry)
+    /// with `None` — the headless devserver / plain `chan serve`.
+    pub fn install_devserver_registry(&self, registry: Arc<dyn DevserverRegistry>) {
+        let _ = self.devserver_registry.set(registry);
+    }
+
+    /// The launcher's devserver registry, once installed. `None` on a host whose
+    /// embedder installed none; the launcher routes then serve an empty devserver
+    /// list and 404 mutation.
+    pub fn devserver_registry(&self) -> Option<&Arc<dyn DevserverRegistry>> {
+        self.devserver_registry.get()
     }
 
     /// Install the library root's fallback router — served by `host_dispatch`

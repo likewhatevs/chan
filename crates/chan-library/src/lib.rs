@@ -14,6 +14,7 @@
 
 pub mod config;
 pub mod desktop_window_ops;
+pub mod devserver_registry;
 pub mod error;
 pub mod host;
 pub mod prefix;
@@ -29,6 +30,7 @@ pub mod workspace_persist;
 pub use config::{
     TerminalConfig, TerminalFontChoice, TERMINAL_SCROLLBACK_MB_MAX, TERMINAL_SCROLLBACK_MB_MIN,
 };
+pub use devserver_registry::{DevserverEntry, DevserverInput, DevserverRegistry};
 pub use error::Error;
 pub use host::{HostedWorkspace, WorkspaceHost};
 pub use prefix::{allocate_workspace_prefix, workspace_slug};
