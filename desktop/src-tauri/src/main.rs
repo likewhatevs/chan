@@ -4164,6 +4164,16 @@ pub fn unbury_window(app: &tauri::AppHandle, label: &str) -> bool {
         if let Some(view) = state.local_watcher_view() {
             view.unbury(label);
         }
+        // FOCUS on an ALREADY-VISIBLE watcher window: `view.unbury` is a no-op
+        // (its webview is alive, not buried), and the early return below skips
+        // the show()/set_focus() the final branch does — so raise + focus the
+        // live webview here. A BURIED window's webview was destroyed
+        // (`get_webview_window` is None → no-op), and the reconcile reopens it
+        // focused (the window builder focuses by default).
+        if let Some(w) = app.get_webview_window(label) {
+            let _ = w.show();
+            let _ = w.set_focus();
+        }
         if removed {
             rebuild_window_menu(app);
         }
@@ -4185,6 +4195,15 @@ pub fn unbury_window(app: &tauri::AppHandle, label: &str) -> bool {
             if let Some(embedded) = state.embedded() {
                 embedded.signal_library_change();
             }
+        }
+        // FOCUS on an ALREADY-VISIBLE devserver window: as in the `local::`
+        // branch, `view.unbury` is a no-op on a live webview and the early
+        // return skips show()/set_focus(), so raise + focus it here. A buried
+        // window's webview is destroyed (None → no-op) and the reconcile reopens
+        // it focused.
+        if let Some(w) = app.get_webview_window(label) {
+            let _ = w.show();
+            let _ = w.set_focus();
         }
         if removed {
             rebuild_window_menu(app);
