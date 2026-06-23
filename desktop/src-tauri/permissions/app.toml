@@ -21,12 +21,9 @@ permissions = [
   "allow-auth-status",
   "allow-open-signin",
   "allow-signout",
-  "allow-add-devserver",
   "allow-list-devservers",
-  "allow-remove-devserver",
   "allow-list-devserver-workspaces",
   "allow-reconnect-devserver",
-  "allow-update-devserver",
 ]
 
 [[set]]
@@ -191,19 +188,9 @@ description = "Enables the signout command."
 commands.allow = ["signout"]
 
 [[permission]]
-identifier = "allow-add-devserver"
-description = "Enables the add_devserver command."
-commands.allow = ["add_devserver"]
-
-[[permission]]
 identifier = "allow-list-devservers"
 description = "Enables the list_devservers command."
 commands.allow = ["list_devservers"]
-
-[[permission]]
-identifier = "allow-remove-devserver"
-description = "Enables the remove_devserver command."
-commands.allow = ["remove_devserver"]
 
 [[permission]]
 identifier = "allow-list-devserver-workspaces"
@@ -214,8 +201,3 @@ commands.allow = ["list_devserver_workspaces"]
 identifier = "allow-reconnect-devserver"
 description = "Enables the reconnect_devserver command."
 commands.allow = ["reconnect_devserver"]
-
-[[permission]]
-identifier = "allow-update-devserver"
-description = "Enables the update_devserver command."
-commands.allow = ["update_devserver"]

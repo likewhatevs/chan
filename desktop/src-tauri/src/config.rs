@@ -216,9 +216,9 @@ impl ConfigStore {
 }
 
 /// Side effect run after a devserver row is removed via the registry's
-/// [`remove`](DevserverRegistry::remove) (the HTTP `DELETE` path), so reaping a
-/// live connection/windows matches the Tauri `remove_devserver` command. Set
-/// once, after the Tauri `AppHandle` exists (the registry installs before it),
+/// [`remove`](DevserverRegistry::remove) (the HTTP `DELETE` path), so that path
+/// reaps a live connection/windows (the desktop's `teardown_devserver_connection`).
+/// Set once, after the Tauri `AppHandle` exists (the registry installs before it),
 /// via the shared [`OnceLock`] cell — the chan-server-side registry can't see
 /// the `AppHandle` directly, so the desktop injects the teardown as a closure.
 /// A no-op when nothing is live (removing a not-connected devserver).

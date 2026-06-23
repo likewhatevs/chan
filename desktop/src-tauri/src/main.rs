@@ -152,8 +152,8 @@ pub struct AppState {
     pub control_terminal_prefixes: Mutex<HashMap<String, String>>,
     /// Teardown hook the launcher's [`DevserverConfigRegistry`] fires after an
     /// HTTP `DELETE /api/library/devservers/{id}` drops a row, so that path
-    /// reaps a live connection/windows the same way the Tauri `remove_devserver`
-    /// command does. The registry (chan-server side) can't see the `AppHandle`,
+    /// reaps a live connection/windows through [`teardown_devserver_connection`]
+    /// (shared with `disconnect_devserver`). The registry (chan-server side) can't see the `AppHandle`,
     /// so it's installed with this shared cell and the desktop fills it (with a
     /// closure over the `AppHandle`) once Tauri setup runs.
     pub devserver_remove_hook: Arc<OnceLock<config::DevserverRemoveHook>>,
@@ -1195,69 +1195,6 @@ fn outbound_label(outbound: &OutboundWorkspace) -> Option<String> {
     }
 }
 
-const DEVSERVER_LABEL_MAX_CHARS: usize = 120;
-
-/// Persist a devserver connection recipe (the New / Devserver form) and
-/// return its desktop-local id. A devserver is a multi-workspace
-/// aggregator the desktop dials out to; this records the connection
-/// recipe so it renders as a `[DEVSERVER {host}]` launcher section.
-///
-/// Idempotent on `url`: re-adding the same endpoint updates its
-/// script/label instead of stacking a duplicate, mirroring
-/// `add_outbound_workspace`'s URL dedup.
-#[tauri::command]
-fn add_devserver(
-    app: tauri::AppHandle,
-    state: State<Arc<AppState>>,
-    url: String,
-    script: String,
-    label: String,
-) -> Result<String, String> {
-    let url = url.trim().to_string();
-    // Validate the URL parses as scheme://host[:port] (rejects bare host:port).
-    devserver::parse_devserver_url(&url)?;
-    let script = script.trim().to_string();
-    let label = normalize_devserver_label(&label)?;
-    let id = {
-        let mut store = state.store.lock().unwrap();
-        let mut cfg = store.get().map_err(err)?;
-        let id = match cfg.devservers.iter_mut().find(|d| d.url == url) {
-            Some(existing) => {
-                existing.script = script;
-                if !label.is_empty() {
-                    existing.label = label;
-                }
-                existing.id.clone()
-            }
-            None => {
-                // Keep this id a UUID, never a bare numeric counter: it rides in
-                // the control terminal's window label (`control-terminal-<id>`),
-                // and the SPA's cross-window drag scope strips a trailing
-                // `-<digits>` from the `?w=` label. A `control-terminal-3` would
-                // collapse to the bare `control-terminal` scope, letting tabs
-                // drag between two devservers' control terminals; a UUID keeps
-                // each scope distinct (the F6 d&d isolation).
-                let entry = Devserver {
-                    id: uuid::Uuid::new_v4().to_string(),
-                    url,
-                    script,
-                    label,
-                    token: String::new(),
-                    added_at: config::current_millis(),
-                    auto_hide_control: false,
-                };
-                let id = entry.id.clone();
-                cfg.devservers.push(entry);
-                id
-            }
-        };
-        store.save(&cfg).map_err(err)?;
-        id
-    };
-    let _ = app.emit(serve::SERVES_CHANGED, ());
-    Ok(id)
-}
-
 /// A configured devserver plus whether the desktop is currently connected
 /// to it. The launcher groups by these: a connected devserver shows its live
 /// workspace rows, a disconnected one shows the connect affordance.
@@ -1346,9 +1283,9 @@ fn teardown_devserver_windows(app: &tauri::AppHandle, state: &AppState, id: &str
 /// Fully tear down a devserver's live connection: drop the in-memory
 /// connection, stop its window watcher (which reconciles its windows away), reap
 /// its windows and control-terminal tenant, then signal the launcher to refresh.
-/// Shared by `disconnect_devserver`, `remove_devserver`, and the registry's
-/// HTTP-DELETE teardown hook so all three reap a connected devserver
-/// identically. Idempotent and a no-op when the devserver wasn't connected.
+/// Shared by `disconnect_devserver` and the registry's HTTP-DELETE teardown
+/// hook so both reap a connected devserver identically. Idempotent and a no-op
+/// when the devserver wasn't connected.
 fn teardown_devserver_connection(app: &tauri::AppHandle, state: &AppState, id: &str) {
     state.devservers.remove(id);
     // Cancel the window watcher (it detaches its windows, not reap — the
@@ -1875,49 +1812,6 @@ async fn reconnect_devserver(
     Ok(false)
 }
 
-/// Update a devserver's connection recipe (host/port/script/label), from the
-/// Edit form. Rejected while connected: a live connection's parameters must
-/// not change underneath it. The new host:port must not collide with another
-/// configured devserver.
-#[tauri::command]
-fn update_devserver(
-    app: tauri::AppHandle,
-    state: State<Arc<AppState>>,
-    id: String,
-    url: String,
-    script: String,
-    label: String,
-) -> Result<(), String> {
-    if state.devservers.is_connected(&id) {
-        return Err("disconnect this devserver before editing it".to_string());
-    }
-    let url = url.trim().to_string();
-    devserver::parse_devserver_url(&url)?;
-    let script = script.trim().to_string();
-    let label = normalize_devserver_label(&label)?;
-    {
-        let mut store = state.store.lock().unwrap();
-        let mut cfg = store.get().map_err(err)?;
-        if cfg.devservers.iter().any(|d| d.id != id && d.url == url) {
-            return Err(format!("another devserver is already at {url}"));
-        }
-        let ds = cfg
-            .devservers
-            .iter_mut()
-            .find(|d| d.id == id)
-            .ok_or_else(|| format!("no devserver {id}"))?;
-        // Leave `ds.token` untouched: an edit keeps the stored credential
-        // (it's write-only, so the form can't resubmit it), mirroring the
-        // registry's keep-on-blank token semantics.
-        ds.url = url;
-        ds.script = script;
-        ds.label = label;
-        store.save(&cfg).map_err(err)?;
-    }
-    let _ = app.emit(serve::SERVES_CHANGED, ());
-    Ok(())
-}
-
 /// Forget (unmount) a workspace on a connected devserver via its management
 /// API. The devserver stops serving that workspace; its files on the box are
 /// untouched and it can be re-mounted later. Reached over the desktop bridge
@@ -1962,39 +1856,6 @@ pub(crate) async fn set_devserver_workspace_on_impl(
         }
         Err(devserver::SetWorkspaceOnError::Other { message }) => Err(message),
     }
-}
-
-/// Forget a devserver: drops any live connection, tears down its windows, and
-/// removes the persisted connection recipe so its launcher section disappears.
-#[tauri::command]
-fn remove_devserver(
-    app: tauri::AppHandle,
-    state: State<Arc<AppState>>,
-    id: String,
-) -> Result<(), String> {
-    {
-        let mut store = state.store.lock().unwrap();
-        let mut cfg = store.get().map_err(err)?;
-        let before = cfg.devservers.len();
-        cfg.devservers.retain(|d| d.id != id);
-        if cfg.devservers.len() != before {
-            store.save(&cfg).map_err(err)?;
-        }
-    }
-    // Reap the live connection/windows (no-op when not connected). Shared with
-    // the launcher's HTTP-DELETE path so both Remove routes behave identically.
-    teardown_devserver_connection(&app, &state, &id);
-    Ok(())
-}
-
-fn normalize_devserver_label(raw: &str) -> Result<String, String> {
-    let label = raw.trim().to_string();
-    if label.chars().count() > DEVSERVER_LABEL_MAX_CHARS {
-        return Err(format!(
-            "devserver label must be {DEVSERVER_LABEL_MAX_CHARS} characters or fewer",
-        ));
-    }
-    Ok(label)
 }
 
 /// Open an additional in-app Tauri webview for a running local
@@ -3082,7 +2943,7 @@ fn main() {
                     }
                     // Fill the registry's remove hook now that the AppHandle
                     // exists: the launcher's HTTP DELETE then reaps a live
-                    // devserver's connection/windows like `remove_devserver`.
+                    // devserver's connection/windows via teardown_devserver_connection.
                     // The closure holds only the AppHandle (no Arc cycle) and
                     // resolves the AppState from it at call time.
                     let app_for_teardown = app.handle().clone();
@@ -3376,12 +3237,9 @@ fn main() {
             add_outbound_workspace,
             open_outbound_workspace,
             remove_outbound_workspace,
-            add_devserver,
             list_devservers,
-            remove_devserver,
             list_devserver_workspaces,
             reconnect_devserver,
-            update_devserver,
             auth::auth_status,
             auth::open_signin,
             auth::signout,
