@@ -1248,17 +1248,14 @@ fn build_workspace_window(app: &AppHandle, spec: WindowSpec<'_>) -> Result<(), S
 /// window: the dialog is the teaching surface for the hide-not-close
 /// behaviour (smoke tests assert it appears). The launcher status-dot hide
 /// suppresses it (its `silent_hide` flag) — that dot is its own explicit hide
-/// gesture and needs no teaching. Async `.show` only — a blocking dialog on
-/// the event-loop thread deadlocks.
+/// gesture and needs no teaching. `native_dialog::notify` is non-blocking for
+/// this close handler (on macOS the modal runs on a later main-loop turn).
 fn show_bury_notice(app: &AppHandle, title: &str) {
-    use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
-    app.dialog()
-        .message(format!(
-            "\"{title}\" was hidden, not closed. Reopen it from the Window menu."
-        ))
-        .title("Window Hidden")
-        .kind(MessageDialogKind::Info)
-        .show(|_| {});
+    crate::native_dialog::notify(
+        app,
+        "Window Hidden",
+        &format!("\"{title}\" was hidden, not closed. Reopen it from the Window menu."),
+    );
 }
 
 /// The active-transfer close guard's prompt (mirror of the live-shells confirm).
@@ -1272,11 +1269,10 @@ fn show_bury_notice(app: &AppHandle, title: &str) {
 ///   safe — no orphan/partial); the workspace's terminal PTYs survive
 ///   server-side, so a later reopen reconnects them with no transfer.
 ///
-/// Async `.show` only — a blocking dialog on the event-loop thread deadlocks
-/// (see `show_bury_notice`); the callback runs on the main thread, where the
-/// view/menu/destroy mutations are safe.
+/// The result callback runs on the main thread (where the view/menu/destroy
+/// mutations are safe); on macOS `native_dialog::confirm` defers the modal to a
+/// later main-loop turn so this close handler stays non-blocking.
 fn prompt_transfer_close(app: &AppHandle, state: &Arc<AppState>, label: &str) {
-    use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
     let title = app
         .get_webview_window(label)
         .and_then(|w| w.title().ok())
@@ -1284,17 +1280,16 @@ fn prompt_transfer_close(app: &AppHandle, state: &Arc<AppState>, label: &str) {
     let app_cb = app.clone();
     let state_cb = Arc::clone(state);
     let label_cb = label.to_string();
-    app.dialog()
-        .message(format!(
+    crate::native_dialog::confirm(
+        app,
+        "Transfer in progress",
+        &format!(
             "\"{title}\" has a file transfer in progress. Cancel it and close the \
              window, or keep the window open until the transfer finishes?"
-        ))
-        .title("Transfer in progress")
-        .buttons(MessageDialogButtons::OkCancelCustom(
-            "Cancel transfer & close".into(),
-            "Keep open".into(),
-        ))
-        .show(move |cancel_and_close| {
+        ),
+        "Cancel transfer & close",
+        "Keep open",
+        move |cancel_and_close| {
             if !cancel_and_close {
                 // Keep open: `prevent_close` already kept it open + visible.
                 return;
@@ -1310,7 +1305,8 @@ fn prompt_transfer_close(app: &AppHandle, state: &Arc<AppState>, label: &str) {
             if let Some(w) = app_cb.get_webview_window(&label_cb) {
                 let _ = w.destroy();
             }
-        });
+        },
+    );
 }
 
 /// Active-transfer guard prompt for a CONNECTED-DEVSERVER window. The transfer
@@ -1320,11 +1316,11 @@ fn prompt_transfer_close(app: &AppHandle, state: &Arc<AppState>, label: &str) {
 /// is hold vs hide, never "cancel": "Keep open" (default/Escape) stays visible to
 /// watch it; "Hide" buries the window the normal devserver way (the webview stays
 /// ALIVE and hidden, so the transfer keeps running, reopenable from the Window
-/// menu). To actually cancel, the user uses the SPA's transfer bar. Async `.show`
-/// only (a blocking dialog on the event-loop thread deadlocks); the callback runs
-/// on the main thread, where the hide/menu mutations are safe.
+/// menu). To actually cancel, the user uses the SPA's transfer bar. The result
+/// callback runs on the main thread (where the hide/menu mutations are safe); on
+/// macOS `native_dialog::confirm` defers the modal so this handler stays
+/// non-blocking.
 fn prompt_devserver_transfer_close(app: &AppHandle, state: &Arc<AppState>, label: &str) {
-    use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
     let title = app
         .get_webview_window(label)
         .and_then(|w| w.title().ok())
@@ -1332,18 +1328,17 @@ fn prompt_devserver_transfer_close(app: &AppHandle, state: &Arc<AppState>, label
     let app_cb = app.clone();
     let state_cb = Arc::clone(state);
     let label_cb = label.to_string();
-    app.dialog()
-        .message(format!(
+    crate::native_dialog::confirm(
+        app,
+        "Transfer in progress",
+        &format!(
             "\"{title}\" has a file transfer in progress. Keep the window open to \
              watch it finish, or hide it — the transfer keeps running in the \
              background (cancel it from the transfer bar if you need to)."
-        ))
-        .title("Transfer in progress")
-        .buttons(MessageDialogButtons::OkCancelCustom(
-            "Hide window".into(),
-            "Keep open".into(),
-        ))
-        .show(move |hide| {
+        ),
+        "Hide window",
+        "Keep open",
+        move |hide| {
             if !hide {
                 // Keep open: `prevent_close` already kept it open + visible.
                 return;
@@ -1358,7 +1353,8 @@ fn prompt_devserver_transfer_close(app: &AppHandle, state: &Arc<AppState>, label
                 state_cb.bury_window(&label_cb, &t);
                 crate::rebuild_window_menu(&app_cb);
             }
-        });
+        },
+    );
 }
 
 /// Snapshot the window's URL hash and push the resulting WindowConfig

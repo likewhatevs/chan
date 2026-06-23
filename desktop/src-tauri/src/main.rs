@@ -8,6 +8,7 @@ mod download;
 mod dropped_paths;
 mod embedded;
 mod linux_gui_stack;
+mod native_dialog;
 #[cfg(target_os = "macos")]
 mod pdf;
 mod registry;
@@ -2307,32 +2308,26 @@ fn spawn_launch_update_check(_app: tauri::AppHandle) {
 /// on the main thread.
 #[cfg(unix)]
 fn prompt_restart_for_update(app: &tauri::AppHandle, version: &str) {
-    use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
-
     let app_owned = app.clone();
     let message = format!(
         "chan-desktop {version} has been downloaded. Restart now to use it, \
          or it will apply the next time you open chan-desktop."
     );
-    let scheduled = app.run_on_main_thread(move || {
-        app_owned
-            .clone()
-            .dialog()
-            .message(message)
-            .title("Update ready")
-            .buttons(MessageDialogButtons::OkCancelCustom(
-                "Restart".into(),
-                "Later".into(),
-            ))
-            .show(move |restart| {
-                if restart {
-                    app_owned.restart();
-                }
-            });
-    });
-    if let Err(e) = scheduled {
-        tracing::warn!(error = %e, "scheduling the update-ready restart prompt failed");
-    }
+    // `native_dialog::confirm` handles the main-thread hop; on macOS it routes
+    // Return to the "Restart" default (the prompt can fire while chan is not
+    // frontmost — see native_dialog).
+    native_dialog::confirm(
+        app,
+        "Update ready",
+        &message,
+        "Restart",
+        "Later",
+        move |restart| {
+            if restart {
+                app_owned.restart();
+            }
+        },
+    );
 }
 
 /// Result of a connecting-screen reachability probe. `reachable` is
@@ -4487,22 +4482,14 @@ fn request_quit(app: &tauri::AppHandle) {
             "Chan has {open} window(s) open. Quitting stops their terminals and local workspaces; remote servers keep running."
         )
     };
-    use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
     let app_for_reply = app.clone();
-    app.dialog()
-        .message(message)
-        .title("Quit Chan?")
-        .buttons(MessageDialogButtons::OkCancelCustom(
-            "Quit".into(),
-            "Cancel".into(),
-        ))
-        .show(move |quit| {
-            state.quit_prompt_open.store(false, Ordering::SeqCst);
-            if quit {
-                state.quit_confirmed.store(true, Ordering::SeqCst);
-                app_for_reply.exit(0);
-            }
-        });
+    native_dialog::confirm(app, "Quit Chan?", &message, "Quit", "Cancel", move |quit| {
+        state.quit_prompt_open.store(false, Ordering::SeqCst);
+        if quit {
+            state.quit_confirmed.store(true, Ordering::SeqCst);
+            app_for_reply.exit(0);
+        }
+    });
 }
 
 /// Eval a `chan:command` dispatch on the currently-focused workspace

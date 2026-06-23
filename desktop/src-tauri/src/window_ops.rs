@@ -206,41 +206,31 @@ async fn close_window(
     };
 
     if shells && !force {
-        // Confirm before killing live terminals; the dialog callback
-        // completes the reply (so the CLI blocks until the user answers).
+        // Confirm before killing live terminals; the result callback completes
+        // the reply (so the CLI blocks until the user answers). `native_dialog::
+        // confirm` does the main-thread hop and, on macOS, routes Return to the
+        // "Remove" default. If scheduling the modal fails, the callback never
+        // runs, the reply sender drops, and the server maps that to an error.
         let app2 = app.clone();
         let id2 = id.clone();
-        let scheduled = on_main(&app, move || {
-            use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
-            app2.clone()
-                .dialog()
-                .message(format!(
-                    "\"{title}\" has running terminals. Removing it will end them."
-                ))
-                .title("Remove window?")
-                .buttons(MessageDialogButtons::OkCancelCustom(
-                    "Remove".into(),
-                    "Cancel".into(),
-                ))
-                .show(move |confirmed| {
-                    if confirmed {
-                        let destroyed = app2
-                            .get_webview_window(&id2)
-                            .map(|w| w.destroy().is_ok())
-                            .unwrap_or(false);
-                        let _ = reply.send(Ok(destroyed));
-                    } else {
-                        let _ = reply.send(Err("cancelled — window not removed".to_string()));
-                    }
-                });
-        })
-        .await;
-        if let Err(e) = scheduled {
-            // The reply was moved into the dialog callback; if scheduling
-            // the dialog itself failed, nothing will complete it — but the
-            // sender dropped, so the server maps that to an error.
-            tracing::warn!(window = %id, error = %e, "scheduling rm confirmation dialog failed");
-        }
+        crate::native_dialog::confirm(
+            &app,
+            "Remove window?",
+            &format!("\"{title}\" has running terminals. Removing it will end them."),
+            "Remove",
+            "Cancel",
+            move |confirmed| {
+                if confirmed {
+                    let destroyed = app2
+                        .get_webview_window(&id2)
+                        .map(|w| w.destroy().is_ok())
+                        .unwrap_or(false);
+                    let _ = reply.send(Ok(destroyed));
+                } else {
+                    let _ = reply.send(Err("cancelled — window not removed".to_string()));
+                }
+            },
+        );
         return;
     }
 
