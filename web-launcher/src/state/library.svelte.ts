@@ -306,11 +306,14 @@ export async function openWorkspaceWindow(path: string): Promise<void> {
 }
 
 /** Toggle a window's visibility (the feed's SHOW/HIDE Eye): hide it if it is
- * connected, otherwise open (focus/un-hide) it. The feed reflects the live state
- * after the watch push, so there is no optimistic flip here. */
+ * visible, otherwise open (un-hide/focus) it. Keyed on the server-persisted
+ * `hidden` (Theme 5), not socket liveness — the toggle stays a bridge op
+ * (`hideWindow`/`openWindow`); the desktop persists `hidden` at the bury/unbury
+ * chokepoint, so the row moves between Open/Hidden on the feed round-trip. No
+ * optimistic flip here — the feed reflects the live state after the watch push. */
 export async function toggleWindow(w: WindowRecord): Promise<void> {
-  if (w.connected) await backend.hideWindow(w.window_id);
-  else await backend.openWindow(w.window_id);
+  if (w.hidden) await backend.openWindow(w.window_id);
+  else await backend.hideWindow(w.window_id);
 }
 
 /** Focus a window (the feed's FOCUS action): openWindow focuses a live window

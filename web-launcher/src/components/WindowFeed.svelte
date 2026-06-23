@@ -1,16 +1,19 @@
 <script lang="ts">
-  // The window feed: the library's authoritative open-window set, grouped by
-  // library (local first, then each remote devserver library). Rows are
-  // recomposed from kind/ordinal/workspace_path, never from the opaque
-  // window_id or the library-composed title. The same feed drives the desktop
-  // Window menu and `cs window list`, so all three always agree.
+  // The window feed: the library's authoritative window set, grouped by library
+  // (local first, then each remote devserver library) and split into Open vs
+  // Hidden — mirroring the native Window menu. Visibility is the server-persisted
+  // `hidden` field (Theme 5; absent = visible) — the launcher is a passive
+  // consumer. Rows are recomposed from kind/ordinal/workspace_path, never from
+  // the opaque window_id or the library-composed title. The same feed drives the
+  // desktop Window menu and `cs window list`, so all three always agree.
   //
-  // Each row carries two icon actions: [FOCUS] (bring the window to focus —
-  // un-hide + focus if buried, take focus if visible) and [SHOW/HIDE] (the
-  // visibility toggle, Eye when visible / EyeOff when hidden). The Eye/EyeOff
-  // conveys the connection state, so the mutable surface drops the status dot.
-  // The read-only surface (gateway/devserver, no desktop bridge) has no actions
-  // and keeps the static dot indicator.
+  // Each row (mutable surface) carries two icon actions: [FOCUS] (bring to focus
+  // — un-hide + focus if hidden, take focus if visible) and [SHOW/HIDE] (the
+  // visibility toggle, Eye when visible / EyeOff when hidden). The toggle stays a
+  // bridge op; the desktop persists `hidden` at the bury/unbury chokepoint, so a
+  // hide moves the row into the Hidden section on the feed round-trip. The
+  // read-only surface (gateway/devserver, no desktop bridge) has no actions and
+  // keeps the static connection dot.
   import { Eye, EyeOff, Focus } from "lucide-svelte";
   import { library, focusWindow, remoteLibraryName, toggleWindow } from "../state/library.svelte";
   import { LOCAL_LIBRARY_ID, librarySectionLabel, windowRowLabel } from "../lib/windowLabel";
@@ -53,70 +56,85 @@
     return groups;
   }
 
-  const groups = $derived(groupByLibrary(library.windows));
+  // Theme-5: split into visible ("Open") and hidden windows. `hidden` (absent =
+  // visible) is the server-persisted source of truth; each part keeps the
+  // by-library grouping so the two sections line up with the native Window menu.
+  const openGroups = $derived(groupByLibrary(library.windows.filter((w) => !w.hidden)));
+  const hiddenGroups = $derived(groupByLibrary(library.windows.filter((w) => w.hidden)));
 </script>
+
+{#snippet windowRow(w: WindowRecord)}
+  {#if readOnly}
+    <!-- Read-only surface (gateway/devserver): the dot shows the connection
+         state but can't drive a native window. -->
+    <div class="row">
+      <div class="row-main">
+        <span class="row-name">{windowRowLabel(w)}</span>
+        {#if w.workspace_path}
+          <span class="row-sub" title={w.workspace_path}>{w.workspace_path}</span>
+        {/if}
+      </div>
+      <span
+        class="dot"
+        class:live={w.connected}
+        title={w.connected ? "Connected" : "Detached"}></span>
+    </div>
+  {:else}
+    <!-- The mutable surface exposes two icon actions per row: [FOCUS] (un-hide +
+         focus, or take focus) and [SHOW/HIDE] (visibility toggle; Eye visible /
+         EyeOff hidden, keyed on the server-persisted `hidden`). -->
+    <div class="row">
+      <div class="row-main">
+        <span class="row-name">{windowRowLabel(w)}</span>
+        {#if w.workspace_path}
+          <span class="row-sub" title={w.workspace_path}>{w.workspace_path}</span>
+        {/if}
+      </div>
+      <div class="row-actions">
+        <button
+          class="icon-btn"
+          type="button"
+          title="Focus window"
+          aria-label="Focus window"
+          onclick={() => focusWindow(w)}>
+          <Focus size={16} />
+        </button>
+        <button
+          class="icon-btn"
+          class:on={!w.hidden}
+          type="button"
+          title={w.hidden ? "Show window" : "Hide window"}
+          aria-label={w.hidden ? "Show window" : "Hide window"}
+          onclick={() => toggleWindow(w)}>
+          {#if w.hidden}<EyeOff size={16} />{:else}<Eye size={16} />{/if}
+        </button>
+      </div>
+    </div>
+  {/if}
+{/snippet}
+
+{#snippet librarySection(groups: Group[])}
+  {#each groups as g (g.libraryId)}
+    <div class="group">
+      <h3 class="group-title">{g.label}</h3>
+      <ul class="rows">
+        {#each g.windows as w (w.window_id)}
+          <li>{@render windowRow(w)}</li>
+        {/each}
+      </ul>
+    </div>
+  {/each}
+{/snippet}
 
 {#if library.windows.length}
   <section class="feed">
-    <h2 class="feed-heading">Open windows</h2>
-    {#each groups as g (g.libraryId)}
-      <div class="group">
-        <h3 class="group-title">{g.label}</h3>
-        <ul class="rows">
-          {#each g.windows as w (w.window_id)}
-            <li>
-              {#if readOnly}
-                <!-- Read-only surface (gateway/devserver): the dot shows the
-                     connection state but can't drive a native window. -->
-                <div class="row">
-                  <div class="row-main">
-                    <span class="row-name">{windowRowLabel(w)}</span>
-                    {#if w.workspace_path}
-                      <span class="row-sub" title={w.workspace_path}>{w.workspace_path}</span>
-                    {/if}
-                  </div>
-                  <span
-                    class="dot"
-                    class:live={w.connected}
-                    title={w.connected ? "Connected" : "Detached"}></span>
-                </div>
-              {:else}
-                <!-- The mutable surface exposes two icon actions per row:
-                     [FOCUS] (un-hide + focus, or take focus) and [SHOW/HIDE]
-                     (visibility toggle; Eye visible / EyeOff hidden). The
-                     Eye/EyeOff conveys the connection state — no separate dot. -->
-                <div class="row">
-                  <div class="row-main">
-                    <span class="row-name">{windowRowLabel(w)}</span>
-                    {#if w.workspace_path}
-                      <span class="row-sub" title={w.workspace_path}>{w.workspace_path}</span>
-                    {/if}
-                  </div>
-                  <div class="row-actions">
-                    <button
-                      class="icon-btn"
-                      type="button"
-                      title="Focus window"
-                      aria-label="Focus window"
-                      onclick={() => focusWindow(w)}>
-                      <Focus size={16} />
-                    </button>
-                    <button
-                      class="icon-btn"
-                      class:on={w.connected}
-                      type="button"
-                      title={w.connected ? "Hide window" : "Show window"}
-                      aria-label={w.connected ? "Hide window" : "Show window"}
-                      onclick={() => toggleWindow(w)}>
-                      {#if w.connected}<Eye size={16} />{:else}<EyeOff size={16} />{/if}
-                    </button>
-                  </div>
-                </div>
-              {/if}
-            </li>
-          {/each}
-        </ul>
-      </div>
-    {/each}
+    {#if openGroups.length}
+      <h2 class="feed-heading">Open windows</h2>
+      {@render librarySection(openGroups)}
+    {/if}
+    {#if hiddenGroups.length}
+      <h2 class="feed-heading">Hidden windows</h2>
+      {@render librarySection(hiddenGroups)}
+    {/if}
   </section>
 {/if}

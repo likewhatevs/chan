@@ -163,6 +163,9 @@ const windows: WindowRecord[] = [
     control: true,
   },
   {
+    // Seeded HIDDEN (Theme 5): a buried devserver window — webview destroyed
+    // (connected:false) and persisted hidden — so the feed renders a "Hidden
+    // windows" section and an EyeOff ("Show window") toggle.
     window_id: "w-ds1-term-1",
     library_id: DS_LIBRARY_ID,
     kind: "terminal",
@@ -174,6 +177,7 @@ const windows: WindowRecord[] = [
     persisted: true,
     connected: false,
     control: false,
+    hidden: true,
   },
   {
     window_id: "w-ds1-api-1",
@@ -480,16 +484,25 @@ export const mockApi: LibraryApi = {
   // The mock has no desktop, so open/hide just flip the in-memory window's
   // `connected` and push the feed — enough for the mock SPA and tests to see the
   // status dot react. A real surface drives the native window through the bridge.
+  // Bridge ops (Theme 5): on the real desktop these funnel through bury/unbury,
+  // which persists `hidden` and (un)spawns the webview. The mock mirrors both so
+  // the feed's Open/Hidden split + the connection dot stay coherent.
   openWindow: (id) => {
     const w = windows.find((x) => x.window_id === id);
-    if (w) w.connected = true;
+    if (w) {
+      w.hidden = false;
+      w.connected = true;
+    }
     notify();
     return tick(undefined);
   },
 
   hideWindow: (id) => {
     const w = windows.find((x) => x.window_id === id);
-    if (w) w.connected = false;
+    if (w) {
+      w.hidden = true;
+      w.connected = false;
+    }
     notify();
     return tick(undefined);
   },

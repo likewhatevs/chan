@@ -37,6 +37,14 @@ export interface WindowRecord {
   /** The devserver's connect CONTROL terminal (runs the connect script). The
    * feed renders it FIRST in its library group; the desktop mints it. */
   control: boolean;
+  /**
+   * Server-persisted visibility (Theme 5). The window is buried/hidden on the
+   * desktop, vs shown. Skip-if-default on the wire — OMITTED for visible windows
+   * — so the field is OPTIONAL here and ABSENT reads as visible. The launcher is
+   * a passive consumer: the desktop persists this at the bury/unbury chokepoint
+   * and it rides the existing `/api/library/windows` feed.
+   */
+  hidden?: boolean;
 }
 
 /** Full snapshot pushed on connect and on every change over the watch socket. */
