@@ -46,6 +46,7 @@ import {
   openDashboardInActivePane,
   openGraphInActivePane,
   openInPane,
+  openLinkTarget,
   openFind,
   openTerminalInPane,
   paneMode,
@@ -472,6 +473,52 @@ describe("tab close confirmation", () => {
     expect(reopened.saved).toBe("saved");
     expect(reopened.caret).toEqual({ from: 3, to: 3 });
     expect(activePane().activeTabId).toBe(reopened.id);
+  });
+
+  test("reopens a closed File Browser tab with its expanded dirs + view state (F3)", async () => {
+    // Close + reopen both run the tab through cloneTab; the browser
+    // branch must carry the per-tab view state or Cmd+Shift+T snaps the
+    // restored File Browser back to a collapsed root.
+    const br: BrowserTab = {
+      kind: "browser",
+      id: "br-f3",
+      title: "Files",
+      inspectorOpen: true,
+      selected: "notes/today.md",
+      selectedPaths: ["notes/today.md", "notes/old.md"],
+      showWorkspace: true,
+      expanded: ["notes", "notes/sub", "archive"],
+      scroll: 120,
+      inspectorWidth: 280,
+    };
+    const originalExpanded = br.expanded;
+    const pane: LeafNode = {
+      kind: "leaf",
+      id: "pane-test",
+      tabs: [br],
+      activeTabId: br.id,
+    };
+    layout.rootId = pane.id;
+    layout.activePaneId = pane.id;
+    layout.nodes = { [pane.id]: pane };
+    layout.focusColor = "blue";
+
+    await closeTab(pane.id, br.id, { force: true });
+    expect(activePane().tabs).toHaveLength(0);
+    expect(canReopenClosedTab()).toBe(true);
+
+    expect(reopenClosedTab()).toBe(true);
+    const reopened = activePane().tabs[0];
+    if (reopened?.kind !== "browser") throw new Error("expected browser tab");
+    expect(reopened.expanded).toEqual(["notes", "notes/sub", "archive"]);
+    expect(reopened.selected).toBe("notes/today.md");
+    expect(reopened.selectedPaths).toEqual(["notes/today.md", "notes/old.md"]);
+    expect(reopened.showWorkspace).toBe(true);
+    expect(reopened.scroll).toBe(120);
+    expect(reopened.inspectorWidth).toBe(280);
+    expect(reopened.inspectorOpen).toBe(true);
+    // Carried arrays are copies, never aliases to the source tab's.
+    expect(reopened.expanded).not.toBe(originalExpanded);
   });
 
   test("closing the last front tab clears the flip", async () => {
@@ -3448,5 +3495,56 @@ describe("openInPane content peek (open any plaintext, refuse binary)", () => {
     // A `.md` is editable by extension, so it never peeks: readStream is the
     // single real load, not a probe + a load.
     expect(read).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("openLinkTarget (F1: resolve a wiki/link stem before opening)", () => {
+  test("opens the resolve-link path, not the raw `[[note]]` stem", async () => {
+    resetLayout([]);
+    // The pill rendered because resolve-link found `notes/note.md`; the
+    // click must open THAT, not the extension-less stem the read route
+    // would 404 on.
+    const resolve = vi
+      .spyOn(api, "resolveLink")
+      .mockResolvedValue({ path: "notes/note.md", kind: "file" });
+    const read = vi.spyOn(api, "readStream").mockResolvedValue({
+      path: "notes/note.md",
+      content: "# note\n",
+      mtime: 1,
+      mtime_ns: "1",
+      writable: true,
+    });
+
+    await openLinkTarget("notes/note");
+
+    expect(resolve).toHaveBeenCalledWith("notes/note");
+    // readStream got the resolved `.md` path, never the bare stem.
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(read.mock.calls[0]?.[0]).toBe("notes/note.md");
+    const tabs = activePane().tabs;
+    expect(tabs).toHaveLength(1);
+    const live = tabs[0];
+    if (live?.kind !== "file") throw new Error("expected a file tab");
+    expect(live.path).toBe("notes/note.md");
+    expect(live.fileMissing).toBeNull();
+  });
+
+  test("falls back to the raw target when resolve fails (broken link still surfaces)", async () => {
+    resetLayout([]);
+    vi.spyOn(api, "resolveLink").mockRejectedValue(new ApiError(404, "not found"));
+    const read = vi.spyOn(api, "readStream").mockResolvedValue({
+      path: "notes/real.md",
+      content: "x\n",
+      mtime: 1,
+      mtime_ns: "1",
+      writable: true,
+    });
+
+    await openLinkTarget("notes/real.md");
+
+    // Unresolvable resolve-link → open the raw target verbatim so the
+    // normal open path (and its missing-file banner) takes over.
+    expect(read).toHaveBeenCalledWith("notes/real.md", expect.anything());
+    expect(activePane().tabs).toHaveLength(1);
   });
 });

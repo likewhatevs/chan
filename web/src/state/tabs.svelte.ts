@@ -2358,6 +2358,32 @@ export function openInActivePane(
   return openInPane(layout.activePaneId, path, opts);
 }
 
+/// Open a wiki / markdown-link target, resolving an extension-less stem
+/// to the real on-disk file before opening. A `[[note]]` pill (and a
+/// `[[` picker pick) carries the raw stem `note`; the pill's kind probe
+/// resolves it through `/api/resolve-link` (which tries `note.md` /
+/// `note.txt` / `note`), so the pill renders as a valid link. But the
+/// click previously handed that raw stem straight to `openInActivePane`,
+/// and the file read route opens the path verbatim (no extension probe)
+/// — so it 404'd and the tab flashed a false "document not found" for a
+/// file that's right there on disk. Resolve through the SAME probe here
+/// so the click opens `note.md`. A failed resolve falls back to the raw
+/// target so a genuinely broken link still lands on the missing-file
+/// banner with the real cause rather than swallowing the click.
+export async function openLinkTarget(
+  target: string,
+  opts: OpenFileOptions = {},
+): Promise<void> {
+  let path = target;
+  try {
+    path = (await api.resolveLink(target)).path;
+  } catch {
+    // Unresolvable (broken link / network): open the raw target so the
+    // editor surfaces the missing file instead of silently no-op'ing.
+  }
+  await openInActivePane(path, opts);
+}
+
 /// Move the active pane's selection to the previous tab. Wraps from
 /// the first tab back to the last (iTerm-style cycle), so repeated
 /// presses keep rotating instead of dead-ending at the edges. No-op
@@ -2793,6 +2819,19 @@ function cloneTab(src: Tab): Tab {
       id: src.id,
       title: src.title,
       inspectorOpen: src.inspectorOpen,
+      // Carry the per-tab File Browser view state across a clone, the
+      // same way the graph branch above carries its own. Without this a
+      // split / move / reopen-closed (Cmd+Shift+T) drops the user's
+      // expanded directories, selection, scroll, and workspace toggle —
+      // the reopened tab snaps back to a collapsed root. Arrays are
+      // copied (not aliased) so the clone and source don't share a
+      // mutable reference.
+      selected: src.selected,
+      selectedPaths: src.selectedPaths ? [...src.selectedPaths] : undefined,
+      showWorkspace: src.showWorkspace,
+      expanded: src.expanded ? [...src.expanded] : undefined,
+      scroll: src.scroll,
+      inspectorWidth: src.inspectorWidth,
     };
   }
   if (src.kind === "dashboard") {

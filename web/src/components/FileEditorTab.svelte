@@ -117,6 +117,7 @@
   } from "../state/store.svelte";
   import {
     openInActivePane,
+    openLinkTarget,
     openTerminalInPane,
     saveDraftTabToWorkspace,
     tabFocusPulse,
@@ -1300,9 +1301,13 @@
           currentPath={tab.path}
           onWikiClick={(args) => {
             // Navigation: click on a wikilink pill opens the
-            // target in the active pane (or a new pane on Cmd /
-            // Ctrl click).
-            void openInActivePane(args.target);
+            // target in the active pane. `args.target` is the raw
+            // link target (a `[[note]]` stem carries no extension),
+            // so resolve it through the same `.md`/`.txt`/bare probe
+            // the pill used before opening — otherwise an
+            // extension-less stem 404s and flashes a false
+            // "document not found" for a file that's on disk.
+            void openLinkTarget(args.target);
           }}
           onTagClick={(name) => openGraphForTag(`#${name}`, name)}
           onMentionClick={(args) => {
