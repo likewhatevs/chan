@@ -1,29 +1,23 @@
 <script lang="ts">
-  // The bulk-action bar a registry list shows while one or more of its rows are
-  // selected. One component, two kinds: a workspace bar (Turn On / Turn Off /
-  // Remove the local tenant) and a devserver bar (Connect / Disconnect / Remove
-  // the registry entry). It is scoped to its `kind` — the count, the actions,
-  // and the delete-confirm all read/write only that kind's slice of the shared
-  // selection — so the two bars coexist without crossing wires.
+  // The single global bulk-action bar. Rendered once App-level above the lists
+  // (gated to the mutable surface), it shows while one or more rows of ANY kind
+  // are selected: it reads the whole selection (a combined count across local
+  // workspaces, served workspaces, and devservers) and its buttons drive the
+  // global ops — Turn On / Turn Off (per-kind under the hood), an ordered
+  // cross-kind Remove (forget served → remove devservers → remove local), and
+  // Clear. The single-row quick actions stay the per-item path.
   import {
     selection,
     selectedCount,
     clearSelection,
-    bulkSetOn,
+    bulkSetOnAll,
     requestBulkDelete,
     cancelBulkDelete,
     confirmBulkDelete,
-    type SelKind,
   } from "../state/selection.svelte";
 
-  let {
-    kind,
-    onLabel = "Turn On",
-    offLabel = "Turn Off",
-  }: { kind: SelKind; onLabel?: string; offLabel?: string } = $props();
-
-  const count = $derived(selectedCount(kind));
-  const confirming = $derived(selection.confirmingDelete === kind);
+  const count = $derived(selectedCount());
+  const confirming = $derived(selection.confirmingDelete);
 </script>
 
 {#if count > 0}
@@ -35,25 +29,25 @@
         class="btn-ghost danger"
         type="button"
         disabled={selection.busy}
-        onclick={() => confirmBulkDelete(kind)}>Confirm remove</button>
+        onclick={confirmBulkDelete}>Confirm remove</button>
       <button class="btn-ghost" type="button" onclick={cancelBulkDelete}>Cancel</button>
     {:else}
       <button
         class="btn-ghost"
         type="button"
         disabled={selection.busy}
-        onclick={() => bulkSetOn(kind, true)}>{onLabel}</button>
+        onclick={() => bulkSetOnAll(true)}>Turn On</button>
       <button
         class="btn-ghost"
         type="button"
         disabled={selection.busy}
-        onclick={() => bulkSetOn(kind, false)}>{offLabel}</button>
+        onclick={() => bulkSetOnAll(false)}>Turn Off</button>
       <button
         class="btn-ghost danger"
         type="button"
         disabled={selection.busy}
-        onclick={() => requestBulkDelete(kind)}>Remove</button>
-      <button class="btn-ghost" type="button" onclick={() => clearSelection(kind)}>Clear</button>
+        onclick={requestBulkDelete}>Remove</button>
+      <button class="btn-ghost" type="button" onclick={() => clearSelection()}>Clear</button>
     {/if}
     {#if selection.note}<span class="bulk-note">{selection.note}</span>{/if}
   </div>

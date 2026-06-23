@@ -4,8 +4,8 @@
   // [NEW TERMINAL] (open a terminal on the connected devserver), [EDIT] (open the
   // edit form; read-only while connected), and [CONNECT/DISCONNECT] (the
   // connection toggle, gated on `connected`) — plus a select checkbox feeding the
-  // bulk bar (Connect / Disconnect / Remove). Connect, disconnect, and new
-  // terminal are desktop actions; the read-only devserver/gateway surface shows
+  // single global bulk bar (App-level: Turn On / Turn Off / Remove). Connect,
+  // disconnect, and new terminal are desktop actions; the read-only devserver/gateway surface shows
   // the rows with Edit only (the registry CRUD is browser-testable; the desktop
   // actions and bulk are hidden where no desktop bridge exists). A stored token
   // shows as a lock chip (the value is never returned).
@@ -20,7 +20,6 @@
   } from "../state/library.svelte";
   import { isSelected, toggleSelected } from "../state/selection.svelte";
   import { openEditDevserver } from "../state/dialog.svelte";
-  import SelectionBar from "./SelectionBar.svelte";
   import { readOnly } from "../state/capabilities";
   import type { DevserverEntry } from "../api/library";
 
@@ -46,10 +45,6 @@
 {#if library.devservers.length}
   <section class="group">
     <h2 class="group-title">↗ Devservers</h2>
-
-    {#if !readOnly}
-      <SelectionBar kind="devserver" onLabel="Connect" offLabel="Disconnect" />
-    {/if}
 
     <ul class="rows">
       {#each library.devservers as ds (ds.id)}

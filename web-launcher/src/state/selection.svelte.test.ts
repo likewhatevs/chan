@@ -1,6 +1,8 @@
-// Multi-select + bulk-action tests against the in-memory mock. The selection is
-// kind-aware (workspaces + devservers); each case adds its own rows so it is
-// robust to the shared module-level mock state.
+// Multi-select + bulk-action tests against the in-memory mock. ONE selection
+// spans three kinds (local workspaces + served devserver workspaces +
+// devservers) feeding one global bulk bar; the bulk ops are global (no kind
+// argument), and bulk remove runs an ordered cross-kind delete. Each case adds
+// its own rows so it is robust to the shared module-level mock state.
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import {
@@ -9,13 +11,14 @@ import {
   selectedCount,
   toggleSelected,
   clearSelection,
-  bulkSetOn,
+  bulkSetOnAll,
   requestBulkDelete,
   cancelBulkDelete,
   confirmBulkDelete,
 } from "./selection.svelte";
 import {
   addLocalWorkspace,
+  connectDevserver,
   library,
   loadLibrary,
   saveDevserver,
@@ -28,6 +31,13 @@ vi.mock("../api/backend", async () => {
   const { mockApi } = await import("../api/mock");
   return { backend: mockApi };
 });
+
+// A macrotask hop drains the coalesced live re-fetch the window-watch push
+// drives (the served-workspace ops refresh `library.workspaces` only through it,
+// not by a direct await).
+function settle(): Promise<void> {
+  return new Promise((r) => setTimeout(r, 0));
+}
 
 beforeEach(async () => {
   clearSelection();
@@ -53,7 +63,7 @@ describe("workspace multi-select", () => {
     const b = library.workspaces.find((w) => w.path === "/tmp/sel-b")!;
     toggleSelected("workspace", a.workspace_id);
     toggleSelected("workspace", b.workspace_id);
-    await bulkSetOn("workspace", false);
+    await bulkSetOnAll(false);
     expect(library.workspaces.find((w) => w.workspace_id === a.workspace_id)?.on).toBe(false);
     expect(library.workspaces.find((w) => w.workspace_id === b.workspace_id)?.on).toBe(false);
   });
@@ -62,10 +72,10 @@ describe("workspace multi-select", () => {
     await addLocalWorkspace("/tmp/sel-keep");
     const id = library.workspaces.find((w) => w.path === "/tmp/sel-keep")!.workspace_id;
     toggleSelected("workspace", id);
-    requestBulkDelete("workspace");
-    expect(selection.confirmingDelete).toBe("workspace");
+    requestBulkDelete();
+    expect(selection.confirmingDelete).toBe(true);
     cancelBulkDelete();
-    expect(selection.confirmingDelete).toBeNull();
+    expect(selection.confirmingDelete).toBe(false);
     expect(library.workspaces.some((w) => w.workspace_id === id)).toBe(true);
   });
 
@@ -74,12 +84,37 @@ describe("workspace multi-select", () => {
     const id = library.workspaces.find((w) => w.path === "/tmp/sel-del")!.workspace_id;
     const before = library.workspaces.length;
     toggleSelected("workspace", id);
-    requestBulkDelete("workspace");
-    await confirmBulkDelete("workspace");
+    requestBulkDelete();
+    await confirmBulkDelete();
     expect(library.workspaces.some((w) => w.workspace_id === id)).toBe(false);
     expect(library.workspaces.length).toBe(before - 1);
-    expect(selectedCount("workspace")).toBe(0);
-    expect(selection.confirmingDelete).toBeNull();
+    expect(selectedCount()).toBe(0);
+    expect(selection.confirmingDelete).toBe(false);
+  });
+});
+
+describe("served (devserver-mounted) multi-select", () => {
+  it("keys a served row by (kind, prefix, devserverId) so it never collides with a local id", () => {
+    // The seed devserver ds-1 is connected; its served "w/docs" row is OFF.
+    const local = library.workspaces.find((w) => w.devserver_id === null)!.workspace_id;
+    toggleSelected("workspace", local);
+    toggleSelected("served", "w/docs", "ds-1");
+    expect(isSelected("workspace", local)).toBe(true);
+    expect(isSelected("served", "w/docs", "ds-1")).toBe(true);
+    // No devserverId (or a different one) is a different row.
+    expect(isSelected("served", "w/docs")).toBe(false);
+    expect(selectedCount("served")).toBe(1);
+    expect(selectedCount()).toBe(2);
+  });
+
+  it("bulk turn on turns on every selected served workspace via its devserver", async () => {
+    // ds-1:w/docs starts OFF (no live terminals → an unforced on/off is clean).
+    expect(library.workspaces.find((w) => w.devserver_id === "ds-1" && w.prefix === "w/docs")!.on).toBe(false);
+    toggleSelected("served", "w/docs", "ds-1");
+    await bulkSetOnAll(true);
+    await settle();
+    expect(library.workspaces.find((w) => w.devserver_id === "ds-1" && w.prefix === "w/docs")!.on).toBe(true);
+    expect(selection.note).toBeNull();
   });
 });
 
@@ -101,7 +136,7 @@ describe("devserver multi-select", () => {
     // The seed devserver is connected; bulk turn off → disconnect.
     const ds = library.devservers.find((d) => d.connected)!;
     toggleSelected("devserver", ds.id);
-    await bulkSetOn("devserver", false);
+    await bulkSetOnAll(false);
     expect(library.devservers.find((d) => d.id === ds.id)?.connected).toBe(false);
   });
 
@@ -110,7 +145,7 @@ describe("devserver multi-select", () => {
     const ds = library.devservers.find((d) => d.host === "bulk-on.example" && d.port === 9200)!;
     expect(ds.connected).toBe(false);
     toggleSelected("devserver", ds.id);
-    await bulkSetOn("devserver", true);
+    await bulkSetOnAll(true);
     expect(library.devservers.find((d) => d.id === ds.id)?.connected).toBe(true);
   });
 
@@ -119,11 +154,45 @@ describe("devserver multi-select", () => {
     const ds = library.devservers.find((d) => d.host === "bulk-rm.example" && d.port === 9300)!;
     const before = library.devservers.length;
     toggleSelected("devserver", ds.id);
-    requestBulkDelete("devserver");
-    expect(selection.confirmingDelete).toBe("devserver");
-    await confirmBulkDelete("devserver");
+    requestBulkDelete();
+    expect(selection.confirmingDelete).toBe(true);
+    await confirmBulkDelete();
     expect(library.devservers.some((d) => d.id === ds.id)).toBe(false);
     expect(library.devservers.length).toBe(before - 1);
-    expect(selectedCount("devserver")).toBe(0);
+    expect(selectedCount()).toBe(0);
+  });
+});
+
+describe("ordered cross-kind bulk remove", () => {
+  it("forgets served workspaces, then removes devservers, then local workspaces", async () => {
+    // A mixed selection across all three kinds: a local workspace, a connected
+    // devserver's served workspace (ds-1:w/api), and a fresh devserver. Ensure
+    // ds-1 is connected first (a prior case may have disconnected it in the
+    // shared mock) so its served rows merge into the feed, then re-list.
+    await connectDevserver("ds-1");
+    await loadLibrary();
+    await addLocalWorkspace("/tmp/mix-local");
+    await saveDevserver({ host: "mix.example", port: 9400, label: "mix" });
+    const local = library.workspaces.find((w) => w.path === "/tmp/mix-local")!;
+    const mix = library.devservers.find((d) => d.host === "mix.example" && d.port === 9400)!;
+    expect(library.workspaces.some((w) => w.devserver_id === "ds-1" && w.prefix === "w/api")).toBe(true);
+
+    toggleSelected("workspace", local.workspace_id);
+    toggleSelected("served", "w/api", "ds-1");
+    toggleSelected("devserver", mix.id);
+    expect(selectedCount()).toBe(3);
+
+    requestBulkDelete();
+    expect(selection.confirmingDelete).toBe(true);
+    await confirmBulkDelete();
+
+    // Served workspace forgotten (left the merged feed), devserver removed, and
+    // the local workspace removed — all three gone; selection cleared.
+    expect(library.workspaces.some((w) => w.devserver_id === "ds-1" && w.prefix === "w/api")).toBe(false);
+    expect(library.devservers.some((d) => d.id === mix.id)).toBe(false);
+    expect(library.workspaces.some((w) => w.path === "/tmp/mix-local")).toBe(false);
+    expect(selectedCount()).toBe(0);
+    expect(selection.confirmingDelete).toBe(false);
+    expect(selection.note).toBeNull();
   });
 });

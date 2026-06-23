@@ -3,25 +3,25 @@
   // registry) first, then one section per connected devserver (its served
   // workspaces, merged in by the library). Each row carries two icon actions —
   // [NEW WINDOW] (open a window onto it; greyed until the workspace is ON) and
-  // [ON/OFF] (the tenant toggle). Local rows add a select checkbox feeding the
-  // bulk bar (Turn On / Turn Off / Remove); remove is bulk-only there. A remote
-  // row adds a [FORGET] action (unmount + drop) and routes its on/off/open/forget
-  // to the owning devserver. The read-only surface shows the on-state statically.
-  import { AppWindow, Power, Trash2 } from "lucide-svelte";
+  // [ON/OFF] (the tenant toggle) — plus a select checkbox feeding the single
+  // global bulk bar (App-level). Local rows select as kind "workspace"; served
+  // (devserver-mounted) rows select as kind "served" carrying their devserverId,
+  // so the bar's ordered Remove can forget them on the right devserver. Remove is
+  // bulk-only (no per-row Forget); the row still routes its on/off/open to the
+  // owning devserver. The read-only surface shows the on-state statically.
+  import { AppWindow, Power } from "lucide-svelte";
   import {
     library,
     toggleWorkspace,
     openWorkspaceWindow,
     openDevserverWorkspace,
     setDevserverWorkspaceOn,
-    forgetDevserverWorkspace,
     reportError,
     clearError,
   } from "../state/library.svelte";
   import { liveTerminalsCount } from "../api/library";
   import { requestConfirm } from "../state/confirm.svelte";
   import { isSelected, toggleSelected } from "../state/selection.svelte";
-  import SelectionBar from "./SelectionBar.svelte";
   import { basename } from "../lib/windowLabel";
   import { readOnly } from "../state/capabilities";
   import type { WorkspaceEntry } from "../api/library";
@@ -119,10 +119,6 @@
   <section class="group">
     <h2 class="group-title">🏠 Local</h2>
 
-    {#if !readOnly}
-      <SelectionBar kind="workspace" />
-    {/if}
-
     <ul class="rows">
       {#each localWorkspaces as ws (ws.workspace_id)}
         <li class="row" class:selected={isSelected("workspace", ws.workspace_id)}>
@@ -173,7 +169,15 @@
     <h2 class="group-title">↗ {g.label}</h2>
     <ul class="rows">
       {#each g.workspaces as ws (ws.workspace_id)}
-        <li class="row">
+        <li class="row" class:selected={!readOnly && isSelected("served", ws.prefix, g.devserverId)}>
+          {#if !readOnly}
+            <input
+              class="row-check"
+              type="checkbox"
+              checked={isSelected("served", ws.prefix, g.devserverId)}
+              aria-label={`Select ${displayName(ws)}`}
+              onchange={() => toggleSelected("served", ws.prefix, g.devserverId)} />
+          {/if}
           <div class="row-main">
             <span class="row-name">{displayName(ws)}</span>
             <span class="row-sub" title={ws.path}>{ws.path}</span>
@@ -199,14 +203,6 @@
                 aria-label={`${ws.on ? "Turn off" : "Turn on"} ${displayName(ws)}`}
                 onclick={() => toggleRemoteWorkspace(g.devserverId, ws.prefix, !ws.on)}>
                 <Power size={16} />
-              </button>
-              <button
-                class="icon-btn danger"
-                type="button"
-                title="Forget"
-                aria-label={`Forget ${displayName(ws)}`}
-                onclick={() => run(forgetDevserverWorkspace(g.devserverId, ws.prefix))}>
-                <Trash2 size={16} />
               </button>
             {/if}
           </div>

@@ -4,6 +4,7 @@
   // and the window feed stays live through its watch subscription.
   import { onMount } from "svelte";
   import TopBar from "./components/TopBar.svelte";
+  import SelectionBar from "./components/SelectionBar.svelte";
   import WorkspaceList from "./components/WorkspaceList.svelte";
   import DevserverList from "./components/DevserverList.svelte";
   import WindowFeed from "./components/WindowFeed.svelte";
@@ -58,6 +59,9 @@
       {/if}
     </div>
   {:else}
+    {#if !readOnly}
+      <SelectionBar />
+    {/if}
     <WorkspaceList />
     <DevserverList />
     <WindowFeed />

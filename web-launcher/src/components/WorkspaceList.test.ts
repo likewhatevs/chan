@@ -1,8 +1,10 @@
 // Component test: WorkspaceList renders the redesigned local rows (icon actions
 // [New window] + [On/Off], no per-row Remove), the merged devserver workspace
-// group (A4), and reveals the bulk bar when a local row is selected. Exercises
-// the real Svelte 5 runtime reactivity of the kind-aware selection (a static
-// check wouldn't catch a non-reactive selection), per jsdom.
+// group (A4) with a select checkbox and NO per-row Forget, and checks a row when
+// it is selected. The single global bulk bar now lives App-level (SelectionBar),
+// not inside the list — covered by SelectionBar.test.ts. Exercises the real
+// Svelte 5 runtime reactivity of the kind-aware selection (a static check
+// wouldn't catch a non-reactive selection), per jsdom.
 
 import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import { mount, unmount, flushSync } from "svelte";
@@ -57,7 +59,7 @@ describe("WorkspaceList redesign", () => {
     expect(labels.some((l) => l.startsWith("Turn off") || l.startsWith("Turn on"))).toBe(true);
   });
 
-  it("renders the connected devserver's workspaces as their own group (A4)", () => {
+  it("renders the connected devserver's workspaces as their own group (A4) with a checkbox, no Forget", () => {
     target = document.createElement("div");
     document.body.appendChild(target);
     app = mount(WorkspaceList, { target });
@@ -66,11 +68,13 @@ describe("WorkspaceList redesign", () => {
     // under a "↗ prod" group header.
     expect(target.textContent).toContain("↗ prod");
     expect(target.textContent).toContain("/srv/api");
-    // A remote row offers a Forget action (per-row; remote rows are not bulk).
-    expect(ariaLabels().some((l) => l.startsWith("Forget"))).toBe(true);
+    // Served rows are now bulk-managed like local ones: no per-row Forget, and a
+    // select checkbox (the ordered Remove lives in the global bar).
+    expect(ariaLabels().some((l) => l.startsWith("Forget"))).toBe(false);
+    expect(target.querySelector('input[aria-label="Select api"]')).not.toBeNull();
   });
 
-  it("reveals the bulk bar + checks the row when a local workspace is selected", () => {
+  it("checks the row when a local workspace is selected (the bulk bar is App-level, not here)", () => {
     target = document.createElement("div");
     document.body.appendChild(target);
     app = mount(WorkspaceList, { target });
@@ -79,10 +83,8 @@ describe("WorkspaceList redesign", () => {
     toggleSelected("workspace", localId);
     flushSync();
 
-    expect(target.querySelector('[aria-label="Bulk actions"]')).not.toBeNull();
-    expect(target.textContent).toContain("1 selected");
-    expect(target.textContent).toContain("Turn On");
-    expect(target.textContent).toContain("Remove");
+    // The single bulk bar lives App-level (SelectionBar), not inside the list.
+    expect(target.querySelector('[aria-label="Bulk actions"]')).toBeNull();
     const checks = [...target.querySelectorAll('input[type="checkbox"]')] as HTMLInputElement[];
     expect(checks.some((c) => c.checked)).toBe(true);
   });
