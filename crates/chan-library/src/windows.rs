@@ -106,39 +106,14 @@ pub struct WindowRecord {
     /// (the common case), so only a control window carries it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub control: bool,
-}
-
-impl WindowRecord {
-    /// Build the wire record for a devserver's CONTROL terminal — the window
-    /// running its connect script. The desktop mints this (it drives the connect
-    /// spawn lifecycle) and adds it to that devserver's feed snapshot, tagged with
-    /// the devserver's `library_id` so the launcher groups it there and renders it
-    /// FIRST (ordinal 0 + `control`). The session runs on the LOCAL shared
-    /// terminal tenant, so `prefix`/`token` point there, but the window GROUPS
-    /// under the devserver. Not persisted: the desktop owns its per-connection
-    /// lifecycle. `connected` reflects whether a `/ws` view is live.
-    pub fn control_terminal(
-        library_id: String,
-        window_id: String,
-        prefix: String,
-        token: String,
-        connected: bool,
-    ) -> Self {
-        WindowRecord {
-            window_id,
-            library_id,
-            kind: WindowKind::Terminal,
-            title: "Control Terminal".to_string(),
-            ordinal: 0,
-            workspace_path: None,
-            prefix,
-            token,
-            persisted: false,
-            connected,
-            active_transfer: false,
-            control: true,
-        }
-    }
+    /// Server-persisted visibility: `true` ⇒ the window is BURIED/hidden (the
+    /// desktop keeps it closed on connect; the launcher renders it as hidden).
+    /// The server is the source of truth (set via `POST …/visibility`), so a
+    /// desktop connect mirrors the saved layout instead of force-opening every
+    /// window. Omitted from the wire when false (the common case) — the launcher
+    /// treats absent as visible.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hidden: bool,
 }
 
 /// The window-set watch frame: a full snapshot pushed on connect and on every
@@ -197,6 +172,12 @@ pub struct PersistedWindow {
     /// default keeps a normal row's on-disk shape unchanged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub library_id: Option<String>,
+    /// Server-persisted visibility (Theme 5): `true` ⇒ buried/hidden. The
+    /// devserver is the source of truth; the desktop mirrors it on connect.
+    /// Surfaced on the wire as [`WindowRecord::hidden`]. `skip_serializing_if`
+    /// default keeps an existing/visible row's on-disk shape unchanged.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hidden: bool,
 }
 
 impl PersistedWindow {
@@ -230,6 +211,7 @@ impl PersistedWindow {
             // transfer state; a freshly assembled/minted record defaults off.
             active_transfer: false,
             control: self.control,
+            hidden: self.hidden,
         }
     }
 }
@@ -348,6 +330,7 @@ impl WindowRegistry {
                 workspace_path,
                 control: false,
                 library_id: None,
+                hidden: false,
             };
             windows.push(row.clone());
             (row, windows.clone())
@@ -376,6 +359,7 @@ impl WindowRegistry {
             workspace_path: None,
             control: true,
             library_id: Some(library_id),
+            hidden: false,
         };
         {
             let mut windows = self.lock();
@@ -406,6 +390,35 @@ impl WindowRegistry {
             self.notify.notify_waiters();
         }
         removed
+    }
+
+    /// Set window `window_id`'s persisted visibility (Theme 5). Returns whether a
+    /// row MATCHED (so a route maps `false` to 404 — idempotent: setting the
+    /// value it already holds still matches). Persists (durable rows; a control
+    /// row stays in-memory via [`Self::save_best_effort`]) + fires the change
+    /// notification only when the value actually changed.
+    pub fn set_hidden(&self, window_id: &str, hidden: bool) -> bool {
+        let (matched, changed, snapshot) = {
+            let mut windows = self.lock();
+            let mut matched = false;
+            let mut changed = false;
+            for w in windows.iter_mut() {
+                if w.window_id == window_id {
+                    matched = true;
+                    if w.hidden != hidden {
+                        w.hidden = hidden;
+                        changed = true;
+                    }
+                    break;
+                }
+            }
+            (matched, changed, windows.clone())
+        };
+        if changed {
+            self.save_best_effort(&snapshot);
+            self.notify.notify_waiters();
+        }
+        matched
     }
 
     /// Snapshot the durable window set, ordered for stable display: terminals
@@ -613,6 +626,7 @@ mod tests {
             connected: true,
             active_transfer: false,
             control: false,
+            hidden: false,
         };
         let v = serde_json::to_value(&rec).unwrap();
         assert_eq!(
@@ -650,6 +664,7 @@ mod tests {
             connected: false,
             active_transfer: false,
             control: false,
+            hidden: false,
         };
         assert_eq!(
             serde_json::to_value(&rec).unwrap(),
@@ -705,23 +720,37 @@ mod tests {
                 connected: true,
                 active_transfer: true,
                 control: false,
+                hidden: false,
             }],
         };
         let v = serde_json::to_value(&set).unwrap();
         assert_eq!(v["windows"][0]["window_id"], "w-1a2b3c4d5e6f7081");
         assert_eq!(v["windows"][0]["active_transfer"], true);
-        // A non-control window omits `control` from the wire.
+        // A non-control, visible window omits `control` AND `hidden` from the wire.
         assert!(v["windows"][0].get("control").is_none());
+        assert!(v["windows"][0].get("hidden").is_none());
         assert_eq!(v["windows"].as_array().unwrap().len(), 1);
         assert_eq!(set, serde_json::from_value(v).unwrap());
     }
 
     #[test]
-    fn control_terminal_record_is_terminal_first_and_control_flagged() {
-        let rec = WindowRecord::control_terminal(
+    fn control_record_via_to_record_is_terminal_first_and_control_flagged() {
+        // The control record is now produced by `to_record` on a control row (the
+        // ARCH path), not a bespoke constructor. A hidden=true control row also
+        // surfaces `hidden` on the wire.
+        let row = PersistedWindow {
+            window_id: "control-terminal-ds1".into(),
+            kind: WindowKind::Terminal,
+            title: "Control Terminal".into(),
+            ordinal: 0,
+            workspace_path: None,
+            control: true,
+            library_id: Some("lib-0f1e2d3c4b5a6978".into()),
+            hidden: true,
+        };
+        let rec = row.to_record(
             "lib-0f1e2d3c4b5a6978".into(),
-            "control-terminal-ds1".into(),
-            "/api/terminal".into(),
+            "/control-0".into(),
             "tok_ctl".into(),
             true,
         );
@@ -729,10 +758,12 @@ mod tests {
         assert_eq!(rec.library_id, "lib-0f1e2d3c4b5a6978");
         assert_eq!(rec.ordinal, 0, "rendered first");
         assert!(rec.control);
+        assert!(rec.hidden);
         assert!(!rec.persisted, "transient, desktop-driven lifecycle");
-        // `control` IS on the wire when true (the launcher renders it first).
+        // `control` AND `hidden` are on the wire when true.
         let v = serde_json::to_value(&rec).unwrap();
         assert_eq!(v["control"], true);
+        assert_eq!(v["hidden"], true);
         assert_eq!(rec, serde_json::from_value(v).unwrap());
     }
 
@@ -771,6 +802,7 @@ mod tests {
             workspace_path: Some("/n".into()),
             control: false,
             library_id: None,
+            hidden: false,
         };
         let v = serde_json::to_value(&p).unwrap();
         assert_eq!(
@@ -784,7 +816,7 @@ mod tests {
             })
         );
         assert_eq!(p, serde_json::from_value(v).unwrap());
-        // A terminal row omits workspace_path AND the default control/library_id.
+        // A terminal row omits workspace_path AND the default control/library_id/hidden.
         let t = PersistedWindow {
             window_id: "w-0".into(),
             kind: WindowKind::Terminal,
@@ -793,13 +825,14 @@ mod tests {
             workspace_path: None,
             control: false,
             library_id: None,
+            hidden: false,
         };
         assert_eq!(
             serde_json::to_value(&t).unwrap(),
             json!({ "window_id": "w-0", "kind": "terminal", "title": "🏠 Terminal Window 1", "ordinal": 1 })
         );
-        // A control row carries `control` + the foreign `library_id`; both are
-        // skip-if-default so they appear ONLY here, never on a normal row.
+        // A control row carries `control` + the foreign `library_id`; all of
+        // control/library_id/hidden are skip-if-default so they appear ONLY when set.
         let c = PersistedWindow {
             window_id: "control-terminal-ds1".into(),
             kind: WindowKind::Terminal,
@@ -808,6 +841,7 @@ mod tests {
             workspace_path: None,
             control: true,
             library_id: Some("lib-f81913a8ca0a6ff6".into()),
+            hidden: false,
         };
         let cv = serde_json::to_value(&c).unwrap();
         assert_eq!(
@@ -822,6 +856,21 @@ mod tests {
             })
         );
         assert_eq!(c, serde_json::from_value(cv).unwrap());
+        // A hidden durable row carries `hidden` on disk (skip-if-default ⇒ present
+        // only when true).
+        let h = PersistedWindow {
+            window_id: "w-1".into(),
+            kind: WindowKind::Terminal,
+            title: "🏠 Terminal Window 2".into(),
+            ordinal: 2,
+            workspace_path: None,
+            control: false,
+            library_id: None,
+            hidden: true,
+        };
+        let hv = serde_json::to_value(&h).unwrap();
+        assert_eq!(hv["hidden"], true);
+        assert_eq!(h, serde_json::from_value(hv).unwrap());
     }
 
     // --- control window (ARCH) ---------------------------------------------
@@ -871,6 +920,51 @@ mod tests {
         assert!(
             !ids.iter().any(|id| id == "control-terminal-ds1"),
             "control row is never written to disk"
+        );
+    }
+
+    // --- visibility (Theme 5) ----------------------------------------------
+
+    #[test]
+    fn set_hidden_toggles_and_matches() {
+        let (reg, _d) = registry();
+        let w = reg.create(WindowKind::Terminal, None);
+        let hidden_of = |reg: &WindowRegistry, id: &str| {
+            reg.snapshot()
+                .into_iter()
+                .find(|x| x.window_id == id)
+                .map(|x| x.hidden)
+        };
+        // Unknown id ⇒ no match.
+        assert!(!reg.set_hidden("nope", true));
+        // Bury: matches, and the snapshot reflects it.
+        assert!(reg.set_hidden(&w.window_id, true));
+        assert_eq!(hidden_of(&reg, &w.window_id), Some(true));
+        // Idempotent: setting the value it already holds still MATCHES (route 204,
+        // not 404).
+        assert!(reg.set_hidden(&w.window_id, true));
+        // Unbury.
+        assert!(reg.set_hidden(&w.window_id, false));
+        assert_eq!(hidden_of(&reg, &w.window_id), Some(false));
+    }
+
+    /// A durable window's hidden state survives a reload (server is the source of
+    /// truth).
+    #[test]
+    fn hidden_persists_across_reload() {
+        let (reg, dir) = registry();
+        let path = dir.path().join("windows.json");
+        let w = reg.create(WindowKind::Terminal, None);
+        assert!(reg.set_hidden(&w.window_id, true));
+        let reloaded = WindowRegistry::open(path);
+        assert_eq!(
+            reloaded
+                .snapshot()
+                .into_iter()
+                .find(|x| x.window_id == w.window_id)
+                .map(|x| x.hidden),
+            Some(true),
+            "hidden persisted to disk"
         );
     }
 
@@ -1033,6 +1127,7 @@ mod tests {
             workspace_path: Some("/n".into()),
             control: false,
             library_id: None,
+            hidden: false,
         };
         let rec = p.to_record("local".into(), "/api/n-0".into(), String::new(), false);
         assert_eq!(rec.window_id, "w-abc");
@@ -1059,6 +1154,7 @@ mod tests {
             workspace_path: None,
             control: true,
             library_id: Some("lib-remote".into()),
+            hidden: false,
         };
         let crec = c.to_record("lib-remote".into(), "/control-0".into(), "tok".into(), true);
         assert!(crec.control);

@@ -103,6 +103,14 @@ pub fn launcher_router(
             "/api/library/windows/:window_id/hide",
             post(handle_hide_library_window),
         )
+        // Theme 5: SET the server-persisted visibility (the durable source of
+        // truth the desktop mirrors on connect). Distinct from /open + /hide
+        // above, which dispatch a desktop-bridge op on the NATIVE window and do
+        // NOT persist.
+        .route(
+            "/api/library/windows/:window_id/visibility",
+            post(handle_set_library_window_visibility),
+        )
         // Devserver connect is a desktop-bridge dispatch (like window open/hide),
         // not registry CRUD, so it lives here on the host-stated router rather
         // than the `LauncherState` devservers block. No `require_mutable` gate:
@@ -337,6 +345,30 @@ async fn handle_discard_library_window(
     AxumPath(window_id): AxumPath<String>,
 ) -> Response {
     match host.discard_window(&window_id) {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => StatusCode::NOT_FOUND.into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+/// Body of `POST /api/library/windows/{window_id}/visibility`.
+#[derive(Deserialize)]
+struct SetVisibility {
+    hidden: bool,
+}
+
+/// `POST /api/library/windows/{window_id}/visibility` `{hidden}`: set the
+/// window's SERVER-PERSISTED visibility (Theme 5), the source of truth the
+/// desktop mirrors on connect. The registry change bridge fires the watch, so
+/// every client's feed reflects the new visibility. 204 on success; 404 when no
+/// window has that id. Distinct from `/open` + `/hide`, which dispatch a
+/// desktop-bridge op on the native window and do not persist.
+async fn handle_set_library_window_visibility(
+    State(host): State<Arc<WorkspaceHost>>,
+    AxumPath(window_id): AxumPath<String>,
+    Json(req): Json<SetVisibility>,
+) -> Response {
+    match host.set_window_hidden(&window_id, req.hidden) {
         Ok(true) => StatusCode::NO_CONTENT.into_response(),
         Ok(false) => StatusCode::NOT_FOUND.into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
@@ -1551,6 +1583,63 @@ mod window_op_route_tests {
         let (status, body) = post(&router, "/api/library/fs/pick-folder").await;
         assert_eq!(status, StatusCode::OK, "pick-folder");
         assert_eq!(body, "\"/picked/dir\"", "pick-folder path json");
+    }
+
+    #[tokio::test]
+    async fn visibility_route_sets_persisted_hidden() {
+        // Theme 5: the /visibility route persists the field directly (no desktop
+        // bridge) and the feed reflects it. Install a registry + mint a window.
+        let host = Arc::new(WorkspaceHost::new(library(), crate::route_builder()));
+        let store = tempfile::tempdir().unwrap();
+        host.install_window_registry(
+            Arc::new(chan_library::windows::WindowRegistry::open(
+                store.path().join("windows.json"),
+            )),
+            "local".into(),
+        );
+        let id = host
+            .mint_window(chan_library::windows::WindowKind::Terminal, None)
+            .expect("mint")
+            .window_id;
+        let router = launcher_router(host, None, None);
+        let vis = format!("/api/library/windows/{id}/visibility");
+
+        // Bury → 204; the feed surfaces hidden=true.
+        let (status, _) = send(&router, "POST", &vis, Some(r#"{"hidden":true}"#)).await;
+        assert_eq!(status, StatusCode::NO_CONTENT, "bury");
+        let (status, body) = send(&router, "GET", "/api/library/windows", None).await;
+        assert_eq!(status, StatusCode::OK);
+        let feed: serde_json::Value = serde_json::from_str(&body).unwrap();
+        let row = feed
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|w| w["window_id"] == id)
+            .expect("window in feed");
+        assert_eq!(row["hidden"], true, "hidden surfaced on the wire");
+
+        // Unbury → 204; hidden omitted from the wire (skip-if-default).
+        let (status, _) = send(&router, "POST", &vis, Some(r#"{"hidden":false}"#)).await;
+        assert_eq!(status, StatusCode::NO_CONTENT, "unbury");
+        let (_, body) = send(&router, "GET", "/api/library/windows", None).await;
+        let feed: serde_json::Value = serde_json::from_str(&body).unwrap();
+        let row = feed
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|w| w["window_id"] == id)
+            .unwrap();
+        assert!(row.get("hidden").is_none(), "visible window omits hidden");
+
+        // Unknown id → 404.
+        let (status, _) = send(
+            &router,
+            "POST",
+            "/api/library/windows/nope/visibility",
+            Some(r#"{"hidden":true}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "unknown id");
     }
 
     #[tokio::test]

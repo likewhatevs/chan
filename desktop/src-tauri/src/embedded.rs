@@ -582,6 +582,7 @@ mod tests {
             connected: true,
             active_transfer: false,
             control: false,
+            hidden: false,
         }
     }
 

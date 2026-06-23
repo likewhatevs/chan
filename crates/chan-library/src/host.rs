@@ -959,6 +959,19 @@ impl WorkspaceHost {
         Ok(row.to_record(devserver_library_id, prefix, token, connected))
     }
 
+    /// Set a window's persisted visibility (Theme 5): `hidden=true` buries it,
+    /// `false` un-buries. The devserver is the source of truth, so a desktop
+    /// connect mirrors the saved layout. Returns whether a row matched (a route
+    /// maps `false` to 404). Works on any registry row incl. the control row
+    /// (its hidden is in-memory/per-connection, like the row itself). The
+    /// registry fires the feed notify on a real change.
+    pub fn set_window_hidden(&self, window_id: &str, hidden: bool) -> Result<bool, Error> {
+        let registry = self
+            .window_registry()
+            .ok_or_else(|| Error::Config("window registry not installed".into()))?;
+        Ok(registry.set_hidden(window_id, hidden))
+    }
+
     /// Reap a control terminal: drop its registry row, forget its tenant
     /// mapping, and tear down its LOCAL command tenant (kills the connect-script
     /// PTY). The registry remove + `close_terminal_tenant` each fire the change
