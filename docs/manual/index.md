@@ -1,11 +1,15 @@
 # Chan Manual
 
-Chan is an AI-native IDE for the modern engineer. You point it at a folder on disk (a workspace) and drive your project in Markdown (design docs, specs, tasks), with AI agents working alongside you in the editor and terminal. Edit, search, graph, run terminals, and coordinate agents over that tree, through the desktop app or the standalone `chan open` command.
+Chan is a minimalist and powerful IDE. What you get:
+* A powerful terminal that is automatable from the command line and agent-friendly
+* An IDE with Markdown editor, Index, and Graph your workspaces, which are git repos or any directory
 
-- Drive any number of parallel agents, each in its own terminal session.
-- Each agent a different specialist — Claude, Codex, Gemini — matched to the task.
+You can seamlessly use Chan on your desktop, laptop, and on your remote server. It is supported on macOS and Linux.
+
+What can you do?
+
+- Drive any number of parallel agents, each in its own terminal session. You write Markdown.
 - Agents coordinate with each other through `cs` tooling and the built-in MCP server, not an in-app chatbot.
-- A Markdown workspace your agents read and write directly, as ordinary files.
 - Scriptable end to end, from one `cs` command line.
 
 Start here:
@@ -25,4 +29,5 @@ Start here:
 ## Chan stays out of the way
 
 When you point chan at a workspace, it does not store any files in it. All of chan's files are stored in `~/.chan` keyed to the workspace directories.
+
 You can seamlessly work on local and remote workspaces using [chan-desktop](install.md) and [chan devserver](devserver.md).

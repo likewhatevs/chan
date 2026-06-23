@@ -1,6 +1,6 @@
 # Installing Chan
 
-Chan ships two ways. **Chan Desktop** is the native app for macOS, Linux, and Windows (requires [Git for Windows](https://gitforwindows.org/)) and is what most people want. Installing it also sets up the `chan` and `cs` command line, so there is nothing else to download.
+Chan ships two ways. **Chan Desktop** is the native app for macOS and Linux and is what most people want. Installing it also sets up the `chan` and `cs` command line, so there is nothing else to download.
 
 The **standalone CLI** is just `chan` (plus a `cs` symlink) for the remote SSH workflow, or any headless server.
 
@@ -24,7 +24,7 @@ Download the AppImage, `.deb`, or `.rpm` from the [install page](https://chan.ap
 
 Launch Chan; first run installs the `chan` and `cs` commands into `~/.local/bin`.
 
-## Standalone CLI, headless
+## Standalone CLI (headless)
 
 The fastest way on macOS or Linux is the shell installer. It installs the `chan` CLI into `PREFIX/bin` (default `~/.local/bin`) plus a `cs` symlink for the control-socket client behind `cs terminal` and friends. It reads release metadata from `chan.app/dl/cli/` and downloads the matching asset:
 
