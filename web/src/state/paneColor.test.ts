@@ -4,6 +4,7 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import {
   NAMED_PANE_HEX,
   applyInitialPaneColor,
+  applyLivePaneColor,
   namedForPaneHex,
   normalizeHexColor,
   seedInitialFocusColor,
@@ -83,6 +84,27 @@ describe("applyInitialPaneColor", () => {
   test("leaves the var unset when ?pane= is invalid", () => {
     setSearch("?pane=red");
     applyInitialPaneColor();
+    expect(document.documentElement.style.getPropertyValue(CSS_VAR)).toBe("");
+  });
+});
+
+describe("applyLivePaneColor (Theme 6 colour-watch apply)", () => {
+  test("sets the CSS var from a valid hex frame", () => {
+    applyLivePaneColor("#e58c4d");
+    expect(document.documentElement.style.getPropertyValue(CSS_VAR)).toBe("#e58c4d");
+  });
+  test("normalizes shorthand + case before applying", () => {
+    applyLivePaneColor("#ABC");
+    expect(document.documentElement.style.getPropertyValue(CSS_VAR)).toBe("#aabbcc");
+  });
+  test("REMOVES the var on a null frame (revert to preset default)", () => {
+    document.documentElement.style.setProperty(CSS_VAR, "#e58c4d");
+    applyLivePaneColor(null);
+    expect(document.documentElement.style.getPropertyValue(CSS_VAR)).toBe("");
+  });
+  test("REMOVES the var on an invalid colour (no CSS injection)", () => {
+    document.documentElement.style.setProperty(CSS_VAR, "#e58c4d");
+    applyLivePaneColor("red; }");
     expect(document.documentElement.style.getPropertyValue(CSS_VAR)).toBe("");
   });
 });

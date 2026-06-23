@@ -64,6 +64,8 @@ describe("Cmd+N keymap branch", () => {
   });
 
   test("api imported from api/client", () => {
-    expect(app).toMatch(/import \{ api \} from "\.\/api\/client";/);
+    // Tolerates co-imports on the same line (e.g. openLocalColorWatch); the
+    // intent is just that `api` is sourced from ./api/client.
+    expect(app).toMatch(/import \{[^}]*\bapi\b[^}]*\} from "\.\/api\/client";/);
   });
 });

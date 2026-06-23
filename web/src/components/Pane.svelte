@@ -485,10 +485,11 @@
     // Keep the per-window preset + checkmark behaviour intact.
     setWindowFocusColor(color);
     // Repurposed as the per-LIBRARY pane-highlight colour. Recolour THIS
-    // window's active pane immediately (v1 only the current window updates
-    // live; other open windows pick the new colour up on their next mint via
-    // `?pane=`), then persist it to the window's own serving host so every
-    // future window of this library mints with it.
+    // window's active pane immediately, then persist it to the window's own
+    // serving host. The PUT fires the server's colour broadcast (Theme 6), so
+    // every OTHER open window of this library live-updates via its
+    // `/api/library/local-color/watch` subscription (App.svelte), and future
+    // windows still mint with it via `?pane=`.
     const hex = NAMED_PANE_HEX[color];
     document.documentElement.style.setProperty("--pane-highlight-color", hex);
     // Best-effort: a read-only / no-store serving surface answers 403/404.

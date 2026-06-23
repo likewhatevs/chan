@@ -320,3 +320,74 @@ export function openWatch(
   handle.close = close;
   return handle;
 }
+
+/// Wire frame for the per-library focus-colour watch
+/// (`GET /api/library/local-color/watch`): `{ color }`, a hex string or null,
+/// mirroring the GET/PUT `LocalColor` shape. Pushed on connect + on each change.
+interface LocalColorFrame {
+  color: string | null;
+}
+
+/// Open the per-library focus-colour watch (Theme 6). A dedicated, self-contained
+/// WebSocket to `/api/library/local-color/watch` (bearer via `?t=`) that calls
+/// `onColor` with each pushed colour (hex or null) — push-on-connect + on change.
+/// Auto-reconnects with the same capped backoff as `openWatch` (500 ms → 8 s).
+///
+/// Deliberately NOT built on the `/ws` watcher: this channel carries none of its
+/// windowId/scope machinery, and keeping it separate leaves the load-bearing
+/// window watcher untouched. Best-effort — no status callback (it never drives a
+/// disconnect overlay). Returns a disposer that closes the socket and stops
+/// reconnecting; the disposer defuses the handlers before `close()` so a queued
+/// `onclose` can't schedule a reconnect after disposal.
+export function openLocalColorWatch(
+  onColor: (color: string | null) => void,
+): () => void {
+  let closed = false;
+  let ws: WebSocket | null = null;
+  let backoff = 500;
+
+  const connect = () => {
+    if (closed) return;
+    const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+    const path = withTokenQuery("/api/library/local-color/watch");
+    ws = new WebSocket(`${proto}//${window.location.host}${path}`);
+    ws.onopen = () => {
+      backoff = 500;
+    };
+    ws.onmessage = (m) => {
+      try {
+        const frame = JSON.parse(m.data) as LocalColorFrame;
+        onColor(frame?.color ?? null);
+      } catch {
+        // Drop malformed frames; the server controls the wire format.
+      }
+    };
+    ws.onclose = () => {
+      if (closed) return;
+      const delay = backoff;
+      backoff = Math.min(backoff * 2, 8000);
+      setTimeout(connect, delay);
+    };
+  };
+
+  const close = () => {
+    closed = true;
+    const w = ws;
+    ws = null;
+    if (w) {
+      w.onopen = null;
+      w.onclose = null;
+      w.onerror = null;
+      w.onmessage = null;
+      try {
+        w.close();
+      } catch {
+        // close() can throw if the socket is already CLOSED — the desired end
+        // state, so swallow it.
+      }
+    }
+  };
+
+  connect();
+  return close;
+}

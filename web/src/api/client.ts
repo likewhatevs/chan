@@ -1385,6 +1385,10 @@ function encPath(p: string): string {
 }
 
 export type { WsStatus } from "./transport";
+// Theme 6: the dedicated per-library focus-colour watch (App.svelte subscribes
+// once per window). Self-contained in transport.ts; surfaced here so the SPA
+// imports it from the api module like the rest of the client surface.
+export { openLocalColorWatch } from "./transport";
 
 /// Handle for the live watcher subscription. Callable as the disposer
 /// (back-compat) and also exposes the per-directory scope-subscription

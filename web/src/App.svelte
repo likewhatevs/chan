@@ -111,12 +111,16 @@
   import { isTauriDesktop, reloadWindow, requestCloseWindow } from "./api/desktop";
   import { activeTransferCount } from "./state/transfers.svelte";
   import { currentOS } from "./state/shortcuts";
-  import { api } from "./api/client";
+  import { api, openLocalColorWatch } from "./api/client";
   import {
     applyInitialPageWidth,
     watchPageWidth,
   } from "./state/pageWidth.svelte";
-  import { applyInitialPaneColor, seedInitialFocusColor } from "./state/paneColor";
+  import {
+    applyInitialPaneColor,
+    applyLivePaneColor,
+    seedInitialFocusColor,
+  } from "./state/paneColor";
   import { installIdleTracker, setReadMode } from "./state/idle.svelte";
   import {
     installScreensaverTracker,
@@ -264,6 +268,11 @@
     syncOverlayStack();
   });
 
+  // Disposer for the Theme-6 per-library focus-colour watch (opened once per
+  // window in the onMount below; closed on unmount).
+  let disposeLocalColorWatch: (() => void) | null = null;
+  onDestroy(() => disposeLocalColorWatch?.());
+
   onMount(async () => {
     // Apply persisted theme + default editor theme to the document
     // root immediately, before any component renders, to avoid a flash.
@@ -275,6 +284,14 @@
     // + focus halo in Pane.svelte) when the param is a valid hex; a no-op
     // otherwise, so the `data-focus-color` presets stay in effect.
     applyInitialPaneColor();
+    // Theme 6: live per-library focus-colour broadcast. Subscribe ONCE PER
+    // WINDOW (the var is per-document; <Pane> is per leaf node, so per-pane would
+    // open redundant sockets) to this library's colour watch and recolour
+    // `--pane-highlight-color` the instant ANY window of the library changes it —
+    // replacing the v1 "other windows pick it up on next mint" behaviour. Pushes
+    // the current colour on connect, so this also reconciles with `?pane=`.
+    // Disposed on unmount.
+    disposeLocalColorWatch = openLocalColorWatch(applyLivePaneColor);
     // Match the focus-colour menu's checkmark to the library colour this
     // window opened with: if `?pane=` is one of the four preset hexes, select
     // that preset so `focusColorForWindow()` agrees with the colour shown. A
