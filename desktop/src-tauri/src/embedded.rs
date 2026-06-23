@@ -366,6 +366,19 @@ impl EmbeddedServer {
         self.host.reap_control_window(window_id)
     }
 
+    /// Set the SERVER-PERSISTED visibility of a window in the LOCAL embedded
+    /// registry (Theme 5): a LOCAL window (`local::<window_id>`) or the control
+    /// terminal row (whose `window_id` is its `control_terminal_label`). Persists
+    /// to `~/.chan/windows.json` (control rows in-memory) and fires the feed change
+    /// so `should_show` + the launcher mirror it. Returns whether a row matched.
+    /// DEVSERVER windows persist on their OWN devserver (see
+    /// `devserver::set_window_visibility`), not here.
+    pub fn set_window_hidden(&self, window_id: &str, hidden: bool) -> Result<bool, String> {
+        self.host
+            .set_window_hidden(window_id, hidden)
+            .map_err(|e| format!("setting window visibility: {e}"))
+    }
+
     /// The loopback address the embedded server listens on. The window
     /// watcher assembles a window's tenant URL (`http://{addr}{prefix}…`)
     /// from this plus the record's prefix/token.

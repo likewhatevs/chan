@@ -1273,6 +1273,49 @@ fn flip_devserver_control_dead(state: &AppState, id: &str) {
     }
 }
 
+/// Theme-5 write path: persist a window's `hidden` visibility to its OWNING
+/// registry, routed by the native label's library. Called at the bury
+/// (`hidden=true`) and unbury (`hidden=false`) chokepoints — BOTH the native
+/// red-dot close AND the SPA SHOW/HIDE toggle (bridge `/hide`+`/open`) funnel
+/// through them — so a connect MIRRORS the persisted layout (HIDE-PERSIST
+/// Option A). The in-memory `buried` set stays the transient local view; this
+/// makes the visibility durable + server-shared.
+fn persist_window_hidden(state: &AppState, label: &str, hidden: bool) {
+    // Control terminal: its registry row's `window_id` IS the full label
+    // (`control_terminal_label`), minted into the LOCAL embedded library.
+    if label.starts_with("control-terminal-") {
+        if let Some(embedded) = state.embedded() {
+            let _ = embedded.set_window_hidden(label, hidden);
+        }
+        return;
+    }
+    // LOCAL window: embedded registry, `window_id` = the part after `local::`.
+    if let Some(window_id) = label.strip_prefix("local::") {
+        if let Some(embedded) = state.embedded() {
+            let _ = embedded.set_window_hidden(window_id, hidden);
+        }
+        return;
+    }
+    // DEVSERVER window (`lib-<hex>::<window_id>`): the devserver owns its registry,
+    // so persist there via its `/visibility` route. Async HTTP, and the bury/
+    // unbury chokepoints are sync, so fire-and-forget; the feed round-trip
+    // reflects the new visibility.
+    if let Some((library_id, window_id)) = label.split_once("::") {
+        if let Some(ds_id) = state.devserver_feed.devserver_id_for_library(library_id) {
+            if let Some(conn) = state.devservers.get(&ds_id) {
+                let window_id = window_id.to_string();
+                tauri::async_runtime::spawn(async move {
+                    if let Err(e) =
+                        devserver::set_window_visibility(&conn, &window_id, hidden).await
+                    {
+                        tracing::debug!(error = %e, "persisting devserver window visibility failed");
+                    }
+                });
+            }
+        }
+    }
+}
+
 /// Poll a devserver's info endpoint until it answers or the budget runs out.
 /// The connect script may take a moment to bring the devserver up, or prompt
 /// for credentials in the control terminal, so the wait is generous; a
@@ -3708,6 +3751,11 @@ pub fn rebuild_window_menu(app: &tauri::AppHandle) {
         let mut open_local: Vec<(String, String)> = Vec::new();
         let mut open_grouped: HashMap<String, Vec<(String, String)>> = HashMap::new();
         for record in &open_records {
+            // Theme 5: a server-hidden window belongs under Hidden, never Open —
+            // group strictly by the persisted `hidden`, not just native visibility.
+            if record.hidden {
+                continue;
+            }
             let label = window_watcher::native_label(record);
             let Some(window) = app.get_webview_window(&label) else {
                 continue;
@@ -3744,7 +3792,27 @@ pub fn rebuild_window_menu(app: &tauri::AppHandle) {
 
         let mut local: Vec<(String, String)> = Vec::new();
         let mut grouped: HashMap<String, Vec<(String, String)>> = HashMap::new();
-        for (label, title) in buried {
+        // Hidden = the in-session buried set UNION the server-persisted hidden
+        // records (Theme 5): a window hidden in a PRIOR session (record.hidden)
+        // isn't opened on connect (should_show false) and isn't in the local
+        // buried set, so list it here so the user can reopen it. Dedup by label;
+        // a hidden window has no live webview, so fall back to the record title.
+        let mut hidden_rows: Vec<(String, String)> = buried;
+        for record in &open_records {
+            if !record.hidden {
+                continue;
+            }
+            let label = window_watcher::native_label(record);
+            if hidden_rows.iter().any(|(l, _)| l == &label) {
+                continue;
+            }
+            let title = app
+                .get_webview_window(&label)
+                .and_then(|w| w.title().ok())
+                .unwrap_or_else(|| record.title.clone());
+            hidden_rows.push((label, title));
+        }
+        for (label, title) in hidden_rows {
             match devservers.iter().find(|(_, _, labels)| labels.contains(&label)) {
                 Some((ds_id, _, _)) => grouped
                     .entry(ds_id.clone())
@@ -4013,6 +4081,10 @@ fn open_remote_window_from_menu(app: &tauri::AppHandle, label: &str) {
 pub fn unbury_window(app: &tauri::AppHandle, label: &str) -> bool {
     let state = app.state::<Arc<AppState>>();
     let removed = state.remove_buried(label);
+    // Theme-5: unbury persists `hidden=false` to the owning registry so the show
+    // is durable + mirrored on connect (BOTH the native menu reopen and the SPA
+    // `/open` toggle funnel here). Routes by the label's library.
+    persist_window_hidden(&state, label, false);
     // A watcher-managed local window: un-bury through the view state. The bury
     // destroyed the native window (the reconcile closed it), so there is nothing
     // to show() — the reconcile reopens it at its window_id. Counts as shown.

@@ -54,16 +54,24 @@ pub trait NativeSurface {
 }
 
 /// Whether the reconcile surfaces `record` as a native window: persisted, not
-/// **locally buried**, and backed by a **live tenant** (a non-empty `token`).
-/// Bury is desktop-local view state (L5) — the browser has no native windows, so
-/// a bury lives only in this process's `buried` set, never in Seam W. The token
-/// gate IS the workspace on/off lifecycle: an off workspace's window carries an
-/// empty token (no tenant to attach to), so the reconcile CLOSES it while the
-/// library KEEPS the record — turning the workspace back on re-tokens it and the
-/// reconcile reopens it at the same window_id (the SPA restores its tabs). Discard
-/// is the library op (the record leaves the snapshot entirely).
+/// **server-hidden** (Theme 5), not **locally buried**, and backed by a **live
+/// tenant** (a non-empty `token`).
+/// `record.hidden` is the SERVER-PERSISTED visibility (Theme 5) — the source of
+/// truth a connect MIRRORS, so a window hidden last session stays hidden on the
+/// next connect/relaunch. Bury is the desktop-local view state (L5) layered on
+/// top for immediate in-session feedback before the persist round-trips through
+/// the feed; the browser has no native windows, so it lives only in this
+/// process's `buried` set. The token gate IS the workspace on/off lifecycle: an
+/// off workspace's window carries an empty token (no tenant to attach to), so the
+/// reconcile CLOSES it while the library KEEPS the record — turning the workspace
+/// back on re-tokens it and the reconcile reopens it at the same window_id (the
+/// SPA restores its tabs). Discard is the library op (the record leaves the
+/// snapshot entirely).
 fn should_show(record: &WindowRecord, buried: &HashSet<String>) -> bool {
-    record.persisted && !buried.contains(&native_label(record)) && !record.token.is_empty()
+    record.persisted
+        && !record.hidden
+        && !buried.contains(&native_label(record))
+        && !record.token.is_empty()
 }
 
 /// One idempotent reconcile pass for `library_id`: open every shown record that
@@ -287,6 +295,23 @@ mod tests {
         reconcile("local", &snap, &none(), &s);
         assert_eq!(*s.opened.borrow(), vec!["local::w-1"]);
         assert!(s.closed.borrow().is_empty());
+    }
+
+    #[test]
+    fn server_hidden_record_is_not_opened_and_is_closed() {
+        // Theme 5: a record with the server-persisted `hidden` flag is NOT
+        // surfaced — `should_show` is false, so the reconcile neither opens it on
+        // connect nor keeps a native window for it (the mirror: hidden last
+        // session stays hidden). The local `buried` set is empty here, so `hidden`
+        // alone gates it.
+        let mut r = rec("local", "w-1", WindowKind::Terminal);
+        r.hidden = true;
+        let s = FakeSurface::with(&[]);
+        reconcile("local", std::slice::from_ref(&r), &none(), &s);
+        assert!(s.opened.borrow().is_empty(), "hidden record must not open");
+        let s2 = FakeSurface::with(&["local::w-1"]);
+        reconcile("local", std::slice::from_ref(&r), &none(), &s2);
+        assert_eq!(*s2.closed.borrow(), vec!["local::w-1"]);
     }
 
     #[test]

@@ -543,6 +543,37 @@ pub async fn forget_workspace(conn: &DevserverConn, prefix: &str) -> Result<(), 
     Ok(())
 }
 
+/// `POST /api/library/windows/{window_id}/visibility` `{hidden}`: set a devserver
+/// window's SERVER-PERSISTED visibility (Theme 5). The devserver owns its window
+/// registry, so hiding/showing a remote window persists THERE and the desktop
+/// mirrors it on the next connect. Distinct from the `/hide`+`/open` bridge ops
+/// (transient, non-persistent). Fire-and-forget from the bury/unbury chokepoint.
+pub async fn set_window_visibility(
+    conn: &DevserverConn,
+    window_id: &str,
+    hidden: bool,
+) -> Result<(), String> {
+    let url = format!(
+        "{}/api/library/windows/{}/visibility",
+        base_origin(&conn.host, conn.port),
+        window_id
+    );
+    let resp = http_client()?
+        .post(&url)
+        .bearer_auth(&conn.token)
+        .json(&serde_json::json!({ "hidden": hidden }))
+        .send()
+        .await
+        .map_err(|e| format!("setting devserver window visibility: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!(
+            "devserver window visibility returned HTTP {}",
+            resp.status()
+        ));
+    }
+    Ok(())
+}
+
 /// The on/off-toggle URL for a registered workspace: the collection path + the
 /// prefix (an absolute route path) + `/on`. Distinct from the DELETE URL
 /// (= Forget); on/off keeps the registration.

@@ -1041,6 +1041,9 @@ fn build_workspace_window(app: &AppHandle, spec: WindowSpec<'_>) -> Result<(), S
                                 view.bury(&label_for_close);
                             }
                             state.bury_window(&label_for_close, &title);
+                            // Theme-5: persist hidden=true so the local window menu's
+                            // Open/Hidden split + a relaunch mirror it (routes local:: -> embedded).
+                            crate::persist_window_hidden(&state, &label_for_close, true);
                             crate::rebuild_window_menu(&app_for_close);
                             if !silent_hide {
                                 show_bury_notice(&app_for_close, &title);
@@ -1083,6 +1086,10 @@ fn build_workspace_window(app: &AppHandle, spec: WindowSpec<'_>) -> Result<(), S
                                 }
                             }
                             state.bury_window(&label_for_close, &title);
+                            // Theme-5: persist hidden=true to the OWNING devserver
+                            // (routes lib-<hex>:: -> its remote /visibility route) so
+                            // the next connect mirrors it.
+                            crate::persist_window_hidden(&state, &label_for_close, true);
                             crate::rebuild_window_menu(&app_for_close);
                             if !silent_hide {
                                 show_bury_notice(&app_for_close, &title);
@@ -1138,12 +1145,14 @@ fn build_workspace_window(app: &AppHandle, spec: WindowSpec<'_>) -> Result<(), S
                         let title = window.title().unwrap_or_else(|_| label_for_close.clone());
                         let _ = window.hide();
                         state.bury_window(&label_for_close, &title);
+                        // Theme-5: persist hidden=true for windows with a registry
+                        // row — the control terminal (routes control-terminal- ->
+                        // embedded). The control row's visibility is now uniform with
+                        // all windows (this replaces the old set_control_connected
+                        // hack). Non-registry windows here (a standalone terminal-,
+                        // an outbound webview) are a no-op in the router.
+                        crate::persist_window_hidden(&state, &label_for_close, true);
                         crate::rebuild_window_menu(&app_for_close);
-                        // The control terminal is now a chan-library registry row
-                        // (UNIFY/ARCH): its launcher dot reflects PTY-alive (resolved
-                        // at read time from its control tenant), uniform with all
-                        // windows — no desktop-side shown/hidden flip on bury (that
-                        // returns uniformly via the server-persisted hidden work).
                         if !silent_hide {
                             show_bury_notice(&app_for_close, &title);
                         }
