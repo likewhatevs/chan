@@ -224,6 +224,11 @@ pub struct WorkspaceHost {
     /// `WindowPresence` connect/disconnect, tenant on/off — so the watch feed
     /// pushes a fresh snapshot. The aggregate every client's reconcile awaits.
     library_change_notify: Arc<Notify>,
+    /// Fires ONLY when the library's pane-highlight colour changes (Theme 6), so
+    /// the `local-color/watch` feed re-pushes `{ color }`. Dedicated (not
+    /// `library_change_notify`) so a colour watcher never wakes on unrelated
+    /// window-set churn, and window watchers never wake on a colour change.
+    local_color_notify: Arc<Notify>,
     /// The library root's fallback router, served when no tenant prefix matches
     /// a request (the launcher SPA + its `/api/library/*` surface live here).
     /// Installed once via [`install_root_fallback`](Self::install_root_fallback);
@@ -300,6 +305,7 @@ impl WorkspaceHost {
             terminal_tenant_prefix: OnceLock::new(),
             control_tenants: RwLock::new(HashMap::new()),
             library_change_notify: Arc::new(Notify::new()),
+            local_color_notify: Arc::new(Notify::new()),
             root_fallback: OnceLock::new(),
         }
     }
@@ -444,6 +450,18 @@ impl WorkspaceHost {
     /// registry mint/discard, presence connect/disconnect, and tenant on/off.
     pub fn library_change_notify(&self) -> Arc<Notify> {
         self.library_change_notify.clone()
+    }
+
+    /// The colour-change signal the `local-color/watch` feed awaits (Theme 6).
+    pub fn local_color_notify(&self) -> Arc<Notify> {
+        self.local_color_notify.clone()
+    }
+
+    /// Fire the colour-change signal — called after the local-colour store is
+    /// written (`handle_set_local_color`), so every `local-color/watch`
+    /// subscriber re-reads + re-applies the new colour.
+    pub fn notify_local_color_change(&self) {
+        self.local_color_notify.notify_waiters();
     }
 
     /// Fire the aggregate library-change signal so the window-set watch feed

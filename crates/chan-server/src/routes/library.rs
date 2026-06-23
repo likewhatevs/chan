@@ -61,6 +61,11 @@ struct LauncherState {
 /// leaks through URL logs and the SPA `fetch` can set the header).
 const WATCH_WS_PATH: &str = "/api/library/windows/watch";
 
+/// The local-colour watch WS path — the other `/api/library/*` route that
+/// accepts the bearer as `?t=` (a browser WebSocket can't set a header), same
+/// rationale as [`WATCH_WS_PATH`].
+const LOCAL_COLOR_WATCH_WS_PATH: &str = "/api/library/local-color/watch";
+
 /// Build the launcher router installed as the [`WorkspaceHost`] root fallback:
 /// the static launcher SPA ([`serve_launcher`]) plus the host-backed
 /// `/api/library/*` data surface (windows today; workspaces next). One bundle,
@@ -183,6 +188,10 @@ pub fn launcher_router(
             "/api/library/local-color",
             get(handle_get_local_color).put(handle_set_local_color),
         )
+        .route(
+            "/api/library/local-color/watch",
+            get(handle_watch_local_color),
+        )
         .with_state(Arc::new(LauncherState {
             host: host.clone(),
             serve_addr: serve_addr.clone(),
@@ -229,7 +238,8 @@ async fn require_launcher_bearer(token: String, req: Request<Body>, next: Next) 
         .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix("Bearer "));
-    let query_token = (req.uri().path() == WATCH_WS_PATH)
+    let path = req.uri().path();
+    let query_token = (path == WATCH_WS_PATH || path == LOCAL_COLOR_WATCH_WS_PATH)
         .then(|| req.uri().query().and_then(query_bearer))
         .flatten();
     let expected = token.as_bytes();
@@ -1018,8 +1028,58 @@ async fn handle_set_local_color(
         return StatusCode::NOT_FOUND.into_response();
     };
     match store.set(body.color) {
-        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Ok(()) => {
+            // Theme 6: broadcast the change so every open window of this library
+            // live-updates its `--pane-highlight-color` (and new windows read
+            // fresh), replacing the desktop's old per-library colour poll.
+            state.host.notify_local_color_change();
+            StatusCode::NO_CONTENT.into_response()
+        }
         Err(msg) => (StatusCode::BAD_REQUEST, msg).into_response(),
+    }
+}
+
+/// `GET /api/library/local-color/watch`: a WebSocket that pushes the library's
+/// pane-highlight colour (`{ color }`) on connect and on every change, so a pane
+/// live-updates `--pane-highlight-color` without polling. Bearer-gated via the
+/// `?t=` query token (a browser WS can't set a header), like the window watch.
+/// One endpoint serves both surfaces: a local window hits the desktop loopback,
+/// a devserver window hits that devserver.
+async fn handle_watch_local_color(
+    State(state): State<Arc<LauncherState>>,
+    ws: WebSocketUpgrade,
+) -> Response {
+    ws.on_upgrade(move |socket| watch_local_color(socket, state))
+}
+
+/// Push a `{ color }` snapshot on connect and on every colour change. Mirrors
+/// [`watch_library_windows`]: arm the change waiter BEFORE the snapshot so a
+/// change between snapshot and await is never missed; the loop ends when the
+/// client disconnects. Driven by the dedicated `local_color_notify` (fired by
+/// [`handle_set_local_color`]), so it does not wake on unrelated window changes.
+async fn watch_local_color(mut socket: WebSocket, state: Arc<LauncherState>) {
+    let notify = state.host.local_color_notify();
+    let changed = notify.notified();
+    tokio::pin!(changed);
+    loop {
+        changed.as_mut().enable();
+        let color = state.host.local_color_store().and_then(|store| store.get());
+        let frame = match serde_json::to_string(&LocalColor { color }) {
+            Ok(frame) => frame,
+            Err(_) => break,
+        };
+        if socket.send(Message::Text(frame)).await.is_err() {
+            break; // the client is gone
+        }
+        tokio::select! {
+            _ = changed.as_mut() => {
+                changed.set(notify.notified());
+            }
+            msg = socket.recv() => match msg {
+                None | Some(Err(_)) | Some(Ok(Message::Close(_))) => break,
+                _ => {}
+            },
+        }
     }
 }
 
@@ -1640,6 +1700,55 @@ mod window_op_route_tests {
         )
         .await;
         assert_eq!(status, StatusCode::NOT_FOUND, "unknown id");
+    }
+
+    /// Theme 6: setting the colour fires the dedicated `local_color_notify` (the
+    /// signal `local-color/watch` awaits) AND the new value is immediately
+    /// readable. The WS push loop (`watch_local_color`) is a line-for-line mirror
+    /// of the window watch; this covers the new wiring (set ⇒ broadcast signal ⇒
+    /// fresh read) without a WS-client dep the chan-server test harness lacks.
+    #[tokio::test]
+    async fn set_local_color_fires_notify_and_is_readable() {
+        struct MemColor(std::sync::Mutex<Option<String>>);
+        impl chan_library::LocalColorStore for MemColor {
+            fn get(&self) -> Option<String> {
+                self.0.lock().unwrap().clone()
+            }
+            fn set(&self, color: Option<String>) -> Result<(), String> {
+                *self.0.lock().unwrap() = color;
+                Ok(())
+            }
+        }
+        let host = Arc::new(WorkspaceHost::new(library(), crate::route_builder()));
+        host.install_local_color_store(Arc::new(MemColor(std::sync::Mutex::new(None))));
+        let router = launcher_router(host.clone(), None, None);
+
+        // Arm the colour-change waiter BEFORE the set (notify_waiters has no
+        // permit, so the waiter must exist first — same ordering the watch uses).
+        let notify = host.local_color_notify();
+        let notified = notify.notified();
+        tokio::pin!(notified);
+        notified.as_mut().enable();
+
+        let (status, _) = send(
+            &router,
+            "PUT",
+            "/api/library/local-color",
+            Some(r##"{"color":"#ff00ff"}"##),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NO_CONTENT, "set colour");
+
+        // The dedicated notify fired (so a watcher would re-push).
+        tokio::time::timeout(std::time::Duration::from_millis(500), notified)
+            .await
+            .expect("local_color_notify fired on set");
+
+        // The new colour is immediately readable (what the watch re-sends).
+        let (status, body) = send(&router, "GET", "/api/library/local-color", None).await;
+        assert_eq!(status, StatusCode::OK);
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["color"], "#ff00ff");
     }
 
     #[tokio::test]
