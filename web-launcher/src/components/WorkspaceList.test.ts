@@ -11,6 +11,7 @@ import { mount, unmount, flushSync } from "svelte";
 import WorkspaceList from "./WorkspaceList.svelte";
 import { library, loadLibrary } from "../state/library.svelte";
 import { toggleSelected, clearSelection } from "../state/selection.svelte";
+import { beginPending, clearAllPending, wsKey } from "../state/pending.svelte";
 
 // Pin the in-memory mock as the backend so the mounted list renders real rows
 // with no live server, independent of how the app composes its default backend.
@@ -31,6 +32,7 @@ function ariaLabels(): string[] {
 
 beforeEach(async () => {
   clearSelection();
+  clearAllPending();
   await loadLibrary();
 });
 
@@ -40,6 +42,7 @@ afterEach(() => {
   target = null;
   app = null;
   clearSelection();
+  clearAllPending();
 });
 
 describe("WorkspaceList redesign", () => {
@@ -87,5 +90,29 @@ describe("WorkspaceList redesign", () => {
     expect(target.querySelector('[aria-label="Bulk actions"]')).toBeNull();
     const checks = [...target.querySelectorAll('input[type="checkbox"]')] as HTMLInputElement[];
     expect(checks.some((c) => c.checked)).toBe(true);
+  });
+
+  it("swaps a local row's on/off button for a disabled spinner while its op is pending", () => {
+    target = document.createElement("div");
+    document.body.appendChild(target);
+    app = mount(WorkspaceList, { target });
+
+    const id = library.workspaces.find((w) => w.devserver_id === null)!.workspace_id;
+    // Before: the on/off button reads "Turn off/on …", enabled.
+    const toggle = () =>
+      [...target!.querySelectorAll("button[aria-label]")].find((b) =>
+        /^(Turn off|Turn on|Working on) /.test(b.getAttribute("aria-label") ?? ""),
+      ) as HTMLButtonElement | undefined;
+    expect(toggle()!.disabled).toBe(false);
+    expect(toggle()!.getAttribute("aria-label")).not.toMatch(/^Working on /);
+
+    // Begin a pending marker for this row → the button becomes a disabled
+    // spinner (real Svelte reactivity, not static).
+    beginPending(wsKey(id), "off");
+    flushSync();
+    const spinning = target.querySelector('button[aria-label^="Working on"]') as HTMLButtonElement;
+    expect(spinning).toBeTruthy();
+    expect(spinning.disabled).toBe(true);
+    expect(spinning.querySelector("svg.spin")).toBeTruthy();
   });
 });

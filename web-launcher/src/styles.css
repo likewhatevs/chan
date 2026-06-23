@@ -135,6 +135,19 @@ body {
   color: var(--danger);
 }
 
+/* In-flight spinner: a lucide <LoaderCircle class="spin"> on a button whose
+   on/off / connect op is pending (see pending.svelte.ts). The class lands on the
+   icon's own <svg>; this stylesheet is global so it reaches it. */
+.spin {
+  animation: chan-spin 0.9s linear infinite;
+}
+
+@keyframes chan-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 /* Multi-select affordances shared by the workspace + devserver lists. */
 .row-check {
   margin-right: 0.6rem;

@@ -9,6 +9,7 @@ import { mount, unmount, flushSync } from "svelte";
 import DevserverList from "./DevserverList.svelte";
 import { library, loadLibrary, saveDevserver } from "../state/library.svelte";
 import { clearSelection } from "../state/selection.svelte";
+import { beginPending, clearAllPending, dsKey } from "../state/pending.svelte";
 
 // Pin the in-memory mock as the backend so the list renders the seed devserver
 // with no live server. The async-import factory dodges vi.mock's hoist trap.
@@ -34,6 +35,7 @@ function byAria(prefix: string): HTMLButtonElement | undefined {
 
 beforeEach(async () => {
   clearSelection();
+  clearAllPending();
   await loadLibrary();
 });
 
@@ -43,6 +45,7 @@ afterEach(() => {
   target = null;
   app = null;
   clearSelection();
+  clearAllPending();
 });
 
 describe("DevserverList redesign", () => {
@@ -81,5 +84,21 @@ describe("DevserverList redesign", () => {
     expect(fresh.connected).toBe(true);
     // The row flips to Disconnect after connecting.
     expect(byAria("Disconnect fresh")).toBeTruthy();
+  });
+
+  it("swaps Connect/Disconnect for a disabled spinner while the devserver op is pending", () => {
+    // The seed devserver "prod" (ds-1) is connected → shows Disconnect.
+    mountList();
+    expect(byAria("Disconnect prod")).toBeTruthy();
+
+    // Begin a pending marker → the toggle becomes a disabled "Working on" spinner
+    // (real Svelte reactivity), and the Disconnect action is gone meanwhile.
+    beginPending(dsKey("ds-1"), "disconnected");
+    flushSync();
+    const spinning = byAria("Working on prod");
+    expect(spinning).toBeTruthy();
+    expect(spinning!.disabled).toBe(true);
+    expect(spinning!.querySelector("svg.spin")).toBeTruthy();
+    expect(byAria("Disconnect prod")).toBeUndefined();
   });
 });

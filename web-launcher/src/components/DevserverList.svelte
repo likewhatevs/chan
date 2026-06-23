@@ -9,7 +9,7 @@
   // the rows with Edit only (the registry CRUD is browser-testable; the desktop
   // actions and bulk are hidden where no desktop bridge exists). A stored token
   // shows as a lock chip (the value is never returned).
-  import { Pencil, Plug, SquareTerminal, Unplug } from "lucide-svelte";
+  import { LoaderCircle, Pencil, Plug, SquareTerminal, Unplug } from "lucide-svelte";
   import {
     library,
     connectDevserver,
@@ -19,6 +19,7 @@
     clearError,
   } from "../state/library.svelte";
   import { isSelected, toggleSelected } from "../state/selection.svelte";
+  import { isPending, dsKey } from "../state/pending.svelte";
   import { openEditDevserver } from "../state/dialog.svelte";
   import { readOnly } from "../state/capabilities";
   import type { DevserverEntry } from "../api/library";
@@ -86,7 +87,17 @@
               <Pencil size={16} />
             </button>
             {#if !readOnly}
-              {#if ds.connected}
+              {#if isPending(dsKey(ds.id))}
+                <button
+                  class="icon-btn"
+                  class:on={ds.connected}
+                  type="button"
+                  disabled
+                  title="Working…"
+                  aria-label={`Working on ${displayName(ds)}`}>
+                  <LoaderCircle class="spin" size={16} />
+                </button>
+              {:else if ds.connected}
                 <button
                   class="icon-btn on"
                   type="button"

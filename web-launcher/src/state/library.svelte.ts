@@ -5,6 +5,15 @@
 
 import { backend } from "../api/backend";
 import type { DevserverEntry, DevserverInput, WindowRecord, WorkspaceEntry } from "../api/library";
+import {
+  beginPending,
+  clearPending,
+  dsKey,
+  reconcile,
+  servedKey,
+  wsKey,
+  type PendingTarget,
+} from "./pending.svelte";
 
 interface LibraryState {
   workspaces: WorkspaceEntry[];
@@ -39,6 +48,23 @@ export function clearError(): void {
   library.error = null;
 }
 
+// Build the per-row state map the pending store reconciles against (the same
+// keys the action handlers + the spinner UI use), then clear any in-flight
+// marker whose row has reached its target / is gone / has timed out. Called
+// after every registry refresh + on loadLibrary, so a finished or abandoned
+// on/off / connect stops spinning and the row shows its real state.
+function reconcilePending(): void {
+  const current: Record<string, PendingTarget> = {};
+  for (const w of library.workspaces) {
+    if (w.devserver_id === null) current[wsKey(w.workspace_id)] = w.on ? "on" : "off";
+    else current[servedKey(w.devserver_id, w.prefix)] = w.on ? "on" : "off";
+  }
+  for (const d of library.devservers) {
+    current[dsKey(d.id)] = d.connected ? "connected" : "disconnected";
+  }
+  reconcile(current);
+}
+
 /** Load both registries and subscribe to the window feed (idempotent watch). */
 export async function loadLibrary(): Promise<void> {
   library.loading = true;
@@ -50,6 +76,10 @@ export async function loadLibrary(): Promise<void> {
     ]);
     library.workspaces = workspaces;
     library.devservers = devservers;
+    // On mount/reload: clear any persisted marker the real state already
+    // satisfies (the op finished while we were away), so the spinner picks up
+    // the latest state and only survives for rows still genuinely in-flight.
+    reconcilePending();
   } catch (e) {
     library.error = errorText(e);
   } finally {
@@ -83,6 +113,7 @@ export function stopWatching(): void {
 
 async function refreshWorkspaces(): Promise<void> {
   library.workspaces = await backend.listWorkspaces();
+  reconcilePending();
 }
 
 // The live re-fetch the window-watch feed drives. The feed pushes a full
@@ -104,6 +135,7 @@ async function refreshWorkspacesLive(): Promise<void> {
       liveRefreshPending = false;
       library.workspaces = await backend.listWorkspaces();
     } while (liveRefreshPending);
+    reconcilePending();
   } catch {
     // Best-effort: a failed live re-fetch must not tear down the feed.
   } finally {
@@ -113,6 +145,7 @@ async function refreshWorkspacesLive(): Promise<void> {
 
 async function refreshDevservers(): Promise<void> {
   library.devservers = await backend.listDevservers();
+  reconcilePending();
 }
 
 // The live devserver re-fetch the window-watch feed drives, mirroring
@@ -134,6 +167,7 @@ async function refreshDevserversLive(): Promise<void> {
       liveDevserversRefreshPending = false;
       library.devservers = await backend.listDevservers();
     } while (liveDevserversRefreshPending);
+    reconcilePending();
   } catch {
     // Best-effort: a failed live re-fetch must not tear down the feed.
   } finally {
@@ -147,8 +181,15 @@ export async function addLocalWorkspace(path: string): Promise<void> {
 }
 
 export async function toggleWorkspace(id: string, on: boolean, force?: boolean): Promise<void> {
-  await backend.setWorkspaceOn(id, on, force);
-  await refreshWorkspaces();
+  const key = wsKey(id);
+  beginPending(key, on ? "on" : "off");
+  try {
+    await backend.setWorkspaceOn(id, on, force);
+  } catch (e) {
+    clearPending(key); // stop the spinner; the error surfaces / the confirm opens
+    throw e;
+  }
+  await refreshWorkspaces(); // reconcile clears the marker once on/off has landed
 }
 
 export async function removeWorkspace(id: string): Promise<void> {
@@ -186,15 +227,29 @@ export async function removeDevserver(id: string): Promise<void> {
 /** Connect a devserver: the desktop runs its connect command and dials the URL.
  * Its windows + served workspaces then appear in the feed via the watch push. */
 export async function connectDevserver(id: string): Promise<void> {
-  await backend.connectDevserver(id);
-  await refreshDevservers();
+  const key = dsKey(id);
+  beginPending(key, "connected");
+  try {
+    await backend.connectDevserver(id);
+  } catch (e) {
+    clearPending(key);
+    throw e;
+  }
+  await refreshDevservers(); // reconcile clears the marker once connected
 }
 
 /** Disconnect a devserver: its windows + served-workspace rows leave the feed;
  * the registry entry stays so Connect can redial. */
 export async function disconnectDevserver(id: string): Promise<void> {
-  await backend.disconnectDevserver(id);
-  await refreshDevservers();
+  const key = dsKey(id);
+  beginPending(key, "disconnected");
+  try {
+    await backend.disconnectDevserver(id);
+  } catch (e) {
+    clearPending(key);
+    throw e;
+  }
+  await refreshDevservers(); // reconcile clears the marker once disconnected
 }
 
 /** Open a terminal window on a connected devserver. The window feed updates
@@ -220,7 +275,16 @@ export async function setDevserverWorkspaceOn(
   on: boolean,
   force?: boolean,
 ): Promise<void> {
-  await backend.setDevserverWorkspaceOn(id, prefix, on, force);
+  const key = servedKey(id, prefix);
+  beginPending(key, on ? "on" : "off");
+  try {
+    await backend.setDevserverWorkspaceOn(id, prefix, on, force);
+  } catch (e) {
+    clearPending(key); // stop the spinner; a 409 live-terminal opens the confirm
+    throw e;
+  }
+  // No direct refresh here — the watch push drives refreshWorkspacesLive, whose
+  // reconcile clears the marker once the served row flips.
 }
 
 /** Forget (unmount + drop) a connected devserver's served workspace by prefix. */

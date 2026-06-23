@@ -9,7 +9,7 @@
   // so the bar's ordered Remove can forget them on the right devserver. Remove is
   // bulk-only (no per-row Forget); the row still routes its on/off/open to the
   // owning devserver. The read-only surface shows the on-state statically.
-  import { AppWindow, Power } from "lucide-svelte";
+  import { AppWindow, LoaderCircle, Power } from "lucide-svelte";
   import {
     library,
     toggleWorkspace,
@@ -22,6 +22,7 @@
   import { liveTerminalsCount } from "../api/library";
   import { requestConfirm } from "../state/confirm.svelte";
   import { isSelected, toggleSelected } from "../state/selection.svelte";
+  import { isPending, servedKey, wsKey } from "../state/pending.svelte";
   import { basename } from "../lib/windowLabel";
   import { readOnly } from "../state/capabilities";
   import type { WorkspaceEntry } from "../api/library";
@@ -151,10 +152,21 @@
                 class="icon-btn"
                 class:on={ws.on}
                 type="button"
-                title={ws.on ? "Turn off" : "Turn on"}
-                aria-label={`${ws.on ? "Turn off" : "Turn on"} ${displayName(ws)}`}
+                disabled={isPending(wsKey(ws.workspace_id))}
+                title={isPending(wsKey(ws.workspace_id))
+                  ? "Working…"
+                  : ws.on
+                    ? "Turn off"
+                    : "Turn on"}
+                aria-label={isPending(wsKey(ws.workspace_id))
+                  ? `Working on ${displayName(ws)}`
+                  : `${ws.on ? "Turn off" : "Turn on"} ${displayName(ws)}`}
                 onclick={() => toggleLocalWorkspace(ws.workspace_id, !ws.on)}>
-                <Power size={16} />
+                {#if isPending(wsKey(ws.workspace_id))}
+                  <LoaderCircle class="spin" size={16} />
+                {:else}
+                  <Power size={16} />
+                {/if}
               </button>
             {/if}
           </div>
@@ -199,10 +211,21 @@
                 class="icon-btn"
                 class:on={ws.on}
                 type="button"
-                title={ws.on ? "Turn off" : "Turn on"}
-                aria-label={`${ws.on ? "Turn off" : "Turn on"} ${displayName(ws)}`}
+                disabled={isPending(servedKey(g.devserverId, ws.prefix))}
+                title={isPending(servedKey(g.devserverId, ws.prefix))
+                  ? "Working…"
+                  : ws.on
+                    ? "Turn off"
+                    : "Turn on"}
+                aria-label={isPending(servedKey(g.devserverId, ws.prefix))
+                  ? `Working on ${displayName(ws)}`
+                  : `${ws.on ? "Turn off" : "Turn on"} ${displayName(ws)}`}
                 onclick={() => toggleRemoteWorkspace(g.devserverId, ws.prefix, !ws.on)}>
-                <Power size={16} />
+                {#if isPending(servedKey(g.devserverId, ws.prefix))}
+                  <LoaderCircle class="spin" size={16} />
+                {:else}
+                  <Power size={16} />
+                {/if}
               </button>
             {/if}
           </div>
