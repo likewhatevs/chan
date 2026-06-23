@@ -9,12 +9,18 @@
 // `runControlTerminalClosedSurvey` (dropped in the SPA migration, commit
 // 151f1a7b). Desktop-only: the driving event never fires in a plain browser.
 //
-// Disconnect division: the SPA DRIVES disconnect/reconnect through the existing
-// HTTP devserver actions. The desktop only emits the raw event (it can't know
-// re-run vs abandon), so the user's choice has to be communicated by the call
-// the SPA makes — Re-run = disconnect+connect, Abandon = disconnect — and the
-// desktop reaps the stale control window as part of that disconnect. (Pending
-// @@Lead's ratification of who owns the disconnect.)
+// Disconnect division (ratified — dev/v0.47.0/team/tasks/contract-Lead-bugB-disconnect.md):
+// the SPA DRIVES reconnect/disconnect through the existing HTTP devserver
+// actions. The desktop only emits the raw event (it can't know re-run vs
+// abandon), so the user's choice is communicated by the call the SPA makes —
+// Re-run = disconnect+connect, Edit = disconnect+edit form, Abandon = disconnect.
+// Two pieces the SPA does NOT own:
+//   - The stuck Control window record is reaped SERVER-SIDE (@@Devserver T2b) on
+//     PTY exit, uniformly for every outcome incl. Dismiss — neither this SPA nor
+//     the desktop reaps it.
+//   - The desktop flips the devserver `connected:false` UNCONDITIONALLY on the
+//     event, so a dead devserver never shows connected even on Dismiss/no-response
+//     (Abandon's explicit disconnect is then idempotent with that flip).
 
 import { library, connectDevserver, disconnectDevserver, reportError } from "./library.svelte";
 import { openEditDevserver } from "./dialog.svelte";
@@ -114,10 +120,12 @@ export async function editControlClosed(): Promise<void> {
   if (ds) openEditDevserver(ds);
 }
 
-/** Abandon: drop the dead connection. The desktop reaps the stale control
- * window as part of its disconnect handler, so the closed terminal leaves the
- * feed. A genuine disconnect failure surfaces in the banner (not swallowed —
- * the disconnect IS the action here). */
+/** Abandon: drop the dead connection (idempotent with the desktop's
+ * unconditional `connected:false` flip on the event). The stale Control window
+ * record itself is reaped server-side by @@Devserver T2b on PTY exit, not by
+ * this disconnect, so it leaves the feed regardless. A genuine disconnect
+ * failure surfaces in the banner (not swallowed — the disconnect IS the action
+ * here). */
 export async function abandonControlClosed(): Promise<void> {
   if (controlClosed.busy || !controlClosed.id) return;
   const id = controlClosed.id;
@@ -131,8 +139,10 @@ export async function abandonControlClosed(): Promise<void> {
   }
 }
 
-/** Dismiss without acting (backdrop / Escape / ×). The devserver is left as-is;
- * the desktop's own teardown on the event still reaps the window. */
+/** Dismiss without acting (backdrop / Escape / ×). No SPA action — yet the dead
+ * state still becomes correct without us: the desktop flips `connected:false`
+ * unconditionally on the event, and the server (@@Devserver T2b) reaps the
+ * Control window on PTY exit. */
 export function dismissControlClosed(): void {
   if (controlClosed.busy) return;
   close();
