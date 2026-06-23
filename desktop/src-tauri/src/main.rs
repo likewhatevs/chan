@@ -2051,6 +2051,15 @@ fn register_devserver_from_handoff(
         token: None,
         auto_hide_control: false,
     })?;
+    // The launcher live-updates its devserver list from the window-watch feed
+    // (`refreshDevserversLive`). A registry add mints no window, so this
+    // OUT-OF-BAND `chan open <url>` add fires no feed push and stays invisible
+    // until a manual reload. The launcher's own add/edit form self-refreshes
+    // (`saveDevserver` re-lists) and removal already pushes via its connection
+    // teardown, so this handoff is the one path that needs an explicit signal.
+    if let Some(embedded) = state.embedded() {
+        embedded.signal_library_change();
+    }
     Ok(())
 }
 
