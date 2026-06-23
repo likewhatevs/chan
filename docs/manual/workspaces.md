@@ -6,7 +6,7 @@ A workspace is a directory that contains markdown and related files. Chan treats
 
 On launch, Chan Desktop opens an empty workspaces window and a standalone terminal; it never creates a workspace for you (no `Chan` folder under Documents, no seeded manual). From the workspaces window, open an existing folder, attach a running `chan open` URL, or receive a remote workspace through the listener.
 
-![Chan Desktop's workspaces launcher with the New workspace dialog open](images/desktop-workspaces.png)
+![](./image-4.png#w=705)
 
 ## Terminal
 
@@ -40,7 +40,7 @@ There is no TLS and only a bearer-token gate, so keep the bind on loopback and r
 
 Chan watches the workspace tree for external edits. The files are still yours: edit them with another program, commit them to git, or move the folder as a normal directory.
 
-![](./image-3.png#w=387)
+![](./image-3.png#w=650)
 
 ## File transfers
 
