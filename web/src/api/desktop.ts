@@ -128,6 +128,26 @@ export async function readDroppedPaths(): Promise<string[]> {
   }
 }
 
+/// One file chosen in the native upload picker: base name + raw bytes (the
+/// `Vec<u8>` crosses the IPC bridge as a JSON number array).
+export interface PickedUploadFile {
+  name: string;
+  bytes: number[];
+}
+
+/// Raise chan-desktop's NATIVE multi-file open picker (the `pick_upload_files`
+/// IPC) and return the chosen files' bytes. `cs upload` cannot raise the SPA's
+/// programmatic `<input type=file>` click on WKWebView (no user gesture, so the
+/// click is silently dropped — the same wall as the clipboard-paste quirk), so
+/// on desktop we open a native panel in Rust instead; the caller wraps the
+/// results in `File` objects and feeds the same upload pipeline the Inspector
+/// pill uses. `[]` = the user cancelled. THROWS on ACL refusal (remote-served
+/// `outbound-*` windows don't get it) or IPC failure — an explicit `cs upload`
+/// deserves a visible error, not a silent no-op (which is the bug we're fixing).
+export async function pickUploadFiles(): Promise<PickedUploadFile[]> {
+  return tauriInvoke<PickedUploadFile[]>("pick_upload_files");
+}
+
 /// Reload the chan window. On chan-desktop calls the
 /// `reload_window` IPC which fires `WebviewWindow::reload()`.
 /// Falls back to `window.location.reload()` on web or on IPC

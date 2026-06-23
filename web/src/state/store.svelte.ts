@@ -64,7 +64,7 @@ import {
   setTransferSignalSink,
   uploadInFlight,
 } from "./transfers.svelte";
-import { isTauriDesktop, runDesktopDownload } from "../api/desktop";
+import { isTauriDesktop, pickUploadFiles, runDesktopDownload } from "../api/desktop";
 import {
   appendDefaultMd,
   preserveExtension,
@@ -1109,7 +1109,18 @@ function terminalSlotForName(name: string): string | null {
 /// files to the SAME `fileOps.uploadFilesTo` the pill uses (shared
 /// transfer-progress indicator). The input is detached after a pick OR a
 /// cancel; an empty selection is a no-op.
+///
+/// On chan-desktop the synthesized input is useless: WKWebView silently drops a
+/// programmatic file-input `.click()` made outside a user gesture (a `cs upload`
+/// arrives via a window-command, not a click), so no picker ever shows. There we
+/// open a NATIVE picker instead (`pickUploadFiles`) and wrap the returned bytes
+/// in `File` objects for the SAME `uploadFilesTo`. Mirrors how
+/// `downloadPathWithProgress` branches on `isTauriDesktop()`.
 function raiseUploadPicker(destDir: string): void {
+  if (isTauriDesktop()) {
+    void raiseDesktopUploadPicker(destDir);
+    return;
+  }
   const input = document.createElement("input");
   input.type = "file";
   input.multiple = true;
@@ -1128,6 +1139,25 @@ function raiseUploadPicker(destDir: string): void {
   input.addEventListener("cancel", () => input.remove(), { once: true });
   document.body.appendChild(input);
   input.click();
+}
+
+/// chan-desktop upload path: open the native picker, wrap the chosen bytes in
+/// `File` objects, and hand them to the same `fileOps.uploadFilesTo` pipeline as
+/// the browser path. An empty result is a cancel (no-op); an ACL refusal /
+/// IPC failure surfaces as a status (an explicit `cs upload` should not fail
+/// silently — that silent no-op is the bug this fixes).
+async function raiseDesktopUploadPicker(destDir: string): Promise<void> {
+  let picked: Awaited<ReturnType<typeof pickUploadFiles>>;
+  try {
+    picked = await pickUploadFiles();
+  } catch (err) {
+    ui.status = `upload failed: ${err instanceof Error ? err.message : String(err)}`;
+    ui.statusKind = "persistent";
+    return;
+  }
+  if (picked.length === 0) return;
+  const files = picked.map((f) => new File([new Uint8Array(f.bytes)], f.name));
+  await fileOps.uploadFilesTo(destDir, files);
 }
 
 async function handleWindowCommand(raw: unknown): Promise<void> {

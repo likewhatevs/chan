@@ -13,6 +13,7 @@ mod native_dialog;
 mod pdf;
 mod registry;
 mod serve;
+mod upload;
 mod watcher;
 mod window_ops;
 mod window_watcher;
@@ -3347,6 +3348,11 @@ fn main() {
             // ACL-scoped to locally-served windows (capabilities/
             // local-drop.json) — the drag pasteboard is system-wide.
             dropped_paths::read_dropped_paths,
+            // Native upload picker for `cs upload` (WKWebView blocks the SPA's
+            // gesture-less file-input click). ACL-scoped to locally-served
+            // windows (capabilities/local-upload.json) — a remote-served
+            // webview must not pop a native picker over the user's disk.
+            upload::pick_upload_files,
             // Native vector PDF export. macOS-only: WKWebView's `createPDF`
             // has no Linux/Windows equivalent wired, and the SPA hides the
             // "Export to PDF" button off-macOS so this is never invoked

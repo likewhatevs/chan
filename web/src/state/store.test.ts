@@ -704,6 +704,48 @@ describe("window commands", () => {
     uploadSpy.mockRestore();
   });
 
+  test("upload (desktop) opens the native picker and uploads the picked bytes (A4)", async () => {
+    window.history.replaceState(null, "", "/?w=window-a");
+    // Stub the Tauri global so isTauriDesktop() is true and pick_upload_files
+    // returns one file; raiseUploadPicker must take the native-picker branch
+    // (a programmatic <input> click is the no-op WKWebView bug we're fixing).
+    const tauriWindow = window as unknown as {
+      __TAURI__?: { core: { invoke: (cmd: string) => Promise<unknown> } };
+    };
+    tauriWindow.__TAURI__ = {
+      core: {
+        invoke: async (cmd: string) =>
+          cmd === "pick_upload_files" ? [{ name: "a.md", bytes: [104, 105] }] : undefined,
+      },
+    };
+    const clickSpy = vi
+      .spyOn(HTMLInputElement.prototype, "click")
+      .mockImplementation(() => {});
+    const uploadSpy = vi.spyOn(fileOps, "uploadFilesTo").mockImplementation(async () => {});
+    try {
+      onWatchEvent({
+        type: "window_command",
+        window_id: "window-a",
+        command: "upload",
+        path: "notes",
+      });
+      await vi.waitFor(() => expect(uploadSpy).toHaveBeenCalledTimes(1));
+      // Native branch only — never the gesture-less <input> click.
+      expect(clickSpy).not.toHaveBeenCalled();
+      const [destDir, dropped] = uploadSpy.mock.calls[0]!;
+      expect(destDir).toBe("notes");
+      const files = Array.from(dropped as FileList | File[]);
+      expect(files).toHaveLength(1);
+      expect(files[0]).toBeInstanceOf(File);
+      expect(files[0]!.name).toBe("a.md");
+      expect(files[0]!.size).toBe(2);
+    } finally {
+      delete tauriWindow.__TAURI__;
+      clickSpy.mockRestore();
+      uploadSpy.mockRestore();
+    }
+  });
+
   test("upload / download for a DIFFERENT window are ignored (A4)", () => {
     window.history.replaceState(null, "", "/?w=window-a");
     const dl = vi.spyOn(fileOps, "downloadPathWithProgress").mockImplementation(() => {});

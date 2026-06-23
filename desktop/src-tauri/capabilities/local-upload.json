@@ -1,0 +1,11 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "local-upload",
+  "description": "Native multi-file open picker for `cs upload`, for LOCALLY-served SPA windows only (workspace-*, terminal-*, local::<window_id> watcher-opened workspace windows). Deliberately excludes outbound-*: those webviews render a remote-served SPA, and this command pops a native open panel and reads the chosen files' bytes off the user's local disk — a remote could otherwise harvest arbitrary local files. Mirrors the local-drop scope.",
+  "remote": {
+    "urls": ["http://127.0.0.1:*", "http://localhost:*"]
+  },
+  "local": true,
+  "windows": ["workspace-*", "terminal-*", "local::*"],
+  "permissions": ["allow-pick-upload-files"]
+}
