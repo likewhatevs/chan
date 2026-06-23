@@ -258,29 +258,9 @@ body {
   opacity: 1;
 }
 
-/* On the desktop loopback the whole window-feed row is the open/hide click
-   target; strip the button chrome so it still reads as a row, with a hover
-   wash and a focus ring. The read-only surface renders the row as a static
-   <div> and the dot as a plain indicator. */
-button.row-toggle {
-  width: 100%;
-  font: inherit;
-  color: inherit;
-  border: none;
-  appearance: none;
-  -webkit-appearance: none;
-  text-align: left;
-  cursor: pointer;
-}
-
-button.row-toggle:hover {
-  background: color-mix(in srgb, var(--accent) 8%, var(--bg-card));
-}
-
-button.row-toggle:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: -2px;
-}
+/* The mutable window-feed row exposes [FOCUS] + [SHOW/HIDE] icon buttons (the
+   shared .icon-btn / .row-actions pattern); the read-only surface renders the
+   row as a static <div> with the .dot as a plain connection indicator. */
 
 /* ---- Window feed ------------------------------------------------------ */
 

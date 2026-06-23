@@ -1,7 +1,8 @@
-// Component test: the Open-windows feed renders each window as a whole-row
-// toggle button (the dot is the state indicator) and flips a window's state on
-// click. This exercises the real Svelte 5 runtime (a static check misses the
-// reactive feed re-render after the watch push), per jsdom.
+// Component test: the Open-windows feed renders each window with two icon
+// actions — [FOCUS] (openWindow: focus / un-hide) and [SHOW/HIDE] (toggleWindow:
+// Eye visible / EyeOff hidden) — replacing the old whole-row toggle + dot. This
+// exercises the real Svelte 5 runtime (a static check misses the reactive feed
+// re-render after the watch push, e.g. the Eye↔EyeOff flip), per jsdom.
 
 import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import { mount, unmount, flushSync } from "svelte";
@@ -19,6 +20,12 @@ vi.mock("../api/backend", async () => {
 let target: HTMLElement | null = null;
 let app: Record<string, unknown> | null = null;
 
+function ariaButton(label: string): HTMLButtonElement | undefined {
+  return [...(target?.querySelectorAll("button[aria-label]") ?? [])].find(
+    (b) => b.getAttribute("aria-label") === label,
+  ) as HTMLButtonElement | undefined;
+}
+
 beforeEach(async () => {
   // loadLibrary subscribes the watch; the mock pushes the seed window set
   // synchronously on subscribe, populating library.windows.
@@ -32,26 +39,62 @@ afterEach(() => {
   app = null;
 });
 
-describe("WindowFeed row toggle", () => {
-  it("renders rows as toggle buttons and flips a detached window on click", async () => {
+describe("WindowFeed row actions", () => {
+  it("renders [FOCUS] + [SHOW/HIDE] icon buttons, no whole-row toggle, no dot", () => {
     target = document.createElement("div");
     document.body.appendChild(target);
     app = mount(WindowFeed, { target });
 
-    const rows = [...target.querySelectorAll("button.row-toggle")] as HTMLButtonElement[];
-    expect(rows.length).toBeGreaterThan(0);
-    // Every row carries its connection-state dot indicator.
-    expect(target.querySelector("button.row-toggle .dot")).toBeTruthy();
-    // The seed includes one detached window — its row offers "Open window".
-    const open = rows.find((b) => b.getAttribute("aria-label") === "Open window");
-    expect(open).toBeTruthy();
+    // The whole-row toggle and the status dot are gone on the mutable surface.
+    expect(target.querySelector("button.row-toggle")).toBeNull();
+    expect(target.querySelector(".dot")).toBeNull();
 
-    open!.click();
-    // The mock flips `connected` + pushes the feed; the row re-renders as a
-    // "Hide window" toggle, so no "Open window" row remains.
+    // Every row carries a FOCUS button; the SHOW/HIDE label reflects connected
+    // state (Eye→"Hide window" when visible, EyeOff→"Show window" when hidden).
+    const focusBtns = [...target.querySelectorAll('button[aria-label="Focus window"]')];
+    expect(focusBtns.length).toBeGreaterThan(0);
+    // The seed has both a visible window and one detached window.
+    expect(ariaButton("Hide window")).toBeTruthy();
+    expect(ariaButton("Show window")).toBeTruthy();
+  });
+
+  it("SHOW/HIDE un-hides a detached window (EyeOff→Eye on the live feed)", async () => {
+    target = document.createElement("div");
+    document.body.appendChild(target);
+    app = mount(WindowFeed, { target });
+
+    // The seed includes one detached window — its SHOW/HIDE button shows EyeOff
+    // ("Show window"). Clicking it opens (un-hides) the window.
+    const show = ariaButton("Show window");
+    expect(show).toBeTruthy();
+
+    show!.click();
+    // The mock flips `connected` + pushes the feed; the row re-renders to "Hide
+    // window" (Eye), so no "Show window" button remains.
     await Promise.resolve();
     flushSync();
-    expect(target.querySelector('button.row-toggle[aria-label="Open window"]')).toBeNull();
+    expect(ariaButton("Show window")).toBeUndefined();
+  });
+
+  it("[FOCUS] calls openWindow (focus / un-hide), not hideWindow", async () => {
+    const { backend } = await import("../api/backend");
+    const open = vi.spyOn(backend, "openWindow");
+    const hide = vi.spyOn(backend, "hideWindow");
+
+    target = document.createElement("div");
+    document.body.appendChild(target);
+    app = mount(WindowFeed, { target });
+
+    // The first row is a visible local window; its FOCUS takes focus via
+    // openWindow (the focus / un-hide op) and never hides.
+    ariaButton("Focus window")!.click();
+    await Promise.resolve();
+    flushSync();
+    expect(open).toHaveBeenCalledTimes(1);
+    expect(hide).not.toHaveBeenCalled();
+
+    open.mockRestore();
+    hide.mockRestore();
   });
 
   it("pins the devserver's control terminal FIRST in its group (W3)", () => {

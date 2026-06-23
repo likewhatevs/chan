@@ -241,12 +241,20 @@ export async function openWorkspaceWindow(path: string): Promise<void> {
   await backend.createWindow("workspace", path);
 }
 
-/** Toggle a window from the feed's status dot: hide it if it is connected,
- * otherwise open (focus/un-hide) it. The dot reflects the live feed after the
- * watch push, so there is no optimistic flip here. */
+/** Toggle a window's visibility (the feed's SHOW/HIDE Eye): hide it if it is
+ * connected, otherwise open (focus/un-hide) it. The feed reflects the live state
+ * after the watch push, so there is no optimistic flip here. */
 export async function toggleWindow(w: WindowRecord): Promise<void> {
   if (w.connected) await backend.hideWindow(w.window_id);
   else await backend.openWindow(w.window_id);
+}
+
+/** Focus a window (the feed's FOCUS action): openWindow focuses a live window
+ * and un-hides + focuses a buried one (it is the only un-hide op), matching the
+ * desired focus behavior either way. The feed updates through the watch push, so
+ * there is nothing to refresh here. */
+export async function focusWindow(w: WindowRecord): Promise<void> {
+  await backend.openWindow(w.window_id);
 }
 
 /** The user's name for a remote library, joined by its library id. */
