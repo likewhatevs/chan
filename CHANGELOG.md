@@ -6,6 +6,50 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [v0.47.0] - 2026-06-23
+
+A devserver / launcher lifecycle release: `chan devserver` gains tunnel-only and
+supervised-service controls, the devserver control terminal is unified onto
+chan-library's window model (fixing several connect/feed bugs at the root),
+per-window visibility now persists and is mirrored on connect, and the per-library
+focus-border colour propagates live across all windows of a library.
+
+### Added
+
+- **`chan devserver` tunnel-only mode.** When a tunnel token is present, the
+  devserver no longer binds a local TCP listener by default (the gateway is the
+  surface). `CHAN_DEVSERVER_LISTEN=0/1` overrides; tunnel-off + `LISTEN=0` is a clear
+  error. Added `--stop` / `--restart` for supervised (`--launchd` / `--systemd`)
+  devservers (`--restart` starts a stopped service).
+- **Per-window visibility persists.** A window hidden in one session stays hidden on
+  reconnect and across a chan-desktop restart; the launcher mirrors the persisted
+  layout instead of re-opening every window.
+- **Live per-library focus-border colour.** Setting the focus colour on any pane now
+  updates every open window of that chan-library live, and new windows inherit it.
+
+### Changed
+
+- **The devserver control terminal is now a first-class chan-library window** (unified
+  onto the window registry instead of a desktop-synthesized record): it appears in the
+  launcher's "Open windows" on connect and is reaped when its process exits.
+- The "Open windows" panel shows hidden windows inline with an eye toggle (no separate
+  section).
+- Removed the dead Tauri devserver CRUD commands; the launcher manages devservers over
+  HTTP.
+
+### Fixed
+
+- The devserver group / Control terminal now appears on a fresh (zero-window) connect
+  and survives a reload — previously missing until a second window was minted.
+- Control-terminal process exit surfaces the **re-run / edit / abandon** prompt again,
+  flips the devserver to disconnected when it is actually unreachable, and removes the
+  closed terminal from the feed.
+- A devserver stays connected when its setup-style connect script exits cleanly (a
+  benign exit no longer flips it to disconnected).
+- New windows no longer come up with the default focus-border colour when a per-library
+  colour is set.
+- Closed workspace windows no longer re-open on chan-desktop restart.
+
 ## [v0.46.0] - 2026-06-23
 
 A launcher-polish and fix release on top of the v0.45.0 desktop release: the
