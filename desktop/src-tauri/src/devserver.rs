@@ -358,34 +358,6 @@ fn row_from_entry(
     })
 }
 
-/// `GET /api/library/local-color`: the devserver's OWN pane-highlight colour
-/// (its `LocalColorStore` value, set from a focus-border menu on one of its
-/// panes), or `None` for the default accent. The desktop caches it per devserver
-/// and surfaces it through `DevserverFeed::pane_color` (seam #5 round-3: each
-/// library's colour lives on its own host). `None` on any error — the colour is
-/// best-effort, never blocks.
-pub async fn fetch_local_color(conn: &DevserverConn) -> Option<String> {
-    #[derive(Deserialize)]
-    struct LocalColor {
-        color: Option<String>,
-    }
-    let url = format!(
-        "{}/api/library/local-color",
-        base_origin(&conn.host, conn.port)
-    );
-    let resp = http_client()
-        .ok()?
-        .get(&url)
-        .bearer_auth(&conn.token)
-        .send()
-        .await
-        .ok()?;
-    if !resp.status().is_success() {
-        return None;
-    }
-    resp.json::<LocalColor>().await.ok()?.color
-}
-
 /// One row of `GET /api/devserver/windows` (contracts.md Amendment 8): a
 /// PERSISTED workspace window the desktop enumerates to offer CLOSED-but-
 /// persisted windows for reopen in the Window menu. Deserialized 1:1 from the

@@ -540,10 +540,15 @@ impl DevserverFeed {
         self.workspaces.lock().unwrap().insert(id, rows);
     }
 
-    /// Replace a devserver's cached colour (the poll gates on change). `None`
-    /// clears it (the devserver has no colour set → default accent).
-    fn set_color(&self, id: String, color: Option<String>) {
+    /// Replace a devserver's cached colour (the Theme-6 colour watch gates its
+    /// re-push on this). `None` clears it (the devserver has no colour set →
+    /// default accent). Returns whether the stored value CHANGED, so the caller
+    /// signals the library only on a real delta (the watch pushes on connect too).
+    fn set_color(&self, id: String, color: Option<String>) -> bool {
         let mut colors = self.colors.lock().unwrap();
+        if colors.get(&id).cloned() == color {
+            return false;
+        }
         match color {
             Some(c) => {
                 colors.insert(id, c);
@@ -552,6 +557,7 @@ impl DevserverFeed {
                 colors.remove(&id);
             }
         }
+        true
     }
 
     /// The remote `library_id` of a connected devserver. Learned from the live
@@ -692,12 +698,16 @@ fn devserver_route_prefix(slug: &str) -> String {
     }
 }
 
-/// Poll a connected devserver's served-workspace list AND its own pane-highlight
-/// colour into the feed caches so the (sync) [`DevserverFeed::workspaces`] /
-/// [`DevserverFeed::pane_color`] serve them without blocking on HTTP. Fires
-/// [`EmbeddedServer::signal_library_change`] only when something actually changes,
+/// Poll a connected devserver's served-workspace list into the feed cache so the
+/// (sync) [`DevserverFeed::workspaces`] serves it without blocking on HTTP. Fires
+/// [`EmbeddedServer::signal_library_change`] only when the list actually changes,
 /// so the launcher re-pushes on a real delta, not every tick. Stops when `cancel`
 /// flips true (disconnect), the same signal that stops the window watcher.
+///
+/// The devserver's pane-highlight COLOUR is no longer polled here: it rides the
+/// push-based `/api/library/local-color/watch` feed (Theme 6) via
+/// [`window_watcher_wiring::spawn_devserver_color_watch`]. There is no
+/// `workspaces/watch` endpoint yet, so the workspace list stays polled.
 fn spawn_devserver_workspace_poll(
     state: Arc<AppState>,
     id: String,
@@ -707,7 +717,6 @@ fn spawn_devserver_workspace_poll(
     const POLL: std::time::Duration = std::time::Duration::from_secs(5);
     tauri::async_runtime::spawn(async move {
         let mut last_ws: Option<Vec<devserver::DevserverWorkspaceRow>> = None;
-        let mut last_color: Option<Option<String>> = None;
         loop {
             if *cancel.borrow_and_update() {
                 return;
@@ -730,14 +739,6 @@ fn spawn_devserver_workspace_poll(
                 Err(e) => {
                     tracing::debug!(devserver = %id, error = %e, "polling devserver workspaces failed");
                 }
-            }
-            // The devserver's own pane-highlight colour (seam #5 round-3): cache it
-            // so a devserver window's `?pane=` injects that devserver's colour.
-            let color = devserver::fetch_local_color(&conn).await;
-            if last_color.as_ref() != Some(&color) {
-                state.devserver_feed.set_color(id.clone(), color.clone());
-                last_color = Some(color);
-                changed = true;
             }
             if changed {
                 if let Some(embedded) = state.embedded() {
@@ -1593,11 +1594,18 @@ async fn connect_devserver_impl(
     // valid (a fresh devserver, or one the user emptied before disconnecting).
     let (cancel, snapshot, view) =
         window_watcher_wiring::spawn_devserver_window_watcher(app.clone(), conn.clone()).await?;
-    // Feed the launcher (seam #1): register this devserver's live window snapshot
-    // and start polling its served workspaces into the cache. Both stop when the
-    // disconnect flips `cancel` (the poll subscribes to the same channel).
+    // Feed the launcher (seam #1): register this devserver's live window snapshot,
+    // poll its served workspaces into the cache, and subscribe to its colour feed
+    // (Theme 6, push-based). All stop when the disconnect flips `cancel` (they
+    // subscribe to the same channel).
     state.devserver_feed.register_windows(id.clone(), snapshot);
     spawn_devserver_workspace_poll(
+        Arc::clone(&state),
+        id.clone(),
+        conn.clone(),
+        cancel.subscribe(),
+    );
+    window_watcher_wiring::spawn_devserver_color_watch(
         Arc::clone(&state),
         id.clone(),
         conn.clone(),
@@ -1823,9 +1831,16 @@ async fn reconnect_devserver(
                     )
                     .await?;
                 // Re-point the launcher feed (seam #1) at the fresh snapshot + a
-                // poll on the rotated token; the old poll stopped on the cancel above.
+                // poll + colour watch on the rotated token; the old ones stopped on
+                // the cancel above.
                 state.devserver_feed.register_windows(id.clone(), snapshot);
                 spawn_devserver_workspace_poll(
+                    Arc::clone(&state),
+                    id.clone(),
+                    probe.clone(),
+                    cancel.subscribe(),
+                );
+                window_watcher_wiring::spawn_devserver_color_watch(
                     Arc::clone(&state),
                     id.clone(),
                     probe,

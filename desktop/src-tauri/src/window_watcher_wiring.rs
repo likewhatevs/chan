@@ -311,6 +311,96 @@ async fn stream_window_feed(
     Ok(())
 }
 
+/// Subscribe to a connected devserver's pane-highlight COLOUR feed
+/// (`GET /api/library/local-color/watch`, Theme 6): on each `{ color }` push,
+/// refresh the launcher's per-devserver colour cache and — only on a real change
+/// — re-push the library feed, so a NEW window of this devserver reads the fresh
+/// `?pane=` colour at build. Push-based; replaces the old 5s colour poll (the
+/// workspace list stays polled — there is no `workspaces/watch`). Reconnects on a
+/// dropped socket until `cancel` flips true (disconnect), like the window feed.
+pub(crate) fn spawn_devserver_color_watch(
+    state: Arc<AppState>,
+    id: String,
+    conn: DevserverConn,
+    mut cancel: watch::Receiver<bool>,
+) {
+    const RECONNECT_BACKOFF: Duration = Duration::from_secs(2);
+    tauri::async_runtime::spawn(async move {
+        loop {
+            if *cancel.borrow_and_update() {
+                return;
+            }
+            tokio::select! {
+                _ = cancel.changed() => return,
+                result = stream_color_feed(&state, &id, &conn) => {
+                    if let Err(e) = result {
+                        tracing::debug!(
+                            devserver = %id,
+                            error = %e,
+                            "devserver colour feed disconnected; reconnecting",
+                        );
+                    }
+                }
+            }
+            if *cancel.borrow_and_update() {
+                return;
+            }
+            tokio::select! {
+                _ = cancel.changed() => return,
+                _ = tokio::time::sleep(RECONNECT_BACKOFF) => {}
+            }
+        }
+    });
+}
+
+/// One `{ color }` frame of the devserver colour watch.
+#[derive(serde::Deserialize)]
+struct LocalColorFrame {
+    color: Option<String>,
+}
+
+/// One connection's lifetime on the devserver colour watch: open the WS (bearer
+/// in the Authorization header, like the window feed), then push every `{ color }`
+/// frame into the per-devserver colour cache, re-pushing the launcher feed only on
+/// a real change.
+async fn stream_color_feed(
+    state: &Arc<AppState>,
+    id: &str,
+    conn: &DevserverConn,
+) -> Result<(), String> {
+    use futures::StreamExt;
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+    use tokio_tungstenite::tungstenite::Message;
+    let url = format!(
+        "ws://{}:{}/api/library/local-color/watch",
+        conn.host, conn.port
+    );
+    let mut request = url
+        .into_client_request()
+        .map_err(|e| format!("bad colour watch url: {e}"))?;
+    request.headers_mut().insert(
+        "Authorization",
+        format!("Bearer {}", conn.token)
+            .parse()
+            .map_err(|e| format!("bad bearer header: {e}"))?,
+    );
+    let (mut ws, _) = tokio_tungstenite::connect_async(request)
+        .await
+        .map_err(|e| format!("connect colour watch: {e}"))?;
+    while let Some(message) = ws.next().await {
+        if let Message::Text(text) = message.map_err(|e| format!("colour watch stream: {e}"))? {
+            if let Ok(frame) = serde_json::from_str::<LocalColorFrame>(&text) {
+                if state.devserver_feed.set_color(id.to_string(), frame.color) {
+                    if let Some(embedded) = state.embedded() {
+                        embedded.signal_library_change();
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Spawn a connected devserver's window watcher: one [`watch_loop`] driven by the
 /// devserver's `/api/library/windows/watch` feed, opening windows as remote SPA
 /// webviews. Returns the `cancel` (a `watch::Sender`) — flip it to `true` on
