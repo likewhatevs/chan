@@ -66,26 +66,19 @@ describe("WindowFeed row actions", () => {
     expect(ariaButton("Show window")).toBeTruthy();
   });
 
-  it("splits visible vs hidden into Open windows / Hidden windows sections", () => {
+  it("lists hidden windows in the single Open-windows list (no Hidden section)", () => {
     target = document.createElement("div");
     document.body.appendChild(target);
     app = mount(WindowFeed, { target });
 
-    // The seed carries one hidden devserver window, so both headings render in
-    // order (Open above Hidden, mirroring the native Window menu).
-    expect(headings()).toEqual(["Open windows", "Hidden windows"]);
-
-    // The hidden row sits under the Hidden section and only there.
-    const hiddenHeading = [...target.querySelectorAll(".feed-heading")].find(
-      (h) => h.textContent?.trim() === "Hidden windows",
-    )!;
-    // Everything after the Hidden heading is the hidden content; the "Show window"
-    // (EyeOff) toggle belongs to it.
-    const show = ariaButton("Show window")!;
-    expect(hiddenHeading.compareDocumentPosition(show) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // ONE list (@@Alex overruled the Open/Hidden split): a single "Open windows"
+    // heading, no "Hidden windows" section. The hidden seed window is still
+    // listed, marked only by its EyeOff ("Show window") toggle.
+    expect(headings()).toEqual(["Open windows"]);
+    expect(ariaButton("Show window")).toBeTruthy();
   });
 
-  it("SHOW/HIDE un-hides a hidden window (EyeOff→Eye, row leaves Hidden)", async () => {
+  it("SHOW/HIDE un-hides a hidden window in place (EyeOff→Eye)", async () => {
     target = document.createElement("div");
     document.body.appendChild(target);
     app = mount(WindowFeed, { target });
@@ -97,7 +90,7 @@ describe("WindowFeed row actions", () => {
 
     show!.click();
     // The mock flips `hidden`/`connected` + pushes the feed; the row re-renders to
-    // "Hide window" (Eye) under Open, so no "Show window" and no Hidden section.
+    // "Hide window" (Eye) in place — still the single list, no "Show window" left.
     await Promise.resolve();
     flushSync();
     expect(ariaButton("Show window")).toBeUndefined();
@@ -125,15 +118,14 @@ describe("WindowFeed row actions", () => {
     hide.mockRestore();
   });
 
-  it("pins the devserver's control terminal FIRST in its Open group (W3)", () => {
+  it("pins the devserver's control terminal FIRST in its group (W3)", () => {
     target = document.createElement("div");
     document.body.appendChild(target);
     app = mount(WindowFeed, { target });
 
     // The seed devserver "prod" group carries a control terminal (control:true,
-    // ordinal 0, visible); the Open section's prod group sorts it first and
-    // labels it "Control terminal". (The Open section renders before Hidden, so
-    // the first "prod" group in the DOM is the Open one.)
+    // ordinal 0); the feed sorts it first in the group and labels it "Control
+    // terminal".
     const groups = [...target.querySelectorAll(".group")];
     const dsGroup = groups.find((g) =>
       g.querySelector(".group-title")?.textContent?.includes("prod"),

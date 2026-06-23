@@ -1,19 +1,19 @@
 <script lang="ts">
-  // The window feed: the library's authoritative window set, grouped by library
-  // (local first, then each remote devserver library) and split into Open vs
-  // Hidden — mirroring the native Window menu. Visibility is the server-persisted
-  // `hidden` field (Theme 5; absent = visible) — the launcher is a passive
-  // consumer. Rows are recomposed from kind/ordinal/workspace_path, never from
-  // the opaque window_id or the library-composed title. The same feed drives the
-  // desktop Window menu and `cs window list`, so all three always agree.
+  // The window feed: the library's authoritative window set, ONE list grouped by
+  // library (local first, then each remote devserver library). Visible and hidden
+  // windows are listed together — the per-row Eye/EyeOff is the only hidden vs
+  // visible indicator (no Open/Hidden section split). Rows are recomposed from
+  // kind/ordinal/workspace_path, never from the opaque window_id or the
+  // library-composed title. The same feed drives the desktop Window menu and
+  // `cs window list`, so all three always agree.
   //
   // Each row (mutable surface) carries two icon actions: [FOCUS] (bring to focus
   // — un-hide + focus if hidden, take focus if visible) and [SHOW/HIDE] (the
-  // visibility toggle, Eye when visible / EyeOff when hidden). The toggle stays a
-  // bridge op; the desktop persists `hidden` at the bury/unbury chokepoint, so a
-  // hide moves the row into the Hidden section on the feed round-trip. The
-  // read-only surface (gateway/devserver, no desktop bridge) has no actions and
-  // keeps the static connection dot.
+  // visibility toggle, Eye when visible / EyeOff when hidden, keyed on the
+  // server-persisted `hidden`). The toggle stays a bridge op; the desktop
+  // persists `hidden` at the bury/unbury chokepoint, so a hide flips the row's
+  // icon on the feed round-trip. The read-only surface (gateway/devserver, no
+  // desktop bridge) has no actions and keeps the static connection dot.
   import { Eye, EyeOff, Focus } from "lucide-svelte";
   import { library, focusWindow, remoteLibraryName, toggleWindow } from "../state/library.svelte";
   import { LOCAL_LIBRARY_ID, librarySectionLabel, windowRowLabel } from "../lib/windowLabel";
@@ -56,11 +56,11 @@
     return groups;
   }
 
-  // Theme-5: split into visible ("Open") and hidden windows. `hidden` (absent =
-  // visible) is the server-persisted source of truth; each part keeps the
-  // by-library grouping so the two sections line up with the native Window menu.
-  const openGroups = $derived(groupByLibrary(library.windows.filter((w) => !w.hidden)));
-  const hiddenGroups = $derived(groupByLibrary(library.windows.filter((w) => w.hidden)));
+  // ONE list, grouped by library (local first, then each remote devserver).
+  // Visible and hidden windows sit together; the per-row Eye/EyeOff (keyed on the
+  // server-persisted `hidden`) is the sole hidden/visible indicator. (@@Alex
+  // overruled an Open/Hidden section split — the icon alone conveys it.)
+  const groups = $derived(groupByLibrary(library.windows));
 </script>
 
 {#snippet windowRow(w: WindowRecord)}
@@ -128,13 +128,7 @@
 
 {#if library.windows.length}
   <section class="feed">
-    {#if openGroups.length}
-      <h2 class="feed-heading">Open windows</h2>
-      {@render librarySection(openGroups)}
-    {/if}
-    {#if hiddenGroups.length}
-      <h2 class="feed-heading">Hidden windows</h2>
-      {@render librarySection(hiddenGroups)}
-    {/if}
+    <h2 class="feed-heading">Open windows</h2>
+    {@render librarySection(groups)}
   </section>
 {/if}
