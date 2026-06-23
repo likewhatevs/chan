@@ -189,6 +189,12 @@ code {
   margin: 0 0 24px;
 }
 
+/* The hero headline's second line (the tagline) reads smaller than the big
+   "Chan," brand word above it. */
+.hero h1 .hero-sub {
+  font-size: 0.5em;
+}
+
 .eyebrow {
   color: var(--accent-2);
   font: 700 0.78rem var(--mono);
