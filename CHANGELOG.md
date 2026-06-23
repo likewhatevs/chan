@@ -6,6 +6,101 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [v0.45.0] - 2026-06-23
+
+The desktop release. It finishes the launcher on the **desktop / WKWebView** surface the v0.44.0 headless
+gate couldn't reach, then — across follow-on rounds driven directly by desktop hand-smoke — builds out the
+full **devserver-in-the-launcher** experience and hardens the window lifecycle. A connected devserver's
+windows, served workspaces, and control terminal now appear in the launcher; the focus-border colour
+persists per chan-library (one for the local library, one per devserver); the launcher rows are redesigned
+with icon buttons + bulk actions; turning a workspace off preserves its window layout for restore on
+turn-on (only Forget purges); and the desktop show/hide, reconnect, and live-terminal-off paths are fixed.
+Alongside: desktop auto-update on launch, standalone-terminal `cs upload`/`cs download`, a new app icon,
+graph-navigation refinements, a reworked marketing homepage with the docs consolidated into the manual, and
+a devserver-reality docs pass.
+
+### Added
+
+- **Desktop auto-update on launch.** chan-desktop checks for an update in the background at startup and
+  prompts to install (honors `CHAN_UPDATE_CHECK=0`) — a directly-booted desktop now self-updates instead
+  of only updating via an explicit `chan upgrade`.
+- **Devserver Connect from the launcher.** The launcher's Connect button now dials a configured devserver
+  (runs its connect command in a control terminal and connects), enabled on the desktop surface and inert
+  in a plain browser.
+- **New-Workspace folder picker.** A native **Browse…** button opens an OS folder dialog to fill the
+  workspace path (the text field stays the fallback, and the only path in a browser).
+- **Standalone-terminal `cs upload` / `cs download`.** Library-level transfers from a standalone terminal
+  (no workspace): cwd-anchored, shell-uid reach, with read/write pre-flight checks that fail fast and
+  leave no partial artifact. `<path>` is required (`.` = current dir); a directory downloads as a
+  streamed tarball, and a cancelled download leaves nothing behind. Workspace transfers stay bounded to
+  the workspace root.
+- **Transfer close-guard for connected-devserver windows.** Closing a connected devserver's window
+  mid-transfer prompts Keep open vs Cancel — the in-flight signal now rides the windows feed.
+- **New desktop app icon** — a black enso on cream paper.
+- **Devserver windows + served workspaces in the launcher.** A connected devserver's standalone terminal,
+  control terminal, and workspace windows now appear in the launcher's Open-windows (and the native Window
+  menu), and its `chan open` workspaces appear in the launcher list — grouped under the devserver, with
+  their on/off/Forget routed to it. Built on a devserver-feed source merged into the window feed +
+  per-workspace cache, plus disconnect / New-Terminal / open-workspace bridge ops.
+- **Control terminal in the launcher.** A connected devserver's control terminal shows **first** in its
+  window group (labelled "Control terminal"), with an optional **"Auto-hide control terminal on success"**
+  on the connect form so it tucks away once the connection is up.
+- **Per-library focus-border colour.** The pane focus-border colour now persists per chan-library — set it
+  once and every standalone terminal and workspace window of that library uses it; the local library and
+  each devserver each keep their own (file-backed, surviving reconnect/restart). Set from the pane's
+  focus-border menu.
+- **Launcher row redesign + bulk actions.** Workspace and devserver rows use icon buttons (New window /
+  On-Off; New terminal / Edit / Connect-Disconnect), with multi-select bulk **Turn on / Turn off / Remove**.
+  Edit opens read-only while a devserver is connected.
+- **Turn-off confirm for live terminals.** Turning off a workspace that still has live terminals now prompts
+  with the live-terminal count and offers to force it off — for both devserver and local workspaces.
+
+### Changed
+
+- **Launcher live-refresh.** The desktop launcher's workspace list updates live as you `chan open` a
+  workspace or turn one on/off — no manual reload.
+- **Open-windows rows are show/hide toggles.** Clicking an Open-windows entry shows or hides its window
+  (the whole row, not just the dot).
+- **Graph "still indexing" state.** While the workspace index is building, the graph tab shows
+  "graph temporarily unavailable while indexing the workspace" instead of "no markdown files in this
+  workspace yet", and the graph repopulates automatically once indexing finishes.
+- **Uploads use the transfer bubble everywhere.** The replace-file upload now reports through the transfer
+  bubble; the upload status-bar text is retired (v0.44.0 retired the download bar only).
+- **File-browser inspector Open.** Opens odd-extension plaintext files (matching the tree's content-peek)
+  instead of offering Download.
+- **Tunnel-publish docs corrected to the `chan devserver` reality** across the README, manual, marketing,
+  and the tunnel-crate docs; the "anonymous public tunnel" section is removed (publishing is always
+  authenticated).
+- **Devserver form is Host + Port.** The add/edit devserver dialog takes a host and a port (the URL is
+  formed for you) instead of a single URL field; the optional token and connect command stay.
+- **Graph shortcut is `Cmd+Shift+M`** (Linux/Windows `Ctrl+Shift+M`) — restored after a mistaken retirement;
+  it opens a Graph tab in the current window and shows on the Graph tile. `Cmd+Shift+G` stays Find-previous;
+  the hybrid-nav alias is `Mod+. M`.
+- **Graph navigation.** "Graph from here" and the inspector's "Open" each open a **new tab** (no in-place
+  re-root), and the graph now renders the filesystem skeleton immediately and layers semantic edges in as
+  the index settles (instead of showing "unavailable" until the index is ready).
+- **README reduced to a minimal pointer** (download from chan.app or build with the Makefile).
+- **Marketing homepage reworked and the docs consolidated into the manual** — a leaner home page, with the
+  product documentation living under the manual (refreshed screenshots).
+
+### Fixed
+
+- **Launcher on-state on the desktop.** A desktop-served workspace now correctly shows as on (it showed
+  "Turn on" despite being served); the launcher resolves a workspace's on-state and its on/off/remove
+  actions by the workspace's canonical root, not the slug prefix the desktop never mounted at.
+- **Turned-off workspaces no longer leave stale windows in the launcher** — and turn-on restores them.
+  Turning a workspace off removes its windows from the launcher but **preserves their layout** (panes/tabs);
+  turning it back on restores the same windows (the terminals restart). Only **Forget** purges the layout.
+  Holds for both local and devserver workspaces (a devserver workspace's windows no longer resurrect on
+  disconnect→reconnect).
+- **Devserver window show/hide from the launcher dot no longer hangs.** Hiding a devserver standalone
+  terminal, control terminal, or workspace window via its dot updates the dot correctly, and clicking the
+  greyed dot **shows it back** (previously it could be hidden but not reopened except via the Window menu).
+  The OS close button updates the dot too.
+- **Control terminal appears on devserver reconnect** without needing to open a second terminal.
+- **Directory download progress no longer shows `NaN%`** — a streamed directory download (no Content-Length)
+  renders an indeterminate progress on the desktop, matching the browser.
+
 ## [v0.44.0] - 2026-06-22
 
 A round that makes the launcher a true view of the real library on the desktop, finishes the
