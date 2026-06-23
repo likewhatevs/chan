@@ -395,14 +395,12 @@ pub async fn spawn_local_terminal_window(state: Arc<AppState>) -> Result<String,
 }
 
 /// A spawned control terminal: its terminal tenant prefix, used to scrape the
-/// token the connect script prints (and, on disconnect, to reap the tenant), plus
-/// the tenant `token` so the connect flow can tag a control-terminal feed record
-/// (D3) that surfaces it in the devserver's launcher list. The window is addressed
-/// by its deterministic `control_terminal_label`, so the struct doesn't carry the
-/// label.
+/// token the connect script prints, to mint the control window's chan-library
+/// registry row (UNIFY/ARCH), and to reap the tenant on disconnect. The window is
+/// addressed by its deterministic `control_terminal_label`, so the struct doesn't
+/// carry the label.
 pub struct ControlTerminal {
     pub prefix: String,
-    pub token: String,
 }
 
 /// Spawn a control terminal: a standalone terminal window whose PTY runs a
@@ -420,17 +418,6 @@ pub async fn spawn_control_terminal_window(
         return Err("embedded local server is unavailable".to_string());
     };
     let (url, prefix) = embedded.open_terminal_with_command(script).await?;
-    // The per-tenant token rides the loaded URL as `?t=`; pull it out for the D3
-    // control-terminal feed record (which carries the tenant prefix + token).
-    let token = url
-        .parse::<tauri::Url>()
-        .ok()
-        .and_then(|u| {
-            u.query_pairs()
-                .find(|(k, _)| k == "t")
-                .map(|(_, v)| v.into_owned())
-        })
-        .unwrap_or_default();
     let label = control_terminal_label(devserver_id);
     build_workspace_window(
         &app,
@@ -454,7 +441,7 @@ pub async fn spawn_control_terminal_window(
             kind: Some("control"),
         },
     )?;
-    Ok(ControlTerminal { prefix, token })
+    Ok(ControlTerminal { prefix })
 }
 
 /// Stable window label for a devserver's control terminal.
@@ -1152,16 +1139,11 @@ fn build_workspace_window(app: &AppHandle, spec: WindowSpec<'_>) -> Result<(), S
                         let _ = window.hide();
                         state.bury_window(&label_for_close, &title);
                         crate::rebuild_window_menu(&app_for_close);
-                        // A buried control terminal flips its launcher dot to
-                        // hidden (D3/D4) — its feed record's `connected` mirrors
-                        // the window's shown state.
-                        if let Some(ds_id) = label_for_close.strip_prefix("control-terminal-") {
-                            if state.devserver_feed.set_control_connected(ds_id, false) {
-                                if let Some(embedded) = state.embedded() {
-                                    embedded.signal_library_change();
-                                }
-                            }
-                        }
+                        // The control terminal is now a chan-library registry row
+                        // (UNIFY/ARCH): its launcher dot reflects PTY-alive (resolved
+                        // at read time from its control tenant), uniform with all
+                        // windows — no desktop-side shown/hidden flip on bury (that
+                        // returns uniformly via the server-persisted hidden work).
                         if !silent_hide {
                             show_bury_notice(&app_for_close, &title);
                         }

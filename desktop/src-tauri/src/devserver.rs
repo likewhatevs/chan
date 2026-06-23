@@ -86,6 +86,11 @@ pub struct DevserverInfo {
     /// Human label for the box, shown in the `[DEVSERVER {host}]` header
     /// once connected.
     pub host_label: String,
+    /// The devserver library's `library_id` (UNIFY/ARCH, Bug-A): supplied at
+    /// connect so the desktop can mint the control terminal as a registry row
+    /// under it even on a zero-window connect (no window record to learn it from).
+    #[serde(default)]
+    pub library_id: String,
 }
 
 /// One element of `GET /api/devserver/workspaces`: a tenant the desktop

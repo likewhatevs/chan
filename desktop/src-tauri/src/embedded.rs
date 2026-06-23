@@ -335,19 +335,35 @@ impl EmbeddedServer {
         self.host.terminal_tenant_last_exit(prefix)
     }
 
-    /// Close the control-terminal tenant mounted at `prefix`, reaping its PTY
-    /// (the devserver connect script) synchronously. Called on disconnect and
-    /// forget: destroying the control-terminal window alone leaves the connect
-    /// script RUNNING on the host because the tenant outlives the window. Must
-    /// NOT route through `close_prefix`/`close_workspace`, whose terminal-PTY
-    /// reap rides a fragile prune-task drop race; `close_terminal_tenant` Kills
-    /// the children directly. A no-op when nothing is mounted there (idempotent
-    /// across a repeated teardown).
-    pub fn close_control_terminal(&self, prefix: &str) -> Result<(), String> {
+    /// Mint the connect-script control terminal as a real (`persisted:false`)
+    /// chan-library registry row under the DEVSERVER's `library_id` (UNIFY/ARCH).
+    /// The row rides `/api/library/windows` with a real library_id so the launcher
+    /// shows the devserver group on a zero-window connect (Bug-A), and is reaped by
+    /// [`reap_control_window`](Self::reap_control_window) on the connect-script PTY
+    /// exit (Bug-B-iii). The native window is still opened imperatively by
+    /// `serve::spawn_control_terminal_window` (Model B); this furnishes only the
+    /// feed row. The row's `(prefix, token, connected)` are resolved at read time
+    /// from the control tenant, so no token crosses here.
+    pub fn mint_control_window(
+        &self,
+        window_id: String,
+        devserver_library_id: String,
+        control_tenant_prefix: String,
+    ) -> Result<WindowRecord, String> {
         self.host
-            .close_terminal_tenant(prefix)
-            .map(|_| ())
-            .map_err(|e| format!("closing control terminal {prefix}: {e}"))
+            .mint_control_window(window_id, devserver_library_id, control_tenant_prefix)
+            .map_err(|e| format!("minting control window: {e}"))
+    }
+
+    /// Reap a control terminal's registry row AND its `/control-N` tenant (kills
+    /// the connect-script PTY), firing the feed change so the launcher drops the
+    /// row. Returns whether a row existed. Called on the control PTY exit (the
+    /// desktop-triggered reap) and on disconnect/forget; idempotent. The host's
+    /// `reap_control_window` removes the registry row and unmounts the tenant
+    /// directly (it does NOT route through the fragile `close_prefix` prune-task
+    /// drop race).
+    pub fn reap_control_window(&self, window_id: &str) -> bool {
+        self.host.reap_control_window(window_id)
     }
 
     /// The loopback address the embedded server listens on. The window

@@ -492,17 +492,10 @@ pub struct DevserverFeed {
     /// (default accent). Surfaced through `pane_color` so a devserver window's
     /// `?pane=` injects that devserver's own colour (seam #5 round-3).
     colors: Mutex<HashMap<String, String>>,
-    /// Devserver id -> its script-connection control terminal, surfaced as a
-    /// synthetic feed record (D3) so it shows FIRST in that devserver's launcher
-    /// list. The control terminal runs on the LOCAL embedded terminal tenant (so
-    /// the record carries its local prefix/token), but `windows()` tags it with the
-    /// devserver's `library_id` so it groups under the devserver. `connected`
-    /// mirrors the window's shown/hidden state (the launcher dot).
-    control: Mutex<HashMap<String, ControlFeedRecord>>,
     /// Devserver id -> its remote `library_id`, cached once learned from a window
-    /// (B2). `library_id_of` falls back to this so the control record still emits
-    /// on RECONNECT when the live feed is momentarily empty (no windows yet) —
-    /// otherwise the control terminal wouldn't show until a later window arrives.
+    /// (B2). `library_id_of` falls back to this so `entry_from_devserver` (the
+    /// launcher's `DevserverEntry`) and the workspace poll still resolve the
+    /// library_id when the live window feed is momentarily empty (no windows yet).
     /// Survives disconnect (the same devserver keeps its library_id on reconnect).
     library_ids: Mutex<HashMap<String, String>>,
     /// Native labels of devserver windows the desktop has LOCALLY buried (B1).
@@ -514,17 +507,6 @@ pub struct DevserverFeed {
     buried: Mutex<std::collections::HashSet<String>>,
 }
 
-/// The desktop's per-devserver control-terminal feed entry (D3). The emitted
-/// record's `window_id` is the control terminal's real native label
-/// (`control-terminal-<id>`), so the launcher's hide/open resolves straight to the
-/// live window via [`serve::resolve_window_label`].
-struct ControlFeedRecord {
-    prefix: String,
-    token: String,
-    /// Whether the control-terminal window is currently shown (the launcher dot).
-    connected: bool,
-}
-
 impl DevserverFeed {
     /// Track a freshly-connected devserver's window snapshot so `windows()` sees
     /// it; the Arc is the one the watcher feed task mutates in place.
@@ -533,48 +515,22 @@ impl DevserverFeed {
     }
 
     /// Drop a disconnected devserver from the per-connection feeds (windows +
-    /// workspace + colour + control). KEEPS `library_ids` (the same devserver
-    /// keeps its id on reconnect — B2). Clears its buried-label overrides (B1) so a
-    /// reconnect doesn't show its reopened windows as hidden.
+    /// workspace + colour). KEEPS `library_ids` (the same devserver keeps its id
+    /// on reconnect — B2). Clears its buried-label overrides (B1) so a reconnect
+    /// doesn't show its reopened windows as hidden. The control terminal is no
+    /// longer a desktop feed record (UNIFY/ARCH: it's a chan-library registry row
+    /// now); its reap is `reap_control_window` on the connect-script PTY exit /
+    /// teardown, not a `forget` drop.
     fn forget(&self, id: &str) {
         self.windows.lock().unwrap().remove(id);
         self.workspaces.lock().unwrap().remove(id);
         self.colors.lock().unwrap().remove(id);
-        self.control.lock().unwrap().remove(id);
         if let Some(library_id) = self.library_ids.lock().unwrap().get(id).cloned() {
             let prefix = format!("{library_id}::");
             self.buried
                 .lock()
                 .unwrap()
                 .retain(|l| !l.starts_with(&prefix));
-        }
-    }
-
-    /// Register a devserver's control terminal as a feed record (D3). Called once
-    /// the control terminal is spawned (connect); `windows()` surfaces it (tagged
-    /// with the devserver `library_id`, once known) so it shows first in the list.
-    fn register_control(&self, id: String, prefix: String, token: String) {
-        self.control.lock().unwrap().insert(
-            id,
-            ControlFeedRecord {
-                prefix,
-                token,
-                connected: true,
-            },
-        );
-    }
-
-    /// Update the control-terminal record's shown/hidden state (the launcher dot).
-    /// Returns whether it changed, so the caller fires the library-change signal
-    /// only on a real flip. A no-op (false) when there's no control record.
-    fn set_control_connected(&self, id: &str, connected: bool) -> bool {
-        let mut control = self.control.lock().unwrap();
-        match control.get_mut(id) {
-            Some(rec) if rec.connected != connected => {
-                rec.connected = connected;
-                true
-            }
-            _ => false,
         }
     }
 
@@ -671,23 +627,11 @@ impl chan_server::DevserverFeedSource for DevserverFeed {
                 }
             }
         }
-        // Append each devserver's control-terminal record (D3), tagged with that
-        // devserver's `library_id` so the launcher groups it under the devserver
-        // (control=true → rendered FIRST). Skipped while the library_id is still
-        // unknown (no windows yet) — it appears once the devserver has a window.
-        // The window_id IS the control terminal's real native label, so the
-        // launcher's hide/open resolves straight to the live window.
-        for (id, rec) in self.control.lock().unwrap().iter() {
-            if let Some(library_id) = self.library_id_of(id) {
-                records.push(chan_server::WindowRecord::control_terminal(
-                    library_id,
-                    serve::control_terminal_label(id),
-                    rec.prefix.clone(),
-                    rec.token.clone(),
-                    rec.connected,
-                ));
-            }
-        }
+        // The control terminal is no longer synthesized here (UNIFY/ARCH): it is a
+        // real chan-library registry row (minted by `mint_control_window` under the
+        // devserver's `library_id`, `control:true`), so it already rides the
+        // registry snapshot that `assemble_window_records` merges — no desktop-side
+        // append.
         records
     }
 
@@ -1268,15 +1212,14 @@ fn teardown_devserver_windows(app: &tauri::AppHandle, state: &AppState, id: &str
     }
     serve::close_window_by_label(app, &serve::control_terminal_label(id));
     // Closing the control-terminal WINDOW doesn't stop the connect script: its
-    // tenant outlives the window. Reap the tenant (kills the script PTY) so a
-    // scripted devserver's disconnect/forget leaves nothing running.
-    let control_prefix = state.control_terminal_prefixes.lock().unwrap().remove(id);
-    if let Some(prefix) = control_prefix {
-        if let Some(embedded) = state.embedded.get() {
-            if let Err(e) = embedded.close_control_terminal(&prefix) {
-                tracing::warn!(devserver = %id, error = %e, "closing control terminal tenant failed");
-            }
-        }
+    // `/control-N` tenant outlives the window. Reap the control terminal's
+    // chan-library registry row AND its tenant (kills the script PTY) so a scripted
+    // devserver's disconnect/forget leaves nothing running. `reap_control_window`
+    // does both (idempotent); drop our prefix tracking so the exit watcher (keyed
+    // on it) stops.
+    state.control_terminal_prefixes.lock().unwrap().remove(id);
+    if let Some(embedded) = state.embedded.get() {
+        embedded.reap_control_window(&serve::control_terminal_label(id));
     }
 }
 
@@ -1457,8 +1400,18 @@ fn spawn_control_terminal_exit_watcher(
                 .get()
                 .and_then(|e| e.control_terminal_exit(&prefix));
             if let Some(code) = exited {
-                // Fire only while still connected: a disconnect-driven reap is
-                // expected teardown, not a surprise loss to survey.
+                // Bug-B-iii (UNIFY/ARCH): the connect-script PTY is gone, so reap
+                // its chan-library registry row — `reap_control_window` removes the
+                // row AND unmounts the `/control-N` tenant, firing the feed change
+                // so the launcher drops it. DESKTOP-TRIGGERED + REQUIRED (the
+                // control row has no server-side auto-reap). Keyed off the PTY exit
+                // so it covers every survey outcome; idempotent (a disconnect-driven
+                // exit already returned above, its prefix no longer current).
+                if let Some(embedded) = state.embedded() {
+                    embedded.reap_control_window(&serve::control_terminal_label(&id));
+                }
+                // Fire the survey only while still connected: a disconnect-driven
+                // reap is expected teardown, not a surprise loss to survey.
                 if state.devservers.is_connected(&id) {
                     tracing::info!(
                         devserver = %id,
@@ -1532,12 +1485,6 @@ async fn connect_devserver_impl(
             .lock()
             .unwrap()
             .insert(id.clone(), ct.prefix.clone());
-        // Surface the control terminal in this devserver's launcher list (D3).
-        // The feed record waits for the devserver's library_id (learned below),
-        // so register now and `windows()` emits it once the id is known.
-        state
-            .devserver_feed
-            .register_control(id.clone(), ct.prefix.clone(), ct.token.clone());
         Some(ct)
     };
     let token = match &control {
@@ -1579,6 +1526,24 @@ async fn connect_devserver_impl(
         name,
     };
     state.devservers.set(id.clone(), conn.clone());
+    // Mint the connect-script control terminal as a chan-library registry row
+    // under this devserver's `library_id` (UNIFY/ARCH). The native window was
+    // already opened imperatively by `spawn_control_terminal_window` (Model B);
+    // this furnishes only the feed row, so the control terminal rides
+    // `/api/library/windows` with a REAL library_id (Bug-A: shows the devserver
+    // group on a zero-window connect + survives reload) and is reaped by
+    // `reap_control_window` on the connect-script PTY exit (Bug-B-iii). Minted HERE
+    // (post-`wait_for_devserver`) because the library_id only arrives with `info`;
+    // read-time assembly resolves the row's prefix/token/connected from the tenant.
+    if let Some(ct) = &control {
+        if let Some(embedded) = state.embedded() {
+            embedded.mint_control_window(
+                serve::control_terminal_label(&id),
+                info.library_id.clone(),
+                ct.prefix.clone(),
+            )?;
+        }
+    }
     // The window watcher is the SOLE driver of this devserver's native windows:
     // spawn it over the library feed (`/api/library/windows/watch`), and its
     // snapshots reconcile open whatever the devserver persisted. An EMPTY feed is
@@ -3314,23 +3279,23 @@ fn main() {
                 // Best-effort: unmount every embedded local workspace
                 // before the desktop runtime exits.
                 serve::stop_all(&state_for_exit);
-                // Explicitly reap any devserver connect-script tenants (the
-                // control terminals): stop_all only unmounts workspaces, so
-                // without this their PTYs would ride process-death SIGHUP
-                // rather than a deterministic kill. Mirrors the
-                // disconnect/forget teardown. Best-effort; the prefixes are
-                // collected before the close calls so the lock isn't held
-                // across them.
+                // Explicitly reap any devserver connect-script control terminals:
+                // stop_all only unmounts workspaces, so without this their PTYs
+                // would ride process-death SIGHUP rather than a deterministic kill.
+                // `reap_control_window` drops each control row + unmounts its
+                // `/control-N` tenant (kills the PTY). Mirrors the disconnect/forget
+                // teardown. Best-effort; the ids are collected before the calls so
+                // the lock isn't held across them.
                 if let Some(embedded) = state_for_exit.embedded.get() {
-                    let prefixes: Vec<String> = state_for_exit
+                    let ids: Vec<String> = state_for_exit
                         .control_terminal_prefixes
                         .lock()
                         .unwrap()
-                        .values()
+                        .keys()
                         .cloned()
                         .collect();
-                    for prefix in prefixes {
-                        let _ = embedded.close_control_terminal(&prefix);
+                    for id in ids {
+                        embedded.reap_control_window(&serve::control_terminal_label(&id));
                     }
                 }
             }
@@ -4109,14 +4074,10 @@ pub fn unbury_window(app: &tauri::AppHandle, label: &str) -> bool {
         }
         None => false,
     };
-    // A re-shown control terminal flips its launcher dot back to shown (D3/D4).
-    if let Some(ds_id) = label.strip_prefix("control-terminal-") {
-        if state.devserver_feed.set_control_connected(ds_id, true) {
-            if let Some(embedded) = state.embedded() {
-                embedded.signal_library_change();
-            }
-        }
-    }
+    // The control terminal's launcher dot now reflects PTY-alive (resolved at read
+    // time from its chan-library control tenant), uniform with all windows — no
+    // desktop-side shown/hidden flip (UNIFY/ARCH; shown/hidden returns uniformly
+    // via the server-persisted hidden work this round).
     if removed {
         rebuild_window_menu(app);
     }
