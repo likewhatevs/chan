@@ -863,7 +863,8 @@ async fn add_workspace(
     // serve immediately is what they expect; otherwise the freshly
     // added row sits there with On=off and Launch disabled, which
     // looks broken.
-    serve::start(app, Arc::clone(&state), path).await?;
+    // User add → they want a window minted (a fresh turn-on).
+    serve::start(app, Arc::clone(&state), path, true).await?;
     Ok(())
 }
 
@@ -959,7 +960,9 @@ async fn set_workspace_on(
 ) -> Result<(), String> {
     let key = canonical_key(Path::new(&path));
     if on {
-        serve::start(app, Arc::clone(&state), key).await?;
+        // User toggled on → mint the first window (fresh on); a kept record means
+        // has_window=true so it won't double-mint.
+        serve::start(app, Arc::clone(&state), key, true).await?;
     } else {
         // `serve::stop` → `close_workspace` busy-waits up to 5s for the flock
         // release (host.rs `wait_for_workspace_release`), so run it off the
@@ -2077,7 +2080,10 @@ fn open_workspace_from_handoff(
                 return;
             }
         }
-        if let Err(e) = serve::start(app.clone(), Arc::clone(&state), key_for_block.clone()).await {
+        // `chan open <workspace>` handoff: the user explicitly opened it → mint a window.
+        if let Err(e) =
+            serve::start(app.clone(), Arc::clone(&state), key_for_block.clone(), true).await
+        {
             emit_system_notice(
                 &app,
                 "warning",
@@ -3250,9 +3256,18 @@ fn main() {
                     .map(|overlay| overlay.on_paths())
                     .unwrap_or_default();
                 for key in enabled {
-                    if let Err(e) =
-                        serve::start(handle.clone(), Arc::clone(&state_for_restore), key.clone())
-                            .await
+                    // BOOT re-serve: RESTORE the persisted windows only — do NOT
+                    // mint (mint_first_window=false). A workspace whose windows were
+                    // all closed has no record; minting would re-open a closed
+                    // window (Bug-C). The watcher restores existing records honoring
+                    // should_show (hidden stays hidden).
+                    if let Err(e) = serve::start(
+                        handle.clone(),
+                        Arc::clone(&state_for_restore),
+                        key.clone(),
+                        false,
+                    )
+                    .await
                     {
                         tracing::warn!(key = %key, error = %e, "restoring enabled workspace failed");
                         emit_system_notice(

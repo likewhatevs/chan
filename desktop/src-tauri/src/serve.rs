@@ -64,7 +64,20 @@ impl ServeHandle {
 }
 
 /// Open a local workspace through the embedded chan-server host.
-pub async fn start(app: AppHandle, state: Arc<AppState>, key: String) -> Result<(), String> {
+///
+/// `mint_first_window` mints the workspace's FIRST window when it has no
+/// persisted window record yet — true for a USER turn-on (add / set-on / `chan
+/// open`: the user wants a window), false for the BOOT re-serve (restore the
+/// persisted set only). On boot, a workspace that is on but whose windows were
+/// all CLOSED has no record; minting there would RE-OPEN a window the user
+/// closed (the Bug-C restart regression). A buried/hidden window keeps its
+/// record, so the watcher restores it honoring `should_show`'s `!hidden`.
+pub async fn start(
+    app: AppHandle,
+    state: Arc<AppState>,
+    key: String,
+    mint_first_window: bool,
+) -> Result<(), String> {
     if state.serves.lock().unwrap().contains_key(&key) {
         return Ok(());
     }
@@ -85,20 +98,22 @@ pub async fn start(app: AppHandle, state: Arc<AppState>, key: String) -> Result<
         serves.insert(key.clone(), ServeHandle::embedded(prefix, url.clone()));
     }
     let _ = app.emit(SERVES_CHANGED, ());
-    // Mint the FIRST window only when this workspace has no persisted window
-    // record yet (a fresh turn-on); the watcher then opens it. On a re-on or
-    // boot re-serve the records already exist, and the mount above (which fired
-    // the library change signal) makes them live, so the watcher reopens them
-    // at their stable window_id — restoring each window's tabs. The registry is
-    // the sole window-creation authority; there is no imperative window build.
-    // LOCAL records only: the merged set now includes connected devservers'
-    // windows, and a remote workspace served at the SAME absolute path (common
-    // with `ssh -L` boxes) would otherwise false-match and skip minting the
-    // local window.
+    // Mint the FIRST window only on a USER turn-on (`mint_first_window`) when this
+    // workspace has no persisted window record yet; the watcher then opens it. On
+    // a re-on the records already exist, and the mount above (which fired the
+    // library change signal) makes them live, so the watcher reopens them at their
+    // stable window_id — restoring each window's tabs. The BOOT re-serve passes
+    // `mint_first_window=false`: it RESTORES the persisted set only, never mints —
+    // a workspace whose windows were all CLOSED has no record, and minting there
+    // would re-open a window the user closed (Bug-C). The registry is the sole
+    // window-creation authority; there is no imperative window build. LOCAL records
+    // only: the merged set now includes connected devservers' windows, and a remote
+    // workspace served at the SAME absolute path (common with `ssh -L` boxes) would
+    // otherwise false-match and skip minting the local window.
     let has_window = embedded.local_window_records().iter().any(|r| {
         r.kind == WindowKind::Workspace && r.workspace_path.as_deref() == Some(key.as_str())
     });
-    if !has_window {
+    if mint_first_window && !has_window {
         if let Err(e) = embedded.mint_window(WindowKind::Workspace, Some(key.clone())) {
             if let Some(handle) = state.serves.lock().unwrap().remove(&key) {
                 stop_handle(None, &state, &key, handle);
