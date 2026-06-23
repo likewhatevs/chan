@@ -2285,10 +2285,11 @@ mod tests {
     fn app_acl_grants_every_registered_command() {
         // Complete coverage: every command in generate_handler! must be
         // grantable somewhere the SPA can reach it. App-command grants come
-        // from the two sets plus the local-drop capability (read_dropped_paths,
-        // scoped to locally-served windows). Catches a command the workspace
-        // SPA invokes (e.g. platform_os, read_clipboard_text) that no set
-        // grants.
+        // from the two sets plus the window-scoped local capabilities —
+        // local-drop (read_dropped_paths) and local-upload (pick_upload_files),
+        // both scoped to locally-served windows. Catches a command the
+        // workspace SPA invokes (e.g. platform_os, read_clipboard_text) that no
+        // set grants.
         const MAIN_RS: &str = include_str!("main.rs");
         let mut granted: std::collections::HashSet<String> =
             app_permission_set_commands("main-window")
@@ -2296,6 +2297,7 @@ mod tests {
                 .chain(app_permission_set_commands("workspace-window"))
                 .collect();
         granted.insert("read_dropped_paths".to_string());
+        granted.insert("pick_upload_files".to_string());
         for command in invoke_handler_commands(MAIN_RS) {
             assert!(
                 granted.contains(&command),
