@@ -1,8 +1,9 @@
 # Chan Manual
 
 Chan is a minimalist and powerful IDE. What you get:
-* A powerful terminal that is automatable from the command line and agent-friendly
-* An IDE with Markdown editor, Index, and Graph your workspaces, which are git repos or any directory
+
+- A powerful terminal that is automatable from the command line and agent-friendly
+- An IDE with Markdown editor, Index, and Graph your workspaces, which are git repos or any directory
 
 You can seamlessly use Chan on your desktop, laptop, and on your remote server. It is supported on macOS and Linux.
 
