@@ -1,6 +1,7 @@
 <script lang="ts">
   // The launcher's top bar: the "Workspaces" title, a theme toggle, an
   // open-terminal button, and the New-workspace button (+).
+  import { SquareTerminal } from "lucide-svelte";
   import { themeState, toggleTheme } from "../state/theme.svelte";
   import { openNewDialog } from "../state/dialog.svelte";
   import { openTerminal } from "../state/library.svelte";
@@ -21,7 +22,7 @@
       type="button"
       aria-label="Open terminal"
       title="Open terminal"
-      onclick={() => openTerminal()}>⌨</button>
+      onclick={() => openTerminal()}><SquareTerminal size={16} /></button>
     {#if !readOnly}
       <button
         class="icon-btn"
