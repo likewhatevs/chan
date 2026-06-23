@@ -2,6 +2,8 @@
 
 Chan edits markdown files as plain text with a WYSIWYG surface. The saved file remains normal markdown.
 
+![Chan editing a Markdown design doc with outline and details inspector](images/editor-markdown.png)
+
 ## Tabs and panes
 
 Open several files in tabs, split the workspace into panes, and move between files without changing the workspace layout on disk.
@@ -23,3 +25,7 @@ Chan recognizes the same date shortcuts as Google Docs. Type `@today` to drop to
 ## Diagrams
 
 A fenced code block tagged `mermaid` renders as a diagram. With the cursor inside the block you edit the Mermaid source as an ordinary code block; move the cursor out of a complete (closed) block and the diagram renders in its place, and move back in to edit it again. A block whose source has an error shows Mermaid's own error message instead of the chart. The diagram renderer loads only the first time a diagram is shown, so documents without diagrams carry no extra cost.
+
+## Inspector
+
+The details inspector beside the editor surfaces a live outline of the current document, its backlinks (see [Wiki-links](wiki-links.md)), and per-file and per-directory code reports — line counts and COCOMO estimates — so you and your agents can see the shape of the workspace without leaving the editor.

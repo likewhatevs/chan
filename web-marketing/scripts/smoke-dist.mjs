@@ -10,7 +10,8 @@ const siteRoot = path.resolve(path.dirname(scriptPath), "..");
 const distRoot = path.join(siteRoot, "dist");
 
 const checks = [
-  { path: "/", status: 200, includes: "<h1>chan</h1>" },
+  { path: "/", status: 200, includes: 'src="/assets/home-hero.png"' },
+  { path: "/", status: 200, includes: 'href="/install/">Install' },
   { path: "/install/", status: 200, includes: "Install Chan" },
   { path: "/install/", status: 200, includes: 'data-release-download="cli-linux-x64"' },
   { path: "/install/", status: 200, includes: 'data-release-download="desktop-linux-rpm-amd64"' },

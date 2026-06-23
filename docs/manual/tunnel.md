@@ -2,6 +2,8 @@
 
 Local use is the default. Tunnel mode is opt-in.
 
+TODO: include mermaid block diagram for the components, then sequence diagram for the connection workflow
+
 ## Local server
 
 Without tunnel flags, `chan open` binds to `127.0.0.1` and gates requests with a per-launch bearer token.

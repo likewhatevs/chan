@@ -49,7 +49,6 @@ const requiredInputs = [
   path.join(srcRoot, "site.js"),
   path.join(siteRoot, "chan-favicon.png"),
   path.join(siteRoot, "chan-mark.png"),
-  path.join(siteRoot, "qr-donate.png"),
   path.join(manualRoot, "index.md"),
 ];
 
@@ -109,6 +108,7 @@ async function main() {
     );
   }
 
+  await copyManualAssets();
   await validateDist(version);
   console.log(`built web-marketing/dist for chan ${version}`);
 }
@@ -132,7 +132,6 @@ async function readWorkspaceVersion() {
 async function copyStaticAssets() {
   await fs.copyFile(path.join(siteRoot, "chan-favicon.png"), path.join(distRoot, "chan-favicon.png"));
   await fs.copyFile(path.join(siteRoot, "chan-mark.png"), path.join(distRoot, "chan-mark.png"));
-  await fs.copyFile(path.join(siteRoot, "qr-donate.png"), path.join(distRoot, "qr-donate.png"));
   await fs.copyFile(path.join(srcRoot, "styles.css"), path.join(distRoot, "assets", "site.css"));
   await fs.copyFile(path.join(srcRoot, "site.js"), path.join(distRoot, "assets", "site.js"));
   await copyDir(path.join(siteRoot, "assets"), path.join(distRoot, "assets"));
@@ -155,6 +154,30 @@ async function copyDir(source, target) {
       await copyDir(from, to);
     } else if (entry.isFile()) {
       await fs.copyFile(from, to);
+    }
+  }
+}
+
+// Copies manual-local image assets (docs/manual/**/*.{png,svg,...}) into
+// dist/manual, preserving their relative path, so manual pages can reference
+// images that also resolve in chan's editor. The .md sources are rendered
+// separately (readManualPages); only image files are copied here.
+const manualImageExtensions = new Set([".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".avif"]);
+
+async function copyManualAssets() {
+  await copyManualAssetsFrom(manualRoot, path.join(distRoot, "manual"));
+}
+
+async function copyManualAssetsFrom(sourceDir, targetDir) {
+  const entries = await fs.readdir(sourceDir, { withFileTypes: true });
+  for (const entry of entries) {
+    if (entry.name.startsWith(".") || entry.name.startsWith("_")) continue;
+    const from = path.join(sourceDir, entry.name);
+    if (entry.isDirectory()) {
+      await copyManualAssetsFrom(from, path.join(targetDir, entry.name));
+    } else if (entry.isFile() && manualImageExtensions.has(path.extname(entry.name).toLowerCase())) {
+      await fs.mkdir(targetDir, { recursive: true });
+      await fs.copyFile(from, path.join(targetDir, entry.name));
     }
   }
 }
@@ -330,6 +353,28 @@ function manualHrefToCleanUrl(href, pageRel) {
   return `${manualUrlFor(targetRel)}${anchor}`;
 }
 
+// Resolves a manual image reference (as authored in docs/manual) to a published
+// src plus an optional width. A workspace-relative path resolves against the
+// source page's dir and maps under /manual/ so it works from the clean per-page
+// URL, while chan's editor resolves the same relative path against the file on
+// disk — one authored form renders in both. Absolute (/...) and external
+// (http:) srcs pass through untouched. A trailing `#w=<px>` fragment is chan's
+// image width hint and sizes the figure.
+function manualImage(raw, pageRel) {
+  const hash = raw.indexOf("#");
+  const pathPart = hash === -1 ? raw : raw.slice(0, hash);
+  const fragment = hash === -1 ? "" : raw.slice(hash + 1);
+  const widthMatch = fragment.match(/(?:^|&)w=(\d+)/);
+  const width = widthMatch ? Number(widthMatch[1]) : null;
+  let src = pathPart;
+  if (!/^[a-z][a-z0-9+.-]*:/i.test(pathPart) && !pathPart.startsWith("/")) {
+    const pageDir = path.posix.dirname(pageRel); // "." for root pages
+    const base = pageDir === "." ? "" : `${pageDir}/`;
+    src = `/manual/${path.posix.normalize(`${base}${pathPart}`)}`;
+  }
+  return { src, width };
+}
+
 function outputForUrl(url) {
   if (!url.startsWith("/") || !url.endsWith("/")) throw new Error(`invalid clean URL: ${url}`);
   return path.posix.join(url.slice(1), "index.html");
@@ -401,11 +446,15 @@ function renderMarkdown(markdown, source, pageRel) {
       continue;
     }
 
-    // A line that is only an image becomes a figure (the manual's diagrams).
+    // A line that is only an image becomes a figure (the manual's diagrams and
+    // screenshots). The src is resolved so manual-local images authored as
+    // chan-relative paths publish under /manual/ (see manualImage).
     const image = line.match(/^!\[([^\]]*)]\(([^)]+)\)\s*$/);
     if (image) {
+      const { src, width } = manualImage(image[2], pageRel);
+      const style = width ? ` style="max-width:${width}px"` : "";
       html.push(
-        `<figure class="inline-shot"><img src="${escapeAttribute(image[2])}" alt="${escapeAttribute(image[1])}" /></figure>`,
+        `<figure class="inline-shot"${style}><img src="${escapeAttribute(src)}" alt="${escapeAttribute(image[1])}" /></figure>`,
       );
       i += 1;
       continue;

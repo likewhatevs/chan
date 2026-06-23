@@ -2,7 +2,7 @@
 
 The gateway is the self-hostable server side of chan's tunnel. It lets a fleet of `chan devserver` instances dial out and be reached from anywhere in the browser, behind sign-in, without opening inbound ports on each machine. It lives in this repo under `gateway/` and is yours to run; the maintainer's own deployment at `id.chan.app` and `devserver.chan.app` is experimental, ships with sign-in off by default, and is not a hosted product.
 
-![Where Chan Gateway sits: each chan devserver dials out over an authenticated tunnel to a self-hosted gateway — identity, devserver-proxy, profile on Postgres, and an admin CLI — while a browser signs in at identity and reaches each workspace through the devserver-proxy's reverse proxy.](/assets/gateway-architecture.svg)
+![Where Chan Gateway sits: each chan devserver dials out over an authenticated tunnel to a self-hosted gateway — identity, devserver-proxy, profile on Postgres, and an admin CLI — while a browser signs in at identity and reaches each workspace through the devserver-proxy's reverse proxy.](images/gateway-architecture.svg#w=736)
 
 ## How chan uses it
 

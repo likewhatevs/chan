@@ -5,6 +5,8 @@ Wiki-links are file and path links inside the workspace.
 ## Picker contract
 
 Typing `[[` opens a file/path picker. The picker is for workspace paths, not global content search. Use search when you want to search document contents.
+![](./image-2.png#w=464)
+
 
 ## Relative paths
 

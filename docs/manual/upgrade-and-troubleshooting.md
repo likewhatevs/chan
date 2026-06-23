@@ -23,4 +23,4 @@ Check that the file is inside the workspace root and is a regular file. Chan ref
 
 ## Install script fails
 
-The shell installer supports the active standalone CLI release targets. For desktop installs, use the [install page](/install/). If release metadata cannot be fetched, the install page links to GitHub Releases instead of guessing asset URLs.
+The shell installer supports the active standalone CLI release targets. For desktop installs, use the [install page](https://chan.app/install/). If release metadata cannot be fetched, the install page links to GitHub Releases instead of guessing asset URLs.

@@ -55,7 +55,6 @@ Chan Desktop attaches to a devserver at a host and port (New, then Devserver). T
 | Case                  | Mac localhost | Extra setup on the box        |
 |-----------------------|---------------|-------------------------------|
 | lima VM               | automatic     | none                          |
-| sdme container (host) | automatic     | systemd PAM packages, linger  |
 | ssh -L (remote box)   | via forward   | ssh, a running devserver      |
 
 To confirm reachability from a Mac shell, the unauthenticated health route answers 200 when the devserver is up (the other `/api/devserver/*` routes need the bearer token):
@@ -69,46 +68,16 @@ curl -sS http://localhost:PORT/api/devserver/info
 lima runs the Linux VM and forwards the guest's `127.0.0.1:PORT` listener out to the Mac's `localhost:PORT`, so a devserver bound to loopback inside the VM is reachable from the Mac directly. The standard cloud image already has the systemd user-session pieces and lingering on, so no extra setup is needed.
 
 ```sh
-# Put the chan binary in the VM (or use a shared $HOME mount where it already is):
-limactl cp ./chan default:/usr/local/bin/chan
+# Enter the VM:
 limactl shell default
 
-# Inside the VM:
+# Inside the VM (make sure $PATH contains ~/.local/bin):
+curl https://chan.app/install.sh | bash
 chan devserver --systemd --port 8791
-
-# From the Mac (still reachable after you exit the VM shell; the service stays up):
-curl -sS http://localhost:8791/api/devserver/info
 ```
 
 Then in Chan Desktop: New, then Devserver, host `localhost`, port `8791`.
 
-### In an sdme container
-
-An sdme container on the VM's default (host) network shares the VM's network namespace, so a devserver bound to `127.0.0.1:PORT` inside the container rides the same lima auto-forward out to the Mac. Unlike the lima cloud image, the minimal container rootfs lacks the systemd user-session pieces, so install them once and enable lingering for the user that runs the devserver (skip this and the devserver fails at `systemctl --user`):
-
-```sh
-# In the lima VM:
-sudo sdme create chan-dev -r ubuntu --started
-sudo sdme cp ./chan chan-dev:/usr/local/bin/chan
-sudo sdme exec chan-dev chmod 0755 /usr/local/bin/chan
-
-# One-time prereqs the minimal rootfs needs (the lima cloud image already has them):
-sudo sdme exec chan-dev bash -c 'apt-get update && apt-get install -y libpam-systemd dbus-user-session'
-sudo sdme exec chan-dev useradd -m -s /bin/bash chuser
-sudo sdme exec chan-dev loginctl enable-linger chuser
-
-# Run the devserver as that non-root user with its session environment:
-sudo sdme exec chan-dev bash -c '
-  U=$(id -u chuser)
-  runuser -u chuser -- env HOME=/home/chuser USER=chuser \
-    XDG_RUNTIME_DIR=/run/user/$U DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$U/bus \
-    chan devserver --systemd --port 8792'
-
-# From the Mac:
-curl -sS http://localhost:8792/api/devserver/info
-```
-
-Then attach from Chan Desktop at `localhost:8792` as above.
 
 ## A remote box: forward the port with ssh
 

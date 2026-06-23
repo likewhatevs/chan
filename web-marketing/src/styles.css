@@ -165,6 +165,22 @@ code {
   padding: 40px 0 72px;
 }
 
+.home-hero {
+  align-items: center;
+  display: flex;
+  flex-direction: column;
+  gap: 32px;
+  justify-content: center;
+  min-height: calc(100vh - 180px);
+  padding: 48px 0 72px;
+  text-align: center;
+}
+
+.home-hero .hero-shot {
+  max-width: 760px;
+  width: 100%;
+}
+
 .hero h1,
 .page-head h1 {
   font-size: clamp(3.8rem, 11vw, 8.25rem);
@@ -281,7 +297,6 @@ code {
 
 .feature-grid h2,
 .split-section h2,
-.support-section h2,
 .section-heading h2,
 .prose h2 {
   font-size: 1.22rem;
@@ -292,7 +307,6 @@ code {
 
 .feature-grid p,
 .split-section p,
-.support-section p,
 .install-section p,
 .prose p,
 .prose li {
@@ -300,7 +314,6 @@ code {
 }
 
 .split-section,
-.support-section,
 .install-section {
   border-top: 1px solid var(--rule);
   display: grid;
@@ -333,17 +346,6 @@ code {
 .button.secondary:hover {
   border-color: var(--accent);
   color: var(--accent);
-}
-
-.support-section img {
-  align-self: start;
-  background: #fff;
-  border: 1px solid var(--rule);
-  border-radius: 8px;
-  height: auto;
-  justify-self: start;
-  max-width: 180px;
-  padding: 10px;
 }
 
 .page-head {
@@ -663,7 +665,6 @@ body.lightbox-open {
 
   .hero,
   .split-section,
-  .support-section,
   .install-section,
   .manual-layout {
     grid-template-columns: 1fr;

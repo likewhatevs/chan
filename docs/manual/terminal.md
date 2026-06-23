@@ -2,6 +2,8 @@
 
 Chan embeds a real terminal next to your files. Each terminal tab is a PTY rooted at the workspace, so shell work, builds, and AI agents all run in the tree you are editing. One terminal owns one agent: start an agent CLI (claude, codex, gemini) in a tab, and that tab is how you, and other agents, reach it.
 
+Terminal sessions run server-side, so closing or reloading the window does not kill them: your tabs are restored and the agents keep running where you left off.
+
 ## What a terminal exports
 
 Every terminal session exports a few environment variables so scripts and agents know where they are:
@@ -44,6 +46,8 @@ A poke is how one agent hands work to another. `cs terminal write --submit <agen
 cs terminal write --tab-name=@@Worker --submit claude 'read tasks/next.md'
 ```
 
+![One Chan terminal using cs terminal write to queue a command into another terminal tab](images/terminal-cs-write.png)
+
 The submit chord differs per agent, because each agent CLI reads a different key as "submit":
 
 - `claude`: the Cmd+Enter chord (an xterm modifyOtherKeys sequence).
@@ -74,6 +78,8 @@ cs terminal survey --tab-name=@@Host --title "Cut the release?" \
     --option "Yes" --option "Not yet" "v0.24.0 is green."
 ```
 
+![A survey overlay launched in one Chan terminal from another with cs terminal survey](images/terminal-cs-survey.png)
+
 Options are numbered `[1]`..`[4]` in the UI, and `--stdin` reads a multi-line markdown body.
 
 The constraint to know: survey needs a live SPA window that owns the tab. A terminal running as a bare PTY with no window attached matches nothing, and the command fails with `no live terminal session matched`. Open the tab in a Chan window before surveying it.
@@ -81,6 +87,8 @@ The constraint to know: survey needs a live SPA window that owns the tab. A term
 ## Team Work
 
 Team Work runs a set of agents as a team across terminal tabs. The lead is an ordinary terminal, with the same Rich Prompt and survey as any other and no special composer: on spawn it receives its identity prompt through the same write queue, then runs like any other terminal. You bootstrap a team with Cmd+P (the team setup/load dialog) or `cs terminal team new|load`, which writes or reads the team's `config.toml` and the generated bootstrap. The team then coordinates through the same `cs terminal` tools (pokes, survey) this page covers.
+
+![AI agents coordinating in a Chan Team Work session](images/team-work-session.png)
 
 ## MCP discovery
 

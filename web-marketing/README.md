@@ -18,11 +18,12 @@ web-marketing/
 |       `-- base.html
 +-- assets/                public image assets copied to dist/assets/
 +-- chan-favicon.png
-+-- chan-mark.png
-`-- qr-donate.png
+`-- chan-mark.png
 ```
 
 Manual source lives in `docs/manual/`. The site build renders that tree to `/manual/` and nested clean URLs. Manual navigation starts with the links in `docs/manual/index.md`, then falls back to path order for pages not linked from the manual landing page.
+
+Manual images live alongside the manual (for example `docs/manual/images/`) and are referenced with workspace-relative paths so they also render in chan's editor. The build copies them into `dist/manual/` and rewrites the paths to absolute `/manual/...` URLs; a trailing `#w=<px>` on an image link sizes the figure.
 
 ## Build
 

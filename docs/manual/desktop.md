@@ -4,7 +4,7 @@ Chan Desktop is the native version of the IDE for macOS and Linux. It hosts the 
 
 ## Install
 
-Download the desktop package for your platform from the [install page](/install/). Desktop packages are release artifacts; the shell installer (`curl -fsSL https://chan.app/install.sh | sh`) installs the standalone `chan` CLI, not the desktop app.
+Download the desktop package for your platform from the [install page](https://chan.app/install/). Desktop packages are release artifacts; the shell installer (`curl -fsSL https://chan.app/install.sh | sh`) installs the standalone `chan` CLI, not the desktop app.
 
 ## Local workspaces
 
@@ -15,34 +15,6 @@ Open a folder on disk and Chan Desktop launches a local `chan open` for it and m
 Each workspace or terminal you open gets its own native window, and a running workspace can have several. Closing a window with its title-bar button hides it rather than destroying it: its terminals keep running and its layout stays warm, and the Window menu lists hidden windows to bring back (the "Hidden Windows" header shows how many are kept warm). Hidden windows do not count against the per-workspace window cap.
 
 From inside a terminal, the `cs window` family manages these windows directly — list them, open and hide them, remove them for good, and rename them. See [Terminal](terminal.md) for the command reference.
-
-## Remote workspaces
-
-A remote workspace is a `chan open` running on another machine (a VM on your laptop, a box on your LAN, a VPS). The remote listens; Chan Desktop connects to it over HTTP/2.
-
-1. On the remote machine, install chan and start a server:
-
-```sh
-# On the remote host (e.g. a Linux VM):
-curl -fsSL https://chan.app/install.sh | sh
-git clone https://github.com/fiorix/chan
-chan open ./chan
-```
-
-   Copy the URL `chan open` prints (it carries the per-launch bearer token).
-
-2. In Chan Desktop: New -> Remote, and paste that URL. The workspace opens in a native window and feels local.
-
-If the remote port is not directly reachable, forward it over SSH first, then paste the resulting `http://localhost:<port>/...` URL:
-
-```sh
-ssh user@host -L 8787:localhost:8787
-# then, in that session on the remote host:
-#   curl -fsSL https://chan.app/install.sh | sh && chan open ./repo
-# paste the printed localhost URL into New -> Remote
-```
-
-A Lima VM on a Mac is a convenient remote: it is a real Linux host reachable from the Mac, so the outbound flow exercises the full remote path locally.
 
 ## Devservers
 
