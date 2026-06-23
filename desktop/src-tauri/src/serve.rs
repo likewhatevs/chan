@@ -841,11 +841,22 @@ fn build_workspace_window(app: &AppHandle, spec: WindowSpec<'_>) -> Result<(), S
     // active-pane highlight; absent -> the default accent. v1 = mint-time (no
     // live recolour of already-open windows).
     if !library_id.is_empty() {
-        if let Some(color) = app
+        let pane = app
             .state::<Arc<AppState>>()
             .embedded()
-            .and_then(|embedded| embedded.pane_color(library_id))
-        {
+            .and_then(|embedded| embedded.pane_color(library_id));
+        // Theme-6 Bug-A diagnostic: log whether `?pane=` is injected at build. A
+        // `Some` here proves the desktop injects the colour at mint time (so a
+        // new window blue-flashing is the web/ live-null revert, not a missing
+        // injection); a `None` means the colour source (local store / devserver
+        // colour cache) was empty at build (timing / consume).
+        tracing::debug!(
+            library_id,
+            window = %window_label,
+            pane_color = ?pane,
+            "build_workspace_window: ?pane= injection at mint time",
+        );
+        if let Some(color) = pane {
             parsed.query_pairs_mut().append_pair("pane", &color);
         }
     }
