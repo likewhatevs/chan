@@ -945,6 +945,7 @@ async fn handle_info(State(state): State<Arc<DevserverState>>) -> Json<Devserver
         devserver_version: env!("CARGO_PKG_VERSION").to_string(),
         protocol: DEVSERVER_API_PROTOCOL,
         host_label: state.host_label.clone(),
+        library_id: state.library_id.clone(),
     })
 }
 

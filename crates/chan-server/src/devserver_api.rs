@@ -42,6 +42,13 @@ pub struct DevserverInfo {
     pub protocol: u32,
     /// Human label for the box, shown to group its workspaces in a client.
     pub host_label: String,
+    /// This devserver library's stable identity (`lib-<16hex>`), the same id
+    /// stamped on every window record. Sent at connect so the desktop can group
+    /// the devserver's launcher feed (and emit its synthetic control record)
+    /// even before any window arrives — a devserver whose terminal was closed
+    /// reconnects with zero windows, and a window record was the ONLY prior
+    /// source of this id (Bug A).
+    pub library_id: String,
 }
 
 /// One element of `GET /api/devserver/workspaces`, the box's workspace
@@ -158,6 +165,7 @@ mod tests {
             devserver_version: "0.38.0".into(),
             protocol: DEVSERVER_API_PROTOCOL,
             host_label: "build-box".into(),
+            library_id: "lib-0123456789abcdef".into(),
         };
         let v = serde_json::to_value(&info).unwrap();
         assert_eq!(
@@ -166,6 +174,7 @@ mod tests {
                 "devserver_version": "0.38.0",
                 "protocol": 1,
                 "host_label": "build-box",
+                "library_id": "lib-0123456789abcdef",
             })
         );
         assert_eq!(info, serde_json::from_value(v).unwrap());
