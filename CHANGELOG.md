@@ -6,6 +6,58 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [v0.46.0] - 2026-06-23
+
+A launcher-polish and fix release on top of the v0.45.0 desktop release: the
+workspace launcher gains unified bulk management for served workspaces, per-window
+focus / show-hide controls, in-flight spinners, and a dismissable error banner;
+editor and graph navigation are fixed; and desktop upload, native dialogs, the
+devserver connection, and the app icon are hardened.
+
+### Added
+
+- **Launcher — per-window Focus and Show/Hide controls.** Each "Open windows" row
+  now has a **Focus** button (raise + focus the window, un-hiding it if buried) and
+  an **Eye / Eye-off** show-hide toggle, replacing the single click-to-toggle dot.
+- **Launcher — in-flight spinners.** Turning a workspace on/off and connecting or
+  disconnecting a devserver now show a spinner while the action runs; the spinner
+  **survives a launcher reload** and reconciles to the latest state.
+- **Launcher — served workspaces are managed like local ones.** A served
+  (devserver-mounted) workspace row gets a select checkbox and feeds **one** global
+  bulk bar spanning local + served + devserver selections, with an ordered
+  cross-kind Remove (forget served → remove devservers → remove local).
+
+### Changed
+
+- **Launcher — the top-level open-terminal button uses the SquareTerminal icon.**
+- **Graph — "Open" on a file node opens the editor** (matching the File Browser);
+  directory nodes still open the File Browser.
+- **App icon — the enso is no longer over-zoomed**, re-rendered with its original
+  cream-paper margin (colours unchanged).
+
+### Fixed
+
+- **Editor — a `[[wiki-link]]` to a resolvable note no longer shows a false
+  "document not found."** The link target is resolved to its real file before
+  opening; genuinely broken links still surface the banner.
+- **Editor — reopening a closed File Browser tab (Cmd+Shift+T) restores its
+  expanded directories** (and selection, scroll, and workspace toggle).
+- **Launcher — the error/warning banner can be dismissed** (an [X] button) without
+  reloading.
+- **Launcher — `chan open <url>` shows the new devserver immediately**, with no
+  manual reload.
+- **Desktop — `cs upload` opens a native file picker** on macOS, so uploads work
+  from a desktop terminal (the web file input is blocked by WKWebView; download was
+  unaffected).
+- **Desktop (macOS) — native confirm dialogs honor Return-to-default** — "Quit
+  Chan?", Remove window, transfer-in-progress, and update-ready all respond to
+  Return on the blue default button.
+- **Desktop — the devserver connection no longer leaks file descriptors.** The
+  desktop built a fresh HTTP client per poll (~22 leaked connections/minute) until
+  the devserver hit its 1024-fd cap and died (~40 min); it now reuses one client.
+- **Manual — the intro bullet list renders correctly** (a missing blank line had
+  folded the bullets into the preceding paragraph).
+
 ## [v0.45.0] - 2026-06-23
 
 The desktop release. It finishes the launcher on the **desktop / WKWebView** surface the v0.44.0 headless
