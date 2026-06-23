@@ -180,6 +180,23 @@ pub struct PersistedWindow {
     pub ordinal: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace_path: Option<String>,
+    /// A devserver control terminal (runs the connect script). True only for the
+    /// transient control row minted via [`WindowRegistry::create_control`]; it is
+    /// NEVER written to disk (see [`WindowRegistry::save_best_effort`]) — the
+    /// control terminal is per-connection, desktop-driven, and reaped on PTY
+    /// exit. `skip_serializing_if` default keeps a normal row's on-disk shape
+    /// unchanged.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub control: bool,
+    /// Owning library override. `None` ⇒ this row belongs to the host's own
+    /// library (the common case; assembly stamps the host's `library_id`).
+    /// `Some(id)` ⇒ a FOREIGN library_id, used by the control row: it is minted
+    /// in the desktop's LOCAL embedded library but GROUPS under the remote
+    /// devserver's `library_id`. (Local-vs-remote OPEN routing keys off
+    /// `control`, NOT this id — see the desktop opener.) `skip_serializing_if`
+    /// default keeps a normal row's on-disk shape unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub library_id: Option<String>,
 }
 
 impl PersistedWindow {
@@ -204,15 +221,15 @@ impl PersistedWindow {
             workspace_path: self.workspace_path.clone(),
             prefix,
             token,
-            persisted: true,
+            // A control row is transient (in-memory only, never on disk), so it
+            // is NOT persisted; every other registry row is durable.
+            persisted: !self.control,
             connected,
             // The live transfer bit is overlaid by the feed assembly
             // (`assemble_window_records`), the one place that holds tenant
             // transfer state; a freshly assembled/minted record defaults off.
             active_transfer: false,
-            // A persisted registry row is never the control terminal — that is a
-            // transient, desktop-driven window built via [`WindowRecord::control_terminal`].
-            control: false,
+            control: self.control,
         }
     }
 }
@@ -329,11 +346,46 @@ impl WindowRegistry {
                 title,
                 ordinal,
                 workspace_path,
+                control: false,
+                library_id: None,
             };
             windows.push(row.clone());
             (row, windows.clone())
         };
         self.save_best_effort(&snapshot);
+        self.notify.notify_waiters();
+        row
+    }
+
+    /// Mint a transient devserver CONTROL terminal row: `kind = Terminal`,
+    /// `control = true`, `ordinal 0` (rendered first), tagged with the FOREIGN
+    /// devserver `library_id` so it GROUPS under that devserver. The desktop
+    /// supplies the `window_id` (the stable native control-window label) so the
+    /// launcher's hide/open resolves straight to the live window. The session
+    /// runs on a LOCAL control tenant; the assembly resolves its prefix/token
+    /// from there (Local-vs-remote OPEN routing keys off `control`, not the
+    /// foreign id). NOT persisted to disk (per-connection; reaped on PTY exit) —
+    /// a re-connect under the same label replaces any stale row. Fires the
+    /// change notification.
+    pub fn create_control(&self, window_id: String, library_id: String) -> PersistedWindow {
+        let row = PersistedWindow {
+            window_id,
+            kind: WindowKind::Terminal,
+            title: "Control Terminal".to_string(),
+            ordinal: 0,
+            workspace_path: None,
+            control: true,
+            library_id: Some(library_id),
+        };
+        {
+            let mut windows = self.lock();
+            // Re-connect reuses the stable label; drop any prior row first so the
+            // set never carries two control rows for one devserver.
+            windows.retain(|w| w.window_id != row.window_id);
+            windows.push(row.clone());
+        }
+        // No persist: control rows are in-memory only (save_best_effort filters
+        // them anyway); just signal the feed.
         self.notify.notify_waiters();
         row
     }
@@ -382,7 +434,11 @@ impl WindowRegistry {
     /// failed save must not abort a window create/remove (the in-memory set is
     /// still correct; the on-disk copy catches up on the next change).
     fn save_best_effort(&self, windows: &[PersistedWindow]) {
-        if let Err(e) = save_atomic(&self.store_path, &windows) {
+        // Control rows are transient/per-connection (in-memory only): never write
+        // them, so a desktop crash can't strand a stale control window on the
+        // next boot. Durable rows persist as before.
+        let durable: Vec<&PersistedWindow> = windows.iter().filter(|w| !w.control).collect();
+        if let Err(e) = save_atomic(&self.store_path, &durable) {
             tracing::warn!("persisting window registry: {e}");
         }
     }
@@ -713,6 +769,8 @@ mod tests {
             title: "🏠 /n Window 1".into(),
             ordinal: 1,
             workspace_path: Some("/n".into()),
+            control: false,
+            library_id: None,
         };
         let v = serde_json::to_value(&p).unwrap();
         assert_eq!(
@@ -726,17 +784,93 @@ mod tests {
             })
         );
         assert_eq!(p, serde_json::from_value(v).unwrap());
-        // A terminal row omits workspace_path.
+        // A terminal row omits workspace_path AND the default control/library_id.
         let t = PersistedWindow {
             window_id: "w-0".into(),
             kind: WindowKind::Terminal,
             title: "🏠 Terminal Window 1".into(),
             ordinal: 1,
             workspace_path: None,
+            control: false,
+            library_id: None,
         };
         assert_eq!(
             serde_json::to_value(&t).unwrap(),
             json!({ "window_id": "w-0", "kind": "terminal", "title": "🏠 Terminal Window 1", "ordinal": 1 })
+        );
+        // A control row carries `control` + the foreign `library_id`; both are
+        // skip-if-default so they appear ONLY here, never on a normal row.
+        let c = PersistedWindow {
+            window_id: "control-terminal-ds1".into(),
+            kind: WindowKind::Terminal,
+            title: "Control Terminal".into(),
+            ordinal: 0,
+            workspace_path: None,
+            control: true,
+            library_id: Some("lib-f81913a8ca0a6ff6".into()),
+        };
+        let cv = serde_json::to_value(&c).unwrap();
+        assert_eq!(
+            cv,
+            json!({
+                "window_id": "control-terminal-ds1",
+                "kind": "terminal",
+                "title": "Control Terminal",
+                "ordinal": 0,
+                "control": true,
+                "library_id": "lib-f81913a8ca0a6ff6",
+            })
+        );
+        assert_eq!(c, serde_json::from_value(cv).unwrap());
+    }
+
+    // --- control window (ARCH) ---------------------------------------------
+
+    #[test]
+    fn create_control_row_shape() {
+        let (reg, _d) = registry();
+        let c = reg.create_control("control-terminal-ds1".into(), "lib-remote".into());
+        assert_eq!(c.window_id, "control-terminal-ds1"); // desktop-supplied label
+        assert!(c.control);
+        assert_eq!(c.kind, WindowKind::Terminal); // no Control kind
+        assert_eq!(c.ordinal, 0);
+        assert_eq!(c.title, "Control Terminal");
+        assert_eq!(c.library_id.as_deref(), Some("lib-remote")); // foreign id
+        assert!(c.workspace_path.is_none());
+        // It is in the live snapshot.
+        assert!(reg
+            .snapshot()
+            .iter()
+            .any(|w| w.window_id == "control-terminal-ds1" && w.control));
+        // Re-create under the same label replaces (never duplicates).
+        reg.create_control("control-terminal-ds1".into(), "lib-remote".into());
+        assert_eq!(
+            reg.snapshot()
+                .iter()
+                .filter(|w| w.window_id == "control-terminal-ds1")
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn control_rows_are_in_memory_only() {
+        let (reg, dir) = registry();
+        let path = dir.path().join("windows.json");
+        reg.create_control("control-terminal-ds1".into(), "lib-remote".into());
+        // A durable create triggers a save WHILE the control row is present; the
+        // save filters control rows, so disk holds only the durable row.
+        let durable = reg.create(WindowKind::Terminal, None);
+        let reloaded = WindowRegistry::open(path);
+        let ids: Vec<String> = reloaded
+            .snapshot()
+            .into_iter()
+            .map(|w| w.window_id)
+            .collect();
+        assert!(ids.contains(&durable.window_id), "durable row persists");
+        assert!(
+            !ids.iter().any(|id| id == "control-terminal-ds1"),
+            "control row is never written to disk"
         );
     }
 
@@ -897,13 +1031,16 @@ mod tests {
             title: "🏠 /n Window 1".into(),
             ordinal: 1,
             workspace_path: Some("/n".into()),
+            control: false,
+            library_id: None,
         };
         let rec = p.to_record("local".into(), "/api/n-0".into(), String::new(), false);
         assert_eq!(rec.window_id, "w-abc");
         assert_eq!(rec.library_id, "local");
         assert_eq!(rec.prefix, "/api/n-0");
         assert_eq!(rec.token, "");
-        assert!(rec.persisted, "a registry row is always persisted");
+        assert!(rec.persisted, "a non-control registry row is persisted");
+        assert!(!rec.control);
         assert!(!rec.connected);
         // `to_record` leaves the transfer bit off; the feed assembly overlays it.
         assert!(!rec.active_transfer);
@@ -911,6 +1048,24 @@ mod tests {
         assert_eq!(rec.kind, WindowKind::Workspace);
         assert_eq!(rec.ordinal, 1);
         assert_eq!(rec.workspace_path.as_deref(), Some("/n"));
+
+        // A control row assembles to control:true + persisted:false, carrying the
+        // foreign library_id passed by the assembly.
+        let c = PersistedWindow {
+            window_id: "control-terminal-ds1".into(),
+            kind: WindowKind::Terminal,
+            title: "Control Terminal".into(),
+            ordinal: 0,
+            workspace_path: None,
+            control: true,
+            library_id: Some("lib-remote".into()),
+        };
+        let crec = c.to_record("lib-remote".into(), "/control-0".into(), "tok".into(), true);
+        assert!(crec.control);
+        assert!(!crec.persisted, "a control row is transient, not persisted");
+        assert_eq!(crec.library_id, "lib-remote");
+        assert_eq!(crec.prefix, "/control-0");
+        assert!(crec.connected);
     }
 
     #[test]

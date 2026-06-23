@@ -212,6 +212,14 @@ pub struct WorkspaceHost {
     /// resolves a terminal window's `(prefix, token)` to it (the terminal
     /// analogue of a workspace tenant). Unset until the tenant mounts.
     terminal_tenant_prefix: OnceLock<String>,
+    /// Control-terminal window_id → its LOCAL `/control-N` tenant prefix. A
+    /// devserver control row runs on its OWN command tenant (not the shared
+    /// terminal tenant), so [`control_window_live`](Self::control_window_live)
+    /// resolves its `(prefix, token, connected)` through this map. Populated by
+    /// [`mint_control_window`](Self::mint_control_window), cleared by
+    /// [`reap_control_window`](Self::reap_control_window). In-memory only (the
+    /// control row is per-connection).
+    control_tenants: RwLock<HashMap<String, String>>,
     /// Fires on any change that affects the window set — registry mint/discard,
     /// `WindowPresence` connect/disconnect, tenant on/off — so the watch feed
     /// pushes a fresh snapshot. The aggregate every client's reconcile awaits.
@@ -290,6 +298,7 @@ impl WorkspaceHost {
             local_color: OnceLock::new(),
             library_id: OnceLock::new(),
             terminal_tenant_prefix: OnceLock::new(),
+            control_tenants: RwLock::new(HashMap::new()),
             library_change_notify: Arc::new(Notify::new()),
             root_fallback: OnceLock::new(),
         }
@@ -869,7 +878,13 @@ impl WorkspaceHost {
                 // remote feed is the only channel a desktop webview onto a
                 // devserver has to learn a window is mid-transfer.
                 let active_transfer = self.tenant_has_active_transfer(&prefix, &row.window_id);
-                let mut record = row.to_record(library_id.to_string(), prefix, token, connected);
+                // A control row carries a FOREIGN library_id (the devserver it
+                // groups under); every other row belongs to this host's library.
+                let row_library_id = row
+                    .library_id
+                    .clone()
+                    .unwrap_or_else(|| library_id.to_string());
+                let mut record = row.to_record(row_library_id, prefix, token, connected);
                 record.active_transfer = active_transfer;
                 record
             })
@@ -915,6 +930,56 @@ impl WorkspaceHost {
         let library_id = self.library_id().to_string();
         let (prefix, token, connected) = self.window_live_state(&row);
         Ok(row.to_record(library_id, prefix, token, connected))
+    }
+
+    /// Mint a devserver CONTROL terminal as a real registry row (UNIFY/ARCH):
+    /// `kind = Terminal`, `control = true`, tagged with the FOREIGN devserver
+    /// `library_id` so it GROUPS under that devserver, but its session is the
+    /// LOCAL command tenant at `control_tenant_prefix` (the connect script). The
+    /// desktop supplies `window_id` (the stable native control-window label) so
+    /// the launcher hide/open resolves to the live window. Records the
+    /// window_id → local-prefix mapping so assembly resolves its live
+    /// `(prefix, token, connected)` from that tenant. Returns the assembled
+    /// record; reaped by [`reap_control_window`](Self::reap_control_window).
+    pub fn mint_control_window(
+        &self,
+        window_id: String,
+        devserver_library_id: String,
+        control_tenant_prefix: String,
+    ) -> Result<WindowRecord, Error> {
+        let registry = self
+            .window_registry()
+            .ok_or_else(|| Error::Config("window registry not installed".into()))?;
+        let row = registry.create_control(window_id.clone(), devserver_library_id.clone());
+        if let Ok(mut map) = self.control_tenants.write() {
+            map.insert(window_id.clone(), control_tenant_prefix);
+        }
+        self.notify_window_change();
+        let (prefix, token, connected) = self.control_window_live(&window_id);
+        Ok(row.to_record(devserver_library_id, prefix, token, connected))
+    }
+
+    /// Reap a control terminal: drop its registry row, forget its tenant
+    /// mapping, and tear down its LOCAL command tenant (kills the connect-script
+    /// PTY). The registry remove + `close_terminal_tenant` each fire the change
+    /// notify, so the feed drops the row. Returns whether a row existed. Called
+    /// on control PTY exit (the server-side reap) and on explicit
+    /// disconnect/forget; idempotent.
+    pub fn reap_control_window(&self, window_id: &str) -> bool {
+        let prefix = self
+            .control_tenants
+            .write()
+            .ok()
+            .and_then(|mut map| map.remove(window_id));
+        let removed = self
+            .window_registry()
+            .map(|registry| registry.remove(window_id))
+            .unwrap_or(false);
+        if let Some(prefix) = prefix {
+            // Best-effort: an already-unmounted tenant returns Ok(false).
+            let _ = self.close_terminal_tenant(&prefix);
+        }
+        removed
     }
 
     /// The library's first-open rule: mint EXACTLY ONE Terminal window the very
@@ -1068,12 +1133,51 @@ impl WorkspaceHost {
     /// a workspace window through
     /// [`workspace_window_live`](Self::workspace_window_live).
     fn window_live_state(&self, row: &PersistedWindow) -> (String, String, bool) {
+        // A control row's session is its OWN command tenant, not the shared
+        // terminal tenant — resolve it through the control-tenant map. (`kind` is
+        // still Terminal, so this must precede the kind match.)
+        if row.control {
+            return self.control_window_live(&row.window_id);
+        }
         match row.kind {
             WindowKind::Workspace => {
                 self.workspace_window_live(row.workspace_path.as_deref(), &row.window_id)
             }
             WindowKind::Terminal => self.terminal_window_live(&row.window_id),
         }
+    }
+
+    /// The `(prefix, token, connected)` for a devserver CONTROL window: its LOCAL
+    /// command tenant (the connect script), looked up by the window_id → prefix
+    /// map [`mint_control_window`](Self::mint_control_window) populated. Mirrors
+    /// [`terminal_window_live`](Self::terminal_window_live) but per-control-tenant
+    /// (each control window has its own tenant, vs the one shared terminal
+    /// tenant). Empty when the mapping or tenant is gone (e.g. mid-reap).
+    fn control_window_live(&self, window_id: &str) -> (String, String, bool) {
+        let Some(prefix) = self
+            .control_tenants
+            .read()
+            .ok()
+            .and_then(|map| map.get(window_id).cloned())
+        else {
+            return (String::new(), String::new(), false);
+        };
+        if let Ok(workspaces) = self.workspaces.read() {
+            if let Some(runtime) = workspaces.get(&prefix) {
+                let connected = runtime
+                    .artifacts
+                    .window_presence
+                    .connected_ids()
+                    .iter()
+                    .any(|id| id == window_id);
+                return (
+                    runtime.handle.prefix.clone(),
+                    runtime.handle.token.clone().unwrap_or_default(),
+                    connected,
+                );
+            }
+        }
+        (String::new(), String::new(), false)
     }
 
     /// The `(prefix, token, connected)` for a terminal window: the library's
@@ -2580,6 +2684,71 @@ mod tests {
         assert_eq!(term_rec.token, "");
         assert!(!term_rec.connected);
         assert_eq!(term_rec.title, term.title);
+    }
+
+    #[tokio::test]
+    async fn control_window_mints_under_foreign_id_resolves_local_tenant_and_reaps() {
+        let cfg = tempfile::tempdir().expect("config dir");
+        let lib = Library::open_at(cfg.path().join("config.toml")).expect("library");
+        let host = WorkspaceHost::new(lib, fake_builder());
+        let store = tempfile::tempdir().expect("store dir");
+        host.install_window_registry(
+            Arc::new(WindowRegistry::open(store.path().join("windows.json"))),
+            "local".into(),
+        );
+
+        // Mount the LOCAL control tenant (the connect script lives here), then
+        // mint the control window tagged with the FOREIGN devserver library_id.
+        host.open_terminal_session_with_command(
+            serve_config("/control-0"),
+            Some("sleep 30".into()),
+            None,
+        )
+        .await
+        .expect("mount control tenant");
+        let rec = host
+            .mint_control_window(
+                "control-terminal-ds1".into(),
+                "lib-remote".into(),
+                "/control-0".into(),
+            )
+            .expect("mint control window");
+        assert!(rec.control);
+        assert!(!rec.persisted, "control window is transient");
+        assert_eq!(
+            rec.library_id, "lib-remote",
+            "grouped under the FOREIGN devserver id, not the host's local id"
+        );
+        assert_eq!(
+            rec.prefix, "/control-0",
+            "session resolves to the LOCAL control tenant (open routing keys off control)"
+        );
+
+        // It rides assemble from the REGISTRY (not desktop synthesis), under the
+        // foreign id, alongside the host's own "local" rows.
+        let records = host.assemble_window_records();
+        let c = records
+            .iter()
+            .find(|r| r.window_id == "control-terminal-ds1")
+            .expect("control row in the feed");
+        assert!(c.control && c.library_id == "lib-remote" && !c.persisted);
+
+        // Reap (server-side, on PTY exit): the row leaves the feed AND the control
+        // tenant is unmounted (a second close is the idempotent no-op).
+        assert!(host.reap_control_window("control-terminal-ds1"));
+        assert!(
+            !host
+                .assemble_window_records()
+                .iter()
+                .any(|r| r.window_id == "control-terminal-ds1"),
+            "control row reaped from the feed"
+        );
+        assert!(
+            !host
+                .close_terminal_tenant("/control-0")
+                .expect("close is idempotent"),
+            "reap already unmounted the control tenant"
+        );
     }
 
     #[tokio::test]
