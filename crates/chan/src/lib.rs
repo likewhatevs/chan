@@ -338,6 +338,16 @@ enum Command {
         /// macOS, runs in the foreground. Mutually exclusive with --systemd.
         #[arg(long, conflicts_with = "systemd")]
         launchd: bool,
+        /// Stop the supervised devserver and exit. Requires --systemd (Linux)
+        /// or --launchd (macOS); a foreground devserver is stopped with Ctrl-C.
+        /// Idempotent: a no-op when the service is not running.
+        #[arg(long, conflicts_with = "restart")]
+        stop: bool,
+        /// Restart the supervised devserver (or START it if it is not running),
+        /// then follow it. Requires --systemd/--launchd. Rewrites the unit /
+        /// agent first, so it picks up the current binary and --bind/--port.
+        #[arg(long)]
+        restart: bool,
         /// Tunnel endpoint URL. With --tunnel-token, the devserver also dials
         /// this gateway and publishes its tenant content at
         /// `{user}.devserver.chan.app/{workspace}/*`, alongside the local
@@ -897,9 +907,23 @@ where
             port,
             systemd,
             launchd,
+            stop,
+            restart,
             tunnel_url,
             tunnel_token,
-        } => cmd_devserver(bind, port, systemd, launchd, tunnel_url, tunnel_token).await,
+        } => {
+            cmd_devserver(
+                bind,
+                port,
+                systemd,
+                launchd,
+                stop,
+                restart,
+                tunnel_url,
+                tunnel_token,
+            )
+            .await
+        }
         Command::Config { action } => cmd_config(action),
         Command::Upgrade {
             yes,
@@ -1728,15 +1752,23 @@ async fn cmd_serve(args: ServeArgs, personality: Personality) -> Result<()> {
 /// the `app.chan.devserver` LaunchAgent. Either re-attaches when its service is
 /// already running; off its own OS each prints a note and runs in the
 /// foreground.
+#[allow(clippy::too_many_arguments)]
 async fn cmd_devserver(
     bind: IpAddr,
     port: u16,
     systemd: bool,
     launchd: bool,
+    stop: bool,
+    restart: bool,
     tunnel_url: String,
     tunnel_token: Option<String>,
 ) -> Result<()> {
     let addr = SocketAddr::new(bind, port);
+    // --stop / --restart act on a supervised (--systemd/--launchd) devserver and
+    // short-circuit the normal start path (no tunnel, no foreground bind).
+    if stop || restart {
+        return manage_supervised_devserver(addr, systemd, launchd, stop).await;
+    }
     if !addr.ip().is_loopback() {
         eprintln!(
             "WARNING: binding to {} exposes the devserver on a non-loopback \
@@ -1799,6 +1831,45 @@ async fn cmd_devserver(
     // resolution lives below the systemd/launchd branches.
     let listen = resolve_devserver_listen(tunnel.is_some(), devserver_listen_override())?;
     run_devserver_foreground(addr, tunnel, listen).await
+}
+
+/// Dispatch `chan devserver --stop` / `--restart` to the supervised backend.
+/// Both act on a `--systemd` (Linux) / `--launchd` (macOS) service and exit or
+/// replace it; a foreground devserver is managed with Ctrl-C. Off the matching
+/// OS, or with no supervisor flag, this errors with a clear message rather than
+/// silently falling through to a foreground start. `--restart` starts the
+/// service when it is not already running.
+async fn manage_supervised_devserver(
+    addr: SocketAddr,
+    systemd: bool,
+    launchd: bool,
+    stop: bool,
+) -> Result<()> {
+    let op = if stop { "--stop" } else { "--restart" };
+    if systemd {
+        if !cfg!(target_os = "linux") {
+            anyhow::bail!("chan devserver: {op} with --systemd is Linux-only.");
+        }
+        return if stop {
+            stop_devserver_under_systemd().await
+        } else {
+            restart_devserver_under_systemd(addr).await
+        };
+    }
+    if launchd {
+        if !cfg!(target_os = "macos") {
+            anyhow::bail!("chan devserver: {op} with --launchd is macOS-only.");
+        }
+        return if stop {
+            stop_devserver_under_launchd().await
+        } else {
+            restart_devserver_under_launchd(addr).await
+        };
+    }
+    anyhow::bail!(
+        "chan devserver: {op} requires --systemd (Linux) or --launchd (macOS); \
+         a foreground devserver is stopped with Ctrl-C."
+    )
 }
 
 /// Whether the foreground devserver binds a local TCP listener. Tunnel mode
@@ -1892,23 +1963,7 @@ async fn run_devserver_under_systemd(addr: SocketAddr) -> Result<()> {
              {DEVSERVER_SYSTEMD_UNIT}"
         );
     } else {
-        let unit_path = write_devserver_unit(addr)?;
-        eprintln!("chan devserver: wrote {}", unit_path.display());
-        systemctl_user(&["daemon-reload"]).await?;
-        systemctl_user(&["enable", "--now", DEVSERVER_SYSTEMD_UNIT]).await?;
-        if !wait_until_active(Duration::from_secs(10)).await {
-            anyhow::bail!(
-                "chan devserver: the systemd user service {DEVSERVER_SYSTEMD_UNIT} \
-                 failed to start:\n{}",
-                recent_unit_journal().await
-            );
-        }
-        // The freshly started service prints the token marker to its own stdout,
-        // which under the unit lands in the journal — invisible to this terminal
-        // on a host with no readable journal. Emit it directly from the persisted
-        // config so the desktop reconnects regardless; fail loud if it never
-        // lands rather than claim "started" on a token we cannot surface.
-        emit_devserver_token_marker(DEVSERVER_TOKEN_WAIT).await?;
+        bootstrap_systemd_unit(addr, false).await?;
         eprintln!(
             "chan devserver: started the systemd user service \
              {DEVSERVER_SYSTEMD_UNIT} (bind={addr})"
@@ -1916,6 +1971,70 @@ async fn run_devserver_under_systemd(addr: SocketAddr) -> Result<()> {
     }
 
     follow_unit_until_stopped().await
+}
+
+/// Write the unit for `addr` and bring it up: `daemon-reload`, then `enable
+/// --now` for a first start or `enable` + `restart` to bounce/(re)start under
+/// `--restart` (`enable --now` would not bounce an already-running unit). Waits
+/// until active and surfaces the bearer token. Shared by the first-start path
+/// and [`restart_devserver_under_systemd`]; the caller owns linger + the
+/// started/restarted log line + following the journal.
+async fn bootstrap_systemd_unit(addr: SocketAddr, restart: bool) -> Result<()> {
+    let unit_path = write_devserver_unit(addr)?;
+    eprintln!("chan devserver: wrote {}", unit_path.display());
+    systemctl_user(&["daemon-reload"]).await?;
+    if restart {
+        // enable (so it survives logout) + restart (bounce a running unit, start
+        // a stopped one); `enable --now` is a no-op on an already-active unit.
+        systemctl_user(&["enable", DEVSERVER_SYSTEMD_UNIT]).await?;
+        systemctl_user(&["restart", DEVSERVER_SYSTEMD_UNIT]).await?;
+    } else {
+        systemctl_user(&["enable", "--now", DEVSERVER_SYSTEMD_UNIT]).await?;
+    }
+    if !wait_until_active(Duration::from_secs(10)).await {
+        anyhow::bail!(
+            "chan devserver: the systemd user service {DEVSERVER_SYSTEMD_UNIT} \
+             failed to start:\n{}",
+            recent_unit_journal().await
+        );
+    }
+    // The freshly started service prints the token marker to its own stdout,
+    // which under the unit lands in the journal — invisible to this terminal
+    // on a host with no readable journal. Emit it directly from the persisted
+    // config so the desktop reconnects regardless; fail loud if it never
+    // lands rather than claim "started" on a token we cannot surface.
+    emit_devserver_token_marker(DEVSERVER_TOKEN_WAIT).await?;
+    Ok(())
+}
+
+/// `chan devserver --systemd --restart`: rewrite the unit (current binary +
+/// `addr`), bounce it (or start it if stopped), then follow the journal. Linger
+/// is ensured first, mirroring the start path.
+async fn restart_devserver_under_systemd(addr: SocketAddr) -> Result<()> {
+    ensure_systemd_linger().await?;
+    let was_running = unit_is_active().await;
+    bootstrap_systemd_unit(addr, true).await?;
+    eprintln!(
+        "chan devserver: {} the systemd user service {DEVSERVER_SYSTEMD_UNIT} (bind={addr})",
+        if was_running { "restarted" } else { "started" }
+    );
+    follow_unit_until_stopped().await
+}
+
+/// `chan devserver --systemd --stop`: stop the running unit. Idempotent — a
+/// no-op when the unit is not active. The unit file stays on disk (it is still
+/// enabled, so a later `--restart` / login brings it back), matching the
+/// launchd `bootout` stop.
+async fn stop_devserver_under_systemd() -> Result<()> {
+    if !unit_is_active().await {
+        eprintln!(
+            "chan devserver: the systemd user service {DEVSERVER_SYSTEMD_UNIT} is not running."
+        );
+        return Ok(());
+    }
+    systemctl_user(&["stop", DEVSERVER_SYSTEMD_UNIT]).await?;
+    eprintln!("chan devserver: stopped the systemd user service {DEVSERVER_SYSTEMD_UNIT}.");
+    Ok(())
 }
 
 /// How long the supervisor waits for the service's bearer token to land in the
@@ -2191,7 +2310,6 @@ const DEVSERVER_LAUNCHD_LABEL: &str = "app.chan.devserver";
 /// need a root LaunchDaemon).
 async fn run_devserver_under_launchd(addr: SocketAddr) -> Result<()> {
     let uid = current_uid().await?;
-    let service = launchd_service_target(uid);
 
     if launchd_is_active(uid).await {
         // Re-attaching to a running agent. Its stdout (with the token marker)
@@ -2203,25 +2321,7 @@ async fn run_devserver_under_launchd(addr: SocketAddr) -> Result<()> {
              {DEVSERVER_LAUNCHD_LABEL}"
         );
     } else {
-        let plist = write_devserver_launch_agent(addr)?;
-        eprintln!("chan devserver: wrote {}", plist.display());
-        // Clear any stale (loaded-but-dead) registration so the freshly written
-        // plist takes effect; best-effort, it errors when nothing is loaded.
-        let _ = run_tool("launchctl", &["bootout", service.as_str()]).await;
-        launchctl(&["enable", service.as_str()]).await?;
-        let plist_arg = plist.to_string_lossy();
-        launchctl(&["bootstrap", &launchd_domain_target(uid), plist_arg.as_ref()]).await?;
-        if !wait_until_launchd_active(uid, Duration::from_secs(10)).await {
-            anyhow::bail!(
-                "chan devserver: the launchd agent {DEVSERVER_LAUNCHD_LABEL} \
-                 failed to start:\n{}",
-                recent_launchd_log().await
-            );
-        }
-        // Same direct-emit contract as the systemd path: the service logs its
-        // own marker to the log file, invisible to this terminal, so surface it
-        // from the persisted config and fail loud if it never lands.
-        emit_devserver_token_marker(DEVSERVER_TOKEN_WAIT).await?;
+        bootstrap_launch_agent(uid, addr).await?;
         eprintln!(
             "chan devserver: started the launchd agent {DEVSERVER_LAUNCHD_LABEL} \
              (bind={addr})"
@@ -2229,6 +2329,67 @@ async fn run_devserver_under_launchd(addr: SocketAddr) -> Result<()> {
     }
 
     follow_launchd_until_stopped(uid).await
+}
+
+/// (Re)register and start the launchd agent for `addr`: rewrite the plist
+/// (current binary + `addr`), bootout any stale registration, enable, bootstrap,
+/// and wait until active. Always re-registers, so it doubles as the `--restart`
+/// reload (a `kickstart -k` alone would bounce the OLD plist). Surfaces the
+/// bearer token. Shared by the first-start path and
+/// [`restart_devserver_under_launchd`]; the caller owns the started/restarted
+/// log line + following the log.
+async fn bootstrap_launch_agent(uid: u32, addr: SocketAddr) -> Result<()> {
+    let service = launchd_service_target(uid);
+    let plist = write_devserver_launch_agent(addr)?;
+    eprintln!("chan devserver: wrote {}", plist.display());
+    // Clear any stale (loaded-but-dead, or running) registration so the freshly
+    // written plist takes effect; best-effort, it errors when nothing is loaded.
+    let _ = run_tool("launchctl", &["bootout", service.as_str()]).await;
+    launchctl(&["enable", service.as_str()]).await?;
+    let plist_arg = plist.to_string_lossy();
+    launchctl(&["bootstrap", &launchd_domain_target(uid), plist_arg.as_ref()]).await?;
+    if !wait_until_launchd_active(uid, Duration::from_secs(10)).await {
+        anyhow::bail!(
+            "chan devserver: the launchd agent {DEVSERVER_LAUNCHD_LABEL} \
+             failed to start:\n{}",
+            recent_launchd_log().await
+        );
+    }
+    // Same direct-emit contract as the systemd path: the service logs its
+    // own marker to the log file, invisible to this terminal, so surface it
+    // from the persisted config and fail loud if it never lands.
+    emit_devserver_token_marker(DEVSERVER_TOKEN_WAIT).await?;
+    Ok(())
+}
+
+/// `chan devserver --launchd --restart`: rewrite + re-register the agent
+/// (current binary + `addr`) so it bounces (or starts if stopped), then follow
+/// its log.
+async fn restart_devserver_under_launchd(addr: SocketAddr) -> Result<()> {
+    let uid = current_uid().await?;
+    let was_running = launchd_is_active(uid).await;
+    bootstrap_launch_agent(uid, addr).await?;
+    eprintln!(
+        "chan devserver: {} the launchd agent {DEVSERVER_LAUNCHD_LABEL} (bind={addr})",
+        if was_running { "restarted" } else { "started" }
+    );
+    follow_launchd_until_stopped(uid).await
+}
+
+/// `chan devserver --launchd --stop`: bootout the agent. Idempotent — `bootout`
+/// errors when nothing is loaded, which we report as already-stopped. The plist
+/// stays on disk (launchd re-bootstraps it at next GUI login), matching the
+/// systemd stop.
+async fn stop_devserver_under_launchd() -> Result<()> {
+    let uid = current_uid().await?;
+    let service = launchd_service_target(uid);
+    let output = run_tool("launchctl", &["bootout", service.as_str()]).await?;
+    if output.status.success() {
+        eprintln!("chan devserver: stopped the launchd agent {DEVSERVER_LAUNCHD_LABEL}.");
+    } else {
+        eprintln!("chan devserver: the launchd agent {DEVSERVER_LAUNCHD_LABEL} is not running.");
+    }
+    Ok(())
 }
 
 /// The current user's numeric uid for the `gui/<uid>` domain target. Shells out
@@ -4350,6 +4511,44 @@ mod tests {
         assert_eq!(parse_listen_override("1"), Some(true));
         // Any non-empty, non-"0" value is truthy (mirrors CHAN_NO_DESKTOP_HANDOFF).
         assert_eq!(parse_listen_override("yes"), Some(true));
+    }
+
+    /// `--stop` / `--restart` parse onto the supervisor flags, and they are
+    /// mutually exclusive (clap `conflicts_with`).
+    #[test]
+    fn devserver_stop_restart_parse() {
+        let cli = Cli::parse_from(["chan", "devserver", "--systemd", "--stop"]);
+        match cli.command {
+            Command::Devserver {
+                systemd,
+                stop,
+                restart,
+                ..
+            } => {
+                assert!(systemd);
+                assert!(stop);
+                assert!(!restart);
+            }
+            other => panic!("expected Command::Devserver, got {other:?}"),
+        }
+        let cli = Cli::parse_from(["chan", "devserver", "--launchd", "--restart"]);
+        match cli.command {
+            Command::Devserver {
+                launchd,
+                stop,
+                restart,
+                ..
+            } => {
+                assert!(launchd);
+                assert!(restart);
+                assert!(!stop);
+            }
+            other => panic!("expected Command::Devserver, got {other:?}"),
+        }
+        // --stop and --restart cannot be combined.
+        assert!(
+            Cli::try_parse_from(["chan", "devserver", "--systemd", "--stop", "--restart"]).is_err()
+        );
     }
 
     /// An explicit `--tunnel-url` still overrides the baked default.
