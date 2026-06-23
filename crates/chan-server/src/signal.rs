@@ -133,12 +133,38 @@ async fn graceful_serve_with_grace(
     }
 }
 
+/// Install the shutdown-signal watcher and block until the first signal fires,
+/// for a foreground server with NO local TCP listener (the tunnel-only
+/// `chan devserver`). There is nothing to drain — the tunnel task races its own
+/// reconnect loop against the same `signal_tx` and stops when it flips — so this
+/// just spawns the watcher and awaits it. Callers that spawn a tunnel /
+/// reindex-cancel side task on `signal_tx` do so before calling this.
+pub async fn graceful_wait(signal_tx: Arc<tokio::sync::watch::Sender<bool>>) {
+    spawn_signal_watcher(signal_tx.clone());
+    let mut signal_rx = signal_tx.subscribe();
+    let _ = signal_rx.changed().await;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::sync::Mutex;
     use std::time::Instant;
     use tokio::io::AsyncWriteExt;
+
+    /// The no-listener path returns as soon as the shutdown signal fires.
+    #[tokio::test]
+    async fn graceful_wait_returns_when_signalled() {
+        let signal_tx = Arc::new(tokio::sync::watch::channel(false).0);
+        let wait = tokio::spawn(graceful_wait(signal_tx.clone()));
+        // Let the watcher subscribe, then signal shutdown.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let _ = signal_tx.send(true);
+        tokio::time::timeout(Duration::from_secs(5), wait)
+            .await
+            .expect("graceful_wait returned before the timeout")
+            .expect("wait task joins");
+    }
 
     /// With no connections in flight, signalling shutdown lets axum drain
     /// at once, so the call returns well inside the grace window.

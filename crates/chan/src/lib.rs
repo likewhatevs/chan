@@ -1791,7 +1791,50 @@ async fn cmd_devserver(
         }
         eprintln!("chan devserver: NOTE: --launchd is macOS-only; running in the foreground.");
     }
-    run_devserver_foreground(addr, tunnel).await
+    // Resolve the local-listener decision for the foreground path only. Tunnel
+    // mode defaults to NOT binding the loopback port (the gateway is the
+    // surface, and it 404s the management API anyway); `CHAN_DEVSERVER_LISTEN`
+    // overrides either way. The supervised backends always bind locally (they
+    // re-exec without the env var, and tunnel mode is refused there), so the
+    // resolution lives below the systemd/launchd branches.
+    let listen = resolve_devserver_listen(tunnel.is_some(), devserver_listen_override())?;
+    run_devserver_foreground(addr, tunnel, listen).await
+}
+
+/// Whether the foreground devserver binds a local TCP listener. Tunnel mode
+/// defaults to no-bind (the gateway is the surface); `CHAN_DEVSERVER_LISTEN`
+/// forces either way. Tunnel-off + LISTEN=0 leaves nothing reachable (no local
+/// listener, no tunnel — only the `chan open` discovery socket), so it is a
+/// hard error rather than a silently-unreachable devserver.
+fn resolve_devserver_listen(tunnel_mode: bool, listen_override: Option<bool>) -> Result<bool> {
+    let listen = listen_override.unwrap_or(!tunnel_mode);
+    if !listen && !tunnel_mode {
+        anyhow::bail!(
+            "chan devserver: CHAN_DEVSERVER_LISTEN=0 with no tunnel leaves nothing reachable \
+             (no local listener and no tunnel). Set CHAN_TUNNEL_TOKEN to publish through the \
+             gateway, or unset CHAN_DEVSERVER_LISTEN to bind the local listener."
+        );
+    }
+    Ok(listen)
+}
+
+/// Read `CHAN_DEVSERVER_LISTEN` as a tri-state: unset or empty ⇒ `None` (use the
+/// tunnel-mode default), `"0"` ⇒ `Some(false)`, any other non-empty value ⇒
+/// `Some(true)` (mirrors `CHAN_NO_DESKTOP_HANDOFF`'s truthiness).
+fn devserver_listen_override() -> Option<bool> {
+    std::env::var("CHAN_DEVSERVER_LISTEN")
+        .ok()
+        .and_then(|v| parse_listen_override(&v))
+}
+
+/// Pure parse for [`devserver_listen_override`] so the tri-state is unit-tested
+/// without touching the process environment.
+fn parse_listen_override(raw: &str) -> Option<bool> {
+    if raw.is_empty() {
+        None
+    } else {
+        Some(raw != "0")
+    }
 }
 
 /// Run the devserver in the foreground. The no-supervisor default and the
@@ -1801,6 +1844,7 @@ async fn cmd_devserver(
 async fn run_devserver_foreground(
     addr: SocketAddr,
     tunnel: Option<chan_server::DevserverTunnel>,
+    listen: bool,
 ) -> Result<()> {
     let lib = library()?;
     chan_server::run_devserver(
@@ -1809,6 +1853,7 @@ async fn run_devserver_foreground(
             addr,
             host_label: devserver_host_label(),
             tunnel,
+            listen,
         },
     )
     .await
@@ -4277,6 +4322,34 @@ mod tests {
             }
             other => panic!("expected Command::Devserver, got {other:?}"),
         }
+    }
+
+    /// The `listen` resolution matrix (plan.md Theme 1): tunnel mode flips the
+    /// default to no-bind; `CHAN_DEVSERVER_LISTEN` overrides; tunnel-off +
+    /// LISTEN=0 is the unreachable-devserver hard error.
+    #[test]
+    fn devserver_listen_matrix() {
+        // Tunnel off: default binds; explicit 1 binds; explicit 0 errors
+        // (nothing reachable).
+        assert!(resolve_devserver_listen(false, None).unwrap());
+        assert!(resolve_devserver_listen(false, Some(true)).unwrap());
+        assert!(resolve_devserver_listen(false, Some(false)).is_err());
+        // Tunnel on: default does NOT bind locally; explicit 0 also doesn't;
+        // explicit 1 binds the local listener alongside the tunnel.
+        assert!(!resolve_devserver_listen(true, None).unwrap());
+        assert!(!resolve_devserver_listen(true, Some(false)).unwrap());
+        assert!(resolve_devserver_listen(true, Some(true)).unwrap());
+    }
+
+    /// `CHAN_DEVSERVER_LISTEN` is a tri-state: unset/empty ⇒ default, `"0"` ⇒
+    /// off, any other non-empty value ⇒ on.
+    #[test]
+    fn devserver_listen_override_parse() {
+        assert_eq!(parse_listen_override(""), None);
+        assert_eq!(parse_listen_override("0"), Some(false));
+        assert_eq!(parse_listen_override("1"), Some(true));
+        // Any non-empty, non-"0" value is truthy (mirrors CHAN_NO_DESKTOP_HANDOFF).
+        assert_eq!(parse_listen_override("yes"), Some(true));
     }
 
     /// An explicit `--tunnel-url` still overrides the baked default.

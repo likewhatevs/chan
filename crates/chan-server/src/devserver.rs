@@ -66,6 +66,13 @@ pub struct DevserverConfig {
     /// tenant content at `{user}.devserver.chan.app/{workspace}/*`. `None`
     /// leaves it local-only (management API + discovery socket on `addr`).
     pub tunnel: Option<DevserverTunnel>,
+    /// Bind the local TCP listener on `addr`. `false` in tunnel-only mode
+    /// (publish through the gateway; binding the loopback port is pure
+    /// overhead behind it). `addr` is still used for the bound-address report,
+    /// the discovery socket, and the per-tenant window records; only the TCP
+    /// bind is skipped. The CLI resolves this from `CHAN_DEVSERVER_LISTEN` +
+    /// tunnel presence (see `cmd_devserver`).
+    pub listen: bool,
 }
 
 /// Gateway tunnel registration for a devserver. The devserver identity is
@@ -668,25 +675,26 @@ pub async fn run_devserver(library: Library, config: DevserverConfig) -> anyhow:
     let _discovery = start_discovery_listener(state.clone());
 
     let app = build_devserver_app(state.clone(), host.clone());
-    let listener = tokio::net::TcpListener::bind(config.addr)
-        .await
-        .with_context(|| format!("binding devserver on {}", config.addr))?;
-    // Report the bound address, not the requested one, so `--port 0` prints
-    // the OS-assigned port (mirrors `chan open`). Falls back to the request
-    // on the impossible local_addr() error rather than refusing to serve.
-    let local_addr = listener.local_addr().unwrap_or(config.addr);
-    println!("chan devserver: listening on http://{local_addr}");
-    // Machine-readable token contract: the desktop control terminal scrapes
-    // this exact marker from the connect-script output on every connect and
-    // reconnect, as the source of truth for the bearer token. Emitted once the
-    // token and bound address are known; the `--systemd` first start surfaces
-    // it through the unit journal the launcher follows.
-    println!("{DEVSERVER_TOKEN_MARKER}{token}");
+
+    // Bind the local TCP listener up front (so a bind failure errors before we
+    // dial the tunnel), unless the resolved config is tunnel-only. `addr` is
+    // still meaningful when unbound — the discovery socket and the per-tenant
+    // window records use it; only the loopback TCP bind is skipped.
+    let listener = if config.listen {
+        Some(
+            tokio::net::TcpListener::bind(config.addr)
+                .await
+                .with_context(|| format!("binding devserver on {}", config.addr))?,
+        )
+    } else {
+        None
+    };
 
     // Shutdown wiring mirrors `serve()`: a single watch channel fed by
     // SIGINT/SIGTERM, plus a side task that cancels every tenant's in-flight
-    // reindex so the per-workspace flocks release promptly. `graceful_serve`
-    // owns the signal watcher and the hard drain deadline.
+    // reindex so the per-workspace flocks release promptly. Both the bound and
+    // the tunnel-only paths share it; the tunnel task and the no-listener wait
+    // both subscribe to it.
     let signal_tx = Arc::new(tokio::sync::watch::channel(false).0);
     let cancel_host = host.clone();
     let mut cancel_rx = signal_tx.subscribe();
@@ -701,13 +709,50 @@ pub async fn run_devserver(library: Library, config: DevserverConfig) -> anyhow:
     // the same router, but the proxy 404s `/api/devserver/*` on the public
     // wildcard, so only tenant content is reachable through the gateway. The
     // run loop reconnects with backoff and is cancelled by the shutdown signal.
+    let tunnel_url = config.tunnel.as_ref().map(|t| t.tunnel_url.clone());
     if let Some(tunnel) = config.tunnel {
         spawn_devserver_tunnel(tunnel, app.clone(), &signal_tx);
     }
 
-    crate::signal::graceful_serve(listener, app, signal_tx)
-        .await
-        .context("running devserver")?;
+    match listener {
+        Some(listener) => {
+            // Report the bound address, not the requested one, so `--port 0`
+            // prints the OS-assigned port (mirrors `chan open`). Falls back to
+            // the request on the impossible local_addr() error rather than
+            // refusing to serve.
+            let local_addr = listener.local_addr().unwrap_or(config.addr);
+            println!("chan devserver: listening on http://{local_addr}");
+            // Machine-readable token contract: the desktop control terminal
+            // scrapes this exact marker from the connect-script output on every
+            // connect and reconnect, as the source of truth for the bearer
+            // token. Emitted once the token and bound address are known; the
+            // `--systemd` first start surfaces it through the unit journal the
+            // launcher follows.
+            println!("{DEVSERVER_TOKEN_MARKER}{token}");
+            crate::signal::graceful_serve(listener, app, signal_tx)
+                .await
+                .context("running devserver")?;
+        }
+        None => {
+            // Tunnel-only: no local TCP listener. The discovery Unix socket and
+            // the tunnel are already up; report the public endpoint instead of a
+            // bound address. The token marker is omitted — it is scraped only on
+            // a LOCAL connect, so it is moot with no listener (and tunnel mode is
+            // foreground-only, so no supervisor follows a journal for it).
+            match &tunnel_url {
+                Some(url) => println!(
+                    "chan devserver: tunnel-only (no local listener); publishing via {url}"
+                ),
+                None => println!(
+                    "chan devserver: no local listener and no tunnel; only the chan-open \
+                     discovery socket is reachable"
+                ),
+            }
+            // No listener to drain: install the signal watcher and await
+            // shutdown while the tunnel + reindex-cancel tasks run on `signal_tx`.
+            crate::signal::graceful_wait(signal_tx).await;
+        }
+    }
     Ok(())
 }
 
