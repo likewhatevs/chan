@@ -757,6 +757,55 @@ mod tests {
         assert_eq!(cfg.devservers[0].token, "tok_secret");
     }
 
+    /// Bug-B §3: the wire `connected` flag the launcher reads
+    /// (`GET /api/library/devservers` -> `list` -> `entry_from_devserver`)
+    /// derives from the shared `DevserverConns` membership, so dropping the conn
+    /// — what the desktop's `flip_devserver_control_dead` does when a control
+    /// terminal dies — flips it false while the config row stays. This is the
+    /// mechanism that guarantees the launcher never shows a dead devserver as
+    /// connected, regardless of how the SPA survey is answered.
+    #[test]
+    fn registry_list_connected_tracks_conns_membership() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(Mutex::new(ConfigStore {
+            path: dir.path().join("config.json"),
+        }));
+        let conns = Arc::new(crate::devserver::DevserverConns::default());
+        let reg = DevserverConfigRegistry::new(
+            Arc::clone(&store),
+            Arc::new(OnceLock::new()),
+            Arc::clone(&conns),
+            Arc::new(crate::DevserverFeed::default()),
+        );
+        let id = reg
+            .add(DevserverInput {
+                host: "127.0.0.1".into(),
+                port: 8787,
+                ..Default::default()
+            })
+            .expect("add")
+            .id;
+        // No live conn yet: disconnected.
+        assert!(!reg.list()[0].connected);
+        // A live conn (what connect_devserver_impl sets on a successful dial).
+        conns.set(
+            id.clone(),
+            crate::devserver::DevserverConn {
+                host: "127.0.0.1".into(),
+                port: 8787,
+                token: "tok".into(),
+                name: "box".into(),
+            },
+        );
+        assert!(reg.list()[0].connected);
+        // The control terminal dies -> the flip drops the conn -> the wire entry
+        // flips connected:false, but the persisted config row is untouched (so a
+        // re-run/edit can reconnect it).
+        conns.remove(&id);
+        assert!(!reg.list()[0].connected);
+        assert_eq!(store.lock().unwrap().get().unwrap().devservers.len(), 1);
+    }
+
     /// `update` with a blank/absent token keeps the stored one; a non-blank
     /// token replaces it. URL/label/script are full-replace.
     #[test]

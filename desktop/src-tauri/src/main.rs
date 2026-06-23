@@ -1305,6 +1305,31 @@ fn teardown_devserver_connection(app: &tauri::AppHandle, state: &AppState, id: &
     let _ = app.emit(serve::SERVES_CHANGED, ());
 }
 
+/// Bug-B §3: a connected devserver's control terminal died (its connect-script
+/// PTY exited, or the user closed the control window) — the connection is
+/// provably dead. Flip the launcher's `connected` flag false UNCONDITIONALLY,
+/// regardless of how the SPA survey is answered (covers Dismiss / no-response),
+/// by dropping the conn from the shared registry the launcher reads
+/// (`GET /api/library/devservers` -> `DevserverConfigRegistry::list` ->
+/// `entry_from_devserver`'s `conns.is_connected`). Re-run/Edit reconnect ->
+/// `connected:true`; Abandon's SPA `disconnectDevserver` is then idempotent (its
+/// `teardown_devserver_connection` finds the conn already gone).
+///
+/// This is a LIGHT flip, NOT a teardown: it changes only the connected flag, so
+/// it stays correct regardless of how the control terminal's window model evolves
+/// (the stuck-window reap + the launcher grouping are handled elsewhere). It
+/// leaves the window watcher running; a later reconnect's `devserver_watchers`
+/// insert drops the old `cancel` sender, which stops the stale watcher (the watch
+/// receivers treat a dropped sender as cancel).
+fn flip_devserver_control_dead(state: &AppState, id: &str) {
+    state.devservers.remove(id);
+    // Re-push the launcher feed so the `connected:false` flip surfaces at once
+    // (the SPA re-lists devservers on a window-feed push).
+    if let Some(embedded) = state.embedded() {
+        embedded.signal_library_change();
+    }
+}
+
 /// Poll a devserver's info endpoint until it answers or the budget runs out.
 /// The connect script may take a moment to bring the devserver up, or prompt
 /// for credentials in the control terminal, so the wait is generous; a
@@ -1440,6 +1465,10 @@ fn spawn_control_terminal_exit_watcher(
                         status = code,
                         "control terminal exited while connected; surveying re-run vs abandon"
                     );
+                    // Bug-B §3: the connection is dead — flip `connected:false`
+                    // NOW, before the SPA survey, so a Dismiss/no-response can't
+                    // leave the launcher showing it connected.
+                    flip_devserver_control_dead(&state, &id);
                     let _ = app.emit("devserver-control-closed", id);
                 }
                 return;
@@ -2402,6 +2431,10 @@ fn request_close_window(app: tauri::AppHandle, window: tauri::WebviewWindow) -> 
         if state.devservers.is_connected(id) {
             let id = id.to_string();
             let _ = show_window(&app, "main");
+            // Bug-B §3: the control terminal IS the connection endpoint, so its
+            // close kills the connection — flip `connected:false` before the SPA
+            // survey (covers a Dismiss/no-response leaving it shown connected).
+            flip_devserver_control_dead(&state, &id);
             let _ = app.emit("devserver-control-closed", id);
             return window.destroy().map_err(err);
         }
