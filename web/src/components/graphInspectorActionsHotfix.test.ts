@@ -33,7 +33,7 @@ describe("graph reload is anchored on scope/depth/mode, not layout churn", () =>
   });
 });
 
-describe("Open spawns a File Browser tab with the item selected, not a graph reload", () => {
+describe("Open routes a file to the editor and a directory to a File Browser tab, not a graph reload", () => {
   test("the nav contract: graphFromHere spawns a NEW graph tab (no in-place re-root)", () => {
     // The old contract re-rooted in place (mutating graphState +
     // selectedId). The new contract spawns a fresh semantic graph tab
@@ -52,26 +52,33 @@ describe("Open spawns a File Browser tab with the item selected, not a graph rel
     );
   });
 
-  test("the semantic-node inspector binds onOpen to a NEW File Browser tab for file selections", () => {
-    // "Open" on a file spawns a File Browser tab with the file selected
-    // (revealPathInBrowserTab, isDir=false), replacing the editor-open
-    // openSelectedFile of the old contract (now deleted).
+  test("the semantic-node inspector binds onOpen to the editor for file selections", () => {
+    // "Open" on a file routes through openFileOrReveal, which opens the
+    // editor pane (openInActivePane) for an editable text file, matching
+    // the File Browser's open-selection, and falls back to a File Browser
+    // tab for a binary. This replaced the File-Browser-tab-only
+    // revealPathInBrowserTab bind of the prior contract.
     expect(panel).toMatch(
-      /onOpen=\{\s*inspectorSelection\?\.kind === "file"\s*\?\s*\(\) => revealPathInBrowserTab\(inspectorSelection\.path, false\)/,
+      /onOpen=\{\s*inspectorSelection\?\.kind === "file"\s*\?\s*\(\) => openFileOrReveal\(inspectorSelection\.path\)/,
     );
-    // The deleted editor-open helper is gone everywhere.
+    // The deleted editor-open helper name is gone everywhere.
     expect(panel).not.toMatch(/openSelectedFile/);
   });
 
-  test("the fs-mode inspector binds onOpen to a File Browser tab for file nodes", () => {
-    // Files spawn a File Browser tab via revealPathInBrowserTab (isDir
-    // false); the editor-open openInActivePane(fsPath) of the old
-    // contract is gone. No close() either: the graph is a tab and close()
-    // would close the pane's new active tab instead of the graph.
+  test("the fs-mode inspector binds onOpen to the editor for file nodes", () => {
+    // A file node "Open" routes through openFileOrReveal: an editable
+    // text file opens in the editor pane. The fs layer's file-kind nodes
+    // carry no text/binary split, so the editable verdict comes from the
+    // tree entry's server kind; a binary falls back to a File Browser
+    // tab. Directories use onReveal.
     expect(panel).toMatch(
-      /onOpen=\{fsKind === "file" \? \(\) => revealPathInBrowserTab\(fsPath, false\) : undefined\}/,
+      /onOpen=\{fsKind === "file" \? \(\) => openFileOrReveal\(fsPath\) : undefined\}/,
     );
-    expect(panel).not.toMatch(/void openInActivePane\(fsPath\); close\(\);/);
+    // openFileOrReveal routes editable text to the editor pane, binary to
+    // a File Browser tab, mirroring the File Browser predicate.
+    expect(panel).toMatch(
+      /function openFileOrReveal\(path: string\): void \{[\s\S]*?isOpenableTextKind\(kind\)[\s\S]*?void openInActivePane\(path\);[\s\S]*?revealPathInBrowserTab\(path, false\);/,
+    );
   });
 });
 

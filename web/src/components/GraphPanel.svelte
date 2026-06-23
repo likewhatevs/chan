@@ -79,7 +79,12 @@
   import InspectorBody, { type InspectorSelection } from "./InspectorBody.svelte";
   import GraphCanvas from "./GraphCanvas.svelte";
   import KindChip from "./KindChip.svelte";
-  import { classifyFile as classifyFileKind, type FileKind } from "../state/kinds";
+  import {
+    classifyFile as classifyFileKind,
+    classifyEntry,
+    isOpenableTextKind,
+    type FileKind,
+  } from "../state/kinds";
   import { chordFor } from "../state/shortcuts";
   import { FS_GRAPH_DEPTH_MAX, graphDepthCap, relativeDepth } from "../graph/depth";
 
@@ -1683,6 +1688,28 @@
     persistTreeExpanded();
   }
 
+  /// Graph "Open" for a node that resolves to a real workspace path.
+  /// Mirrors the File Browser's open-selection: an editable text file
+  /// (markdown note, contact, plain source / config) opens in the active
+  /// editor pane through the same `openInActivePane` call
+  /// `FileBrowserSurface` uses, so the two surfaces agree on what "Open"
+  /// means. A binary / media / non-openable file keeps its prior
+  /// behavior and reveals in a File Browser tab instead; the filesystem
+  /// layer's `file`-kind nodes carry no text-vs-binary distinction, so
+  /// the editable verdict comes from the tree entry's server kind (with
+  /// a path-based fallback when the entry isn't in the current listing).
+  /// Directory nodes never reach here: a directory "Open" routes through
+  /// `onReveal` -> `revealPathInBrowserTab(path, true)`.
+  function openFileOrReveal(path: string): void {
+    const entry = tree.entries.find((e) => e.path === path);
+    const kind = entry ? classifyEntry(entry) : classifyFileKind(path);
+    if (isOpenableTextKind(kind)) {
+      void openInActivePane(path);
+    } else {
+      revealPathInBrowserTab(path, false);
+    }
+  }
+
   function selectFromList(n: RenderedNode): void {
     // GraphCanvas reads `selectedId` reactively and applies the
     // selection ring + first-degree label reveal itself, so all
@@ -2883,18 +2910,20 @@
              report; tags / refs / backlinks for files) by routing
              through InspectorBody. FileInfoBody dispatches on
              entry.is_dir so the "file" selection variant covers both
-             shapes. Per the nav contract "Open" spawns a NEW File
-             Browser tab with the item selected (file via onOpen, dir
-             via FileInfoBody's openDirInBrowser → onReveal); "Graph
-             from here" (`onSetAsScope` → `graphFromHere`) spawns a new
-             graph tab. The breadcrumb above handles upward navigation. -->
+             shapes. Per the nav contract a file "Open" (onOpen ->
+             openFileOrReveal) opens the editor pane, matching the File
+             Browser; a directory "Open" routes through FileInfoBody's
+             openDirInBrowser → onReveal into a new File Browser tab;
+             "Graph from here" (`onSetAsScope` → `graphFromHere`) spawns
+             a new graph tab. The breadcrumb above handles upward
+             navigation. -->
         {@const fsPath = selectedFsNode.path}
         {@const fsKind = selectedFsNode.kind}
         {@const fsIsDir = isFsDirectory(selectedFsNode)}
         <InspectorBody
           selection={{ kind: "file", path: fsPath }}
           showRefs
-          onOpen={fsKind === "file" ? () => revealPathInBrowserTab(fsPath, false) : undefined}
+          onOpen={fsKind === "file" ? () => openFileOrReveal(fsPath) : undefined}
           onReveal={fsIsDir ? () => revealPathInBrowserTab(fsPath, true) : undefined}
           onNavigate={(p) => {
             const peer = fsNodes.find((n) => n.path === p);
@@ -2964,14 +2993,14 @@
           selection={inspectorSelection}
           onOpen={
             inspectorSelection?.kind === "file"
-              ? () => revealPathInBrowserTab(inspectorSelection.path, false)
+              ? () => openFileOrReveal(inspectorSelection.path)
               : inspectorSelection?.kind === "mention" && selectedContactPath
                 ? () => {
                     // Mention/contact "Open": route the resolved contact
-                    // file (looked up via tree.kind === "contact") to a
-                    // new File Browser tab with it selected, matching the
-                    // file/dir nav contract.
-                    revealPathInBrowserTab(selectedContactPath!, false);
+                    // file (looked up via tree.kind === "contact") to the
+                    // editor pane, matching the file nav contract and the
+                    // File Browser's open-selection.
+                    openFileOrReveal(selectedContactPath!);
                   }
                 : undefined
           }

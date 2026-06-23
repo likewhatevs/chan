@@ -13,23 +13,23 @@ describe("file-browser reveal actions", () => {
     expect(terminal).not.toContain("function graphTerminalCwd()");
   });
 
-  test("graph inspector Open / reveal buttons reveal in a browser TAB", () => {
+  test("graph inspector Open routes a file to the editor, a dir to a browser TAB", () => {
     // Reveal opens a File Browser TAB via openBrowserInActivePane so
     // the graph tab persists. The overlay-era revealPathInBrowser +
     // close() chain is gone. The dedicated revealSelectedFile /
     // revealSelectedFsEntry helpers were deleted; revealPathInBrowserTab
-    // is the single reveal-into-a-new-FB-tab primitive the inspector
-    // binds directly on onOpen (file) and onReveal (dir).
+    // is the single reveal-into-a-new-FB-tab primitive, bound directly
+    // on onReveal (dir) and used as the binary fallback inside
+    // openFileOrReveal.
     expect(graph).not.toContain("function revealSelectedFile(");
     expect(graph).not.toContain("function revealSelectedFsEntry(");
     expect(graph).toContain("function revealPathInBrowserTab(path: string, isDir: boolean)");
-    // File "Open" → revealPathInBrowserTab(path, false): a file selection
-    // spawns a File Browser tab with the file selected.
+    // File "Open" routes through openFileOrReveal: an editable text file
+    // opens in the editor pane (mirroring the File Browser), a binary
+    // falls back to a File Browser tab. Not a direct reveal anymore.
+    expect(graph).toContain("() => openFileOrReveal(inspectorSelection.path)");
     expect(graph).toContain(
-      "() => revealPathInBrowserTab(inspectorSelection.path, false)",
-    );
-    expect(graph).toContain(
-      "onOpen={fsKind === \"file\" ? () => revealPathInBrowserTab(fsPath, false) : undefined}",
+      "onOpen={fsKind === \"file\" ? () => openFileOrReveal(fsPath) : undefined}",
     );
     // Directories expand the directory ITSELF (upto = parts.length)
     // so the File Browser opens AT the dir; files expand ancestors.
@@ -41,6 +41,20 @@ describe("file-browser reveal actions", () => {
     expect(graph).not.toContain("revealPathInBrowser(selectedNode.path");
     expect(graph).not.toContain("revealPathInBrowser(selectedFsNode.path");
     expect(graph).not.toContain("openBrowser().inspectorOpen");
+  });
+
+  test("openFileOrReveal mirrors the File Browser open-selection predicate", () => {
+    // The single file-Open primitive looks up the tree entry and gates
+    // on the same isOpenableTextKind(classifyEntry(...)) predicate the
+    // File Browser's openSelected uses, so the two surfaces agree on what
+    // "Open" means: editable text opens in the editor pane via
+    // openInActivePane; everything else (binary / media / not in the
+    // listing) falls back to a File Browser tab.
+    expect(graph).toContain("function openFileOrReveal(path: string): void");
+    expect(graph).toContain("isOpenableTextKind(kind)");
+    expect(graph).toContain("classifyEntry(entry)");
+    expect(graph).toContain("void openInActivePane(path)");
+    expect(graph).toContain("revealPathInBrowserTab(path, false)");
   });
 });
 
