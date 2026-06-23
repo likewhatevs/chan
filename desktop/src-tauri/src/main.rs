@@ -1454,19 +1454,45 @@ fn spawn_control_terminal_exit_watcher(
                 if let Some(embedded) = state.embedded() {
                     embedded.reap_control_window(&serve::control_terminal_label(&id));
                 }
-                // Fire the survey only while still connected: a disconnect-driven
-                // reap is expected teardown, not a surprise loss to survey.
+                // The control-script PTY exited — but that is a CONNECTION LOSS
+                // only if the devserver is now UNREACHABLE. The control script's
+                // role varies: a SETUP-style script exits 0 after bringing a
+                // still-reachable devserver up (NOT a disconnect — the connection is
+                // live), while a TUNNEL script dying leaves the devserver
+                // unreachable. So PROBE reachability and key the disconnect on THAT,
+                // not on the control script's liveness. (Regression fix: the §3 flip
+                // fired on EVERY control-PTY exit, so a setup-script exit right after
+                // connect falsely flipped the live devserver to disconnected —
+                // is_connected stopped reflecting the live connection, and the later
+                // gate then skipped the real survey.) Only while still connected: a
+                // disconnect-driven reap is expected teardown, not a surprise.
                 if state.devservers.is_connected(&id) {
-                    tracing::info!(
-                        devserver = %id,
-                        status = code,
-                        "control terminal exited while connected; surveying re-run vs abandon"
-                    );
-                    // Bug-B §3: the connection is dead — flip `connected:false`
-                    // NOW, before the SPA survey, so a Dismiss/no-response can't
-                    // leave the launcher showing it connected.
-                    flip_devserver_control_dead(&state, &id);
-                    let _ = app.emit("devserver-control-closed", id);
+                    let reachable = match state.devservers.get(&id) {
+                        Some(conn) => devserver::fetch_info(&conn.host, conn.port).await.is_ok(),
+                        None => false,
+                    };
+                    if reachable {
+                        // The connect script finished its setup; the devserver is
+                        // live. Stay connected (is_connected reflects the LIVE
+                        // connection); no survey. The control row was reaped above;
+                        // its window stays showing the script's final output.
+                        tracing::info!(
+                            devserver = %id,
+                            status = code,
+                            "control script exited but the devserver is still reachable; staying connected"
+                        );
+                    } else {
+                        tracing::info!(
+                            devserver = %id,
+                            status = code,
+                            "control terminal exited and the devserver is unreachable; surveying re-run vs abandon"
+                        );
+                        // Bug-B §3: the connection is dead — flip `connected:false`
+                        // NOW, before the SPA survey, so a Dismiss/no-response can't
+                        // leave the launcher showing it connected.
+                        flip_devserver_control_dead(&state, &id);
+                        let _ = app.emit("devserver-control-closed", id);
+                    }
                 }
                 return;
             }
