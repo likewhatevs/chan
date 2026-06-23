@@ -97,14 +97,18 @@ describe("applyLivePaneColor (Theme 6 colour-watch apply)", () => {
     applyLivePaneColor("#ABC");
     expect(document.documentElement.style.getPropertyValue(CSS_VAR)).toBe("#aabbcc");
   });
-  test("REMOVES the var on a null frame (revert to preset default)", () => {
+  test("LEAVES a null frame as no-override (keeps the ?pane= seed — Bug A)", () => {
     document.documentElement.style.setProperty(CSS_VAR, "#e58c4d");
     applyLivePaneColor(null);
-    expect(document.documentElement.style.getPropertyValue(CSS_VAR)).toBe("");
+    expect(document.documentElement.style.getPropertyValue(CSS_VAR)).toBe("#e58c4d");
   });
-  test("REMOVES the var on an invalid colour (no CSS injection)", () => {
+  test("LEAVES an invalid colour as no-override (no clobber, no injection)", () => {
     document.documentElement.style.setProperty(CSS_VAR, "#e58c4d");
     applyLivePaneColor("red; }");
+    expect(document.documentElement.style.getPropertyValue(CSS_VAR)).toBe("#e58c4d");
+  });
+  test("a null frame on an UNSEEDED window leaves the var unset (default accent)", () => {
+    applyLivePaneColor(null);
     expect(document.documentElement.style.getPropertyValue(CSS_VAR)).toBe("");
   });
 });

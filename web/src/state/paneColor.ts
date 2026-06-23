@@ -82,15 +82,18 @@ export function applyInitialPaneColor(): void {
 /// Live-apply a colour pushed by the per-library focus-colour watch (Theme 6,
 /// `GET /api/library/local-color/watch`). A valid hex sets
 /// `--pane-highlight-color` on the document root, so every pane of this window
-/// recolours the instant any window of the library changes the colour; a null
-/// or invalid colour REMOVES the variable, reverting to the `data-focus-color`
-/// preset default. Same validation as the `?pane=` boot path, so a watch frame
-/// can never inject arbitrary CSS.
+/// recolours the instant any window of the library changes the colour.
+///
+/// A null / absent / invalid colour is treated as "no override": the current
+/// value is LEFT IN PLACE, never cleared. The watch pushes the current colour on
+/// connect, so a library with no persisted colour pushes `{ color: null }` right
+/// after boot — clearing the var there would clobber the `?pane=` boot seed back
+/// to the default accent (Bug A). Same validation as the `?pane=` path, so a
+/// watch frame can never inject arbitrary CSS.
 export function applyLivePaneColor(color: string | null): void {
   if (typeof document === "undefined") return;
   const hex = normalizeHexColor(color);
   if (hex) document.documentElement.style.setProperty(CSS_VAR, hex);
-  else document.documentElement.style.removeProperty(CSS_VAR);
 }
 
 /// Boot-seed the per-window focus-colour menu checkmark so it matches the
