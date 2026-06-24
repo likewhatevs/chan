@@ -136,12 +136,14 @@ describe("WindowFeed row actions", () => {
     expect(firstRowName?.textContent?.trim()).toBe("Control terminal");
   });
 
-  it("SHOW/HIDE surfaces a bridge error in the banner, not the console (L3/C6)", async () => {
+  it("SHOW/HIDE surfaces a genuine bridge error in the banner, not the console (L3/C6)", async () => {
     const { backend } = await import("../api/backend");
-    // A stale/reaped window (or no desktop bridge) rejects the hide op. The eye
-    // handler must catch it and report to the banner (library.error), never let
-    // a floating promise reject into the console.
-    const hide = vi.spyOn(backend, "hideWindow").mockRejectedValue(new Error("window is gone"));
+    // A bridge op can still reject for a GENUINE failure (no desktop bridge, a
+    // network error). The eye handler must catch it and report to the banner
+    // (library.error), never let a floating promise reject into the console. A
+    // stale/reaped window is NOT this case — it is a clean 204 (the no-op test
+    // below).
+    const hide = vi.spyOn(backend, "hideWindow").mockRejectedValue(new Error("no desktop bridge"));
 
     target = document.createElement("div");
     document.body.appendChild(target);
@@ -155,7 +157,31 @@ describe("WindowFeed row actions", () => {
     flushSync();
 
     expect(hide).toHaveBeenCalledTimes(1);
-    expect(library.error).toBe("window is gone");
+    expect(library.error).toBe("no desktop bridge");
+
+    hide.mockRestore();
+  });
+
+  it("eye click on a reaped window is a clean 204 no-op: no banner, no console (L3/C6 seam 4)", async () => {
+    const { backend } = await import("../api/backend");
+    // Seam 4 (@@Desktop D4): a stale/reaped window's hide replies Ok(()) → 204, a
+    // silent no-op, NOT a 409. The launcher must treat that resolved call as a
+    // clean no-op — req() accepts 204, so toggleWindow resolves and the handler
+    // sets no error. Pins the 409→204 contract on the launcher side.
+    const hide = vi.spyOn(backend, "hideWindow").mockResolvedValue(undefined);
+
+    target = document.createElement("div");
+    document.body.appendChild(target);
+    app = mount(WindowFeed, { target });
+
+    ariaButton("Hide window")!.click();
+    await new Promise((r) => setTimeout(r, 0));
+    flushSync();
+
+    expect(hide).toHaveBeenCalledTimes(1);
+    // The clear-then-resolve path leaves no banner error (run() clears on entry,
+    // the resolved 204 never reports).
+    expect(library.error).toBeNull();
 
     hide.mockRestore();
   });
