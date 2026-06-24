@@ -80,6 +80,18 @@ export function apiPath(path: string): string {
   return `${PREFIX}${path}`;
 }
 
+/// Resolve an in-app path to the ROOT origin, IGNORING the tenant `chan-prefix`.
+/// For surface-level resources mounted ONLY on the root launcher router, not
+/// under tenant prefixes — the library's own pane-highlight colour
+/// (`/api/library/local-color`). A window served under a prefix
+/// (`serve.rs` mints `{prefix}/index.html`) would otherwise have `apiPath`
+/// prepend that prefix and 404 the route. The bearer still travels (the
+/// Authorization header via `requestRoot`, or `?t=` via `rootTokenQuery` for the
+/// watch WS), so the surface still authenticates as the window's tenant.
+export function rootPath(path: string): string {
+  return path.startsWith("/") ? path : `/${path}`;
+}
+
 function loadToken(): string | null {
   const url = new URL(window.location.href);
   const t = url.searchParams.get("t");
@@ -99,6 +111,17 @@ const token = loadToken();
 /// header (WebSocket upgrade, `<img src>` rendered by the browser).
 export function withTokenQuery(path: string): string {
   const full = apiPath(path);
+  if (!token) return full;
+  const sep = full.includes("?") ? "&" : "?";
+  return `${full}${sep}t=${encodeURIComponent(token)}`;
+}
+
+/// Like `withTokenQuery`, but at the ROOT origin (`rootPath`, ignoring the
+/// tenant prefix). For a surface-level watch WS (`/api/library/local-color/watch`)
+/// a prefixed window must reach at root; a browser WS can't set the
+/// Authorization header, so the bearer rides as `?t=`.
+export function rootTokenQuery(path: string): string {
+  const full = rootPath(path);
   if (!token) return full;
   const sep = full.includes("?") ? "&" : "?";
   return `${full}${sep}t=${encodeURIComponent(token)}`;
@@ -134,6 +157,31 @@ export async function request<T>(
   signal?: AbortSignal,
   timeoutMs: number = REQUEST_TIMEOUT_MS,
 ): Promise<T> {
+  return requestTo<T>(apiPath(path), method, path, body, signal, timeoutMs);
+}
+
+/// Like `request`, but resolves `path` at the ROOT origin (`rootPath`, ignoring
+/// the tenant `chan-prefix`) while still sending the Authorization bearer. For
+/// surface-level routes mounted ONLY on the root launcher router (the library's
+/// own pane-highlight colour) that a prefixed window would otherwise 404.
+export async function requestRoot<T>(
+  method: string,
+  path: string,
+  body?: unknown,
+  signal?: AbortSignal,
+  timeoutMs: number = REQUEST_TIMEOUT_MS,
+): Promise<T> {
+  return requestTo<T>(rootPath(path), method, path, body, signal, timeoutMs);
+}
+
+async function requestTo<T>(
+  url: string,
+  method: string,
+  path: string,
+  body?: unknown,
+  signal?: AbortSignal,
+  timeoutMs: number = REQUEST_TIMEOUT_MS,
+): Promise<T> {
   const headers: Record<string, string> = {};
   if (token) headers.authorization = `Bearer ${token}`;
   const init: RequestInit = { method, headers };
@@ -155,7 +203,7 @@ export async function request<T>(
   if (sigs.length > 0) init.signal = AbortSignal.any(sigs);
 
   try {
-    const res = await fetch(apiPath(path), init);
+    const res = await fetch(url, init);
     if (!res.ok) {
       const text = await res.text().catch(() => res.statusText);
       // Try to parse the body as JSON so structured error responses
@@ -349,7 +397,10 @@ export function openLocalColorWatch(
   const connect = () => {
     if (closed) return;
     const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const path = withTokenQuery("/api/library/local-color/watch");
+    // ROOT path (NOT `withTokenQuery`/prefixed): the local-color route lives only
+    // on the root launcher router, so a window served under a tenant prefix must
+    // reach the watch at root or it 404s. Bearer rides as `?t=` (WS can't header).
+    const path = rootTokenQuery("/api/library/local-color/watch");
     ws = new WebSocket(`${proto}//${window.location.host}${path}`);
     ws.onopen = () => {
       backoff = 500;

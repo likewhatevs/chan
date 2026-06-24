@@ -273,9 +273,13 @@ describe("Pane.svelte doSetFocusColor persists + recolours per library", () => {
 });
 
 describe("api.setLocalColor PUTs the library local-color route", () => {
-  test("setLocalColor issues PUT /api/library/local-color with { color }", () => {
+  test("setLocalColor PUTs via requestRoot (ROOT path, not the tenant prefix) — C8", () => {
+    // MUST be `requestRoot`, NOT `req`/`request`: the local-color route lives only
+    // on the root launcher router, so a window served under a tenant prefix would
+    // 404 if the prefix were prepended (`apiPath`). See localColorRootPath.test.ts
+    // for the behavioural proof. The window's `?t=` bearer still travels.
     expect(clientSource).toMatch(
-      /setLocalColor: \(color: string\) =>[\s\S]*?req<void>\([\s\S]*?"PUT",[\s\S]*?"\/api\/library\/local-color",[\s\S]*?\{ color \}/,
+      /setLocalColor: \(color: string\) =>[\s\S]*?requestRoot<void>\([\s\S]*?"PUT",[\s\S]*?"\/api\/library\/local-color",[\s\S]*?\{ color \}/,
     );
   });
 });
