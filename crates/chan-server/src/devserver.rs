@@ -165,18 +165,20 @@ impl DevserverStore {
 /// devserver restart (with fresh PTYs). `None` when there is no home dir (the
 /// tenant then falls back to the in-memory `ephemeral_sessions`).
 fn devserver_terminals_dir() -> Option<PathBuf> {
+    // Routed through the single chan-home authority so `CHAN_HOME` relocates it.
     Some(
-        dirs::home_dir()?
-            .join(".chan")
+        chan_workspace::paths::config_dir()
             .join("devserver")
             .join("terminals"),
     )
 }
 
 fn devserver_config_path() -> std::io::Result<PathBuf> {
-    let home = dirs::home_dir()
-        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "no home directory"))?;
-    Ok(home.join(".chan").join("devserver").join("config.json"))
+    // Routed through the single chan-home authority (`config_dir`) so `CHAN_HOME`
+    // relocates it; `config_dir` is infallible, so this no longer errors.
+    Ok(chan_workspace::paths::config_dir()
+        .join("devserver")
+        .join("config.json"))
 }
 
 /// Machine-readable marker the desktop control terminal scrapes from the

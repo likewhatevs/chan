@@ -2477,10 +2477,10 @@ fn launch_agent_path() -> Result<PathBuf> {
 }
 
 /// `~/.chan/devserver/devserver.log` — where the agent's stdout/stderr land
-/// (launchd has no journal). Co-located with the 0600 devserver config.
+/// (launchd has no journal). Co-located with the 0600 devserver config. Routed
+/// through the single chan-home authority (`config_dir`) so `CHAN_HOME` moves it.
 fn devserver_log_path() -> Result<PathBuf> {
-    Ok(home_dir()?
-        .join(".chan")
+    Ok(chan_workspace::paths::config_dir()
         .join("devserver")
         .join("devserver.log"))
 }

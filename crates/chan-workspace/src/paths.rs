@@ -24,7 +24,20 @@ use sha2::{Digest, Sha256};
 /// registry + default-workspace). `~/.chan/` on desktop targets;
 /// co-located under the data dir on iOS / Android where the home
 /// dir isn't user-writable.
+///
+/// `CHAN_HOME` overrides this with the directory to use IN PLACE OF `~/.chan`
+/// (CARGO_HOME / GNUPGHOME semantics — the dir itself, not a parent): set
+/// `CHAN_HOME=/tmp/x` and chan reads its registry, devservers, and config under
+/// `/tmp/x`, leaving the real `~/.chan` untouched (an isolated smoke instance).
+/// Checked FIRST, so every delegator (`state_dir`, `cache_dir`,
+/// `global_config_path`, `workspaces_dir`, …) inherits it. This is the SINGLE
+/// authority for the chan home; nothing else resolves `~/.chan` independently.
 pub fn config_dir() -> PathBuf {
+    // `var_os` (a home path need not be UTF-8); an empty value is treated as
+    // unset so `CHAN_HOME=` does not collapse the home to the cwd.
+    if let Some(dir) = std::env::var_os("CHAN_HOME").filter(|v| !v.is_empty()) {
+        return PathBuf::from(dir);
+    }
     #[cfg(any(target_os = "ios", target_os = "android"))]
     {
         return state_dir();
@@ -315,6 +328,49 @@ mod tests {
     fn global_config_path_ends_in_config_toml() {
         let p = global_config_path();
         assert_eq!(p.file_name().and_then(|s| s.to_str()), Some("config.toml"));
+    }
+
+    #[test]
+    fn config_dir_honors_chan_home_override() {
+        // CHAN_HOME is process-global: serialize + save/restore so this neither
+        // bleeds into nor is corrupted by a concurrent test that reads config_dir.
+        use std::sync::Mutex;
+        static ENV_GUARD: Mutex<()> = Mutex::new(());
+        let _serial = ENV_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+        let saved = std::env::var_os("CHAN_HOME");
+
+        // Set: config_dir IS CHAN_HOME (the dir itself, CARGO_HOME-style), and
+        // every delegator inherits it.
+        std::env::set_var("CHAN_HOME", "/tmp/chan-home-test");
+        assert_eq!(config_dir(), PathBuf::from("/tmp/chan-home-test"));
+        assert_eq!(
+            global_config_path(),
+            PathBuf::from("/tmp/chan-home-test/config.toml")
+        );
+        assert_eq!(
+            workspaces_dir(),
+            PathBuf::from("/tmp/chan-home-test/workspaces")
+        );
+        assert_eq!(state_dir(), PathBuf::from("/tmp/chan-home-test"));
+
+        // Empty is treated as unset: the home-based default, NOT the cwd.
+        std::env::set_var("CHAN_HOME", "");
+        assert_ne!(config_dir(), PathBuf::from(""));
+        assert!(config_dir().ends_with(".chan"));
+
+        // Unset: the home-based default `~/.chan`.
+        std::env::remove_var("CHAN_HOME");
+        assert!(
+            config_dir().ends_with(".chan"),
+            "default chan home is ~/.chan: {:?}",
+            config_dir()
+        );
+
+        // Restore the pre-test value so no later test sees a stray CHAN_HOME.
+        match saved {
+            Some(v) => std::env::set_var("CHAN_HOME", v),
+            None => std::env::remove_var("CHAN_HOME"),
+        }
     }
 
     #[test]

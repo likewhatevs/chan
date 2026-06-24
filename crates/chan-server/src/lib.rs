@@ -998,10 +998,8 @@ pub fn route_builder() -> Arc<dyn chan_library::TenantBuilder> {
 /// `"local"`. The window feed has no data until a registry is installed; this is
 /// the desktop's counterpart to the devserver's `~/.chan/devserver/windows.json`.
 pub fn install_local_window_registry(host: &WorkspaceHost) {
-    let store = dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".chan")
-        .join("windows.json");
+    // Single chan-home authority so `CHAN_HOME` relocates the local window store.
+    let store = chan_workspace::paths::config_dir().join("windows.json");
     host.install_window_registry(
         Arc::new(chan_library::windows::WindowRegistry::open(store)),
         "local".to_string(),
@@ -1014,10 +1012,8 @@ pub fn install_local_window_registry(host: &WorkspaceHost) {
 /// devserver's `~/.chan/devserver/workspaces.json`; the boot path reads it to
 /// re-serve the workspaces the user left on.
 pub fn install_local_workspace_overlay(host: &WorkspaceHost) {
-    let store = dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".chan")
-        .join("workspaces.json");
+    // Single chan-home authority so `CHAN_HOME` relocates the local overlay store.
+    let store = chan_workspace::paths::config_dir().join("workspaces.json");
     host.install_workspace_overlay(Arc::new(WorkspaceOverlay::open(store)));
 }
 
