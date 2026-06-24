@@ -269,6 +269,23 @@ fn install_one(kind: &InstallKind, bin_dir: &Path, name: &str) -> std::io::Resul
     }
 }
 
+/// The directory the unix shim install resolves to — `local_bin_dir()`, which is
+/// CHAN_HOME-aware (`$CHAN_HOME/.local/bin` when set, else `$HOME/.local/bin`) — so
+/// the boot install log can name the path it ACTUALLY wrote to instead of a hardcoded
+/// `~/.local/bin` (which misleads under a `CHAN_HOME` smoke instance). `None` off unix:
+/// the Windows shims live under a different `%LOCALAPPDATA%` dir, so the log omits the
+/// path there rather than naming the wrong one (no behavioural change, just logging).
+#[cfg(unix)]
+pub(crate) fn shim_install_dir() -> Option<std::path::PathBuf> {
+    chan_workspace::paths::local_bin_dir()
+}
+
+/// Off unix the boot log omits the install dir (see the unix variant).
+#[cfg(not(unix))]
+pub(crate) fn shim_install_dir() -> Option<std::path::PathBuf> {
+    None
+}
+
 /// Install the `~/.local/bin/{chan,cs}` shims for this install, self-healing any
 /// stale shim WE wrote. No-op for a dev build / unrecognized layout or when
 /// there is no home dir. Returns the number of shims written/updated.

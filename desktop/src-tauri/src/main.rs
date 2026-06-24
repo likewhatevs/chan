@@ -3039,7 +3039,15 @@ fn main() {
     // for a dev build / unrecognized layout; never fatal to boot.
     match cs_install::install_bin_shims() {
         Ok(0) => {}
-        Ok(n) => tracing::info!(shims = n, "installed chan/cs bin shims into ~/.local/bin"),
+        // Log the dir we ACTUALLY wrote to (CHAN_HOME-aware), not a hardcoded
+        // `~/.local/bin` — the literal misled a `CHAN_HOME` smoke run. Off unix the
+        // dir is omitted rather than named wrong.
+        Ok(n) => match cs_install::shim_install_dir() {
+            Some(dir) => {
+                tracing::info!(shims = n, dir = %dir.display(), "installed chan/cs bin shims")
+            }
+            None => tracing::info!(shims = n, "installed chan/cs bin shims"),
+        },
         Err(e) => tracing::warn!(error = %e, "installing bin shims failed"),
     }
     let store = Arc::new(Mutex::new(
