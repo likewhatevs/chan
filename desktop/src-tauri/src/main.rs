@@ -514,6 +514,19 @@ impl DevserverFeed {
         self.windows.lock().unwrap().insert(id, snapshot);
     }
 
+    /// Seed a devserver's remote `library_id` into the cache BEFORE its first
+    /// window reaches the snapshot (C5 / D3). The connect flow learns the id from
+    /// `wait_for_devserver`'s `info` and mints the control row under it; without
+    /// this seed, `library_id_of` returns `None` until a later window syncs the
+    /// mapping, so the launcher cannot match the control row's `library_id` to this
+    /// devserver and groups it under a blank `↗` header. Seeding here makes
+    /// `entry_from_devserver` carry the real id from the FIRST render so the control
+    /// row groups under its parent devserver immediately. Idempotent; a later
+    /// snapshot read re-caches the same value.
+    fn seed_library_id(&self, id: String, library_id: String) {
+        self.library_ids.lock().unwrap().insert(id, library_id);
+    }
+
     /// Drop a disconnected devserver from the per-connection feeds (windows +
     /// workspace + colour). KEEPS `library_ids` (the same devserver keeps its id
     /// on reconnect — B2). Clears its buried-label overrides (B1) so a reconnect
@@ -1630,6 +1643,19 @@ async fn connect_devserver_impl(
         name,
     };
     state.devservers.set(id.clone(), conn.clone());
+    // C5 / D3 (load-bearing): seed this devserver's `library_id` into the launcher
+    // feed BEFORE the control mint so the launcher resolves the control row's group
+    // to the devserver's NAME from the FIRST render, not a blank `↗`. Without it
+    // `library_id_of` stays None until a window syncs the mapping, and the launcher
+    // (which matches the control row's `library_id` against each devserver's
+    // reported id) groups it separately. Non-empty only: `info.library_id` defaults
+    // to "" if the devserver omitted it. (@@Launcher's never-blank id is the safety
+    // net; this is the grouping fix.)
+    if !info.library_id.is_empty() {
+        state
+            .devserver_feed
+            .seed_library_id(id.clone(), info.library_id.clone());
+    }
     // Mint the connect-script control terminal as a chan-library registry row
     // under this devserver's `library_id` (UNIFY/ARCH). The native window was
     // already opened imperatively by `spawn_control_terminal_window` (Model B);
@@ -4700,6 +4726,23 @@ mod tests {
         assert!(MAIN_RS.contains("run_hidden_mcp_proxy_if_requested"));
         assert!(MAIN_RS.contains("run_mcp_proxy(socket)"));
         assert!(MAIN_RS.contains("chan_server::run_mcp_stdio_proxy"));
+    }
+
+    #[test]
+    fn seed_library_id_resolves_before_any_window_arrives() {
+        // C5 / D3 (load-bearing): on connect the desktop already knows the
+        // devserver's library_id (from `wait_for_devserver`'s info) before any
+        // window snapshot exists. Seeding it must make `library_id_of` resolve
+        // immediately so the launcher's `DevserverEntry` carries the real id from
+        // the FIRST render and groups the control row under its parent devserver —
+        // instead of a blank `↗` until a later window syncs the mapping.
+        let feed = DevserverFeed::default();
+        // No window snapshot yet → unresolvable without the seed.
+        assert_eq!(feed.library_id_of("ds-1"), None);
+        feed.seed_library_id("ds-1".to_string(), "lib-abc123".to_string());
+        assert_eq!(feed.library_id_of("ds-1"), Some("lib-abc123".to_string()));
+        // The seed is per-devserver; an unrelated id stays unresolved.
+        assert_eq!(feed.library_id_of("ds-2"), None);
     }
 
     #[test]
