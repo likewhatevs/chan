@@ -34,38 +34,29 @@ describe("TerminalTab generated reply routing", () => {
     );
   });
 
-  test("drops xterm replies during the reattach replay window (CPR-leak fix)", () => {
-    // A replayed historical query (e.g. ESC[6n) must NOT have its reply sent to
-    // the PTY — that lands it at the prompt + echoes. The gate is scoped to the
-    // replay window only (set on reattach, cleared once the ring drains), so
-    // LIVE replies still forward.
-    expect(terminal).toContain("let replayingReattach = false;");
-    expect(terminal).toContain("replayingReattach = reattaching;");
-    // The drop: during the replay window, return without sendInput.
-    expect(terminal).toMatch(
-      /if \(ptyOutputWriteDepth > 0\) \{[\s\S]*?if \(replayingReattach\) return;[\s\S]*?sendInput\(data\);/,
+  test("forwards terminal-generated replies unconditionally — reattach-replay gate reverted", () => {
+    // The reattach reply-gating (36fcbab5 + 9b44cef2) was REVERTED per @@Alex: it
+    // could STALL (the drain depth never returning to 0 under continuous TUI
+    // output), so `replayingReattach` stuck true and handleXtermData dropped
+    // EVERY live CPR/DA reply — a TUI (claude code / vim) left without its query
+    // replies hangs / renders blank. Worse than the leak it prevented. So a
+    // terminal-generated reply during a server-write now ALWAYS forwards to its
+    // own PTY (sendInput), never the broadcast fan-out, with NO replay-window
+    // drop. Accepted tradeoff: an occasional historical CPR reply may echo at the
+    // prompt (`…R`/`…c`). Ref dev/terminal-regression/.
+    //
+    // The gate + ALL its state/logic is gone — no orphans (svelte-check clean).
+    expect(terminal).not.toContain("replayingReattach");
+    expect(terminal).not.toContain("clearReplayWhenDrained");
+    expect(terminal).not.toContain("maybeEndReplayWindow");
+    // The depth>0 reply branch forwards straight to its PTY — no conditional drop.
+    const handler = terminal.match(
+      /function handleXtermData\(data: string\): void \{[\s\S]*?\n  \}/,
+    )?.[0];
+    expect(handler).toBeTruthy();
+    expect(handler).toMatch(
+      /if \(ptyOutputWriteDepth > 0\) \{[\s\S]*?sendInput\(data\);\s*return;\s*\}/,
     );
-  });
-
-  test("ends the replay window on ring DRAIN, not synchronously on `ready` (async-write race)", () => {
-    // term.write() is async: xterm keeps parsing the replayed ring (and emitting
-    // historical CPR/DA replies) after the `ready` frame arrives. Clearing
-    // replayingReattach synchronously on `ready` forwarded those late replies as
-    // garbage at the prompt. Fix: `ready` LATCHES the clear; the drain callback
-    // resolves it when the write depth returns to 0 (or `ready` clears at once
-    // if the ring already drained).
-    expect(terminal).toContain("let clearReplayWhenDrained = false;");
-    // `ready`: latch while writes are still draining; clear now only if drained.
-    expect(terminal).toMatch(
-      /frame\.type === "ready"[\s\S]*?if \(ptyOutputWriteDepth > 0\) \{\s*clearReplayWhenDrained = true;\s*\} else \{\s*replayingReattach = false;\s*\}/,
-    );
-    // The drain resolver flips the flag only at depth 0 with the latch set.
-    expect(terminal).toMatch(
-      /function maybeEndReplayWindow\(\): void \{[\s\S]*?clearReplayWhenDrained && ptyOutputWriteDepth === 0[\s\S]*?clearReplayWhenDrained = false;[\s\S]*?replayingReattach = false;/,
-    );
-    // Wired into the tracked write's drain callback (after the depth decrement).
-    expect(terminal).toMatch(
-      /term\.write\(bytes, \(\) => \{[\s\S]*?ptyOutputWriteDepth = Math\.max\(0, ptyOutputWriteDepth - 1\);\s*maybeEndReplayWindow\(\);/,
-    );
+    expect(handler).not.toContain("return;\n      sendInput");
   });
 });

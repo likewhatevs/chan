@@ -208,21 +208,6 @@
   let webglRendererActive = false;
   let webglContextLossRetries = 0;
   let ptyOutputWriteDepth = 0;
-  // True while writing the initial reattach REPLAY (from connect until the
-  // server's `ready` frame, which it sends AFTER the replayed output ring —
-  // see crates/chan-server/src/routes/terminal.rs). xterm answers any
-  // HISTORICAL query (e.g. `ESC[6n` CPR) in the replayed bytes, but the
-  // original asker already got its answer when the query was live, so that
-  // reply must be DROPPED (handleXtermData) — forwarding it lands the reply at
-  // the shell prompt (`bash: 41R: command not found`) and echoes it. Live
-  // (post-`ready`) replies still forward (vim/readline need them).
-  let replayingReattach = false;
-  // Defers the end-of-replay clear: term.write() is async, so on the `ready`
-  // frame xterm may still be draining the replayed ring (and emitting its
-  // historical query replies). `ready` latches this instead of clearing
-  // replayingReattach directly; writePtyOutput's drain callback resolves it
-  // when the write depth returns to 0. See maybeEndReplayWindow.
-  let clearReplayWhenDrained = false;
   let hostResumeTimers: ReturnType<typeof setTimeout>[] = [];
   let hostResumeListenerCleanup: (() => void) | null = null;
   // Wall-clock-gap sleep/wake detector. See
@@ -760,12 +745,6 @@
     sawSessionControl = false;
     gitBashMissing = false;
     const reattaching = Boolean(tab.terminalSessionId);
-    // Gate xterm replies to historical queries during the reattach replay
-    // window; latched on the `ready` frame, then cleared once the replayed ring
-    // has drained (maybeEndReplayWindow). A fresh spawn has an empty replay, so
-    // this is only ever true (and only ever drops a reply) for a reattach.
-    replayingReattach = reattaching;
-    clearReplayWhenDrained = false;
     pendingPromptSeed = reattaching ? "" : (tab.seedInput ?? "");
     promptSeedSent = false;
     const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
@@ -811,18 +790,6 @@
         return;
       }
       if (frame.type === "ready") {
-        // The server sends `ready` AFTER the replay ring — but term.write() is
-        // async, so xterm is often still parsing that ring (and emitting its
-        // historical CPR/DA query replies via onData) when `ready` arrives.
-        // Clearing replayingReattach here would forward those late replies as
-        // garbage at the prompt (`…R`/`…c`). Latch the clear until every
-        // replayed write has drained (depth back to 0); end now only if the
-        // ring already drained. LIVE replies (post-drain) still forward.
-        if (ptyOutputWriteDepth > 0) {
-          clearReplayWhenDrained = true;
-        } else {
-          replayingReattach = false;
-        }
         statusDetail = `${frame.cols}x${frame.rows}`;
         terminalCwdAbs = frame.cwd ?? null;
         terminalCwdVirtual = frame.cwd_rel ?? null;
@@ -1073,29 +1040,15 @@
     toggleRichPromptForTab(tab.id);
   }
 
-  // End the reattach replay window once the LAST replayed write has drained
-  // (depth back to 0) and the `ready` frame has latched the clear. This is the
-  // resolver for the async-write race: it flips replayingReattach off only after
-  // xterm has finished emitting the replayed ring's historical query replies, so
-  // those replies are dropped (handleXtermData) instead of echoing at the prompt.
-  function maybeEndReplayWindow(): void {
-    if (clearReplayWhenDrained && ptyOutputWriteDepth === 0) {
-      clearReplayWhenDrained = false;
-      replayingReattach = false;
-    }
-  }
-
   function writePtyOutput(bytes: Uint8Array): void {
     if (!term) return;
     ptyOutputWriteDepth += 1;
     try {
       term.write(bytes, () => {
         ptyOutputWriteDepth = Math.max(0, ptyOutputWriteDepth - 1);
-        maybeEndReplayWindow();
       });
     } catch (err) {
       ptyOutputWriteDepth = Math.max(0, ptyOutputWriteDepth - 1);
-      maybeEndReplayWindow();
       throw err;
     }
   }
@@ -1151,12 +1104,15 @@
     // replies. Replies belong only to the PTY that requested them;
     // they must not enter chan's broadcast fan-out.
     if (ptyOutputWriteDepth > 0) {
-      // A reply to a query in the bytes we just wrote. During the reattach
-      // replay window the query is HISTORICAL (the original asker already got
-      // its answer when it was live), so DROP the reply — forwarding it would
-      // inject it at the shell prompt + echo (`^[[…R`). Post-`ready` (live)
-      // replies still forward (vim/readline/CPR consumers need them).
-      if (replayingReattach) return;
+      // A reply to a query in the bytes we just wrote: forward it ONLY to the
+      // requesting PTY (sendInput), never into the broadcast fan-out. Forwarded
+      // UNCONDITIONALLY — historical (reattach-replay) or live. We previously
+      // dropped replies during a reattach-replay window to stop a historical
+      // CPR/DA reply leaking at the prompt (`…R`/`…c`), but that gate could
+      // STALL (the drain depth never returning to 0 under continuous TUI
+      // output), dropping every LIVE reply and hanging/blanking the TUI — far
+      // worse than the occasional leak. Reverted per @@Alex; the occasional
+      // historical-reply echo is accepted. Ref dev/terminal-regression/.
       sendInput(data);
       return;
     }
@@ -1246,7 +1202,6 @@
     term?.dispose();
     term = null;
     ptyOutputWriteDepth = 0;
-    clearReplayWhenDrained = false;
     webglRendererActive = false;
     fit = null;
     search = null;
