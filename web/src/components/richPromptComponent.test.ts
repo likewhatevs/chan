@@ -79,8 +79,18 @@ describe("RichPrompt.svelte component", () => {
     // (submitAgent()) + a client message id, only beginning a pending when the
     // frame actually went out (the data-loss guard).
     expect(richPromptSrc).toMatch(/const id = crypto\.randomUUID\(\);/);
+    // C1: the WIRE payload is the draft text with image refs rewritten from
+    // draft-file-relative to workspace-rooted, so the receiving agent (at $CWD =
+    // workspace root) finds the pasted image instead of 404ing on ./image.png.
+    // The card/recall text (`lastQueued`) stays the ORIGINAL text — preview-correct.
     expect(richPromptSrc).toMatch(
-      /if \(!sendPromptToTerminal\(tab\.id, text, submitAgent\(\), id\)\) return true;/,
+      /import \{ rewriteImagePathsForDelivery \} from "\.\.\/editor\/deliver_images"/,
+    );
+    expect(richPromptSrc).toMatch(
+      /const delivered = rewriteImagePathsForDelivery\(text, draftPath\);/,
+    );
+    expect(richPromptSrc).toMatch(
+      /if \(!sendPromptToTerminal\(tab\.id, delivered, submitAgent\(\), id\)\) return true;/,
     );
     expect(richPromptSrc).toMatch(/beginPendingPrompt\(tab, id\);/);
     const submitBody = richPromptSrc.match(/function submit\(\): boolean \{[\s\S]*?\n  \}/)?.[0];

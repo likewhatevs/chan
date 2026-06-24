@@ -38,6 +38,7 @@
     outdentListItem,
   } from "../editor/commands/list";
   import { imageDropHandlers } from "../editor/bubbles/image_drop";
+  import { rewriteImagePathsForDelivery } from "../editor/deliver_images";
   import { makeThemeCompartment } from "../editor/base";
   import { effectiveHybridSurfaceTheme } from "../state/store.svelte";
   import { currentOS } from "../state/shortcuts";
@@ -342,7 +343,12 @@
     const text = view.state.doc.toString();
     if (!text.trim()) return true;
     const id = crypto.randomUUID();
-    if (!sendPromptToTerminal(tab.id, text, submitAgent(), id)) return true;
+    // The composer's pasted-image refs are relative to the DRAFT file (so the
+    // in-compose preview resolves them); the receiving agent runs at $CWD =
+    // workspace root, so deliver them workspace-rooted or it 404s the image.
+    // The draft/card text stays as-is — only the wire payload is rewritten.
+    const delivered = rewriteImagePathsForDelivery(text, draftPath);
+    if (!sendPromptToTerminal(tab.id, delivered, submitAgent(), id)) return true;
     // Queued. KEEP the text in the composer as the greyed read-only card (the
     // lock $effect greys it the moment `isPending` flips). Persist it so a
     // reload restores the card, and remember it for ArrowUp recall / Esc drop.
