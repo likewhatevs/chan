@@ -2,7 +2,7 @@
 // actions — [FOCUS] (openWindow: focus / un-hide) and [SHOW/HIDE] (toggleWindow:
 // Eye visible / EyeOff hidden) — and splits visible vs hidden windows into
 // "Open windows" / "Hidden windows" sections keyed on the server-persisted
-// `hidden` (Theme 5). This exercises the real Svelte 5 runtime (a static check
+// `hidden` flag. This exercises the real Svelte 5 runtime (a static check
 // misses the reactive feed re-render after the watch push, e.g. the Eye↔EyeOff
 // flip + the row moving between sections), per jsdom.
 
@@ -72,7 +72,7 @@ describe("WindowFeed row actions", () => {
     document.body.appendChild(target);
     app = mount(WindowFeed, { target });
 
-    // ONE list (@@Alex overruled the Open/Hidden split): a single "Open windows"
+    // ONE list: a single "Open windows"
     // heading, no "Hidden windows" section. The hidden seed window is still
     // listed, marked only by its EyeOff ("Show window") toggle.
     expect(headings()).toEqual(["Open windows"]);
@@ -119,7 +119,7 @@ describe("WindowFeed row actions", () => {
     hide.mockRestore();
   });
 
-  it("pins the devserver's control terminal FIRST in its group (W3)", () => {
+  it("pins the devserver's control terminal FIRST in its group", () => {
     target = document.createElement("div");
     document.body.appendChild(target);
     app = mount(WindowFeed, { target });
@@ -136,7 +136,7 @@ describe("WindowFeed row actions", () => {
     expect(firstRowName?.textContent?.trim()).toBe("Control terminal");
   });
 
-  it("SHOW/HIDE surfaces a genuine bridge error in the banner, not the console (L3/C6)", async () => {
+  it("SHOW/HIDE surfaces a genuine bridge error in the banner, not the console", async () => {
     const { backend } = await import("../api/backend");
     // A bridge op can still reject for a GENUINE failure (no desktop bridge, a
     // network error). The eye handler must catch it and report to the banner
@@ -162,9 +162,9 @@ describe("WindowFeed row actions", () => {
     hide.mockRestore();
   });
 
-  it("eye click on a reaped window is a clean 204 no-op: no banner, no console (L3/C6 seam 4)", async () => {
+  it("eye click on a reaped window is a clean 204 no-op: no banner, no console", async () => {
     const { backend } = await import("../api/backend");
-    // Seam 4 (@@Desktop D4): a stale/reaped window's hide replies Ok(()) → 204, a
+    // A stale/reaped window's hide replies Ok(()) -> 204, a
     // silent no-op, NOT a 409. The launcher must treat that resolved call as a
     // clean no-op — req() accepts 204, so toggleWindow resolves and the handler
     // sets no error. Pins the 409→204 contract on the launcher side.
@@ -187,7 +187,7 @@ describe("WindowFeed row actions", () => {
   });
 });
 
-describe("WindowFeed duplicate-key resilience (L1/C3)", () => {
+describe("WindowFeed duplicate-key resilience", () => {
   function makeWindow(window_id: string): WindowRecord {
     return {
       window_id,

@@ -95,7 +95,7 @@ struct PersistedConfig {
     #[serde(default)]
     devserver_token: String,
     /// This library's stable identity, minted once (`lib-<16hex>`) and persisted
-    /// so it survives restart. Stamped on every window record (Seam W); a client
+    /// so it survives restart. Stamped on every window record; a client
     /// merging several libraries' feeds partitions by it.
     #[serde(default)]
     library_id: String,
@@ -317,8 +317,8 @@ impl DevserverState {
         let (currently_on, root) = match current {
             Some(current) => current,
             // Not in the serving map: it may be a host-library workspace the
-            // devserver has not mounted yet (D1 — every library workspace is
-            // listable + toggleable). Resolve the prefix back to its library
+            // devserver has not mounted yet. Every library workspace is listable
+            // and toggleable. Resolve the prefix back to its library
             // root and treat it as currently off; an unknown prefix is a 404.
             None => match self.library_root_for_prefix(prefix) {
                 Some(root) => (false, root),
@@ -365,8 +365,8 @@ impl DevserverState {
     /// "removed" signal, since an off row is registered-but-unmounted and
     /// forgetting it must still report success. Distinct from on/off.
     fn forget_workspace(&self, prefix: &str) -> Result<bool, Error> {
-        // DESTRUCTIVE under D1 (Seam B Amendment 6) — the devserver Forget is
-        // `chan workspace rm`: unmount-if-running, then UNREGISTER from the host
+        // Devserver Forget is destructive: it is `chan workspace rm`,
+        // unmount-if-running, then UNREGISTER from the host
         // library (reset Everything + bin the trash). The host library is the
         // single registry, so the workspace then disappears everywhere
         // (library, devserver listing, CLI). `set_workspace_on {on:false}` is
@@ -388,9 +388,9 @@ impl DevserverState {
             let mut workspaces = self.workspaces.lock().unwrap_or_else(|e| e.into_inner());
             workspaces.remove(prefix);
         }
-        // Remove from the host library: reset Everything + bin the workspace
-        // trash (@@Alex "bin it!!"). Unmount above dropped the tenant's handle,
-        // so the writer lock is released before the reset.
+        // Remove from the host library: reset Everything and bin the workspace
+        // trash. Unmount above dropped the tenant's handle, so the writer lock is
+        // released before the reset.
         self.host.library().unregister_workspace(&root)?;
         // FORGET purges the workspace's window records so they don't resurrect on
         // reconnect (finding #8). OFF (`set_workspace_on {on:false}` above) only
@@ -456,8 +456,8 @@ impl DevserverState {
     /// The box's workspace list for `GET /api/devserver/workspaces`: ONE row
     /// per HOST-LIBRARY workspace (the set `chan workspace ls` shows, read live
     /// from the registry), with `on`/`prefix`/`token` from the devserver's
-    /// serving state. The host library — not the devserver's own config — is
-    /// the source of truth (D1): a freshly-started devserver therefore lists
+    /// serving state. The host library, not the devserver's own config, is
+    /// the source of truth: a freshly-started devserver therefore lists
     /// exactly what `chan list` shows instead of coming up empty. A library
     /// workspace the devserver is not serving is `on:false` at its stable
     /// derived prefix with no token; toggling it on mounts it (see
@@ -524,7 +524,7 @@ impl DevserverState {
         })
     }
 
-    /// Mount the per-library SHARED terminal tenant (D-W3). `open_terminal_session`
+    /// Mount the per-library SHARED terminal tenant. `open_terminal_session`
     /// records its prefix in the host's `terminal_tenant_prefix`, which the window
     /// feed's `terminal_window_live` resolves a Terminal record's prefix+token
     /// against. The desktop does this via `embedded.rs`; the devserver never did
@@ -570,7 +570,7 @@ pub async fn run_devserver(library: Library, config: DevserverConfig) -> anyhow:
     }
     let token = persisted.devserver_token.clone();
     // Mint a stable per-library id once (`lib-<16hex>`), persisted alongside the
-    // token, so it survives restart and stamps every window record (Seam W).
+    // token, so it survives restart and stamps every window record.
     if persisted.library_id.is_empty() {
         persisted.library_id = format!("lib-{:016x}", rand::random::<u64>());
     }
@@ -580,8 +580,8 @@ pub async fn run_devserver(library: Library, config: DevserverConfig) -> anyhow:
     // Opt in to control-socket `chan close`: a hosted workspace's tenant can
     // then be unmounted by path (it does not kill the multi-tenant process).
     host.install_self();
-    // Install the persisted window registry (the Seam-W source of truth) beside
-    // the devserver config, so the window feed has data. The window-record
+    // Install the persisted window registry beside the devserver config, so the
+    // window feed has data. The window-record
     // assembly reads it; `library_id` stamps each row.
     let windows_store = devserver_config_path()
         .context("resolving devserver windows store path")?
@@ -614,7 +614,7 @@ pub async fn run_devserver(library: Library, config: DevserverConfig) -> anyhow:
         store,
     });
 
-    // Mount the per-library SHARED terminal tenant (D-W3) before serving, so
+    // Mount the per-library SHARED terminal tenant before serving, so
     // devserver Terminal windows resolve to a real prefix+token.
     state
         .mount_shared_terminal_tenant()
@@ -1029,7 +1029,7 @@ async fn handle_set_workspace_on(
 async fn handle_list_windows(
     State(_state): State<Arc<DevserverState>>,
 ) -> Json<Vec<DevserverWindow>> {
-    // Superseded by the library window feed `GET /api/library/windows` (Seam W),
+    // Superseded by the library window feed `GET /api/library/windows`,
     // which the desktop watcher and `cs window list` reconcile to. The
     // per-tenant enumeration that backed this endpoint is gone with the host
     // move; this returns empty during the transition until the feed lands and
@@ -1090,7 +1090,7 @@ pub(crate) fn bytes_eq(a: &[u8], b: &[u8]) -> bool {
 /// their public slug `/{slug}` (top-level); only `/api` collides.
 const RESERVED_WORKSPACE_PREFIX: &str = "/api";
 
-/// Mount prefix of the per-library SHARED terminal tenant (D-W3) that every
+/// Mount prefix of the per-library SHARED terminal tenant that every
 /// devserver Terminal window resolves to. Fixed (one shared tenant per library),
 /// and distinct from per-label terminal prefixes (`/api/term-…`) and workspace
 /// prefixes (the top-level public slug `/{slug}`), so it never collides.
@@ -1184,7 +1184,7 @@ mod tests {
         // A different basename differs.
         let c = allocate_workspace_prefix(Path::new("/tmp/other")).unwrap();
         assert_ne!(a, c);
-        // C3: same basename under a DIFFERENT parent no longer collides — the
+        // Same basename under a DIFFERENT parent no longer collides: the
         // hash suffix keys the prefix to the root, so the two map to DISTINCT
         // prefixes and both mount (the old basename-only slug rejected the
         // second at mount time).
@@ -1210,7 +1210,7 @@ mod tests {
         assert!(prefix.starts_with("/notes-"), "{prefix}");
         assert!(state.host.mounted_prefixes().unwrap().contains(&prefix));
 
-        // C3: a SECOND workspace with the same basename under a DIFFERENT parent
+        // A SECOND workspace with the same basename under a DIFFERENT parent
         // no longer collides — the hash keys the prefix to the root, so both
         // mount at distinct prefixes (the bug was the second being rejected).
         let other = tempfile::tempdir().expect("other");
@@ -1381,7 +1381,7 @@ mod tests {
             "lib-test".into(),
         );
 
-        // Mount the shared terminal tenant (the D-W3 mount run_devserver does
+        // Mount the shared terminal tenant (the same mount run_devserver does
         // before provisioning the first-open terminal), then provision it.
         state
             .mount_shared_terminal_tenant()
@@ -1496,7 +1496,7 @@ mod tests {
 
     #[tokio::test]
     async fn lists_full_host_library_and_toggles_unserved_workspaces_on() {
-        // D1: GET /workspaces lists ONE row per HOST-LIBRARY workspace (what
+        // GET /workspaces lists ONE row per HOST-LIBRARY workspace (what
         // `chan list` shows), not just the devserver's served subset — so a
         // fresh devserver is not empty. An unserved library workspace is off at
         // its stable prefix; `{prefix}/on` mounts it even though it was never
@@ -1543,7 +1543,7 @@ mod tests {
         );
 
         // Toggle A on by its stable prefix — never registered on the devserver,
-        // yet this mounts it (D1: every library workspace is toggleable).
+        // yet this mounts it; every library workspace is toggleable.
         let prefix_a = allocate_workspace_prefix(ws_a.path()).expect("prefix");
         let row = state
             .set_workspace_on(&prefix_a, true)
@@ -1570,8 +1570,8 @@ mod tests {
 
     #[tokio::test]
     async fn forget_is_destructive_and_removes_from_the_host_library() {
-        // Seam B Amendment 6: the devserver Forget is DESTRUCTIVE — it is
-        // `chan workspace rm` (unmount-if-on + unregister from the host library
+        // Devserver Forget is destructive: it is `chan workspace rm`
+        // (unmount-if-on + unregister from the host library
         // + bin the trash). The host library is the single registry, so the
         // workspace then disappears from the listing too. (`set_workspace_on
         // {on:false}` is the reversible unmount; this is the removal.)
@@ -2155,7 +2155,7 @@ mod tests {
     async fn local_color_gate_accepts_a_tenant_token_but_windows_stay_launcher_only() {
         use tower::ServiceExt;
 
-        // C8 cut-blocker: a window is served with its per-TENANT token, NOT the
+        // A window is served with its per-TENANT token, NOT the
         // launcher token, so the local-color (config) routes must accept a valid
         // tenant token — while the launcher-MANAGEMENT routes (windows) stay
         // launcher-only.
@@ -2188,7 +2188,7 @@ mod tests {
                 .unwrap()
         };
 
-        // local-color GET accepts the per-tenant token (the C8 fix — was a 401).
+        // local-color GET accepts the per-tenant token.
         let color_tenant = app
             .clone()
             .oneshot(bearer("/api/library/local-color", &tenant_token))

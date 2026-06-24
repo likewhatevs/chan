@@ -5,7 +5,7 @@ import pane from "./Pane.svelte?raw";
 // Rich Prompt - the terminal wiring: TerminalTab registers the prompt
 // sink (WS `prompt` frame, NOT raw input), mounts the bubble over the active
 // terminal, and exposes the right-click "Show/Hide Rich Prompt" entry. The
-// bubble component + toggle + send seam are covered in
+// bubble component + toggle + sender are covered in
 // richPromptComponent.test.ts. Real interaction is browser-smoked.
 
 describe("TerminalTab Rich Prompt wiring", () => {

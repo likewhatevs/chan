@@ -10,7 +10,7 @@
 //! closes them by destroying the Tauri window. The watcher is inert until a
 //! local window is minted (an empty registry reconciles to nothing); routing
 //! the window-creation paths through the registry mint makes it the SOLE driver
-//! of local windows, so the reconnect/relaunch duplicate class (L0 Bug A) is
+//! of local windows, so reconnect/relaunch cannot duplicate windows and is
 //! unreachable by construction.
 
 use std::collections::HashSet;
@@ -28,7 +28,7 @@ use crate::window_watcher::{
 };
 use crate::{serve, AppState};
 
-/// Library id of the embedded local-disk library (Seam-L scheme).
+/// Library id of the embedded local-disk library.
 const LOCAL_LIBRARY_ID: &str = "local";
 
 /// How a watched window opens its SPA — the only library-specific bit of the
@@ -70,7 +70,7 @@ struct LocalWindowFeed {
 
 impl WindowFeed for LocalWindowFeed {
     fn snapshot(&self) -> Vec<WindowRecord> {
-        // LOCAL records only (`local_window_records`): the merged set (seam #1)
+        // LOCAL records only (`local_window_records`): the merged launcher set
         // includes devserver windows, but the LOCAL native watcher must only
         // reconcile LOCAL windows — devserver windows are driven by their own
         // per-devserver watcher — else the local reconcile would try to open
@@ -176,7 +176,7 @@ pub(crate) fn spawn_local_window_watcher(app: AppHandle, state: Arc<AppState>) {
     };
     let view = Arc::new(WatcherViewState::default());
     // Share the view state so the desktop close handlers can bury/unbury
-    // through the watcher (L5), then hand the same Arc to the loop.
+    // through the watcher, then hand the same Arc to the loop.
     state.set_local_watcher_view(Arc::clone(&view));
     // The local library lives for the whole process, so the watcher is never
     // cancelled — `cancel` is a future that only resolves at process exit
@@ -297,7 +297,7 @@ async fn stream_window_feed(
                     state.refresh_devserver_active_transfers(&library_id, &active);
                 }
                 *snapshot.lock().unwrap() = set.windows;
-                // Re-push the launcher feed (seam #1): a devserver window change
+                // Re-push the launcher feed: a devserver window change
                 // shifts the merged launcher window set, so signal the embedded
                 // host to re-assemble + re-push. The devserver only pushes on a
                 // real change, so this is already change-gated.
@@ -312,7 +312,7 @@ async fn stream_window_feed(
 }
 
 /// Subscribe to a connected devserver's pane-highlight COLOUR feed
-/// (`GET /api/library/local-color/watch`, Theme 6): on each `{ color }` push,
+/// (`GET /api/library/local-color/watch`): on each `{ color }` push,
 /// refresh the launcher's per-devserver colour cache and — only on a real change
 /// — re-push the library feed, so a NEW window of this devserver reads the fresh
 /// `?pane=` colour at build. Push-based; replaces the old 5s colour poll (the
@@ -427,7 +427,7 @@ pub(crate) async fn spawn_devserver_window_watcher(
         .await
         .unwrap_or_default();
     let snapshot = Arc::new(Mutex::new(seed));
-    // A handle on the snapshot for the caller's launcher feed (seam #1): the same
+    // A handle on the snapshot for the caller's launcher feed: the same
     // Arc the feed task mutates, so the launcher reads this devserver's live windows.
     let snapshot_handle = Arc::clone(&snapshot);
     let change = Arc::new(Notify::new());
@@ -459,7 +459,7 @@ pub(crate) async fn spawn_devserver_window_watcher(
     let feed = DevserverWindowFeed { snapshot, change };
     let view = Arc::new(WatcherViewState::default());
     // A handle on the view for the caller so the close handler can bury THIS
-    // devserver's windows through it (D2): a bury flips `should_show` false and
+    // devserver's windows through it: a bury flips `should_show` false and
     // the reconcile CLOSES the webview (drops the `/ws`), so the launcher dot
     // reflects hidden — unlike a bare `window.hide()`, which keeps the `/ws` live.
     let view_handle = Arc::clone(&view);

@@ -2,7 +2,7 @@
 ///
 /// The launcher ships as a browser SPA (served by chan-server over HTTP) and, on
 /// the desktop loopback surface, as a chan-desktop Tauri webview. This module is
-/// the small seam where the desktop pushes backend events the plain-browser
+/// the desktop event bridge for backend events the plain-browser
 /// surface never sees — today just `devserver-control-closed` (a connected
 /// devserver's control terminal exited). It uses the GLOBAL Tauri API
 /// (`window.__TAURI__`, exposed by `withGlobalTauri: true`); the launcher has no

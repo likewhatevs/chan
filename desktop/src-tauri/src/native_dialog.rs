@@ -131,14 +131,14 @@ fn run_native_alert(
 
     // First button added is the default: rightmost, blue. AppKit already keys
     // it to Return, but we set it explicitly so the routing never depends on
-    // that implicit default — and the crux of F5 is the `runModal` below, which
-    // makes the alert window key so Return actually reaches this button.
+    // that implicit default. `runModal` below makes the alert window key so Return
+    // actually reaches this button.
     let default_btn = alert.addButtonWithTitle(&NSString::from_str(default_label));
     default_btn.setKeyEquivalent(&NSString::from_str("\r"));
     if let Some(secondary) = secondary_label {
         let secondary_btn = alert.addButtonWithTitle(&NSString::from_str(secondary));
         // Escape dismisses to the secondary (the safe "Keep open" / "Cancel" /
-        // "Later" choice), preserving the pre-F5 Escape behaviour.
+        // "Later" choice), preserving the previous Escape behaviour.
         secondary_btn.setKeyEquivalent(&NSString::from_str("\u{1b}"));
     }
 

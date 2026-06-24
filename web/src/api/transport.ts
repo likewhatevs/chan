@@ -6,7 +6,7 @@
 // implementation, one wire format, one auth model - there is no
 // platform-specific path.
 //
-// The seam exists as a single module so client.ts can stay focused
+// This transport lives in a single module so client.ts can stay focused
 // on the typed API surface (file ops, search, graph, ...) and leave
 // wire mechanics (token plumbing, fetch shape, WebSocket reconnect)
 // here.
@@ -376,7 +376,7 @@ interface LocalColorFrame {
   color: string | null;
 }
 
-/// Open the per-library focus-colour watch (Theme 6). A dedicated, self-contained
+/// Open the per-library focus-colour watch. A dedicated, self-contained
 /// WebSocket to `/api/library/local-color/watch` (bearer via `?t=`) that calls
 /// `onColor` with each pushed colour (hex or null) — push-on-connect + on change.
 /// Auto-reconnects with the same capped backoff as `openWatch` (500 ms → 8 s).

@@ -63,8 +63,8 @@ struct PreflightSnapshot {
     /// `PATCH /api/config`. `build_snapshot` defaults it false; the route
     /// handlers set it from the editor prefs alongside `cs_link`.
     cs_dismissed: bool,
-    /// Post-open workspace facts for the SPA onboarding surface (P2,
-    /// open-then-configure). Cleanly SEPARATED from the lock gate: it carries
+    /// Post-open workspace facts for the SPA onboarding surface. Cleanly
+    /// SEPARATED from the lock gate: it carries
     /// no readiness signal and never feeds `phase` / `locked`. `build_snapshot`
     /// leaves it `None`; the route handlers attach it only once the workspace
     /// is `Ready`, which is exactly when the onboarding card consumes it.

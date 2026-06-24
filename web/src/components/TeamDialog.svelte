@@ -256,7 +256,7 @@
     config = reshapeSplitGrid(config, shape);
   }
 
-  /// E1: distribute every unassigned member across the current grid's cells
+  /// Distribute every unassigned member across the current grid's cells
   /// (least-populated first). No-op outside split mode.
   function autoAssign(): void {
     if (config.realEstate.kind !== "split") return;
@@ -886,7 +886,7 @@
     background: color-mix(in srgb, var(--accent) 20%, var(--bg));
     border-color: var(--accent);
   }
-  /* E1 auto-assign: same pill look as the shape picks, pushed to the right
+  /* Auto-assign: same pill look as the shape picks, pushed to the right
      end of the shapes row, sized to hold the robot icon. */
   .team-auto-assign {
     margin-left: auto;

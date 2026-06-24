@@ -426,7 +426,7 @@ fn dir_report_survives_jsonl_roundtrip() {
 
 #[test]
 fn file_bucket_is_markdown_for_md_files() {
-    // The graph G6 colour scheme distinguishes
+    // The graph colour scheme distinguishes
     // markdown notes (orange) from source code (royalblue).
     // chan-report carries the Markdown bucket explicitly so the
     // graph layer doesn't have to re-detect the language at

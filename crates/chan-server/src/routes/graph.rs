@@ -1,8 +1,8 @@
 //! `[[ ]]` typeahead, link resolution, headings, and the unified
 //! graph view.
 //!
-//! Two-phase typeahead UX. Phase 1: as the user types `[[Re...`, the
-//! picker hits /api/link-targets to surface candidate files. Phase 2:
+//! Two-step typeahead UX. First, as the user types `[[Re...`, the
+//! picker hits /api/link-targets to surface candidate files. Then,
 //! after the user picks a file (`[[recipes/pasta.md`), they may type
 //! `#` to jump to a heading; the picker hits /api/headings/<rel> to
 //! enumerate the file's anchors.
@@ -338,7 +338,7 @@ enum GraphNodeView {
         /// chan-report's tracked-file set (markdown + recognized
         /// source extensions). Missing for files chan-report
         /// doesn't track (binary, media, unknown). Lets the SPA's
-        /// G6 colour scheme read the truth from the server instead
+        /// graph colour scheme read the truth from the server instead
         /// of running client-side regex classification.
         #[serde(skip_serializing_if = "Option::is_none")]
         bucket: Option<ReportFileBucket>,
@@ -2342,9 +2342,8 @@ mod tests {
         assert!(file_set.contains("LICENSE"));
 
         // referenced_disk_files trigger: disk_files contains LICENSE,
-        // graph_file_set does not, and it is not an image. So the
-        // bug-fix branch in api_graph will emit a File { missing:
-        // false } node for it instead of the previous ghost.
+        // graph_file_set does not, and it is not an image. api_graph emits a
+        // File { missing: false } node for it instead of the previous ghost.
         assert!(disk.contains("LICENSE"));
         assert!(!graph_file_set.contains("LICENSE"));
         assert!(!is_image_path("LICENSE"));

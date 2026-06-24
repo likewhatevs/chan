@@ -2,7 +2,7 @@ import { describe, expect, test } from "vitest";
 
 import { rewriteImagePathsForDelivery } from "./deliver_images";
 
-// C1: a pasted image in the rich prompt lands at `.Drafts/{name}/image.png`
+// A pasted image in the rich prompt lands at `.Drafts/{name}/image.png`
 // and is inserted draft-file-relative (`./image.png`) so the in-compose
 // preview resolves it. But the receiving agent runs at `$CWD` = workspace
 // root, so `./image.png` would 404. `rewriteImagePathsForDelivery` rewrites

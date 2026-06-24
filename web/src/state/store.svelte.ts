@@ -1266,7 +1266,7 @@ async function handleWindowCommand(raw: unknown): Promise<void> {
     return;
   }
   if (frame.command === "team_spawned" && Array.isArray(frame.members)) {
-    // S1: a CLI `cs terminal team new|load` spawned a team in this window;
+    // A CLI `cs terminal team new|load` spawned a team in this window;
     // surface each member by opening a terminal tab attached to its live
     // session.
     surfaceTeamSpawn(typeof frame.group === "string" ? frame.group : "", frame.members);
@@ -1285,7 +1285,7 @@ async function handleWindowCommand(raw: unknown): Promise<void> {
   }
 }
 
-/// S1: surface a CLI-spawned team. The server already started each PTY; open
+/// Surface a CLI-spawned team. The server already started each PTY; open
 /// a terminal tab ATTACHED to each live `session_id` (not a fresh session),
 /// grouped under the team's group, so a `cs terminal team new|load` from the
 /// CLI shows up in this window instead of only on the next attach. The new
@@ -2045,7 +2045,7 @@ export function schedulePersistStateToHash(): void {
   }, HASH_DEBOUNCE_MS);
 }
 
-/// Test seam for URL-hash overlay restore. The public bootstrap path
+/// Test hook for URL-hash overlay restore. The public bootstrap path
 /// mixes hash, remote session, auth, and websocket startup; keeping
 /// this narrow lets regression tests cover hash parsing without
 /// faking the whole app lifecycle.
@@ -2943,7 +2943,7 @@ export const browserSidePanes = $state<{
 ///   - `anchor` is the range pivot for shift-extend; it tracks the last
 ///     plain/cmd click (the "from" of a future shift+click range).
 /// A plain click sets `paths=[path]`, `anchor=path`. Selection is
-/// per-FB-instance via the snapshot/restore seam (FileBrowserSurface);
+/// per-FB-instance via snapshot/restore (FileBrowserSurface);
 /// dock + overlay intentionally share this singleton (workspace-wide intent).
 export const browserSelection = $state<{
   path: string | null;

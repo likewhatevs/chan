@@ -4550,7 +4550,7 @@ mod tests {
         }
     }
 
-    /// The `listen` resolution matrix (plan.md Theme 1): tunnel mode flips the
+    /// The `listen` resolution matrix: tunnel mode flips the
     /// default to no-bind; `CHAN_DEVSERVER_LISTEN` overrides; tunnel-off +
     /// LISTEN=0 is the unreachable-devserver hard error.
     #[test]

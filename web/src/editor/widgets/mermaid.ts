@@ -86,7 +86,7 @@ function cacheError(source: string, err: MermaidError | null): void {
   }
 }
 
-/// Actionable error face (D3): lead with the failing line number, echo
+/// Actionable error face: lead with the failing line number, echo
 /// that source line's text, then mermaid's reason - so the user can
 /// locate the problem before stepping into the source. Falls back to the
 /// raw message when mermaid didn't report a line.
@@ -233,7 +233,7 @@ class MermaidWidget extends WidgetType {
         // mermaid's error on the diagram face, never crash / fall back.
         renderErrorFace(diagram, this.source, res);
         // Remember the failing line so the source view can accent it
-        // when the cursor steps in (D2-A, cached-on-entry).
+        // when the cursor steps in.
         cacheError(
           this.source,
           res.errorLine
@@ -395,8 +395,8 @@ function scan(state: EditorState, dark: boolean): DecorationSet {
 /// Error-line accent. While the cursor is INSIDE a mermaid block whose
 /// last render failed (its source is in errorCache), mark the failing
 /// source line so the user can find it without a line-number gutter.
-/// Cached-on-entry (D2-A): the error comes from the prior render, so the
-/// accent shows when you step in and clears once you edit the source
+/// The error comes from the prior render, so the accent shows when you step in
+/// and clears once you edit the source
 /// (cache miss on the changed text) until the next render re-validates.
 const LINE_ERROR_DECO = Decoration.line({
   attributes: { class: "cm-md-mermaid-error-line" },

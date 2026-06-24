@@ -231,7 +231,7 @@ fn status_for_error(e: &Error) -> StatusCode {
 fn patch_config(state: &AppState, body: PatchConfigBody) -> Result<GlobalConfigView, Error> {
     if let Some(prefs) = body.preferences {
         apply_preferences(state, prefs)?;
-        // P3: tell every open window of this tenant a setting changed, so each
+        // Tell every open window of this tenant a setting changed, so each
         // re-fetches preferences and reflects it live (theme, fonts, pane
         // widths, ...) instead of going stale until a reload.
         broadcast_config_changed(state);
@@ -342,7 +342,7 @@ mod tests {
 
     #[test]
     fn broadcast_config_changed_emits_a_config_changed_frame_on_the_ws_bus() {
-        // P3 cross-window settings sync: the SPA's /ws event store keys on a
+        // Cross-window settings sync: the SPA's /ws event store keys on a
         // frame whose `kind` is exactly "config_changed" (it then re-fetches
         // preferences). Pin that wire contract so a rename can't silently break
         // live sync. Tested directly rather than through `patch_config`, which

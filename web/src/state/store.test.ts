@@ -348,7 +348,7 @@ describe("all-terminal reload reattach snapshot", () => {
     // A terminal with NO session id — it hasn't connected / been assigned a
     // tsid yet. Nothing to reattach, so the reload snapshot must stay empty;
     // otherwise a reload would restore a tsid-less terminal and spawn a stray
-    // fresh PTY (the dual-key orphan @@LaneB caught).
+    // fresh PTY.
     setTerminalLayout({ terminalSessionId: undefined });
     scheduleSessionSave();
     await vi.runAllTimersAsync();
@@ -655,7 +655,7 @@ describe("window commands", () => {
     expect(browserSelection.path).toBe("notes/today.md");
   });
 
-  test("download routes to fileOps.downloadPathWithProgress with the server-resolved is_dir (A4)", () => {
+  test("download routes to fileOps.downloadPathWithProgress with the server-resolved is_dir", () => {
     window.history.replaceState(null, "", "/?w=window-a");
     const spy = vi
       .spyOn(fileOps, "downloadPathWithProgress")
@@ -682,7 +682,7 @@ describe("window commands", () => {
     spy.mockRestore();
   });
 
-  test("upload raises a file picker (the Inspector input's twin), no upload until files are picked (A4)", () => {
+  test("upload raises a file picker (the Inspector input's twin), no upload until files are picked", () => {
     window.history.replaceState(null, "", "/?w=window-a");
     const clickSpy = vi
       .spyOn(HTMLInputElement.prototype, "click")
@@ -704,7 +704,7 @@ describe("window commands", () => {
     uploadSpy.mockRestore();
   });
 
-  test("upload (desktop) opens the native picker and uploads the picked bytes (A4)", async () => {
+  test("upload (desktop) opens the native picker and uploads the picked bytes", async () => {
     window.history.replaceState(null, "", "/?w=window-a");
     // Stub the Tauri global so isTauriDesktop() is true and pick_upload_files
     // returns one file; raiseUploadPicker must take the native-picker branch
@@ -746,7 +746,7 @@ describe("window commands", () => {
     }
   });
 
-  test("upload / download for a DIFFERENT window are ignored (A4)", () => {
+  test("upload / download for a DIFFERENT window are ignored", () => {
     window.history.replaceState(null, "", "/?w=window-a");
     const dl = vi.spyOn(fileOps, "downloadPathWithProgress").mockImplementation(() => {});
     const clickSpy = vi

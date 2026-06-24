@@ -3,8 +3,8 @@
 // devservers — feeding ONE global bulk bar (rendered App-level above the lists).
 // Bulk turn on/off loops the per-kind singular op (the ops are independent +
 // idempotent, so no bulk endpoints are needed); bulk remove runs an ORDERED
-// cross-kind delete (forget served → remove devservers → remove local) so a
-// devserver and its served workspaces tear down in the order @@Alex asked for.
+// cross-kind delete (forget served -> remove devservers -> remove local) so a
+// devserver and its served workspaces tear down in dependency order.
 // Served rows carry their owning `devserverId` so the delete is self-sufficient
 // and immune to the live window-watch re-fetch dropping a row mid-bulk. Partial
 // failures are counted and surfaced; the per-row quick actions stay the
@@ -112,7 +112,7 @@ async function runBulk(
  * tenant, a served workspace toggles on its owning devserver, a devserver
  * connects/disconnects. Bulk-off stays a fail-safe — an unforced off that 409s
  * (live terminals) just counts as a failure; never a per-item confirm, never a
- * force-kill (phase-35 F6 deferral). The single-row Off confirm is where that
+ * force-kill. The single-row Off confirm is where that
  * path lives. */
 export async function bulkSetOnAll(on: boolean): Promise<void> {
   if (selection.busy) return;
@@ -139,8 +139,7 @@ export function cancelBulkDelete(): void {
   selection.confirmingDelete = false;
 }
 
-/** Ordered cross-kind bulk remove (the order is deliberate, confirmed with
- * @@Alex):
+/** Ordered cross-kind bulk remove (the order is deliberate):
  *   1. Forget every selected SERVED workspace — a desktop action that REQUIRES
  *      the devserver still connected (it tells the remote to unmount+drop), so
  *      it must run before the devserver removal below disconnects it.

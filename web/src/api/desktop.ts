@@ -2,7 +2,7 @@
 ///
 /// chan ships as both a browser SPA (served by chan-server over
 /// http) and a chan-desktop Tauri webview. Most UX is identical
-/// across the two; this module is the small seam where surfaces
+/// across the two; this module is the bridge where surfaces
 /// need to dispatch differently (window reload, DevTools, etc.).
 
 import {

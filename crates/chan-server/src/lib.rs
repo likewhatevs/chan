@@ -59,7 +59,7 @@ pub use chan_library::desktop_window_ops::{
 };
 /// Re-export the single-sourced shell resolver so the desktop (which deps
 /// chan-server, not chan-library directly) can call `chan_server::user_shell()`
-/// for its PATH-harvest helper (D6). Unix-only, matching the chan-library gate.
+/// for its PATH-harvest helper. Unix-only, matching the chan-library gate.
 #[cfg(unix)]
 pub use chan_library::user_shell;
 pub use chan_library::window_titles::{SharedWindowTitles, WindowMeta, WindowTitles};
@@ -327,7 +327,7 @@ fn format_index_progress(event: &ProgressEvent, verbose: bool) -> String {
 /// Prime the Windows Git BASH discovery cache off the async request path.
 /// Discovery shells out (`git --exec-path`, `reg query`, `where bash`) with
 /// blocking process spawns; resolving it lazily on the first terminal create
-/// would run those on a tokio worker and freeze the embedded SPA (W1). Fire it
+/// would run those on a tokio worker and freeze the embedded SPA. Fire it
 /// on a blocking thread at server-build time — before the router accepts any
 /// request — so the spawn-gate cache read is instant. A no-op off Windows.
 fn prime_terminal_shell() {
@@ -979,7 +979,7 @@ fn terminal_router(state: Arc<AppState>) -> Router {
         .with_state(state)
 }
 
-/// chan-server's implementation of chan-library's tenant-construction seam.
+/// chan-server's implementation of chan-library's tenant-construction boundary.
 /// `WorkspaceHost` holds an `Arc<dyn TenantBuilder>` and calls these to mount a
 /// tenant; they wrap [`build_app`]/[`build_terminal_app`] and adapt the
 /// route-layer `AppArtifacts` to the host-facing `TenantArtifacts`.

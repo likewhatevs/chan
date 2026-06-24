@@ -108,7 +108,7 @@ pub fn launcher_router(
             "/api/library/windows/:window_id/hide",
             post(handle_hide_library_window),
         )
-        // Theme 5: SET the server-persisted visibility (the durable source of
+        // SET the server-persisted visibility (the durable source of
         // truth the desktop mirrors on connect). Distinct from /open + /hide
         // above, which dispatch a desktop-bridge op on the NATIVE window and do
         // NOT persist.
@@ -197,7 +197,7 @@ pub fn launcher_router(
             serve_addr: serve_addr.clone(),
         }));
     // Captured before `host` is moved into the devservers state below: the
-    // surface-bearer gate (C8) needs the host to validate a window's per-tenant
+    // surface-bearer gate needs the host to validate a window's per-tenant
     // token against the live tenants.
     let host_for_surface = host.clone();
     // Devservers: list on BOTH surfaces (a registry-less surface returns empty);
@@ -213,7 +213,7 @@ pub fn launcher_router(
             put(handle_update_devserver).delete(handle_remove_devserver),
         )
         .with_state(Arc::new(LauncherState { host, serve_addr }));
-    // C8: the launcher-MANAGEMENT routes (windows / workspaces / devservers) stay
+    // The launcher-management routes (windows / workspaces / devservers) stay
     // gated on the launcher token. The local-color (`config`) routes set the
     // surface's OWN cosmetic colour from a pane menu, called by whatever window
     // is open — which carries a per-TENANT token, not the launcher token — so
@@ -281,7 +281,7 @@ async fn require_launcher_bearer(token: String, req: Request<Body>, next: Next) 
 /// focus-border menu — and a window is served with its per-TENANT token, not the
 /// launcher token (`desktop/serve.rs` `?t={record.token}`). A launcher-only gate
 /// therefore hard-401s every real window's GET/PUT/watch, so the colour never
-/// persists and a fresh window seeds blue (C8). Accepts the same `Bearer` header
+/// persists and a fresh window seeds blue. Accepts the same `Bearer` header
 /// and watch-WS `?t=` forms; comparisons are constant-time. A shared chan-server
 /// route, so this admits BOTH local and devserver windows in one place.
 async fn require_surface_bearer(
@@ -429,7 +429,7 @@ struct SetVisibility {
 }
 
 /// `POST /api/library/windows/{window_id}/visibility` `{hidden}`: set the
-/// window's SERVER-PERSISTED visibility (Theme 5), the source of truth the
+/// window's server-persisted visibility, the source of truth the
 /// desktop mirrors on connect. The registry change bridge fires the watch, so
 /// every client's feed reflects the new visibility. 204 on success; 404 when no
 /// window has that id. Distinct from `/open` + `/hide`, which dispatch a
@@ -909,8 +909,8 @@ async fn handle_workspace_off(
     // Live terminals would be killed by the unmount — confirm first, in parity
     // with the devserver off: an unforced off of a workspace with live terminals
     // answers 409 + the shared `live_terminals` body the launcher already parses;
-    // the launcher then retries with `force: true`. (OFF still PRESERVES the
-    // window records per B3 — only the close is gated, not the records.)
+    // the launcher then retries with `force: true`. OFF still preserves the
+    // window records; only the close is gated.
     let active_terminals = state.host.tenant_terminal_session_count(&prefix);
     if active_terminals > 0 && !force {
         return (
@@ -1090,7 +1090,7 @@ async fn handle_set_local_color(
     };
     match store.set(body.color) {
         Ok(()) => {
-            // Theme 6: broadcast the change so every open window of this library
+            // Broadcast the change so every open window of this library
             // live-updates its `--pane-highlight-color` (and new windows read
             // fresh), replacing the desktop's old per-library colour poll.
             state.host.notify_local_color_change();
@@ -1410,7 +1410,7 @@ mod devserver_route_tests {
     #[tokio::test]
     async fn add_devserver_carries_no_color_but_round_trips_auto_hide_control() {
         // The add/edit form no longer carries `color` (set from the focus-border
-        // flow), but it DOES carry `auto_hide_control` (W4), echoed back.
+        // flow), but it DOES carry `auto_hide_control`, echoed back.
         let reg = Arc::new(FakeRegistry::default());
         let router = router_with(Some(reg), true);
         let (status, body) = request(
@@ -1514,7 +1514,7 @@ mod devserver_route_tests {
 
     #[tokio::test]
     async fn local_workspace_off_confirms_on_live_terminals_then_force_offs() {
-        // B8 parity with the devserver off: an UNforced local off of a workspace
+        // Parity with the devserver off: an unforced local off of a workspace
         // with live terminals → 409 `live_terminals` (the shared shape the
         // launcher already parses); retry with force:true → 204.
         let cfg = tempfile::tempdir().unwrap();
@@ -1708,7 +1708,7 @@ mod window_op_route_tests {
 
     #[tokio::test]
     async fn visibility_route_sets_persisted_hidden() {
-        // Theme 5: the /visibility route persists the field directly (no desktop
+        // The /visibility route persists the field directly (no desktop
         // bridge) and the feed reflects it. Install a registry + mint a window.
         let host = Arc::new(WorkspaceHost::new(library(), crate::route_builder()));
         let store = tempfile::tempdir().unwrap();
@@ -1763,7 +1763,7 @@ mod window_op_route_tests {
         assert_eq!(status, StatusCode::NOT_FOUND, "unknown id");
     }
 
-    /// Theme 6: setting the colour fires the dedicated `local_color_notify` (the
+    /// Setting the colour fires the dedicated `local_color_notify` (the
     /// signal `local-color/watch` awaits) AND the new value is immediately
     /// readable. The WS push loop (`watch_local_color`) is a line-for-line mirror
     /// of the window watch; this covers the new wiring (set ⇒ broadcast signal ⇒

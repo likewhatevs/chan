@@ -298,7 +298,7 @@ pub fn install_bin_shims() -> std::io::Result<u32> {
     if matches!(kind, InstallKind::None) {
         return Ok(0);
     }
-    // CHAN_HOME-aware (D9 / W8): `$CHAN_HOME/.local/bin` when CHAN_HOME is set, else
+    // CHAN_HOME-aware: `$CHAN_HOME/.local/bin` when CHAN_HOME is set, else
     // `$HOME/.local/bin` (byte-identical to the old inlined path when unset). `None`
     // only when neither base resolves — then there's nowhere to install, so no-op.
     let Some(bin_dir) = chan_workspace::paths::local_bin_dir() else {

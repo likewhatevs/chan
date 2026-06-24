@@ -475,7 +475,7 @@ describe("tab close confirmation", () => {
     expect(activePane().activeTabId).toBe(reopened.id);
   });
 
-  test("reopens a closed File Browser tab with its expanded dirs + view state (F3)", async () => {
+  test("reopens a closed File Browser tab with its expanded dirs + view state", async () => {
     // Close + reopen both run the tab through cloneTab; the browser
     // branch must carry the per-tab view state or Cmd+Shift+T snaps the
     // restored File Browser back to a collapsed root.
@@ -2067,7 +2067,7 @@ describe("find state", () => {
   });
 });
 
-describe("terminal keyboard-protocol survival (BUG-3)", () => {
+describe("terminal keyboard-protocol survival", () => {
   test("a fresh spawn creates a zero-state protocol on the tab", () => {
     const tab = terminalTab();
 
@@ -2208,7 +2208,7 @@ describe("terminal session serialization", () => {
     expect(tab.lastAgentEchoSeq).toBe(12);
   });
 
-  test("round-trips the negotiated keyboard protocol in session layouts (BUG-3 reload)", async () => {
+  test("round-trips the negotiated keyboard protocol in session layouts", async () => {
     const src = terminalTab({ title: "agent", terminalSessionId: "term_123" });
     // The agent negotiated xterm modifyOtherKeys; this is what a reload
     // reattaching past the replay window must keep so Shift+Enter inserts
@@ -3498,7 +3498,7 @@ describe("openInPane content peek (open any plaintext, refuse binary)", () => {
   });
 });
 
-describe("openLinkTarget (F1: resolve a wiki/link stem before opening)", () => {
+describe("openLinkTarget resolves a wiki/link stem before opening", () => {
   test("opens the resolve-link path, not the raw `[[note]]` stem", async () => {
     resetLayout([]);
     // The pill rendered because resolve-link found `notes/note.md`; the

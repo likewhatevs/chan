@@ -424,7 +424,7 @@ mod tests {
 
     #[test]
     fn validate_response_wire_pins_devserver_id() {
-        // W1 cross-service contract: devserver-proxy keys the registry
+        // Cross-service contract: devserver-proxy keys the registry
         // and the devserver-gate `drv` claim on this exact JSON field
         // name. Renaming it is a silent, compile-green break, so pin the
         // wire string here.

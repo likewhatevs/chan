@@ -39,9 +39,9 @@ describe("terminal protocol invariants", () => {
     expect(route).toMatch(/ClientFrame::Resize \{ cols, rows \}[\s\S]*?session\.resize\(pty_size\(Some\(cols\), Some\(rows\)\)\)/);
   });
 
-  test("terminal-generated replies bypass broadcast and duplicate replay replies are gated", () => {
+  test("terminal-generated replies bypass broadcast and are not replay-gated", () => {
     expect(tab).toContain("routeXtermData(data, ptyWrites, sendInput, sendUserInput)");
-    expect(tab).toContain("suppressAttachReplayGeneratedReplies");
-    expect(tab).toContain("attachPtyWriteOrigin()");
+    expect(tab).not.toContain("replayingReattach");
+    expect(tab).not.toContain("clearReplayWhenDrained");
   });
 });

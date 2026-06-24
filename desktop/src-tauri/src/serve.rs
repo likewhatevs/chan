@@ -70,7 +70,7 @@ impl ServeHandle {
 /// open`: the user wants a window), false for the BOOT re-serve (restore the
 /// persisted set only). On boot, a workspace that is on but whose windows were
 /// all CLOSED has no record; minting there would RE-OPEN a window the user
-/// closed (the Bug-C restart regression). A buried/hidden window keeps its
+/// closed. A buried/hidden window keeps its
 /// record, so the watcher restores it honoring `should_show`'s `!hidden`.
 pub async fn start(
     app: AppHandle,
@@ -105,7 +105,7 @@ pub async fn start(
     // stable window_id — restoring each window's tabs. The BOOT re-serve passes
     // `mint_first_window=false`: it RESTORES the persisted set only, never mints —
     // a workspace whose windows were all CLOSED has no record, and minting there
-    // would re-open a window the user closed (Bug-C). The registry is the sole
+    // would re-open a window the user closed. The registry is the sole
     // window-creation authority; there is no imperative window build. LOCAL records
     // only: the merged set now includes connected devservers' windows, and a remote
     // workspace served at the SAME absolute path (common with `ssh -L` boxes) would
@@ -262,7 +262,7 @@ pub fn is_workspace_webview_label(label: &str) -> bool {
 /// bare per-library session key, decoupled from the OS-window label. Local
 /// tenants are always up, so the tenant URL loads directly (no connecting
 /// screen). An off workspace carries an empty token and the SPA turns it on
-/// before attaching (O-W2).
+/// before attaching.
 pub(crate) fn open_watched_local_window(
     app: &AppHandle,
     addr: SocketAddr,
@@ -411,7 +411,7 @@ pub async fn spawn_local_terminal_window(state: Arc<AppState>) -> Result<String,
 
 /// A spawned control terminal: its terminal tenant prefix, used to scrape the
 /// token the connect script prints, to mint the control window's chan-library
-/// registry row (UNIFY/ARCH), and to reap the tenant on disconnect. The window is
+/// registry row, and to reap the tenant on disconnect. The window is
 /// addressed by its deterministic `control_terminal_label`, so the struct doesn't
 /// carry the label.
 pub struct ControlTerminal {
@@ -477,13 +477,12 @@ pub fn control_terminal_label(devserver_id: &str) -> String {
 /// scheme), so an id that is itself a live label OR already contains `::` is
 /// used verbatim. Otherwise match the native window whose label ends with
 /// `::{id}` — among the OPEN windows AND the buried list. A buried WATCHED window
-/// (local:: AND, since D2, the devserver `lib-<hex>::` family) has no live webview
+/// (local:: and the devserver `lib-<hex>::` family) has no live webview
 /// — the reconcile destroyed it on bury — so it can't be found among the open
-/// windows; its full composite label lives in the buried list (B4: a buried
-/// devserver standalone terminal otherwise fell to the `local::` fallback and the
-/// dot couldn't reopen it — the view-driven un-bury in [`open_window_by_label`]
-/// needs the real `lib-<hex>::` label). Only a bare id matching NEITHER falls back
-/// to the `local::` composite.
+/// windows; its full composite label lives in the buried list so a buried
+/// devserver standalone terminal does not fall to the `local::` fallback. The
+/// view-driven un-bury in [`open_window_by_label`] needs the real `lib-<hex>::`
+/// label. Only a bare id matching NEITHER falls back to the `local::` composite.
 pub(crate) fn resolve_window_label(app: &AppHandle, id: &str) -> String {
     // A live window whose exact label IS `id` wins — covers `cs window` passing a
     // legacy `terminal-`/`workspace-` label that carries no `::`.
@@ -523,10 +522,10 @@ pub fn open_window_by_label(
     let label = label.as_str();
     // A watched window — LOCAL (`local::`) OR a DEVSERVER (`lib-<hex>::`) — un-buries
     // through its watcher view: its bury DESTROYED the native window (the reconcile
-    // closed it — `local::` locally, `lib-` via the devserver view in D2), so there
+    // closed it — `local::` locally, `lib-` via the devserver view), so there
     // is NO webview to `show()`. `unbury_window` flips the right view and the
     // reconcile reopens it at its `window_id`. This must run even when there is no
-    // live webview, so it precedes the `get_webview_window` check below. B4: the
+    // live webview, so it precedes the `get_webview_window` check below. The
     // dot-show of a buried devserver STANDALONE terminal is `lib-<hex>::…` with a
     // destroyed webview — without the `lib-` arm it missed this AND the
     // `get_webview_window` check, and fell to the workspace-only fallback (reopening
@@ -849,7 +848,7 @@ fn build_workspace_window(app: &AppHandle, spec: WindowSpec<'_>) -> Result<(), S
     if !library_id.is_empty() {
         parsed.query_pairs_mut().append_pair("lib", library_id);
     }
-    // `pane=<hex>` is the window's library pane-highlight colour (seam #5): the
+    // `pane=<hex>` is the window's library pane-highlight colour: the
     // host's `pane_color` resolves the two sources behind one call — local
     // (the installed `LocalColorStore`) vs a devserver (`DevserverEntry.color`
     // matched by `library_id`). The editor reads it on boot to tint the
@@ -860,7 +859,7 @@ fn build_workspace_window(app: &AppHandle, spec: WindowSpec<'_>) -> Result<(), S
             .state::<Arc<AppState>>()
             .embedded()
             .and_then(|embedded| embedded.pane_color(library_id));
-        // Theme-6 Bug-A diagnostic: log whether `?pane=` is injected at build. A
+        // Diagnostic: log whether `?pane=` is injected at build. A
         // `Some` here proves the desktop injects the colour at mint time (so a
         // new window blue-flashing is the web/ live-null revert, not a missing
         // injection); a `None` means the colour source (local store / devserver
@@ -1013,7 +1012,7 @@ fn build_workspace_window(app: &AppHandle, spec: WindowSpec<'_>) -> Result<(), S
                     // and never reach this branch.
                     WindowEvent::CloseRequested { api, .. } => {
                         let state = app_for_close.state::<Arc<AppState>>();
-                        // A5: a launcher status-dot hide routes through this same
+                        // A launcher status-dot hide routes through this same
                         // close path (so the bury handler runs) but is its own
                         // explicit hide gesture — consume its one-shot flag here so
                         // the bury below skips the teaching notice. A genuine
@@ -1067,7 +1066,7 @@ fn build_workspace_window(app: &AppHandle, spec: WindowSpec<'_>) -> Result<(), S
                                 view.bury(&label_for_close);
                             }
                             state.bury_window(&label_for_close, &title);
-                            // Theme-5: persist hidden=true so the local window menu's
+                            // Persist hidden=true so the local window menu's
                             // Open/Hidden split + a relaunch mirror it (routes local:: -> embedded).
                             crate::persist_window_hidden(&state, &label_for_close, true);
                             crate::rebuild_window_menu(&app_for_close);
@@ -1080,7 +1079,7 @@ fn build_workspace_window(app: &AppHandle, spec: WindowSpec<'_>) -> Result<(), S
                         // bury it through THAT devserver's watcher view (mirror
                         // local:: above) so its reconcile CLOSES the webview —
                         // dropping the `/ws`, so the remote pushes `connected:false`
-                        // and the launcher dot reflects hidden (D2). The old path
+                        // and the launcher dot reflects hidden. The old path
                         // (`window.hide()` below) kept the webview + `/ws` alive, so
                         // the dot stayed green on both dot-hide and OS-close. The
                         // record stays, reopenable from the Window menu / the dot.
@@ -1103,7 +1102,7 @@ fn build_workspace_window(app: &AppHandle, spec: WindowSpec<'_>) -> Result<(), S
                                     view.bury(&label_for_close);
                                 }
                             }
-                            // Override the feed `connected` to hidden (B1) + re-push,
+                            // Override the feed `connected` to hidden and re-push,
                             // so the launcher dot flips even for a standalone terminal
                             // whose remote `/ws` never reports disconnected.
                             if state.devserver_feed.set_buried(&label_for_close, true) {
@@ -1112,7 +1111,7 @@ fn build_workspace_window(app: &AppHandle, spec: WindowSpec<'_>) -> Result<(), S
                                 }
                             }
                             state.bury_window(&label_for_close, &title);
-                            // Theme-5: persist hidden=true to the OWNING devserver
+                            // Persist hidden=true to the owning devserver
                             // (routes lib-<hex>:: -> its remote /visibility route) so
                             // the next connect mirrors it.
                             crate::persist_window_hidden(&state, &label_for_close, true);
@@ -1171,7 +1170,7 @@ fn build_workspace_window(app: &AppHandle, spec: WindowSpec<'_>) -> Result<(), S
                         let title = window.title().unwrap_or_else(|_| label_for_close.clone());
                         let _ = window.hide();
                         state.bury_window(&label_for_close, &title);
-                        // Theme-5: persist hidden=true for windows with a registry
+                        // Persist hidden=true for windows with a registry
                         // row — the control terminal (routes control-terminal- ->
                         // embedded). The control row's visibility is now uniform with
                         // all windows (this replaces the old set_control_connected
@@ -1208,7 +1207,7 @@ fn build_workspace_window(app: &AppHandle, spec: WindowSpec<'_>) -> Result<(), S
                         // A watcher-buried window destroyed here was buried by its
                         // reconcile (the user hid it); KEEP it in the reopen menu.
                         // Check the LOCAL view for `local::` windows and the owning
-                        // DEVSERVER view for `lib-<hex>::…` windows (D2) — a hidden
+                        // DEVSERVER view for `lib-<hex>::…` windows; a hidden
                         // devserver window is reopenable while connected. Only a
                         // real teardown/discard (in NO watcher bury set — e.g. the
                         // view was already dropped on disconnect) drops it.
@@ -1722,12 +1721,12 @@ mod tests {
 
     #[test]
     fn resolve_label_matches_a_bare_id_to_a_buried_devserver_label() {
-        // B4: a buried DEVSERVER standalone terminal's webview was DESTROYED (D2),
-        // so it is NOT in the open set — but `resolve_window_label` adds the buried
-        // list to the candidates, so the bare id resolves to its real `lib-<hex>::`
-        // label (not the `local::` fallback), letting the dot-show un-bury via the
-        // devserver view instead of falling to the workspace-only path (reopening
-        // nothing). The buried composite is the only candidate here (no open webview).
+        // A buried DEVSERVER standalone terminal's webview was destroyed, so it is
+        // NOT in the open set. `resolve_window_label` adds the buried list to the
+        // candidates, so the bare id resolves to its real `lib-<hex>::` label (not
+        // the `local::` fallback), letting the dot-show un-bury via the devserver
+        // view instead of falling to the workspace-only path. The buried composite
+        // is the only candidate here (no open webview).
         let candidates = vec!["lib-abc::w-7".to_string()];
         assert_eq!(resolve_label_from("w-7", &candidates), "lib-abc::w-7");
     }
@@ -2471,7 +2470,7 @@ mod tests {
 
     #[test]
     fn launcher_event_capability_grants_listen_to_remote_served_launcher() {
-        // C2 / seam 3: the launcher SPA is REMOTELY served from the embedded
+        // The launcher SPA is REMOTELY served from the embedded
         // chan-server loopback (the main window loads `WebviewUrl::External
         // http://127.0.0.1:<port>/`). A Tauri capability reaches remotely-loaded
         // content only when it declares `remote.urls`; default.json has none, so

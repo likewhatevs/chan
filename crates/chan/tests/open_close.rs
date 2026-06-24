@@ -1,12 +1,12 @@
-//! Cross-process proof of `chan close` (the W5 mechanism, contracts.md
-//! Amendment 1/3): a SEPARATE `chan open --standalone` process holds a
+//! Cross-process proof of `chan close`: a SEPARATE `chan open --standalone`
+//! process holds a
 //! workspace's writer flock and its per-pid control socket; `chan close
 //! <path>` discovers that process from the on-disk `writer.lock` record
 //! (`{pid, …}`) → its control socket (`$TMPDIR/chan-control-<pid>-*.sock`),
 //! sends the `Close` verb, and the serve process exits + releases the flock.
 //!
-//! @@Alex's requirement, verbatim: "On a workspace that is being served,
-//! calling `close` will send the signal to tear down the other one."
+//! Requirement under test: on a workspace that is being served, calling
+//! `close` sends the signal that tears down the serving process.
 //!
 //! Isolation: a throwaway `HOME` redirects the whole `~/.chan` library, and a
 //! shared socket dir is set as BOTH `TMPDIR` and `XDG_RUNTIME_DIR` on the serve
@@ -231,7 +231,7 @@ fn close_tears_down_the_separate_serve_process() {
         String::from_utf8_lossy(&out.stdout),
     );
 
-    // Assert 1 — the thing @@Alex wants proven: the OTHER process exits, because
+    // Assert the separate serve process exits because
     // `close` reached it over its control socket (Close → shutdown_tx →
     // graceful exit). Not this process; the separate serve we spawned.
     assert!(

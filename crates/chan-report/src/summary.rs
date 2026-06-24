@@ -2,8 +2,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::cocomo::CocomoSummary;
 
-/// Source-code-shaped classification axis. The graph overhaul's
-/// G6 colour scheme needs to distinguish markdown notes from
+/// Source-code-shaped classification axis. The graph colour scheme
+/// needs to distinguish markdown notes from
 /// source-code files (different colour for each); this enum is
 /// the axis chan-report owns.
 ///
@@ -20,12 +20,12 @@ use crate::cocomo::CocomoSummary;
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum FileBucket {
-    /// `.md` files. Notes. Graph G6 colour: orange.
+    /// `.md` files. Notes. Graph colour: orange.
     Markdown,
     /// Anything else `tokei` recognizes: Rust, Python, TypeScript,
     /// JSON, TOML, shell scripts, Makefile, Dockerfile, LICENSE,
     /// .gitignore, etc. The `language` is `tokei::LanguageType::name()`
-    /// so consumers can group / display per-language. Graph G6
+    /// so consumers can group / display per-language. Graph
     /// colour: royalblue.
     SourceCode { language: String },
 }
@@ -50,7 +50,7 @@ pub struct FileStats {
     pub bytes: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mtime: Option<String>,
-    /// Source-code-shaped classification axis for the graph's G6
+    /// Source-code-shaped classification axis for the graph's
     /// colour scheme. Optional + serde-skipped when None so older
     /// JSONL files (written before this field existed)
     /// load cleanly under the same SCHEMA_VERSION; the field

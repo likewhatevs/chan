@@ -89,7 +89,7 @@ describe("applyInitialPaneColor", () => {
   });
 });
 
-describe("applyLivePaneColor (Theme 6 colour-watch apply)", () => {
+describe("applyLivePaneColor colour-watch apply", () => {
   test("sets the CSS var from a valid hex frame", () => {
     applyLivePaneColor("#e58c4d");
     expect(document.documentElement.style.getPropertyValue(CSS_VAR)).toBe("#e58c4d");
@@ -114,16 +114,15 @@ describe("applyLivePaneColor (Theme 6 colour-watch apply)", () => {
   });
 });
 
-// C8 / seam 5: 2+ windows of the same library (incl. split panes — the var is
+// Two or more windows of the same library (incl. split panes — the var is
 // on the document root, so every pane in a window reads it) must converge on
 // the library's non-blue focus border and never fall back to default blue. The
 // per-call tests above lock each apply() in isolation; these lock the ORDERED
 // sequences the real multi-window race produces (seed, then the watch's
 // push-on-connect + reconnect storms), which is where the stuck-blue bug lives.
-// @@Desktop D5 fixes the SEED freshness on the 2nd window; this side guarantees
-// that once a valid colour is present (from seed OR a live push) no later
-// null/late push reverts it to blue.
-describe("C8 multi-window live-apply consistency", () => {
+// Once a valid colour is present (from seed OR a live push), no later
+// null/late push may revert it to blue.
+describe("multi-window live-apply consistency", () => {
   const get = () => document.documentElement.style.getPropertyValue(CSS_VAR);
 
   test("a seeded window keeps its colour through a reconnect's null push", () => {
@@ -138,7 +137,7 @@ describe("C8 multi-window live-apply consistency", () => {
   });
 
   test("a 2nd window with NO seed is coloured by the watch's push-on-connect", () => {
-    // The desktop seed can lag on the 2nd same-library window (the D5 bug); the
+    // The desktop seed can lag on the 2nd same-library window; the
     // live watch's push-on-connect must still bring it to the library colour
     // (never leave it stuck on the default blue accent).
     setSearch("?t=token"); // no ?pane=
@@ -227,7 +226,7 @@ describe("seedInitialFocusColor boot-seed", () => {
   });
 });
 
-// S4 / consume-uniform: the live watch must sync the focus-colour MENU (and thus
+// The live watch must sync the focus-colour menu (and thus
 // new split panes' `data-focus-color`) to a pushed colour, not just the CSS var
 // — else the checkmark + a fresh split disagree with the recoloured border.
 describe("syncLiveFocusColorMenu (live watch → menu)", () => {

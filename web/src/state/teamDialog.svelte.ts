@@ -215,7 +215,7 @@ export function defaultTabGroupFromPath(teamDir: string): string {
   return base || "chan-team";
 }
 
-/// Auto-assign (E1): distribute every member NOT already placed in a cell
+/// Auto-assign: distribute every member NOT already placed in a cell
 /// across the split grid's cells, filling the least-populated cell each time
 /// (so empty cells fill first, then it balances). Members already dropped into
 /// a cell stay put. Pure: returns a fresh slots array, the input untouched.

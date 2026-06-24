@@ -1,7 +1,7 @@
 //! The desktop window watcher — chan-desktop as a pure view of the library.
 //!
 //! Every native window is a reconciled reflection of the library's authoritative
-//! window set (Seam W). A `LibraryWatcher` per connected library (the embedded
+//! window set. A `LibraryWatcher` per connected library (the embedded
 //! local library + each devserver) holds the latest [`WindowRecord`] snapshot and
 //! [`reconcile`]s the native surface to it: open a native window for every library
 //! window that lacks one, close every native window the library no longer lists.
@@ -10,9 +10,9 @@
 //! windows` / `teardown_devserver_windows` / `track_devserver_window` + the in-memory
 //! `devserver_windows` map). Because the reconcile is an idempotent diff keyed by the
 //! library-minted id, **reconnect = resubscribe + reconcile can never mint a
-//! duplicate** — the L0 always-mint growth path is unreachable by construction.
+//! duplicate** by construction.
 //!
-//! Wiring (lands with G1.5/G2): the local library feeds in-process via
+//! Wiring: the local library feeds in-process via
 //! `host.assemble_window_records()` + the registry's change `Notify`; a devserver
 //! feeds over `GET /api/library/windows` + its watch socket. Both drive the same
 //! [`reconcile`]. This module is the surface-agnostic core; the Tauri-side
@@ -20,7 +20,7 @@
 //!
 //! The reconcile core + loop are consumed by the per-library watcher wiring (the
 //! `WindowFeed` impls, the Tauri `NativeSurface` impl, the `watch_loop` spawn) and
-//! the L5 close handlers (bury/unbury through the view state).
+//! the close handlers (bury/unbury through the view state).
 
 use std::collections::HashSet;
 use std::future::Future;
@@ -30,7 +30,7 @@ use chan_server::WindowRecord;
 use tokio::sync::Notify;
 
 /// The composite native-window key. `window_id` is unique only within its minting
-/// library (Amendment W1: libraries mint independently, no global authority), so the
+/// library (libraries mint independently; there is no global authority), so the
 /// globally-unique native key is `{library_id}::{window_id}`. This string IS the
 /// Tauri window label; the `?w=` value is the **bare** `window_id` (decoupled — the
 /// per-library SPA/session/presence key). `library_id` ∈ {`local`, `lib-<hex>`} and
@@ -54,11 +54,11 @@ pub trait NativeSurface {
 }
 
 /// Whether the reconcile surfaces `record` as a native window: persisted, not
-/// **server-hidden** (Theme 5), not **locally buried**, and backed by a **live
+/// **server-hidden**, not **locally buried**, and backed by a **live
 /// tenant** (a non-empty `token`).
-/// `record.hidden` is the SERVER-PERSISTED visibility (Theme 5) — the source of
+/// `record.hidden` is the server-persisted visibility, the source of
 /// truth a connect MIRRORS, so a window hidden last session stays hidden on the
-/// next connect/relaunch. Bury is the desktop-local view state (L5) layered on
+/// next connect/relaunch. Bury is the desktop-local view state layered on
 /// top for immediate in-session feedback before the persist round-trips through
 /// the feed; the browser has no native windows, so it lives only in this
 /// process's `buried` set. The token gate IS the workspace on/off lifecycle: an
@@ -130,8 +130,8 @@ pub trait WindowFeed {
 }
 
 /// Desktop-local view state the watcher reconciles around. **Bury is
-/// desktop-local** (L5 / @@Lead ruling #1): the browser has no native windows,
-/// so a buried window lives only in this set, never in Seam W. Mutating it fires
+/// desktop-local**: the browser has no native windows, so a buried window lives
+/// only in this set, never in the authoritative window set. Mutating it fires
 /// `changed` so the loop re-reconciles without waiting on a feed change.
 #[derive(Default)]
 pub struct WatcherViewState {
@@ -299,7 +299,7 @@ mod tests {
 
     #[test]
     fn server_hidden_record_is_not_opened_and_is_closed() {
-        // Theme 5: a record with the server-persisted `hidden` flag is NOT
+        // A record with the server-persisted `hidden` flag is NOT
         // surfaced — `should_show` is false, so the reconcile neither opens it on
         // connect nor keeps a native window for it (the mirror: hidden last
         // session stays hidden). The local `buried` set is empty here, so `hidden`
@@ -316,8 +316,8 @@ mod tests {
 
     #[test]
     fn reattach_is_idempotent_no_duplicate() {
-        // The L0 bug-can't-happen test: a native window already exists for the id,
-        // and the same snapshot re-applies (reconnect = resubscribe + reconcile).
+        // A native window already exists for the id, and the same snapshot
+        // re-applies (reconnect = resubscribe + reconcile).
         let s = FakeSurface::with(&["local::w-1"]);
         let snap = vec![rec("local", "w-1", WindowKind::Terminal)];
         reconcile("local", &snap, &none(), &s);

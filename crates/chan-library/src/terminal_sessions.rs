@@ -110,7 +110,7 @@ pub struct Registry {
     /// Optional hook fired when [`reap_exited`](Self::reap_exited) reaps a
     /// session that owns a window: the host installs it (on the SHARED terminal
     /// tenant only) to drop the standalone terminal's window-feed row when its
-    /// PTY exits, so it does not linger as a ghost (C4). A workspace tenant
+    /// PTY exits, so it does not linger. A workspace tenant
     /// leaves this unset — a pane's death must never close its workspace window.
     window_reaper: Mutex<Option<WindowReaper>>,
 }
@@ -608,8 +608,8 @@ impl Registry {
             // session that brings none of its own, so the window's terminal
             // runs the command; an explicit per-session command wins.
             //
-            // W5: only a session that inherits the TENANT's default command —
-            // i.e. a single-purpose / devserver CONTROL tenant — echoes the
+            // Only a session that inherits the TENANT's default command
+            // (a single-purpose / devserver CONTROL tenant) echoes the
             // "running: {command}" banner. A per-session command (a team agent
             // terminal spawned via `POST /api/terminals`, or a restart override)
             // is NOT a single-purpose tenant and gets no banner.
@@ -683,8 +683,8 @@ impl Registry {
         if let Some(extra_env) = env {
             opts.env.extend(extra_env);
         }
-        // A restart re-runs the command but does NOT re-echo the W5 banner: the
-        // banner names a tenant's launch command (control connect), while a
+        // A restart re-runs the command but does NOT re-echo the running banner:
+        // the banner names a tenant's launch command (control connect), while a
         // restart override (e.g. the team-bootstrap flip from a host shell to
         // the lead's `claude`) is not a single-purpose-tenant launch.
         let session = Session::spawn(id.to_string(), self.config.clone(), opts, false)
@@ -1225,7 +1225,7 @@ impl Registry {
     pub fn reap_exited(&self) -> usize {
         // Capture each reaped session's owning window_id alongside its id: a
         // standalone terminal window IS its session, so reaping the session must
-        // also drop the window-feed row (C4), and `close` removes the session
+        // also drop the window-feed row, and `close` removes the session
         // before we could read it back.
         let to_reap: Vec<(String, Option<String>)> = {
             let sessions = self.sessions.lock().expect("terminal registry poisoned");
@@ -1527,7 +1527,7 @@ impl Session {
         // Windows: the terminal shell is Git BASH (a hard dependency). Prepend
         // Git's `usr/bin` (+ `mingw64/bin`) so `git` and the coreutils resolve,
         // and the chan bin dir (`%LOCALAPPDATA%\chan\bin`) so the `chan` / `cs`
-        // shims resolve (W2). The shim dir is only ever added to the HKCU PATH
+        // shims resolve. The shim dir is only ever added to the HKCU PATH
         // registry by `cs_install::ensure_on_user_path`, which never reaches
         // this already-running process's inherited env — so prepend it here,
         // independent of registry propagation. Must match `cs_install`'s
@@ -1670,7 +1670,7 @@ impl Session {
             exit_code: Mutex::new(None),
         });
 
-        // W5: a single-purpose / devserver CONTROL tenant echoes a banner naming
+        // A single-purpose / devserver CONTROL tenant echoes a banner naming
         // the command it is about to run, so the user sees the launch command
         // before its output. Recorded into the replay ring HERE — after the
         // session exists but BEFORE the reader thread starts — so the banner is
@@ -2940,7 +2940,7 @@ mod tests {
 
     #[test]
     fn reap_exited_fires_the_window_reaper_for_a_dead_detached_session() {
-        // C4: a standalone terminal's PTY exits while detached → reap_exited
+        // A standalone terminal's PTY exits while detached -> reap_exited
         // closes the session AND fires the window-reaper hook with its
         // window_id, so the host can drop the window-feed row with it.
         let registry = Registry::new(test_config(1024, 4, 10));
@@ -3289,7 +3289,7 @@ mod tests {
 
     #[test]
     fn control_tenant_session_echoes_running_banner_first() {
-        // W5: a session that inherits the TENANT default command (the devserver
+        // A session that inherits the TENANT default command (the devserver
         // control / single-purpose tenant) writes `running: {command}\r\n` as the
         // FIRST ring bytes — before the child's output and so durable across a
         // scrollback replay.

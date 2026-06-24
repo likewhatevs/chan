@@ -89,7 +89,7 @@ impl EmbeddedServer {
             devserver_conns,
             devserver_feed,
         )));
-        // Install the local-library pane-highlight colour store (seam #5) over the
+        // Install the local-library pane-highlight colour store over the
         // SAME shared desktop config the devserver registry uses, so the host reads
         // the local colour when minting local windows and the launcher's
         // local-colour route writes it.
@@ -336,13 +336,13 @@ impl EmbeddedServer {
     }
 
     /// Mint the connect-script control terminal as a real (`persisted:false`)
-    /// chan-library registry row under the DEVSERVER's `library_id` (UNIFY/ARCH).
+    /// chan-library registry row under the DEVSERVER's `library_id`.
     /// The row rides `/api/library/windows` with a real library_id so the launcher
-    /// shows the devserver group on a zero-window connect (Bug-A), and is reaped by
+    /// shows the devserver group on a zero-window connect, and is reaped by
     /// [`reap_control_window`](Self::reap_control_window) on the connect-script PTY
-    /// exit (Bug-B-iii). The native window is still opened imperatively by
-    /// `serve::spawn_control_terminal_window` (Model B); this furnishes only the
-    /// feed row. The row's `(prefix, token, connected)` are resolved at read time
+    /// exit. The native window is still opened imperatively by
+    /// `serve::spawn_control_terminal_window`; this furnishes only the feed row.
+    /// The row's `(prefix, token, connected)` are resolved at read time
     /// from the control tenant, so no token crosses here.
     pub fn mint_control_window(
         &self,
@@ -366,8 +366,8 @@ impl EmbeddedServer {
         self.host.reap_control_window(window_id)
     }
 
-    /// Set the SERVER-PERSISTED visibility of a window in the LOCAL embedded
-    /// registry (Theme 5): a LOCAL window (`local::<window_id>`) or the control
+    /// Set the server-persisted visibility of a window in the LOCAL embedded
+    /// registry: a LOCAL window (`local::<window_id>`) or the control
     /// terminal row (whose `window_id` is its `control_terminal_label`). Persists
     /// to `~/.chan/windows.json` (control rows in-memory) and fires the feed change
     /// so `should_show` + the launcher mirror it. Returns whether a row matched.
@@ -386,11 +386,11 @@ impl EmbeddedServer {
         self.addr
     }
 
-    /// The library's authoritative window set (Seam W), each persisted
+    /// The library's authoritative window set, each persisted
     /// registry row joined with its serving tenant's live `prefix`/`token`/
-    /// `connected`. Since seam #1 this MERGES connected devservers' windows for
+    /// `connected`. This MERGES connected devservers' windows for
     /// the launcher, so it is the right source only for surfaces that want the
-    /// full set (the launcher feed, the B4 Window menu). Empty until a window is
+    /// full set (the launcher feed and the Window menu). Empty until a window is
     /// minted.
     pub fn assemble_window_records(&self) -> Vec<WindowRecord> {
         self.host.assemble_window_records()
@@ -419,7 +419,7 @@ impl EmbeddedServer {
         self.host.library_change_notify()
     }
 
-    /// Install the launcher's connected-devserver feed source (seam #1) so
+    /// Install the launcher's connected-devserver feed source so
     /// `assemble_window_records` + the list-workspaces route merge connected
     /// devservers' windows + workspaces into the local launcher surface.
     pub fn install_devserver_feed(&self, feed: Arc<dyn chan_server::DevserverFeedSource>) {
@@ -433,7 +433,7 @@ impl EmbeddedServer {
         self.host.signal_library_change();
     }
 
-    /// The pane-highlight colour for a window of `library_id` (seam #5): the host
+    /// The pane-highlight colour for a window of `library_id`: the host
     /// resolves the two sources behind one call — local (the installed
     /// [`LocalColorStore`](chan_server::LocalColorStore)) vs a devserver
     /// (`DevserverEntry.color` matched by `library_id` in the devserver registry).
@@ -482,7 +482,7 @@ impl EmbeddedServer {
 
     /// Discard a window: remove its registry row and reap its terminal
     /// sessions, then fire the aggregate change signal so the watcher reconciles
-    /// the native window closed (the L5 discard op — `^W`/`^D`/empty-pane). The
+    /// the native window closed (`^W`/`^D`/empty-pane). The
     /// record is gone, so the watcher never reopens it. Returns whether a row
     /// existed.
     pub fn discard_window(&self, window_id: &str) -> Result<bool, String> {
@@ -524,7 +524,7 @@ fn map_open_error(key: &str, e: chan_server::Error) -> String {
 /// won't persist across relaunch).
 async fn local_terminal_session_dir() -> Option<std::path::PathBuf> {
     let dir = chan_workspace::paths::config_dir().join("terminal-sessions");
-    // `tokio::fs` keeps the dir-create off the runtime thread (async-audit C3):
+    // `tokio::fs` keeps the dir-create off the runtime thread:
     // `open_terminal` is async, so a blocking `std::fs::create_dir_all` would
     // stall the event loop.
     tokio::fs::create_dir_all(&dir).await.ok()?;

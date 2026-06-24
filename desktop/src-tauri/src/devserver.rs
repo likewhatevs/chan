@@ -86,7 +86,7 @@ pub struct DevserverInfo {
     /// Human label for the box, shown in the `[DEVSERVER {host}]` header
     /// once connected.
     pub host_label: String,
-    /// The devserver library's `library_id` (UNIFY/ARCH, Bug-A): supplied at
+    /// The devserver library's `library_id`: supplied at
     /// connect so the desktop can mint the control terminal as a registry row
     /// under it even on a zero-window connect (no window record to learn it from).
     #[serde(default)]
@@ -346,7 +346,7 @@ struct LocalColorResponse {
 /// (`#rrggbb`), or `None` for the default accent. Fetched ONCE on connect to warm
 /// the desktop's per-devserver colour cache BEFORE the window watcher opens any
 /// window, so a devserver window seeds its `?pane=` colour from the first build
-/// instead of flashing blue until the async colour watch pushes (C8 / D5). The
+/// instead of flashing blue until the async colour watch pushes. The
 /// colour watch (`stream_color_feed`) keeps it live thereafter.
 pub async fn fetch_local_color(conn: &DevserverConn) -> Result<Option<String>, String> {
     let url = format!(
@@ -390,7 +390,7 @@ fn row_from_entry(
     })
 }
 
-/// One row of `GET /api/devserver/windows` (contracts.md Amendment 8): a
+/// One row of `GET /api/devserver/windows`: a
 /// PERSISTED workspace window the desktop enumerates to offer CLOSED-but-
 /// persisted windows for reopen in the Window menu. Deserialized 1:1 from the
 /// frozen wire; `title` is optional (mirrors `WindowInfo`). `prefix` + the
@@ -407,7 +407,7 @@ pub struct DevserverWindowRow {
     pub saved: bool,
 }
 
-/// `GET /api/devserver/windows` (Amendment 8): every PERSISTED window across all
+/// `GET /api/devserver/windows`: every PERSISTED window across all
 /// of the devserver's tenants, with the live `connected`/`saved` flags + the
 /// current per-mount token. Authed like the rest. Persisted-only by construction
 /// (a discarded window's blob is already gone server-side), so the desktop only
@@ -433,7 +433,7 @@ pub async fn fetch_devserver_windows(
         .map_err(|e| format!("decoding devserver windows: {e}"))
 }
 
-/// The full Seam-W window set a connected devserver serves at
+/// The full window set a connected devserver serves at
 /// `GET /api/library/windows` — the watcher's initial seed (it also carries the
 /// devserver's `library_id`, stamped per row, the watcher's first read of which
 /// library it is reconciling). The WS `/watch` then pushes every change. The new
@@ -460,8 +460,7 @@ pub async fn fetch_library_windows(
 /// (`POST /api/library/windows`): the library assigns the id, persists the
 /// record, and fires the watch, so the desktop's watcher reconciles the new
 /// window open — no client-side open. Used for the first-connect boot terminal
-/// (`kind: Terminal`). (The D3.1 mint helper, pulled forward for the
-/// D1-completion boot-terminal bootstrap; the launcher-open reroute stays D3.)
+/// (`kind: Terminal`) and launcher-open reroutes.
 pub async fn mint_library_window(
     conn: &DevserverConn,
     kind: chan_server::WindowKind,
@@ -548,7 +547,7 @@ pub async fn forget_workspace(conn: &DevserverConn, prefix: &str) -> Result<(), 
 }
 
 /// `POST /api/library/windows/{window_id}/visibility` `{hidden}`: set a devserver
-/// window's SERVER-PERSISTED visibility (Theme 5). The devserver owns its window
+/// window's server-persisted visibility. The devserver owns its window
 /// registry, so hiding/showing a remote window persists THERE and the desktop
 /// mirrors it on the next connect. Distinct from the `/hide`+`/open` bridge ops
 /// (transient, non-persistent). Fire-and-forget from the bury/unbury chokepoint.
@@ -705,8 +704,8 @@ mod tests {
     }
 
     #[test]
-    fn devserver_window_row_decodes_amendment_8_shape() {
-        // Pins the GET /api/devserver/windows wire (Amendment 8): title is
+    fn devserver_window_row_decodes_reopenable_window_shape() {
+        // Pins the GET /api/devserver/windows wire: title is
         // optional; connected/saved drive the reopenable filter; token is empty
         // when the tenant is off. An extra wire field (e.g. a legacy `kind`) is
         // ignored. A drift here reds before the menu misbehaves.
@@ -833,7 +832,7 @@ mod tests {
 
     #[test]
     fn scrape_token_ignores_the_w5_running_banner() {
-        // W5 (chan-library a1fba0de) prepends a `running: {command}\r\n` banner to
+        // The terminal layer prepends a `running: {command}\r\n` banner to
         // the control terminal's scrollback before the connect script runs — it is
         // the FIRST ring bytes, ahead of any token the devserver emits. Confirm it
         // can't disturb the scrape.

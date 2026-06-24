@@ -19,7 +19,7 @@ use crate::summary::{FileBucket, FileStats};
 
 /// Classify a tokei-recognized language into the
 /// source-code-shaped bucket axis. Markdown is the only special
-/// case (the graph G6 colour scheme distinguishes notes from
+/// case (the graph colour scheme distinguishes notes from
 /// source); everything else `tokei` recognizes falls under
 /// `SourceCode { language: <tokei name> }`.
 ///

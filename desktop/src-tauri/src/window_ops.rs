@@ -74,7 +74,7 @@ async fn handle(app: AppHandle, state: Arc<AppState>, op: DesktopWindowOp) {
             let _ = reply.send(crate::connect_devserver_impl(app, state, id).await);
         }
         // The launcher's connected-devserver row buttons fire these over the
-        // bridge (seam #2). Each reuses the same connection state the connect
+        // desktop bridge. Each reuses the same connection state the connect
         // flow set up; the reply unblocks the route's `dispatch_window_op`.
         DesktopWindowOp::DisconnectDevserver { id, reply } => {
             crate::teardown_devserver_connection(&app, &state, &id);
@@ -161,9 +161,9 @@ fn hide_window(app: &AppHandle, id: &str) -> Result<(), String> {
             app.state::<Arc<AppState>>().mark_silent_hide(&label);
             w.close().map_err(|e| format!("hiding {id}: {e}"))
         }
-        // C6 / D4 (seam 4): a reaped / already-gone native window is an idempotent
+        // A reaped / already-gone native window is an idempotent
         // silent no-op — reply Ok(()) so the route returns 204, NOT Err (which maps
-        // to 409 and floods the launcher's eye-handler console). W3 reaps a
+        // to 409 and floods the launcher's eye-handler console). Reaping a
         // standalone terminal's feed row on PTY exit; a client still holding the
         // just-removed row can click its eye, and that hide must land cleanly. Err
         // (→409) is reserved for the genuine "no desktop attached / manager gone"

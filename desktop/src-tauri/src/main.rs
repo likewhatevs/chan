@@ -57,7 +57,7 @@ pub struct AppState {
     /// Initialized during Tauri setup, after the async runtime is
     /// available for Tokio listener registration.
     embedded: OnceLock<embedded::EmbeddedServer>,
-    /// The local window watcher's desktop-local view state (the L5 bury set),
+    /// The local window watcher's desktop-local view state,
     /// shared so the close handlers can bury/unbury through the watcher rather
     /// than the legacy hide path. Set once when the watcher spawns.
     local_watcher_view: OnceLock<Arc<window_watcher::WatcherViewState>>,
@@ -113,7 +113,7 @@ pub struct AppState {
     /// can open its tenants); absent means disconnected. In memory only:
     /// the bearer token rotates, so it is re-acquired on each connect.
     pub devservers: Arc<devserver::DevserverConns>,
-    /// The launcher's connected-devserver feed source (seam #1). Installed on the
+    /// The launcher's connected-devserver feed source. Installed on the
     /// embedded host; populated on connect and drained on disconnect. The host
     /// reads it when assembling the launcher's window + workspace lists.
     pub devserver_feed: Arc<DevserverFeed>,
@@ -129,9 +129,9 @@ pub struct AppState {
     /// reap — it learned its `library_id` lazily from the feed). Supersedes the
     /// imperative `devserver_windows` tracking for the watcher-driven path.
     pub devserver_watchers: Mutex<HashMap<String, tokio::sync::watch::Sender<bool>>>,
-    /// Per connected devserver (`Devserver.id`), its window-watcher view state (the
-    /// L5 bury set) — the devserver analog of `local_watcher_view`. The close
-    /// handler buries a devserver window through it (D2) so the reconcile CLOSES
+    /// Per connected devserver (`Devserver.id`), its window-watcher view state,
+    /// the devserver analog of `local_watcher_view`. The close handler buries a
+    /// devserver window through it so the reconcile CLOSES
     /// the webview (drops the `/ws`) rather than hiding it alive, letting the
     /// launcher dot reflect hidden. Dropped on disconnect with the watcher.
     pub devserver_watcher_views: Mutex<HashMap<String, Arc<window_watcher::WatcherViewState>>>,
@@ -306,7 +306,7 @@ impl AppState {
         self.embedded.get()
     }
 
-    /// The window watcher's view state (the L5 bury set), once the watcher has
+    /// The window watcher's view state, once the watcher has
     /// spawned. Close handlers bury/unbury local windows through it.
     pub(crate) fn local_watcher_view(&self) -> Option<&Arc<window_watcher::WatcherViewState>> {
         self.local_watcher_view.get()
@@ -471,7 +471,7 @@ impl AppState {
     }
 }
 
-/// The launcher's connected-devserver feed source (seam #1): aggregates every
+/// The launcher's connected-devserver feed source: aggregates every
 /// connected devserver's live window snapshot and cached workspace rows so the
 /// embedded host merges them into the local launcher surface (one launcher lists
 /// local + remote alike). Installed on the host via
@@ -490,15 +490,15 @@ pub struct DevserverFeed {
     /// Devserver id -> its cached pane-highlight colour (its own remote
     /// `LocalColorStore` value, refreshed by the poll task). Absent = no colour
     /// (default accent). Surfaced through `pane_color` so a devserver window's
-    /// `?pane=` injects that devserver's own colour (seam #5 round-3).
+    /// `?pane=` injects that devserver's own colour.
     colors: Mutex<HashMap<String, String>>,
-    /// Devserver id -> its remote `library_id`, cached once learned from a window
-    /// (B2). `library_id_of` falls back to this so `entry_from_devserver` (the
+    /// Devserver id -> its remote `library_id`, cached once learned from a window.
+    /// `library_id_of` falls back to this so `entry_from_devserver` (the
     /// launcher's `DevserverEntry`) and the workspace poll still resolve the
     /// library_id when the live window feed is momentarily empty (no windows yet).
     /// Survives disconnect (the same devserver keeps its library_id on reconnect).
     library_ids: Mutex<HashMap<String, String>>,
-    /// Native labels of devserver windows the desktop has LOCALLY buried (B1).
+    /// Native labels of devserver windows the desktop has LOCALLY buried.
     /// `windows()` overrides their `connected` to false so the launcher dot
     /// reflects hidden the moment they're hidden — the desktop's bury state is the
     /// truth for the dot (a workspace window's remote `/ws` push agrees, but a
@@ -515,7 +515,7 @@ impl DevserverFeed {
     }
 
     /// Seed a devserver's remote `library_id` into the cache BEFORE its first
-    /// window reaches the snapshot (C5 / D3). The connect flow learns the id from
+    /// window reaches the snapshot. The connect flow learns the id from
     /// `wait_for_devserver`'s `info` and mints the control row under it; without
     /// this seed, `library_id_of` returns `None` until a later window syncs the
     /// mapping, so the launcher cannot match the control row's `library_id` to this
@@ -529,9 +529,9 @@ impl DevserverFeed {
 
     /// Drop a disconnected devserver from the per-connection feeds (windows +
     /// workspace + colour). KEEPS `library_ids` (the same devserver keeps its id
-    /// on reconnect — B2). Clears its buried-label overrides (B1) so a reconnect
+    /// on reconnect). Clears its buried-label overrides so a reconnect
     /// doesn't show its reopened windows as hidden. The control terminal is no
-    /// longer a desktop feed record (UNIFY/ARCH: it's a chan-library registry row
+    /// longer a desktop feed record (it is a chan-library registry row
     /// now); its reap is `reap_control_window` on the connect-script PTY exit /
     /// teardown, not a `forget` drop.
     fn forget(&self, id: &str) {
@@ -553,7 +553,7 @@ impl DevserverFeed {
         self.workspaces.lock().unwrap().insert(id, rows);
     }
 
-    /// Replace a devserver's cached colour (the Theme-6 colour watch gates its
+    /// Replace a devserver's cached colour (the colour watch gates its
     /// re-push on this). `None` clears it (the devserver has no colour set →
     /// default accent). Returns whether the stored value CHANGED, so the caller
     /// signals the library only on a real delta (the watch pushes on connect too).
@@ -574,7 +574,7 @@ impl DevserverFeed {
     }
 
     /// The remote `library_id` of a connected devserver. Learned from the live
-    /// window snapshot and CACHED (B2): on reconnect the snapshot can be empty for
+    /// window snapshot and cached: on reconnect the snapshot can be empty for
     /// a moment (no windows yet), so fall back to the cached value — otherwise the
     /// control record (which needs the library_id) wouldn't emit until a later
     /// window arrives.
@@ -596,7 +596,7 @@ impl DevserverFeed {
     }
 
     /// Mark a devserver window LOCALLY buried (or un-buried) so `windows()`
-    /// overrides its `connected` (B1). Returns whether it changed, so the caller
+    /// overrides its `connected`. Returns whether it changed, so the caller
     /// fires the library-change signal only on a real flip.
     fn set_buried(&self, label: &str, buried: bool) -> bool {
         let mut set = self.buried.lock().unwrap();
@@ -610,7 +610,7 @@ impl DevserverFeed {
     /// The devserver id owning `library_id`, learned from the live window
     /// snapshots (each devserver's records carry its remote `library_id`). The
     /// reverse of [`library_id_of`]; the close handler uses it to find which
-    /// devserver's watcher view to bury a `lib-<hex>::…` window through (D2).
+    /// devserver's watcher view to bury a `lib-<hex>::…` window through.
     fn devserver_id_for_library(&self, library_id: &str) -> Option<String> {
         self.windows.lock().unwrap().iter().find_map(|(id, snap)| {
             snap.lock()
@@ -631,7 +631,7 @@ impl chan_server::DevserverFeedSource for DevserverFeed {
             .values()
             .flat_map(|snapshot| snapshot.lock().unwrap().clone())
             .collect();
-        // Override `connected` for windows the desktop has LOCALLY buried (B1) so
+        // Override `connected` for windows the desktop has LOCALLY buried so
         // the launcher dot reflects hidden immediately — the desktop's bury state
         // is the truth for the dot. A workspace window's remote `/ws` drop agrees,
         // but a standalone terminal on the shared `/terminal` tenant never pushes
@@ -646,7 +646,7 @@ impl chan_server::DevserverFeedSource for DevserverFeed {
                 }
             }
         }
-        // The control terminal is no longer synthesized here (UNIFY/ARCH): it is a
+        // The control terminal is no longer synthesized here: it is a
         // real chan-library registry row (minted by `mint_control_window` under the
         // devserver's `library_id`, `control:true`), so it already rides the
         // registry snapshot that `assemble_window_records` merges — no desktop-side
@@ -718,7 +718,7 @@ fn devserver_route_prefix(slug: &str) -> String {
 /// flips true (disconnect), the same signal that stops the window watcher.
 ///
 /// The devserver's pane-highlight COLOUR is no longer polled here: it rides the
-/// push-based `/api/library/local-color/watch` feed (Theme 6) via
+/// push-based `/api/library/local-color/watch` feed via
 /// [`window_watcher_wiring::spawn_devserver_color_watch`]. There is no
 /// `workspaces/watch` endpoint yet, so the workspace list stays polled.
 fn spawn_devserver_workspace_poll(
@@ -979,7 +979,7 @@ async fn set_workspace_on(
     } else {
         // `serve::stop` → `close_workspace` busy-waits up to 5s for the flock
         // release (host.rs `wait_for_workspace_release`), so run it off the
-        // runtime — this is an async command (async-audit A3).
+        // runtime; this async command must not block the event loop.
         let state_owned = Arc::clone(&state);
         tokio::task::spawn_blocking(move || serve::stop(Some(&app), &state_owned, &key))
             .await
@@ -1256,7 +1256,7 @@ fn teardown_devserver_connection(app: &tauri::AppHandle, state: &AppState, id: &
     }
     state.devserver_watcher_views.lock().unwrap().remove(id);
     teardown_devserver_windows(app, state, id);
-    // Drop it from the launcher feed (seam #1) and re-push so its windows +
+    // Drop it from the launcher feed and re-push so its windows +
     // workspaces leave the launcher; the watcher/poll already stopped on `cancel`.
     state.devserver_feed.forget(id);
     if let Some(embedded) = state.embedded() {
@@ -1265,7 +1265,7 @@ fn teardown_devserver_connection(app: &tauri::AppHandle, state: &AppState, id: &
     let _ = app.emit(serve::SERVES_CHANGED, ());
 }
 
-/// Bug-B §3: a connected devserver's control terminal died (its connect-script
+/// A connected devserver's control terminal died (its connect-script
 /// PTY exited, or the user closed the control window) — the connection is
 /// provably dead. Flip the launcher's `connected` flag false UNCONDITIONALLY,
 /// regardless of how the SPA survey is answered (covers Dismiss / no-response),
@@ -1290,7 +1290,7 @@ fn flip_devserver_control_dead(state: &AppState, id: &str) {
     }
 }
 
-/// Theme-5 write path: persist a window's `hidden` visibility to its OWNING
+/// Persist a window's `hidden` visibility to its OWNING
 /// registry, routed by the native label's library. Called at the bury
 /// (`hidden=true`) and unbury (`hidden=false`) chokepoints — BOTH the native
 /// red-dot close AND the SPA SHOW/HIDE toggle (bridge `/hide`+`/open`) funnel
@@ -1427,7 +1427,7 @@ async fn scrape_control_terminal_token(
 /// close it, so it stays showing "process exited; press Ctrl+D", same as a
 /// non-control terminal. The fire is desktop-side (a poll of the tenant's exit
 /// status), independent of the control window's SPA and so robust to a
-/// buried/throttled WKWebView (frozen Seam C contract, rule a).
+/// buried/throttled WKWebView.
 ///
 /// Stops without firing once this watcher's control terminal is no longer the
 /// devserver's current one: a disconnect/forget removes the prefix (and reaps
@@ -1460,7 +1460,7 @@ fn spawn_control_terminal_exit_watcher(
                 .get()
                 .and_then(|e| e.control_terminal_exit(&prefix));
             if let Some(code) = exited {
-                // Bug-B-iii (UNIFY/ARCH): the connect-script PTY is gone, so reap
+                // The connect-script PTY is gone, so reap
                 // its chan-library registry row — `reap_control_window` removes the
                 // row AND unmounts the `/control-N` tenant, firing the feed change
                 // so the launcher drops it. DESKTOP-TRIGGERED + REQUIRED (the
@@ -1470,9 +1470,9 @@ fn spawn_control_terminal_exit_watcher(
                 if let Some(embedded) = state.embedded() {
                     embedded.reap_control_window(&serve::control_terminal_label(&id));
                 }
-                // C2 (v0.48.0, @@Alex's rule): the control script IS the connection
-                // for a SCRIPT-based devserver — an `ssh -N` tunnel, a foreground
-                // `chan devserver`, etc. — so its PTY exiting means the session
+                // For a script-based devserver, the control script is the connection
+                // (for example `ssh -N` or a foreground `chan devserver`), so its PTY
+                // exiting means the session
                 // ended, FULL STOP. Disconnect ALWAYS: flip `connected:false` +
                 // survey re-run/abandon. This deliberately drops the old reachability
                 // probe that kept a "setup-style" script's devserver connected after
@@ -1566,7 +1566,7 @@ async fn connect_devserver_impl(
     state: Arc<AppState>,
     id: String,
 ) -> Result<(), String> {
-    // Idempotency (seam #3): a re-Connect on an already-connected devserver is a
+    // Idempotency: a re-Connect on an already-connected devserver is a
     // no-op, not an error. Without this the second connect re-ran the control
     // terminal + scrape, which raced the live one ("control terminal was closed
     // before the devserver connected").
@@ -1643,26 +1643,26 @@ async fn connect_devserver_impl(
         name,
     };
     state.devservers.set(id.clone(), conn.clone());
-    // C5 / D3 (load-bearing): seed this devserver's `library_id` into the launcher
+    // Seed this devserver's `library_id` into the launcher
     // feed BEFORE the control mint so the launcher resolves the control row's group
     // to the devserver's NAME from the FIRST render, not a blank `↗`. Without it
     // `library_id_of` stays None until a window syncs the mapping, and the launcher
     // (which matches the control row's `library_id` against each devserver's
     // reported id) groups it separately. Non-empty only: `info.library_id` defaults
-    // to "" if the devserver omitted it. (@@Launcher's never-blank id is the safety
-    // net; this is the grouping fix.)
+    // to "" if the devserver omitted it; the launcher's never-blank fallback is
+    // only a safety net.
     if !info.library_id.is_empty() {
         state
             .devserver_feed
             .seed_library_id(id.clone(), info.library_id.clone());
     }
     // Mint the connect-script control terminal as a chan-library registry row
-    // under this devserver's `library_id` (UNIFY/ARCH). The native window was
-    // already opened imperatively by `spawn_control_terminal_window` (Model B);
+    // under this devserver's `library_id`. The native window was
+    // already opened imperatively by `spawn_control_terminal_window`;
     // this furnishes only the feed row, so the control terminal rides
-    // `/api/library/windows` with a REAL library_id (Bug-A: shows the devserver
-    // group on a zero-window connect + survives reload) and is reaped by
-    // `reap_control_window` on the connect-script PTY exit (Bug-B-iii). Minted HERE
+    // `/api/library/windows` with a REAL library_id, shows the devserver group on
+    // a zero-window connect, survives reload, and is reaped by
+    // `reap_control_window` on the connect-script PTY exit. Minted HERE
     // (post-`wait_for_devserver`) because the library_id only arrives with `info`;
     // read-time assembly resolves the row's prefix/token/connected from the tenant.
     if let Some(ct) = &control {
@@ -1674,7 +1674,7 @@ async fn connect_devserver_impl(
             )?;
         }
     }
-    // C8 / D5: warm this devserver's pane-colour cache BEFORE the window watcher
+    // Warm this devserver's pane-colour cache BEFORE the window watcher
     // opens any window, so a devserver window seeds its `?pane=` colour from the
     // FIRST build instead of flashing blue until the async colour watch
     // (`spawn_devserver_color_watch`, below) pushes the first frame. The cache is
@@ -1701,9 +1701,9 @@ async fn connect_devserver_impl(
     // valid (a fresh devserver, or one the user emptied before disconnecting).
     let (cancel, snapshot, view) =
         window_watcher_wiring::spawn_devserver_window_watcher(app.clone(), conn.clone()).await?;
-    // Feed the launcher (seam #1): register this devserver's live window snapshot,
+    // Feed the launcher: register this devserver's live window snapshot,
     // poll its served workspaces into the cache, and subscribe to its colour feed
-    // (Theme 6, push-based). All stop when the disconnect flips `cancel` (they
+    // with push-based updates. All stop when the disconnect flips `cancel` (they
     // subscribe to the same channel).
     state.devserver_feed.register_windows(id.clone(), snapshot);
     spawn_devserver_workspace_poll(
@@ -1719,7 +1719,7 @@ async fn connect_devserver_impl(
         cancel.subscribe(),
     );
     // Track the watcher view so the close handler can bury this devserver's
-    // windows through it (D2).
+    // windows through it.
     state
         .devserver_watcher_views
         .lock()
@@ -1756,9 +1756,9 @@ async fn connect_devserver_impl(
             ct.prefix.clone(),
         );
     }
-    // D4: auto-hide the control terminal on connect success when the devserver's
+    // Auto-hide the control terminal on connect success when the devserver's
     // "auto-hide control terminal on success" is set. A PROGRAMMATIC hide → reuse
-    // the A5 silent-hide path so it does NOT fire the bury notice (unlike the OS
+    // the silent-hide path so it does NOT fire the bury notice (unlike the OS
     // close button); the close handler buries it + flips its launcher dot hidden.
     if auto_hide_control && control.is_some() {
         let label = serve::control_terminal_label(&id);
@@ -1771,7 +1771,7 @@ async fn connect_devserver_impl(
         });
     }
     // Re-push the launcher feed now so the control-terminal record appears
-    // immediately (B2). On a FRESH connect the boot terminal's feed push would
+    // immediately. On a FRESH connect the boot terminal's feed push would
     // trigger this, but on RECONNECT the feed can be empty for a beat — the cached
     // library_id (`library_id_of`) lets `windows()` emit the control record, and
     // this signal makes the launcher pick it up without waiting for a later window.
@@ -1804,7 +1804,7 @@ async fn list_devserver_workspaces(
 /// which lived outside the feed and vanished on reconnect. The SPA Open button
 /// turns the workspace ON first, so the minted record resolves a live token (an
 /// off workspace mints an empty token the watcher skips). Reached over the
-/// desktop bridge from the launcher's `workspaces/open` route (seam #2).
+/// desktop bridge from the launcher's `workspaces/open` route.
 pub(crate) async fn open_devserver_workspace_impl(
     state: &Arc<AppState>,
     id: String,
@@ -1824,7 +1824,7 @@ pub(crate) async fn open_devserver_workspace_impl(
 /// opens it as a `lib-` terminal on the devserver's shared `/terminal` tenant —
 /// the same terminal family as the connect-time boot terminal, not an isolated
 /// per-window tenant. Reached over the desktop bridge from the launcher's
-/// per-devserver `terminal` route (seam #2).
+/// per-devserver `terminal` route.
 pub(crate) async fn open_devserver_terminal_impl(
     state: &Arc<AppState>,
     id: String,
@@ -1844,7 +1844,7 @@ pub(crate) async fn open_devserver_terminal_impl(
 /// tenant is gone after a restart); the user reopens one from the recovered
 /// section.
 // Imperative reconnect orchestrator superseded by the devserver watcher (the
-// reconcile re-surfaces workspace windows); deleted in S2-DEVSERVER D3.
+// reconcile re-surfaces workspace windows).
 #[allow(dead_code)]
 fn reopen_devserver_workspace_windows(
     app: &tauri::AppHandle,
@@ -1937,7 +1937,7 @@ async fn reconnect_devserver(
                         probe.clone(),
                     )
                     .await?;
-                // Re-point the launcher feed (seam #1) at the fresh snapshot + a
+                // Re-point the launcher feed at the fresh snapshot + a
                 // poll + colour watch on the rotated token; the old ones stopped on
                 // the cancel above.
                 state.devserver_feed.register_windows(id.clone(), snapshot);
@@ -1974,7 +1974,7 @@ async fn reconnect_devserver(
 /// Forget (unmount) a workspace on a connected devserver via its management
 /// API. The devserver stops serving that workspace; its files on the box are
 /// untouched and it can be re-mounted later. Reached over the desktop bridge
-/// from the launcher's `workspaces/{prefix}` DELETE route (seam #2).
+/// from the launcher's `workspaces/{prefix}` DELETE route.
 pub(crate) async fn forget_devserver_workspace_impl(
     state: &Arc<AppState>,
     id: String,
@@ -1990,7 +1990,7 @@ pub(crate) async fn forget_devserver_workspace_impl(
 /// Set a registered devserver workspace on (mount + mint a fresh tenant token)
 /// or off (unmount, keep registered) — the on/off toggle on a devserver row,
 /// distinct from Forget ([`forget_devserver_workspace_impl`]). Reached over the
-/// desktop bridge from the launcher's `workspaces/on|off` routes (seam #2/#4).
+/// desktop bridge from the launcher's `workspaces/on|off` routes.
 /// An unforced off of a workspace with live terminals is NOT an error: it
 /// resolves to [`SetWorkspaceOnOutcome::NeedsForce`] with the live-terminal
 /// count, so the launcher confirms then retries with `force: true` (which
@@ -2564,7 +2564,7 @@ fn request_close_window(app: tauri::AppHandle, window: tauri::WebviewWindow) -> 
         if state.devservers.is_connected(id) {
             let id = id.to_string();
             let _ = show_window(&app, "main");
-            // Bug-B §3: the control terminal IS the connection endpoint, so its
+            // The control terminal IS the connection endpoint, so its
             // close kills the connection — flip `connected:false` before the SPA
             // survey (covers a Dismiss/no-response leaving it shown connected).
             flip_devserver_control_dead(&state, &id);
@@ -2932,7 +2932,7 @@ fn resolve_login_shell_path() -> Option<String> {
     use std::time::Duration;
     const MARK: &str = "__CHAN_PATH__";
     const TIMEOUT: Duration = Duration::from_secs(3);
-    // Single-source the shell with the interactive terminal (W6): $SHELL, then the
+    // Single-source the shell with the interactive terminal: $SHELL, then the
     // passwd entry (pw_shell), then /bin/sh — validated. Replaces the old hardcoded
     // `/bin/zsh` guess so the PATH-harvest fallback consults the shell the user
     // actually logs in with. `cfg(target_os = "macos")` ⊂ `cfg(unix)`, so the
@@ -3111,7 +3111,7 @@ fn main() {
                     if state_for_setup.embedded.set(server).is_err() {
                         tracing::warn!("embedded local server initialized more than once");
                     }
-                    // Install the connected-devserver feed source (seam #1) so the
+                    // Install the connected-devserver feed source so the
                     // launcher merges remote windows + workspaces. Done after the
                     // host is up; connections (which populate it) only start later.
                     if let Some(embedded) = state_for_setup.embedded.get() {
@@ -3151,7 +3151,7 @@ fn main() {
                     }
                     // Spawn the local window watcher: native windows become a
                     // pure idempotent reconcile of the local library's window
-                    // set (Seam W), so reconnect / relaunch can never spawn a
+                    // set, so reconnect / relaunch can never spawn a
                     // duplicate. Inert until a local window is minted (an empty
                     // registry reconciles to nothing); converting the creation
                     // paths to mint makes it the sole driver.
@@ -3350,7 +3350,7 @@ fn main() {
                     // BOOT re-serve: RESTORE the persisted windows only — do NOT
                     // mint (mint_first_window=false). A workspace whose windows were
                     // all closed has no record; minting would re-open a closed
-                    // window (Bug-C). The watcher restores existing records honoring
+                    // window. The watcher restores existing records honoring
                     // should_show (hidden stays hidden).
                     if let Err(e) = serve::start(
                         handle.clone(),
@@ -3898,7 +3898,7 @@ pub fn rebuild_window_menu(app: &tauri::AppHandle) {
         let mut open_local: Vec<(String, String)> = Vec::new();
         let mut open_grouped: HashMap<String, Vec<(String, String)>> = HashMap::new();
         for record in &open_records {
-            // Theme 5: a server-hidden window belongs under Hidden, never Open —
+            // A server-hidden window belongs under Hidden, never Open:
             // group strictly by the persisted `hidden`, not just native visibility.
             if record.hidden {
                 continue;
@@ -3940,7 +3940,7 @@ pub fn rebuild_window_menu(app: &tauri::AppHandle) {
         let mut local: Vec<(String, String)> = Vec::new();
         let mut grouped: HashMap<String, Vec<(String, String)>> = HashMap::new();
         // Hidden = the in-session buried set UNION the server-persisted hidden
-        // records (Theme 5): a window hidden in a PRIOR session (record.hidden)
+        // records: a window hidden in a PRIOR session (record.hidden)
         // isn't opened on connect (should_show false) and isn't in the local
         // buried set, so list it here so the user can reopen it. Dedup by label;
         // a hidden window has no live webview, so fall back to the record title.
@@ -4228,7 +4228,7 @@ fn open_remote_window_from_menu(app: &tauri::AppHandle, label: &str) {
 pub fn unbury_window(app: &tauri::AppHandle, label: &str) -> bool {
     let state = app.state::<Arc<AppState>>();
     let removed = state.remove_buried(label);
-    // Theme-5: unbury persists `hidden=false` to the owning registry so the show
+    // Unbury persists `hidden=false` to the owning registry so the show
     // is durable + mirrored on connect (BOTH the native menu reopen and the SPA
     // `/open` toggle funnel here). Routes by the label's library.
     persist_window_hidden(&state, label, false);
@@ -4254,7 +4254,7 @@ pub fn unbury_window(app: &tauri::AppHandle, label: &str) -> bool {
         }
         return true;
     }
-    // A watcher-managed DEVSERVER window: un-bury through ITS devserver view (D2).
+    // A watcher-managed DEVSERVER window: un-bury through ITS devserver view.
     // The bury destroyed the webview (the reconcile closed it), so there's nothing
     // to show() — un-burying lets the reconcile reopen it at its window_id.
     if label.starts_with("lib-") {
@@ -4264,7 +4264,7 @@ pub fn unbury_window(app: &tauri::AppHandle, label: &str) -> bool {
                 view.unbury(label);
             }
         }
-        // Clear the feed `connected` override (B1) + re-push so the dot goes back
+        // Clear the feed `connected` override and re-push so the dot goes back
         // to shown; the reconcile reopens the webview and the `/ws` reconnects.
         if state.devserver_feed.set_buried(label, false) {
             if let Some(embedded) = state.embedded() {
@@ -4295,8 +4295,8 @@ pub fn unbury_window(app: &tauri::AppHandle, label: &str) -> bool {
     };
     // The control terminal's launcher dot now reflects PTY-alive (resolved at read
     // time from its chan-library control tenant), uniform with all windows — no
-    // desktop-side shown/hidden flip (UNIFY/ARCH; shown/hidden returns uniformly
-    // via the server-persisted hidden work this round).
+    // desktop-side shown/hidden flip; shown/hidden returns uniformly through the
+    // server-persisted hidden path.
     if removed {
         rebuild_window_menu(app);
     }
@@ -4764,7 +4764,7 @@ mod tests {
 
     #[test]
     fn seed_library_id_resolves_before_any_window_arrives() {
-        // C5 / D3 (load-bearing): on connect the desktop already knows the
+        // On connect the desktop already knows the
         // devserver's library_id (from `wait_for_devserver`'s info) before any
         // window snapshot exists. Seeding it must make `library_id_of` resolve
         // immediately so the launcher's `DevserverEntry` carries the real id from
@@ -4781,11 +4781,11 @@ mod tests {
 
     #[test]
     fn pane_color_resolves_once_colour_cached_and_window_seeded() {
-        // C8 / D5: a devserver window seeds its `?pane=` colour through
+        // A devserver window seeds its `?pane=` colour through
         // `pane_color`, which maps library_id -> devserver id via a registered
         // window snapshot, then reads the per-devserver colour cache. On a FRESH
         // connect that cache is cold until the async colour watch pushes its first
-        // frame, so the first windows seeded `None` and flashed blue. D5 warms the
+        // frame, so the first windows seeded `None` and flashed blue. Connect now warms the
         // cache eagerly on connect (`fetch_local_color` -> `set_color` before the
         // window watcher opens anything); this pins the resolution the seed relies
         // on.
@@ -4808,12 +4808,12 @@ mod tests {
             hidden: false,
         }]));
         feed.register_windows("ds-1".to_string(), snapshot);
-        // Cache cold (the pre-D5 fresh-connect gap) -> the window seeds None (blue).
+        // Cache cold during a fresh connect -> the window seeds None (blue).
         assert_eq!(feed.pane_color(lib), None);
-        // Eager seed (D5) warms the cache -> the first window seeds the colour.
+        // Eager seed warms the cache -> the first window seeds the colour.
         feed.set_color("ds-1".to_string(), Some("#ff8800".to_string()));
         assert_eq!(feed.pane_color(lib), Some("#ff8800".to_string()));
-        // Seam-5 corollary: a GENUINE clear (the devserver dropped its colour) still
+        // A genuine clear (the devserver dropped its colour) still
         // propagates — a null push removes the cache so new windows fall back to the
         // accent. (The null-no-clobber invariant lives on the WEB live-apply side,
         // which f407f2eb already fixed; the desktop cache must still reflect a real

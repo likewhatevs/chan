@@ -1077,7 +1077,7 @@
   }
   /* Input row anchored at the bottom of the results column; status
      and results stack above it. Top border (was bottom) so the
-     seam reads as "input separated from the content above it". */
+     input reads as separated from the content above it. */
   .head {
     display: flex;
     gap: 6px;

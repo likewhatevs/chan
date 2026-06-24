@@ -487,7 +487,7 @@
     setWindowFocusColor(color);
     // Repurposed as the per-LIBRARY pane-highlight colour. Recolour THIS
     // window's active pane immediately, then persist it to the window's own
-    // serving host. The PUT fires the server's colour broadcast (Theme 6), so
+    // serving host. The PUT fires the server's colour broadcast, so
     // every OTHER open window of this library live-updates via its
     // `/api/library/local-color/watch` subscription (App.svelte), and future
     // windows still mint with it via `?pane=`.
@@ -497,7 +497,7 @@
     // Swallow it — a failed persist must never break the menu or throw — but LOG
     // the status so a persist FAILURE on a surface that DOES have a store (e.g. a
     // local desktop window whose per-tenant token is rejected by the launcher
-    // bearer gate, S4) is visible instead of silently lost.
+    // bearer gate) is visible instead of silently lost.
     void api.setLocalColor(hex).catch((err: unknown) => {
       const status = err instanceof ApiError ? err.status : "?";
       console.warn(`setLocalColor failed (status ${status}); colour not persisted`, err);
@@ -1584,7 +1584,7 @@
           Graph tabs join the keep-alive family: rendering GraphPanel
           inside the active-tab if-chain remounted it on every switch,
           and GraphCanvas.start() refetches + re-lays-out from scratch
-          (transform reset, sim rebuilt) — the full redraw @@Alex saw
+          (transform reset, sim rebuilt)
           on activation, cheap on small workspaces but painful on a
           large source tree. Kept mounted + hidden via the same
           visibility contract, pan/zoom/selection survive a switch, and

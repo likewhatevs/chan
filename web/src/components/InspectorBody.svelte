@@ -101,7 +101,7 @@
     {showRefs}
   />
 {:else if selection.kind === "directory"}
-  <!-- Folder parity (inspector-spec.md I3): route directory selections
+  <!-- Folder parity: route directory selections
        through FileInfoBody (its is_dir branch) so the graph folder
        inspector renders the SAME body as the File Browser folder
        inspector. FileInfoBody looks the entry up from the tree (loading

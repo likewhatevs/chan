@@ -120,7 +120,7 @@ describe("mermaid wiring", () => {
     expect(mermaidSrc).toMatch(/cm-md-mermaid-error-line/);
     // openLine + N mapping into the document.
     expect(mermaidSrc).toMatch(/info\.openLine \+ err\.line/);
-    // Actionable face leads with the line number (D3).
+    // Actionable face leads with the line number.
     expect(mermaidSrc).toMatch(/Mermaid error - line \$\{res\.errorLine\}/);
     // Error cleared on a successful re-render so a fixed line stops
     // accenting.

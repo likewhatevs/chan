@@ -4,7 +4,7 @@
 // exposes a per-terminal MB budget; the spawn site needs lines. Both
 // the conversion and the slider clamps live here so a future change
 // to the constants (or to xterm.js's per-cell footprint) lands in one
-// place, and the unit tests exercise the seam without needing a
+// place, and the unit tests cover the conversion without needing a
 // running PTY.
 
 /// Settings slider bounds. Kept in lockstep with the Rust constants in

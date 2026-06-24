@@ -307,7 +307,7 @@ export async function openWorkspaceWindow(path: string): Promise<void> {
 
 /** Toggle a window's visibility (the feed's SHOW/HIDE Eye): hide it if it is
  * visible, otherwise open (un-hide/focus) it. Keyed on the server-persisted
- * `hidden` (Theme 5), not socket liveness — the toggle stays a bridge op
+ * `hidden`, not socket liveness — the toggle stays a bridge op
  * (`hideWindow`/`openWindow`); the desktop persists `hidden` at the bury/unbury
  * chokepoint, so the row moves between Open/Hidden on the feed round-trip. No
  * optimistic flip here — the feed reflects the live state after the watch push. */

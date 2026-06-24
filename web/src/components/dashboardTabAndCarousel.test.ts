@@ -431,7 +431,7 @@ describe("EmptyPaneWelcome static spawn surface", () => {
     );
     // EmptyPaneWelcome mounts on the lone-pane empty case, but NOT in a
     // terminal-only window: those always hold a terminal, so the lone spawn
-    // tile only ever flashed during the empty boot layout (W1).
+    // tile only ever flashed during the empty boot layout.
     // EmptyPaneWelcome does not forward oncontextmenu because there
     // is no empty-pane right-click menu.
     expect(pane).toMatch(

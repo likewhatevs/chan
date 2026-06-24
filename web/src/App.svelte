@@ -269,7 +269,7 @@
     syncOverlayStack();
   });
 
-  // Disposer for the Theme-6 per-library focus-colour watch (opened once per
+  // Disposer for the per-library focus-colour watch (opened once per
   // window in the onMount below; closed on unmount).
   let disposeLocalColorWatch: (() => void) | null = null;
   onDestroy(() => disposeLocalColorWatch?.());
@@ -285,7 +285,7 @@
     // + focus halo in Pane.svelte) when the param is a valid hex; a no-op
     // otherwise, so the `data-focus-color` presets stay in effect.
     applyInitialPaneColor();
-    // Theme 6: live per-library focus-colour broadcast. Subscribe ONCE PER
+    // Live per-library focus-colour broadcast. Subscribe ONCE PER
     // WINDOW (the var is per-document; <Pane> is per leaf node, so per-pane would
     // open redundant sockets) to this library's colour watch and recolour
     // `--pane-highlight-color` the instant ANY window of the library changes it —
@@ -1562,7 +1562,7 @@
     --page-shade: rgba(0, 0, 0, 0.035);
     --zebra-bg: rgba(0, 0, 0, 0.025);
     /* Light mode: pull the inspector several shades off white so the
-       resize handle's seam reads as a real boundary instead of a
+       resize handle reads as a real boundary instead of a
        hairline at the same brightness as the editor canvas. */
     --inspector-bg: #ececef;
     --separator: #b0b0b6;

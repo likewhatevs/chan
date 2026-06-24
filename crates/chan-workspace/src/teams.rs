@@ -23,7 +23,7 @@ pub struct TeamConfig {
     pub auto_prefix_at: bool,
     // Whether the team's member terminals start with the chan MCP
     // discovery env vars (CHAN_MCP_SERVER_JSON + companions) set. Off by
-    // default (B5: MCP env starts disabled for ALL agents, since codex
+    // default (MCP env starts disabled for ALL agents, since codex
     // wants a file-based config and a stray env descriptor makes it fail
     // to start). The team setup dialog and `cs terminal team new|load`
     // opt back in. `#[serde(default)]` => an absent field (hand-written

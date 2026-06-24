@@ -6,7 +6,7 @@ import {
   SHORTCUTS,
 } from "./shortcuts";
 
-// Phase-26 step 5: confirm the Windows shortcut set is Ctrl-based and
+// Confirm the Windows shortcut set is Ctrl-based and
 // Linux-like — no chord LABEL should render "Cmd" under Windows
 // (Windows keyboards have no Command key; Win-key-as-Cmd is ruled out).
 

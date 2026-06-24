@@ -1371,7 +1371,7 @@
     font-size: 12px;
     white-space: pre-wrap;
   }
-  /* Actionable error face (D3): the line number leads, the offending
+  /* Actionable error face: the line number leads, the offending
      source line is echoed verbatim, then mermaid's reason follows. */
   :global(.md-wysiwyg-cm6 .cm-md-mermaid-error-head) {
     font-weight: 600;
@@ -1385,7 +1385,7 @@
     white-space: pre;
     overflow-x: auto;
   }
-  /* Failing-line accent (D1-i): a left-border bar on the source line
+  /* Failing-line accent: a left-border bar on the source line
      mermaid blamed, shown only while the cursor is in the block's
      source. A gutter-less linter marker - no global code-block restyle,
      no line-number column. `box-shadow` (not `border`) so the line

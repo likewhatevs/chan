@@ -84,8 +84,7 @@
 
   // ONE list, grouped by library (local first, then each remote devserver).
   // Visible and hidden windows sit together; the per-row Eye/EyeOff (keyed on the
-  // server-persisted `hidden`) is the sole hidden/visible indicator. (@@Alex
-  // overruled an Open/Hidden section split — the icon alone conveys it.)
+  // server-persisted `hidden`) is the sole hidden/visible indicator.
   const groups = $derived(groupByLibrary(library.windows));
 </script>
 

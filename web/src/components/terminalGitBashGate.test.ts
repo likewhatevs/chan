@@ -1,7 +1,7 @@
 import { describe, expect, test } from "vitest";
 import tab from "./TerminalTab.svelte?raw";
 
-// Phase-26: friendly in-app gate when Git for Windows is missing. The
+// Friendly in-app gate when Git for Windows is missing. The
 // backend contract (chan-server terminal_sessions.rs / routes/terminal.rs,
 // pinned by a Rust test) is a WS error frame `reason: "git_bash_missing"`
 // and an HTTP 424 on the restart path. TerminalTab consumes BOTH and

@@ -1145,8 +1145,8 @@ export function toggleTerminalGroupBroadcast(tab: TerminalTab): void {
   }
 }
 
-/// Set a local terminal's broadcast toggle by its live session id. The seam
-/// for the `terminal_broadcast` window-command: another window's Select All /
+/// Set a local terminal's broadcast toggle by its live session id. This is
+/// the `terminal_broadcast` window-command entry point: another window's Select All /
 /// per-row toggle reaches the owning window here, which flips the matching
 /// tab so the normal `set-broadcast` sync + sign + fan run unchanged. No-op
 /// when no local tab hosts that session.
@@ -1803,7 +1803,7 @@ const terminalCloseSinks = new Map<string, TerminalCloseSink>();
 /// the WS `close` frame, so the PTY stays alive in the shared `/terminal`
 /// registry for the target window to re-attach to. Window-local cleanup
 /// (Rich Prompt draft, bubble entry) still runs - the tab really is gone from
-/// THIS window. The set is the seam because the close-sink takes no args; it
+/// THIS window. The set carries this state because the close-sink takes no args; it
 /// is drained on consult (see `isTerminalMoving`) so a normal later close of a
 /// re-created tab with a colliding id still kills its PTY.
 const terminalsMovingOut = new Set<string>();
@@ -1844,7 +1844,7 @@ export function registerTerminalInputSink(tabId: string, sink: TerminalInputSink
   };
 }
 
-// Rich Prompt send seam. Mirrors the input-sink registry but feeds the terminal
+// Rich Prompt sender. Mirrors the input-sink registry but feeds the terminal
 // WS `prompt` frame (NOT the raw `input` keystroke path): each TerminalTab
 // registers a sink that enqueues into THIS session's server-side write queue,
 // where it shares one FIFO with `cs terminal write` and auto-submits in order.

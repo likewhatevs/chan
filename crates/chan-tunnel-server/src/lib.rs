@@ -132,8 +132,8 @@ pub struct Validated {
 ///
 /// The chan-tunnel listener logs `ServerError` values via
 /// `tracing::warn!`, so anything echoed back will land in operator
-/// journals. The crate itself never logs the token; the seam is
-/// the only place this guarantee can be broken.
+/// journals. The crate itself never logs the token; this boundary is
+/// the only place the guarantee can be broken.
 #[async_trait]
 pub trait Validator: Send + Sync + 'static {
     async fn validate(&self, token: &str) -> Result<Validated, ServerError>;

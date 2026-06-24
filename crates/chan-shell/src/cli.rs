@@ -1111,7 +1111,7 @@ async fn cmd_shell_terminal(action: TerminalAction) -> Result<()> {
             if tab_name.is_none() && tab_group.is_none() {
                 anyhow::bail!("cs terminal write needs --tab-name and/or --tab-group");
             }
-            // Raw bytes, no implicit newline (@@Alex decision). --stdin
+            // Raw bytes, no implicit newline. --stdin
             // reads this process's stdin to EOF; otherwise the literal
             // `cmd`. Terminal input is UTF-8 text.
             let data = if stdin {
@@ -1554,7 +1554,7 @@ fn build_followup(
     )
 }
 
-/// The pure followup-context precedence per the 2026-06-01 amendment:
+/// The pure followup-context precedence:
 /// `from` <- `$CHAN_TAB_NAME` (fallback `--from`); `to` <- the survey target
 /// (`--tab-name`, then `--tab-group`; fallback `--to`). `dir` comes straight
 /// from `--followup-dir` (only called when that was passed). Bails with a clear

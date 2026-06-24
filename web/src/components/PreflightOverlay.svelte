@@ -106,7 +106,7 @@
     }
   }
 
-  // First-run onboarding nudge (P2). Non-locking, like the cs card: it rides on
+  // First-run onboarding nudge. Non-locking, like the cs card: it rides on
   // the ready snapshot's `summary` block and points the user at the Dashboard
   // to enable the optional Semantic / Reports layers (a thin nudge, NOT inline
   // toggles). Dismissal is persisted PER WORKSPACE so each new workspace gets

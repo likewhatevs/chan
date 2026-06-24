@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-// Theme 6: the dedicated per-library focus-colour watch. Pins that it opens a
+// Dedicated per-library focus-colour watch. Pins that it opens a
 // WebSocket to /api/library/local-color/watch, delivers `{ color }` frames (hex
 // or null) to the callback, drops malformed frames, and the disposer closes the
 // socket + defuses the reconnect. jsdom has no WebSocket, so a controllable fake

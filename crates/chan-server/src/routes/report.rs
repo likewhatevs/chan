@@ -25,8 +25,8 @@
 //!     under the directory contribute (a file named identically to
 //!     a directory would not). Empty `path` is the workspace root.
 //!     Responds 404 when no tracked file lives at or under `path`.
-//!     This is the endpoint the graph overhaul's directory inspector
-//!     (G3) consumes per-click without re-walking the file map.
+//!     This is the endpoint the directory inspector consumes per-click
+//!     without re-walking the file map.
 //!
 //! All endpoints lazily trigger chan-workspace's initial report scan on
 //! first call; subsequent calls hit the warm in-memory index.

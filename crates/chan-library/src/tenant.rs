@@ -109,7 +109,7 @@ pub enum UnserveMode {
 
 /// What the route layer hands back per mounted tenant — everything the host
 /// needs to route to it, reconcile its windows, and tear it down. The
-/// router-construction seam: the host owns these; the route layer builds them
+/// router-construction boundary: the host owns these; the route layer builds them
 /// via [`TenantBuilder`]. This is the ex-`AppArtifacts`, reduced to the
 /// host-facing surface, plus an opaque keep-alive for the route-layer pieces
 /// the host only owns for lifetime (the MCP bridge, the control socket, the

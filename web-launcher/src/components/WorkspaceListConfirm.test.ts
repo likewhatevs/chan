@@ -112,7 +112,7 @@ describe("remote workspace OFF confirm-and-retry", () => {
     spy.mockRestore();
   });
 
-  it("opens the SAME confirm-and-retry for a LOCAL workspace off (B8 parity)", async () => {
+  it("opens the SAME confirm-and-retry for a LOCAL workspace off", async () => {
     // Parity with the devserver path: turning off a LOCAL workspace with live
     // terminals must confirm + force-retry, not silently kill the terminals.
     const { setMockLocalLiveTerminals } = await import("../api/mock");

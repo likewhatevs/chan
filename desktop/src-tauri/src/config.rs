@@ -101,7 +101,7 @@ pub struct Devserver {
     /// Wall-clock millis when the devserver was added.
     #[serde(default)]
     pub added_at: u64,
-    /// Whether the control terminal auto-hides on a successful connect (D4 — the
+    /// Whether the control terminal auto-hides on a successful connect (the
     /// devserver form's "auto-hide control terminal on success" checkbox). The
     /// connect flow reads it to hide the control terminal programmatically (no
     /// bury notice) once connected.
@@ -345,7 +345,7 @@ fn entry_from_devserver(
         // its colour; no colour lives on the entry anymore (each library's colour
         // is on its own host).
         library_id: feed.library_id_of(&d.id),
-        // D4: whether the control terminal auto-hides on connect success.
+        // Whether the control terminal auto-hides on connect success.
         auto_hide_control: d.auto_hide_control,
     }
 }
@@ -397,7 +397,7 @@ impl DevserverRegistry for DevserverConfigRegistry {
         // path reads as "derive the label from the URL host" / "no script").
         ds.label = input.label.unwrap_or_default();
         ds.script = input.script.unwrap_or_default();
-        // D4 flag is full-replace like label/script (the edit form resubmits it).
+        // The auto-hide flag is full-replace like label/script (the edit form resubmits it).
         ds.auto_hide_control = input.auto_hide_control;
         // Token is the lone keep-on-blank field: a write-only credential the
         // launcher never reads back, so its edit form can't resubmit it.
@@ -757,7 +757,7 @@ mod tests {
         assert_eq!(cfg.devservers[0].token, "tok_secret");
     }
 
-    /// Bug-B §3: the wire `connected` flag the launcher reads
+    /// The wire `connected` flag the launcher reads
     /// (`GET /api/library/devservers` -> `list` -> `entry_from_devserver`)
     /// derives from the shared `DevserverConns` membership, so dropping the conn
     /// — what the desktop's `flip_devserver_control_dead` does when a control

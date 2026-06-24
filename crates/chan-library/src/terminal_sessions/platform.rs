@@ -215,7 +215,7 @@ pub(super) fn git_bash() -> Option<&'static GitBashInstall> {
 /// bash`) with blocking `std::process::Command`; resolving it lazily on the
 /// first terminal create — which runs on a tokio worker (the embedded server
 /// hosts the SPA, API, and WS on one runtime) — would block that worker and
-/// freeze the SPA (W1). The server primes this once on a blocking thread at
+/// freeze the SPA. The server primes this once on a blocking thread at
 /// startup, so the inline spawn gate
 /// ([`reject_terminal_spawn_if_git_bash_missing`]) and [`windows_command_builder`]
 /// only ever read the warm `OnceLock`.

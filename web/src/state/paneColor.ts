@@ -79,7 +79,7 @@ export function applyInitialPaneColor(): void {
   if (hex) document.documentElement.style.setProperty(CSS_VAR, hex);
 }
 
-/// Live-apply a colour pushed by the per-library focus-colour watch (Theme 6,
+/// Live-apply a colour pushed by the per-library focus-colour watch,
 /// `GET /api/library/local-color/watch`). A valid hex sets
 /// `--pane-highlight-color` on the document root, so every pane of this window
 /// recolours the instant any window of the library changes the colour.

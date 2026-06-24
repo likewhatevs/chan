@@ -172,7 +172,7 @@ pub struct PersistedWindow {
     /// default keeps a normal row's on-disk shape unchanged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub library_id: Option<String>,
-    /// Server-persisted visibility (Theme 5): `true` ⇒ buried/hidden. The
+    /// Server-persisted visibility: `true` ⇒ buried/hidden. The
     /// devserver is the source of truth; the desktop mirrors it on connect.
     /// Surfaced on the wire as [`WindowRecord::hidden`]. `skip_serializing_if`
     /// default keeps an existing/visible row's on-disk shape unchanged.
@@ -392,8 +392,8 @@ impl WindowRegistry {
         removed
     }
 
-    /// Remove `window_id` ONLY if it is a NON-CONTROL terminal window — the C4
-    /// reap of a standalone terminal whose PTY exited while detached. A
+    /// Remove `window_id` ONLY if it is a NON-CONTROL terminal window whose PTY
+    /// exited while detached. A
     /// workspace window (its panes' deaths must not close it) and a control
     /// window (the desktop exit-watcher owns those) are left untouched, so this
     /// is safe to fire from the shared terminal tenant's reap hook. Returns
@@ -414,7 +414,7 @@ impl WindowRegistry {
         removed
     }
 
-    /// Set window `window_id`'s persisted visibility (Theme 5). Returns whether a
+    /// Set window `window_id`'s persisted visibility. Returns whether a
     /// row MATCHED (so a route maps `false` to 404 — idempotent: setting the
     /// value it already holds still matches). Persists (durable rows; a control
     /// row stays in-memory via [`Self::save_best_effort`]) + fires the change
@@ -757,8 +757,8 @@ mod tests {
 
     #[test]
     fn control_record_via_to_record_is_terminal_first_and_control_flagged() {
-        // The control record is now produced by `to_record` on a control row (the
-        // ARCH path), not a bespoke constructor. A hidden=true control row also
+        // The control record is now produced by `to_record` on a control row, not
+        // a bespoke constructor. A hidden=true control row also
         // surfaces `hidden` on the wire.
         let row = PersistedWindow {
             window_id: "control-terminal-ds1".into(),
@@ -895,7 +895,7 @@ mod tests {
         assert_eq!(h, serde_json::from_value(hv).unwrap());
     }
 
-    // --- control window (ARCH) ---------------------------------------------
+    // --- control window -----------------------------------------------------
 
     #[test]
     fn create_control_row_shape() {
@@ -945,7 +945,7 @@ mod tests {
         );
     }
 
-    // --- visibility (Theme 5) ----------------------------------------------
+    // --- visibility ---------------------------------------------------------
 
     #[test]
     fn set_hidden_toggles_and_matches() {
@@ -1198,7 +1198,7 @@ mod tests {
 
     #[test]
     fn remove_terminal_only_removes_non_control_terminal_rows() {
-        // C4 reap scoping: the shared terminal tenant's hook drops a standalone
+        // The shared terminal tenant's hook drops a standalone
         // terminal row, but must never touch a workspace window (its panes'
         // deaths must not close it) or a control window (the desktop
         // exit-watcher owns those).

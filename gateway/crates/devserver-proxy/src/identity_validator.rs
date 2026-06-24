@@ -128,7 +128,7 @@ impl<V: Validator> Validator for CapturingValidator<V> {
 mod tests {
     use super::*;
 
-    // Consumer byte-pin (W1): the validate-response field identity produces
+    // Consumer byte-pin: the validate-response field identity produces
     // is `devserver_id`, and the registry keys on it. A one-sided rename of
     // this wire field must fail here, not silently key the registry on an
     // empty string.

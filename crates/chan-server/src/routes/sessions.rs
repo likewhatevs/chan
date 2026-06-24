@@ -19,7 +19,7 @@ use crate::util::raw_json_response;
 
 /// Window id query param (`?w=<id>`) for session routes. `moved=1` (DELETE
 /// only) marks a cross-window MOVE-OUT so the handler deletes the blob but does
-/// NOT reap the window's sessions — the moved PTY survives (Amendment 7). Get /
+/// NOT reap the window's sessions; the moved PTY survives. Get /
 /// put ignore it.
 #[derive(Deserialize)]
 pub struct SessionQuery {
@@ -138,10 +138,10 @@ pub async fn api_delete_session(
     //   drop it from the persisted set AND reap its sessions (kill the PTYs,
     //   release the fds) — the "discard ⇒ reap" half that frees a busy detached
     //   session the pruner keeps alive.
-    // - `?w=W&moved=1` (Amendment 7): the source window emptied because its tab
+    // - `?w=W&moved=1`: the source window emptied because its tab
     //   moved to another window. Drop the blob + unpersist so it leaves
-    //   `cs window list`, but do NOT reap — the moved PTY survives, and
-    //   Amendment 3(A)'s reattach re-binds it to the target window. Skipping the
+    //   `cs window list`, but do NOT reap; the moved PTY survives, and
+    //   reattach re-binds it to the target window. Skipping the
     //   reap is the deterministic guard against the source DELETE racing ahead
     //   of the target's attach/rebind.
     // Either way the blob delete below runs (an unsaved window can still go).

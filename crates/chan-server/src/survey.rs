@@ -6,7 +6,7 @@
 //! (`POST /api/survey/reply`) deserializes the [`SurveyReply`] and calls
 //! [`SurveyBus::complete_survey`], which fires the oneshot and unblocks the
 //! handler. Keeping the bus and the reply route on the two ends of one
-//! stable `complete_survey` API keeps the seam between them narrow.
+//! stable `complete_survey` API keeps their coupling narrow.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};

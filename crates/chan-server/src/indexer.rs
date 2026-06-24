@@ -43,8 +43,8 @@ pub struct EmbedProgress {
     pub total: u32,
 }
 
-/// Background-embed progress, owned independently of `IndexStatus` (Theme-5
-/// Option B, decoupled-signal form). The cold build's embed pass writes it;
+/// Background-embed progress, owned independently of `IndexStatus`. The cold
+/// build's embed pass writes it;
 /// `set_idle` reads it when stamping `Idle`; the coordinator clears it when
 /// the build resolves. Decoupling it from the status enum is what stops a
 /// watcher reindex (status -> Reindexing -> Idle) from clobbering the embed
@@ -185,7 +185,7 @@ impl Indexer {
             model: stats.model.clone(),
             embedding: None,
         }));
-        // Shared embed-progress signal (Theme-5 Option B). Lives outside the
+        // Shared embed-progress signal. Lives outside the
         // IndexStatus mutex so the watcher's Reindexing -> Idle transitions
         // never drop the cold-build embed chip.
         let bg_embed: BgEmbed = Arc::new(Mutex::new(None));
@@ -1364,7 +1364,7 @@ mod tests {
 
     #[test]
     fn set_idle_reattaches_the_embed_chip_from_the_shared_signal() {
-        // Theme-5 Option B clobber fix: an incremental reindex that lands in
+        // An incremental reindex that lands in
         // set_idle WHILE a cold-build embed pass is still running must
         // RE-ATTACH the chip from the shared signal, not drop it (the old
         // bug: set_idle hard-coded embedding: None, so any file edit during

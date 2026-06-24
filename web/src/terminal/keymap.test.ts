@@ -183,7 +183,7 @@ describe("terminal meta key mapping", () => {
     expect(serializeKeyboardProtocolState(undefined)).toBeNull();
   });
 
-  test("negotiated state survives a serialize/restore round-trip (BUG-3 reload)", () => {
+  test("negotiated state survives a serialize/restore round-trip", () => {
     const protocol = createTerminalKeyboardProtocolState();
     applyXtermModifierKeys(protocol, [4, 2]);
     // Shift+Enter -> modifyOtherKeys sequence before the round-trip.

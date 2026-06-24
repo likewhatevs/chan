@@ -97,7 +97,7 @@
   let ackTimer: ReturnType<typeof setTimeout> | null = null;
   let noteTimer: ReturnType<typeof setTimeout> | null = null;
   // True while a just-submitted message is still in flight ("sent"/"queued").
-  // It presents the GREYED, read-only "queued" card (@@Alex's model): the
+  // It presents the greyed, read-only "queued" card: the
   // submitted text stays visible, dimmed, caret hidden, and the editor is
   // read-only so the bytes the agent will read can't be edited out from under
   // it. Back-to-back is reconciled NOT by dropping the lock (that loses the
@@ -114,7 +114,7 @@
   // (pull it back out of the queue to edit) and Esc can drop it.
   let lastQueued: { id: string; text: string } | null = null;
 
-  // CodeMirror read-only lock seam. While a message is in flight the editor is
+  // CodeMirror read-only lock. While a message is in flight the editor is
   // readOnly (programmatic editing commands — Enter-continue-markup, Backspace,
   // Tab-indent — respect it and no-op) but stays EDITABLE (contenteditable) so
   // the caret/keymap remain live: ArrowUp-recall + the `beforeinput` move-on
@@ -703,7 +703,7 @@
   .rp-label.queued {
     color: var(--text-primary);
   }
-  /* Greyed read-only "queued" card (@@Alex's model): the submitted text stays
+  /* Greyed read-only "queued" card: the submitted text stays
      visible but dimmed, with the caret hidden, so it reads as queued-not-
      editable. The editor is `EditorState.readOnly` underneath; typing exits via
      `beforeinput` move-on. The opacity + the hidden caret are the only visual

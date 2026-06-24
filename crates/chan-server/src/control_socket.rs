@@ -29,7 +29,7 @@ pub type TerminalRegistryCell = Arc<OnceLock<Arc<TerminalRegistry>>>;
 
 // The control-socket wire contract (request + response) is shared with
 // the `cs` client through chan-shell, so a tag/field rename moves in
-// lockstep instead of silently breaking one side. The transport seam is
+// lockstep instead of silently breaking one side. The transport module is
 // the only `#[cfg]`-split surface now (unix socket vs. windows named pipe),
 // so these types and every handler below are platform-neutral.
 pub use chan_shell::{ControlRequest, ControlResponse};
@@ -304,7 +304,7 @@ async fn serve_connection(conn: transport::Conn, ctx: ControlSocketCtx) {
     }
 }
 
-/// The cross-platform transport seam — the ONLY `#[cfg]`-split surface for
+/// The cross-platform transport module -- the ONLY `#[cfg]`-split surface for
 /// both the control socket AND the MCP bridge (`mcp_bridge.rs` reuses
 /// `bind`/`accept` + `connect`/`Client`). unix uses a `UnixListener`/`UnixStream`;
 /// windows uses a `tokio::net::windows::named_pipe` server/client. Both yield a
@@ -432,7 +432,7 @@ pub(crate) mod transport {
     // + `Client` are the proxy (client) side the MCP bridge reuses.
     pub use imp::{bind, connect, Client, Conn};
 }
-// transport seam ends here; the request handlers below are platform-neutral.
+// The transport split ends here; the request handlers below are platform-neutral.
 
 // Async because of the one blocking variant (`TermSurvey`); every other
 // arm returns synchronously without awaiting.

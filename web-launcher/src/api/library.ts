@@ -38,7 +38,7 @@ export interface WindowRecord {
    * feed renders it FIRST in its library group; the desktop mints it. */
   control: boolean;
   /**
-   * Server-persisted visibility (Theme 5). The window is buried/hidden on the
+   * Server-persisted visibility. The window is buried/hidden on the
    * desktop, vs shown. Skip-if-default on the wire — OMITTED for visible windows
    * — so the field is OPTIONAL here and ABSENT reads as visible. The launcher is
    * a passive consumer: the desktop persists this at the bury/unbury chokepoint

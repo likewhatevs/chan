@@ -27,7 +27,7 @@ class TestWebSocket {
   readyState = TestWebSocket.OPEN;
   binaryType = "blob";
   onopen: (() => void) | null = null;
-  onmessage: ((event: { data: unknown }) => void) | null = null;
+  onmessage: ((event: { data: unknown }) => void | Promise<void>) | null = null;
   onclose: (() => void) | null = null;
   onerror: (() => void) | null = null;
   sent: string[] = [];
@@ -144,21 +144,14 @@ function openSocket(): TestWebSocket {
 }
 
 describe("TerminalTab activity frames", () => {
-  // SKIPPED for v0.48.0 (terminal-exp modularization). After the refactor this
-  // fails: the unfocused-tab activity dot stays unset because `focused` — now a
-  // `$props()` prop read inside the long-lived `onmessage` closure — evaluates true
-  // when the test passes false. The dot's branch + the parent wiring (Pane.svelte)
-  // are structurally unchanged, so the RUNTIME behaviour is likely preserved, but it
-  // is UNCONFIRMED. Follow-up to investigate + re-enable post-release:
-  // dev/v0.48.0/carryover.md ("terminal-exp activity-dot").
-  test.skip(
+  test(
     "marks an active tab in an unfocused pane when activity arrives",
     async () => {
       const tab = terminalTab();
       await renderTerminal(tab, false);
 
       const socket = openSocket();
-      socket.onmessage?.({
+      await socket.onmessage?.({
         data: JSON.stringify({
           type: "session",
           id: "term-session",
@@ -167,7 +160,7 @@ describe("TerminalTab activity frames", () => {
           bytes_since_focus: 0,
         }),
       });
-      socket.onmessage?.({
+      await socket.onmessage?.({
         data: JSON.stringify({ type: "activity", bytes_since_focus: 12 }),
       });
 

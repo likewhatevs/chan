@@ -11,8 +11,7 @@
   //   chan-workspace layer returns `verified: false` regardless,
   //   matching the "lockout is moot" framing).
   // * Wrong PIN triggers a 400ms shake + clears the input.
-  //   No rate limiting (local-only threat model per the task
-  //   body).
+  //   No rate limiting; the threat model is local-only.
   //
   // Mount strategy: rendered at App root (after every other
   // overlay) so the z-index is unambiguous. The screensaver

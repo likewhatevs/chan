@@ -1,4 +1,4 @@
-//! The launcher's devserver registry seam.
+//! The launcher's devserver registry boundary.
 //!
 //! The launcher lists and mutates the user's configured devservers, but the
 //! devserver set lives in chan-desktop's config (`desktop/src-tauri/src/config.rs`),
@@ -17,7 +17,7 @@
 //!
 //! Errors are plain `String`s: the only consumer is the route layer, which turns
 //! them straight into HTTP bodies, so threading a rich error enum across the
-//! chan-library / chan-server / chan-desktop seam buys nothing.
+//! chan-library / chan-server / chan-desktop boundary buys nothing.
 
 use serde::{Deserialize, Serialize};
 

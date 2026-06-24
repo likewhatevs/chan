@@ -1046,7 +1046,7 @@
   /// Rich Prompt recall: ask the server to pull a still-queued message out of
   /// this session's write queue by its `prompt_id`. The server replies with a
   /// `prompt-cancelled` ack (removed: true|false). Returns whether the WS was
-  /// open. See the wire contract in task-LaneA-LaneC-1.
+  /// open.
   function sendCancelPrompt(id: string): boolean {
     return send({ type: "cancel-prompt", id });
   }

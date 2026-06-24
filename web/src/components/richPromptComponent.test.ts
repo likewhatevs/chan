@@ -10,7 +10,7 @@ import {
   toggleRichPromptForTab,
 } from "../state/richPrompt.svelte";
 
-// Rich Prompt - the Drafts-backed bubble + its toggle + the send seam. The
+// Rich Prompt - the Drafts-backed bubble + its toggle + the sender. The
 // terminal wiring (mount / menu / sink registration / close-discard) is covered
 // in richPromptTerminalWiring.test.ts. Component markup is asserted as source
 // shape (it is a Svelte component, not pure); the real interaction (paste ->
@@ -79,7 +79,7 @@ describe("RichPrompt.svelte component", () => {
     // (submitAgent()) + a client message id, only beginning a pending when the
     // frame actually went out (the data-loss guard).
     expect(richPromptSrc).toMatch(/const id = crypto\.randomUUID\(\);/);
-    // C1: the WIRE payload is the draft text with image refs rewritten from
+    // The wire payload is the draft text with image refs rewritten from
     // draft-file-relative to workspace-rooted, so the receiving agent (at $CWD =
     // workspace root) finds the pasted image instead of 404ing on ./image.png.
     // The card/recall text (`lastQueued`) stays the ORIGINAL text — preview-correct.
@@ -95,7 +95,7 @@ describe("RichPrompt.svelte component", () => {
     expect(richPromptSrc).toMatch(/beginPendingPrompt\(tab, id\);/);
     const submitBody = richPromptSrc.match(/function submit\(\): boolean \{[\s\S]*?\n  \}/)?.[0];
     expect(submitBody).toBeTruthy();
-    // MODEL A: submit KEEPS the text (the greyed card), so it does NOT clear the
+    // Submit KEEPS the text (the greyed card), so it does NOT clear the
     // composer; it guards re-submit while the card is up (no double-deliver),
     // persists the text (reload-restores the card), and remembers it for recall.
     expect(submitBody).not.toContain('insert: ""');
@@ -129,7 +129,7 @@ describe("RichPrompt.svelte component", () => {
   });
 
   test("the greyed read-only card: readOnly lock + caret hidden, reconciled by type-to-move-on", () => {
-    // MODEL A re-applies @@Alex's read-only/greyed/caret-hidden card via a lock
+    // The read-only/greyed/caret-hidden card is applied via a lock
     // compartment, but reconciles back-to-back by exiting on the first keystroke
     // (beforeinput move-on) rather than dropping the lock — so it never STICKS.
     expect(richPromptSrc).toMatch(/lockCompartment/);
@@ -243,7 +243,7 @@ describe("App.svelte Rich Prompt toggle", () => {
   });
 });
 
-describe("prompt-sink send seam (tabs.svelte.ts)", () => {
+describe("prompt-sink sender (tabs.svelte.ts)", () => {
   test("registry + per-terminal sender exist, distinct from the input sink", () => {
     expect(tabs).toMatch(/export function registerTerminalPromptSink\(/);
     // The trailing id is optional: the team orchestrator's lead-identity

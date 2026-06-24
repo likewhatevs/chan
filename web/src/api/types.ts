@@ -602,7 +602,7 @@ export type CsLink = {
   /// Why auto-create is unavailable, when `can_create` is false.
   note?: string | null;
 };
-// Post-open workspace facts for the first-run onboarding nudge (P2). Rides on
+// Post-open workspace facts for the first-run onboarding nudge. Rides on
 // the pre-flight snapshot, present only once the workspace is ready; never
 // feeds the lock gate.
 export type WorkspaceSummary = {

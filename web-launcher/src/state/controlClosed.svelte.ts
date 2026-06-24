@@ -15,7 +15,7 @@
 // abandon), so the user's choice is communicated by the call the SPA makes —
 // Re-run = disconnect+connect, Edit = disconnect+edit form, Abandon = disconnect.
 // Two pieces the SPA does NOT own:
-//   - The stuck Control window record is reaped SERVER-SIDE (@@Devserver T2b) on
+//   - The stuck Control window record is reaped server-side on
 //     PTY exit, uniformly for every outcome incl. Dismiss — neither this SPA nor
 //     the desktop reaps it.
 //   - The desktop flips the devserver `connected:false` UNCONDITIONALLY on the
@@ -122,7 +122,7 @@ export async function editControlClosed(): Promise<void> {
 
 /** Abandon: drop the dead connection (idempotent with the desktop's
  * unconditional `connected:false` flip on the event). The stale Control window
- * record itself is reaped server-side by @@Devserver T2b on PTY exit, not by
+ * record itself is reaped server-side on PTY exit, not by
  * this disconnect, so it leaves the feed regardless. A genuine disconnect
  * failure surfaces in the banner (not swallowed — the disconnect IS the action
  * here). */
@@ -141,7 +141,7 @@ export async function abandonControlClosed(): Promise<void> {
 
 /** Dismiss without acting (backdrop / Escape / ×). No SPA action — yet the dead
  * state still becomes correct without us: the desktop flips `connected:false`
- * unconditionally on the event, and the server (@@Devserver T2b) reaps the
+ * unconditionally on the event, and the server reaps the
  * Control window on PTY exit. */
 export function dismissControlClosed(): void {
   if (controlClosed.busy) return;

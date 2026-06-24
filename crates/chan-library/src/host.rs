@@ -50,7 +50,7 @@ pub struct HostedWorkspace {
 /// their on/off/remove by `workspace_id` (the round-1 by-root path). Rows merged
 /// in from a connected devserver via [`DevserverFeedSource::workspaces`] carry
 /// `devserver_id: Some(..)` + the remote `library_id`, and the SPA groups them by
-/// `devserver_id` and routes their on/off/forget by `prefix` (seam #2's ops).
+/// `devserver_id` and routes their on/off/forget by `prefix`.
 ///
 /// Defined here, not in chan-server's route module, because
 /// [`DevserverFeedSource`] returns it and that trait is a chan-library type the
@@ -79,8 +79,8 @@ pub struct LauncherWorkspace {
     /// stripped) — local AND devserver rows alike. For local rows it equals
     /// `workspace_id`; for devserver rows the feed must strip the remote prefix's
     /// leading slash before tagging so the on/off/forget ops carry a clean slug.
-    /// (Prefixes are single-segment `[a-z0-9-]` slugs, so `%2F` never arises —
-    /// the reason the seam #2 ops can safely round-trip `prefix` as a value.)
+    /// (Prefixes are single-segment `[a-z0-9-]` slugs, so `%2F` never arises;
+    /// the devserver workspace ops can safely round-trip `prefix` as a value.)
     #[serde(default)]
     pub prefix: String,
 }
@@ -104,8 +104,8 @@ pub trait DevserverFeedSource: Send + Sync {
     /// Connected devservers' served workspaces, already tagged with their
     /// `devserver_id` + remote `library_id`, appended to the local workspace
     /// rows by the launcher's list-workspaces route. Each row's `prefix` MUST be
-    /// the slash-free slug (leading slash stripped), so the seam #2 on/off/forget
-    /// ops carry a clean single segment.
+    /// the slash-free slug (leading slash stripped), so on/off/forget routes carry
+    /// a clean single segment.
     fn workspaces(&self) -> Vec<LauncherWorkspace>;
     /// The pane-highlight colour of the connected devserver whose library is
     /// `library_id` — its own `LocalColorStore` value, fetched from the devserver
@@ -167,7 +167,7 @@ pub struct WorkspaceHost {
     /// which tears workspaces down in-process).
     self_weak: OnceLock<Weak<dyn HostControl>>,
     /// The library's persisted window registry — the source of truth for which
-    /// windows exist (D5 ids). Installed once via
+    /// windows exist. Installed once via
     /// [`install_window_registry`](Self::install_window_registry); the window
     /// feed (`assemble_window_records`) reads it. Empty on a host that never
     /// installs one (its window set is empty).
@@ -224,7 +224,7 @@ pub struct WorkspaceHost {
     /// `WindowPresence` connect/disconnect, tenant on/off — so the watch feed
     /// pushes a fresh snapshot. The aggregate every client's reconcile awaits.
     library_change_notify: Arc<Notify>,
-    /// Fires ONLY when the library's pane-highlight colour changes (Theme 6), so
+    /// Fires ONLY when the library's pane-highlight colour changes, so
     /// the `local-color/watch` feed re-pushes `{ color }`. Dedicated (not
     /// `library_change_notify`) so a colour watcher never wakes on unrelated
     /// window-set churn, and window watchers never wake on a colour change.
@@ -452,7 +452,7 @@ impl WorkspaceHost {
         self.library_change_notify.clone()
     }
 
-    /// The colour-change signal the `local-color/watch` feed awaits (Theme 6).
+    /// The colour-change signal the `local-color/watch` feed awaits.
     pub fn local_color_notify(&self) -> Arc<Notify> {
         self.local_color_notify.clone()
     }
@@ -728,7 +728,7 @@ impl WorkspaceHost {
         // A command-less tenant is the SHARED terminal tenant (the one
         // standalone terminal windows attach to); a command-carrying one is a
         // control / single-purpose tenant the desktop exit-watcher manages.
-        // Only the former gets the C4 window-reap hook below.
+        // Only the former gets the window-reap hook below.
         let is_shared_terminal = command.is_none();
         // The builder applies `command` as the tenant's default before the SPA
         // can open the first terminal.
@@ -748,7 +748,7 @@ impl WorkspaceHost {
         artifacts
             .window_presence
             .install_change_notify(self.library_change_notify.clone());
-        // C4: a standalone terminal window IS its PTY. When the shell exits and
+        // A standalone terminal window IS its PTY. When the shell exits and
         // no client is attached, the registry's `reap_exited` closes the session;
         // hook it so the window-feed row leaves with it instead of lingering as a
         // ghost. Scoped to the shared terminal tenant + non-control terminal rows
@@ -885,7 +885,7 @@ impl WorkspaceHost {
     /// token is cloned out of the host. Used by the local-color routes to admit
     /// a window's OWN per-tenant token (not just the launcher token) — a window
     /// is served with its tenant token, so a launcher-only gate would 401 every
-    /// window's colour GET/PUT/watch (C8).
+    /// window's colour GET/PUT/watch.
     pub fn any_tenant_token(&self, accept: impl Fn(&str) -> bool) -> bool {
         let Ok(workspaces) = self.workspaces.read() else {
             return false;
@@ -963,8 +963,8 @@ impl WorkspaceHost {
     /// [`WindowRecord`] (the same shape the feed serves, so a `POST` handler
     /// returns it directly). The registry's create fires the watch via the
     /// bridge; this also fires it directly so the push does not hinge on the
-    /// bridge task's scheduling. The tenant side (ensuring a serving tenant for
-    /// the new window) is layered on with the D-W3 desktop wiring.
+    /// bridge task's scheduling. The tenant side ensures a serving tenant exists
+    /// for the new window.
     pub fn mint_window(
         &self,
         kind: WindowKind,
@@ -993,7 +993,7 @@ impl WorkspaceHost {
         Ok(row.to_record(library_id, prefix, token, connected))
     }
 
-    /// Mint a devserver CONTROL terminal as a real registry row (UNIFY/ARCH):
+    /// Mint a devserver CONTROL terminal as a real registry row:
     /// `kind = Terminal`, `control = true`, tagged with the FOREIGN devserver
     /// `library_id` so it GROUPS under that devserver, but its session is the
     /// LOCAL command tenant at `control_tenant_prefix` (the connect script). The
@@ -1020,7 +1020,7 @@ impl WorkspaceHost {
         Ok(row.to_record(devserver_library_id, prefix, token, connected))
     }
 
-    /// Set a window's persisted visibility (Theme 5): `hidden=true` buries it,
+    /// Set a window's persisted visibility: `hidden=true` buries it,
     /// `false` un-buries. The devserver is the source of truth, so a desktop
     /// connect mirrors the saved layout. Returns whether a row matched (a route
     /// maps `false` to 404). Works on any registry row incl. the control row
@@ -1107,11 +1107,11 @@ impl WorkspaceHost {
 
     /// Discard a window: drop its registry row, reap its terminal sessions, and
     /// fire the watch. Returns whether a row existed (a `DELETE` handler maps
-    /// `false` to 404). The reap is the L5 "discard ⇒ reap" contract: it frees
-    /// the fds a busy detached session would otherwise keep alive. A terminal
-    /// window's sessions reap once @@Desktop's D-W3 terminal tenant is wired;
-    /// until then only that tenant is absent, so the reap is simply a no-op for
-    /// terminal windows (workspace windows reap their panes today).
+    /// `false` to 404). Reaping on discard frees the fds a busy detached session
+    /// would otherwise keep alive. A terminal window's sessions reap once terminal
+    /// tenant wiring is present; until then only that tenant is absent, so the reap
+    /// is simply a no-op for terminal windows (workspace windows reap their panes
+    /// today).
     pub fn discard_window(&self, window_id: &str) -> Result<bool, Error> {
         let registry = self
             .window_registry()
@@ -2074,7 +2074,7 @@ mod tests {
 
     #[tokio::test]
     async fn off_filters_windows_from_feed_but_preserves_them_for_on_restore() {
-        // B3: turning a workspace OFF must HIDE its windows from the live feed
+        // Turning a workspace OFF must HIDE its windows from the live feed
         // (finding #1) but PRESERVE the persisted records so turning it back ON
         // restores them. A terminal window is never workspace-gated. Only FORGET
         // purges (covered by `forget_purges_the_workspaces_windows`).
@@ -2554,7 +2554,7 @@ mod tests {
 
         // Closing the tenant reaps the PTY synchronously: the registry is
         // already drained on return, not eventually via the prune task. This
-        // is the D4 defense — an explicit Disconnect must stop the script now.
+        // An explicit Disconnect must stop the script now.
         assert!(host
             .close_terminal_tenant("/control")
             .expect("close terminal tenant"));
@@ -2732,8 +2732,8 @@ mod tests {
         let ws = registry.create(WindowKind::Workspace, Some("/tmp/notes".into()));
         host.install_window_registry(registry, "lib-abc".into());
 
-        // The off (unmounted) workspace window is FILTERED out of the live feed
-        // (B3: its record is preserved on disk, hidden until the workspace is ON);
+        // The off (unmounted) workspace window is FILTERED out of the live feed:
+        // its record is preserved on disk, hidden until the workspace is ON;
         // only the terminal shows.
         let records = host.assemble_window_records();
         assert_eq!(records.len(), 1, "off workspace filtered; terminal stays");
@@ -2888,7 +2888,7 @@ mod tests {
         assert_eq!(ws.workspace_path.as_deref(), Some("/tmp/notes"));
 
         // The terminal lands in the live feed. The unmounted workspace window is
-        // minted + persisted but FILTERED out (B3) until its workspace is on, so
+        // minted + persisted but FILTERED out until its workspace is on, so
         // the feed shows only the terminal.
         let ids: Vec<String> = host
             .assemble_window_records()
@@ -2988,7 +2988,7 @@ mod tests {
             "non-empty registry → no first-open mint"
         );
         // The pre-existing workspace is unmounted, so its window is filtered from
-        // the live feed (B3); crucially, NO first-open terminal was minted into it.
+        // the live feed; crucially, NO first-open terminal was minted into it.
         assert!(
             !host
                 .assemble_window_records()
@@ -3082,8 +3082,8 @@ mod tests {
             let cfg = tempfile::tempdir().expect("config dir");
             let lib = Library::open_at(cfg.path().join("config.toml")).expect("library");
             let host = Arc::new(WorkspaceHost::new(lib, fake_builder()));
-            // Mount the shared terminal tenant (records terminal_tenant_prefix) —
-            // the D-W3 mount the devserver does at startup.
+            // Mount the shared terminal tenant (records terminal_tenant_prefix),
+            // matching the devserver startup path.
             host.open_terminal_session(serve_config("/api/terminal"), None)
                 .await
                 .expect("mount shared terminal tenant");

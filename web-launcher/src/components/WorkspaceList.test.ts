@@ -1,6 +1,6 @@
 // Component test: WorkspaceList renders the redesigned local rows (icon actions
 // [New window] + [On/Off], no per-row Remove), the merged devserver workspace
-// group (A4) with a select checkbox and NO per-row Forget, and checks a row when
+// group with a select checkbox and NO per-row Forget, and checks a row when
 // it is selected. The single global bulk bar now lives App-level (SelectionBar),
 // not inside the list — covered by SelectionBar.test.ts. Exercises the real
 // Svelte 5 runtime reactivity of the kind-aware selection (a static check
@@ -62,7 +62,7 @@ describe("WorkspaceList redesign", () => {
     expect(labels.some((l) => l.startsWith("Turn off") || l.startsWith("Turn on"))).toBe(true);
   });
 
-  it("renders the connected devserver's workspaces as their own group (A4) with a checkbox, no Forget", () => {
+  it("renders the connected devserver's workspaces as their own group with a checkbox, no Forget", () => {
     target = document.createElement("div");
     document.body.appendChild(target);
     app = mount(WorkspaceList, { target });

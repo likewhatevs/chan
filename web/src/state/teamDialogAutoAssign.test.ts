@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 
 import { autoAssignSlots } from "./teamDialog.svelte";
 
-describe("autoAssignSlots (E1 team auto-assign)", () => {
+describe("autoAssignSlots team auto-assign", () => {
   it("spreads all unassigned members one-per-cell when counts match", () => {
     expect(autoAssignSlots([[], [], [], []], 4)).toEqual([[0], [1], [2], [3]]);
   });

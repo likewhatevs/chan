@@ -88,7 +88,7 @@ pub fn is_vcs_control_path(rel: &str) -> bool {
     matches!(rel, ".git/HEAD" | ".git/index" | ".hg/dirstate")
 }
 
-/// Test seam: the same algorithm as [`detect_parent_vcs`], but with
+/// Test helper: the same algorithm as [`detect_parent_vcs`], but with
 /// an explicit `home` override so tests can workspace the `$HOME` stop
 /// without touching the developer's real home directory.
 pub(crate) fn detect_parent_vcs_with_home(path: &Path, home: Option<PathBuf>) -> Option<VcsParent> {

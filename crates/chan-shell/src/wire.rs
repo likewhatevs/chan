@@ -368,8 +368,7 @@ pub struct SurveySpec {
     /// Team context for the `[F]` path, so C's reply route can land the
     /// followup at `{dir}/followups/followup-{from}-{to}-{n}.md` without
     /// re-deriving the team-dir (a workspace may hold several teams). The
-    /// CLI populates it ONLY when `--followup` is set; `null` otherwise
-    /// (2026-06-01 contract amendment).
+    /// CLI populates it ONLY when `--followup` is set; `null` otherwise.
     #[serde(default)]
     pub followup: Option<SurveyFollowup>,
 }

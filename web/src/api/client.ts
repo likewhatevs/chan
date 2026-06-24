@@ -2,7 +2,7 @@
 // (token plumbing, fetch shape, WebSocket reconnect) live in
 // `./transport.ts`. Both `chan serve` and the Tauri desktop shell
 // reach the same in-process server over loopback HTTP+WS, so there
-// is one transport implementation, not a polymorphic seam.
+// is one transport implementation rather than platform-specific clients.
 
 import type {
   BuildInfo,
@@ -1391,7 +1391,7 @@ function encPath(p: string): string {
 }
 
 export type { WsStatus } from "./transport";
-// Theme 6: the dedicated per-library focus-colour watch (App.svelte subscribes
+// Dedicated per-library focus-colour watch (App.svelte subscribes
 // once per window). Self-contained in transport.ts; surfaced here so the SPA
 // imports it from the api module like the rest of the client surface.
 export { openLocalColorWatch } from "./transport";

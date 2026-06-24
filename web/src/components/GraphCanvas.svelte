@@ -523,7 +523,7 @@
 
   function renderRadius(kind: DKind, id: string): number {
     // Workspace root is the structural anchor of the whole graph - per
-    // E2 it's 1.5x every other directory so the hub reads at a
+    // It is 1.5x every other directory so the hub reads at a
     // glance. Doc nodes stay at the prior RADIUS_DOC; folder
     // (non-workspace) nodes stay at RADIUS_DIR.
     const base =
