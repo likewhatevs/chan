@@ -69,6 +69,12 @@ use serde::Serialize;
 
 mod update;
 
+/// Default listen port shared by `chan open` (standalone serve) and
+/// `chan devserver`. Single-sourced so the two cannot drift: `cmd_serve` relies
+/// on them being equal to recognize the "a devserver already owns 8787" bind
+/// collision and print an actionable hint instead of a bare "address in use".
+const DEFAULT_PORT: u16 = 8787;
+
 /// Extended `long_about` for `chan open` (the workspace-serve form). The
 /// keybindings list is generated from `web/src/state/shortcuts.ts` (the
 /// single source of truth for chan's chords). Resync after any change to that file
@@ -246,7 +252,7 @@ enum Command {
         /// Mutually exclusive with -4.
         #[arg(short = '6', long = "ipv6")]
         ipv6: bool,
-        #[arg(long, default_value_t = 8787)]
+        #[arg(long, default_value_t = DEFAULT_PORT)]
         port: u16,
         /// URL path prefix to mount the server under. Lets a reverse
         /// proxy multiplex many `chan open` instances under one host
@@ -324,7 +330,7 @@ enum Command {
         #[arg(long, default_value = "127.0.0.1")]
         bind: IpAddr,
         /// Port to bind.
-        #[arg(long, default_value_t = 8787)]
+        #[arg(long, default_value_t = DEFAULT_PORT)]
         port: u16,
         /// Run under a systemd user service (Linux): create and start the
         /// `chan-devserver.service` user unit (re-attaching if it is already
@@ -1741,9 +1747,43 @@ async fn cmd_serve(args: ServeArgs, personality: Personality) -> Result<()> {
         // from themselves.
         settings_disabled: no_settings,
     };
-    chan_server::serve(lib, workspace, config)
-        .await
-        .with_context(|| format!("running server on {addr}"))
+    // A standalone `chan open` defaults to `DEFAULT_PORT` (8787) — the SAME
+    // default as `chan devserver`. When a devserver already owns that port but
+    // its handoff did NOT mount this workspace (version skew, mount error, or
+    // the registration was opted out), the fall-through standalone bind here
+    // collides. Recognize that exact case and print an actionable hint instead
+    // of a bare "address already in use", which otherwise reads as a chan bug.
+    let serve_result = chan_server::serve(lib, workspace, config).await;
+    if let Err(err) = &serve_result {
+        if let Some(hint) = devserver_port_collision_hint(addr.port(), err) {
+            return Err(anyhow::anyhow!(hint));
+        }
+    }
+    serve_result.with_context(|| format!("running server on {addr}"))
+}
+
+/// Actionable hint for the one bind failure a user is most likely to hit and
+/// least likely to diagnose: `chan open` falling through to a standalone bind
+/// on `DEFAULT_PORT` while a `chan devserver` already owns it. Returns `Some`
+/// only for an `AddrInUse` on exactly that port; every other error falls
+/// through to the generic "running server on {addr}" context unchanged (no
+/// behaviour change — this is purely a clearer message).
+fn devserver_port_collision_hint(port: u16, err: &chan_server::Error) -> Option<String> {
+    if port != DEFAULT_PORT {
+        return None;
+    }
+    let chan_server::Error::Io(io_err) = err else {
+        return None;
+    };
+    if io_err.kind() != std::io::ErrorKind::AddrInUse {
+        return None;
+    }
+    Some(format!(
+        "port {DEFAULT_PORT} is already in use — most likely held by a running \
+         `chan devserver` (its default port). The handoff did not mount this \
+         workspace there, so `chan open` fell through to a standalone server and \
+         could not bind. Re-run with `--port N` to use a different port."
+    ))
 }
 
 /// Run a headless multi-workspace devserver bound to `bind:port`. By default
@@ -4324,6 +4364,31 @@ fn print_import_summary(summary: &chan_workspace::ImportSummary) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn devserver_collision_hint_only_on_default_port_addr_in_use() {
+        use std::io::{Error as IoError, ErrorKind};
+        let in_use = || chan_server::Error::Io(IoError::from(ErrorKind::AddrInUse));
+
+        // Default port + AddrInUse → the actionable hint, naming the port and
+        // the `--port` escape hatch.
+        let hint = devserver_port_collision_hint(DEFAULT_PORT, &in_use()).expect("hint");
+        assert!(hint.contains(&DEFAULT_PORT.to_string()), "{hint}");
+        assert!(hint.contains("--port"), "{hint}");
+
+        // A non-default port is not special-cased (the collision is specific to
+        // the shared devserver default) → falls through.
+        assert!(devserver_port_collision_hint(9999, &in_use()).is_none());
+
+        // A different io error on the default port is not the collision → falls
+        // through to the generic context.
+        let denied = chan_server::Error::Io(IoError::from(ErrorKind::PermissionDenied));
+        assert!(devserver_port_collision_hint(DEFAULT_PORT, &denied).is_none());
+
+        // A non-io error on the default port falls through too.
+        let cfg = chan_server::Error::Config("nope".into());
+        assert!(devserver_port_collision_hint(DEFAULT_PORT, &cfg).is_none());
+    }
 
     #[test]
     fn devserver_url_discriminator() {
