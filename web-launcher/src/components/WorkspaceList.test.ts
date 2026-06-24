@@ -68,8 +68,8 @@ describe("WorkspaceList redesign", () => {
     app = mount(WorkspaceList, { target });
 
     // The seed devserver "prod" is connected, so its served workspaces merge in
-    // under a "↗ prod" group header.
-    expect(target.textContent).toContain("↗ prod");
+    // under a "🌐 prod" group header.
+    expect(target.textContent).toContain("🌐 prod");
     expect(target.textContent).toContain("/srv/api");
     // Served rows are now bulk-managed like local ones: no per-row Forget, and a
     // select checkbox (the ordered Remove lives in the global bar).

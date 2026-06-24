@@ -45,7 +45,7 @@
 
 {#if library.devservers.length}
   <section class="group">
-    <h2 class="group-title">↗ Devservers</h2>
+    <h2 class="group-title">🌐 Devservers</h2>
 
     <ul class="rows">
       {#each library.devservers as ds (ds.id)}

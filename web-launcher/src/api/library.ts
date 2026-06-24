@@ -109,7 +109,7 @@ export interface DevserverEntry {
   has_token: boolean;
   /**
    * The library id this devserver is assigned once known, joining its window
-   * rows in the feed to the user's name for it (the "↗ + name" remote label).
+   * rows in the feed to the user's name for it (the "🌐 + name" remote label).
    * null before the devserver's first connect, when no library id exists yet.
    */
   library_id: string | null;

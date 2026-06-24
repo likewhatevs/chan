@@ -178,7 +178,7 @@
 
 {#each remoteGroups as g (g.devserverId)}
   <section class="group">
-    <h2 class="group-title">↗ {g.label}</h2>
+    <h2 class="group-title">🌐 {g.label}</h2>
     <ul class="rows">
       {#each g.workspaces as ws (ws.workspace_id)}
         <li class="row" class:selected={!readOnly && isSelected("served", ws.prefix, g.devserverId)}>
