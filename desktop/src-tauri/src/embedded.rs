@@ -516,11 +516,14 @@ fn map_open_error(key: &str, e: chan_server::Error) -> String {
 }
 
 /// On-disk dir for the standalone `/terminal` tenant's per-window layout blobs
-/// (`~/.chan/terminal-sessions`, created on first use). `None` if the home dir
-/// can't be resolved — the tenant then keeps layout in-memory (it just won't
-/// persist across relaunch).
+/// (`~/.chan/terminal-sessions`, created on first use). Routed through
+/// `chan_workspace::paths::config_dir` (the single config-dir authority) so a
+/// `CHAN_HOME` override isolates a smoke instance — byte-identical to the old
+/// inlined `~/.chan/terminal-sessions` when `CHAN_HOME` is unset. `None` only if
+/// the dir can't be created — the tenant then keeps layout in-memory (it just
+/// won't persist across relaunch).
 async fn local_terminal_session_dir() -> Option<std::path::PathBuf> {
-    let dir = dirs::home_dir()?.join(".chan").join("terminal-sessions");
+    let dir = chan_workspace::paths::config_dir().join("terminal-sessions");
     // `tokio::fs` keeps the dir-create off the runtime thread (async-audit C3):
     // `open_terminal` is async, so a blocking `std::fs::create_dir_all` would
     // stall the event loop.
