@@ -1,0 +1,58 @@
+# devserver-proxy: public service at devserver.<domain> (apex: tunnel register +
+# admin + healthz) and *.devserver.<domain> (wildcard: reverse-proxy tenant
+# content into registered chan devserver peers). Stateless; no Postgres.
+#
+# Two ports: 7002 carries HTTP (apex + wildcard, dispatched on Host); 7100 is the
+# h2c tunnel-registration listener that `chan devserver --tunnel-url` dials.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: chan-gateway-devserver-proxy
+  labels:
+    app.kubernetes.io/name: devserver-proxy
+    app.kubernetes.io/part-of: chan-gateway
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: devserver-proxy
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: devserver-proxy
+        app.kubernetes.io/part-of: chan-gateway
+    spec:
+      containers:
+        - name: devserver-proxy
+          image: chan-gateway-devserver-proxy:dev
+          # BIND_ADDR=0.0.0.0:7002 + TUNNEL_BIND_ADDR=0.0.0.0:7100 baked in;
+          # URLs/tokens from ConfigMap/Secret.
+          envFrom:
+            - configMapRef: { name: chan-gateway-config }
+            - secretRef: { name: chan-gateway-secrets }
+          ports:
+            - { name: http, containerPort: 7002 }
+            - { name: tunnel, containerPort: 7100 }
+          readinessProbe:
+            httpGet: { path: /healthz, port: 7002 }
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /healthz, port: 7002 }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: chan-gateway-devserver-proxy
+  labels:
+    app.kubernetes.io/part-of: chan-gateway
+spec:
+  # Public surface; a TLS terminator routes devserver.<domain> + the wildcard
+  # here on :7002, and grpc/h2c-passes the tunnel register endpoint to :7100.
+  selector:
+    app.kubernetes.io/name: devserver-proxy
+  ports:
+    - { name: http, port: 7002, targetPort: 7002 }
+    - { name: tunnel, port: 7100, targetPort: 7100 }

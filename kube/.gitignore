@@ -1,0 +1,2 @@
+# Filled-in secret (copied from secret.example.yaml) must never be committed.
+secret.yaml

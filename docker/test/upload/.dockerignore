@@ -1,0 +1,4 @@
+# Context for the upload-tester image is this directory only; keep any local
+# npm install output out of the build context (the image runs its own install).
+node_modules
+npm-debug.log

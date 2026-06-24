@@ -1,0 +1,10 @@
+{
+  "name": "chan-upload-test",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Headless-Chrome browser-upload proof against a chan server.",
+  "dependencies": {
+    "puppeteer-core": "^23.0.0"
+  }
+}

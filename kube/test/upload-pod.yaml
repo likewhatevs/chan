@@ -1,0 +1,60 @@
+# D4: headless-Chrome browser-upload proof, as one sdme pod.
+#
+# Two containers share a network namespace (localhost) and a /workspace volume:
+#   - chan: serves an empty workspace on 127.0.0.1:8787 with the token gate off.
+#   - upload-tester: headless chromium POSTs a file to /api/files/upload from the
+#     chan page's origin, then stat's the landed file on the shared volume.
+#
+# Run (privileged; see ../README.md):
+#   sudo sdme kube apply -f kube/test/upload-pod.yaml --base-fs <base>
+#   sudo sdme logs chan-upload-test --oci    # look for the upload-tester PASS line
+#   sudo sdme kube delete chan-upload-test
+#
+# The proof: a BROWSER upload succeeds. chan-desktop's Tauri upload ACL gates the
+# desktop client only; a browser is not subject to it.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: chan-upload-test
+  labels:
+    app.kubernetes.io/part-of: chan-gateway
+    app.kubernetes.io/component: upload-test
+spec:
+  # One-shot test: the tester exits, chan keeps running; read the tester's log.
+  restartPolicy: Never
+  containers:
+    - name: chan
+      image: chan:dev
+      imagePullPolicy: IfNotPresent
+      # ENTRYPOINT is `chan`; override only the args. --no-token drops the bearer
+      # gate so the browser request needs no credential. --standalone/--here
+      # serve the mounted dir verbatim without the desktop/devserver handoff.
+      args: ["open", "/workspace", "--host", "0.0.0.0", "--port", "8787",
+             "--no-browser", "--standalone", "--here", "--no-token"]
+      # Test-only: run as root so the write into the shared volume (the actual
+      # proof) always succeeds regardless of the emptyDir's owner. The shipped
+      # image runs as the non-root `chan` user.
+      securityContext:
+        runAsUser: 0
+      ports:
+        - containerPort: 8787
+      volumeMounts:
+        - { name: workspace, mountPath: /workspace }
+      readinessProbe:
+        tcpSocket: { port: 8787 }
+        initialDelaySeconds: 2
+        periodSeconds: 3
+
+    - name: upload-tester
+      image: chan-upload-test:dev
+      imagePullPolicy: IfNotPresent
+      env:
+        - { name: CHAN_URL, value: "http://127.0.0.1:8787" }
+        - { name: UPLOAD_DIR, value: "." }
+        - { name: WORKSPACE_PATH, value: "/workspace" }
+        - { name: FILENAME, value: "browser-upload-proof.txt" }
+      volumeMounts:
+        - { name: workspace, mountPath: /workspace, readOnly: true }
+  volumes:
+    - name: workspace
+      emptyDir: {}

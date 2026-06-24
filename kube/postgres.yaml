@@ -1,0 +1,85 @@
+# Postgres backing store for profile and identity (both run sqlx migrations on
+# boot and hold state here). devserver-proxy is stateless and does not use it.
+#
+# Single replica with a PersistentVolumeClaim. profile/identity retry their boot
+# connection via restartPolicy until Postgres is ready, so no explicit ordering
+# is needed. postgres:16 matches the version CI tests against.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: chan-gateway-postgres-data
+  labels:
+    app.kubernetes.io/part-of: chan-gateway
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 2Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: chan-gateway-postgres
+  labels:
+    app.kubernetes.io/name: postgres
+    app.kubernetes.io/part-of: chan-gateway
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: postgres
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: postgres
+        app.kubernetes.io/part-of: chan-gateway
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16
+          env:
+            - name: POSTGRES_USER
+              valueFrom: { configMapKeyRef: { name: chan-gateway-config, key: POSTGRES_USER } }
+            - name: POSTGRES_DB
+              valueFrom: { configMapKeyRef: { name: chan-gateway-config, key: POSTGRES_DB } }
+            - name: POSTGRES_PASSWORD
+              valueFrom: { secretKeyRef: { name: chan-gateway-secrets, key: POSTGRES_PASSWORD } }
+            # Keep PGDATA in a subdir so the volume's lost+found does not collide
+            # with initdb's empty-dir requirement.
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          ports:
+            - containerPort: 5432
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "chan", "-d", "chan_gateway"]
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-U", "chan"]
+            initialDelaySeconds: 10
+            periodSeconds: 10
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: chan-gateway-postgres-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: chan-gateway-postgres
+  labels:
+    app.kubernetes.io/part-of: chan-gateway
+spec:
+  selector:
+    app.kubernetes.io/name: postgres
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: 5432
