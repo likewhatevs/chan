@@ -1457,44 +1457,75 @@ fn spawn_control_terminal_exit_watcher(
                 if let Some(embedded) = state.embedded() {
                     embedded.reap_control_window(&serve::control_terminal_label(&id));
                 }
-                // The control-script PTY exited — but that is a CONNECTION LOSS
-                // only if the devserver is now UNREACHABLE. The control script's
-                // role varies: a SETUP-style script exits 0 after bringing a
-                // still-reachable devserver up (NOT a disconnect — the connection is
-                // live), while a TUNNEL script dying leaves the devserver
-                // unreachable. So PROBE reachability and key the disconnect on THAT,
-                // not on the control script's liveness. (Regression fix: the §3 flip
-                // fired on EVERY control-PTY exit, so a setup-script exit right after
-                // connect falsely flipped the live devserver to disconnected —
-                // is_connected stopped reflecting the live connection, and the later
-                // gate then skipped the real survey.) Only while still connected: a
-                // disconnect-driven reap is expected teardown, not a surprise.
+                // C2 (v0.48.0, @@Alex's rule): the control script IS the connection
+                // for a SCRIPT-based devserver — an `ssh -N` tunnel, a foreground
+                // `chan devserver`, etc. — so its PTY exiting means the session
+                // ended, FULL STOP. Disconnect ALWAYS: flip `connected:false` +
+                // survey re-run/abandon. This deliberately drops the old reachability
+                // probe that kept a "setup-style" script's devserver connected after
+                // the script exited 0 — that heuristic let a broken-pipe SSH linger
+                // as "connected" (the user's "^C and no dialog shows"). A persistent
+                // connection must now keep its script alive.
+                //
+                // Scriptless (host/port/token) devservers keep the reachability
+                // lifecycle, but they have NO control terminal — this watcher is
+                // spawned only when a connect script ran (`control.is_some()`), so it
+                // never runs for them. The `config.script` check makes that invariant
+                // explicit and preserves the scriptless contract if the spawn
+                // condition ever widens. (Lock held only for this synchronous read —
+                // never across the `fetch_info` await below.)
+                let script_based = state
+                    .store
+                    .lock()
+                    .unwrap()
+                    .get()
+                    .ok()
+                    .and_then(|cfg| {
+                        cfg.devservers
+                            .iter()
+                            .find(|d| d.id == id)
+                            .map(|d| !d.script.trim().is_empty())
+                    })
+                    .unwrap_or(false);
+                // Only while still connected: a disconnect-driven reap is expected
+                // teardown, not a surprise this watcher owns.
                 if state.devservers.is_connected(&id) {
-                    let reachable = match state.devservers.get(&id) {
-                        Some(conn) => devserver::fetch_info(&conn.host, conn.port).await.is_ok(),
-                        None => false,
-                    };
-                    if reachable {
-                        // The connect script finished its setup; the devserver is
-                        // live. Stay connected (is_connected reflects the LIVE
-                        // connection); no survey. The control row was reaped above;
-                        // its window stays showing the script's final output.
+                    if script_based {
                         tracing::info!(
                             devserver = %id,
                             status = code,
-                            "control script exited but the devserver is still reachable; staying connected"
+                            "control script exited; disconnecting (script == connection) + surveying re-run vs abandon"
                         );
-                    } else {
-                        tracing::info!(
-                            devserver = %id,
-                            status = code,
-                            "control terminal exited and the devserver is unreachable; surveying re-run vs abandon"
-                        );
-                        // Bug-B §3: the connection is dead — flip `connected:false`
-                        // NOW, before the SPA survey, so a Dismiss/no-response can't
-                        // leave the launcher showing it connected.
+                        // Flip `connected:false` NOW, before the SPA survey, so a
+                        // Dismiss / no-response can't leave the launcher showing it
+                        // connected.
                         flip_devserver_control_dead(&state, &id);
                         let _ = app.emit("devserver-control-closed", id);
+                    } else {
+                        // Defensive only: a scriptless devserver has no control
+                        // terminal today, so this branch is unreachable. Preserve the
+                        // reachability lifecycle if the watcher's spawn ever widens.
+                        let reachable = match state.devservers.get(&id) {
+                            Some(conn) => {
+                                devserver::fetch_info(&conn.host, conn.port).await.is_ok()
+                            }
+                            None => false,
+                        };
+                        if reachable {
+                            tracing::info!(
+                                devserver = %id,
+                                status = code,
+                                "scriptless control exit but the devserver is still reachable; staying connected"
+                            );
+                        } else {
+                            tracing::info!(
+                                devserver = %id,
+                                status = code,
+                                "scriptless control exit and unreachable; surveying re-run vs abandon"
+                            );
+                            flip_devserver_control_dead(&state, &id);
+                            let _ = app.emit("devserver-control-closed", id);
+                        }
                     }
                 }
                 return;
