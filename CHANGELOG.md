@@ -6,6 +6,48 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [v0.49.0] - 2026-06-24
+
+A UI-responsiveness, desktop-presentation, and packaging release: the chan-launcher
+now drives its on/off and connect spinners from real backend lifecycle state instead
+of a fixed optimistic timer, turning a workspace on during boot no longer false-errors,
+the desktop "Window Hidden" notice is centered, every local window title shows the home
+glyph, `cs upload` works from a tunnel window, and chan plus the gateway services now
+ship as container images with Kubernetes manifests.
+
+### Added
+
+- **Container images and Kubernetes manifests.** Multi-stage Dockerfiles for the `chan`
+  binary and the gateway services (identity, profile, devserver-proxy) under `docker/`,
+  plus `kube/` manifests for the gateway stack (Deployments, Services, ConfigMap, Secret,
+  Postgres, and an sdme single-pod variant). Validated under sdme: images build, the
+  gateway services answer `/healthz`, and a headless-browser upload lands.
+- **`cmd+r` / `ctrl+r` reloads the launcher window** in chan-desktop.
+
+### Changed
+
+- **The launcher drives its spinners from real backend status.** Workspace and devserver
+  toggles reflect the backend lifecycle — workspace `stopped | starting | running |
+  error` and devserver `disconnected | connecting | connected` — instead of a fixed 45s
+  optimistic timer. A toggle spins while its workspace is starting and is disabled
+  mid-transition, an errored mount surfaces its reason on the row, and a devserver
+  disconnect clears the connect spinner with no manual reload.
+- **The "Window Hidden" notice is centered.** chan-desktop replaces the native
+  left-aligned alert with a custom centered notice (icon, title, text, and OK button).
+- **Every local window title shows the home glyph (🏠).** The desktop-monitor glyph for
+  paths outside `$HOME` is gone; all local windows show 🏠 and remote/devserver windows
+  keep the globe (🌐).
+- **`cs upload` works from a tunnel window.** chan-desktop grants `pick_upload_files` to
+  tunnel (devserver) windows, so uploading a file over an ssh tunnel opens the picker
+  instead of failing with an ACL error.
+
+### Fixed
+
+- **Turning a workspace on during boot no longer false-errors.** A turn-on for a
+  workspace that this chan process is already mounting (or has mounted) is idempotent;
+  the "another process is locking the workspace" error now fires only for a genuinely
+  foreign lock holder, not for chan's own in-flight mount during boot-restore.
+
 ## [v0.48.0] - 2026-06-24
 
 A devserver / launcher window-lifecycle, identity, and presentation release: the
