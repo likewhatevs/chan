@@ -6,6 +6,65 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [v0.48.0] - 2026-06-24
+
+A devserver / launcher window-lifecycle, identity, and presentation release: the
+per-library pane focus-border colour now actually persists and reaches every window
+of a chan-library (a root-cause fix), same-basename workspaces coexist, the control
+terminal echoes the command it runs, a new `CHAN_HOME` isolates a chan instance, and
+a batch of presentation + hygiene fixes — several carried over from v0.47.0.
+
+### Added
+
+- **`CHAN_HOME` environment variable.** Point chan at a different home directory —
+  config, workspace registry, devserver tree, window/terminal state — without
+  changing `$HOME` (e.g. `CHAN_HOME=/tmp/scratch chan …` for a fully isolated
+  instance). When it is set, chan-desktop also installs its `chan`/`cs` shims under
+  `CHAN_HOME/.local/bin`.
+- **The control terminal echoes its command.** A script-based devserver's control
+  terminal prints `running: <command>` before it runs, so the connect command is
+  visible.
+
+### Changed
+
+- **Devserver windows use a 🌐 globe icon** — in window titles and the launcher feed
+  — replacing the old outbox-tray / arrow glyph.
+- **The shell is never hardcoded.** Terminals and the macOS PATH-harvest resolve the
+  user's configured shell uniformly (`$SHELL` → passwd entry → `/bin/sh`); the old
+  `/bin/sh` / `/bin/zsh` fallbacks are gone.
+- **Two workspaces with the same folder name can be open at once.** A workspace's
+  mount prefix is now `/{name}-{hash}` (a short hash of its canonical path), so
+  `foo/notes` and `bar/notes` no longer collide.
+- The launcher's *Workspaces* and *Devservers* rows align their labels left, matching
+  *Open windows*.
+
+### Fixed
+
+- **Per-library pane focus-border colour now persists and propagates.** Setting a
+  pane's focus colour persists for the chan-library, and a newly-opened window (local
+  or devserver, terminal or workspace) shows it. Previously the change never
+  persisted — the request was misrouted under the window's tenant prefix and 404'd —
+  so new windows fell back to the default blue.
+- **Pasted rich-prompt images resolve for the receiving agent.** An image pasted into
+  the rich prompt is delivered as a workspace-rooted path, so the agent finds it at
+  its working directory instead of 404ing.
+- **Terminals no longer blank under a full-screen TUI** (e.g. claude code). The
+  reattach reply-gating that could stall and drop live cursor/device-status replies
+  was removed (at the cost of an occasional historical reply echoing at the prompt).
+- A **script-based devserver disconnects immediately** when its control script exits:
+  no lingering "connected", the control row leaves the feed, and the re-run / abandon
+  prompt appears.
+- The launcher's **control-closed survey fires again** — the remote-served launcher
+  was missing the `core:event` listen permission.
+- Same-name workspaces no longer **crash the launcher** with a duplicate-key error.
+- `chan open` on a port a devserver already holds (`:8787`) prints an **actionable
+  message** instead of a raw `EADDRINUSE`.
+- A **standalone terminal window leaves the feed** when its shell exits while
+  detached, instead of lingering as a ghost.
+- A devserver's **Control terminal groups under its devserver** in *Open windows*,
+  not under a blank header.
+- Clicking the **eye on a just-closed window** is a clean no-op — no console errors.
+
 ## [v0.47.0] - 2026-06-23
 
 A devserver / launcher lifecycle release: `chan devserver` gains tunnel-only and
