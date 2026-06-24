@@ -336,6 +336,38 @@ pub async fn fetch_workspaces(conn: &DevserverConn) -> Result<Vec<DevserverWorks
         .collect()
 }
 
+/// One `{ color }` frame of the devserver's `/api/library/local-color` GET.
+#[derive(serde::Deserialize)]
+struct LocalColorResponse {
+    color: Option<String>,
+}
+
+/// `GET /api/library/local-color`: the devserver library's pane-highlight colour
+/// (`#rrggbb`), or `None` for the default accent. Fetched ONCE on connect to warm
+/// the desktop's per-devserver colour cache BEFORE the window watcher opens any
+/// window, so a devserver window seeds its `?pane=` colour from the first build
+/// instead of flashing blue until the async colour watch pushes (C8 / D5). The
+/// colour watch (`stream_color_feed`) keeps it live thereafter.
+pub async fn fetch_local_color(conn: &DevserverConn) -> Result<Option<String>, String> {
+    let url = format!(
+        "{}/api/library/local-color",
+        base_origin(&conn.host, conn.port)
+    );
+    let resp = http_client()?
+        .get(&url)
+        .bearer_auth(&conn.token)
+        .send()
+        .await
+        .map_err(|e| format!("fetching devserver colour: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("devserver colour returned HTTP {}", resp.status()));
+    }
+    resp.json::<LocalColorResponse>()
+        .await
+        .map(|r| r.color)
+        .map_err(|e| format!("decoding devserver colour: {e}"))
+}
+
 /// Turn a wire `WorkspaceEntry` into a launcher row, assembling the tenant URL
 /// from its token. An off (registered-but-unmounted) row carries `token:""` and
 /// gets an empty URL — it has no live tenant; the launcher renders it off and

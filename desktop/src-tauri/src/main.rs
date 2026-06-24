@@ -1674,6 +1674,27 @@ async fn connect_devserver_impl(
             )?;
         }
     }
+    // C8 / D5: warm this devserver's pane-colour cache BEFORE the window watcher
+    // opens any window, so a devserver window seeds its `?pane=` colour from the
+    // FIRST build instead of flashing blue until the async colour watch
+    // (`spawn_devserver_color_watch`, below) pushes the first frame. The cache is
+    // keyed by devserver id and read through `pane_color` at mint time; the watch
+    // keeps it live for later changes. Best-effort: a fetch failure just leaves the
+    // cache cold (the watch fills it shortly), so connect must NOT fail on it. (The
+    // local library needs no analog — its `pane_color("local")` reads the persisted
+    // desktop config directly, always fresh.)
+    match devserver::fetch_local_color(&conn).await {
+        Ok(color) => {
+            state.devserver_feed.set_color(id.clone(), color);
+        }
+        Err(e) => {
+            tracing::debug!(
+                devserver = %id,
+                error = %e,
+                "eager pane-colour seed failed; the colour watch will fill it",
+            );
+        }
+    }
     // The window watcher is the SOLE driver of this devserver's native windows:
     // spawn it over the library feed (`/api/library/windows/watch`), and its
     // snapshots reconcile open whatever the devserver persisted. An EMPTY feed is
@@ -4743,6 +4764,49 @@ mod tests {
         assert_eq!(feed.library_id_of("ds-1"), Some("lib-abc123".to_string()));
         // The seed is per-devserver; an unrelated id stays unresolved.
         assert_eq!(feed.library_id_of("ds-2"), None);
+    }
+
+    #[test]
+    fn pane_color_resolves_once_colour_cached_and_window_seeded() {
+        // C8 / D5: a devserver window seeds its `?pane=` colour through
+        // `pane_color`, which maps library_id -> devserver id via a registered
+        // window snapshot, then reads the per-devserver colour cache. On a FRESH
+        // connect that cache is cold until the async colour watch pushes its first
+        // frame, so the first windows seeded `None` and flashed blue. D5 warms the
+        // cache eagerly on connect (`fetch_local_color` -> `set_color` before the
+        // window watcher opens anything); this pins the resolution the seed relies
+        // on.
+        use chan_server::DevserverFeedSource;
+        let feed = DevserverFeed::default();
+        let lib = "lib-deadbeef";
+        let snapshot = Arc::new(Mutex::new(vec![chan_server::WindowRecord {
+            window_id: "w-1".into(),
+            library_id: lib.into(),
+            kind: chan_server::WindowKind::Terminal,
+            title: "Terminal".into(),
+            ordinal: 1,
+            workspace_path: None,
+            prefix: "/lib".into(),
+            token: "tok".into(),
+            persisted: true,
+            connected: true,
+            active_transfer: false,
+            control: false,
+            hidden: false,
+        }]));
+        feed.register_windows("ds-1".to_string(), snapshot);
+        // Cache cold (the pre-D5 fresh-connect gap) -> the window seeds None (blue).
+        assert_eq!(feed.pane_color(lib), None);
+        // Eager seed (D5) warms the cache -> the first window seeds the colour.
+        feed.set_color("ds-1".to_string(), Some("#ff8800".to_string()));
+        assert_eq!(feed.pane_color(lib), Some("#ff8800".to_string()));
+        // Seam-5 corollary: a GENUINE clear (the devserver dropped its colour) still
+        // propagates — a null push removes the cache so new windows fall back to the
+        // accent. (The null-no-clobber invariant lives on the WEB live-apply side,
+        // which f407f2eb already fixed; the desktop cache must still reflect a real
+        // clear, so the eager seed mustn't blanket-ignore nulls.)
+        feed.set_color("ds-1".to_string(), None);
+        assert_eq!(feed.pane_color(lib), None);
     }
 
     #[test]
