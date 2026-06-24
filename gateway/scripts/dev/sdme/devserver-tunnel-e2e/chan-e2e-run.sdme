@@ -1,0 +1,18 @@
+# chan-e2e-run: minimal Ubuntu runtime rootfs for the devserver-tunnel e2e.
+# Carries just the diagnostic/runtime tools the harness needs inside the two
+# zone containers (the proxy + the chan devserver). The release binaries are
+# copied in at container-create time (they change per build); the tools here
+# are static, so baking them once keeps each run from paying an apt round trip
+# and lets the containers run on an isolated zone with no outbound internet.
+#
+#   iproute2        `ip route` -> the host gateway a container dials for the
+#                   cross-zone/host-routed tunnel + the stub identity
+#   curl            in-container HTTP probes (host-side curl covers the rest)
+#   ca-certificates harmless; the e2e is http/h2c only (no TLS) so not required
+#
+# Build: sudo sdme fs build -f chan-e2e-run chan-e2e-run.sdme
+FROM ubuntu
+RUN apt-get update && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        iproute2 iputils-ping curl ca-certificates hostname python3 && \
+    rm -rf /var/lib/apt/lists/*
