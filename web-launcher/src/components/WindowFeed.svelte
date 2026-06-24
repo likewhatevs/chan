@@ -15,10 +15,30 @@
   // icon on the feed round-trip. The read-only surface (gateway/devserver, no
   // desktop bridge) has no actions and keeps the static connection dot.
   import { Eye, EyeOff, Focus } from "lucide-svelte";
-  import { library, focusWindow, remoteLibraryName, toggleWindow } from "../state/library.svelte";
+  import {
+    library,
+    focusWindow,
+    remoteLibraryName,
+    toggleWindow,
+    reportError,
+    clearError,
+  } from "../state/library.svelte";
   import { LOCAL_LIBRARY_ID, librarySectionLabel, windowRowLabel } from "../lib/windowLabel";
   import { readOnly } from "../state/capabilities";
   import type { WindowRecord } from "../api/library";
+
+  // The FOCUS / SHOW-HIDE bridge ops reject on a surface with no desktop and on a
+  // stale/reaped window (the native window is gone). Catch here and surface the
+  // failure in the banner instead of letting a floating promise reject into the
+  // console — the eye on a reaped row stays a clean no-op, not an error flood.
+  async function run(action: Promise<void>): Promise<void> {
+    clearError();
+    try {
+      await action;
+    } catch (e) {
+      reportError(e);
+    }
+  }
 
   interface Group {
     libraryId: string;
@@ -37,6 +57,12 @@
     const map = new Map<string, WindowRecord[]>();
     for (const w of windows) {
       const arr = map.get(w.library_id) ?? [];
+      // Defense-in-depth: a duplicate (library_id, window_id) must not reach the
+      // keyed {#each} below — a repeated key throws Svelte each_key_duplicate and
+      // freezes the entire feed. The library's keyed-pathspec mount prefix
+      // prevents the collision at the source; dropping a stray duplicate here
+      // keeps a slip a silent no-op instead of a render crash.
+      if (arr.some((x) => x.window_id === w.window_id)) continue;
       arr.push(w);
       map.set(w.library_id, arr);
     }
@@ -96,7 +122,7 @@
           type="button"
           title="Focus window"
           aria-label="Focus window"
-          onclick={() => focusWindow(w)}>
+          onclick={() => run(focusWindow(w))}>
           <Focus size={16} />
         </button>
         <button
@@ -105,7 +131,7 @@
           type="button"
           title={w.hidden ? "Show window" : "Hide window"}
           aria-label={w.hidden ? "Show window" : "Hide window"}
-          onclick={() => toggleWindow(w)}>
+          onclick={() => run(toggleWindow(w))}>
           {#if w.hidden}<EyeOff size={16} />{:else}<Eye size={16} />{/if}
         </button>
       </div>

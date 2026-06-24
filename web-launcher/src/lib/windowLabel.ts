@@ -45,15 +45,22 @@ export function windowRowLabel(w: WindowRecord): string {
  * The section header for a library id: "🏠 Local" for the local library, or
  * "↗ <name>" for a remote one, where <name> is the user's devserver label
  * resolved via the library-id join. Falls back to a short id when no name is
- * known (e.g. a devserver that has not connected yet).
+ * known (e.g. a devserver that has not connected yet). Never renders a bare
+ * "↗ " with no name: a control terminal can mint before its devserver's
+ * library id is synced, so the fallback always yields a non-empty token (the
+ * live name fills in once the registry join resolves on the next feed push).
  */
 export function librarySectionLabel(libraryId: string, remoteName: string | null): string {
   if (libraryId === LOCAL_LIBRARY_ID) return "🏠 Local";
   return `↗ ${remoteName ?? shortLibraryId(libraryId)}`;
 }
 
-/** A compact, non-parsed rendering of an opaque library id for fallback display. */
+/** A compact, non-parsed rendering of an opaque library id for fallback display.
+ * Never empty: an unsynced / blank library id (a control terminal minted before
+ * its devserver's id is assigned) renders "Devserver" so the header never reads
+ * a bare "↗ ". */
 export function shortLibraryId(libraryId: string): string {
   const hex = libraryId.startsWith("lib-") ? libraryId.slice(4) : libraryId;
+  if (!hex) return "Devserver";
   return hex.length > 8 ? `${hex.slice(0, 8)}...` : hex;
 }

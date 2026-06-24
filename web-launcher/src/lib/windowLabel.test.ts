@@ -44,6 +44,11 @@ describe("library section labels", () => {
   it("falls back to a short id when the remote name is unknown", () => {
     expect(librarySectionLabel("lib-7f3a9c21b40d8e65", null)).toBe("↗ 7f3a9c21...");
   });
+  it("never renders a bare arrow for an unsynced (empty) library id", () => {
+    // A control terminal can mint before its devserver's library id is synced;
+    // the header must still read a non-empty token, not "↗ ".
+    expect(librarySectionLabel("", null)).toBe("↗ Devserver");
+  });
 });
 
 describe("shortLibraryId", () => {
@@ -52,5 +57,9 @@ describe("shortLibraryId", () => {
   });
   it("leaves a short id intact", () => {
     expect(shortLibraryId("lib-abc123")).toBe("abc123");
+  });
+  it("never returns empty for a blank or bare-prefix id", () => {
+    expect(shortLibraryId("")).toBe("Devserver");
+    expect(shortLibraryId("lib-")).toBe("Devserver");
   });
 });

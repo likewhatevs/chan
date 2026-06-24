@@ -204,6 +204,12 @@ body {
   flex-direction: column;
   gap: 0.15rem;
   min-width: 0;
+  /* Grow to fill the row so the label sits left, immediately after the
+     checkbox, and pushes the actions to the far right. Without this a row with
+     a leading checkbox has three space-between children and the label floats to
+     the centre; the window feed (no checkbox) is already left-aligned, and
+     growing here keeps it so. */
+  flex: 1;
 }
 
 .row-name {

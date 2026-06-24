@@ -9,7 +9,8 @@
 import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import { mount, unmount, flushSync } from "svelte";
 import WindowFeed from "./WindowFeed.svelte";
-import { loadLibrary } from "../state/library.svelte";
+import { library, loadLibrary } from "../state/library.svelte";
+import type { WindowRecord } from "../api/library";
 
 // Pin the in-memory mock as the backend so the feed renders the seed windows
 // with no live server, independent of how the app composes its default backend.
@@ -133,5 +134,61 @@ describe("WindowFeed row actions", () => {
     expect(dsGroup).toBeTruthy();
     const firstRowName = dsGroup!.querySelector(".rows li .row-name");
     expect(firstRowName?.textContent?.trim()).toBe("Control terminal");
+  });
+
+  it("SHOW/HIDE surfaces a bridge error in the banner, not the console (L3/C6)", async () => {
+    const { backend } = await import("../api/backend");
+    // A stale/reaped window (or no desktop bridge) rejects the hide op. The eye
+    // handler must catch it and report to the banner (library.error), never let
+    // a floating promise reject into the console.
+    const hide = vi.spyOn(backend, "hideWindow").mockRejectedValue(new Error("window is gone"));
+
+    target = document.createElement("div");
+    document.body.appendChild(target);
+    app = mount(WindowFeed, { target });
+
+    // The seed has visible windows → at least one "Hide window" (Eye) toggle.
+    ariaButton("Hide window")!.click();
+    // Drain the microtask queue so the rejected bridge op settles through the
+    // handler's catch (run → toggleWindow → hideWindow → reportError).
+    await new Promise((r) => setTimeout(r, 0));
+    flushSync();
+
+    expect(hide).toHaveBeenCalledTimes(1);
+    expect(library.error).toBe("window is gone");
+
+    hide.mockRestore();
+  });
+});
+
+describe("WindowFeed duplicate-key resilience (L1/C3)", () => {
+  function makeWindow(window_id: string): WindowRecord {
+    return {
+      window_id,
+      library_id: "local",
+      kind: "terminal",
+      title: "🏠 Terminal Window 1",
+      ordinal: 1,
+      workspace_path: null,
+      prefix: "t/local-1",
+      token: "tok",
+      persisted: true,
+      connected: true,
+      control: false,
+    };
+  }
+
+  it("renders one row for a duplicated (library_id, window_id), not each_key_duplicate", () => {
+    // Two records sharing (library_id, window_id) would throw Svelte
+    // each_key_duplicate at mount and freeze the whole feed (the same-basename
+    // mount-prefix collision). The feed must drop the duplicate and render once.
+    library.windows = [makeWindow("w-dup"), makeWindow("w-dup")];
+
+    target = document.createElement("div");
+    document.body.appendChild(target);
+    // Mount must not throw on the duplicate key.
+    app = mount(WindowFeed, { target });
+
+    expect(target.querySelectorAll(".rows li").length).toBe(1);
   });
 });
