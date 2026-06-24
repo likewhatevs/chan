@@ -161,7 +161,14 @@ fn hide_window(app: &AppHandle, id: &str) -> Result<(), String> {
             app.state::<Arc<AppState>>().mark_silent_hide(&label);
             w.close().map_err(|e| format!("hiding {id}: {e}"))
         }
-        None => Err(format!("no window {id}")),
+        // C6 / D4 (seam 4): a reaped / already-gone native window is an idempotent
+        // silent no-op — reply Ok(()) so the route returns 204, NOT Err (which maps
+        // to 409 and floods the launcher's eye-handler console). W3 reaps a
+        // standalone terminal's feed row on PTY exit; a client still holding the
+        // just-removed row can click its eye, and that hide must land cleanly. Err
+        // (→409) is reserved for the genuine "no desktop attached / manager gone"
+        // case, which the route body already explains.
+        None => Ok(()),
     }
 }
 
