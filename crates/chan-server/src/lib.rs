@@ -57,6 +57,11 @@ pub use chan_library::desktop_window_ops::{
     DesktopBridge, DesktopWindowOp, DesktopWindowSender, NewWindowKind, SetWorkspaceOnOutcome,
     NO_DESKTOP,
 };
+/// Re-export the single-sourced shell resolver so the desktop (which deps
+/// chan-server, not chan-library directly) can call `chan_server::user_shell()`
+/// for its PATH-harvest helper (D6). Unix-only, matching the chan-library gate.
+#[cfg(unix)]
+pub use chan_library::user_shell;
 pub use chan_library::window_titles::{SharedWindowTitles, WindowMeta, WindowTitles};
 pub use chan_library::windows::{CreateWindow, WindowKind, WindowRecord, WindowSet};
 pub(crate) use chan_library::{

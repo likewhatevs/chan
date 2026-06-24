@@ -2256,6 +2256,18 @@ fn locale_selects_utf8(requested: &BTreeMap<String, String>) -> bool {
     false
 }
 
+/// Resolve the user's shell the same way an interactive terminal does:
+/// `$SHELL` (when it points at an executable) → the passwd `pw_shell` →
+/// `/bin/sh`. Single-sources the resolution so no caller hardcodes a fallback
+/// shell. This is exactly `portable_pty`'s `new_default_prog().get_shell()`,
+/// which performs and validates that lookup — reuse it rather than hand-rolling
+/// `getpwuid`. Unix-only: `get_shell` is unix-only, and the Windows terminal
+/// path is Git BASH, which never calls this.
+#[cfg(unix)]
+pub fn user_shell() -> String {
+    CommandBuilder::new_default_prog().get_shell()
+}
+
 fn command_builder(command: Option<&str>) -> CommandBuilder {
     let command = command.map(str::trim).filter(|command| !command.is_empty());
     #[cfg(windows)]
@@ -2269,10 +2281,11 @@ fn command_builder(command: Option<&str>) -> CommandBuilder {
             // before (portable_pty resolves $SHELL / the passwd entry).
             None => CommandBuilder::new_default_prog(),
             // One-shot: run it through a login shell so profile-exported PATH
-            // (where `cs` lives) is in scope.
+            // (where `cs` lives) is in scope. The shell is resolved via
+            // `user_shell` ($SHELL → passwd → /bin/sh, validated) — single-sourced
+            // with the interactive path above, never a hardcoded `/bin/sh`.
             Some(command) => {
-                let shell = std::env::var_os("SHELL").unwrap_or_else(|| "/bin/sh".into());
-                let mut cmd = CommandBuilder::new(shell);
+                let mut cmd = CommandBuilder::new(user_shell());
                 cmd.args(["-lc", command]);
                 cmd
             }
@@ -3817,6 +3830,23 @@ mod tests {
             String::from_utf8_lossy(&ring)
         );
         registry.close_all(CloseReason::Shutdown);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn user_shell_resolves_to_a_nonempty_executable() {
+        // The single-sourced resolver: $SHELL → passwd → /bin/sh, each validated
+        // executable. Whatever it returns must be a real, runnable shell.
+        use std::os::unix::fs::PermissionsExt;
+        let shell = user_shell();
+        assert!(!shell.is_empty(), "resolver returned an empty shell");
+        let path = std::path::Path::new(&shell);
+        assert!(path.is_absolute(), "shell path should be absolute: {shell}");
+        let meta = std::fs::metadata(path).expect("resolved shell exists on disk");
+        assert!(
+            meta.permissions().mode() & 0o111 != 0,
+            "resolved shell is executable: {shell}"
+        );
     }
 
     #[tokio::test]

@@ -41,4 +41,8 @@ pub use serve_config::{sanitize_prefix, ServeConfig, ServeHandle};
 pub use tenant::{
     HostControl, TenantArtifacts, TenantBuilder, UnserveMode, UnserveScope, WorkspaceCellHandle,
 };
+/// The single-sourced shell resolver (`$SHELL` → passwd → `/bin/sh`); unix-only.
+/// Re-exported at the crate root so callers say `chan_library::user_shell()`.
+#[cfg(unix)]
+pub use terminal_sessions::user_shell;
 pub use workspace_persist::{FileLocalColor, PersistedWorkspace, WorkspaceOverlay};
