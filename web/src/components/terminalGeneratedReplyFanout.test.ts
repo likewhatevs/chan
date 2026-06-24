@@ -16,47 +16,41 @@ describe("TerminalTab generated reply routing", () => {
 
   test("installs keyboard protocol tracking before xterm input handlers", () => {
     expect(terminal).toMatch(
-      /installKeyboardProtocolHandlers\(term, keyboardProtocol, sendInput\);[\s\S]*?term\.attachCustomKeyEventHandler\(handleTerminalKeyEvent\);/,
+      /installKeyboardProtocolHandlers\(term, keyboardProtocol, sendGeneratedTerminalInput\);[\s\S]*?term\.attachCustomKeyEventHandler\(handleTerminalKeyEvent\);/,
     );
   });
 
   test("PTY output uses a tracked xterm write", () => {
+    expect(terminal).toContain("PtyWriteTracker");
+    expect(terminal).toContain("const ptyWrites = new PtyWriteTracker();");
     expect(terminal).toMatch(
-      /function writePtyOutput\(bytes: Uint8Array\): void \{[\s\S]*?ptyOutputWriteDepth \+= 1;[\s\S]*?term\.write\(bytes, \(\) => \{[\s\S]*?ptyOutputWriteDepth = Math\.max\(0, ptyOutputWriteDepth - 1\);/,
+      /function writePtyOutput\(bytes: Uint8Array, origin: PtyWriteOrigin = "live"\): void \{[\s\S]*?ptyWrites\.write\(term, bytes, origin\);/,
     );
-    expect(terminal).toMatch(/const bytes = new Uint8Array\(event\.data\);[\s\S]*?writePtyOutput\(bytes\);/);
+    expect(terminal).toMatch(/const bytes = await terminalMessageBytes\(event\.data\);[\s\S]*?writePtyOutput\(bytes, attachPtyWriteOrigin\(\)\);/);
   });
 
   test("xterm-generated replies bypass broadcast fan-out", () => {
     expect(terminal).toContain("term.onData(handleXtermData);");
     expect(terminal).toMatch(
-      /function handleXtermData\(data: string\): void \{[\s\S]*?if \(ptyOutputWriteDepth > 0\) \{[\s\S]*?sendInput\(data\);[\s\S]*?return;[\s\S]*?\}[\s\S]*?sendUserInput\(data\);/,
+      /function handleXtermData\(data: string\): void \{[\s\S]*?routeXtermData\(data, ptyWrites, sendInput, sendUserInput\);/,
     );
   });
 
-  test("forwards terminal-generated replies unconditionally — reattach-replay gate reverted", () => {
-    // The reattach reply-gating (36fcbab5 + 9b44cef2) was REVERTED per @@Alex: it
-    // could STALL (the drain depth never returning to 0 under continuous TUI
-    // output), so `replayingReattach` stuck true and handleXtermData dropped
-    // EVERY live CPR/DA reply — a TUI (claude code / vim) left without its query
-    // replies hangs / renders blank. Worse than the leak it prevented. So a
-    // terminal-generated reply during a server-write now ALWAYS forwards to its
-    // own PTY (sendInput), never the broadcast fan-out, with NO replay-window
-    // drop. Accepted tradeoff: an occasional historical CPR reply may echo at the
-    // prompt (`…R`/`…c`). Ref dev/terminal-regression/.
-    //
-    // The gate + ALL its state/logic is gone — no orphans (svelte-check clean).
-    expect(terminal).not.toContain("replayingReattach");
-    expect(terminal).not.toContain("clearReplayWhenDrained");
-    expect(terminal).not.toContain("maybeEndReplayWindow");
-    // The depth>0 reply branch forwards straight to its PTY — no conditional drop.
-    const handler = terminal.match(
-      /function handleXtermData\(data: string\): void \{[\s\S]*?\n  \}/,
-    )?.[0];
-    expect(handler).toBeTruthy();
-    expect(handler).toMatch(
-      /if \(ptyOutputWriteDepth > 0\) \{[\s\S]*?sendInput\(data\);\s*return;\s*\}/,
+  test("suppresses duplicate reattach replay replies without blocking live replies", () => {
+    // Full reattach replay feeds historical PTY queries into a brand-new
+    // xterm. Re-answering those old queries leaks raw CPR/DA/DCS reply bytes
+    // into the shell prompt after refresh, so only duplicate replay-origin
+    // generated replies are suppressed; live output still answers through
+    // the owning PTY and bypasses broadcast.
+    expect(terminal).toContain("let attachReplayActive = false;");
+    expect(terminal).toContain("let suppressAttachReplayGeneratedReplies = false;");
+    expect(terminal).toMatch(
+      /const duplicateReplay = reattaching && !sawSessionControl;[\s\S]*?attachReplayActive = true;[\s\S]*?suppressAttachReplayGeneratedReplies = duplicateReplay;/,
     );
-    expect(handler).not.toContain("return;\n      sendInput");
+    expect(terminal).toMatch(
+      /frame\.type === "ready"[\s\S]*?attachReplayActive = false;[\s\S]*?suppressAttachReplayGeneratedReplies = false;/,
+    );
+    expect(terminal).toContain("shouldForwardGeneratedTerminalInput(ptyWrites)");
+    expect(terminal).toContain("routeXtermData(data, ptyWrites, sendInput, sendUserInput);");
   });
 });

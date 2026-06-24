@@ -10,25 +10,18 @@ import terminal from "./TerminalTab.svelte?raw";
 describe("trailing-edge fit converges after resize", () => {
   test("queueFit schedules both the leading rAF fit AND the trailing fit", () => {
     expect(terminal).toMatch(
-      /function queueFit\(\): void \{[\s\S]*?requestAnimationFrame\(\(\) => \{[\s\S]*?fit\?\.fit\(\)[\s\S]*?scheduleTrailingFit\(\);/,
+      /function queueFit\(\): void \{[\s\S]*?requestAnimationFrame\(\(\) => \{[\s\S]*?runTerminalFit\(fit, term[\s\S]*?trailingFit\.schedule\(\);/,
     );
   });
 
-  test("scheduleTrailingFit debounces via setTimeout(...120) coalescing on the trailing edge", () => {
-    expect(terminal).toMatch(
-      /function scheduleTrailingFit\(\): void \{[\s\S]*?if \(trailingFitTimer\) clearTimeout\(trailingFitTimer\);[\s\S]*?trailingFitTimer = setTimeout\(\(\) => \{[\s\S]*?fit\?\.fit\(\)[\s\S]*?\}, 120\);/,
-    );
-  });
-
-  test("trailingFitTimer state declared at module scope of the component", () => {
-    expect(terminal).toMatch(
-      /let trailingFitTimer: ReturnType<typeof setTimeout> \| null = null;/,
-    );
+  test("trailing fit is owned by the resize helper", () => {
+    expect(terminal).toContain("createTrailingFitScheduler");
+    expect(terminal).toMatch(/const trailingFit = createTrailingFitScheduler\(\(\) => \{[\s\S]*?runTerminalFit\(fit, term/);
   });
 
   test("teardown clears the trailing-fit timer (no race against dispose)", () => {
     expect(terminal).toMatch(
-      /function teardown\(\): void \{[\s\S]*?if \(trailingFitTimer\) \{[\s\S]*?clearTimeout\(trailingFitTimer\);[\s\S]*?trailingFitTimer = null;/,
+      /function teardown\(\): void \{[\s\S]*?trailingFit\.clear\(\);/,
     );
   });
 

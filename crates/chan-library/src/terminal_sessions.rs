@@ -6,12 +6,12 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::io::{Read, Write};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use portable_pty::{native_pty_system, CommandBuilder, PtySize};
+use portable_pty::{native_pty_system, PtySize};
 use rand::RngCore;
 use serde::Serialize;
 use tokio::sync::{broadcast, watch, Notify};
@@ -20,8 +20,29 @@ use tokio::task::JoinHandle;
 use crate::config::TerminalConfig;
 use crate::time::{now_unix_millis, now_unix_secs};
 
-#[cfg(target_os = "macos")]
-use std::process::Command;
+mod bytes;
+mod platform;
+mod redraw;
+mod ring;
+
+use bytes::{contains_subslice, visible_activity_bytes};
+#[cfg(windows)]
+use platform::git_bash;
+#[cfg(windows)]
+pub use platform::prime_git_bash;
+#[cfg(unix)]
+pub use platform::user_shell;
+use platform::{
+    clear_mcp_env, command_builder, locale_selects_utf8, path_inside_root, process_cwd,
+    reject_terminal_spawn_if_fd_pressure, reject_terminal_spawn_if_git_bash_missing, set_mcp_env,
+    terminal_home_dir,
+};
+#[cfg(test)]
+use platform::{fd_headroom_allows, TERMINAL_SESSION_FD_ESTIMATE};
+use redraw::force_redraw_with_wobble;
+#[cfg(test)]
+use redraw::redraw_wobble_size;
+use ring::RingBuffer;
 
 const BROADCAST_CAP: usize = 1024;
 
@@ -48,9 +69,6 @@ const ALT_SCREEN_ENTER: &[u8] = b"\x1b[?1049h";
 const ALT_SCREEN_EXIT: &[u8] = b"\x1b[?1049l";
 const ALT_SCREEN_TAIL_BYTES: usize = ALT_SCREEN_ENTER.len() - 1;
 const REDRAW_WOBBLE_DELAY: Duration = Duration::from_millis(50);
-const TERMINAL_FD_HEADROOM: u64 = 32;
-const TERMINAL_SESSION_FD_ESTIMATE: u64 = 8;
-
 pub const ALT_SCREEN_ATTACH_PRELUDE: &[u8] = b"\x1b[?1049h\x1b[2J\x1b[H";
 
 #[derive(Debug, Clone)]
@@ -730,7 +748,7 @@ impl Registry {
     ) -> Result<AttachHandle, CreateError> {
         if let Some(id) = id {
             if let Some(handle) = self.attach_for_ws(id, since) {
-                // Amendment 3(A): re-home the session to the ATTACHING window.
+                // Move invariant: re-home the session to the attaching window.
                 // A cross-window terminal move re-binds it here, so a later
                 // `close_for_window(source)` reaps only sessions still bound to
                 // the source — not the one that just moved away.
@@ -743,7 +761,7 @@ impl Registry {
 
     /// Re-home a live session to `window_id` (the attaching window). No-op for a
     /// windowless (`None`) reattach or a vanished session. See
-    /// [`Session::set_window_id`] (Amendment 3(A)).
+    /// [`Session::set_window_id`].
     fn rebind_session_window(&self, id: &str, window_id: Option<String>) {
         if window_id.is_none() {
             return;
@@ -841,10 +859,10 @@ impl Registry {
     }
 
     /// Drop `window_id` from the persisted set WITHOUT reaping its sessions.
-    /// The discard half of a cross-window MOVE-OUT (Amendment 7): the source
+    /// The discard half of a cross-window move-out: the source
     /// window emptied because its tab moved away, so its layout blob is deleted
-    /// (it leaves `cs window list`) but the moved PTY must survive — Amendment
-    /// 3(A)'s reattach rebinds it to the target. A move-out DELETE
+    /// (it leaves `cs window list`) but the moved PTY must survive; reattach
+    /// rebinds it to the target. A move-out DELETE
     /// (`?w=W&moved=1`) routes here; a real discard (`?w=W`) routes through
     /// [`forget_window`](Self::forget_window) and reaps.
     pub fn unpersist_window(&self, window_id: &str) {
@@ -1195,7 +1213,7 @@ impl Registry {
     /// attached. A dead, unviewed session is a pure ghost — no process, no
     /// viewer — so keeping it only leaks the slot and HOLDS its tab name,
     /// making a re-spawn under the same name collide and come up renamed (the
-    /// `cs terminal restart` ghost-tab bug: a killed agent's entry lingered
+    /// `cs terminal restart` ghost-tab regression: a killed agent's entry lingered
     /// because the controller thread records `exit_code` on exit but never
     /// removes the entry). Distinct axis from [`prune_idle_at`], which times
     /// out *live* detached sessions and deliberately keeps persisted windows:
@@ -1251,7 +1269,7 @@ impl Registry {
     /// Reap sessions whose window can never come back. Persistence-driven, NOT
     /// activity-driven (a busy detached session refreshes `last_activity` on
     /// every output byte, so the old activity timer kept htop / a `for` loop
-    /// immortal — the FD leak). The rule, per the v0.40.0 Seam A contract:
+    /// immortal). The rule:
     ///
     /// - **attached** (`attach_count > 0`) — keep; a client is live on it.
     /// - **detached, window persisted** (a durable layout blob exists, tracked
@@ -1386,66 +1404,6 @@ impl Registry {
     }
 }
 
-/// Gate every spawn path on the Git BASH hard dependency (Windows only). When
-/// it is absent there is no POSIX shell to spawn, so reject with the
-/// structured [`CreateError::GitBashMissing`] the frontend turns into the
-/// install gate — rather than silently falling back to `cmd` or surfacing an
-/// opaque spawn error. A no-op on every other platform.
-fn reject_terminal_spawn_if_git_bash_missing() -> Result<(), CreateError> {
-    #[cfg(windows)]
-    if git_bash().is_none() {
-        return Err(CreateError::GitBashMissing);
-    }
-    Ok(())
-}
-
-fn reject_terminal_spawn_if_fd_pressure() -> Result<(), CreateError> {
-    let Some((open, limit)) = fd_snapshot() else {
-        return Ok(());
-    };
-    if fd_headroom_allows(open, limit, TERMINAL_SESSION_FD_ESTIMATE) {
-        return Ok(());
-    }
-    Err(CreateError::FdPressure(FdPressure {
-        open,
-        limit,
-        required: TERMINAL_SESSION_FD_ESTIMATE + TERMINAL_FD_HEADROOM,
-    }))
-}
-
-fn fd_headroom_allows(open: u64, limit: u64, new_fds: u64) -> bool {
-    open.saturating_add(new_fds)
-        .saturating_add(TERMINAL_FD_HEADROOM)
-        < limit
-}
-
-#[cfg(unix)]
-fn fd_snapshot() -> Option<(u64, u64)> {
-    let open = std::fs::read_dir("/dev/fd").ok()?.count() as u64;
-    let limit = nofile_limit()?;
-    Some((open, limit))
-}
-
-#[cfg(not(unix))]
-fn fd_snapshot() -> Option<(u64, u64)> {
-    None
-}
-
-#[cfg(target_os = "linux")]
-fn nofile_limit() -> Option<u64> {
-    rustix::process::getrlimit(rustix::process::Resource::Nofile).current
-}
-
-#[cfg(target_os = "macos")]
-fn nofile_limit() -> Option<u64> {
-    rustix::process::getrlimit(rustix::process::Resource::Nofile).current
-}
-
-#[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
-fn nofile_limit() -> Option<u64> {
-    None
-}
-
 impl Drop for Registry {
     fn drop(&mut self) {
         if let Ok(mut sessions) = self.sessions.lock() {
@@ -1490,7 +1448,7 @@ struct Session {
     /// mutable because a reattach REBINDS it to the attaching window: a
     /// cross-window terminal move re-homes the session, so a later
     /// `close_for_window(source)` reaps only sessions STILL bound to the source
-    /// (Seam A Amendment 3(A)). Read via [`Session::window_id`].
+    /// Read via [`Session::window_id`].
     window_id: Mutex<Option<String>>,
     workspace_root: PathBuf,
     spawn_opts: CreateOptions,
@@ -2113,7 +2071,7 @@ impl Session {
             .clone()
     }
 
-    /// Rebind the owning window on reattach (Amendment 3(A)). A `None`
+    /// Rebind the owning window on reattach. A `None`
     /// (windowless) reattach does NOT clear an existing binding — only a real
     /// attaching window re-homes the session.
     fn set_window_id(&self, window_id: Option<String>) {
@@ -2195,367 +2153,11 @@ impl Session {
     }
 }
 
-fn path_inside_root(path: &Path, root: &Path) -> bool {
-    let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-    let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
-    path == root || path.starts_with(root)
-}
-
-#[cfg(target_os = "linux")]
-fn process_cwd(pid: u32) -> Option<PathBuf> {
-    std::fs::read_link(format!("/proc/{pid}/cwd")).ok()
-}
-
-#[cfg(target_os = "macos")]
-fn process_cwd(pid: u32) -> Option<PathBuf> {
-    let output = Command::new("/usr/sbin/lsof")
-        .args(["-a", "-d", "cwd", "-Fn", "-p", &pid.to_string()])
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .find_map(|line| line.strip_prefix('n'))
-        .filter(|path| !path.is_empty())
-        .map(PathBuf::from)
-}
-
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
-fn process_cwd(_pid: u32) -> Option<PathBuf> {
-    None
-}
-
 enum PtyCommand {
     Input(Vec<u8>),
     Resize(PtySize),
     Redraw,
     Kill,
-}
-
-/// True when the requested or inherited environment already selects a UTF-8
-/// codeset, following the standard LC_ALL > LC_CTYPE > LANG precedence. The
-/// per-session overrides win over the server's own environment. When this is
-/// false the spawned shell would fall back to the POSIX/C codeset and render
-/// multibyte UTF-8 as raw bytes in pagers / editors like `less` and `vim`.
-fn locale_selects_utf8(requested: &BTreeMap<String, String>) -> bool {
-    let lookup = |key: &str| -> Option<String> {
-        requested
-            .get(key)
-            .cloned()
-            .or_else(|| std::env::var(key).ok())
-            .filter(|value| !value.is_empty())
-    };
-    for key in ["LC_ALL", "LC_CTYPE", "LANG"] {
-        if let Some(value) = lookup(key) {
-            let value = value.to_ascii_lowercase();
-            return value.contains("utf-8") || value.contains("utf8");
-        }
-    }
-    false
-}
-
-/// Resolve the user's shell the same way an interactive terminal does:
-/// `$SHELL` (when it points at an executable) → the passwd `pw_shell` →
-/// `/bin/sh`. Single-sources the resolution so no caller hardcodes a fallback
-/// shell. This is exactly `portable_pty`'s `new_default_prog().get_shell()`,
-/// which performs and validates that lookup — reuse it rather than hand-rolling
-/// `getpwuid`. Unix-only: `get_shell` is unix-only, and the Windows terminal
-/// path is Git BASH, which never calls this.
-#[cfg(unix)]
-pub fn user_shell() -> String {
-    CommandBuilder::new_default_prog().get_shell()
-}
-
-fn command_builder(command: Option<&str>) -> CommandBuilder {
-    let command = command.map(str::trim).filter(|command| !command.is_empty());
-    #[cfg(windows)]
-    {
-        windows_command_builder(command)
-    }
-    #[cfg(not(windows))]
-    {
-        match command {
-            // No command: the user's default interactive shell, exactly as
-            // before (portable_pty resolves $SHELL / the passwd entry).
-            None => CommandBuilder::new_default_prog(),
-            // One-shot: run it through a login shell so profile-exported PATH
-            // (where `cs` lives) is in scope. The shell is resolved via
-            // `user_shell` ($SHELL → passwd → /bin/sh, validated) — single-sourced
-            // with the interactive path above, never a hardcoded `/bin/sh`.
-            Some(command) => {
-                let mut cmd = CommandBuilder::new(user_shell());
-                cmd.args(["-lc", command]);
-                cmd
-            }
-        }
-    }
-}
-
-/// Windows terminal shell: **Git BASH** (a hard dependency — see the phase-26
-/// design). Spawn it as a login shell (`bash -l`, `-lc` for one-shots) so its
-/// MSYS `/etc/profile` sets up the POSIX environment. The PATH prepend that
-/// makes `git`/coreutils/`cs` resolve happens in [`Session::spawn`] (it needs
-/// the live env). Callers gate on [`git_bash`] via
-/// [`reject_terminal_spawn_if_git_bash_missing`] before reaching here; the
-/// `cmd` fallback is purely defensive for any unguarded path.
-#[cfg(windows)]
-fn windows_command_builder(command: Option<&str>) -> CommandBuilder {
-    match git_bash() {
-        Some(git) => {
-            let mut cmd = CommandBuilder::new(&git.bash);
-            match command {
-                Some(command) => cmd.args(["-lc", command]),
-                None => cmd.args(["-l"]),
-            }
-            cmd
-        }
-        None => match command {
-            Some(command) => {
-                let mut cmd = CommandBuilder::new("cmd");
-                cmd.args(["/C", command]);
-                cmd
-            }
-            None => CommandBuilder::new_default_prog(),
-        },
-    }
-}
-
-/// A resolved Git for Windows BASH install.
-#[cfg(windows)]
-struct GitBashInstall {
-    /// `<root>\bin\bash.exe` — the launcher that initialises the MSYS env.
-    bash: PathBuf,
-    /// Extra Windows PATH entries (`<root>\usr\bin`, `<root>\mingw64\bin`) so
-    /// `git`, the coreutils, and the `cs` shim resolve for the login shell and
-    /// anything it spawns.
-    path_prepend: Vec<PathBuf>,
-}
-
-/// Resolve Git BASH once and cache the result (present or absent) for the
-/// process lifetime — discovery shells out, and a terminal spawn is on the
-/// interactive path.
-#[cfg(windows)]
-fn git_bash() -> Option<&'static GitBashInstall> {
-    static CACHE: std::sync::OnceLock<Option<GitBashInstall>> = std::sync::OnceLock::new();
-    CACHE.get_or_init(resolve_git_bash).as_ref()
-}
-
-/// Force the [`git_bash`] cache to resolve eagerly, off the async request path.
-/// [`resolve_git_bash`] shells out (`git --exec-path`, `reg query` ×2, `where
-/// bash`) with blocking `std::process::Command`; resolving it lazily on the
-/// first terminal create — which runs on a tokio worker (the embedded server
-/// hosts the SPA, API, and WS on one runtime) — would block that worker and
-/// freeze the SPA (W1). The server primes this once on a blocking thread at
-/// startup, so the inline spawn gate
-/// ([`reject_terminal_spawn_if_git_bash_missing`]) and [`windows_command_builder`]
-/// only ever read the warm `OnceLock`.
-// `pub` (not `pub(crate)`) because chan-server's route layer calls it
-// cross-crate to prime the cache at server startup.
-#[cfg(windows)]
-pub fn prime_git_bash() {
-    let _ = git_bash();
-}
-
-/// Discovery order (most reliable first), returning the first root whose
-/// `bin\bash.exe` exists:
-///   1. `git --exec-path` → walk up to the install root (skips WSL entirely).
-///   2. Well-known install dirs under Program Files / per-user.
-///   3. Registry `HKLM\...\GitForWindows\InstallPath` via `reg query`.
-///   4. `where bash`, filtering out System32 / WindowsApps (the WSL `bash.exe`
-///      launcher, which is NOT Git BASH).
-///
-/// No registry/winapi crate is pulled — `git`/`reg`/`where` are shelled out.
-#[cfg(windows)]
-fn resolve_git_bash() -> Option<GitBashInstall> {
-    use std::process::Command;
-
-    // 1. Derive the root from `git --exec-path`
-    //    (`<root>\mingw64\libexec\git-core`): walk ancestors for `bin\bash.exe`.
-    if let Ok(output) = Command::new("git").arg("--exec-path").output() {
-        if output.status.success() {
-            let exec_path = String::from_utf8_lossy(&output.stdout);
-            let exec_path = PathBuf::from(exec_path.trim());
-            for root in exec_path.ancestors() {
-                if let Some(install) = git_bash_from_root(root) {
-                    return Some(install);
-                }
-            }
-        }
-    }
-
-    // 2. Well-known install roots.
-    let mut roots: Vec<PathBuf> = Vec::new();
-    for var in ["ProgramFiles", "ProgramFiles(x86)", "ProgramW6432"] {
-        if let Some(dir) = std::env::var_os(var) {
-            roots.push(PathBuf::from(dir).join("Git"));
-        }
-    }
-    if let Some(local) = std::env::var_os("LocalAppData") {
-        roots.push(PathBuf::from(local).join("Programs").join("Git"));
-    }
-    for root in &roots {
-        if let Some(install) = git_bash_from_root(root) {
-            return Some(install);
-        }
-    }
-
-    // 3. Registry InstallPath (32- and 64-bit views).
-    for key in [
-        r"HKLM\SOFTWARE\GitForWindows",
-        r"HKLM\SOFTWARE\WOW6432Node\GitForWindows",
-    ] {
-        if let Ok(output) = Command::new("reg")
-            .args([key, "/v", "InstallPath"])
-            .output()
-        {
-            if output.status.success() {
-                let text = String::from_utf8_lossy(&output.stdout);
-                // `    InstallPath    REG_SZ    C:\Program Files\Git`
-                if let Some(path) = text
-                    .lines()
-                    .find_map(|line| line.split("REG_SZ").nth(1))
-                    .map(str::trim)
-                    .filter(|p| !p.is_empty())
-                {
-                    if let Some(install) = git_bash_from_root(Path::new(path)) {
-                        return Some(install);
-                    }
-                }
-            }
-        }
-    }
-
-    // 4. `where bash`, skipping the WSL launcher under System32 / WindowsApps.
-    if let Ok(output) = Command::new("where").arg("bash").output() {
-        if output.status.success() {
-            let text = String::from_utf8_lossy(&output.stdout);
-            for line in text.lines().map(str::trim).filter(|l| !l.is_empty()) {
-                let lower = line.to_ascii_lowercase();
-                if lower.contains(r"\system32\") || lower.contains(r"\windowsapps\") {
-                    continue;
-                }
-                // `where bash` points at `<root>\bin\bash.exe`, so the install
-                // root is two levels up.
-                if let Some(root) = Path::new(line).parent().and_then(Path::parent) {
-                    if let Some(install) = git_bash_from_root(root) {
-                        return Some(install);
-                    }
-                }
-            }
-        }
-    }
-
-    None
-}
-
-/// Build a [`GitBashInstall`] from a candidate install root, or `None` if it
-/// has no `bin\bash.exe`.
-#[cfg(windows)]
-fn git_bash_from_root(root: &Path) -> Option<GitBashInstall> {
-    let bash = root.join("bin").join("bash.exe");
-    if !bash.is_file() {
-        return None;
-    }
-    let mut path_prepend = Vec::new();
-    for sub in [["usr", "bin"], ["mingw64", "bin"], ["mingw32", "bin"]] {
-        let dir = root.join(sub[0]).join(sub[1]);
-        if dir.is_dir() {
-            path_prepend.push(dir);
-        }
-    }
-    Some(GitBashInstall { bash, path_prepend })
-}
-
-fn contains_subslice(haystack: &[u8], needle: &[u8]) -> bool {
-    !needle.is_empty() && haystack.windows(needle.len()).any(|w| w == needle)
-}
-
-fn force_redraw_with_wobble<E>(
-    original: PtySize,
-    delay: Duration,
-    mut resize: impl FnMut(PtySize) -> Result<(), E>,
-) -> Result<(), E> {
-    let wobble = redraw_wobble_size(original);
-    resize(wobble)?;
-    std::thread::sleep(delay);
-    resize(original)
-}
-
-fn redraw_wobble_size(original: PtySize) -> PtySize {
-    let rows = if original.rows > 1 {
-        original.rows - 1
-    } else {
-        original.rows.saturating_add(1)
-    };
-    PtySize { rows, ..original }
-}
-
-#[derive(Debug)]
-struct RingBuffer {
-    cap: usize,
-    chunks: VecDeque<(u64, Vec<u8>)>,
-    start_seq: u64,
-    end_seq: u64,
-    len: usize,
-}
-
-impl RingBuffer {
-    fn new(cap: usize) -> Self {
-        Self {
-            cap: cap.max(1),
-            chunks: VecDeque::new(),
-            start_seq: 0,
-            end_seq: 0,
-            len: 0,
-        }
-    }
-
-    fn push(&mut self, bytes: &[u8]) {
-        let start = self.end_seq;
-        self.end_seq = self.end_seq.saturating_add(bytes.len() as u64);
-        if bytes.len() >= self.cap {
-            self.chunks.clear();
-            let tail = bytes[bytes.len() - self.cap..].to_vec();
-            self.start_seq = self.end_seq.saturating_sub(tail.len() as u64);
-            self.len = tail.len();
-            self.chunks.push_back((self.start_seq, tail));
-            return;
-        }
-        self.len = self.len.saturating_add(bytes.len());
-        self.chunks.push_back((start, bytes.to_vec()));
-        while self.len > self.cap {
-            if let Some((_start, chunk)) = self.chunks.pop_front() {
-                self.len = self.len.saturating_sub(chunk.len());
-                self.start_seq = self.start_seq.saturating_add(chunk.len() as u64);
-            } else {
-                self.start_seq = self.end_seq;
-                self.len = 0;
-                break;
-            }
-        }
-    }
-
-    fn end_seq(&self) -> u64 {
-        self.end_seq
-    }
-
-    fn snapshot_since(&self, since: Option<u64>) -> (Vec<Vec<u8>>, u64) {
-        let requested = since.unwrap_or(self.start_seq);
-        let replay_start = requested.max(self.start_seq);
-        let missed = self.start_seq.saturating_sub(requested);
-        let mut replay = Vec::new();
-        for (chunk_start, chunk) in &self.chunks {
-            let chunk_end = chunk_start.saturating_add(chunk.len() as u64);
-            if chunk_end <= replay_start {
-                continue;
-            }
-            let offset = replay_start.saturating_sub(*chunk_start) as usize;
-            replay.push(chunk[offset..].to_vec());
-        }
-        (replay, missed)
-    }
 }
 
 fn random_session_id() -> String {
@@ -2567,102 +2169,6 @@ fn random_session_id() -> String {
         let _ = write!(&mut out, "{b:02x}");
     }
     out
-}
-
-pub(crate) fn set_mcp_env(cmd: &mut CommandBuilder, socket_path: &std::path::Path) {
-    let Some(socket) = socket_path.to_str() else {
-        return;
-    };
-    let Ok(exe) = std::env::current_exe() else {
-        return;
-    };
-    let Some(exe) = exe.to_str() else {
-        return;
-    };
-    let argv_json = serde_json::json!([exe, "__mcp-proxy", socket]).to_string();
-    let server_json = serde_json::json!({
-        "name": "chan",
-        "command": exe,
-        "args": ["__mcp-proxy", socket],
-    })
-    .to_string();
-
-    cmd.env("CHAN_MCP_SERVER_NAME", "chan");
-    cmd.env("CHAN_MCP_SOCKET", socket);
-    cmd.env("CHAN_MCP_COMMAND", format!("{exe} __mcp-proxy {socket}"));
-    cmd.env("CHAN_MCP_COMMAND_JSON", argv_json);
-    cmd.env("CHAN_MCP_SERVER_JSON", server_json);
-}
-
-fn clear_mcp_env(cmd: &mut CommandBuilder) {
-    for key in [
-        "CHAN_MCP_SERVER_NAME",
-        "CHAN_MCP_SOCKET",
-        "CHAN_MCP_COMMAND",
-        "CHAN_MCP_COMMAND_JSON",
-        "CHAN_MCP_SERVER_JSON",
-        "CHAN_TAB_GROUP",
-        "CHAN_WINDOW_ID",
-        "CHAN_CONTROL_SOCKET",
-        "CHAN_WORKSPACE_NAME",
-        "CHAN_WORKSPACE_PATH",
-    ] {
-        cmd.env_remove(key);
-    }
-}
-
-pub(crate) fn terminal_home_dir() -> Option<PathBuf> {
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .or_else(dirs::home_dir)
-}
-
-fn visible_activity_bytes(bytes: &[u8]) -> u64 {
-    let mut visible = 0;
-    let mut i = 0;
-    while i < bytes.len() {
-        match bytes[i] {
-            0x1b => i = skip_ansi_escape(bytes, i + 1),
-            0x00..=0x1f | 0x7f => i += 1,
-            b if b.is_ascii_whitespace() => i += 1,
-            _ => {
-                visible += 1;
-                i += 1;
-            }
-        }
-    }
-    visible
-}
-
-fn skip_ansi_escape(bytes: &[u8], mut i: usize) -> usize {
-    if i >= bytes.len() {
-        return i;
-    }
-    match bytes[i] {
-        b'[' => {
-            i += 1;
-            while i < bytes.len() {
-                let b = bytes[i];
-                i += 1;
-                if (0x40..=0x7e).contains(&b) {
-                    break;
-                }
-            }
-            i
-        }
-        b']' => {
-            i += 1;
-            while i < bytes.len() {
-                match bytes[i] {
-                    0x07 => return i + 1,
-                    0x1b if i + 1 < bytes.len() && bytes[i + 1] == b'\\' => return i + 2,
-                    _ => i += 1,
-                }
-            }
-            i
-        }
-        _ => i + 1,
-    }
 }
 
 #[cfg(test)]
@@ -3358,9 +2864,9 @@ mod tests {
 
     #[test]
     fn unpersist_window_drops_persistence_without_reaping() {
-        // Amendment 7 move-out: the source's `?w=W&moved=1` DELETE unpersists
-        // the window but must NOT reap — the moved PTY survives (Amendment 3(A)
-        // rebinds it to the target on attach).
+        // Move-out invariant: the source's `?w=W&moved=1` DELETE unpersists
+        // the window but must NOT reap; attach rebinds the moved PTY to the
+        // target window.
         let registry = Registry::new(test_config(1024, 4, 10));
         let _a = registry.create(opts_with_window("win-a")).unwrap();
         registry.mark_window_persisted("win-a");
@@ -3502,7 +3008,7 @@ mod tests {
 
     #[test]
     fn restart_signals_restarted_not_closed_on_the_old_channel() {
-        // The restart-reconcile contract (bug 2): a restart broadcasts
+        // Restart-reconcile contract: a restart broadcasts
         // `Restarted` (never `Closed`/`Exit`) on the OLD channel, so the /ws
         // reader re-attaches to the relaunched session under the SAME id
         // instead of dropping the tab. The id stays live afterwards.
@@ -3531,7 +3037,7 @@ mod tests {
 
     #[test]
     fn cross_window_move_rebinds_window_and_survives_source_discard() {
-        // Amendment 3(A): a terminal dragged from window A to window B must
+        // Move invariant: a terminal dragged from window A to window B must
         // re-home to B on reattach, so A's discard (it emptied out) does NOT
         // reap the moved session — only sessions STILL bound to A.
         let registry = Registry::new(test_config(1024, 4, 10));
@@ -4099,7 +3605,7 @@ mod tests {
         insert_session(&reg, named_session("a", "Terminal-1"));
         insert_session(&reg, named_session("b", "Terminal-2"));
         assert_eq!(reg.next_terminal_name(), "Terminal-3");
-        // Free the middle one -> its number is REUSED (the reported bug:
+        // Free the middle one -> its number is REUSED (the numbering regression:
         // open 1+2, close 2, next should be 2, not 3).
         reg.sessions.lock().unwrap().remove("b");
         assert_eq!(reg.next_terminal_name(), "Terminal-2");

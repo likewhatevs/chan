@@ -44,7 +44,7 @@ describe("TerminalTab WebGL renderer", () => {
       /import \{[^}]*\bisTauriDesktop\b[^}]*\} from "\.\.\/api\/desktop"/,
     );
     expect(tab).toMatch(
-      /if \(isTauriDesktop\(\) && currentOS\(\) === "linux"\) return;[\s\S]{0,40}try \{/,
+      /if \(!shouldUseWebglRenderer\(isTauriDesktop\(\), currentOS\(\)\)\) return;[\s\S]{0,40}try \{/,
     );
   });
 
@@ -52,7 +52,7 @@ describe("TerminalTab WebGL renderer", () => {
     // refreshTerminalRows is the renderer-refresh primitive for mount /
     // focus / blur / host-resume events.
     expect(tab).toMatch(/function refreshTerminalRows\(\): void/);
-    expect(tab).toMatch(/maybeRefresh\?\.call\(term, 0, Math\.max\(0, term\.rows - 1\)\)/);
+    expect(tab).toMatch(/refreshTerminalRowsImpl\(term\)/);
   });
 
   test("never clears the shared WebGL texture atlas on a per-pane event", () => {
@@ -74,10 +74,7 @@ describe("TerminalTab WebGL renderer", () => {
     // UTF-8 sequences must reach xterm as bytes. Coercing through
     // String() would corrupt non-ASCII glyphs.
     expect(tab).toMatch(
-      /event\.data instanceof ArrayBuffer[\s\S]*?const bytes = new Uint8Array\(event\.data\);[\s\S]*?writePtyOutput\(bytes\);/,
-    );
-    expect(tab).toMatch(
-      /event\.data instanceof Blob[\s\S]*?const bytes = new Uint8Array\(await event\.data\.arrayBuffer\(\)\);[\s\S]*?writePtyOutput\(bytes\);/,
+      /const bytes = await terminalMessageBytes\(event\.data\);[\s\S]*?writePtyOutput\(bytes, attachPtyWriteOrigin\(\)\);/,
     );
     expect(tab).not.toMatch(/term\?\.write\(String\(event\.data\)\)/);
   });

@@ -80,10 +80,25 @@
   } from "../state/store.svelte";
   import { terminalWsPath } from "../terminal/session";
   import {
+    PtyWriteTracker,
+    type PtyWriteOrigin,
+    routeXtermData,
+    shouldForwardGeneratedTerminalInput,
+    terminalMessageBytes,
+  } from "../terminal/connection";
+  import {
     handleTerminalMetaKey,
     installKeyboardProtocolHandlers,
   } from "../terminal/keymap";
   import { installTerminalReportGuards } from "../terminal/xtermReports";
+  import {
+    refreshTerminalRows as refreshTerminalRowsImpl,
+    shouldUseWebglRenderer,
+  } from "../terminal/renderer";
+  import {
+    createTrailingFitScheduler,
+    runTerminalFit,
+  } from "../terminal/resize";
   import {
     clampScrollbackMb,
     scrollbackLinesFromMb,
@@ -132,7 +147,7 @@
         /// one per tail-bearing message. Lets a reloaded SPA re-prove its
         /// restored pending Rich Prompt message is still queued at position
         /// `index+1` (vs the anonymous `queue_depth`, which may count pokes
-        /// from other windows). Always present (`[]` when none). GAP 2.
+        /// from other windows). Always present (`[]` when none).
         queued_prompt_ids?: string[];
       }
     | { type: "activity"; bytes_since_focus: number }
@@ -207,7 +222,7 @@
   let terminalCwdVirtual: string | null = $state(null);
   let webglRendererActive = false;
   let webglContextLossRetries = 0;
-  let ptyOutputWriteDepth = 0;
+  const ptyWrites = new PtyWriteTracker();
   let hostResumeTimers: ReturnType<typeof setTimeout>[] = [];
   let hostResumeListenerCleanup: (() => void) | null = null;
   // Wall-clock-gap sleep/wake detector. See
@@ -220,6 +235,11 @@
   // wake.
   const WAKE_PROBE_MS = 2000;
   const WAKE_GAP_MS = 6000;
+  const trailingFit = createTrailingFitScheduler(() => {
+    runTerminalFit(fit, term, (detail) => {
+      statusDetail = detail;
+    });
+  });
   // While output arrives at an unfocused terminal the unseen-output
   // dot pulses; this timer flips it solid once output has been quiet
   // for ACTIVITY_PULSE_QUIET_MS.
@@ -458,11 +478,7 @@
   }
 
   function refreshTerminalRows(): void {
-    if (!term) return;
-    const maybeRefresh = (term as Terminal & {
-      refresh?: (start: number, end: number) => void;
-    }).refresh;
-    maybeRefresh?.call(term, 0, Math.max(0, term.rows - 1));
+    refreshTerminalRowsImpl(term);
   }
 
   // Repaint the visible rows; do NOT clear the texture atlas.
@@ -559,6 +575,8 @@
   // bounded by a small retry budget so a genuinely dead GPU settles
   // on the DOM renderer rather than thrashing recreate.
   const WEBGL_MAX_CONTEXT_LOSS_RETRIES = 3;
+  let attachReplayActive = false;
+  let suppressAttachReplayGeneratedReplies = false;
 
   function enableWebglRenderer(): void {
     if (!term) return;
@@ -574,7 +592,7 @@
     // with the lineHeight gap the WebGL customGlyphs path otherwise fills).
     // The env-level WEBKIT_DISABLE_DMABUF_RENDERER fix in linux_gui_stack.rs
     // is about webview creation, not this per-layer present stall.
-    if (isTauriDesktop() && currentOS() === "linux") return;
+    if (!shouldUseWebglRenderer(isTauriDesktop(), currentOS())) return;
     try {
       const webgl = new WebglAddon();
       webgl.onContextLoss(() => {
@@ -670,7 +688,7 @@
       !tab.terminalSessionId,
     );
     installTerminalReportGuards(term);
-    installKeyboardProtocolHandlers(term, keyboardProtocol, sendInput);
+    installKeyboardProtocolHandlers(term, keyboardProtocol, sendGeneratedTerminalInput);
     fit = new FitAddon();
     search = new SearchAddon({ highlightLimit: 1000 });
     serialize = new SerializeAddon();
@@ -718,8 +736,7 @@
     // byte cursor and the server replays the session's full ring. A
     // carried-over cursor once made the server skip everything the
     // PREVIOUS xterm had seen (its buffer died with term.dispose()) -
-    // the "terminal shows only its last line after a pane split" bug;
-    // the cursor was removed outright. Echo dedupe (lastAgentEchoSeq)
+    // the previous xterm's buffer was disposed too. Echo dedupe (lastAgentEchoSeq)
     // is independent of screen content and survives the remount.
     void connect();
     if (focused) queueMicrotask(() => term?.focus());
@@ -769,16 +786,9 @@
       sendFocusState();
     };
     ws.onmessage = async (event) => {
-      if (event.data instanceof ArrayBuffer) {
-        const bytes = new Uint8Array(event.data);
-        writePtyOutput(bytes);
-        recordOutputActivity();
-        maybeSeedPrompt();
-        return;
-      }
-      if (event.data instanceof Blob) {
-        const bytes = new Uint8Array(await event.data.arrayBuffer());
-        writePtyOutput(bytes);
+      const bytes = await terminalMessageBytes(event.data);
+      if (bytes) {
+        writePtyOutput(bytes, attachPtyWriteOrigin());
         recordOutputActivity();
         maybeSeedPrompt();
         return;
@@ -790,11 +800,16 @@
         return;
       }
       if (frame.type === "ready") {
+        attachReplayActive = false;
+        suppressAttachReplayGeneratedReplies = false;
         statusDetail = `${frame.cols}x${frame.rows}`;
         terminalCwdAbs = frame.cwd ?? null;
         terminalCwdVirtual = frame.cwd_rel ?? null;
         recoverTerminalRendererAfterHostResume();
       } else if (frame.type === "session") {
+        const duplicateReplay = reattaching && !sawSessionControl;
+        attachReplayActive = true;
+        suppressAttachReplayGeneratedReplies = duplicateReplay;
         sawSessionControl = true;
         setTerminalSession(tab, frame.id);
         setTerminalActivity(tab, !focused && (frame.bytes_since_focus ?? 0) > 0);
@@ -802,7 +817,7 @@
         // server truth, never persisted client-side.
         setTerminalQueueDepth(tab, frame.queue_depth ?? 0);
         // Re-prove a RESTORED pending Rich Prompt message against the server's
-        // authoritative queue (GAP 2 / reload contract): re-lock + re-show it
+        // authoritative queue (reload contract): re-lock + re-show it
         // with its position if still queued, clear it if it already drained.
         // Mutates tab state from this event handler (not a $derived); the
         // bubble's own onMount/$effect re-shows it when the view exists.
@@ -1010,6 +1025,11 @@
     send({ type: "input", data });
   }
 
+  function sendGeneratedTerminalInput(data: string): void {
+    if (!shouldForwardGeneratedTerminalInput(ptyWrites)) return;
+    sendInput(data);
+  }
+
   /// Rich Prompt + team-lead-identity submit path: send `data` over the existing
   /// terminal WS as a `prompt` frame so the server ENQUEUES it into this
   /// session's write queue (shared FIFO with `cs terminal write`) and appends
@@ -1040,17 +1060,13 @@
     toggleRichPromptForTab(tab.id);
   }
 
-  function writePtyOutput(bytes: Uint8Array): void {
+  function attachPtyWriteOrigin(): PtyWriteOrigin {
+    return attachReplayActive && suppressAttachReplayGeneratedReplies ? "replay" : "live";
+  }
+
+  function writePtyOutput(bytes: Uint8Array, origin: PtyWriteOrigin = "live"): void {
     if (!term) return;
-    ptyOutputWriteDepth += 1;
-    try {
-      term.write(bytes, () => {
-        ptyOutputWriteDepth = Math.max(0, ptyOutputWriteDepth - 1);
-      });
-    } catch (err) {
-      ptyOutputWriteDepth = Math.max(0, ptyOutputWriteDepth - 1);
-      throw err;
-    }
+    ptyWrites.write(term, bytes, origin);
   }
 
   /// Decode a base64 agent-event payload into the string
@@ -1100,33 +1116,14 @@
   }
 
   function handleXtermData(data: string): void {
-    // xterm emits onData for user input and terminal-generated
-    // replies. Replies belong only to the PTY that requested them;
-    // they must not enter chan's broadcast fan-out.
-    if (ptyOutputWriteDepth > 0) {
-      // A reply to a query in the bytes we just wrote: forward it ONLY to the
-      // requesting PTY (sendInput), never into the broadcast fan-out. Forwarded
-      // UNCONDITIONALLY — historical (reattach-replay) or live. We previously
-      // dropped replies during a reattach-replay window to stop a historical
-      // CPR/DA reply leaking at the prompt (`…R`/`…c`), but that gate could
-      // STALL (the drain depth never returning to 0 under continuous TUI
-      // output), dropping every LIVE reply and hanging/blanking the TUI — far
-      // worse than the occasional leak. Reverted per @@Alex; the occasional
-      // historical-reply echo is accepted. Ref dev/terminal-regression/.
-      sendInput(data);
-      return;
-    }
-    sendUserInput(data);
+    routeXtermData(data, ptyWrites, sendInput, sendUserInput);
   }
 
   function queueFit(): void {
     requestAnimationFrame(() => {
-      try {
-        fit?.fit();
-        if (term) statusDetail = `${term.cols}x${term.rows}`;
-      } catch {
-        // xterm throws if fit runs before dimensions settle.
-      }
+      runTerminalFit(fit, term, (detail) => {
+        statusDetail = detail;
+      });
     });
     // Trailing-edge fit. ResizeObserver sometimes misses or swallows
     // the FINAL resize event of a drag gesture (a browser quirk: the
@@ -1141,29 +1138,12 @@
     // when the size hasn't drifted: `fit.fit` short-circuits +
     // `term.resize` no-ops on identical cols/rows so no
     // spurious SIGWINCH lands on the PTY.
-    scheduleTrailingFit();
-  }
-
-  /// Trailing-edge fit scheduler. Coalesces rapid ResizeObserver
-  /// fires (pane-divider drag = dozens per
-  /// second) into a single fit 120ms after the last fire. 120ms
-  /// matches the perception threshold for "the user has stopped
-  /// dragging" + leaves room for one more frame of paint.
-  let trailingFitTimer: ReturnType<typeof setTimeout> | null = null;
-  function scheduleTrailingFit(): void {
-    if (trailingFitTimer) clearTimeout(trailingFitTimer);
-    trailingFitTimer = setTimeout(() => {
-      trailingFitTimer = null;
-      try {
-        fit?.fit();
-        if (term) statusDetail = `${term.cols}x${term.rows}`;
-      } catch {
-        // Same throw guard as `queueFit`.
-      }
-    }, 120);
+    trailingFit.schedule();
   }
 
   function closeSocket(): void {
+    attachReplayActive = false;
+    suppressAttachReplayGeneratedReplies = false;
     const s = ws;
     ws = null;
     if (!s) return;
@@ -1183,13 +1163,7 @@
       clearTimeout(sessionSaveTimer);
       sessionSaveTimer = null;
     }
-    if (trailingFitTimer) {
-      // Clear the trailing-edge fit timer so a resize-during-teardown
-      // rAF doesn't race against the `term?.dispose()` below + throw
-      // at fit-time.
-      clearTimeout(trailingFitTimer);
-      trailingFitTimer = null;
-    }
+    trailingFit.clear();
     clearHostResumeTimers();
     hostResumeListenerCleanup?.();
     if (activityPulseTimer) {
@@ -1201,7 +1175,7 @@
     resizeObserver = null;
     term?.dispose();
     term = null;
-    ptyOutputWriteDepth = 0;
+    ptyWrites.reset();
     webglRendererActive = false;
     fit = null;
     search = null;
