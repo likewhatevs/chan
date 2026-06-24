@@ -209,13 +209,23 @@ impl EmbeddedServer {
         // `WorkspaceLocked`. Retry briefly so the toggle settles instead of
         // erroring; a genuine other-process lock still surfaces after the
         // short budget. Mirrors `unregister_with_retry` on the close side.
+        //
+        // Mount through the idempotent `open_or_get_registered_workspace`
+        // wrapper (its `register_lock` + `hosted_for_root` precheck): a
+        // redundant turn-on of an ALREADY-mounted root returns `Ok(existing)`
+        // rather than `WorkspaceAlreadyOpen`, so a click that lands in the gap
+        // before the launcher's `status:starting` disables the toggle settles
+        // to success instead of the wrong "open in another chan process"
+        // message. The retry loop still covers the OFF->ON releasing-handle
+        // case (root unregistered, flock not yet dropped), which surfaces as
+        // `WorkspaceAlreadyOpen` from the inner mount until the handle releases.
         const MAX_ATTEMPTS: usize = 8;
         const BACKOFF: std::time::Duration = std::time::Duration::from_millis(150);
         let prefix = prefix_for_key(key);
         for attempt in 1..=MAX_ATTEMPTS {
             match self
                 .host
-                .open_registered_workspace(Path::new(key), serve_config(self.addr, &prefix))
+                .open_or_get_registered_workspace(Path::new(key), serve_config(self.addr, &prefix))
                 .await
             {
                 Ok(hosted) => return Ok(hosted.handle.launch_url()),

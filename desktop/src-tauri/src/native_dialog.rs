@@ -1,4 +1,4 @@
-//! Confirm / notice dialogs that honor Return-to-default on macOS.
+//! Confirm dialogs that honor Return-to-default on macOS.
 //!
 //! Every desktop confirm used to go straight through `tauri_plugin_dialog`
 //! (rfd under the hood). The button ORDER is right, but rfd's async alert
@@ -15,15 +15,15 @@
 //! itself, the same way `pdf.rs` pumps the run loop synchronously).
 //!
 //! Off macOS the plugin path is kept verbatim (rfd routes Return fine on
-//! GTK / Win32), so both helpers are cfg-split internally and callers stay
+//! GTK / Win32), so `confirm` is cfg-split internally and callers stay
 //! platform-agnostic.
 //!
-//! Both helpers are callback-shaped like the old `.show(cb)` they replace:
-//! the result callback runs on the main thread. On macOS the modal is
-//! scheduled via `run_on_main_thread`, so it fires on a fresh main-loop turn
-//! (after the calling window-close handler unwinds) — keeping the close path
-//! non-blocking and the bury / destroy / hide side effects on the main thread
-//! exactly as before.
+//! `confirm` is callback-shaped like the old `.show(cb)` it replaces: the
+//! result callback runs on the main thread. On macOS the modal is scheduled
+//! via `run_on_main_thread`, so it fires on a fresh main-loop turn (after the
+//! calling window-close handler unwinds) — keeping the close path non-blocking
+//! and the bury / destroy / hide side effects on the main thread exactly as
+//! before.
 
 use tauri::AppHandle;
 
@@ -77,33 +77,6 @@ pub(crate) fn confirm(
                 secondary_label.to_owned(),
             ))
             .show(on_result);
-    }
-}
-
-/// Show a single-button informational notice (one "OK" button). Return / click
-/// dismisses it. Non-blocking for the caller.
-pub(crate) fn notify(app: &AppHandle, title: &str, message: &str) {
-    #[cfg(target_os = "macos")]
-    {
-        let title = title.to_owned();
-        let message = message.to_owned();
-        let scheduled = app.run_on_main_thread(move || {
-            let mtm = MainThreadMarker::new()
-                .expect("run_on_main_thread closure must execute on the main thread");
-            let _ = run_native_alert(mtm, &title, &message, "OK", None);
-        });
-        if let Err(e) = scheduled {
-            tracing::warn!(error = %e, "scheduling native notice dialog failed");
-        }
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
-        app.dialog()
-            .message(message)
-            .title(title)
-            .kind(MessageDialogKind::Info)
-            .show(|_| {});
     }
 }
 

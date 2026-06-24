@@ -12,10 +12,14 @@
 //! `uploadFilesTo` pipeline the Inspector upload pill uses (shared transfer
 //! progress, dedup, drafts guard).
 //!
-//! ACL: scoped to LOCALLY-served workspace/terminal windows only
-//! (`capabilities/local-upload.json`), never `outbound-*` — a remote-served
-//! webview must not be able to pop a native open panel and read local file
-//! bytes off the user's disk.
+//! ACL: scoped (`capabilities/local-upload.json`) to LOCALLY-served
+//! workspace/terminal windows and the user's own devserver/tunnel windows
+//! (`lib-*`, a registry-configured devserver reached at loopback over a
+//! tunnel). It stays off `outbound-*` (ad-hoc remote-URL attach): the panel
+//! reads local file bytes, so an untrusted remote-served webview must not be
+//! able to pop it. The picker is user-interactive and `cs upload` is
+//! user-initiated, so the static tunnel-window grant is acceptable; a
+//! per-gesture handshake ACL is the follow-up.
 
 use serde::Serialize;
 use tauri::AppHandle;

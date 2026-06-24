@@ -59,7 +59,7 @@ The launcher (Tauri label `main`, title "Chan Desktop") is a singleton: it is ne
 | column  | meaning                                                  |
 |---------|----------------------------------------------------------|
 | On      | local rows: runtime toggle; remote rows: connection dot  |
-| Where   | kind glyph + locator: home/computer glyph + path (local), outbound glyph + URL/label (remote) |
+| Where   | kind glyph + locator: house glyph + path (local), outbound glyph + URL/label (remote) |
 | actions | Open split button (primary: in-app webview; caret menu: Open in Browser, Forget) |
 
 Clicking a local row's Where cell reveals the folder in the OS file manager. Workspace names are read-only in the desktop; renames happen through the CLI and the watcher reflects them.

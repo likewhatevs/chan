@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "window-hidden",
+  "description": "The custom centered 'Window Hidden' bury notice (label: window-hidden-<seq>). A static teaching surface with one OK button that closes its own window.",
+  "windows": ["window-hidden-*"],
+  "permissions": ["core:default", "core:window:allow-close"]
+}

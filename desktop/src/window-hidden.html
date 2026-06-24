@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Window Hidden</title>
+  <link rel="icon" type="image/png" href="chan-favicon.png" />
+  <link rel="apple-touch-icon" href="chan-favicon.png" />
+  <!-- Reuse the launcher base tokens (read-only link) so the notice reads as
+       the same product, then layer the centered notice rules on top. -->
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="stylesheet" href="window-hidden.css" />
+</head>
+<body class="hidden-notice-body">
+  <main class="hidden-notice" role="alertdialog"
+        aria-labelledby="notice-title" aria-describedby="notice-body">
+    <img class="hidden-notice-mark" src="chan-mark.png" alt="" aria-hidden="true" />
+    <h1 class="hidden-notice-title" id="notice-title">Window Hidden</h1>
+    <p class="hidden-notice-text" id="notice-body"></p>
+    <button type="button" class="hidden-notice-btn primary" id="ok">OK</button>
+  </main>
+
+  <script src="window-hidden.js"></script>
+</body>
+</html>

@@ -43,8 +43,7 @@ const MAX_WINDOWS_PER_WORKSPACE: usize = 10;
 /// then the locator (path / URL). Emoji render as color glyphs in the macOS
 /// title bar; named constants so swapping to a monochrome set (e.g. arrows
 /// for outbound) is a one-line change each.
-const ICON_LOCAL_HOME: &str = "\u{1F3E0}"; // house: local disk, under $HOME
-const ICON_LOCAL_OTHER: &str = "\u{1F5A5}\u{FE0F}"; // desktop computer: local, elsewhere
+const ICON_LOCAL_HOME: &str = "\u{1F3E0}"; // house: any local-disk workspace
 const ICON_OUTBOUND: &str = "\u{1F310}"; // globe: a remote devserver we dial OUT to
 
 /// Live state for one running serve. Held in `AppState.serves`
@@ -183,24 +182,13 @@ pub fn workspace_window_prefix(key: &str) -> String {
     format!("workspace-{:016x}", h.finish())
 }
 
-/// Window title for a local-workspace webview: a kind glyph (home vs this
-/// machine) then the workspace path. The path is the locator (the
-/// disambiguating signal in the OS window switcher); the glyph prefix
-/// makes the kind read at a glance.
+/// Window title for a local-workspace webview: the house glyph then the
+/// workspace path. Every local-disk workspace uses the house glyph regardless
+/// of where on disk it lives. The path is the locator (the disambiguating
+/// signal in the OS window switcher); the glyph prefix makes the kind read at
+/// a glance.
 fn workspace_title(key: &str) -> String {
-    local_title(key, dirs::home_dir().as_deref())
-}
-
-/// Pure home-vs-elsewhere title formatting, split from `workspace_title` so it
-/// is testable without depending on the process's real home dir. A path under
-/// `home` gets the house glyph; anything else (or no resolvable home) gets the
-/// computer glyph.
-fn local_title(key: &str, home: Option<&Path>) -> String {
-    let icon = match home {
-        Some(home) if Path::new(key).starts_with(home) => ICON_LOCAL_HOME,
-        _ => ICON_LOCAL_OTHER,
-    };
-    format!("{icon} {key}")
+    format!("{ICON_LOCAL_HOME} {key}")
 }
 
 /// Title for a devserver (remote) webview, per spec `icon devserver / repo`:
@@ -208,7 +196,7 @@ fn local_title(key: &str, home: Option<&Path>) -> String {
 /// (the path basename). `build_workspace_window` appends ` Window {N}`. A
 /// terminal carries no workspace, so it reads `icon devserver Terminal`. The
 /// full remote path is NOT used (it would read as a meaningless local path —
-/// `workspace_title`'s home-vs-computer glyph is wrong for a remote box).
+/// `workspace_title`'s local house glyph is wrong for a remote box).
 fn devserver_window_title(devserver_name: &str, record: &WindowRecord) -> String {
     match record.kind {
         WindowKind::Terminal => format!("{ICON_OUTBOUND} {devserver_name} Terminal"),
@@ -1260,18 +1248,55 @@ fn build_workspace_window(app: &AppHandle, spec: WindowSpec<'_>) -> Result<(), S
     res.map_err(|e| format!("scheduling workspace window for {window_label}: {e}"))
 }
 
-/// Informational notice shown when the OS close (red) button buries a
-/// window: the dialog is the teaching surface for the hide-not-close
-/// behaviour (smoke tests assert it appears). The launcher status-dot hide
-/// suppresses it (its `silent_hide` flag) — that dot is its own explicit hide
-/// gesture and needs no teaching. `native_dialog::notify` is non-blocking for
-/// this close handler (on macOS the modal runs on a later main-loop turn).
+/// Custom centered notice shown when the OS close (red) button buries a
+/// window: the teaching surface for the hide-not-close behaviour (smoke tests
+/// assert it appears). A small fixed-size Tauri webview window
+/// (`window-hidden.html`) centered on screen, with the app mark, "Window
+/// Hidden" title, body, and OK button all centered — not a native left-aligned
+/// alert. The launcher status-dot hide suppresses it (its `silent_hide` flag);
+/// that dot is its own explicit hide gesture and needs no teaching. A fresh
+/// `window-hidden-<seq>` label per call so rapid buries each get their own
+/// notice rather than a stale single window. Built on a later main-loop turn:
+/// the close handler that calls this is mid-event on the main thread, so the
+/// window creation is deferred just as the native notice it replaces was.
 fn show_bury_notice(app: &AppHandle, title: &str) {
-    crate::native_dialog::notify(
-        app,
-        "Window Hidden",
-        &format!("\"{title}\" was hidden, not closed. Reopen it from the Window menu."),
+    let body = format!("\"{title}\" was hidden, not closed. Reopen it from the Window menu.");
+    // Hand the formatted body to the page as a global it reads on load, so the
+    // arbitrary window title never has to ride a query string.
+    let init = format!(
+        "window.__CHAN_NOTICE_BODY__ = {};",
+        serde_json::to_string(&body).unwrap_or_else(|_| "\"\"".to_string())
     );
+    let app_for_build = app.clone();
+    let scheduled = app.run_on_main_thread(move || {
+        let label = format!("window-hidden-{}", next_window_seq());
+        match WebviewWindowBuilder::new(
+            &app_for_build,
+            &label,
+            WebviewUrl::App("window-hidden.html".into()),
+        )
+        .title("Window Hidden")
+        .inner_size(380.0, 280.0)
+        .resizable(false)
+        .center()
+        .initialization_script(init.as_str())
+        .build()
+        {
+            // Off macOS the app menu renders as a per-window GTK menubar; a
+            // File/Edit/Window bar on a fixed-size notice is noise. macOS keeps
+            // the global menubar (nothing to remove). Mirrors `open_about_window`.
+            Ok(win) => {
+                #[cfg(not(target_os = "macos"))]
+                let _ = win.remove_menu();
+                #[cfg(target_os = "macos")]
+                let _ = win;
+            }
+            Err(e) => tracing::warn!(error = %e, "showing the Window Hidden notice failed"),
+        }
+    });
+    if let Err(e) = scheduled {
+        tracing::warn!(error = %e, "scheduling the Window Hidden notice failed");
+    }
 }
 
 /// The active-transfer close guard's prompt (mirror of the live-shells confirm).
@@ -2044,26 +2069,18 @@ mod tests {
     }
 
     #[test]
-    fn local_title_prefixes_home_vs_computer_glyph_then_path() {
-        // The local title leads with the kind glyph (home when under the
-        // user's home dir, computer otherwise) then the path verbatim
-        // (the path is the disambiguating window-switcher
-        // signal). `local_title` takes home explicitly so the test does not
-        // depend on the process's real home dir.
-        let home = Path::new("/Users/alex");
+    fn workspace_title_prefixes_house_glyph_then_path() {
+        // Every local-disk workspace leads with the house glyph then the path
+        // verbatim (the path is the disambiguating window-switcher signal),
+        // regardless of where on disk it lives.
         assert_eq!(
-            local_title("/Users/alex/dev/github.com/fiorix/chan", Some(home)),
+            workspace_title("/Users/alex/dev/github.com/fiorix/chan"),
             format!("{ICON_LOCAL_HOME} /Users/alex/dev/github.com/fiorix/chan"),
         );
-        // Outside home -> computer glyph. Trailing slash passed through.
+        // Outside $HOME still gets the house glyph. Trailing slash passed through.
         assert_eq!(
-            local_title("/tmp/scratch/", Some(home)),
-            format!("{ICON_LOCAL_OTHER} /tmp/scratch/"),
-        );
-        // No resolvable home dir -> computer glyph (never mislabels as home).
-        assert_eq!(
-            local_title("/Users/alex/notes", None),
-            format!("{ICON_LOCAL_OTHER} /Users/alex/notes"),
+            workspace_title("/tmp/scratch/"),
+            format!("{ICON_LOCAL_HOME} /tmp/scratch/"),
         );
     }
 

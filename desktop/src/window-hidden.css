@@ -1,0 +1,73 @@
+/* Window Hidden notice. Tokens come from styles.css (the launcher base); this
+   layers the centered teaching layout: app mark, title, body, and a single OK
+   button, all centered both on screen (the Rust opener centers the window) and
+   within it. */
+
+.hidden-notice-body {
+  /* The window opens straight onto this page; fill the viewport so the notice
+     centers in it. */
+  display: flex;
+  min-height: 100vh;
+  margin: 0;
+}
+
+.hidden-notice {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  gap: 14px;
+  padding: 26px 24px;
+}
+
+.hidden-notice-mark {
+  width: 56px;
+  height: 56px;
+  border-radius: 12px;
+}
+
+.hidden-notice-title {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--text);
+  letter-spacing: -0.01em;
+}
+
+.hidden-notice-text {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  max-width: 32ch;
+}
+
+.hidden-notice-btn {
+  font: inherit;
+  font-size: 13px;
+  padding: 7px 28px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  color: var(--text);
+  cursor: pointer;
+  transition: border-color 120ms ease, background-color 120ms ease,
+    filter 120ms ease;
+}
+.hidden-notice-btn:hover {
+  border-color: var(--brand);
+}
+.hidden-notice-btn:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 1px;
+}
+.hidden-notice-btn.primary {
+  background: var(--brand);
+  border-color: var(--brand);
+  color: #fff;
+}
+.hidden-notice-btn.primary:hover {
+  filter: brightness(1.08);
+}

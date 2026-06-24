@@ -24,7 +24,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use chan_server::{DevserverEntry, DevserverInput, DevserverRegistry};
+use chan_server::{DevserverEntry, DevserverInput, DevserverRegistry, DevserverStatus};
 use serde::{Deserialize, Serialize};
 
 use crate::devserver::DevserverConns;
@@ -243,7 +243,7 @@ pub struct DevserverConfigRegistry {
     /// headless surfaces) — `remove` then only drops the config row.
     on_remove: Arc<OnceLock<DevserverRemoveHook>>,
     /// The live connection map (shared with `AppState.devservers`), so `list`
-    /// reports each row's [`DevserverEntry::connected`] — the launcher shows
+    /// reports each row's [`DevserverEntry::status`] — the launcher shows
     /// Connect vs Disconnect + gates Edit read-only off it.
     conns: Arc<DevserverConns>,
     /// The connected-devserver feed (shared with `AppState.devserver_feed`), so
@@ -336,9 +336,16 @@ fn entry_from_devserver(
         label: d.label.clone(),
         script: d.script.clone(),
         has_token: !d.token.is_empty(),
-        // A live connection in the desktop's in-memory map means connected; a
+        // The desktop's in-memory conn map is binary: present = connected,
+        // absent = disconnected. It tracks no in-flight connect, so `connecting`
+        // is never produced here; the launcher's optimistic bridge covers the
+        // connect click until the next feed refetch settles the status. A
         // headless surface installs no registry, so this never runs there.
-        connected: conns.is_connected(&d.id),
+        status: if conns.is_connected(&d.id) {
+            DevserverStatus::Connected
+        } else {
+            DevserverStatus::Disconnected
+        },
         // The connected library id, learned from the live window feed (`None`
         // until this devserver is connected with ≥1 window). `pane_color` matches
         // a devserver window's `library_id` against this (in the feed) to resolve
@@ -786,7 +793,7 @@ mod tests {
             .expect("add")
             .id;
         // No live conn yet: disconnected.
-        assert!(!reg.list()[0].connected);
+        assert_eq!(reg.list()[0].status, DevserverStatus::Disconnected);
         // A live conn (what connect_devserver_impl sets on a successful dial).
         conns.set(
             id.clone(),
@@ -797,12 +804,12 @@ mod tests {
                 name: "box".into(),
             },
         );
-        assert!(reg.list()[0].connected);
+        assert_eq!(reg.list()[0].status, DevserverStatus::Connected);
         // The control terminal dies -> the flip drops the conn -> the wire entry
-        // flips connected:false, but the persisted config row is untouched (so a
-        // re-run/edit can reconnect it).
+        // flips to status:disconnected, but the persisted config row is untouched
+        // (so a re-run/edit can reconnect it).
         conns.remove(&id);
-        assert!(!reg.list()[0].connected);
+        assert_eq!(reg.list()[0].status, DevserverStatus::Disconnected);
         assert_eq!(store.lock().unwrap().get().unwrap().devservers.len(), 1);
     }
 

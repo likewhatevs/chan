@@ -21,7 +21,6 @@ permissions = [
   "allow-auth-status",
   "allow-open-signin",
   "allow-signout",
-  "allow-list-devservers",
   "allow-list-devserver-workspaces",
   "allow-reconnect-devserver",
 ]
@@ -186,11 +185,6 @@ commands.allow = ["open_signin"]
 identifier = "allow-signout"
 description = "Enables the signout command."
 commands.allow = ["signout"]
-
-[[permission]]
-identifier = "allow-list-devservers"
-description = "Enables the list_devservers command."
-commands.allow = ["list_devservers"]
 
 [[permission]]
 identifier = "allow-list-devserver-workspaces"

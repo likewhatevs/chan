@@ -690,6 +690,16 @@ fn to_launcher_workspace(
     chan_server::LauncherWorkspace {
         workspace_id: slug.clone(),
         path: row.path,
+        // A connected devserver's row reflects the remote's on/off: on => the
+        // remote is serving it (running), off => stopped. The desktop sees no
+        // finer remote mount state here, and has no local mount error to report
+        // for a remote workspace.
+        status: if row.on {
+            chan_server::WorkspaceStatus::Running
+        } else {
+            chan_server::WorkspaceStatus::Stopped
+        },
+        error: None,
         label: row.label,
         on: row.on,
         library_id,
@@ -1154,38 +1164,6 @@ fn outbound_label(outbound: &OutboundWorkspace) -> Option<String> {
     } else {
         Some(label.to_string())
     }
-}
-
-/// A configured devserver plus whether the desktop is currently connected
-/// to it. The launcher groups by these: a connected devserver shows its live
-/// workspace rows, a disconnected one shows the connect affordance.
-#[derive(Debug, Clone, Serialize)]
-struct DevserverView {
-    id: String,
-    url: String,
-    script: String,
-    label: String,
-    added_at: u64,
-    connected: bool,
-}
-
-/// The configured devservers, for the launcher's `[DEVSERVER {host}]`
-/// grouping, each tagged with its live connection state. The per-devserver
-/// workspace rows come from `list_devserver_workspaces` once connected.
-#[tauri::command]
-fn list_devservers(state: State<Arc<AppState>>) -> Result<Vec<DevserverView>, String> {
-    let devservers = state.store.lock().unwrap().get().map_err(err)?.devservers;
-    Ok(devservers
-        .into_iter()
-        .map(|d| DevserverView {
-            connected: state.devservers.is_connected(&d.id),
-            id: d.id,
-            url: d.url,
-            script: d.script,
-            label: d.label,
-            added_at: d.added_at,
-        })
-        .collect())
 }
 
 /// Display name for a devserver in the Window menu: its user label, or its
@@ -3200,6 +3178,10 @@ fn main() {
                     Ok(url) => {
                         match WebviewWindowBuilder::new(app, "main", WebviewUrl::External(url))
                             .title(LAUNCHER_WINDOW_TITLE)
+                            // The launcher is remote-served and skips KEY_BRIDGE_JS;
+                            // inject the minimal reload-only chord so Cmd+R / Ctrl+R
+                            // reloads it.
+                            .initialization_script(LAUNCHER_RELOAD_BRIDGE_JS)
                             .inner_size(960.0, 600.0)
                             .min_inner_size(720.0, 400.0)
                             .resizable(true)
@@ -3407,9 +3389,11 @@ fn main() {
             // local-drop.json) — the drag pasteboard is system-wide.
             dropped_paths::read_dropped_paths,
             // Native upload picker for `cs upload` (WKWebView blocks the SPA's
-            // gesture-less file-input click). ACL-scoped to locally-served
-            // windows (capabilities/local-upload.json) — a remote-served
-            // webview must not pop a native picker over the user's disk.
+            // gesture-less file-input click). ACL-scoped to locally-served and
+            // the user's own devserver/tunnel windows (capabilities/
+            // local-upload.json); excludes outbound-* (ad-hoc remote URL) so an
+            // untrusted remote-served webview can't pop a native picker over
+            // the user's disk.
             upload::pick_upload_files,
             // Native vector PDF export. macOS-only: WKWebView's `createPDF`
             // has no Linux/Windows equivalent wired, and the SPA hides the
@@ -3425,7 +3409,6 @@ fn main() {
             add_outbound_workspace,
             open_outbound_workspace,
             remove_outbound_workspace,
-            list_devservers,
             list_devserver_workspaces,
             reconnect_devserver,
             auth::auth_status,
@@ -4546,6 +4529,34 @@ async fn discard_devserver_window(app: &tauri::AppHandle, label: &str) -> Result
 /// standalone terminal window instead), so there is no `Window N`
 /// suffix to disambiguate.
 const LAUNCHER_WINDOW_TITLE: &str = "Chan Desktop";
+
+/// Minimal reload-only key bridge for the launcher window. The launcher is
+/// remote-served (the embedded loopback SPA) and does NOT receive the full
+/// workspace `KEY_BRIDGE_JS`, so without this it has no reload chord. Claims
+/// Cmd+R (macOS) / Ctrl+R (Linux/Windows) in the capture phase and reloads via
+/// the `reload_window` IPC, falling back to `location.reload()` when the Tauri
+/// bridge is absent. Plain Ctrl+R is safe to claim here: the launcher hosts no
+/// terminal whose shell reverse-search it would shadow (workspace windows move
+/// reload to Ctrl+Shift+R off macOS for exactly that reason).
+const LAUNCHER_RELOAD_BRIDGE_JS: &str = r#"
+(() => {
+  function reload() {
+    const tauri = window.__TAURI__;
+    if (tauri && tauri.core && typeof tauri.core.invoke === 'function') {
+      tauri.core.invoke('reload_window').catch(() => window.location.reload());
+    } else {
+      window.location.reload();
+    }
+  }
+  window.addEventListener('keydown', (e) => {
+    if (e.code !== 'KeyR' || e.altKey || e.shiftKey) return;
+    if (!(e.metaKey || e.ctrlKey)) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    reload();
+  }, true);
+})();
+"#;
 
 /// Quit, asking first while ANY SPA window is alive — visible or
 /// buried (a buried window is a live hidden webview, so one
