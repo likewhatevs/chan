@@ -878,6 +878,24 @@ impl WorkspaceHost {
             .unwrap_or(0)
     }
 
+    /// Whether `accept` matches SOME live tenant's bearer token (workspace,
+    /// terminal, or control tenant — every tenant carries its mint token in its
+    /// `ServeHandle`). The caller supplies the comparison so the constant-time
+    /// primitive stays in chan-server (where the launcher gate lives) and no
+    /// token is cloned out of the host. Used by the local-color routes to admit
+    /// a window's OWN per-tenant token (not just the launcher token) — a window
+    /// is served with its tenant token, so a launcher-only gate would 401 every
+    /// window's colour GET/PUT/watch (C8).
+    pub fn any_tenant_token(&self, accept: impl Fn(&str) -> bool) -> bool {
+        let Ok(workspaces) = self.workspaces.read() else {
+            return false;
+        };
+        workspaces
+            .values()
+            .filter_map(|runtime| runtime.handle.token.as_deref())
+            .any(accept)
+    }
+
     /// Whether a persisted window row appears in the LIVE window feed. A workspace
     /// window shows only while its workspace is currently MOUNTED/ON: turning the
     /// workspace OFF leaves the record on disk (so ON restores the same

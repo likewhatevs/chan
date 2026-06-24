@@ -196,6 +196,10 @@ pub fn launcher_router(
             host: host.clone(),
             serve_addr: serve_addr.clone(),
         }));
+    // Captured before `host` is moved into the devservers state below: the
+    // surface-bearer gate (C8) needs the host to validate a window's per-tenant
+    // token against the live tenants.
+    let host_for_surface = host.clone();
     // Devservers: list on BOTH surfaces (a registry-less surface returns empty);
     // add/update/remove gated mutable (403 read-only, 404 no registry) inside the
     // handlers, same as workspaces.
@@ -209,17 +213,31 @@ pub fn launcher_router(
             put(handle_update_devserver).delete(handle_remove_devserver),
         )
         .with_state(Arc::new(LauncherState { host, serve_addr }));
-    let api = windows.merge(workspaces).merge(config).merge(devservers);
-    let api = match bearer {
+    // C8: the launcher-MANAGEMENT routes (windows / workspaces / devservers) stay
+    // gated on the launcher token. The local-color (`config`) routes set the
+    // surface's OWN cosmetic colour from a pane menu, called by whatever window
+    // is open — which carries a per-TENANT token, not the launcher token — so
+    // they get a relaxed SURFACE gate (launcher OR any valid tenant token). A
+    // launcher-only gate 401'd every window's colour GET/PUT/watch.
+    let launcher_api = windows.merge(workspaces).merge(devservers);
+    let (launcher_api, config) = match bearer {
         Some(token) => {
-            let token = token.to_string();
-            api.route_layer(middleware::from_fn(move |req, next| {
-                let token = token.clone();
+            let launcher_token = token.to_string();
+            let surface_token = token.to_string();
+            let launcher_api = launcher_api.route_layer(middleware::from_fn(move |req, next| {
+                let token = launcher_token.clone();
                 async move { require_launcher_bearer(token, req, next).await }
-            }))
+            }));
+            let config = config.route_layer(middleware::from_fn(move |req, next| {
+                let token = surface_token.clone();
+                let host = host_for_surface.clone();
+                async move { require_surface_bearer(token, host, req, next).await }
+            }));
+            (launcher_api, config)
         }
-        None => api,
+        None => (launcher_api, config),
     };
+    let api = launcher_api.merge(config);
     // The static SPA shell is ALWAYS public (loads before it holds the token) and
     // carries the read-only hint so the SPA hides mutation controls on the
     // devserver surface rather than showing buttons that 403.
@@ -251,6 +269,49 @@ async fn require_launcher_bearer(token: String, req: Request<Body>, next: Next) 
         (
             StatusCode::UNAUTHORIZED,
             "missing or invalid launcher bearer token",
+        )
+            .into_response()
+    }
+}
+
+/// Gate the local-color (`config`) sub-router on ANY valid SURFACE token: the
+/// launcher token OR a live per-tenant/window token this host serves. Unlike
+/// [`require_launcher_bearer`] (launcher-MANAGEMENT routes), the local-color
+/// routes set the surface's OWN cosmetic library colour from a pane's
+/// focus-border menu — and a window is served with its per-TENANT token, not the
+/// launcher token (`desktop/serve.rs` `?t={record.token}`). A launcher-only gate
+/// therefore hard-401s every real window's GET/PUT/watch, so the colour never
+/// persists and a fresh window seeds blue (C8). Accepts the same `Bearer` header
+/// and watch-WS `?t=` forms; comparisons are constant-time. A shared chan-server
+/// route, so this admits BOTH local and devserver windows in one place.
+async fn require_surface_bearer(
+    launcher_token: String,
+    host: Arc<WorkspaceHost>,
+    req: Request<Body>,
+    next: Next,
+) -> Response {
+    let header_token = req
+        .headers()
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "));
+    let path = req.uri().path();
+    let query_token = (path == WATCH_WS_PATH || path == LOCAL_COLOR_WATCH_WS_PATH)
+        .then(|| req.uri().query().and_then(query_bearer))
+        .flatten();
+    // A token is valid for this surface if it is the launcher token OR any live
+    // tenant token this host serves (the window's own `?t=`/Bearer token).
+    let valid = |t: &str| {
+        bytes_eq(t.as_bytes(), launcher_token.as_bytes())
+            || host.any_tenant_token(|tok| bytes_eq(tok.as_bytes(), t.as_bytes()))
+    };
+    let authorized = header_token.is_some_and(&valid) || query_token.is_some_and(&valid);
+    if authorized {
+        next.run(req).await
+    } else {
+        (
+            StatusCode::UNAUTHORIZED,
+            "missing or invalid surface bearer token",
         )
             .into_response()
     }

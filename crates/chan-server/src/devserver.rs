@@ -2151,6 +2151,121 @@ mod tests {
         assert_eq!(watch_bad.status(), StatusCode::UNAUTHORIZED);
     }
 
+    #[tokio::test]
+    async fn local_color_gate_accepts_a_tenant_token_but_windows_stay_launcher_only() {
+        use tower::ServiceExt;
+
+        // C8 cut-blocker: a window is served with its per-TENANT token, NOT the
+        // launcher token, so the local-color (config) routes must accept a valid
+        // tenant token — while the launcher-MANAGEMENT routes (windows) stay
+        // launcher-only.
+        let home = tempfile::tempdir().expect("home");
+        let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let state = test_state(home.path(), addr);
+
+        // Mount a workspace so the host has a live tenant with a real token.
+        let parent = tempfile::tempdir().expect("parent");
+        let ws = parent.path().join("notes");
+        std::fs::create_dir_all(&ws).unwrap();
+        std::fs::write(ws.join("n.md"), "# N\n").unwrap();
+        let prefix = state.register_workspace(&ws).await.expect("mount");
+        let tenant_token = state
+            .workspaces
+            .lock()
+            .unwrap()
+            .get(&prefix)
+            .expect("record")
+            .token
+            .clone();
+        assert!(!tenant_token.is_empty(), "the tenant minted a token");
+
+        let app = crate::routes::launcher_router(state.host.clone(), Some("launcher-token"), None);
+        let bearer = |uri: &str, token: &str| {
+            HttpRequest::builder()
+                .uri(uri)
+                .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap()
+        };
+
+        // local-color GET accepts the per-tenant token (the C8 fix — was a 401).
+        let color_tenant = app
+            .clone()
+            .oneshot(bearer("/api/library/local-color", &tenant_token))
+            .await
+            .unwrap();
+        assert_ne!(
+            color_tenant.status(),
+            StatusCode::UNAUTHORIZED,
+            "a valid tenant token must pass the surface gate"
+        );
+
+        // local-color PUT also passes the gate on the tenant token (whatever the
+        // handler then does — store-less may 4xx — it is not a 401).
+        let color_put = app
+            .clone()
+            .oneshot(
+                HttpRequest::builder()
+                    .method("PUT")
+                    .uri("/api/library/local-color")
+                    .header(header::AUTHORIZATION, format!("Bearer {tenant_token}"))
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{"color":"rebeccapurple"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_ne!(color_put.status(), StatusCode::UNAUTHORIZED);
+
+        // The watch WS accepts the tenant token via `?t=` (a fresh window READS
+        // on-connect through the watch — it 401'd today).
+        let color_watch = app
+            .clone()
+            .oneshot(
+                HttpRequest::builder()
+                    .uri(format!("/api/library/local-color/watch?t={tenant_token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_ne!(color_watch.status(), StatusCode::UNAUTHORIZED);
+
+        // The launcher token still works on local-color.
+        let color_launcher = app
+            .clone()
+            .oneshot(bearer("/api/library/local-color", "launcher-token"))
+            .await
+            .unwrap();
+        assert_ne!(color_launcher.status(), StatusCode::UNAUTHORIZED);
+
+        // A bogus token is still rejected on local-color.
+        let color_bogus = app
+            .clone()
+            .oneshot(bearer("/api/library/local-color", "bogus"))
+            .await
+            .unwrap();
+        assert_eq!(color_bogus.status(), StatusCode::UNAUTHORIZED);
+
+        // The launcher-management routes stay launcher-only: the tenant token is
+        // NOT accepted on /windows, but the launcher token is.
+        let windows_tenant = app
+            .clone()
+            .oneshot(bearer("/api/library/windows", &tenant_token))
+            .await
+            .unwrap();
+        assert_eq!(
+            windows_tenant.status(),
+            StatusCode::UNAUTHORIZED,
+            "the launcher-management routes must stay launcher-only"
+        );
+        let windows_launcher = app
+            .oneshot(bearer("/api/library/windows", "launcher-token"))
+            .await
+            .unwrap();
+        assert_ne!(windows_launcher.status(), StatusCode::UNAUTHORIZED);
+    }
+
     /// The watch pump arms its change waiter (`enable`) BEFORE it takes the
     /// snapshot. A `Notify::Notified` records the `notify_waiters` count when it
     /// is created and compares it on first poll, so a change is observed only
