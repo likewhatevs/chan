@@ -2079,6 +2079,8 @@ mod tests {
     const WORKSPACE_CAPABILITY_JSON: &str = include_str!("../capabilities/workspace.json");
     const DEFAULT_CAPABILITY_JSON: &str = include_str!("../capabilities/default.json");
     const LOCAL_DROP_CAPABILITY_JSON: &str = include_str!("../capabilities/local-drop.json");
+    const LAUNCHER_EVENTS_CAPABILITY_JSON: &str =
+        include_str!("../capabilities/launcher-events.json");
     const APP_PERMISSIONS_TOML: &str = include_str!("../permissions/app.toml");
 
     fn capability_permissions(raw: &str) -> Vec<String> {
@@ -2397,9 +2399,9 @@ mod tests {
             "workspace-window permission set must not carry the drag-pasteboard grant: {workspace_set:?}",
         );
         // Belt symmetry: the launcher (default capability) is
-        // locally-served and outside the harvest threat model, but it
-        // has no drop surface either — pin it off so the grant can't
-        // drift in through the third broad capability.
+        // remote-served from the embedded loopback but has no drop
+        // surface — pin the grant off it too so it can't drift in
+        // through the third broad capability.
         let default_perms = capability_permissions(DEFAULT_CAPABILITY_JSON);
         assert!(
             default_perms.iter().all(|p| p != "allow-read-dropped-paths"),
@@ -2465,5 +2467,58 @@ mod tests {
             perms.iter().any(|p| p == "opener:allow-open-url"),
             "default capability must include opener:allow-open-url: {perms:?}",
         );
+    }
+
+    #[test]
+    fn launcher_event_capability_grants_listen_to_remote_served_launcher() {
+        // C2 / seam 3: the launcher SPA is REMOTELY served from the embedded
+        // chan-server loopback (the main window loads `WebviewUrl::External
+        // http://127.0.0.1:<port>/`). A Tauri capability reaches remotely-loaded
+        // content only when it declares `remote.urls`; default.json has none, so
+        // its `core:default` (which DOES carry `core:event:default`) never reached
+        // the launcher and `onTauriEvent('devserver-control-closed', …)` was denied
+        // with `plugin:event|listen not allowed by ACL`. The dedicated
+        // launcher-events capability restores the listen/unlisten grant on the
+        // remote launcher windows — pin it so a capability refactor can't silently
+        // re-break the connect-script-exit survey.
+        let windows = capability_windows(LAUNCHER_EVENTS_CAPABILITY_JSON);
+        assert!(
+            windows.iter().any(|w| w == "main"),
+            "launcher-events capability must target the main launcher window: {windows:?}",
+        );
+        assert!(
+            windows.iter().any(|w| w == "main-*"),
+            "launcher-events capability must target additional main-N launchers: {windows:?}",
+        );
+        // It MUST be remote-scoped, or the grant is inert against the loopback-served
+        // launcher (the whole reason the listener was dead).
+        let remote_urls = capability_remote_urls(LAUNCHER_EVENTS_CAPABILITY_JSON);
+        assert!(
+            remote_urls.iter().any(|u| u == "http://127.0.0.1:*"),
+            "launcher-events must cover the loopback origin the launcher is served from: {remote_urls:?}",
+        );
+        let perms = capability_permissions(LAUNCHER_EVENTS_CAPABILITY_JSON);
+        assert!(
+            perms.iter().any(|p| p == "core:event:default"),
+            "launcher-events must grant the core event listen/unlisten ACL: {perms:?}",
+        );
+        // Least privilege: it carries ONLY the event grant. The launcher is pure
+        // HTTP otherwise, so the powerful local-only default.json grants (updater,
+        // process restart, dialog) must NOT leak onto remote content through here.
+        assert_eq!(
+            perms.len(),
+            1,
+            "launcher-events must stay scoped to the event grant only: {perms:?}",
+        );
+        for forbidden in [
+            "process:allow-restart",
+            "updater:allow-download-and-install",
+            "dialog:allow-open",
+        ] {
+            assert!(
+                perms.iter().all(|p| p != forbidden),
+                "launcher-events must not broaden {forbidden} onto remote content: {perms:?}",
+            );
+        }
     }
 }
