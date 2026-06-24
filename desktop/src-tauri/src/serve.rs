@@ -45,7 +45,7 @@ const MAX_WINDOWS_PER_WORKSPACE: usize = 10;
 /// for outbound) is a one-line change each.
 const ICON_LOCAL_HOME: &str = "\u{1F3E0}"; // house: local disk, under $HOME
 const ICON_LOCAL_OTHER: &str = "\u{1F5A5}\u{FE0F}"; // desktop computer: local, elsewhere
-const ICON_OUTBOUND: &str = "\u{1F4E4}"; // outbox tray: we dial OUT to a URL
+const ICON_OUTBOUND: &str = "\u{1F310}"; // globe: a remote devserver we dial OUT to
 
 /// Live state for one running serve. Held in `AppState.serves`
 /// keyed by canonical workspace path.
