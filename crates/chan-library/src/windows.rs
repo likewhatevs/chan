@@ -392,6 +392,28 @@ impl WindowRegistry {
         removed
     }
 
+    /// Remove `window_id` ONLY if it is a NON-CONTROL terminal window — the C4
+    /// reap of a standalone terminal whose PTY exited while detached. A
+    /// workspace window (its panes' deaths must not close it) and a control
+    /// window (the desktop exit-watcher owns those) are left untouched, so this
+    /// is safe to fire from the shared terminal tenant's reap hook. Returns
+    /// whether a row was removed; fires the change notification when so.
+    pub fn remove_terminal(&self, window_id: &str) -> bool {
+        let (removed, snapshot) = {
+            let mut windows = self.lock();
+            let before = windows.len();
+            windows.retain(|w| {
+                !(w.window_id == window_id && matches!(w.kind, WindowKind::Terminal) && !w.control)
+            });
+            (windows.len() != before, windows.clone())
+        };
+        if removed {
+            self.save_best_effort(&snapshot);
+            self.notify.notify_waiters();
+        }
+        removed
+    }
+
     /// Set window `window_id`'s persisted visibility (Theme 5). Returns whether a
     /// row MATCHED (so a route maps `false` to 404 — idempotent: setting the
     /// value it already holds still matches). Persists (durable rows; a control
@@ -1172,6 +1194,32 @@ mod tests {
         assert!(reg.snapshot().is_empty());
         assert!(!reg.remove(&w.window_id), "second remove is a no-op false");
         assert!(!reg.remove("w-nope"), "unknown id is false");
+    }
+
+    #[test]
+    fn remove_terminal_only_removes_non_control_terminal_rows() {
+        // C4 reap scoping: the shared terminal tenant's hook drops a standalone
+        // terminal row, but must never touch a workspace window (its panes'
+        // deaths must not close it) or a control window (the desktop
+        // exit-watcher owns those).
+        let (reg, _d) = registry();
+        let term = reg.create(WindowKind::Terminal, None);
+        let ws = reg.create(WindowKind::Workspace, Some("/tmp/ws".to_string()));
+        let ctrl = reg.create_control("ctl-win".to_string(), "lib-remote".to_string());
+
+        assert!(!reg.remove_terminal(&ws.window_id), "workspace row kept");
+        assert!(!reg.remove_terminal(&ctrl.window_id), "control row kept");
+        assert!(reg.remove_terminal(&term.window_id), "terminal row reaped");
+        assert!(
+            !reg.remove_terminal(&term.window_id),
+            "second remove is a no-op false"
+        );
+        assert!(!reg.remove_terminal("w-nope"), "unknown id is false");
+
+        let ids: Vec<String> = reg.snapshot().into_iter().map(|w| w.window_id).collect();
+        assert!(ids.contains(&ws.window_id), "workspace survives");
+        assert!(ids.contains(&ctrl.window_id), "control survives");
+        assert!(!ids.contains(&term.window_id), "terminal gone");
     }
 
     // --- change notification (watch broadcaster contract) ------------------

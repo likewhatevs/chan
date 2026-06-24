@@ -89,6 +89,36 @@ pub struct Registry {
     /// disk. It tracks marks for THIS process's lifetime — sessions never
     /// outlive the process (PTYs die with it), so it needs no startup seed.
     persisted_windows: Mutex<HashSet<String>>,
+    /// Optional hook fired when [`reap_exited`](Self::reap_exited) reaps a
+    /// session that owns a window: the host installs it (on the SHARED terminal
+    /// tenant only) to drop the standalone terminal's window-feed row when its
+    /// PTY exits, so it does not linger as a ghost (C4). A workspace tenant
+    /// leaves this unset — a pane's death must never close its workspace window.
+    window_reaper: Mutex<Option<WindowReaper>>,
+}
+
+/// Host-installed hook to reap a terminal WINDOW row when its session is reaped.
+/// Takes the reaped session's `window_id`. See
+/// [`Registry::install_window_reaper`]. A newtype so [`Registry`] keeps deriving
+/// `Debug` (a bare `dyn Fn` does not implement it).
+#[derive(Clone)]
+pub struct WindowReaper(Arc<dyn Fn(&str) + Send + Sync>);
+
+impl WindowReaper {
+    /// Wrap a closure taking the reaped session's `window_id`.
+    pub fn new(f: impl Fn(&str) + Send + Sync + 'static) -> Self {
+        Self(Arc::new(f))
+    }
+
+    fn call(&self, window_id: &str) {
+        (self.0)(window_id)
+    }
+}
+
+impl std::fmt::Debug for WindowReaper {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("WindowReaper(..)")
+    }
 }
 
 /// Parse the ordinal from a default `Terminal-N` name for lowest-free
@@ -416,7 +446,20 @@ impl Registry {
             roster_notify: Arc::new(Notify::new()),
             default_command: Mutex::new(None),
             persisted_windows: Mutex::new(HashSet::new()),
+            window_reaper: Mutex::new(None),
         }
+    }
+
+    /// Install the hook that reaps a standalone terminal's WINDOW row when its
+    /// session is reaped by [`reap_exited`](Self::reap_exited) (PTY exited and
+    /// no client attached). The host wires this on the SHARED terminal tenant
+    /// only, so a workspace tenant's pane death never closes its workspace
+    /// window. A later install replaces the prior hook.
+    pub fn install_window_reaper(&self, reaper: WindowReaper) {
+        *self
+            .window_reaper
+            .lock()
+            .expect("terminal registry poisoned") = Some(reaper);
     }
 
     /// Hand out the next per-tenant default terminal name: the LOWEST-FREE
@@ -1147,7 +1190,11 @@ impl Registry {
     /// output — no natural-`exit`-vanishes regression). Returns how many were
     /// reaped. Run before every [`create`](Self::create) and on the pruner tick.
     pub fn reap_exited(&self) -> usize {
-        let to_reap: Vec<String> = {
+        // Capture each reaped session's owning window_id alongside its id: a
+        // standalone terminal window IS its session, so reaping the session must
+        // also drop the window-feed row (C4), and `close` removes the session
+        // before we could read it back.
+        let to_reap: Vec<(String, Option<String>)> = {
             let sessions = self.sessions.lock().expect("terminal registry poisoned");
             sessions
                 .iter()
@@ -1159,13 +1206,24 @@ impl Registry {
                             .expect("session exit poisoned")
                             .is_some()
                 })
-                .map(|(id, _)| id.clone())
+                .map(|(id, session)| (id.clone(), session.window_id()))
                 .collect()
         };
+        let reaper = self
+            .window_reaper
+            .lock()
+            .expect("terminal registry poisoned")
+            .clone();
         let mut reaped = 0;
-        for id in &to_reap {
+        for (id, window_id) in &to_reap {
             if self.close(id, CloseReason::Explicit) {
                 reaped += 1;
+                // The shared terminal tenant's hook drops the window-feed row +
+                // refreshes the feed. No-op on a workspace / control window
+                // (the host scopes it; the row guard double-checks the kind).
+                if let (Some(window_id), Some(reaper)) = (window_id, reaper.as_ref()) {
+                    reaper.call(window_id);
+                }
             }
         }
         reaped
@@ -3324,6 +3382,51 @@ mod tests {
         drop(handle); // detached, but exit_code stays None (still running)
         assert_eq!(registry.reap_exited(), 0);
         assert_eq!(registry.len(), 1);
+        registry.close_all(CloseReason::Shutdown);
+    }
+
+    #[test]
+    fn reap_exited_fires_the_window_reaper_for_a_dead_detached_session() {
+        // C4: a standalone terminal's PTY exits while detached → reap_exited
+        // closes the session AND fires the window-reaper hook with its
+        // window_id, so the host can drop the window-feed row with it.
+        let registry = Registry::new(test_config(1024, 4, 10));
+        let reaped: Arc<std::sync::Mutex<Vec<String>>> =
+            Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink = Arc::clone(&reaped);
+        registry.install_window_reaper(WindowReaper::new(move |window_id: &str| {
+            sink.lock().unwrap().push(window_id.to_string());
+        }));
+        let handle = registry.create(opts_with_window("win-term")).unwrap();
+        drop(handle); // detached
+        {
+            let sessions = registry.sessions.lock().unwrap();
+            let session = sessions.values().next().unwrap();
+            *session.exit_code.lock().unwrap() = Some(0); // process exited
+        }
+        assert_eq!(registry.reap_exited(), 1);
+        assert_eq!(*reaped.lock().unwrap(), vec!["win-term".to_string()]);
+    }
+
+    #[test]
+    fn reap_exited_does_not_fire_the_window_reaper_for_an_attached_session() {
+        // The guard: an attached dead terminal is KEPT (a viewer sees the final
+        // output), so the window-reaper must NOT fire and the window stays.
+        let registry = Registry::new(test_config(1024, 4, 10));
+        let reaped: Arc<std::sync::Mutex<Vec<String>>> =
+            Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink = Arc::clone(&reaped);
+        registry.install_window_reaper(WindowReaper::new(move |window_id: &str| {
+            sink.lock().unwrap().push(window_id.to_string());
+        }));
+        let _handle = registry.create(opts_with_window("win-viewed")).unwrap(); // attached
+        {
+            let sessions = registry.sessions.lock().unwrap();
+            let session = sessions.values().next().unwrap();
+            *session.exit_code.lock().unwrap() = Some(0);
+        }
+        assert_eq!(registry.reap_exited(), 0);
+        assert!(reaped.lock().unwrap().is_empty());
         registry.close_all(CloseReason::Shutdown);
     }
 

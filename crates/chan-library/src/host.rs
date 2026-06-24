@@ -725,6 +725,11 @@ impl WorkspaceHost {
             }
         }
 
+        // A command-less tenant is the SHARED terminal tenant (the one
+        // standalone terminal windows attach to); a command-carrying one is a
+        // control / single-purpose tenant the desktop exit-watcher manages.
+        // Only the former gets the C4 window-reap hook below.
+        let is_shared_terminal = command.is_none();
         // The builder applies `command` as the tenant's default before the SPA
         // can open the first terminal.
         let artifacts = self
@@ -743,6 +748,26 @@ impl WorkspaceHost {
         artifacts
             .window_presence
             .install_change_notify(self.library_change_notify.clone());
+        // C4: a standalone terminal window IS its PTY. When the shell exits and
+        // no client is attached, the registry's `reap_exited` closes the session;
+        // hook it so the window-feed row leaves with it instead of lingering as a
+        // ghost. Scoped to the shared terminal tenant + non-control terminal rows
+        // (`remove_terminal`), so a workspace window's pane death never closes it.
+        if is_shared_terminal {
+            if let Some(window_registry) = self.window_registry().cloned() {
+                let notify = Arc::clone(&self.library_change_notify);
+                artifacts.terminal_sessions.install_window_reaper(
+                    crate::terminal_sessions::WindowReaper::new(move |window_id: &str| {
+                        if window_registry.remove_terminal(window_id) {
+                            // Fire the feed change directly too, so the push does
+                            // not hinge on the registry-bridge task's scheduling
+                            // (mirrors `mint_window`).
+                            notify.notify_waiters();
+                        }
+                    }),
+                );
+            }
+        }
         // Root reported for diagnostics / desktop correlation: the PTY
         // cwd is the user's home dir, so surface that. Falls back to "/"
         // to match `build_terminal_app`'s registry root resolution.
