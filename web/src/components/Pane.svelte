@@ -105,6 +105,7 @@
     windowDragScope,
     windowLibraryId,
   } from "../api/client";
+  import { ApiError } from "../api/errors";
   import { NAMED_PANE_HEX } from "../state/paneColor";
   import { onDestroy, onMount } from "svelte";
   import { applyPageWidthToElement, pageWidth } from "../state/pageWidth.svelte";
@@ -493,9 +494,13 @@
     const hex = NAMED_PANE_HEX[color];
     document.documentElement.style.setProperty("--pane-highlight-color", hex);
     // Best-effort: a read-only / no-store serving surface answers 403/404.
-    // Swallow it — a failed persist must never break the menu or throw.
+    // Swallow it — a failed persist must never break the menu or throw — but LOG
+    // the status so a persist FAILURE on a surface that DOES have a store (e.g. a
+    // local desktop window whose per-tenant token is rejected by the launcher
+    // bearer gate, S4) is visible instead of silently lost.
     void api.setLocalColor(hex).catch((err: unknown) => {
-      console.warn("setLocalColor failed", err);
+      const status = err instanceof ApiError ? err.status : "?";
+      console.warn(`setLocalColor failed (status ${status}); colour not persisted`, err);
     });
   }
 

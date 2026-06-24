@@ -8,6 +8,7 @@ import {
   namedForPaneHex,
   normalizeHexColor,
   seedInitialFocusColor,
+  syncLiveFocusColorMenu,
 } from "./paneColor";
 import paneSource from "../components/Pane.svelte?raw";
 import clientSource from "../api/client.ts?raw";
@@ -222,6 +223,34 @@ describe("seedInitialFocusColor boot-seed", () => {
     setSearch("?t=token");
     const setColor = vi.fn();
     seedInitialFocusColor(setColor);
+    expect(setColor).not.toHaveBeenCalled();
+  });
+});
+
+// S4 / consume-uniform: the live watch must sync the focus-colour MENU (and thus
+// new split panes' `data-focus-color`) to a pushed colour, not just the CSS var
+// — else the checkmark + a fresh split disagree with the recoloured border.
+describe("syncLiveFocusColorMenu (live watch → menu)", () => {
+  test("selects the named preset for a pushed preset hex", () => {
+    const setColor = vi.fn();
+    syncLiveFocusColorMenu("#f97316", setColor);
+    expect(setColor).toHaveBeenCalledWith("orange");
+    expect(setColor).toHaveBeenCalledTimes(1);
+  });
+  test("normalizes case/shorthand before matching", () => {
+    const setColor = vi.fn();
+    syncLiveFocusColorMenu("#388BFD", setColor);
+    expect(setColor).toHaveBeenCalledWith("blue");
+  });
+  test("leaves the menu as-is for a valid but non-preset (custom) hex", () => {
+    const setColor = vi.fn();
+    syncLiveFocusColorMenu("#abcdef", setColor);
+    expect(setColor).not.toHaveBeenCalled();
+  });
+  test("leaves the menu as-is for a null / invalid push (no clobber)", () => {
+    const setColor = vi.fn();
+    syncLiveFocusColorMenu(null, setColor);
+    syncLiveFocusColorMenu("red; }", setColor);
     expect(setColor).not.toHaveBeenCalled();
   });
 });

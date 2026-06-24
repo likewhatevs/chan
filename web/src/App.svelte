@@ -120,6 +120,7 @@
     applyInitialPaneColor,
     applyLivePaneColor,
     seedInitialFocusColor,
+    syncLiveFocusColorMenu,
   } from "./state/paneColor";
   import { installIdleTracker, setReadMode } from "./state/idle.svelte";
   import {
@@ -290,8 +291,13 @@
     // `--pane-highlight-color` the instant ANY window of the library changes it —
     // replacing the v1 "other windows pick it up on next mint" behaviour. Pushes
     // the current colour on connect, so this also reconciles with `?pane=`.
+    // Apply the var (border) AND sync the menu/`data-focus-color` so a live push
+    // doesn't leave the checkmark + new split panes disagreeing with the border.
     // Disposed on unmount.
-    disposeLocalColorWatch = openLocalColorWatch(applyLivePaneColor);
+    disposeLocalColorWatch = openLocalColorWatch((color) => {
+      applyLivePaneColor(color);
+      syncLiveFocusColorMenu(color, setWindowFocusColor);
+    });
     // Match the focus-colour menu's checkmark to the library colour this
     // window opened with: if `?pane=` is one of the four preset hexes, select
     // that preset so `focusColorForWindow()` agrees with the colour shown. A

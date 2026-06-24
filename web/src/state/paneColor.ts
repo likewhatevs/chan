@@ -112,3 +112,21 @@ export function seedInitialFocusColor(
   const named = namedForPaneHex(readPaneParam());
   if (named) setColor(named);
 }
+
+/// Sync the per-window focus-colour MENU to a colour pushed by the live watch.
+/// `applyLivePaneColor` recolours the active border (the doc-root var, which
+/// overrides `data-focus-color`), but the menu checkmark + any NEW split pane's
+/// `data-focus-color` read `focusColorForWindow()` (`layout.focusColor`) — left
+/// stale, they disagree with the border the window is actually showing. So when
+/// a pushed colour maps to one of the four presets, select it; a custom (non-
+/// preset), null, or invalid colour leaves the menu as-is (no preset reads as
+/// "selected"). The live counterpart of `seedInitialFocusColor` (which seeds
+/// from `?pane=`); takes the setter as a callback to stay free of the tabs state
+/// module (no import cycle, trivially testable).
+export function syncLiveFocusColorMenu(
+  color: string | null,
+  setColor: (color: FocusColor) => void,
+): void {
+  const named = namedForPaneHex(color);
+  if (named) setColor(named);
+}
