@@ -31,10 +31,11 @@ pub mod workspace_persist;
 pub use config::{
     TerminalConfig, TerminalFontChoice, TERMINAL_SCROLLBACK_MB_MAX, TERMINAL_SCROLLBACK_MB_MIN,
 };
-pub use devserver_registry::{DevserverEntry, DevserverInput, DevserverRegistry};
+pub use devserver_registry::{DevserverEntry, DevserverInput, DevserverRegistry, DevserverStatus};
 pub use error::Error;
 pub use host::{
     DevserverFeedSource, HostedWorkspace, LauncherWorkspace, LocalColorStore, WorkspaceHost,
+    WorkspaceStatus,
 };
 pub use prefix::{allocate_workspace_prefix, workspace_slug};
 pub use serve_config::{sanitize_prefix, ServeConfig, ServeHandle};

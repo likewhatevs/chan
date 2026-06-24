@@ -5674,15 +5674,21 @@ mod tests {
         assert!(workspace.exists("b/c.md"));
     }
 
-    // Cross-platform: `lock::is_contended` maps the Windows LockFileEx
-    // error to contention too, so a second open surfaces WorkspaceLocked
-    // on Windows the same as flock does on Unix.
+    // A second open of the same root in THIS process is refused: the writer
+    // flock is held by our own pid, so it surfaces `WorkspaceAlreadyOpen` (this
+    // chan already has it), not the cross-process `WorkspaceLocked`. The refusal
+    // — no second writer — is the load-bearing invariant; only the error type
+    // distinguishes our own process from a foreign holder (a separate process,
+    // a different pid, still yields `WorkspaceLocked`). A fresh `Library` handle
+    // has an empty live_workspaces map, so the open reaches the flock rather
+    // than the map's pre-check. (`lock::is_contended` maps the Windows
+    // LockFileEx error to contention too, so this holds on Windows as on Unix.)
     #[test]
-    fn second_open_blocks_on_writer_lock() {
+    fn second_open_in_same_process_is_already_open() {
         let (cfg, root, _workspace) = fixture();
         let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
         let err = lib.open_workspace(root.path()).unwrap_err();
-        assert!(matches!(err, ChanError::WorkspaceLocked));
+        assert!(matches!(err, ChanError::WorkspaceAlreadyOpen));
     }
 
     /// Defensive: if the registered workspace path has been replaced by

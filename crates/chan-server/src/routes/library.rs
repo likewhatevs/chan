@@ -36,7 +36,7 @@ use crate::devserver::bytes_eq;
 use crate::static_assets::serve_launcher;
 use crate::{
     CreateWindow, DesktopWindowOp, DevserverEntry, DevserverInput, LauncherWorkspace,
-    SetWorkspaceOnOutcome, WindowRecord, WindowSet, WorkspaceHost,
+    SetWorkspaceOnOutcome, WindowRecord, WindowSet, WorkspaceHost, WorkspaceStatus,
 };
 
 /// State shared by the `/api/library/workspaces` handlers: the library host plus
@@ -711,10 +711,16 @@ async fn handle_list_workspaces(State(state): State<Arc<LauncherState>>) -> Resp
                 .ok()?
                 .trim_start_matches('/')
                 .to_string();
+            // Live lifecycle state the launcher drives spinners off. `on` stays
+            // the live mounted bool (== status `running`); `status` carries the
+            // richer `starting`/`error` the bool can't express.
+            let (status, error) = host.workspace_status(&ws.root_path);
             Some(LauncherWorkspace {
                 path: ws.root_path.to_string_lossy().into_owned(),
                 label: workspace_label(&ws.root_path),
-                on: host.is_root_mounted(&ws.root_path),
+                on: status == WorkspaceStatus::Running,
+                status,
+                error,
                 // Local rows: no devserver, prefix == workspace_id (the slash-free
                 // slug); on/off/remove route by workspace_id (the round-1 path).
                 library_id: None,
@@ -843,6 +849,9 @@ async fn handle_add_workspace(
                 path: hosted.root.to_string_lossy().into_owned(),
                 label: workspace_label(&hosted.root),
                 on: true,
+                // Just mounted: live state is running, no error.
+                status: WorkspaceStatus::Running,
+                error: None,
                 // A freshly added workspace is always local (no devserver).
                 library_id: None,
                 devserver_id: None,
@@ -925,6 +934,11 @@ async fn handle_workspace_off(
     match state.host.close_workspace(&prefix) {
         Ok(_) => {
             set_overlay(&state.host, &root, false);
+            // Settle any transient `starting`/`error` to `stopped`: a failed
+            // mount is not in the `workspaces` map, so `close_workspace` was a
+            // no-op for it and would otherwise leave its lifecycle overlay (and
+            // the launcher's error row) behind.
+            state.host.clear_workspace_lifecycle(&root);
             StatusCode::NO_CONTENT.into_response()
         }
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
@@ -1160,7 +1174,8 @@ mod devserver_route_tests {
 
     use super::launcher_router;
     use crate::{
-        DevserverEntry, DevserverInput, DevserverRegistry, LocalColorStore, WorkspaceHost,
+        DevserverEntry, DevserverInput, DevserverRegistry, DevserverStatus, LocalColorStore,
+        WorkspaceHost,
     };
 
     /// An in-memory `DevserverRegistry` standing in for the desktop config so the
@@ -1183,7 +1198,7 @@ mod devserver_route_tests {
                     script: String::new(),
                     has_token: true,
                     library_id: None,
-                    connected: false,
+                    status: DevserverStatus::Disconnected,
                     auto_hide_control: false,
                 }]),
             }
@@ -1206,7 +1221,7 @@ mod devserver_route_tests {
                 script: input.script.unwrap_or_default(),
                 has_token: input.token.is_some(),
                 library_id: None,
-                connected: false,
+                status: DevserverStatus::Disconnected,
                 auto_hide_control: input.auto_hide_control,
             };
             self.rows.lock().unwrap().push(entry.clone());

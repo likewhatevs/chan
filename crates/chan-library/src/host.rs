@@ -7,7 +7,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, OnceLock, RwLock, Weak};
+use std::sync::{Arc, Mutex, OnceLock, RwLock, Weak};
 use std::time::{Duration, Instant};
 
 use axum::body::Body;
@@ -15,7 +15,7 @@ use axum::extract::State;
 use axum::http::{Request, StatusCode, Uri};
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::Router;
-use chan_workspace::{Library, Workspace};
+use chan_workspace::{ChanError, Library, Workspace};
 use serde::{Deserialize, Serialize};
 use tokio::sync::Notify;
 use tower::ServiceExt;
@@ -56,6 +56,27 @@ pub struct HostedWorkspace {
 /// [`DevserverFeedSource`] returns it and that trait is a chan-library type the
 /// host holds; chan-server re-exports it for its route handlers (the same
 /// define-in-library / re-export-from-server shape as [`DevserverEntry`]).
+/// A workspace's live lifecycle state, distinct from the persisted desired
+/// `on`. The launcher drives spinners and disables toggles off this REAL
+/// backend state instead of an optimistic timer: a row spins while `starting`,
+/// settles solid on `running`/`stopped`, and surfaces `error` (with
+/// [`LauncherWorkspace::error`]) when a mount fails.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum WorkspaceStatus {
+    /// Not mounted: desired off, or off and idle. The launcher shows OFF, solid.
+    #[default]
+    Stopped,
+    /// Mount requested / in flight (flock + tenant build not yet complete). The
+    /// launcher spins the row and disables the toggle.
+    Starting,
+    /// Mounted and serving. The launcher shows ON, solid.
+    Running,
+    /// The last mount attempt failed; [`LauncherWorkspace::error`] carries the
+    /// reason. The launcher clears the spinner and surfaces the reason.
+    Error,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LauncherWorkspace {
     /// Route prefix without its leading slash — the launcher's opaque local key.
@@ -83,6 +104,16 @@ pub struct LauncherWorkspace {
     /// the devserver workspace ops can safely round-trip `prefix` as a value.)
     #[serde(default)]
     pub prefix: String,
+    /// Live lifecycle state, distinct from the persisted desired `on`. The
+    /// launcher spins a row while `starting` and surfaces `error`; it reads
+    /// `status` directly rather than inferring from `on`. `#[serde(default)]`:
+    /// a row without the field reads `stopped`.
+    #[serde(default)]
+    pub status: WorkspaceStatus,
+    /// Short human reason, present only when `status == error` (a foreign lock,
+    /// an open failure). Omitted otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 /// Supplies the launcher's connected-devserver feed: the window records and
@@ -237,6 +268,25 @@ pub struct WorkspaceHost {
     /// in. Empty on a host with no root surface — the root `/` then 404s, the
     /// prior behavior.
     root_fallback: OnceLock<Router>,
+    /// Transient mount-lifecycle overlay keyed by canonical workspace root: a
+    /// root being mounted (`Starting`) or whose last mount failed (`Error`).
+    /// The `workspaces` map is the running source of truth (presence = running);
+    /// this carries the two transient states it cannot express, so the launcher
+    /// can spin a row (`starting`) and show a failure reason (`error`). Marked
+    /// on mount START in [`open_registered_workspace`](Self::open_registered_workspace),
+    /// cleared when the mount settles to running, dropped to stopped on turn-off.
+    mount_state: Mutex<HashMap<PathBuf, MountState>>,
+}
+
+/// The transient lifecycle of a workspace root that the `workspaces` map (the
+/// running set) cannot express: a mount in flight, or why the last one failed.
+/// Held in [`WorkspaceHost::mount_state`] and projected into
+/// [`WorkspaceStatus`] by [`WorkspaceHost::workspace_status`].
+enum MountState {
+    /// A mount is in flight (flock + tenant build not yet complete).
+    Starting,
+    /// The last mount attempt failed; the string is the short human reason.
+    Error(String),
 }
 
 struct HostedWorkspaceRuntime {
@@ -307,6 +357,7 @@ impl WorkspaceHost {
             library_change_notify: Arc::new(Notify::new()),
             local_color_notify: Arc::new(Notify::new()),
             root_fallback: OnceLock::new(),
+            mount_state: Mutex::new(HashMap::new()),
         }
     }
 
@@ -522,7 +573,29 @@ impl WorkspaceHost {
         root: impl AsRef<Path>,
         config: ServeConfig,
     ) -> Result<HostedWorkspace, Error> {
-        let workspace = self.library.open_workspace(root.as_ref())?;
+        let root = root.as_ref();
+        // Mark the mount in flight (status `starting`) and fire the watch feed
+        // so the launcher spins this row before the (possibly slow) tenant build
+        // completes. This is the SHARED inner mount every entry point funnels
+        // through — the `open_or_get` wrapper, the desktop's direct boot-restore
+        // (embedded.rs), the devserver `mount_at` — so all of them surface
+        // `starting`/`error` without each routing the lifecycle themselves.
+        self.mark_mount_starting(root);
+        let result = self.open_registered_workspace_inner(root, config).await;
+        self.settle_mount(root, &result);
+        result
+    }
+
+    /// The raw mount: open the per-workspace handle (acquiring the flock) and
+    /// mount its tenant. Split from [`open_registered_workspace`](
+    /// Self::open_registered_workspace) so the lifecycle bookkeeping wraps a
+    /// single fallible body.
+    async fn open_registered_workspace_inner(
+        &self,
+        root: &Path,
+        config: ServeConfig,
+    ) -> Result<HostedWorkspace, Error> {
+        let workspace = self.library.open_workspace(root)?;
         self.open_workspace(workspace, config).await
     }
 
@@ -1452,6 +1525,10 @@ impl WorkspaceHost {
         // `WorkspaceAlreadyOpen`. Drop re-runs shutdown on the now-cleared
         // cell, which is a no-op.
         let released = runtime.shutdown();
+        // A running workspace carries no transient lifecycle state, but clear
+        // defensively so a leftover `error`/`starting` can never outlive a
+        // close. No feed push here — the `notify_window_change` below covers it.
+        self.clear_mount_state(&runtime.root);
         drop(runtime);
         if let Some((weak, lock_dir)) = released {
             wait_for_workspace_release(&weak, &lock_dir);
@@ -1589,6 +1666,100 @@ impl WorkspaceHost {
             .iter()
             .find(|(_, runtime)| canonical_key(&runtime.root) == target)
             .map(|(prefix, _)| prefix.clone())
+    }
+
+    /// The launcher row's live `(status, error)` for a workspace root. `running`
+    /// when mounted (the `workspaces` map is authoritative and wins over any
+    /// stale overlay entry); else the transient overlay's `starting`/`error`;
+    /// else `stopped`. The launcher drives its spinner and toggle-disable off
+    /// this, not an optimistic timer.
+    pub fn workspace_status(&self, root: &Path) -> (WorkspaceStatus, Option<String>) {
+        if self.is_root_mounted(root) {
+            return (WorkspaceStatus::Running, None);
+        }
+        let key = canonical_key(root);
+        match self
+            .mount_state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&key)
+        {
+            Some(MountState::Starting) => (WorkspaceStatus::Starting, None),
+            Some(MountState::Error(reason)) => (WorkspaceStatus::Error, Some(reason.clone())),
+            None => (WorkspaceStatus::Stopped, None),
+        }
+    }
+
+    /// Drop a workspace root's transient lifecycle overlay and fire the watch
+    /// feed when something changed. The launcher's turn-OFF calls this so a row
+    /// left `starting` or `error` settles to `stopped` even when nothing was
+    /// mounted to close (a failed mount is not in the `workspaces` map, so
+    /// `close_workspace` is a no-op for it).
+    pub fn clear_workspace_lifecycle(&self, root: &Path) {
+        let key = canonical_key(root);
+        let had = self
+            .mount_state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&key)
+            .is_some();
+        if had {
+            self.notify_window_change();
+        }
+    }
+
+    /// Mark a workspace root's mount as in flight (`starting`) and fire the
+    /// watch feed so the launcher spins the row before the (possibly slow)
+    /// tenant build completes. No-op when the root is already mounted (`running`
+    /// wins), so a retry of an already-served workspace never spuriously flips
+    /// it to `starting`. Overwrites a prior `error` — a fresh attempt clears it.
+    fn mark_mount_starting(&self, root: &Path) {
+        if self.is_root_mounted(root) {
+            return;
+        }
+        let key = canonical_key(root);
+        self.mount_state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(key, MountState::Starting);
+        self.notify_window_change();
+    }
+
+    /// Record that a workspace root's last mount failed (`error` + reason) and
+    /// fire the watch feed so the launcher clears the spinner and surfaces the
+    /// reason.
+    fn mark_mount_error(&self, root: &Path, reason: String) {
+        let key = canonical_key(root);
+        self.mount_state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(key, MountState::Error(reason));
+        self.notify_window_change();
+    }
+
+    /// Drop a workspace root's transient lifecycle state (it settled to running,
+    /// or was torn down). No feed push: the settling transition already fired
+    /// one (mount success in `open_workspace`, close in `close_workspace`).
+    fn clear_mount_state(&self, root: &Path) {
+        let key = canonical_key(root);
+        self.mount_state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&key);
+    }
+
+    /// Project a finished mount onto the lifecycle overlay: clear on success
+    /// (the `workspaces` map now reports `running`); leave `starting` on our own
+    /// in-flight contention (`WorkspaceAlreadyOpen` — a concurrent task of THIS
+    /// process is mounting the same root and will settle it, so it is not a
+    /// failure); record `error` for a real failure (a foreign lock, an open
+    /// error).
+    fn settle_mount(&self, root: &Path, result: &Result<HostedWorkspace, Error>) {
+        match result {
+            Ok(_) => self.clear_mount_state(root),
+            Err(Error::Core(ChanError::WorkspaceAlreadyOpen)) => {}
+            Err(e) => self.mark_mount_error(root, e.to_string()),
+        }
     }
 
     fn router_for_path(&self, path: &str) -> Result<Option<Router>, Error> {
@@ -2052,6 +2223,91 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn host_workspace_status_tracks_mount_lifecycle() {
+        // The launcher reads `workspace_status` for each row: `stopped` when
+        // unmounted, `running` once mounted, back to `stopped` after close. The
+        // running `workspaces` map is authoritative for `running`.
+        let cfg = tempfile::tempdir().expect("config dir");
+        let root = tempfile::tempdir().expect("workspace");
+        let lib = Library::open_at(cfg.path().join("config.toml")).expect("library");
+        lib.register_workspace(root.path()).expect("register");
+        let host = Arc::new(WorkspaceHost::new(lib.clone(), fake_builder()));
+
+        assert_eq!(
+            host.workspace_status(root.path()),
+            (WorkspaceStatus::Stopped, None)
+        );
+
+        host.open_registered_workspace(root.path(), serve_config("/workspace"))
+            .await
+            .expect("open");
+        assert_eq!(
+            host.workspace_status(root.path()),
+            (WorkspaceStatus::Running, None)
+        );
+
+        assert!(host.close_workspace("/workspace").expect("close"));
+        assert_eq!(
+            host.workspace_status(root.path()),
+            (WorkspaceStatus::Stopped, None)
+        );
+    }
+
+    #[tokio::test]
+    async fn host_workspace_status_surfaces_starting_and_error() {
+        // The transient overlay drives `starting` (mount in flight) and `error`
+        // (last mount failed) — the two states the running `workspaces` map
+        // can't express. A turn-off clears a non-mounted errored row to stopped.
+        let cfg = tempfile::tempdir().expect("config dir");
+        let root = tempfile::tempdir().expect("workspace");
+        let lib = Library::open_at(cfg.path().join("config.toml")).expect("library");
+        lib.register_workspace(root.path()).expect("register");
+        let host = Arc::new(WorkspaceHost::new(lib.clone(), fake_builder()));
+
+        host.mark_mount_starting(root.path());
+        assert_eq!(
+            host.workspace_status(root.path()),
+            (WorkspaceStatus::Starting, None)
+        );
+
+        host.mark_mount_error(root.path(), "foreign lock".into());
+        assert_eq!(
+            host.workspace_status(root.path()),
+            (WorkspaceStatus::Error, Some("foreign lock".to_string()))
+        );
+
+        host.clear_workspace_lifecycle(root.path());
+        assert_eq!(
+            host.workspace_status(root.path()),
+            (WorkspaceStatus::Stopped, None)
+        );
+    }
+
+    #[tokio::test]
+    async fn host_workspace_status_running_overrides_stale_overlay() {
+        // `running` (presence in the workspaces map) wins over a stale `starting`
+        // overlay entry, so a row never spins while it is actually served.
+        let cfg = tempfile::tempdir().expect("config dir");
+        let root = tempfile::tempdir().expect("workspace");
+        let lib = Library::open_at(cfg.path().join("config.toml")).expect("library");
+        lib.register_workspace(root.path()).expect("register");
+        let host = Arc::new(WorkspaceHost::new(lib.clone(), fake_builder()));
+
+        host.open_registered_workspace(root.path(), serve_config("/workspace"))
+            .await
+            .expect("open");
+        // Force a stale overlay entry behind the running mount; running must win.
+        host.mount_state
+            .lock()
+            .unwrap()
+            .insert(canonical_key(root.path()), MountState::Starting);
+        assert_eq!(
+            host.workspace_status(root.path()),
+            (WorkspaceStatus::Running, None)
+        );
     }
 
     #[tokio::test]

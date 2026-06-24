@@ -21,6 +21,28 @@
 
 use serde::{Deserialize, Serialize};
 
+/// A devserver's live connection state, as the launcher renders it. Replaces a
+/// bare `connected` bool so the launcher can show a connect spinner
+/// (`connecting`) and clear it the instant the tunnel drops (`disconnected`),
+/// driving the UI off real state rather than an optimistic timer. Volatile
+/// runtime state populated by chan-desktop from its connection map; a
+/// headless/registry-less surface tracks no connections and reports
+/// `disconnected`.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum DevserverStatus {
+    /// No live connection: registered but offline, or the tunnel/control script
+    /// dropped. The launcher shows Connect, no spinner, Edit enabled.
+    #[default]
+    Disconnected,
+    /// A connect is in flight (dial / tunnel handshake not yet complete). The
+    /// launcher shows a spinner and disables Connect/Disconnect.
+    Connecting,
+    /// The desktop holds a live connection. The launcher shows Disconnect and
+    /// gates Edit read-only.
+    Connected,
+}
+
 /// One configured devserver, as the launcher lists it. The token is WRITE-ONLY:
 /// accepted on add/update, never serialized back — [`has_token`](Self::has_token)
 /// reports its presence instead.
@@ -53,14 +75,14 @@ pub struct DevserverEntry {
     /// rows in the feed to the user's name for it. `None` before the devserver's
     /// first connect, when no library id exists yet.
     pub library_id: Option<String>,
-    /// Whether the desktop currently holds a live connection to this devserver.
-    /// Volatile runtime state populated by chan-desktop from its connection map;
-    /// `false` on a headless/registry-less surface that tracks no connections.
-    /// The launcher reads it to show Connect vs Disconnect and gate Edit
-    /// read-only while connected. `#[serde(default)]`: a row without the field
-    /// reads `false`.
+    /// This devserver's live connection state. Volatile runtime state populated
+    /// by chan-desktop from its connection map; `disconnected` on a
+    /// headless/registry-less surface that tracks no connections. The launcher
+    /// reads it to show Connect vs Disconnect, drive the connect spinner, and
+    /// gate Edit read-only while connected/connecting. `#[serde(default)]`: a
+    /// row without the field reads `disconnected`.
     #[serde(default)]
-    pub connected: bool,
+    pub status: DevserverStatus,
 }
 
 /// The add/update payload. `host` + `port` are required; the rest are optional.

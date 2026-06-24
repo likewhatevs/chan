@@ -223,13 +223,15 @@ impl Library {
             .clone();
         drop(reg);
         let key = canonical_key(&entry.root_path);
-        // In-process pre-check: if we still hold an open handle to
-        // this workspace, return WorkspaceAlreadyOpen rather than letting
-        // the cross-process flock surface as WorkspaceLocked. The lock
-        // on `live_workspaces` is held only across the upgrade probe;
-        // we drop it before calling Workspace::open so a slow open
-        // (canonicalize on a cloud root, lazy index init) never
-        // blocks unrelated workspaces from registering / listing.
+        // In-process pre-check: if we still hold an open handle to this
+        // workspace, return WorkspaceAlreadyOpen up front instead of reaching
+        // the flock. (A contended flock held by our own pid now also reports
+        // WorkspaceAlreadyOpen, so the two agree; the pre-check additionally
+        // short-circuits the potentially-slow Workspace::open below.) The lock
+        // on `live_workspaces` is held only across the upgrade probe; we drop
+        // it before calling Workspace::open so a slow open (canonicalize on a
+        // cloud root, lazy index init) never blocks unrelated workspaces from
+        // registering / listing.
         {
             let mut map = self.inner.live_workspaces.lock().unwrap();
             gc_dead_entries(&mut map);
@@ -269,8 +271,10 @@ impl Library {
     /// Preconditions:
     ///   - The caller MUST drop any open `Arc<Workspace>` for `root`
     ///     before calling. We acquire the writer lock briefly to
-    ///     verify exclusive access; if any process (including this
-    ///     one) holds it, we fail with `ChanError::WorkspaceLocked`.
+    ///     verify exclusive access; a FOREIGN process holding it fails
+    ///     with `ChanError::WorkspaceLocked`, while this process's own
+    ///     lock (a handle we didn't drop) fails with
+    ///     `ChanError::WorkspaceAlreadyOpen`.
     ///   - On Unix this is mostly defense-in-depth (open files
     ///     survive unlink). On Windows the lock check is load-
     ///     bearing because removing files-in-use fails.
@@ -298,11 +302,12 @@ impl Library {
         use crate::progress::{ProgressEvent, ProgressStage};
         // In-process pre-check: a buggy caller might hold a Workspace
         // and call reset_workspace from another thread, expecting the
-        // flock to serialize. It does (WorkspaceLock::acquire below
-        // would fail with WorkspaceLocked), but the clearer error tells
-        // the developer they're racing themselves rather than a
-        // mystery second process. Cross-process safety still rides
-        // on the flock.
+        // flock to serialize. It does — and `WorkspaceLock::acquire`
+        // below now also reports `WorkspaceAlreadyOpen` for a lock held
+        // by our own pid, so the two agree — but the pre-check
+        // short-circuits before touching the flock and names the clash
+        // precisely. Cross-process safety (a foreign holder ⇒
+        // `WorkspaceLocked`) still rides on the flock.
         let key = canonical_key(root);
         {
             let mut map = self.inner.live_workspaces.lock().unwrap();
@@ -968,15 +973,17 @@ mod tests {
         assert!(matches!(err, ChanError::WorkspaceAlreadyOpen));
     }
 
-    // Cross-platform: `lock::is_contended` maps the Windows LockFileEx
-    // error to contention too, so a lock held by another handle surfaces
-    // WorkspaceLocked on Windows the same as flock does on Unix.
+    // A second Library handle on the same config has its own live_workspaces
+    // map, so reset's in-process pre-check doesn't fire and it reaches the
+    // flock. The flock is held by our OWN pid (this OS process), so reset
+    // refuses with `WorkspaceAlreadyOpen` — this chan already has it — not the
+    // cross-process `WorkspaceLocked`. The refusal protects the index either
+    // way; a genuinely foreign holder (a separate process, a different pid)
+    // still yields `WorkspaceLocked` (see lock.rs
+    // `foreign_live_holder_is_workspace_locked`). (`lock::is_contended` maps the
+    // Windows LockFileEx error to contention too, so this holds on Windows.)
     #[test]
-    fn reset_workspace_returns_locked_when_other_process_holds_lock() {
-        // Hand-crafted second Library handle on the same config to
-        // simulate another process: each Library has its own
-        // live_workspaces map, so the in-process check on `lib2`
-        // doesn't fire, and we hit the flock instead.
+    fn reset_workspace_refuses_when_another_handle_in_process_holds_lock() {
         let (lib, cfg, workspace) = lib();
         lib.register_workspace(workspace.path()).unwrap();
         let _open = lib.open_workspace(workspace.path()).unwrap();
@@ -984,7 +991,7 @@ mod tests {
         let err = lib2
             .reset_workspace(workspace.path(), ResetMode::State)
             .unwrap_err();
-        assert!(matches!(err, ChanError::WorkspaceLocked));
+        assert!(matches!(err, ChanError::WorkspaceAlreadyOpen));
     }
 
     #[test]

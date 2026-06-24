@@ -58,15 +58,21 @@ impl WorkspaceLock {
     /// Fast path: the OS advisory lock is free → take it and (over)write
     /// our [`LockRecord`].
     ///
-    /// Contended path: the OS lock is held. We read the record and only
-    /// **steal** when the recorded holder is **provably dead** (its pid
-    /// no longer exists) and the record names this same workspace — the
-    /// case where a dead `chan open`'s lock fd was inherited by a still-
-    /// living child and pins the flock with no real writer behind it. In
-    /// every uncertain case — record missing, unparseable, for a
-    /// different path, the holder alive, or liveness indeterminate — we
-    /// refuse with [`ChanError::WorkspaceLocked`] rather than risk two
-    /// writers corrupting the index.
+    /// Contended path: the OS lock is held. We read the record. When it
+    /// names THIS process (our own pid, same workspace root) the lock is
+    /// held by us — a live `Workspace` handle, or a mount in flight on
+    /// another task — so we return [`ChanError::WorkspaceAlreadyOpen`],
+    /// never the cross-process [`ChanError::WorkspaceLocked`]: a turn-on
+    /// racing chan's own in-flight mount must not read as a foreign lock.
+    /// Otherwise we only **steal** when the recorded holder is **provably
+    /// dead** (its pid no longer exists) and the record names this same
+    /// workspace — the case where a dead `chan open`'s lock fd was
+    /// inherited by a still-living child and pins the flock with no real
+    /// writer behind it. In every uncertain case — record missing,
+    /// unparseable, for a different path, a FOREIGN holder alive, or
+    /// liveness indeterminate — we refuse with
+    /// [`ChanError::WorkspaceLocked`] rather than risk two writers
+    /// corrupting the index.
     ///
     /// On Unix a normally-dead holder's flock is auto-released, so the
     /// contended path is reached only for that leaked-fd case. On Windows
@@ -96,6 +102,18 @@ impl WorkspaceLock {
     fn try_steal(path: &Path, workspace_root: &Path) -> Result<Self> {
         let record = read_record_at(path);
         let our_path = canonical_string(workspace_root);
+        // The contended lock is held by US (our own pid, this workspace): a
+        // live handle elsewhere in this process, or a mount in flight on
+        // another task. That is `WorkspaceAlreadyOpen`, not the cross-process
+        // `WorkspaceLocked` — the holder is this chan, so the "open in another
+        // process" path must not fire. (A coincidental stale record with our
+        // pid can't reach here: a dead holder's flock is free, so we'd be on
+        // the fast path, not contended.)
+        if let Some(r) = &record {
+            if r.path == our_path && r.pid == std::process::id() {
+                return Err(ChanError::WorkspaceAlreadyOpen);
+            }
+        }
         let stealable = match &record {
             // Missing/torn record ⇒ holder is mid-write or unknown ⇒
             // treat as alive.
@@ -366,24 +384,60 @@ mod tests {
     // so the contract is symmetric. CI runs tests on unix today; the
     // Windows arm is compile-checked via `cargo xwin check`.
     #[test]
-    fn second_acquire_fails_while_held() {
+    fn second_acquire_same_process_is_already_open() {
+        // The contended lock's record names OUR own pid, so a second
+        // acquire reads as `WorkspaceAlreadyOpen` (this chan already holds
+        // it), NOT the cross-process `WorkspaceLocked`. This is what makes
+        // a launcher turn-on racing chan's own in-flight mount idempotent
+        // instead of a false "locked by another process".
         let tmp = TempDir::new().unwrap();
         let _l1 = WorkspaceLock::acquire(tmp.path(), &root(&tmp)).unwrap();
         let r2 = WorkspaceLock::acquire(tmp.path(), &root(&tmp));
-        assert!(matches!(r2, Err(ChanError::WorkspaceLocked)));
+        assert!(matches!(r2, Err(ChanError::WorkspaceAlreadyOpen)));
     }
 
     #[test]
     fn live_holder_is_never_stolen() {
         // The held lock records OUR (alive) pid; a second acquire must
         // refuse rather than steal. Stealing a live holder would corrupt
-        // the index — the highest-risk failure this module guards.
+        // the index — the highest-risk failure this module guards. Our own
+        // pid reads as `WorkspaceAlreadyOpen`; either way the lock is NOT
+        // stolen (the record still names the original holder).
         let tmp = TempDir::new().unwrap();
         let _held = WorkspaceLock::acquire(tmp.path(), &root(&tmp)).unwrap();
         assert_eq!(
             read_lock_record(tmp.path()).unwrap().pid,
             std::process::id()
         );
+        let again = WorkspaceLock::acquire(tmp.path(), &root(&tmp));
+        assert!(matches!(again, Err(ChanError::WorkspaceAlreadyOpen)));
+        // No steal happened: the record is untouched, our handle still valid.
+        assert_eq!(
+            read_lock_record(tmp.path()).unwrap().pid,
+            std::process::id()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn foreign_live_holder_is_workspace_locked() {
+        // A contended lock whose record names a FOREIGN live pid is the real
+        // cross-process `WorkspaceLocked`. We hold the flock, then overwrite
+        // the record with pid 1 (init: always live on unix) to stand in for a
+        // foreign holder; a second acquire must refuse with `WorkspaceLocked`,
+        // not `WorkspaceAlreadyOpen` and not a steal.
+        let tmp = TempDir::new().unwrap();
+        let _held = WorkspaceLock::acquire(tmp.path(), &root(&tmp)).unwrap();
+        let foreign = LockRecord {
+            pid: 1,
+            path: canonical_string(&root(&tmp)),
+            started_at: "2000-01-01T00:00:00Z".to_string(),
+        };
+        fs::write(
+            tmp.path().join("writer.lock"),
+            serde_json::to_vec(&foreign).unwrap(),
+        )
+        .unwrap();
         let again = WorkspaceLock::acquire(tmp.path(), &root(&tmp));
         assert!(matches!(again, Err(ChanError::WorkspaceLocked)));
     }
