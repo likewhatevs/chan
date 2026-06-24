@@ -2932,7 +2932,12 @@ fn resolve_login_shell_path() -> Option<String> {
     use std::time::Duration;
     const MARK: &str = "__CHAN_PATH__";
     const TIMEOUT: Duration = Duration::from_secs(3);
-    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
+    // Single-source the shell with the interactive terminal (W6): $SHELL, then the
+    // passwd entry (pw_shell), then /bin/sh — validated. Replaces the old hardcoded
+    // `/bin/zsh` guess so the PATH-harvest fallback consults the shell the user
+    // actually logs in with. `cfg(target_os = "macos")` ⊂ `cfg(unix)`, so the
+    // unix-gated symbol is in scope.
+    let shell = chan_server::user_shell();
     let mut child = std::process::Command::new(shell)
         .args([
             "-l",
