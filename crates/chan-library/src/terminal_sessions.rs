@@ -581,7 +581,7 @@ impl Registry {
         // Validate the cap + mint the id under the lock, but SPAWN (openpty +
         // fork/exec) OUTSIDE it so a create's PTY launch doesn't stall every
         // other terminal op on the registry mutex.
-        let id = {
+        let (id, announce_command) = {
             let sessions = self.sessions.lock().expect("terminal registry poisoned");
             if sessions.len() >= self.config.terminal.session_cap {
                 return Err(CreateError::Capped);
@@ -589,17 +589,28 @@ impl Registry {
             // A tenant opened to run a specific command applies it to any
             // session that brings none of its own, so the window's terminal
             // runs the command; an explicit per-session command wins.
-            if opts.command.is_none() {
-                opts.command = self
+            //
+            // W5: only a session that inherits the TENANT's default command —
+            // i.e. a single-purpose / devserver CONTROL tenant — echoes the
+            // "running: {command}" banner. A per-session command (a team agent
+            // terminal spawned via `POST /api/terminals`, or a restart override)
+            // is NOT a single-purpose tenant and gets no banner.
+            let announce_command = if opts.command.is_none() {
+                let default = self
                     .default_command
                     .lock()
                     .expect("terminal registry poisoned")
                     .clone();
-            }
-            self.unused_id(&sessions)
+                let from_tenant_default = default.is_some();
+                opts.command = default;
+                from_tenant_default
+            } else {
+                false
+            };
+            (self.unused_id(&sessions), announce_command)
         };
-        let session =
-            Session::spawn(id.clone(), self.config.clone(), opts).map_err(CreateError::Spawn)?;
+        let session = Session::spawn(id.clone(), self.config.clone(), opts, announce_command)
+            .map_err(CreateError::Spawn)?;
         let mut sessions = self.sessions.lock().expect("terminal registry poisoned");
         // Re-check under the re-acquired lock: a concurrent create may have
         // filled the cap (or — astronomically — taken the random id) while we
@@ -654,7 +665,11 @@ impl Registry {
         if let Some(extra_env) = env {
             opts.env.extend(extra_env);
         }
-        let session = Session::spawn(id.to_string(), self.config.clone(), opts)
+        // A restart re-runs the command but does NOT re-echo the W5 banner: the
+        // banner names a tenant's launch command (control connect), while a
+        // restart override (e.g. the team-bootstrap flip from a host shell to
+        // the lead's `claude`) is not a single-purpose-tenant launch.
+        let session = Session::spawn(id.to_string(), self.config.clone(), opts, false)
             .map_err(CreateError::Spawn)?;
         let mut sessions = self.sessions.lock().expect("terminal registry poisoned");
         match sessions.get(id) {
@@ -1532,7 +1547,12 @@ struct Session {
 }
 
 impl Session {
-    fn spawn(id: String, config: RegistryConfig, opts: CreateOptions) -> anyhow::Result<Arc<Self>> {
+    fn spawn(
+        id: String,
+        config: RegistryConfig,
+        opts: CreateOptions,
+        announce_command: bool,
+    ) -> anyhow::Result<Arc<Self>> {
         let pty_system = native_pty_system();
         let pair = pty_system.openpty(opts.size)?;
         let mut cmd = command_builder(opts.command.as_deref());
@@ -1691,6 +1711,20 @@ impl Session {
             closed: AtomicBool::new(false),
             exit_code: Mutex::new(None),
         });
+
+        // W5: a single-purpose / devserver CONTROL tenant echoes a banner naming
+        // the command it is about to run, so the user sees the launch command
+        // before its output. Recorded into the replay ring HERE — after the
+        // session exists but BEFORE the reader thread starts — so the banner is
+        // the first ring bytes (precedes the child's output) and survives
+        // scrollback replay on reload. Display-only: the executed command
+        // (`command_builder` above) is untouched; this never wraps or re-quotes
+        // it.
+        if announce_command {
+            if let Some(command) = session.spawn_opts.command.as_deref() {
+                session.record_output(format!("running: {command}\r\n").as_bytes());
+            }
+        }
 
         {
             let session = session.clone();
@@ -3732,6 +3766,57 @@ mod tests {
             "tenant default ran despite an explicit command: {out:?}"
         );
         registry.close(handle.id(), CloseReason::Explicit);
+    }
+
+    #[test]
+    fn control_tenant_session_echoes_running_banner_first() {
+        // W5: a session that inherits the TENANT default command (the devserver
+        // control / single-purpose tenant) writes `running: {command}\r\n` as the
+        // FIRST ring bytes — before the child's output and so durable across a
+        // scrollback replay.
+        let registry = Registry::new(test_config(4096, 4, 60));
+        registry.set_default_command(Some("printf done".into()));
+        let _handle = registry.create(opts_with_window("win-ctl")).unwrap();
+        let ring = registry.all_scrollback();
+        assert!(
+            ring.starts_with(b"running: printf done\r\n"),
+            "banner must be the first ring bytes: {:?}",
+            String::from_utf8_lossy(&ring)
+        );
+        registry.close_all(CloseReason::Shutdown);
+    }
+
+    #[test]
+    fn shared_tenant_session_has_no_running_banner() {
+        // The shared interactive tenant has no default command, so its session
+        // runs the user's shell and gets NO banner.
+        let registry = Registry::new(test_config(4096, 4, 60));
+        let _handle = registry.create(opts_with_window("win-sh")).unwrap();
+        let ring = registry.all_scrollback();
+        assert!(
+            !ring.starts_with(b"running:"),
+            "shared interactive terminal must have no banner: {:?}",
+            String::from_utf8_lossy(&ring)
+        );
+        registry.close_all(CloseReason::Shutdown);
+    }
+
+    #[test]
+    fn per_session_command_has_no_running_banner() {
+        // A per-session command (a team agent terminal spawned via
+        // `POST /api/terminals`) is NOT a single-purpose tenant — the command did
+        // not come from the tenant default, so it gets NO banner.
+        let registry = Registry::new(test_config(4096, 4, 60));
+        let mut opts = opts_with_window("win-agent");
+        opts.command = Some("printf agent".into());
+        let _handle = registry.create(opts).unwrap();
+        let ring = registry.all_scrollback();
+        assert!(
+            !ring.starts_with(b"running:"),
+            "a per-session command must have no banner: {:?}",
+            String::from_utf8_lossy(&ring)
+        );
+        registry.close_all(CloseReason::Shutdown);
     }
 
     #[tokio::test]
