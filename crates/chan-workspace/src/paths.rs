@@ -71,10 +71,33 @@ pub fn metadata_key_for_root(workspace_root: &Path) -> String {
         .unwrap_or_else(|_| workspace_root.to_path_buf());
     let canonical_s = canonical.as_os_str().to_string_lossy();
     let slug = metadata_slug(&canonical_s);
+    format!("{slug}-{}", canonical_hash8(&canonical_s))
+}
+
+/// First 8 hex chars of the sha256 of a workspace root's canonical path.
+///
+/// Deterministic per root: the same root always hashes the same across
+/// restarts, and two roots that share a basename but differ in their parent
+/// hash differently. This is the collision-breaking suffix shared by the
+/// metadata key (above) and the public mount prefix
+/// ([`allocate_workspace_prefix`](../../chan_library/fn.allocate_workspace_prefix.html),
+/// chan-library), so the keyed pathspec `/{basename-slug}-{8hex}` is unique
+/// even across two same-basename workspaces.
+pub fn canonical_root_hash8(workspace_root: &Path) -> String {
+    let canonical = workspace_root
+        .canonicalize()
+        .unwrap_or_else(|_| workspace_root.to_path_buf());
+    canonical_hash8(&canonical.as_os_str().to_string_lossy())
+}
+
+/// sha256 of an already-canonicalized path string → its first 8 hex chars.
+/// Single-sourced so the metadata key and the mount prefix derive the suffix
+/// identically.
+fn canonical_hash8(canonical_s: &str) -> String {
     let mut h = Sha256::new();
     h.update(canonical_s.as_bytes());
     let hex = format!("{:x}", h.finalize());
-    format!("{slug}-{}", &hex[..8])
+    hex[..8].to_string()
 }
 
 fn metadata_slug(path: &str) -> String {

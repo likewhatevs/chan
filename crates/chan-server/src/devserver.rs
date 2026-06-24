@@ -1165,62 +1165,88 @@ mod tests {
     }
 
     #[test]
-    fn workspace_prefix_is_the_public_slug() {
+    fn workspace_prefix_is_a_keyed_pathspec() {
         let a = allocate_workspace_prefix(Path::new("/tmp/notes")).unwrap();
         let b = allocate_workspace_prefix(Path::new("/tmp/notes")).unwrap();
         // Deterministic: the same root maps to the same prefix.
         assert_eq!(a, b);
-        // The prefix IS the public slug the gateway forwards (`/{slug}`), not
-        // the old opaque `/api/{slug}-{hash}`. Top-level, never under the
-        // reserved `/api/` management+terminal namespace, never empty.
-        assert_eq!(a, "/notes");
-        assert!(!a.starts_with("/api"));
+        // The prefix is the keyed pathspec `/{slug}-{8hex}` the gateway forwards:
+        // the legible basename slug plus a hash of the canonical root. Top-level,
+        // never under the reserved `/api/` namespace, never empty.
+        assert!(a.starts_with("/notes-"), "{a}");
+        assert!(!a.starts_with("/api/") && a != "/api");
         assert_ne!(a, "");
+        let suffix = a.rsplit_once('-').unwrap().1;
+        assert_eq!(suffix.len(), 8);
+        assert!(suffix.chars().all(|c| c.is_ascii_hexdigit()));
         // A different basename differs.
         let c = allocate_workspace_prefix(Path::new("/tmp/other")).unwrap();
         assert_ne!(a, c);
-        // Same basename under a different parent COLLIDES (same slug): the
-        // devserver rejects the second at mount time (slug uniqueness).
+        // C3: same basename under a DIFFERENT parent no longer collides — the
+        // hash suffix keys the prefix to the root, so the two map to DISTINCT
+        // prefixes and both mount (the old basename-only slug rejected the
+        // second at mount time).
         let d = allocate_workspace_prefix(Path::new("/tmp/sub/notes")).unwrap();
-        assert_eq!(a, d);
+        assert!(d.starts_with("/notes-"), "{d}");
+        assert_ne!(a, d, "same basename, different root → distinct prefix");
     }
 
     #[tokio::test]
-    async fn mount_uses_public_slug_and_rejects_slug_collision_and_reserved() {
+    async fn mount_uses_keyed_pathspec_same_basename_coexist_and_reserved_guarded() {
         let home = tempfile::tempdir().expect("home");
         let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
         let state = test_state(home.path(), addr);
 
-        // A workspace named "notes" mounts at its PUBLIC slug "/notes" (the path
-        // the gateway forwards), not an opaque /api/{slug}-{hash}.
+        // A workspace named "notes" mounts at its keyed pathspec `/notes-{8hex}`
+        // (the path the gateway forwards): a legible basename slug plus a hash of
+        // the canonical root.
         let parent = tempfile::tempdir().expect("parent");
         let notes = parent.path().join("notes");
         std::fs::create_dir_all(&notes).unwrap();
         std::fs::write(notes.join("n.md"), "# N\n").unwrap();
         let prefix = state.register_workspace(&notes).await.expect("mount");
-        assert_eq!(prefix, "/notes");
-        assert!(state
-            .host
-            .mounted_prefixes()
-            .unwrap()
-            .contains(&"/notes".to_string()));
+        assert!(prefix.starts_with("/notes-"), "{prefix}");
+        assert!(state.host.mounted_prefixes().unwrap().contains(&prefix));
 
-        // A SECOND workspace with the same basename collides on the slug and is
-        // rejected at mount time (slug uniqueness within a devserver).
+        // C3: a SECOND workspace with the same basename under a DIFFERENT parent
+        // no longer collides — the hash keys the prefix to the root, so both
+        // mount at distinct prefixes (the bug was the second being rejected).
         let other = tempfile::tempdir().expect("other");
         let notes2 = other.path().join("notes");
         std::fs::create_dir_all(&notes2).unwrap();
         std::fs::write(notes2.join("n.md"), "# N2\n").unwrap();
-        let err = state.register_workspace(&notes2).await.unwrap_err();
-        assert!(err.to_string().contains("already mounted"), "{err}");
+        let prefix2 = state
+            .register_workspace(&notes2)
+            .await
+            .expect("second same-basename workspace also mounts");
+        assert!(prefix2.starts_with("/notes-"), "{prefix2}");
+        assert_ne!(
+            prefix, prefix2,
+            "same basename, different root → distinct prefix"
+        );
+        assert!(state.host.mounted_prefixes().unwrap().contains(&prefix2));
 
-        // A workspace whose basename sanitizes to the reserved "api" slug is
-        // rejected: it would mount at /api and shadow the management namespace.
+        // A workspace named "api" no longer shadows the reserved /api management
+        // namespace: the hash suffix mounts it at `/api-{8hex}`, a distinct
+        // top-level segment.
         let api_parent = tempfile::tempdir().expect("api parent");
         let api_dir = api_parent.path().join("api");
         std::fs::create_dir_all(&api_dir).unwrap();
         std::fs::write(api_dir.join("a.md"), "# A\n").unwrap();
-        let err = state.register_workspace(&api_dir).await.unwrap_err();
+        let api_prefix = state
+            .register_workspace(&api_dir)
+            .await
+            .expect("api mounts");
+        assert!(api_prefix.starts_with("/api-"), "{api_prefix}");
+        assert_ne!(api_prefix, RESERVED_WORKSPACE_PREFIX);
+
+        // The reserved guard still rejects a LITERAL `/api` mount (defense in
+        // depth: allocate_workspace_prefix can no longer produce it, but a direct
+        // mount at the management namespace must still fail).
+        let err = state
+            .mount_at(&api_dir, RESERVED_WORKSPACE_PREFIX)
+            .await
+            .unwrap_err();
         assert!(err.to_string().contains("reserved"), "{err}");
     }
 
