@@ -1,5 +1,7 @@
-//! First-run install of the `chan` and `cs` bin shims into `~/.local/bin`, so a
-//! chan-desktop install also gives you the `chan` / `cs` command line with
+//! First-run install of the `chan` and `cs` bin shims into `~/.local/bin`
+//! (`$CHAN_HOME/.local/bin` when `CHAN_HOME` is set — resolved via
+//! `chan_workspace::paths::local_bin_dir`, so a smoke instance stays isolated),
+//! so a chan-desktop install also gives you the `chan` / `cs` command line with
 //! nothing extra to download. Both names resolve to the running chan-desktop
 //! binary; the argv[0] dispatch (`chan_shell::invoked_as_chan` /
 //! `invoked_as_cs`) selects the CLI / control-client path before any GUI init.
@@ -279,10 +281,12 @@ pub fn install_bin_shims() -> std::io::Result<u32> {
     if matches!(kind, InstallKind::None) {
         return Ok(0);
     }
-    let Some(home) = dirs::home_dir() else {
+    // CHAN_HOME-aware (D9 / W8): `$CHAN_HOME/.local/bin` when CHAN_HOME is set, else
+    // `$HOME/.local/bin` (byte-identical to the old inlined path when unset). `None`
+    // only when neither base resolves — then there's nowhere to install, so no-op.
+    let Some(bin_dir) = chan_workspace::paths::local_bin_dir() else {
         return Ok(0);
     };
-    let bin_dir = home.join(".local").join("bin");
 
     let mut changed = 0u32;
     for name in SHIM_NAMES {
