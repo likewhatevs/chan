@@ -102,6 +102,10 @@ stayed coherent.
   remote `starting`/`error` fidelity needs a deeper pass-through.
 - Suppressing a genuinely-foreign-lock thrown error from the launcher banner in favor of
   only the row affordance (needs a foreign-lock wire shape not in the contract).
+- Launcher right-click "Reload" shows no `⌘R` label: the launcher falls through to
+  WebKit's native context menu (workspace panes show the chord because they render their
+  own custom menu). Matching it needs a custom web-launcher context menu; the chord itself
+  works. @@Alex to decide whether to add the label. (Smoke note 8.1.)
 
 ## The cut
 
