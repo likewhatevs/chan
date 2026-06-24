@@ -1,54 +1,28 @@
-// Unit tests for the in-flight pending store: begin → reconcile clears once the
-// row reaches its target (or the row is gone, or it times out); clear stops the
-// spinner (the reject path); and the localStorage round-trip (persist + hydrate)
-// survives a reload. A fake localStorage is stubbed so the persistence path is
-// deterministic regardless of the jsdom/node localStorage quirk.
+// Unit tests for the optimistic bridge: begin opens a marker; reconcile holds it
+// while the row is still at its pre-click status and drops it once the backend
+// `status` moves off that (the transition began, so `status` drives the spinner),
+// the row is gone, or the backstop elapses; clear stops the spinner (the reject
+// path). No localStorage: the bridge is in-memory only — a boot-restore spinner
+// now comes from the backend `status:starting`, not a persisted marker.
 
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { describe, it, expect, beforeEach } from "vitest";
 import {
   pending,
   isPending,
   beginPending,
   clearPending,
   clearAllPending,
-  hydratePending,
   reconcile,
   wsKey,
   servedKey,
   dsKey,
 } from "./pending.svelte";
 
-const STORAGE_KEY = "chan-launcher-pending";
-
-// A minimal in-memory Storage so persist()/load() are deterministic.
-function fakeStorage(): Storage {
-  const m = new Map<string, string>();
-  return {
-    getItem: (k) => m.get(k) ?? null,
-    setItem: (k, v) => {
-      m.set(k, String(v));
-    },
-    removeItem: (k) => {
-      m.delete(k);
-    },
-    clear: () => m.clear(),
-    key: (i) => [...m.keys()][i] ?? null,
-    get length() {
-      return m.size;
-    },
-  } as Storage;
-}
-
 beforeEach(() => {
-  vi.stubGlobal("localStorage", fakeStorage());
   clearAllPending();
 });
 
-afterEach(() => {
-  vi.unstubAllGlobals();
-});
-
-describe("pending store", () => {
+describe("pending bridge", () => {
   it("begins a marker and reports it pending", () => {
     const k = wsKey("a");
     expect(isPending(k)).toBe(false);
@@ -66,29 +40,48 @@ describe("pending store", () => {
     expect(isPending(servedKey("ds-2", "w/api"))).toBe(false);
   });
 
-  it("reconcile clears a marker once its row reaches the target, keeps it otherwise", () => {
-    beginPending(wsKey("a"), "on");
-    beginPending(wsKey("b"), "on");
-    // a reached "on" → cleared; b still "off" → kept.
-    reconcile({ [wsKey("a")]: "on", [wsKey("b")]: "off" });
+  it("holds the bridge while the row is still at its pre-click state, drops it once status moves", () => {
+    beginPending(wsKey("a"), "on"); // pre-click state: "stopped"
+    // Backend hasn't started the mount yet → still "stopped" → bridge held.
+    reconcile({ [wsKey("a")]: "stopped" });
+    expect(isPending(wsKey("a"))).toBe(true);
+    // Status moved to the transitional "starting": backend `status` now drives
+    // the spinner, so the bridge is dropped.
+    reconcile({ [wsKey("a")]: "starting" });
     expect(isPending(wsKey("a"))).toBe(false);
-    expect(isPending(wsKey("b"))).toBe(true);
   });
 
-  it("reconcile clears a marker whose row is gone (no current state)", () => {
+  it("drops the bridge once an off reaches its settled status", () => {
+    beginPending(wsKey("b"), "off"); // pre-click state: "running"
+    reconcile({ [wsKey("b")]: "running" }); // not begun yet → held
+    expect(isPending(wsKey("b"))).toBe(true);
+    reconcile({ [wsKey("b")]: "stopped" }); // reached → dropped
+    expect(isPending(wsKey("b"))).toBe(false);
+  });
+
+  it("holds a connect bridge until the dial leaves disconnected", () => {
+    const k = dsKey("d");
+    beginPending(k, "connected"); // pre-click state: "disconnected"
+    reconcile({ [k]: "disconnected" }); // not begun → held
+    expect(isPending(k)).toBe(true);
+    reconcile({ [k]: "connecting" }); // dialing → status drives → dropped
+    expect(isPending(k)).toBe(false);
+  });
+
+  it("drops a marker whose row is gone (no current state)", () => {
     beginPending(dsKey("x"), "connected");
     reconcile({}); // x no longer present
     expect(isPending(dsKey("x"))).toBe(false);
   });
 
-  it("treats a timed-out marker as not pending and reconcile drops it", () => {
+  it("treats a backstopped marker as not pending and reconcile drops it", () => {
     const k = wsKey("c");
     beginPending(k, "on");
-    // Backdate the marker well past the timeout.
+    // Backdate the marker well past the backstop.
     pending.markers[k]!.ts = Date.now() - 60_000;
     expect(isPending(k)).toBe(false);
-    // Even though the row has NOT reached the target, the timeout clears it.
-    reconcile({ [k]: "off" });
+    // Even though the row is still at its pre-click state, the backstop clears it.
+    reconcile({ [k]: "stopped" });
     expect(k in pending.markers).toBe(false);
   });
 
@@ -98,35 +91,5 @@ describe("pending store", () => {
     expect(isPending(k)).toBe(true);
     clearPending(k);
     expect(isPending(k)).toBe(false);
-  });
-
-  it("persists to localStorage and hydrates back (survives reload)", () => {
-    const k = dsKey("p");
-    beginPending(k, "connected");
-    // Persisted under the storage key.
-    const raw = localStorage.getItem(STORAGE_KEY);
-    expect(raw).toBeTruthy();
-    expect(JSON.parse(raw!)[k].target).toBe("connected");
-
-    // Simulate a reload: a fresh in-memory store loses the runtime state, but
-    // hydrate() re-reads the persisted markers.
-    clearAllPending();
-    expect(isPending(k)).toBe(false);
-    localStorage.setItem(
-      STORAGE_KEY,
-      JSON.stringify({ [k]: { target: "connected", ts: Date.now() } }),
-    );
-    hydratePending();
-    expect(isPending(k)).toBe(true);
-  });
-
-  it("drops malformed persisted entries on hydrate", () => {
-    localStorage.setItem(
-      STORAGE_KEY,
-      JSON.stringify({ "ws:ok": { target: "on", ts: Date.now() }, "ws:bad": { target: "nope" } }),
-    );
-    hydratePending();
-    expect(isPending(wsKey("ok"))).toBe(true);
-    expect(isPending(wsKey("bad"))).toBe(false);
   });
 });

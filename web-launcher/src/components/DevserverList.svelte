@@ -3,7 +3,7 @@
   // mutable (desktop loopback) surface each row carries three icon actions —
   // [NEW TERMINAL] (open a terminal on the connected devserver), [EDIT] (open the
   // edit form; read-only while connected), and [CONNECT/DISCONNECT] (the
-  // connection toggle, gated on `connected`) — plus a select checkbox feeding the
+  // connection toggle, gated on `status`) — plus a select checkbox feeding the
   // single global bulk bar (App-level: Turn On / Turn Off / Remove). Connect,
   // disconnect, and new terminal are desktop actions; the read-only devserver/gateway surface shows
   // the rows with Edit only (the registry CRUD is browser-testable; the desktop
@@ -41,6 +41,15 @@
       reportError(e);
     }
   }
+
+  const connected = (ds: DevserverEntry): boolean => ds.status === "connected";
+
+  // Spinner = the backend reports the dial in flight (`connecting`) OR the
+  // optimistic bridge is open between a click and the first refetch. The toggle
+  // is disabled while spinning so a click can't race an in-flight connect/
+  // disconnect; a dropped tunnel lands `disconnected` and clears the spinner.
+  const spinning = (ds: DevserverEntry): boolean =>
+    ds.status === "connecting" || isPending(dsKey(ds.id));
 </script>
 
 {#if library.devservers.length}
@@ -61,7 +70,7 @@
           <div class="row-main">
             <span class="row-name">
               {displayName(ds)}
-              {#if ds.connected}<span class="dot live" title="Connected"></span>{/if}
+              {#if connected(ds)}<span class="dot live" title="Connected"></span>{/if}
               {#if ds.has_token}<span class="chip" title="A connect token is stored">🔒 token</span>{/if}
             </span>
             <span class="row-sub" title={endpoint(ds)}>{endpoint(ds)}</span>
@@ -71,8 +80,8 @@
               <button
                 class="icon-btn"
                 type="button"
-                disabled={!ds.connected}
-                title={ds.connected ? "New terminal" : "Connect to open a terminal"}
+                disabled={!connected(ds)}
+                title={connected(ds) ? "New terminal" : "Connect to open a terminal"}
                 aria-label={`New terminal on ${displayName(ds)}`}
                 onclick={() => run(openDevserverTerminal(ds.id))}>
                 <SquareTerminal size={16} />
@@ -81,23 +90,23 @@
             <button
               class="icon-btn"
               type="button"
-              title={ds.connected ? "View (read-only while connected)" : "Edit"}
+              title={ds.status === "disconnected" ? "Edit" : "View (read-only while connected)"}
               aria-label={`Edit ${displayName(ds)}`}
               onclick={() => openEditDevserver(ds)}>
               <Pencil size={16} />
             </button>
             {#if !readOnly}
-              {#if isPending(dsKey(ds.id))}
+              {#if spinning(ds)}
                 <button
                   class="icon-btn"
-                  class:on={ds.connected}
+                  class:on={connected(ds)}
                   type="button"
                   disabled
                   title="Working…"
                   aria-label={`Working on ${displayName(ds)}`}>
                   <LoaderCircle class="spin" size={16} />
                 </button>
-              {:else if ds.connected}
+              {:else if connected(ds)}
                 <button
                   class="icon-btn on"
                   type="button"

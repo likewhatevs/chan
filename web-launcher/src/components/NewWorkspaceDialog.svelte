@@ -13,10 +13,11 @@
   import { readOnly } from "../state/capabilities";
 
   const editing = dialog.editing;
-  // A connected devserver can't be edited (the backend rejects the write), so
-  // the form opens read-only: inputs disabled, no Save — disconnect first to
-  // edit. Captured at open (the dialog mounts fresh each time).
-  const readOnlyEdit = editing?.connected === true;
+  // A devserver with a live connection (connecting or connected) can't be edited
+  // (the backend rejects the write), so the form opens read-only: inputs
+  // disabled, no Save — disconnect first to edit. Captured at open (the dialog
+  // mounts fresh each time).
+  const readOnlyEdit = editing != null && editing.status !== "disconnected";
 
   let error = $state<string | null>(null);
   let submitting = $state(false);
@@ -167,7 +168,7 @@
   {:else}
     {#if readOnlyEdit}
       <p class="intro">
-        This devserver is connected, so its settings are read-only. Disconnect it to edit.
+        This devserver has a live connection, so its settings are read-only. Disconnect it to edit.
       </p>
     {:else}
       <p class="intro">

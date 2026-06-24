@@ -81,7 +81,7 @@ describe("control-closed survey modal", () => {
     await settle();
     flushSync();
 
-    expect(library.devservers.find((d) => d.id === "ds-1")!.connected).toBe(true);
+    expect(library.devservers.find((d) => d.id === "ds-1")!.status).toBe("connected");
     expect(controlClosed.open).toBe(false);
     expect(library.error).toBeNull();
   });
@@ -98,7 +98,7 @@ describe("control-closed survey modal", () => {
     await settle();
     flushSync();
 
-    expect(library.devservers.find((d) => d.id === "ds-1")!.connected).toBe(false);
+    expect(library.devservers.find((d) => d.id === "ds-1")!.status).toBe("disconnected");
     expect(controlClosed.open).toBe(false);
   });
 });

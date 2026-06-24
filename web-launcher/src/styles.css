@@ -220,6 +220,15 @@ body {
   color: var(--text);
 }
 
+/* Workspace mount-error affordance: a danger-tinted icon beside the row name,
+   carrying the backend's `error` reason as its tooltip. Shown when a row's
+   lifecycle status is "error". */
+.row-error {
+  display: inline-flex;
+  align-items: center;
+  color: var(--danger);
+}
+
 .row-sub {
   font-size: 0.78rem;
   color: var(--text-secondary);

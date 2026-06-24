@@ -160,7 +160,7 @@ describe("New workspace dialog", () => {
       script: "",
       has_token: true,
       library_id: null,
-      connected: false,
+      status: "disconnected",
       auto_hide_control: false,
     };
     openEditDevserver(ds);
@@ -188,7 +188,7 @@ describe("New workspace dialog", () => {
       script: "",
       has_token: false,
       library_id: "lib-abc",
-      connected: true,
+      status: "connected",
       auto_hide_control: false,
     };
     openEditDevserver(ds);

@@ -31,7 +31,7 @@ function settle(): Promise<void> {
 }
 
 function ds1Connected(): boolean {
-  return library.devservers.find((d) => d.id === "ds-1")!.connected;
+  return library.devservers.find((d) => d.id === "ds-1")!.status === "connected";
 }
 
 beforeEach(async () => {

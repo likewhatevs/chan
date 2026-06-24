@@ -55,6 +55,17 @@ export interface WindowSet {
 // ---- The workspace registry ---------------------------------------------
 
 /**
+ * Live mount lifecycle of a workspace tenant. `on` is the persisted DESIRED
+ * state; `status` is where the mount actually is right now, so the launcher
+ * drives spinners off real backend state instead of a timer:
+ * - `stopped`  not mounted (desired off, or never started)
+ * - `starting` mount requested / in flight (the spinner state)
+ * - `running`  mounted and serving
+ * - `error`    mount failed (foreign lock, open error); see `WorkspaceEntry.error`
+ */
+export type WorkspaceStatus = "stopped" | "starting" | "running" | "error";
+
+/**
  * A workspace row in the launcher's workspace feed. Local rows are folders in
  * the local registry (`devserver_id` null); remote rows are workspaces a
  * connected devserver serves (`devserver_id` set), merged into the same feed so
@@ -68,8 +79,13 @@ export interface WorkspaceEntry {
   path: string;
   /** Optional display label; empty falls back to the path basename. */
   label: string;
-  /** Tenant is currently served (on) vs registered-but-off. */
+  /** Persisted DESIRED state: tenant should be served (on) vs registered-but-off. */
   on: boolean;
+  /** Live mount lifecycle. The spinner shows while `starting`; `error` renders a
+   * row error affordance carrying `error`. Drives the UI in place of `on`. */
+  status: WorkspaceStatus;
+  /** Short human reason, present only when `status === "error"`. */
+  error?: string;
   /** The library serving this row: null/"local" for local rows; the remote
    * library id for a devserver-served row. */
   library_id: string | null;
@@ -89,6 +105,17 @@ export interface WorkspaceEntry {
 // and native-window reconciliation are desktop-internal. The token is
 // write-only over the wire: POST/PUT accept it, GET never echoes it back;
 // `has_token` reports whether one is stored.
+
+/**
+ * Live connection lifecycle of a devserver, driving the launcher's Connect /
+ * Disconnect toggle and its spinner off real backend state:
+ * - `disconnected` no live connection (the Connect state); emitted when the
+ *   tunnel drops or the control script exits, so a dropped devserver clears
+ *   its spinner with no manual reload
+ * - `connecting`   dial in flight (the spinner state)
+ * - `connected`    a live connection is held (the Disconnect state)
+ */
+export type DevserverStatus = "disconnected" | "connecting" | "connected";
 
 export interface DevserverEntry {
   /** Stable registry id used for row actions and the connection-state map. */
@@ -114,11 +141,11 @@ export interface DevserverEntry {
    */
   library_id: string | null;
   /**
-   * Whether the desktop currently holds a live connection to this devserver.
-   * Drives Connect vs Disconnect and gates Edit read-only (the backend rejects
-   * edits while connected). Always false on a surface with no desktop bridge.
+   * Live connection lifecycle. Drives Connect vs Disconnect and the connect
+   * spinner, and gates Edit read-only (the backend rejects edits while a
+   * connection is held). `disconnected` on a surface with no desktop bridge.
    */
-  connected: boolean;
+  status: DevserverStatus;
   /**
    * Auto-hide the connect control terminal once the devserver connects: the
    * desktop buries the control-terminal window on success instead of leaving it

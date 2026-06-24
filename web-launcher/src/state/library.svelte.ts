@@ -5,15 +5,7 @@
 
 import { backend } from "../api/backend";
 import type { DevserverEntry, DevserverInput, WindowRecord, WorkspaceEntry } from "../api/library";
-import {
-  beginPending,
-  clearPending,
-  dsKey,
-  reconcile,
-  servedKey,
-  wsKey,
-  type PendingTarget,
-} from "./pending.svelte";
+import { beginPending, clearPending, dsKey, reconcile, servedKey, wsKey } from "./pending.svelte";
 
 interface LibraryState {
   workspaces: WorkspaceEntry[];
@@ -48,19 +40,19 @@ export function clearError(): void {
   library.error = null;
 }
 
-// Build the per-row state map the pending store reconciles against (the same
-// keys the action handlers + the spinner UI use), then clear any in-flight
-// marker whose row has reached its target / is gone / has timed out. Called
-// after every registry refresh + on loadLibrary, so a finished or abandoned
-// on/off / connect stops spinning and the row shows its real state.
+// Build the per-row status map the pending bridge reconciles against (the same
+// keys the action handlers + the spinner UI use), then drop any bridge marker
+// whose row's status has moved off its pre-click state (the backend transition
+// landed), is gone, or has backstopped. Called after every registry refresh +
+// on loadLibrary, so once the backend `status` arrives it drives the spinner.
 function reconcilePending(): void {
-  const current: Record<string, PendingTarget> = {};
+  const current: Record<string, string> = {};
   for (const w of library.workspaces) {
-    if (w.devserver_id === null) current[wsKey(w.workspace_id)] = w.on ? "on" : "off";
-    else current[servedKey(w.devserver_id, w.prefix)] = w.on ? "on" : "off";
+    const key = w.devserver_id === null ? wsKey(w.workspace_id) : servedKey(w.devserver_id, w.prefix);
+    current[key] = w.status;
   }
   for (const d of library.devservers) {
-    current[dsKey(d.id)] = d.connected ? "connected" : "disconnected";
+    current[dsKey(d.id)] = d.status;
   }
   reconcile(current);
 }

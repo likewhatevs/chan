@@ -9,7 +9,7 @@
   // so the bar's ordered Remove can forget them on the right devserver. Remove is
   // bulk-only (no per-row Forget); the row still routes its on/off/open to the
   // owning devserver. The read-only surface shows the on-state statically.
-  import { AppWindow, LoaderCircle, Power } from "lucide-svelte";
+  import { AppWindow, CircleAlert, LoaderCircle, Power } from "lucide-svelte";
   import {
     library,
     toggleWorkspace,
@@ -114,6 +114,20 @@
     }
     void offWorkspaceWithConfirm((force) => setDevserverWorkspaceOn(devserverId, prefix, false, force));
   }
+
+  // The pending key for a row (local rows by workspace_id, served rows by
+  // devserver_id + prefix), matching the action handlers.
+  function rowKey(ws: WorkspaceEntry): string {
+    return ws.devserver_id === null ? wsKey(ws.workspace_id) : servedKey(ws.devserver_id, ws.prefix);
+  }
+
+  // Spinner = the backend reports the mount in flight (`starting`) OR the
+  // optimistic bridge is still open between a click and the first refetch. The
+  // toggle is disabled while spinning so a click cannot race chan's own in-flight
+  // mount; `error` and the settled states leave it enabled (retry allowed).
+  function spinning(ws: WorkspaceEntry): boolean {
+    return ws.status === "starting" || isPending(rowKey(ws));
+  }
 </script>
 
 {#if localWorkspaces.length}
@@ -132,7 +146,14 @@
               onchange={() => toggleSelected("workspace", ws.workspace_id)} />
           {/if}
           <div class="row-main">
-            <span class="row-name">{displayName(ws)}</span>
+            <span class="row-name">
+              {displayName(ws)}
+              {#if ws.status === "error"}
+                <span class="row-error" title={ws.error ?? "Mount failed"}>
+                  <CircleAlert size={14} />
+                </span>
+              {/if}
+            </span>
             <span class="row-sub" title={ws.path}>{ws.path}</span>
           </div>
           <div class="row-actions">
@@ -152,17 +173,13 @@
                 class="icon-btn"
                 class:on={ws.on}
                 type="button"
-                disabled={isPending(wsKey(ws.workspace_id))}
-                title={isPending(wsKey(ws.workspace_id))
-                  ? "Working…"
-                  : ws.on
-                    ? "Turn off"
-                    : "Turn on"}
-                aria-label={isPending(wsKey(ws.workspace_id))
+                disabled={spinning(ws)}
+                title={spinning(ws) ? "Working…" : ws.on ? "Turn off" : "Turn on"}
+                aria-label={spinning(ws)
                   ? `Working on ${displayName(ws)}`
                   : `${ws.on ? "Turn off" : "Turn on"} ${displayName(ws)}`}
                 onclick={() => toggleLocalWorkspace(ws.workspace_id, !ws.on)}>
-                {#if isPending(wsKey(ws.workspace_id))}
+                {#if spinning(ws)}
                   <LoaderCircle class="spin" size={16} />
                 {:else}
                   <Power size={16} />
@@ -191,7 +208,14 @@
               onchange={() => toggleSelected("served", ws.prefix, g.devserverId)} />
           {/if}
           <div class="row-main">
-            <span class="row-name">{displayName(ws)}</span>
+            <span class="row-name">
+              {displayName(ws)}
+              {#if ws.status === "error"}
+                <span class="row-error" title={ws.error ?? "Mount failed"}>
+                  <CircleAlert size={14} />
+                </span>
+              {/if}
+            </span>
             <span class="row-sub" title={ws.path}>{ws.path}</span>
           </div>
           <div class="row-actions">
@@ -211,17 +235,13 @@
                 class="icon-btn"
                 class:on={ws.on}
                 type="button"
-                disabled={isPending(servedKey(g.devserverId, ws.prefix))}
-                title={isPending(servedKey(g.devserverId, ws.prefix))
-                  ? "Working…"
-                  : ws.on
-                    ? "Turn off"
-                    : "Turn on"}
-                aria-label={isPending(servedKey(g.devserverId, ws.prefix))
+                disabled={spinning(ws)}
+                title={spinning(ws) ? "Working…" : ws.on ? "Turn off" : "Turn on"}
+                aria-label={spinning(ws)
                   ? `Working on ${displayName(ws)}`
                   : `${ws.on ? "Turn off" : "Turn on"} ${displayName(ws)}`}
                 onclick={() => toggleRemoteWorkspace(g.devserverId, ws.prefix, !ws.on)}>
-                {#if isPending(servedKey(g.devserverId, ws.prefix))}
+                {#if spinning(ws)}
                   <LoaderCircle class="spin" size={16} />
                 {:else}
                   <Power size={16} />

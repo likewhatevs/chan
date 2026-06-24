@@ -36,6 +36,7 @@ const workspaces: WorkspaceEntry[] = [
     path: "/Users/fiorix/notes",
     label: "",
     on: true,
+    status: "running",
     library_id: "local",
     devserver_id: null,
     prefix: "ws-1",
@@ -45,6 +46,7 @@ const workspaces: WorkspaceEntry[] = [
     path: "/Users/fiorix/work/journal",
     label: "Journal",
     on: false,
+    status: "stopped",
     library_id: "local",
     devserver_id: null,
     prefix: "ws-2",
@@ -63,7 +65,7 @@ const devservers: MockDevserver[] = [
     library_id: DS_LIBRARY_ID,
     // Seeded connected so the merged view (remote windows + remote workspace
     // rows + the Disconnect action) has something real to render with no desktop.
-    connected: true,
+    status: "connected",
     auto_hide_control: false,
   },
 ];
@@ -71,13 +73,14 @@ const devservers: MockDevserver[] = [
 // A connected devserver's served workspaces, merged into the workspace feed
 // tagged with their devserver_id + library_id. Only surface while the owning
 // devserver is connected (the live feed source returns connected devservers'
-// workspaces); listWorkspaces filters on the devserver's `connected`.
+// workspaces); listWorkspaces filters on the devserver's `status`.
 const devserverWorkspaces: WorkspaceEntry[] = [
   {
     workspace_id: "ds-1:w/api",
     path: "/srv/api",
     label: "api",
     on: true,
+    status: "running",
     library_id: DS_LIBRARY_ID,
     devserver_id: "ds-1",
     prefix: "w/api",
@@ -87,6 +90,7 @@ const devserverWorkspaces: WorkspaceEntry[] = [
     path: "/srv/docs",
     label: "docs",
     on: false,
+    status: "stopped",
     library_id: DS_LIBRARY_ID,
     devserver_id: "ds-1",
     prefix: "w/docs",
@@ -115,7 +119,10 @@ export function setMockLocalLiveTerminals(workspace_id: string, n: number): void
  * flag). Test-only, so a suite that exercises the flow stays order-independent;
  * unused on the live SPA path. */
 export function resetMockRemoteWorkspaces(): void {
-  for (const w of devserverWorkspaces) w.on = w.prefix === "w/docs" ? false : true;
+  for (const w of devserverWorkspaces) {
+    w.on = w.prefix !== "w/docs";
+    w.status = w.on ? "running" : "stopped";
+  }
   liveTerminals.clear();
   liveTerminals.set("ds-1:w/api", 2);
 }
@@ -223,7 +230,7 @@ function publicDevserver(ds: MockDevserver): DevserverEntry {
     script: ds.script,
     has_token: ds.has_token,
     library_id: ds.library_id,
-    connected: ds.connected,
+    status: ds.status,
     auto_hide_control: ds.auto_hide_control,
   };
 }
@@ -231,7 +238,9 @@ function publicDevserver(ds: MockDevserver): DevserverEntry {
 /** The merged workspace feed: local rows + every connected devserver's served
  * workspaces (the live feed source supplies only connected devservers'). */
 function mergedWorkspaces(): WorkspaceEntry[] {
-  const connectedIds = new Set(devservers.filter((d) => d.connected).map((d) => d.id));
+  const connectedIds = new Set(
+    devservers.filter((d) => d.status === "connected").map((d) => d.id),
+  );
   const remote = devserverWorkspaces.filter((w) => w.devserver_id && connectedIds.has(w.devserver_id));
   return [...workspaces, ...remote].map((w) => ({ ...w }));
 }
@@ -252,6 +261,7 @@ export const mockApi: LibraryApi = {
       path,
       label: "",
       on: true,
+      status: "running",
       library_id: "local",
       devserver_id: null,
       prefix: workspace_id,
@@ -273,7 +283,13 @@ export const mockApi: LibraryApi = {
         ),
       );
     }
-    if (ws) ws.on = on;
+    if (ws) {
+      ws.on = on;
+      // The live mount settles synchronously here (no real backend to mount):
+      // on -> running, off -> stopped. The launcher's spinner during the click
+      // is the optimistic bridge; a real backend would report `starting` first.
+      ws.status = on ? "running" : "stopped";
+    }
     // Turning a workspace off PURGES its workspace windows from the feed,
     // mirroring the backend's discard_workspace_windows (off + forget) — no
     // stale window records linger. On does not restore them (the user opens
@@ -309,8 +325,8 @@ export const mockApi: LibraryApi = {
       token: input.token ?? "",
       // No library id until the desktop connects this devserver for the first time.
       library_id: null,
-      // A freshly added devserver is not connected until the desktop dials it.
-      connected: false,
+      // A freshly added devserver is disconnected until the desktop dials it.
+      status: "disconnected",
       auto_hide_control: input.auto_hide_control ?? false,
     };
     devservers.push(ds);
@@ -348,7 +364,7 @@ export const mockApi: LibraryApi = {
   connectDevserver: (id) => {
     const ds = devservers.find((d) => d.id === id);
     if (ds) {
-      ds.connected = true;
+      ds.status = "connected";
       if (ds.library_id) {
         for (const w of windows) if (w.library_id === ds.library_id) w.connected = true;
       }
@@ -359,11 +375,11 @@ export const mockApi: LibraryApi = {
 
   // Disconnect drops the live connection: the devserver's windows detach and
   // its served-workspace rows leave the merged feed (mergedWorkspaces filters
-  // on `connected`). The registry entry stays (Connect can redial).
+  // on `status`). The registry entry stays (Connect can redial).
   disconnectDevserver: (id) => {
     const ds = devservers.find((d) => d.id === id);
     if (ds) {
-      ds.connected = false;
+      ds.status = "disconnected";
       if (ds.library_id) {
         for (const w of windows) if (w.library_id === ds.library_id) w.connected = false;
       }
@@ -437,7 +453,10 @@ export const mockApi: LibraryApi = {
       );
     }
     if (!on && force) liveTerminals.delete(key);
-    if (ws) ws.on = on;
+    if (ws) {
+      ws.on = on;
+      ws.status = on ? "running" : "stopped";
+    }
     notify();
     return tick(undefined);
   },

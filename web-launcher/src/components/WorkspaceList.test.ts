@@ -11,7 +11,8 @@ import { mount, unmount, flushSync } from "svelte";
 import WorkspaceList from "./WorkspaceList.svelte";
 import { library, loadLibrary } from "../state/library.svelte";
 import { toggleSelected, clearSelection } from "../state/selection.svelte";
-import { beginPending, clearAllPending, wsKey } from "../state/pending.svelte";
+import { beginPending, clearAllPending, isPending, wsKey } from "../state/pending.svelte";
+import type { WorkspaceEntry } from "../api/library";
 
 // Pin the in-memory mock as the backend so the mounted list renders real rows
 // with no live server, independent of how the app composes its default backend.
@@ -114,5 +115,48 @@ describe("WorkspaceList redesign", () => {
     expect(spinning).toBeTruthy();
     expect(spinning.disabled).toBe(true);
     expect(spinning.querySelector("svg.spin")).toBeTruthy();
+  });
+
+  it("spins a row from backend status:starting alone (no pending marker)", () => {
+    target = document.createElement("div");
+    document.body.appendChild(target);
+    app = mount(WorkspaceList, { target });
+
+    const id = library.workspaces.find((w) => w.devserver_id === null)!.workspace_id;
+    // No optimistic marker — the spinner is driven purely off the backend
+    // lifecycle status, as on a boot-restore re-mount.
+    expect(isPending(wsKey(id))).toBe(false);
+    library.workspaces = library.workspaces.map(
+      (w): WorkspaceEntry => (w.workspace_id === id ? { ...w, status: "starting" } : w),
+    );
+    flushSync();
+
+    const spinning = target.querySelector('button[aria-label^="Working on"]') as HTMLButtonElement;
+    expect(spinning).toBeTruthy();
+    expect(spinning.disabled).toBe(true);
+    expect(spinning.querySelector("svg.spin")).toBeTruthy();
+  });
+
+  it("surfaces status:error with the reason and keeps the toggle enabled (retry)", () => {
+    target = document.createElement("div");
+    document.body.appendChild(target);
+    app = mount(WorkspaceList, { target });
+
+    const id = library.workspaces.find((w) => w.devserver_id === null)!.workspace_id;
+    library.workspaces = library.workspaces.map(
+      (w): WorkspaceEntry =>
+        w.workspace_id === id ? { ...w, status: "error", error: "foreign lock held" } : w,
+    );
+    flushSync();
+
+    // The error affordance carries the reason as its tooltip…
+    expect(target.querySelector('.row-error[title="foreign lock held"]')).toBeTruthy();
+    // …and the on/off toggle is a normal (non-spinner) enabled button so the
+    // user can retry — error is not a transitional state.
+    const toggle = target.querySelector(
+      'button[aria-label^="Turn off"], button[aria-label^="Turn on"]',
+    ) as HTMLButtonElement;
+    expect(toggle).toBeTruthy();
+    expect(toggle.disabled).toBe(false);
   });
 });

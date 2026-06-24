@@ -9,7 +9,8 @@ import { mount, unmount, flushSync } from "svelte";
 import DevserverList from "./DevserverList.svelte";
 import { library, loadLibrary, saveDevserver } from "../state/library.svelte";
 import { clearSelection } from "../state/selection.svelte";
-import { beginPending, clearAllPending, dsKey } from "../state/pending.svelte";
+import { beginPending, clearAllPending, dsKey, isPending } from "../state/pending.svelte";
+import type { DevserverEntry } from "../api/library";
 
 // Pin the in-memory mock as the backend so the list renders the seed devserver
 // with no live server. The async-import factory dodges vi.mock's hoist trap.
@@ -81,7 +82,7 @@ describe("DevserverList redesign", () => {
 
     expect(library.error).toBeNull();
     const fresh = library.devservers.find((d) => d.host === "fresh.example" && d.port === 9100)!;
-    expect(fresh.connected).toBe(true);
+    expect(fresh.status).toBe("connected");
     // The row flips to Disconnect after connecting.
     expect(byAria("Disconnect fresh")).toBeTruthy();
   });
@@ -100,5 +101,29 @@ describe("DevserverList redesign", () => {
     expect(spinning!.disabled).toBe(true);
     expect(spinning!.querySelector("svg.spin")).toBeTruthy();
     expect(byAria("Disconnect prod")).toBeUndefined();
+  });
+
+  it("spins from status:connecting alone, then clears the spinner on disconnect", () => {
+    // Drive the spinner purely from the backend lifecycle status — no marker.
+    mountList();
+    expect(isPending(dsKey("ds-1"))).toBe(false);
+
+    library.devservers = library.devservers.map(
+      (d): DevserverEntry => (d.id === "ds-1" ? { ...d, status: "connecting" } : d),
+    );
+    flushSync();
+    const spinning = byAria("Working on prod");
+    expect(spinning).toBeTruthy();
+    expect(spinning!.disabled).toBe(true);
+    expect(byAria("Disconnect prod")).toBeUndefined();
+
+    // A dropped tunnel lands `disconnected` on the next refetch: the spinner
+    // clears with no manual reload and the row offers Connect again.
+    library.devservers = library.devservers.map(
+      (d): DevserverEntry => (d.id === "ds-1" ? { ...d, status: "disconnected" } : d),
+    );
+    flushSync();
+    expect(byAria("Working on prod")).toBeUndefined();
+    expect(byAria("Connect prod")).toBeTruthy();
   });
 });

@@ -134,19 +134,19 @@ describe("devserver multi-select", () => {
 
   it("bulk turn off disconnects every selected devserver", async () => {
     // The seed devserver is connected; bulk turn off → disconnect.
-    const ds = library.devservers.find((d) => d.connected)!;
+    const ds = library.devservers.find((d) => d.status === "connected")!;
     toggleSelected("devserver", ds.id);
     await bulkSetOnAll(false);
-    expect(library.devservers.find((d) => d.id === ds.id)?.connected).toBe(false);
+    expect(library.devservers.find((d) => d.id === ds.id)?.status).toBe("disconnected");
   });
 
   it("bulk turn on connects every selected devserver", async () => {
     await saveDevserver({ host: "bulk-on.example", port: 9200, label: "bulk-on" });
     const ds = library.devservers.find((d) => d.host === "bulk-on.example" && d.port === 9200)!;
-    expect(ds.connected).toBe(false);
+    expect(ds.status).toBe("disconnected");
     toggleSelected("devserver", ds.id);
     await bulkSetOnAll(true);
-    expect(library.devservers.find((d) => d.id === ds.id)?.connected).toBe(true);
+    expect(library.devservers.find((d) => d.id === ds.id)?.status).toBe("connected");
   });
 
   it("confirmed bulk remove drops the selected devserver", async () => {
