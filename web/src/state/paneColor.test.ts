@@ -113,6 +113,66 @@ describe("applyLivePaneColor (Theme 6 colour-watch apply)", () => {
   });
 });
 
+// C8 / seam 5: 2+ windows of the same library (incl. split panes — the var is
+// on the document root, so every pane in a window reads it) must converge on
+// the library's non-blue focus border and never fall back to default blue. The
+// per-call tests above lock each apply() in isolation; these lock the ORDERED
+// sequences the real multi-window race produces (seed, then the watch's
+// push-on-connect + reconnect storms), which is where the stuck-blue bug lives.
+// @@Desktop D5 fixes the SEED freshness on the 2nd window; this side guarantees
+// that once a valid colour is present (from seed OR a live push) no later
+// null/late push reverts it to blue.
+describe("C8 multi-window live-apply consistency", () => {
+  const get = () => document.documentElement.style.getPropertyValue(CSS_VAR);
+
+  test("a seeded window keeps its colour through a reconnect's null push", () => {
+    // Window opened with ?pane=orange; the watch reconnects and re-pushes the
+    // library's current colour. A library with no PERSISTED colour pushes null
+    // on connect — that must not clobber the valid seed back to blue (Bug A).
+    setSearch("?pane=%23f97316");
+    applyInitialPaneColor();
+    expect(get()).toBe("#f97316");
+    applyLivePaneColor(null); // push-on-(re)connect for a no-persisted-colour lib
+    expect(get()).toBe("#f97316");
+  });
+
+  test("a 2nd window with NO seed is coloured by the watch's push-on-connect", () => {
+    // The desktop seed can lag on the 2nd same-library window (the D5 bug); the
+    // live watch's push-on-connect must still bring it to the library colour
+    // (never leave it stuck on the default blue accent).
+    setSearch("?t=token"); // no ?pane=
+    applyInitialPaneColor();
+    expect(get()).toBe(""); // unseeded → default accent for now
+    applyLivePaneColor("#22c55e"); // watch delivers the library colour
+    expect(get()).toBe("#22c55e");
+  });
+
+  test("a reconnect storm of null pushes never reverts a seeded colour", () => {
+    setSearch("?pane=%23f97316");
+    applyInitialPaneColor();
+    for (let i = 0; i < 5; i += 1) applyLivePaneColor(null);
+    expect(get()).toBe("#f97316");
+  });
+
+  test("a later live colour change recolours an already-seeded window", () => {
+    setSearch("?pane=%23f97316");
+    applyInitialPaneColor();
+    applyLivePaneColor("#22c55e"); // another window picked green
+    expect(get()).toBe("#22c55e");
+  });
+
+  test("an explicit blue preset push IS applied (blue is a chosen colour, not a clear)", () => {
+    // Picking the blue preset persists `#388bfd` (a valid hex), so the watch
+    // pushes the hex — distinct from the null "no colour set" frame. The window
+    // must show the chosen blue, proving null-no-clobber doesn't swallow a real
+    // blue choice.
+    setSearch("?pane=%23f97316");
+    applyInitialPaneColor();
+    applyLivePaneColor(NAMED_PANE_HEX.blue);
+    expect(get()).toBe("#388bfd");
+  });
+});
+
 describe("NAMED_PANE_HEX named <-> hex map", () => {
   test("blue is the --pane-focus literal, the other three mirror the presets", () => {
     expect(NAMED_PANE_HEX).toEqual({
