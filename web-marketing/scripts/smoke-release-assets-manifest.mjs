@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 
 import { gatewayServices } from "./gateway-services.mjs";
 
+const siteRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const version = "0.15.4";
 const tag = `v${version}`;
 const names = [
@@ -41,9 +42,58 @@ const names = [
   `Chan_${version}_aarch64.app.tar.gz.sig`,
 ];
 
+const windowsNames = [
+  `Chan_${version}_x64-setup.exe`,
+  "chan-x86_64-pc-windows-msvc.zip",
+];
+
 const root = mkdtempSync(path.join(tmpdir(), "chan-release-assets-"));
 try {
-  const assetDir = path.join(root, "assets");
+  // No Windows assets: the optional Windows entries are skipped, not an error.
+  const base = runCollect("base", []);
+  assertEqual(base.version, version, "version");
+  assertEqual(base.tag, tag, "tag");
+  assertEqual(base.assets.length, 23, "asset count excludes detached sig");
+  assert(
+    !base.assets.some((asset) => asset.name.endsWith("-setup.exe")),
+    "windows installer absent when not in the release",
+  );
+  assert(
+    !base.assets.some((asset) => asset.name.endsWith("windows-msvc.zip")),
+    "windows cli absent when not in the release",
+  );
+
+  const cli = base.assets.find((asset) => asset.name === names[0]);
+  assert(cli, "missing CLI asset");
+  assertEqual(
+    cli.sha256,
+    createHash("sha256").update(`asset bytes for ${names[0]}\n`).digest("hex"),
+    "CLI sha256",
+  );
+
+  const updater = base.assets.find((asset) => asset.updater_platform === "darwin-aarch64");
+  assert(updater, "missing updater asset");
+  assertEqual(updater.signature, "fixture-updater-signature", "updater signature");
+
+  // Windows assets present: the optional entries are collected.
+  const win = runCollect("windows", windowsNames);
+  assertEqual(win.assets.length, 25, "windows assets collected when present");
+  assert(
+    win.assets.some((asset) => asset.name === windowsNames[0]),
+    "windows installer collected",
+  );
+  assert(
+    win.assets.some((asset) => asset.name === windowsNames[1]),
+    "windows cli collected",
+  );
+  console.log("smoked release asset manifest collection");
+} finally {
+  rmSync(root, { force: true, recursive: true });
+}
+
+function runCollect(label, extraNames) {
+  const runRoot = path.join(root, label);
+  const assetDir = path.join(runRoot, "assets");
   mkdirSync(assetDir, { recursive: true });
   const release = {
     tag_name: tag,
@@ -51,7 +101,7 @@ try {
     body: "Fixture release",
     assets: [],
   };
-  for (const name of names) {
+  for (const name of [...names, ...extraNames]) {
     const body = name.endsWith(".sig")
       ? "fixture-updater-signature\n"
       : `asset bytes for ${name}\n`;
@@ -63,8 +113,8 @@ try {
     });
   }
 
-  const releaseJson = path.join(root, "release.json");
-  const out = path.join(root, "manifest.json");
+  const releaseJson = path.join(runRoot, "release.json");
+  const out = path.join(runRoot, "manifest.json");
   writeFileSync(releaseJson, `${JSON.stringify(release, null, 2)}\n`);
   execFileSync("node", [
     "scripts/collect-release-assets.mjs",
@@ -74,27 +124,9 @@ try {
     assetDir,
     "--out",
     out,
-  ], { cwd: path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..") });
+  ], { cwd: siteRoot });
 
-  const manifest = JSON.parse(readFileSync(out, "utf8"));
-  assertEqual(manifest.version, version, "version");
-  assertEqual(manifest.tag, tag, "tag");
-  assertEqual(manifest.assets.length, 23, "asset count excludes detached sig");
-
-  const cli = manifest.assets.find((asset) => asset.name === names[0]);
-  assert(cli, "missing CLI asset");
-  assertEqual(
-    cli.sha256,
-    createHash("sha256").update(`asset bytes for ${names[0]}\n`).digest("hex"),
-    "CLI sha256",
-  );
-
-  const updater = manifest.assets.find((asset) => asset.updater_platform === "darwin-aarch64");
-  assert(updater, "missing updater asset");
-  assertEqual(updater.signature, "fixture-updater-signature", "updater signature");
-  console.log("smoked release asset manifest collection");
-} finally {
-  rmSync(root, { force: true, recursive: true });
+  return JSON.parse(readFileSync(out, "utf8"));
 }
 
 function assert(value, message) {

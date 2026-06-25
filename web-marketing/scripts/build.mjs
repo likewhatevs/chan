@@ -614,12 +614,15 @@ function distPathForUrl(url) {
   return url.slice(1);
 }
 
+// The removed surface is the PowerShell one-liner install (install.ps1 +
+// `irm <url> | iex`), which stays scrubbed. The Windows DESKTOP installer
+// (NSIS .exe) and the standalone Windows CLI zip ARE first-class downloads on
+// the install page, so the phrase "Windows installer" is allowed.
 function validateNoRemovedInstallSurface(file, text) {
   const forbidden = [
     /install\.ps1/i,
     /PowerShell/i,
     /irm\s+https?:/i,
-    /Windows\s+installer/i,
   ];
   for (const pattern of forbidden) {
     if (pattern.test(text)) {

@@ -168,6 +168,33 @@ function gatewayDownloads(manifest) {
   }));
 }
 
+// Windows downloads are DERIVED from the manifest (like gateway), not a fixed
+// list: the NSIS desktop installer and the standalone Windows CLI zip are
+// optional assets (see collect-release-assets.mjs), so they only appear on the
+// install page once a release actually ships them. Until then the install-page
+// buttons fall back to the GitHub releases page.
+function windowsDownloads(manifest) {
+  const candidates = [
+    {
+      id: "desktop-windows-nsis",
+      kind: "desktop",
+      label: "Windows installer (x64)",
+      platform: "windows-x86_64",
+      format: "exe",
+      asset: `Chan_${manifest.version}_x64-setup.exe`,
+    },
+    {
+      id: "cli-windows-x64",
+      kind: "cli",
+      label: "Windows x86_64 zip",
+      target: "x86_64-pc-windows-msvc",
+      format: "zip",
+      asset: "chan-x86_64-pc-windows-msvc.zip",
+    },
+  ];
+  return candidates.filter((download) => manifest.assets.has(download.asset));
+}
+
 async function main() {
   const options = parseArgs(process.argv.slice(2));
   const manifest = normalizeManifest(
@@ -298,6 +325,7 @@ function buildMetadata(manifest) {
     ...desktopDownloads(manifest.version),
     ...cliDownloads(),
     ...gatewayDownloads(manifest),
+    ...windowsDownloads(manifest),
   ].map((download) => {
     const asset = requireAsset(manifest, download.asset);
     return {
