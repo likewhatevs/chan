@@ -227,12 +227,14 @@ pub struct WindowGeometryRecord {
 /// signature ([`lookup_window_geometry`]).
 #[derive(Debug, Clone, PartialEq)]
 pub enum GeometryMatch {
-    /// Signature matched: restore full position + size (the apply path clamps it
-    /// on-screen as a safety net).
+    /// Signature matched (same monitor hardware): high confidence — restore the
+    /// stored position + size.
     Exact(WindowGeometry),
-    /// No signature match: offer the SIZE only (the apply path clamps it to the
-    /// current primary monitor); the OS picks the position.
-    SizeOnly(WindowGeometry),
+    /// No signature match (monitor layout changed): lower confidence, but still
+    /// restore the most-recent stored geometry. The apply path clamps it to the
+    /// monitor the stored position falls on, preserving the position when it is
+    /// on-screen rather than centering + shrinking on the primary.
+    Fallback(WindowGeometry),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -581,15 +583,21 @@ pub fn pop_window_config(
 }
 
 /// Order-independent monitor signature: the monitor count plus each monitor's
-/// full bounds and scale factor, sorted so the OS reporting monitors in a
-/// different order doesn't change the string. The scale is stringified
-/// (`{:.2}`) so float equality never bites. Geometry restore is gated on an
-/// exact match of this, so it changes whenever the physical monitor layout or a
-/// DPI scale changes (the cases where a stored position would land off-screen).
+/// SIZE and scale factor, sorted so the OS reporting monitors in a different
+/// order doesn't change the string. The scale is stringified (`{:.2}`) so float
+/// equality never bites.
+///
+/// Monitor POSITION is deliberately excluded: macOS anchors the global
+/// coordinate space at the Main display, so making a display the Main one (or
+/// the menu bar moving) re-origins every monitor's position WITHOUT any hardware
+/// change. Keying on position made a same-hardware hide+reopen mismatch and fall
+/// through to the size-only path. Size + scale identify the hardware layout;
+/// where a window lands is the stored geometry's job (the apply path clamps the
+/// restored position to the monitor it belongs to).
 pub fn monitor_signature(mons: &[MonitorDesc]) -> String {
     let mut parts: Vec<String> = mons
         .iter()
-        .map(|m| format!("{},{},{},{}@{:.2}", m.x, m.y, m.w, m.h, m.scale))
+        .map(|m| format!("{}x{}@{:.2}", m.w, m.h, m.scale))
         .collect();
     parts.sort();
     format!("{}|{}", mons.len(), parts.join("|"))
@@ -631,9 +639,9 @@ pub fn push_window_geometry(cfg: &mut Config, label: &str, mut geom: WindowGeome
 }
 
 /// Resolve the geometry to apply for `label` under `current_sig`: an exact
-/// signature match restores position + size ([`GeometryMatch::Exact`]);
-/// otherwise the most-recent stored geometry is offered SIZE-only
-/// ([`GeometryMatch::SizeOnly`]). `None` when nothing is stored for the label.
+/// signature match returns [`GeometryMatch::Exact`]; otherwise the most-recent
+/// stored geometry is returned as [`GeometryMatch::Fallback`]. `None` when
+/// nothing is stored for the label.
 pub fn lookup_window_geometry(
     cfg: &Config,
     label: &str,
@@ -646,14 +654,45 @@ pub fn lookup_window_geometry(
     if let Some(g) = rec.geometries.iter().find(|g| g.monitor_sig == current_sig) {
         return Some(GeometryMatch::Exact(g.clone()));
     }
-    rec.geometries.first().cloned().map(GeometryMatch::SizeOnly)
+    rec.geometries.first().cloned().map(GeometryMatch::Fallback)
 }
 
-/// Shrink a size so it never exceeds the given (primary) work area, with a
-/// 1px floor. Position is the OS's choice in the size-only fallback, so only
-/// `w/h` are bounded.
-pub fn clamp_size(w: u32, h: u32, work_w: u32, work_h: u32) -> (u32, u32) {
-    (w.min(work_w).max(1), h.min(work_h).max(1))
+/// Intersection AREA of two rects (each `(x, y, w, h)`), in px². `i64` so the
+/// product can't overflow `i32`. Zero when the rects don't overlap.
+fn intersect_area(a: (i32, i32, u32, u32), b: (i32, i32, u32, u32)) -> i64 {
+    let (ax, ay, aw, ah) = a;
+    let (bx, by, bw, bh) = b;
+    let ix1 = ax.max(bx) as i64;
+    let iy1 = ay.max(by) as i64;
+    let ix2 = (ax as i64 + aw as i64).min(bx as i64 + bw as i64);
+    let iy2 = (ay as i64 + ah as i64).min(by as i64 + bh as i64);
+    (ix2 - ix1).max(0) * (iy2 - iy1).max(0)
+}
+
+/// Index of the monitor a stored window rect belongs to: the one whose FULL
+/// bounds overlap the rect the most. `None` when the rect overlaps no monitor
+/// (stored fully off every current screen — the caller then falls back to the
+/// union box). Identifies "which screen is this window on" so the restore clamps
+/// to THAT monitor's work area instead of the primary's.
+pub fn monitor_for_rect(mons: &[MonitorDesc], x: i32, y: i32, w: u32, h: u32) -> Option<usize> {
+    let mut best: Option<(usize, i64)> = None;
+    for (i, m) in mons.iter().enumerate() {
+        let area = intersect_area((x, y, w, h), (m.x, m.y, m.w, m.h));
+        if area > 0 && best.is_none_or(|(_, a)| area > a) {
+            best = Some((i, area));
+        }
+    }
+    best.map(|(i, _)| i)
+}
+
+/// A monitor's WORK area as a `(min_x, min_y, max_x, max_y)` clamp box.
+pub fn work_area_bbox(m: &MonitorDesc) -> (i32, i32, i32, i32) {
+    (
+        m.work_x,
+        m.work_y,
+        m.work_x + m.work_w as i32,
+        m.work_y + m.work_h as i32,
+    )
 }
 
 /// Bounding box `(min_x, min_y, max_x, max_y)` of every monitor's WORK area, or
@@ -1216,9 +1255,21 @@ mod tests {
     fn signature_encodes_count_and_scale() {
         let sig = monitor_signature(&[mon(0, 0, 1920, 1080, 1.5)]);
         assert!(sig.starts_with("1|"), "sig={sig}");
-        assert!(sig.contains("0,0,1920,1080@1.50"), "sig={sig}");
-        // A different scale under the same bounds is a DIFFERENT signature.
+        assert!(sig.contains("1920x1080@1.50"), "sig={sig}");
+        // A different scale under the same size is a DIFFERENT signature.
         assert_ne!(sig, monitor_signature(&[mon(0, 0, 1920, 1080, 2.0)]));
+        // A different SIZE is a different signature.
+        assert_ne!(sig, monitor_signature(&[mon(0, 0, 2560, 1440, 1.5)]));
+    }
+
+    #[test]
+    fn signature_ignores_monitor_position() {
+        // macOS re-origins monitor positions when the Main display / menu bar
+        // moves; the same hardware must keep the same signature so a reopen
+        // doesn't fall through. Only size + scale + count matter.
+        let at_origin = monitor_signature(&[mon(0, 0, 3840, 2160, 2.0)]);
+        let shifted = monitor_signature(&[mon(-1512, 982, 3840, 2160, 2.0)]);
+        assert_eq!(at_origin, shifted);
     }
 
     #[test]
@@ -1288,12 +1339,16 @@ mod tests {
     }
 
     #[test]
-    fn lookup_geometry_size_only_on_signature_mismatch() {
+    fn lookup_geometry_fallback_on_signature_mismatch() {
         let mut cfg = Config::default();
         push_window_geometry(&mut cfg, "w1", geom("sigA", 10, 20, 800, 600, 100));
         match lookup_window_geometry(&cfg, "w1", "sigOTHER") {
-            Some(GeometryMatch::SizeOnly(g)) => assert_eq!((g.w, g.h), (800, 600)),
-            other => panic!("expected SizeOnly, got {other:?}"),
+            // Fallback still carries the full stored rect; the apply path
+            // preserves the position, clamped to its monitor.
+            Some(GeometryMatch::Fallback(g)) => {
+                assert_eq!((g.x, g.y, g.w, g.h), (10, 20, 800, 600))
+            }
+            other => panic!("expected Fallback, got {other:?}"),
         }
     }
 
@@ -1328,9 +1383,44 @@ mod tests {
     }
 
     #[test]
-    fn clamp_size_shrinks_oversize_keeps_fitting() {
-        assert_eq!(clamp_size(3000, 2000, 1920, 1080), (1920, 1080));
-        assert_eq!(clamp_size(800, 600, 1920, 1080), (800, 600));
+    fn monitor_for_rect_picks_the_containing_monitor() {
+        // External (LG 4K) as the main display at origin, laptop BELOW it (the
+        // host's layout). A window stored on the laptop maps to the laptop, not
+        // the external — so the restore clamps to the laptop's work area.
+        let external = mon(0, 0, 3840, 2160, 2.0);
+        let laptop = mon(0, 2160, 3024, 1964, 2.0);
+        let mons = [external, laptop];
+        assert_eq!(monitor_for_rect(&mons, 200, 2300, 1200, 800), Some(1));
+        assert_eq!(monitor_for_rect(&mons, 200, 200, 1200, 800), Some(0));
+    }
+
+    #[test]
+    fn monitor_for_rect_uses_max_overlap_and_none_when_offscreen() {
+        let mons = [mon(0, 0, 1920, 1080, 1.0), mon(1920, 0, 1920, 1080, 1.0)];
+        // Straddling the seam but mostly on the right monitor -> index 1.
+        assert_eq!(monitor_for_rect(&mons, 1800, 100, 1000, 700), Some(1));
+        // Entirely off every screen -> None (caller falls back to union box).
+        assert_eq!(monitor_for_rect(&mons, 9000, 9000, 400, 300), None);
+    }
+
+    #[test]
+    fn work_area_bbox_excludes_the_menu_bar() {
+        // mon() carves a 40px top bar out of the work area.
+        let m = mon(0, 0, 3840, 2160, 2.0);
+        assert_eq!(work_area_bbox(&m), (0, 40, 3840, 2160));
+    }
+
+    #[test]
+    fn clamp_to_actual_monitor_preserves_position_on_a_secondary() {
+        // A window stored on the BELOW laptop stays on the laptop at its stored
+        // position (it is within that monitor's work area), not centered or
+        // pulled to the primary external display.
+        let external = mon(0, 0, 3840, 2160, 2.0);
+        let laptop = mon(0, 2160, 3024, 1964, 2.0); // work y[2200,4124]
+        let mons = [external, laptop];
+        let idx = monitor_for_rect(&mons, 300, 2400, 1200, 800).unwrap();
+        let (x, y, w, h) = clamp_rect_to_bbox(300, 2400, 1200, 800, work_area_bbox(&mons[idx]));
+        assert_eq!((x, y, w, h), (300, 2400, 1200, 800));
     }
 
     #[test]

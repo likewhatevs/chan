@@ -1456,94 +1456,113 @@ fn monitor_desc(m: &tauri::Monitor) -> config::MonitorDesc {
     }
 }
 
-/// The current primary monitor's work-area size (physical px), used to clamp the
-/// size-only fallback. `None` when no primary monitor is identifiable.
-fn primary_work_area(app: &AppHandle) -> Option<(u32, u32)> {
-    let m = app.primary_monitor().ok().flatten()?;
-    let area = m.work_area();
-    Some((area.size.width, area.size.height))
-}
-
 /// What to do with a window's geometry at build time. `Restore` re-applies a
-/// signature-matched full rect; `SizeOnly` re-applies just the size (OS picks
-/// the position) when the monitor layout changed; `Default` leaves the builder's
-/// 1200x800 + OS position. The non-`Default` plans build the window hidden and
-/// apply physical geometry post-build (see [`apply_geometry_plan`]).
+/// stored rect (clamped to the monitor it belongs to — position preserved when
+/// on-screen); `Default` leaves the builder's 1200x800 + OS position. A
+/// `Restore` builds the window hidden and applies physical geometry post-build
+/// (see [`apply_geometry_plan`]). `Debug` is logged in the `WINGEO` diagnostics.
+#[derive(Debug)]
 enum GeometryPlan {
     Default,
-    SizeOnly { w: u32, h: u32 },
     Restore { x: i32, y: i32, w: u32, h: u32 },
 }
 
 impl GeometryPlan {
-    /// Whether the builder should start hidden (any plan that repositions /
+    /// Whether the builder should start hidden (a `Restore` repositions /
     /// resizes post-build, so the window doesn't flash at the default first).
     fn builds_hidden(&self) -> bool {
         !matches!(self, GeometryPlan::Default)
     }
 }
 
+/// Build a `Restore` plan from a stored geometry: clamp it to the WORK area of
+/// the monitor the stored rect belongs to (so the position is preserved when
+/// on-screen, and the size is bounded to that monitor — not the primary). Falls
+/// back to the union work-area box, then to the stored rect verbatim when no
+/// monitors are known. This is the fix for the external-monitor symptom: a window
+/// stored on a secondary / non-primary display no longer gets centered + shrunk
+/// to the primary on a fall-through.
+fn plan_for_geometry(mons: &[config::MonitorDesc], g: &WindowGeometry) -> GeometryPlan {
+    let bbox = config::monitor_for_rect(mons, g.x, g.y, g.w, g.h)
+        .map(|i| config::work_area_bbox(&mons[i]))
+        .or_else(|| config::union_work_bbox(mons));
+    match bbox {
+        Some(b) => {
+            let (x, y, w, h) = config::clamp_rect_to_bbox(g.x, g.y, g.w, g.h, b);
+            GeometryPlan::Restore { x, y, w, h }
+        }
+        None => GeometryPlan::Restore {
+            x: g.x,
+            y: g.y,
+            w: g.w,
+            h: g.h,
+        },
+    }
+}
+
 /// Resolve the geometry to apply for `label` against the CURRENT monitor
-/// signature: an exact-signature match restores the full rect (clamped on-screen
-/// as a safety net); a mismatch restores SIZE only (clamped to the primary work
-/// area, OS positions); nothing stored -> the default. Desktop-local and
-/// read-only — never blocks the open.
+/// signature. An exact-signature match and a layout-changed fallback both
+/// restore the stored rect clamped to its monitor (the fallback used to center +
+/// shrink on the primary — the external-monitor bug); nothing stored -> default.
+/// Desktop-local and read-only — never blocks the open. Logs a `WINGEO` line so
+/// the host can pin the behaviour on real multi-monitor hardware from the rc2 run.
 fn resolve_geometry_plan(app: &AppHandle, label: &str) -> GeometryPlan {
     let mons = current_monitors(app);
     let sig = config::monitor_signature(&mons);
     let state = app.state::<Arc<AppState>>();
-    match state.lookup_window_geometry(label, &sig) {
-        None => GeometryPlan::Default,
-        Some(config::GeometryMatch::Exact(g)) => match config::union_work_bbox(&mons) {
-            Some(bbox) => {
-                let (x, y, w, h) = config::clamp_rect_to_bbox(g.x, g.y, g.w, g.h, bbox);
-                GeometryPlan::Restore { x, y, w, h }
-            }
-            // No monitors to clamp against: apply the stored rect verbatim.
-            None => GeometryPlan::Restore {
-                x: g.x,
-                y: g.y,
-                w: g.w,
-                h: g.h,
-            },
-        },
-        Some(config::GeometryMatch::SizeOnly(g)) => match primary_work_area(app) {
-            Some((work_w, work_h)) => {
-                let (w, h) = config::clamp_size(g.w, g.h, work_w, work_h);
-                GeometryPlan::SizeOnly { w, h }
-            }
-            None => GeometryPlan::SizeOnly { w: g.w, h: g.h },
-        },
-    }
+    let (matched, stored_sig, plan) = match state.lookup_window_geometry(label, &sig) {
+        None => ("none", String::new(), GeometryPlan::Default),
+        Some(config::GeometryMatch::Exact(g)) => {
+            ("exact", g.monitor_sig.clone(), plan_for_geometry(&mons, &g))
+        }
+        Some(config::GeometryMatch::Fallback(g)) => (
+            "fallback",
+            g.monitor_sig.clone(),
+            plan_for_geometry(&mons, &g),
+        ),
+    };
+    tracing::info!(
+        label = %label,
+        current_sig = %sig,
+        stored_sig = %stored_sig,
+        matched = matched,
+        plan = ?plan,
+        monitors = ?mons,
+        "WINGEO resolve",
+    );
+    plan
 }
 
-/// Apply a resolved [`GeometryPlan`] to a freshly-built (hidden, for non-default
-/// plans) window, then reveal it. Physical px throughout; every step is
-/// best-effort so a geometry error degrades to a default-placed visible window
-/// rather than a stuck-hidden one.
+/// Apply a resolved [`GeometryPlan`] to a freshly-built (hidden, for a `Restore`)
+/// window, then reveal it. Physical px throughout; every step is best-effort so a
+/// geometry error degrades to a default-placed visible window rather than a
+/// stuck-hidden one. Logs the intended vs ACTUAL geometry (`WINGEO applied`) so
+/// the host can see whether macOS placed the window where asked.
 fn apply_geometry_plan(window: &tauri::WebviewWindow, label: &str, plan: GeometryPlan) {
-    match plan {
-        GeometryPlan::Default => {}
-        GeometryPlan::SizeOnly { w, h } => {
-            if let Err(e) = window.set_size(PhysicalSize::new(w, h)) {
-                tracing::warn!(label = %label, error = %e, "restoring window size failed");
-            }
-            reveal_window(window, label);
-        }
-        GeometryPlan::Restore { x, y, w, h } => {
-            if let Err(e) = window.set_size(PhysicalSize::new(w, h)) {
-                tracing::warn!(label = %label, error = %e, "restoring window size failed");
-            }
-            if let Err(e) = window.set_position(PhysicalPosition::new(x, y)) {
-                tracing::warn!(label = %label, error = %e, "restoring window position failed");
-            }
-            reveal_window(window, label);
-        }
+    let GeometryPlan::Restore { x, y, w, h } = plan else {
+        return;
+    };
+    if let Err(e) = window.set_size(PhysicalSize::new(w, h)) {
+        tracing::warn!(label = %label, error = %e, "restoring window size failed");
     }
+    if let Err(e) = window.set_position(PhysicalPosition::new(x, y)) {
+        tracing::warn!(label = %label, error = %e, "restoring window position failed");
+    }
+    reveal_window(window, label);
+    tracing::info!(
+        label = %label,
+        want_x = x,
+        want_y = y,
+        want_w = w,
+        want_h = h,
+        got_pos = ?window.outer_position().ok(),
+        got_size = ?window.inner_size().ok(),
+        "WINGEO applied",
+    );
 }
 
 /// Show + focus a window that was built hidden for geometry restore. Always
-/// runs for a non-default plan so the window can never stay invisible.
+/// runs for a `Restore` so the window can never stay invisible.
 fn reveal_window(window: &tauri::WebviewWindow, label: &str) {
     if let Err(e) = window.show() {
         tracing::warn!(label = %label, error = %e, "showing restored window failed");
@@ -1557,6 +1576,7 @@ fn reveal_window(window: &tauri::WebviewWindow, label: &str) {
 /// hidden / destroyed, so a reopen restores the size + position the user left.
 /// Best-effort: skips on a query error or a degenerate (zero) size; geometry is
 /// desktop-owned, so this runs for local / devserver / outbound windows alike.
+/// Logs a `WINGEO capture` line (signature + coords + monitors) for the host.
 fn capture_window_geometry(app: &AppHandle, label: &str) {
     let Some(window) = app.get_webview_window(label) else {
         return;
@@ -1567,7 +1587,24 @@ fn capture_window_geometry(app: &AppHandle, label: &str) {
     if size.width == 0 || size.height == 0 {
         return;
     }
-    let monitor_sig = config::monitor_signature(&current_monitors(app));
+    let mons = current_monitors(app);
+    let monitor_sig = config::monitor_signature(&mons);
+    let on_monitor = window
+        .current_monitor()
+        .ok()
+        .flatten()
+        .map(|m| (m.name().cloned(), m.scale_factor()));
+    tracing::info!(
+        label = %label,
+        sig = %monitor_sig,
+        x = pos.x,
+        y = pos.y,
+        w = size.width,
+        h = size.height,
+        on_monitor = ?on_monitor,
+        monitors = ?mons,
+        "WINGEO capture",
+    );
     app.state::<Arc<AppState>>().push_window_geometry(
         label,
         WindowGeometry {
