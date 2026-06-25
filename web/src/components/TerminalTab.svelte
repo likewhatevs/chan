@@ -91,6 +91,7 @@
     installKeyboardProtocolHandlers,
   } from "../terminal/keymap";
   import { installTerminalReportGuards } from "../terminal/xtermReports";
+  import { installShiftSelectionBypass } from "../terminal/selectionBypass";
   import {
     refreshTerminalRows as refreshTerminalRowsImpl,
     shouldUseWebglRenderer,
@@ -708,6 +709,10 @@
       }),
     );
     term.open(host);
+    // Hold Shift to force a native selection while a TUI holds mouse tracking,
+    // on every platform (xterm.js ignores Shift on macOS). Must run after
+    // open(): the SelectionService it wraps is created there.
+    installShiftSelectionBypass(term);
     // The WebGL renderer makes xterm.js's built-in customGlyphs path
     // fire: under the default DOM renderer, box-drawing +
     // block-element characters fall through to the system font which
