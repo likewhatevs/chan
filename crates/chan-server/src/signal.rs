@@ -128,9 +128,31 @@ async fn graceful_serve_with_grace(
             tokio::time::sleep(grace).await;
         } => {
             eprintln!("chan: graceful shutdown exceeded {grace:?}; forcing exit");
-            Ok(())
+            force_exit_after_grace()
         }
     }
+}
+
+/// What the [`graceful_serve_with_grace`] deadline arm does after the drain
+/// exceeds the grace window.
+///
+/// On Windows, returning here only drops the `axum::serve` future; under a
+/// still-running runtime (the tunnel / reindex side tasks, a wedged ConPTY
+/// read) the OS does not always release the listen socket synchronously, so the
+/// port keeps answering after the deadline — and there is no SIGTERM to force a
+/// second teardown as on unix. Make the "forcing exit" promise literal. Safe:
+/// HTTP already drained via axum's graceful shutdown, the control socket is a
+/// named pipe the OS reclaims, and the unix `Drop`-unlinks are `#[cfg(unix)]`.
+#[cfg(windows)]
+fn force_exit_after_grace() -> std::io::Result<()> {
+    std::process::exit(0)
+}
+
+/// On unix the runtime teardown on return already releases the listener, and a
+/// second SIGINT/SIGTERM force-kills if anything wedges — so just return.
+#[cfg(not(windows))]
+fn force_exit_after_grace() -> std::io::Result<()> {
+    Ok(())
 }
 
 /// Install the shutdown-signal watcher and block until the first signal fires,
@@ -195,6 +217,12 @@ mod tests {
     /// so the deadline arm is what returns. A 100ms grace proves the path
     /// without a 10s test; the elapsed assertion proves the deadline (not the
     /// server) arm fired.
+    ///
+    /// Unix-only: on Windows the deadline arm calls `std::process::exit(0)`
+    /// ([`force_exit_after_grace`]), which would terminate the whole test
+    /// binary rather than return — so the "returns Ok after the grace"
+    /// assertion is meaningless there.
+    #[cfg(not(windows))]
     #[tokio::test]
     async fn graceful_serve_force_exits_after_grace_deadline() {
         let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
