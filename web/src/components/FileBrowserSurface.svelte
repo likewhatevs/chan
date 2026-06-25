@@ -49,6 +49,7 @@
     paneWidths,
     persistPaneWidths,
     schedulePersistStateToHash,
+    scheduleSessionSave,
     persistFbTreeInstanceExpansion,
     seedFbTreeInstanceFromReloadSnapshot,
     surfaceThemeOverride,
@@ -297,6 +298,19 @@
     if (!isTab || !tab) return;
     const top = (ev.currentTarget as HTMLElement).scrollTop;
     tab.scroll = top > 0 ? Math.round(top) : undefined;
+  }
+
+  // The File-Browser inspector width is per-tab (BrowserTab.inspectorWidth,
+  // serialized as `iw`). persistPaneWidths only saves the global fallback;
+  // for the tab variant also schedule the layout save so the per-tab width
+  // rides the URL hash + session blob and survives reload, the same way the
+  // Editor inspector does.
+  function onInspectorResize(): void {
+    persistPaneWidths();
+    if (isTab) {
+      schedulePersistStateToHash();
+      scheduleSessionSave();
+    }
   }
 
   // In tab variant there is no on-surface header, so the FB
@@ -649,7 +663,7 @@
           () => browserState.inspectorWidth ?? paneWidths.browser,
           (v) => (browserState.inspectorWidth = v)
         }
-        onResize={persistPaneWidths}
+        onResize={onInspectorResize}
         onClose={() => (browserState.inspectorOpen = false)}
       >
         {#if browserSelection.showWorkspace && !browserSelection.path}
