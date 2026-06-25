@@ -3,7 +3,7 @@ import { describe, expect, test } from "vitest";
 import tab from "../components/TerminalTab.svelte?raw";
 import session from "./session.ts?raw";
 
-const route = readFileSync("../crates/chan-server/src/routes/terminal.rs", "utf8");
+const route = readFileSync("../../../crates/chan-server/src/routes/terminal.rs", "utf8");
 
 describe("terminal protocol invariants", () => {
   test("reattach asks the server for a full replay ring", () => {

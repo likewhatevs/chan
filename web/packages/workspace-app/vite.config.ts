@@ -2,16 +2,24 @@
 //
 // Build the editor web app.
 //
-// Output goes to /web/dist/, which chan-server embeds via rust-embed at
-// compile time. The Rust backend serves /api/* and the WS at /ws;
-// everything else is the SPA, so we set base to "./" to keep asset URLs
-// relative.
+// Output goes to the repo-root /web/dist/, which chan-server embeds via
+// rust-embed at compile time. This package lives at web/packages/workspace-app
+// under the ./web npm-workspaces root, so the embed-output path is two levels
+// up (../../dist); the rust-embed input path is frozen, so the source layout
+// moves and the output path does not. The Rust backend serves /api/* and the
+// WS at /ws; everything else is the SPA, so we set base to "./" to keep asset
+// URLs relative.
 
 import { svelte } from "@sveltejs/vite-plugin-svelte";
-import { fileURLToPath } from "node:url";
+import { createRequire } from "node:module";
+import { dirname, join } from "node:path";
 import { defineConfig } from "vitest/config";
 
-const svelteClient = fileURLToPath(new URL("./node_modules/svelte/src/index-client.js", import.meta.url));
+// Resolve svelte's client entry through node resolution so it works whether
+// svelte is hoisted to the workspace-root node_modules or kept package-local;
+// svelte's exports map does not expose ./src, so reach it via the package dir.
+const require = createRequire(import.meta.url);
+const svelteClient = join(dirname(require.resolve("svelte/package.json")), "src/index-client.js");
 
 export default defineConfig({
   base: "./",
@@ -36,7 +44,10 @@ export default defineConfig({
     },
   },
   build: {
-    outDir: "dist",
+    // Frozen rust-embed input path (X-2): repo-root web/dist, two levels up
+    // from this package. crates/chan-server/build.rs + static_assets.rs are
+    // untouched; only the source location moved under ./web.
+    outDir: "../../dist",
     emptyOutDir: true,
     target: "es2022",
     sourcemap: false,

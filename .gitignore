@@ -11,11 +11,17 @@
 *~
 .DS_Store
 
-# Frontend build artifacts
+# Frontend build artifacts. The ./web npm-workspaces root builds its members
+# to the FROZEN rust-embed input paths (X-2): workspace-app -> web/dist,
+# launcher -> web-launcher/dist, profile -> gateway/crates/identity/web/dist.
+# Those output dirs stay where the rust-embed derives read them even though the
+# source now lives under web/packages/.
 node_modules/
 web/dist/
 web/.chan-build-stamp
 web/pkg/
+web-launcher/dist/
+web-launcher/.chan-build-stamp
 .svelte-kit/
 .vite/
 
