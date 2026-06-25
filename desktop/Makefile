@@ -10,7 +10,7 @@ TAURI_CLI_ROOT := $(abspath $(CHAN_REPO)/target/tauri-cli)
 TAURI_CLI_BIN := $(TAURI_CLI_ROOT)/bin/cargo-tauri
 TAURI := PATH="$(TAURI_CLI_ROOT)/bin:$$PATH" cargo tauri
 
-# Finder-less DMG packaging (packaging/build-dmg.sh + dmg_settings.py). The
+# Finder-less DMG packaging (packaging/desktop/build-dmg.sh + dmg_settings.py). The
 # layout is pinned by the settings file, so any dmgbuild 1.x yields the same
 # layout; tighten DMGBUILD_SPEC to an exact `==` for a fully reproducible pin.
 DMGBUILD_SPEC ?= dmgbuild>=1.6,<2
@@ -277,7 +277,7 @@ app-signed: sign-prereqs tauri-cli web
 # Sign + notarize + staple + bundle a .dmg.
 #
 # We build ONLY the signed .app with Tauri, then build the .dmg ourselves with
-# `dmgbuild` (packaging/build-dmg.sh), because tauri-bundler's DMG step lays out
+# `dmgbuild` (packaging/desktop/build-dmg.sh), because tauri-bundler's DMG step lays out
 # the Finder window over AppleScript/Finder, which no-ops on a headless CI
 # runner and ships a flat default-layout DMG. dmgbuild writes the layout
 # programmatically (no Finder), so local == CI byte-for-byte. The notarize is
@@ -296,7 +296,7 @@ app-notarized: sign-prereqs notarize-prereqs tauri-cli web
 	    DMG="$(BUNDLE_DIR)/dmg/Chan_$${VERSION}_$${ARCH}.dmg"; \
 	    rm -f "$(BUNDLE_DIR)"/dmg/*.dmg; \
 	    DMG_VENV="$(DMG_VENV)" DMGBUILD_SPEC="$(DMGBUILD_SPEC)" \
-	        packaging/build-dmg.sh "$$APP" "$$DMG" "Chan"; \
+	        $(abspath $(CHAN_REPO))/packaging/desktop/build-dmg.sh "$$APP" "$$DMG" "Chan"; \
 	    echo "codesigning $$DMG (Developer ID: $(APPLE_SIGNING_IDENTITY))"; \
 	    codesign --force --timestamp --sign "$(APPLE_SIGNING_IDENTITY)" "$$DMG"; \
 	    if [ "$(NOTARIZE_VIA)" = "keychain" ]; then \
@@ -331,7 +331,7 @@ dmg-layout-proof: tauri-cli web
 	    DMG="$(BUNDLE_DIR)/dmg/Chan_$${VERSION}_$${ARCH}.dmg"; \
 	    rm -f "$(BUNDLE_DIR)"/dmg/*.dmg; \
 	    DMG_VENV="$(DMG_VENV)" DMGBUILD_SPEC="$(DMGBUILD_SPEC)" \
-	        packaging/build-dmg.sh "$$APP" "$$DMG" "Chan"; \
+	        $(abspath $(CHAN_REPO))/packaging/desktop/build-dmg.sh "$$APP" "$$DMG" "Chan"; \
 	    echo ""; \
 	    echo "layout-proof DMG: $$DMG"; \
 	    echo "inspect: hdiutil attach \"$$DMG\" && ls -la /Volumes/Chan"

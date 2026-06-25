@@ -305,7 +305,7 @@ jobs:
     # AppImage plus the debian-family .deb and the fedora-family .rpm that
     # Tauri targets:"all" already emits, on amd64 AND arm64 (matching the
     # CLI + gateway matrix jobs). The per-distro sdme rootfs templates under
-    # scripts/dev/sdme/chan-desktop-{ubuntu,fedora,arch}.sdme own the LOCAL
+    # packaging/sdme/chan-desktop-{ubuntu,fedora,arch}.sdme own the LOCAL
     # multi-distro dev/QA build path (build from macOS via lima); they are
     # not consumable by GH Actions, so CI leans on the universal AppImage +
     # the .rpm rather than literal fedora/arch container jobs (which would

@@ -17,7 +17,7 @@ CHAN_TARGET ?=
 # Linux chan-desktop build (AppImage/.deb) runs inside an sdme container so a
 # macOS workstation can produce Linux bundles. DISTRO selects the rootfs +
 # .sdme template; SDME is how sdme is reached (a lima VM on macOS, directly on
-# a Linux host). See scripts/dev/sdme/build-chan-desktop.sh.
+# a Linux host). See packaging/sdme/build-chan-desktop.sh.
 DISTRO ?= ubuntu
 SDME ?= limactl shell default sudo sdme
 
@@ -96,10 +96,10 @@ linux-chan-desktop: ## Build the chan-desktop AppImage/.deb for DISTRO via sdme.
 .PHONY: linux-gateway
 linux-gateway: ## Build the gateway .deb packages via sdme (the gateway-linux-packages mirror).
 	# The gateway is a separate nested workspace, so its sdme build infra
-	# lives under gateway/scripts/dev/sdme/ (next to chan-psql.sdme) rather
+	# lives under packaging/gateway/scripts/dev/sdme/ (next to chan-psql.sdme) rather
 	# than packaging/linux. SDME selects how sdme is reached (lima on macOS).
 	CHAN_REPO="$(REPO_ROOT)" SDME="$(SDME)" \
-		gateway/scripts/dev/sdme/build-gateway.sh
+		packaging/gateway/scripts/dev/sdme/build-gateway.sh
 
 .PHONY: macos-chan-app
 macos-chan-app: ## Build and sign the macOS .app bundle.
