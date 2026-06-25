@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { initial } from "chan-web-common/initial";
+  import { initial } from "@chan/web-shared/initial";
   import type { Me } from "../lib/api";
   import { meStore, MAX_USERNAME_EDITS } from "../state/me.svelte";
 

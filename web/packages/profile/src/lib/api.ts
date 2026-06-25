@@ -1,9 +1,9 @@
 // identity-service public API client. Bearer wrapper, error type,
-// and credentialed fetch live in chan-web-common.
+// and credentialed fetch live in @chan/web-shared.
 
-import { request } from "chan-web-common/api";
+import { request } from "@chan/web-shared/api";
 
-export { HttpError } from "chan-web-common/api";
+export { HttpError } from "@chan/web-shared/api";
 
 export type User = {
   id: string;

@@ -1,6 +1,6 @@
 {
-  "name": "chan-gateway-web",
-  "version": "0.1.0",
+  "name": "@chan/profile",
+  "version": "0.51.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -9,6 +9,6 @@
     "check": "svelte-check --tsconfig ./tsconfig.json"
   },
   "dependencies": {
-    "chan-web-common": "*"
+    "@chan/web-shared": "*"
   }
 }

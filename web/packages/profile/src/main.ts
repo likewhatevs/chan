@@ -1,4 +1,4 @@
-import "chan-web-common/theme.css";
+import "@chan/web-shared/theme.css";
 import { mount } from "svelte";
 import App from "./App.svelte";
 

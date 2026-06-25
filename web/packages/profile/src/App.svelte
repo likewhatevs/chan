@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import Topbar from "chan-web-common/Topbar.svelte";
+  import Topbar from "@chan/web-shared/Topbar.svelte";
   import Login from "./views/Login.svelte";
   import Profile from "./views/Profile.svelte";
   import Tokens from "./views/Tokens.svelte";
