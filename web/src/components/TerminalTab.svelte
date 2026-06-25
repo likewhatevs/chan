@@ -372,6 +372,10 @@
   // only repaints.
   $effect(() => {
     if (focused) return;
+    // Relinquish keyboard focus when this terminal stops being the active
+    // tab, so a newly opened editor (e.g. `cs open {path}`) actually gets the
+    // keystrokes instead of the xterm textarea keeping `document.activeElement`.
+    term?.blur();
     recoverTerminalRendererAfterHostResume();
     sendFocusState();
   });

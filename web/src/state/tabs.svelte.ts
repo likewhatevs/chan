@@ -2299,6 +2299,7 @@ export async function openInPane(
     if (opts.initialSelection) pendingReopen.caret = { ...opts.initialSelection };
     p.activeTabId = pendingReopen.id;
     layout.activePaneId = paneId;
+    bumpTabFocusPulse();
     await loadTabContent(paneId, pendingReopen.id, path);
     return;
   }
@@ -2309,6 +2310,7 @@ export async function openInPane(
     if (opts.initialSelection) existing.caret = { ...opts.initialSelection };
     p.activeTabId = existing.id;
     layout.activePaneId = paneId;
+    bumpTabFocusPulse();
     return;
   }
   // Path-based classification picks the initial mode: markdown-class
@@ -2348,6 +2350,11 @@ export async function openInPane(
   p.tabs.push(newTab);
   p.activeTabId = newTab.id;
   layout.activePaneId = paneId;
+  // Pull keyboard focus to the just-opened editor: making it the active tab
+  // isn't enough on its own (the editor's focus effect only grabs the live
+  // ref on a focus pulse, and the prior terminal's xterm keeps DOM focus).
+  // This is the `cs open {path}` path too (handleWindowCommand -> openInPane).
+  bumpTabFocusPulse();
   await loadTabContent(paneId, newTab.id, path);
 }
 

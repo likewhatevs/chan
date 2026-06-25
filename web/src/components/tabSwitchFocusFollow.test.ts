@@ -45,6 +45,32 @@ describe("tabFocusPulse mechanism", () => {
   });
 });
 
+// `cs open {path}` and File-Browser opens both route through openInPane.
+// Like a tab switch, activating the file tab isn't enough on its own: the
+// editor's focus effect only grabs the live ref on a pulse, and the prior
+// terminal's xterm keeps DOM focus until something blurs it. openInPane must
+// bump the pulse on every activation path, and TerminalTab must blur when it
+// stops being focused.
+describe("openInPane moves focus to the opened editor", () => {
+  test("new-tab path bumps the pulse after activating", () => {
+    expect(tabs).toMatch(
+      /export async function openInPane\([\s\S]*?p\.tabs\.push\(newTab\);[\s\S]*?p\.activeTabId = newTab\.id;[\s\S]*?bumpTabFocusPulse\(\);/,
+    );
+  });
+
+  test("existing-tab path bumps the pulse after activating", () => {
+    expect(tabs).toMatch(
+      /export async function openInPane\([\s\S]*?p\.activeTabId = existing\.id;[\s\S]*?bumpTabFocusPulse\(\);/,
+    );
+  });
+
+  test("TerminalTab blurs the xterm when it loses focus", () => {
+    expect(terminalTab).toMatch(
+      /\$effect\(\(\) => \{[\s\S]*?if \(focused\) return;[\s\S]*?term\?\.blur\(\);/,
+    );
+  });
+});
+
 describe("tab header click refocuses input-capable tabs", () => {
   test("Pane imports bumpTabFocusPulse for tab-strip clicks", () => {
     expect(pane).toMatch(/import \{[\s\S]*?\bbumpTabFocusPulse,[\s\S]*?\} from "\.\.\/state\/tabs\.svelte";/);
