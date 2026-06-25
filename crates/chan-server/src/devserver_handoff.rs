@@ -21,16 +21,16 @@
 //! it. The CLI must therefore consult this module BEFORE it calls
 //! `open_workspace`, so it never double-opens.
 //!
-//! The devserver is a Linux/macOS concept, so the listener and client are
-//! Unix-domain-socket only; on other targets the types still compile but
-//! discovery resolves to "no devserver" so the CLI keeps its standalone
-//! behavior.
+//! The listener and client use Unix-domain sockets on unix and a named pipe on
+//! Windows (mirroring [`crate::handoff`]); on any other target the types still
+//! compile but discovery resolves to "no devserver" so the CLI keeps its
+//! standalone behavior.
 
 use serde::{Deserialize, Serialize};
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 use std::path::Path;
 use std::path::PathBuf;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 use std::time::Duration;
 
 /// Wire-protocol version of the registration RPC. The CLI and devserver
@@ -140,7 +140,25 @@ pub fn well_known_devserver_socket_path() -> Option<PathBuf> {
         let uid = current_uid();
         Some(std::env::temp_dir().join(format!("chan-devserver-{uid}.sock")))
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        // Named pipes share one machine-global namespace, so namespace by user
+        // to avoid cross-user collision (same-user access is the default pipe
+        // ACL). WELL-KNOWN per-user (not per-pid) so the CLI finds the running
+        // devserver without its pid, mirroring `handoff::well_known_socket_path`.
+        let user = std::env::var("USERNAME").unwrap_or_default();
+        let user: String = user
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+            .collect();
+        let user = if user.is_empty() {
+            "default".into()
+        } else {
+            user
+        };
+        Some(PathBuf::from(format!(r"\\.\pipe\chan-devserver-{user}")))
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         None
     }
@@ -169,10 +187,15 @@ pub fn devserver_handoff_opt_out() -> bool {
 /// Handle owning the registration listener. Drop aborts the accept loop and
 /// unlinks the socket file, mirroring [`crate::handoff`]. A `kill -9` that
 /// skips Drop leaves a stale file; the next bind unlinks it first.
+#[cfg(any(unix, windows))]
 pub struct ListenerHandle {
     socket_path: PathBuf,
-    #[cfg(unix)]
     accept_loop: Option<tokio::task::JoinHandle<()>>,
+}
+
+#[cfg(not(any(unix, windows)))]
+pub struct ListenerHandle {
+    socket_path: PathBuf,
 }
 
 impl ListenerHandle {
@@ -181,12 +204,15 @@ impl ListenerHandle {
     }
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 impl Drop for ListenerHandle {
     fn drop(&mut self) {
         if let Some(h) = self.accept_loop.take() {
             h.abort();
         }
+        // A Unix socket leaves a filesystem node to unlink; a Windows named
+        // pipe vanishes when the owning process exits, so nothing to remove.
+        #[cfg(unix)]
         let _ = std::fs::remove_file(&self.socket_path);
     }
 }
@@ -263,7 +289,77 @@ where
     })
 }
 
-#[cfg(not(unix))]
+/// Windows: bind the well-known named pipe and serve registration requests,
+/// mirroring [`crate::handoff::start_listener`]'s Windows arm. The first
+/// instance owns the name (`first_pipe_instance(true)`); each accept re-arms a
+/// fresh instance BEFORE serving so a client arriving during the swap still
+/// finds a live server. Same one-line-JSON framing + `dispatch` version gate as
+/// the unix arm.
+#[cfg(windows)]
+pub fn start_listener<F, Fut>(socket_path: PathBuf, handler: F) -> std::io::Result<ListenerHandle>
+where
+    F: Fn(Request) -> Fut + Send + Sync + 'static,
+    Fut: std::future::Future<Output = Response> + Send + 'static,
+{
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    use tokio::net::windows::named_pipe::ServerOptions;
+
+    let pipe_name = socket_path.as_os_str().to_owned();
+    let mut next = ServerOptions::new()
+        .first_pipe_instance(true)
+        .create(&pipe_name)?;
+
+    let handler = std::sync::Arc::new(handler);
+    let accept_loop = tokio::spawn(async move {
+        loop {
+            if let Err(e) = next.connect().await {
+                tracing::warn!("devserver registration accept: {e}");
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                continue;
+            }
+            // Re-arm BEFORE serving so the next client doesn't race to NotFound.
+            let fresh = match ServerOptions::new().create(&pipe_name) {
+                Ok(s) => s,
+                Err(e) => {
+                    tracing::warn!("devserver registration re-arm: {e}");
+                    break;
+                }
+            };
+            let connected = std::mem::replace(&mut next, fresh);
+            let handler = handler.clone();
+            tokio::spawn(async move {
+                let (read, mut write) = tokio::io::split(connected);
+                let mut reader = BufReader::new(read);
+                let mut line = String::new();
+                let response = match reader.read_line(&mut line).await {
+                    Ok(0) => Response::Error {
+                        message: "empty registration request".into(),
+                    },
+                    Ok(_) => match serde_json::from_str::<Request>(&line) {
+                        Ok(req) => dispatch(req, handler.as_ref()).await,
+                        Err(e) => Response::Error {
+                            message: format!("invalid registration request: {e}"),
+                        },
+                    },
+                    Err(e) => Response::Error {
+                        message: format!("read registration request: {e}"),
+                    },
+                };
+                if let Ok(mut out) = serde_json::to_vec(&response) {
+                    out.push(b'\n');
+                    let _ = write.write_all(&out).await;
+                }
+            });
+        }
+    });
+
+    Ok(ListenerHandle {
+        socket_path,
+        accept_loop: Some(accept_loop),
+    })
+}
+
+#[cfg(not(any(unix, windows)))]
 pub fn start_listener<F, Fut>(_socket_path: PathBuf, _handler: F) -> std::io::Result<ListenerHandle>
 where
     F: Fn(Request) -> Fut + Send + Sync + 'static,
@@ -271,7 +367,7 @@ where
 {
     Err(std::io::Error::new(
         std::io::ErrorKind::Unsupported,
-        "devserver registration listener requires unix-domain sockets",
+        "devserver registration listener requires unix-domain sockets or windows named pipes",
     ))
 }
 
@@ -279,7 +375,7 @@ where
 /// `handler`. A skew short-circuits to [`Response::VersionSkew`] and the
 /// handler never runs, so the devserver never acts on a request it cannot
 /// fully understand.
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 async fn dispatch<F, Fut>(req: Request, handler: &F) -> Response
 where
     F: Fn(Request) -> Fut,
@@ -369,7 +465,70 @@ pub async fn try_register_devserver(workspace_path: &Path) -> Outcome {
     }
 }
 
-#[cfg(not(unix))]
+/// Windows: the same registration round-trip over the well-known named pipe,
+/// mirroring [`crate::handoff::try_open_devserver`]'s Windows arm. A missing
+/// pipe maps to [`Outcome::NoDevserver`] at once; a momentarily-busy pipe gets
+/// a short bounded retry. Any other failure also falls back to standalone.
+#[cfg(windows)]
+pub async fn try_register_devserver(workspace_path: &Path) -> Outcome {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    use tokio::net::windows::named_pipe::ClientOptions;
+
+    const ERROR_PIPE_BUSY: i32 = 231;
+
+    let Some(socket_path) = well_known_devserver_socket_path() else {
+        return Outcome::NoDevserver;
+    };
+
+    let deadline = std::time::Instant::now() + Duration::from_millis(1500);
+    let client = loop {
+        match ClientOptions::new().open(&socket_path) {
+            Ok(c) => break c,
+            Err(e) if e.raw_os_error() == Some(ERROR_PIPE_BUSY) => {
+                if std::time::Instant::now() >= deadline {
+                    return Outcome::NoDevserver;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            // No pipe (no devserver) or any other open error: standalone.
+            Err(_) => return Outcome::NoDevserver,
+        }
+    };
+
+    let req = Request::RegisterWorkspace {
+        protocol: PROTOCOL_VERSION,
+        cli_version: CHAN_VERSION.into(),
+        workspace_path: workspace_path.display().to_string(),
+    };
+    let mut payload = match serde_json::to_vec(&req) {
+        Ok(v) => v,
+        Err(_) => return Outcome::NoDevserver,
+    };
+    payload.push(b'\n');
+
+    let (read, mut write) = tokio::io::split(client);
+    let io = async {
+        write.write_all(&payload).await?;
+        write.flush().await?;
+        let mut reader = BufReader::new(read);
+        let mut line = String::new();
+        reader.read_line(&mut line).await?;
+        Ok::<String, std::io::Error>(line)
+    };
+    let line = match tokio::time::timeout(Duration::from_millis(3000), io).await {
+        Ok(Ok(line)) if !line.trim().is_empty() => line,
+        _ => return Outcome::NoDevserver,
+    };
+
+    match serde_json::from_str::<Response>(&line) {
+        Ok(Response::Registered { prefix, .. }) => Outcome::Registered { prefix },
+        Ok(Response::VersionSkew { .. }) => Outcome::VersionSkew,
+        Ok(Response::Error { message }) => Outcome::Error(message),
+        Err(_) => Outcome::NoDevserver,
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
 pub async fn try_register_devserver(_workspace_path: &std::path::Path) -> Outcome {
     Outcome::NoDevserver
 }
