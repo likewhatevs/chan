@@ -117,21 +117,45 @@ desktop validation moved to the rc1 CI build.
 
 ## Follow-ups (→ next round / @@Alex)
 
-- **`dashboard` vs `infographics` field mismatch** (separate latent bug): frontend
-  `HYBRID_SURFACE_KINDS` uses `"dashboard"`; the backend `HybridSurfaceThemes`
-  (`crates/chan-server/src/preferences.rs:167`) names it `infographics`, so a
-  dashboard surface theme override is dropped on the backend round-trip. Cross-cutting
-  with data-migration implications; deferred.
 - **Host-smoke checklist** (the browser/macOS residuals the local gate cannot cover):
   A1 macOS WKWebView Shift-drag selection + clipboard write; A2 live htop arrows +
   wheel after a real reload; C3/C4/C5 reload UX; D1 two-client same-screen geometry
   restore incl. the dual-monitor flip.
 
+## Host smoke + follow-up fixes (rc2)
+
+The host smoke-tested the rc1 artifacts (macOS desktop + Linux devserver). Nine of
+twelve items passed (A1, A2, A3, B1, B2, C2, C3, C4, C5); three were fixed in a
+follow-up pass on the same `main`:
+
+- **C1 caret reorder** (`71242960`): a newly opened file placed the caret correctly
+  but the first keystroke re-reset it to (0,0) ("Hello" -> "elloH"). The `value`
+  `$effect` re-ran `maybeRestoreCaret()` on the keystroke echo; gated it to fire
+  only on a real external content change (handles both the new-file case and the
+  persisted-caret restore).
+- **D1 external-monitor geometry** (`d3dcf135`): geometry restored correctly on the
+  laptop screen but landed centered + shrunk on an external 4K HiDPI main display.
+  The monitor signature keyed on position, which macOS re-origins when the menu bar
+  moves between displays, so a same-layout reopen mismatched and fell to the
+  size-only-clamped-to-primary path. Dropped position from the signature
+  (size + scale only) and made restore clamp to the window's actual monitor,
+  preserving position. `WINGEO` info-log diagnostics aid host verification.
+- **infographics -> dashboard** (`c15f8f68`): the backend `HybridSurfaceThemes`
+  field was renamed from the old `infographics` token to `dashboard` (the frontend
+  already used `dashboard`), with `#[serde(alias = "infographics")]` migrating
+  existing stored overrides forward.
+
+Also `f992af43`: the rc dry run's RPM packaging rejected the `-` in `0.50.0-rc1`
+(RPM forbids it); the `linux-rpm` target now translates the semver prerelease to
+RPM's `~` form (`0.50.0~rc1`), for the RPM only, leaving the semver/git version
+intact.
+
 ## The cut
 
-Twelve lane commits on local `main` over the rc1 base (`56839154`), integrated
-`make pre-push` from the shared tree (chan-desktop excluded on the bare host;
-covered by the rc1 CI build), version bump `0.49.0 → 0.50.0-rc1`, then a
-non-publishing `release.yml` dry run (`publish=false`) building all-platform CLI +
-desktop artifacts incl. macOS sign/notarize. No `v0.50.0` tag and no published
-release this round — the host smoke-tests the artifacts first.
+Twelve lane commits over the rc1 base (`56839154`) + three host-smoke fixes + the
+RPM packaging fix, on local `main`. Version bumped `0.49.0 -> 0.50.0-rc1` then
+`-> 0.50.0-rc2`; `release.yml` accepts the prerelease tag. The non-publishing dry
+run (`publish=false`) builds all-platform CLI + desktop artifacts incl. macOS
+sign/notarize, uploaded as Actions artifacts; the host re-smokes rc2 (D1 needs the
+external-monitor hardware) before the final `v0.50.0` tag. No `v0.50.0` tag and no
+published release yet.
