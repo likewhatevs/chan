@@ -44,15 +44,18 @@ describe("HybridTerminalConfig wiring", () => {
     );
   });
 
-  test("save path re-fetches global config before PATCH to avoid clobbering parallel edits", () => {
-    // Re-fetching before PATCH is the safety net for a parallel
-    // autosave from another back-of-card surface. The PATCH body
-    // overlays only the terminal subtree.
-    expect(source).toMatch(/const current = await api\.config\(\)/);
+  test("save path routes the PATCH through the serialized config write chain", () => {
+    // A whole-block PATCH built from a stale read can clobber a parallel
+    // back-of-card save (e.g. a hybrid_surface_themes override). Routing
+    // through updateGlobalConfigSerial serializes the read-modify-write so
+    // the terminal save overlays only its own subtree.
     expect(source).toMatch(
-      /preferences: \{ \.\.\.current\.preferences, terminal: editing\.terminal \}/,
+      /import \{ ui, updateGlobalConfigSerial, workspace \} from "\.\.\/state\/store\.svelte"/,
     );
-    expect(source).toMatch(/await api\.updateConfig\(cfgBody\)/);
+    expect(source).toMatch(
+      /await updateGlobalConfigSerial\(\(prefs\) => \(\{[\s\S]*?\.\.\.prefs,[\s\S]*?terminal: terminalSlice,[\s\S]*?\}\)\)/,
+    );
+    expect(source).not.toMatch(/const cfgBody: GlobalConfig/);
   });
 
   test("normalizeTerminal backfills missing fields with the defaults", () => {

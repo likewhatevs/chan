@@ -2,8 +2,8 @@
   // Terminal settings on the Hybrid back-side mount point.
 
   import { api } from "../api/client";
-  import type { GlobalConfig, Preferences } from "../api/types";
-  import { ui, workspace } from "../state/store.svelte";
+  import type { Preferences } from "../api/types";
+  import { ui, updateGlobalConfigSerial, workspace } from "../state/store.svelte";
   import {
     clampScrollbackMb,
     SCROLLBACK_MB_DEFAULT,
@@ -278,12 +278,12 @@
     }, AUTOSAVE_DELAY_MS);
   }
 
-  /// Save the terminal slice. We re-fetch the current global config
-  /// before PATCHing so concurrent edits from other back-of-card
-  /// surfaces (theme etc.) merge correctly: the new GlobalConfig
-  /// payload starts from the server's latest state and overlays
-  /// only this form's terminal subtree. The two-fetch re-sync
-  /// pattern after the PATCH keeps workspace.info authoritative.
+  /// Save the terminal slice. The PATCH goes through the shared config
+  /// write chain (updateGlobalConfigSerial) so it cannot interleave with a
+  /// parallel back-of-card save (e.g. a theme-override PATCH) and clobber a
+  /// field it never touched; the chain re-reads the server's latest config
+  /// and overlays only this form's terminal subtree. The re-sync after the
+  /// PATCH keeps workspace.info authoritative.
   async function save(): Promise<void> {
     if (!editing || inflight) return;
     if (!terminalDirty()) return;
@@ -296,12 +296,11 @@
     const sent = terminalSnapshot();
     lastSentSnapshot = sent;
     try {
-      const current = await api.config();
-      const cfgBody: GlobalConfig = {
-        preferences: { ...current.preferences, terminal: editing.terminal },
-        workspaces: current.workspaces,
-      };
-      await api.updateConfig(cfgBody);
+      const terminalSlice = editing.terminal;
+      await updateGlobalConfigSerial((prefs) => ({
+        ...prefs,
+        terminal: terminalSlice,
+      }));
       if (ui.terminalOnly) {
         // No /api/workspace on the slim terminal tenant; re-sync from the
         // global config instead and refresh the dirty-check reference.

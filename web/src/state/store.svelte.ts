@@ -7,6 +7,7 @@ import type {
   HybridSurfaceKind,
   HybridSurfaceThemes,
   IndexStatus,
+  Preferences,
   SurfaceThemeChoice,
   TerminalRosterEntry,
   TreeEntry,
@@ -338,22 +339,34 @@ export function setHybridSurfaceTheme(
   void persistHybridSurfaceThemes();
 }
 
-let hybridSurfaceThemePersistInflight: Promise<void> = Promise.resolve();
-function persistHybridSurfaceThemes(): Promise<void> {
-  const next = hybridSurfaceThemesSnapshot();
-  hybridSurfaceThemePersistInflight = hybridSurfaceThemePersistInflight
+/// Every PATCH /api/config is a whole-block replacement, so two back-of-card
+/// surfaces doing read-modify-write concurrently can clobber a field neither
+/// meant to touch — e.g. the terminal-config autosave reads config before a
+/// just-fired theme-override PATCH lands, then writes the block back without
+/// the override. Funnel all config writes through one chain so each task
+/// re-reads the latest config, applies its mutation, and writes with no
+/// interleaving. A mutation that returns null skips a redundant PATCH.
+let configWriteInflight: Promise<void> = Promise.resolve();
+export function updateGlobalConfigSerial(
+  mutate: (prefs: Preferences) => Preferences | null,
+): Promise<void> {
+  configWriteInflight = configWriteInflight
     .catch(() => {})
     .then(async () => {
       const cfg = await api.config();
-      await api.updateConfig({
-        ...cfg,
-        preferences: {
-          ...cfg.preferences,
-          hybrid_surface_themes: next,
-        },
-      });
+      const nextPrefs = mutate(cfg.preferences);
+      if (!nextPrefs) return;
+      await api.updateConfig({ ...cfg, preferences: nextPrefs });
     });
-  return hybridSurfaceThemePersistInflight;
+  return configWriteInflight;
+}
+
+function persistHybridSurfaceThemes(): Promise<void> {
+  const next = hybridSurfaceThemesSnapshot();
+  return updateGlobalConfigSerial((prefs) => ({
+    ...prefs,
+    hybrid_surface_themes: next,
+  }));
 }
 
 const TRANSIENT_STATUS_DEFAULT_MS = 3000;
@@ -569,20 +582,13 @@ export function setThemeChoice(choice: ThemeChoice): void {
   void persistThemeChoice(choice);
 }
 
-let themePersistInflight: Promise<void> = Promise.resolve();
 function persistThemeChoice(choice: ThemeChoice): Promise<void> {
-  // Coalesce rapid clicks (system→light→dark) by chaining off the
-  // prior write; the catch swallows so a transient failure doesn't
-  // block the next write.
-  themePersistInflight = themePersistInflight.catch(() => {}).then(async () => {
-    const cfg = await api.config();
-    if (cfg.preferences.theme === choice) return;
-    await api.updateConfig({
-      ...cfg,
-      preferences: { ...cfg.preferences, theme: choice },
-    });
-  });
-  return themePersistInflight;
+  // Serialized with every other config write (shared chain) so a rapid
+  // theme flip can't clobber — or be clobbered by — a parallel
+  // back-of-card save. Skips the PATCH when the value already matches.
+  return updateGlobalConfigSerial((prefs) =>
+    prefs.theme === choice ? null : { ...prefs, theme: choice },
+  );
 }
 
 /** First-paint DOM sync, before any component mounts. The actual
@@ -3090,7 +3096,6 @@ export async function fbClipboardPaste(destDir: string): Promise<string[]> {
 }
 
 let widthsPersistTimer: ReturnType<typeof setTimeout> | null = null;
-let widthsPersistInflight: Promise<void> = Promise.resolve();
 const PANE_WIDTHS_DEBOUNCE_MS = 200;
 
 /// Persist the current widths. Called by ResizeHandle's onChange on
@@ -3107,9 +3112,8 @@ export function persistPaneWidths(): void {
       search: clamp(paneWidths.search),
       outline: clamp(paneWidths.outline),
     };
-    widthsPersistInflight = widthsPersistInflight.catch(() => {}).then(async () => {
-      const cfg = await api.config();
-      const cur = cfg.preferences.pane_widths;
+    void updateGlobalConfigSerial((prefs) => {
+      const cur = prefs.pane_widths;
       if (
         cur &&
         cur.inspector === snapshot.inspector &&
@@ -3118,12 +3122,9 @@ export function persistPaneWidths(): void {
         cur.search === snapshot.search &&
         cur.outline === snapshot.outline
       ) {
-        return;
+        return null;
       }
-      await api.updateConfig({
-        ...cfg,
-        preferences: { ...cfg.preferences, pane_widths: snapshot },
-      });
+      return { ...prefs, pane_widths: snapshot };
     });
   }, PANE_WIDTHS_DEBOUNCE_MS);
 }
