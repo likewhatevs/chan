@@ -16,11 +16,10 @@
   import { api } from "../api/client";
   import type {
     EditorTheme,
-    GlobalConfig,
     LineSpacing,
     Preferences,
   } from "../api/types";
-  import { workspace } from "../state/store.svelte";
+  import { updateGlobalConfigSerial, workspace } from "../state/store.svelte";
   import { DATE_FORMATS } from "../editor/dateFormats";
   import { editorToolsPrefs } from "../state/editorTools.svelte";
   import HybridSurfaceConfigShell from "./HybridSurfaceConfigShell.svelte";
@@ -165,10 +164,10 @@
     }, AUTOSAVE_DELAY_MS);
   }
 
-  /// Save the editor-related slice. Fetches the latest GlobalConfig
-  /// from the server first, overlays only the editor-related fields,
-  /// then PATCHes. Parallel autosaves from other back-of-card surfaces
-  /// (semantic-search, etc.) cannot be clobbered.
+  /// Save the editor-related slice. The PATCH goes through the shared config
+  /// write chain (updateGlobalConfigSerial), which re-reads the latest config
+  /// and overlays only the editor-related fields, so a parallel back-of-card
+  /// save (semantic-search, a theme override, etc.) cannot be clobbered.
   async function save(): Promise<void> {
     if (!editing || inflight) return;
     if (!editorDirty()) return;
@@ -181,19 +180,14 @@
     const sent = editorSnapshot();
     lastSentSnapshot = sent;
     try {
-      const current = await api.config();
-      const cfgBody: GlobalConfig = {
-        preferences: {
-          ...current.preferences,
-          editor_theme: editing.editor_theme,
-          line_spacing: editing.line_spacing,
-          date_format: editing.date_format,
-          strip_trailing_whitespace_on_save:
-            editing.strip_trailing_whitespace_on_save,
-        },
-        workspaces: current.workspaces,
+      const slice = {
+        editor_theme: editing.editor_theme,
+        line_spacing: editing.line_spacing,
+        date_format: editing.date_format,
+        strip_trailing_whitespace_on_save:
+          editing.strip_trailing_whitespace_on_save,
       };
-      await api.updateConfig(cfgBody);
+      await updateGlobalConfigSerial((prefs) => ({ ...prefs, ...slice }));
       const info = await api.workspace();
       workspace.info = info;
       editing = normalizeEditor(clone(info.preferences));

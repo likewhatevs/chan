@@ -1,10 +1,10 @@
-import { api } from "../api/client";
+// Imported from the leaf ./configWrite module, NOT ./store.svelte: store
+// already imports this module, so importing store back would form a cycle.
+import { updateGlobalConfigSerial } from "./configWrite";
 
 export const editorToolsPrefs = $state({
   stripTrailingWhitespaceOnSave: false,
 });
-
-let stripWhitespacePersistInflight: Promise<void> = Promise.resolve();
 
 export function applyEditorToolPreferences(prefs: {
   strip_trailing_whitespace_on_save?: boolean;
@@ -15,18 +15,12 @@ export function applyEditorToolPreferences(prefs: {
 
 export function persistStripTrailingWhitespaceOnSave(value: boolean): Promise<void> {
   editorToolsPrefs.stripTrailingWhitespaceOnSave = value;
-  stripWhitespacePersistInflight = stripWhitespacePersistInflight
-    .catch(() => {})
-    .then(async () => {
-      const cfg = await api.config();
-      if (cfg.preferences.strip_trailing_whitespace_on_save === value) return;
-      await api.updateConfig({
-        ...cfg,
-        preferences: {
-          ...cfg.preferences,
-          strip_trailing_whitespace_on_save: value,
-        },
-      });
-    });
-  return stripWhitespacePersistInflight;
+  // Serialized with every other config write (shared chain) so a concurrent
+  // back-of-card save can't clobber this field — or be clobbered by it.
+  // Skips the PATCH when the value already matches.
+  return updateGlobalConfigSerial((prefs) =>
+    prefs.strip_trailing_whitespace_on_save === value
+      ? null
+      : { ...prefs, strip_trailing_whitespace_on_save: value },
+  );
 }

@@ -7,7 +7,6 @@ import type {
   HybridSurfaceKind,
   HybridSurfaceThemes,
   IndexStatus,
-  Preferences,
   SurfaceThemeChoice,
   TerminalRosterEntry,
   TreeEntry,
@@ -89,6 +88,7 @@ import { graphData, invalidateGraph, ensureGraphLoaded } from "./graphData.svelt
 import { withTokenQuery } from "../api/transport";
 import { uiConfirm } from "./confirm.svelte";
 import { applyEditorToolPreferences } from "./editorTools.svelte";
+import { updateGlobalConfigSerial } from "./configWrite";
 import { hydratePageWidthFromPrefs } from "./pageWidth.svelte";
 import { fbWatchResyncAll } from "./fbWatch.svelte";
 // `workspace` + the draft-path helpers live in a side-effect-free leaf
@@ -339,27 +339,12 @@ export function setHybridSurfaceTheme(
   void persistHybridSurfaceThemes();
 }
 
-/// Every PATCH /api/config is a whole-block replacement, so two back-of-card
-/// surfaces doing read-modify-write concurrently can clobber a field neither
-/// meant to touch — e.g. the terminal-config autosave reads config before a
-/// just-fired theme-override PATCH lands, then writes the block back without
-/// the override. Funnel all config writes through one chain so each task
-/// re-reads the latest config, applies its mutation, and writes with no
-/// interleaving. A mutation that returns null skips a redundant PATCH.
-let configWriteInflight: Promise<void> = Promise.resolve();
-export function updateGlobalConfigSerial(
-  mutate: (prefs: Preferences) => Preferences | null,
-): Promise<void> {
-  configWriteInflight = configWriteInflight
-    .catch(() => {})
-    .then(async () => {
-      const cfg = await api.config();
-      const nextPrefs = mutate(cfg.preferences);
-      if (!nextPrefs) return;
-      await api.updateConfig({ ...cfg, preferences: nextPrefs });
-    });
-  return configWriteInflight;
-}
+// updateGlobalConfigSerial lives in ./configWrite (a leaf module with no store
+// dependency) so editorTools.svelte.ts can share the SAME write chain without
+// an import cycle — store imports editorTools, so editorTools must not import
+// store back. Re-exported here so existing call sites keep importing it from
+// the store barrel.
+export { updateGlobalConfigSerial };
 
 function persistHybridSurfaceThemes(): Promise<void> {
   const next = hybridSurfaceThemesSnapshot();

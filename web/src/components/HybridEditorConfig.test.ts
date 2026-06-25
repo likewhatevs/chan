@@ -70,16 +70,22 @@ describe("HybridEditorConfig wiring", () => {
     );
   });
 
-  test("save merges only editor fields onto the server's current GlobalConfig", () => {
-    // Race safety: re-fetch the latest config, overlay editor
-    // fields, then PATCH. Parallel saves from other surfaces
-    // (e.g. HybridFileBrowserConfig's semantic-search save) can't
-    // be clobbered by a HybridEditorConfig save.
-    expect(source).toMatch(/const current = await api\.config\(\)/);
+  test("save merges only editor fields through the serialized config write chain", () => {
+    // Race safety: the shared updateGlobalConfigSerial chain re-reads the
+    // latest config, overlays only the editor fields, and writes without
+    // interleaving — so a parallel save from another surface (e.g.
+    // HybridFileBrowserConfig's semantic-search, a theme override) can't be
+    // clobbered.
     expect(source).toMatch(
-      /preferences:\s*\{[\s\S]*?\.\.\.current\.preferences[\s\S]*?editor_theme:\s*editing\.editor_theme[\s\S]*?strip_trailing_whitespace_on_save:[\s\S]*?editing\.strip_trailing_whitespace_on_save/,
+      /import \{ updateGlobalConfigSerial, workspace \} from "\.\.\/state\/store\.svelte"/,
     );
-    expect(source).toMatch(/await api\.updateConfig\(cfgBody\)/);
+    expect(source).toMatch(
+      /await updateGlobalConfigSerial\(\(prefs\) => \(\{ \.\.\.prefs, \.\.\.slice \}\)\)/,
+    );
+    expect(source).toMatch(
+      /const slice = \{[\s\S]*?editor_theme: editing\.editor_theme,[\s\S]*?strip_trailing_whitespace_on_save:[\s\S]*?editing\.strip_trailing_whitespace_on_save,/,
+    );
+    expect(source).not.toMatch(/const cfgBody: GlobalConfig/);
   });
 
   test("dirty check is scoped to the four editor-related fields", () => {

@@ -2,6 +2,8 @@
 
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import storeSource from "./store.svelte.ts?raw";
+import configWriteSource from "./configWrite.ts?raw";
+import editorToolsSource from "./editorTools.svelte.ts?raw";
 import { api } from "../api/client";
 import { updateGlobalConfigSerial } from "./store.svelte";
 
@@ -129,5 +131,28 @@ describe("config writers route through the shared serial chain (source pins)", (
     expect(storeSource).not.toMatch(/hybridSurfaceThemePersistInflight/);
     expect(storeSource).not.toMatch(/themePersistInflight/);
     expect(storeSource).not.toMatch(/widthsPersistInflight/);
+    expect(editorToolsSource).not.toMatch(/stripWhitespacePersistInflight/);
+  });
+
+  test("the serializer is a leaf module re-exported by store (no import cycle)", () => {
+    // store imports editorTools, so the shared chain must live in a module
+    // that neither imports back. configWrite depends only on the api client.
+    expect(configWriteSource).toMatch(
+      /export function updateGlobalConfigSerial\(/,
+    );
+    expect(configWriteSource).not.toMatch(/from "\.\/store\.svelte"/);
+    expect(storeSource).toMatch(
+      /import \{ updateGlobalConfigSerial \} from "\.\/configWrite";/,
+    );
+    expect(storeSource).toMatch(/export \{ updateGlobalConfigSerial \};/);
+  });
+
+  test("editorTools persists through the shared chain, imported from configWrite", () => {
+    expect(editorToolsSource).toMatch(
+      /import \{ updateGlobalConfigSerial \} from "\.\/configWrite";/,
+    );
+    expect(editorToolsSource).toMatch(
+      /persistStripTrailingWhitespaceOnSave\(value: boolean\): Promise<void> \{[\s\S]*?return updateGlobalConfigSerial\(/,
+    );
   });
 });
