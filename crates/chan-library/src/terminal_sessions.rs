@@ -609,8 +609,8 @@ impl Registry {
             // runs the command; an explicit per-session command wins.
             //
             // Only a session that inherits the TENANT's default command
-            // (a single-purpose / devserver CONTROL tenant) echoes the
-            // "running: {command}" banner. A per-session command (a team agent
+            // (a single-purpose / devserver CONTROL tenant) echoes the bare
+            // `{command}\r\n` banner. A per-session command (a team agent
             // terminal spawned via `POST /api/terminals`, or a restart override)
             // is NOT a single-purpose tenant and gets no banner.
             let announce_command = if opts.command.is_none() {
@@ -1680,7 +1680,7 @@ impl Session {
         // it.
         if announce_command {
             if let Some(command) = session.spawn_opts.command.as_deref() {
-                session.record_output(format!("running: {command}\r\n").as_bytes());
+                session.record_output(format!("{command}\r\n").as_bytes());
             }
         }
 
@@ -3288,32 +3288,40 @@ mod tests {
     }
 
     #[test]
-    fn control_tenant_session_echoes_running_banner_first() {
+    fn control_tenant_session_echoes_command_banner_first() {
         // A session that inherits the TENANT default command (the devserver
-        // control / single-purpose tenant) writes `running: {command}\r\n` as the
+        // control / single-purpose tenant) writes the bare `{command}\r\n` as the
         // FIRST ring bytes — before the child's output and so durable across a
-        // scrollback replay.
+        // scrollback replay. The banner is the bare script + newline (no prefix)
+        // so the command's own output begins on the next line.
         let registry = Registry::new(test_config(4096, 4, 60));
         registry.set_default_command(Some("printf done".into()));
         let _handle = registry.create(opts_with_window("win-ctl")).unwrap();
         let ring = registry.all_scrollback();
         assert!(
-            ring.starts_with(b"running: printf done\r\n"),
-            "banner must be the first ring bytes: {:?}",
+            ring.starts_with(b"printf done\r\n"),
+            "command banner must be the first ring bytes: {:?}",
+            String::from_utf8_lossy(&ring)
+        );
+        assert!(
+            !ring.starts_with(b"running:"),
+            "banner must carry no `running:` prefix: {:?}",
             String::from_utf8_lossy(&ring)
         );
         registry.close_all(CloseReason::Shutdown);
     }
 
     #[test]
-    fn shared_tenant_session_has_no_running_banner() {
+    fn shared_tenant_session_has_no_command_banner() {
         // The shared interactive tenant has no default command, so its session
-        // runs the user's shell and gets NO banner.
+        // runs the user's shell and gets NO banner — the announce path never
+        // fires, so the ring never leads with an injected `{command}\r\n` line
+        // (a degenerate empty banner would lead with `\r\n`).
         let registry = Registry::new(test_config(4096, 4, 60));
         let _handle = registry.create(opts_with_window("win-sh")).unwrap();
         let ring = registry.all_scrollback();
         assert!(
-            !ring.starts_with(b"running:"),
+            !ring.starts_with(b"\r\n"),
             "shared interactive terminal must have no banner: {:?}",
             String::from_utf8_lossy(&ring)
         );
@@ -3321,17 +3329,19 @@ mod tests {
     }
 
     #[test]
-    fn per_session_command_has_no_running_banner() {
+    fn per_session_command_has_no_command_banner() {
         // A per-session command (a team agent terminal spawned via
         // `POST /api/terminals`) is NOT a single-purpose tenant — the command did
-        // not come from the tenant default, so it gets NO banner.
+        // not come from the tenant default, so it gets NO banner: the ring must
+        // not lead with the bare `printf agent\r\n` echo a control tenant would
+        // inject.
         let registry = Registry::new(test_config(4096, 4, 60));
         let mut opts = opts_with_window("win-agent");
         opts.command = Some("printf agent".into());
         let _handle = registry.create(opts).unwrap();
         let ring = registry.all_scrollback();
         assert!(
-            !ring.starts_with(b"running:"),
+            !ring.starts_with(b"printf agent\r\n"),
             "a per-session command must have no banner: {:?}",
             String::from_utf8_lossy(&ring)
         );
