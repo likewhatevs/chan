@@ -892,6 +892,21 @@ async fn send_attach_prelude(
     {
         return Err(());
     }
+    // Re-assert the live private-mode set (DECCKM + mouse + bracketed paste the
+    // foreground program set but won't re-announce after a reattach), so a fresh
+    // client whose terminal came up at defaults regains them — otherwise arrows
+    // stop navigating (DECCKM) and the wheel/clicks stop reaching the program
+    // (mouse), the htop-after-reload bug. Empty for a plain shell. Sent after the
+    // alt-screen prelude (alt buffer active first) and before the redraw nudge
+    // (the repaint then lands with the modes already set).
+    if !session.mode_reassert.is_empty()
+        && socket
+            .send(Message::Binary(session.mode_reassert.clone()))
+            .await
+            .is_err()
+    {
+        return Err(());
+    }
     session.request_redraw();
     let (cwd, cwd_rel) = terminal_cwd_payload(
         state.try_workspace().ok().as_deref(),

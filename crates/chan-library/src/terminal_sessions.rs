@@ -4,7 +4,7 @@
 //! replay ring, and lifecycle policy live here so browser reloads can
 //! detach and reattach without killing the shell.
 
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicUsize, Ordering};
@@ -70,6 +70,32 @@ const ALT_SCREEN_EXIT: &[u8] = b"\x1b[?1049l";
 const ALT_SCREEN_TAIL_BYTES: usize = ALT_SCREEN_ENTER.len() - 1;
 const REDRAW_WOBBLE_DELAY: Duration = Duration::from_millis(50);
 pub const ALT_SCREEN_ATTACH_PRELUDE: &[u8] = b"\x1b[?1049h\x1b[2J\x1b[H";
+
+/// DEC private modes whose loss on a fresh client's reattach breaks INPUT —
+/// key encoding (DECCKM) and mouse-event delivery/encoding — because the live
+/// foreground program set them once at startup and will NOT re-announce after
+/// a reattach. Reattaching in alt-screen replays no scrollback, so the original
+/// set sequences are gone and the fresh terminal comes up at defaults: arrows
+/// stop navigating (DECCKM) and the wheel/clicks stop reaching the program
+/// (mouse). We track the set currently on (scanned from PTY output by
+/// [`Session::update_private_modes`]) and re-assert it in the attach prelude —
+/// generalizing the single-bool alt-screen restore. Screen-rendering modes
+/// (autowrap, cursor visibility) are deliberately NOT tracked: the program's
+/// post-attach redraw re-establishes them. Alt-screen (1049/1047/47) is NOT
+/// here either — it is handled by [`ALT_SCREEN_ATTACH_PRELUDE`].
+const TRACKED_PRIVATE_MODES: &[u16] = &[
+    1,    // DECCKM — application cursor keys (arrow encoding: \e[A vs \eOA)
+    1000, // mouse: normal button (press/release) tracking
+    1002, // mouse: button-event (drag) tracking
+    1003, // mouse: any-event (motion) tracking
+    1004, // focus in/out reporting
+    1006, // mouse: SGR extended coordinate encoding
+    2004, // bracketed paste
+];
+/// Upper bound on a carried partial private-mode CSI (`\e[?<params>(h|l)`) split
+/// across PTY reads: a handful of `;`-joined mode numbers. Past this, a dangling
+/// `\e[?…` is not a real mode toggle and is dropped rather than buffered.
+const PRIVATE_MODE_TAIL_CAP: usize = 64;
 
 #[derive(Debug, Clone)]
 pub struct RegistryConfig {
@@ -358,6 +384,11 @@ pub struct AttachHandle {
     pub seq: u64,
     pub missed_bytes: u64,
     pub alt_screen: bool,
+    /// Bytes re-asserting the live tracked private-mode set (DECCKM + mouse +
+    /// bracketed-paste the foreground program had on) so a fresh client that
+    /// came up at defaults regains them. Empty for a plain shell. Sent by the
+    /// attach prelude after the alt-screen prelude, before the redraw nudge.
+    pub mode_reassert: Vec<u8>,
 }
 
 impl AttachHandle {
@@ -1489,6 +1520,14 @@ struct Session {
     bytes_since_focus: AtomicU64,
     in_alt_screen: AtomicBool,
     alt_screen_tail: Mutex<Vec<u8>>,
+    /// The [`TRACKED_PRIVATE_MODES`] the live program currently has ON, scanned
+    /// from PTY output by [`Session::update_private_modes`] and re-asserted on
+    /// reattach (see [`Session::attach`]) so a fresh client whose terminal came
+    /// up at defaults regains the program's key/mouse modes.
+    private_modes: Mutex<BTreeSet<u16>>,
+    /// Carry for a private-mode CSI split across PTY reads (mirrors
+    /// `alt_screen_tail`, bounded by [`PRIVATE_MODE_TAIL_CAP`]).
+    private_mode_tail: Mutex<Vec<u8>>,
     /// This session's broadcast toggle, synced from the SPA via the
     /// `set-broadcast` WS frame on toggle and on (re)connect. Gates the
     /// cross-window input fan (see `broadcast_input_cross_window`) and is
@@ -1665,6 +1704,8 @@ impl Session {
             bytes_since_focus: AtomicU64::new(0),
             in_alt_screen: AtomicBool::new(false),
             alt_screen_tail: Mutex::new(Vec::new()),
+            private_modes: Mutex::new(BTreeSet::new()),
+            private_mode_tail: Mutex::new(Vec::new()),
             broadcast: AtomicBool::new(false),
             closed: AtomicBool::new(false),
             exit_code: Mutex::new(None),
@@ -1791,6 +1832,7 @@ impl Session {
                 .snapshot_since(since)
         };
         let seq = self.seq.load(Ordering::Relaxed);
+        let mode_reassert = self.private_mode_prelude();
         AttachHandle {
             id: self.id.clone(),
             session: self,
@@ -1799,6 +1841,7 @@ impl Session {
             seq,
             missed_bytes,
             alt_screen,
+            mode_reassert,
         }
     }
 
@@ -2092,6 +2135,7 @@ impl Session {
         self.last_output_at
             .store(now_unix_millis(), Ordering::Relaxed);
         self.update_alt_screen(bytes);
+        self.update_private_modes(bytes);
         let end_seq = {
             let mut ring = self.ring.lock().expect("terminal ring poisoned");
             ring.push(bytes);
@@ -2150,6 +2194,100 @@ impl Session {
             tail.clear();
             tail.extend_from_slice(&scan[scan.len() - keep..]);
         }
+    }
+
+    /// Track the live [`TRACKED_PRIVATE_MODES`] set by parsing DEC private-mode
+    /// CSIs — `ESC [ ? <;-joined decimal params> (h|l)` — out of PTY output.
+    /// `h` adds each tracked param to the set, `l` removes it; a sequence split
+    /// across reads is carried in `private_mode_tail`. Non-`h`/`l` finals (a
+    /// DECRQM `$p` query, a report, …) are skipped without toggling. Sequences
+    /// can carry several modes at once (htop emits `\e[?1006;1000h`).
+    fn update_private_modes(&self, bytes: &[u8]) {
+        let mut tail = self
+            .private_mode_tail
+            .lock()
+            .expect("terminal private-mode tail poisoned");
+        let mut scan = Vec::with_capacity(tail.len() + bytes.len());
+        scan.extend_from_slice(&tail);
+        scan.extend_from_slice(bytes);
+        tail.clear();
+
+        let mut changes: Vec<(u16, bool)> = Vec::new();
+        let n = scan.len();
+        let mut i = 0;
+        while i < n {
+            if scan[i] != 0x1b {
+                i += 1;
+                continue;
+            }
+            // A private-mode CSI begins ESC '[' '?'. Fewer than 3 trailing bytes
+            // could still grow into one on the next read — carry from the ESC.
+            if n - i < 3 {
+                if n - i <= PRIVATE_MODE_TAIL_CAP {
+                    tail.extend_from_slice(&scan[i..]);
+                }
+                break;
+            }
+            if scan[i + 1] != b'[' || scan[i + 2] != b'?' {
+                i += 1;
+                continue;
+            }
+            // Consume `;`-joined decimal params up to the final byte.
+            let mut j = i + 3;
+            while j < n && (scan[j].is_ascii_digit() || scan[j] == b';') {
+                j += 1;
+            }
+            if j == n {
+                // Params not yet terminated — carry the partial (bounded).
+                if n - i <= PRIVATE_MODE_TAIL_CAP {
+                    tail.extend_from_slice(&scan[i..]);
+                }
+                break;
+            }
+            let final_byte = scan[j];
+            if final_byte == b'h' || final_byte == b'l' {
+                let on = final_byte == b'h';
+                for param in scan[i + 3..j].split(|&b| b == b';') {
+                    if let Ok(mode) = std::str::from_utf8(param).unwrap_or("x").parse::<u16>() {
+                        if TRACKED_PRIVATE_MODES.contains(&mode) {
+                            changes.push((mode, on));
+                        }
+                    }
+                }
+            }
+            i = j + 1;
+        }
+        drop(tail);
+
+        if changes.is_empty() {
+            return;
+        }
+        let mut modes = self
+            .private_modes
+            .lock()
+            .expect("terminal private modes poisoned");
+        for (mode, on) in changes {
+            if on {
+                modes.insert(mode);
+            } else {
+                modes.remove(&mode);
+            }
+        }
+    }
+
+    /// Bytes that re-assert the live tracked private-mode set on reattach —
+    /// `ESC [ ? <n> h` per mode currently on, in mode-number order. Empty when
+    /// none are on (a plain shell never bloats the prelude).
+    fn private_mode_prelude(&self) -> Vec<u8> {
+        let modes = self
+            .private_modes
+            .lock()
+            .expect("terminal private modes poisoned");
+        let mut out = Vec::new();
+        for mode in modes.iter() {
+            out.extend_from_slice(format!("\x1b[?{mode}h").as_bytes());
+        }
+        out
     }
 }
 
@@ -2251,6 +2389,8 @@ mod tests {
             bytes_since_focus: AtomicU64::new(0),
             in_alt_screen: AtomicBool::new(false),
             alt_screen_tail: Mutex::new(Vec::new()),
+            private_modes: Mutex::new(BTreeSet::new()),
+            private_mode_tail: Mutex::new(Vec::new()),
             broadcast: AtomicBool::new(false),
             closed: AtomicBool::new(false),
             exit_code: Mutex::new(None),
@@ -2728,6 +2868,85 @@ mod tests {
         assert!(session.in_alt_screen.load(Ordering::Relaxed));
         session.record_output(b"1049l");
         assert!(!session.in_alt_screen.load(Ordering::Relaxed));
+    }
+
+    fn modes_on(session: &Arc<Session>) -> Vec<u16> {
+        session
+            .private_modes
+            .lock()
+            .unwrap()
+            .iter()
+            .copied()
+            .collect()
+    }
+
+    /// THE htop-after-reload regression. A live PTY running htop set DECCKM(1) +
+    /// mouse(1000;1006) + alt-screen(1049) at startup; a fresh client reattaching
+    /// in alt-screen replays no scrollback, so the prelude is the ONLY chance to
+    /// restore those modes. Before the fix the prelude re-asserted ONLY alt-screen,
+    /// so arrows (DECCKM) and wheel/clicks (mouse) died. The reattach must now
+    /// re-assert the live INPUT modes — and NOT alt-screen (handled separately).
+    #[test]
+    fn reattach_reasserts_htop_input_modes() {
+        let session = test_session_with_ring(4096);
+        // The exact private-mode set real htop 3.4.1 emits at startup (captured).
+        session.record_output(b"\x1b[?1049h\x1b[?7h\x1b[?1h\x1b[?25l\x1b[?1006;1000h");
+        assert_eq!(modes_on(&session), vec![1, 1000, 1006]);
+
+        let attached = session.clone().attach(Some(0));
+        // BTreeSet order → 1, 1000, 1006. Alt-screen (1049) is NOT here; autowrap
+        // (7) and cursor-hide (25) are untracked screen state, also absent.
+        assert_eq!(attached.mode_reassert, b"\x1b[?1h\x1b[?1000h\x1b[?1006h");
+        assert!(attached.alt_screen, "alt-screen still tracked separately");
+    }
+
+    #[test]
+    fn private_modes_track_set_and_reset() {
+        let session = test_session_with_ring(1024);
+        session.record_output(b"\x1b[?1h");
+        assert_eq!(modes_on(&session), vec![1]);
+        session.record_output(b"\x1b[?1000h");
+        assert_eq!(modes_on(&session), vec![1, 1000]);
+        // Reset DECCKM (rmkx): 1 leaves the set, 1000 stays.
+        session.record_output(b"\x1b[?1l");
+        assert_eq!(modes_on(&session), vec![1000]);
+    }
+
+    #[test]
+    fn private_modes_parse_grouped_and_split_across_reads() {
+        let session = test_session_with_ring(1024);
+        // Grouped params in one CSI (htop's `\e[?1006;1000h`).
+        session.record_output(b"\x1b[?1006;1000h");
+        assert_eq!(modes_on(&session), vec![1000, 1006]);
+        // A single CSI split across two reads must still resolve.
+        session.record_output(b"\x1b[?2");
+        assert_eq!(modes_on(&session), vec![1000, 1006]);
+        session.record_output(b"004h");
+        assert_eq!(modes_on(&session), vec![1000, 1006, 2004]);
+    }
+
+    #[test]
+    fn private_modes_ignore_untracked_and_queries() {
+        let session = test_session_with_ring(1024);
+        // Untracked screen modes (autowrap, cursor visibility) never enter the set.
+        session.record_output(b"\x1b[?7h\x1b[?25l\x1b[?12l");
+        assert!(modes_on(&session).is_empty());
+        // A DECRQM query (`$p` final) must not toggle anything.
+        session.record_output(b"\x1b[?1006;1000$p");
+        assert!(modes_on(&session).is_empty());
+        // Alt-screen is tracked separately, not in the re-assert set.
+        session.record_output(b"\x1b[?1049h");
+        assert!(modes_on(&session).is_empty());
+        assert!(session.clone().attach(Some(0)).mode_reassert.is_empty());
+    }
+
+    #[test]
+    fn plain_shell_has_empty_mode_reassert() {
+        // A session that never set a tracked mode re-asserts nothing — a plain
+        // shell must not bloat the prelude.
+        let session = test_session_with_ring(1024);
+        session.record_output(b"$ echo hi\r\nhi\r\n");
+        assert!(session.attach(Some(0)).mode_reassert.is_empty());
     }
 
     #[test]
