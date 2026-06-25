@@ -74,8 +74,8 @@ Because the shared pre-push hook is intentionally Postgres-free, it does not run
 ### Commit message conventions
 
 * Conventional Commits-flavored prefixes: `feat:` / `fix:` / `docs:` / `refactor:` / `test:` / `chore:` / `ci:`. Not strictly enforced, but the repo's history reads cleaner that way.
-* Subject line < 70 chars; body wraps at ~72. Explain the **why**, not just the what.
-* No em dashes; tables are pure ASCII targeting 80 columns (see [`.agents/writing-rules.md`](.agents/writing-rules.md)).
+* Subject line < 70 chars; body wraps at ~72. Explain the **why**, not just the what. The subject states what the change IS: no archaeology, no plan/round/phase numbers or task ids in the headline (change history lives in `CHANGELOG.md`, `docs/phases/`, and the `dev/` tree).
+* No em dashes; tables are pure ASCII targeting 80 columns; prose does not hard-wrap (one logical line per paragraph). See [`.agents/writing-rules.md`](.agents/writing-rules.md).
 
 ### Architectural ground rules
 
