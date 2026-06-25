@@ -553,10 +553,24 @@ fn wipe_dir(dir: &Path) -> Result<usize> {
         .into_iter()
         .filter_map(|e| e.ok())
         .count();
-    match std::fs::remove_dir_all(dir) {
-        Ok(()) => Ok(count),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(0),
-        Err(e) => Err(e.into()),
+    // A workspace teardown (forget / unregister) can run while a background
+    // indexer reindex is still finishing. That reindex writes to the index dir
+    // on a `spawn_blocking` task the teardown cancels but cannot abort
+    // mid-write, so it can land a last file between the walk above and the
+    // remove below, losing the race to ENOTEMPTY. The cancelled reindex stops
+    // within a few ms once it next checks its cancel flag, so retry the remove
+    // on a non-empty dir with a short bounded backoff before surfacing it.
+    let mut attempt = 0u32;
+    loop {
+        match std::fs::remove_dir_all(dir) {
+            Ok(()) => return Ok(count),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+            Err(e) if e.kind() == std::io::ErrorKind::DirectoryNotEmpty && attempt < 20 => {
+                attempt += 1;
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            Err(e) => return Err(e.into()),
+        }
     }
 }
 
