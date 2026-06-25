@@ -28,7 +28,7 @@
 //!   - cs_dismissed (the `cs` terminal-alias offer was dismissed;
 //!     migrated from the SPA `chan.csLinkDismissed` localStorage)
 //!   - hybrid_surface_themes (optional body-theme overrides for
-//!     Hybrid Editor / Terminal / File Browser / Graph / Infographics)
+//!     Hybrid Editor / Terminal / File Browser / Graph / Dashboard)
 //!
 //! The Preferences view returned over /api/workspace and /api/config is
 //! assembled in lib.rs by joining EditorPrefs with ServerConfig.
@@ -163,8 +163,16 @@ pub struct HybridSurfaceThemes {
     pub browser: Option<SurfaceThemeChoice>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub graph: Option<SurfaceThemeChoice>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub infographics: Option<SurfaceThemeChoice>,
+    // `alias = "infographics"` migrates configs written before this surface
+    // was renamed: an existing `infographics` key still loads, and the next
+    // save flushes the canonical `dashboard` token (the frontend already keys
+    // it `dashboard`). The shim self-erodes, like `line_spacing`'s `tight`.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        alias = "infographics"
+    )]
+    pub dashboard: Option<SurfaceThemeChoice>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -500,5 +508,39 @@ mod tests {
         assert_eq!(reloaded.page_width_ratio, 0.5);
         assert!(reloaded.overlay_maximized);
         assert!(reloaded.cs_dismissed);
+    }
+
+    #[test]
+    fn hybrid_dashboard_round_trips_and_migrates_legacy_infographics() {
+        // The frontend keys this surface `dashboard`; the field must
+        // round-trip that key. The pre-rename field name dropped a
+        // `dashboard` override on the way in, losing the user's choice.
+        let tmp = TempDir::new().unwrap();
+        let p = tmp.path().join("preferences.toml");
+        std::fs::write(&p, "[hybrid_surface_themes]\ndashboard = \"dark\"\n").unwrap();
+        let prefs = EditorPrefs::load_from(&p).unwrap();
+        assert_eq!(
+            prefs.hybrid_surface_themes.dashboard,
+            Some(SurfaceThemeChoice::Dark)
+        );
+        // Saving emits the canonical `dashboard` token, never `infographics`.
+        prefs.save_to(&p).unwrap();
+        let saved = std::fs::read_to_string(&p).unwrap();
+        assert!(saved.contains("dashboard = \"dark\""), "got: {saved}");
+        assert!(!saved.contains("infographics"), "got: {saved}");
+
+        // A config written before the rename keyed it `infographics`. The
+        // serde alias migrates it into `dashboard` on load (so the override
+        // survives), and the next save flushes the canonical token.
+        std::fs::write(&p, "[hybrid_surface_themes]\ninfographics = \"light\"\n").unwrap();
+        let migrated = EditorPrefs::load_from(&p).unwrap();
+        assert_eq!(
+            migrated.hybrid_surface_themes.dashboard,
+            Some(SurfaceThemeChoice::Light)
+        );
+        migrated.save_to(&p).unwrap();
+        let resaved = std::fs::read_to_string(&p).unwrap();
+        assert!(resaved.contains("dashboard = \"light\""), "got: {resaved}");
+        assert!(!resaved.contains("infographics"), "got: {resaved}");
     }
 }
