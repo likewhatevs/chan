@@ -465,6 +465,24 @@
             name is already in use.
           </span>
         </label>
+
+        {#if config.configMode === "new"}
+          <label class="team-field">
+            <span class="team-field-label">Brief (optional)</span>
+            <textarea
+              bind:value={config.brief}
+              rows="5"
+              placeholder="Read ./path/to/brief.md"
+              autocomplete="off"
+            ></textarea>
+            <span class="team-field-hint">
+              Folded verbatim into the generated <code>bootstrap.md</code> (its
+              own section after the Roster), so this round's custom operating
+              instructions survive a regenerate. Leave empty for the generic
+              bootstrap.
+            </span>
+          </label>
+        {/if}
       </fieldset>
 
       <label class="team-field">
@@ -729,13 +747,18 @@
     color: var(--text-secondary);
   }
   .team-field input[type="text"],
-  .team-field select {
+  .team-field select,
+  .team-field textarea {
     background: var(--bg);
     border: 1px solid var(--border);
     border-radius: 4px;
     padding: 6px 8px;
     color: var(--text);
     font: inherit;
+  }
+  .team-field textarea {
+    resize: vertical;
+    min-height: 4.5rem;
   }
   .team-field-hint {
     font-size: 0.75rem;

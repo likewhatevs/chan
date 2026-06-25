@@ -1257,8 +1257,17 @@ export const api = {
   /// (possibly edited) config on Bootstrap.
   readTeamConfig: (dir: string) =>
     req<TeamConfigWire>("POST", "/api/team-config/read", { dir }),
-  writeTeamConfig: (dir: string, config: TeamConfigWire) =>
-    req<void>("POST", "/api/team-config/write", { dir, config }),
+  /// `briefContent`, when set, is folded VERBATIM into the generated
+  /// bootstrap.md server-side (its own section after the Roster). It is the
+  /// brief TEXT, not a path (the server has no client filesystem); the dialog
+  /// reads the file client-side, mirroring the CLI's `--brief`. It is not part
+  /// of config.toml, so it travels as a sibling field.
+  writeTeamConfig: (dir: string, config: TeamConfigWire, briefContent?: string) =>
+    req<void>("POST", "/api/team-config/write", {
+      dir,
+      config,
+      brief_content: briefContent,
+    }),
 
   /// Reply to a survey raised by `cs terminal survey`. The blocked CLI is
   /// awaiting on the server's survey bus keyed by `surveyId`; this POST

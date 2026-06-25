@@ -93,6 +93,7 @@ describe("translateConfig", () => {
         { name: "Worker1", command: "claude", env: "", isLead: false },
       ],
       realEstate: { kind: "tabs" },
+      brief: "",
       ...overrides,
     };
   }
@@ -303,6 +304,7 @@ describe("translateConfig <-> wireToDialog round-trips real estate", () => {
         grid: { rows: 2, cols: 2 },
         slots: [[0], [1], [2], []],
       },
+      brief: "",
     };
     const wireOut = translateConfig(original);
     const back = wireToDialog(wireOut, "round");
@@ -332,6 +334,7 @@ describe("translateConfig <-> wireToDialog round-trips real estate", () => {
         { name: "Worker2", command: "bash", env: "", isLead: false },
       ],
       realEstate: { kind: "tabs" },
+      brief: "",
     };
     // The agent is not stored anywhere: it is derived from the command at use
     // time (server-side, and SPA-side for the lead poke). The command round-

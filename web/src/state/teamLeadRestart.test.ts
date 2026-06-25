@@ -62,6 +62,7 @@ function config(): TeamDialogConfig {
     mcpEnv: false,
     members: [{ name: "Lead", command: "claude --resume", env: "DEBUG=1", isLead: true }],
     realEstate: { kind: "tabs" },
+    brief: "",
   };
 }
 

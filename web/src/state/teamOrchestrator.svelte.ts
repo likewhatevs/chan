@@ -192,6 +192,9 @@ export function wireToDialog(
     mcpEnv: wire.mcp_env,
     members,
     realEstate: realEstateFromWire(wire, size),
+    // The brief is not persisted in config.toml, so a loaded team starts with
+    // an empty brief field (Load never regenerates the bootstrap anyway).
+    brief: "",
   };
 }
 
@@ -373,8 +376,11 @@ export async function runTeamBootstrap(
   //    `{teamDir}/config.toml`. The backend writes it (plus the
   //    generated bootstrap.md + the tasks/journals/followups dirs)
   //    through the Workspace sandbox: atomic, path-sandboxed,
-  //    special-file refusal (see api.writeTeamConfig).
-  await api.writeTeamConfig(config.teamDir, wire);
+  //    special-file refusal (see api.writeTeamConfig). A non-empty brief
+  //    folds verbatim into the generated bootstrap.md (server-side); the
+  //    brief is not part of config.toml, so it travels as a separate arg.
+  const brief = config.brief.trim() ? config.brief : undefined;
+  await api.writeTeamConfig(config.teamDir, wire, brief);
 
   const leadEntry = wire.members.find((m) => m.is_lead);
   if (!leadEntry) throw new Error("config has no lead member");

@@ -25,9 +25,9 @@ describe("api client: dir-based team-config read/write", () => {
     );
   });
 
-  test("writeTeamConfig POSTs /api/team-config/write with { dir, config }", () => {
+  test("writeTeamConfig POSTs /api/team-config/write with { dir, config, brief_content }", () => {
     expect(client).toMatch(
-      /writeTeamConfig: \(dir: string, config: TeamConfigWire\) =>[\s\S]{1,200}req<void>\("POST", "\/api\/team-config\/write", \{ dir, config \}\)/,
+      /writeTeamConfig: \(dir: string, config: TeamConfigWire, briefContent\?: string\) =>[\s\S]{1,200}req<void>\("POST", "\/api\/team-config\/write", \{[\s\S]{1,120}dir,[\s\S]{1,40}config,[\s\S]{1,80}brief_content: briefContent,/,
     );
   });
 });

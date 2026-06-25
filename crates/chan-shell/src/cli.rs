@@ -577,6 +577,12 @@ pub enum TerminalAction {
         /// with `--followup-dir`.
         #[arg(long)]
         to: Option<String>,
+        /// Seconds to wait for the host's reply before giving up. On elapse the
+        /// survey returns no answer, prints `no reply within <secs>s` to
+        /// stderr, and exits 124 (the GNU `timeout` convention), so a caller
+        /// can tell a timed-out survey from an answered or dismissed one.
+        #[arg(long, value_name = "SECS", default_value_t = crate::wire::DEFAULT_SURVEY_TIMEOUT_SECS)]
+        timeout: u64,
         /// Read the markdown problem body from this process's stdin
         /// instead of the positional `body` (handy for multi-line bodies).
         #[arg(long)]
@@ -620,6 +626,13 @@ pub enum TeamAction {
         /// `--config`.
         #[arg(long)]
         stdin: bool,
+        /// Path to a brief Markdown file folded VERBATIM into the generated
+        /// `bootstrap.md` (its own section after the Roster), so a round's
+        /// custom operating instructions survive a normal `new`/regenerate.
+        /// The CLI reads the file and sends its text; the server never sees the
+        /// path. Omit for the generic bootstrap.
+        #[arg(long, value_name = "FILE")]
+        brief: Option<PathBuf>,
         /// Turn the chan MCP env vars ON or OFF for the team's terminals
         /// (sets `mcp_env` in the written config.toml). Default when omitted:
         /// OFF, matching the config default - agents still reach `cs search`
@@ -1225,6 +1238,7 @@ async fn cmd_shell_terminal(action: TerminalAction) -> Result<()> {
             followup_dir,
             from,
             to,
+            timeout,
             stdin,
             body,
         } => {
@@ -1236,6 +1250,7 @@ async fn cmd_shell_terminal(action: TerminalAction) -> Result<()> {
                 followup_dir,
                 from,
                 to,
+                timeout_secs: timeout,
                 stdin,
                 body,
             })
@@ -1267,6 +1282,7 @@ async fn cmd_shell_team(action: TeamAction) -> Result<()> {
             dir,
             config,
             stdin,
+            brief,
             mcp_env,
             script,
         } => {
@@ -1276,11 +1292,16 @@ async fn cmd_shell_team(action: TeamAction) -> Result<()> {
             if let Some(toggle) = mcp_env {
                 config_toml = set_team_mcp_env(&config_toml, toggle.as_bool())?;
             }
+            // Read the brief file CLIENT-side into text; the server has no
+            // access to the caller's filesystem (same reason config travels as
+            // text). Absent -> None, the generic bootstrap.
+            let brief_content = read_brief_input(brief)?;
             (
                 ControlRequest::TerminalTeam {
                     dir: resolve_team_dir(&dir)?,
                     op: TeamOp::New,
                     config_toml: Some(config_toml),
+                    brief_content,
                     script,
                     window_id,
                 },
@@ -1292,6 +1313,8 @@ async fn cmd_shell_team(action: TeamAction) -> Result<()> {
                 dir: resolve_team_dir(&dir)?,
                 op: TeamOp::Load,
                 config_toml: None,
+                // Load never regenerates the bootstrap, so a brief is moot.
+                brief_content: None,
                 script,
                 window_id,
             },
@@ -1307,6 +1330,21 @@ async fn cmd_shell_team(action: TeamAction) -> Result<()> {
         eprintln!("{message}");
     }
     Ok(())
+}
+
+/// Read the optional `cs terminal team new --brief <file>` into text. The
+/// server has no access to the caller's filesystem, so the CLI reads the file
+/// and sends its CONTENT (the same reason the config travels as text). `None`
+/// when `--brief` was omitted -> the generic bootstrap.
+fn read_brief_input(brief: Option<PathBuf>) -> Result<Option<String>> {
+    match brief {
+        None => Ok(None),
+        Some(path) => {
+            let text = std::fs::read_to_string(&path)
+                .with_context(|| format!("reading team brief {}", path.display()))?;
+            Ok(Some(text))
+        }
+    }
 }
 
 /// Resolve the `cs terminal team new` config.toml input from `--config
@@ -1449,6 +1487,7 @@ struct SurveyArgs {
     followup_dir: Option<String>,
     from: Option<String>,
     to: Option<String>,
+    timeout_secs: u64,
     stdin: bool,
     body: Vec<String>,
 }
@@ -1467,6 +1506,7 @@ async fn cmd_shell_survey(args: SurveyArgs) -> Result<()> {
         followup_dir,
         from,
         to,
+        timeout_secs,
         stdin,
         body,
     } = args;
@@ -1518,19 +1558,59 @@ async fn cmd_shell_survey(args: SurveyArgs) -> Result<()> {
         followup: followup_ctx,
     };
     let socket = control_socket_env()?;
-    let message = send_control_request(
+    let result = send_control_request(
         &socket,
         ControlRequest::TermSurvey {
             tab_name,
             tab_group,
             spec,
+            timeout_secs,
         },
     )
-    .await?;
-    // The reply is the result the caller wants captured, so it goes to
-    // stdout (unlike the queued-request acks the other commands eprintln).
-    println!("{message}");
-    Ok(())
+    .await;
+    match classify_survey_result(result)? {
+        // The reply is the result the caller wants captured, so it goes to
+        // stdout (unlike the queued-request acks the other commands eprintln).
+        SurveyOutcome::Answered(message) => {
+            println!("{message}");
+            Ok(())
+        }
+        // No answer within `--timeout`: the notice goes to STDERR so stdout
+        // stays empty for a `$(cs terminal survey ...)` capture, and exit 124
+        // lets a script branch on the timeout. stderr is unbuffered, so the
+        // line lands before the hard exit skips the runtime shutdown.
+        SurveyOutcome::TimedOut(message) => {
+            eprintln!("{message}");
+            std::process::exit(crate::exit_code::SURVEY_TIMEOUT);
+        }
+    }
+}
+
+/// The terminal outcome of a blocking `cs terminal survey` round-trip. Split
+/// from [`cmd_shell_survey`] so the print-stream + exit-code decision is
+/// unit-testable without a live server or a `process::exit`.
+#[derive(Debug)]
+enum SurveyOutcome {
+    /// The host answered, deferred (`[F]`), or dismissed: the reply line is
+    /// printed to stdout and the process exits 0.
+    Answered(String),
+    /// `--timeout` elapsed with no reply: the message is printed to stderr and
+    /// the process exits [`crate::exit_code::SURVEY_TIMEOUT`] (124).
+    TimedOut(String),
+}
+
+/// Classify a [`send_control_request`] result for the survey command: a plain
+/// reply is [`SurveyOutcome::Answered`]; the typed timeout error
+/// ([`crate::exit_code::ControlTimeout`], from a `ControlResponse::Timeout`)
+/// becomes [`SurveyOutcome::TimedOut`]; any other error propagates (exit 1).
+fn classify_survey_result(result: Result<String>) -> Result<SurveyOutcome> {
+    match result {
+        Ok(message) => Ok(SurveyOutcome::Answered(message)),
+        Err(err) => match err.downcast::<crate::exit_code::ControlTimeout>() {
+            Ok(timeout) => Ok(SurveyOutcome::TimedOut(timeout.message)),
+            Err(other) => Err(other),
+        },
+    }
 }
 
 /// Resolve the `[F]` followup team context, reading `$CHAN_TAB_NAME` from the
@@ -1655,6 +1735,59 @@ mod tests {
     fn terminal_list_markdown_empty_is_short_line() {
         let out = render_terminal_list_markdown(r#"{"groups":{}}"#).expect("render");
         assert_eq!(out, "No live terminal sessions.\n");
+    }
+
+    #[test]
+    fn survey_timeout_flag_parses_and_defaults_to_600() {
+        // Omitted: the baked-in default carries the window so the agent never
+        // blocks forever, and default-vs-custom stays visible in the message.
+        let cli = CsCli::parse_from(["cs", "terminal", "survey", "--tab-name", "@@Alex", "q"]);
+        match cli.action {
+            ShellAction::Terminal {
+                action: TerminalAction::Survey { timeout, .. },
+            } => assert_eq!(timeout, crate::wire::DEFAULT_SURVEY_TIMEOUT_SECS),
+            other => panic!("expected survey, got {other:?}"),
+        }
+        // Explicit override is taken verbatim.
+        let cli = CsCli::parse_from([
+            "cs",
+            "terminal",
+            "survey",
+            "--tab-name",
+            "@@Alex",
+            "--timeout",
+            "30",
+            "q",
+        ]);
+        match cli.action {
+            ShellAction::Terminal {
+                action: TerminalAction::Survey { timeout, .. },
+            } => assert_eq!(timeout, 30),
+            other => panic!("expected survey, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn classify_survey_result_maps_reply_timeout_and_error() {
+        // A plain reply is the answered outcome (stdout, exit 0).
+        match classify_survey_result(Ok("Ship it".into())).unwrap() {
+            SurveyOutcome::Answered(m) => assert_eq!(m, "Ship it"),
+            SurveyOutcome::TimedOut(m) => panic!("unexpected timeout: {m}"),
+        }
+        // The typed timeout error becomes the timed-out outcome (stderr, 124),
+        // carrying the server's elapsed-window line verbatim.
+        let timed_out = classify_survey_result(Err(crate::exit_code::ControlTimeout {
+            message: "no reply within 30s".into(),
+        }
+        .into()))
+        .unwrap();
+        match timed_out {
+            SurveyOutcome::TimedOut(m) => assert_eq!(m, "no reply within 30s"),
+            SurveyOutcome::Answered(m) => panic!("expected timeout, got answer: {m}"),
+        }
+        // Any other error propagates unchanged (the generic exit-1 path).
+        let err = classify_survey_result(Err(anyhow::anyhow!("connection refused"))).unwrap_err();
+        assert!(err.to_string().contains("connection refused"));
     }
 
     #[test]
@@ -1952,6 +2085,7 @@ mod tests {
                                 dir,
                                 config,
                                 stdin,
+                                brief,
                                 mcp_env,
                                 script,
                             },
@@ -1960,6 +2094,8 @@ mod tests {
                 assert_eq!(dir, "alpha");
                 assert_eq!(config.as_deref(), Some(std::path::Path::new("spec.toml")));
                 assert!(!stdin);
+                // Omitting --brief leaves it unset (the generic bootstrap).
+                assert_eq!(brief, None);
                 // Omitting --mcp-env leaves the field unset (server default OFF).
                 assert_eq!(mcp_env, None);
                 assert!(script);

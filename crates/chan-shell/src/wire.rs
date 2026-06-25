@@ -14,6 +14,16 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+/// Default `cs terminal survey` reply window, in seconds. The CLI flag
+/// `--timeout` defaults to the same value; this serde default only covers a
+/// caller that omits the field on the wire, so the server still bounds the
+/// wait instead of blocking forever.
+pub const DEFAULT_SURVEY_TIMEOUT_SECS: u64 = 600;
+
+fn default_survey_timeout_secs() -> u64 {
+    DEFAULT_SURVEY_TIMEOUT_SECS
+}
+
 /// A command from a `cs`-spawned terminal to the chan-server it belongs
 /// to. The internal `type` tag plus `snake_case` variant names are the
 /// wire strings the server matches on; do not rename without changing
@@ -205,6 +215,13 @@ pub enum ControlRequest {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         tab_group: Option<String>,
         spec: SurveySpec,
+        /// How many seconds the server waits for a reply before giving up and
+        /// answering with [`ControlResponse::Timeout`]. The CLI flag
+        /// `--timeout` carries the real default (600); the serde default keeps
+        /// a direct or older caller that omits the field on the same 600s
+        /// window instead of blocking forever.
+        #[serde(default = "default_survey_timeout_secs")]
+        timeout_secs: u64,
     },
     // Category 2: create or load a Team Work team from the CLI (`cs
     // terminal team new|load`). `new` carries the team's config.toml text
@@ -225,6 +242,13 @@ pub enum ControlRequest {
         /// The team config.toml text for `new`; absent for `load`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         config_toml: Option<String>,
+        /// The brief text (`--brief <file>`, read client-side) folded verbatim
+        /// into the generated `bootstrap.md` for `new`; absent for `load` and
+        /// when no brief was given. Travels as raw text alongside
+        /// `config_toml`: the server has no access to the caller's filesystem,
+        /// and the dialog path sends file CONTENT the same way.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        brief_content: Option<String>,
         /// Emit the paste-and-run bootstrap script instead of writing
         /// (`new`) / summarizing (`load`).
         #[serde(default)]
@@ -555,6 +579,7 @@ mod survey_wire_tests {
                 options: vec!["yes".into()],
                 followup: None,
             },
+            timeout_secs: 42,
         };
         let v: serde_json::Value = serde_json::to_value(&req).unwrap();
         assert_eq!(v["type"], "term_survey");
@@ -562,10 +587,51 @@ mod survey_wire_tests {
         // tab_group None is skipped on the wire (matches the sibling variants).
         assert!(v.get("tab_group").is_none());
         assert_eq!(v["spec"]["bodyMarkdown"], "q");
+        assert_eq!(v["timeout_secs"], 42);
         // Decodes back into the same variant (the server's path).
         let raw = serde_json::to_string(&req).unwrap();
         let back: ControlRequest = serde_json::from_str(&raw).unwrap();
-        assert!(matches!(back, ControlRequest::TermSurvey { .. }));
+        assert!(matches!(
+            back,
+            ControlRequest::TermSurvey {
+                timeout_secs: 42,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn term_survey_timeout_secs_defaults_when_omitted() {
+        // An older / direct caller that omits `timeout_secs` decodes onto the
+        // baked-in default rather than 0 (which would time out immediately) or
+        // a decode error, so the server still bounds the wait.
+        let raw = serde_json::json!({
+            "type": "term_survey",
+            "tab_name": "@@Alice",
+            "spec": { "surveyId": "", "title": null, "bodyMarkdown": "q", "options": ["yes"], "followup": null },
+        })
+        .to_string();
+        let back: ControlRequest = serde_json::from_str(&raw).unwrap();
+        match back {
+            ControlRequest::TermSurvey { timeout_secs, .. } => {
+                assert_eq!(timeout_secs, DEFAULT_SURVEY_TIMEOUT_SECS);
+            }
+            other => panic!("expected TermSurvey, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn control_response_timeout_tag_round_trips() {
+        // The timeout outcome is a distinct `status` so the client never has
+        // to infer it from `error` or a dropped connection.
+        let resp = ControlResponse::Timeout {
+            message: "no reply within 600s".into(),
+        };
+        let v: serde_json::Value = serde_json::to_value(&resp).unwrap();
+        assert_eq!(v["status"], "timeout");
+        assert_eq!(v["message"], "no reply within 600s");
+        let back: ControlResponse = serde_json::from_str(&v.to_string()).unwrap();
+        assert!(matches!(back, ControlResponse::Timeout { .. }));
     }
 
     #[test]
@@ -824,6 +890,7 @@ mod survey_wire_tests {
             dir: "new-team-1".into(),
             op: TeamOp::New,
             config_toml: Some("team_name = \"alpha\"\n".into()),
+            brief_content: Some("# Brief\n\nRepro first.".into()),
             script: true,
             window_id: Some("window-a".into()),
         };
@@ -832,15 +899,17 @@ mod survey_wire_tests {
         assert_eq!(v["dir"], "new-team-1");
         assert_eq!(v["op"], "new");
         assert_eq!(v["config_toml"], "team_name = \"alpha\"\n");
+        assert_eq!(v["brief_content"], "# Brief\n\nRepro first.");
         assert_eq!(v["script"], true);
         assert_eq!(v["window_id"], "window-a");
 
-        // `load` omits config_toml + window_id (skip_serializing_if) and
-        // defaults script to false.
+        // `load` omits config_toml + brief_content + window_id
+        // (skip_serializing_if) and defaults script to false.
         let load = ControlRequest::TerminalTeam {
             dir: "teams/alpha".into(),
             op: TeamOp::Load,
             config_toml: None,
+            brief_content: None,
             script: false,
             window_id: None,
         };
@@ -849,6 +918,10 @@ mod survey_wire_tests {
         assert!(
             v.get("config_toml").is_none(),
             "None config_toml is skipped"
+        );
+        assert!(
+            v.get("brief_content").is_none(),
+            "None brief_content is skipped"
         );
         assert!(v.get("window_id").is_none(), "None window_id is skipped");
         assert_eq!(v["script"], false);
@@ -904,8 +977,21 @@ mod survey_wire_tests {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum ControlResponse {
-    Ok { message: String },
-    Error { message: String },
+    Ok {
+        message: String,
+    },
+    Error {
+        message: String,
+    },
+    /// A blocking request the server abandoned because its reply window
+    /// elapsed (today only `cs terminal survey --timeout`). Distinct from
+    /// `Error` so the client can map it to a dedicated exit code instead of
+    /// the generic failure path, and never has to infer a timeout from a
+    /// dropped connection. `message` is the elapsed-window line the CLI
+    /// prints (e.g. `no reply within 600s`).
+    Timeout {
+        message: String,
+    },
 }
 
 /// What kind of process serves a workspace, for `chan ps`. A `serve` standalone,

@@ -23,6 +23,11 @@ pub use wire::{
 mod cli;
 #[cfg(feature = "client")]
 mod control;
+// Named exit codes for the client (the `cs terminal survey --timeout` 124
+// path) and the typed error that carries one. Client-only: the server links
+// the wire types without it.
+#[cfg(feature = "client")]
+mod exit_code;
 // The submit map is always compiled (serde-free, clap-free): chan-server's
 // server-side team spawner reads the agent submit chords without pulling the
 // `client` feature (clap). Only the `ValueEnum` parse impl for the

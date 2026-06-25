@@ -45,11 +45,15 @@ pub struct ReadTeamConfigPayload {
 
 /// `POST /api/team-config/write` body. `dir` is workspace-relative;
 /// `config` mirrors the SPA's `TeamConfigWire` shape 1:1 (it IS
-/// `chan_workspace::TeamConfig`).
+/// `chan_workspace::TeamConfig`). `brief_content` is the optional brief
+/// folded verbatim into the generated `bootstrap.md` (the dialog reads the
+/// file client-side and sends its text, mirroring the CLI's `--brief`).
 #[derive(Deserialize)]
 pub struct WriteTeamConfigPayload {
     pub dir: String,
     pub config: TeamConfig,
+    #[serde(default)]
+    pub brief_content: Option<String>,
 }
 
 /// Up-front guard so a bad `dir` produces a clean 400 message instead
@@ -174,9 +178,12 @@ pub async fn api_team_config_write(
         Err(msg) => return err(StatusCode::BAD_REQUEST, msg),
     };
     let config = payload.config;
+    let brief = payload.brief_content;
     let workspace = state.workspace();
-    let result =
-        tokio::task::spawn_blocking(move || write_team_config(&workspace, &dir, &config)).await;
+    let result = tokio::task::spawn_blocking(move || {
+        write_team_config(&workspace, &dir, &config, brief.as_deref())
+    })
+    .await;
     match result {
         Ok(Ok(())) => Json(serde_json::json!({})).into_response(),
         Ok(Err(msg)) => err(StatusCode::BAD_REQUEST, msg),
@@ -202,6 +209,7 @@ pub(crate) fn write_team_config(
     workspace: &chan_workspace::Workspace,
     dir: &str,
     config: &TeamConfig,
+    brief: Option<&str>,
 ) -> Result<(), String> {
     validate_team_config(config)?;
     let toml_text =
@@ -227,7 +235,7 @@ pub(crate) fn write_team_config(
         .map_err(|e| format!("cannot write {config_rel}: {e}"))?;
 
     let bootstrap_rel = format!("{dir}/bootstrap.md");
-    let bootstrap = generate_bootstrap_md(dir, config);
+    let bootstrap = generate_bootstrap_md(dir, config, brief);
     workspace
         .write_text(&bootstrap_rel, &bootstrap)
         .map_err(|e| format!("cannot write {bootstrap_rel}: {e}"))?;
@@ -241,7 +249,11 @@ pub(crate) fn write_team_config(
 /// Shared by the HTTP write path, the `cs terminal team` control-socket
 /// handler, and the `--script` generator so there is one source of truth
 /// for the bootstrap text (never a client-side regeneration).
-pub(crate) fn generate_bootstrap_md(team_dir: &str, config: &TeamConfig) -> String {
+pub(crate) fn generate_bootstrap_md(
+    team_dir: &str,
+    config: &TeamConfig,
+    brief: Option<&str>,
+) -> String {
     let team_name = &config.team_name;
     let host_handle = &config.host_handle;
     let host_name = &config.host_name;
@@ -276,6 +288,21 @@ pub(crate) fn generate_bootstrap_md(team_dir: &str, config: &TeamConfig) -> Stri
     out.push_str("## Roster\n\n");
     out.push_str(&render_roster(config));
     out.push('\n');
+
+    // The `--brief` file (or the dialog's brief field) folds in verbatim here,
+    // after the Roster and before the generated process sections, so a round's
+    // custom operating instructions survive a normal `new`/regenerate instead
+    // of forcing the hand-author + `load` workaround. Outer whitespace is
+    // trimmed so the section sits flush; an absent or blank brief emits
+    // nothing (the boilerplate is augmented, never replaced).
+    if let Some(brief) = brief {
+        let brief = brief.trim();
+        if !brief.is_empty() {
+            out.push_str("## Brief\n\n");
+            out.push_str(brief);
+            out.push_str("\n\n");
+        }
+    }
 
     out.push_str("## How we work\n\n");
     out.push_str(&format!(
@@ -452,7 +479,11 @@ pub(crate) fn lead_first_order(config: &TeamConfig) -> Vec<&Member> {
 /// so the bootstrap text is never regenerated client-side. The spawn order
 /// mirrors `teamOrchestrator.svelte.ts runTeamBootstrap` (lead first).
 /// ASCII only, no em dashes.
-pub(crate) fn generate_bootstrap_script(team_dir: &str, config: &TeamConfig) -> String {
+pub(crate) fn generate_bootstrap_script(
+    team_dir: &str,
+    config: &TeamConfig,
+    brief: Option<&str>,
+) -> String {
     let dir = team_dir.trim_end_matches('/');
     // The team's terminal group base. The `--script` form uses it verbatim
     // (a shell script cannot cheaply query the live registry); the
@@ -461,7 +492,7 @@ pub(crate) fn generate_bootstrap_script(team_dir: &str, config: &TeamConfig) -> 
     let group = team_base_group(config);
     let config_toml = toml::to_string_pretty(config)
         .unwrap_or_else(|e| format!("# failed to serialize team config: {e}\n"));
-    let bootstrap_md = generate_bootstrap_md(dir, config);
+    let bootstrap_md = generate_bootstrap_md(dir, config, brief);
 
     let mut out = String::new();
     out.push_str("#!/usr/bin/env bash\n");
@@ -773,7 +804,7 @@ mod tests {
         let (_cfg, _root, workspace) = test_workspace();
         let config = sample_config();
 
-        write_team_config(&workspace, "new-team-1", &config).unwrap();
+        write_team_config(&workspace, "new-team-1", &config, None).unwrap();
         let read = read_team_config(&workspace, "new-team-1").unwrap();
 
         assert_eq!(read, config, "read config must equal written config");
@@ -783,7 +814,7 @@ mod tests {
     #[test]
     fn write_creates_config_bootstrap_and_subdirs() {
         let (_cfg, _root, workspace) = test_workspace();
-        write_team_config(&workspace, "teams/alpha", &sample_config()).unwrap();
+        write_team_config(&workspace, "teams/alpha", &sample_config(), None).unwrap();
 
         assert!(workspace.exists("teams/alpha/config.toml"));
         assert!(workspace.exists("teams/alpha/bootstrap.md"));
@@ -795,7 +826,7 @@ mod tests {
     #[test]
     fn bootstrap_contains_team_host_lead_and_poke_chord() {
         let (_cfg, _root, workspace) = test_workspace();
-        write_team_config(&workspace, "new-team-1", &sample_config()).unwrap();
+        write_team_config(&workspace, "new-team-1", &sample_config(), None).unwrap();
         let bootstrap = workspace.read_text("new-team-1/bootstrap.md").unwrap();
 
         assert!(bootstrap.contains("alpha"), "team name present");
@@ -843,6 +874,61 @@ mod tests {
     }
 
     #[test]
+    fn bootstrap_folds_brief_verbatim_after_roster() {
+        let config = sample_config();
+        let brief = "# Round 7\n\nRepro-first. Do NOT touch cli.rs.";
+        let bootstrap = generate_bootstrap_md("teams/alpha", &config, Some(brief));
+        // The brief is its own section with a stable heading, content verbatim.
+        assert!(bootstrap.contains("## Brief\n\n"), "brief heading present");
+        assert!(
+            bootstrap.contains("Repro-first. Do NOT touch cli.rs."),
+            "brief body folded verbatim"
+        );
+        // It lands AFTER the Roster and BEFORE the generated process sections,
+        // augmenting (not replacing) them.
+        let brief_at = bootstrap.find("## Brief").expect("brief section");
+        let roster_at = bootstrap.find("## Roster").expect("roster section");
+        let how_at = bootstrap
+            .find("## How we work")
+            .expect("how-we-work section");
+        assert!(roster_at < brief_at, "brief after roster");
+        assert!(brief_at < how_at, "brief before how-we-work");
+        assert!(bootstrap.contains("## How we work"), "boilerplate retained");
+    }
+
+    #[test]
+    fn bootstrap_omits_brief_section_when_absent_or_blank() {
+        let config = sample_config();
+        // No brief at all: no heading.
+        let none = generate_bootstrap_md("teams/alpha", &config, None);
+        assert!(
+            !none.contains("## Brief"),
+            "no brief section without a brief"
+        );
+        // A whitespace-only brief is treated as absent, not an empty section.
+        let blank = generate_bootstrap_md("teams/alpha", &config, Some("   \n\n"));
+        assert!(!blank.contains("## Brief"), "blank brief emits nothing");
+    }
+
+    #[test]
+    fn write_team_config_persists_the_brief_into_bootstrap() {
+        let (_cfg, _root, workspace) = test_workspace();
+        write_team_config(
+            &workspace,
+            "new-team-1",
+            &sample_config(),
+            Some("Custom round instructions."),
+        )
+        .unwrap();
+        let bootstrap = workspace.read_text("new-team-1/bootstrap.md").unwrap();
+        assert!(bootstrap.contains("## Brief"), "brief section written");
+        assert!(
+            bootstrap.contains("Custom round instructions."),
+            "brief body written verbatim"
+        );
+    }
+
+    #[test]
     fn validate_rejects_zero_members() {
         let mut config = sample_config();
         config.members.clear();
@@ -887,7 +973,7 @@ mod tests {
     #[test]
     fn bootstrap_roster_shows_agent_and_per_agent_poke_chords() {
         let (_cfg, _root, workspace) = test_workspace();
-        write_team_config(&workspace, "new-team-1", &sample_config()).unwrap();
+        write_team_config(&workspace, "new-team-1", &sample_config(), None).unwrap();
         let bootstrap = workspace.read_text("new-team-1/bootstrap.md").unwrap();
 
         // Roster carries the agent column + each member's agent value.
@@ -970,7 +1056,7 @@ mod tests {
 
     #[test]
     fn script_writes_tree_config_bootstrap_and_spawns_lead_first() {
-        let script = generate_bootstrap_script("new-team-1", &sample_config());
+        let script = generate_bootstrap_script("new-team-1", &sample_config(), None);
         assert!(script.starts_with("#!/usr/bin/env bash"), "shebang");
         assert!(script.contains("set -euo pipefail"), "fail-fast");
         // The dir tree.
@@ -1022,7 +1108,7 @@ mod tests {
 
     #[test]
     fn script_is_pure_ascii_no_em_dashes() {
-        let script = generate_bootstrap_script("teams/alpha", &sample_config());
+        let script = generate_bootstrap_script("teams/alpha", &sample_config(), None);
         assert!(script.is_ascii(), "script must be pure ASCII");
         assert!(!script.contains('\u{2014}'), "no em dashes");
     }
@@ -1035,7 +1121,7 @@ mod tests {
         // box / submit chord).
         config.members[1].handle = "@@Shell".into();
         config.members[1].command = "bash".into();
-        let script = generate_bootstrap_script("new-team-1", &config);
+        let script = generate_bootstrap_script("new-team-1", &config, None);
         assert!(
             script.contains("--tab-name='@@Shell'"),
             "shell member spawned"

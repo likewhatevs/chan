@@ -107,6 +107,13 @@ pub async fn send_control_request(socket: &Path, request: ControlRequest) -> Res
     match response {
         ControlResponse::Ok { message } => Ok(message),
         ControlResponse::Error { message } => anyhow::bail!("{message}"),
+        // A bounded blocking request whose window elapsed (today only
+        // `cs terminal survey --timeout`). Surface it as a typed error the
+        // dispatch edge downcasts to a dedicated exit code, NOT the generic
+        // bail (exit 1), so a timeout is never confused with a real failure.
+        ControlResponse::Timeout { message } => {
+            Err(crate::exit_code::ControlTimeout { message }.into())
+        }
     }
 }
 

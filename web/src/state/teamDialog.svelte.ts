@@ -176,6 +176,13 @@ export interface TeamDialogConfig {
   /// Length must equal `size`. Exactly one member has `isLead: true`.
   members: TeamMemberDraft[];
   realEstate: TeamRealEstate;
+  /// Optional brief Markdown folded VERBATIM into the generated
+  /// `bootstrap.md` (its own section after the Roster), so a round's custom
+  /// operating instructions survive a normal regenerate. Empty -> the generic
+  /// bootstrap. The dialog holds the brief TEXT (not a path): the server has
+  /// no access to the client filesystem, mirroring the CLI's `--brief`. Not
+  /// part of the persisted `config.toml`; it travels alongside it.
+  brief: string;
 }
 
 /// The dialog request object. App.svelte creates the Team Work Lead
@@ -257,6 +264,7 @@ export function defaultTeamConfig(): TeamDialogConfig {
       { name: "Lead", command: "claude", env: "", isLead: true },
     ],
     realEstate: { kind: "tabs" },
+    brief: "",
   };
 }
 

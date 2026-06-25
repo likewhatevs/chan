@@ -688,11 +688,13 @@ async fn handle_request(req: ControlRequest, ctx: &ControlSocketCtx) -> ControlR
             tab_name,
             tab_group,
             spec,
+            timeout_secs,
         } => {
             handle_survey(
                 spec,
                 tab_name.as_deref(),
                 tab_group.as_deref(),
+                timeout_secs,
                 events_tx,
                 survey_bus,
                 terminal_registry,
@@ -703,6 +705,7 @@ async fn handle_request(req: ControlRequest, ctx: &ControlSocketCtx) -> ControlR
             dir,
             op,
             config_toml,
+            brief_content,
             script,
             window_id,
         } => {
@@ -711,6 +714,7 @@ async fn handle_request(req: ControlRequest, ctx: &ControlSocketCtx) -> ControlR
                     dir,
                     op,
                     config_toml,
+                    brief_content,
                     script,
                     window_id,
                 },
@@ -856,6 +860,10 @@ struct TeamRequest {
     dir: String,
     op: TeamOp,
     config_toml: Option<String>,
+    /// The brief text (`cs terminal team new --brief <file>`, read client-side)
+    /// folded verbatim into the generated `bootstrap.md`. `new`-only; ignored
+    /// by `load` (which never regenerates the bootstrap).
+    brief_content: Option<String>,
     script: bool,
     /// The caller's window ($CHAN_WINDOW_ID), when present: every spawned
     /// agent session binds to it so the agents carry $CHAN_WINDOW_ID and the
@@ -888,6 +896,7 @@ async fn handle_team(req: TeamRequest, ctx: &ControlSocketCtx) -> ControlRespons
         dir,
         op,
         config_toml,
+        brief_content,
         script,
         window_id,
     } = req;
@@ -938,14 +947,16 @@ async fn handle_team(req: TeamRequest, ctx: &ControlSocketCtx) -> ControlRespons
             }
             if script {
                 return ControlResponse::Ok {
-                    message: generate_bootstrap_script(dir, &config),
+                    message: generate_bootstrap_script(dir, &config, brief_content.as_deref()),
                 };
             }
             let workspace = match workspace_from_cell(workspace_cell, tenant) {
                 Ok(workspace) => workspace,
                 Err(message) => return ControlResponse::Error { message },
             };
-            if let Err(message) = write_team_config(&workspace, dir, &config) {
+            if let Err(message) =
+                write_team_config(&workspace, dir, &config, brief_content.as_deref())
+            {
                 return ControlResponse::Error { message };
             }
             // The config + bootstrap.md + tree are on disk. Without a
@@ -973,7 +984,9 @@ async fn handle_team(req: TeamRequest, ctx: &ControlSocketCtx) -> ControlRespons
             };
             if script {
                 return ControlResponse::Ok {
-                    message: generate_bootstrap_script(dir, &config),
+                    // Load never folds a brief: it reads an existing team and
+                    // never regenerates its `bootstrap.md`.
+                    message: generate_bootstrap_script(dir, &config, None),
                 };
             }
             // Load now brings the saved team UP, not just summarizes it: read
@@ -1249,6 +1262,7 @@ async fn handle_survey(
     mut spec: SurveySpec,
     tab_name: Option<&str>,
     tab_group: Option<&str>,
+    timeout_secs: u64,
     events_tx: &broadcast::Sender<String>,
     survey_bus: &Arc<crate::survey::SurveyBus>,
     terminal_registry: Option<&Arc<TerminalRegistry>>,
@@ -1296,17 +1310,30 @@ async fn handle_survey(
             return ControlResponse::Error { message };
         }
     }
-    // Block until C's reply route fires the oneshot. A receive error means
-    // the sender was dropped without a reply (server shutdown); the entry is
-    // gone, but cancel defensively in case register/await ever diverge.
-    match rx.await {
-        Ok(reply) => ControlResponse::Ok {
+    // Block until C's reply route fires the oneshot, the timeout window
+    // elapses, or the sender is dropped. Mirrors the `cs pane` round-trip
+    // (PANE_REPLY_TIMEOUT), but the window is the caller's `--timeout` (the
+    // host needs real time to read and answer, unlike pane's instant reply).
+    match tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), rx).await {
+        Ok(Ok(reply)) => ControlResponse::Ok {
             message: format_survey_reply(&reply),
         },
-        Err(_) => {
+        // A receive error means the sender was dropped without a reply (server
+        // shutdown); the entry is gone, but cancel defensively in case
+        // register/await ever diverge.
+        Ok(Err(_)) => {
             survey_bus.cancel(&survey_id);
             ControlResponse::Error {
                 message: "survey cancelled before a reply".into(),
+            }
+        }
+        // No reply within the window: drop the parked oneshot so it does not
+        // leak and answer with a distinct Timeout (the CLI maps it to exit
+        // 124). A late host answer then finds the id gone and no-ops.
+        Err(_elapsed) => {
+            survey_bus.cancel(&survey_id);
+            ControlResponse::Timeout {
+                message: format!("no reply within {timeout_secs}s"),
             }
         }
     }
@@ -2324,7 +2351,7 @@ mod tests {
             ControlResponse::Error { message } => {
                 assert_eq!(message, "workspace cell lock poisoned");
             }
-            ControlResponse::Ok { message } => panic!("unexpected ok response: {message}"),
+            other => panic!("unexpected non-error response: {other:?}"),
         }
     }
 
@@ -2350,7 +2377,7 @@ mod tests {
                 assert_eq!(message, TERMINAL_ONLY_NEEDS_WORKSPACE);
                 assert!(message.contains("standalone terminal"));
             }
-            ControlResponse::Ok { message } => panic!("unexpected ok response: {message}"),
+            other => panic!("unexpected non-error response: {other:?}"),
         }
     }
 
@@ -2383,7 +2410,7 @@ mod tests {
             ControlResponse::Ok { message } => {
                 assert!(message.contains("download request queued"), "{message}")
             }
-            ControlResponse::Error { message } => panic!("unexpected error: {message}"),
+            other => panic!("unexpected non-ok response: {other:?}"),
         }
         let frame = rx.try_recv().expect("download window command broadcast");
         let stripped_file = file.to_string_lossy().trim_start_matches('/').to_string();
@@ -2406,7 +2433,7 @@ mod tests {
             ControlResponse::Ok { message } => {
                 assert!(message.contains("upload request queued"), "{message}")
             }
-            ControlResponse::Error { message } => panic!("unexpected error: {message}"),
+            other => panic!("unexpected non-ok response: {other:?}"),
         }
         let frame = rx.try_recv().expect("upload window command broadcast");
         let stripped_dir = dir
@@ -2434,7 +2461,7 @@ mod tests {
                 let rows: Value = serde_json::from_str(&message).expect("rows JSON");
                 assert_eq!(rows, serde_json::json!([]));
             }
-            ControlResponse::Error { message } => panic!("unexpected error: {message}"),
+            other => panic!("unexpected non-ok response: {other:?}"),
         }
     }
 
@@ -2461,7 +2488,7 @@ mod tests {
 
         match response {
             ControlResponse::Ok { message } => assert_eq!(message, "terminal request queued"),
-            ControlResponse::Error { message } => panic!("unexpected error: {message}"),
+            other => panic!("unexpected non-ok response: {other:?}"),
         }
         // The window command was broadcast to the (stand-in) connected window.
         let frame = rx.try_recv().expect("window command broadcast");
@@ -2492,7 +2519,7 @@ mod tests {
             ControlResponse::Error { message } => {
                 assert_eq!(message, TERM_NEW_PATH_NEEDS_WORKSPACE)
             }
-            ControlResponse::Ok { message } => panic!("unexpected ok: {message}"),
+            other => panic!("unexpected non-error response: {other:?}"),
         }
     }
 
@@ -2926,6 +2953,7 @@ agent = "codex"
                 dir: "   ".to_string(),
                 op: TeamOp::New,
                 config_toml: None,
+                brief_content: None,
                 script: false,
                 window_id: None,
             },
@@ -2936,13 +2964,14 @@ agent = "codex"
             ControlResponse::Error { message } => {
                 assert!(message.contains("required"), "{message}")
             }
-            ControlResponse::Ok { message } => panic!("unexpected ok: {message}"),
+            other => panic!("unexpected non-error response: {other:?}"),
         }
         match handle_team(
             TeamRequest {
                 dir: "/abs/team".to_string(),
                 op: TeamOp::Load,
                 config_toml: None,
+                brief_content: None,
                 script: false,
                 window_id: None,
             },
@@ -2953,7 +2982,7 @@ agent = "codex"
             ControlResponse::Error { message } => {
                 assert!(message.contains("workspace-relative"), "{message}")
             }
-            ControlResponse::Ok { message } => panic!("unexpected ok: {message}"),
+            other => panic!("unexpected non-error response: {other:?}"),
         }
     }
 
@@ -2965,6 +2994,7 @@ agent = "codex"
                 dir: "new-team-1".to_string(),
                 op: TeamOp::New,
                 config_toml: None,
+                brief_content: None,
                 script: false,
                 window_id: None,
             },
@@ -2975,7 +3005,7 @@ agent = "codex"
             ControlResponse::Error { message } => {
                 assert!(message.contains("needs a config"), "{message}")
             }
-            ControlResponse::Ok { message } => panic!("unexpected ok: {message}"),
+            other => panic!("unexpected non-error response: {other:?}"),
         }
     }
 
@@ -2989,6 +3019,7 @@ agent = "codex"
                 dir: "new-team-1".to_string(),
                 op: TeamOp::New,
                 config_toml: Some(SAMPLE_TEAM_TOML.into()),
+                brief_content: None,
                 script: true,
                 window_id: None,
             },
@@ -3001,7 +3032,7 @@ agent = "codex"
                 assert!(message.contains("--tab-name='@@Lead'"), "{message}");
                 assert!(message.contains("--submit=codex"), "{message}");
             }
-            ControlResponse::Error { message } => panic!("unexpected error: {message}"),
+            other => panic!("unexpected non-ok response: {other:?}"),
         }
     }
 
@@ -3013,6 +3044,7 @@ agent = "codex"
                 dir: "new-team-1".to_string(),
                 op: TeamOp::New,
                 config_toml: Some("this is not = = toml".into()),
+                brief_content: None,
                 script: true,
                 window_id: None,
             },
@@ -3023,7 +3055,7 @@ agent = "codex"
             ControlResponse::Error { message } => {
                 assert!(message.contains("invalid team config TOML"), "{message}")
             }
-            ControlResponse::Ok { message } => panic!("unexpected ok: {message}"),
+            other => panic!("unexpected non-error response: {other:?}"),
         }
     }
 
@@ -3042,6 +3074,7 @@ created_at = "2026-05-29T00:00:00Z"
                 dir: "new-team-1".to_string(),
                 op: TeamOp::New,
                 config_toml: Some(toml_text.into()),
+                brief_content: None,
                 script: true,
                 window_id: None,
             },
@@ -3052,7 +3085,7 @@ created_at = "2026-05-29T00:00:00Z"
             ControlResponse::Error { message } => {
                 assert!(message.contains("between 1 and 9"), "{message}")
             }
-            ControlResponse::Ok { message } => panic!("unexpected ok: {message}"),
+            other => panic!("unexpected non-error response: {other:?}"),
         }
     }
 
@@ -3337,7 +3370,7 @@ is_lead = false
                 assert!(message.contains("2 member(s) up"), "{message}");
                 assert!(message.contains("poked 0 agent(s)"), "{message}");
             }
-            ControlResponse::Error { message } => panic!("unexpected error: {message}"),
+            other => panic!("unexpected non-ok response: {other:?}"),
         }
         assert_eq!(registry.session_summaries().len(), 2);
     }
@@ -3405,7 +3438,7 @@ is_lead = false
             .expect("register workspace");
         let workspace = lib.open_workspace(root.path()).expect("open workspace");
         let config: TeamConfig = toml::from_str(SHELL_TEAM_TOML).expect("valid shell team");
-        write_team_config(&workspace, dir, &config).expect("write team");
+        write_team_config(&workspace, dir, &config, None).expect("write team");
         let (index_tx, index_rx) = broadcast::channel::<chan_workspace::WatchEvent>(1);
         // Keep the channel open for the indexer's lifetime; the test never
         // sends on it.
@@ -3442,6 +3475,7 @@ is_lead = false
                 dir: "saved-team".to_string(),
                 op: TeamOp::Load,
                 config_toml: None,
+                brief_content: None,
                 script: false,
                 window_id: Some("win-load".to_string()),
             },
@@ -3453,7 +3487,7 @@ is_lead = false
                 assert!(message.contains("spawned"), "load spawns: {message}");
                 assert!(message.contains("2 member(s) up"), "{message}");
             }
-            ControlResponse::Error { message } => panic!("unexpected error: {message}"),
+            other => panic!("unexpected non-ok response: {other:?}"),
         }
         assert_eq!(
             registry.session_summaries().len(),
@@ -3479,6 +3513,7 @@ is_lead = false
                 dir: "saved-team".to_string(),
                 op: TeamOp::Load,
                 config_toml: None,
+                brief_content: None,
                 script: false,
                 window_id: None,
             },
@@ -3493,7 +3528,7 @@ is_lead = false
                 );
                 assert!(message.contains("2 member(s)"), "{message}");
             }
-            ControlResponse::Error { message } => panic!("unexpected error: {message}"),
+            other => panic!("unexpected non-ok response: {other:?}"),
         }
     }
 
@@ -3515,7 +3550,7 @@ is_lead = false
                     "{message}"
                 );
             }
-            ControlResponse::Error { message } => panic!("unexpected error: {message}"),
+            other => panic!("unexpected non-ok response: {other:?}"),
         }
     }
 
@@ -3533,7 +3568,7 @@ is_lead = false
                 assert!(message.contains("no member could be spawned"), "{message}");
                 assert!(message.contains("@@Lead (boom)"), "{message}");
             }
-            ControlResponse::Ok { message } => panic!("unexpected ok: {message}"),
+            other => panic!("unexpected non-error response: {other:?}"),
         }
     }
 }

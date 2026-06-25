@@ -82,6 +82,7 @@ function tabsConfig(): TeamDialogConfig {
       { name: "Worker2", command: "codex", env: "", isLead: false },
     ],
     realEstate: { kind: "tabs" },
+    brief: "",
   };
 }
 
