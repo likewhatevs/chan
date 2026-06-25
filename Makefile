@@ -139,7 +139,7 @@ ci-release: pre-push ## Run the local release validation target.
 
 .PHONY: gateway-spa
 gateway-spa: ## Build the gateway identity SPA bundle (rust-embed input).
-	cd gateway && $(NPM) install && $(NPM) run build
+	cd web && $(NPM) install && $(NPM) run build -w @chan/profile
 
 .PHONY: gateway-build
 gateway-build: gateway-spa ## Build the gateway release crates (GATEWAY_CARGO_FLAGS adds cross/release).
@@ -161,12 +161,12 @@ web-launcher: ## Build the embedded launcher bundle (web-launcher/dist).
 	# this too — wired as a prerequisite of `web`/`web-check` so the single
 	# `make web` funnel (root `chan`, desktop/Makefile, packaging/linux,
 	# release.yml) builds both with no per-consumer edit.
-	cd web-launcher && $(NPM) install && $(NPM) run build
+	cd web && $(NPM) install && $(NPM) run build -w @chan/launcher
 	@date -u '+%Y-%m-%dT%H:%M:%SZ' > "$(LAUNCHER_BUILD_STAMP)"
 
 .PHONY: web
 web: web-launcher ## Build the embedded web bundle.
-	cd web && $(NPM) install && $(NPM) run build
+	cd web && $(NPM) install && $(NPM) run build -w @chan/workspace-app
 	@date -u '+%Y-%m-%dT%H:%M:%SZ' > "$(WEB_BUILD_STAMP)"
 
 .PHONY: web-check
@@ -180,13 +180,15 @@ web-check: web-launcher ## Run frontend check, vitest, and production build.
 	# The web-launcher prerequisite only BUILDS the launcher (vite build), which
 	# misses type errors + unit regressions, so gate its svelte-check + vitest
 	# here too (it already ran `npm install`). Both SPAs are now fully gated.
-	cd web-launcher && $(NPM) run check && $(NPM) test
-	cd web && $(NPM) install && $(NPM) run check && $(NPM) test && $(NPM) run build
+	cd web && $(NPM) install \
+		&& $(NPM) run check -w @chan/launcher && $(NPM) run test -w @chan/launcher \
+		&& $(NPM) run check -w @chan/workspace-app && $(NPM) run test -w @chan/workspace-app \
+		&& $(NPM) run build -w @chan/workspace-app
 	@date -u '+%Y-%m-%dT%H:%M:%SZ' > "$(WEB_BUILD_STAMP)"
 
 .PHONY: web-marketing-check
 web-marketing-check: ## Run marketing site checks.
-	cd web-marketing && $(NPM) run check
+	cd web && $(NPM) install && $(NPM) run check -w @chan/marketing
 
 .PHONY: models
 models: ## Pre-fetch the optional embedded search model.
@@ -230,10 +232,10 @@ clean: ## Remove local build outputs (root workspace, web, gateway, desktop).
 	rm -rf web-launcher/dist web-launcher/node_modules
 	rm -f $(WEB_BUILD_STAMP) $(LAUNCHER_BUILD_STAMP)
 	# gateway/ is its own cargo workspace: root `cargo clean` never
-	# touches gateway/target. The npm paths mirror gateway/.gitignore
-	# (monorepo node_modules + the rust-embed SPA dist).
+	# touches gateway/target. The gateway frontend now lives in the ./web
+	# npm workspace; only its rust-embed SPA dist remains under gateway/.
 	cd gateway && $(CARGO) clean
-	rm -rf gateway/node_modules gateway/web-common/node_modules gateway/crates/*/web/node_modules gateway/crates/*/web/dist
+	rm -rf gateway/crates/identity/web/dist
 	# Desktop owns its extras (downloaded sidecar binaries); same
 	# delegation as the chan-desktop / desktop-dev build targets.
 	$(MAKE) -C desktop clean

@@ -131,8 +131,7 @@ jobs:
           # else LauncherAssets bakes an empty dir and the launcher window serves
           # the "launcher bundle not built" fallback. Mirrors `make chan-desktop`
           # (its `web` target depends on `web-launcher`).
-          (cd web-launcher && npm install && npm run build)
-          (cd web && npm install && npm run build)
+          (cd web && npm install && npm run build -w @chan/launcher && npm run build -w @chan/workspace-app)
           # Build the console-subsystem `chan.exe` CLI (a real terminal program:
           # `chan devserver` then BLOCKS and takes Ctrl-C, unlike the
           # GUI-subsystem chan-desktop.exe, which detaches when launched from

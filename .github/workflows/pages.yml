@@ -33,13 +33,13 @@ jobs:
         with:
           node-version: '20'
       - run: npm run check
-        working-directory: chan/web-marketing
+        working-directory: chan/web/packages/marketing
       - name: Preserve existing release metadata
         run: npm run preserve:metadata
-        working-directory: chan/web-marketing
+        working-directory: chan/web/packages/marketing
       - uses: actions/upload-pages-artifact@v5
         with:
-          path: chan/web-marketing/dist
+          path: chan/web/packages/marketing/dist
 
   deploy:
     name: deploy site
