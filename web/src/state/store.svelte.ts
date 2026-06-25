@@ -151,11 +151,21 @@ export type ThemeChoice = "system" | "light" | "dark";
 
 function systemTheme(): "light" | "dark" {
   if (typeof window !== "undefined" && window.matchMedia) {
-    return window.matchMedia("(prefers-color-scheme: dark)").matches
-      ? "dark"
-      : "light";
+    if (window.matchMedia("(prefers-color-scheme: dark)").matches) return "dark";
+    if (window.matchMedia("(prefers-color-scheme: light)").matches) return "light";
+    // Neither query matches: the OS appearance is undeterminable (e.g.
+    // headless linux with no desktop colour-scheme signal). Default to
+    // dark, same as when matchMedia itself is unavailable.
+    return "dark";
   }
   return "dark";
+}
+
+/** Test seam: resolve the OS system theme from the current `matchMedia`.
+ *  Lets the headless-fallback regression test stub `matchMedia` and assert
+ *  the resolution without driving the persisted-choice path. */
+export function __testSystemTheme(): "light" | "dark" {
+  return systemTheme();
 }
 
 function effectiveTheme(choice: ThemeChoice): "light" | "dark" {
