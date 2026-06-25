@@ -349,11 +349,17 @@
   /// Apply `initialCaret` once we have a doc to land it in. Idempotent;
   /// subsequent calls no-op via the `caretRestored` flag.
   function maybeRestoreCaret(): void {
-    if (caretRestored || !view || !caretPending) return;
+    if (caretRestored || !view) return;
     const lim = view.state.doc.length;
     if (lim === 0) return;
-    const from = Math.min(Math.max(0, caretPending.from), lim);
-    const to = Math.min(Math.max(0, caretPending.to), lim);
+    // No persisted caret (a plain open via the File Browser / `cs open`):
+    // default to document start so the editor still places a caret AND
+    // re-claims focus once content lands, mirroring the Draft path that
+    // passes initialSelection. Without this an opener that omits a caret
+    // leaves the file unfocused (caret unusable until the user clicks in).
+    const target = caretPending ?? { from: 0, to: 0 };
+    const from = Math.min(Math.max(0, target.from), lim);
+    const to = Math.min(Math.max(0, target.to), lim);
     view.dispatch({
       selection: { anchor: from, head: to },
       effects: EditorView.scrollIntoView(from, { y: "nearest" }),
