@@ -35,6 +35,12 @@ use crate::devserver::DevserverConns;
 /// without risking unbounded growth from an open-close-reopen loop.
 pub const MAX_WINDOW_CONFIGS: usize = 20;
 
+/// Cap on how many distinct monitor signatures we remember per window in the
+/// geometry LRU. Five covers a laptop that docks / undocks across a couple of
+/// external-monitor layouts and flips back without losing any layout's stored
+/// size + position. Newest signature first; older ones evicted past the cap.
+pub const MAX_WINDOW_GEOMETRIES: usize = 5;
+
 /// An already-running chan server that chan-desktop opens by URL.
 /// The URL may carry a bearer token. It is persisted verbatim after
 /// validation because the remote server owns token rotation and
@@ -154,6 +160,81 @@ fn default_zoom() -> f64 {
     1.0
 }
 
+/// Plain monitor descriptor, decoupled from Tauri so the geometry math stays
+/// unit-testable without a window system (this module links no Tauri). `serve`
+/// maps each `tauri::Monitor` to one of these: the full bounds + `scale` form
+/// the monitor SIGNATURE; the `work_*` usable area drives the on-screen clamp.
+/// Physical pixels throughout (OS desktop coordinates).
+#[derive(Debug, Clone, PartialEq)]
+pub struct MonitorDesc {
+    pub x: i32,
+    pub y: i32,
+    pub w: u32,
+    pub h: u32,
+    pub work_x: i32,
+    pub work_y: i32,
+    pub work_w: u32,
+    pub work_h: u32,
+    pub scale: f64,
+}
+
+/// One captured OS window geometry, tagged with the monitor signature it was
+/// captured under. Physical pixels (OS desktop coordinates) so the clamp /
+/// restore math is unambiguous across mixed-DPI monitors; the signature pins the
+/// scale factor, so a matching-signature restore re-applies these verbatim with
+/// no rescale. `x,y` is the OUTER (top-left) position; `w,h` the INNER (content)
+/// size — matching `WebviewWindow::{outer_position, inner_size}` at capture and
+/// `set_position` / `set_size` at apply.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct WindowGeometry {
+    /// Monitor signature at capture time (see [`monitor_signature`]). The
+    /// geometry is only re-applied as a full restore when the live signature
+    /// matches, so a stored `x,y` can't open a window off a desktop it no
+    /// longer fits.
+    pub monitor_sig: String,
+    pub x: i32,
+    pub y: i32,
+    pub w: u32,
+    pub h: u32,
+    /// Wall-clock millis at capture; newest first within a record's
+    /// per-signature LRU. Diagnostics + eviction order only.
+    pub saved_at: u64,
+}
+
+/// Desktop-owned OS window geometry for one window, with a small
+/// per-monitor-signature LRU so a machine that flips monitor layout and back
+/// restores each layout's own size + position. Keyed by the (stable across a
+/// bury / reopen) native window label — sibling to [`WindowConfig`], which holds
+/// SPA restore state for outbound windows only. Geometry lives here for ALL
+/// window classes (local / devserver / outbound) because only chan-desktop can
+/// read / set OS window pixels — even when the SPA session itself is server-owned.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WindowGeometryRecord {
+    /// Native Tauri window label — the join key. Stable across a bury / reopen:
+    /// outbound windows reuse their label; watcher windows reopen at the same
+    /// `{library_id}::{window_id}`.
+    pub window_label: String,
+    /// Per-signature geometry LRU, newest first, capped at
+    /// [`MAX_WINDOW_GEOMETRIES`].
+    #[serde(default)]
+    pub geometries: Vec<WindowGeometry>,
+    /// Wall-clock millis of the most recent capture for this window; newest
+    /// record first in the stack. Diagnostics + LRU eviction.
+    pub saved_at: u64,
+}
+
+/// Result of resolving a window's stored geometry against the CURRENT monitor
+/// signature ([`lookup_window_geometry`]).
+#[derive(Debug, Clone, PartialEq)]
+pub enum GeometryMatch {
+    /// Signature matched: restore full position + size (the apply path clamps it
+    /// on-screen as a safety net).
+    Exact(WindowGeometry),
+    /// No signature match: offer the SIZE only (the apply path clamps it to the
+    /// current primary monitor); the OS picks the position.
+    SizeOnly(WindowGeometry),
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Config {
     /// Explicit outbound URL attachments. These are non-owned
@@ -173,6 +254,14 @@ pub struct Config {
     /// evicted past that.
     #[serde(default)]
     pub window_configs: Vec<WindowConfig>,
+    /// Desktop-owned OS window geometry, one [`WindowGeometryRecord`] per window
+    /// label, each with its own per-monitor-signature LRU. Sibling to
+    /// `window_configs` (which is outbound-only SPA restore state): geometry is
+    /// keyed by the stable native label and covers every window class, since only
+    /// the desktop can read / set OS window pixels. Newest record first; capped
+    /// at `MAX_WINDOW_CONFIGS` windows.
+    #[serde(default)]
+    pub window_geometry: Vec<WindowGeometryRecord>,
     /// The LOCAL library's pane-highlight colour (hex `#rrggbb`), or `None` for
     /// the default accent. Backs the [`LocalColorStore`](chan_server::LocalColorStore)
     /// the host reads when minting local windows (terminals + workspaces). The
@@ -489,6 +578,129 @@ pub fn pop_window_config(
         .iter()
         .position(|w| w.key == key && !is_label_live(&w.window_label))?;
     Some(cfg.window_configs.remove(pos))
+}
+
+/// Order-independent monitor signature: the monitor count plus each monitor's
+/// full bounds and scale factor, sorted so the OS reporting monitors in a
+/// different order doesn't change the string. The scale is stringified
+/// (`{:.2}`) so float equality never bites. Geometry restore is gated on an
+/// exact match of this, so it changes whenever the physical monitor layout or a
+/// DPI scale changes (the cases where a stored position would land off-screen).
+pub fn monitor_signature(mons: &[MonitorDesc]) -> String {
+    let mut parts: Vec<String> = mons
+        .iter()
+        .map(|m| format!("{},{},{},{}@{:.2}", m.x, m.y, m.w, m.h, m.scale))
+        .collect();
+    parts.sort();
+    format!("{}|{}", mons.len(), parts.join("|"))
+}
+
+/// Upsert a freshly-captured geometry into the window's per-signature LRU and
+/// move the window's record to the front. The new signature replaces any prior
+/// entry for the same signature (dedup) and goes to the front, capped at
+/// [`MAX_WINDOW_GEOMETRIES`] so flipping monitor layouts and back keeps each
+/// layout's own geometry. The records stack is capped at [`MAX_WINDOW_CONFIGS`]
+/// windows. Best-effort callers save afterwards; this only mutates `cfg`.
+pub fn push_window_geometry(cfg: &mut Config, label: &str, mut geom: WindowGeometry) {
+    if geom.saved_at == 0 {
+        geom.saved_at = now_millis();
+    }
+    let saved_at = geom.saved_at;
+    if let Some(pos) = cfg
+        .window_geometry
+        .iter()
+        .position(|r| r.window_label == label)
+    {
+        let mut rec = cfg.window_geometry.remove(pos);
+        rec.geometries.retain(|g| g.monitor_sig != geom.monitor_sig);
+        rec.geometries.insert(0, geom);
+        rec.geometries.truncate(MAX_WINDOW_GEOMETRIES);
+        rec.saved_at = saved_at;
+        cfg.window_geometry.insert(0, rec);
+    } else {
+        cfg.window_geometry.insert(
+            0,
+            WindowGeometryRecord {
+                window_label: label.to_string(),
+                geometries: vec![geom],
+                saved_at,
+            },
+        );
+    }
+    cfg.window_geometry.truncate(MAX_WINDOW_CONFIGS);
+}
+
+/// Resolve the geometry to apply for `label` under `current_sig`: an exact
+/// signature match restores position + size ([`GeometryMatch::Exact`]);
+/// otherwise the most-recent stored geometry is offered SIZE-only
+/// ([`GeometryMatch::SizeOnly`]). `None` when nothing is stored for the label.
+pub fn lookup_window_geometry(
+    cfg: &Config,
+    label: &str,
+    current_sig: &str,
+) -> Option<GeometryMatch> {
+    let rec = cfg
+        .window_geometry
+        .iter()
+        .find(|r| r.window_label == label)?;
+    if let Some(g) = rec.geometries.iter().find(|g| g.monitor_sig == current_sig) {
+        return Some(GeometryMatch::Exact(g.clone()));
+    }
+    rec.geometries.first().cloned().map(GeometryMatch::SizeOnly)
+}
+
+/// Shrink a size so it never exceeds the given (primary) work area, with a
+/// 1px floor. Position is the OS's choice in the size-only fallback, so only
+/// `w/h` are bounded.
+pub fn clamp_size(w: u32, h: u32, work_w: u32, work_h: u32) -> (u32, u32) {
+    (w.min(work_w).max(1), h.min(work_h).max(1))
+}
+
+/// Bounding box `(min_x, min_y, max_x, max_y)` of every monitor's WORK area, or
+/// `None` when there are no monitors. The clamp keeps a restored window inside
+/// this box so it can't open off the visible desktop.
+pub fn union_work_bbox(mons: &[MonitorDesc]) -> Option<(i32, i32, i32, i32)> {
+    if mons.is_empty() {
+        return None;
+    }
+    let min_x = mons.iter().map(|m| m.work_x).min().unwrap();
+    let min_y = mons.iter().map(|m| m.work_y).min().unwrap();
+    let max_x = mons
+        .iter()
+        .map(|m| m.work_x + m.work_w as i32)
+        .max()
+        .unwrap();
+    let max_y = mons
+        .iter()
+        .map(|m| m.work_y + m.work_h as i32)
+        .max()
+        .unwrap();
+    Some((min_x, min_y, max_x, max_y))
+}
+
+/// Clamp a window rect so the WHOLE window stays inside the work-area bounding
+/// box: shrink the size to fit if larger, then pull the top-left back so the
+/// window can't open off the visible desktop. For a signature MATCH this is a
+/// near-no-op (the stored rect was valid then); it earns its keep when the work
+/// area shrank under the same physical layout (a dock / taskbar appeared).
+pub fn clamp_rect_to_bbox(
+    x: i32,
+    y: i32,
+    w: u32,
+    h: u32,
+    bbox: (i32, i32, i32, i32),
+) -> (i32, i32, u32, u32) {
+    let (min_x, min_y, max_x, max_y) = bbox;
+    let bw = (max_x - min_x).max(0) as u32;
+    let bh = (max_y - min_y).max(0) as u32;
+    let w = w.min(bw).max(1);
+    let h = h.min(bh).max(1);
+    // Highest top-left that still fits the window inside the bbox.
+    let max_x_pos = (max_x - w as i32).max(min_x);
+    let max_y_pos = (max_y - h as i32).max(min_y);
+    let cx = x.clamp(min_x, max_x_pos);
+    let cy = y.clamp(min_y, max_y_pos);
+    (cx, cy, w, h)
 }
 
 fn now_millis() -> u64 {
@@ -960,5 +1172,242 @@ mod tests {
                 ..Default::default()
             })
             .is_err());
+    }
+
+    // --- window geometry ---
+
+    fn mon(x: i32, y: i32, w: u32, h: u32, scale: f64) -> MonitorDesc {
+        // Work area = full bounds minus a 40px top bar, to exercise the clamp.
+        MonitorDesc {
+            x,
+            y,
+            w,
+            h,
+            work_x: x,
+            work_y: y + 40,
+            work_w: w,
+            work_h: h - 40,
+            scale,
+        }
+    }
+
+    fn geom(sig: &str, x: i32, y: i32, w: u32, h: u32, saved_at: u64) -> WindowGeometry {
+        WindowGeometry {
+            monitor_sig: sig.to_string(),
+            x,
+            y,
+            w,
+            h,
+            saved_at,
+        }
+    }
+
+    #[test]
+    fn signature_is_order_independent() {
+        let a = mon(0, 0, 2560, 1440, 2.0);
+        let b = mon(2560, 0, 1920, 1080, 1.0);
+        assert_eq!(
+            monitor_signature(&[a.clone(), b.clone()]),
+            monitor_signature(&[b, a]),
+        );
+    }
+
+    #[test]
+    fn signature_encodes_count_and_scale() {
+        let sig = monitor_signature(&[mon(0, 0, 1920, 1080, 1.5)]);
+        assert!(sig.starts_with("1|"), "sig={sig}");
+        assert!(sig.contains("0,0,1920,1080@1.50"), "sig={sig}");
+        // A different scale under the same bounds is a DIFFERENT signature.
+        assert_ne!(sig, monitor_signature(&[mon(0, 0, 1920, 1080, 2.0)]));
+    }
+
+    #[test]
+    fn signature_changes_with_monitor_count() {
+        let one = monitor_signature(&[mon(0, 0, 1920, 1080, 1.0)]);
+        let two = monitor_signature(&[mon(0, 0, 1920, 1080, 1.0), mon(1920, 0, 1920, 1080, 1.0)]);
+        assert_ne!(one, two);
+    }
+
+    #[test]
+    fn push_geometry_inserts_and_dedupes_by_signature() {
+        let mut cfg = Config::default();
+        push_window_geometry(&mut cfg, "w1", geom("sigA", 10, 20, 800, 600, 100));
+        // Same window + same signature: replaces, not appends; stays length 1.
+        push_window_geometry(&mut cfg, "w1", geom("sigA", 30, 40, 900, 700, 200));
+        assert_eq!(cfg.window_geometry.len(), 1);
+        assert_eq!(cfg.window_geometry[0].geometries.len(), 1);
+        assert_eq!(cfg.window_geometry[0].geometries[0].x, 30);
+        assert_eq!(cfg.window_geometry[0].geometries[0].w, 900);
+        assert_eq!(cfg.window_geometry[0].saved_at, 200);
+    }
+
+    #[test]
+    fn push_geometry_keeps_per_signature_lru_capped_newest_first() {
+        let mut cfg = Config::default();
+        for i in 0..(MAX_WINDOW_GEOMETRIES as i32 + 3) {
+            let sig = format!("sig{i}");
+            push_window_geometry(&mut cfg, "w1", geom(&sig, i, i, 800, 600, 100 + i as u64));
+        }
+        assert_eq!(cfg.window_geometry.len(), 1);
+        assert_eq!(
+            cfg.window_geometry[0].geometries.len(),
+            MAX_WINDOW_GEOMETRIES
+        );
+        let newest = format!("sig{}", MAX_WINDOW_GEOMETRIES as i32 + 2);
+        assert_eq!(cfg.window_geometry[0].geometries[0].monitor_sig, newest);
+    }
+
+    #[test]
+    fn push_geometry_caps_records_and_moves_touched_to_front() {
+        let mut cfg = Config::default();
+        for i in 0..(MAX_WINDOW_CONFIGS + 3) {
+            let label = format!("w{i}");
+            push_window_geometry(&mut cfg, &label, geom("s", 0, 0, 1, 1, 100 + i as u64));
+        }
+        // Capped at MAX_WINDOW_CONFIGS windows; newest label at the front, the
+        // three oldest evicted.
+        assert_eq!(cfg.window_geometry.len(), MAX_WINDOW_CONFIGS);
+        let newest = format!("w{}", MAX_WINDOW_CONFIGS + 2);
+        assert_eq!(cfg.window_geometry[0].window_label, newest);
+        assert!(!cfg.window_geometry.iter().any(|r| r.window_label == "w0"));
+        // Re-touching a surviving window moves its record to the front.
+        let survivor = format!("w{}", MAX_WINDOW_CONFIGS);
+        push_window_geometry(&mut cfg, &survivor, geom("s", 5, 5, 1, 1, 999));
+        assert_eq!(cfg.window_geometry[0].window_label, survivor);
+        assert_eq!(cfg.window_geometry.len(), MAX_WINDOW_CONFIGS);
+    }
+
+    #[test]
+    fn lookup_geometry_exact_on_signature_match() {
+        let mut cfg = Config::default();
+        push_window_geometry(&mut cfg, "w1", geom("sigA", 10, 20, 800, 600, 100));
+        match lookup_window_geometry(&cfg, "w1", "sigA") {
+            Some(GeometryMatch::Exact(g)) => assert_eq!((g.x, g.y, g.w, g.h), (10, 20, 800, 600)),
+            other => panic!("expected Exact, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn lookup_geometry_size_only_on_signature_mismatch() {
+        let mut cfg = Config::default();
+        push_window_geometry(&mut cfg, "w1", geom("sigA", 10, 20, 800, 600, 100));
+        match lookup_window_geometry(&cfg, "w1", "sigOTHER") {
+            Some(GeometryMatch::SizeOnly(g)) => assert_eq!((g.w, g.h), (800, 600)),
+            other => panic!("expected SizeOnly, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn lookup_geometry_none_when_label_absent() {
+        let cfg = Config::default();
+        assert!(lookup_window_geometry(&cfg, "missing", "sigA").is_none());
+    }
+
+    #[test]
+    fn geometry_flip_layout_and_back_restores_each_signature() {
+        // The dual-monitor flip guardrail: capture under A, then under B, then
+        // flip back to A -> A's own geometry is still remembered (Exact), not
+        // overwritten by B.
+        let mut cfg = Config::default();
+        push_window_geometry(
+            &mut cfg,
+            "lib-ab::w-1",
+            geom("sigA", 100, 100, 1200, 800, 100),
+        );
+        push_window_geometry(&mut cfg, "lib-ab::w-1", geom("sigB", 50, 50, 900, 700, 200));
+        match lookup_window_geometry(&cfg, "lib-ab::w-1", "sigA") {
+            Some(GeometryMatch::Exact(g)) => {
+                assert_eq!((g.x, g.y, g.w, g.h), (100, 100, 1200, 800))
+            }
+            other => panic!("flip-back to A: expected Exact A, got {other:?}"),
+        }
+        match lookup_window_geometry(&cfg, "lib-ab::w-1", "sigB") {
+            Some(GeometryMatch::Exact(g)) => assert_eq!((g.x, g.y, g.w, g.h), (50, 50, 900, 700)),
+            other => panic!("on B: expected Exact B, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn clamp_size_shrinks_oversize_keeps_fitting() {
+        assert_eq!(clamp_size(3000, 2000, 1920, 1080), (1920, 1080));
+        assert_eq!(clamp_size(800, 600, 1920, 1080), (800, 600));
+    }
+
+    #[test]
+    fn clamp_rect_leaves_onscreen_rect_unchanged() {
+        let bbox = union_work_bbox(&[mon(0, 0, 2560, 1440, 2.0)]).unwrap();
+        assert_eq!(
+            clamp_rect_to_bbox(100, 100, 1200, 800, bbox),
+            (100, 100, 1200, 800)
+        );
+    }
+
+    #[test]
+    fn clamp_rect_pulls_offscreen_rect_back() {
+        // work area: x[0,2560], y[40,1440]
+        let bbox = union_work_bbox(&[mon(0, 0, 2560, 1440, 2.0)]).unwrap();
+        // Bottom-right overflow: top-left pulled so the 1200x800 window fits.
+        assert_eq!(
+            clamp_rect_to_bbox(9000, 9000, 1200, 800, bbox),
+            (1360, 640, 1200, 800)
+        );
+        // Negative origin pulled to the work-area min (x=0, y=40).
+        let (x, y, _, _) = clamp_rect_to_bbox(-500, -500, 1200, 800, bbox);
+        assert_eq!((x, y), (0, 40));
+    }
+
+    #[test]
+    fn clamp_rect_shrinks_window_larger_than_desktop() {
+        let bbox = union_work_bbox(&[mon(0, 0, 1280, 800, 1.0)]).unwrap(); // work 1280x760
+        assert_eq!(
+            clamp_rect_to_bbox(0, 40, 4000, 4000, bbox),
+            (0, 40, 1280, 760)
+        );
+    }
+
+    #[test]
+    fn clamp_rect_keeps_window_on_second_monitor() {
+        // Two side-by-side monitors; a window on the right one stays put.
+        let bbox =
+            union_work_bbox(&[mon(0, 0, 1920, 1080, 1.0), mon(1920, 0, 1920, 1080, 1.0)]).unwrap(); // x[0,3840], y[40,1080]
+        assert_eq!(
+            clamp_rect_to_bbox(2000, 100, 1000, 700, bbox),
+            (2000, 100, 1000, 700)
+        );
+    }
+
+    #[test]
+    fn union_work_bbox_none_for_empty() {
+        assert!(union_work_bbox(&[]).is_none());
+    }
+
+    #[test]
+    fn config_loads_without_window_geometry_field() {
+        // A config.json predating window geometry must still load: serde reads
+        // the missing key as the empty set, so the load never fails and drops
+        // the rest of the config.
+        let raw = r#"{ "outbound": [], "window_configs": [] }"#;
+        let cfg: Config = serde_json::from_str(raw).expect("load without window_geometry");
+        assert!(cfg.window_geometry.is_empty());
+    }
+
+    #[test]
+    fn window_geometry_round_trips() {
+        let mut cfg = Config::default();
+        push_window_geometry(
+            &mut cfg,
+            "lib-ab::w-1",
+            geom("sigA", 100, 100, 1200, 800, 100),
+        );
+        push_window_geometry(&mut cfg, "lib-ab::w-1", geom("sigB", 50, 50, 900, 700, 200));
+        let json = serde_json::to_string(&cfg).expect("serialize");
+        let back: Config = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back.window_geometry.len(), 1);
+        let rec = &back.window_geometry[0];
+        assert_eq!(rec.window_label, "lib-ab::w-1");
+        assert_eq!(rec.geometries.len(), 2);
+        // Newest (sigB) first.
+        assert_eq!(rec.geometries[0].monitor_sig, "sigB");
+        assert_eq!(rec.geometries[1].monitor_sig, "sigA");
     }
 }

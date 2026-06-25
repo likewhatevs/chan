@@ -35,7 +35,7 @@ use tauri::menu::{Menu, MenuItemKind, PredefinedMenuItem, WINDOW_SUBMENU_ID};
 use tauri::menu::{MenuItemBuilder, Submenu};
 use tauri::{Emitter, Manager, RunEvent, State, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 
-use config::{Config, ConfigStore, Devserver, OutboundWorkspace, WindowConfig};
+use config::{Config, ConfigStore, Devserver, OutboundWorkspace, WindowConfig, WindowGeometry};
 use serve::ServeHandle;
 
 const CHAN_BUSY_CHANGED: &str = "chan-busy";
@@ -381,6 +381,45 @@ impl AppState {
             tracing::warn!(error = %e, "persisting window config stack failed");
         }
         Some(popped)
+    }
+
+    /// Upsert a window's freshly-captured OS geometry into the desktop-local
+    /// geometry LRU (see `config::push_window_geometry`). Keyed by the stable
+    /// native window label; covers every window class (the geometry store is
+    /// separate from the outbound-only `window_configs`). Best-effort: any I/O
+    /// error is logged and dropped, like `push_window_config`.
+    pub fn push_window_geometry(&self, label: &str, geom: WindowGeometry) {
+        let mut store = self.store.lock().unwrap();
+        let mut cfg = match store.get() {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!(error = %e, "loading config to push window geometry failed");
+                return;
+            }
+        };
+        config::push_window_geometry(&mut cfg, label, geom);
+        if let Err(e) = store.save(&cfg) {
+            tracing::warn!(error = %e, "persisting window geometry stack failed");
+        }
+    }
+
+    /// Resolve the geometry to apply for `label` under `current_sig` (see
+    /// `config::lookup_window_geometry`): exact-signature restore vs size-only
+    /// fallback vs nothing. Read-only; `None` on a config read error (the open
+    /// then falls back to the default size).
+    pub fn lookup_window_geometry(
+        &self,
+        label: &str,
+        current_sig: &str,
+    ) -> Option<config::GeometryMatch> {
+        let cfg = match self.store.lock().unwrap().get() {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!(error = %e, "loading config to look up window geometry failed");
+                return None;
+            }
+        };
+        config::lookup_window_geometry(&cfg, label, current_sig)
     }
 
     /// Assign the lowest-free display number for `base` among live

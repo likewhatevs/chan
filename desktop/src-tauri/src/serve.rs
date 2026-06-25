@@ -27,9 +27,12 @@ fn next_window_seq() -> u64 {
     WINDOW_SEQ.fetch_add(1, Ordering::Relaxed)
 }
 
-use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent};
+use tauri::{
+    AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, WebviewUrl, WebviewWindowBuilder,
+    WindowEvent,
+};
 
-use crate::config::{self, WindowConfig};
+use crate::config::{self, WindowConfig, WindowGeometry};
 use crate::AppState;
 
 /// Tauri event emitted when any local runtime starts or stops. The
@@ -913,7 +916,15 @@ fn build_workspace_window(app: &AppHandle, spec: WindowSpec<'_>) -> Result<(), S
         let display_title = state
             .window_title_override(&label_owned)
             .unwrap_or_else(|| format!("{title_owned} Window {window_number}"));
-        match WebviewWindowBuilder::new(&app_owned, &label_owned, webview_url)
+        // Resolve the desktop-local OS geometry to restore for this window
+        // (keyed by the native label, matched against the live monitor
+        // signature). When we will reposition / resize, the window builds HIDDEN
+        // and the physical geometry is applied post-build before it shows
+        // (`apply_geometry_plan` in the Ok arm) — flash-free, and physical
+        // desktop coordinates sidestep the builder's logical-pixel cross-DPI
+        // ambiguity. A `Default` plan keeps the visible 1200x800 build below.
+        let geometry_plan = resolve_geometry_plan(&app_owned, &label_owned);
+        let builder = WebviewWindowBuilder::new(&app_owned, &label_owned, webview_url)
             .title(display_title.clone())
             .inner_size(1200.0, 800.0)
             .min_inner_size(640.0, 400.0)
@@ -942,10 +953,19 @@ fn build_workspace_window(app: &AppHandle, spec: WindowSpec<'_>) -> Result<(), S
             // path-print reads the drag pasteboard via
             // `read_dropped_paths` (dropped_paths.rs) instead of
             // native drag events.
-            .disable_drag_drop_handler()
-            .build()
-        {
+            .disable_drag_drop_handler();
+        // Build hidden when restored geometry will be applied, so the window
+        // never flashes at the default size/position before it is repositioned.
+        let builder = if geometry_plan.builds_hidden() {
+            builder.visible(false)
+        } else {
+            builder
+        };
+        match builder.build() {
             Ok(window) => {
+                // Apply the restored OS geometry (physical px) and reveal the
+                // window at its final size/position before anything else.
+                apply_geometry_plan(&window, &label_owned, geometry_plan);
                 // Register the OS title + kind so `cs window list` shows
                 // the same title the title bar does. The `Destroyed` arm
                 // below drops the entry. No-op without an embedded server
@@ -1046,6 +1066,9 @@ fn build_workspace_window(app: &AppHandle, spec: WindowSpec<'_>) -> Result<(), S
                         // it is in the watcher bury set.
                         if label_for_close.starts_with("local::") {
                             api.prevent_close();
+                            // Capture OS geometry while the window is still alive —
+                            // the watcher reconcile destroys the native window on bury.
+                            capture_window_geometry(&app_for_close, &label_for_close);
                             let title = app_for_close
                                 .get_webview_window(&label_for_close)
                                 .and_then(|w| w.title().ok())
@@ -1073,6 +1096,10 @@ fn build_workspace_window(app: &AppHandle, spec: WindowSpec<'_>) -> Result<(), S
                         // record stays, reopenable from the Window menu / the dot.
                         if label_for_close.starts_with("lib-") {
                             api.prevent_close();
+                            // Capture OS geometry before the devserver reconcile
+                            // closes the webview on bury. This is the D1 smoke
+                            // target (a devserver window restoring its own size).
+                            capture_window_geometry(&app_for_close, &label_for_close);
                             let title = app_for_close
                                 .get_webview_window(&label_for_close)
                                 .and_then(|w| w.title().ok())
@@ -1150,6 +1177,7 @@ fn build_workspace_window(app: &AppHandle, spec: WindowSpec<'_>) -> Result<(), S
                                 &key_for_close,
                                 false,
                             );
+                            capture_window_geometry(&app_for_close, &label_for_close);
                         }
                         let Some(window) = app_for_close.get_webview_window(&label_for_close)
                         else {
@@ -1394,6 +1422,161 @@ fn prompt_devserver_transfer_close(app: &AppHandle, state: &Arc<AppState>, label
                 state_cb.bury_window(&label_cb, &t);
                 crate::rebuild_window_menu(&app_cb);
             }
+        },
+    );
+}
+
+/// Map the live monitors to plain [`config::MonitorDesc`]s (full bounds + scale
+/// for the signature; work area for the clamp). Empty on a monitor-query error,
+/// which yields the degenerate `"0|"` signature — a window then restores
+/// size-only (no off-screen position) rather than crashing the open.
+fn current_monitors(app: &AppHandle) -> Vec<config::MonitorDesc> {
+    app.available_monitors()
+        .unwrap_or_default()
+        .iter()
+        .map(monitor_desc)
+        .collect()
+}
+
+/// One `tauri::Monitor` -> the plain descriptor the geometry math consumes.
+fn monitor_desc(m: &tauri::Monitor) -> config::MonitorDesc {
+    let pos = m.position();
+    let size = m.size();
+    let area = m.work_area();
+    config::MonitorDesc {
+        x: pos.x,
+        y: pos.y,
+        w: size.width,
+        h: size.height,
+        work_x: area.position.x,
+        work_y: area.position.y,
+        work_w: area.size.width,
+        work_h: area.size.height,
+        scale: m.scale_factor(),
+    }
+}
+
+/// The current primary monitor's work-area size (physical px), used to clamp the
+/// size-only fallback. `None` when no primary monitor is identifiable.
+fn primary_work_area(app: &AppHandle) -> Option<(u32, u32)> {
+    let m = app.primary_monitor().ok().flatten()?;
+    let area = m.work_area();
+    Some((area.size.width, area.size.height))
+}
+
+/// What to do with a window's geometry at build time. `Restore` re-applies a
+/// signature-matched full rect; `SizeOnly` re-applies just the size (OS picks
+/// the position) when the monitor layout changed; `Default` leaves the builder's
+/// 1200x800 + OS position. The non-`Default` plans build the window hidden and
+/// apply physical geometry post-build (see [`apply_geometry_plan`]).
+enum GeometryPlan {
+    Default,
+    SizeOnly { w: u32, h: u32 },
+    Restore { x: i32, y: i32, w: u32, h: u32 },
+}
+
+impl GeometryPlan {
+    /// Whether the builder should start hidden (any plan that repositions /
+    /// resizes post-build, so the window doesn't flash at the default first).
+    fn builds_hidden(&self) -> bool {
+        !matches!(self, GeometryPlan::Default)
+    }
+}
+
+/// Resolve the geometry to apply for `label` against the CURRENT monitor
+/// signature: an exact-signature match restores the full rect (clamped on-screen
+/// as a safety net); a mismatch restores SIZE only (clamped to the primary work
+/// area, OS positions); nothing stored -> the default. Desktop-local and
+/// read-only — never blocks the open.
+fn resolve_geometry_plan(app: &AppHandle, label: &str) -> GeometryPlan {
+    let mons = current_monitors(app);
+    let sig = config::monitor_signature(&mons);
+    let state = app.state::<Arc<AppState>>();
+    match state.lookup_window_geometry(label, &sig) {
+        None => GeometryPlan::Default,
+        Some(config::GeometryMatch::Exact(g)) => match config::union_work_bbox(&mons) {
+            Some(bbox) => {
+                let (x, y, w, h) = config::clamp_rect_to_bbox(g.x, g.y, g.w, g.h, bbox);
+                GeometryPlan::Restore { x, y, w, h }
+            }
+            // No monitors to clamp against: apply the stored rect verbatim.
+            None => GeometryPlan::Restore {
+                x: g.x,
+                y: g.y,
+                w: g.w,
+                h: g.h,
+            },
+        },
+        Some(config::GeometryMatch::SizeOnly(g)) => match primary_work_area(app) {
+            Some((work_w, work_h)) => {
+                let (w, h) = config::clamp_size(g.w, g.h, work_w, work_h);
+                GeometryPlan::SizeOnly { w, h }
+            }
+            None => GeometryPlan::SizeOnly { w: g.w, h: g.h },
+        },
+    }
+}
+
+/// Apply a resolved [`GeometryPlan`] to a freshly-built (hidden, for non-default
+/// plans) window, then reveal it. Physical px throughout; every step is
+/// best-effort so a geometry error degrades to a default-placed visible window
+/// rather than a stuck-hidden one.
+fn apply_geometry_plan(window: &tauri::WebviewWindow, label: &str, plan: GeometryPlan) {
+    match plan {
+        GeometryPlan::Default => {}
+        GeometryPlan::SizeOnly { w, h } => {
+            if let Err(e) = window.set_size(PhysicalSize::new(w, h)) {
+                tracing::warn!(label = %label, error = %e, "restoring window size failed");
+            }
+            reveal_window(window, label);
+        }
+        GeometryPlan::Restore { x, y, w, h } => {
+            if let Err(e) = window.set_size(PhysicalSize::new(w, h)) {
+                tracing::warn!(label = %label, error = %e, "restoring window size failed");
+            }
+            if let Err(e) = window.set_position(PhysicalPosition::new(x, y)) {
+                tracing::warn!(label = %label, error = %e, "restoring window position failed");
+            }
+            reveal_window(window, label);
+        }
+    }
+}
+
+/// Show + focus a window that was built hidden for geometry restore. Always
+/// runs for a non-default plan so the window can never stay invisible.
+fn reveal_window(window: &tauri::WebviewWindow, label: &str) {
+    if let Err(e) = window.show() {
+        tracing::warn!(label = %label, error = %e, "showing restored window failed");
+    }
+    let _ = window.set_focus();
+}
+
+/// Capture a window's CURRENT OS geometry (outer position + inner size, physical
+/// px) under the live monitor signature and upsert it into the desktop-local
+/// geometry LRU keyed by `label`. Called at every bury arm BEFORE the window is
+/// hidden / destroyed, so a reopen restores the size + position the user left.
+/// Best-effort: skips on a query error or a degenerate (zero) size; geometry is
+/// desktop-owned, so this runs for local / devserver / outbound windows alike.
+fn capture_window_geometry(app: &AppHandle, label: &str) {
+    let Some(window) = app.get_webview_window(label) else {
+        return;
+    };
+    let (Ok(pos), Ok(size)) = (window.outer_position(), window.inner_size()) else {
+        return;
+    };
+    if size.width == 0 || size.height == 0 {
+        return;
+    }
+    let monitor_sig = config::monitor_signature(&current_monitors(app));
+    app.state::<Arc<AppState>>().push_window_geometry(
+        label,
+        WindowGeometry {
+            monitor_sig,
+            x: pos.x,
+            y: pos.y,
+            w: size.width,
+            h: size.height,
+            saved_at: 0,
         },
     );
 }
