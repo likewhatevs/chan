@@ -80,7 +80,11 @@ rpm:
 	# to the package dir, unlike cargo-deb). --target-dir forces output into the
 	# workspace target/ so it lands beside the .deb, where the release workflow's
 	# `find target` staging step looks. Asset resolution is unaffected.
-	cd "$(CHAN_REPO)/crates/chan" && $(CARGO) generate-rpm --target "$(RPM_TARGET)" --target-dir "$(CHAN_REPO)/target"
+	# RPM version grammar forbids '-' (it separates version from release), so a
+	# semver prerelease (0.50.0-rc1) is translated to RPM's '~' form (0.50.0~rc1),
+	# which also sorts before the final release. The semver version is unchanged
+	# everywhere else; a final release carries no '-' and is unaffected.
+	cd "$(CHAN_REPO)/crates/chan" && $(CARGO) generate-rpm --target "$(RPM_TARGET)" --target-dir "$(CHAN_REPO)/target" --set-metadata 'version = "$(subst -,~,$(CHAN_VERSION))"'
 	@file=$$(find "$(CHAN_REPO)/target" -path '*/generate-rpm/*.rpm' -type f | head -1); \
 		if [ -z "$$file" ]; then \
 			echo "error: no .rpm under $(CHAN_REPO)/target"; \
