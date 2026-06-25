@@ -1,11 +1,13 @@
-# web-marketing
+# @chan/marketing
 
-Source for the public `chan.app` static site. The publishable artifact is generated into `web-marketing/dist/`; do not publish the source tree directly.
+Source for the public `chan.app` static site, a member of the `./web`
+npm-workspaces monorepo. The publishable artifact is generated into `dist/`; do
+not publish the source tree directly.
 
 ## Layout
 
 ```text
-web-marketing/
+web/packages/marketing/
 +-- package.json
 +-- scripts/
 |   `-- build.mjs          static generator and validator
@@ -119,4 +121,7 @@ Desktop packages are downloaded directly as release artifacts. They are not inst
 
 ## Workspace boundary
 
-This site is independent from the Svelte editor app in `web/`. It does not participate in `cargo build`, `cargo test`, or the embedded editor bundle.
+This site is a member of the `./web` npm-workspaces monorepo, but unlike the
+embedded SPAs it is not baked into any binary: it does not participate in `cargo
+build`, `cargo test`, or the embedded editor bundle, and it deploys to `chan.app`
+via the release/pages workflows.

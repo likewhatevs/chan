@@ -7,7 +7,7 @@ import { gatewayServices } from "./gateway-services.mjs";
 
 const scriptPath = fileURLToPath(import.meta.url);
 const siteRoot = path.resolve(path.dirname(scriptPath), "..");
-const repoRoot = path.resolve(siteRoot, "..");
+const repoRoot = path.resolve(siteRoot, "..", "..", "..");
 const srcRoot = path.join(siteRoot, "src");
 const distRoot = path.join(siteRoot, "dist");
 const manualRoot = path.join(repoRoot, "docs", "manual");
@@ -110,7 +110,7 @@ async function main() {
 
   await copyManualAssets();
   await validateDist(version);
-  console.log(`built web-marketing/dist for chan ${version}`);
+  console.log(`built marketing dist for chan ${version}`);
 }
 
 async function assertFile(file) {

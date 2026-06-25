@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 
 const scriptPath = fileURLToPath(import.meta.url);
 const siteRoot = path.resolve(path.dirname(scriptPath), "..");
-const repoRoot = path.resolve(siteRoot, "..");
+const repoRoot = path.resolve(siteRoot, "..", "..", "..");
 const distRoot = path.join(siteRoot, "dist");
 
 async function main() {
@@ -71,7 +71,7 @@ async function parseArgs(args) {
 function printHelp() {
   console.log(`usage: node scripts/bundle-manual.mjs [--version X.Y.Z] [--out PATH] [--check] [--list]
 
-Builds chan-manual-<version>.tar.gz from web-marketing/dist/manual and shared
+Builds chan-manual-<version>.tar.gz from marketing dist/manual and shared
 site assets. Run npm run build first.
 `);
 }

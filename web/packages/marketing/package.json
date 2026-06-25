@@ -1,5 +1,6 @@
 {
-  "name": "chan-web-marketing",
+  "name": "@chan/marketing",
+  "version": "0.51.0",
   "private": true,
   "type": "module",
   "engines": {

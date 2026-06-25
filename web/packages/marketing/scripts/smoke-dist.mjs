@@ -38,13 +38,13 @@ async function main() {
   } finally {
     await close(server);
   }
-  console.log(`smoked web-marketing/dist routes on 127.0.0.1:${port}`);
+  console.log(`smoked marketing dist routes on 127.0.0.1:${port}`);
 }
 
 async function assertDistReady() {
   const stat = await fs.stat(distRoot).catch(() => null);
   if (!stat?.isDirectory()) {
-    throw new Error("web-marketing/dist is missing; run npm run build first");
+    throw new Error("marketing dist is missing; run npm run build first");
   }
 }
 

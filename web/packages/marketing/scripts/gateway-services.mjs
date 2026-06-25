@@ -14,13 +14,15 @@ const repoRoot = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "..",
   "..",
+  "..",
+  "..",
 );
 
 const makefile = readFileSync(path.join(repoRoot, "Makefile"), "utf8");
 const match = makefile.match(/^GATEWAY_RELEASE_CRATES\s*:?=\s*(.+)$/m);
 if (!match) {
   throw new Error(
-    "GATEWAY_RELEASE_CRATES not found in Makefile; the web-marketing " +
+    "GATEWAY_RELEASE_CRATES not found in Makefile; the marketing " +
       "release-asset scripts single-source the gateway service names from it.",
   );
 }
