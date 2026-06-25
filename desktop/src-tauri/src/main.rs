@@ -3215,27 +3215,48 @@ fn main() {
                     format!("http://{}/?t={}", embedded.addr(), embedded.launcher_token());
                 match launcher_url.parse::<tauri::Url>() {
                     Ok(url) => {
-                        match WebviewWindowBuilder::new(app, "main", WebviewUrl::External(url))
+                        // Restore the launcher's last size + position (per-monitor),
+                        // the same path workspace windows use: resolve a plan, build
+                        // hidden when we'll reposition, then apply + reveal post-build
+                        // so it never flashes at the default first.
+                        let geometry_plan = serve::resolve_geometry_plan(app.handle(), "main");
+                        let restored = geometry_plan.builds_hidden();
+                        let builder = WebviewWindowBuilder::new(app, "main", WebviewUrl::External(url))
                             .title(LAUNCHER_WINDOW_TITLE)
                             // The launcher is remote-served and skips KEY_BRIDGE_JS;
                             // inject the minimal reload-only chord so Cmd+R / Ctrl+R
                             // reloads it.
                             .initialization_script(LAUNCHER_RELOAD_BRIDGE_JS)
-                            .inner_size(960.0, 600.0)
-                            .min_inner_size(720.0, 400.0)
-                            .resizable(true)
-                            .build()
-                        {
+                            // Compact default; the persisted geometry above overrides
+                            // it once the user resizes/moves the window.
+                            .inner_size(680.0, 720.0)
+                            .min_inner_size(560.0, 460.0)
+                            .resizable(true);
+                        let builder = if restored {
+                            builder.visible(false)
+                        } else {
+                            builder
+                        };
+                        match builder.build() {
                             Ok(main) => {
                                 let main_for_event = main.clone();
+                                let app_for_close = app.handle().clone();
                                 main.on_window_event(move |event| {
                                     if let WindowEvent::CloseRequested { api, .. } = event {
                                         api.prevent_close();
+                                        // Persist size + position before hiding so the
+                                        // next reopen restores them.
+                                        serve::capture_window_geometry(&app_for_close, "main");
                                         let _ = main_for_event.hide();
                                     }
                                 });
-                                let _ = main.show();
-                                let _ = main.set_focus();
+                                // Reveals the window on a `Restore` plan; a `Default`
+                                // plan is a no-op, so show + focus it explicitly.
+                                serve::apply_geometry_plan(&main, "main", geometry_plan);
+                                if !restored {
+                                    let _ = main.show();
+                                    let _ = main.set_focus();
+                                }
                             }
                             Err(e) => {
                                 tracing::warn!(error = %e, "building the launcher window failed")

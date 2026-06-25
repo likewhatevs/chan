@@ -1462,7 +1462,7 @@ fn monitor_desc(m: &tauri::Monitor) -> config::MonitorDesc {
 /// `Restore` builds the window hidden and applies physical geometry post-build
 /// (see [`apply_geometry_plan`]). `Debug` is logged in the `WINGEO` diagnostics.
 #[derive(Debug)]
-enum GeometryPlan {
+pub(crate) enum GeometryPlan {
     Default,
     Restore { x: i32, y: i32, w: u32, h: u32 },
 }
@@ -1470,7 +1470,7 @@ enum GeometryPlan {
 impl GeometryPlan {
     /// Whether the builder should start hidden (a `Restore` repositions /
     /// resizes post-build, so the window doesn't flash at the default first).
-    fn builds_hidden(&self) -> bool {
+    pub(crate) fn builds_hidden(&self) -> bool {
         !matches!(self, GeometryPlan::Default)
     }
 }
@@ -1506,7 +1506,7 @@ fn plan_for_geometry(mons: &[config::MonitorDesc], g: &WindowGeometry) -> Geomet
 /// shrink on the primary — the external-monitor bug); nothing stored -> default.
 /// Desktop-local and read-only — never blocks the open. Logs a `WINGEO` line so
 /// the host can pin the behaviour on real multi-monitor hardware from the rc2 run.
-fn resolve_geometry_plan(app: &AppHandle, label: &str) -> GeometryPlan {
+pub(crate) fn resolve_geometry_plan(app: &AppHandle, label: &str) -> GeometryPlan {
     let mons = current_monitors(app);
     let sig = config::monitor_signature(&mons);
     let state = app.state::<Arc<AppState>>();
@@ -1538,7 +1538,7 @@ fn resolve_geometry_plan(app: &AppHandle, label: &str) -> GeometryPlan {
 /// geometry error degrades to a default-placed visible window rather than a
 /// stuck-hidden one. Logs the intended vs ACTUAL geometry (`WINGEO applied`) so
 /// the host can see whether macOS placed the window where asked.
-fn apply_geometry_plan(window: &tauri::WebviewWindow, label: &str, plan: GeometryPlan) {
+pub(crate) fn apply_geometry_plan(window: &tauri::WebviewWindow, label: &str, plan: GeometryPlan) {
     let GeometryPlan::Restore { x, y, w, h } = plan else {
         return;
     };
@@ -1577,7 +1577,7 @@ fn reveal_window(window: &tauri::WebviewWindow, label: &str) {
 /// Best-effort: skips on a query error or a degenerate (zero) size; geometry is
 /// desktop-owned, so this runs for local / devserver / outbound windows alike.
 /// Logs a `WINGEO capture` line (signature + coords + monitors) for the host.
-fn capture_window_geometry(app: &AppHandle, label: &str) {
+pub(crate) fn capture_window_geometry(app: &AppHandle, label: &str) {
     let Some(window) = app.get_webview_window(label) else {
         return;
     };
