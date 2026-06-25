@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { __testSystemTheme } from "./store.svelte.ts";
+import { __testSystemTheme } from "./store.svelte";
 
 // When the OS appearance cannot be determined (e.g. headless linux), the
 // `system` theme must resolve to dark. "Undeterminable" means matchMedia is
