@@ -634,8 +634,16 @@
   });
 
   $effect(() => {
+    const before = view?.state.doc.toString();
     sync.applyExternal(view, value);
-    maybeRestoreCaret();
+    // Only (re)place the caret when an EXTERNAL value change actually
+    // applied content (the async file load), not on the keystroke echo
+    // that writes `value` back from the live doc. Re-running on a keystroke
+    // yanks the caret to document start mid-typing: on a new empty note the
+    // first character flips the doc empty -> non-empty, maybeRestoreCaret
+    // then resets the caret to 0, and the text reorders ("Hello" ->
+    // "elloH").
+    if (view && before !== view.state.doc.toString()) maybeRestoreCaret();
   });
 
   $effect(() => {

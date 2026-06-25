@@ -384,11 +384,17 @@
   onDestroy(() => view?.destroy());
 
   $effect(() => {
+    const before = view?.state.doc.toString();
     sync.applyExternal(view, value);
-    // Once the first non-empty content lands, place the caret at the
-    // persisted offset. We intentionally read `initialCaret` lazily
-    // (no $effect dep) so a later prop update doesn't re-restore.
-    maybeRestoreCaret();
+    // Only (re)place the caret when an EXTERNAL value change actually
+    // applied content (the async file load), not on the keystroke echo
+    // that writes `value` back from the live doc. Re-running on a keystroke
+    // yanks the caret to document start mid-typing: on a new empty file the
+    // first character flips the doc empty -> non-empty, maybeRestoreCaret
+    // then resets the caret to 0, and the text reorders ("Hello" ->
+    // "elloH"). We read `initialCaret` lazily (no $effect dep) so a later
+    // prop update doesn't re-restore.
+    if (view && before !== view.state.doc.toString()) maybeRestoreCaret();
   });
 
   // Reconfigure the theme compartment whenever the editor body
