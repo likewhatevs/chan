@@ -1,11 +1,11 @@
-// chan-report public surface.
-//
-// Walks a directory, counts SLOC per file by language, computes
-// per-language roll-ups and a COCOMO summary, and maintains the
-// state incrementally so a single file change does not require a
-// full rescan. The crate is I/O-free for state: callers
-// (chan-workspace) own persistence and call write_jsonl / load_jsonl
-// when they decide to materialize a snapshot to disk.
+//! chan-report public surface.
+//!
+//! Walks a directory, counts SLOC per file by language, computes
+//! per-language roll-ups and a COCOMO summary, and maintains the
+//! state incrementally so a single file change does not require a
+//! full rescan. The crate is I/O-free for state: callers
+//! (chan-workspace) own persistence and call write_jsonl / load_jsonl
+//! when they decide to materialize a snapshot to disk.
 
 #![forbid(unsafe_code)]
 

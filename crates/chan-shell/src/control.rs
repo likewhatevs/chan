@@ -79,7 +79,7 @@ pub fn absolutize(path: PathBuf) -> Result<PathBuf> {
 
 /// Connect to the control socket, write one JSON request line, and return
 /// the server's reply message (or its error, surfaced as an `Err`).
-/// Platform-neutral over the [`transport`] module.
+/// Platform-neutral over the `transport` module.
 pub async fn send_control_request(socket: &Path, request: ControlRequest) -> Result<String> {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 

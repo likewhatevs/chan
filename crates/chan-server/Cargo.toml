@@ -6,6 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "HTTP + WebSocket surface for chan, wrapping chan-workspace in axum routes."
+publish = false
 
 [lib]
 name = "chan_server"
@@ -66,15 +67,15 @@ futures = { workspace = true }
 notify = { workspace = true }
 open = "5"
 percent-encoding = "2"
-portable-pty = "0.8"
-rand = "0.8"
+portable-pty = { workspace = true }
+rand = { workspace = true }
 # HTTP client for the Source Code Pro download endpoint
 # (`POST /api/fonts/source-code-pro/download`).
 # Mirrors chan-tunnel-server / chan binary deps; rustls keeps the
 # build OpenSSL-free.
 reqwest = { workspace = true }
 rust-embed = "8"
-rustix = { version = "1.1", features = ["process"] }
+rustix = { workspace = true }
 tokio = { workspace = true }
 toml = { workspace = true }
 tower = { workspace = true }
@@ -84,7 +85,7 @@ serde_json = { workspace = true }
 tempfile = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
-url = "2"
+url = { workspace = true }
 
 [dev-dependencies]
 # This crate's tests (host.rs, routes/terminal.rs) drive chan-library's

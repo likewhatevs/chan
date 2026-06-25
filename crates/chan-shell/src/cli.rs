@@ -34,7 +34,7 @@ struct CsCli {
     action: ShellAction,
 }
 
-/// Parse a full `cs` argv (argv[0] included) and dispatch it. The entry
+/// Parse a full `cs` argv (`argv[0]` included) and dispatch it. The entry
 /// `chan-desktop` calls when invoked through a `cs` name, so desktop users
 /// get the `cs` client without a `chan` binary on PATH. clap prints help /
 /// usage and exits on a parse error or `--help`, exactly like the `chan`
@@ -554,7 +554,7 @@ pub enum TerminalAction {
         #[arg(long)]
         title: Option<String>,
         /// An answer option (1..=4). Repeat for each: `--option A
-        /// --option B`. The UI numbers them [1]..[4].
+        /// --option B`. The UI numbers them `[1]`..`[4]`.
         #[arg(long = "option", value_name = "LABEL")]
         option: Vec<String>,
         /// Team directory (workspace-relative) for the `[F]` follow-up

@@ -387,7 +387,7 @@ pub struct SurveySpec {
     pub title: Option<String>,
     /// The problem description, rendered as markdown.
     pub body_markdown: String,
-    /// 1..=4 option labels; the SPA numbers them [1]..[4].
+    /// 1..=4 option labels; the SPA numbers them `[1]`..`[4]`.
     pub options: Vec<String>,
     /// Team context for the `[F]` path, so C's reply route can land the
     /// followup at `{dir}/followups/followup-{from}-{to}-{n}.md` without
@@ -427,9 +427,9 @@ pub enum SurveyReply {
         option_index: u32,
         option_label: String,
     },
-    /// The user hit [F] (follow up). When the survey carried followup context,
+    /// The user hit `[F]` (follow up). When the survey carried followup context,
     /// C created `{dir}/followups/followup-{from}-{to}-{n}.md` and
-    /// `followup_path` is that workspace-relative path. Part C made [F]
+    /// `followup_path` is that workspace-relative path. Part C made `[F]`
     /// standard on every survey, so a survey raised WITHOUT followup context
     /// still offers it: that is a plain deferral and `followup_path` is `None`
     /// (no file).
@@ -441,7 +441,7 @@ pub enum SurveyReply {
     },
     /// The user hit Dismiss (Part C). A distinct reply with no option index
     /// and no file, so the asking agent can tell the host dropped the survey
-    /// rather than answering it or deferring with [F].
+    /// rather than answering it or deferring with `[F]`.
     #[serde(rename = "dismissed", rename_all = "camelCase")]
     Dismissed { survey_id: String },
 }

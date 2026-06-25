@@ -290,7 +290,7 @@ impl Library {
     /// `reset_workspace` plus a `ProgressCallback`. Fires one
     /// `ProgressStage::Reset` event per subsystem (index, graph,
     /// sessions, tokens, report) as it is wiped, so a UI can
-    /// surface "wiping <subsystem>..." without instrumenting each
+    /// surface "wiping `<subsystem>`..." without instrumenting each
     /// caller. The label carries the subsystem name; `current` /
     /// `total` count through the fixed subsystem list.
     pub fn reset_workspace_with(

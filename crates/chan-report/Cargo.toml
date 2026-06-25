@@ -6,6 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Per-file language/SLOC/COCOMO report with incremental updates."
+publish = false
 
 [dependencies]
 chrono = { workspace = true }

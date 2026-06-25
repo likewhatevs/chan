@@ -76,7 +76,7 @@ fn invoked_as(arg0: &std::ffi::OsStr, name: &str) -> bool {
 /// The name this process was invoked as, for the `cs` / `chan` stem checks.
 ///
 /// Prefers `$ARGV0` over `argv[0]`. On a packaged Linux AppImage, linuxdeploy's
-/// `AppRun` re-execs the inner binary WITHOUT preserving argv[0], so
+/// `AppRun` re-execs the inner binary WITHOUT preserving `argv[0]`, so
 /// `std::env::args_os().next()` is the inner binary path — not the `cs` /
 /// `chan` the user invoked through an `exec -a <name> "$APPIMAGE"` shim. The
 /// type-2 AppImage runtime instead exports that `exec -a` name as `$ARGV0`, so

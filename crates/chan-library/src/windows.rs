@@ -157,7 +157,7 @@ pub struct PersistedWindow {
     pub workspace_path: Option<String>,
     /// A devserver control terminal (runs the connect script). True only for the
     /// transient control row minted via [`WindowRegistry::create_control`]; it is
-    /// NEVER written to disk (see [`WindowRegistry::save_best_effort`]) — the
+    /// NEVER written to disk (see `WindowRegistry::save_best_effort`) — the
     /// control terminal is per-connection, desktop-driven, and reaped on PTY
     /// exit. `skip_serializing_if` default keeps a normal row's on-disk shape
     /// unchanged.
@@ -417,7 +417,7 @@ impl WindowRegistry {
     /// Set window `window_id`'s persisted visibility. Returns whether a
     /// row MATCHED (so a route maps `false` to 404 — idempotent: setting the
     /// value it already holds still matches). Persists (durable rows; a control
-    /// row stays in-memory via [`Self::save_best_effort`]) + fires the change
+    /// row stays in-memory via `Self::save_best_effort`) + fires the change
     /// notification only when the value actually changed.
     pub fn set_hidden(&self, window_id: &str, hidden: bool) -> bool {
         let (matched, changed, snapshot) = {

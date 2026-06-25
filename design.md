@@ -318,6 +318,14 @@ chan-llm is MCP-only: it has no in-app chat session, no CLI backends, and no too
 
 chan-server hosts the MCP server in-process behind a Unix-domain socket (`crates/chan-server/src/mcp_bridge.rs`). External subprocesses connect via `chan __mcp-proxy <socket>`, which is a stdio<->socket pipe. This sidesteps chan-workspace's per-workspace flock that would otherwise reject a child's `Library::open_workspace`.
 
+## Error model
+
+The workspace shares one error convention rather than a shared error crate. Each request-handler crate owns its own `thiserror::Error` enum with an `IntoResponse` impl that maps every variant to a precise HTTP status; public-facing messages stay short and generic (`unauthorized`, `internal error`) while the detailed context goes to the `tracing` log. `anyhow::Error` is fine in `main.rs` and startup paths; request handlers return explicit variants. chan-server's `error.rs` is the root-side example; in the gateway, `profile`, `identity`, and `devserver-proxy` each carry their own.
+
+Cross-service CLIENT errors -- the typed failures one service surfaces to another over HTTP -- live in a `*-common` crate as axum-free `thiserror`/`serde` types that each consumer maps into its own enum via `From`. The gateway's `gateway-common` holds these (the profile and workspace-admin client errors, the devserver-gate error).
+
+There is deliberately no error type spanning the Postgres-free core and the gateway: a shared enum would couple the static core binary to gateway concerns, which is the boundary the separate gateway workspace exists to hold. The tunnel crates reinforce the same discipline by flattening their errors to primitives on `Display`, so `h2::Error` and `serde_json::Error` never surface in a public API another crate must re-export.
+
 ## Frontend embed: build, serve, prefix
 
 The frontend lives under `web/` (Svelte + Vite + Tailwind) and ships as a build artifact under `web/dist/`. It is consumed by chan-server through rust-embed:

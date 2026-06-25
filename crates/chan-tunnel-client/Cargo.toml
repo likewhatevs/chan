@@ -6,6 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Client library for chan-tunnel; driven by `chan devserver`."
+publish = false
 
 [dependencies]
 chan-tunnel-proto = { workspace = true }

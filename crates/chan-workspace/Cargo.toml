@@ -10,25 +10,31 @@ description = "Filesystem, search, and graph primitives for chan workspaces"
 [dependencies]
 chan-report = { workspace = true }
 bincode = { version = "2", features = ["serde"] }
+# Local pin, not `workspace = true`: keeps chrono's default features; the
+# workspace pin sets `default-features = false`, so hoisting would drop them
+# from this crate's build.
 chrono = { version = "0.4", features = ["serde"] }
 csv = "1"
 base64 = { workspace = true }
-dirs = "5"
+dirs = { workspace = true }
 fs4 = { version = "0.9", features = ["sync"] }
 gray_matter = { version = "0.2", default-features = false, features = ["yaml"] }
+# Local pin, not `workspace = true`: pins the file-watch backend explicitly
+# (defaults off + macos_fsevent) so a change to the workspace-wide notify
+# default cannot silently swap this crate's backend.
 notify = { version = "6", default-features = false, features = ["macos_fsevent"] }
 pulldown-cmark = { version = "0.12", default-features = false }
 rusqlite = { version = "0.32", features = ["bundled"] }
-rustix = { version = "1.1", features = ["process"] }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-sha2 = "0.10"
+rustix = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
 tar = { workspace = true }
 tantivy = "0.24"
-tempfile = "3"
-thiserror = "1"
-toml = "0.8"
-tracing = "0.1"
+tempfile = { workspace = true }
+thiserror = { workspace = true }
+toml = { workspace = true }
+tracing = { workspace = true }
 walkdir = "2"
 zstd = { workspace = true }
 
@@ -92,7 +98,7 @@ windows-sys = { version = "0.59", features = [
 ] }
 
 [dev-dependencies]
-tempfile = "3"
+tempfile = { workspace = true }
 
 [features]
 default = ["embeddings"]

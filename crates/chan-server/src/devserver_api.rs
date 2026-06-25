@@ -3,13 +3,13 @@
 //! A small, versioned HTTP/JSON surface a chan-desktop client drives over
 //! the tunnel to list, mount, toggle, and forget workspaces on a headless
 //! box. It
-//! is the reserved-root namespace of [`crate::devserver`]: the management
+//! is the reserved-root namespace of `crate::devserver`: the management
 //! router answers `/api/devserver/*`, and every workspace tenant mounts
 //! under a non-empty, legible prefix below it.
 //!
 //! This module defines only the on-wire types and their pinned JSON; the
-//! axum handlers, auth, and runtime live in [`crate::devserver`]. The
-//! contract lives in its own module (like [`chan_shell::wire`]) so a field
+//! axum handlers, auth, and runtime live in `crate::devserver`. The
+//! contract lives in its own module (like `chan_shell::wire`) so a field
 //! or tag rename moves on both sides at once: the wire strings are the
 //! serde field names, so a one-sided rename compiles green and breaks at
 //! runtime. The `*_wire` tests below pin the exact bytes against that.

@@ -6,6 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "The chan library: the authoritative window/terminal/workspace lifecycle (the source of truth clients reconcile to)."
+publish = false
 
 [lib]
 name = "chan_library"
@@ -29,9 +30,9 @@ anyhow = { workspace = true }
 async-trait = { workspace = true }
 axum = { workspace = true }
 dirs = { workspace = true }
-portable-pty = "0.8"
-rand = "0.8"
-rustix = { version = "1.1", features = ["process"] }
+portable-pty = { workspace = true }
+rand = { workspace = true }
+rustix = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

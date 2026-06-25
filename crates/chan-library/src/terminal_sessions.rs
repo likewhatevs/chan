@@ -342,7 +342,7 @@ pub enum SessionEvent {
     Restarted,
     /// The write queue's MESSAGE depth changed (an enqueue on either path,
     /// or a message's tail drained). The depth is the absolute message count
-    /// (see [`QueuedWrite::tail`]), so consumers stay idempotent under
+    /// (see `QueuedWrite::tail`), so consumers stay idempotent under
     /// duplicate events and multi-window attaches.
     QueueDepth(usize),
     /// A Rich Prompt message's LAST write reached the PTY. `depth` is the
@@ -1223,7 +1223,7 @@ impl Registry {
     /// making a re-spawn under the same name collide and come up renamed (the
     /// `cs terminal restart` ghost-tab regression: a killed agent's entry lingered
     /// because the controller thread records `exit_code` on exit but never
-    /// removes the entry). Distinct axis from [`prune_idle_at`], which times
+    /// removes the entry). Distinct axis from `prune_idle_at`, which times
     /// out *live* detached sessions and deliberately keeps persisted windows:
     /// a dead process can't be reattached, only re-spawned, so a persisted
     /// window comes back fresh on reconnect rather than stranding the ghost.

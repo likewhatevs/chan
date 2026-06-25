@@ -6,6 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "chan: the `cs` control-socket client shared by chan and chan-desktop."
+publish = false
 
 [features]
 # The `cs` CLIENT (clap surface + control-socket dispatch + the agent

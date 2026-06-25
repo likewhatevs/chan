@@ -1,25 +1,25 @@
-// chan-workspace: filesystem, search, and graph primitives for chan workspaces.
-//
-// Public surface is path-based, all relative paths POSIX-style ("/" separator)
-// and rooted at a Workspace's `root`. Designed to be FFI-safe via uniffi later:
-// no lifetimes on public types, owned strings only, all handle types are
-// `Arc<Self>`-able.
-//
-// Two top-level handles:
-//
-//   Library: owns the per-machine registry (~/.chan/config.toml) of known
-//   workspaces and resolves OS state/cache locations. Process-wide singleton
-//   in practice; cheap to clone (Arc inside).
-//
-//   Workspace: handle to one registered directory. Exposes filesystem
-//   primitives (read/write/stat/list), search, graph, and watch. Holds a
-//   per-workspace cross-process lock for the index writer.
-//
-// What is intentionally NOT here:
-//   - HTTP server, WebSocket transport, frontend bundle. Those live in
-//     `chan` (the CLI + embedded editor).
-//   - LLM/agent code, API key storage. App-level concern.
-//   - Editor preferences (fonts, theme). App-level concern.
+//! chan-workspace: filesystem, search, and graph primitives for chan workspaces.
+//!
+//! Public surface is path-based, all relative paths POSIX-style ("/" separator)
+//! and rooted at a Workspace's `root`. Designed to be FFI-safe via uniffi later:
+//! no lifetimes on public types, owned strings only, all handle types are
+//! `Arc<Self>`-able.
+//!
+//! Two top-level handles:
+//!
+//!   Library: owns the per-machine registry (~/.chan/config.toml) of known
+//!   workspaces and resolves OS state/cache locations. Process-wide singleton
+//!   in practice; cheap to clone (Arc inside).
+//!
+//!   Workspace: handle to one registered directory. Exposes filesystem
+//!   primitives (read/write/stat/list), search, graph, and watch. Holds a
+//!   per-workspace cross-process lock for the index writer.
+//!
+//! What is intentionally NOT here:
+//!   - HTTP server, WebSocket transport, frontend bundle. Those live in
+//!     `chan` (the CLI + embedded editor).
+//!   - LLM/agent code, API key storage. App-level concern.
+//!   - Editor preferences (fonts, theme). App-level concern.
 
 mod blob;
 pub mod bootstrap;

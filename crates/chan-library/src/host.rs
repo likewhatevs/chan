@@ -55,7 +55,7 @@ pub struct HostedWorkspace {
 /// Defined here, not in chan-server's route module, because
 /// [`DevserverFeedSource`] returns it and that trait is a chan-library type the
 /// host holds; chan-server re-exports it for its route handlers (the same
-/// define-in-library / re-export-from-server shape as [`DevserverEntry`]).
+/// define-in-library / re-export-from-server shape as `DevserverEntry`).
 /// A workspace's live lifecycle state, distinct from the persisted desired
 /// `on`. The launcher drives spinners and disables toggles off this REAL
 /// backend state instead of an optimistic timer: a row spins while `starting`,
@@ -750,7 +750,7 @@ impl WorkspaceHost {
     /// `config.prefix`, optionally running `command` on its PTY.
     ///
     /// Mirrors [`open_workspace`](Self::open_workspace) but backs the
-    /// mount with [`build_terminal_app`] instead of `build_app`: no
+    /// mount with `build_terminal_app` instead of `build_app`: no
     /// `Arc<Workspace>`, no watcher / indexer / MCP bridge / control
     /// socket. The slim tenant serves only the terminal + window-session
     /// routes plus the SPA shell, so a standalone terminal window
@@ -987,7 +987,7 @@ impl WorkspaceHost {
     /// with its serving tenant's live state (prefix/token/`connected`), and
     /// includes a workspace window only while its workspace is mounted (an off
     /// workspace's records are filtered out — preserved on disk, hidden from the
-    /// live feed; see [`window_in_live_feed`](Self::window_in_live_feed)). Empty
+    /// live feed; see `window_in_live_feed`). Empty
     /// when no registry is installed (a host that never opened one has no windows).
     pub fn assemble_window_records(&self) -> Vec<WindowRecord> {
         let Some(registry) = self.window_registry() else {
@@ -1591,7 +1591,7 @@ impl WorkspaceHost {
     /// drops its `Arc<Workspace>` at the next per-file cancel check, releasing
     /// the per-workspace flock promptly instead of waiting for the rebuild to
     /// run to completion. Mirrors the single-tenant `indexer.cancel()` in
-    /// [`clear_workspace_cell`]. Read-only over the map and best-effort per
+    /// `clear_workspace_cell`. Read-only over the map and best-effort per
     /// tenant: a poisoned cell or a terminal tenant (no workspace cell) is
     /// skipped.
     pub fn cancel_all_reindex(&self) {

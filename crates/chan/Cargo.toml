@@ -5,7 +5,8 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "chan: an AI-native workspace for your Markdown notes and projects."
+description = "chan: an AI-native IDE for the modern engineer; a CLI plus an HTTP server serving a hybrid editor, terminal, file browser, and graph over a folder on disk."
+publish = false
 
 [[bin]]
 name = "chan"
@@ -66,7 +67,7 @@ serde_json = { workspace = true }
 # `EditorPrefs::save`); we never roll our own tempfile + rename here.
 toml = { workspace = true }
 reqwest = { workspace = true, features = ["stream"] }
-sha2 = "0.10"
+sha2 = { workspace = true }
 
 # Archive extraction for the upgrade flow. Published standalone CLI
 # releases ship as `.tar.gz` on Linux and macOS.
@@ -111,7 +112,7 @@ maintainer = "Alexandre Fiori <fiorix@gmail.com>"
 copyright = "2026 Alexandre Fiori"
 license-file = ["../../LICENSE", "0"]
 extended-description = """
-chan is an AI-native workspace for your Markdown notes and projects:
+chan is an AI-native IDE for the modern engineer:
 a CLI plus an HTTP server that serves a hybrid editor, terminal, file
 browser, and graph over a folder on disk. Cross-file [[wiki-link]]
 autocomplete, BM25 content search, and an MCP server for agents
@@ -126,7 +127,7 @@ assets = [
 
 [package.metadata.generate-rpm]
 license = "Apache-2.0"
-summary = "AI-native workspace for your Markdown notes and projects"
+summary = "AI-native IDE for the modern engineer"
 # cargo-generate-rpm resolves asset `source` paths relative to
 # the package directory (`crates/chan/`), unlike cargo-deb which
 # is workspace-aware. The binary lives at the workspace target

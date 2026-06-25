@@ -4,7 +4,7 @@
 //! Two-step typeahead UX. First, as the user types `[[Re...`, the
 //! picker hits /api/link-targets to surface candidate files. Then,
 //! after the user picks a file (`[[recipes/pasta.md`), they may type
-//! `#` to jump to a heading; the picker hits /api/headings/<rel> to
+//! `#` to jump to a heading; the picker hits /api/headings/`<rel>` to
 //! enumerate the file's anchors.
 //!
 //! The graph endpoints (links / graph / backlinks) walk chan-workspace's

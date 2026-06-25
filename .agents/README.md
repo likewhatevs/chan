@@ -68,9 +68,9 @@ desktop/                Tauri shell. Cross-platform desktop wrapper
                         .agents/desktop.md.
 
 gateway/                Account / sign-in / reverse-proxy surface for
-                        chan.app (id.chan.app + workspace.chan.app).
+                        chan.app (id.chan.app + devserver.chan.app).
                         Separate nested Cargo workspace (profile,
-                        identity, workspace-proxy, admin,
+                        identity, devserver-proxy, admin,
                         gateway-common); Postgres-backed, linux amd64/
                         arm64 only. NOT a member of the root workspace,
                         so the core build stays Postgres-free. Agent

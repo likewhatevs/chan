@@ -1,28 +1,28 @@
-// Pre-fetches the default embedding model and writes it as a
-// single zstd-compressed tarball at
-// `crates/chan-server/resources/models.tar.zst`. chan-server's
-// release build calls `include_bytes!` on the tarball; the seeder
-// at first server launch zstd-decodes + untars the blob into the
-// per-machine cache (~/Library/Caches/chan/models on macOS) so
-// users never block on a HuggingFace download.
-//
-// Two-stage:
-//
-//   1. Open the candle embedder against a stable staging dir under
-//      `target/fetch-models-cache/`. hf-hub downloads the model
-//      there if missing; a re-run with the cache populated skips
-//      the network. cargo-clean wipes the dir; that's intentional,
-//      the next build re-downloads.
-//   2. tar+zstd encode the staging dir into the embed bundle.
-//      Drops `*.lock` and `**/blobs/**` along the way; tar follows
-//      the snapshots/ symlinks into the blob bytes, so dropping
-//      blobs/ outright would otherwise double the archive.
-//
-// Run from the workspace root via `make models` or
-// `cargo run -p fetch-models`. Idempotent: re-running with the
-// model already cached AND the tarball up-to-date is a fast
-// no-op. Honors `HTTPS_PROXY` / `HTTP_PROXY` for restricted
-// networks; hf-hub's underlying HTTP client picks them up.
+//! Pre-fetches the default embedding model and writes it as a
+//! single zstd-compressed tarball at
+//! `crates/chan-server/resources/models.tar.zst`. chan-server's
+//! release build calls `include_bytes!` on the tarball; the seeder
+//! at first server launch zstd-decodes + untars the blob into the
+//! per-machine cache (~/Library/Caches/chan/models on macOS) so
+//! users never block on a HuggingFace download.
+//!
+//! Two-stage:
+//!
+//!   1. Open the candle embedder against a stable staging dir under
+//!      `target/fetch-models-cache/`. hf-hub downloads the model
+//!      there if missing; a re-run with the cache populated skips
+//!      the network. cargo-clean wipes the dir; that's intentional,
+//!      the next build re-downloads.
+//!   2. tar+zstd encode the staging dir into the embed bundle.
+//!      Drops `*.lock` and `**/blobs/**` along the way; tar follows
+//!      the snapshots/ symlinks into the blob bytes, so dropping
+//!      blobs/ outright would otherwise double the archive.
+//!
+//! Run from the workspace root via `make models` or
+//! `cargo run -p fetch-models`. Idempotent: re-running with the
+//! model already cached AND the tarball up-to-date is a fast
+//! no-op. Honors `HTTPS_PROXY` / `HTTP_PROXY` for restricted
+//! networks; hf-hub's underlying HTTP client picks them up.
 
 use std::path::{Path, PathBuf};
 
