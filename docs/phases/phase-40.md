@@ -117,6 +117,14 @@ desktop validation moved to the rc1 CI build.
 
 ## Follow-ups (→ next round / @@Alex)
 
+- **D1 external-display repeated-hide shrink** (host-confirmed on rc2, ships as a
+  known issue in v0.50.0). `d3dcf135` fixed the centered / wrong-monitor restore,
+  but on a secondary/external display each hide+show redraws the window smaller
+  than the previous time by a ~predictable fraction (cumulative). The symptom
+  points at an inner-vs-outer-size or logical-vs-physical-scale mismatch in the
+  capture/apply round-trip that compounds each cycle (capture reads one size, the
+  next restore applies a slightly different one). Easy to repro on the host's
+  external 4K HiDPI main display. Fix in a later phase.
 - **Host-smoke checklist** (the browser/macOS residuals the local gate cannot cover):
   A1 macOS WKWebView Shift-drag selection + clipboard write; A2 live htop arrows +
   wheel after a real reload; C3/C4/C5 reload UX; D1 two-client same-screen geometry

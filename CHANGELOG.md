@@ -27,6 +27,8 @@ position per monitor.
   geometry is captured on hide/close and restored on reopen, keyed by a monitor
   signature with a per-machine LRU; a monitor-layout mismatch restores size only,
   clamped on-screen. Desktop-only; the browser keeps its URL-hash layout restore.
+  Known issue: on a secondary/external display, repeated hide/show can
+  progressively shrink the window; a fix is tracked for a later release.
 
 ### Fixed
 
