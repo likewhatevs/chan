@@ -14,6 +14,10 @@
   // cross-axis space.
 
   import { activeLayout, type LeafNode, type SplitNode } from "../state/tabs.svelte";
+  import {
+    schedulePersistStateToHash,
+    scheduleSessionSave,
+  } from "../state/store.svelte";
   import Pane from "./Pane.svelte";
   import Self from "./Workspace.svelte";
 
@@ -51,6 +55,13 @@
       // child elements with their own cursor styles).
       document.body.style.removeProperty("cursor");
       document.body.style.removeProperty("user-select");
+      // Persist the new ratio. The layout-persistence effect only tracks
+      // leaf nodes, so a divider drag (which mutates the split's ratio)
+      // never schedules a save on its own — the size is then lost on
+      // reload, notably when an adjacent pane is empty and no other
+      // activity triggers a save.
+      schedulePersistStateToHash();
+      scheduleSessionSave();
     };
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
