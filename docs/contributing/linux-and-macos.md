@@ -84,9 +84,9 @@ limactl shell default sudo sdme fs import ubuntu docker.io/ubuntu
 make linux-chan-desktop DISTRO=ubuntu
 ```
 
-`make linux-chan-desktop` drives `scripts/dev/sdme/build-chan-desktop.sh`, which:
+`make linux-chan-desktop` drives `packaging/sdme/build-chan-desktop.sh`, which:
 
-1. builds the `chan-desktop-<distro>` rootfs from `scripts/dev/sdme/chan-desktop-<distro>.sdme` on first use (it bakes the Tauri build deps and the Rust toolchain, so this cost is paid once),
+1. builds the `chan-desktop-<distro>` rootfs from `packaging/sdme/chan-desktop-<distro>.sdme` on first use (it bakes the Tauri build deps and the Rust toolchain, so this cost is paid once),
 2. creates or reuses a `chan-desktop-build-<distro>` container,
 3. seeds the committed tree (`git archive HEAD`),
 4. runs `make chan-desktop` inside it, and
@@ -262,7 +262,7 @@ for c in profile identity devserver-proxy admin; do cargo deb --no-build -p "$c"
 # install (postinst creates the chan-gateway user + units + default env),
 # generate config, start, and check health
 dpkg -i target/debian/*.deb || apt-get -f install -y
-bash scripts/configure.sh   # answers: PG user/pass/db, base domain, scheme, >=1 provider
+bash ../packaging/gateway/scripts/configure.sh   # answers: PG user/pass/db, base domain, scheme, >=1 provider
 systemctl enable --now chan-gateway-profile chan-gateway-identity chan-gateway-devserver-proxy
 systemctl is-active chan-gateway-profile chan-gateway-identity chan-gateway-devserver-proxy
 for p in 7001 7000 7002; do curl -fsS "http://127.0.0.1:$p/healthz"; echo; done

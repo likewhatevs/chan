@@ -121,7 +121,7 @@ archpkg:
 .PHONY: chan-desktop
 chan-desktop:
 	CHAN_REPO="$(abspath $(CHAN_REPO))" SDME="$(SDME)" DISTRO="$(DISTRO)" \
-		"$(abspath $(CHAN_REPO))/scripts/dev/sdme/build-chan-desktop.sh"
+		"$(abspath $(CHAN_REPO))/packaging/sdme/build-chan-desktop.sh"
 
 .PHONY: packages
 packages: deb rpm archpkg

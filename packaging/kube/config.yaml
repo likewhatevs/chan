@@ -1,0 +1,36 @@
+# Non-secret configuration shared by the gateway services. Every Deployment
+# pulls this in with `envFrom: configMapRef`. A service reads only the variables
+# it needs; the unused ones are inert (e.g. devserver-proxy ignores
+# PROFILE_SERVICE_URL). Cross-service URLs use the Service DNS names defined in
+# the per-service manifests; on a real cluster they resolve via kube-dns.
+#
+# This is the cluster shape. The sdme single-pod validation (packaging/kube/sdme/) wires
+# the same variables to 127.0.0.1 instead, because one nspawn shares localhost.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: chan-gateway-config
+  labels:
+    app.kubernetes.io/part-of: chan-gateway
+data:
+  # Public domain. Services derive their hosts from CHAN_DOMAIN
+  # (id.<domain>, devserver.<domain>, *.devserver.<domain>) and must agree,
+  # since the workspace-gate JWT `aud` is the inbound host.
+  CHAN_DOMAIN: "localtest.me"
+  # http for this no-TLS example stack; set https behind a TLS terminator.
+  PUBLIC_SCHEME: "http"
+  # Session cookie Secure attribute. false so the cookie survives plain http in
+  # this example; MUST be true in production behind TLS.
+  COOKIE_SECURE: "false"
+
+  # Inter-service URLs (Service DNS + container port).
+  PROFILE_SERVICE_URL: "http://chan-gateway-profile:7001"
+  IDENTITY_URL: "http://chan-gateway-identity:7000"
+  WORKSPACE_ADMIN_URL: "http://chan-gateway-devserver-proxy:7002"
+
+  # Cap concurrent workspace registrations per user (0 = unlimited).
+  MAX_WORKSPACES_PER_USER: "0"
+
+  # Postgres bootstrap (non-secret pieces; the password lives in the Secret).
+  POSTGRES_USER: "chan"
+  POSTGRES_DB: "chan_gateway"

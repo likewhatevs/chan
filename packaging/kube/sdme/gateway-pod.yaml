@@ -1,0 +1,102 @@
+# sdme validation pod: the whole gateway stack as ONE Pod.
+#
+# sdme runs a multi-container Pod as a single systemd-nspawn container with one
+# service per app, sharing a network namespace via localhost. So the four
+# containers reach each other on 127.0.0.1 (no Service DNS needed) and the
+# inter-service URLs are wired to loopback here, unlike the cluster manifests in
+# the parent directory which use Service DNS names.
+#
+# Bring-up (privileged; see ../README.md for the full runbook):
+#   sudo sdme kube secret create gateway-secrets \
+#       --from-literal=DATABASE_URL=postgres://chan:chan@127.0.0.1:5432/chan_gateway \
+#       --from-literal=POSTGRES_PASSWORD=chan \
+#       --from-literal=PROFILE_AUTH_TOKEN=$(openssl rand -hex 32) \
+#       --from-literal=PROFILE_ADMIN_TOKEN=$(openssl rand -hex 32) \
+#       --from-literal=IDENTITY_INTERNAL_TOKEN=$(openssl rand -hex 32) \
+#       --from-literal=WORKSPACE_GATE_SECRET=$(openssl rand -hex 32) \
+#       --from-literal=WORKSPACE_ADMIN_TOKEN=$(openssl rand -hex 32) \
+#       --from-literal=GITHUB_CLIENT_ID=dev-placeholder \
+#       --from-literal=GITHUB_CLIENT_SECRET=dev-placeholder
+#   sudo sdme kube apply -f packaging/kube/sdme/gateway-pod.yaml --base-fs <base>
+#
+# Image resolution: the four chan-gateway-* images must be reachable by the name
+# below. Point default_kube_registry at a registry that holds them, or pre-load
+# them, before apply (see ../README.md "Making the images available to sdme").
+apiVersion: v1
+kind: Pod
+metadata:
+  name: chan-gateway
+  labels:
+    app.kubernetes.io/part-of: chan-gateway
+spec:
+  restartPolicy: Always
+  containers:
+    # --- Postgres (profile + identity migrate against it on boot) -----------
+    - name: postgres
+      image: postgres:16
+      imagePullPolicy: IfNotPresent
+      env:
+        - { name: POSTGRES_USER, value: "chan" }
+        - { name: POSTGRES_DB, value: "chan_gateway" }
+        - name: POSTGRES_PASSWORD
+          valueFrom: { secretKeyRef: { name: gateway-secrets, key: POSTGRES_PASSWORD } }
+        - { name: PGDATA, value: /var/lib/postgresql/data/pgdata }
+      volumeMounts:
+        - { name: pgdata, mountPath: /var/lib/postgresql/data }
+      readinessProbe:
+        exec: { command: ["pg_isready", "-U", "chan", "-d", "chan_gateway"] }
+        initialDelaySeconds: 3
+        periodSeconds: 5
+
+    # --- profile (:7001 internal) -------------------------------------------
+    - name: profile
+      image: chan-gateway-profile:dev
+      imagePullPolicy: IfNotPresent
+      # BIND_ADDR=0.0.0.0:7001 baked into the image. Tokens + DATABASE_URL from
+      # the secret; the loopback admin URL inline.
+      envFrom:
+        - secretRef: { name: gateway-secrets }
+      env:
+        - { name: WORKSPACE_ADMIN_URL, value: "http://127.0.0.1:7002" }
+      readinessProbe:
+        httpGet: { path: /healthz, port: 7001 }
+        initialDelaySeconds: 3
+        periodSeconds: 5
+
+    # --- identity (:7000 public sign-in) ------------------------------------
+    - name: identity
+      image: chan-gateway-identity:dev
+      imagePullPolicy: IfNotPresent
+      envFrom:
+        - secretRef: { name: gateway-secrets }
+      env:
+        - { name: CHAN_DOMAIN, value: "localtest.me" }
+        - { name: PUBLIC_SCHEME, value: "http" }
+        - { name: COOKIE_SECURE, value: "false" }
+        - { name: PROFILE_SERVICE_URL, value: "http://127.0.0.1:7001" }
+        - { name: WORKSPACE_ADMIN_URL, value: "http://127.0.0.1:7002" }
+      readinessProbe:
+        httpGet: { path: /healthz, port: 7000 }
+        initialDelaySeconds: 5
+        periodSeconds: 5
+
+    # --- devserver-proxy (:7002 HTTP + :7100 h2c tunnel) --------------------
+    - name: devserver-proxy
+      image: chan-gateway-devserver-proxy:dev
+      imagePullPolicy: IfNotPresent
+      # BIND_ADDR=0.0.0.0:7002 + TUNNEL_BIND_ADDR=0.0.0.0:7100 baked in.
+      envFrom:
+        - secretRef: { name: gateway-secrets }
+      env:
+        - { name: CHAN_DOMAIN, value: "localtest.me" }
+        - { name: PUBLIC_SCHEME, value: "http" }
+        - { name: IDENTITY_URL, value: "http://127.0.0.1:7000" }
+        - { name: MAX_WORKSPACES_PER_USER, value: "0" }
+      readinessProbe:
+        httpGet: { path: /healthz, port: 7002 }
+        initialDelaySeconds: 5
+        periodSeconds: 5
+  volumes:
+    # Ephemeral DB: this pod is for health validation, not durable state.
+    - name: pgdata
+      emptyDir: {}

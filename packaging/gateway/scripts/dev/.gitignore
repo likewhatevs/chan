@@ -1,0 +1,5 @@
+# Local dev runner: generated creds, secrets, and pidfile -- never commit.
+.env
+.env.*
+secrets/
+.run.pid

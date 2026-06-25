@@ -4,7 +4,7 @@ The gateway runs as a set of `sdme` containers on a private network zone, in pro
 
 It mirrors the production definitions in the sibling `chan-prod-setup` repo. Per "show the pattern, copy little", it walks ONE worked service container end to end and points at `chan-prod-setup` for the rest, rather than duplicating every prod config here.
 
-> A faster inner loop exists for rapid iteration: `scripts/dev/run.sh` runs the services as host `cargo run` binaries over `*.localtest.me` (see [`scripts/dev/README.md`](../scripts/dev/README.md)). That is handy while editing code, but it is NOT the prod-like shape. This guide is the all-container stack.
+> A faster inner loop exists for rapid iteration: `packaging/gateway/scripts/dev/run.sh` runs the services as host `cargo run` binaries over `*.localtest.me` (see [`packaging/gateway/scripts/dev/README.md`](../../packaging/gateway/scripts/dev/README.md)). That is handy while editing code, but it is NOT the prod-like shape. This guide is the all-container stack.
 
 ## Why the all-container, prod-like stack
 
@@ -48,14 +48,14 @@ The service containers install the gateway `.deb`s, the same way prod does, so b
 make linux-gateway     # root Makefile -> build-gateway.sh, uses gateway-build.sdme
 ```
 
-`gateway-build.sdme` (in `scripts/dev/sdme/`) bakes the Rust toolchain, node/npm, and cargo-deb; no Postgres is needed at build time. The four packages (identity, profile, devserver-proxy, admin) land in the build's `dist/` staging dir, where the service containers pick them up.
+`gateway-build.sdme` (in `packaging/gateway/scripts/dev/sdme/`) bakes the Rust toolchain, node/npm, and cargo-deb; no Postgres is needed at build time. The four packages (identity, profile, devserver-proxy, admin) land in the build's `dist/` staging dir, where the service containers pick them up.
 
 ## Postgres: chan-psql on the zone
 
 Build and start the Postgres container on the `chan-svc` zone. The build file is a sanitized dev copy of the prod one (no host bind-mount, a throwaway `chan` superuser with password `chan`, both `chan_gateway` and `chan_gateway_test` seeded on first boot).
 
 ```sh
-cd gateway/scripts/dev/sdme
+cd packaging/gateway/scripts/dev/sdme
 limactl shell default sudo sdme fs build chan-psql-dev chan-psql.sdme
 limactl shell default sudo sdme create chan-psql -r chan-psql-dev \
     --network-zone chan-svc -p 5432:5432

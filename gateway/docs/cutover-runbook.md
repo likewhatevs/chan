@@ -52,7 +52,7 @@ Two `feature_flags` defaults are OFF and must be enabled in prod (surfaced by th
 - **`share_workspaces`** — default OFF hides the dashboard Devservers tab. Enable it for the per-devserver dashboard to show. (The `share_workspaces` -> `share_devservers` rename is a deferred follow-up; the name is a misnomer now but functionally gates sharing.)
 
 ## Step 7c — Prod GitHub OAuth app (distinct from the dev app)
-The dev OAuth app (creds in `gateway/scripts/dev/.env`) is STAGING-SMOKE ONLY; never ship it. Prod identity needs its own GitHub OAuth app:
+The dev OAuth app (creds in `packaging/gateway/scripts/dev/.env`) is STAGING-SMOKE ONLY; never ship it. Prod identity needs its own GitHub OAuth app:
 - Authorization callback URL = `https://id.chan.app/auth/github/callback` (identity host UNCHANGED by this migration — only `workspace.* -> devserver.*` changed; `redirect_uri` is BASE_URL-derived, so prod `BASE_URL=https://id.chan.app` yields this callback automatically; cutover-safe, proven by @@Proxy).
 - Set its `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` in the PROD identity service via the prod secret mechanism (GitHub Actions Secrets / `chan-prod-setup`), NEVER in chat/journals/commits (secrets boundary).
 - If prod ALREADY has a working OAuth app for `id.chan.app`, it keeps working unchanged (the callback host didn't move); only create a new one if prod has none yet.

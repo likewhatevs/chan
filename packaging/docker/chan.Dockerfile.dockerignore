@@ -1,0 +1,17 @@
+# Build-context excludes for chan.Dockerfile. BuildKit reads
+# <dockerfile>.dockerignore, so this applies with `docker build -f
+# packaging/docker/chan.Dockerfile .` without a repo-root .dockerignore. The builder
+# rebuilds node_modules and the web bundles inside the image, so shipping them
+# in the context would only bloat the upload and risk a stale dist.
+.git
+**/node_modules
+**/dist
+target
+gateway/target
+desktop/src-tauri/target
+desktop/src-tauri/gen
+**/.chan-build-stamp
+dev/
+docs/
+web-marketing/
+**/*.log

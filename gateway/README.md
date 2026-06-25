@@ -27,8 +27,6 @@ gateway/
   crates/gateway-common/           # lib: shared clients / JWT / validators
   web-common/                      # shared theme CSS + fetch wrapper (npm)
   migrations/                      # sqlx migrations (Postgres)
-  packaging/                       # shared systemd/env templates
-  scripts/                         # build-debs.sh, dev stack, sdme files
   docs/                            # dev-setup.md and friends
 ```
 
@@ -111,7 +109,7 @@ export WORKSPACE_GATE_SECRET=dev-devserver-gate-secret
 cargo run -p devserver-proxy
 ```
 
-devserver-proxy holds no database and no session cookie of its own; a workspace is reached by following the "open workspace" link from the id.chan.app dashboard, which carries the entry token. For the full local stack use `scripts/dev/setup.sh` + `scripts/dev/run.sh`.
+devserver-proxy holds no database and no session cookie of its own; a workspace is reached by following the "open workspace" link from the id.chan.app dashboard, which carries the entry token. For the full local stack use `../packaging/gateway/scripts/dev/setup.sh` + `../packaging/gateway/scripts/dev/run.sh`.
 
 For frontend iteration without re-embedding:
 
@@ -141,7 +139,7 @@ To build .debs locally on macOS (one-off, before relying on CI):
 brew install zig
 rustup target add x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu
 cargo install cargo-zigbuild cargo-deb
-./scripts/build-debs.sh
+../packaging/gateway/scripts/build-debs.sh
 ls dist/                                   # eight .deb files (4 packages x 2 archs)
 ```
 
@@ -186,7 +184,7 @@ Build / install:
 
 ```sh
 cargo install --path crates/admin                 # local dev
-# or use the .deb produced by scripts/build-debs.sh:
+# or use the .deb produced by ../packaging/gateway/scripts/build-debs.sh:
 sudo apt install ./chan-gateway-admin_*.deb
 ```
 

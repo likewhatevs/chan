@@ -25,14 +25,14 @@ export WORKSPACE_GATE_SECRET=dev-devserver-gate-secret
 cargo run -p devserver-proxy
 ```
 
-For the full local stack (with identity + profile + Postgres), prefer `scripts/dev/setup.sh` + `scripts/dev/run.sh`. Two listeners come up:
+For the full local stack (with identity + profile + Postgres), prefer `packaging/gateway/scripts/dev/setup.sh` + `packaging/gateway/scripts/dev/run.sh`. Two listeners come up:
 
 - `BIND_ADDR` (7002): public HTTP. devserver.chan.app sits behind nginx + TLS in production; loopback in dev.
 - `TUNNEL_BIND_ADDR` (7100): h2c. nginx `grpc_pass`es `/v1/tunnel` on the apex here; `chan serve` instances dial it for the handshake.
 
 ## Env vars
 
-Public hostnames come from the shared domain config ([`gateway/packaging/domain.env`](../../packaging/domain.env)).
+Public hostnames come from the shared domain config ([`packaging/gateway/packaging/domain.env`](../../../packaging/gateway/packaging/domain.env)).
 
 Required:
 

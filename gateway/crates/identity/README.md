@@ -44,8 +44,8 @@ export GITHUB_CLIENT_SECRET=...
 cargo run -p identity
 ```
 
-Hostnames derive from `CHAN_DOMAIN` (default `localtest.me`) and `PUBLIC_SCHEME` (default `http`); `BASE_URL` defaults to `<scheme>://id.<domain>` and is set explicitly above only to pin the loopback port. For the full local stack, prefer `scripts/dev/setup.sh`
-+ `scripts/dev/run.sh`.
+Hostnames derive from `CHAN_DOMAIN` (default `localtest.me`) and `PUBLIC_SCHEME` (default `http`); `BASE_URL` defaults to `<scheme>://id.<domain>` and is set explicitly above only to pin the loopback port. For the full local stack, prefer `packaging/gateway/scripts/dev/setup.sh`
++ `packaging/gateway/scripts/dev/run.sh`.
 
 Register a GitHub OAuth app at `https://github.com/settings/developers` with callback `http://127.0.0.1:7000/auth/github/callback`. The other providers follow the same pattern.
 
@@ -68,7 +68,7 @@ Provider credentials (each pair optional; leave both unset to disable):
 - `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`
 - `GITLAB_CLIENT_ID`, `GITLAB_CLIENT_SECRET`
 
-Domain (single source; see [`gateway/packaging/domain.env`](../../packaging/domain.env)):
+Domain (single source; see [`packaging/gateway/packaging/domain.env`](../../../packaging/gateway/packaging/domain.env)):
 
 | Name                       | Default        | Purpose                     |
 |----------------------------|----------------|-----------------------------|

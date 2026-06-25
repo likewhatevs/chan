@@ -20,7 +20,7 @@ From the workspace:
 cargo install --path crates/admin
 ```
 
-From a Debian package (built by `scripts/build-debs.sh`):
+From a Debian package (built by `packaging/gateway/scripts/build-debs.sh`):
 
 ```bash
 sudo apt install ./chan-gateway-admin_*.deb
