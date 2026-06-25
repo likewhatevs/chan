@@ -6,6 +6,40 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [v0.51.0] - 2026-06-25
+
+Windows desktop support graduates from a CI-only artifact to a published download:
+the release now ships an (unsigned) Windows desktop installer and a standalone
+Windows CLI, the terminal defaults to the user's own shell instead of requiring
+Git BASH, and `chan open` integrates with a running devserver over a named pipe.
+
+### Added
+
+- **The Windows desktop installer and CLI are published downloads.** The release
+  builds and uploads `Chan_<version>_x64-setup.exe` (NSIS desktop installer) and
+  `chan-x86_64-pc-windows-msvc.zip` (standalone CLI), and the install page lists
+  both. The installer is **unsigned** for now, so Windows SmartScreen may warn on
+  first run; Authenticode signing is tracked for a later release. The Windows build
+  is best-effort: a failure does not block the Linux and macOS release.
+- **`chan devserver --service`** unifies the previous `--systemd` / `--launchd`
+  flags into one cross-platform flag, with a Windows service backend.
+- **Windows named-pipe devserver discovery.** `chan open` finds and registers into
+  an already-running devserver over a named pipe, matching the unix-socket behavior.
+
+### Changed
+
+- **The Windows terminal defaults to the user's shell** (PowerShell / cmd, with a
+  `CHAN_SHELL` override) instead of requiring Git BASH; the in-app "install Git for
+  Windows" gate is removed.
+
+### Fixed
+
+- **`chan open` hands off to a running chan-desktop** from the bundled console
+  `chan.exe`, so opening a path from the CLI focuses the existing window instead of
+  starting a second server.
+- **chan-server forces process exit on Windows** when the graceful-shutdown deadline
+  lapses, so a lingering task can no longer keep the process alive.
+
 ## [v0.50.0] - 2026-06-25
 
 A terminal-interaction, reload-state, and CLI-ergonomics bug-sweep with desktop
