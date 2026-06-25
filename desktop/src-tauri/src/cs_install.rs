@@ -474,34 +474,41 @@ mod windows_shim {
 
     /// The `.cmd` wrapper that re-execs `target` as `name`. `set "ARGV0=<name>"`
     /// makes `chan_shell::invoked_arg0()` report `<name>` so the CLI / control
-    /// client dispatch fires before any GUI init; `%*` forwards the args; `exit
-    /// /b` propagates the child's exit code. CRLF endings for `cmd.exe`.
+    /// client dispatch fires before any GUI init. `set "CHAN_DESKTOP_HANDOFF=1"`
+    /// opts the bundled console `chan.exe` (a `Standalone`-personality binary)
+    /// into the CLI-to-desktop handoff, so `chan open <ws>` hands off to the
+    /// running desktop instead of binding its own port — matching the
+    /// macOS/Linux desktop shim (which re-execs the desktop binary directly).
+    /// `%*` forwards the args; `exit /b` propagates the child's exit code. CRLF
+    /// endings for `cmd.exe`.
     pub(super) fn wrapper_script(name: &str, target: &Path) -> String {
         format!(
             "@echo off\r\n\
              {WRAPPER_MARKER}\r\n\
              setlocal\r\n\
              set \"ARGV0={name}\"\r\n\
+             set \"CHAN_DESKTOP_HANDOFF=1\"\r\n\
              \"{target}\" %*\r\n\
              exit /b %errorlevel%\r\n",
             target = target.display(),
         )
     }
 
-    /// The extensionless POSIX shim that Git BASH runs for a bare `chan` /
-    /// `cs`. Git BASH (MSYS, POSIX) does not consult `PATHEXT`, so it will not
-    /// run `chan.cmd` as `chan`; it needs a real shebang script named exactly
-    /// `chan`. Exports `ARGV0=<name>` — `chan_shell::invoked_arg0()` reads it
-    /// ahead of `argv[0]` — then execs the installed chan-desktop.exe so the
-    /// CLI / control-client dispatch fires instead of the GUI. Same ARGV0
-    /// mechanism as the Linux AppImage wrapper. Forward-slash target so MSYS
-    /// parses the path (backslashes are sh escapes); LF endings.
+    /// The extensionless POSIX shim that a POSIX shell (a user's own
+    /// `bash`/`sh`) runs for a bare `chan` / `cs`, since such shells do not
+    /// consult `PATHEXT` and so will not run `chan.cmd` as `chan`. Exports
+    /// `ARGV0=<name>` — `chan_shell::invoked_arg0()` reads it ahead of
+    /// `argv[0]` — and `CHAN_DESKTOP_HANDOFF=1` so `chan open` hands off to the
+    /// running desktop (see [`wrapper_script`]), then execs the target. Same
+    /// ARGV0 mechanism as the Linux AppImage wrapper. Forward-slash target so
+    /// MSYS parses the path (backslashes are sh escapes); LF endings.
     pub(super) fn posix_wrapper_script(name: &str, target: &Path) -> String {
         let target = target.display().to_string().replace('\\', "/");
         format!(
             "#!/bin/sh\n\
              {POSIX_MARKER}\n\
              export ARGV0={name}\n\
+             export CHAN_DESKTOP_HANDOFF=1\n\
              exec \"{target}\" \"$@\"\n",
         )
     }
@@ -766,6 +773,8 @@ mod windows_shim {
             assert!(s.starts_with("@echo off\r\n"));
             assert!(s.contains(WRAPPER_MARKER));
             assert!(s.contains("set \"ARGV0=chan\"\r\n"));
+            // Opts the bundled console chan.exe into the desktop handoff.
+            assert!(s.contains("set \"CHAN_DESKTOP_HANDOFF=1\"\r\n"));
             assert!(s.contains("\"C:\\Program Files\\Chan\\chan-desktop.exe\" %*\r\n"));
             assert!(s.contains("exit /b %errorlevel%\r\n"));
             // Distinct script per name.
@@ -783,6 +792,7 @@ mod windows_shim {
             assert!(s.starts_with("#!/bin/sh\n"));
             assert!(s.contains(POSIX_MARKER));
             assert!(s.contains("export ARGV0=chan\n"));
+            assert!(s.contains("export CHAN_DESKTOP_HANDOFF=1\n"));
             // Backslashes become forward slashes so MSYS/Git BASH parses the
             // path; the whole script stays backslash-free.
             assert!(s.contains("exec \"C:/Program Files/Chan/chan-desktop.exe\" \"$@\"\n"));

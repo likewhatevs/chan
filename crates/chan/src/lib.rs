@@ -1632,17 +1632,23 @@ async fn cmd_serve(args: ServeArgs, personality: Personality) -> Result<()> {
             .with_context(|| format!("creating workspace root {}", root.display()))?;
     }
 
-    // CLI-to-desktop handoff. Only the Desktop personality (chan-desktop
-    // dispatched as `chan`) integrates with a running desktop; the
-    // standalone `chan` binary always owns its own server (browser) and
-    // never hands off. When a same-user chan-desktop is running in a GUI
-    // session, ask it to open this workspace in a native window and EXIT. The
-    // desktop then owns the workspace's flock; the CLI must NOT also open the
-    // workspace (the single-writer invariant). This runs BEFORE
-    // `open_workspace` so a successful handoff never double-opens. Every
-    // fallback (no desktop, refused, stale socket, bad handshake, version
-    // skew, GUI-absent) drops through to the standalone server path below.
-    if personality == Personality::Desktop && !standalone {
+    // CLI-to-desktop handoff. The Desktop personality (chan-desktop dispatched
+    // as `chan`) integrates with a running desktop; a truly standalone `chan`
+    // binary owns its own server and never hands off — UNLESS it was launched by
+    // the desktop's own shim, which sets `CHAN_DESKTOP_HANDOFF=1`
+    // (`handoff_forced`). That is how the Windows desktop bundle works: its shim
+    // re-execs the separate console `chan.exe` (always `Standalone`), so it opts
+    // into the handoff explicitly, matching the macOS/Linux desktop shim that
+    // re-execs the desktop binary with `Personality::Desktop`. When a same-user
+    // chan-desktop is running in a GUI session, ask it to open this workspace in
+    // a native window and EXIT. The desktop then owns the workspace's flock; the
+    // CLI must NOT also open it (the single-writer invariant). This runs BEFORE
+    // `open_workspace` so a successful handoff never double-opens. Every fallback
+    // (no desktop, refused, stale socket, bad handshake, version skew,
+    // GUI-absent) drops through to the standalone server path below.
+    let want_desktop_handoff =
+        personality == Personality::Desktop || chan_server::handoff::handoff_forced();
+    if want_desktop_handoff && !standalone {
         if let Some(outcome) = maybe_handoff_to_desktop(&root).await {
             return outcome;
         }

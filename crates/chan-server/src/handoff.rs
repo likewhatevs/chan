@@ -283,6 +283,22 @@ pub fn handoff_opt_out() -> bool {
     }
 }
 
+/// Force the CLI-to-desktop handoff ON for a `Standalone`-personality binary:
+/// `CHAN_DESKTOP_HANDOFF=1`. The desktop-installed Windows shim sets this so the
+/// bundled console `chan.exe` hands a `chan open` off to the running desktop
+/// exactly like the macOS/Linux desktop shim does via `Personality::Desktop`
+/// (on those platforms the shim re-execs the desktop binary, so the personality
+/// already carries the intent; on Windows the shim re-execs a separate
+/// `chan.exe`, which is always `Standalone`, so it needs this explicit signal).
+/// `CHAN_NO_DESKTOP_HANDOFF` still wins — the opt-out is checked at the handoff
+/// itself. Any non-empty, non-"0" value counts as set.
+pub fn handoff_forced() -> bool {
+    match std::env::var("CHAN_DESKTOP_HANDOFF") {
+        Ok(v) => !v.is_empty() && v != "0",
+        Err(_) => false,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Desktop side: listener on the well-known socket.
 // ---------------------------------------------------------------------------
@@ -1045,6 +1061,27 @@ mod tests {
         match prev {
             Some(v) => std::env::set_var("CHAN_NO_DESKTOP_HANDOFF", v),
             None => std::env::remove_var("CHAN_NO_DESKTOP_HANDOFF"),
+        }
+    }
+
+    #[test]
+    fn forced_parsing() {
+        // Pins the `CHAN_DESKTOP_HANDOFF` name — the desktop shim sets it to opt
+        // the bundled console chan.exe into the handoff; a rename here would
+        // silently break that cross-crate contract. Snapshot + restore for
+        // order-independence.
+        let prev = std::env::var_os("CHAN_DESKTOP_HANDOFF");
+        std::env::remove_var("CHAN_DESKTOP_HANDOFF");
+        assert!(!handoff_forced());
+        std::env::set_var("CHAN_DESKTOP_HANDOFF", "1");
+        assert!(handoff_forced());
+        std::env::set_var("CHAN_DESKTOP_HANDOFF", "0");
+        assert!(!handoff_forced());
+        std::env::set_var("CHAN_DESKTOP_HANDOFF", "");
+        assert!(!handoff_forced());
+        match prev {
+            Some(v) => std::env::set_var("CHAN_DESKTOP_HANDOFF", v),
+            None => std::env::remove_var("CHAN_DESKTOP_HANDOFF"),
         }
     }
 
