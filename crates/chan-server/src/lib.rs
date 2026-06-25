@@ -325,12 +325,12 @@ fn format_index_progress(event: &ProgressEvent, verbose: bool) -> String {
 /// listener) and the `WorkspaceHost` tenant builder (the devserver and
 /// chan-desktop mount their tenants through it) so every path serves
 /// byte-identical request handling.
-/// Prime the Windows Git BASH discovery cache off the async request path.
-/// Discovery shells out (`git --exec-path`, `reg query`, `where bash`) with
-/// blocking process spawns; resolving it lazily on the first terminal create
-/// would run those on a tokio worker and freeze the embedded SPA. Fire it
-/// on a blocking thread at server-build time — before the router accepts any
-/// request — so the spawn-gate cache read is instant. A no-op off Windows.
+/// Prime the Windows default-shell resolution cache off the async request path.
+/// Resolution may shell out (`where pwsh`) with a blocking process spawn;
+/// resolving it lazily on the first terminal create would run that on a tokio
+/// worker and freeze the embedded SPA. Fire it on a blocking thread at
+/// server-build time — before the router accepts any request — so the
+/// command-builder cache read is instant. A no-op off Windows.
 fn prime_terminal_shell() {
     #[cfg(windows)]
     {
@@ -340,7 +340,7 @@ fn prime_terminal_shell() {
         // later through the `OnceLock`. `drop` rather than `let _` keeps clippy's
         // `let_underscore_future` happy.
         drop(tokio::task::spawn_blocking(
-            crate::terminal_sessions::prime_git_bash,
+            crate::terminal_sessions::prime_windows_shell,
         ));
     }
 }

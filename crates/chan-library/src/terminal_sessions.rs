@@ -27,15 +27,12 @@ mod ring;
 
 use bytes::{contains_subslice, visible_activity_bytes};
 #[cfg(windows)]
-use platform::git_bash;
-#[cfg(windows)]
-pub use platform::prime_git_bash;
+pub use platform::prime_windows_shell;
 #[cfg(unix)]
 pub use platform::user_shell;
 use platform::{
     clear_mcp_env, command_builder, locale_selects_utf8, path_inside_root, process_cwd,
-    reject_terminal_spawn_if_fd_pressure, reject_terminal_spawn_if_git_bash_missing, set_mcp_env,
-    terminal_home_dir,
+    reject_terminal_spawn_if_fd_pressure, set_mcp_env, terminal_home_dir,
 };
 #[cfg(test)]
 use platform::{fd_headroom_allows, TERMINAL_SESSION_FD_ESTIMATE};
@@ -271,32 +268,14 @@ pub struct EnqueueOutcome {
 pub enum CreateError {
     Capped,
     FdPressure(FdPressure),
-    /// Windows only: Git BASH (the required terminal shell — see
-    /// [`command_builder`]) was not found. A distinct, structured variant so
-    /// the desktop/frontend can render the friendly "Install Git for Windows"
-    /// gate instead of treating it as a generic spawn failure. Constructed only
-    /// on windows (via [`reject_terminal_spawn_if_git_bash_missing`]); the
-    /// match arms that handle it stay compiled on every platform.
-    #[cfg_attr(not(windows), allow(dead_code))]
-    GitBashMissing,
     Spawn(anyhow::Error),
 }
-
-/// The user-facing missing-Git message, pinned in one place so the gate copy
-/// and any test share a single source of truth (it carries the install URL).
-pub const GIT_BASH_MISSING_MESSAGE: &str =
-    "Git for Windows is required for the terminal — install it from https://gitforwindows.org/";
-
-/// The structured `reason` tag carried on the WS error frame and matched by
-/// the frontend gate, mirroring the existing `"fd_pressure"` tag.
-pub const GIT_BASH_MISSING_REASON: &str = "git_bash_missing";
 
 impl std::fmt::Display for CreateError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             CreateError::Capped => f.write_str("terminal session cap reached"),
             CreateError::FdPressure(pressure) => write!(f, "{pressure}"),
-            CreateError::GitBashMissing => f.write_str(GIT_BASH_MISSING_MESSAGE),
             CreateError::Spawn(e) => write!(f, "{e}"),
         }
     }
@@ -622,10 +601,9 @@ impl Registry {
         // `session_cap` slot against a re-spawn under the same name. See
         // [`reap_exited`].
         self.reap_exited();
-        // Global pre-spawn gates (git-bash on PATH; fd pressure — the latter
-        // does an fd_snapshot read_dir): neither needs the sessions lock, so run
-        // them before taking it, keeping that blocking I/O off the registry lock.
-        reject_terminal_spawn_if_git_bash_missing()?;
+        // Global pre-spawn gate (fd pressure — an fd_snapshot read_dir): does
+        // not need the sessions lock, so run it before taking it, keeping that
+        // blocking I/O off the registry lock.
         reject_terminal_spawn_if_fd_pressure()?;
         // Validate the cap + mint the id under the lock, but SPAWN (openpty +
         // fork/exec) OUTSIDE it so a create's PTY launch doesn't stall every
@@ -695,7 +673,6 @@ impl Registry {
         if old.closed.load(Ordering::Relaxed) {
             return Ok(false);
         }
-        reject_terminal_spawn_if_git_bash_missing()?;
         reject_terminal_spawn_if_fd_pressure()?;
         let mut opts = old.restart_options();
         if tab_name.is_some() {
@@ -1564,9 +1541,8 @@ impl Session {
             cmd.env("USERPROFILE", home);
         }
         // Windows: the terminal shell is Git BASH (a hard dependency). Prepend
-        // Git's `usr/bin` (+ `mingw64/bin`) so `git` and the coreutils resolve,
-        // and the chan bin dir (`%LOCALAPPDATA%\chan\bin`) so the `chan` / `cs`
-        // shims resolve. The shim dir is only ever added to the HKCU PATH
+        // Prepend the chan bin dir (`%LOCALAPPDATA%\chan\bin`) so the `chan` /
+        // `cs` shims resolve. The shim dir is only ever added to the HKCU PATH
         // registry by `cs_install::ensure_on_user_path`, which never reaches
         // this already-running process's inherited env — so prepend it here,
         // independent of registry propagation. Must match `cs_install`'s
@@ -1575,9 +1551,6 @@ impl Session {
         #[cfg(windows)]
         {
             let mut prepend: Vec<PathBuf> = Vec::new();
-            if let Some(git) = git_bash() {
-                prepend.extend(git.path_prepend.iter().cloned());
-            }
             if let Some(local) = dirs::data_local_dir() {
                 prepend.push(local.join("chan").join("bin"));
             }
@@ -2312,20 +2285,6 @@ fn random_session_id() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// Pin the missing-Git structured contract the frontend gate keys on: the
-    /// `reason` tag and the install URL carried by the message. A rename here
-    /// would silently break the "Install Git for Windows" gate, which the team
-    /// cannot smoke without Windows hardware.
-    #[test]
-    fn git_bash_missing_contract_is_stable() {
-        assert_eq!(GIT_BASH_MISSING_REASON, "git_bash_missing");
-        assert_eq!(
-            CreateError::GitBashMissing.to_string(),
-            GIT_BASH_MISSING_MESSAGE
-        );
-        assert!(GIT_BASH_MISSING_MESSAGE.contains("https://gitforwindows.org/"));
-    }
 
     fn test_config(ring_bytes: usize, cap: usize, idle: u64) -> RegistryConfig {
         let tmp = tempfile::tempdir().unwrap();

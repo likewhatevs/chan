@@ -10,19 +10,6 @@ use super::{CreateError, FdPressure};
 const TERMINAL_FD_HEADROOM: u64 = 32;
 pub(super) const TERMINAL_SESSION_FD_ESTIMATE: u64 = 8;
 
-/// Gate every spawn path on the Git BASH hard dependency (Windows only). When
-/// it is absent there is no POSIX shell to spawn, so reject with the
-/// structured [`CreateError::GitBashMissing`] the frontend turns into the
-/// install gate — rather than silently falling back to `cmd` or surfacing an
-/// opaque spawn error. A no-op on every other platform.
-pub(super) fn reject_terminal_spawn_if_git_bash_missing() -> Result<(), CreateError> {
-    #[cfg(windows)]
-    if git_bash().is_none() {
-        return Err(CreateError::GitBashMissing);
-    }
-    Ok(())
-}
-
 pub(super) fn reject_terminal_spawn_if_fd_pressure() -> Result<(), CreateError> {
     let Some((open, limit)) = fd_snapshot() else {
         return Ok(());
@@ -140,7 +127,7 @@ pub(super) fn command_builder(command: Option<&str>) -> CommandBuilder {
     let command = command.map(str::trim).filter(|command| !command.is_empty());
     #[cfg(windows)]
     {
-        windows_command_builder(command)
+        windows_shell().build(command)
     }
     #[cfg(not(windows))]
     {
@@ -161,179 +148,148 @@ pub(super) fn command_builder(command: Option<&str>) -> CommandBuilder {
     }
 }
 
-/// Windows terminal shell: **Git BASH** (a hard dependency of the Windows
-/// design). Spawn it as a login shell (`bash -l`, `-lc` for one-shots) so its
-/// MSYS `/etc/profile` sets up the POSIX environment. The PATH prepend that
-/// makes `git`/coreutils/`cs` resolve happens in [`Session::spawn`] (it needs
-/// the live env). Callers gate on [`git_bash`] via
-/// [`reject_terminal_spawn_if_git_bash_missing`] before reaching here; the
-/// `cmd` fallback is purely defensive for any unguarded path.
+/// The user's default Windows terminal shell, resolved once and cached.
 #[cfg(windows)]
-fn windows_command_builder(command: Option<&str>) -> CommandBuilder {
-    match git_bash() {
-        Some(git) => {
-            let mut cmd = CommandBuilder::new(&git.bash);
-            match command {
-                Some(command) => cmd.args(["-lc", command]),
-                None => cmd.args(["-l"]),
+pub(super) struct WindowsShell {
+    program: PathBuf,
+    kind: WinShellKind,
+}
+
+/// How the resolved Windows shell takes its interactive / one-shot arguments.
+#[cfg(windows)]
+#[derive(Clone, Copy)]
+enum WinShellKind {
+    /// `powershell.exe` / `pwsh.exe`: `-NoLogo` interactive, `-NoLogo -Command`
+    /// one-shot. No `-NoProfile` — we want the user's profile/PATH (the `-l`
+    /// analog of the unix login shell).
+    PowerShell,
+    /// `cmd.exe`: no args interactive, `/C` one-shot.
+    Cmd,
+    /// Any other shell a user points `CHAN_SHELL` at (a POSIX `sh`/`bash`,
+    /// including a Git BASH they install themselves): `-l` / `-lc`, matching the
+    /// unix login-shell convention.
+    Posix,
+}
+
+#[cfg(windows)]
+impl WindowsShell {
+    fn build(&self, command: Option<&str>) -> CommandBuilder {
+        let mut cmd = CommandBuilder::new(&self.program);
+        match (self.kind, command) {
+            (WinShellKind::PowerShell, None) => {
+                cmd.arg("-NoLogo");
             }
-            cmd
+            (WinShellKind::PowerShell, Some(c)) => {
+                cmd.args(["-NoLogo", "-Command", c]);
+            }
+            (WinShellKind::Cmd, None) => {}
+            (WinShellKind::Cmd, Some(c)) => {
+                cmd.args(["/C", c]);
+            }
+            (WinShellKind::Posix, None) => {
+                cmd.arg("-l");
+            }
+            (WinShellKind::Posix, Some(c)) => {
+                cmd.args(["-lc", c]);
+            }
         }
-        None => match command {
-            Some(command) => {
-                let mut cmd = CommandBuilder::new("cmd");
-                cmd.args(["/C", command]);
-                cmd
-            }
-            None => CommandBuilder::new_default_prog(),
-        },
+        cmd
     }
 }
 
-/// A resolved Git for Windows BASH install.
+/// Resolve the user's default Windows shell once and cache it for the process
+/// lifetime — resolution shells out (`where pwsh`), and a terminal spawn is on
+/// the interactive path.
 #[cfg(windows)]
-pub(super) struct GitBashInstall {
-    /// `<root>\bin\bash.exe` — the launcher that initialises the MSYS env.
-    pub(super) bash: PathBuf,
-    /// Extra Windows PATH entries (`<root>\usr\bin`, `<root>\mingw64\bin`) so
-    /// `git`, the coreutils, and the `cs` shim resolve for the login shell and
-    /// anything it spawns.
-    pub(super) path_prepend: Vec<PathBuf>,
+pub(super) fn windows_shell() -> &'static WindowsShell {
+    static CACHE: std::sync::OnceLock<WindowsShell> = std::sync::OnceLock::new();
+    CACHE.get_or_init(resolve_windows_shell)
 }
 
-/// Resolve Git BASH once and cache the result (present or absent) for the
-/// process lifetime — discovery shells out, and a terminal spawn is on the
-/// interactive path.
-#[cfg(windows)]
-pub(super) fn git_bash() -> Option<&'static GitBashInstall> {
-    static CACHE: std::sync::OnceLock<Option<GitBashInstall>> = std::sync::OnceLock::new();
-    CACHE.get_or_init(resolve_git_bash).as_ref()
-}
-
-/// Force the [`git_bash`] cache to resolve eagerly, off the async request path.
-/// [`resolve_git_bash`] shells out (`git --exec-path`, `reg query` ×2, `where
-/// bash`) with blocking `std::process::Command`; resolving it lazily on the
-/// first terminal create — which runs on a tokio worker (the embedded server
-/// hosts the SPA, API, and WS on one runtime) — would block that worker and
-/// freeze the SPA. The server primes this once on a blocking thread at
-/// startup, so the inline spawn gate
-/// ([`reject_terminal_spawn_if_git_bash_missing`]) and [`windows_command_builder`]
-/// only ever read the warm `OnceLock`.
+/// Force the [`windows_shell`] cache to resolve eagerly, off the async request
+/// path. Resolution may shell out (`where pwsh`) with blocking
+/// `std::process::Command`; resolving it lazily on the first terminal create —
+/// which runs on a tokio worker (the embedded server hosts the SPA, API, and WS
+/// on one runtime) — would block that worker and freeze the SPA. The server
+/// primes this once on a blocking thread at startup, so [`windows_shell`] only
+/// ever reads the warm `OnceLock`.
 // `pub` (not `pub(crate)`) because chan-server's route layer calls it
 // cross-crate to prime the cache at server startup.
 #[cfg(windows)]
-pub fn prime_git_bash() {
-    let _ = git_bash();
+pub fn prime_windows_shell() {
+    let _ = windows_shell();
 }
 
-/// Discovery order (most reliable first), returning the first root whose
-/// `bin\bash.exe` exists:
-///   1. `git --exec-path` → walk up to the install root (skips WSL entirely).
-///   2. Well-known install dirs under Program Files / per-user.
-///   3. Registry `HKLM\...\GitForWindows\InstallPath` via `reg query`.
-///   4. `where bash`, filtering out System32 / WindowsApps (the WSL `bash.exe`
-///      launcher, which is NOT Git BASH).
-///
-/// No registry/winapi crate is pulled — `git`/`reg`/`where` are shelled out.
+/// Classify a shell program by its file stem so a `CHAN_SHELL` override gets the
+/// right argument convention. Unknown stems are treated as POSIX (`-lc`), which
+/// is the useful fallback for a user who points `CHAN_SHELL` at a `bash`/`sh`.
 #[cfg(windows)]
-fn resolve_git_bash() -> Option<GitBashInstall> {
+fn classify_windows_shell(program: &Path) -> WinShellKind {
+    let stem = program
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    match stem.as_str() {
+        "pwsh" | "powershell" => WinShellKind::PowerShell,
+        "cmd" => WinShellKind::Cmd,
+        _ => WinShellKind::Posix,
+    }
+}
+
+/// Resolve the Windows shell, first match wins:
+///   1. `CHAN_SHELL` (verbatim path/name; arg convention inferred from the stem).
+///   2. `pwsh.exe` (PowerShell 7) if on PATH.
+///   3. `powershell.exe` (Windows PowerShell 5, in-box on every supported Windows).
+///   4. `%ComSpec%` / `cmd.exe`.
+#[cfg(windows)]
+fn resolve_windows_shell() -> WindowsShell {
     use std::process::Command;
 
-    // 1. Derive the root from `git --exec-path`
-    //    (`<root>\mingw64\libexec\git-core`): walk ancestors for `bin\bash.exe`.
-    if let Ok(output) = Command::new("git").arg("--exec-path").output() {
+    // 1. Explicit override.
+    if let Some(raw) = std::env::var_os("CHAN_SHELL").filter(|v| !v.is_empty()) {
+        let program = PathBuf::from(raw);
+        let kind = classify_windows_shell(&program);
+        return WindowsShell { program, kind };
+    }
+
+    // 2. PowerShell 7 (pwsh) if installed.
+    if let Ok(output) = Command::new("where").arg("pwsh").output() {
         if output.status.success() {
-            let exec_path = String::from_utf8_lossy(&output.stdout);
-            let exec_path = PathBuf::from(exec_path.trim());
-            for root in exec_path.ancestors() {
-                if let Some(install) = git_bash_from_root(root) {
-                    return Some(install);
-                }
+            if let Some(path) = String::from_utf8_lossy(&output.stdout)
+                .lines()
+                .map(str::trim)
+                .find(|l| !l.is_empty())
+            {
+                return WindowsShell {
+                    program: PathBuf::from(path),
+                    kind: WinShellKind::PowerShell,
+                };
             }
         }
     }
 
-    // 2. Well-known install roots.
-    let mut roots: Vec<PathBuf> = Vec::new();
-    for var in ["ProgramFiles", "ProgramFiles(x86)", "ProgramW6432"] {
-        if let Some(dir) = std::env::var_os(var) {
-            roots.push(PathBuf::from(dir).join("Git"));
-        }
-    }
-    if let Some(local) = std::env::var_os("LocalAppData") {
-        roots.push(PathBuf::from(local).join("Programs").join("Git"));
-    }
-    for root in &roots {
-        if let Some(install) = git_bash_from_root(root) {
-            return Some(install);
-        }
+    // 3. Windows PowerShell 5, the in-box default. Prefer the full System32
+    //    path so a modified PATH can't shadow it; fall back to the bare name.
+    let powershell = std::env::var_os("SystemRoot")
+        .or_else(|| std::env::var_os("windir"))
+        .map(|root| PathBuf::from(root).join(r"System32\WindowsPowerShell\v1.0\powershell.exe"))
+        .filter(|p| p.is_file());
+    if let Some(program) = powershell {
+        return WindowsShell {
+            program,
+            kind: WinShellKind::PowerShell,
+        };
     }
 
-    // 3. Registry InstallPath (32- and 64-bit views).
-    for key in [
-        r"HKLM\SOFTWARE\GitForWindows",
-        r"HKLM\SOFTWARE\WOW6432Node\GitForWindows",
-    ] {
-        if let Ok(output) = Command::new("reg")
-            .args([key, "/v", "InstallPath"])
-            .output()
-        {
-            if output.status.success() {
-                let text = String::from_utf8_lossy(&output.stdout);
-                // `    InstallPath    REG_SZ    C:\Program Files\Git`
-                if let Some(path) = text
-                    .lines()
-                    .find_map(|line| line.split("REG_SZ").nth(1))
-                    .map(str::trim)
-                    .filter(|p| !p.is_empty())
-                {
-                    if let Some(install) = git_bash_from_root(Path::new(path)) {
-                        return Some(install);
-                    }
-                }
-            }
-        }
+    // 4. %ComSpec% / cmd.exe — the last-resort default.
+    let comspec = std::env::var_os("ComSpec")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(r"C:\Windows\System32\cmd.exe"));
+    WindowsShell {
+        program: comspec,
+        kind: WinShellKind::Cmd,
     }
-
-    // 4. `where bash`, skipping the WSL launcher under System32 / WindowsApps.
-    if let Ok(output) = Command::new("where").arg("bash").output() {
-        if output.status.success() {
-            let text = String::from_utf8_lossy(&output.stdout);
-            for line in text.lines().map(str::trim).filter(|l| !l.is_empty()) {
-                let lower = line.to_ascii_lowercase();
-                if lower.contains(r"\system32\") || lower.contains(r"\windowsapps\") {
-                    continue;
-                }
-                // `where bash` points at `<root>\bin\bash.exe`, so the install
-                // root is two levels up.
-                if let Some(root) = Path::new(line).parent().and_then(Path::parent) {
-                    if let Some(install) = git_bash_from_root(root) {
-                        return Some(install);
-                    }
-                }
-            }
-        }
-    }
-
-    None
-}
-
-/// Build a [`GitBashInstall`] from a candidate install root, or `None` if it
-/// has no `bin\bash.exe`.
-#[cfg(windows)]
-fn git_bash_from_root(root: &Path) -> Option<GitBashInstall> {
-    let bash = root.join("bin").join("bash.exe");
-    if !bash.is_file() {
-        return None;
-    }
-    let mut path_prepend = Vec::new();
-    for sub in [["usr", "bin"], ["mingw64", "bin"], ["mingw32", "bin"]] {
-        let dir = root.join(sub[0]).join(sub[1]);
-        if dir.is_dir() {
-            path_prepend.push(dir);
-        }
-    }
-    Some(GitBashInstall { bash, path_prepend })
 }
 
 pub(crate) fn set_mcp_env(cmd: &mut CommandBuilder, socket_path: &std::path::Path) {

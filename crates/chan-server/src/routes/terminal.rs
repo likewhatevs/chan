@@ -18,7 +18,7 @@ use crate::signal::now_unix_secs;
 use crate::state::AppState;
 use crate::terminal_sessions::{
     AttachHandle, CloseReason, CreateError, CreateOptions, RestartOverrides, SessionEvent,
-    ALT_SCREEN_ATTACH_PRELUDE, GIT_BASH_MISSING_REASON,
+    ALT_SCREEN_ATTACH_PRELUDE,
 };
 
 const DEFAULT_COLS: u16 = 80;
@@ -363,11 +363,6 @@ pub async fn api_create_terminal(
         Err(CreateError::FdPressure(e)) => {
             (StatusCode::SERVICE_UNAVAILABLE, e.to_string()).into_response()
         }
-        // 424 Failed Dependency: Git for Windows is missing. The body is the
-        // friendly install message; the frontend gate renders it with the link.
-        Err(e @ CreateError::GitBashMissing) => {
-            (StatusCode::FAILED_DEPENDENCY, e.to_string()).into_response()
-        }
         Err(CreateError::Spawn(e)) => (
             StatusCode::BAD_REQUEST,
             format!("failed to start terminal: {e}"),
@@ -423,9 +418,6 @@ pub async fn api_restart_terminal(
         }
         Err(CreateError::FdPressure(e)) => {
             (StatusCode::SERVICE_UNAVAILABLE, e.to_string()).into_response()
-        }
-        Err(e @ CreateError::GitBashMissing) => {
-            (StatusCode::FAILED_DEPENDENCY, e.to_string()).into_response()
         }
         Err(CreateError::Spawn(e)) => (
             StatusCode::BAD_REQUEST,
@@ -598,19 +590,6 @@ async fn terminal_ws(mut socket: WebSocket, state: Arc<AppState>, opts: Terminal
                     reason: message.into(),
                 })))
                 .await;
-            return;
-        }
-        Err(e @ CreateError::GitBashMissing) => {
-            // Structured `reason` tag so the frontend renders the "Install Git
-            // for Windows" gate rather than a generic terminal error.
-            let _ = send_frame(
-                &mut socket,
-                ServerFrame::Error {
-                    message: e.to_string(),
-                    reason: Some(GIT_BASH_MISSING_REASON),
-                },
-            )
-            .await;
             return;
         }
         Err(CreateError::Spawn(e)) => {

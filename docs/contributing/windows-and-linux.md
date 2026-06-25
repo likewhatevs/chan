@@ -10,9 +10,9 @@
 
 chan supports Windows on two fronts, kept deliberately separate:
 
-1. **Running / building chan-desktop *for* Windows** — the GUI app, with its
-   terminal wired to [Git for Windows](https://gitforwindows.org/) (Git BASH).
-   You do **not** need a Windows machine to *compile-check* this from
+1. **Running / building chan-desktop *for* Windows** — the GUI app, whose
+   terminal runs the user's default shell (PowerShell, or `cmd` / a `CHAN_SHELL`
+   override). You do **not** need a Windows machine to *compile-check* this from
    macOS/Linux; see "Native Windows build" below.
 2. **Developing chan *on* a Windows machine** — running the gates, building the
    Linux artifacts (AppImage / `.deb` / `.rpm`, the static musl CLI tarball) and
