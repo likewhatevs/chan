@@ -150,6 +150,12 @@ Also `f992af43`: the rc dry run's RPM packaging rejected the `-` in `0.50.0-rc1`
 RPM's `~` form (`0.50.0~rc1`), for the RPM only, leaving the semver/git version
 intact.
 
+And `6cff75ac`: the rc2 push CI tripped a pre-existing flake --
+`forget_is_destructive_...` failed with "Directory not empty" because a workspace
+teardown removes the index dir while a cancelled background reindex finishes its
+last write on a `spawn_blocking` task it cannot abort mid-write. `wipe_dir` now
+retries the remove on a non-empty dir with a short bounded backoff (verified 40/40).
+
 ## The cut
 
 Twelve lane commits over the rc1 base (`56839154`) + three host-smoke fixes + the
