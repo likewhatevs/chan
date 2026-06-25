@@ -125,12 +125,25 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # chan-desktop embeds web/dist via rust-embed, so the SPA bundle must
-          # exist before the Rust crate compiles (mirrors `make chan-desktop`).
+          # chan-desktop embeds BOTH frontend bundles via rust-embed: web/dist
+          # (WebAssets) and web-launcher/dist (LauncherAssets, the launcher /
+          # library-root SPA). Both must exist before the Rust crate compiles,
+          # else LauncherAssets bakes an empty dir and the launcher window serves
+          # the "launcher bundle not built" fallback. Mirrors `make chan-desktop`
+          # (its `web` target depends on `web-launcher`).
+          (cd web-launcher && npm install && npm run build)
           (cd web && npm install && npm run build)
+          # Build the console-subsystem `chan.exe` CLI (a real terminal program:
+          # `chan devserver` then BLOCKS and takes Ctrl-C, unlike the
+          # GUI-subsystem chan-desktop.exe, which detaches when launched from
+          # PowerShell). The shims (cs_install.rs) re-point at it when present.
+          cargo build --release -p chan
           # NSIS only: the cross-platform `bundle.targets: "all"` would also try
           # the WiX MSI, which needs the WiX toolset we deliberately dropped.
-          (cd desktop/src-tauri && cargo tauri build --bundles nsis)
+          # `tauri.windows.conf.json` (a deep-merge over tauri.conf.json, Windows
+          # only) bundles the chan.exe built just above as a resource; the main
+          # conf can't carry it because the file does not exist on macOS/Linux.
+          (cd desktop/src-tauri && cargo tauri build --bundles nsis --config tauri.windows.conf.json)
 
       - if: matrix.os == 'windows-latest'
         name: Headless boot + /api/health smoke

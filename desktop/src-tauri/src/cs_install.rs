@@ -326,7 +326,10 @@ pub fn install_bin_shims() -> std::io::Result<u32> {
 /// fresh shell resolves `chan` / `cs`.
 #[cfg(windows)]
 pub fn install_bin_shims() -> std::io::Result<u32> {
-    use windows_shim::{ensure_on_user_path, install_one, install_roots, shim_bin_dir, SHIM_NAMES};
+    use windows_shim::{
+        ensure_on_user_path, install_one, install_roots, resolve_cli_target, shim_bin_dir,
+        SHIM_NAMES,
+    };
 
     // Stable install path only: a dev `cargo run` from target\{debug,release}\
     // is left alone (never pollute the user's PATH from an un-packaged build),
@@ -347,9 +350,13 @@ pub fn install_bin_shims() -> std::io::Result<u32> {
         return Ok(0);
     };
 
+    // Point the shims at the bundled console `chan.exe` when present (real CLI
+    // semantics: foreground + Ctrl-C), else the GUI chan-desktop.exe as before.
+    let target = resolve_cli_target(&exe);
+
     let mut changed = 0u32;
     for name in SHIM_NAMES {
-        match install_one(&exe, &bin_dir, name) {
+        match install_one(&target, &bin_dir, name) {
             Ok(true) => changed += 1,
             Ok(false) => {}
             Err(e) => tracing::warn!(error = %e, shim = name, "installing bin shim failed"),
@@ -419,6 +426,26 @@ mod windows_shim {
             }
         }
         roots
+    }
+
+    /// Resolve the binary the `chan` / `cs` shims should re-exec. Prefer a
+    /// bundled console-subsystem `chan.exe` (a real CLI: `chan devserver` from a
+    /// terminal then BLOCKS and takes Ctrl-C, unlike the GUI-subsystem
+    /// chan-desktop.exe, which detaches when launched from PowerShell). Probe
+    /// the layouts the Windows bundle may place it in — a sibling of
+    /// chan-desktop.exe, or a `resources\` subdir — and fall back to the desktop
+    /// exe itself when absent (a desktop-only build / older install), so the
+    /// shims always point at SOMETHING that dispatches the CLI via `$ARGV0`.
+    pub(super) fn resolve_cli_target(desktop_exe: &Path) -> PathBuf {
+        let Some(dir) = desktop_exe.parent() else {
+            return desktop_exe.to_path_buf();
+        };
+        for candidate in [dir.join("chan.exe"), dir.join("resources").join("chan.exe")] {
+            if candidate.is_file() {
+                return candidate;
+            }
+        }
+        desktop_exe.to_path_buf()
     }
 
     /// Whether `exe` is an installed chan-desktop (the right stem, under a known
@@ -677,6 +704,29 @@ mod windows_shim {
     #[cfg(test)]
     mod tests {
         use super::*;
+
+        #[test]
+        fn resolve_cli_target_prefers_bundled_chan_then_falls_back() {
+            let tmp = tempfile::tempdir().unwrap();
+            let dir = tmp.path();
+            let desktop = dir.join("chan-desktop.exe");
+            std::fs::write(&desktop, b"").unwrap();
+
+            // No chan.exe anywhere: fall back to the desktop exe (no regression).
+            assert_eq!(resolve_cli_target(&desktop), desktop);
+
+            // chan.exe in a `resources\` subdir is used.
+            let res_dir = dir.join("resources");
+            std::fs::create_dir_all(&res_dir).unwrap();
+            let res_cli = res_dir.join("chan.exe");
+            std::fs::write(&res_cli, b"").unwrap();
+            assert_eq!(resolve_cli_target(&desktop), res_cli);
+
+            // A sibling chan.exe wins (first candidate probed).
+            let sibling = dir.join("chan.exe");
+            std::fs::write(&sibling, b"").unwrap();
+            assert_eq!(resolve_cli_target(&desktop), sibling);
+        }
 
         #[test]
         fn installed_exe_accepts_localappdata_rejects_target() {
