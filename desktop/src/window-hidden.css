@@ -23,9 +23,14 @@
 }
 
 .hidden-notice-mark {
+  /* A CSS-masked silhouette (not an <img>) so the mark is painted in a theme
+     token and inverts with light/dark — a fixed dark PNG vanished on the dark
+     dialog. Mirrors the launcher header's `.brand .enso`. */
   width: 56px;
   height: 56px;
-  border-radius: 12px;
+  background-color: var(--text);
+  -webkit-mask: url('chan-mark.png') center / contain no-repeat;
+          mask: url('chan-mark.png') center / contain no-repeat;
 }
 
 .hidden-notice-title {
