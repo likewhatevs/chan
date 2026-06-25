@@ -25,6 +25,8 @@ Git BASH, and `chan open` integrates with a running devserver over a named pipe.
   flags into one cross-platform flag, with a Windows service backend.
 - **Windows named-pipe devserver discovery.** `chan open` finds and registers into
   an already-running devserver over a named pipe, matching the unix-socket behavior.
+- **The chan-desktop launcher window remembers its size and position** across
+  restarts (per monitor, like the editor window) and opens at a more compact default.
 
 ### Changed
 
@@ -39,6 +41,10 @@ Git BASH, and `chan open` integrates with a running devserver over a named pipe.
   starting a second server.
 - **chan-server forces process exit on Windows** when the graceful-shutdown deadline
   lapses, so a lingering task can no longer keep the process alive.
+- **`cs open <path>` moves the cursor to the opened editor** instead of leaving it in
+  the terminal that ran the command.
+- **The desktop "Window Hidden" notice mark follows the theme** — a fixed dark logo
+  that had become invisible on the dark dialog.
 
 ## [v0.50.0] - 2026-06-25
 
