@@ -79,7 +79,7 @@ impl WorkspaceLock {
     /// the equivalent is a leaked `LockFileEx` handle: the lockfile is
     /// opened with `FILE_SHARE_DELETE` and the steal unlinks it, but it
     /// stays best-effort (a recreate can lose a race to the leaked handle's
-    /// pending-delete, degrading to a refuse). `holder_liveness` probes the
+    /// pending-delete, degrading to a refuse). `process_alive` probes the
     /// recorded pid on both platforms so only a provably-dead holder is
     /// ever stolen from.
     pub fn acquire(lock_dir: &Path, workspace_root: &Path) -> Result<Self> {
@@ -117,7 +117,7 @@ impl WorkspaceLock {
         let stealable = match &record {
             // Missing/torn record ⇒ holder is mid-write or unknown ⇒
             // treat as alive.
-            Some(r) => r.path == our_path && holder_liveness(r.pid) == Liveness::Dead,
+            Some(r) => r.path == our_path && process_alive(r.pid) == ProcessLiveness::Dead,
             None => false,
         };
         if !stealable {
@@ -238,33 +238,37 @@ fn canonical_string(root: &Path) -> String {
         .into_owned()
 }
 
-// Only Unix and Windows have a liveness probe; on any other target the
-// sole verdict is `Indeterminate`, so `Alive`/`Dead` are never built there.
+/// Verdict of [`process_alive`]. Only Unix and Windows have a real probe; on
+/// any other target the sole verdict is `Indeterminate`, so `Alive`/`Dead` are
+/// never built there.
 #[cfg_attr(not(any(unix, windows)), allow(dead_code))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Liveness {
+pub enum ProcessLiveness {
     Alive,
     Dead,
     Indeterminate,
 }
 
-/// Is process `pid` alive? Conservative: only `Dead` authorizes a steal,
-/// and we return `Dead` solely when the OS says "no such process".
-/// Anything ambiguous (permission denied, an unexpected errno, no probe
-/// available) is treated as not-dead so a live holder is never stolen.
-fn holder_liveness(pid: u32) -> Liveness {
+/// Is process `pid` alive? Conservative: only `Dead` is a definitive
+/// "no such process"; anything ambiguous (permission denied, an unexpected
+/// errno, no probe available) is `Indeterminate` so a caller never treats a
+/// live process as gone. The writer-lock steal path keys on `Dead`; the
+/// devserver Windows supervisor reuses it (alongside a creation-time guard)
+/// before signalling a recorded pid. Dependency-free: `rustix` on unix,
+/// `windows-sys` on Windows — both already chan-workspace deps.
+pub fn process_alive(pid: u32) -> ProcessLiveness {
     #[cfg(unix)]
     {
         use rustix::io::Errno;
         use rustix::process::{test_kill_process, Pid};
         let Some(pid) = i32::try_from(pid).ok().and_then(Pid::from_raw) else {
-            return Liveness::Indeterminate;
+            return ProcessLiveness::Indeterminate;
         };
         match test_kill_process(pid) {
-            Ok(()) => Liveness::Alive,
-            Err(Errno::SRCH) => Liveness::Dead,
-            Err(Errno::PERM) => Liveness::Alive,
-            Err(_) => Liveness::Indeterminate,
+            Ok(()) => ProcessLiveness::Alive,
+            Err(Errno::SRCH) => ProcessLiveness::Dead,
+            Err(Errno::PERM) => ProcessLiveness::Alive,
+            Err(_) => ProcessLiveness::Indeterminate,
         }
     }
     #[cfg(windows)]
@@ -289,21 +293,21 @@ fn holder_liveness(pid: u32) -> Liveness {
             if handle.is_null() {
                 return match GetLastError() {
                     // No process with that id: provably dead.
-                    ERROR_INVALID_PARAMETER => Liveness::Dead,
+                    ERROR_INVALID_PARAMETER => ProcessLiveness::Dead,
                     // It exists but is protected from our token: alive.
-                    ERROR_ACCESS_DENIED => Liveness::Alive,
-                    _ => Liveness::Indeterminate,
+                    ERROR_ACCESS_DENIED => ProcessLiveness::Alive,
+                    _ => ProcessLiveness::Indeterminate,
                 };
             }
             let mut code: u32 = 0;
             let ok = GetExitCodeProcess(handle, &mut code);
             CloseHandle(handle);
             if ok == 0 {
-                Liveness::Indeterminate
+                ProcessLiveness::Indeterminate
             } else if code == STILL_ACTIVE {
-                Liveness::Alive
+                ProcessLiveness::Alive
             } else {
-                Liveness::Dead
+                ProcessLiveness::Dead
             }
         }
     }
@@ -312,7 +316,7 @@ fn holder_liveness(pid: u32) -> Liveness {
         // No dependency-free liveness probe on this target. Stay
         // conservative: never steal.
         let _ = pid;
-        Liveness::Indeterminate
+        ProcessLiveness::Indeterminate
     }
 }
 
@@ -469,7 +473,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn our_own_pid_reads_as_alive() {
-        assert_eq!(holder_liveness(std::process::id()), Liveness::Alive);
+        assert_eq!(process_alive(std::process::id()), ProcessLiveness::Alive);
     }
 
     #[cfg(unix)]
@@ -481,13 +485,13 @@ mod tests {
             .expect("spawn /usr/bin/true");
         let pid = child.id();
         child.wait().expect("reap child");
-        assert_eq!(holder_liveness(pid), Liveness::Dead);
+        assert_eq!(process_alive(pid), ProcessLiveness::Dead);
     }
 
     #[cfg(windows)]
     #[test]
     fn our_own_pid_reads_as_alive() {
-        assert_eq!(holder_liveness(std::process::id()), Liveness::Alive);
+        assert_eq!(process_alive(std::process::id()), ProcessLiveness::Alive);
     }
 
     #[cfg(windows)]
@@ -502,6 +506,6 @@ mod tests {
             .expect("spawn cmd /C exit");
         let pid = child.id();
         child.wait().expect("reap child");
-        assert_eq!(holder_liveness(pid), Liveness::Dead);
+        assert_eq!(process_alive(pid), ProcessLiveness::Dead);
     }
 }

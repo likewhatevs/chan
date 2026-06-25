@@ -8,11 +8,23 @@ chan devserver --bind 127.0.0.1 --port 8787
 
 There is no TLS and only a bearer-token gate, so keep the bind on loopback and reach the devserver from another machine over a forwarded localhost port (below).
 
-## Keep it running: `--systemd` (Linux), `--launchd` (macOS)
+## Keep it running: `--service`
 
-On Linux, `chan devserver --systemd` runs the devserver under a systemd user service named `chan-devserver.service` instead of in the foreground, so it survives the terminal that launched it and survives logout. This is what lets you start a devserver on a box, disconnect, and resume your sessions later: the service keeps the workspaces mounted, and re-running `chan devserver --systemd` re-attaches to the already-running service (it prints "re-attaching to the running systemd user service chan-devserver.service" and does not rewrite the unit) rather than starting a second one.
+`chan devserver --service` runs the devserver under the platform service manager instead of in the foreground, so it survives the terminal that launched it. This is what lets you start a devserver on a box, disconnect, and resume your sessions later: the service keeps the workspaces mounted, and re-running `chan devserver --service` re-attaches to the already-running instance rather than starting a second one.
 
-On first run it:
+The backend is chosen per OS — a systemd user service on Linux, a launchd LaunchAgent on macOS, a detached background process tracked by a PID file on Windows — but the flags are the same everywhere:
+
+```sh
+chan devserver --service                # start (or re-attach), then surface the bearer token
+chan devserver --service --stop         # stop the supervised devserver
+chan devserver --service --restart      # restart (or start if stopped) on the current --bind/--port
+```
+
+`--stop`/`--restart` require `--service`; a plain foreground `chan devserver` is stopped with Ctrl-C.
+
+### Linux: systemd user service
+
+`--service` runs the devserver under a systemd user service named `chan-devserver.service`, which survives the terminal **and** survives logout. On first run it:
 
 - Ensures user lingering is on, so the service runs without an active login session. If lingering is off and chan cannot enable it, it stops with a hint to run it once as root:
 
@@ -22,9 +34,7 @@ On first run it:
 
 - Writes `~/.config/systemd/user/chan-devserver.service` (its `ExecStart` runs `chan devserver --bind=... --port=...`), then enables and starts it with `systemctl --user enable --now` and follows its journal.
 
-`--systemd` is Linux-only — on macOS use `--launchd` (below); on other platforms it prints a note and runs in the foreground.
-
-Manage the service with the usual user-scoped systemd commands:
+You can also manage it with the usual user-scoped systemd commands:
 
 ```sh
 systemctl --user status chan-devserver.service
@@ -33,13 +43,13 @@ systemctl --user stop chan-devserver.service
 journalctl --user -u chan-devserver.service -f
 ```
 
-### macOS: `--launchd`
+### macOS: launchd LaunchAgent
 
-On macOS, `chan devserver --launchd` runs the devserver under a per-user launchd **LaunchAgent** named `app.chan.devserver`, the counterpart to `--systemd`. It writes `~/Library/LaunchAgents/app.chan.devserver.plist` (whose `ProgramArguments` run `chan devserver --bind=… --port=…`), loads it into your `gui/$UID` login session with `launchctl bootstrap`, and starts it. Re-running re-attaches to the already-running agent (it prints "re-attaching to the running launchd agent app.chan.devserver") rather than starting a second one.
+`--service` runs the devserver under a per-user launchd **LaunchAgent** named `app.chan.devserver`. It writes `~/Library/LaunchAgents/app.chan.devserver.plist` (whose `ProgramArguments` run `chan devserver --bind=… --port=…`), loads it into your `gui/$UID` login session with `launchctl bootstrap`, and starts it.
 
-A LaunchAgent outlives the terminal that launched it and your GUI login session, but — unlike systemd's linger — it does **not** survive a full logout (that would need a root LaunchDaemon, out of scope for a per-user dev tool). launchd has no journal, so the agent's output goes to `~/.chan/devserver/devserver.log`, which the foreground supervisor follows.
+A LaunchAgent outlives the terminal that launched it and your GUI login session, but — unlike systemd's linger — it does **not** survive a full logout (that would need a root LaunchDaemon, out of scope for a per-user dev tool). launchd has no journal, so the agent's output goes to `~/.chan/devserver/devserver.log`.
 
-Manage the agent with `launchctl`:
+You can also manage it with `launchctl`:
 
 ```sh
 launchctl print gui/$(id -u)/app.chan.devserver        # status (state = running, pid, last exit code)
@@ -47,6 +57,12 @@ launchctl kickstart -k gui/$(id -u)/app.chan.devserver # restart
 launchctl bootout gui/$(id -u)/app.chan.devserver      # stop and unload
 tail -f ~/.chan/devserver/devserver.log                # follow its log
 ```
+
+### Windows: detached background process
+
+`--service` spawns the devserver as a detached background process and records its pid in `~/.chan/devserver/service.json`. Unlike systemd/launchd there is no OS supervisor: the process is **per-login** — it does not survive logout and does not auto-restart on crash — but it does survive the terminal that launched it, which is enough to start a devserver and walk away for the session. Its output goes to `~/.chan/devserver/devserver.log`.
+
+`--service --stop` reads the pid (guarded against pid reuse by the recorded process creation time) and terminates it; `--service --restart` stops and respawns. There is no console signal to a detached process, so `--stop` is a hard terminate — safe because the devserver drains each HTTP request synchronously and releases its per-workspace locks on exit.
 
 ## Reach it from Chan Desktop at localhost
 

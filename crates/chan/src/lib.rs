@@ -69,6 +69,11 @@ use serde::Serialize;
 
 mod update;
 
+/// Windows `--service` backend: a detached background devserver tracked by a
+/// PID/state file (the systemd/launchd analog). Compiled only on Windows.
+#[cfg(windows)]
+mod devserver_windows;
+
 /// Default listen port shared by `chan open` (standalone serve) and
 /// `chan devserver`. Single-sourced so the two cannot drift: `cmd_serve` relies
 /// on them being equal to recognize the "a devserver already owns 8787" bind
@@ -332,26 +337,24 @@ enum Command {
         /// Port to bind.
         #[arg(long, default_value_t = DEFAULT_PORT)]
         port: u16,
-        /// Run under a systemd user service (Linux): create and start the
-        /// `chan-devserver.service` user unit (re-attaching if it is already
-        /// running), so it survives the launching shell and logout, then
-        /// follow its journal. Off Linux, runs in the foreground.
+        /// Run as a managed background service that survives the launching
+        /// shell, then follow its output. The backend is per-OS: a systemd
+        /// user service (`chan-devserver.service`) on Linux, a launchd
+        /// LaunchAgent (`app.chan.devserver`) on macOS, and a detached
+        /// background process tracked by a PID file on Windows. Re-attaches if
+        /// the service is already running. Without it, the devserver runs in
+        /// the foreground (Ctrl-C to stop). Note: the Windows backend is
+        /// per-login — it does not survive logout or auto-restart on crash.
         #[arg(long)]
-        systemd: bool,
-        /// Run under a macOS launchd LaunchAgent (`app.chan.devserver`):
-        /// write and load the agent (re-attaching if it is already running),
-        /// so it survives the launching shell, then follow its log. Off
-        /// macOS, runs in the foreground. Mutually exclusive with --systemd.
-        #[arg(long, conflicts_with = "systemd")]
-        launchd: bool,
-        /// Stop the supervised devserver and exit. Requires --systemd (Linux)
-        /// or --launchd (macOS); a foreground devserver is stopped with Ctrl-C.
-        /// Idempotent: a no-op when the service is not running.
+        service: bool,
+        /// Stop the supervised devserver and exit. Requires --service; a
+        /// foreground devserver is stopped with Ctrl-C. Idempotent: a no-op
+        /// when the service is not running.
         #[arg(long, conflicts_with = "restart")]
         stop: bool,
         /// Restart the supervised devserver (or START it if it is not running),
-        /// then follow it. Requires --systemd/--launchd. Rewrites the unit /
-        /// agent first, so it picks up the current binary and --bind/--port.
+        /// then follow it. Requires --service. Rewrites the unit / agent / PID
+        /// state first, so it picks up the current binary and --bind/--port.
         #[arg(long)]
         restart: bool,
         /// Tunnel endpoint URL. With --tunnel-token, the devserver also dials
@@ -911,25 +914,12 @@ where
         Command::Devserver {
             bind,
             port,
-            systemd,
-            launchd,
+            service,
             stop,
             restart,
             tunnel_url,
             tunnel_token,
-        } => {
-            cmd_devserver(
-                bind,
-                port,
-                systemd,
-                launchd,
-                stop,
-                restart,
-                tunnel_url,
-                tunnel_token,
-            )
-            .await
-        }
+        } => cmd_devserver(bind, port, service, stop, restart, tunnel_url, tunnel_token).await,
         Command::Config { action } => cmd_config(action),
         Command::Upgrade {
             yes,
@@ -1787,27 +1777,27 @@ fn devserver_port_collision_hint(port: u16, err: &chan_server::Error) -> Option<
 }
 
 /// Run a headless multi-workspace devserver bound to `bind:port`. By default
-/// it runs in the foreground. `--systemd` (Linux) supervises it under the
-/// `chan-devserver.service` user unit; `--launchd` (macOS) supervises it under
-/// the `app.chan.devserver` LaunchAgent. Either re-attaches when its service is
-/// already running; off its own OS each prints a note and runs in the
-/// foreground.
+/// it runs in the foreground. `--service` supervises it under the platform
+/// service manager so it survives the launching shell: a systemd user unit
+/// (`chan-devserver.service`) on Linux, a launchd LaunchAgent
+/// (`app.chan.devserver`) on macOS, and a detached background process tracked
+/// by a PID file on Windows. It re-attaches when the service is already
+/// running.
 #[allow(clippy::too_many_arguments)]
 async fn cmd_devserver(
     bind: IpAddr,
     port: u16,
-    systemd: bool,
-    launchd: bool,
+    service: bool,
     stop: bool,
     restart: bool,
     tunnel_url: String,
     tunnel_token: Option<String>,
 ) -> Result<()> {
     let addr = SocketAddr::new(bind, port);
-    // --stop / --restart act on a supervised (--systemd/--launchd) devserver and
+    // --stop / --restart act on a supervised (--service) devserver and
     // short-circuit the normal start path (no tunnel, no foreground bind).
     if stop || restart {
-        return manage_supervised_devserver(addr, systemd, launchd, stop).await;
+        return manage_supervised_devserver(addr, service, stop).await;
     }
     if !addr.ip().is_loopback() {
         eprintln!(
@@ -1835,81 +1825,108 @@ async fn cmd_devserver(
                      Prefer CHAN_TUNNEL_TOKEN env var instead."
                 );
             }
-            if systemd || launchd {
+            if service {
                 anyhow::bail!(
                     "chan devserver: tunnel mode (--tunnel-token) is not supported under \
-                     --systemd/--launchd; the supervised backend would persist the token in \
-                     the unit file. Run the devserver in the foreground (or under your own \
-                     supervisor) to enable the tunnel."
+                     --service; the supervised backend would persist the token in the unit \
+                     file / agent / spawn args. Run the devserver in the foreground (or \
+                     under your own supervisor) to enable the tunnel."
                 );
             }
             Some(chan_server::DevserverTunnel { tunnel_url, token })
         }
         None => None,
     };
-    // `--systemd` / `--launchd` supervise the foreground devserver under the
-    // platform service manager so it survives the launching terminal. Each is a
-    // no-op off its own OS (the other backend is not wired there), so fall back
-    // to the foreground.
-    if systemd {
-        if cfg!(target_os = "linux") {
-            return run_devserver_under_systemd(addr).await;
-        }
-        eprintln!("chan devserver: NOTE: --systemd is Linux-only; running in the foreground.");
-    }
-    if launchd {
-        if cfg!(target_os = "macos") {
-            return run_devserver_under_launchd(addr).await;
-        }
-        eprintln!("chan devserver: NOTE: --launchd is macOS-only; running in the foreground.");
+    // `--service` supervises the foreground devserver under the platform service
+    // manager so it survives the launching terminal.
+    if service {
+        return run_devserver_as_service(addr).await;
     }
     // Resolve the local-listener decision for the foreground path only. Tunnel
     // mode defaults to NOT binding the loopback port (the gateway is the
     // surface, and it 404s the management API anyway); `CHAN_DEVSERVER_LISTEN`
     // overrides either way. The supervised backends always bind locally (they
     // re-exec without the env var, and tunnel mode is refused there), so the
-    // resolution lives below the systemd/launchd branches.
+    // resolution lives below the --service branch.
     let listen = resolve_devserver_listen(tunnel.is_some(), devserver_listen_override())?;
     run_devserver_foreground(addr, tunnel, listen).await
 }
 
-/// Dispatch `chan devserver --stop` / `--restart` to the supervised backend.
-/// Both act on a `--systemd` (Linux) / `--launchd` (macOS) service and exit or
-/// replace it; a foreground devserver is managed with Ctrl-C. Off the matching
-/// OS, or with no supervisor flag, this errors with a clear message rather than
-/// silently falling through to a foreground start. `--restart` starts the
-/// service when it is not already running.
-async fn manage_supervised_devserver(
-    addr: SocketAddr,
-    systemd: bool,
-    launchd: bool,
-    stop: bool,
-) -> Result<()> {
+/// Dispatch `--service` to the platform supervisor: systemd (Linux), launchd
+/// (macOS), or the detached-process + PID-file backend (Windows). On any other
+/// target there is no supervisor, so fall back to a foreground bind with a note
+/// rather than silently doing nothing.
+async fn run_devserver_as_service(addr: SocketAddr) -> Result<()> {
+    // The systemd/launchd supervisors compile on every target, so reference them
+    // unconditionally via RUNTIME `cfg!` — that keeps their whole call graph
+    // non-dead-code even on Windows (the false branch compiles, it just never
+    // runs). Only the Windows-only backend module and the no-backend fallback
+    // are compile-gated.
+    if cfg!(target_os = "linux") {
+        return run_devserver_under_systemd(addr).await;
+    }
+    if cfg!(target_os = "macos") {
+        return run_devserver_under_launchd(addr).await;
+    }
+    #[cfg(target_os = "windows")]
+    {
+        return devserver_windows::run_devserver_under_windows(addr).await;
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        eprintln!(
+            "chan devserver: NOTE: --service has no supervisor backend on this OS; \
+             running in the foreground."
+        );
+        let listen = resolve_devserver_listen(false, devserver_listen_override())?;
+        run_devserver_foreground(addr, None, listen).await
+    }
+}
+
+/// Dispatch `chan devserver --stop` / `--restart` to the platform supervisor:
+/// systemd (Linux), launchd (macOS), or the detached-process backend (Windows).
+/// Acts on a `--service` instance and exits or replaces it; a foreground
+/// devserver is managed with Ctrl-C. Without `--service` this errors with a
+/// clear message rather than silently falling through to a foreground start.
+/// `--restart` starts the service when it is not already running.
+async fn manage_supervised_devserver(addr: SocketAddr, service: bool, stop: bool) -> Result<()> {
     let op = if stop { "--stop" } else { "--restart" };
-    if systemd {
-        if !cfg!(target_os = "linux") {
-            anyhow::bail!("chan devserver: {op} with --systemd is Linux-only.");
-        }
+    if !service {
+        anyhow::bail!(
+            "chan devserver: {op} requires --service; a foreground devserver is \
+             stopped with Ctrl-C."
+        );
+    }
+    // Reference the systemd/launchd supervisors unconditionally via runtime
+    // `cfg!` (see `run_devserver_as_service`) so their call graph stays
+    // non-dead-code on Windows; the Windows backend + no-backend bail are
+    // compile-gated.
+    if cfg!(target_os = "linux") {
         return if stop {
             stop_devserver_under_systemd().await
         } else {
             restart_devserver_under_systemd(addr).await
         };
     }
-    if launchd {
-        if !cfg!(target_os = "macos") {
-            anyhow::bail!("chan devserver: {op} with --launchd is macOS-only.");
-        }
+    if cfg!(target_os = "macos") {
         return if stop {
             stop_devserver_under_launchd().await
         } else {
             restart_devserver_under_launchd(addr).await
         };
     }
-    anyhow::bail!(
-        "chan devserver: {op} requires --systemd (Linux) or --launchd (macOS); \
-         a foreground devserver is stopped with Ctrl-C."
-    )
+    #[cfg(target_os = "windows")]
+    {
+        return if stop {
+            devserver_windows::stop_devserver_under_windows().await
+        } else {
+            devserver_windows::restart_devserver_under_windows(addr).await
+        };
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        anyhow::bail!("chan devserver: {op} with --service has no supervisor backend on this OS.")
+    }
 }
 
 /// Whether the foreground devserver binds a local TCP listener. Tunnel mode
@@ -4582,29 +4599,29 @@ mod tests {
     /// mutually exclusive (clap `conflicts_with`).
     #[test]
     fn devserver_stop_restart_parse() {
-        let cli = Cli::parse_from(["chan", "devserver", "--systemd", "--stop"]);
+        let cli = Cli::parse_from(["chan", "devserver", "--service", "--stop"]);
         match cli.command {
             Command::Devserver {
-                systemd,
+                service,
                 stop,
                 restart,
                 ..
             } => {
-                assert!(systemd);
+                assert!(service);
                 assert!(stop);
                 assert!(!restart);
             }
             other => panic!("expected Command::Devserver, got {other:?}"),
         }
-        let cli = Cli::parse_from(["chan", "devserver", "--launchd", "--restart"]);
+        let cli = Cli::parse_from(["chan", "devserver", "--service", "--restart"]);
         match cli.command {
             Command::Devserver {
-                launchd,
+                service,
                 stop,
                 restart,
                 ..
             } => {
-                assert!(launchd);
+                assert!(service);
                 assert!(restart);
                 assert!(!stop);
             }
@@ -4612,7 +4629,7 @@ mod tests {
         }
         // --stop and --restart cannot be combined.
         assert!(
-            Cli::try_parse_from(["chan", "devserver", "--systemd", "--stop", "--restart"]).is_err()
+            Cli::try_parse_from(["chan", "devserver", "--service", "--stop", "--restart"]).is_err()
         );
     }
 
