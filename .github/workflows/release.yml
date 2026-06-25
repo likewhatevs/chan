@@ -613,6 +613,99 @@ jobs:
           path: chan/release-artifacts/*
           if-no-files-found: error
 
+  windows-artifacts:
+    name: Windows packages (unsigned)
+    needs: context
+    runs-on: windows-latest
+    # Windows desktop is experimental and the NSIS installer is UNSIGNED (the
+    # SSL.com Authenticode cert is still pending — docs/release/windows-signing.md).
+    # A Windows build failure must NOT block the Linux+macOS release: continue-on-error
+    # lets publish-release proceed, and the install page + /dl metadata already treat
+    # the Windows assets as optional, so they simply omit Windows until the next good
+    # build. The build recipe mirrors release-desktop.yml's proven Windows job.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          path: chan
+
+      - run: cp chan/rust-toolchain.toml ./rust-toolchain.toml
+        shell: bash
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: chan
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: chan/web/package-lock.json
+
+      - name: Install tauri-cli
+        uses: taiki-e/install-action@v2
+        with:
+          tool: tauri-cli@2
+
+      - name: Build Windows packages (CLI zip + NSIS installer, unsigned)
+        working-directory: chan
+        shell: bash
+        env:
+          VERSION: ${{ needs.context.outputs.version }}
+        run: |
+          set -euo pipefail
+          # chan / chan-desktop embed BOTH frontend bundles via rust-embed: web/dist
+          # (WebAssets) and web-launcher/dist (LauncherAssets). Both must exist before
+          # the Rust crates compile, else LauncherAssets bakes an empty dir.
+          (cd web-launcher && npm install && npm run build)
+          (cd web && npm install && npm run build)
+          # Console-subsystem chan.exe CLI (a real terminal program): shipped standalone
+          # as the Windows CLI zip AND embedded into the NSIS installer as a resource.
+          cargo build --release -p chan
+          mkdir -p release-artifacts staging
+          cp target/release/chan.exe staging/
+          cp LICENSE README.md staging/
+          # chan-x86_64-pc-windows-msvc.zip — the name the install page resolves.
+          (cd staging && 7z a -tzip ../release-artifacts/chan-x86_64-pc-windows-msvc.zip chan.exe LICENSE README.md)
+          # NSIS only: bundle.targets "all" would also try the WiX MSI we dropped.
+          # tauri.windows.conf.json deep-merges the chan.exe built above as a resource.
+          (cd desktop/src-tauri && cargo tauri build --bundles nsis --config tauri.windows.conf.json)
+          cp "target/release/bundle/nsis/Chan_${VERSION}_x64-setup.exe" release-artifacts/
+          ls -la release-artifacts
+
+      - name: Headless boot + /api/health smoke
+        working-directory: chan
+        shell: bash
+        run: |
+          set -uo pipefail
+          # chan-desktop.exe dispatches the chan CLI when arg0 stem is `chan` (ARGV0
+          # wins). Off unix `chan open` has no GUI to hand off to, so it serves a
+          # standalone server — the headless proof the Windows-built server boots.
+          exe="target/release/chan-desktop.exe"
+          ws="$RUNNER_TEMP/chan-smoke-ws"
+          mkdir -p "$ws"
+          ARGV0=chan CHAN_NO_DESKTOP_HANDOFF=1 "$exe" open \
+            --no-browser --no-token --port 8799 "$ws" &
+          srv=$!
+          ok=
+          for _ in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8799/api/health | grep -q '"status":"ok"'; then
+              ok=1; echo "embedded server answered /api/health"; break
+            fi
+            sleep 2
+          done
+          kill "$srv" 2>/dev/null || true
+          if [ -z "$ok" ]; then
+            echo "::error::chan-desktop embedded server did not answer /api/health"
+            exit 1
+          fi
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-windows
+          path: chan/release-artifacts/*
+          if-no-files-found: error
+
   publish-release:
     name: publish GitHub Release
     if: needs.context.outputs.publish == 'true'
@@ -623,6 +716,7 @@ jobs:
       - linux-desktop-artifacts
       - macos-cli-artifact
       - macos-desktop-artifacts
+      - windows-artifacts
     runs-on: ubuntu-latest
     permissions:
       contents: write
