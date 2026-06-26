@@ -2336,9 +2336,31 @@ async fn user_linger_enabled(user: &str) -> bool {
 
 /// Write `~/.config/systemd/user/chan-devserver.service` whose `ExecStart`
 /// runs THIS binary's foreground devserver on `addr`. Returns the unit path.
+/// Resolve a STABLE, relaunchable path to this `chan` binary for a unit / plist
+/// `ExecStart`. `current_exe()` goes stale when the binary is relocated or is an
+/// AppImage (an ephemeral `/tmp/.mount_*` path), so prefer in order: `$APPIMAGE`
+/// (the real image), then `current_exe()`, then `~/.local/bin/chan`, then a bare
+/// `chan` resolved from the unit's PATH.
+fn resolve_relaunchable_exe() -> PathBuf {
+    if let Some(appimage) = std::env::var_os("APPIMAGE") {
+        if !appimage.is_empty() {
+            return PathBuf::from(appimage);
+        }
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        return exe;
+    }
+    if let Some(home) = std::env::var_os("HOME") {
+        let local = PathBuf::from(home).join(".local").join("bin").join("chan");
+        if local.exists() {
+            return local;
+        }
+    }
+    PathBuf::from("chan")
+}
+
 fn write_devserver_unit(addr: SocketAddr) -> Result<PathBuf> {
-    let exe = std::env::current_exe()
-        .context("resolving the chan binary path for the systemd unit ExecStart")?;
+    let exe = resolve_relaunchable_exe();
     let dir = systemd_user_unit_dir()?;
     std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
     let unit_path = dir.join(DEVSERVER_SYSTEMD_UNIT);
@@ -2655,8 +2677,7 @@ fn devserver_log_path() -> Result<PathBuf> {
 /// Write the LaunchAgent plist whose `ProgramArguments` run THIS binary's
 /// foreground devserver on `addr`. Returns the plist path.
 fn write_devserver_launch_agent(addr: SocketAddr) -> Result<PathBuf> {
-    let exe = std::env::current_exe()
-        .context("resolving the chan binary path for the launchd ProgramArguments")?;
+    let exe = resolve_relaunchable_exe();
     let log = devserver_log_path()?;
     if let Some(parent) = log.parent() {
         std::fs::create_dir_all(parent)
@@ -4819,6 +4840,26 @@ mod tests {
                 assert!(force);
             }
             other => panic!("expected Command::Devserver, got {other:?}"),
+        }
+    }
+
+    /// The unit/plist ExecStart binary path prefers `$APPIMAGE` (the real,
+    /// relaunchable image) over the ephemeral `current_exe()`. Snapshot + restore
+    /// the env so the test is order-independent.
+    #[test]
+    fn relaunchable_exe_prefers_appimage() {
+        let prev = std::env::var_os("APPIMAGE");
+        std::env::set_var("APPIMAGE", "/opt/chan.AppImage");
+        assert_eq!(
+            resolve_relaunchable_exe(),
+            PathBuf::from("/opt/chan.AppImage")
+        );
+        std::env::remove_var("APPIMAGE");
+        // Without $APPIMAGE it falls back to a real path (current_exe in tests).
+        assert!(!resolve_relaunchable_exe().as_os_str().is_empty());
+        match prev {
+            Some(v) => std::env::set_var("APPIMAGE", v),
+            None => std::env::remove_var("APPIMAGE"),
         }
     }
 
