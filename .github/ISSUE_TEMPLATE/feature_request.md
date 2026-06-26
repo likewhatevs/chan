@@ -22,7 +22,7 @@ If you tried other approaches or thought through alternatives, mention them so r
 
 chan keeps a tight feature surface. Quick sanity check before opening:
 
-* Does it fit a single-binary, no-runtime-deps notes app?
+* Does it fit a single-binary, no-runtime-deps AI-native IDE?
 * Does it preserve the chan-drive boundary (no direct filesystem ops outside the drive contract)?
 * Does it stay local-first by default (no required network calls)?
 
