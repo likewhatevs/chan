@@ -1700,15 +1700,17 @@ fn render_terminal_list_markdown(raw: &str) -> Result<String> {
     let mut out = String::new();
     for (group, sessions) in groups {
         out.push_str(&format!("## {group}\n\n"));
-        out.push_str("| name | session | window | kind | status | cwd |\n");
-        out.push_str("| --- | --- | --- | --- | --- | --- |\n");
+        out.push_str("| name | session | window | pane | tab | kind | status | cwd |\n");
+        out.push_str("| --- | --- | --- | --- | --- | --- | --- | --- |\n");
         if let Some(arr) = sessions.as_array() {
             for s in arr {
                 out.push_str(&format!(
-                    "| {} | {} | {} | {} | {} | {} |\n",
+                    "| {} | {} | {} | {} | {} | {} | {} | {} |\n",
                     str_field(s, "name"),
                     str_field(s, "session_id"),
                     str_field(s, "window"),
+                    str_field(s, "pane"),
+                    str_field(s, "tab"),
                     str_field(s, "window_kind"),
                     str_field(s, "window_status"),
                     str_field(s, "cwd"),
@@ -1742,26 +1744,26 @@ mod tests {
 
     #[test]
     fn terminal_list_markdown_renders_window_columns() {
-        let raw = r#"{"groups":{"default":[{"name":"probe","session_id":"s1","window":"w-abc","window_kind":"standalone-terminal","window_status":"alive","cwd":"/tmp"}]}}"#;
+        let raw = r#"{"groups":{"default":[{"name":"probe","session_id":"s1","window":"w-abc","pane":"p-1","tab":"t-1","window_kind":"standalone-terminal","window_status":"alive","cwd":"/tmp"}]}}"#;
         let out = render_terminal_list_markdown(raw).expect("render");
         assert!(
-            out.contains("| name | session | window | kind | status | cwd |"),
+            out.contains("| name | session | window | pane | tab | kind | status | cwd |"),
             "header: {out}"
         );
         assert!(
-            out.contains("| probe | s1 | w-abc | standalone-terminal | alive | /tmp |"),
+            out.contains("| probe | s1 | w-abc | p-1 | t-1 | standalone-terminal | alive | /tmp |"),
             "row: {out}"
         );
     }
 
     #[test]
     fn terminal_list_markdown_tolerates_a_pre_identity_server() {
-        // An older server omits the window/kind/status fields; the columns fall
-        // back to `-` rather than erroring.
+        // A server that omits the window/pane/tab/kind/status fields renders `-`
+        // in those columns rather than erroring.
         let raw = r#"{"groups":{"default":[{"name":"probe","session_id":"s1","cwd":"/tmp"}]}}"#;
         let out = render_terminal_list_markdown(raw).expect("render");
         assert!(
-            out.contains("| probe | s1 | - | - | - | /tmp |"),
+            out.contains("| probe | s1 | - | - | - | - | - | /tmp |"),
             "row: {out}"
         );
     }
