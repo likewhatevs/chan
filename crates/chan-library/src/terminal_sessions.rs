@@ -145,6 +145,12 @@ pub struct Registry {
     /// keeps its blob so the window resurrects on reconnect; only an explicit
     /// discard drops it.
     blob_reaper: Mutex<Option<BlobReaper>>,
+    /// Per-PTY-life epoch source. Each spawn (create OR restart) takes the next
+    /// value and stamps it on the session, so a reattach can prove its cached
+    /// scrollback belongs to the SAME incarnation: a restart reuses the session
+    /// id but resets `seq` to 0, so without the bumped generation a stale client
+    /// `since` cursor would desync silently (empty replay, no warning).
+    generation_counter: AtomicU64,
 }
 
 /// Host-installed hook to reap a terminal WINDOW row when its session is reaped.
@@ -403,6 +409,10 @@ pub struct AttachHandle {
     pub rx: broadcast::Receiver<SessionEvent>,
     pub replay: Vec<Vec<u8>>,
     pub seq: u64,
+    /// This session incarnation's epoch, sent in the attach prelude so the
+    /// client can prove a cached scrollback snapshot belongs to the SAME PTY
+    /// life before resuming from a `since` cursor (a restart bumps it).
+    pub generation: u64,
     pub missed_bytes: u64,
     pub alt_screen: bool,
     /// Bytes re-asserting the live tracked private-mode set (DECCKM + mouse +
@@ -518,6 +528,7 @@ impl Registry {
             persisted_windows: Mutex::new(HashSet::new()),
             window_reaper: Mutex::new(None),
             blob_reaper: Mutex::new(None),
+            generation_counter: AtomicU64::new(0),
         }
     }
 
@@ -613,6 +624,18 @@ impl Registry {
         Some(session.window_id())
     }
 
+    /// The live session's current incarnation epoch, or `None` if there is no
+    /// such live session. Used by the WS attach path to honor a client `since`
+    /// cursor only when the client's cached generation still matches.
+    fn session_generation(&self, id: &str) -> Option<u64> {
+        let sessions = self.sessions.lock().expect("terminal registry poisoned");
+        let session = sessions.get(id)?;
+        if session.closed.load(Ordering::Relaxed) {
+            return None;
+        }
+        Some(session.generation())
+    }
+
     /// Snapshot of every live session for the cross-window roster. Mirrors
     /// [`Registry::session_summaries`] but carries `window_id` + the
     /// `broadcast` toggle and skips the per-session cwd probe (the roster
@@ -704,8 +727,14 @@ impl Registry {
             };
             (self.unused_id(&sessions), announce_command)
         };
-        let session = Session::spawn(id.clone(), self.config.clone(), opts, announce_command)
-            .map_err(CreateError::Spawn)?;
+        let session = Session::spawn(
+            id.clone(),
+            self.config.clone(),
+            opts,
+            announce_command,
+            self.generation_counter.fetch_add(1, Ordering::Relaxed),
+        )
+        .map_err(CreateError::Spawn)?;
         let mut sessions = self.sessions.lock().expect("terminal registry poisoned");
         // Re-check under the re-acquired lock: a concurrent create may have
         // filled the cap (or — astronomically — taken the random id) while we
@@ -763,8 +792,14 @@ impl Registry {
         // the banner names a tenant's launch command (control connect), while a
         // restart override (e.g. the team-bootstrap flip from a host shell to
         // the lead's `claude`) is not a single-purpose-tenant launch.
-        let session = Session::spawn(id.to_string(), self.config.clone(), opts, false)
-            .map_err(CreateError::Spawn)?;
+        let session = Session::spawn(
+            id.to_string(),
+            self.config.clone(),
+            opts,
+            false,
+            self.generation_counter.fetch_add(1, Ordering::Relaxed),
+        )
+        .map_err(CreateError::Spawn)?;
         let mut sessions = self.sessions.lock().expect("terminal registry poisoned");
         match sessions.get(id) {
             Some(current) if Arc::ptr_eq(current, &old) => {
@@ -813,7 +848,7 @@ impl Registry {
         since: Option<u64>,
         opts: CreateOptions,
     ) -> Result<AttachHandle, CreateError> {
-        self.get_or_create_for_ws(id, since, opts, None, None)
+        self.get_or_create_for_ws(id, since, opts, None, None, None)
     }
 
     pub fn get_or_create_for_ws(
@@ -823,9 +858,25 @@ impl Registry {
         opts: CreateOptions,
         pane_id: Option<String>,
         tab_id: Option<String>,
+        client_generation: Option<u64>,
     ) -> Result<AttachHandle, CreateError> {
         if let Some(id) = id {
-            if let Some(handle) = self.attach_for_ws(id, since) {
+            // Honor the client's `since` cursor for a SNAPSHOT RESUME only when
+            // its cached generation still matches the live session: a restart
+            // reuses the id but resets the ring/`seq` to 0, so a stale cursor
+            // would otherwise replay an empty delta with missed=0 (silent
+            // desync). A client that is not resuming echoes NO generation -- its
+            // `since` (the SPA's `Some(0)`) is honored as sent so a ring
+            // overflow still surfaces via `missed_bytes`.
+            let effective_since = match client_generation {
+                Some(g) if self.session_generation(id) == Some(g) => since,
+                // Echoed a generation that no longer matches (e.g. a restart it
+                // did not observe): the cached cursor is stale -> full replay.
+                Some(_) => None,
+                // Not a resume attempt: pass `since` through unchanged.
+                None => since,
+            };
+            if let Some(handle) = self.attach_for_ws(id, effective_since) {
                 // Move invariant: re-home the session to the attaching window.
                 // A cross-window terminal move re-binds it here, so a later
                 // `close_for_window(source)` reaps only sessions still bound to
@@ -1573,6 +1624,10 @@ struct Session {
     /// Read via [`Session::pane_id`] / [`Session::tab_id`] for `cs term list`.
     pane_id: Mutex<Option<String>>,
     tab_id: Mutex<Option<String>>,
+    /// Per-PTY-life epoch stamped at spawn (see [`Registry::generation_counter`]).
+    /// A restart mints a new session under the same id with this bumped and the
+    /// ring/`seq` reset, so a client compares it before trusting a `since` cursor.
+    generation: u64,
     workspace_root: PathBuf,
     spawn_opts: CreateOptions,
     child_pid: Option<u32>,
@@ -1641,6 +1696,7 @@ impl Session {
         config: RegistryConfig,
         opts: CreateOptions,
         announce_command: bool,
+        generation: u64,
     ) -> anyhow::Result<Arc<Self>> {
         let pty_system = native_pty_system();
         let pair = pty_system.openpty(opts.size)?;
@@ -1764,6 +1820,7 @@ impl Session {
             window_id: Mutex::new(window_id),
             pane_id: Mutex::new(None),
             tab_id: Mutex::new(None),
+            generation,
             workspace_root: config.workspace_root.clone(),
             spawn_opts: CreateOptions {
                 size: opts.size,
@@ -1922,6 +1979,7 @@ impl Session {
                 .snapshot_since(since)
         };
         let seq = self.seq.load(Ordering::Relaxed);
+        let generation = self.generation;
         let mode_reassert = self.private_mode_prelude();
         AttachHandle {
             id: self.id.clone(),
@@ -1929,6 +1987,7 @@ impl Session {
             rx,
             replay,
             seq,
+            generation,
             missed_bytes,
             alt_screen,
             mode_reassert,
@@ -2204,6 +2263,12 @@ impl Session {
             .clone()
     }
 
+    /// This session incarnation's epoch. Stable for the PTY's life; a restart
+    /// mints a new session under the same id with a higher value.
+    fn generation(&self) -> u64 {
+        self.generation
+    }
+
     /// Rebind the owning window on reattach. A `None`
     /// (windowless) reattach does NOT clear an existing binding — only a real
     /// attaching window re-homes the session.
@@ -2472,6 +2537,7 @@ mod tests {
             window_id: Mutex::new(None),
             pane_id: Mutex::new(None),
             tab_id: Mutex::new(None),
+            generation: 0,
             workspace_root: PathBuf::from("/"),
             spawn_opts: CreateOptions {
                 size: test_size(),
@@ -3375,6 +3441,7 @@ mod tests {
                 opts_with_window("win-pt"),
                 Some("pane-7".to_string()),
                 Some("tab-3".to_string()),
+                None,
             )
             .unwrap();
         let id = handle.id().to_string();
@@ -3392,6 +3459,7 @@ mod tests {
                 Some(0),
                 opts_with_window("win-pt"),
                 Some("pane-9".to_string()),
+                None,
                 None,
             )
             .unwrap();
@@ -3454,6 +3522,85 @@ mod tests {
     }
 
     #[test]
+    fn generation_bumps_on_restart() {
+        // The per-PTY-life epoch must advance on restart: the session keeps its
+        // id but the ring/`seq` reset to 0, so a reattach with a stale `since`
+        // cursor would silently desync. The bumped generation is the client's
+        // cache-invalidation signal (see `get_or_create_for_ws`'s gate).
+        let registry = Registry::new(test_config(4096, 8, 60));
+        let first = registry.create(opts_with_window("win-gen")).unwrap();
+        let id = first.id().to_string();
+        let gen1 = first.generation;
+        drop(first);
+        assert!(registry.restart(&id, RestartOverrides::default()).unwrap());
+        let second = registry.attach(&id, None).unwrap();
+        assert!(
+            second.generation > gen1,
+            "restart must mint a higher generation (was {gen1}, got {})",
+            second.generation
+        );
+        registry.close_all(CloseReason::Shutdown);
+    }
+
+    #[tokio::test]
+    async fn reattach_honors_since_only_on_matching_generation() {
+        // A reattach resumes from `since` only when the client's cached
+        // generation still matches the live session; a mismatch forces a full
+        // replay so a stale cursor never yields a silently-truncated screen.
+        let registry = Registry::new(test_config(1 << 16, 4, 60));
+        let mut first = registry.create(opts_with_window("win-gate")).unwrap();
+        let id = first.id().to_string();
+        let gen = first.generation;
+        // Drive output so the ring is non-empty and `seq` advances.
+        first.send_input(b"echo chan-gate-probe\n");
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        let mut got_output = false;
+        while tokio::time::Instant::now() < deadline {
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            match tokio::time::timeout(remaining, first.rx.recv()).await {
+                Ok(Ok(SessionEvent::Output(_))) => {
+                    got_output = true;
+                    break;
+                }
+                Ok(Ok(_)) => {}
+                Ok(Err(_)) | Err(_) => break,
+            }
+        }
+        assert!(got_output, "session produced no output to seed the ring");
+        let end = registry.attach(&id, None).unwrap().seq;
+        assert!(end > 0, "seq did not advance past 0");
+        // Matching generation: `since` honored -> a small delta from `end`.
+        let matched = registry
+            .get_or_create_for_ws(
+                Some(&id),
+                Some(end),
+                opts_with_window("win-gate"),
+                None,
+                None,
+                Some(gen),
+            )
+            .unwrap();
+        // Mismatched generation: `since` ignored -> full ring replay. The full
+        // replay carries the pre-`end` history the delta omits, so it is
+        // strictly larger -- robust to any trailing prompt output both observe.
+        let mismatched = registry
+            .get_or_create_for_ws(
+                Some(&id),
+                Some(end),
+                opts_with_window("win-gate"),
+                None,
+                None,
+                Some(gen + 1),
+            )
+            .unwrap();
+        assert!(
+            mismatched.replay.concat().len() > matched.replay.concat().len(),
+            "a mismatched generation must replay more (full ring) than the matched delta"
+        );
+        registry.close_all(CloseReason::Shutdown);
+    }
+
+    #[test]
     fn cross_window_move_rebinds_window_and_survives_source_discard() {
         // Move invariant: a terminal dragged from window A to window B must
         // re-home to B on reattach, so A's discard (it emptied out) does NOT
@@ -3466,7 +3613,14 @@ mod tests {
 
         // ...dragged to window B: B reattaches by id with window_id=B.
         let reattached = registry
-            .get_or_create_for_ws(Some(&id), Some(0), opts_with_window("win-b"), None, None)
+            .get_or_create_for_ws(
+                Some(&id),
+                Some(0),
+                opts_with_window("win-b"),
+                None,
+                None,
+                None,
+            )
             .expect("reattach");
         assert_eq!(
             reattached.id(),

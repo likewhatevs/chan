@@ -45,6 +45,10 @@ pub struct TerminalQuery {
     /// session so `cs terminal list` can trace it to its window -> pane -> tab.
     pane_id: Option<String>,
     tab_id: Option<String>,
+    /// The session incarnation epoch the client cached its scrollback snapshot
+    /// under. The server honors `since` only when it still matches the live
+    /// session's generation (a restart bumps it); absent or stale -> full replay.
+    generation: Option<u64>,
     mcp_env: Option<TerminalMcpEnv>,
     cwd: Option<String>,
 }
@@ -177,6 +181,10 @@ enum ServerFrame {
     Session {
         id: String,
         seq: u64,
+        /// This session incarnation's epoch. A restart reuses the id but bumps
+        /// this and resets `seq`, so the SPA invalidates a cached scrollback
+        /// snapshot whose generation no longer matches.
+        generation: u64,
         missed_bytes: u64,
         bytes_since_focus: u64,
         /// MESSAGE depth of the shared write queue at attach time (a gemini
@@ -309,6 +317,7 @@ pub async fn api_terminal_ws(
         window_id,
         pane_id,
         tab_id,
+        generation: query.generation,
         mcp_env,
         cwd,
     };
@@ -512,6 +521,7 @@ struct TerminalWsOptions {
     window_id: Option<String>,
     pane_id: Option<String>,
     tab_id: Option<String>,
+    generation: Option<u64>,
     mcp_env: bool,
     cwd: Option<PathBuf>,
 }
@@ -567,6 +577,7 @@ async fn terminal_ws(mut socket: WebSocket, state: Arc<AppState>, opts: Terminal
         create_opts,
         opts.pane_id,
         opts.tab_id,
+        opts.generation,
     ) {
         Ok(session) => session,
         Err(CreateError::Capped) => {
@@ -859,6 +870,7 @@ async fn send_attach_prelude(
         ServerFrame::Session {
             id: session.id().to_owned(),
             seq: session.seq,
+            generation: session.generation,
             missed_bytes: session.missed_bytes,
             bytes_since_focus: session.bytes_since_focus(),
             queue_depth: session.queue_depth(),
@@ -1277,6 +1289,7 @@ mod tests {
         let session = ServerFrame::Session {
             id: "abc".into(),
             seq: 7,
+            generation: 3,
             missed_bytes: 0,
             bytes_since_focus: 0,
             queue_depth: 2,
@@ -1284,13 +1297,14 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&session).unwrap(),
-            r#"{"type":"session","id":"abc","seq":7,"missed_bytes":0,"bytes_since_focus":0,"queue_depth":2,"queued_prompt_ids":["u-1","u-2"]}"#
+            r#"{"type":"session","id":"abc","seq":7,"generation":3,"missed_bytes":0,"bytes_since_focus":0,"queue_depth":2,"queued_prompt_ids":["u-1","u-2"]}"#
         );
         // Empty list still serializes as `[]` (always present; the SPA can
         // assume the field exists — pre-release, no back-compat).
         let session_empty = ServerFrame::Session {
             id: "abc".into(),
             seq: 0,
+            generation: 0,
             missed_bytes: 0,
             bytes_since_focus: 0,
             queue_depth: 0,
@@ -1298,7 +1312,7 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&session_empty).unwrap(),
-            r#"{"type":"session","id":"abc","seq":0,"missed_bytes":0,"bytes_since_focus":0,"queue_depth":0,"queued_prompt_ids":[]}"#
+            r#"{"type":"session","id":"abc","seq":0,"generation":0,"missed_bytes":0,"bytes_since_focus":0,"queue_depth":0,"queued_prompt_ids":[]}"#
         );
         // cancel-prompt decode (client→server) — pin the tag + field so a
         // rename can't silently break the SPA wire with a green build.
