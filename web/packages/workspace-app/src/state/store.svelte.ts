@@ -2235,9 +2235,9 @@ export function scheduleSessionSave(): void {
       // Window emptied out (layout serialized to null): delete the blob
       // rather than writing an empty one, so this window stops appearing
       // as `saved` in `/api/windows` / `cs window list`.
-      void api.deleteSession();
+      void api.deleteSession().catch(() => {});
     } else {
-      void api.putSession(payload);
+      void api.putSession(payload).catch(() => {});
     }
   }, SESSION_DEBOUNCE_MS);
 }
