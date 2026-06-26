@@ -16,6 +16,8 @@ use tokio::sync::broadcast;
 use tokio::task::JoinHandle;
 
 use crate::desktop_window_ops::DesktopWindowOp;
+use crate::handover_bus::{HandoverBus, HandoverReply};
+use crate::session_presence::{HandoverError, SessionRegistry};
 use crate::state::WorkspaceCell;
 use crate::terminal_sessions::CreateOptions;
 use crate::terminal_sessions::Registry as TerminalRegistry;
@@ -133,6 +135,18 @@ enum WindowCommand {
         group: String,
         members: Vec<SpawnedMember>,
     },
+    // `cs session handover`: a follower asked to take leadership; prompt THIS
+    // (leader) window to accept or reject. The SPA shows the handover overlay
+    // and POSTs the answer to `/api/session/handover/reply` echoing
+    // `request_id`, which fires the parked handover-bus oneshot. snake_case
+    // field names (like `pane_query`'s `request_id`), read by the SPA's
+    // `handleWindowCommand`.
+    HandoverPrompt {
+        request_id: String,
+        from_window_id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        from_name: Option<String>,
+    },
 }
 
 /// One spawned team member in a [`WindowCommand::TeamSpawned`]: the tab name
@@ -245,6 +259,12 @@ pub struct ControlSocketCtx {
     pub terminal_registry: TerminalRegistryCell,
     pub survey_bus: Arc<crate::survey::SurveyBus>,
     pub window_bus: Arc<crate::window_bus::WindowBus>,
+    /// The per-tenant leader/followers session; `cs session list/self/handover/
+    /// takeover` read and drive it (the `/ws` pump joins it per socket).
+    pub session_registry: Arc<SessionRegistry>,
+    /// `cs session handover` blocked-transport registry: the requester's
+    /// oneshot parks here until the leader answers.
+    pub handover_bus: Arc<HandoverBus>,
     /// Desktop integration: the window-ops channel (`None` standalone) and the
     /// shared title map. The lifecycle verbs send ops down the channel.
     pub desktop: crate::desktop_window_ops::DesktopBridge,
@@ -445,6 +465,8 @@ async fn handle_request(req: ControlRequest, ctx: &ControlSocketCtx) -> ControlR
         terminal_registry,
         survey_bus,
         window_bus,
+        session_registry,
+        handover_bus,
         desktop,
         tenant,
         unserve,
@@ -668,6 +690,32 @@ async fn handle_request(req: ControlRequest, ctx: &ControlSocketCtx) -> ControlR
             into_response(
                 serde_json::to_string(&records).map_err(|e| format!("encoding window list: {e}")),
             )
+        }
+        ControlRequest::SessionList => handle_session_list(session_registry),
+        ControlRequest::SessionSelf { window_id, name } => {
+            handle_session_self(session_registry, events_tx, window_id, name)
+        }
+        ControlRequest::SessionHandover {
+            window_id,
+            to,
+            accept,
+            reject,
+            timeout_secs,
+        } => {
+            handle_session_handover(
+                session_registry,
+                handover_bus,
+                events_tx,
+                window_id,
+                to,
+                accept,
+                reject,
+                timeout_secs,
+            )
+            .await
+        }
+        ControlRequest::SessionTakeover { window_id, force } => {
+            handle_session_takeover(session_registry, events_tx, window_id, force)
         }
         ControlRequest::Identify => {
             // Classify this serving process for `chan ps`. `unserve` separates a
@@ -1526,6 +1574,192 @@ fn into_response(result: Result<String, String>) -> ControlResponse {
     }
 }
 
+/// `cs session list`: the participant rows (`[{window_id, name, role, status}]`)
+/// as JSON in `Ok.message` for the CLI to render. The leader is the row whose
+/// role is `leader`; `is_self` is marked client-side from `$CHAN_WINDOW_ID`.
+fn handle_session_list(session_registry: &SessionRegistry) -> ControlResponse {
+    let snapshot = session_registry.snapshot(std::time::Instant::now());
+    into_response(
+        serde_json::to_string(&snapshot.participants)
+            .map_err(|e| format!("encoding session list: {e}")),
+    )
+}
+
+/// `cs session self --name`: rename the calling window and rebroadcast the
+/// roster.
+fn handle_session_self(
+    session_registry: &SessionRegistry,
+    events_tx: &broadcast::Sender<String>,
+    window_id: String,
+    name: String,
+) -> ControlResponse {
+    if session_registry.rename(&window_id, &name) {
+        crate::session_roster::broadcast_session_roster(events_tx, session_registry);
+        ControlResponse::Ok {
+            message: format!("renamed to {name}"),
+        }
+    } else {
+        ControlResponse::Error {
+            message: format!("not a session participant: {window_id}"),
+        }
+    }
+}
+
+/// `cs session handover`: either a follower REQUESTS leadership (blocks for the
+/// leader's accept/reject), or the leader ANSWERS a pending request from its own
+/// terminal (`--accept` / `--reject`, the CLI path for a non-visible leader).
+/// The request path mirrors `handle_survey`: park the oneshot, push the prompt
+/// to the leader, then block on the caller's `--timeout`.
+async fn handle_session_handover(
+    session_registry: &SessionRegistry,
+    handover_bus: &HandoverBus,
+    events_tx: &broadcast::Sender<String>,
+    window_id: String,
+    to: Option<String>,
+    accept: bool,
+    reject: bool,
+    timeout_secs: u64,
+) -> ControlResponse {
+    // The leader answering a pending request from its own terminal.
+    if accept || reject {
+        let Some(pending) = session_registry.pending_for_leader(&window_id) else {
+            return ControlResponse::Error {
+                message: "no handover is waiting for your answer".into(),
+            };
+        };
+        let reply = if accept {
+            HandoverReply::Accept
+        } else {
+            HandoverReply::Reject { reason: None }
+        };
+        handover_bus.complete(&pending.request_id, reply);
+        return ControlResponse::Ok {
+            message: if accept {
+                "handover accepted".into()
+            } else {
+                "handover rejected".into()
+            },
+        };
+    }
+    // A follower requesting handover: park the oneshot BEFORE prompting so a
+    // fast answer cannot race ahead of the parked request.
+    let (request_id, rx) = handover_bus.register();
+    let leader = match session_registry.request_handover(&request_id, &window_id, to.as_deref()) {
+        Ok(leader) => leader,
+        Err(error) => {
+            handover_bus.cancel(&request_id);
+            return ControlResponse::Error {
+                message: handover_error_message(error),
+            };
+        }
+    };
+    let from_name = session_registry
+        .snapshot(std::time::Instant::now())
+        .participants
+        .into_iter()
+        .find(|p| p.window_id == window_id)
+        .and_then(|p| p.name);
+    if let Err(message) = send_window_command(
+        &leader,
+        WindowCommand::HandoverPrompt {
+            request_id: request_id.clone(),
+            from_window_id: window_id.clone(),
+            from_name,
+        },
+        events_tx,
+    ) {
+        handover_bus.cancel(&request_id);
+        session_registry.cancel_handover(&request_id);
+        return ControlResponse::Error { message };
+    }
+    let timeout_secs = if timeout_secs == 0 { 30 } else { timeout_secs };
+    match tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), rx).await {
+        Ok(Ok(reply)) => {
+            let accepted = matches!(reply, HandoverReply::Accept);
+            // The answer path only fired the oneshot; apply the leadership move
+            // here, in the requester's handler, so it happens exactly once.
+            let resolved = session_registry.resolve_handover(&request_id, accepted);
+            if accepted {
+                crate::session_roster::broadcast_session_roster(events_tx, session_registry);
+            }
+            match reply {
+                HandoverReply::Accept => {
+                    let leader = resolved
+                        .and_then(|r| r.new_leader)
+                        .unwrap_or_else(|| window_id.clone());
+                    ControlResponse::Ok {
+                        message: format!("handover accepted; {leader} now leads"),
+                    }
+                }
+                HandoverReply::Reject { reason } => ControlResponse::Ok {
+                    message: reason
+                        .map(|r| format!("handover rejected: {r}"))
+                        .unwrap_or_else(|| "handover rejected".into()),
+                },
+            }
+        }
+        // The sender was dropped without a reply (server shutdown, or the
+        // requester gone): clear both sides and report it.
+        Ok(Err(_)) => {
+            handover_bus.cancel(&request_id);
+            session_registry.cancel_handover(&request_id);
+            ControlResponse::Error {
+                message: "handover cancelled before a reply".into(),
+            }
+        }
+        // No answer within the window: drop the parked request and clear the
+        // pending slot; a late answer then finds nothing.
+        Err(_elapsed) => {
+            handover_bus.cancel(&request_id);
+            session_registry.cancel_handover(&request_id);
+            ControlResponse::Timeout {
+                message: format!("no answer within {timeout_secs}s"),
+            }
+        }
+    }
+}
+
+/// `cs session takeover [--force]`: become leader. Plain takeover only when the
+/// leader is gone/disconnected; `--force` seizes a live leader.
+fn handle_session_takeover(
+    session_registry: &SessionRegistry,
+    events_tx: &broadcast::Sender<String>,
+    window_id: String,
+    force: bool,
+) -> ControlResponse {
+    match session_registry.takeover(&window_id, force) {
+        Ok(true) => {
+            crate::session_roster::broadcast_session_roster(events_tx, session_registry);
+            ControlResponse::Ok {
+                message: "you are now the leader".into(),
+            }
+        }
+        Ok(false) => ControlResponse::Ok {
+            message: "you already lead this session".into(),
+        },
+        Err(error) => ControlResponse::Error {
+            message: handover_error_message(error),
+        },
+    }
+}
+
+/// Map a [`HandoverError`] to a clear CLI message.
+fn handover_error_message(error: HandoverError) -> String {
+    match error {
+        HandoverError::NotAParticipant => "you are not a participant in this session".into(),
+        HandoverError::NoLeader => "this session has no leader to hand over from".into(),
+        HandoverError::UnknownTarget => "the handover target is not a session participant".into(),
+        HandoverError::AlreadyLeader => "that window already leads this session".into(),
+        HandoverError::AlreadyPending => "another handover is already in flight".into(),
+        HandoverError::LeaderNotLive => {
+            "the leader is not connected; use `cs session takeover` instead".into()
+        }
+        HandoverError::LeaderLive => {
+            "the leader is live; ask with `cs session handover`, or seize it with `--force`".into()
+        }
+    }
+}
+
 /// `cs window new`: ask the desktop to spawn a window whose kind is
 /// derived from the calling tenant — a terminal tenant spawns a terminal
 /// window, a workspace tenant spawns another window of that workspace.
@@ -2299,6 +2533,8 @@ mod tests {
             terminal_registry: Arc::new(std::sync::OnceLock::new()),
             survey_bus: Arc::new(crate::survey::SurveyBus::new()),
             window_bus: Arc::new(crate::window_bus::WindowBus::new()),
+            session_registry: Arc::new(SessionRegistry::new()),
+            handover_bus: Arc::new(HandoverBus::new()),
             // No desktop attached in unit tests: lifecycle ops refuse and
             // the title map stays empty.
             desktop: crate::desktop_window_ops::DesktopBridge::default(),
@@ -2306,6 +2542,26 @@ mod tests {
             // Unit tests don't exercise unserve; refuse it explicitly.
             unserve: UnserveScope::Unsupported,
         }
+    }
+
+    #[test]
+    fn session_list_emits_participant_rows() {
+        let registry = Arc::new(SessionRegistry::new());
+        let _leader = registry.join("w-a").guard;
+        let _follower = registry.join("w-b").guard;
+        let ControlResponse::Ok { message } = handle_session_list(&registry) else {
+            panic!("expected Ok rows");
+        };
+        let rows: serde_json::Value = serde_json::from_str(&message).expect("json rows");
+        let rows = rows.as_array().expect("array of rows");
+        assert_eq!(rows.len(), 2);
+        // The {window_id, name, role, status} contract the CLI renderer reads;
+        // the first-joined window leads.
+        assert_eq!(rows[0]["window_id"], "w-a");
+        assert_eq!(rows[0]["role"], "leader");
+        assert_eq!(rows[0]["status"], "live");
+        assert!(rows[0]["name"].is_null());
+        assert_eq!(rows[1]["role"], "follower");
     }
 
     #[tokio::test]
