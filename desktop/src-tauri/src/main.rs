@@ -4584,6 +4584,39 @@ async fn discard_devserver_window(app: &tauri::AppHandle, label: &str) -> Result
     Ok(())
 }
 
+/// Like [`discard_devserver_window`] but matched by the BARE `window_id` (what
+/// `cs window rm` sends) instead of the composite native label — the cross-host
+/// path where a local terminal removes a connected devserver's window, whose
+/// registry row lives remote-side and so cannot be reached by the embedded
+/// host's own `discard_window`. Returns whether a connected devserver owned the
+/// id (and its row was DELETEd there). The local `--force` guard does not apply
+/// on this path: the embedded host cannot see the devserver's terminals, so a
+/// devserver window is best managed from one of its own terminals (which routes
+/// `cs window rm` to the guarded devserver-side path).
+async fn discard_devserver_window_by_id(
+    app: &tauri::AppHandle,
+    window_id: &str,
+) -> Result<bool, String> {
+    let state = app.state::<Arc<AppState>>();
+    let devserver_ids: Vec<String> = {
+        let cfg = state.store.lock().unwrap().get().map_err(err)?;
+        cfg.devservers.iter().map(|ds| ds.id.clone()).collect()
+    };
+    for id in devserver_ids {
+        let Some(conn) = state.devservers.get(&id) else {
+            continue;
+        };
+        let Ok(windows) = devserver::fetch_library_windows(&conn).await else {
+            continue;
+        };
+        if windows.iter().any(|r| r.window_id == window_id) {
+            devserver::discard_library_window(&conn, window_id).await?;
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 /// OS window title for the singleton launcher. Launchers are never
 /// multiplied anymore (Cmd/Ctrl+Shift+N on the launcher opens a
 /// standalone terminal window instead), so there is no `Window N`

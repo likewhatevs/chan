@@ -206,9 +206,13 @@ async fn close_window(
         }
     };
     let Some((title, shells)) = live else {
-        // No live window: nothing to destroy. The server handles deleting
-        // a saved layout for this id.
-        let _ = reply.send(Ok(false));
+        // No live LOCAL window. Before reporting "nothing here", try the
+        // cross-host path: the bare id may name a connected devserver's window,
+        // whose registry row lives remote-side and so is unreachable from the
+        // embedded host's own discard. DELETE it there if so (Ok(true)); a plain
+        // local window or unknown id yields Ok(false) and the server then deletes
+        // any saved layout for this id.
+        let _ = reply.send(crate::discard_devserver_window_by_id(&app, &id).await);
         return;
     };
 
