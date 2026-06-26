@@ -154,6 +154,7 @@ mod tests {
             ephemeral_sessions: std::sync::Mutex::new(std::collections::HashMap::new()),
             terminal_session_dir: None,
             window_presence: std::sync::Arc::new(crate::window_presence::WindowPresence::new()),
+            session_registry: std::sync::Arc::new(crate::session_presence::SessionRegistry::new()),
             window_transfers: std::sync::Arc::new(crate::window_transfers::WindowTransfers::new()),
             window_titles: std::sync::Arc::new(crate::window_titles::WindowTitles::new()),
             instance_id: "test-instance".to_string(),

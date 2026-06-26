@@ -38,6 +38,7 @@ mod mcp_bridge;
 mod preferences;
 mod routes;
 mod self_writes;
+mod session_roster;
 mod signal;
 mod state;
 mod static_assets;
@@ -65,7 +66,7 @@ pub use chan_library::user_shell;
 pub use chan_library::window_titles::{SharedWindowTitles, WindowMeta, WindowTitles};
 pub use chan_library::windows::{CreateWindow, WindowKind, WindowRecord, WindowSet};
 pub(crate) use chan_library::{
-    desktop_window_ops, window_presence, window_titles, window_transfers,
+    desktop_window_ops, session_presence, window_presence, window_titles, window_transfers,
 };
 pub use chan_library::{
     DevserverEntry, DevserverFeedSource, DevserverInput, DevserverRegistry, DevserverStatus,
@@ -192,6 +193,10 @@ struct AppArtifacts {
     /// change. Held alongside the pruner/drainer so dropping AppArtifacts
     /// aborts it too.
     _terminal_roster_broadcaster: tokio::task::JoinHandle<()>,
+    /// Ages out disconnected session participants and rebroadcasts the
+    /// leader/followers roster. Held alongside the other background tasks so
+    /// dropping AppArtifacts aborts it too.
+    _session_reaper: tokio::task::JoinHandle<()>,
     /// Mutable handle to the URL prefix injected into the SPA shell
     /// as `<meta name="chan-prefix">`. Local serve sets it once at
     /// build time from `ServeConfig::prefix`; tunnel mode swaps in
@@ -575,6 +580,14 @@ async fn build_app(
     // Per-window in-flight transfer count; shared with the host's close guard
     // the same way as presence (cloned into TenantArtifacts off AppState below).
     let window_transfers = Arc::new(window_transfers::WindowTransfers::new());
+    // The leader/followers session for this tenant; the `/ws` pump joins it per
+    // socket and the reaper below ages out disconnected participants.
+    let session_registry = Arc::new(session_presence::SessionRegistry::new());
+    let session_reaper = session_roster::spawn_session_reaper(
+        session_registry.clone(),
+        events_tx.clone(),
+        shutdown_rx.clone(),
+    );
     // A standalone serve unserves by exiting the process (its shutdown
     // signal); a hosted tenant unserves by unmounting itself from the host.
     let unserve_scope = match unserve {
@@ -652,6 +665,7 @@ async fn build_app(
         ephemeral_sessions: Mutex::new(std::collections::HashMap::new()),
         terminal_session_dir: None,
         window_presence,
+        session_registry,
         window_transfers,
         window_titles: desktop.window_titles.clone(),
         instance_id: random_token(),
@@ -675,6 +689,7 @@ async fn build_app(
         _terminal_pruner: terminal_pruner,
         _terminal_drainer: terminal_drainer,
         _terminal_roster_broadcaster: terminal_roster_broadcaster,
+        _session_reaper: session_reaper,
         prefix,
         mcp_bridge,
         control_socket,
@@ -776,6 +791,12 @@ async fn build_terminal_app(
     let window_bus = Arc::new(window_bus::WindowBus::new());
     let window_presence = Arc::new(window_presence::WindowPresence::new());
     let window_transfers = Arc::new(window_transfers::WindowTransfers::new());
+    let session_registry = Arc::new(session_presence::SessionRegistry::new());
+    let session_reaper = session_roster::spawn_session_reaper(
+        session_registry.clone(),
+        events_tx.clone(),
+        shutdown_rx.clone(),
+    );
     let terminal_registry_cell: control_socket::TerminalRegistryCell =
         Arc::new(std::sync::OnceLock::new());
     let control_socket_path = control_socket::pick_socket_path();
@@ -875,6 +896,7 @@ async fn build_terminal_app(
         // store); a control / desktop-local terminal passes None.
         terminal_session_dir: session_dir,
         window_presence,
+        session_registry,
         window_transfers,
         window_titles: desktop.window_titles.clone(),
         instance_id: random_token(),
@@ -898,6 +920,7 @@ async fn build_terminal_app(
         _terminal_pruner: terminal_pruner,
         _terminal_drainer: terminal_drainer,
         _terminal_roster_broadcaster: terminal_roster_broadcaster,
+        _session_reaper: session_reaper,
         prefix,
         // No workspace to MCP-bridge; the control socket above IS the
         // local CLI surface (terminal-scoped).
@@ -1104,6 +1127,7 @@ fn into_tenant_artifacts(a: AppArtifacts) -> chan_library::TenantArtifacts {
         _terminal_pruner,
         _terminal_drainer,
         _terminal_roster_broadcaster,
+        _session_reaper,
         prefix,
         mcp_bridge,
         control_socket,
@@ -1130,6 +1154,7 @@ fn into_tenant_artifacts(a: AppArtifacts) -> chan_library::TenantArtifacts {
             _terminal_pruner,
             _terminal_drainer,
             _terminal_roster_broadcaster,
+            _session_reaper,
             mcp_bridge,
             control_socket,
             state,

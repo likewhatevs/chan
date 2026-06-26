@@ -44,6 +44,8 @@ pub async fn ws_upgrade(
     let scopes = state.scope_registry.clone();
     let presence = state.window_presence.clone();
     let transfers = state.window_transfers.clone();
+    let session_registry = state.session_registry.clone();
+    let session_events_tx = state.events_tx.clone();
     let window_id = q.w.map(|w| w.trim().to_string()).filter(|w| !w.is_empty());
     ws.on_upgrade(move |socket| async move {
         // RAII presence ref: held across the pump so EVERY exit path
@@ -53,6 +55,20 @@ pub async fn ws_upgrade(
         // `set` on each `transfers` frame, and Drop clears this socket's
         // contribution on every exit path (so a reload reads inactive).
         let transfer_guard = window_id.as_ref().map(|id| transfers.register(id));
+        // RAII session participation: the first socket of a window joins the
+        // leader/followers session (electing the leader when it is first); the
+        // guard's Drop arms the grace clock when the last socket drops. A join
+        // that moves the roster (a new or revived participant) rebroadcasts.
+        let _session = window_id.as_ref().map(|id| {
+            let join = session_registry.join(id);
+            if join.changed {
+                crate::session_roster::broadcast_session_roster(
+                    &session_events_tx,
+                    &session_registry,
+                );
+            }
+            join.guard
+        });
         ws_pump(
             socket,
             rx,

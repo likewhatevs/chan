@@ -140,6 +140,12 @@ pub struct AppState {
     /// the module docs). Feeds `GET /api/windows` and `cs window list`
     /// with the connected/saved split.
     pub window_presence: Arc<crate::window_presence::WindowPresence>,
+    /// The per-tenant leader/followers session: who is connected, who
+    /// leads, and the live/disconnecting/disconnected/gone lifecycle. The
+    /// `/ws` pump joins it per socket; `cs session` reads and drives it.
+    /// Layered over `window_presence` (which still backs the connected
+    /// flag); see the `session_presence` module docs.
+    pub session_registry: Arc<crate::session_presence::SessionRegistry>,
     /// Per-window in-flight transfer count (refcounted; see the module
     /// docs). Reported by the SPA over `/ws` and read by the desktop close
     /// guard (`WorkspaceHost::tenant_has_active_transfer`).
@@ -298,6 +304,7 @@ pub(crate) mod test_support {
             ephemeral_sessions: Mutex::new(HashMap::new()),
             terminal_session_dir: None,
             window_presence: Arc::new(crate::window_presence::WindowPresence::new()),
+            session_registry: Arc::new(crate::session_presence::SessionRegistry::new()),
             window_transfers: Arc::new(crate::window_transfers::WindowTransfers::new()),
             window_titles: Arc::new(crate::window_titles::WindowTitles::new()),
             instance_id: "test-instance".to_string(),
