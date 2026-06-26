@@ -115,6 +115,26 @@ pub enum Request {
         /// Optional connect script run before the dial.
         script: Option<String>,
     },
+    /// Ask the running desktop to tear down the workspace it serves at
+    /// `workspace_path` -- the `chan close` / `chan workspace rm` handoff. The
+    /// desktop stops serving the tenant and, with `remove`, unregisters it from
+    /// its own library + overlay. Like the open handoff, this goes through the
+    /// well-known socket because the per-pid control socket reaches the embedded
+    /// host but CANNOT update the desktop's runtime map: a control-socket close
+    /// leaves the launcher showing the workspace stale-on and a restart
+    /// resurrects it.
+    CloseWorkspace {
+        protocol: u32,
+        cli_version: String,
+        /// The workspace root to stop serving. The desktop canonicalizes +
+        /// matches it the same way its own close path does. Sent as a string
+        /// for stable JSON across platforms.
+        workspace_path: String,
+        /// `chan workspace rm` / `chan close --remove`: also unregister the
+        /// workspace from the desktop's library + overlay, not just stop
+        /// serving it.
+        remove: bool,
+    },
 }
 
 impl Request {
@@ -123,7 +143,8 @@ impl Request {
         match self {
             Request::OpenWorkspace { protocol, .. }
             | Request::Upgrade { protocol, .. }
-            | Request::OpenDevserver { protocol, .. } => *protocol,
+            | Request::OpenDevserver { protocol, .. }
+            | Request::CloseWorkspace { protocol, .. } => *protocol,
         }
     }
 
@@ -132,7 +153,8 @@ impl Request {
         match self {
             Request::OpenWorkspace { cli_version, .. }
             | Request::Upgrade { cli_version, .. }
-            | Request::OpenDevserver { cli_version, .. } => cli_version,
+            | Request::OpenDevserver { cli_version, .. }
+            | Request::CloseWorkspace { cli_version, .. } => cli_version,
         }
     }
 }
@@ -174,6 +196,11 @@ pub enum Response {
     /// `OpenDevserver`. The CLI prints a note and exits; the desktop owns the
     /// devserver lifecycle from here.
     DevserverRegistered { desktop_version: String },
+    /// The desktop tore down the workspace from a `CloseWorkspace` request
+    /// (stopped serving it, and unregistered it when `remove`). The CLI prints
+    /// a note and exits. A skew / error / absent desktop instead falls back to
+    /// the per-pid control-socket teardown.
+    Closed { desktop_version: String },
 }
 
 /// Resolve the well-known per-user socket path. Prefers
@@ -625,6 +652,7 @@ pub async fn try_handoff(workspace_path: &Path) -> Outcome {
         Ok(Response::UpgradeStarted { .. })
         | Ok(Response::UpgradeChecked { .. })
         | Ok(Response::DevserverRegistered { .. })
+        | Ok(Response::Closed { .. })
         | Err(_) => Outcome::NoDesktop,
     }
 }
@@ -699,6 +727,7 @@ pub async fn try_handoff(workspace_path: &Path) -> Outcome {
         Ok(Response::UpgradeStarted { .. })
         | Ok(Response::UpgradeChecked { .. })
         | Ok(Response::DevserverRegistered { .. })
+        | Ok(Response::Closed { .. })
         | Err(_) => Outcome::NoDesktop,
     }
 }
@@ -706,6 +735,147 @@ pub async fn try_handoff(workspace_path: &Path) -> Outcome {
 #[cfg(not(any(unix, windows)))]
 pub async fn try_handoff(_workspace_path: &std::path::Path) -> Outcome {
     Outcome::NoDesktop
+}
+
+/// Try to make a running same-user desktop tear down the workspace it serves at
+/// `workspace_path` -- the `chan close` / `chan workspace rm` handoff. Connects
+/// the well-known socket, sends a `CloseWorkspace` request, and maps the reply
+/// via [`map_close_response`]. Any connect failure / stale socket / read error /
+/// malformed reply maps to `Outcome::NoDesktop` so the CLI falls back to the
+/// per-pid control-socket teardown exactly like today when the desktop is
+/// absent. Mirrors `try_handoff`'s framing + timeouts.
+#[cfg(unix)]
+pub async fn try_close_workspace(workspace_path: &Path, remove: bool) -> Outcome {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    use tokio::net::UnixStream;
+
+    let Some(socket_path) = well_known_socket_path() else {
+        return Outcome::NoDesktop;
+    };
+    if !socket_path.exists() {
+        return Outcome::NoDesktop;
+    }
+
+    let connect = UnixStream::connect(&socket_path);
+    let stream = match tokio::time::timeout(Duration::from_millis(1500), connect).await {
+        Ok(Ok(s)) => s,
+        Ok(Err(_)) | Err(_) => return Outcome::NoDesktop,
+    };
+
+    let req = Request::CloseWorkspace {
+        protocol: PROTOCOL_VERSION,
+        cli_version: CHAN_VERSION.into(),
+        workspace_path: workspace_path.display().to_string(),
+        remove,
+    };
+    let mut payload = match serde_json::to_vec(&req) {
+        Ok(v) => v,
+        Err(_) => return Outcome::NoDesktop,
+    };
+    payload.push(b'\n');
+
+    let (read, mut write) = stream.into_split();
+    let io = async {
+        write.write_all(&payload).await?;
+        write.flush().await?;
+        let mut reader = BufReader::new(read);
+        let mut line = String::new();
+        reader.read_line(&mut line).await?;
+        Ok::<String, std::io::Error>(line)
+    };
+    let line = match tokio::time::timeout(Duration::from_millis(3000), io).await {
+        Ok(Ok(line)) if !line.trim().is_empty() => line,
+        _ => return Outcome::NoDesktop,
+    };
+
+    map_close_response(&line)
+}
+
+/// Windows: the same `CloseWorkspace` round-trip over the well-known named pipe,
+/// mirroring `try_handoff`'s Windows arm (a missing pipe maps to `NoDesktop` at
+/// once; a momentarily-busy pipe gets a short bounded retry).
+#[cfg(windows)]
+pub async fn try_close_workspace(workspace_path: &Path, remove: bool) -> Outcome {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    use tokio::net::windows::named_pipe::ClientOptions;
+
+    const ERROR_PIPE_BUSY: i32 = 231;
+
+    let Some(socket_path) = well_known_socket_path() else {
+        return Outcome::NoDesktop;
+    };
+
+    let deadline = std::time::Instant::now() + Duration::from_millis(1500);
+    let client = loop {
+        match ClientOptions::new().open(&socket_path) {
+            Ok(c) => break c,
+            Err(e) if e.raw_os_error() == Some(ERROR_PIPE_BUSY) => {
+                if std::time::Instant::now() >= deadline {
+                    return Outcome::NoDesktop;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            Err(_) => return Outcome::NoDesktop,
+        }
+    };
+
+    let req = Request::CloseWorkspace {
+        protocol: PROTOCOL_VERSION,
+        cli_version: CHAN_VERSION.into(),
+        workspace_path: workspace_path.display().to_string(),
+        remove,
+    };
+    let mut payload = match serde_json::to_vec(&req) {
+        Ok(v) => v,
+        Err(_) => return Outcome::NoDesktop,
+    };
+    payload.push(b'\n');
+
+    let (read, mut write) = tokio::io::split(client);
+    let io = async {
+        write.write_all(&payload).await?;
+        write.flush().await?;
+        let mut reader = BufReader::new(read);
+        let mut line = String::new();
+        reader.read_line(&mut line).await?;
+        Ok::<String, std::io::Error>(line)
+    };
+    let line = match tokio::time::timeout(Duration::from_millis(3000), io).await {
+        Ok(Ok(line)) if !line.trim().is_empty() => line,
+        _ => return Outcome::NoDesktop,
+    };
+
+    map_close_response(&line)
+}
+
+#[cfg(not(any(unix, windows)))]
+pub async fn try_close_workspace(_workspace_path: &std::path::Path, _remove: bool) -> Outcome {
+    Outcome::NoDesktop
+}
+
+/// Map a `CloseWorkspace` reply line to an [`Outcome`]. Shared by the unix +
+/// windows arms: only `Closed` is a success; a skew falls back to `VersionSkew`,
+/// an `Error` to `DesktopError`, and any other reply / unparseable line to
+/// `NoDesktop` so the caller drops to the control-socket teardown rather than
+/// guessing.
+#[cfg(any(unix, windows))]
+fn map_close_response(line: &str) -> Outcome {
+    match serde_json::from_str::<Response>(line) {
+        Ok(Response::Closed { .. }) => Outcome::HandedOff,
+        Ok(Response::VersionSkew {
+            desktop_version,
+            desktop_protocol,
+        }) => Outcome::VersionSkew {
+            desktop_version,
+            desktop_protocol,
+        },
+        Ok(Response::Error { message }) => Outcome::DesktopError { message },
+        Ok(Response::Opened { .. })
+        | Ok(Response::UpgradeStarted { .. })
+        | Ok(Response::UpgradeChecked { .. })
+        | Ok(Response::DevserverRegistered { .. })
+        | Err(_) => Outcome::NoDesktop,
+    }
 }
 
 /// Try to register a devserver by `url` with a running same-user
@@ -848,6 +1018,7 @@ fn map_devserver_response(line: &str) -> Outcome {
         Ok(Response::Opened { .. })
         | Ok(Response::UpgradeStarted { .. })
         | Ok(Response::UpgradeChecked { .. })
+        | Ok(Response::Closed { .. })
         | Err(_) => Outcome::NoDesktop,
     }
 }
@@ -951,9 +1122,10 @@ pub async fn try_upgrade(check_only: bool) -> UpgradeOutcome {
         Ok(Response::Error { message }) => UpgradeOutcome::DesktopError { message },
         // An open-workspace / devserver reply to an upgrade request, or an
         // unparseable line: a desktop we can't talk to sanely.
-        Ok(Response::Opened { .. }) | Ok(Response::DevserverRegistered { .. }) | Err(_) => {
-            UpgradeOutcome::NoDesktop
-        }
+        Ok(Response::Opened { .. })
+        | Ok(Response::DevserverRegistered { .. })
+        | Ok(Response::Closed { .. })
+        | Err(_) => UpgradeOutcome::NoDesktop,
     }
 }
 
@@ -1000,6 +1172,19 @@ mod tests {
         assert!(json.contains("\"type\":\"open_devserver\""));
         assert!(json.contains("\"url\":\"https://box.example.com:8787\""));
         assert_eq!(devserver, serde_json::from_str::<Request>(&json).unwrap());
+
+        let close = Request::CloseWorkspace {
+            protocol: PROTOCOL_VERSION,
+            cli_version: "9.9.9".into(),
+            workspace_path: "/tmp/notes".into(),
+            remove: true,
+        };
+        let json = serde_json::to_string(&close).unwrap();
+        assert!(json.contains("\"type\":\"close_workspace\""));
+        assert!(json.contains("\"remove\":true"));
+        assert_eq!(close, serde_json::from_str::<Request>(&json).unwrap());
+        assert_eq!(close.protocol(), PROTOCOL_VERSION);
+        assert_eq!(close.cli_version(), "9.9.9");
     }
 
     #[test]
@@ -1044,6 +1229,44 @@ mod tests {
         let json = serde_json::to_string(&registered).unwrap();
         assert!(json.contains("\"status\":\"devserver_registered\""));
         assert_eq!(registered, serde_json::from_str::<Response>(&json).unwrap());
+
+        let closed = Response::Closed {
+            desktop_version: CHAN_VERSION.into(),
+        };
+        let json = serde_json::to_string(&closed).unwrap();
+        assert!(json.contains("\"status\":\"closed\""));
+        assert_eq!(closed, serde_json::from_str::<Response>(&json).unwrap());
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn map_close_response_maps_variants() {
+        // `Closed` is the only success; everything else falls back so the CLI
+        // drops to the per-pid control-socket teardown rather than guessing.
+        let closed = format!("{{\"status\":\"closed\",\"desktop_version\":\"{CHAN_VERSION}\"}}");
+        assert!(matches!(map_close_response(&closed), Outcome::HandedOff));
+
+        let skew =
+            "{\"status\":\"version_skew\",\"desktop_version\":\"0.1.0\",\"desktop_protocol\":99}";
+        assert!(matches!(
+            map_close_response(skew),
+            Outcome::VersionSkew { .. }
+        ));
+
+        let err = "{\"status\":\"error\",\"message\":\"nope\"}";
+        assert!(matches!(
+            map_close_response(err),
+            Outcome::DesktopError { .. }
+        ));
+
+        // An open-workspace reply to a close request (a desktop we can't talk to
+        // sanely) and unparseable lines both fall back.
+        let opened = format!(
+            "{{\"status\":\"opened\",\"desktop_version\":\"{CHAN_VERSION}\",\
+             \"capabilities\":{{\"open_local_workspace\":true}}}}"
+        );
+        assert!(matches!(map_close_response(&opened), Outcome::NoDesktop));
+        assert!(matches!(map_close_response("not json"), Outcome::NoDesktop));
     }
 
     #[test]
@@ -1185,6 +1408,9 @@ mod tests {
                     Request::OpenDevserver { .. } => Response::Error {
                         message: "unexpected open_devserver".into(),
                     },
+                    Request::CloseWorkspace { .. } => Response::Error {
+                        message: "unexpected close".into(),
+                    },
                 }
             }
         })
@@ -1238,6 +1464,9 @@ mod tests {
                 Request::OpenDevserver { .. } => Response::Error {
                     message: "unexpected open_devserver".into(),
                 },
+                Request::CloseWorkspace { .. } => Response::Error {
+                    message: "unexpected close".into(),
+                },
             }
         })
         .unwrap();
@@ -1271,6 +1500,9 @@ mod tests {
                 },
                 Request::Upgrade { .. } => Response::Error {
                     message: "unexpected upgrade".into(),
+                },
+                Request::CloseWorkspace { .. } => Response::Error {
+                    message: "unexpected close".into(),
                 },
             }
         })

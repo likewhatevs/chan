@@ -830,7 +830,7 @@ where
                 reports,
             } => cmd_add(path, semantic_search, reports),
             WorkspaceAction::Ls { json } => cmd_list(json),
-            WorkspaceAction::Rm { path } => cmd_remove(path).await,
+            WorkspaceAction::Rm { path } => cmd_remove(path, personality).await,
             WorkspaceAction::Index { action } => cmd_index(action),
             WorkspaceAction::Reports { action } => cmd_reports(action),
             WorkspaceAction::Search { path, query, limit } => cmd_search(path, query, limit),
@@ -861,7 +861,7 @@ where
         },
         Command::Shell { action } => chan_shell::dispatch(action).await,
         Command::Completions { shell } => cmd_completions(shell),
-        Command::Close { path, remove } => cmd_close(path, remove).await,
+        Command::Close { path, remove } => cmd_close(path, remove, personality).await,
         Command::Open {
             target,
             name,
@@ -1192,7 +1192,7 @@ async fn serving_kind(holder_pid: u32) -> Option<ServedBy> {
     })
 }
 
-async fn cmd_remove(path: PathBuf) -> Result<()> {
+async fn cmd_remove(path: PathBuf, personality: Personality) -> Result<()> {
     let lib = library()?;
     // Tear down a running serve first: `reset_workspace` takes the writer
     // flock and would otherwise fail `WorkspaceLocked` on a live serve.
@@ -1200,7 +1200,7 @@ async fn cmd_remove(path: PathBuf) -> Result<()> {
     // reset surface the real error.
     // `remove: true` so a devserver/desktop host also unregisters the
     // workspace from its own library + overlay (not just the local config.toml).
-    let _ = unserve_running(&lib, &path, true).await;
+    let _ = unserve_running(&lib, &path, true, personality).await;
     remove_from_registry(&lib, &path)
 }
 
@@ -1236,13 +1236,13 @@ fn remove_from_registry(lib: &Library, path: &Path) -> Result<()> {
 /// holder) is treated as success, since the goal is "this workspace is not
 /// served". With `remove`, it then also forgets the workspace from the
 /// registry (`chan workspace rm`), INDEPENDENT of the teardown outcome.
-async fn cmd_close(path: PathBuf, remove: bool) -> Result<()> {
+async fn cmd_close(path: PathBuf, remove: bool, personality: Personality) -> Result<()> {
     let lib = library()?;
     // Pass `remove` through so a host (devserver/desktop) that serves this
     // workspace also unregisters it from its own library + overlay; the local
     // `remove_from_registry` below then handles the caller's config.toml +
     // metadata (and the not-served / standalone cases the host can't).
-    match unserve_running(&lib, &path, remove).await {
+    match unserve_running(&lib, &path, remove, personality).await {
         Ok(UnserveOutcome::Unserved) => println!("closed: {}", path.display()),
         Ok(UnserveOutcome::NotServed) => println!("(not served: {})", path.display()),
         // A reachable-but-failed teardown is still "best effort": report it,
@@ -1277,7 +1277,42 @@ enum UnserveOutcome {
 /// registry — not just the caller's local `config.toml`. This is what keeps a
 /// devserver-served workspace from lingering in the launcher (and surviving a
 /// restart) after `chan close --remove` / `chan workspace rm`.
-async fn unserve_running(lib: &Library, path: &Path, remove: bool) -> Result<UnserveOutcome> {
+async fn unserve_running(
+    lib: &Library,
+    path: &Path,
+    remove: bool,
+    personality: Personality,
+) -> Result<UnserveOutcome> {
+    let canonical = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+
+    // Desktop close handoff, mirroring the `chan open` handoff. A running
+    // same-user chan-desktop owns the workspace flock AND its own library +
+    // overlay; the per-pid control socket reaches the embedded host (the window
+    // closes) but never updates the desktop's runtime map, so the launcher shows
+    // the workspace stale-on and a restart resurrects it. The well-known handoff
+    // socket sidesteps that and the pid-discovery miss (a GUI desktop whose
+    // TMPDIR differs from the terminal's). Gated like the open handoff: only the
+    // Desktop personality or the forced shim hands off, never a plain standalone
+    // binary; `CHAN_NO_DESKTOP_HANDOFF` opts out. Any non-`HandedOff` outcome
+    // (no desktop, skew, error) drops through to the control-socket path below.
+    let want_desktop_handoff = (personality == Personality::Desktop
+        || chan_server::handoff::handoff_forced())
+        && !chan_server::handoff::handoff_opt_out();
+    if want_desktop_handoff {
+        if let chan_server::handoff::Outcome::HandedOff =
+            chan_server::handoff::try_close_workspace(&canonical, remove).await
+        {
+            // The desktop released its flock during teardown; wait it out so a
+            // `chan open` racing right behind doesn't see a transient
+            // WorkspaceLocked. Only the locally-registered case resolves a lock
+            // dir to wait on.
+            if let Some(paths) = lib.workspace_paths_for(path) {
+                wait_for_lock_release(&paths.lock);
+            }
+            return Ok(UnserveOutcome::Unserved);
+        }
+    }
+
     let Some(paths) = lib.workspace_paths_for(path) else {
         return Ok(UnserveOutcome::NotServed); // not registered => nothing serving
     };
@@ -1290,7 +1325,6 @@ async fn unserve_running(lib: &Library, path: &Path, remove: bool) -> Result<Uns
         // socket. Nothing to tear down over the wire.
         return Ok(UnserveOutcome::NotServed);
     };
-    let canonical = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
     chan_shell::send_control_request(
         &socket,
         chan_shell::ControlRequest::Close {
