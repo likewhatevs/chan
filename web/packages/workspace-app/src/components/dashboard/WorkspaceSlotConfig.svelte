@@ -142,7 +142,7 @@
   }
 
   // Recent workspaces: a read-only list from the global config endpoint.
-  // chan serve takes an explicit workspace path, so there is no default-root
+  // chan open takes an explicit workspace path, so there is no default-root
   // field to edit here; this section only surfaces recently-opened workspaces.
   let globalConfig = $state<GlobalConfig | null>(null);
 
@@ -295,7 +295,7 @@
   {/if}
 </section>
 
-<!-- Recent workspaces. chan serve takes an explicit workspace path, so this
+<!-- Recent workspaces. chan open takes an explicit workspace path, so this
      slot's flip-back surfaces only recently-opened workspaces, below a dashed
      divider matching the one between chan-reports and Metadata archive
      above. -->

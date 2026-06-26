@@ -619,7 +619,7 @@ async fn proxy_http(
 
 /// Drop hop-by-hop headers, Host, Cookie (the devserver_gate cookie has
 /// no business at the upstream), Authorization (a user-presented PAT
-/// or bearer has no business at the tenant's `chan serve` either;
+/// or bearer has no business at the tenant's `chan devserver` either;
 /// auth on this leg is the devserver_gate handshake plus the tunnel
 /// trust boundary), and existing X-Forwarded-*. Honors the
 /// connection-token list per RFC 7230 6.1.
@@ -756,7 +756,7 @@ const X_FORWARDED_PROTO: &str = "x-forwarded-proto";
 const X_FORWARDED_HOST: &str = "x-forwarded-host";
 
 /// Trust boundary: devserver-proxy is the only thing between the client
-/// and the upstream `chan serve`. Inbound `X-Forwarded-Host` /
+/// and the upstream `chan devserver`. Inbound `X-Forwarded-Host` /
 /// `X-Forwarded-Proto` are entirely client-controlled (nginx may not
 /// scrub them, and the gateway must not assume it does) so we never
 /// forward those values; we re-derive `host` from the inbound `Host`

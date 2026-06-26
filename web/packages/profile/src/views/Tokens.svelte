@@ -90,7 +90,7 @@
   }
 
   async function revoke(id: string) {
-    if (!confirm("Revoke this token? Existing chan serve sessions using it will be disconnected.")) return;
+    if (!confirm("Revoke this token? Existing chan devserver sessions using it will be disconnected.")) return;
     await api.revokeToken(id);
     await refresh();
   }
@@ -126,7 +126,7 @@
     <button onclick={() => (showCreate = true)}>New token</button>
   </div>
   <p class="muted">
-    Tokens authenticate <code>chan serve --tunnel-token</code> and other
+    Tokens authenticate <code>chan devserver --tunnel-token</code> and other
     CLI clients. Treat them like passwords: a token grants the same
     access as your account, scoped to your workspaces only.
   </p>

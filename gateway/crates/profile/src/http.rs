@@ -727,7 +727,7 @@ async fn admin_block_user(
     tx.commit().await?;
 
     // Best-effort: drop every live tunnel the user has at the moment
-    // we block. Without this, an authenticated `chan serve` keeps
+    // we block. Without this, an authenticated `chan devserver` keeps
     // serving over its existing yamux substreams until it disconnects;
     // the DB block is already enforced for new validates and new
     // sessions, but the in-process registrations on devserver-proxy don't

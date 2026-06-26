@@ -607,7 +607,7 @@ impl VcsKind { fn as_str(&self) -> &'static str }       // "git" | "hg" | "svn"
 struct VcsParent { kind: VcsKind, repo_root: PathBuf }
 ```
 
-Pure stat-walk. `detect_parent_vcs` is used by `chan serve` (and any future shell) to decide whether a workspace path is inside a Git / Mercurial / Subversion working tree and would be better served at the repo root instead of an arbitrary subdir. `detect_workspace_vcs` answers "is the root itself a checkout". `is_vcs_control_path` recognizes the control files the watcher forwards (`.git/HEAD`, `.git/index`, `.hg/dirstate`).
+Pure stat-walk. `detect_parent_vcs` is used by `chan open` (and any future shell) to decide whether a workspace path is inside a Git / Mercurial / Subversion working tree and would be better served at the repo root instead of an arbitrary subdir. `detect_workspace_vcs` answers "is the root itself a checkout". `is_vcs_control_path` recognizes the control files the watcher forwards (`.git/HEAD`, `.git/index`, `.hg/dirstate`).
 
 `detect_parent_vcs` algorithm:
 
@@ -616,7 +616,7 @@ Pure stat-walk. `detect_parent_vcs` is used by `chan serve` (and any future shel
   - Marker checks use `symlink_metadata` (lstat) plus a file-type gate: symlinks, FIFOs, sockets, char/block devices at `.git` / `.hg` / `.svn` are rejected. Same "lstat, never stat, on user paths" invariant the rest of the crate enforces; a planted symlink or special file can't fool the suggestion.
   - Stop at: a mount boundary (`st_dev` change on Unix; skipped on Windows), at `$HOME` (never inspected; dotfiles-as-git is unrelated to workspace-root selection), or at the filesystem root.
 
-The function never invokes `git`/`hg`/`svn` and never reads repository contents. The shell layer (`chan serve`, desktop) is responsible for the user-facing decision (refuse and suggest the repo root, present a dialog, accept an explicit override).
+The function never invokes `git`/`hg`/`svn` and never reads repository contents. The shell layer (`chan open`, desktop) is responsible for the user-facing decision (refuse and suggest the repo root, present a dialog, accept an explicit override).
 
 ### Public types (selected)
 

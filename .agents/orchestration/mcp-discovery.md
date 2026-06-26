@@ -1,6 +1,6 @@
 # MCP Discovery
 
-chan-server exposes its MCP bridge over a Unix-domain socket while `chan serve` is running. It does not publish that socket into external agent config files on startup.
+chan-server exposes its MCP bridge over a Unix-domain socket while `chan open` is running. It does not publish that socket into external agent config files on startup.
 
 In particular, chan does not write:
 
@@ -28,7 +28,7 @@ The command descriptor points at the chan binary itself running a small bridge s
 chan __mcp-proxy <unix-socket-path>
 ```
 
-The socket path is the active `chan serve` process's MCP bridge socket. chan-server rebinds it on each startup; terminal sessions get the live value through `CHAN_MCP_SOCKET` and `CHAN_MCP_SERVER_JSON`.
+The socket path is the active `chan open` process's MCP bridge socket. chan-server rebinds it on each startup; terminal sessions get the live value through `CHAN_MCP_SOCKET` and `CHAN_MCP_SERVER_JSON`.
 
 ## Out of scope (today)
 

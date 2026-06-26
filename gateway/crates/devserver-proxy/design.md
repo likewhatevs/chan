@@ -2,7 +2,7 @@
 
 ## Problem
 
-`chan serve` instances register over chan-tunnel and live until the peer disconnects. The gateway needs a service that:
+`chan devserver` instances register over chan-tunnel and live until the peer disconnects. The gateway needs a service that:
 
 1. Accepts the tunnel registration handshake.
 2. Reverse-proxies HTTP and WebSocket traffic into the registered workspace.

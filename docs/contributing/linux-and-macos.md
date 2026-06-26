@@ -113,7 +113,7 @@ On Apple Silicon the bundles are aarch64 Linux; CI's `ubuntu-latest` owns the ca
 chan-desktop runs as both `chan` and `cs` — the same binary re-execing itself with `argv[0]` set to the name (the `chan_shell::invoked_as_chan` / `invoked_as_cs` argv0 detection), so the CLI / control client runs instead of the GUI. On boot it owns the `~/.local/bin/{chan,cs}` shims (`desktop/src-tauri/src/cs_install.rs`): real symlinks to the installed binary for a `.app` or deb/rpm install, `exec -a` wrapper scripts for an AppImage (whose `current_exe()` is an ephemeral mount). The shims self-heal on a move or self-upgrade, are idempotent, and never clobber a `chan` / `cs` you installed yourself. To check the client path on a built artifact, point the inner binary at a running server's control socket and confirm it runs the client, not the GUI:
 
 ```sh
-# in the container, with a `chan serve` running and $CHAN_CONTROL_SOCKET
+# in the container, with a `chan open` running and $CHAN_CONTROL_SOCKET
 # pointed at its socket:
 exec -a cs ./squashfs-root/usr/bin/chan-desktop terminal list   # rc=0, no GUI
 ```
@@ -145,7 +145,7 @@ CI builds these in `release.yml`'s `linux-cli-artifacts` job (zig via `mlugg/set
 
 ## Devserver: the `--systemd` user-service path
 
-`chan devserver` and its supervision are Linux-specific. `chan devserver --systemd` runs the server under a `chan-devserver.service` systemd **user** service (it ensures linger, starts the unit, and re-attaches to an already-running one), and the `chan serve PATH` discovery socket that registers workspaces with it is Unix-only. On macOS `--systemd` is not yet wired to launchd — it prints a note and runs in the foreground — so to develop and exercise the supervised path on a Mac you run it inside lima/sdme, the same Linux flow as everyone else. The supervision shape and its token-delivery contract are in [`design.md`](../../design.md) ("Devserver and the multi-workspace host").
+`chan devserver` and its supervision are Linux-specific. `chan devserver --systemd` runs the server under a `chan-devserver.service` systemd **user** service (it ensures linger, starts the unit, and re-attaches to an already-running one), and the `chan open PATH` discovery socket that registers workspaces with it is Unix-only. On macOS `--systemd` is not yet wired to launchd — it prints a note and runs in the foreground — so to develop and exercise the supervised path on a Mac you run it inside lima/sdme, the same Linux flow as everyone else. The supervision shape and its token-delivery contract are in [`design.md`](../../design.md) ("Devserver and the multi-workspace host").
 
 The one thing this needs beyond the core gate's container is a **systemd user manager**: `--systemd` drives `loginctl enable-linger` and `systemctl --user`, which require a regular (non-root), lingering user with a live user session — not the root shell `sdme join` drops you into. Stand one up once:
 

@@ -51,7 +51,7 @@ The phase-13 r2 Team Work revamp REMOVED the fsnotify event-watcher / poke-dispa
 ## Verification discipline (smoke, not just gates)
 
 - rust-embed bakes the frontend bundle at BUILD time. To smoke a frontend change you must `npm run build` then `cargo build -p chan` then restart; there is no hot reload. A stale `web/dist` (gitignored) gives a false "the flag is broken" negative. Grep the SERVED bundle, not the source, when a flag looks broken. (phases 8, 15)
-- When re-walking a previously-failed test, `pkill chan serve` + rebuild
+- When re-walking a previously-failed test, `pkill chan open` + rebuild
   + verify binary provenance + restart. Stale-binary false positives
   caused multi-round wild-goose chases. In multi-agent runs a broad `pkill` kills every lane's server; the orchestrator serves from a renamed binary copy and lanes scope their pkills to their own path. (phase 15)
 - Static gates (svelte-check, `?raw` source-pattern vitest) MISS Svelte-5 runtime reactivity errors (for example `state_unsafe_mutation` from mutating `$state` inside a `$derived`). Browser-smoke any reactivity change. (phase 15)

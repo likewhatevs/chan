@@ -1367,7 +1367,7 @@ function onWatchReady(): void {
   // reconnecting client would miss the last push until the next change.
   void seedTerminalRoster();
   // A reconnect may mean the server PROCESS was restarted (a remote
-  // `chan serve` bounced); detect that and reload rather than go stale.
+  // `chan devserver` bounced); detect that and reload rather than go stale.
   void checkServerInstance();
 }
 
@@ -1383,7 +1383,7 @@ let serverInstance: string | null = null;
 /// and in-memory state are gone, and without a reload the window sits
 /// on a stale view with stuck terminals until a manual Cmd+R — the
 /// reload is that Cmd+R, automated. Reported against outbound remotes
-/// (^C + re-run of `chan serve`); health answers on every tenant
+/// (^C + re-run of `chan devserver`); health answers on every tenant
 /// (terminal-only included), so the check applies everywhere.
 /// Best-effort: a transient read failure skips until the next
 /// reconnect.

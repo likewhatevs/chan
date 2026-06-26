@@ -3,7 +3,7 @@
 -- A row reads "owner_user_id shares workspace_name with whoever signs in
 -- on a verified OAuth email matching grantee_email, with the given
 -- role". The grant is keyed on (owner, workspace, email) so an owner can
--- pre-seed access before `chan serve --tunnel-workspace-name=<name>` is ever
+-- pre-seed access before `chan devserver --tunnel-workspace-name=<name>` is ever
 -- run; workspace-proxy's in-memory registry decides whether the workspace is
 -- currently live, this table decides who is allowed in once it is.
 --

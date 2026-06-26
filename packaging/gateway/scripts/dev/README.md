@@ -44,7 +44,7 @@ Then open:
 
 * http://id.localtest.me:17000 -- dashboard. Sign in with GitHub; GitHub redirects to the callback at `id.localtest.me:17000`, identity-service mints a session cookie (host-only on `id.localtest.me`), and the SPA loads.
 
-The Workspaces tab is empty until a `chan serve` instance registers a workspace (see below).
+The Workspaces tab is empty until a `chan devserver` instance registers a workspace (see below).
 
 ### First-time sign-in: enrol yourself
 

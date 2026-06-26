@@ -2,7 +2,7 @@
 // Print the keyboard-shortcut table from web/packages/workspace-app/src/state/shortcuts.ts.
 // Two modes:
 //   default                   plain ASCII (what the empty pane renders)
-//   --serve-long-about        wrapped in the `chan serve --help` framing
+//   --serve-long-about        wrapped in the `chan open --help` framing
 //                             so the output drops straight into
 //                             crates/chan/src/main.rs.
 //

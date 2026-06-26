@@ -134,7 +134,7 @@
       <p class="muted small">
         Deleting your account removes the user record, all linked
         OAuth identities, and all personal access tokens. Active
-        tunnels keep running until their <code>chan serve</code>
+        tunnels keep running until their <code>chan devserver</code>
         process exits or the token they use is rotated. This cannot
         be undone.
       </p>

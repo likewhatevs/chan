@@ -134,7 +134,7 @@ enum TunnelCmd {
         #[arg(long)]
         user: Option<String>,
     },
-    /// Force a tunnel offline by (user, workspace). The chan serve
+    /// Force a tunnel offline by (user, workspace). The chan devserver
     /// peer is free to reconnect.
     Kill { user: String, workspace: String },
     /// Live snapshot stream (SSE). Re-renders the table every

@@ -18,7 +18,7 @@
 #
 #   - devserver-proxy  public-facing service at devserver.chan.app
 #                  (apex: tunnel + admin) and *.devserver.chan.app
-#                  (wildcard: tenant content). Terminates `chan serve`
+#                  (wildcard: tenant content). Terminates `chan devserver`
 #                  tunnel registrations over h2c and reverse-proxies
 #                  HTTP + WebSocket traffic into them, gated by the
 #                  devserver-gate JWT handoff.
@@ -71,7 +71,7 @@ axum = { version = "0.7", features = ["macros", "ws"] }
 # bridge them onto tokio io.
 tokio-util = { version = "0.7", features = ["compat"] }
 # Workspace-proxy runs hyper's h1 client over yamux substreams to
-# reach `chan serve` (reqwest can't drive a caller-supplied stream).
+# reach `chan devserver` (reqwest can't drive a caller-supplied stream).
 hyper = { version = "1", features = ["client", "http1"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
 http = "1"
@@ -106,7 +106,7 @@ thiserror = "1"
 # hooks). Drops unused fs/process/test-util to shrink each binary.
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "sync", "io-util", "signal"] }
 # Plaintext WebSocket client used to bridge browser WS frames to
-# `chan serve`. devserver-proxy runs the WS client handshake (`client_async`)
+# `chan devserver`. devserver-proxy runs the WS client handshake (`client_async`)
 # directly on a yamux substream, so the `connect` feature isn't needed.
 tokio-tungstenite = { version = "0.24", default-features = false }
 futures-util = { version = "0.3", default-features = false, features = ["sink"] }

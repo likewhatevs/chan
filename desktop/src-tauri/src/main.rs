@@ -2169,7 +2169,7 @@ fn open_workspace_from_handoff(
                 emit_system_notice(
                     &app,
                     "warning",
-                    format!("Could not open {key_for_block} from chan serve: {e}"),
+                    format!("Could not open {key_for_block} from chan open: {e}"),
                 );
                 return;
             }
@@ -2177,7 +2177,7 @@ fn open_workspace_from_handoff(
                 emit_system_notice(
                     &app,
                     "warning",
-                    format!("Opening {key_for_block} from chan serve panicked: {e}"),
+                    format!("Opening {key_for_block} from chan open panicked: {e}"),
                 );
                 return;
             }
@@ -2189,7 +2189,7 @@ fn open_workspace_from_handoff(
             emit_system_notice(
                 &app,
                 "warning",
-                format!("Could not open {key_for_block} from chan serve: {e}"),
+                format!("Could not open {key_for_block} from chan open: {e}"),
             );
         }
     });

@@ -1,7 +1,7 @@
 import { describe, expect, test } from "vitest";
 import storeSource from "./store.svelte.ts?raw";
 
-// A remote `chan serve` bouncing (^C + re-run) used to leave its
+// A remote `chan devserver` bouncing (^C + re-run) used to leave its
 // desktop window stale: the watch socket reconnected fine, but the new
 // process had none of the old PTYs, so terminals sat stuck until a
 // manual Cmd+R. The store now reads /api/health's `instance` (random

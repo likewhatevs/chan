@@ -133,7 +133,7 @@ pub fn router(
     // No per-IP rate limit here. The only caller is devserver-proxy,
     // so a governor at this hop sees one peer IP regardless of how
     // many distinct clients are probing tokens upstream: a single
-    // global bucket that can lock out legitimate `chan serve`
+    // global bucket that can lock out legitimate `chan devserver`
     // handshakes while leaving real attacker shape invisible. The
     // primary PAT brute-force gate sits in devserver-proxy, keyed on
     // a hash of the candidate token; `token_throttle` inside the
@@ -678,7 +678,7 @@ async fn delete_profile(State(state): State<AppState>, session: Session) -> Resu
     // Best-effort: drop every live tunnel the user had open.
     // devserver-proxy holds those substreams in-process, so the cascade
     // above doesn't reach them. A failure here logs and continues;
-    // the remote chan serve will get rejected on its next handshake
+    // the remote chan devserver will get rejected on its next handshake
     // anyway because the PAT is now gone.
     if let (Some(client), Some(name)) = (&state.cfg.workspace_admin, username) {
         match client.kill_user_tunnels(&name).await {

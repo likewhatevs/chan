@@ -5,7 +5,7 @@
 //   2. chan-desktop's KEY_BRIDGE_JS (native keymap; rebroadcasts as
 //      `chan:command` events that chan handles).
 //   3. The empty-pane background table.
-//   4. crates/chan/src/main.rs SERVE_LONG_ABOUT (the `chan serve
+//   4. crates/chan/src/main.rs SERVE_LONG_ABOUT (the `chan open
 //      --help` text). Resync via `node web/packages/workspace-app/scripts/shortcuts-table.mjs`.
 //
 // Chord grammar: a `+`-separated list of modifier tokens followed by
@@ -712,7 +712,7 @@ export function currentPlatform(): Platform {
 ///
 /// No box-drawing, no Unicode - matches the project's writing rules.
 /// Output is intended for the empty-pane background AND the
-/// `chan serve --help` text; resync the latter via the
+/// `chan open --help` text; resync the latter via the
 /// `web/packages/workspace-app/scripts/shortcuts-table.mjs` helper.
 export function renderTable(platform: Platform, os: OS): string {
   const groups = new Map<ShortcutGroup, Shortcut[]>();

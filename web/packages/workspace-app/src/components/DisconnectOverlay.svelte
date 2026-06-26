@@ -127,7 +127,7 @@
 
   const subline = $derived.by(() => {
     if (ui.ws === "closed") {
-      return "the server may have stopped; check the terminal where you ran `chan serve`";
+      return "the server may have stopped; check the terminal where you ran `chan open`";
     }
     return "this usually clears on its own; press Retry to skip the wait";
   });

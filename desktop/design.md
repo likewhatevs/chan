@@ -38,9 +38,9 @@ One desktop process hosts many running local workspaces:
 There are two workspace attachment modes:
 
 - **Local embedded**: a local registry entry opened by chan-desktop. The desktop mounts the workspace into its embedded `WorkspaceHost` and owns the runtime.
-- **Remote outbound**: an already-running chan server that chan-desktop opens by URL. Example: the user runs `chan serve /tmp/foo`, then adds that token-bearing URL as an outbound attachment. The desktop owns only the window, not the server.
+- **Remote outbound**: an already-running chan server that chan-desktop opens by URL. Example: the user runs `chan open /tmp/foo`, then adds that token-bearing URL as an outbound attachment. The desktop owns only the window, not the server.
 
-There is no fallback serve mode. If a user wants to run `chan serve` directly, that is a remote attachment, even when the server is on the same machine.
+There is no fallback serve mode. If a user wants to run `chan open` directly, that is a remote attachment, even when the server is on the same machine.
 
 ## 3. Workspace lifecycle
 
@@ -91,7 +91,7 @@ The local runtime:
 - opens one workspace webview automatically, with additional Open clicks opening more windows for the same runtime (capped per workspace),
 - closes all of the workspace's windows when the runtime is toggled off.
 
-A workspace already open in another chan process (a standalone `chan serve`, or a second desktop) surfaces as a clear "open in another chan process" error and the toggle reverts; a quick off-then-on retries briefly so the previous handle can release its lock.
+A workspace already open in another chan process (a standalone `chan open`, or a second desktop) surfaces as a clear "open in another chan process" error and the toggle reverts; a quick off-then-on retries briefly so the previous handle can release its lock.
 
 ### 3.4 Toggle Off (stop)
 
@@ -105,7 +105,7 @@ Stops the serve (if running), then unregisters the workspace through `chan-works
 
 Anything that mutates `~/.chan/config.toml` shows up in the UI: `chan add` / `chan remove` / `chan rename` from a terminal, a second chan-desktop process, or hand-editing the TOML.
 
-For an external `chan serve` the registry only records that the workspace exists, not that a serve is running: the local On toggle stays off and no URL appears. A user who wants that server in the desktop adds it as a remote outbound attachment.
+For an external `chan open` the registry only records that the workspace exists, not that a serve is running: the local On toggle stays off and no URL appears. A user who wants that server in the desktop adds it as a remote outbound attachment.
 
 ## 4. Validation
 
@@ -120,7 +120,7 @@ chan-desktop is self-contained. It links `chan-workspace` and `chan-server` dire
 
 Local workspaces open through the embedded chan-server `WorkspaceHost`, which owns a single `chan_workspace::Library`. Every registry mutation runs in-process against that `Library`.
 
-The single codesigned and notarised artifact is the chan-desktop app itself; there is no second binary to sign. External `chan serve` processes are supported as explicit remote attachments (section 11), not as a local serving dependency.
+The single codesigned and notarised artifact is the chan-desktop app itself; there is no second binary to sign. External `chan open` processes are supported as explicit remote attachments (section 11), not as a local serving dependency.
 
 ## 6. Window model
 
@@ -161,7 +161,7 @@ Outbound windows do not load the remote URL directly: a down remote would paint 
 
 ### 6.5 Standalone terminal windows
 
-Standalone terminal windows host the SPA in terminal-only mode (`kind=terminal`: no workspace fetch, terminal panes only). All of them load the ONE shared `/terminal` tenant of the embedded server, mounted on first use and never torn down per window: PTYs live in a single registry, so a terminal tab moved between windows keeps its live PTY, and orphaned PTYs idle-prune. There is no registry entry and no On-toggle lifecycle. Sessions inherit chan-server's terminal contract, including the `cs` control socket, so `cs` works inside a desktop terminal exactly as under a standalone `chan serve`. The close button buries the window while shells are live and really closes it when none are left.
+Standalone terminal windows host the SPA in terminal-only mode (`kind=terminal`: no workspace fetch, terminal panes only). All of them load the ONE shared `/terminal` tenant of the embedded server, mounted on first use and never torn down per window: PTYs live in a single registry, so a terminal tab moved between windows keeps its live PTY, and orphaned PTYs idle-prune. There is no registry entry and no On-toggle lifecycle. Sessions inherit chan-server's terminal contract, including the `cs` control socket, so `cs` works inside a desktop terminal exactly as under a standalone `chan open`. The close button buries the window while shells are live and really closes it when none are left.
 
 ### 6.6 Remote windows
 
@@ -171,7 +171,7 @@ Remote-backed connections (outbound attachments) own their window state server-s
 
 Non-goal: chan-desktop installation should be "drag Chan.app to /Applications". No installer, no scripts.
 
-chan-desktop is also the `chan` / `cs` command line: on boot it owns `~/.local/bin/{chan,cs}` shims that resolve to the running desktop binary, so a desktop install gives you `chan serve` and the shell-first workflows with nothing extra to download. A standalone `chan` (the `chan.app/install.sh` installer or a release tarball) is still available and independent; the two share the same `~/.chan` registry, so a workspace added by one shows up in the other.
+chan-desktop is also the `chan` / `cs` command line: on boot it owns `~/.local/bin/{chan,cs}` shims that resolve to the running desktop binary, so a desktop install gives you `chan open` and the shell-first workflows with nothing extra to download. A standalone `chan` (the `chan.app/install.sh` installer or a release tarball) is still available and independent; the two share the same `~/.chan` registry, so a workspace added by one shows up in the other.
 
 The shims are installed per package kind (`src-tauri/src/cs_install.rs`, `install_bin_shims()`, called on boot): a macOS `.app` or Linux deb/rpm gets real symlinks to the installed binary; a Linux AppImage gets tiny `exec -a` wrapper scripts, because `current_exe()` inside an AppImage is the ephemeral mount. Both names resolve to the same binary, and the argv[0] stem dispatch (`chan_shell::invoked_arg0`, which prefers `$ARGV0` over `argv[0]` so an AppImage that lost argv[0] to `AppRun` still reaches the inner CLI instead of the GUI) selects the CLI / control-client / GUI path. Best-effort, idempotent, and self-healing: a shim we wrote is re-pointed or rewritten on the next launch when it goes stale (the binary moved, the AppImage updated), and a `chan` / `cs` the user installed themselves is never clobbered.
 
@@ -235,7 +235,7 @@ Remote workspaces are explicit attachments. They are not a fallback for failed e
 Outbound attach means the server already exists and chan-desktop opens it by URL. Example:
 
 ```
-chan serve /tmp/foo
+chan open /tmp/foo
 ```
 
 The user copies the printed URL, including the bearer token, into the [New] modal's Remote form. The desktop opens that URL in a workspace webview (through the connecting screen, section 6.4) and does not try to start, stop, reclaim, or inspect the server process. This works whether the URL points at another machine or at `127.0.0.1` on the same machine.

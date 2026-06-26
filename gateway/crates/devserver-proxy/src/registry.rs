@@ -84,7 +84,7 @@ impl Registry {
     /// Race notes: `record_user` and `forget_user` race on the same
     /// map entry. The intended ordering inside `evict_all_for_user`
     /// is list live tunnels, evict each, then call `forget_user`. A
-    /// reconnect from `chan serve` between the list step and the
+    /// reconnect from `chan devserver` between the list step and the
     /// final `forget_user` step calls `record_user` and reseeds the
     /// cache before the remove fires. That window leaks a stale
     /// uuid only if the new validate observed a uuid different from
@@ -156,7 +156,7 @@ impl Registry {
 
     /// Evict every tunnel a user has live. Used on account-delete
     /// to drop sessions whose backing PAT was just cascade-deleted;
-    /// without this the chan serve substreams stay alive until the
+    /// without this the chan devserver substreams stay alive until the
     /// remote process exits or the underlying TCP closes. Returns
     /// the count actually evicted (0 is fine).
     ///

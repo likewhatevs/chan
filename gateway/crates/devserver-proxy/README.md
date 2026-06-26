@@ -1,10 +1,10 @@
 # devserver-proxy
 
-Public-facing service at devserver.chan.app (apex) and `*.devserver.chan.app` (wildcard). Reverse-proxies HTTP / WebSocket traffic into a user's running `chan serve` instances. Embeds `chan-tunnel-server` to terminate registrations from those instances on a separate h2c listener. No SPA, no database; it is a stateless proxy.
+Public-facing service at devserver.chan.app (apex) and `*.devserver.chan.app` (wildcard). Reverse-proxies HTTP / WebSocket traffic into a user's running `chan devserver` instances. Embeds `chan-tunnel-server` to terminate registrations from those instances on a separate h2c listener. No SPA, no database; it is a stateless proxy.
 
 ## Role in the system
 
-devserver-proxy is the surface where a workspace is served in the browser. It does NOT read identity's `id_session` cookie. Entry is gated by the devserver-gate handoff: identity mints a short-lived entry JWT and 303s the browser to `{user}.devserver.<domain>/{workspace}/?t=<jwt>`; devserver-proxy verifies it (signature + `aud` = inbound host + `drv`), mints its own host-only, path-scoped `devserver_gate` cookie, and forwards authenticated traffic to the right `chan serve` peer through a yamux substream owned by an active tunnel. The `aud`-equals-inbound-host check is what enforces tenant isolation.
+devserver-proxy is the surface where a workspace is served in the browser. It does NOT read identity's `id_session` cookie. Entry is gated by the devserver-gate handoff: identity mints a short-lived entry JWT and 303s the browser to `{user}.devserver.<domain>/{workspace}/?t=<jwt>`; devserver-proxy verifies it (signature + `aud` = inbound host + `drv`), mints its own host-only, path-scoped `devserver_gate` cookie, and forwards authenticated traffic to the right `chan devserver` peer through a yamux substream owned by an active tunnel. The `aud`-equals-inbound-host check is what enforces tenant isolation.
 
 ## Build
 
@@ -28,7 +28,7 @@ cargo run -p devserver-proxy
 For the full local stack (with identity + profile + Postgres), prefer `packaging/gateway/scripts/dev/setup.sh` + `packaging/gateway/scripts/dev/run.sh`. Two listeners come up:
 
 - `BIND_ADDR` (7002): public HTTP. devserver.chan.app sits behind nginx + TLS in production; loopback in dev.
-- `TUNNEL_BIND_ADDR` (7100): h2c. nginx `grpc_pass`es `/v1/tunnel` on the apex here; `chan serve` instances dial it for the handshake.
+- `TUNNEL_BIND_ADDR` (7100): h2c. nginx `grpc_pass`es `/v1/tunnel` on the apex here; `chan devserver` instances dial it for the handshake.
 
 ## Env vars
 

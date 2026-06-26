@@ -10,7 +10,7 @@ pub struct Config {
     /// wildcard). Behind nginx + TLS.
     pub bind_addr: SocketAddr,
     /// Tunnel listener (apex `/v1/tunnel`). h2c behind nginx
-    /// `grpc_pass`; `chan serve` instances dial
+    /// `grpc_pass`; `chan devserver` instances dial
     /// `https://devserver.chan.app/v1/tunnel` over h2/TLS, terminated at
     /// nginx and forwarded here cleartext.
     pub tunnel_bind_addr: SocketAddr,
@@ -24,7 +24,7 @@ pub struct Config {
     pub wildcard_suffix: String,
     /// Base URL of identity-service. devserver-proxy POSTs to
     /// `{identity_url}/internal/v1/tokens/validate` to validate the
-    /// PAT every `chan serve` presents in its tunnel handshake.
+    /// PAT every `chan devserver` presents in its tunnel handshake.
     pub identity_url: Url,
     /// Bearer devserver-proxy presents on identity-service's
     /// `/internal/v1/tokens/validate`. Sourced from
@@ -54,7 +54,7 @@ pub struct Config {
     /// missing on a fresh deploy.
     pub admin_token: Option<String>,
     /// Cap on response bytes streamed back from an upstream `chan
-    /// serve` per request. `None` (env unset or `0`) disables the
+    /// devserver` per request. `None` (env unset or `0`) disables the
     /// cap.
     pub max_response_bytes: Option<usize>,
     /// Cap on inbound request body bytes forwarded to the upstream.
@@ -65,7 +65,7 @@ pub struct Config {
     /// per-half idle timeouts instead.
     pub request_timeout: Option<std::time::Duration>,
     /// Value to set on the outbound `X-Forwarded-Proto` header before
-    /// forwarding to the upstream `chan serve`. devserver-proxy itself
+    /// forwarding to the upstream `chan devserver`. devserver-proxy itself
     /// does not see TLS (nginx terminates), so we cannot derive this
     /// from the inbound connection; the inbound `X-Forwarded-Proto`
     /// is client-controlled and must not be trusted. Defaults to

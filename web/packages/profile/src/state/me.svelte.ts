@@ -43,7 +43,7 @@ class MeStore {
   /// Refetch /api/me without going through the loading state. Used
   /// by the Devservers view to refresh the list after a manual nudge
   /// (an open succeeded / failed, or the user just connected a new
-  /// `chan serve`).
+  /// `chan devserver`).
   async refresh() {
     try {
       this.me = await api.me();

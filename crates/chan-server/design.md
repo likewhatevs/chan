@@ -19,7 +19,7 @@ the devserver. Per tenant it builds `Router::new().merge(api).fallback(serve_sta
   (tunnel-trust — the gateway proxy gates the public edge) with workspace mutation **read-only**.
 - **MCP host**: hosts `chan-llm` in-process over a Unix socket (+ `chan __mcp-proxy`).
 - **Devserver builder** (`devserver.rs`): `build_devserver_app` composes the `WorkspaceHost` + per-tenant
-  apps into one merged router for `run_devserver`; `chan serve` and the desktop loopback run the same app.
+  apps into one merged router for `run_devserver`; `chan devserver` and the desktop loopback run the same app.
 
 ```mermaid
 flowchart TB

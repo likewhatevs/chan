@@ -6,7 +6,7 @@ Date: 2026-05-18
 
 ## Profile
 
-One of two web-test lanes. Runs `chan serve` test servers, workspaces the embedded editor + terminal through a real browser session, and reports manual-walkthrough findings against the running app. Pairs with @@WebtestB for parallel coverage of multi-pane / multi-workspace scenarios.
+One of two web-test lanes. Runs `chan open` test servers, workspaces the embedded editor + terminal through a real browser session, and reports manual-walkthrough findings against the running app. Pairs with @@WebtestB for parallel coverage of multi-pane / multi-workspace scenarios.
 
 ## Skills
 
