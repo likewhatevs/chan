@@ -1925,7 +1925,10 @@ async fn cmd_devserver(
     // registration; the local management server still binds. The tunnel runs
     // only in the FOREGROUND devserver: the token is a secret, and the
     // supervised backends would have to persist it in the unit file / launchd
-    // plist (0644) to re-exec with it, so the combination is refused.
+    // plist (0644) to re-exec with it. The `chan` foreground daemon never
+    // persists it (it serves in-process), so the tunnel rides along with =chan
+    // and the plain foreground; only systemd/launchd refuse it.
+    let resolved = service.map(ServiceKind::resolve);
     let tunnel = match tunnel_token {
         Some(token) => {
             // Warn when the token came in via the flag rather than the env var
@@ -1938,12 +1941,15 @@ async fn cmd_devserver(
                      Prefer CHAN_TUNNEL_TOKEN env var instead."
                 );
             }
-            if service.is_some() {
+            if matches!(
+                resolved,
+                Some(ServiceKind::Systemd) | Some(ServiceKind::Launchd)
+            ) {
                 anyhow::bail!(
                     "chan devserver: tunnel mode (--tunnel-token) is not supported under \
-                     --service; the supervised backend would persist the token in the unit \
-                     file / agent / spawn args. Run the devserver in the foreground (or \
-                     under your own supervisor) to enable the tunnel."
+                     --service=systemd / --service=launchd; the supervised backend would \
+                     persist the token in the unit / agent (0644). Use --service=chan, or \
+                     run the devserver in the foreground."
                 );
             }
             Some(chan_server::DevserverTunnel { tunnel_url, token })
@@ -1953,8 +1959,8 @@ async fn cmd_devserver(
     // `--service` supervises the devserver under the resolved backend so it
     // outlives the launching terminal (systemd/launchd) or runs as a foreground
     // self-managed daemon (chan).
-    if let Some(kind) = service {
-        return run_devserver_as_service(kind.resolve(), addr, force, verbose).await;
+    if let Some(kind) = resolved {
+        return run_devserver_as_service(kind, addr, force, verbose, tunnel).await;
     }
     // Resolve the local-listener decision for the foreground path only. Tunnel
     // mode defaults to NOT binding the loopback port (the gateway is the
@@ -1976,9 +1982,12 @@ async fn run_devserver_as_service(
     addr: SocketAddr,
     force: bool,
     verbose: bool,
+    tunnel: Option<chan_server::DevserverTunnel>,
 ) -> Result<()> {
     match kind {
-        ServiceKind::Chan => devserver_daemon::run_devserver_as_chan(addr, force, verbose).await,
+        ServiceKind::Chan => {
+            devserver_daemon::run_devserver_as_chan(addr, force, verbose, tunnel).await
+        }
         ServiceKind::Systemd => {
             if cfg!(target_os = "linux") {
                 run_devserver_under_systemd(addr).await

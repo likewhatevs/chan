@@ -41,19 +41,24 @@ fn daemon_record_path() -> PathBuf {
 /// take over. Without `--force`, an already-running daemon on the SAME address
 /// is re-attached as a foreground watchdog; a different address errors (use
 /// `--force` / `--restart`).
-pub async fn run_devserver_as_chan(addr: SocketAddr, force: bool, verbose: bool) -> Result<()> {
+pub async fn run_devserver_as_chan(
+    addr: SocketAddr,
+    force: bool,
+    verbose: bool,
+    tunnel: Option<chan_server::DevserverTunnel>,
+) -> Result<()> {
     let lock_path = daemon_lock_path();
     let record_path = daemon_record_path();
     if verbose {
         print_daemon_paths(&lock_path, &record_path);
     }
     if force {
-        return take_over(&lock_path, &record_path, addr).await;
+        return take_over(&lock_path, &record_path, addr, tunnel).await;
     }
     match DaemonLock::acquire(&lock_path, &record_path, &addr.to_string(), false)
         .map_err(|e| anyhow::anyhow!("acquiring the devserver daemon lock: {e}"))?
     {
-        DaemonAcquire::Daemon(guard) => serve_as_daemon(guard, addr).await,
+        DaemonAcquire::Daemon(guard) => serve_as_daemon(guard, addr, tunnel).await,
         DaemonAcquire::Running(record) => {
             if record.addr != addr.to_string() {
                 anyhow::bail!(
@@ -75,7 +80,8 @@ pub async fn run_devserver_as_chan(addr: SocketAddr, force: bool, verbose: bool)
 /// `--restart`: turn down any running daemon, then serve. Starts one if none is
 /// running.
 pub async fn restart_devserver_chan(addr: SocketAddr, verbose: bool) -> Result<()> {
-    run_devserver_as_chan(addr, true, verbose).await
+    // --restart short-circuits before tunnel resolution, so it never carries one.
+    run_devserver_as_chan(addr, true, verbose, None).await
 }
 
 /// `--stop`: terminate the running daemon and clear the pidfile. Idempotent --
@@ -134,12 +140,16 @@ pub fn status_devserver_chan(verbose: bool) -> Result<()> {
 /// server's lifetime. The guard's Drop releases the flock and removes the
 /// pidfile on exit; the foreground server prints the bearer-token marker itself
 /// on startup, so a reconnecting desktop scrapes it from this terminal.
-async fn serve_as_daemon(guard: DaemonLock, addr: SocketAddr) -> Result<()> {
+async fn serve_as_daemon(
+    guard: DaemonLock,
+    addr: SocketAddr,
+    tunnel: Option<chan_server::DevserverTunnel>,
+) -> Result<()> {
     eprintln!(
         "chan devserver: self-managed daemon running in the foreground (bind={addr}); \
          Ctrl-C to stop."
     );
-    let result = crate::run_devserver_foreground(addr, None, true).await;
+    let result = crate::run_devserver_foreground(addr, tunnel, true).await;
     drop(guard);
     result
 }
@@ -147,7 +157,12 @@ async fn serve_as_daemon(guard: DaemonLock, addr: SocketAddr) -> Result<()> {
 /// `--force` / `--restart`: stop a running daemon (if any), then take the lock
 /// and serve. The terminate happens BEFORE re-acquiring so the new server does
 /// not race the old one for the port.
-async fn take_over(lock_path: &Path, record_path: &Path, addr: SocketAddr) -> Result<()> {
+async fn take_over(
+    lock_path: &Path,
+    record_path: &Path,
+    addr: SocketAddr,
+    tunnel: Option<chan_server::DevserverTunnel>,
+) -> Result<()> {
     if let Some(record) = read_daemon_record(record_path) {
         if is_record_live(&record) {
             eprintln!(
@@ -161,7 +176,7 @@ async fn take_over(lock_path: &Path, record_path: &Path, addr: SocketAddr) -> Re
     match DaemonLock::acquire(lock_path, record_path, &addr.to_string(), true).map_err(|e| {
         anyhow::anyhow!("re-acquiring the devserver daemon lock after takeover: {e}")
     })? {
-        DaemonAcquire::Daemon(guard) => serve_as_daemon(guard, addr).await,
+        DaemonAcquire::Daemon(guard) => serve_as_daemon(guard, addr, tunnel).await,
         DaemonAcquire::Running(r) => anyhow::bail!(
             "chan devserver: could not take over the running daemon (pid {}); it is still \
              holding the lock.",
