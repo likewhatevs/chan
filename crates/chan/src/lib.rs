@@ -69,10 +69,10 @@ use serde::Serialize;
 
 mod update;
 
-/// Windows `--service` backend: a detached background devserver tracked by a
-/// PID/state file (the systemd/launchd analog). Compiled only on Windows.
-#[cfg(windows)]
-mod devserver_windows;
+/// The `--service=chan` self-managed daemon: a cross-OS foreground devserver
+/// guarded by a single-instance pidfile + flock (the systemd/launchd analog
+/// where there is no OS supervisor, and the portable choice everywhere).
+mod devserver_daemon;
 
 /// Default listen port shared by `chan open` (standalone serve) and
 /// `chan devserver`. Single-sourced so the two cannot drift: `cmd_serve` relies
@@ -337,26 +337,35 @@ enum Command {
         /// Port to bind.
         #[arg(long, default_value_t = DEFAULT_PORT)]
         port: u16,
-        /// Run as a managed background service that survives the launching
-        /// shell, then follow its output. The backend is per-OS: a systemd
+        /// Run as a managed service instead of the foreground. `--service` with
+        /// no value (or `=none`) picks the best backend for the OS: a systemd
         /// user service (`chan-devserver.service`) on Linux, a launchd
-        /// LaunchAgent (`app.chan.devserver`) on macOS, and a detached
-        /// background process tracked by a PID file on Windows. Re-attaches if
-        /// the service is already running. Without it, the devserver runs in
-        /// the foreground (Ctrl-C to stop). Note: the Windows backend is
-        /// per-login — it does not survive logout or auto-restart on crash.
-        #[arg(long)]
-        service: bool,
-        /// Stop the supervised devserver and exit. Requires --service; a
-        /// foreground devserver is stopped with Ctrl-C. Idempotent: a no-op
-        /// when the service is not running.
+        /// LaunchAgent (`app.chan.devserver`) on macOS, and the self-managed
+        /// `chan` daemon on Windows + other Unix. `=chan` forces the cross-OS
+        /// self-managed FOREGROUND daemon (pidfile + flock); `=systemd` /
+        /// `=launchd` force that backend. systemd/launchd survive logout; the
+        /// `chan` daemon is foreground and shares the launching session's life.
+        /// Omit `--service` to run in the foreground (Ctrl-C to stop).
+        #[arg(long, value_enum, num_args = 0..=1, default_missing_value = "none")]
+        service: Option<ServiceKind>,
+        /// Stop the supervised service and exit. With no `--service`, targets the
+        /// per-OS best pick. Idempotent: a no-op when it is not running. A
+        /// foreground devserver is stopped with Ctrl-C.
         #[arg(long, conflicts_with = "restart")]
         stop: bool,
-        /// Restart the supervised devserver (or START it if it is not running),
-        /// then follow it. Requires --service. Rewrites the unit / agent / PID
-        /// state first, so it picks up the current binary and --bind/--port.
+        /// Restart the supervised service (or START it if it is not running),
+        /// then stay attached. Rewrites the unit / agent / pidfile first, so it
+        /// picks up the current binary and --bind/--port.
         #[arg(long)]
         restart: bool,
+        /// Report whether the supervised service is running, then exit. With no
+        /// `--service`, reports the per-OS best pick.
+        #[arg(long)]
+        status: bool,
+        /// Replace a running service whose bind address differs, or take over a
+        /// wedged one, instead of erroring. Applies to `--service` / `--restart`.
+        #[arg(long)]
+        force: bool,
         /// Tunnel endpoint URL. With --tunnel-token, the devserver also dials
         /// this gateway and publishes its tenant content at
         /// `{user}.devserver.chan.app/{workspace}/*`, alongside the local
@@ -805,6 +814,41 @@ pub enum Personality {
     Desktop,
 }
 
+/// Which supervisor backs `chan devserver --service`. The CLI value `none`
+/// (`Auto`) picks the best backend for the OS; the others force a specific one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum ServiceKind {
+    /// Best pick for the OS: systemd (Linux), launchd (macOS), the self-managed
+    /// `chan` daemon (Windows + other Unix).
+    #[value(name = "none")]
+    Auto,
+    /// The cross-OS self-managed foreground daemon (pidfile + flock).
+    Chan,
+    /// A systemd user service (Linux only).
+    Systemd,
+    /// A launchd LaunchAgent (macOS only).
+    Launchd,
+}
+
+impl ServiceKind {
+    /// Resolve `Auto` to the concrete per-OS backend; the others pass through.
+    /// After this, the result is never `Auto`.
+    fn resolve(self) -> ServiceKind {
+        match self {
+            ServiceKind::Auto => {
+                if cfg!(target_os = "linux") {
+                    ServiceKind::Systemd
+                } else if cfg!(target_os = "macos") {
+                    ServiceKind::Launchd
+                } else {
+                    ServiceKind::Chan
+                }
+            }
+            other => other,
+        }
+    }
+}
+
 /// Parse `args` and run the selected subcommand to completion.
 ///
 /// This is the single entry point for the whole `chan` CLI. The caller owns
@@ -917,9 +961,25 @@ where
             service,
             stop,
             restart,
+            status,
+            force,
             tunnel_url,
             tunnel_token,
-        } => cmd_devserver(bind, port, service, stop, restart, tunnel_url, tunnel_token).await,
+        } => {
+            cmd_devserver(
+                bind,
+                port,
+                service,
+                stop,
+                restart,
+                status,
+                force,
+                tunnel_url,
+                tunnel_token,
+                verbose,
+            )
+            .await
+        }
         Command::Config { action } => cmd_config(action),
         Command::Upgrade {
             yes,
@@ -1827,17 +1887,30 @@ fn devserver_port_collision_hint(port: u16, err: &chan_server::Error) -> Option<
 async fn cmd_devserver(
     bind: IpAddr,
     port: u16,
-    service: bool,
+    service: Option<ServiceKind>,
     stop: bool,
     restart: bool,
+    status: bool,
+    force: bool,
     tunnel_url: String,
     tunnel_token: Option<String>,
+    verbose: bool,
 ) -> Result<()> {
     let addr = SocketAddr::new(bind, port);
-    // --stop / --restart act on a supervised (--service) devserver and
-    // short-circuit the normal start path (no tunnel, no foreground bind).
+    // --status / --stop / --restart act on a supervised service and short-circuit
+    // the normal start path. With no explicit --service they target the per-OS
+    // best pick (`Auto`).
+    if status {
+        return run_devserver_status(service.unwrap_or(ServiceKind::Auto).resolve(), verbose).await;
+    }
     if stop || restart {
-        return manage_supervised_devserver(addr, service, stop).await;
+        return manage_supervised_devserver(
+            service.unwrap_or(ServiceKind::Auto).resolve(),
+            addr,
+            stop,
+            verbose,
+        )
+        .await;
     }
     if !addr.ip().is_loopback() {
         eprintln!(
@@ -1865,7 +1938,7 @@ async fn cmd_devserver(
                      Prefer CHAN_TUNNEL_TOKEN env var instead."
                 );
             }
-            if service {
+            if service.is_some() {
                 anyhow::bail!(
                     "chan devserver: tunnel mode (--tunnel-token) is not supported under \
                      --service; the supervised backend would persist the token in the unit \
@@ -1877,10 +1950,11 @@ async fn cmd_devserver(
         }
         None => None,
     };
-    // `--service` supervises the foreground devserver under the platform service
-    // manager so it survives the launching terminal.
-    if service {
-        return run_devserver_as_service(addr).await;
+    // `--service` supervises the devserver under the resolved backend so it
+    // outlives the launching terminal (systemd/launchd) or runs as a foreground
+    // self-managed daemon (chan).
+    if let Some(kind) = service {
+        return run_devserver_as_service(kind.resolve(), addr, force, verbose).await;
     }
     // Resolve the local-listener decision for the foreground path only. Tunnel
     // mode defaults to NOT binding the loopback port (the gateway is the
@@ -1892,80 +1966,116 @@ async fn cmd_devserver(
     run_devserver_foreground(addr, tunnel, listen).await
 }
 
-/// Dispatch `--service` to the platform supervisor: systemd (Linux), launchd
-/// (macOS), or the detached-process + PID-file backend (Windows). On any other
-/// target there is no supervisor, so fall back to a foreground bind with a note
-/// rather than silently doing nothing.
-async fn run_devserver_as_service(addr: SocketAddr) -> Result<()> {
-    // The systemd/launchd supervisors compile on every target, so reference them
-    // unconditionally via RUNTIME `cfg!` — that keeps their whole call graph
-    // non-dead-code even on Windows (the false branch compiles, it just never
-    // runs). Only the Windows-only backend module and the no-backend fallback
-    // are compile-gated.
-    if cfg!(target_os = "linux") {
-        return run_devserver_under_systemd(addr).await;
-    }
-    if cfg!(target_os = "macos") {
-        return run_devserver_under_launchd(addr).await;
-    }
-    #[cfg(target_os = "windows")]
-    {
-        return devserver_windows::run_devserver_under_windows(addr).await;
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        eprintln!(
-            "chan devserver: NOTE: --service has no supervisor backend on this OS; \
-             running in the foreground."
-        );
-        let listen = resolve_devserver_listen(false, devserver_listen_override())?;
-        run_devserver_foreground(addr, None, listen).await
+/// Dispatch a resolved `--service` backend: the self-managed `chan` daemon
+/// (cross-OS, foreground), a systemd user service (Linux), or a launchd
+/// LaunchAgent (macOS). The systemd/launchd backends compile on every target and
+/// are gated at runtime via `cfg!`, so a wrong-OS request errors clearly rather
+/// than silently doing nothing.
+async fn run_devserver_as_service(
+    kind: ServiceKind,
+    addr: SocketAddr,
+    force: bool,
+    verbose: bool,
+) -> Result<()> {
+    match kind {
+        ServiceKind::Chan => devserver_daemon::run_devserver_as_chan(addr, force, verbose).await,
+        ServiceKind::Systemd => {
+            if cfg!(target_os = "linux") {
+                run_devserver_under_systemd(addr).await
+            } else {
+                anyhow::bail!(
+                    "chan devserver: the systemd backend is Linux-only; use --service=chan."
+                )
+            }
+        }
+        ServiceKind::Launchd => {
+            if cfg!(target_os = "macos") {
+                run_devserver_under_launchd(addr).await
+            } else {
+                anyhow::bail!(
+                    "chan devserver: the launchd backend is macOS-only; use --service=chan."
+                )
+            }
+        }
+        ServiceKind::Auto => unreachable!("Auto is resolved before dispatch"),
     }
 }
 
-/// Dispatch `chan devserver --stop` / `--restart` to the platform supervisor:
-/// systemd (Linux), launchd (macOS), or the detached-process backend (Windows).
-/// Acts on a `--service` instance and exits or replaces it; a foreground
-/// devserver is managed with Ctrl-C. Without `--service` this errors with a
-/// clear message rather than silently falling through to a foreground start.
-/// `--restart` starts the service when it is not already running.
-async fn manage_supervised_devserver(addr: SocketAddr, service: bool, stop: bool) -> Result<()> {
-    let op = if stop { "--stop" } else { "--restart" };
-    if !service {
-        anyhow::bail!(
-            "chan devserver: {op} requires --service; a foreground devserver is \
-             stopped with Ctrl-C."
-        );
+/// Report whether the resolved backend's service is running, then exit. The
+/// `chan` daemon reads its pidfile; systemd/launchd bridge `is-active` /
+/// `launchctl print`.
+async fn run_devserver_status(kind: ServiceKind, verbose: bool) -> Result<()> {
+    match kind {
+        ServiceKind::Chan => devserver_daemon::status_devserver_chan(verbose),
+        ServiceKind::Systemd => {
+            if cfg!(target_os = "linux") {
+                let running = unit_is_active().await;
+                println!(
+                    "chan devserver (systemd): {} -- {DEVSERVER_SYSTEMD_UNIT}",
+                    if running { "running" } else { "not running" }
+                );
+                Ok(())
+            } else {
+                anyhow::bail!("chan devserver: the systemd backend is Linux-only.")
+            }
+        }
+        ServiceKind::Launchd => {
+            if cfg!(target_os = "macos") {
+                let uid = current_uid().await?;
+                let running = launchd_is_active(uid).await;
+                println!(
+                    "chan devserver (launchd): {} -- {DEVSERVER_LAUNCHD_LABEL}",
+                    if running { "running" } else { "not running" }
+                );
+                Ok(())
+            } else {
+                anyhow::bail!("chan devserver: the launchd backend is macOS-only.")
+            }
+        }
+        ServiceKind::Auto => unreachable!("Auto is resolved before dispatch"),
     }
-    // Reference the systemd/launchd supervisors unconditionally via runtime
-    // `cfg!` (see `run_devserver_as_service`) so their call graph stays
-    // non-dead-code on Windows; the Windows backend + no-backend bail are
-    // compile-gated.
-    if cfg!(target_os = "linux") {
-        return if stop {
-            stop_devserver_under_systemd().await
-        } else {
-            restart_devserver_under_systemd(addr).await
-        };
-    }
-    if cfg!(target_os = "macos") {
-        return if stop {
-            stop_devserver_under_launchd().await
-        } else {
-            restart_devserver_under_launchd(addr).await
-        };
-    }
-    #[cfg(target_os = "windows")]
-    {
-        return if stop {
-            devserver_windows::stop_devserver_under_windows().await
-        } else {
-            devserver_windows::restart_devserver_under_windows(addr).await
-        };
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        anyhow::bail!("chan devserver: {op} with --service has no supervisor backend on this OS.")
+}
+
+/// Dispatch `--stop` / `--restart` for a resolved backend: the self-managed
+/// `chan` daemon, a systemd user service (Linux), or a launchd LaunchAgent
+/// (macOS). `--restart` starts the service when it is not already running.
+async fn manage_supervised_devserver(
+    kind: ServiceKind,
+    addr: SocketAddr,
+    stop: bool,
+    verbose: bool,
+) -> Result<()> {
+    match kind {
+        ServiceKind::Chan => {
+            if stop {
+                devserver_daemon::stop_devserver_chan(verbose).await
+            } else {
+                devserver_daemon::restart_devserver_chan(addr, verbose).await
+            }
+        }
+        ServiceKind::Systemd => {
+            if cfg!(target_os = "linux") {
+                if stop {
+                    stop_devserver_under_systemd().await
+                } else {
+                    restart_devserver_under_systemd(addr).await
+                }
+            } else {
+                anyhow::bail!("chan devserver: the systemd backend is Linux-only.")
+            }
+        }
+        ServiceKind::Launchd => {
+            if cfg!(target_os = "macos") {
+                if stop {
+                    stop_devserver_under_launchd().await
+                } else {
+                    restart_devserver_under_launchd(addr).await
+                }
+            } else {
+                anyhow::bail!("chan devserver: the launchd backend is macOS-only.")
+            }
+        }
+        ServiceKind::Auto => unreachable!("Auto is resolved before dispatch"),
     }
 }
 
@@ -4647,7 +4757,7 @@ mod tests {
                 restart,
                 ..
             } => {
-                assert!(service);
+                assert_eq!(service, Some(ServiceKind::Auto));
                 assert!(stop);
                 assert!(!restart);
             }
@@ -4661,7 +4771,7 @@ mod tests {
                 restart,
                 ..
             } => {
-                assert!(service);
+                assert_eq!(service, Some(ServiceKind::Auto));
                 assert!(restart);
                 assert!(!stop);
             }
@@ -4671,6 +4781,45 @@ mod tests {
         assert!(
             Cli::try_parse_from(["chan", "devserver", "--service", "--stop", "--restart"]).is_err()
         );
+    }
+
+    /// `--service` parses to an enum: absent => None (foreground), bare or
+    /// `=none` => Auto (per-OS pick), and each explicit backend by name. `--status`
+    /// / `--force` are plain flags.
+    #[test]
+    fn devserver_service_kind_parse() {
+        let kind = |args: &[&str]| match Cli::parse_from(args).command {
+            Command::Devserver { service, .. } => service,
+            other => panic!("expected Command::Devserver, got {other:?}"),
+        };
+        assert_eq!(kind(&["chan", "devserver"]), None);
+        assert_eq!(
+            kind(&["chan", "devserver", "--service"]),
+            Some(ServiceKind::Auto)
+        );
+        assert_eq!(
+            kind(&["chan", "devserver", "--service", "none"]),
+            Some(ServiceKind::Auto)
+        );
+        assert_eq!(
+            kind(&["chan", "devserver", "--service", "chan"]),
+            Some(ServiceKind::Chan)
+        );
+        assert_eq!(
+            kind(&["chan", "devserver", "--service", "systemd"]),
+            Some(ServiceKind::Systemd)
+        );
+        assert_eq!(
+            kind(&["chan", "devserver", "--service", "launchd"]),
+            Some(ServiceKind::Launchd)
+        );
+        match Cli::parse_from(["chan", "devserver", "--status", "--force"]).command {
+            Command::Devserver { status, force, .. } => {
+                assert!(status);
+                assert!(force);
+            }
+            other => panic!("expected Command::Devserver, got {other:?}"),
+        }
     }
 
     /// An explicit `--tunnel-url` still overrides the baked default.

@@ -246,6 +246,48 @@ pub fn process_creation_time(_pid: u32) -> Option<u64> {
     None
 }
 
+/// Best-effort stop of `pid`: `SIGTERM` on Unix (graceful -- the devserver
+/// drains its HTTP and releases its writer locks on the signal), and
+/// `TerminateProcess` on Windows (a detached daemon has no console for a
+/// `CTRL_C_EVENT`, and the writer locks self-heal a hard stop). Returns `true`
+/// when the signal was delivered or the process was already gone.
+#[cfg(unix)]
+pub fn signal_terminate(pid: u32) -> bool {
+    use rustix::io::Errno;
+    use rustix::process::{Pid, Signal};
+    let Some(pid) = i32::try_from(pid).ok().and_then(Pid::from_raw) else {
+        return false;
+    };
+    matches!(
+        rustix::process::kill_process(pid, Signal::TERM),
+        Ok(()) | Err(Errno::SRCH)
+    )
+}
+
+/// Windows: `TerminateProcess` via the minimal terminate right. A gone or
+/// inaccessible process reads as already-stopped.
+#[cfg(windows)]
+pub fn signal_terminate(pid: u32) -> bool {
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::Threading::{OpenProcess, TerminateProcess, PROCESS_TERMINATE};
+    // SAFETY: plain Win32 FFI; open with terminate right, close the handle.
+    unsafe {
+        let handle = OpenProcess(PROCESS_TERMINATE, 0, pid);
+        if handle.is_null() {
+            return true;
+        }
+        let ok = TerminateProcess(handle, 0);
+        CloseHandle(handle);
+        ok != 0
+    }
+}
+
+/// No process-signalling primitive on this target.
+#[cfg(not(any(unix, windows)))]
+pub fn signal_terminate(_pid: u32) -> bool {
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
