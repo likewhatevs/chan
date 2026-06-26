@@ -186,7 +186,7 @@ pub fn is_free(lock_dir: &Path) -> bool {
     }
 }
 
-fn open_lock_file(path: &Path) -> Result<File> {
+pub(crate) fn open_lock_file(path: &Path) -> Result<File> {
     let mut opts = OpenOptions::new();
     opts.create(true).read(true).write(true).truncate(false);
     #[cfg(windows)]
@@ -325,7 +325,7 @@ pub fn process_alive(pid: u32) -> ProcessLiveness {
 /// `ERROR_LOCK_VIOLATION` / `ERROR_SHARING_VIOLATION`, which std does
 /// not decode to `WouldBlock` — the historical "Windows lock-contract
 /// gap". Match both so contention maps to `WorkspaceLocked` uniformly.
-fn is_contended(e: &std::io::Error) -> bool {
+pub(crate) fn is_contended(e: &std::io::Error) -> bool {
     if e.kind() == std::io::ErrorKind::WouldBlock {
         return true;
     }

@@ -24,6 +24,7 @@
 mod blob;
 pub mod bootstrap;
 pub mod contacts;
+pub mod daemon_lock;
 pub mod dashboard;
 pub mod drafts;
 pub mod error;
