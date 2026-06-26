@@ -495,3 +495,139 @@ export function _pruneWatchedViews(): void {
 // Expose unregister for symmetry, though current call sites rely on
 // the prune-on-broadcast path.
 export const _internal = { unregisterView };
+
+// ---- inline-code local-file links ---------------------------------------
+
+/// The canonical internal target an inline `code` span resolves to, or null
+/// when it is not a plausible local-file reference. A path carries no
+/// whitespace, so a code snippet (`npm install`, `const x = 5`) is skipped
+/// cheaply before any resolve. External / anchor-only strings (parseInternalLink
+/// returns null) and the current file itself (by path or stem) are excluded
+/// too. The async file-existence check is getKind, applied on top of this.
+export function codeSpanInternalTarget(
+  text: string,
+  currentPath: string | null,
+): string | null {
+  if (text.length === 0 || /\s/.test(text)) return null;
+  const parsed = parseInternalLink(text, text, currentPath);
+  if (!parsed) return null;
+  if (currentPath) {
+    const stem = currentPath.replace(/\.(md|txt)$/i, "");
+    if (parsed.target === currentPath || parsed.target === stem) return null;
+  }
+  return parsed.target;
+}
+
+function codeLinkMark(target: string): Decoration {
+  return Decoration.mark({
+    class: "cm-md-code-link",
+    attributes: { "data-code-link-target": target },
+  });
+}
+
+function scanInlineCodeLinks(
+  view: EditorView,
+  getCurrentPath?: () => string | null,
+): DecorationSet {
+  const { state } = view;
+  const { from, to } = view.viewport;
+  const currentPath = getCurrentPath?.() ?? null;
+  const ranges: Array<{ from: number; to: number; deco: Decoration }> = [];
+  syntaxTree(state).iterate({
+    from,
+    to,
+    enter(node) {
+      if (node.name !== "InlineCode") return;
+      // Content sits between the open and close backtick marker children.
+      const cursor = node.node.cursor();
+      if (!cursor.firstChild()) return;
+      const contentFrom = cursor.to;
+      let contentTo = contentFrom;
+      do {
+        contentTo = cursor.from;
+      } while (cursor.nextSibling());
+      if (contentFrom >= contentTo) return;
+      const text = state.doc.sliceString(contentFrom, contentTo);
+      const target = codeSpanInternalTarget(text, currentPath);
+      if (!target) return;
+      // Only a resolved real file earns the link affordance; an in-flight or
+      // 404 resolve leaves the span plain and re-runs on kindResolvedEffect.
+      if (getKind(target) !== "file") return;
+      ranges.push({
+        from: contentFrom,
+        to: contentTo,
+        deco: codeLinkMark(target),
+      });
+    },
+  });
+  return Decoration.set(
+    ranges.map((r) => r.deco.range(r.from, r.to)),
+    true,
+  );
+}
+
+export interface InlineCodeLinkOptions {
+  onWikiClick: (args: WikiLinkClickArgs) => void;
+  getCurrentPath?: () => string | null;
+}
+
+/// Decorate inline `code` spans whose text resolves to a real workspace file as
+/// clickable internal links. A NON-atomic mark (not the atomic wiki-pill
+/// widget) so the code text stays editable. Mirrors wikiLinkDecorations and
+/// shares its kind cache + resolve broadcast, so a kind resolving anywhere
+/// re-runs this walker too.
+export function inlineCodeLinkDecorations(
+  opts: InlineCodeLinkOptions,
+): Extension {
+  return ViewPlugin.fromClass(
+    class {
+      decorations: DecorationSet;
+      constructor(view: EditorView) {
+        registerView(view);
+        this.decorations = scanInlineCodeLinks(view, opts.getCurrentPath);
+      }
+      update(u: ViewUpdate): void {
+        const kindResolved = u.transactions.some((tr) =>
+          tr.effects.some((e) => e.is(kindResolvedEffect)),
+        );
+        if (
+          u.docChanged ||
+          u.viewportChanged ||
+          u.selectionSet ||
+          kindResolved
+        ) {
+          this.decorations = scanInlineCodeLinks(u.view, opts.getCurrentPath);
+        }
+      }
+    },
+    { decorations: (v) => v.decorations },
+  );
+}
+
+/// Open an inline-code link on Cmd/Ctrl-click (a plain click keeps editing the
+/// code text), routing through the same onWikiClick funnel as the wiki pill.
+/// The target rides in the mark's data attribute so no re-resolve is needed.
+export function inlineCodeLinkClickHandler(
+  opts: InlineCodeLinkOptions,
+): Extension {
+  return EditorView.domEventHandlers({
+    mousedown(event) {
+      if (!(event.metaKey || event.ctrlKey)) return false;
+      const el = (event.target as HTMLElement | null)?.closest(
+        ".cm-md-code-link",
+      ) as HTMLElement | null;
+      const target = el?.dataset.codeLinkTarget;
+      if (!target) return false;
+      event.preventDefault();
+      event.stopPropagation();
+      opts.onWikiClick({
+        target,
+        label: target,
+        anchor: "",
+        wasAbs: target.startsWith("/"),
+        openInNewPane: false,
+      });
+      return true;
+    },
+  });
+}

@@ -24,6 +24,8 @@
   } from "./widgets/mention";
   import { dateDecorations } from "./widgets/date";
   import {
+    inlineCodeLinkClickHandler,
+    inlineCodeLinkDecorations,
     wikiLinkDecorations,
     type WikiLinkClickArgs,
   } from "./widgets/wikilink";
@@ -449,8 +451,16 @@
         mentionDecorations({ onMentionClick }),
         dateDecorations(),
         externalLinkClickHandler(),
+        inlineCodeLinkClickHandler({
+          onWikiClick,
+          getCurrentPath: () => currentPath,
+        }),
         rightClickNoSelect(),
         wikiLinkDecorations({
+          onWikiClick,
+          getCurrentPath: () => currentPath,
+        }),
+        inlineCodeLinkDecorations({
           onWikiClick,
           getCurrentPath: () => currentPath,
         }),
@@ -901,6 +911,14 @@
     color: var(--chan-editor-inline-code-color, inherit);
     padding: 0.05em 0.25em;
     border-radius: 3px;
+  }
+  /* An inline code span whose text resolves to a real workspace file:
+     coloured like a link with a dotted underline to signal it is a
+     Cmd/Ctrl-clickable reference, while the code text stays editable. */
+  :global(.md-wysiwyg-cm6 .cm-md-code-link) {
+    color: var(--chan-editor-link-color, var(--link, #0a64c8));
+    text-decoration: underline dotted;
+    text-underline-offset: 2px;
   }
   :global(.md-wysiwyg-cm6 .cm-md-link) {
     color: var(--chan-editor-link-color, var(--link, #0a64c8));
