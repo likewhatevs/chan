@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 
+import { forceParsing } from "@codemirror/language";
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { afterEach, describe, expect, test } from "vitest";
@@ -74,6 +75,10 @@ describe("collectDocImageSrcs (editor set)", () => {
       parent,
       state: EditorState.create({ doc, extensions: [chanMarkdown()] }),
     });
+    // collectDocImageSrcs walks the whole syntaxTree, which is parsed lazily
+    // within a time budget; force a full parse so the assertion does not flake
+    // under CPU load (an incomplete tree would yield only the first image).
+    forceParsing(view, view.state.doc.length, 1e9);
     expect(collectDocImageSrcs(view)).toEqual([
       "one.png",
       "two.png",
