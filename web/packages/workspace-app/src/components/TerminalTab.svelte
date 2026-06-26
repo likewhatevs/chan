@@ -771,6 +771,8 @@
         tabName: terminalTabName(tab),
         tabGroup: terminalTabGroup(tab),
         windowId: sessionWindowId(),
+        paneId,
+        tabId: tab.id,
         sessionId: tab.terminalSessionId,
         agentEchoSince: tab.lastAgentEchoSeq,
         cwd: reattaching ? undefined : tab.cwd,

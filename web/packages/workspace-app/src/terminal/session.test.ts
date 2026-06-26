@@ -41,6 +41,26 @@ describe("terminalWsPath", () => {
     );
   });
 
+  test("adds pane and tab ids when provided", () => {
+    // The SPA layout coordinates thread window -> pane -> tab so the server can
+    // trace a session back to its view in `cs terminal list`.
+    expect(
+      terminalWsPath({
+        cols: 80,
+        rows: 24,
+        tabName: "shell",
+        paneId: "pane-7",
+        tabId: "tab-3",
+      }),
+    ).toBe(
+      "/api/terminal/ws?cols=80&rows=24&tab_name=shell&pane_id=pane-7&tab_id=tab-3",
+    );
+    // Blank/absent ids never hit the wire.
+    expect(
+      terminalWsPath({ cols: 80, rows: 24, tabName: "shell", paneId: "  " }),
+    ).not.toContain("pane_id");
+  });
+
   test("adds agent event echo replay cursor when reattaching", () => {
     expect(
       terminalWsPath({

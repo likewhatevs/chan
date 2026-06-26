@@ -41,6 +41,10 @@ pub struct TerminalQuery {
     tab_name: Option<String>,
     tab_group: Option<String>,
     window_id: Option<String>,
+    /// The SPA layout coordinates of the attaching view, threaded onto the live
+    /// session so `cs terminal list` can trace it to its window -> pane -> tab.
+    pane_id: Option<String>,
+    tab_id: Option<String>,
     mcp_env: Option<TerminalMcpEnv>,
     cwd: Option<String>,
 }
@@ -256,6 +260,8 @@ pub async fn api_terminal_ws(
     let tab_name = query.tab_name.as_deref().and_then(normalize_tab_name);
     let tab_group = query.tab_group.as_deref().and_then(normalize_tab_group);
     let window_id = query.window_id.as_deref().and_then(normalize_window_id);
+    let pane_id = query.pane_id.as_deref().and_then(normalize_layout_id);
+    let tab_id = query.tab_id.as_deref().and_then(normalize_layout_id);
     // MCP env is off by default. An explicit `?mcp_env=on|off` query
     // wins (the SPA can force a per-terminal choice); when absent we fall
     // back to the non-team server-config default, which itself defaults
@@ -301,6 +307,8 @@ pub async fn api_terminal_ws(
         tab_name,
         tab_group,
         window_id,
+        pane_id,
+        tab_id,
         mcp_env,
         cwd,
     };
@@ -502,6 +510,8 @@ struct TerminalWsOptions {
     tab_name: Option<String>,
     tab_group: Option<String>,
     window_id: Option<String>,
+    pane_id: Option<String>,
+    tab_id: Option<String>,
     mcp_env: bool,
     cwd: Option<PathBuf>,
 }
@@ -555,6 +565,8 @@ async fn terminal_ws(mut socket: WebSocket, state: Arc<AppState>, opts: Terminal
         opts.session_id.as_deref(),
         opts.since,
         create_opts,
+        opts.pane_id,
+        opts.tab_id,
     ) {
         Ok(session) => session,
         Err(CreateError::Capped) => {
@@ -954,6 +966,17 @@ fn normalize_tab_name(name: &str) -> Option<String> {
 }
 
 fn normalize_window_id(id: &str) -> Option<String> {
+    let trimmed = id.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    Some(trimmed.chars().take(256).collect())
+}
+
+/// Normalize an opaque SPA layout id (pane or tab) the same way as a window id:
+/// trim, drop blank, cap length. These are best-effort placement labels carried
+/// for `cs terminal list`, not validated against any registry.
+fn normalize_layout_id(id: &str) -> Option<String> {
     let trimmed = id.trim();
     if trimmed.is_empty() {
         return None;

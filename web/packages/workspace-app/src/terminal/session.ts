@@ -4,6 +4,10 @@ export type TerminalWsPathOpts = {
   tabName: string;
   tabGroup?: string | null;
   windowId?: string | null;
+  /// SPA layout coordinates of the view this terminal is mounted in, sent on
+  /// every (re)attach so `cs terminal list` can trace window -> pane -> tab.
+  paneId?: string | null;
+  tabId?: string | null;
   sessionId?: string | null;
   agentEchoSince?: number | null;
   cwd?: string | null;
@@ -22,6 +26,14 @@ export function terminalWsPath(opts: TerminalWsPathOpts): string {
   if (tabGroup && tabGroup !== "default") params.set("tab_group", tabGroup);
   const windowId = opts.windowId?.trim();
   if (windowId) params.set("window_id", windowId);
+  // Pane/tab are the SPA's layout coordinates for this view; the server records
+  // them on the live session for `cs terminal list` window->pane->tab tracing.
+  // Sent for both a fresh spawn and a reattach (a terminal always lives in a
+  // pane+tab); best-effort, so they ride the URL only when known.
+  const paneId = opts.paneId?.trim();
+  if (paneId) params.set("pane_id", paneId);
+  const tabId = opts.tabId?.trim();
+  if (tabId) params.set("tab_id", tabId);
   const sessionId = opts.sessionId?.trim();
   if (sessionId) {
     params.set("session", sessionId);

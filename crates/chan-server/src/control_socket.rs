@@ -2153,6 +2153,8 @@ fn term_list(registry: &TerminalRegistry, windows: &[WindowRecord]) -> Result<St
             "window": window,
             "window_kind": window_kind,
             "window_status": window_status,
+            "pane": summary.pane_id,
+            "tab": summary.tab_id,
             "cwd": summary.cwd.map(|p| p.to_string_lossy().into_owned()),
         });
         groups.entry(summary.tab_group).or_default().push(entry);

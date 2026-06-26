@@ -263,6 +263,11 @@ pub struct TerminalSessionSummary {
     /// created outside a browser window. The control socket resolves it to the
     /// owning window's kind + connected state for `cs term list`.
     pub window_id: Option<String>,
+    /// The SPA pane + tab this session was last attached under, threading
+    /// window->pane->tab for `cs term list`. Best-effort: `None` until a browser
+    /// attaches, and re-bound on split/move.
+    pub pane_id: Option<String>,
+    pub tab_id: Option<String>,
     pub cwd: Option<PathBuf>,
 }
 
@@ -808,7 +813,7 @@ impl Registry {
         since: Option<u64>,
         opts: CreateOptions,
     ) -> Result<AttachHandle, CreateError> {
-        self.get_or_create_for_ws(id, since, opts)
+        self.get_or_create_for_ws(id, since, opts, None, None)
     }
 
     pub fn get_or_create_for_ws(
@@ -816,6 +821,8 @@ impl Registry {
         id: Option<&str>,
         since: Option<u64>,
         opts: CreateOptions,
+        pane_id: Option<String>,
+        tab_id: Option<String>,
     ) -> Result<AttachHandle, CreateError> {
         if let Some(id) = id {
             if let Some(handle) = self.attach_for_ws(id, since) {
@@ -824,10 +831,13 @@ impl Registry {
                 // `close_for_window(source)` reaps only sessions still bound to
                 // the source — not the one that just moved away.
                 self.rebind_session_window(id, opts.window_id.clone());
+                self.bind_session_pane_tab(id, pane_id, tab_id);
                 return Ok(handle);
             }
         }
-        self.create(opts)
+        let handle = self.create(opts)?;
+        self.bind_session_pane_tab(handle.id(), pane_id, tab_id);
+        Ok(handle)
     }
 
     /// Re-home a live session to `window_id` (the attaching window). No-op for a
@@ -844,6 +854,26 @@ impl Registry {
             .get(id)
         {
             session.set_window_id(window_id);
+        }
+    }
+
+    /// Record the browser-reported pane + tab placement on a live session, for
+    /// `cs term list` window->pane->tab tracing. Sent on every (re)attach; a
+    /// `None` on either axis leaves the prior value (a server-spawned session
+    /// that never attached has neither). Best-effort -- the ids re-bind on
+    /// split/move, so the list shows the last attach's coordinates.
+    fn bind_session_pane_tab(&self, id: &str, pane_id: Option<String>, tab_id: Option<String>) {
+        if pane_id.is_none() && tab_id.is_none() {
+            return;
+        }
+        if let Some(session) = self
+            .sessions
+            .lock()
+            .expect("terminal registry poisoned")
+            .get(id)
+        {
+            session.set_pane_id(pane_id);
+            session.set_tab_id(tab_id);
         }
     }
 
@@ -982,6 +1012,8 @@ impl Registry {
                     .clone()
                     .unwrap_or_else(|| DEFAULT_TERMINAL_GROUP.to_string()),
                 window_id: session.window_id(),
+                pane_id: session.pane_id(),
+                tab_id: session.tab_id(),
                 cwd: session.cwd(),
             })
             .collect()
@@ -1534,6 +1566,13 @@ struct Session {
     /// `close_for_window(source)` reaps only sessions STILL bound to the source
     /// Read via [`Session::window_id`].
     window_id: Mutex<Option<String>>,
+    /// The SPA layout coordinates -- pane id + tab id -- this session was last
+    /// attached under, reported by the browser on each (re)attach. Interior
+    /// mutable and best-effort: they re-bind on split/move and stay `None` for
+    /// a session that never attached from a browser (e.g. `cs terminal new`).
+    /// Read via [`Session::pane_id`] / [`Session::tab_id`] for `cs term list`.
+    pane_id: Mutex<Option<String>>,
+    tab_id: Mutex<Option<String>>,
     workspace_root: PathBuf,
     spawn_opts: CreateOptions,
     child_pid: Option<u32>,
@@ -1723,6 +1762,8 @@ impl Session {
             tab_name,
             tab_group,
             window_id: Mutex::new(window_id),
+            pane_id: Mutex::new(None),
+            tab_id: Mutex::new(None),
             workspace_root: config.workspace_root.clone(),
             spawn_opts: CreateOptions {
                 size: opts.size,
@@ -2173,6 +2214,39 @@ impl Session {
         *self.window_id.lock().expect("terminal window_id poisoned") = window_id;
     }
 
+    /// The SPA pane id this session was last attached under (`cs term list`).
+    fn pane_id(&self) -> Option<String> {
+        self.pane_id
+            .lock()
+            .expect("terminal pane_id poisoned")
+            .clone()
+    }
+
+    /// The SPA tab id this session was last attached under (`cs term list`).
+    fn tab_id(&self) -> Option<String> {
+        self.tab_id
+            .lock()
+            .expect("terminal tab_id poisoned")
+            .clone()
+    }
+
+    /// Rebind the pane id on reattach. Like [`Session::set_window_id`], a `None`
+    /// (the id was not reported) does NOT clear an existing binding.
+    fn set_pane_id(&self, pane_id: Option<String>) {
+        if pane_id.is_none() {
+            return;
+        }
+        *self.pane_id.lock().expect("terminal pane_id poisoned") = pane_id;
+    }
+
+    /// Rebind the tab id on reattach. A `None` does NOT clear the binding.
+    fn set_tab_id(&self, tab_id: Option<String>) {
+        if tab_id.is_none() {
+            return;
+        }
+        *self.tab_id.lock().expect("terminal tab_id poisoned") = tab_id;
+    }
+
     fn record_output(&self, bytes: &[u8]) {
         if bytes.is_empty() {
             return;
@@ -2396,6 +2470,8 @@ mod tests {
             tab_name: None,
             tab_group: None,
             window_id: Mutex::new(None),
+            pane_id: Mutex::new(None),
+            tab_id: Mutex::new(None),
             workspace_root: PathBuf::from("/"),
             spawn_opts: CreateOptions {
                 size: test_size(),
@@ -3288,6 +3364,44 @@ mod tests {
     }
 
     #[test]
+    fn session_summaries_carry_the_attached_pane_and_tab() {
+        // cs term list traces window -> pane -> tab; the pane/tab ids ride the
+        // WS attach query and are recorded best-effort on the live session.
+        let registry = Registry::new(test_config(4096, 4, 60));
+        let handle = registry
+            .get_or_create_for_ws(
+                None,
+                None,
+                opts_with_window("win-pt"),
+                Some("pane-7".to_string()),
+                Some("tab-3".to_string()),
+            )
+            .unwrap();
+        let id = handle.id().to_string();
+        let summaries = registry.session_summaries();
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(summaries[0].pane_id.as_deref(), Some("pane-7"));
+        assert_eq!(summaries[0].tab_id.as_deref(), Some("tab-3"));
+
+        // A reattach (split/move into another pane) re-binds the pane id; a
+        // `None` on either axis leaves the prior value untouched.
+        drop(handle);
+        let _re = registry
+            .get_or_create_for_ws(
+                Some(&id),
+                Some(0),
+                opts_with_window("win-pt"),
+                Some("pane-9".to_string()),
+                None,
+            )
+            .unwrap();
+        let summaries = registry.session_summaries();
+        assert_eq!(summaries[0].pane_id.as_deref(), Some("pane-9"));
+        assert_eq!(summaries[0].tab_id.as_deref(), Some("tab-3"));
+        registry.close_all(CloseReason::Shutdown);
+    }
+
+    #[test]
     fn close_matching_closes_by_tab_name_and_leaves_others() {
         let registry = Registry::new(test_config(1024, 4, 10));
         let _a = registry
@@ -3352,7 +3466,7 @@ mod tests {
 
         // ...dragged to window B: B reattaches by id with window_id=B.
         let reattached = registry
-            .get_or_create_for_ws(Some(&id), Some(0), opts_with_window("win-b"))
+            .get_or_create_for_ws(Some(&id), Some(0), opts_with_window("win-b"), None, None)
             .expect("reattach");
         assert_eq!(
             reattached.id(),
