@@ -1,6 +1,6 @@
 {
   "name": "@chan/web",
-  "version": "0.52.0",
+  "version": "0.53.0-rc1",
   "private": true,
   "type": "module",
   "workspaces": [
