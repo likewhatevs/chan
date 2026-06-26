@@ -19,6 +19,7 @@ pub mod error;
 pub mod host;
 pub mod prefix;
 pub mod serve_config;
+pub mod session_presence;
 pub mod tenant;
 pub mod terminal_sessions;
 pub mod time;
