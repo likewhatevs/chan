@@ -2166,6 +2166,74 @@ const DEVSERVER_SYSTEMD_UNIT: &str = "chan-devserver.service";
 /// journal until the unit stops. The controlling terminal sees the
 /// devserver's output and notices when it dies, and a unit that cannot
 /// start exits non-zero loudly so a watching desktop catches it.
+/// What a `--service` watchdog polls to decide the backing server is still up.
+/// One probe per backend, so [`run_health_watchdog`] is shared by the
+/// self-managed `chan` daemon, systemd, and launchd.
+enum DaemonLiveness {
+    /// The self-managed `chan` daemon: its pidfile still names this live pid.
+    Chan { record_path: PathBuf, pid: u32 },
+    /// A systemd user service: `systemctl --user is-active`.
+    Systemd,
+    /// A launchd LaunchAgent: `launchctl print` reports running.
+    Launchd { uid: u32 },
+}
+
+impl DaemonLiveness {
+    async fn alive(&self) -> bool {
+        match self {
+            DaemonLiveness::Chan { record_path, pid } => matches!(
+                chan_workspace::daemon_lock::read_daemon_record(record_path),
+                Some(r) if r.pid == *pid && chan_workspace::daemon_lock::is_record_live(&r)
+            ),
+            DaemonLiveness::Systemd => unit_is_active().await,
+            DaemonLiveness::Launchd { uid } => launchd_is_active(*uid).await,
+        }
+    }
+}
+
+/// Stay foreground watching a running `--service` backend until it exits or the
+/// user detaches with Ctrl-C -- the unified reattach contract (no journald /
+/// launchd log follow). Detaching leaves the backing server running and exits 0;
+/// the server dying (liveness lost, or ~6s of failed `/api/health`) exits
+/// non-zero, so the launcher survey can tell a clean detach from a crash.
+async fn run_health_watchdog(addr: &str, liveness: DaemonLiveness, subject: &str) -> Result<()> {
+    let health_url = format!("http://{addr}/api/health");
+    let client = reqwest::Client::new();
+    let mut health_fails = 0u32;
+    loop {
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {
+                eprintln!("chan devserver: detached; the {subject} keeps running.");
+                return Ok(());
+            }
+            _ = tokio::time::sleep(Duration::from_secs(2)) => {
+                if !liveness.alive().await {
+                    anyhow::bail!("chan devserver: the {subject} is no longer running.");
+                }
+                if health_ok(&client, &health_url).await {
+                    health_fails = 0;
+                } else {
+                    health_fails += 1;
+                    if health_fails >= 3 {
+                        anyhow::bail!(
+                            "chan devserver: the {subject} stopped answering /api/health."
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// One bounded `/api/health` probe; any non-2xx, transport error, or timeout is
+/// a miss.
+async fn health_ok(client: &reqwest::Client, url: &str) -> bool {
+    match tokio::time::timeout(Duration::from_secs(2), client.get(url).send()).await {
+        Ok(Ok(resp)) => resp.status().is_success(),
+        _ => false,
+    }
+}
+
 async fn run_devserver_under_systemd(addr: SocketAddr) -> Result<()> {
     ensure_systemd_linger().await?;
 
@@ -2186,7 +2254,12 @@ async fn run_devserver_under_systemd(addr: SocketAddr) -> Result<()> {
         );
     }
 
-    follow_unit_until_stopped().await
+    run_health_watchdog(
+        &addr.to_string(),
+        DaemonLiveness::Systemd,
+        &format!("systemd user service {DEVSERVER_SYSTEMD_UNIT}"),
+    )
+    .await
 }
 
 /// Write the unit for `addr` and bring it up: `daemon-reload`, then `enable
@@ -2194,7 +2267,7 @@ async fn run_devserver_under_systemd(addr: SocketAddr) -> Result<()> {
 /// `--restart` (`enable --now` would not bounce an already-running unit). Waits
 /// until active and surfaces the bearer token. Shared by the first-start path
 /// and [`restart_devserver_under_systemd`]; the caller owns linger + the
-/// started/restarted log line + following the journal.
+/// started/restarted log line + watching the service.
 async fn bootstrap_systemd_unit(addr: SocketAddr, restart: bool) -> Result<()> {
     let unit_path = write_devserver_unit(addr)?;
     eprintln!("chan devserver: wrote {}", unit_path.display());
@@ -2224,7 +2297,7 @@ async fn bootstrap_systemd_unit(addr: SocketAddr, restart: bool) -> Result<()> {
 }
 
 /// `chan devserver --systemd --restart`: rewrite the unit (current binary +
-/// `addr`), bounce it (or start it if stopped), then follow the journal. Linger
+/// `addr`), bounce it (or start it if stopped), then watch it. Linger
 /// is ensured first, mirroring the start path.
 async fn restart_devserver_under_systemd(addr: SocketAddr) -> Result<()> {
     ensure_systemd_linger().await?;
@@ -2234,7 +2307,12 @@ async fn restart_devserver_under_systemd(addr: SocketAddr) -> Result<()> {
         "chan devserver: {} the systemd user service {DEVSERVER_SYSTEMD_UNIT} (bind={addr})",
         if was_running { "restarted" } else { "started" }
     );
-    follow_unit_until_stopped().await
+    run_health_watchdog(
+        &addr.to_string(),
+        DaemonLiveness::Systemd,
+        &format!("systemd user service {DEVSERVER_SYSTEMD_UNIT}"),
+    )
+    .await
 }
 
 /// `chan devserver --systemd --stop`: stop the running unit. Idempotent — a
@@ -2406,54 +2484,6 @@ fn systemd_user_unit_dir() -> Result<PathBuf> {
         .join("user"))
 }
 
-/// Stream the unit's journal to stdout, returning when the unit is no
-/// longer active. A unit left in a failed state returns an error so the
-/// caller exits non-zero.
-async fn follow_unit_until_stopped() -> Result<()> {
-    // The unit's `is-active` state — NOT journalctl's lifetime — is the
-    // authoritative stop signal. journalctl can exit early for reasons that
-    // have nothing to do with the unit: most commonly a host where this user
-    // has no readable journal (a uid below SYS_UID_MAX, which journald treats
-    // as a system user and never gives a per-user journal, or a user outside
-    // the `systemd-journal`/`adm` groups). Conflating that with "the unit
-    // stopped" would declare a healthy devserver dead.
-    let mut follow = tokio::process::Command::new("journalctl")
-        .args(["--user", "-u", DEVSERVER_SYSTEMD_UNIT, "-f", "-n", "20"])
-        .spawn()
-        .context("spawning journalctl to follow the devserver service")?;
-    let mut streaming = true;
-    loop {
-        tokio::time::sleep(Duration::from_secs(2)).await;
-        if !unit_is_active().await {
-            break;
-        }
-        if streaming && matches!(follow.try_wait(), Ok(Some(_))) {
-            // Lost the log stream while the unit is still running: keep
-            // supervising via is-active, just without journal output.
-            eprintln!(
-                "chan devserver: journal streaming for {DEVSERVER_SYSTEMD_UNIT} \
-                 stopped (is this user in the `systemd-journal` group?); still \
-                 supervising the service"
-            );
-            streaming = false;
-        }
-    }
-    let _ = follow.start_kill();
-    let _ = follow.wait().await;
-    if unit_is_failed().await {
-        anyhow::bail!(
-            "chan devserver: the systemd user service {DEVSERVER_SYSTEMD_UNIT} \
-             entered a failed state:\n{}",
-            recent_unit_journal().await
-        );
-    }
-    eprintln!(
-        "chan devserver: the systemd user service {DEVSERVER_SYSTEMD_UNIT} is no \
-         longer active."
-    );
-    Ok(())
-}
-
 /// Poll until the unit is active, a failure is reported, or the deadline
 /// passes. Tolerates the brief `activating` window after `enable --now`.
 async fn wait_until_active(timeout: Duration) -> bool {
@@ -2566,7 +2596,12 @@ async fn run_devserver_under_launchd(addr: SocketAddr) -> Result<()> {
         );
     }
 
-    follow_launchd_until_stopped(uid).await
+    run_health_watchdog(
+        &addr.to_string(),
+        DaemonLiveness::Launchd { uid },
+        &format!("launchd agent {DEVSERVER_LAUNCHD_LABEL}"),
+    )
+    .await
 }
 
 /// (Re)register and start the launchd agent for `addr`: rewrite the plist
@@ -2575,7 +2610,7 @@ async fn run_devserver_under_launchd(addr: SocketAddr) -> Result<()> {
 /// reload (a `kickstart -k` alone would bounce the OLD plist). Surfaces the
 /// bearer token. Shared by the first-start path and
 /// [`restart_devserver_under_launchd`]; the caller owns the started/restarted
-/// log line + following the log.
+/// log line + watching the agent.
 async fn bootstrap_launch_agent(uid: u32, addr: SocketAddr) -> Result<()> {
     let service = launchd_service_target(uid);
     let plist = write_devserver_launch_agent(addr)?;
@@ -2601,8 +2636,8 @@ async fn bootstrap_launch_agent(uid: u32, addr: SocketAddr) -> Result<()> {
 }
 
 /// `chan devserver --launchd --restart`: rewrite + re-register the agent
-/// (current binary + `addr`) so it bounces (or starts if stopped), then follow
-/// its log.
+/// (current binary + `addr`) so it bounces (or starts if stopped), then watch
+/// it.
 async fn restart_devserver_under_launchd(addr: SocketAddr) -> Result<()> {
     let uid = current_uid().await?;
     let was_running = launchd_is_active(uid).await;
@@ -2611,7 +2646,12 @@ async fn restart_devserver_under_launchd(addr: SocketAddr) -> Result<()> {
         "chan devserver: {} the launchd agent {DEVSERVER_LAUNCHD_LABEL} (bind={addr})",
         if was_running { "restarted" } else { "started" }
     );
-    follow_launchd_until_stopped(uid).await
+    run_health_watchdog(
+        &addr.to_string(),
+        DaemonLiveness::Launchd { uid },
+        &format!("launchd agent {DEVSERVER_LAUNCHD_LABEL}"),
+    )
+    .await
 }
 
 /// `chan devserver --launchd --stop`: bootout the agent. Idempotent — `bootout`
@@ -2832,46 +2872,6 @@ async fn recent_launchd_log() -> String {
         }
         Err(e) => format!("(could not read {}: {e})", path.display()),
     }
-}
-
-/// Stream the agent's log to stdout, returning when the agent is no longer
-/// active. An agent left in a failed state returns an error so the caller exits
-/// non-zero. Mirrors `follow_unit_until_stopped`.
-async fn follow_launchd_until_stopped(uid: u32) -> Result<()> {
-    let log = devserver_log_path()?;
-    let mut follow = tokio::process::Command::new("tail")
-        .args(["-f", "-n", "20"])
-        .arg(&log)
-        .spawn()
-        .context("spawning tail to follow the devserver log")?;
-    let mut streaming = true;
-    loop {
-        tokio::time::sleep(Duration::from_secs(2)).await;
-        if !launchd_is_active(uid).await {
-            break;
-        }
-        if streaming && matches!(follow.try_wait(), Ok(Some(_))) {
-            eprintln!(
-                "chan devserver: log streaming for {DEVSERVER_LAUNCHD_LABEL} \
-                 stopped; still supervising the agent"
-            );
-            streaming = false;
-        }
-    }
-    let _ = follow.start_kill();
-    let _ = follow.wait().await;
-    if launchd_is_failed(uid).await {
-        anyhow::bail!(
-            "chan devserver: the launchd agent {DEVSERVER_LAUNCHD_LABEL} entered \
-             a failed state:\n{}",
-            recent_launchd_log().await
-        );
-    }
-    eprintln!(
-        "chan devserver: the launchd agent {DEVSERVER_LAUNCHD_LABEL} is no \
-         longer active."
-    );
-    Ok(())
 }
 
 /// Integrate a Desktop-personality `chan open` with the desktop app.

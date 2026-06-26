@@ -186,11 +186,9 @@ async fn take_over(
 }
 
 /// Re-attach to a running daemon on the same address: re-emit the bearer-token
-/// marker (so a reconnecting desktop scrapes it from this terminal) and stay
-/// foreground, polling the daemon's pidfile + `/api/health`, until it exits or
-/// the user detaches with Ctrl-C. Detaching leaves the daemon running (this is a
-/// separate watcher process); the daemon dying exits non-zero, so the launcher
-/// survey can tell a clean detach from a crash.
+/// marker (so a reconnecting desktop scrapes it from this terminal), then stay
+/// foreground via the shared health watchdog until the daemon exits or the user
+/// detaches with Ctrl-C.
 async fn watchdog(record: DaemonRecord) -> Result<()> {
     eprintln!(
         "chan devserver: re-attaching to the running self-managed daemon (pid {}) on {}; \
@@ -200,59 +198,15 @@ async fn watchdog(record: DaemonRecord) -> Result<()> {
     // The daemon's own startup token marker is invisible to this NEW terminal;
     // re-emit it from the persisted config so a reconnecting desktop scrapes it.
     crate::emit_devserver_token_marker(crate::DEVSERVER_TOKEN_WAIT).await?;
-
-    let record_path = daemon_record_path();
-    let health_url = format!("http://{}/api/health", record.addr);
-    let client = reqwest::Client::new();
-    let mut health_fails = 0u32;
-    loop {
-        tokio::select! {
-            _ = tokio::signal::ctrl_c() => {
-                eprintln!(
-                    "chan devserver: detached; the daemon (pid {}) keeps running.",
-                    record.pid
-                );
-                return Ok(());
-            }
-            _ = tokio::time::sleep(Duration::from_secs(2)) => {
-                // Definitive death: the pidfile is gone (clean stop) or now names
-                // a dead / different pid.
-                let same_daemon = matches!(
-                    read_daemon_record(&record_path),
-                    Some(r) if r.pid == record.pid && is_record_live(&r)
-                );
-                if !same_daemon {
-                    anyhow::bail!(
-                        "chan devserver: the self-managed daemon (pid {}) exited.",
-                        record.pid
-                    );
-                }
-                // Heartbeat: a live pid that stops answering /api/health for ~6s
-                // is wedged.
-                if health_ok(&client, &health_url).await {
-                    health_fails = 0;
-                } else {
-                    health_fails += 1;
-                    if health_fails >= 3 {
-                        anyhow::bail!(
-                            "chan devserver: the self-managed daemon (pid {}) stopped \
-                             answering /api/health.",
-                            record.pid
-                        );
-                    }
-                }
-            }
-        }
-    }
-}
-
-/// One bounded `/api/health` probe; any non-2xx, transport error, or timeout is
-/// a miss.
-async fn health_ok(client: &reqwest::Client, url: &str) -> bool {
-    match tokio::time::timeout(Duration::from_secs(2), client.get(url).send()).await {
-        Ok(Ok(resp)) => resp.status().is_success(),
-        _ => false,
-    }
+    crate::run_health_watchdog(
+        &record.addr,
+        crate::DaemonLiveness::Chan {
+            record_path: daemon_record_path(),
+            pid: record.pid,
+        },
+        &format!("self-managed daemon (pid {})", record.pid),
+    )
+    .await
 }
 
 /// Block (bounded) until the pidfile is gone or names a dead pid -- the signal
