@@ -3,8 +3,8 @@ import { codeSpanInternalTarget } from "./widgets/wikilink";
 import wikilink from "./widgets/wikilink.ts?raw";
 import wysiwyg from "./Wysiwyg.svelte?raw";
 
-// ask 4: an inline `code` span whose text resolves to a real workspace file
-// renders as a Cmd/Ctrl-clickable internal link (detect + open, single-match).
+// An inline `code` span whose text resolves to a real workspace file renders
+// as a Cmd/Ctrl-clickable internal link (detect + open, single match).
 
 describe("codeSpanInternalTarget (the detect decision)", () => {
   test("skips code containing whitespace (a snippet, not a path)", () => {

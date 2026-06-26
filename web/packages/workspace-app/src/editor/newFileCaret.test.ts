@@ -164,7 +164,7 @@ describe("persisted caret survives mount (reopened file)", () => {
   }
 });
 
-// ---- bug-4: resetCaret re-drives an ALREADY-mounted, latched editor ----
+// ---- resetCaret re-drives an ALREADY-mounted, latched editor ----
 //
 // A pane keeps one editor per tab alive, and `initialCaret` is a one-shot
 // mount snapshot (maybeRestoreCaret latches via caretRestored). So re-opening a
@@ -172,7 +172,7 @@ describe("persisted caret survives mount (reopened file)", () => {
 // through the prop. `resetCaret` is the imperative channel the tab host drives
 // instead; it must move the caret of a live editor and clamp to the doc.
 
-describe("resetCaret re-drives an already-mounted editor (bug-4)", () => {
+describe("resetCaret re-drives an already-mounted editor", () => {
   for (const [name, Comp] of components) {
     test(`${name}: resetCaret moves the caret after the mount-time caret latched`, () => {
       const target = document.createElement("div");
@@ -210,7 +210,7 @@ describe("resetCaret re-drives an already-mounted editor (bug-4)", () => {
   }
 });
 
-describe("resetCaret export shape (bug-4)", () => {
+describe("resetCaret export shape", () => {
   for (const [name, src] of rawEditors) {
     test(`${name}: exports resetCaret with selection + scrollIntoView + focus`, () => {
       expect(src).toMatch(

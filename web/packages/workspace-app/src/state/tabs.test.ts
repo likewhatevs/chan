@@ -482,7 +482,7 @@ describe("tab close confirmation", () => {
     expect(activePane().activeTabId).toBe(reopened.id);
   });
 
-  describe("openInPane caret command (bug-4)", () => {
+  describe("openInPane caret command", () => {
     // openInPane mutates the layout-proxied tab; read it back via activePane()
     // (the local `tab` reference is the pre-proxy object and stays stale).
     function reopenedFileTab(): FileTab {
@@ -524,7 +524,7 @@ describe("tab close confirmation", () => {
     });
   });
 
-  describe("per-file caret persistence (ask 2)", () => {
+  describe("per-file caret persistence", () => {
     test("setTabCaret records the caret when the tab is not loading", () => {
       vi.mocked(recordCaret).mockClear();
       const tab = fileTab({ path: "notes/a.md", loading: false });
@@ -579,7 +579,7 @@ describe("tab close confirmation", () => {
     });
   });
 
-  describe("auto-discard empty files on close (ask 3)", () => {
+  describe("auto-discard empty files on close", () => {
     test("discards an empty dirty file: deletes it then closes the tab", async () => {
       const remove = vi.spyOn(api, "remove").mockResolvedValue(undefined);
       const pane = resetLayout([

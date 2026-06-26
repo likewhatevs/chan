@@ -4,7 +4,7 @@ import fileTree from "./FileTree.svelte?raw";
 import fileBrowserSurface from "./FileBrowserSurface.svelte?raw";
 import store from "../state/store.svelte.ts?raw";
 
-// bug-4: an explicit open must re-place the caret of a kept-alive tab whose
+// An explicit open must re-place the caret of a kept-alive tab whose
 // editor has latched its one-shot `initialCaret`. The channel is:
 //   explicit-open caller -> openInPane (landAtTop / initialSelection)
 //     -> issueCaretCommand sets tab.caretCommand
