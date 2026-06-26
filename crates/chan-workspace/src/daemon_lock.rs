@@ -176,6 +176,26 @@ pub fn read_daemon_record(record_path: &Path) -> Option<DaemonRecord> {
     serde_json::from_str(trimmed).ok()
 }
 
+/// Whether the daemon flock at `lock_path` is currently HELD by some process --
+/// the authoritative "a daemon is running" signal on Unix, where the flock
+/// auto-releases on exit, so a FREE lock proves the recorded pid is stale even
+/// after a `kill -9` left a `daemon.json` behind and that pid was reused. A
+/// caller signalling a recorded pid must gate on this so it never SIGTERMs an
+/// innocent reused-pid process. Probe-only: it momentarily takes the lock for the
+/// check and releases it on return. Conservative -- any open / unexpected error
+/// reads as NOT held, so an ambiguous probe never green-lights a signal.
+pub fn daemon_lock_held(lock_path: &Path) -> bool {
+    let Ok(file) = open_lock_file(lock_path) else {
+        return false;
+    };
+    match FileExt::try_lock_exclusive(&file) {
+        // Acquired -> it was free -> not held (the lock drops with `file`).
+        Ok(()) => false,
+        Err(e) if is_contended(&e) => true,
+        Err(_) => false,
+    }
+}
+
 /// Whether `record` names a process that is alive AND -- when a creation time
 /// was recorded (Windows) -- whose creation time still matches, so a reused pid
 /// is never mistaken for the daemon. A `0` creation time degrades to
@@ -393,6 +413,23 @@ mod tests {
             started_at: "2020-01-01T00:00:00Z".into(),
         };
         assert!(!is_record_live(&dead), "a long-dead pid is not live");
+    }
+
+    #[test]
+    fn daemon_lock_held_reflects_the_flock() {
+        let tmp = TempDir::new().unwrap();
+        let (lock, record) = paths(&tmp);
+        // Nothing holds it yet.
+        assert!(!daemon_lock_held(&lock));
+        let guard = match DaemonLock::acquire(&lock, &record, "127.0.0.1:8787", false).unwrap() {
+            DaemonAcquire::Daemon(g) => g,
+            DaemonAcquire::Running(_) => panic!("first acquire must win"),
+        };
+        // Held while a daemon owns the lock -> a stop / takeover may signal.
+        assert!(daemon_lock_held(&lock));
+        drop(guard);
+        // Released on exit -> a leftover pidfile is provably stale (no signal).
+        assert!(!daemon_lock_held(&lock));
     }
 
     #[test]

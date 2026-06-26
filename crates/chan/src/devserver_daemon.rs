@@ -18,7 +18,8 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 
 use chan_workspace::daemon_lock::{
-    is_record_live, read_daemon_record, signal_terminate, DaemonAcquire, DaemonLock, DaemonRecord,
+    daemon_lock_held, is_record_live, read_daemon_record, signal_terminate, DaemonAcquire,
+    DaemonLock, DaemonRecord,
 };
 
 /// `~/.chan/devserver/daemon.lock` -- the flock anchor (routed through the
@@ -96,7 +97,12 @@ pub async fn stop_devserver_chan(verbose: bool) -> Result<()> {
         eprintln!("chan devserver: no self-managed daemon is running.");
         return Ok(());
     };
-    if !is_record_live(&record) {
+    // Signal only when the flock is HELD (a daemon genuinely holds the lock) AND
+    // the pid passes the liveness / creation-time guard. On Unix the flock
+    // auto-releases on death, so a leaked daemon.json + a reused pid reads as
+    // flock-FREE here -- we clear it instead of SIGTERMing the innocent process
+    // that now holds that pid (Windows is already guarded by creation_time).
+    if !daemon_lock_held(&daemon_lock_path()) || !is_record_live(&record) {
         let _ = std::fs::remove_file(&record_path);
         eprintln!("chan devserver: no self-managed daemon is running (cleared a stale pidfile).");
         return Ok(());
@@ -164,7 +170,10 @@ async fn take_over(
     tunnel: Option<chan_server::DevserverTunnel>,
 ) -> Result<()> {
     if let Some(record) = read_daemon_record(record_path) {
-        if is_record_live(&record) {
+        // Same flock-gated guard as --stop: never SIGTERM a reused pid whose
+        // daemon.json leaked from a kill -9 (flock-FREE on Unix). A free flock
+        // means the dead holder is gone, and the force re-acquire below fast-paths.
+        if daemon_lock_held(lock_path) && is_record_live(&record) {
             eprintln!(
                 "chan devserver: stopping the running daemon (pid {}) to take over.",
                 record.pid

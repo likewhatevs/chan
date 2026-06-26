@@ -75,17 +75,6 @@ sha2 = { workspace = true }
 tar = { workspace = true }
 flate2 = "1"
 
-# The `--service` Windows backend (`devserver_windows.rs`): a detached
-# background devserver tracked by a PID file. OpenProcess/GetProcessTimes
-# decide whether a recorded pid is still ours (liveness + creation-time guard)
-# before TerminateProcess. Same windows-sys version chan-workspace pins so the
-# lockfile carries one.
-[target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.59", features = [
-    "Win32_Foundation",
-    "Win32_System_Threading",
-] }
-
 [dev-dependencies]
 tempfile = { workspace = true }
 
