@@ -108,6 +108,7 @@
   } from "./state/tabs.svelte";
   import { applyEditorTheme, DEFAULT_EDITOR_THEME } from "./state/editorTheme";
   import { flushPendingBufferWrites, pruneEditorBuffers } from "./state/editorBuffer";
+  import { pruneTerminalSnapshots } from "./terminal/snapshotCache";
   import { isTauriDesktop, reloadWindow, requestCloseWindow } from "./api/desktop";
   import { activeTransferCount } from "./state/transfers.svelte";
   import { currentOS } from "./state/shortcuts";
@@ -463,6 +464,10 @@
     // overlay. The overlay's own Retry button (a focused element) is
     // unaffected; there is nothing else to drive while the server is gone.
     if (ui.disconnectBlocking) {
+      // Let cmd+` through to the native window cycler: the overlay must not trap
+      // the macOS window-switch chord, so the user can leave a disconnected
+      // window for another (mac-relevant only; a harmless no-op elsewhere).
+      if (e.code === "Backquote") return;
       e.preventDefault();
       e.stopPropagation();
       return;
@@ -1269,6 +1274,7 @@
   // sweep keeps storage tidy for long-lived sessions.
   onMount(() => {
     pruneEditorBuffers();
+    pruneTerminalSnapshots();
   });
 
   // Synchronously flush in-flight debounced editor-buffer writes before the

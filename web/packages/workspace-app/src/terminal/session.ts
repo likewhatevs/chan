@@ -9,6 +9,13 @@ export type TerminalWsPathOpts = {
   paneId?: string | null;
   tabId?: string | null;
   sessionId?: string | null;
+  /// Byte cursor to resume a reattach from, when the client primes a cached
+  /// scrollback snapshot (ask 6). Omitted -> a full replay from the ring head
+  /// (the server reports any overflow loss via `missed_bytes`).
+  since?: number | null;
+  /// The session generation the cached snapshot belongs to. The server honors
+  /// `since` only when this still matches the live session (a restart bumps it).
+  generation?: number | null;
   agentEchoSince?: number | null;
   cwd?: string | null;
 };
@@ -37,15 +44,19 @@ export function terminalWsPath(opts: TerminalWsPathOpts): string {
   const sessionId = opts.sessionId?.trim();
   if (sessionId) {
     params.set("session", sessionId);
-    // A reattach always feeds a brand-new EMPTY xterm, so it always
-    // wants the session's full replay ring: `since` is the constant 0,
-    // not a byte cursor (the cursor was removed - tracking it across
-    // remounts is what caused the "only the last line after a split"
-    // bug). Explicit 0 rather than absent: `Some(0)` makes the server
-    // report bytes lost to ring overflow via `missed_bytes` (the
-    // "terminal replay missed N bytes" notice); `None` would silently
-    // start at the ring head.
-    params.set("since", "0");
+    // `since` defaults to the constant 0 (a full replay into a fresh empty
+    // xterm). When the caller has a VALID cached scrollback snapshot it passes
+    // the snapshot's byte cursor + generation instead, and the server replays
+    // only the delta past it -- but ONLY when the generation still matches
+    // (a restart resets the ring/seq). Explicit 0 (vs absent) makes the server
+    // report ring-overflow loss via `missed_bytes` rather than silently
+    // starting at the ring head. A bare cursor with no matching cached content
+    // is what caused the old "only the last line after a split" bug, so the
+    // cursor is only ever sent paired with a restored snapshot + generation.
+    params.set("since", String(Math.max(0, Math.floor(opts.since ?? 0))));
+    if (opts.generation != null) {
+      params.set("generation", String(Math.max(0, Math.floor(opts.generation))));
+    }
     params.set(
       "agent_echo_since",
       String(Math.max(0, Math.floor(opts.agentEchoSince ?? 0))),

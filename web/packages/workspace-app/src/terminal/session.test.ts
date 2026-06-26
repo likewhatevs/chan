@@ -28,6 +28,24 @@ describe("terminalWsPath", () => {
     );
   });
 
+  test("resumes from a cached byte cursor + generation when provided", () => {
+    // A valid scrollback-snapshot cache hit sends its cursor + generation; the
+    // server replays only the delta past it, and honors it only on a matching
+    // generation (ask 6).
+    expect(
+      terminalWsPath({
+        cols: 80,
+        rows: 24,
+        tabName: "build log",
+        sessionId: "term_abc",
+        since: 1500,
+        generation: 4,
+      }),
+    ).toBe(
+      "/api/terminal/ws?cols=80&rows=24&tab_name=build+log&session=term_abc&since=1500&generation=4&agent_echo_since=0",
+    );
+  });
+
   test("adds window id when provided", () => {
     expect(
       terminalWsPath({

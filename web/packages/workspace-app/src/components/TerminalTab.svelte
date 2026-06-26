@@ -80,6 +80,14 @@
   } from "../state/store.svelte";
   import { terminalWsPath } from "../terminal/session";
   import {
+    readTerminalSnapshot,
+    writeTerminalSnapshot,
+    clearTerminalSnapshot,
+    MAX_ONE_SNAPSHOT_BYTES,
+    SNAPSHOT_SCROLLBACK_LINES,
+    type TerminalSnapshot,
+  } from "../terminal/snapshotCache";
+  import {
     PtyWriteTracker,
     type PtyWriteOrigin,
     routeXtermData,
@@ -139,6 +147,10 @@
         type: "session";
         id: string;
         seq: number;
+        /// This session incarnation's epoch. A restart reuses the id but bumps
+        /// it (and resets `seq`), so a cached scrollback snapshot whose
+        /// generation no longer matches is discarded and the server full-replays.
+        generation: number;
         missed_bytes?: number;
         bytes_since_focus?: number;
         /// MESSAGE depth of the shared write queue at attach time, so every
@@ -200,6 +212,15 @@
   // window that's actually in memory.
   let scrollbackLines = scrollbackLinesFromMb(SCROLLBACK_MB_DEFAULT);
   let ws: WebSocket | null = null;
+  // Scrollback snapshot resume state (ask 6). `pendingSnapshot` is a cache hit
+  // loaded at connect time, primed into the xterm on the attach prelude only
+  // when the server confirms the same generation + no missed bytes; otherwise
+  // discarded for a full replay. `receivedSeq` tracks the server byte cursor
+  // (prelude `seq` + live bytes since) so a capture knows where to resume from.
+  // `serverGeneration` is the live session epoch (null until the first prelude).
+  let pendingSnapshot: TerminalSnapshot | null = null;
+  let receivedSeq = 0;
+  let serverGeneration: number | null = null;
   let resizeObserver: ResizeObserver | null = null;
   let status = $state<"closed" | "connecting" | "connected" | "exited">("closed");
   let statusDetail = $state("");
@@ -763,6 +784,25 @@
     const reattaching = Boolean(tab.terminalSessionId);
     pendingPromptSeed = reattaching ? "" : (tab.seedInput ?? "");
     promptSeedSent = false;
+    // Try to resume from a cached scrollback snapshot (ask 6, option A). Only
+    // for a reattach to a known session AND when the cached geometry still
+    // matches the live xterm -- a serialized screen written into a different
+    // width reflows wrong (absolute cursor + hard-wrap baked at the old cols).
+    // On a hit, request the delta from the cached cursor + generation; the
+    // server honors them only if the generation still matches, else full replay.
+    pendingSnapshot = null;
+    receivedSeq = 0;
+    serverGeneration = null;
+    let resumeSince: number | undefined;
+    let resumeGeneration: number | undefined;
+    if (reattaching && tab.terminalSessionId) {
+      const cached = readTerminalSnapshot(tab.terminalSessionId);
+      if (cached && cached.cols === term.cols && cached.rows === term.rows) {
+        pendingSnapshot = cached;
+        resumeSince = cached.lastSeq;
+        resumeGeneration = cached.generation;
+      }
+    }
     const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
     const path = withTokenQuery(
       terminalWsPath({
@@ -774,6 +814,8 @@
         paneId,
         tabId: tab.id,
         sessionId: tab.terminalSessionId,
+        since: resumeSince,
+        generation: resumeGeneration,
         agentEchoSince: tab.lastAgentEchoSeq,
         cwd: reattaching ? undefined : tab.cwd,
       }),
@@ -790,6 +832,10 @@
       const bytes = await terminalMessageBytes(event.data);
       if (bytes) {
         writePtyOutput(bytes, attachPtyWriteOrigin());
+        // Advance the server byte cursor only for LIVE output: replay chunks
+        // (between the `session` and `ready` frames) reconstruct history up to
+        // the prelude `seq` we already adopted, so counting them would double.
+        if (!attachReplayActive) receivedSeq += bytes.length;
         recordOutputActivity();
         maybeSeedPrompt();
         return;
@@ -812,6 +858,24 @@
         attachReplayActive = true;
         suppressAttachReplayGeneratedReplies = duplicateReplay;
         sawSessionControl = true;
+        // Adopt the server's byte cursor + epoch for this incarnation. Prime the
+        // cached snapshot ONLY when the server confirms the SAME generation and
+        // no ring bytes were lost: then the replay chunks that follow are just
+        // the delta past the cached cursor and append cleanly on top. On any
+        // mismatch the server has already fallen back to a full replay, so drop
+        // the stale snapshot and let those chunks repaint from scratch. Written
+        // inside the replay window so xterm's device-report replies stay
+        // suppressed (see attachPtyWriteOrigin / connection.ts).
+        serverGeneration = frame.generation;
+        receivedSeq = frame.seq;
+        if (
+          pendingSnapshot &&
+          frame.generation === pendingSnapshot.generation &&
+          (frame.missed_bytes ?? 0) === 0
+        ) {
+          term?.write(pendingSnapshot.ansi);
+        }
+        pendingSnapshot = null;
         setTerminalSession(tab, frame.id);
         setTerminalActivity(tab, !focused && (frame.bytes_since_focus ?? 0) > 0);
         // Re-sync the queue badge on every (re)attach: the depth is absolute
@@ -864,6 +928,10 @@
         // fail any in-flight prompt so the bubble unlocks with its text.
         setTerminalQueueDepth(tab, 0);
         failPendingPrompt(tab);
+        // The cached scrollback snapshot is keyed by this now-dead session id;
+        // drop it so a closed terminal does not hold cache budget (a future
+        // session gets a fresh id, so it would never be reused anyway).
+        if (tab.terminalSessionId) clearTerminalSnapshot(tab.terminalSessionId);
         clearTerminalSession(tab);
         if (frame.reason === "explicit") {
           // The user (or another window / `cs terminal close`) deleted this
@@ -1023,6 +1091,42 @@
     if (!shouldForwardGeneratedTerminalInput(ptyWrites)) return;
     sendInput(data);
   }
+
+  /// Capture a bounded SerializeAddon snapshot of the current screen +
+  /// scrollback into localStorage so the NEXT reload restores it instantly and
+  /// the server only streams the delta past `receivedSeq` (ask 6). Keyed by the
+  /// server session id + its generation; a capture over the per-snapshot byte
+  /// budget is dropped (the reattach falls back to a full replay) rather than
+  /// evicting other terminals. Synchronous, for the pagehide/unload path.
+  function captureSnapshot(): void {
+    const sessionId = tab.terminalSessionId;
+    if (!term || !serialize || !sessionId || serverGeneration === null) return;
+    const lines = Math.min(scrollbackLines, SNAPSHOT_SCROLLBACK_LINES);
+    const ansi = serialize.serialize({ scrollback: lines });
+    if (!ansi || ansi.length > MAX_ONE_SNAPSHOT_BYTES) return;
+    writeTerminalSnapshot(sessionId, {
+      ansi,
+      generation: serverGeneration,
+      lastSeq: receivedSeq,
+      cols: term.cols,
+      rows: term.rows,
+      updatedAt: Date.now(),
+    });
+  }
+
+  // Persist a scrollback snapshot when the page is hidden/reloaded so the
+  // reattach after the reload resumes from it (ask 6). pagehide is the
+  // mobile-safe variant; beforeunload covers desktop reloads. Synchronous --
+  // async work in these handlers is unreliable.
+  $effect(() => {
+    const onHide = () => captureSnapshot();
+    window.addEventListener("pagehide", onHide);
+    window.addEventListener("beforeunload", onHide);
+    return () => {
+      window.removeEventListener("pagehide", onHide);
+      window.removeEventListener("beforeunload", onHide);
+    };
+  });
 
   /// Rich Prompt + team-lead-identity submit path: send `data` over the existing
   /// terminal WS as a `prompt` frame so the server ENQUEUES it into this
