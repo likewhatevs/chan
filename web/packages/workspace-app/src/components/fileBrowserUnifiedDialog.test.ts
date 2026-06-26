@@ -68,7 +68,7 @@ describe("fileOps.createFileOrDir helper", () => {
 
   test("non-slash result dispatches to api.create(path, false, \"\") + openInActivePane after appendDefaultMd", () => {
     expect(store).toMatch(
-      /async createFileOrDir[\s\S]{1,3000}const path = appendDefaultMd\(next\);[\s\S]{1,400}await api\.create\(path, false, ""\);[\s\S]{1,400}await openInActivePane\(path\);/,
+      /async createFileOrDir[\s\S]{1,3000}const path = appendDefaultMd\(next\);[\s\S]{1,400}await api\.create\(path, false, ""\);[\s\S]{1,400}await openInActivePane\(path, \{ landAtTop: true \}\);/,
     );
   });
 });

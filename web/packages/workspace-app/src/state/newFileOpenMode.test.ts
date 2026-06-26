@@ -20,7 +20,7 @@ import store from "./store.svelte.ts?raw";
 describe("item 2: create-resolution open/select", () => {
   test("createFile opens the new editable file in the active pane", () => {
     expect(store).toMatch(
-      /async createFile\(parentPath: string\): Promise<void> \{[\s\S]{1,1500}await api\.create\(path, false, ""\);[\s\S]{1,400}await openInActivePane\(path\);/,
+      /async createFile\(parentPath: string\): Promise<void> \{[\s\S]{1,1500}await api\.create\(path, false, ""\);[\s\S]{1,400}await openInActivePane\(path, \{ landAtTop: true \}\);/,
     );
   });
 
@@ -35,7 +35,7 @@ describe("item 2: create-resolution open/select", () => {
       /async createFileOrDir[\s\S]{1,2000}const isDir = next\.endsWith\("\/"\);[\s\S]{1,400}revealAndSelect\(next\);/,
     );
     expect(store).toMatch(
-      /async createFileOrDir[\s\S]{1,3000}await openInActivePane\(path\);/,
+      /async createFileOrDir[\s\S]{1,3000}await openInActivePane\(path, \{ landAtTop: true \}\);/,
     );
   });
 });
