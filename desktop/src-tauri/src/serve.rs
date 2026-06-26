@@ -282,6 +282,7 @@ pub(crate) fn open_watched_local_window(
             session_id: &record.window_id,
             library_id: &record.library_id,
             title: &title,
+            ordinal: Some(record.ordinal),
             url: &url,
             url_hash_seed: "",
             config_key: String::new(),
@@ -320,6 +321,7 @@ pub(crate) fn open_watched_remote_window(
             session_id: &record.window_id,
             library_id: &record.library_id,
             title: &title,
+            ordinal: Some(record.ordinal),
             url: &url,
             url_hash_seed: "",
             config_key: String::new(),
@@ -366,6 +368,7 @@ pub fn spawn_remote_workspace_window(
             // tab d&d to itself).
             library_id: "",
             title: &title,
+            ordinal: None,
             url,
             url_hash_seed: &restore.url_hash,
             config_key,
@@ -434,6 +437,7 @@ pub async fn spawn_control_terminal_window(
             // terminal tenant, so it belongs to the `local` library.
             library_id: "local",
             title: "Control Terminal",
+            ordinal: None,
             url: &url,
             url_hash_seed: "",
             config_key: String::new(),
@@ -548,6 +552,7 @@ pub fn open_window_by_label(
                 // A running local workspace window belongs to the `local` library.
                 library_id: "local",
                 title: &title,
+                ordinal: None,
                 url: &url,
                 url_hash_seed: "",
                 config_key: config::local_window_key(&key),
@@ -621,6 +626,7 @@ pub fn reopen_remote_window(
             // passes none (the SPA defaults to `local`).
             library_id: "",
             title: &entry.base_title,
+            ordinal: None,
             url: &entry.url,
             url_hash_seed: "",
             config_key: entry.config_key.clone(),
@@ -766,6 +772,13 @@ struct WindowSpec<'a> {
     library_id: &'a str,
     /// Base title; the builder suffixes a reused " Window N" display number.
     title: &'a str,
+    /// The library's persisted per-(kind, workspace) ordinal — the same number
+    /// `cs window list` prints as `#`. When `Some`, it is the displayed
+    /// " Window N" suffix, so the titlebar and the registry agree. `None` for
+    /// windows with no library record (outbound URL attachments, imperative
+    /// reopen paths), which fall back to the desktop-local `assign_window_number`
+    /// counter.
+    ordinal: Option<u32>,
     /// The workspace/terminal URL the webview ultimately shows.
     url: &'a str,
     /// URL fragment from the window-config stack: applied verbatim so
@@ -810,6 +823,7 @@ fn build_workspace_window(app: &AppHandle, spec: WindowSpec<'_>) -> Result<(), S
         session_id,
         library_id,
         title,
+        ordinal,
         url,
         url_hash_seed,
         config_key,
@@ -894,6 +908,9 @@ fn build_workspace_window(app: &AppHandle, spec: WindowSpec<'_>) -> Result<(), S
     // "workspace" (covers local / outbound) — the kind `cs window list` shows.
     // Captured owned so the 'static main-thread closure can hold it.
     let kind_owned = kind.unwrap_or("workspace").to_string();
+    // The library ordinal (Copy) to display as " Window N", or None for windows
+    // with no library record (fall back to the desktop-local counter below).
+    let ordinal_owned = ordinal;
     let res = app.run_on_main_thread(move || {
         // Defensive: window labels are unique-per-instance now, so
         // a collision shouldn't happen. If it ever does (e.g. some
@@ -909,13 +926,19 @@ fn build_workspace_window(app: &AppHandle, spec: WindowSpec<'_>) -> Result<(), S
         // below) so the next same-base window reuses it.
         let state = app_owned.state::<Arc<AppState>>();
         let window_number = state.assign_window_number(&label_owned, &title_owned);
+        // Prefer the library's persisted ordinal (the `#` in `cs window list`)
+        // so the titlebar number and the registry agree; fall back to the
+        // desktop-local counter only for windows with no record (outbound /
+        // imperative reopen). assign_window_number is still called above so its
+        // reservation + release-on-close bookkeeping stays balanced regardless.
+        let display_number = ordinal_owned.map(u64::from).unwrap_or(window_number);
         // A `cs window title` override (kept across the bury/reopen cycle)
         // wins over the auto "{base} Window {N}" scheme; otherwise use the
         // default. The resolved title is registered below once the window
         // builds, so `cs window list` shows what the title bar shows.
         let display_title = state
             .window_title_override(&label_owned)
-            .unwrap_or_else(|| format!("{title_owned} Window {window_number}"));
+            .unwrap_or_else(|| format!("{title_owned} Window {display_number}"));
         // Resolve the desktop-local OS geometry to restore for this window
         // (keyed by the native label, matched against the live monitor
         // signature). When we will reposition / resize, the window builds HIDDEN
