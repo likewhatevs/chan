@@ -186,7 +186,7 @@
     font-weight: 600;
   }
   .survey-body {
-    font-size: 14px;
+    font-size: 16px;
     line-height: 1.5;
     margin-bottom: 1rem;
   }
@@ -217,7 +217,7 @@
     border: 1px solid var(--border);
     border-radius: 7px;
     cursor: pointer;
-    font-size: 14px;
+    font-size: 15px;
   }
   .survey-option:hover:not(:disabled),
   .survey-option:focus-visible {
