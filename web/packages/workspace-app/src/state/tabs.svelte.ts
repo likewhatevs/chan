@@ -40,7 +40,12 @@ import {
 // store's eager draft-promotion-sink registration. See the cycle note
 // below.
 import { isDraftPath } from "./workspace.svelte";
-import { readCaret, recordCaret, rekeyCaret } from "./caretIndex";
+import {
+  clearCaretsUnder,
+  readCaret,
+  recordCaret,
+  rekeyCaret,
+} from "./caretIndex";
 // `uiPathPrompt` lives in store.svelte, which has a TOP-LEVEL side
 // effect (`registerDraftPromotionSink(...)`) that calls back into THIS
 // module. A static `import { uiPathPrompt } from "./store.svelte"`
@@ -264,6 +269,12 @@ export type FileTab = {
   /// written on every keystroke) so the consuming effect does not re-fire
   /// while typing. Never serialized (see serializeTab's field allowlist).
   caretCommand?: { from: number; to: number };
+  /// Whether the file was empty when its content last loaded. Drives the
+  /// empty-file auto-discard on close: an editable file is deleted on close
+  /// only when it is empty now AND (the buffer is dirty OR it opened empty),
+  /// so a file that merely failed to load (non-empty on disk, shown blank) is
+  /// never deleted. Set by loadTabContent; transient, never serialized.
+  openedEmpty?: boolean;
   /// Per-tab inspector and outline widths so two file tabs side by
   /// side carry independent inspector/outline sizes. Fall back to
   /// `paneWidths.inspector` / `paneWidths.outline` when unset.
@@ -2202,6 +2213,7 @@ async function loadTabContent(
     if (t) {
       t.content = r.content;
       t.saved = r.content;
+      t.openedEmpty = r.content.trim().length === 0;
       t.savedMtime = r.mtime ?? null;
       t.savedMtimeNs = r.mtime_ns ?? null;
       t.repoRoot = r.repo_root ?? null;
@@ -2579,6 +2591,15 @@ async function closeTabAsync(
   const movingOut = tab.kind === "terminal" && terminalsMovingOut.has(tabId);
   if (isDraftTab(tab) && !opts?.force) {
     if (!(await handleDraftTabClose(tab))) return;
+  } else if (
+    !opts?.force &&
+    shouldDiscardEmptyFileOnClose(tab) &&
+    (await discardEmptyFileOnClose(tab))
+  ) {
+    // An empty editable file was auto-discarded; fall through to remove its
+    // tab. Skipping confirmCloseTabs is deliberate: it autosaves dirty tabs,
+    // which would write the empty buffer to disk before the close. The sync
+    // predicate short-circuits non-files so their close timing is unchanged.
   } else if (!(await confirmCloseTabs([tab], opts))) {
     return;
   }
@@ -2681,6 +2702,42 @@ async function handleDraftTabClose(tab: FileTab): Promise<boolean> {
     tab.error = `draft close failed: ${(e as Error).message}`;
     return false;
   }
+}
+
+/// Whether closing `tab` should auto-discard it as an empty editable file: it
+/// is empty now AND either dirty (the user emptied it) or it opened empty, so
+/// the close never autosaves an empty buffer to disk. A file that is mid-load,
+/// failed to load, or is missing is excluded (it may be non-empty on disk and
+/// merely shown blank). Synchronous so a terminal / non-empty file short-
+/// circuits in the close branch BEFORE any await, preserving the same-tick
+/// confirm-dialog timing the close path relies on.
+function shouldDiscardEmptyFileOnClose(tab: Tab): tab is FileTab {
+  return (
+    tab.kind === "file" &&
+    !tab.loading &&
+    !tab.error &&
+    !tab.fileMissing &&
+    tab.content.trim().length === 0 &&
+    (isDirty(tab) || tab.openedEmpty === true)
+  );
+}
+
+/// Delete an empty editable file on close -- the generalization of the draft
+/// empty-discard above -- silently (no confirm prompt, a brief toast). Deletes
+/// via `api.remove` directly, not fileOps.remove (which prompts and recursively
+/// closes path-matching tabs). Returns true when it discarded -- the caller
+/// then skips confirmCloseTabs and removes the tab -- or false when the delete
+/// failed, so the close falls back to a normal path and the tab is not trapped.
+async function discardEmptyFileOnClose(tab: FileTab): Promise<boolean> {
+  try {
+    await api.remove(tab.path);
+  } catch {
+    return false;
+  }
+  clearCaretsUnder(tab.path);
+  const name = tab.path.split("/").pop() ?? tab.path;
+  notify(`Discarded empty file ${name}`);
+  return true;
 }
 
 export async function saveDraftTabToWorkspace(tab: FileTab): Promise<boolean> {

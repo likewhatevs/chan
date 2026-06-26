@@ -579,6 +579,75 @@ describe("tab close confirmation", () => {
     });
   });
 
+  describe("auto-discard empty files on close (ask 3)", () => {
+    test("discards an empty dirty file: deletes it then closes the tab", async () => {
+      const remove = vi.spyOn(api, "remove").mockResolvedValue(undefined);
+      const pane = resetLayout([
+        fileTab({ path: "notes/a.md", content: "", saved: "old", openedEmpty: false }),
+      ]);
+      await closeTab(pane.id, "file-1");
+      expect(remove).toHaveBeenCalledWith("notes/a.md");
+      expect(activePane().tabs).toHaveLength(0);
+    });
+
+    test("discards a file that opened empty even when clean", async () => {
+      const remove = vi.spyOn(api, "remove").mockResolvedValue(undefined);
+      const pane = resetLayout([
+        fileTab({ path: "notes/a.md", content: "", saved: "", openedEmpty: true }),
+      ]);
+      await closeTab(pane.id, "file-1");
+      expect(remove).toHaveBeenCalledWith("notes/a.md");
+      expect(activePane().tabs).toHaveLength(0);
+    });
+
+    test("does NOT discard a non-empty file (closes normally)", async () => {
+      const remove = vi.spyOn(api, "remove").mockResolvedValue(undefined);
+      const pane = resetLayout([
+        fileTab({ path: "notes/a.md", content: "hello", saved: "hello", openedEmpty: false }),
+      ]);
+      await closeTab(pane.id, "file-1");
+      expect(remove).not.toHaveBeenCalled();
+      expect(activePane().tabs).toHaveLength(0);
+    });
+
+    test("does NOT discard an empty file that is clean and did not open empty", async () => {
+      const remove = vi.spyOn(api, "remove").mockResolvedValue(undefined);
+      const pane = resetLayout([
+        fileTab({ path: "notes/a.md", content: "", saved: "", openedEmpty: false }),
+      ]);
+      await closeTab(pane.id, "file-1");
+      expect(remove).not.toHaveBeenCalled();
+    });
+
+    test("does NOT discard a file that failed to load (error set), though blank", async () => {
+      const remove = vi.spyOn(api, "remove").mockResolvedValue(undefined);
+      const pane = resetLayout([
+        fileTab({ path: "notes/a.md", content: "", saved: "", error: "load failed", openedEmpty: false }),
+      ]);
+      await closeTab(pane.id, "file-1");
+      expect(remove).not.toHaveBeenCalled();
+    });
+
+    test("a force close never discards", async () => {
+      const remove = vi.spyOn(api, "remove").mockResolvedValue(undefined);
+      const pane = resetLayout([
+        fileTab({ path: "notes/a.md", content: "", saved: "old", openedEmpty: false }),
+      ]);
+      await closeTab(pane.id, "file-1", { force: true });
+      expect(remove).not.toHaveBeenCalled();
+      expect(activePane().tabs).toHaveLength(0);
+    });
+
+    test("a failed deletion falls back to a normal close (tab not trapped)", async () => {
+      vi.spyOn(api, "remove").mockRejectedValue(new Error("disk error"));
+      const pane = resetLayout([
+        fileTab({ path: "notes/a.md", content: "", saved: "", openedEmpty: true }),
+      ]);
+      await closeTab(pane.id, "file-1");
+      expect(activePane().tabs).toHaveLength(0);
+    });
+  });
+
   test("reopens a closed File Browser tab with its expanded dirs + view state", async () => {
     // Close + reopen both run the tab through cloneTab; the browser
     // branch must carry the per-tab view state or Cmd+Shift+T snaps the
