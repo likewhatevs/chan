@@ -10,7 +10,7 @@ export type TerminalWsPathOpts = {
   tabId?: string | null;
   sessionId?: string | null;
   /// Byte cursor to resume a reattach from, when the client primes a cached
-  /// scrollback snapshot (ask 6). Omitted -> a full replay from the ring head
+  /// scrollback snapshot. Omitted -> a full replay from the ring head
   /// (the server reports any overflow loss via `missed_bytes`).
   since?: number | null;
   /// The session generation the cached snapshot belongs to. The server honors

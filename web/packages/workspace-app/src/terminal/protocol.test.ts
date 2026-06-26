@@ -9,7 +9,7 @@ describe("terminal protocol invariants", () => {
   test("reattach defaults to a full replay; a cursor rides only with a generation", () => {
     // The default `since` is still 0 (a full replay into a fresh xterm); a byte
     // cursor is sent ONLY from a validated scrollback-snapshot cache hit, always
-    // paired with the session generation the server gates it against (ask 6). A
+    // paired with the session generation the server gates it against. A
     // bare per-tab cursor -- the old "last line after a split" bug -- never goes
     // on the wire on its own.
     expect(session).toContain(

@@ -31,7 +31,7 @@ describe("terminalWsPath", () => {
   test("resumes from a cached byte cursor + generation when provided", () => {
     // A valid scrollback-snapshot cache hit sends its cursor + generation; the
     // server replays only the delta past it, and honors it only on a matching
-    // generation (ask 6).
+    // generation.
     expect(
       terminalWsPath({
         cols: 80,

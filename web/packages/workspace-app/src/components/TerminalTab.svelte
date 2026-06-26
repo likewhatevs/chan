@@ -212,7 +212,7 @@
   // window that's actually in memory.
   let scrollbackLines = scrollbackLinesFromMb(SCROLLBACK_MB_DEFAULT);
   let ws: WebSocket | null = null;
-  // Scrollback snapshot resume state (ask 6). `pendingSnapshot` is a cache hit
+  // Scrollback snapshot resume state. `pendingSnapshot` is a cache hit
   // loaded at connect time, primed into the xterm on the attach prelude only
   // when the server confirms the same generation + no missed bytes; otherwise
   // discarded for a full replay. `receivedSeq` tracks the server byte cursor
@@ -784,7 +784,7 @@
     const reattaching = Boolean(tab.terminalSessionId);
     pendingPromptSeed = reattaching ? "" : (tab.seedInput ?? "");
     promptSeedSent = false;
-    // Try to resume from a cached scrollback snapshot (ask 6, option A). Only
+    // Try to resume from a cached scrollback snapshot. Only
     // for a reattach to a known session AND when the cached geometry still
     // matches the live xterm -- a serialized screen written into a different
     // width reflows wrong (absolute cursor + hard-wrap baked at the old cols).
@@ -1094,7 +1094,7 @@
 
   /// Capture a bounded SerializeAddon snapshot of the current screen +
   /// scrollback into localStorage so the NEXT reload restores it instantly and
-  /// the server only streams the delta past `receivedSeq` (ask 6). Keyed by the
+  /// the server only streams the delta past `receivedSeq`. Keyed by the
   /// server session id + its generation; a capture over the per-snapshot byte
   /// budget is dropped (the reattach falls back to a full replay) rather than
   /// evicting other terminals. Synchronous, for the pagehide/unload path.
@@ -1122,7 +1122,7 @@
   }
 
   // Persist a scrollback snapshot when the page is hidden/reloaded so the
-  // reattach after the reload resumes from it (ask 6). pagehide is the
+  // reattach after the reload resumes from it. pagehide is the
   // mobile-safe variant; beforeunload covers desktop reloads. Synchronous --
   // async work in these handlers is unreliable.
   $effect(() => {

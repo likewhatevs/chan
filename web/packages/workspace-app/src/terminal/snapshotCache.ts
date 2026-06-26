@@ -1,4 +1,4 @@
-/// Terminal scrollback snapshot cache (ask 6, option A).
+/// Terminal scrollback snapshot cache.
 ///
 /// Persists a bounded SerializeAddon ANSI snapshot of a terminal's screen +
 /// scrollback so a reload restores it INSTANTLY from localStorage and the

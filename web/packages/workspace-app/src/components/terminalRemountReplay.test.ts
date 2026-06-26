@@ -3,8 +3,8 @@ import terminalSource from "./TerminalTab.svelte?raw";
 import sessionSource from "../terminal/session.ts?raw";
 
 // A TerminalTab (re)mount -- pane split, tile swap, cross-pane drag,
-// cross-window move, reload -- feeds a brand-new EMPTY xterm. ask 6 lets a
-// reattach RESUME from a cached scrollback snapshot instead of always
+// cross-window move, reload -- feeds a brand-new EMPTY xterm; a reattach
+// RESUMES from a cached scrollback snapshot instead of always
 // re-replaying the full server ring -- but only in the SAFE form that does NOT
 // reintroduce the old "terminal shows only its last line after a split" bug:
 // the byte cursor is never a bare per-tab field. It rides ONLY with a
@@ -37,7 +37,7 @@ describe("terminal reattach resumes safely or full-replays", () => {
   test("a cached snapshot primes only on a generation + missed match, else full replay", () => {
     // The snapshot is written into the fresh xterm ONLY when the prelude
     // confirms the same generation and no missed bytes; otherwise it is dropped
-    // and the server's full replay repaints from scratch (option A's fallback).
+    // and the server's full replay repaints from scratch (the fallback).
     expect(term).toMatch(
       /frame\.generation === pendingSnapshot\.generation &&\s*\(frame\.missed_bytes \?\? 0\) === 0/,
     );
