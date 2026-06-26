@@ -136,6 +136,39 @@ pub enum ControlRequest {
     WindowHide {
         id: String,
     },
+    // `cs session list`: participants + leader + each one's status, as JSON
+    // in `Ok.message` for the CLI to render (like WindowList). Works on both
+    // workspace and terminal tenants. Session-scoped: no window id.
+    SessionList,
+    // `cs session self --name=`: rename the CALLING client. window_id is the
+    // caller's own ($CHAN_WINDOW_ID), supplied by the CLI via open_env().
+    SessionSelf {
+        window_id: String,
+        name: String,
+    },
+    // `cs session handover`: a FOLLOWER requests handover from the live leader
+    // (blocks for accept/reject up to timeout_secs); or the LEADER answers a
+    // pending request with accept/reject (the CLI path for a non-visible
+    // leader). window_id is the caller's own. `to` optionally names the target
+    // window id (default: the requester).
+    SessionHandover {
+        window_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        to: Option<String>,
+        #[serde(default)]
+        accept: bool,
+        #[serde(default)]
+        reject: bool,
+        #[serde(default)]
+        timeout_secs: u64,
+    },
+    // `cs session takeover [--force]`: become leader. Plain takeover only when
+    // the leader is disconnected/gone; `--force` seizes a LIVE leader.
+    SessionTakeover {
+        window_id: String,
+        #[serde(default)]
+        force: bool,
+    },
     TermRestart {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         tab_name: Option<String>,
@@ -771,6 +804,72 @@ mod survey_wire_tests {
         let back: ControlRequest =
             serde_json::from_str(&serde_json::to_string(&req).unwrap()).unwrap();
         assert!(matches!(back, ControlRequest::WindowHide { .. }));
+    }
+
+    #[test]
+    fn session_list_request_tag() {
+        let v: serde_json::Value = serde_json::to_value(ControlRequest::SessionList).unwrap();
+        assert_eq!(v["type"], "session_list");
+    }
+
+    #[test]
+    fn session_self_request_tag_window_id_and_name() {
+        let req = ControlRequest::SessionSelf {
+            window_id: "w-abc".into(),
+            name: "alice".into(),
+        };
+        let v: serde_json::Value = serde_json::to_value(&req).unwrap();
+        assert_eq!(v["type"], "session_self");
+        assert_eq!(v["window_id"], "w-abc");
+        assert_eq!(v["name"], "alice");
+    }
+
+    #[test]
+    fn session_handover_request_tag_and_optional_fields() {
+        // `to` is skipped when None; accept/reject/timeout_secs default and a
+        // minimal `{type, window_id}` decodes (the server's path).
+        let req = ControlRequest::SessionHandover {
+            window_id: "w-abc".into(),
+            to: None,
+            accept: false,
+            reject: false,
+            timeout_secs: 30,
+        };
+        let v: serde_json::Value = serde_json::to_value(&req).unwrap();
+        assert_eq!(v["type"], "session_handover");
+        assert_eq!(v["window_id"], "w-abc");
+        assert!(v.get("to").is_none());
+        assert_eq!(v["timeout_secs"], 30);
+        let back: ControlRequest =
+            serde_json::from_str(r#"{"type":"session_handover","window_id":"w-abc"}"#).unwrap();
+        assert!(matches!(
+            back,
+            ControlRequest::SessionHandover {
+                accept: false,
+                reject: false,
+                timeout_secs: 0,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn session_takeover_request_tag_and_force() {
+        let req = ControlRequest::SessionTakeover {
+            window_id: "w-abc".into(),
+            force: false,
+        };
+        let v: serde_json::Value = serde_json::to_value(&req).unwrap();
+        assert_eq!(v["type"], "session_takeover");
+        assert_eq!(v["window_id"], "w-abc");
+        assert_eq!(v["force"], false);
+        let back: ControlRequest =
+            serde_json::from_str(r#"{"type":"session_takeover","window_id":"w-abc","force":true}"#)
+                .unwrap();
+        assert!(matches!(
+            back,
+            ControlRequest::SessionTakeover { force: true, .. }
+        ));
     }
 
     #[test]

@@ -130,6 +130,15 @@ pub enum ShellAction {
         #[command(subcommand)]
         action: WindowAction,
     },
+    /// Manage this session's leader and followers. `cs session list` shows the
+    /// participants and the leader; `self --name=` renames you; `handover`
+    /// requests (or, as leader, answers) a handover; `takeover` claims
+    /// leadership when the leader is gone (`--force` seizes a live one).
+    #[command(infer_subcommands = true)]
+    Session {
+        #[command(subcommand)]
+        action: SessionAction,
+    },
     /// Inspect or drive a window's tab/pane layout. Bare `cs pane` reports
     /// the layout (every pane, its tabs and which is selected); the
     /// subcommands focus a pane, split it right|bottom, resize it, or close a
@@ -203,6 +212,53 @@ pub enum WindowAction {
     Hide {
         /// The window id (see `cs window list`).
         id: String,
+    },
+}
+
+/// `cs session <action>`: manage the session's leader and followers over the
+/// control socket. `list` is socket-only; `self`/`handover`/`takeover` carry
+/// the caller's own window id ($CHAN_WINDOW_ID) so the server knows which
+/// participant is acting.
+#[derive(Subcommand, Debug)]
+pub enum SessionAction {
+    /// List the session participants, the leader, and each one's status.
+    /// Markdown by default; `--json [--pretty]` for machine output.
+    List {
+        /// Emit the raw JSON rows instead of the markdown table.
+        #[arg(long)]
+        json: bool,
+        /// With --json, pretty-print (indent) the JSON. Ignored without --json.
+        #[arg(long)]
+        pretty: bool,
+    },
+    /// Rename yourself in this session.
+    #[command(name = "self")]
+    SelfCmd {
+        /// The new display name for this client.
+        #[arg(long)]
+        name: String,
+    },
+    /// Request a leader handover (default), or accept/reject a pending request
+    /// when you are the leader.
+    Handover {
+        /// Window id to hand leadership to (default: you).
+        #[arg(long)]
+        to: Option<String>,
+        /// Accept a pending handover request (leader only).
+        #[arg(long)]
+        accept: bool,
+        /// Reject a pending handover request (leader only).
+        #[arg(long)]
+        reject: bool,
+        /// Seconds to wait for the leader's answer.
+        #[arg(long, default_value_t = 30)]
+        timeout: u64,
+    },
+    /// Take over as leader (only when the leader is gone, unless --force).
+    Takeover {
+        /// Seize leadership even from a live leader.
+        #[arg(long)]
+        force: bool,
     },
 }
 
@@ -747,6 +803,41 @@ pub async fn dispatch(action: ShellAction) -> Result<()> {
             }
             WindowAction::Hide { id } => cmd_window_op(ControlRequest::WindowHide { id }).await,
         },
+        ShellAction::Session { action } => match action {
+            SessionAction::List { json, pretty } => cmd_session_list(json, pretty).await,
+            SessionAction::SelfCmd { name } => {
+                let env = open_env()?;
+                cmd_session_op(ControlRequest::SessionSelf {
+                    window_id: env.window_id,
+                    name,
+                })
+                .await
+            }
+            SessionAction::Handover {
+                to,
+                accept,
+                reject,
+                timeout,
+            } => {
+                let env = open_env()?;
+                cmd_session_op(ControlRequest::SessionHandover {
+                    window_id: env.window_id,
+                    to,
+                    accept,
+                    reject,
+                    timeout_secs: timeout,
+                })
+                .await
+            }
+            SessionAction::Takeover { force } => {
+                let env = open_env()?;
+                cmd_session_op(ControlRequest::SessionTakeover {
+                    window_id: env.window_id,
+                    force,
+                })
+                .await
+            }
+        },
         ShellAction::Search {
             query,
             limit,
@@ -832,6 +923,66 @@ fn render_window_list_markdown(raw: &str) -> Result<String> {
         out.push_str(&format!(
             "| {id} | {library} | {kind} | {title} | {ordinal} | {status} |\n"
         ));
+    }
+    Ok(out)
+}
+
+/// `cs session list`: fetch the session participant roster (window id, name,
+/// role, status) and print it. Session-scoped like `cs window list`: needs
+/// only $CHAN_CONTROL_SOCKET, no window id.
+async fn cmd_session_list(json: bool, pretty: bool) -> Result<()> {
+    let socket = control_socket_env()?;
+    let raw = send_control_request(&socket, ControlRequest::SessionList).await?;
+    if json {
+        if pretty {
+            let value: serde_json::Value =
+                serde_json::from_str(&raw).context("parsing session list JSON")?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&value).context("formatting session list JSON")?
+            );
+        } else {
+            println!("{raw}");
+        }
+    } else {
+        print!("{}", render_session_list_markdown(&raw)?);
+    }
+    Ok(())
+}
+
+/// `cs session <self|handover|takeover>`: send a session command and print the
+/// server's reply. A `handover` request BLOCKS here until the leader accepts /
+/// rejects or the timeout elapses (the CLI exits 124 on timeout, like
+/// `cs window rm` blocking on the desktop dialog).
+async fn cmd_session_op(req: ControlRequest) -> Result<()> {
+    let socket = control_socket_env()?;
+    let message = send_control_request(&socket, req).await?;
+    println!("{message}");
+    Ok(())
+}
+
+/// Render the `cs session list` rows (`{window_id, name, role, status}`) as a
+/// markdown table. `role` is leader or follower; `status` is the participant
+/// lifecycle state (live / disconnecting / disconnected / gone).
+fn render_session_list_markdown(raw: &str) -> Result<String> {
+    let value: serde_json::Value =
+        serde_json::from_str(raw).context("parsing session list JSON")?;
+    let rows = value
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("session list JSON is not an array"))?;
+    if rows.is_empty() {
+        return Ok("No session participants.\n".to_string());
+    }
+    let mut out = String::from(
+        "| window | name | role | status |\n\
+         | --- | --- | --- | --- |\n",
+    );
+    for row in rows {
+        let window = row.get("window_id").and_then(|v| v.as_str()).unwrap_or("?");
+        let name = row.get("name").and_then(|v| v.as_str()).unwrap_or("");
+        let role = row.get("role").and_then(|v| v.as_str()).unwrap_or("");
+        let status = row.get("status").and_then(|v| v.as_str()).unwrap_or("");
+        out.push_str(&format!("| {window} | {name} | {role} | {status} |\n"));
     }
     Ok(out)
 }
@@ -1766,6 +1917,30 @@ mod tests {
             out.contains("| probe | s1 | - | - | - | - | - | /tmp |"),
             "row: {out}"
         );
+    }
+
+    #[test]
+    fn session_list_markdown_renders_participant_rows() {
+        let raw = r#"[{"window_id":"w-abc","name":"alice","role":"leader","status":"live"},{"window_id":"w-def","name":"bob","role":"follower","status":"disconnecting"}]"#;
+        let out = render_session_list_markdown(raw).expect("render");
+        assert!(
+            out.contains("| window | name | role | status |"),
+            "header: {out}"
+        );
+        assert!(
+            out.contains("| w-abc | alice | leader | live |"),
+            "leader: {out}"
+        );
+        assert!(
+            out.contains("| w-def | bob | follower | disconnecting |"),
+            "follower: {out}"
+        );
+    }
+
+    #[test]
+    fn session_list_markdown_empty_is_short_line() {
+        let out = render_session_list_markdown("[]").expect("render");
+        assert_eq!(out, "No session participants.\n");
     }
 
     #[test]
