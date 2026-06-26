@@ -24,8 +24,21 @@
     clearError,
   } from "../state/library.svelte";
   import { LOCAL_LIBRARY_ID, librarySectionLabel, windowRowLabel } from "../lib/windowLabel";
+  import { hasControlAttention, clearControlAttention } from "../state/controlAttention.svelte";
   import { readOnly } from "../state/capabilities";
   import type { WindowRecord } from "../api/library";
+
+  // A control terminal whose inner process exited flags its devserver's library
+  // for attention; its eye slow-flashes yellow until the user acts on the window.
+  function needsAttention(w: WindowRecord): boolean {
+    return w.control && hasControlAttention(w.library_id);
+  }
+
+  // The user acting on the window (focus or show/hide) acknowledges the
+  // attention -- clear the flash.
+  function acknowledge(w: WindowRecord): void {
+    if (w.control) clearControlAttention(w.library_id);
+  }
 
   // The FOCUS / SHOW-HIDE bridge ops reject on a surface with no desktop and on a
   // stale/reaped window (the native window is gone). Catch here and surface the
@@ -121,16 +134,31 @@
           type="button"
           title="Focus window"
           aria-label="Focus window"
-          onclick={() => run(focusWindow(w))}>
+          onclick={() => {
+            acknowledge(w);
+            run(focusWindow(w));
+          }}>
           <Focus size={16} />
         </button>
         <button
           class="icon-btn"
           class:on={!w.hidden}
+          class:attention={needsAttention(w)}
           type="button"
-          title={w.hidden ? "Show window" : "Hide window"}
-          aria-label={w.hidden ? "Show window" : "Hide window"}
-          onclick={() => run(toggleWindow(w))}>
+          title={needsAttention(w)
+            ? "Control terminal exited -- show window"
+            : w.hidden
+              ? "Show window"
+              : "Hide window"}
+          aria-label={needsAttention(w)
+            ? `${w.hidden ? "Show window" : "Hide window"} (needs attention)`
+            : w.hidden
+              ? "Show window"
+              : "Hide window"}
+          onclick={() => {
+            acknowledge(w);
+            run(toggleWindow(w));
+          }}>
           {#if w.hidden}<EyeOff size={16} />{:else}<Eye size={16} />{/if}
         </button>
       </div>
@@ -157,3 +185,36 @@
     {@render librarySection(groups)}
   </section>
 {/if}
+
+<style>
+  /* A control terminal whose inner process exited: its eye slow-flashes yellow to
+     request attention (additive to the action survey). The pulse overrides the
+     .on accent tint while it runs; the user acting on the window clears it. */
+  .icon-btn.attention {
+    animation: control-attention 1.6s ease-in-out infinite;
+  }
+
+  @keyframes control-attention {
+    0%,
+    100% {
+      border-color: var(--btn-border);
+      color: var(--text-secondary);
+      background: var(--btn-bg);
+    }
+    50% {
+      border-color: #e3b341;
+      color: #e3b341;
+      background: color-mix(in srgb, #e3b341 18%, transparent);
+    }
+  }
+
+  /* Respect reduced-motion: hold a steady yellow instead of pulsing. */
+  @media (prefers-reduced-motion: reduce) {
+    .icon-btn.attention {
+      animation: none;
+      border-color: #e3b341;
+      color: #e3b341;
+      background: color-mix(in srgb, #e3b341 18%, transparent);
+    }
+  }
+</style>

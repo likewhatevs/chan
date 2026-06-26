@@ -24,6 +24,7 @@
 
 import { library, connectDevserver, disconnectDevserver, reportError } from "./library.svelte";
 import { openEditDevserver } from "./dialog.svelte";
+import { markControlAttention } from "./controlAttention.svelte";
 
 interface ControlClosedState {
   open: boolean;
@@ -61,10 +62,15 @@ export function controlClosedId(payload: unknown): string | null {
   return null;
 }
 
-/** Dispatch a raw `devserver-control-closed` payload to the survey. */
+/** Dispatch a raw `devserver-control-closed` payload: flash the control row's
+ * eye for attention AND open the action survey (additive -- the flash lingers if
+ * the survey is dismissed). */
 export function onControlClosedEvent(payload: unknown): void {
   const id = controlClosedId(payload);
-  if (id) handleControlClosed(id);
+  if (id) {
+    markControlAttention(id);
+    handleControlClosed(id);
+  }
 }
 
 /** Open the survey for a devserver whose control terminal just closed. One modal

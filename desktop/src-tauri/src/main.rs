@@ -1485,16 +1485,15 @@ fn spawn_control_terminal_exit_watcher(
                 .get()
                 .and_then(|e| e.control_terminal_exit(&prefix));
             if let Some(code) = exited {
-                // The connect-script PTY is gone, so reap
-                // its chan-library registry row — `reap_control_window` removes the
-                // row AND unmounts the `/control-N` tenant, firing the feed change
-                // so the launcher drops it. DESKTOP-TRIGGERED + REQUIRED (the
-                // control row has no server-side auto-reap). Keyed off the PTY exit
-                // so it covers every survey outcome; idempotent (a disconnect-driven
-                // exit already returned above, its prefix no longer current).
-                if let Some(embedded) = state.embedded() {
-                    embedded.reap_control_window(&serve::control_terminal_label(&id));
-                }
+                // The connect-script PTY is gone, but KEEP the control window row
+                // and its (now dead) tenant: the launcher slow-flashes the row's
+                // eye to request attention, and "show window" reveals the terminal
+                // sitting at "process exited". The row is reaped on the user's next
+                // action -- re-run / disconnect / abandon all teardown through
+                // `reap_control_window`, a re-Connect upserts the same stable label
+                // (`create_control` drops any prior row, so no duplicate), and quit
+                // reaps at exit. (A disconnect-driven exit already returned above,
+                // its prefix no longer current.)
                 // For a script-based devserver, the control script is the connection
                 // (for example `ssh -N` or a foreground `chan devserver`), so its PTY
                 // exiting means the session

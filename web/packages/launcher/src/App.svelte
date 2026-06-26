@@ -15,6 +15,7 @@
   import { dialog, openNewDialog } from "./state/dialog.svelte";
   import { confirm } from "./state/confirm.svelte";
   import { controlClosed, onControlClosedEvent } from "./state/controlClosed.svelte";
+  import { clearControlAttention } from "./state/controlAttention.svelte";
   import { onTauriEvent } from "./api/desktop";
   import { applyTheme } from "./state/theme.svelte";
   import { readOnly } from "./state/capabilities";
@@ -38,6 +39,21 @@
       library.devservers.length === 0 &&
       library.windows.length === 0,
   );
+
+  // Clear a devserver's control-attention flash when it RECONNECTS (a
+  // disconnected -> connected transition). Tracking the transition, not the
+  // current state, avoids clearing the flash that the control-closed event just
+  // set while the feed still reports the dying devserver as connected.
+  const wasConnected = new Map<string, boolean>();
+  $effect(() => {
+    for (const ds of library.devservers) {
+      const now = ds.status === "connected";
+      if (now && !(wasConnected.get(ds.id) ?? false) && ds.library_id) {
+        clearControlAttention(ds.library_id);
+      }
+      wasConnected.set(ds.id, now);
+    }
+  });
 </script>
 
 <TopBar />

@@ -10,6 +10,7 @@ import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import { mount, unmount, flushSync } from "svelte";
 import WindowFeed from "./WindowFeed.svelte";
 import { library, loadLibrary } from "../state/library.svelte";
+import { markControlAttention, clearAllControlAttention } from "../state/controlAttention.svelte";
 import type { WindowRecord } from "../api/library";
 
 // Pin the in-memory mock as the backend so the feed renders the seed windows
@@ -46,6 +47,7 @@ afterEach(() => {
   target?.remove();
   target = null;
   app = null;
+  clearAllControlAttention();
 });
 
 describe("WindowFeed row actions", () => {
@@ -184,6 +186,43 @@ describe("WindowFeed row actions", () => {
     expect(library.error).toBeNull();
 
     hide.mockRestore();
+  });
+});
+
+describe("WindowFeed control-attention flash", () => {
+  it("flashes the control terminal's eye when its devserver needs attention", () => {
+    // The seed devserver ds-1 (library DS_LIBRARY_ID) owns the control terminal
+    // w-ds1-control; flagging it for attention flashes that row's eye.
+    markControlAttention("ds-1");
+    target = document.createElement("div");
+    document.body.appendChild(target);
+    app = mount(WindowFeed, { target });
+
+    const flashing = [...target.querySelectorAll("button.icon-btn.attention")];
+    expect(flashing.length).toBe(1); // exactly the control row, not other windows
+    expect(flashing[0]!.getAttribute("aria-label")).toContain("needs attention");
+  });
+
+  it("clears the flash when the user acts on the control window", async () => {
+    markControlAttention("ds-1");
+    target = document.createElement("div");
+    document.body.appendChild(target);
+    app = mount(WindowFeed, { target });
+
+    const eye = target.querySelector("button.icon-btn.attention") as HTMLButtonElement;
+    expect(eye).toBeTruthy();
+    eye.click();
+    await new Promise((r) => setTimeout(r, 0));
+    flushSync();
+    // Acknowledged: no row flashes any more.
+    expect(target.querySelector("button.icon-btn.attention")).toBeNull();
+  });
+
+  it("does not flash any eye when no devserver needs attention", () => {
+    target = document.createElement("div");
+    document.body.appendChild(target);
+    app = mount(WindowFeed, { target });
+    expect(target.querySelector("button.icon-btn.attention")).toBeNull();
   });
 });
 
