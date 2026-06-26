@@ -125,3 +125,20 @@ describe("devserver registry", () => {
     expect(remote.every((w) => w.connected)).toBe(true);
   });
 });
+
+describe("resync on regaining visibility/focus", () => {
+  it("re-reads both registries on a window focus event", async () => {
+    // loadLibrary (beforeEach) installs the visibility/focus listener. A focus
+    // re-reads the authoritative registries so state drift while hidden / a
+    // feed blip is corrected with no user action.
+    const { backend } = await import("../api/backend");
+    const ws = vi.spyOn(backend, "listWorkspaces");
+    const ds = vi.spyOn(backend, "listDevservers");
+    window.dispatchEvent(new Event("focus"));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(ws).toHaveBeenCalled();
+    expect(ds).toHaveBeenCalled();
+    ws.mockRestore();
+    ds.mockRestore();
+  });
+});

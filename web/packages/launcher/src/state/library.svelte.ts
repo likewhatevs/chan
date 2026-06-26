@@ -24,6 +24,7 @@ export const library = $state<LibraryState>({
 });
 
 let unwatch: (() => void) | null = null;
+let removeVisibilityResync: (() => void) | null = null;
 
 function errorText(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
@@ -95,12 +96,41 @@ export async function loadLibrary(): Promise<void> {
       // The window feed is best-effort: a host without WebSocket or a failed
       // connection must not break loading the registries.
     }
+    installVisibilityResync();
   }
 }
 
 export function stopWatching(): void {
   unwatch?.();
   unwatch = null;
+  removeVisibilityResync?.();
+  removeVisibilityResync = null;
+}
+
+/** Re-read the authoritative registries (best-effort, coalesced). The launcher
+ * runs this when it regains visibility/focus so a change missed while the window
+ * was hidden (the desktop hides, not destroys, the launcher) or the feed socket
+ * blipped is corrected with no user action -- the client-side resync of the world
+ * the redesign calls for, with no new server endpoint. */
+export function resync(): void {
+  void refreshWorkspacesLive();
+  void refreshDevserversLive();
+}
+
+// Resync whenever the launcher becomes visible / focused again. The window feed's
+// reconnect already heals a dropped socket; this additionally covers a frame
+// missed while the socket was alive and the time the launcher spent hidden.
+function installVisibilityResync(): void {
+  if (removeVisibilityResync || typeof document === "undefined") return;
+  const onVisible = (): void => {
+    if (document.visibilityState === "visible") resync();
+  };
+  document.addEventListener("visibilitychange", onVisible);
+  window.addEventListener("focus", resync);
+  removeVisibilityResync = () => {
+    document.removeEventListener("visibilitychange", onVisible);
+    window.removeEventListener("focus", resync);
+  };
 }
 
 async function refreshWorkspaces(): Promise<void> {
@@ -275,8 +305,10 @@ export async function setDevserverWorkspaceOn(
     clearPending(key); // stop the spinner; a 409 live-terminal opens the confirm
     throw e;
   }
-  // No direct refresh here — the watch push drives refreshWorkspacesLive, whose
-  // reconcile clears the marker once the served row flips.
+  // Re-list now rather than wait on the watch push alone: a dropped feed would
+  // otherwise strand the served row's marker until the 10s backstop. reconcile
+  // clears it once the served row flips; the watch push keeps it live thereafter.
+  await refreshWorkspaces();
 }
 
 /** Forget (unmount + drop) a connected devserver's served workspace by prefix. */

@@ -324,18 +324,56 @@ export const liveApi: LibraryApi = {
   pickFolder: () => req("POST", "/api/library/fs/pick-folder"),
   listWindows: () => req("GET", "/api/library/windows"),
   watchWindows: (onSet) => {
+    // The feed is the live resync channel: the server pushes a FULL snapshot on
+    // connect and on every change, so a fresh connection re-syncs the whole world.
+    // Reconnect with capped backoff when the socket drops -- a closed socket left
+    // un-rearmed is how a row strands on a stale `starting`/`connecting` status
+    // (the dangling spinner), since no further push ever lands. The reconnect's
+    // on-connect snapshot is the consolidation step that corrects it.
     const proto = location.protocol === "https:" ? "wss:" : "ws:";
-    const token = authToken();
-    const q = token ? `?t=${encodeURIComponent(token)}` : "";
-    const ws = new WebSocket(`${proto}//${location.host}/api/library/windows/watch${q}`);
-    ws.onmessage = (ev) => {
-      try {
-        onSet(JSON.parse(ev.data) as WindowSet);
-      } catch {
-        // A malformed frame is dropped; the next full snapshot self-heals.
-      }
+    let ws: WebSocket | null = null;
+    let stopped = false;
+    let attempt = 0;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+
+    const open = (): void => {
+      const token = authToken();
+      const q = token ? `?t=${encodeURIComponent(token)}` : "";
+      ws = new WebSocket(`${proto}//${location.host}/api/library/windows/watch${q}`);
+      ws.onmessage = (ev) => {
+        attempt = 0; // a frame proves the link is healthy: reset the backoff
+        try {
+          onSet(JSON.parse(ev.data) as WindowSet);
+        } catch {
+          // A malformed frame is dropped; the next full snapshot self-heals.
+        }
+      };
+      ws.onclose = () => {
+        if (!stopped) scheduleReconnect();
+      };
+      ws.onerror = () => {
+        // Surface the failure as a close so the single reconnect path runs.
+        ws?.close();
+      };
     };
-    return () => ws.close();
+
+    const scheduleReconnect = (): void => {
+      if (stopped || timer !== null) return;
+      // 0.5s, 1s, 2s, 4s ... capped at 15s.
+      const delay = Math.min(500 * 2 ** attempt, 15000);
+      attempt += 1;
+      timer = setTimeout(() => {
+        timer = null;
+        if (!stopped) open();
+      }, delay);
+    };
+
+    open();
+    return () => {
+      stopped = true;
+      if (timer !== null) clearTimeout(timer);
+      ws?.close();
+    };
   },
   createWindow: (kind, workspacePath) =>
     req("POST", "/api/library/windows", {
