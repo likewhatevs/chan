@@ -12,6 +12,22 @@
   // doing nothing eventually heals on its own.
 
   import { reconnectWatcher, ui } from "../state/store.svelte";
+  import { windowLibraryId } from "../api/client";
+  import { isTauriDesktop, abandonDevserverForWindow } from "../api/desktop";
+
+  // Abandon is offered only on a devserver-backed desktop window: a stuck remote
+  // connection the user can give up on. windowLibraryId() is "local" for the
+  // local library; isTauriDesktop() gates out the plain browser (which has no IPC
+  // and whose tab the user closes themselves). Both read once -- not reactive.
+  const canAbandon = isTauriDesktop() && windowLibraryId() !== "local";
+  let abandonBtn: HTMLButtonElement | null = $state(null);
+
+  // Abandon: ask the desktop to disconnect this window's devserver. The window
+  // closes async via the watcher; best-effort, so a failed/inert IPC just leaves
+  // the overlay (the user can still Retry or wait for auto-reconnect).
+  function abandon(): void {
+    void abandonDevserverForWindow();
+  }
 
   /// Show the overlay only AFTER the watcher channel has been open
   /// at least once during this session. The "connecting" state at
@@ -82,12 +98,18 @@
   });
 
   function trapTab(e: KeyboardEvent): void {
-    // Single focusable element inside the dialog: any Tab/Shift+Tab
-    // just keeps focus where it is.
-    if (e.key === "Tab") {
-      e.preventDefault();
-      retryBtn?.focus();
-    }
+    // Keep focus on the dialog's buttons (Retry, plus Abandon when offered):
+    // Tab/Shift+Tab cycles between them and never leaks to the blocked UI behind.
+    if (e.key !== "Tab") return;
+    e.preventDefault();
+    const focusables = [retryBtn, abandonBtn].filter(
+      (b): b is HTMLButtonElement => b !== null,
+    );
+    if (focusables.length === 0) return;
+    const here = focusables.indexOf(document.activeElement as HTMLButtonElement);
+    const step = e.shiftKey ? -1 : 1;
+    const next = (here + step + focusables.length) % focusables.length;
+    focusables[next < 0 ? 0 : next]!.focus();
   }
 
   const message = $derived.by(() => {
@@ -124,9 +146,16 @@
     <div class="card">
       <div class="title">{message}</div>
       <div class="subline">{subline}</div>
-      <button class="retry" bind:this={retryBtn} onclick={reconnectWatcher}>
-        Retry now
-      </button>
+      <div class="actions">
+        <button class="retry" bind:this={retryBtn} onclick={reconnectWatcher}>
+          Retry now
+        </button>
+        {#if canAbandon}
+          <button class="abandon" bind:this={abandonBtn} onclick={abandon}>
+            Abandon
+          </button>
+        {/if}
+      </div>
     </div>
   </div>
 {/if}
@@ -167,8 +196,12 @@
     color: var(--text-secondary);
     line-height: 1.4;
   }
+  .actions {
+    display: flex;
+    gap: 10px;
+    justify-content: center;
+  }
   .retry {
-    align-self: center;
     background: var(--link);
     color: #fff;
     border: 1px solid var(--link);
@@ -178,4 +211,18 @@
     cursor: pointer;
   }
   .retry:hover { filter: brightness(1.1); }
+  /* Abandon is the destructive escape hatch: muted until hover, then danger. */
+  .abandon {
+    background: transparent;
+    color: var(--text-secondary);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 6px 14px;
+    font: inherit;
+    cursor: pointer;
+  }
+  .abandon:hover {
+    border-color: var(--danger);
+    color: var(--danger);
+  }
 </style>

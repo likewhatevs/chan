@@ -182,6 +182,25 @@ export async function requestCloseWindow(): Promise<void> {
   }
 }
 
+/// Abandon the devserver backing THIS workspace window: tell the desktop to
+/// disconnect it. Called by the disconnect overlay's Abandon button on a
+/// devserver-backed desktop window whose watcher channel has dropped. The desktop
+/// resolves which devserver this window belongs to (from its window label), shows
+/// the launcher, and drives the disconnect; the window then closes async via the
+/// watcher. No-op off-desktop; INERT on a non-loopback devserver window (the IPC
+/// ACL is not granted there) -- both degrade to a silent best-effort no-op.
+export async function abandonDevserverForWindow(): Promise<void> {
+  if (!isTauriDesktop()) return;
+  try {
+    await tauriInvoke("abandon_devserver_for_window");
+  } catch (err) {
+    console.warn(
+      "abandonDevserverForWindow: abandon_devserver_for_window IPC failed",
+      err,
+    );
+  }
+}
+
 /// Open the platform's web inspector. On chan-desktop calls the
 /// `open_devtools` IPC. On web returns false so the caller can
 /// surface a hint pointing the user at the browser's built-in

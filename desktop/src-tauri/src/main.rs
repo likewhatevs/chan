@@ -2694,6 +2694,39 @@ fn request_close_window(app: tauri::AppHandle, window: tauri::WebviewWindow) -> 
     window.destroy().map_err(err)
 }
 
+/// Abandon the devserver backing a workspace window (the disconnect overlay's
+/// Abandon button). A devserver window's label is `<library_id>::<window_id>`;
+/// resolve the owning devserver from that library id via the cached
+/// `library_id_of` over the CONNECTED devservers -- NOT `devserver_id_for_library`,
+/// whose live-snapshot read is empty exactly when the overlay shows -- then reveal
+/// the launcher (it hides, not destroys) and emit `devserver-abandon` so the
+/// launcher disconnects it, reusing the connect spinner lifecycle. The window then
+/// closes async via the watcher's teardown. Inert on a local window, or when no
+/// connected devserver matches (already disconnected).
+#[tauri::command]
+fn abandon_devserver_for_window(
+    app: tauri::AppHandle,
+    state: State<Arc<AppState>>,
+    window: tauri::WebviewWindow,
+) -> Result<(), String> {
+    let label = window.label();
+    let Some(library_id) = label.split("::").next().filter(|l| l.starts_with("lib-")) else {
+        return Ok(()); // a local window has no devserver to abandon
+    };
+    let cfg = state.store.lock().unwrap().get().map_err(err)?;
+    let devserver_id = cfg
+        .devservers
+        .iter()
+        .filter(|d| state.devservers.is_connected(&d.id))
+        .find(|d| state.devserver_feed.library_id_of(&d.id).as_deref() == Some(library_id))
+        .map(|d| d.id.clone());
+    if let Some(id) = devserver_id {
+        let _ = show_window(&app, "main");
+        let _ = app.emit("devserver-abandon", id);
+    }
+    Ok(())
+}
+
 /// Browser-style zoom controls. Step size is
 /// 10 % per Cmd++/Cmd+- press; the clamp range matches Tauri's own
 /// `zoom_hotkeys_enabled` polyfill semantics (0.25-5.0).
@@ -3516,6 +3549,7 @@ fn main() {
             reload_window,
             open_devtools,
             request_close_window,
+            abandon_devserver_for_window,
             download::save_file_to_downloads,
             // Registered on every platform; returns [] off macOS so the
             // SPA's terminal drop handler needs no platform branching.

@@ -32,6 +32,7 @@ permissions = [
   "allow-reload-window",
   "allow-open-devtools",
   "allow-request-close-window",
+  "allow-abandon-devserver-for-window",
   "allow-save-file-to-downloads",
   "allow-zoom-in",
   "allow-zoom-out",
@@ -91,6 +92,11 @@ commands.allow = ["open_devtools"]
 identifier = "allow-request-close-window"
 description = "Enables the request_close_window command."
 commands.allow = ["request_close_window"]
+
+[[permission]]
+identifier = "allow-abandon-devserver-for-window"
+description = "Enables the abandon_devserver_for_window command (disconnect overlay Abandon)."
+commands.allow = ["abandon_devserver_for_window"]
 
 [[permission]]
 identifier = "allow-save-file-to-downloads"
