@@ -253,6 +253,13 @@ impl EmbeddedServer {
         self.host.library()
     }
 
+    /// True iff a workspace with this canonical root is mounted right now (under
+    /// any prefix). The launcher's `on` state and the workspace-overlay snapshot
+    /// read this so they reflect the REAL mount, not a stale shadow.
+    pub fn is_root_mounted(&self, root: &std::path::Path) -> bool {
+        self.host.is_root_mounted(root)
+    }
+
     pub fn close_prefix(&self, prefix: &str) -> Result<(), String> {
         self.host
             .close_workspace(prefix)

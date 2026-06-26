@@ -1038,14 +1038,12 @@ async fn set_workspace_on(
     Ok(())
 }
 
-/// Snapshot every currently-on local workspace into the library-owned workspace
-/// overlay (`~/.chan/workspaces.json`) as `on` rows, so the next boot re-serves
-/// them (the §3.2 boot matrix). Off workspaces are simply absent — the CLI
-/// registry surfaces them off; a workspace that fails to re-serve at boot is not
-/// in `serves` and so drops out of this snapshot on the next clean shutdown.
-/// Called after each on/off toggle and on clean shutdown. Best-effort: a no-op
-/// when the embedded host / overlay is unavailable, never fatal to the toggle or
-/// the exit.
+/// Snapshot every currently-mounted local workspace into the library-owned
+/// workspace overlay (`~/.chan/workspaces.json`) as `on` rows, so the next boot
+/// re-serves them (the boot matrix). Off workspaces are simply absent — the CLI
+/// registry surfaces them off. Called after each on/off toggle and on clean
+/// shutdown. Best-effort: a no-op when the embedded host / overlay is
+/// unavailable, never fatal to the toggle or the exit.
 fn persist_workspaces(state: &AppState) {
     let Some(embedded) = state.embedded.get() else {
         return;
@@ -1053,11 +1051,21 @@ fn persist_workspaces(state: &AppState) {
     let Some(overlay) = embedded.workspace_overlay() else {
         return;
     };
-    let mut keys: Vec<String> = state.serves.lock().unwrap().keys().cloned().collect();
-    keys.sort();
-    let rows: Vec<chan_server::PersistedWorkspace> = keys
+    // Reconcile against the host's ACTUAL mounted set (the registered library
+    // workspaces filtered by what is mounted right now), mirroring chan-server's
+    // devserver `persist_state`: a workspace unmounted out-of-band (a
+    // control-socket `chan close`) leaves no desktop-side trace, so reading the
+    // live mount is what keeps a closed workspace from being persisted as `on`
+    // and resurrected on the next boot. `overlay.replace` sorts by path on save.
+    let rows: Vec<chan_server::PersistedWorkspace> = embedded
+        .library()
+        .list_workspaces()
         .into_iter()
-        .map(|path| chan_server::PersistedWorkspace { path, on: true })
+        .filter(|ws| embedded.is_root_mounted(&ws.root_path))
+        .map(|ws| chan_server::PersistedWorkspace {
+            path: ws.root_path.to_string_lossy().into_owned(),
+            on: true,
+        })
         .collect();
     overlay.replace(rows);
 }
@@ -2185,6 +2193,58 @@ fn open_workspace_from_handoff(
                 format!("Could not open {key_for_block} from chan serve: {e}"),
             );
         }
+    });
+    Ok(())
+}
+
+/// Tear down a local workspace handed off from `chan close` / `chan workspace rm`
+/// (handoff `CloseWorkspace`). The control socket reaches the embedded host but
+/// cannot touch `AppState.serves`; this path runs `serve::stop`, which DOES update
+/// the serve map (and closes the window via the watcher), then `persist_workspaces`
+/// snapshots the now-unmounted set so the next boot does not resurrect a closed
+/// workspace. `remove` also unregisters it from the shared library. Off the
+/// listener task — `serve::stop` can block on workspace release — so the CLI gets
+/// a prompt `Closed`; the desktop owns the teardown once it answers.
+fn close_workspace_from_handoff(
+    app: tauri::AppHandle,
+    state: Arc<AppState>,
+    path: PathBuf,
+    remove: bool,
+) -> Result<(), String> {
+    if state.embedded.get().is_none() {
+        // No embedded host to tear down through: let the CLI fall back to the
+        // control-socket path (Error → not HandedOff).
+        return Err("embedded local server is unavailable".to_string());
+    }
+    let key = canonical_key(&path);
+    tauri::async_runtime::spawn(async move {
+        let app_for_stop = app.clone();
+        let state_for_stop = Arc::clone(&state);
+        let key_for_stop = key.clone();
+        // `serve::stop` → `close_prefix` can sleep waiting on workspace release;
+        // keep it off the runtime so the listener stays responsive.
+        let _ = tokio::task::spawn_blocking(move || {
+            serve::stop(Some(&app_for_stop), &state_for_stop, &key_for_stop);
+        })
+        .await;
+        if remove {
+            if let Some(embedded) = state.embedded.get() {
+                let library = embedded.library().clone();
+                let key_for_unreg = key.clone();
+                if let Ok(Err(e)) = tokio::task::spawn_blocking(move || {
+                    unregister_with_retry(&library, &key_for_unreg)
+                })
+                .await
+                {
+                    emit_system_notice(
+                        &app,
+                        "warning",
+                        format!("Could not remove {key} from chan close: {e}"),
+                    );
+                }
+            }
+        }
+        persist_workspaces(&state);
     });
     Ok(())
 }
@@ -3345,6 +3405,21 @@ fn main() {
                                             desktop_version: CHAN_VERSION.into(),
                                         }
                                     }
+                                    Err(message) => Response::Error { message },
+                                },
+                                Request::CloseWorkspace {
+                                    workspace_path,
+                                    remove,
+                                    ..
+                                } => match close_workspace_from_handoff(
+                                    app,
+                                    state,
+                                    PathBuf::from(workspace_path),
+                                    remove,
+                                ) {
+                                    Ok(()) => Response::Closed {
+                                        desktop_version: CHAN_VERSION.into(),
+                                    },
                                     Err(message) => Response::Error { message },
                                 },
                             }
