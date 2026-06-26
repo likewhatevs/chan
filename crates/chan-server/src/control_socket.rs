@@ -702,14 +702,22 @@ async fn handle_request(req: ControlRequest, ctx: &ControlSocketCtx) -> ControlR
             reject,
             timeout_secs,
         } => {
+            // None requests a handover; Some(true/false) is the leader's
+            // accept/reject answer.
+            let answer = if accept {
+                Some(true)
+            } else if reject {
+                Some(false)
+            } else {
+                None
+            };
             handle_session_handover(
                 session_registry,
                 handover_bus,
                 events_tx,
                 window_id,
                 to,
-                accept,
-                reject,
+                answer,
                 timeout_secs,
             )
             .await
@@ -1616,12 +1624,13 @@ async fn handle_session_handover(
     events_tx: &broadcast::Sender<String>,
     window_id: String,
     to: Option<String>,
-    accept: bool,
-    reject: bool,
+    // `None` requests a handover; `Some(true)`/`Some(false)` is the leader
+    // answering a pending request with accept / reject.
+    answer: Option<bool>,
     timeout_secs: u64,
 ) -> ControlResponse {
     // The leader answering a pending request from its own terminal.
-    if accept || reject {
+    if let Some(accept) = answer {
         let Some(pending) = session_registry.pending_for_leader(&window_id) else {
             return ControlResponse::Error {
                 message: "no handover is waiting for your answer".into(),
