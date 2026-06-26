@@ -6,6 +6,39 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [v0.53.0] - 2026-06-26
+
+The first feature round since the unification: multi-client session presence, a self-managed cross-platform devserver daemon, terminal scrollback resume on reload, editor cursor persistence and inline-file links, and a regrouped chan-desktop launcher -- plus six rolled-forward v0.52.0-rc2 fixes and a `chan serve` terminology rename.
+
+### Added
+
+- **Session presence: leader and followers.** Multiple browser / chan-desktop / API clients in one workspace now collaborate. The first client to connect is the session leader; `cs session list` shows the participants, the leader, and each one's live / disconnecting / disconnected / gone status. `cs session self --name=` renames you, `cs session handover` requests leadership from the live leader (who gets an accept/reject prompt), and `cs session takeover --force` seizes it; when a leader goes away the longest-connected live participant is promoted automatically.
+- **`chan devserver --service` is a self-managed cross-platform daemon.** `--service` takes a backend (`none` picks the best for the OS, or `chan` / `systemd` / `launchd`). The `chan` backend runs a single-instance foreground daemon on Linux, macOS, and Windows -- a pidfile + flock with stale-process takeover, `--status` / `--stop` / `--restart` / `--force`, and a `-v` listing of every related file. Reattaching to an already-running server is a health-check watchdog (it no longer follows journald / launchd logs), and a relocated binary still relaunches.
+- **The terminal resumes scrollback on reload.** Instead of replaying the whole server-side ring on every reattach, the client caches a screen snapshot plus a byte cursor in localStorage and asks the server only for the delta since it last saw, guarded by a per-session generation so a restart refreshes cleanly.
+- **The editor remembers your cursor per file.** Reopening a file restores the caret and scroll position; a large file streaming in parks the caret at the top until it finishes; the saved position is dropped when the file disappears. An explicit open still lands at the top.
+- **Inline code that names a local file becomes a link.** When an inline `` `code` `` span resolves to a real workspace file, it renders as a clickable link you open with Cmd/Ctrl-click.
+- **`cs terminal list` traces window -> pane -> tab.** Each terminal shows its owning window, pane, and tab (blank when unknown).
+
+### Changed
+
+- **The chan-desktop launcher is a "Library" tree.** Workspaces and devservers regroup under one tree with per-row controls and a host label you click to copy. On/off spinners settle correctly and resync against the server on a dropped feed or on re-show, with no dangling or out-of-state rows; a devserver's control terminal flashes its EYE button when its process exits.
+- **Empty editable files are discarded on close.** Opening a file, clearing it, and closing the tab deletes the empty file instead of saving it.
+- **`chan serve` is now `chan open` (a local workspace) and `chan devserver` (the tunnel).** The command was renamed; documentation and messages follow.
+
+### Fixed
+
+- **`chan close` / `chan workspace rm` hands off to a running chan-desktop** so the desktop's view stays in sync.
+- **The disconnect/retry overlay** no longer swallows cmd+backtick window cycling, and Abandon disconnects the devserver cleanly.
+- **An explicit open lands the cursor at the top** instead of a stale position.
+- **The link autocomplete inside `[](url)` offers the link itself first.**
+- **The black bar at the bottom of the terminal is gone.**
+- **chan-desktop startup restores only the workspaces that are actually mounted** (one closed out-of-band is not resurrected).
+
+### Notes
+
+- This is a prerelease (`0.53.0-rc1`) validated by a non-publishing dry-run build; the published `v0.53.0` is a later step.
+- Known limitation: a markdown link whose label contains balanced brackets (`[[foo] bar](path)`) renders as plain text (an upstream `@lezer/markdown` limitation); escape the inner brackets as a workaround.
+
 ## [v0.52.0] - 2026-06-26
 
 A repository-structure unification — the frontend consolidates into a single `./web` npm workspace, build and deploy tooling moves under `./packaging`, and the crate layer gets a naming, docs, and dependency-hygiene pass — plus a round of window and terminal lifecycle fixes.
