@@ -6,9 +6,18 @@ import session from "./session.ts?raw";
 const route = readFileSync("../../../crates/chan-server/src/routes/terminal.rs", "utf8");
 
 describe("terminal protocol invariants", () => {
-  test("reattach asks the server for a full replay ring", () => {
-    expect(session).toContain('params.set("since", "0")');
-    expect(tab).not.toContain("lastSeq");
+  test("reattach defaults to a full replay; a cursor rides only with a generation", () => {
+    // The default `since` is still 0 (a full replay into a fresh xterm); a byte
+    // cursor is sent ONLY from a validated scrollback-snapshot cache hit, always
+    // paired with the session generation the server gates it against (ask 6). A
+    // bare per-tab cursor -- the old "last line after a split" bug -- never goes
+    // on the wire on its own.
+    expect(session).toContain(
+      "String(Math.max(0, Math.floor(opts.since ?? 0)))",
+    );
+    expect(session).toContain("if (opts.generation != null)");
+    // The resume cursor originates from the snapshot cache, not a bare tab field.
+    expect(tab).toContain("readTerminalSnapshot");
   });
 
   test("server attach prelude sends control, binary replay, alt-screen prelude, then ready", () => {

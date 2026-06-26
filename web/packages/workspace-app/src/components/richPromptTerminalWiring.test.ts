@@ -53,9 +53,11 @@ describe("TerminalTab Rich Prompt wiring", () => {
     expect(terminal).toMatch(
       /ws\.onclose = \(\) => \{[\s\S]{1,800}failPendingPrompt\(tab\);\s*setTerminalQueueDepth\(tab, 0\);/,
     );
-    // closed/exit arms: depth 0 + fail BEFORE clearTerminalSession.
+    // closed/exit arms: depth 0 + fail BEFORE clearTerminalSession (the
+    // scrollback-snapshot clear, keyed by the now-dead session id, sits between
+    // the fail and the session clear -- still before clearTerminalSession).
     expect(terminal).toMatch(
-      /frame\.type === "closed"\) \{[\s\S]{1,600}setTerminalQueueDepth\(tab, 0\);\s*failPendingPrompt\(tab\);\s*clearTerminalSession\(tab\);/,
+      /frame\.type === "closed"\) \{[\s\S]{1,600}setTerminalQueueDepth\(tab, 0\);\s*failPendingPrompt\(tab\);[\s\S]{0,320}clearTerminalSession\(tab\);/,
     );
     expect(terminal).toMatch(
       /frame\.type === "exit"\) \{[\s\S]{1,400}setTerminalQueueDepth\(tab, 0\);\s*failPendingPrompt\(tab\);\s*clearTerminalSession\(tab\);/,

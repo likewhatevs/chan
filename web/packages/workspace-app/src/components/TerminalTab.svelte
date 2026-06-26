@@ -1101,17 +1101,24 @@
   function captureSnapshot(): void {
     const sessionId = tab.terminalSessionId;
     if (!term || !serialize || !sessionId || serverGeneration === null) return;
-    const lines = Math.min(scrollbackLines, SNAPSHOT_SCROLLBACK_LINES);
-    const ansi = serialize.serialize({ scrollback: lines });
-    if (!ansi || ansi.length > MAX_ONE_SNAPSHOT_BYTES) return;
-    writeTerminalSnapshot(sessionId, {
-      ansi,
-      generation: serverGeneration,
-      lastSeq: receivedSeq,
-      cols: term.cols,
-      rows: term.rows,
-      updatedAt: Date.now(),
-    });
+    // Never throw out of a pagehide/beforeunload handler: this fires globally
+    // (any navigation/unload, including unrelated downloads), so a serialize on
+    // a mid-teardown xterm must degrade to "no snapshot", not an uncaught error.
+    try {
+      const lines = Math.min(scrollbackLines, SNAPSHOT_SCROLLBACK_LINES);
+      const ansi = serialize.serialize({ scrollback: lines });
+      if (!ansi || ansi.length > MAX_ONE_SNAPSHOT_BYTES) return;
+      writeTerminalSnapshot(sessionId, {
+        ansi,
+        generation: serverGeneration,
+        lastSeq: receivedSeq,
+        cols: term.cols,
+        rows: term.rows,
+        updatedAt: Date.now(),
+      });
+    } catch (e) {
+      console.warn("[chan] terminal snapshot capture failed", e);
+    }
   }
 
   // Persist a scrollback snapshot when the page is hidden/reloaded so the
