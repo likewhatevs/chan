@@ -254,8 +254,8 @@ curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
 cargo install cargo-deb
 
 # build the SPA, then the four .debs
+(cd /root/chan/web && npm ci && npm run build -w @chan/profile)
 cd /root/chan/gateway
-npm ci && npm run build --workspaces
 cargo build --release -p profile -p identity -p devserver-proxy -p admin
 for c in profile identity devserver-proxy admin; do cargo deb --no-build -p "$c"; done
 

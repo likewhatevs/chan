@@ -20,17 +20,16 @@ Personal access tokens (PATs, `chan_pat_...`) are the only credential the chan C
 gateway/
   Cargo.toml                       # workspace
   crates/identity/                 # bin: identity-service (id.chan.app)
-  crates/identity/web/             # SPA embedded into identity-service
+  crates/identity/web/dist/        # @chan/profile bundle, embedded into identity-service
   crates/devserver-proxy/          # bin: devserver-proxy-service (devserver.chan.app)
   crates/profile/                  # bin: profile-service (internal)
   crates/admin/                    # bin: chan-gateway-admin (operator CLI)
   crates/gateway-common/           # lib: shared clients / JWT / validators
-  web-common/                      # shared theme CSS + fetch wrapper (npm)
   migrations/                      # sqlx migrations (Postgres)
   docs/                            # dev-setup.md and friends
 ```
 
-The frontend matches `web/` at the repo root so id.chan.app and the editor read as the same product: Svelte 5 + Vite + TypeScript, dark default with the same CSS variable palette.
+identity's SPA (`@chan/profile`) and the shared chrome (`@chan/web-shared`) live in the `./web` npm workspace at the repo root, so id.chan.app and the editor read as the same product: Svelte 5 + Vite + TypeScript, dark default with the same CSS variable palette.
 
 ## Dev
 
@@ -49,14 +48,15 @@ createdb chan_gateway_test         # used by `cargo test`
 
 ### Frontend
 
-identity's SPA shares an npm workspace (at `gateway/`) with the small `web-common` package (shared theme CSS, fetch wrapper, topbar component). One install builds the bundle:
+identity's SPA is `@chan/profile`, a member of the `./web` npm workspace at the repo root (alongside `@chan/web-shared`, the shared theme CSS / fetch wrapper / topbar). Build it from there (or `make gateway-spa`):
 
 ```sh
+cd web
 npm install
-npm run build --workspaces
+npm run build -w @chan/profile
 ```
 
-`vite build` writes to `crates/identity/web/dist/`, embedded by the identity binary via `rust-embed`. devserver-proxy ships no SPA.
+`vite build` writes to `gateway/crates/identity/web/dist/`, embedded by the identity binary via `rust-embed`. devserver-proxy ships no SPA.
 
 ### GitHub OAuth app
 
@@ -114,7 +114,7 @@ devserver-proxy holds no database and no session cookie of its own; a workspace 
 For frontend iteration without re-embedding:
 
 ```sh
-npm run dev -w crates/identity/web      # :5173, proxies to :7000
+cd web && npm run dev -w @chan/profile   # :5173, proxies to :7000
 ```
 
 ## Tests

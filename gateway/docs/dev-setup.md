@@ -184,7 +184,7 @@ The bare `limactl shell default sudo sdme ...` form works too (useful for script
 ```sh
 cd gateway
 export TEST_DATABASE_URL=postgres://chan:chan@127.0.0.1:5432/chan_gateway_test
-npm ci && npm run build --workspaces   # SPA; rust-embed needs web/dist
+(cd ../web && npm ci && npm run build -w @chan/profile)   # gateway identity SPA (rust-embed input)
 cargo test                             # profile + identity need the DB
 ```
 

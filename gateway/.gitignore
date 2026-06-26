@@ -10,4 +10,3 @@
 /node_modules
 /crates/*/web/node_modules
 /crates/*/web/dist
-/web-common/node_modules

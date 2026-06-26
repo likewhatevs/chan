@@ -7,8 +7,8 @@
   // cause, so this surface names the problem in plain language and
   // tells them where the real URL came from.
   //
-  // Visual matches chan-gateway's `workspace unavailable` page (see
-  // chan-gateway/crates/workspace-proxy/src/proxy.rs::NOT_FOUND_HTML) so
+  // Visual matches the gateway's `workspace unavailable` page (see
+  // gateway/crates/devserver-proxy/src/proxy.rs::NOT_FOUND_HTML) so
   // the "something is wrong here" UX is consistent across the two
   // surfaces a user can land on with an unusable URL.
 

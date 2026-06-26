@@ -53,8 +53,8 @@ Unlike the core, the gateway is Postgres-backed. Its integration tests (`profile
 ```bash
 export TEST_DATABASE_URL=postgres://chan:chan@127.0.0.1:5432/chan_gateway_test
 
+(cd web && npm ci && npm run build -w @chan/profile)   # gateway identity SPA (rust-embed input)
 cd gateway
-npm ci && npm run build --workspaces   # SPA; rust-embed needs web/dist
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings
 cargo test                             # profile + identity need the DB

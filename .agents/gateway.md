@@ -73,17 +73,18 @@ createdb chan_gateway_test   # test database used by integration tests
 export DATABASE_URL=postgres://localhost/chan_gateway
 ```
 
-Only identity-service ships a SPA. `crates/identity/web` and the shared `web-common` package live in one npm workspace at the repo root:
+Only identity-service ships a SPA. Its source is `@chan/profile` and the shared chrome is `@chan/web-shared`, both members of the `./web` npm workspace at the repo root:
 
 ```bash
-npm install                   # one install for the whole workspace
-npm run build --workspaces    # build the identity SPA bundle
+cd web
+npm install                          # one install for the whole workspace
+npm run build -w @chan/profile       # build the identity SPA bundle (or: make gateway-spa)
 ```
 
 Per-app dev:
 
 ```bash
-npm run dev -w crates/identity/web    # vite dev server for id.chan.app
+cd web && npm run dev -w @chan/profile    # vite dev server for id.chan.app
 ```
 
 A fresh checkout without `web/dist/` still builds; identity's SPA endpoint returns a "frontend not built" banner that points at the right command. devserver-proxy has no SPA.

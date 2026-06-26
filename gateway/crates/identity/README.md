@@ -19,11 +19,12 @@ It does not own user data. Every user lookup, write, or audit row goes through p
 cargo build -p identity
 ```
 
-Frontend baked in at build time via `rust_embed`. identity is the gateway's only SPA; it installs from the gateway npm workspace root:
+Frontend baked in at build time via `rust_embed`. identity is the gateway's only SPA; its source is `@chan/profile` in the `./web` npm workspace at the repo root:
 
 ```bash
+cd web
 npm install
-npm run build -w crates/identity/web
+npm run build -w @chan/profile
 ```
 
 A fresh checkout without `web/dist/` still builds; the SPA endpoints render a "frontend not built" banner that points at the build command.
