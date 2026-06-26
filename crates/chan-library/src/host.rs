@@ -1235,16 +1235,12 @@ impl WorkspaceHost {
     /// discard (cs-driven, a watcher reconcile, a crashed client) that never
     /// sends the SPA `DELETE /api/session`: the terminal sessions (PTYs + fds)
     /// AND the durable workspace session/layout blob
-    /// (`<workspace>/.chan/sessions/<id>`). The id is library-unique, so only
-    /// its owning tenant has anything; the rest are no-ops. Handles are cloned
-    /// out under the lock and the reap/delete run after releasing it, so the
-    /// blocking I/O never stalls a concurrent tenant mount/unmount. Returns the
-    /// session count reaped.
-    ///
-    /// The on-disk TERMINAL layout blob (`terminal_blob`, a chan-server store
-    /// keyed by the tenant's session dir) is not reaped here — chan-library
-    /// can't reach it. (Follow-up: surface the terminal blob to this path so a
-    /// discarded terminal window's layout is cleaned too.)
+    /// (`<workspace>/.chan/sessions/<id>`) AND the standalone terminal window's
+    /// layout blob (the chan-server `terminal_blob`, reached via the host-
+    /// installed `BlobReaper` hook). The id is library-unique, so only its owning
+    /// tenant has anything; the rest are no-ops. Handles are cloned out under the
+    /// lock and the reap/delete run after releasing it, so the blocking I/O never
+    /// stalls a concurrent tenant mount/unmount. Returns the session count reaped.
     fn reap_discarded_window_state(&self, window_id: &str) -> usize {
         let (registries, workspaces) = {
             let tenants = match self.workspaces.read() {
@@ -1263,7 +1259,13 @@ impl WorkspaceHost {
         };
         let reaped = registries
             .iter()
-            .map(|sessions| sessions.forget_window(window_id))
+            .map(|sessions| {
+                // Drop this window's durable terminal layout blob too (the
+                // chan-server `terminal_blob`, reachable only via the installed
+                // hook); a no-op on tenants without one.
+                sessions.reap_window_layout(window_id);
+                sessions.forget_window(window_id)
+            })
             .sum();
         // Delete the durable workspace session/layout blob too (best-effort; a
         // no-op when this window has none), so a non-SPA discard never orphans
@@ -3325,6 +3327,48 @@ mod tests {
                 .is_none(),
             "discard_window must delete the durable session blob"
         );
+    }
+
+    #[tokio::test]
+    async fn discard_window_fires_the_terminal_blob_reaper() {
+        // P1b: discard runs the installed blob reaper so a discarded terminal
+        // window's durable layout blob (the chan-server `terminal_blob`, which
+        // the host cannot reach directly) is dropped too — the standalone-
+        // terminal analogue of the workspace session-blob delete above.
+        let cfg = tempfile::tempdir().expect("config dir");
+        let lib = Library::open_at(cfg.path().join("config.toml")).expect("library");
+        let host = Arc::new(WorkspaceHost::new(lib, fake_builder()));
+        host.open_terminal_session(serve_config("/api/terminal"), None)
+            .await
+            .expect("mount shared terminal tenant");
+        // Record what the blob reaper is asked to delete (chan-server installs the
+        // real one; here we stub it on the shared terminal tenant's registry).
+        let reaped: Arc<std::sync::Mutex<Vec<String>>> =
+            Arc::new(std::sync::Mutex::new(Vec::new()));
+        {
+            let tenants = host.workspaces.read().unwrap();
+            let sink = Arc::clone(&reaped);
+            tenants
+                .values()
+                .next()
+                .expect("shared terminal tenant")
+                .artifacts
+                .terminal_sessions
+                .install_blob_reaper(crate::terminal_sessions::BlobReaper::new(
+                    move |window_id: &str| {
+                        sink.lock().unwrap().push(window_id.to_string());
+                    },
+                ));
+        }
+        let store = tempfile::tempdir().expect("store dir");
+        let registry = Arc::new(WindowRegistry::open(store.path().join("windows.json")));
+        host.install_window_registry(registry, "local".into());
+        let rec = host
+            .mint_window(WindowKind::Terminal, None)
+            .expect("mint terminal");
+
+        assert!(host.discard_window(&rec.window_id).expect("discard"));
+        assert_eq!(*reaped.lock().unwrap(), vec![rec.window_id.clone()]);
     }
 
     #[tokio::test]

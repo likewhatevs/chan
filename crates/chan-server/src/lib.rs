@@ -826,6 +826,19 @@ async fn build_terminal_app(
     // Hand the live registry to the control socket so cs term
     // write / list can resolve sessions (mirrors build_app).
     let _ = terminal_registry_cell.set(terminal_sessions.clone());
+    // A durable layout store (the launcher's devserver terminal session dir)
+    // means this tenant's window layouts live in `terminal_blob`. Wire the blob
+    // reaper so an EXPLICIT window discard (cs window rm / a watcher reconcile)
+    // drops the window's saved layout too — the host's reap can't reach this
+    // chan-server store directly. Ephemeral / control tenants (`None`) leave it
+    // unset; their layout is in-memory and dies with the process.
+    if let Some(dir) = session_dir.clone() {
+        terminal_sessions.install_blob_reaper(terminal_sessions::BlobReaper::new(
+            move |window_id: &str| {
+                let _ = crate::terminal_blob::delete(&dir, window_id);
+            },
+        ));
+    }
     let terminal_sessions_handle = terminal_sessions.clone();
     let terminal_pruner = terminal_sessions.clone().spawn_pruner(shutdown_rx.clone());
     let terminal_drainer = terminal_sessions.clone().spawn_drainer(shutdown_rx.clone());

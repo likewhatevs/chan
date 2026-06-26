@@ -136,6 +136,15 @@ pub struct Registry {
     /// PTY exits, so it does not linger. A workspace tenant
     /// leaves this unset — a pane's death must never close its workspace window.
     window_reaper: Mutex<Option<WindowReaper>>,
+    /// Optional hook fired on an EXPLICIT window discard (via
+    /// [`reap_window_layout`](Self::reap_window_layout)) to delete the standalone
+    /// terminal window's durable layout blob from the chan-server `terminal_blob`
+    /// store, which chan-library cannot reach directly. The host wires this on
+    /// the persisted terminal tenant only. Deliberately NOT fired from
+    /// [`reap_exited`](Self::reap_exited): a persisted terminal whose PTY exits
+    /// keeps its blob so the window resurrects on reconnect; only an explicit
+    /// discard drops it.
+    blob_reaper: Mutex<Option<BlobReaper>>,
 }
 
 /// Host-installed hook to reap a terminal WINDOW row when its session is reaped.
@@ -159,6 +168,30 @@ impl WindowReaper {
 impl std::fmt::Debug for WindowReaper {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("WindowReaper(..)")
+    }
+}
+
+/// Host-installed hook to delete a discarded terminal window's durable layout
+/// blob (the chan-server `terminal_blob` store, which chan-library can't reach).
+/// Takes the discarded `window_id`. See [`Registry::install_blob_reaper`]. A
+/// newtype so [`Registry`] keeps deriving `Debug` (a bare `dyn Fn` does not).
+#[derive(Clone)]
+pub struct BlobReaper(Arc<dyn Fn(&str) + Send + Sync>);
+
+impl BlobReaper {
+    /// Wrap a closure taking the discarded window's `window_id`.
+    pub fn new(f: impl Fn(&str) + Send + Sync + 'static) -> Self {
+        Self(Arc::new(f))
+    }
+
+    fn call(&self, window_id: &str) {
+        (self.0)(window_id)
+    }
+}
+
+impl std::fmt::Debug for BlobReaper {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("BlobReaper(..)")
     }
 }
 
@@ -475,6 +508,7 @@ impl Registry {
             default_command: Mutex::new(None),
             persisted_windows: Mutex::new(HashSet::new()),
             window_reaper: Mutex::new(None),
+            blob_reaper: Mutex::new(None),
         }
     }
 
@@ -488,6 +522,31 @@ impl Registry {
             .window_reaper
             .lock()
             .expect("terminal registry poisoned") = Some(reaper);
+    }
+
+    /// Install the hook that deletes a discarded window's durable terminal layout
+    /// blob ([`reap_window_layout`](Self::reap_window_layout)). The host wires
+    /// this on the persisted terminal tenant only (the one whose `DELETE
+    /// /api/session` routes to `terminal_blob`); ephemeral/control tenants leave
+    /// it unset. A later install replaces the prior hook.
+    pub fn install_blob_reaper(&self, reaper: BlobReaper) {
+        *self.blob_reaper.lock().expect("terminal registry poisoned") = Some(reaper);
+    }
+
+    /// Reap the durable terminal layout blob for an EXPLICITLY discarded
+    /// `window_id` via the installed [`BlobReaper`]. A no-op when no hook is
+    /// installed (workspace / ephemeral / control tenants). The hook is cloned
+    /// out under the lock and the (blocking, file-I/O) delete runs after release,
+    /// matching the lock discipline of [`session_summaries`](Self::session_summaries).
+    pub fn reap_window_layout(&self, window_id: &str) {
+        let reaper = self
+            .blob_reaper
+            .lock()
+            .expect("terminal registry poisoned")
+            .clone();
+        if let Some(reaper) = reaper {
+            reaper.call(window_id);
+        }
     }
 
     /// Hand out the next per-tenant default terminal name: the LOWEST-FREE
@@ -3159,6 +3218,29 @@ mod tests {
         assert_eq!(registry.reap_exited(), 0);
         assert!(reaped.lock().unwrap().is_empty());
         registry.close_all(CloseReason::Shutdown);
+    }
+
+    #[test]
+    fn reap_window_layout_fires_the_blob_reaper() {
+        // The explicit-discard hook: the host calls reap_window_layout so a
+        // discarded terminal window's durable layout blob is dropped too.
+        let registry = Registry::new(test_config(1024, 4, 10));
+        let reaped: Arc<std::sync::Mutex<Vec<String>>> =
+            Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink = Arc::clone(&reaped);
+        registry.install_blob_reaper(BlobReaper::new(move |window_id: &str| {
+            sink.lock().unwrap().push(window_id.to_string());
+        }));
+        registry.reap_window_layout("win-blob");
+        assert_eq!(*reaped.lock().unwrap(), vec!["win-blob".to_string()]);
+    }
+
+    #[test]
+    fn reap_window_layout_is_a_noop_without_a_blob_reaper() {
+        // Workspace / ephemeral / control tenants install no hook; the call must
+        // be a harmless no-op, never a panic.
+        let registry = Registry::new(test_config(1024, 4, 10));
+        registry.reap_window_layout("win-none");
     }
 
     #[test]
