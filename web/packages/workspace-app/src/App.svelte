@@ -2,6 +2,7 @@
   import { onDestroy, onMount } from "svelte";
   import AppStatusBar from "./components/AppStatusBar.svelte";
   import TransferBubble from "./components/TransferBubble.svelte";
+  import SessionHandoverBubble from "./components/SessionHandoverBubble.svelte";
   import ConfirmModal from "./components/ConfirmModal.svelte";
   import ConflictModal from "./components/ConflictModal.svelte";
   import DisconnectOverlay from "./components/DisconnectOverlay.svelte";
@@ -1382,6 +1383,10 @@
      opened from the status-bar transfers indicator. Mounted once, anchored to
      the window so it floats above the panes near the status bar. -->
 <TransferBubble />
+<!-- Handover-request notification (cs session handover): the leader's window
+     shows who is asking to take over, with Accept / Reject. Mounted once,
+     window-anchored like the transfer bubble. -->
+<SessionHandoverBubble />
 <!-- Pane Mode (Cmd+K) cheatsheet, toggled with `h` while pane mode
      is active. Gated on the live `paneMode.active` so it auto-hides
      the moment the transaction commits / discards. -->

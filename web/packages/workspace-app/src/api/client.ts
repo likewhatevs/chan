@@ -1279,6 +1279,13 @@ export const api = {
   surveyReply: (reply: SurveyReplyRequest) =>
     req<void>("POST", "/api/survey/reply", reply),
 
+  /// Reply to a `cs session handover`: the leader accepts or rejects a parked
+  /// request. Fires the handover-bus oneshot and unblocks the requesting CLI.
+  /// 404 if it already resolved (timed out / taken over); 403 if this window is
+  /// not the current leader.
+  sessionHandoverReply: (reply: SessionHandoverReplyRequest) =>
+    req<void>("POST", "/api/session/handover/reply", reply),
+
   /// Reply to a `cs pane` window query. The server pushed a `pane_query`
   /// window_command with a minted `requestId`; the SPA built the layout
   /// snapshot and POSTs it here, which completes the parked window-bus
@@ -1389,6 +1396,17 @@ export type WindowReplyRequest = {
   requestId: string;
   payload: unknown;
 };
+
+/// Body of `POST /api/session/handover/reply` (the leader's answer to
+/// `cs session handover`). camelCase to match the server. `windowId` is the
+/// answering window's own id; the route checks it is the current leader holding
+/// the request.
+export interface SessionHandoverReplyRequest {
+  requestId: string;
+  windowId: string;
+  accept: boolean;
+  reason?: string | null;
+}
 
 /// Encode a path as a sequence of percent-encoded segments. We keep `/`
 /// raw so axum's `*path` capture works.

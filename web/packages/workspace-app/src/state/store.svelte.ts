@@ -23,6 +23,7 @@ import {
   type WsStatus,
 } from "../api/client";
 import { showSurvey } from "./survey.svelte";
+import { applySessionRoster, showHandover, type SessionParticipant } from "./session.svelte";
 import {
   activeLayout,
   closePane,
@@ -692,6 +693,14 @@ export function onWatchEvent(e: unknown): void {
     );
     return;
   }
+  if (frameType === "session_roster") {
+    // Leader/followers snapshot for this tenant. Full snapshot, applied
+    // wholesale; drives the handover overlay's leader/self awareness.
+    applySessionRoster(
+      (e as { participants?: SessionParticipant[]; leader?: string | null } | null) ?? {},
+    );
+    return;
+  }
   const kind = (e as { kind?: string } | null)?.kind;
   if (kind === "config_changed") {
     // A sibling window flipped a setting (theme, fonts,
@@ -868,6 +877,14 @@ type WindowCommandFrame =
       command: "terminal_broadcast";
       session_id: string;
       on: boolean;
+    }
+  | {
+      type: "window_command";
+      window_id: string;
+      command: "handover_prompt";
+      request_id: string;
+      from_window_id: string;
+      from_name?: string | null;
     };
 
 /// A tab's display title for `cs pane`: a file tab's basename, else its
@@ -1254,6 +1271,21 @@ async function handleWindowCommand(raw: unknown): Promise<void> {
     // save: a survey is transient, not layout.
     const slot = frame.tabName ? terminalSlotForName(frame.tabName) : null;
     showSurvey(frame.survey, slot);
+    return;
+  }
+  if (
+    frame.command === "handover_prompt" &&
+    typeof frame.request_id === "string" &&
+    typeof frame.from_window_id === "string"
+  ) {
+    // `cs session handover`: a follower asked to take leadership and this
+    // window is the leader. Raise the handover prompt; accept/reject POSTs the
+    // reply that unblocks the requester. Transient, no session save.
+    showHandover({
+      requestId: frame.request_id,
+      fromWindowId: frame.from_window_id,
+      fromName: typeof frame.from_name === "string" ? frame.from_name : null,
+    });
     return;
   }
   if (frame.command === "pane_query" && typeof frame.request_id === "string") {
