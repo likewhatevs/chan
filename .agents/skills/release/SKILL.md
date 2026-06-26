@@ -25,7 +25,7 @@ The desktop Rust package version is inherited from the workspace, so the `.app` 
 
 ## Self-upgrade is data-driven
 
-Self-upgrade reads the latest manifest from `/dl` on chan.app. Cutting a release auto-supersedes prior versions; there is no `update.rs` edit required. The desktop updater probes the static manifest at `https://chan.app/dl/desktop/latest.json`, generated at release time by `web-marketing/scripts/generate-release-metadata.mjs`.
+Self-upgrade reads the latest manifest from `/dl` on chan.app. Cutting a release auto-supersedes prior versions; there is no `update.rs` edit required. The desktop updater probes the static manifest at `https://chan.app/dl/desktop/latest.json`, generated at release time by `web/packages/marketing/scripts/generate-release-metadata.mjs`.
 
 ## Procedure
 

@@ -9,7 +9,7 @@
 //!   - `SubmitAgent::derive`: map a spawn command (+ an optional `CHAN_AGENT`
 //!     env override) to the agent whose submit encoding it uses. This is the
 //!     single source of truth for "which agent is this", mirrored in
-//!     `web/src/state/teamDialog.svelte.ts` (`agentForMember`).
+//!     `web/packages/workspace-app/src/state/teamDialog.svelte.ts` (`agentForMember`).
 //!   - `apply_submit_chord`: turn a poke into the PTY bytes that submit it.
 //!     Each agent has a `{}`-templated chord whose DEFAULT reproduces the
 //!     live-probed bytes, but which is overridable at runtime (env var or

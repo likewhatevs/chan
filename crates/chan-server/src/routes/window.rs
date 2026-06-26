@@ -20,7 +20,7 @@ use crate::error::err;
 use crate::state::AppState;
 
 /// Body of `POST /api/window/reply`. camelCase to match the SPA
-/// (`web/src/api/client.ts` `WindowReplyRequest`). `payload` is opaque to the
+/// (`web/packages/workspace-app/src/api/client.ts` `WindowReplyRequest`). `payload` is opaque to the
 /// server: the CLI formats it. For a `cs pane` query it is the layout
 /// snapshot the SPA built from its `layout` singleton.
 #[derive(Deserialize)]

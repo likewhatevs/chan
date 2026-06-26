@@ -13,5 +13,5 @@ desktop/src-tauri/gen
 **/.chan-build-stamp
 dev/
 docs/
-web-marketing/
+web/packages/marketing/
 **/*.log

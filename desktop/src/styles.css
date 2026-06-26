@@ -1,4 +1,4 @@
-/* Workspaces launcher styling. Tokens mirror chan-web's :root in
+/* Workspaces launcher styling. Tokens mirror @chan/workspace-app's :root in
    App.svelte so the native chrome reads as the same product as the
    in-workspace UI. Dark by default; light kicks in when the OS theme
    is light (no manual toggle). */
@@ -517,7 +517,7 @@ table.workspaces tbody tr:hover { background: var(--hover-bg); }
   opacity: 0.5;
 }
 
-/* Toggle switch — keeps the visual language of chan-web's small
+/* Toggle switch — keeps the visual language of @chan/workspace-app's small
    in-line controls (assistant on/off, etc.). */
 .switch {
   position: relative;

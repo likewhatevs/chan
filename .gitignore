@@ -56,3 +56,7 @@ crates/chan-server/resources/models/
 # as a chan workspace (Cmd+N drafts land in .Drafts/). Machine-local
 # serve artifact, not source.
 /.Drafts/
+
+# Host-local attachment drop (screenshots / images pasted into a
+# session). Local-only working area, never committed.
+/attachments/

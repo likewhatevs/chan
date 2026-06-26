@@ -84,9 +84,11 @@ a separate Cargo workspace.
 | `chan-tunnel-{proto,client,server}` | lib crates | tunnel wire protocol / outbound dialer / gateway terminator |
 | `fetch-models` | bin crate | build-time embedding-model bundler |
 | `chan-desktop` (`desktop/src-tauri`) | bin crate | native Tauri shell — macOS `.dmg`, Windows NSIS, Linux AppImage/deb/rpm |
-| `web` (`chan-web`) | SPA | the main UI: editor/terminal/graph/file-browser, embedded as `web/dist` |
-| `web-launcher` (`chan-web-launcher`) | SPA | the launcher (real workspace + devserver list + window feed); served at `/` across all 3 surfaces |
-| `web-marketing` (`chan-web-marketing`) | static site | chan.app marketing + install + `/dl` metadata |
+| `web/packages/workspace-app` (`@chan/workspace-app`) | SPA | the main UI: editor/terminal/graph/file-browser, embedded as `web/dist` |
+| `web/packages/launcher` (`@chan/launcher`) | SPA | the launcher (real workspace + devserver list + window feed); served at `/` across all 3 surfaces |
+| `web/packages/marketing` (`@chan/marketing`) | static site | chan.app marketing + install + `/dl` metadata |
+| `web/packages/web-shared` (`@chan/web-shared`) | shared lib | wire/theme/chrome shared across the `./web` members (lifted gateway `web-common`) |
+| `web/packages/profile` (`@chan/profile`) | SPA | the gateway identity/profile SPA (lifted), embedded as `gateway/crates/identity/web/dist` |
 | `gateway/*` | separate workspace | account / sign-in / reverse-proxy for chan.app (`gateway-common`, `profile`, `identity`+SPA, `devserver-proxy`, `admin`) |
 
 ### Dependency / layering (who builds on whom)

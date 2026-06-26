@@ -28,7 +28,7 @@ use crate::error::err;
 use crate::state::AppState;
 
 /// Body of `POST /api/survey/reply`. Internally tagged on `kind`, camelCase
-/// to match the SPA (`web/src/api/client.ts` `SurveyReplyRequest`). Distinct
+/// to match the SPA (`web/packages/workspace-app/src/api/client.ts` `SurveyReplyRequest`). Distinct
 /// from [`chan_shell::SurveyReply`]: for a followup the SPA sends the echoed
 /// context (it cannot know the minted path), and this route synthesizes the
 /// path before completing the bus oneshot.

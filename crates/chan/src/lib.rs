@@ -81,9 +81,9 @@ mod devserver_windows;
 const DEFAULT_PORT: u16 = 8787;
 
 /// Extended `long_about` for `chan open` (the workspace-serve form). The
-/// keybindings list is generated from `web/src/state/shortcuts.ts` (the
+/// keybindings list is generated from `web/packages/workspace-app/src/state/shortcuts.ts` (the
 /// single source of truth for chan's chords). Resync after any change to that file
-/// with `node web/scripts/shortcuts-table.mjs --serve-long-about`
+/// with `node web/packages/workspace-app/scripts/shortcuts-table.mjs --serve-long-about`
 /// and paste the output between the BEGIN/END markers below. The
 /// native shell (chan-desktop) layers VS Code-shaped chords on top
 /// of the browser set; those are documented in the same TS source.

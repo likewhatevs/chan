@@ -1,6 +1,6 @@
 //! The launcher SPA root surface + the `/api/library/*` serve handlers.
 //!
-//! `web-launcher/` is a pure `/api/library/*` HTTP client served at the
+//! `web/packages/launcher` is a pure `/api/library/*` HTTP client served at the
 //! devserver/library root `/`. chan-library's `host_dispatch` 404s the root
 //! (it only matches workspace-tenant prefixes); this module builds the router
 //! the embedder installs as the host's root fallback

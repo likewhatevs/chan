@@ -192,7 +192,7 @@ pub struct PaneWidths {
 }
 
 impl Default for PaneWidths {
-    // Mirrors web/src/state/store.svelte.ts DEFAULT_PANE_WIDTHS.
+    // Mirrors web/packages/workspace-app/src/state/store.svelte.ts DEFAULT_PANE_WIDTHS.
     fn default() -> Self {
         Self {
             inspector: 220,

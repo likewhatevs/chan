@@ -229,7 +229,7 @@ export type Preferences = {
   line_spacing: LineSpacing;
   /// Default format used by @date / @today and as the initial
   /// selection in the calendar picker's format dropdown.
-  /// Format ids are defined in `web/src/editor/dateFormats.ts`.
+  /// Format ids are defined in `web/packages/workspace-app/src/editor/dateFormats.ts`.
   date_format: string;
   /// When true, saves strip trailing spaces and tabs before writing
   /// text buffers to disk.
@@ -271,7 +271,7 @@ export type TreeEntry = {
   /// File-kind discriminator from the server. Present for every
   /// regular file; absent on directory entries (frontends key off
   /// `is_dir` for those). Values mirror the unified taxonomy in
-  /// `web/src/state/kinds.ts`:
+  /// `web/packages/workspace-app/src/state/kinds.ts`:
   ///   - `document`: markdown-class (.md / .txt) without contact
   ///     frontmatter.
   ///   - `contact`: markdown-class with `chan.kind: contact`

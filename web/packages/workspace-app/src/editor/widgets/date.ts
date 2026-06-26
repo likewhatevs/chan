@@ -3,7 +3,7 @@
 // Detection: lezer-markdown doesn't recognize dates, so this lives in
 // its own ViewPlugin (mirrors the tag pattern from widgets/tag.ts).
 // We delegate matching to dateFormats.findDateMatches - the same
-// matcher the legacy editor used, kept under web/src/editor/ so date
+// matcher the legacy editor used, kept under web/packages/workspace-app/src/editor/ so date
 // catalog evolution stays in one place.
 //
 // Rendering: per design.md #3 / #5, dates are atomic widgets.

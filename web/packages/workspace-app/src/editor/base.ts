@@ -2,7 +2,7 @@
 //
 // Lifted out of the legacy editor/Source.svelte so the WYSIWYG rewrite
 // reuses the same theme handling, find-on-page state, density attribute,
-// and external-sync guard. See web/src/editor-cm6/design.md for the
+// and external-sync guard. See web/packages/workspace-app/src/editor/design.md for the
 // invariants this module helps enforce (in particular #1: the doc IS the
 // markdown source, and #8: find shape is identical across modes).
 

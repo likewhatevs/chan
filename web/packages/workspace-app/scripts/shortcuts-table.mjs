@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Print the keyboard-shortcut table from web/src/state/shortcuts.ts.
+// Print the keyboard-shortcut table from web/packages/workspace-app/src/state/shortcuts.ts.
 // Two modes:
 //   default                   plain ASCII (what the empty pane renders)
 //   --serve-long-about        wrapped in the `chan serve --help` framing
@@ -7,8 +7,8 @@
 //                             crates/chan/src/main.rs.
 //
 // Usage:
-//   node web/scripts/shortcuts-table.mjs
-//   node web/scripts/shortcuts-table.mjs --serve-long-about
+//   node web/packages/workspace-app/scripts/shortcuts-table.mjs
+//   node web/packages/workspace-app/scripts/shortcuts-table.mjs --serve-long-about
 //
 // Pick `--platform` (web | native) and `--os` (mac | linux | windows)
 // to render alternate variants; defaults to the web fallback set with

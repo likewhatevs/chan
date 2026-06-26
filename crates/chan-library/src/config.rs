@@ -101,6 +101,6 @@ fn default_terminal_default_term() -> String {
 }
 
 /// Inclusive bounds the Settings UI exposes for the scrollback slider.
-/// Mirrored in `web/src/state/terminalPrefs.ts`; keep in lockstep.
+/// Mirrored in `web/packages/workspace-app/src/terminal/scrollback.ts`; keep in lockstep.
 pub const TERMINAL_SCROLLBACK_MB_MIN: u32 = 10;
 pub const TERMINAL_SCROLLBACK_MB_MAX: u32 = 500;

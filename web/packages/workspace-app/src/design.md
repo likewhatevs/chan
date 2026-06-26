@@ -1,22 +1,22 @@
 # chan web frontend
 
-Design reference for the chan web frontend: first the two web SPAs and how each is served, then the color system both share. Update this file in the same commit as a change to the frontend serving topology, `App.svelte`'s palette blocks, the editor theme sheets under `web/src/editor/themes/`, or `web/src/editor/highlight.ts`.
+Design reference for the chan web frontend: first the two web SPAs and how each is served, then the color system both share. Update this file in the same commit as a change to the frontend serving topology, `App.svelte`'s palette blocks, the editor theme sheets under `web/packages/workspace-app/src/editor/themes/`, or `web/packages/workspace-app/src/editor/highlight.ts`.
 
 ## Two web frontends
 
 chan ships **two** Svelte 5 + Vite web SPAs, both embedded into chan-server as `RustEmbed` bundles (`crates/chan-server/src/static_assets.rs`) and both built on the color system below:
 
-- **`web/` — the main SPA** (this directory): the per-workspace UI — editor, file browser, graph, terminals, dashboard — talking to `/api/*` (files, drafts, index, contacts, config, `fs/transfer`, plus the `/ws` event stream). chan-server serves it from `WebAssets` (`RustEmbed` over `web/dist`) through `serve_static`, the router `.fallback`, so it answers a workspace tenant's routes. `serve_static` runs `inject_chan_meta` to stamp two tags the SPA reads at boot via `api/transport.ts`: `<meta chan-prefix>` (the URL mount prefix, so a reverse-proxied instance builds correct `/api` URLs) and `<meta chan-settings-disabled>` (greys the Settings surface).
-- **`web-launcher/` — the launcher SPA**: a small, pure `/api/library/*` HTTP client (workspaces · windows · devservers) served at the host/library root `/` from `LauncherAssets` via `serve_launcher` + the `WorkspaceHost` root fallback. It reads `<meta chan-launcher-readonly>` to hide mutation controls on read-only surfaces. The launcher is reached on **all three surfaces** — devserver/tunnel, gateway-proxied (`{owner}.devserver.chan.app/`), and desktop loopback — the same bundle per-surface installed, with per-surface auth (None tunnel-trust / Some loopback window token) and a read-only-gateway vs full-loopback workspace-mutation split. Its internals are documented in `web-launcher/design.md`.
+- **`web/packages/workspace-app/` — the main SPA** (this directory): the per-workspace UI — editor, file browser, graph, terminals, dashboard — talking to `/api/*` (files, drafts, index, contacts, config, `fs/transfer`, plus the `/ws` event stream). chan-server serves it from `WebAssets` (`RustEmbed` over `web/dist`) through `serve_static`, the router `.fallback`, so it answers a workspace tenant's routes. `serve_static` runs `inject_chan_meta` to stamp two tags the SPA reads at boot via `api/transport.ts`: `<meta chan-prefix>` (the URL mount prefix, so a reverse-proxied instance builds correct `/api` URLs) and `<meta chan-settings-disabled>` (greys the Settings surface).
+- **`web/packages/launcher/` — the launcher SPA**: a small, pure `/api/library/*` HTTP client (workspaces · windows · devservers) served at the host/library root `/` from `LauncherAssets` via `serve_launcher` + the `WorkspaceHost` root fallback. It reads `<meta chan-launcher-readonly>` to hide mutation controls on read-only surfaces. The launcher is reached on **all three surfaces** — devserver/tunnel, gateway-proxied (`{owner}.devserver.chan.app/`), and desktop loopback — the same bundle per-surface installed, with per-surface auth (None tunnel-trust / Some loopback window token) and a read-only-gateway vs full-loopback workspace-mutation split. Its internals are documented in `web/packages/launcher/design.md`.
 
 The two are complementary: the launcher is the cross-workspace registry (pick / add / toggle a workspace, mint a window), and opening a workspace window lands the user in the main SPA. Both honor the theme axes + canonical palette below, so a launcher served over a tunnel and the workspace UI on loopback read identically.
 
 ```mermaid
 flowchart TB
-    subgraph web["web/ — main SPA (the workspace UI)"]
+    subgraph web["web/packages/workspace-app/ — main SPA (the workspace UI)"]
         WAPP["App.svelte · editor · file browser · graph · terminals · dashboard<br/>over /api/* (files · drafts · index · contacts · config · fs/transfer · /ws)<br/>reads &lt;meta chan-prefix&gt; + &lt;meta chan-settings-disabled&gt; (api/transport.ts)"]
     end
-    subgraph launcher["web-launcher/ — launcher SPA (the registry)"]
+    subgraph launcher["web/packages/launcher/ — launcher SPA (the registry)"]
         LAPP["TopBar · WorkspaceList · WindowFeed · NewWorkspaceDialog<br/>pure /api/library/* client (workspaces · windows · devservers)<br/>reads &lt;meta chan-launcher-readonly&gt; → hides mutation controls"]
     end
     subgraph cs["chan-server static_assets.rs — two RustEmbed bundles"]
@@ -46,11 +46,11 @@ The frontend has two independent theme dimensions. Both can change at runtime.
 
 1. **Color scheme** (`data-theme="light"` or `data-theme="dark"`). Controls the entire CSS-variable palette: backgrounds, text, accents, pill hues, graph node hues, etc. Defined in `App.svelte` as a `:global(:root), :global([data-theme="dark"])` block (dark is the default) plus a `:global([data-theme="light"])` override block. `state/store.svelte.ts` applies the resolved choice to `<html>`. Because the blocks key off the *attribute* (not the `html` element), a Hybrid surface can re-apply a scheme to its own subtree: each surface root (editor, browser, graph, terminal, dashboard) sets `data-theme={surfaceThemeOverride(kind)}` from the `hybrid_surface_themes` preference, overriding the global pick for just that surface.
 
-2. **Editor theme** (`data-editor-theme="github"`, `"google_docs"`, or `"word"`). Controls the editor surface only: body font, heading scale, code font, link color, code-block slab bg, table borders, blockquote rule. Defined in `web/src/editor/themes/{base,github,google_docs,word}.css` as `--chan-editor-*` variables. `base.css` declares neutral defaults; each named theme overrides under `:root[data-editor-theme="<name>"]`, with dark variants at both `:root[...][data-theme="dark"]` and the descendant form `:root[...] [data-theme="dark"]` so a per-surface dark override restyles the editor too. `state/editorTheme.ts` applies the attribute to `<html>` (default `github`); the preference (`editor_theme`) lives server-side and propagates to every open window via the WS `config_changed` event. The picker is the editor surface's config flip-side (`HybridEditorConfig.svelte`).
+2. **Editor theme** (`data-editor-theme="github"`, `"google_docs"`, or `"word"`). Controls the editor surface only: body font, heading scale, code font, link color, code-block slab bg, table borders, blockquote rule. Defined in `web/packages/workspace-app/src/editor/themes/{base,github,google_docs,word}.css` as `--chan-editor-*` variables. `base.css` declares neutral defaults; each named theme overrides under `:root[data-editor-theme="<name>"]`, with dark variants at both `:root[...][data-theme="dark"]` and the descendant form `:root[...] [data-theme="dark"]` so a per-surface dark override restyles the editor too. `state/editorTheme.ts` applies the attribute to `<html>` (default `github`); the preference (`editor_theme`) lives server-side and propagates to every open window via the WS `config_changed` event. The picker is the editor surface's config flip-side (`HybridEditorConfig.svelte`).
 
 The axes are orthogonal. Any combination of color scheme by editor theme is valid (6 combinations total). Only the color-scheme axis affects app chrome (panes, status bar, file tree, panels, modals); the editor-theme axis is scoped to the editor surface.
 
-A third, fixed dimension is the **syntax-highlight palette**. It is GitHub Primer (light or dark, branched off the color scheme) and is shared across all three editor themes, so a python snippet reads identically regardless of which document chrome is active. It paints fenced code blocks (per-language packs lazy-load via `editor/markdown/code_languages.ts`) and whole files in Source mode. See `web/src/editor/highlight.ts` — including the one deliberate Primer divergence: plain identifiers get no color because Primer's orange collides with chan's brand orange.
+A third, fixed dimension is the **syntax-highlight palette**. It is GitHub Primer (light or dark, branched off the color scheme) and is shared across all three editor themes, so a python snippet reads identically regardless of which document chrome is active. It paints fenced code blocks (per-language packs lazy-load via `editor/markdown/code_languages.ts`) and whole files in Source mode. See `web/packages/workspace-app/src/editor/highlight.ts` — including the one deliberate Primer divergence: plain identifiers get no color because Primer's orange collides with chan's brand orange.
 
 ## Canonical semantic palette
 
@@ -115,7 +115,7 @@ Pill backgrounds (`--pill-*-bg`) are alpha tints of the concept hue (~0.15-0.20 
 
 ## Kind taxonomy
 
-`web/src/state/kinds.ts` defines the unified taxonomy used by every chip, tree icon, and inspector header glyph. Three families:
+`web/packages/workspace-app/src/state/kinds.ts` defines the unified taxonomy used by every chip, tree icon, and inspector header glyph. Three families:
 
 - **FileKind**: things that exist as files in the workspace. `document` | `contact` | `text` | `media` | `binary` | `pending`.
 - **EntityKind**: graph-only entities (tokens extracted from markdown bodies, no file backing). `tag` | `mention` | `date`.
@@ -123,7 +123,7 @@ Pill backgrounds (`--pill-*-bg`) are alpha tints of the concept hue (~0.15-0.20 
 
 `classifyEntry(entry)` / `classifyFile(path, serverKind?)` is the single classifier. The server projects a `kind` discriminator on every regular file it lists, and that wire value wins whenever present. The path-only fallback (`classifyPath` in `state/fileTypes.ts`) runs only for bare paths held outside a tree listing (graph ghost rows, broken-link targets): images + PDFs are `media`, `.md` is `document`, `.txt` plus the source/config/shell extension set and well-known basenames (Makefile, LICENSE, ...) are `text`, everything else is `binary`. The extension sets mirror `chan-workspace/src/fs_ops.rs` and must be widened in lockstep. `pending` is a server-side state for unknown extensions awaiting the UTF-8 content sniff; it only reaches the SPA from the recursive whole-tree listing and renders neutrally.
 
-`web/src/components/KindChip.svelte` is the single chip component. Inspector headers pass `block` (flex:1 fill); the search results list passes `compact` (smaller font + fixed-width column). `ghost` and `dim` modify opacity for graph ghost rows and search filename-match rows respectively. Passing `onClick` renders the chip as a button (the "scope the graph to this file" affordance).
+`web/packages/workspace-app/src/components/KindChip.svelte` is the single chip component. Inspector headers pass `block` (flex:1 fill); the search results list passes `compact` (smaller font + fixed-width column). `ghost` and `dim` modify opacity for graph ghost rows and search filename-match rows respectively. Passing `onClick` renders the chip as a button (the "scope the graph to this file" affordance).
 
 ### Per-kind mapping
 
@@ -189,7 +189,7 @@ Shadow      --pane-shadow          Floating-pane drop shadow (light
 Drafts      --fb-drafts-fg/-bg     Drafts dir row + graph tint
 ```
 
-Editor-theme axis (`web/src/editor/themes/*.css`):
+Editor-theme axis (`web/packages/workspace-app/src/editor/themes/*.css`):
 
 ```
 Group       Variable                          Use
@@ -249,20 +249,20 @@ Slab bg and the H1/H2 hairline rule track the editor theme; the syntax palette o
 
 ## Adding a new editor theme
 
-1. Create `web/src/editor/themes/<name>.css`. Override only the `--chan-editor-*` tokens that should diverge from `base.css`; missing tokens fall through to the color-scheme palette.
+1. Create `web/packages/workspace-app/src/editor/themes/<name>.css`. Override only the `--chan-editor-*` tokens that should diverge from `base.css`; missing tokens fall through to the color-scheme palette.
 2. Light goes under `:root[data-editor-theme="<name>"]`; dark goes under `:root[data-editor-theme="<name>"][data-theme="dark"]` plus the descendant `[data-theme="dark"]` form for per-surface overrides.
-3. Import the sheet in `web/src/main.ts` next to the other theme imports.
-4. Add the value to the `EditorTheme` union in `web/src/api/types.ts` and register the option in `HybridEditorConfig.svelte`.
+3. Import the sheet in `web/packages/workspace-app/src/main.ts` next to the other theme imports.
+4. Add the value to the `EditorTheme` union in `web/packages/workspace-app/src/api/types.ts` and register the option in `HybridEditorConfig.svelte`.
 5. Decide whether the theme wants the GitHub-style H1/H2 rule; opt in by setting `--chan-editor-h{1,2}-border-bottom` and `--chan-editor-h{1,2}-padding-bottom` (base.css defaults these to `none` / `0`).
 
 The new theme inherits the GitHub Primer syntax-highlight palette automatically; it is not part of the editor-theme contract.
 
 ## Source-of-truth pointers
 
-- `web/src/App.svelte` palette blocks: color-scheme axis.
-- `web/src/state/store.svelte.ts`: applies `data-theme`, owns the per-Hybrid-surface overrides.
-- `web/src/editor/themes/`: editor-theme axis.
-- `web/src/state/editorTheme.ts`: applies `data-editor-theme`.
-- `web/src/editor/highlight.ts`: syntax-highlight palette (GitHub Primer, shared across editor themes).
-- `web/src/editor/base.ts` `themeExtensions()`: how CodeMirror picks the highlight + chrome (cursor, gutter) per color scheme.
-- `web/src/state/kinds.ts` + `web/src/state/fileTypes.ts`: kind taxonomy + path fallback classifier.
+- `web/packages/workspace-app/src/App.svelte` palette blocks: color-scheme axis.
+- `web/packages/workspace-app/src/state/store.svelte.ts`: applies `data-theme`, owns the per-Hybrid-surface overrides.
+- `web/packages/workspace-app/src/editor/themes/`: editor-theme axis.
+- `web/packages/workspace-app/src/state/editorTheme.ts`: applies `data-editor-theme`.
+- `web/packages/workspace-app/src/editor/highlight.ts`: syntax-highlight palette (GitHub Primer, shared across editor themes).
+- `web/packages/workspace-app/src/editor/base.ts` `themeExtensions()`: how CodeMirror picks the highlight + chrome (cursor, gutter) per color scheme.
+- `web/packages/workspace-app/src/state/kinds.ts` + `web/packages/workspace-app/src/state/fileTypes.ts`: kind taxonomy + path fallback classifier.

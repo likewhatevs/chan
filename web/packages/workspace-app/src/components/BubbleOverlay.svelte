@@ -90,7 +90,7 @@
       {#if active.title}
         <h2 class="survey-title">{active.title}</h2>
       {/if}
-      <!-- renderMarkdownWithBreaks is DOMPurify-sanitized (web/src/api/markdown.ts),
+      <!-- renderMarkdownWithBreaks is DOMPurify-sanitized (web/packages/workspace-app/src/api/markdown.ts),
            so {@html} is safe for the agent-supplied body. `breaks: true` so a
            single authored newline renders as a line break (survey bodies are
            hand-written multi-line prompts). -->

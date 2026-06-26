@@ -85,7 +85,7 @@ export function labelFor(kind: Kind): string {
 }
 
 /// CSS color variable for the chip background. Wraps the canonical
-/// palette tokens defined in App.svelte; see web/src/design.md for
+/// palette tokens defined in App.svelte; see web/packages/workspace-app/src/design.md for
 /// the cross-surface mapping. `text` aliases `--g-doc` for now
 /// because the two share the document hue family until we pick a
 /// separate tone (the visual distinction is icon + label, not hue).

@@ -20,11 +20,11 @@ TARGETS=("x86_64-unknown-linux-gnu" "aarch64-unknown-linux-gnu")
 
 # Frontend bundle. rust-embed bakes whatever is in
 # crates/identity/web/dist into the binary at compile time, so we
-# MUST build the SPA first. It shares one npm workspace (at gateway/)
-# with the chan-web-common package.
+# MUST build the SPA first. The gateway profile SPA is @chan/profile,
+# a member of the ./web npm workspace (the gateway no longer carries
+# its own npm root); building it emits to the frozen embed dist.
 echo "==> building SPA bundle"
-npm ci --silent
-npm run build --workspaces --if-present --silent
+(cd ../web && npm ci --silent && npm run build -w @chan/profile --silent)
 
 # Cross-compile binaries.
 for target in "${TARGETS[@]}"; do

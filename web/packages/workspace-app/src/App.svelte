@@ -1516,7 +1516,7 @@
        same item reads with the same color across the graph, the
        file tree, the info panel, and the editor: document ->
        orange, media -> purple, tag -> green, contact -> yellow,
-       date/time -> grey, broken -> red. See web/src/design.md
+       date/time -> grey, broken -> red. See web/packages/workspace-app/src/design.md
        for the full cross-surface table. Backgrounds are alpha
        tints of the foreground so each pill reads as a badge
        rather than a button. */
