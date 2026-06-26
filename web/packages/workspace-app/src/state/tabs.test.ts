@@ -82,6 +82,7 @@ import {
   scheduleAutosave,
   serializeLayout,
   setActivePane,
+  setTabCaret,
   setTerminalActivity,
   setTerminalActivityPulsing,
   setTerminalBroadcastBySession,
@@ -111,6 +112,12 @@ import {
   type LeafNode,
   type TerminalTab,
 } from "./tabs.svelte";
+
+// The per-file caret index is a localStorage store (absent in the node test
+// env); mock it so the tests assert the wiring (record on edit, restore on
+// open) without a storage polyfill.
+vi.mock("./caretIndex");
+import { readCaret, recordCaret } from "./caretIndex";
 
 function resetLayout(tabs: Array<FileTab | TerminalTab>): LeafNode {
   const pane: LeafNode = {
@@ -514,6 +521,61 @@ describe("tab close confirmation", () => {
       const tab = reopenedFileTab();
       expect(tab.caret).toEqual({ from: 5, to: 5 });
       expect(tab.caretCommand).toBeUndefined();
+    });
+  });
+
+  describe("per-file caret persistence (ask 2)", () => {
+    test("setTabCaret records the caret when the tab is not loading", () => {
+      vi.mocked(recordCaret).mockClear();
+      const tab = fileTab({ path: "notes/a.md", loading: false });
+      setTabCaret(tab, 3, 8);
+      expect(tab.caret).toEqual({ from: 3, to: 8 });
+      expect(recordCaret).toHaveBeenCalledWith("notes/a.md", 3, 8);
+    });
+
+    test("setTabCaret does NOT record while the tab is still loading", () => {
+      vi.mocked(recordCaret).mockClear();
+      const tab = fileTab({ path: "notes/a.md", loading: true });
+      setTabCaret(tab, 3, 8);
+      expect(tab.caret).toEqual({ from: 3, to: 8 });
+      expect(recordCaret).not.toHaveBeenCalled();
+    });
+
+    test("an implicit fresh open restores the saved caret after load", async () => {
+      vi.mocked(readCaret).mockReturnValueOnce({ from: 4, to: 6 });
+      vi.spyOn(api, "readStream").mockResolvedValue({
+        path: "notes/b.md",
+        content: "abcdefghij",
+        mtime: 1,
+        mtime_ns: "1",
+        writable: true,
+      });
+      const pane = resetLayout([]);
+      await openInPane(pane.id, "notes/b.md", {});
+      const t = activePane().tabs[0];
+      expect(t?.kind).toBe("file");
+      if (t?.kind !== "file") return;
+      expect(t.caretCommand).toEqual({ from: 4, to: 6 });
+    });
+
+    test("an explicit landAtTop open ignores the saved caret and lands at top", async () => {
+      // restoreSavedCaretAfterLoad returns before consulting readCaret when
+      // landAtTop is set, so the saved caret never overrides the explicit top.
+      vi.mocked(readCaret).mockClear();
+      vi.spyOn(api, "readStream").mockResolvedValue({
+        path: "notes/c.md",
+        content: "abcdefghij",
+        mtime: 1,
+        mtime_ns: "1",
+        writable: true,
+      });
+      const pane = resetLayout([]);
+      await openInPane(pane.id, "notes/c.md", { landAtTop: true });
+      const t = activePane().tabs[0];
+      expect(t?.kind).toBe("file");
+      if (t?.kind !== "file") return;
+      expect(t.caret).toEqual({ from: 0, to: 0 });
+      expect(readCaret).not.toHaveBeenCalled();
     });
   });
 

@@ -102,6 +102,7 @@ export {
   isDraftPath,
 } from "./workspace.svelte";
 import { workspace, draftsDir, isDraftPath } from "./workspace.svelte";
+import { clearCaretsUnder } from "./caretIndex";
 
 /// Display name for the active workspace. The server computes this from
 /// the path; it is not user-managed registry metadata.
@@ -4388,6 +4389,10 @@ export const fileOps = {
     if (!ok) return;
     try {
       await api.remove(path);
+      // Drop the persisted caret for the deleted file (and its descendants on
+      // a directory delete) so a later file reusing the path never restores a
+      // ghost position.
+      clearCaretsUnder(path);
       await Promise.all([refreshTree(), refreshWorkspace()]);
       const underDeleted = (p: string) =>
         p === path || p.startsWith(`${path}/`);

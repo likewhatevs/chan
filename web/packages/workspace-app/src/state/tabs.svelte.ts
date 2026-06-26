@@ -40,6 +40,7 @@ import {
 // store's eager draft-promotion-sink registration. See the cycle note
 // below.
 import { isDraftPath } from "./workspace.svelte";
+import { readCaret, recordCaret, rekeyCaret } from "./caretIndex";
 // `uiPathPrompt` lives in store.svelte, which has a TOP-LEVEL side
 // effect (`registerDraftPromotionSink(...)`) that calls back into THIS
 // module. A static `import { uiPathPrompt } from "./store.svelte"`
@@ -2386,6 +2387,33 @@ export async function openInPane(
   // This is the `cs open {path}` path too (handleWindowCommand -> openInPane).
   bumpTabFocusPulse();
   await loadTabContent(paneId, newTab.id, path);
+  restoreSavedCaretAfterLoad(paneId, newTab.id, path, opts);
+}
+
+/// After a fresh open finishes streaming, land the caret at the per-file saved
+/// position for an IMPLICIT open (a link / mention / reopen of a closed file).
+/// Explicit opens (landAtTop) and open-at-selection set the caret at open time
+/// and skip this. Restoring AFTER the load lands the caret on the FULL doc (the
+/// large-file park, so it is never clamped to a partial stream) and only when
+/// the caret is still parked at top, so it never overrides a caret the user
+/// moved while the file streamed in.
+function restoreSavedCaretAfterLoad(
+  paneId: string,
+  tabId: string,
+  path: string,
+  opts: OpenFileOptions,
+): void {
+  if (opts.landAtTop || opts.initialSelection) return;
+  const saved = readCaret(path);
+  if (!saved) return;
+  const node = layout.nodes[paneId];
+  if (!node || node.kind !== "leaf") return;
+  const t = node.tabs.find(
+    (tab): tab is FileTab => tab.kind === "file" && tab.id === tabId,
+  );
+  if (!t || t.error || t.fileMissing) return;
+  if (t.caret && (t.caret.from !== 0 || t.caret.to !== 0)) return;
+  issueCaretCommand(t, saved.from, saved.to);
 }
 
 export function openInActivePane(
@@ -3733,6 +3761,11 @@ export function toggleActiveFileTabMode(): void {
 /// (persistence, telemetry) later.
 export function setTabCaret(tab: FileTab, from: number, to: number): void {
   tab.caret = { from, to };
+  // Persist the caret per file (debounced) so a later reopen lands here.
+  // Skip while the file is still streaming: the editor parks at {0,0} during
+  // load, and recording that would clobber the saved offset before the
+  // post-load restore reads it back.
+  if (!tab.loading) recordCaret(tab.path, from, to);
 }
 /// Imperatively command a mounted editor to (re)place its caret. A
 /// kept-alive tab's editor snapshots `initialCaret` once and latches, so an
@@ -5122,6 +5155,9 @@ export function tabsForPath(path: string): { paneId: string; tabId: string }[] {
 /// it (kind change, etc.) the next save surfaces the failure via
 /// the existing error channel; we don't need to special-case here.
 export function rekeyTabsForRename(from: string, to: string): void {
+  // Move the persisted caret(s) with the file/dir so a renamed file keeps its
+  // remembered caret and does not orphan a stale entry.
+  rekeyCaret(from, to);
   const dirPrefix = `${from}/`;
   const newDirPrefix = `${to}/`;
   for (const node of Object.values(layout.nodes)) {
