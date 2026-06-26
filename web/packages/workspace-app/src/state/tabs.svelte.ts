@@ -69,6 +69,12 @@ export type Mode = "wysiwyg" | "source" | "pretty" | "table";
 export type EditorSelection = { from: number; to: number };
 export type OpenFileOptions = {
   initialSelection?: EditorSelection;
+  /// Force the caret to document top, overriding any persisted/restored
+  /// position. Set by explicit user-driven opens (File-Tree click, File
+  /// Browser open, create, duplicate, `cs open`); omitted by implicit opens
+  /// (search, wiki/mention links, backlink navigation) so they keep their
+  /// jump target or last-known caret.
+  landAtTop?: boolean;
 };
 
 /// Default mode for a freshly opened file. JSON tabs land in
@@ -249,6 +255,14 @@ export type FileTab = {
   /// on every selection change; the editor that mounts next reads
   /// it once on first content apply to restore the caret.
   caret?: { from: number; to: number };
+  /// Transient imperative caret command. A mounted editor snapshots
+  /// `initialCaret` once and latches, so re-opening a kept-alive tab can't
+  /// move the caret through the prop. `openInPane` sets a fresh object here
+  /// on an explicit open; the FileEditorTab effect drives the live editor to
+  /// it via `resetCaret`. Kept separate from `caret` (the live position
+  /// written on every keystroke) so the consuming effect does not re-fire
+  /// while typing. Never serialized (see serializeTab's field allowlist).
+  caretCommand?: { from: number; to: number };
   /// Per-tab inspector and outline widths so two file tabs side by
   /// side carry independent inspector/outline sizes. Fall back to
   /// `paneWidths.inspector` / `paneWidths.outline` when unset.
@@ -2296,7 +2310,9 @@ export async function openInPane(
     pendingReopen.fileMissing = null;
     pendingReopen.repoRoot = null;
     pendingReopen.fsWritable = true;
-    if (opts.initialSelection) pendingReopen.caret = { ...opts.initialSelection };
+    if (opts.landAtTop) issueCaretCommand(pendingReopen, 0, 0);
+    else if (opts.initialSelection)
+      pendingReopen.caret = { ...opts.initialSelection };
     p.activeTabId = pendingReopen.id;
     layout.activePaneId = paneId;
     bumpTabFocusPulse();
@@ -2307,7 +2323,17 @@ export async function openInPane(
     (t): t is FileTab => t.kind === "file" && t.path === path,
   );
   if (existing) {
-    if (opts.initialSelection) existing.caret = { ...opts.initialSelection };
+    // The tab is kept alive and its editor has latched its mount-time caret,
+    // so a reopen must re-drive the caret imperatively (an explicit open lands
+    // at top; a search/link reopen jumps to its selection). A plain refocus
+    // with no caret intent leaves the caret where the user left it.
+    if (opts.landAtTop) issueCaretCommand(existing, 0, 0);
+    else if (opts.initialSelection)
+      issueCaretCommand(
+        existing,
+        opts.initialSelection.from,
+        opts.initialSelection.to,
+      );
     p.activeTabId = existing.id;
     layout.activePaneId = paneId;
     bumpTabFocusPulse();
@@ -2346,7 +2372,11 @@ export async function openInPane(
     highlightTrailingWhitespace: false,
     codeBlocksCollapsed: false,
   };
-  if (opts.initialSelection) newTab.caret = { ...opts.initialSelection };
+  // A brand-new tab mounts its editor fresh, so `initialCaret` (seeded from
+  // `caret`) lands the position with no imperative command needed. landAtTop
+  // forces top, overriding any restored position.
+  if (opts.landAtTop) newTab.caret = { from: 0, to: 0 };
+  else if (opts.initialSelection) newTab.caret = { ...opts.initialSelection };
   p.tabs.push(newTab);
   p.activeTabId = newTab.id;
   layout.activePaneId = paneId;
@@ -3703,6 +3733,23 @@ export function toggleActiveFileTabMode(): void {
 /// (persistence, telemetry) later.
 export function setTabCaret(tab: FileTab, from: number, to: number): void {
   tab.caret = { from, to };
+}
+/// Imperatively command a mounted editor to (re)place its caret. A
+/// kept-alive tab's editor snapshots `initialCaret` once and latches, so an
+/// explicit reopen of an already-mounted tab can't move the caret through the
+/// prop. Setting a fresh object here re-fires the FileEditorTab effect that
+/// calls the editor's `resetCaret`, even when the position repeats. Sets
+/// `caret` too so the position survives a later remount; the command itself is
+/// transient and never serialized.
+export function issueCaretCommand(tab: FileTab, from: number, to: number): void {
+  tab.caret = { from, to };
+  tab.caretCommand = { from, to };
+}
+/// Clear a consumed caret command so a later remount of the same kept-alive
+/// tab does not replay it. The consuming FileEditorTab effect calls this once
+/// it has driven the editor.
+export function clearTabCaretCommand(tab: FileTab): void {
+  tab.caretCommand = undefined;
 }
 export function setTabInspectorOpen(tab: FileTab, open: boolean): void {
   tab.inspectorOpen = open;

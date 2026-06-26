@@ -475,6 +475,48 @@ describe("tab close confirmation", () => {
     expect(activePane().activeTabId).toBe(reopened.id);
   });
 
+  describe("openInPane caret command (bug-4)", () => {
+    // openInPane mutates the layout-proxied tab; read it back via activePane()
+    // (the local `tab` reference is the pre-proxy object and stays stale).
+    function reopenedFileTab(): FileTab {
+      const t = activePane().tabs[0];
+      if (t?.kind !== "file") throw new Error("expected a file tab");
+      return t;
+    }
+
+    test("reopening a kept-alive tab with landAtTop commands the caret to top", async () => {
+      const pane = resetLayout([
+        fileTab({ path: "notes/a.md", caret: { from: 12, to: 12 } }),
+      ]);
+      await openInPane(pane.id, "notes/a.md", { landAtTop: true });
+      const tab = reopenedFileTab();
+      expect(tab.caret).toEqual({ from: 0, to: 0 });
+      expect(tab.caretCommand).toEqual({ from: 0, to: 0 });
+    });
+
+    test("reopening with initialSelection commands the caret to the selection", async () => {
+      const pane = resetLayout([
+        fileTab({ path: "notes/a.md", caret: { from: 0, to: 0 } }),
+      ]);
+      await openInPane(pane.id, "notes/a.md", {
+        initialSelection: { from: 7, to: 9 },
+      });
+      const tab = reopenedFileTab();
+      expect(tab.caret).toEqual({ from: 7, to: 9 });
+      expect(tab.caretCommand).toEqual({ from: 7, to: 9 });
+    });
+
+    test("a plain refocus leaves the caret untouched and issues no command", async () => {
+      const pane = resetLayout([
+        fileTab({ path: "notes/a.md", caret: { from: 5, to: 5 } }),
+      ]);
+      await openInPane(pane.id, "notes/a.md", {});
+      const tab = reopenedFileTab();
+      expect(tab.caret).toEqual({ from: 5, to: 5 });
+      expect(tab.caretCommand).toBeUndefined();
+    });
+  });
+
   test("reopens a closed File Browser tab with its expanded dirs + view state", async () => {
     // Close + reopen both run the tab through cloneTab; the browser
     // branch must carry the per-tab view state or Cmd+Shift+T snaps the

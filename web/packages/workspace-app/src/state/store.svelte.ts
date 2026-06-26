@@ -1165,7 +1165,8 @@ async function handleWindowCommand(raw: unknown): Promise<void> {
   const frame = raw as Partial<WindowCommandFrame> | null;
   if (!frame || frame.window_id !== sessionWindowId()) return;
   if (frame.command === "open_file" && typeof frame.path === "string") {
-    await openInActivePane(frame.path);
+    // `cs open {path}` is an explicit CLI open: land at document top.
+    await openInActivePane(frame.path, { landAtTop: true });
     setTransientStatus(`opened ${frame.path}`);
     return;
   }
@@ -4243,7 +4244,7 @@ export const fileOps = {
     try {
       await api.create(path, false, "");
       await refreshTree();
-      await openInActivePane(path);
+      await openInActivePane(path, { landAtTop: true });
     } catch (e) {
       ui.status = `create failed: ${(e as Error).message}`;
     }
@@ -4308,7 +4309,7 @@ export const fileOps = {
     try {
       await api.create(path, false, "");
       await refreshTree();
-      await openInActivePane(path);
+      await openInActivePane(path, { landAtTop: true });
     } catch (e) {
       ui.status = `create failed: ${(e as Error).message}`;
     }
@@ -4421,7 +4422,7 @@ export const fileOps = {
       const target = nextDuplicateName(path);
       await api.create(target, false, src.content);
       await refreshTree();
-      await openInActivePane(target);
+      await openInActivePane(target, { landAtTop: true });
       revealAndSelect(target);
     } catch (e) {
       ui.status = `duplicate failed: ${(e as Error).message}`;

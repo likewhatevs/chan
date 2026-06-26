@@ -399,7 +399,8 @@
     // pill and the tree's double-click: an odd-suffix plaintext file
     // (content-sniffed to `text`) opens instead of falling to Download.
     if (entry && !entry.is_dir && isOpenableTextKind(classifyEntry(entry))) {
-      void openInActivePane(entry.path);
+      // Explicit user open (File Browser open-selection): land at top.
+      void openInActivePane(entry.path, { landAtTop: true });
       if (isOverlay) closeSurface();
     }
   }

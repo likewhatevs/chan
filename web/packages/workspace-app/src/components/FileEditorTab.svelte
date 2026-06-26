@@ -82,6 +82,7 @@
     reopenClosedTab,
     reloadTabFromDisk,
     setMode,
+    clearTabCaretCommand,
     setTabCaret,
     setTabInspectorOpen,
     setTabCodeBlocksCollapsed,
@@ -180,6 +181,29 @@
       if (!focused) return;
       if (tab.mode === "wysiwyg") wysiwygRef?.focus();
       else sourceRef?.focus();
+    });
+  });
+
+  // Imperative caret-command channel. A kept-alive tab's editor snapshots
+  // `initialCaret` once at mount and then latches, so re-opening an already-
+  // mounted tab (File-Browser reclick, `cs open` twice, a link that restores
+  // a saved caret) cannot move the caret through the prop. `openInPane` sets a
+  // fresh `tab.caretCommand` on such an open; this effect drives the live
+  // editor to it via `resetCaret`. Tracking `tab.caretCommand` only (NOT
+  // `tab.caret`, which is rewritten on every keystroke) keeps this from
+  // re-firing while typing. The microtask defers past the open stack and reads
+  // `tab.mode` untracked, mirroring the focus effect above, so a later mode
+  // toggle (which remaps the caret itself) does not replay a stale command.
+  $effect(() => {
+    const cmd = tab.caretCommand;
+    if (!cmd) return;
+    queueMicrotask(() => {
+      if (tab.mode === "wysiwyg") wysiwygRef?.resetCaret(cmd.from, cmd.to);
+      else sourceRef?.resetCaret(cmd.from, cmd.to);
+      // One-shot: clear so a later remount of this kept-alive tab (a move /
+      // detach to another pane) does not replay a stale command and yank the
+      // caret. Reassigning to undefined just re-runs this effect to a no-op.
+      clearTabCaretCommand(tab);
     });
   });
 

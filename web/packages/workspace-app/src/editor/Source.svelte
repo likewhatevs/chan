@@ -173,6 +173,31 @@
     view.focus();
   }
 
+  /// Imperatively re-place the caret at a doc-offset range, scrolling it
+  /// into view and refocusing. Unlike `maybeRestoreCaret` this is NOT gated
+  /// by the one-shot `caretRestored` latch - it is the live channel the tab
+  /// host drives on an explicit reopen of this kept-alive editor (the prop
+  /// `initialCaret` was snapshotted once at mount and can no longer move the
+  /// caret). Clamps to the current doc, so a command that arrives before
+  /// content streams in is a harmless near-no-op; the real placement then
+  /// still comes from `maybeRestoreCaret` once content lands.
+  export function resetCaret(from: number, to: number): void {
+    if (!view) return;
+    const lim = view.state.doc.length;
+    const f = Math.min(Math.max(0, from), lim);
+    const t = Math.min(Math.max(0, to), lim);
+    view.dispatch({
+      selection: { anchor: f, head: t },
+      effects: EditorView.scrollIntoView(f, { y: "nearest" }),
+    });
+    if (autoFocus) {
+      requestAnimationFrame(() => {
+        if (!view) return;
+        view.focus();
+      });
+    }
+  }
+
   export function removeTrailingWhitespaceInEditor(): boolean {
     if (!view) return false;
     return removeTrailingWhitespace(view);

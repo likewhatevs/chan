@@ -163,3 +163,66 @@ describe("persisted caret survives mount (reopened file)", () => {
     });
   }
 });
+
+// ---- bug-4: resetCaret re-drives an ALREADY-mounted, latched editor ----
+//
+// A pane keeps one editor per tab alive, and `initialCaret` is a one-shot
+// mount snapshot (maybeRestoreCaret latches via caretRestored). So re-opening a
+// kept-alive tab (File-Browser reclick, `cs open` twice) cannot move the caret
+// through the prop. `resetCaret` is the imperative channel the tab host drives
+// instead; it must move the caret of a live editor and clamp to the doc.
+
+describe("resetCaret re-drives an already-mounted editor (bug-4)", () => {
+  for (const [name, Comp] of components) {
+    test(`${name}: resetCaret moves the caret after the mount-time caret latched`, () => {
+      const target = document.createElement("div");
+      document.body.append(target);
+      const component = mount(Comp, {
+        target,
+        props: {
+          autoFocus: false,
+          path: "note.md",
+          value: "abcdef",
+          initialCaret: { from: 5, to: 5 },
+        } as ComponentProps<typeof SourceComponent>,
+      });
+      mounted.push(component);
+      flushSync();
+      const dom =
+        target.querySelector<HTMLElement>(".cm-editor") ??
+        target.querySelector<HTMLElement>(".cm-content");
+      const view = dom ? EditorView.findFromDOM(dom) : null;
+      if (!view) throw new Error("editor view did not mount");
+      // The mount-time caret latched at offset 5; the prop is now inert.
+      expect(view.state.selection.main.head).toBe(5);
+      const reset = (
+        component as unknown as { resetCaret: (from: number, to: number) => void }
+      ).resetCaret;
+      reset(1, 1);
+      flushSync();
+      expect(view.state.selection.main.head).toBe(1);
+      // A command beyond the doc clamps to its length (the large-file park
+      // guard: an early command on a partially-streamed doc is a safe no-op).
+      reset(999, 999);
+      flushSync();
+      expect(view.state.selection.main.head).toBe(6);
+    });
+  }
+});
+
+describe("resetCaret export shape (bug-4)", () => {
+  for (const [name, src] of rawEditors) {
+    test(`${name}: exports resetCaret with selection + scrollIntoView + focus`, () => {
+      expect(src).toMatch(
+        /export function resetCaret\(from: number, to: number\): void \{[\s\S]*?selection: \{ anchor: f, head: t \},[\s\S]*?EditorView\.scrollIntoView\(f, \{ y: "nearest" \}\),[\s\S]*?view\.focus\(\);/,
+      );
+    });
+
+    test(`${name}: resetCaret is NOT gated by the caretRestored latch`, () => {
+      // It is the LIVE re-drive; a caretRestored guard would defeat the fix.
+      expect(src).not.toMatch(
+        /export function resetCaret\([^)]*\): void \{\s*if \([^)]*caretRestored/,
+      );
+    });
+  }
+});

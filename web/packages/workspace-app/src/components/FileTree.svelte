@@ -505,7 +505,9 @@
   }
 
   function onOpen(path: string): void {
-    void openInActivePane(path);
+    // Explicit user open (double-click / Open button): land at document top,
+    // overriding any persisted caret.
+    void openInActivePane(path, { landAtTop: true });
   }
 
   /// Single-click selects an entry; the FileBrowserTab side panel
