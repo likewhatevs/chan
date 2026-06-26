@@ -19,6 +19,7 @@ use crate::desktop_window_ops::DesktopWindowOp;
 use crate::state::WorkspaceCell;
 use crate::terminal_sessions::CreateOptions;
 use crate::terminal_sessions::Registry as TerminalRegistry;
+use crate::{WindowKind, WindowRecord};
 
 /// Settable handle to the terminal registry. The registry is built after
 /// the control socket starts (it needs the control socket path for
@@ -600,7 +601,18 @@ async fn handle_request(req: ControlRequest, ctx: &ControlSocketCtx) -> ControlR
                     message: "terminal registry unavailable".into(),
                 };
             };
-            into_response(term_list(registry))
+            // Resolve the library window set (the same source `WindowList` reads)
+            // so the listing can name each session's owning window + kind +
+            // liveness. A standalone serve has no host, so the set is empty and
+            // every session reads back `orphaned` — honest, not wrong.
+            let windows = match unserve {
+                UnserveScope::Host(weak) => weak
+                    .upgrade()
+                    .map(|host| host.assemble_window_records())
+                    .unwrap_or_default(),
+                UnserveScope::Standalone { .. } | UnserveScope::Unsupported => Vec::new(),
+            };
+            into_response(term_list(registry, &windows))
         }
         ControlRequest::TermRestart {
             tab_name,
@@ -2064,14 +2076,43 @@ fn term_scrollback(registry: &TerminalRegistry, tab_name: &str) -> Result<String
 }
 
 /// Category 2: list live terminal sessions as JSON, grouped by group.
-fn term_list(registry: &TerminalRegistry) -> Result<String, String> {
-    use std::collections::BTreeMap;
+fn term_list(registry: &TerminalRegistry, windows: &[WindowRecord]) -> Result<String, String> {
+    use std::collections::{BTreeMap, HashMap};
+
+    // Index the library window set so each session can name its owning window's
+    // kind + liveness without a second registry walk.
+    let by_id: HashMap<&str, &WindowRecord> =
+        windows.iter().map(|w| (w.window_id.as_str(), w)).collect();
 
     let mut groups: BTreeMap<String, Vec<serde_json::Value>> = BTreeMap::new();
     for summary in registry.session_summaries() {
+        // Resolve the session's window: a live row gives kind + alive/offline; a
+        // session whose window_id has no row outlived its window (orphaned); a
+        // session with no window_id was created outside a browser window (none).
+        let (window, window_kind, window_status) = match summary.window_id.as_deref() {
+            Some(id) => match by_id.get(id) {
+                Some(rec) => {
+                    let kind = if rec.control {
+                        "control"
+                    } else {
+                        match rec.kind {
+                            WindowKind::Terminal => "standalone-terminal",
+                            WindowKind::Workspace => "workspace",
+                        }
+                    };
+                    let status = if rec.connected { "alive" } else { "offline" };
+                    (Some(id.to_string()), kind, status)
+                }
+                None => (Some(id.to_string()), "orphaned", "orphaned"),
+            },
+            None => (None, "none", "none"),
+        };
         let entry = serde_json::json!({
             "name": summary.tab_name,
             "session_id": summary.session_id,
+            "window": window,
+            "window_kind": window_kind,
+            "window_status": window_status,
             "cwd": summary.cwd.map(|p| p.to_string_lossy().into_owned()),
         });
         groups.entry(summary.tab_group).or_default().push(entry);
@@ -2894,9 +2935,95 @@ mod tests {
     #[test]
     fn term_list_has_no_groups_without_sessions() {
         let (_root, registry) = empty_registry();
-        let json = term_list(&registry).expect("term list");
+        let json = term_list(&registry, &[]).expect("term list");
         let value: Value = serde_json::from_str(&json).expect("json");
         assert_eq!(value["groups"], serde_json::json!({}));
+    }
+
+    fn window_record(
+        window_id: &str,
+        kind: WindowKind,
+        connected: bool,
+        control: bool,
+    ) -> WindowRecord {
+        WindowRecord {
+            window_id: window_id.into(),
+            library_id: "local".into(),
+            kind,
+            title: String::new(),
+            ordinal: 1,
+            workspace_path: None,
+            prefix: String::new(),
+            token: String::new(),
+            persisted: true,
+            connected,
+            active_transfer: false,
+            control,
+            hidden: false,
+        }
+    }
+
+    #[test]
+    fn term_list_carries_window_kind_and_status() {
+        let (_root, registry) = empty_registry();
+        // A session in an alive workspace window, one in an offline standalone
+        // terminal window, one whose window row is gone (orphaned), and a
+        // windowless headless session.
+        for (name, win) in [
+            ("alive", Some("win-alive")),
+            ("offline", Some("win-offline")),
+            ("ghost", Some("win-gone")),
+            ("headless", None),
+        ] {
+            registry
+                .create(CreateOptions {
+                    size: PtySize {
+                        cols: 80,
+                        rows: 24,
+                        pixel_width: 0,
+                        pixel_height: 0,
+                    },
+                    tab_name: Some(name.into()),
+                    tab_group: None,
+                    window_id: win.map(str::to_string),
+                    mcp_env: false,
+                    cwd: None,
+                    command: None,
+                    env: Default::default(),
+                })
+                .expect("spawn session");
+        }
+        let records = [
+            window_record("win-alive", WindowKind::Workspace, true, false),
+            window_record("win-offline", WindowKind::Terminal, false, false),
+        ];
+        let json = term_list(&registry, &records).expect("term list");
+        let value: Value = serde_json::from_str(&json).expect("json");
+        let entries = value["groups"]["default"]
+            .as_array()
+            .expect("default group")
+            .clone();
+        let entry = |n: &str| {
+            entries
+                .iter()
+                .find(|e| e["name"] == n)
+                .unwrap_or_else(|| panic!("entry {n} missing: {value}"))
+                .clone()
+        };
+        let alive = entry("alive");
+        assert_eq!(alive["window"], "win-alive");
+        assert_eq!(alive["window_kind"], "workspace");
+        assert_eq!(alive["window_status"], "alive");
+        let offline = entry("offline");
+        assert_eq!(offline["window_kind"], "standalone-terminal");
+        assert_eq!(offline["window_status"], "offline");
+        let ghost = entry("ghost");
+        assert_eq!(ghost["window"], "win-gone");
+        assert_eq!(ghost["window_kind"], "orphaned");
+        assert_eq!(ghost["window_status"], "orphaned");
+        let headless = entry("headless");
+        assert_eq!(headless["window"], Value::Null);
+        assert_eq!(headless["window_kind"], "none");
     }
 
     #[test]

@@ -259,6 +259,10 @@ pub struct TerminalSessionSummary {
     pub tab_name: Option<String>,
     /// Resolved group (never empty; `DEFAULT_TERMINAL_GROUP` when unset).
     pub tab_group: String,
+    /// The window that owns this session (the `?w=` key), or `None` for a session
+    /// created outside a browser window. The control socket resolves it to the
+    /// owning window's kind + connected state for `cs term list`.
+    pub window_id: Option<String>,
     pub cwd: Option<PathBuf>,
 }
 
@@ -965,6 +969,7 @@ impl Registry {
                     .tab_group
                     .clone()
                     .unwrap_or_else(|| DEFAULT_TERMINAL_GROUP.to_string()),
+                window_id: session.window_id(),
                 cwd: session.cwd(),
             })
             .collect()
@@ -3241,6 +3246,17 @@ mod tests {
         // be a harmless no-op, never a panic.
         let registry = Registry::new(test_config(1024, 4, 10));
         registry.reap_window_layout("win-none");
+    }
+
+    #[test]
+    fn session_summaries_carry_the_owning_window_id() {
+        // cs term list resolves each session's owning window from this field.
+        let registry = Registry::new(test_config(4096, 4, 60));
+        let _h = registry.create(opts_with_window("win-sum")).unwrap();
+        let summaries = registry.session_summaries();
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(summaries[0].window_id.as_deref(), Some("win-sum"));
+        registry.close_all(CloseReason::Shutdown);
     }
 
     #[test]

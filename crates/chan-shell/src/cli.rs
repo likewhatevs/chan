@@ -1700,14 +1700,17 @@ fn render_terminal_list_markdown(raw: &str) -> Result<String> {
     let mut out = String::new();
     for (group, sessions) in groups {
         out.push_str(&format!("## {group}\n\n"));
-        out.push_str("| name | session | cwd |\n");
-        out.push_str("| --- | --- | --- |\n");
+        out.push_str("| name | session | window | kind | status | cwd |\n");
+        out.push_str("| --- | --- | --- | --- | --- | --- |\n");
         if let Some(arr) = sessions.as_array() {
             for s in arr {
                 out.push_str(&format!(
-                    "| {} | {} | {} |\n",
+                    "| {} | {} | {} | {} | {} | {} |\n",
                     str_field(s, "name"),
                     str_field(s, "session_id"),
+                    str_field(s, "window"),
+                    str_field(s, "window_kind"),
+                    str_field(s, "window_status"),
                     str_field(s, "cwd"),
                 ));
             }
@@ -1735,6 +1738,32 @@ mod tests {
     fn terminal_list_markdown_empty_is_short_line() {
         let out = render_terminal_list_markdown(r#"{"groups":{}}"#).expect("render");
         assert_eq!(out, "No live terminal sessions.\n");
+    }
+
+    #[test]
+    fn terminal_list_markdown_renders_window_columns() {
+        let raw = r#"{"groups":{"default":[{"name":"probe","session_id":"s1","window":"w-abc","window_kind":"standalone-terminal","window_status":"alive","cwd":"/tmp"}]}}"#;
+        let out = render_terminal_list_markdown(raw).expect("render");
+        assert!(
+            out.contains("| name | session | window | kind | status | cwd |"),
+            "header: {out}"
+        );
+        assert!(
+            out.contains("| probe | s1 | w-abc | standalone-terminal | alive | /tmp |"),
+            "row: {out}"
+        );
+    }
+
+    #[test]
+    fn terminal_list_markdown_tolerates_a_pre_identity_server() {
+        // An older server omits the window/kind/status fields; the columns fall
+        // back to `-` rather than erroring.
+        let raw = r#"{"groups":{"default":[{"name":"probe","session_id":"s1","cwd":"/tmp"}]}}"#;
+        let out = render_terminal_list_markdown(raw).expect("render");
+        assert!(
+            out.contains("| probe | s1 | - | - | - | /tmp |"),
+            "row: {out}"
+        );
     }
 
     #[test]
