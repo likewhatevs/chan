@@ -36,7 +36,7 @@ The first feature round since the unification: multi-client session presence, a 
 
 ### Notes
 
-- This is a prerelease (`0.53.0-rc1`) validated by a non-publishing dry-run build; the published `v0.53.0` is a later step.
+- Validated by a non-publishing cross-OS dry-run build (Linux / macOS / Windows CLI and desktop, including the macOS sign/notarize path) plus on-device smoke testing.
 - Known limitation: a markdown link whose label contains balanced brackets (`[[foo] bar](path)`) renders as plain text (an upstream `@lezer/markdown` limitation); escape the inner brackets as a workaround.
 
 ## [v0.52.0] - 2026-06-26
