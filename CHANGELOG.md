@@ -8,7 +8,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [v0.52.0] - 2026-06-26
 
-A repository-structure unification with no user-facing behavior change: the frontend consolidates into a single `./web` npm workspace, build and deploy tooling moves under `./packaging`, and the crate layer gets a naming, docs, and dependency-hygiene pass.
+A repository-structure unification — the frontend consolidates into a single `./web` npm workspace, build and deploy tooling moves under `./packaging`, and the crate layer gets a naming, docs, and dependency-hygiene pass — plus a round of window and terminal lifecycle fixes.
 
 ### Changed
 
@@ -16,9 +16,16 @@ A repository-structure unification with no user-facing behavior change: the fron
 - **One `./packaging` tree.** Docker, Kubernetes, Linux packaging, desktop packaging, sdme, and gateway packaging consolidate under `./packaging`. Every Makefile target and CI job name is unchanged.
 - **Crate hygiene.** Shared dependencies centralize in `[workspace.dependencies]`, app-internal crates are marked `publish = false`, three crates gain a `design.md`, and the product is described consistently as an AI-native IDE.
 
+### Fixed
+
+- **Dead and offline windows are removable again.** `cs window rm` (and clearing an offline devserver row) now routes through the library's authoritative window discard — it drops the persisted registry row, ends the window's terminal sessions, and deletes their saved layout — so a dead window no longer reappears on the next `cs window list` or after a restart. Removing a window that still has live terminal shells is refused unless `--force` is passed, and `cs window rm` no longer blocks on a desktop confirm dialog.
+- **`cs window rm` can remove a connected devserver's window from a local terminal**, not only from one of that devserver's own terminals.
+- **`cs terminal list` shows each terminal's owning window**, its kind (standalone-terminal / workspace / control / orphaned), and whether that window is alive or offline.
+- **A window's titlebar number matches `cs window list`.** Watcher-opened windows now title themselves from the library's persisted ordinal (the `#` column) instead of a desktop-local counter, so the titlebar `Window N` and the registry no longer drift.
+
 ### Notes
 
-- No runtime behavior change: this release restructures sources only. The rust-embed bundle paths and the release-download contract are unchanged.
+- The unification restructures sources only — the rust-embed bundle paths and the `/dl` release-download contract are byte-stable. The window and terminal lifecycle items under **Fixed** are the release's only behavior changes.
 
 ## [v0.51.0] - 2026-06-25
 
