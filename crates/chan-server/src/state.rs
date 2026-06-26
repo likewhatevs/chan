@@ -118,6 +118,11 @@ pub struct AppState {
     /// /api/window/reply`) completes it with the layout snapshot. Shared so
     /// both ends reach the same map; transient in-memory state.
     pub window_bus: Arc<crate::window_bus::WindowBus>,
+    /// `cs session handover` blocked-transport registry. Same shape and
+    /// lifecycle as `survey_bus`/`window_bus`: the control socket parks the
+    /// requester's oneshot here and the leader's answer (`POST
+    /// /api/session/handover/reply`, or the leader's own CLI) completes it.
+    pub handover_bus: Arc<crate::handover_bus::HandoverBus>,
     /// In-memory per-window session-blob store for workspace-LESS tenants
     /// (standalone terminal windows). A workspace tenant persists layout via
     /// `Workspace::{put,get}_session` on disk; a terminal tenant has no
@@ -301,6 +306,7 @@ pub(crate) mod test_support {
             scope_registry: Arc::new(crate::bus::ScopeRegistry::new()),
             survey_bus: Arc::new(crate::survey::SurveyBus::new()),
             window_bus: Arc::new(crate::window_bus::WindowBus::new()),
+            handover_bus: Arc::new(crate::handover_bus::HandoverBus::new()),
             ephemeral_sessions: Mutex::new(HashMap::new()),
             terminal_session_dir: None,
             window_presence: Arc::new(crate::window_presence::WindowPresence::new()),

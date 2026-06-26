@@ -33,6 +33,7 @@ mod error;
 /// Public so both the `chan` CLI (client) and `chan-desktop`
 /// (listener) consume it; both already depend on chan-server.
 pub mod handoff;
+mod handover_bus;
 mod indexer;
 mod mcp_bridge;
 mod preferences;
@@ -105,10 +106,10 @@ use routes::{
     api_reports_disable, api_reports_enable, api_reports_state, api_resolve_link,
     api_restart_terminal, api_screensaver_clear_pin, api_screensaver_patch,
     api_screensaver_set_pin, api_screensaver_state, api_screensaver_verify, api_search_content,
-    api_search_files, api_set_terminal_broadcast, api_storage_reset, api_survey_reply,
-    api_team_config_read, api_team_config_write, api_terminal_next_name, api_terminal_ws,
-    api_terminals_roster, api_upload_file, api_window_reply, api_workspace_bootstrap,
-    api_write_file, spawn_roster_broadcaster, ws_upgrade,
+    api_search_files, api_session_handover_reply, api_set_terminal_broadcast, api_storage_reset,
+    api_survey_reply, api_team_config_read, api_team_config_write, api_terminal_next_name,
+    api_terminal_ws, api_terminals_roster, api_upload_file, api_window_reply,
+    api_workspace_bootstrap, api_write_file, spawn_roster_broadcaster, ws_upgrade,
 };
 #[cfg(feature = "embeddings")]
 use routes::{
@@ -574,6 +575,10 @@ async fn build_app(
     // layout query. The control socket parks the query oneshot; the SPA's
     // `POST /api/window/reply` route completes it through AppState below.
     let window_bus = Arc::new(crate::window_bus::WindowBus::new());
+    // Handover bus: same shape again, for the blocked `cs session handover`.
+    // The requester parks a oneshot here; the leader's answer (the SPA's
+    // `POST /api/session/handover/reply` or its own CLI) completes it.
+    let handover_bus = Arc::new(handover_bus::HandoverBus::new());
     // Shared by the `/ws` route (presence updates) and the host's window-set
     // assembly (cloned onto AppState below).
     let window_presence = Arc::new(window_presence::WindowPresence::new());
@@ -662,6 +667,7 @@ async fn build_app(
         scope_registry,
         survey_bus,
         window_bus,
+        handover_bus,
         ephemeral_sessions: Mutex::new(std::collections::HashMap::new()),
         terminal_session_dir: None,
         window_presence,
@@ -789,6 +795,7 @@ async fn build_terminal_app(
     // tenants can't collide.
     let survey_bus = Arc::new(survey::SurveyBus::new());
     let window_bus = Arc::new(window_bus::WindowBus::new());
+    let handover_bus = Arc::new(handover_bus::HandoverBus::new());
     let window_presence = Arc::new(window_presence::WindowPresence::new());
     let window_transfers = Arc::new(window_transfers::WindowTransfers::new());
     let session_registry = Arc::new(session_presence::SessionRegistry::new());
@@ -891,6 +898,7 @@ async fn build_terminal_app(
         scope_registry,
         survey_bus,
         window_bus,
+        handover_bus,
         ephemeral_sessions: Mutex::new(std::collections::HashMap::new()),
         // A persisted devserver terminal sets this (its launcher session
         // store); a control / desktop-local terminal passes None.
@@ -1003,6 +1011,12 @@ fn terminal_router(state: Arc<AppState>) -> Router {
         // tenant's control socket parks on the same Arcs.
         .route("/api/window/reply", post(api_window_reply))
         .route("/api/survey/reply", post(api_survey_reply))
+        // cs session handover reply: the leader accepts/rejects a parked
+        // `cs session handover`, unblocking the requester's CLI.
+        .route(
+            "/api/session/handover/reply",
+            post(api_session_handover_reply),
+        )
         // Events / broadcast / pane bus.
         .route("/ws", get(ws_upgrade));
     Router::new()
@@ -1393,6 +1407,12 @@ fn router(state: Arc<AppState>) -> Router {
         // cs pane reply: completes the parked window-bus oneshot with the
         // SPA's layout snapshot. The reply half of the `cs pane` channel.
         .route("/api/window/reply", post(api_window_reply))
+        // cs session handover reply: the leader accepts/rejects a parked
+        // `cs session handover`, unblocking the requester's CLI.
+        .route(
+            "/api/session/handover/reply",
+            post(api_session_handover_reply),
+        )
         .route(
             "/api/files/*path",
             get(api_read_file)
