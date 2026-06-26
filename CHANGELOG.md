@@ -6,6 +6,20 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [v0.52.0] - 2026-06-26
+
+A repository-structure unification with no user-facing behavior change: the frontend consolidates into a single `./web` npm workspace, build and deploy tooling moves under `./packaging`, and the crate layer gets a naming, docs, and dependency-hygiene pass.
+
+### Changed
+
+- **One `./web` npm workspace.** The workspace app, launcher, gateway identity SPA, shared chrome, and marketing site are now members of a single `./web` monorepo (`@chan/{workspace-app,launcher,profile,web-shared,marketing}`) with one lockfile and a shared design system. The embedded bundles and the `/dl` release-download contract are byte-stable.
+- **One `./packaging` tree.** Docker, Kubernetes, Linux packaging, desktop packaging, sdme, and gateway packaging consolidate under `./packaging`. Every Makefile target and CI job name is unchanged.
+- **Crate hygiene.** Shared dependencies centralize in `[workspace.dependencies]`, app-internal crates are marked `publish = false`, three crates gain a `design.md`, and the product is described consistently as an AI-native IDE.
+
+### Notes
+
+- No runtime behavior change: this release restructures sources only. The rust-embed bundle paths and the release-download contract are unchanged.
+
 ## [v0.51.0] - 2026-06-25
 
 Windows desktop support graduates from a CI-only artifact to a published download:
