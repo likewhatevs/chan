@@ -1276,6 +1276,26 @@ impl WorkspaceHost {
         reaped
     }
 
+    /// Total LIVE terminal sessions owned by `window_id` across this host's
+    /// mounted tenants. The read-only basis for the `cs window rm` `--force`
+    /// guard; mirrors the tenant iteration in [`reap_discarded_window_state`](
+    /// Self::reap_discarded_window_state) but counts instead of reaping.
+    pub fn live_terminal_count(&self, window_id: &str) -> usize {
+        let registries: Vec<_> = {
+            let Ok(tenants) = self.workspaces.read() else {
+                return 0;
+            };
+            tenants
+                .values()
+                .map(|runtime| runtime.artifacts.terminal_sessions.clone())
+                .collect()
+        };
+        registries
+            .iter()
+            .map(|sessions| sessions.count_for_window(window_id))
+            .sum()
+    }
+
     /// Resolve a persisted window's live `(prefix, token, connected)` from its
     /// serving tenant. A terminal window resolves to the library's shared
     /// terminal tenant (via [`terminal_window_live`](Self::terminal_window_live)),
@@ -1827,6 +1847,14 @@ impl HostControl for WorkspaceHost {
 
     fn assemble_window_records(&self) -> Vec<WindowRecord> {
         self.assemble_window_records()
+    }
+
+    fn discard_window(&self, window_id: &str) -> Result<bool, Error> {
+        self.discard_window(window_id)
+    }
+
+    fn live_terminal_count(&self, window_id: &str) -> usize {
+        self.live_terminal_count(window_id)
     }
 }
 

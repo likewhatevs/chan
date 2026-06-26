@@ -70,6 +70,19 @@ pub trait HostControl: Send + Sync {
     /// authoritative records `cs window list` and the launcher render. Assembled
     /// from the window registry + live tenant + presence state.
     fn assemble_window_records(&self) -> Vec<WindowRecord>;
+
+    /// Authoritatively discard window `window_id`: drop its persisted registry
+    /// row, reap its terminal sessions + layout blob, and fire the window watch
+    /// so any live native window closes. `Ok(false)` when this host owns no such
+    /// row (e.g. the row lives on a connected devserver). The single cleanup
+    /// behind `cs window rm`, reached through the host weak so an offline/dead
+    /// row is removable even with no desktop attached.
+    fn discard_window(&self, window_id: &str) -> Result<bool, Error>;
+
+    /// How many LIVE terminal sessions window `window_id` owns across this host's
+    /// tenants — the read-only count behind the `cs window rm` `--force` guard, so
+    /// a removal that would kill running shells is refused unless forced.
+    fn live_terminal_count(&self, window_id: &str) -> usize;
 }
 
 /// How a control socket's process tears down the workspace named by a

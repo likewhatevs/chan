@@ -918,6 +918,18 @@ impl Registry {
         closed
     }
 
+    /// How many LIVE sessions window `window_id` owns — the read-only twin of
+    /// [`close_for_window`](Self::close_for_window), for the `cs window rm`
+    /// `--force` guard. Counts only sessions not yet marked closed.
+    pub fn count_for_window(&self, window_id: &str) -> usize {
+        let sessions = self.sessions.lock().expect("terminal registry poisoned");
+        sessions
+            .values()
+            .filter(|session| !session.closed.load(Ordering::Relaxed))
+            .filter(|session| session.window_id().as_deref() == Some(window_id))
+            .count()
+    }
+
     /// A window was DISCARDED (its layout blob was DELETEd — `^W` to empty,
     /// `^D`, `Ctrl+Shift+W`, or an empty window). Drop it from the persisted
     /// set and immediately reap its terminal sessions. This is what frees a
@@ -3132,6 +3144,22 @@ mod tests {
             registry.close_for_window("win-missing", CloseReason::Explicit),
             0
         );
+    }
+
+    #[test]
+    fn count_for_window_counts_only_live_matching_sessions() {
+        // The read-only basis for the `cs window rm` --force guard.
+        let registry = Registry::new(test_config(1024, 4, 10));
+        let _a1 = registry.create(opts_with_window("win-a")).unwrap();
+        let _a2 = registry.create(opts_with_window("win-a")).unwrap();
+        let _b = registry.create(opts_with_window("win-b")).unwrap();
+        assert_eq!(registry.count_for_window("win-a"), 2);
+        assert_eq!(registry.count_for_window("win-b"), 1);
+        assert_eq!(registry.count_for_window("win-missing"), 0);
+        // Closing a window's sessions drops it to zero.
+        registry.close_for_window("win-a", CloseReason::Explicit);
+        assert_eq!(registry.count_for_window("win-a"), 0);
+        registry.close_all(CloseReason::Shutdown);
     }
 
     #[test]

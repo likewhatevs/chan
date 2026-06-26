@@ -773,7 +773,7 @@ async fn handle_request(req: ControlRequest, ctx: &ControlSocketCtx) -> ControlR
                 .map(|()| format!("opened window {id}")),
         ),
         ControlRequest::WindowClose { id, force } => {
-            handle_window_close(desktop, workspace_cell, tenant, id, force).await
+            handle_window_close(desktop, unserve, workspace_cell, tenant, id, force).await
         }
         ControlRequest::WindowHide { id } => into_response(
             desktop
@@ -1558,36 +1558,75 @@ async fn handle_window_new(
     )
 }
 
-/// `cs window rm`: destroy the window (the desktop prompts first when it
-/// has live terminals and `force` is unset, blocking this request until
-/// the user answers), then drop its saved layout so it can't reappear as
-/// a reopenable `saved` row. A row with neither a live window nor a saved
-/// blob is an unknown id and errors.
+/// `cs window rm`: authoritatively remove the window. The host weak drops the
+/// persisted registry row, reaps its terminal sessions + layout blob, and fires
+/// the window watch so any live native window closes — so an offline/dead row is
+/// removable even with no desktop attached. Live shells are guarded server-side:
+/// without `force`, a window with live terminals is refused, so a removal never
+/// kills a running agent by surprise. A stale saved layout with no row is still
+/// cleaned; an unknown id errors.
 async fn handle_window_close(
     desktop: &crate::desktop_window_ops::DesktopBridge,
+    unserve: &UnserveScope,
     workspace_cell: &Arc<RwLock<Option<WorkspaceCell>>>,
     tenant: ControlTenant,
     id: String,
     force: bool,
 ) -> ControlResponse {
     use crate::desktop_window_ops::DesktopWindowOp;
-    let destroyed = match desktop
+
+    // The host weak is the only authority that can drop a persisted window row
+    // (and reap its PTYs + layout blob) — even an offline/dead row with no live
+    // native window, which is the whole point of `cs window rm`.
+    let host = match unserve {
+        UnserveScope::Host(weak) => weak.upgrade(),
+        UnserveScope::Standalone { .. } | UnserveScope::Unsupported => None,
+    };
+
+    // --force guard: refuse a removal that would kill live shells unless forced.
+    // Runs server-side (this host owns the PTYs) so it holds headless too, where
+    // there is no desktop confirm dialog. Disconnect/reload never reaches here,
+    // so persisted sessions are untouched.
+    if !force {
+        if let Some(host) = host.as_ref() {
+            let live = host.live_terminal_count(&id);
+            if live > 0 {
+                return ControlResponse::Error {
+                    message: format!(
+                        "window {id} has {live} live terminal session(s); \
+                         re-run with --force to remove them"
+                    ),
+                };
+            }
+        }
+    }
+
+    // Authoritative removal: drop the registry row + reap sessions + blob. The
+    // window watch fires, so any live native window closes from the registry
+    // change. `false` ⇒ this host owns no such row (e.g. a connected devserver
+    // owns it).
+    let discarded = host
+        .as_ref()
+        .map(|host| host.discard_window(&id).unwrap_or(false))
+        .unwrap_or(false);
+
+    // Best-effort fast close of a live native window. The server already guarded,
+    // so force the desktop op (no second confirm dialog); a headless host answers
+    // NO_DESKTOP and relies on the watcher reconcile above.
+    let destroyed = desktop
         .dispatch(|reply| DesktopWindowOp::Close {
             id: id.clone(),
-            force,
+            force: true,
             reply,
         })
         .await
-    {
-        Ok(destroyed) => destroyed,
-        Err(message) => return ControlResponse::Error { message },
-    };
-    // Best-effort, current tenant only: a terminal tenant has no on-disk
-    // blob (its sessions are ephemeral), and an id belonging to another
-    // workspace can't be reached from here (its blob may persist — a
-    // known limitation). Check existence first so the reply is honest
-    // about whether a layout was actually removed.
-    let had_blob = if tenant == ControlTenant::Workspace {
+        .unwrap_or(false);
+
+    // Fallback only when nothing was discarded: a stale saved layout blob with no
+    // feed row (discard_window already deletes the blob of any row it owns).
+    // Current workspace tenant only — a terminal tenant has no on-disk blob and a
+    // foreign workspace's blob is unreachable from here (a known limitation).
+    let had_blob = if !discarded && tenant == ControlTenant::Workspace {
         match workspace_from_cell(workspace_cell, tenant) {
             Ok(workspace) => {
                 let key = id.clone();
@@ -1609,17 +1648,18 @@ async fn handle_window_close(
     } else {
         false
     };
-    match (destroyed, had_blob) {
-        (true, true) => ControlResponse::Ok {
-            message: format!("removed window {id} (destroyed; saved layout deleted)"),
+
+    match (discarded, destroyed, had_blob) {
+        (true, _, _) => ControlResponse::Ok {
+            message: format!("removed window {id}"),
         },
-        (true, false) => ControlResponse::Ok {
-            message: format!("removed window {id} (destroyed)"),
+        (false, true, _) => ControlResponse::Ok {
+            message: format!("closed window {id}"),
         },
-        (false, true) => ControlResponse::Ok {
+        (false, false, true) => ControlResponse::Ok {
             message: format!("deleted saved layout for {id} (no live window)"),
         },
-        (false, false) => ControlResponse::Error {
+        (false, false, false) => ControlResponse::Error {
             message: format!("no window or saved layout for {id}"),
         },
     }
@@ -3024,6 +3064,101 @@ mod tests {
         let headless = entry("headless");
         assert_eq!(headless["window"], Value::Null);
         assert_eq!(headless["window_kind"], "none");
+    }
+
+    /// A host stub for the `cs window rm` guard: a fixed live-terminal count and
+    /// a flag recording whether the authoritative discard ran.
+    struct FakeHost {
+        live: usize,
+        discarded: std::sync::atomic::AtomicBool,
+    }
+
+    impl chan_library::HostControl for FakeHost {
+        fn close_workspace_for_root(
+            &self,
+            _root: &std::path::Path,
+        ) -> Result<bool, chan_library::Error> {
+            Ok(false)
+        }
+        fn remove_workspace_for_root(
+            &self,
+            _root: &std::path::Path,
+        ) -> Result<bool, chan_library::Error> {
+            Ok(false)
+        }
+        fn assemble_window_records(&self) -> Vec<WindowRecord> {
+            Vec::new()
+        }
+        fn discard_window(&self, _window_id: &str) -> Result<bool, chan_library::Error> {
+            self.discarded
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+            Ok(true)
+        }
+        fn live_terminal_count(&self, _window_id: &str) -> usize {
+            self.live
+        }
+    }
+
+    async fn run_window_rm(live: usize, force: bool) -> (ControlResponse, Arc<FakeHost>) {
+        let cell = Arc::new(RwLock::new(None));
+        let mut ctx = test_ctx(cell, ControlTenant::Workspace);
+        let fake = Arc::new(FakeHost {
+            live,
+            discarded: std::sync::atomic::AtomicBool::new(false),
+        });
+        let host: Arc<dyn chan_library::HostControl> = fake.clone();
+        ctx.unserve = UnserveScope::Host(Arc::downgrade(&host));
+        let resp = handle_request(
+            ControlRequest::WindowClose {
+                id: "w-1".into(),
+                force,
+            },
+            &ctx,
+        )
+        .await;
+        (resp, fake)
+    }
+
+    #[tokio::test]
+    async fn window_rm_guards_live_terminals_without_force() {
+        let (resp, fake) = run_window_rm(2, false).await;
+        match resp {
+            ControlResponse::Error { message } => {
+                assert!(message.contains("2 live terminal"), "got: {message}")
+            }
+            other => panic!("expected guard error, got {other:?}"),
+        }
+        assert!(
+            !fake.discarded.load(std::sync::atomic::Ordering::SeqCst),
+            "the guard must refuse before discarding"
+        );
+    }
+
+    #[tokio::test]
+    async fn window_rm_with_force_discards_despite_live_terminals() {
+        let (resp, fake) = run_window_rm(2, true).await;
+        assert!(matches!(resp, ControlResponse::Ok { .. }), "got: {resp:?}");
+        assert!(
+            fake.discarded.load(std::sync::atomic::Ordering::SeqCst),
+            "--force must reach the authoritative discard"
+        );
+    }
+
+    #[tokio::test]
+    async fn window_rm_removes_an_offline_row_with_no_live_terminals() {
+        // The headline bug: an offline/dead row (no live terminals) is removable
+        // without --force, via the host's authoritative discard.
+        let (resp, fake) = run_window_rm(0, false).await;
+        match resp {
+            ControlResponse::Ok { message } => {
+                assert!(message.contains("removed window w-1"), "got: {message}")
+            }
+            other => panic!("expected ok, got {other:?}"),
+        }
+        assert!(
+            fake.discarded.load(std::sync::atomic::Ordering::SeqCst),
+            "an offline row must be discarded"
+        );
     }
 
     #[test]
