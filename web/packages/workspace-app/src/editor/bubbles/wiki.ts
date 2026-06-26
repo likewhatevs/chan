@@ -29,6 +29,7 @@ import { api } from "../../api/client";
 import type { LinkTarget, TreeEntry } from "../../api/types";
 import { indexStatus } from "../../state/store.svelte";
 import { decodePercent, relativizePath, wikiLinkToMarkdown } from "../links";
+import { parseInternalLink } from "../widgets/wikilink";
 import {
   filterBlocks,
   insertBlockAnchor,
@@ -133,6 +134,23 @@ interface HeadingHit {
   level: number;
   text: string;
   anchor: string;
+}
+
+/// A sentinel hit, prepended in raw `[label](url)` mode, that OPENS the link
+/// already in the URL slot rather than searching for a replacement. Without it
+/// the URL-slot autocomplete only lists /api/link-targets search results, so
+/// the link the user is sitting on can never be opened from the bubble.
+interface SelfHit {
+  kind: "Self";
+  /// Canonical resolved target (workspace-rooted), passed to onOpenLink.
+  target: string;
+  anchor: string | null;
+  /// The literal URL-slot text, shown in the row.
+  url: string;
+}
+
+function isSelfHit(hit: unknown): hit is SelfHit {
+  return (hit as { kind?: string } | null)?.kind === "Self";
 }
 
 interface WikiBubbleHandle extends BubbleHandle {
@@ -241,17 +259,37 @@ export function openWikiBubble(opts: WikiBubbleOpts): WikiBubbleHandle {
   status.className = "md-bubble-status";
   shell.wrap.appendChild(status);
 
-  function activeHits(): Array<LinkTarget | HeadingHit | ParsedBlock> {
+  /// In raw `[label](url)` mode, the literal URL slot resolved to an openable
+  /// internal target -- the "OPEN <url>" sentinel. Null in wrap mode, when
+  /// there is no open handler, or when the slot is external / anchor-only /
+  /// unresolvable (parseInternalLink returns null for `http`/`mailto`/`#...`).
+  function selfHit(): SelfHit | null {
+    if (!opts.onOpenLink) return null;
+    if (opts.templateMode !== "raw" || mode.kind !== "file") return null;
+    const literal = opts.view.state.doc.sliceString(opts.triggerStart, triggerEnd);
+    const parsed = parseInternalLink(literal, "", opts.fromPath ?? null);
+    if (!parsed) return null;
+    return {
+      kind: "Self",
+      target: parsed.target,
+      anchor: parsed.anchor ? parsed.anchor : null,
+      url: literal,
+    };
+  }
+
+  function activeHits(): Array<LinkTarget | HeadingHit | ParsedBlock | SelfHit> {
     if (mode.kind === "heading") return headingHits;
     if (mode.kind === "block") return blockHits;
-    // File mode: /api/link-targets hits first (names / titles / headings),
-    // then the client-side PATH candidates, deduped against any file row
-    // for the same path so a file matched by both name and path lists once.
+    // File mode: the raw-slot Self row first (so cmd+enter / ↵ opens the link
+    // the caret sits on), then /api/link-targets hits (names / titles /
+    // headings), then the client-side PATH candidates, deduped against any file
+    // row for the same path so a file matched by both name and path lists once.
     const namedPaths = new Set(
       fileHits.filter((h) => h.kind !== "Heading").map((h) => h.path),
     );
     const extras = pathHits.filter((p) => !namedPaths.has(p.path));
-    return [...fileHits, ...extras];
+    const self = selfHit();
+    return self ? [self, ...fileHits, ...extras] : [...fileHits, ...extras];
   }
 
   function render(): void {
@@ -326,6 +364,15 @@ export function openWikiBubble(opts: WikiBubbleOpts): WikiBubbleHandle {
         text.textContent = firstLine.replace(/\s*\^[A-Za-z0-9-]{4,}\s*$/, "");
         row.appendChild(tag);
         row.appendChild(text);
+      } else if (isSelfHit(hit)) {
+        // "OPEN <url>" row: opens the link already in the slot.
+        const tag = document.createElement("span");
+        tag.className = "md-bubble-row-level";
+        tag.textContent = "OPEN";
+        const text = document.createElement("span");
+        text.textContent = hit.url;
+        row.appendChild(tag);
+        row.appendChild(text);
       } else {
         const t = hit as LinkTarget;
         if (t.kind === "Heading") {
@@ -377,7 +424,9 @@ export function openWikiBubble(opts: WikiBubbleOpts): WikiBubbleHandle {
         .then((results) => {
           if (!alive || seq !== reqSeq || mode.kind !== "file") return;
           fileHits = results;
-          if (selectedIndex >= fileHits.length) selectedIndex = 0;
+          // Clamp against the FULL list (a prepended Self row + path extras),
+          // not just fileHits, or the selection can land out of range.
+          if (selectedIndex >= activeHits().length) selectedIndex = 0;
           render();
         })
         .catch((err) => {
@@ -556,7 +605,16 @@ export function openWikiBubble(opts: WikiBubbleOpts): WikiBubbleHandle {
     }
   }
 
-  function commit(hit: LinkTarget | HeadingHit | ParsedBlock): void {
+  function commit(hit: LinkTarget | HeadingHit | ParsedBlock | SelfHit): void {
+    if (isSelfHit(hit)) {
+      // The Self row OPENS the link already in the slot instead of rewriting
+      // it. Mandatory guard: a SelfHit carries no `.path`, so falling through
+      // to the file-mode branch would call fileLinkInsert(undefined, ...) and
+      // corrupt the document.
+      if (opts.onOpenLink) opts.onOpenLink(hit.target, hit.anchor);
+      dismiss();
+      return;
+    }
     const raw = opts.templateMode === "raw";
     if (mode.kind === "block") {
       // Block commit may need a fresh `^id` written to the target file.
@@ -669,6 +727,11 @@ export function openWikiBubble(opts: WikiBubbleOpts): WikiBubbleHandle {
     if (!opts.onOpenLink) return;
     const hits = activeHits();
     const hit = hits[selectedIndex];
+    if (isSelfHit(hit)) {
+      opts.onOpenLink(hit.target, hit.anchor);
+      dismiss();
+      return;
+    }
     let target: string;
     let anchor: string | null = null;
     if (mode.kind === "heading") {

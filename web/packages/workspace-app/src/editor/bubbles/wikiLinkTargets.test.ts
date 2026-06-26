@@ -99,3 +99,43 @@ describe("wiki file completion uses graph link targets", () => {
     expect(wiki).not.toMatch(/const ref = `\$\{target\}\^\$\{anchorId\}`;/);
   });
 });
+
+describe("raw-mode self-link (open the link in the slot)", () => {
+  test("resolves the raw URL slot via parseInternalLink, gated on raw + file + open handler", () => {
+    expect(wiki).toMatch(
+      /import \{ parseInternalLink \} from "\.\.\/widgets\/wikilink";/,
+    );
+    expect(wiki).toMatch(
+      /function selfHit\(\): SelfHit \| null \{[\s\S]*?if \(!opts\.onOpenLink\) return null;[\s\S]*?opts\.templateMode !== "raw" \|\| mode\.kind !== "file"[\s\S]*?doc\.sliceString\(opts\.triggerStart, triggerEnd\)[\s\S]*?parseInternalLink\(literal, "", opts\.fromPath \?\? null\)/,
+    );
+    // External / anchor-only slots resolve to null -> no Self row.
+    expect(wiki).toMatch(/if \(!parsed\) return null;/);
+  });
+
+  test("activeHits prepends the Self row before file + path hits", () => {
+    expect(wiki).toMatch(
+      /return self \? \[self, \.\.\.fileHits, \.\.\.extras\] : \[\.\.\.fileHits, \.\.\.extras\];/,
+    );
+  });
+
+  test("commit routes a Self hit to onOpenLink and NEVER to fileLinkInsert (doc-corruption guard)", () => {
+    expect(wiki).toMatch(
+      /function commit\(hit: [^)]*SelfHit\): void \{\s*if \(isSelfHit\(hit\)\) \{[\s\S]*?opts\.onOpenLink\(hit\.target, hit\.anchor\);[\s\S]*?dismiss\(\);[\s\S]*?return;/,
+    );
+  });
+
+  test("openSelected opens a Self hit before the LinkTarget cast", () => {
+    expect(wiki).toMatch(
+      /const hit = hits\[selectedIndex\];\s*if \(isSelfHit\(hit\)\) \{\s*opts\.onOpenLink\(hit\.target, hit\.anchor\);/,
+    );
+  });
+
+  test("the selectedIndex clamp counts the full active list, not just fileHits", () => {
+    expect(wiki).toMatch(
+      /if \(selectedIndex >= activeHits\(\)\.length\) selectedIndex = 0;/,
+    );
+    expect(wiki).not.toMatch(
+      /if \(selectedIndex >= fileHits\.length\) selectedIndex = 0;/,
+    );
+  });
+});
