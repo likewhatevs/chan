@@ -2008,6 +2008,7 @@
     height: 100%;
   }
   .terminal-host :global(.xterm-viewport) {
+    background-color: var(--bg);
     scrollbar-color: var(--separator) var(--bg);
   }
   .terminal-tab-menu-bubble {
