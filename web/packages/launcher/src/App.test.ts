@@ -42,7 +42,22 @@ describe("launcher root", () => {
     expect(target.querySelector(".topbar")).not.toBeNull();
     expect(target.querySelector('[aria-label="New workspace"]')).not.toBeNull();
     expect(target.querySelector('[aria-label="Toggle theme"]')).not.toBeNull();
-    expect(target.querySelector('[aria-label="Open terminal"]')).not.toBeNull();
+    // The open-terminal action moved out of the top bar into the Local group
+    // header (the library tree), so the top bar no longer carries it.
+    const topbar = target.querySelector(".topbar")!;
+    expect(topbar.querySelector('[aria-label="Open terminal"]')).toBeNull();
+    expect(topbar.querySelector('[aria-label="New local terminal"]')).toBeNull();
+  });
+
+  it("renders the Local group's new-terminal action once the library loads", async () => {
+    target = document.createElement("div");
+    document.body.appendChild(target);
+    app = mount(App, { target });
+    await settle();
+    flushSync();
+
+    // The open-terminal action lives in the Local group header now.
+    expect(target.querySelector('[aria-label="New local terminal"]')).not.toBeNull();
   });
 
   it("shows a dismissable error banner that the [X] clears (no reload needed)", async () => {

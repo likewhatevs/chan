@@ -1,15 +1,15 @@
 <script lang="ts">
-  // The launcher's top bar: the "Workspaces" title, a theme toggle, an
-  // open-terminal button, and the New-workspace button (+).
-  import { SquareTerminal } from "lucide-svelte";
+  // The launcher's top bar: the "Library" title, a theme toggle, and the
+  // New-workspace button (+). The open-terminal action moved into the Local
+  // group header (the library tree), so the top bar stays the global chrome:
+  // theme + add.
   import { themeState, toggleTheme } from "../state/theme.svelte";
   import { openNewDialog } from "../state/dialog.svelte";
-  import { openTerminal } from "../state/library.svelte";
   import { readOnly } from "../state/capabilities";
 </script>
 
 <header class="topbar">
-  <h1 class="brand">Workspaces</h1>
+  <h1 class="brand">Library</h1>
   <div class="actions">
     <button
       class="icon-btn"
@@ -17,12 +17,6 @@
       aria-label="Toggle theme"
       title="Toggle theme"
       onclick={toggleTheme}>{themeState.theme === "dark" ? "☀" : "☾"}</button>
-    <button
-      class="icon-btn"
-      type="button"
-      aria-label="Open terminal"
-      title="Open terminal"
-      onclick={() => openTerminal()}><SquareTerminal size={16} /></button>
     {#if !readOnly}
       <button
         class="icon-btn"

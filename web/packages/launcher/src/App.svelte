@@ -6,8 +6,7 @@
   import { X } from "lucide-svelte";
   import TopBar from "./components/TopBar.svelte";
   import SelectionBar from "./components/SelectionBar.svelte";
-  import WorkspaceList from "./components/WorkspaceList.svelte";
-  import DevserverList from "./components/DevserverList.svelte";
+  import Library from "./components/Library.svelte";
   import WindowFeed from "./components/WindowFeed.svelte";
   import NewWorkspaceDialog from "./components/NewWorkspaceDialog.svelte";
   import ConfirmDialog from "./components/ConfirmDialog.svelte";
@@ -84,8 +83,7 @@
     {#if !readOnly}
       <SelectionBar />
     {/if}
-    <WorkspaceList />
-    <DevserverList />
+    <Library />
     <WindowFeed />
   {/if}
 </main>
