@@ -48,6 +48,21 @@ docker build -f packaging/docker/chan.Dockerfile --build-arg EMBED_MODEL=1 -t ch
 
 ## Run
 
+### Pull from Docker Hub
+
+Every release publishes the four images to `docker.io/fiorix/`. The immutable version tag (`X.Y.Z`) is published on every release and never moves; `latest` is published only on a GA release (skipped for pre-releases), so it always resolves to the newest stable build.
+
+```sh
+docker pull fiorix/chan:0.55.0      # immutable, pinned to one release
+docker pull fiorix/chan:latest      # newest GA release
+```
+
+The gateway services publish the same way and share the tag policy: `fiorix/chan-gateway-identity`, `fiorix/chan-gateway-profile`, `fiorix/chan-gateway-devserver-proxy`. Run a published image just like the local `chan:dev` examples below -- substitute the `fiorix/chan:<tag>` ref:
+
+```sh
+docker run --rm -p 8787:8787 -v "$PWD:/workspace" fiorix/chan:0.55.0
+```
+
 ### chan: serve one workspace
 
 ```sh
