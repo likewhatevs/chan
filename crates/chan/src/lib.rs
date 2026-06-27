@@ -1177,6 +1177,16 @@ struct PsOutput {
     workspaces: Vec<PsRow>,
 }
 
+/// The `chan ps` BY column: the resolved serving kind, or `-` when the
+/// workspace is served but its kind could not be probed (the STATE column
+/// already distinguishes served vs free).
+fn ps_by_column(_served: bool, kind: Option<ServedBy>) -> &'static str {
+    match kind {
+        Some(k) => k.label(),
+        None => "-",
+    }
+}
+
 /// `chan ps`: report each registered workspace's serving state. Serving
 /// is decided by a live writer-lock holder (`lock::is_free` is false);
 /// the holder's pid + start time come from the `writer.lock` record.
@@ -1224,11 +1234,7 @@ async fn cmd_ps(json: bool) -> Result<()> {
     println!("{:<7}  {:<11}  {:>8}  WORKSPACE", "STATE", "BY", "PID");
     for r in &rows {
         let state = if r.served { "served" } else { "free" };
-        let by = match r.served_by {
-            Some(k) => k.label(),
-            None if r.served => "served",
-            None => "-",
-        };
+        let by = ps_by_column(r.served, r.served_by);
         let pid = r.pid.map_or_else(|| "-".to_string(), |p| p.to_string());
         println!("{:<7}  {:<11}  {:>8}  {}", state, by, pid, r.path);
     }
@@ -1238,7 +1244,8 @@ async fn cmd_ps(json: bool) -> Result<()> {
 /// Resolve the serving kind behind `holder_pid` with an `Identify`
 /// round-trip to its control socket. Returns `None` when the holder has
 /// no reachable control socket or does not answer; `chan ps` then shows
-/// `served` without a kind.
+/// `-` in the BY column (the STATE column still distinguishes served vs
+/// free).
 async fn serving_kind(holder_pid: u32) -> Option<ServedBy> {
     let socket = control_socket_for_pid(holder_pid)?;
     let message = chan_shell::send_control_request(&socket, chan_shell::ControlRequest::Identify)
@@ -1399,28 +1406,42 @@ async fn unserve_running(
 }
 
 /// Find a control socket for `pid` by its well-known name
-/// (`$TMPDIR/chan-control-<pid>-<rand>.sock`). A dedicated `chan open` serve
-/// has exactly one; a multi-tenant devserver has one per tenant under the
-/// same pid. Either way every socket routes the `Close { path }` verb to the
-/// server, which acts by path — so the first match is sufficient and we
-/// must NOT broadcast (once the first tenant unmounts, the rest 404).
-/// Returns `None` where the socket isn't a temp-dir file (Windows named
-/// pipes aren't enumerable here — teardown over the wire is unix-first this
-/// round).
+/// (`chan-control-<pid>-<rand>`). A dedicated `chan open` serve has exactly
+/// one; a multi-tenant devserver has one per tenant under the same pid.
+/// Either way every socket routes the `Close { path }` verb to the server,
+/// which acts by path — so the first match is sufficient and we must NOT
+/// broadcast (once the first tenant unmounts, the rest 404). On unix the
+/// socket is a `.sock` file in `$TMPDIR`; on Windows it is a named pipe under
+/// the `\\.\pipe\` namespace.
+#[cfg(unix)]
 fn control_socket_for_pid(pid: u32) -> Option<PathBuf> {
-    control_socket_for_pid_in(&std::env::temp_dir(), pid)
+    control_socket_for_pid_in(&std::env::temp_dir(), pid, true)
 }
 
-fn control_socket_for_pid_in(dir: &Path, pid: u32) -> Option<PathBuf> {
-    let prefix = format!("chan-control-{pid}-");
+#[cfg(windows)]
+fn control_socket_for_pid(pid: u32) -> Option<PathBuf> {
+    // Windows control sockets are named pipes under the `\\.\pipe\`
+    // namespace, which is directory-enumerable; the names carry the pid.
+    control_socket_for_pid_in(std::path::Path::new(r"\\.\pipe\"), pid, false)
+}
+
+fn control_socket_for_pid_in(dir: &Path, pid: u32, require_sock_ext: bool) -> Option<PathBuf> {
     for entry in std::fs::read_dir(dir).ok()?.flatten() {
         let name = entry.file_name();
         let name = name.to_string_lossy();
-        if name.starts_with(&prefix) && name.ends_with(".sock") {
+        if control_socket_name_matches(&name, pid, require_sock_ext) {
             return Some(entry.path());
         }
     }
     None
+}
+
+/// True when `name` is a control socket for `pid`
+/// (`chan-control-<pid>-<rand>`), optionally requiring the unix `.sock`
+/// suffix (Windows named pipes have no extension).
+fn control_socket_name_matches(name: &str, pid: u32, require_sock_ext: bool) -> bool {
+    let prefix = format!("chan-control-{pid}-");
+    name.starts_with(&prefix) && (!require_sock_ext || name.ends_with(".sock"))
 }
 
 /// Block (bounded) until the writer lock for `lock_dir` is free after a
@@ -4613,11 +4634,64 @@ mod tests {
         // both ignored.
         std::fs::write(dir.path().join("chan-control-999-abcd.sock"), b"").unwrap();
         std::fs::write(dir.path().join("chan-mcp-4242-abcd.sock"), b"").unwrap();
-        assert_eq!(control_socket_for_pid_in(dir.path(), 4242), None);
+        assert_eq!(control_socket_for_pid_in(dir.path(), 4242, true), None);
         // The matching pid's socket is found.
         let want = dir.path().join("chan-control-4242-ef01.sock");
         std::fs::write(&want, b"").unwrap();
-        assert_eq!(control_socket_for_pid_in(dir.path(), 4242), Some(want));
+        assert_eq!(
+            control_socket_for_pid_in(dir.path(), 4242, true),
+            Some(want)
+        );
+    }
+
+    #[test]
+    fn control_socket_name_matches_pid_and_ext() {
+        // A unix `.sock` file matches whether or not the suffix is required.
+        assert!(control_socket_name_matches(
+            "chan-control-1234-ab.sock",
+            1234,
+            true
+        ));
+        assert!(control_socket_name_matches(
+            "chan-control-1234-ab.sock",
+            1234,
+            false
+        ));
+        // A Windows named pipe (no extension) matches only when the suffix
+        // is not required.
+        assert!(control_socket_name_matches(
+            "chan-control-1234-deadbeef",
+            1234,
+            false
+        ));
+        assert!(!control_socket_name_matches(
+            "chan-control-1234-deadbeef",
+            1234,
+            true
+        ));
+        // A different pid and an unrelated name never match.
+        assert!(!control_socket_name_matches(
+            "chan-control-9999-ab.sock",
+            1234,
+            true
+        ));
+        assert!(!control_socket_name_matches(
+            "something-else.sock",
+            1234,
+            true
+        ));
+    }
+
+    #[test]
+    fn ps_by_column_never_emits_bare_served() {
+        // Served-but-unprobed and free both render `-` (STATE carries the
+        // served/free distinction).
+        assert_eq!(ps_by_column(true, None), "-");
+        assert_eq!(ps_by_column(false, None), "-");
+        // A resolved kind renders its label.
+        assert_eq!(ps_by_column(true, Some(ServedBy::Devserver)), "devserver");
+        assert_eq!(ps_by_column(true, Some(ServedBy::Standalone)), "standalone");
+        assert_eq!(ps_by_column(true, Some(ServedBy::Desktop)), "desktop");
     }
 
     #[cfg(target_os = "macos")]
