@@ -155,7 +155,8 @@ export interface DevserverEntry {
   /**
    * The devserver host's OS family (`macos | windows | linux | other`),
    * self-reported at connect, driving the machine icon. Empty before the first
-   * connect or from a devserver too old to report it (a neutral icon then).
+   * connect or from a devserver too old to report it; no icon is shown then. A
+   * non-empty unrecognized value shows the neutral monitor mark.
    */
   os: string;
   /**

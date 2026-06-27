@@ -86,7 +86,8 @@ pub struct DevserverEntry {
     /// The devserver host's OS family (`macos | windows | linux | other`),
     /// learned from its `DevserverInfo` self-report at connect and cached in the
     /// live feed (survives disconnect). Empty before the first connect or from a
-    /// devserver too old to report it; the launcher shows a neutral icon then.
+    /// devserver too old to report it; the launcher shows no icon then. A
+    /// non-empty unrecognized value shows the neutral monitor mark.
     /// `#[serde(default)]`: a row without the field reads empty.
     #[serde(default)]
     pub os: String,
