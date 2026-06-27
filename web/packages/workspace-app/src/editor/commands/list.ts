@@ -96,11 +96,51 @@ export function continueListOnEnter(view: EditorView): boolean {
   }
   if (sel.head !== line.to) return false;
   const insert = `\n${nextPrefix(prefix)}`;
+  const changes: { from: number; to: number; insert: string }[] = [
+    { from: sel.head, to: sel.head, insert },
+  ];
+  if (prefix.ordered && prefix.number !== null) {
+    appendOrderedRenumber(view.state, line.number, prefix, changes);
+  }
   view.dispatch({
-    changes: { from: sel.head, to: sel.head, insert },
+    changes,
     selection: { anchor: sel.head + insert.length },
   });
   return true;
+}
+
+/// Shift the ordered-list tail below `lineNumber` up by one so a freshly
+/// inserted item does not duplicate the next marker (…N, N+1[new], N+1,
+/// N+2… becomes …N, N+1, N+2, N+3…). The renumber edits are appended to
+/// the caller's `changes` so the insert + renumber land in ONE dispatch
+/// (one undo). Walks the contiguous run of same-indent ordered siblings,
+/// reusing each line's own `.`/`)` separator, and stops at the first line
+/// that is not a same-indent ordered item or that breaks the +1 sequence,
+/// so a deliberately non-contiguous tail or a nested sublist is left
+/// intact. Mirrors @codemirror/lang-markdown's renumberList gap-stop (the
+/// rich-prompt Enter path uses it), so both editors renumber alike.
+function appendOrderedRenumber(
+  state: EditorState,
+  lineNumber: number,
+  prefix: ListPrefix,
+  changes: { from: number; to: number; insert: string }[],
+): void {
+  let prev = prefix.number!;
+  for (let n = lineNumber + 1; n <= state.doc.lines; n++) {
+    const line = state.doc.line(n);
+    const tp = parseListPrefix(line.text);
+    if (!tp || !tp.ordered || tp.number === null) break;
+    if (tp.indent !== prefix.indent) break;
+    if (tp.number !== prev + 1) break;
+    const markerStart = line.from + tp.indent.length;
+    const digits = tp.marker.length - 1; // marker = digit run + 1 separator
+    changes.push({
+      from: markerStart,
+      to: markerStart + digits,
+      insert: String(prev + 2),
+    });
+    prev = tp.number;
+  }
 }
 
 const INDENT_UNIT = "  "; // 2 spaces

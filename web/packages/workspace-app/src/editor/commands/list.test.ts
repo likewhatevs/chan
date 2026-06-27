@@ -69,6 +69,44 @@ describe("continueListOnEnter", () => {
     expect(snapshot().doc).toBe("3) third\n4) ");
   });
 
+  test("mid-list insert renumbers the following items", () => {
+    // Inserting after `1.` must push 2->3 and 3->4, not leave a duplicate 2.
+    mount("1. one\n2. two\n3. three", 6);
+    expect(continueListOnEnter(view)).toBe(true);
+    expect(snapshot()).toEqual({
+      doc: "1. one\n2. \n3. two\n4. three",
+      head: 10,
+    });
+  });
+
+  test("mid-list insert reuses each item's own separator", () => {
+    mount("1) one\n2) two", 6);
+    expect(continueListOnEnter(view)).toBe(true);
+    expect(snapshot().doc).toBe("1) one\n2) \n3) two");
+  });
+
+  test("mid-list insert stops at a nested-indent boundary", () => {
+    // The deeper child belongs to its own sublevel; renumbering must not
+    // bump it, and it ends the same-indent run.
+    mount("1. parent\n   1. child", 9);
+    expect(continueListOnEnter(view)).toBe(true);
+    expect(snapshot().doc).toBe("1. parent\n2. \n   1. child");
+  });
+
+  test("mid-list insert leaves a following non-ordered list untouched", () => {
+    mount("1. one\n2. two\n- [ ] task", 6);
+    expect(continueListOnEnter(view)).toBe(true);
+    expect(snapshot().doc).toBe("1. one\n2. \n3. two\n- [ ] task");
+  });
+
+  test("mid-list insert renumbers the contiguous run then stops at a gap", () => {
+    // 2 is contiguous (->3); 5 is a deliberate jump, so the renumber stops
+    // there and leaves it alone (renumberList gap-stop parity).
+    mount("1. one\n2. two\n5. five", 6);
+    expect(continueListOnEnter(view)).toBe(true);
+    expect(snapshot().doc).toBe("1. one\n2. \n3. two\n5. five");
+  });
+
   test("task list emits a fresh unchecked box", () => {
     mount("- [x] done", 10);
     expect(continueListOnEnter(view)).toBe(true);
