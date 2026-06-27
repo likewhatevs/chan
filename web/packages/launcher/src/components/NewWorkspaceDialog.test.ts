@@ -173,6 +173,8 @@ describe("New workspace dialog -- edit", () => {
       library_id: null,
       status: "disconnected",
       auto_hide_control: false,
+      os: "",
+      pretty_name: null,
     };
     openEditDevserver(ds);
     const el = render();
@@ -197,6 +199,8 @@ describe("New workspace dialog -- edit", () => {
       library_id: "lib-abc",
       status: "connected",
       auto_hide_control: false,
+      os: "macos",
+      pretty_name: "macOS 15.1",
     };
     openEditDevserver(ds);
     const el = render();

@@ -31,6 +31,16 @@
   // Local-directory form. In a plain browser this is a path text input; the
   // desktop embed swaps in a native folder picker (both POST the same path).
   let localPath = $state("");
+  // Optional display name for the local workspace; empty keeps the folder name.
+  let localLabel = $state("");
+  // The folder name the label defaults to, shown as the field's placeholder.
+  const localBasename = $derived(
+    localPath
+      .trim()
+      .replace(/[\\/]+$/, "")
+      .split(/[\\/]/)
+      .pop() ?? "",
+  );
 
   // Devserver form, seeded from the edit target. Address shows the stored
   // `host:port` (the token is write-only and never echoed); Name + Connect
@@ -85,7 +95,7 @@
     }
     submitting = true;
     try {
-      await addLocalWorkspace(path);
+      await addLocalWorkspace(path, localLabel.trim() || undefined);
       closeDialog();
     } catch (e) {
       error = msg(e);
@@ -184,6 +194,16 @@
           <button class="btn" type="button" onclick={browse}>Browse…</button>
         {/if}
       </div>
+    </label>
+    <label class="field">
+      Display name <span class="muted">(optional)</span>
+      <input
+        type="text"
+        bind:value={localLabel}
+        placeholder={localBasename || "Defaults to the folder name"}
+        autocomplete="off"
+        spellcheck="false"
+        onkeydown={(e) => onFieldKey(e, submitLocal)} />
     </label>
     <div class="tip">
       <SquareTerminal size={16} />

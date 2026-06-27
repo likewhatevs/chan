@@ -10,3 +10,13 @@
 export const readOnly =
   typeof document !== "undefined" &&
   document.querySelector('meta[name="chan-launcher-readonly"]') !== null;
+
+// The launcher host's OS family, injected by the server as a <meta> tag so the
+// LOCAL machine card shows the same OS icon as a remote devserver does. One of
+// `macos | windows | linux | other`, or "" when the tag is absent (no icon).
+export const hostOs =
+  typeof document === "undefined"
+    ? ""
+    : (document
+        .querySelector('meta[name="chan-launcher-host-os"]')
+        ?.getAttribute("content") ?? "");

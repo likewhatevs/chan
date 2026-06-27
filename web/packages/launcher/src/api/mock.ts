@@ -67,6 +67,8 @@ const devservers: MockDevserver[] = [
     // rows + the Disconnect action) has something real to render with no desktop.
     status: "connected",
     auto_hide_control: false,
+    os: "linux",
+    pretty_name: "Debian GNU/Linux 12 (bookworm)",
   },
 ];
 
@@ -232,6 +234,8 @@ function publicDevserver(ds: MockDevserver): DevserverEntry {
     library_id: ds.library_id,
     status: ds.status,
     auto_hide_control: ds.auto_hide_control,
+    os: ds.os,
+    pretty_name: ds.pretty_name,
   };
 }
 
@@ -254,12 +258,12 @@ function tick<T>(value: T): Promise<T> {
 export const mockApi: LibraryApi = {
   listWorkspaces: () => tick(mergedWorkspaces()),
 
-  addLocalWorkspace: (path) => {
+  addLocalWorkspace: (path, label) => {
     const workspace_id = `ws-${nextWs++}`;
     const entry: WorkspaceEntry = {
       workspace_id,
       path,
-      label: "",
+      label: (label ?? "").trim(),
       on: true,
       status: "running",
       library_id: "local",
@@ -328,6 +332,9 @@ export const mockApi: LibraryApi = {
       // A freshly added devserver is disconnected until the desktop dials it.
       status: "disconnected",
       auto_hide_control: input.auto_hide_control ?? false,
+      // OS is unknown until the first connect surfaces the self-report.
+      os: "",
+      pretty_name: null,
     };
     devservers.push(ds);
     return tick(publicDevserver(ds));

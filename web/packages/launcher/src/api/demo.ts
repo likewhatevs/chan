@@ -72,6 +72,8 @@ function seed(): Seed {
         library_id: LIMA_LIBRARY_ID,
         status: "connected",
         auto_hide_control: false,
+        os: "linux",
+        pretty_name: "Ubuntu 24.04.1 LTS",
       },
       {
         id: "ds-windows",
@@ -84,6 +86,8 @@ function seed(): Seed {
         library_id: WINDOWS_LIBRARY_ID,
         status: "connected",
         auto_hide_control: false,
+        os: "windows",
+        pretty_name: "Windows 11 Pro",
       },
       {
         id: "ds-linux",
@@ -96,6 +100,9 @@ function seed(): Seed {
         library_id: null,
         status: "connecting",
         auto_hide_control: false,
+        // Still connecting: it has not self-reported its OS yet (no icon).
+        os: "",
+        pretty_name: null,
       },
     ],
     devserverWorkspaces: [
@@ -258,12 +265,12 @@ export function createLauncherDemoApi(): LauncherDemoApi {
     attentionDevserverId: ATTENTION_DEVSERVER_ID,
     reset,
     listWorkspaces: () => tick(mergedWorkspaces()),
-    addLocalWorkspace: (path) => {
+    addLocalWorkspace: (path, label) => {
       const workspace_id = `ws-demo-${nextWs++}`;
       const entry: WorkspaceEntry = {
         workspace_id,
         path,
-        label: "",
+        label: (label ?? "").trim(),
         on: true,
         status: "running",
         library_id: "local",
@@ -310,6 +317,8 @@ export function createLauncherDemoApi(): LauncherDemoApi {
         library_id: null,
         status: "disconnected",
         auto_hide_control: input.auto_hide_control ?? false,
+        os: "",
+        pretty_name: null,
       };
       devservers.push(ds);
       notify();

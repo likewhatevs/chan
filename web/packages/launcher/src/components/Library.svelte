@@ -25,6 +25,7 @@
     Unplug,
   } from "lucide-svelte";
   import WindowRow from "./WindowRow.svelte";
+  import OsIcon from "./OsIcon.svelte";
   import {
     library,
     toggleWorkspace,
@@ -45,7 +46,7 @@
   import { openEditDevserver, openNewDialog } from "../state/dialog.svelte";
   import { basename } from "../lib/windowLabel";
   import { buildMachineTree, type MachineNode, type WorkspaceNode } from "../lib/machineTree";
-  import { readOnly } from "../state/capabilities";
+  import { readOnly, hostOs } from "../state/capabilities";
   import { demoState, resetDemo } from "../state/demo.svelte";
   import type { DevserverEntry, WorkspaceEntry } from "../api/library";
 
@@ -308,6 +309,7 @@
 {#snippet dsIdentity(ds: DevserverEntry, withPencil: boolean)}
   <span class="ds-name-row">
     <span class="row-name">{devserverName(ds)}</span>
+    <OsIcon os={ds.os} prettyName={ds.pretty_name} />
     {#if connected(ds)}<span class="status-dot live" title="Connected"></span>{/if}
     {#if ds.has_token}<span class="chip" title="A connect token is stored">🔒 token</span>{/if}
   </span>
@@ -323,6 +325,7 @@
       <div class="machine-header">
         <span class="machine-icon" aria-hidden="true"><House size={16} /></span>
         <span class="machine-name">Local machine</span>
+        <OsIcon os={hostOs} />
         <span class="status-dot live" title="This machine"></span>
         <div class="machine-actions">
           {#if !readOnly}

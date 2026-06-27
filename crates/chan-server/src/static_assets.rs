@@ -212,20 +212,27 @@ pub fn inject_chan_meta(html: &[u8], prefix: &str, settings_disabled: bool) -> V
     out
 }
 
-/// Inject the launcher's read-only hint right after the opening `<head>` when
-/// `read_only`: `<meta name="chan-launcher-readonly" content="1">`. The SPA
-/// reads it to hide its workspace mutation controls on the tunnel-trust
-/// devserver surface (where mutation is gated out and would 403). No-op
-/// otherwise, or when `<head>` is absent (returns the original bytes).
+/// Inject the launcher's runtime hints right after the opening `<head>`:
+///
+///   - `<meta name="chan-launcher-host-os" content="<family>">` always, so the
+///     LOCAL machine card can show the host's OS icon. The value is the OS
+///     family enum (`macos | windows | linux | other`), which carries no
+///     HTML-attribute-special bytes.
+///   - `<meta name="chan-launcher-readonly" content="1">` only when `read_only`
+///     (the tunnel-trust devserver/gateway surface), so the SPA hides its
+///     workspace mutation controls instead of showing buttons that 403.
+///
+/// No-op when `<head>` is absent (returns the original bytes).
 fn inject_launcher_meta(html: &[u8], read_only: bool) -> Vec<u8> {
-    if !read_only {
-        return html.to_vec();
-    }
     let needle = b"<head>";
     let Some(pos) = html.windows(needle.len()).position(|w| w == needle) else {
         return html.to_vec();
     };
-    let insert = "<meta name=\"chan-launcher-readonly\" content=\"1\">";
+    let (os, _pretty_name) = crate::devserver::detect_os();
+    let mut insert = format!("<meta name=\"chan-launcher-host-os\" content=\"{os}\">");
+    if read_only {
+        insert.push_str("<meta name=\"chan-launcher-readonly\" content=\"1\">");
+    }
     let after_head = pos + needle.len();
     let mut out = Vec::with_capacity(html.len() + insert.len());
     out.extend_from_slice(&html[..after_head]);

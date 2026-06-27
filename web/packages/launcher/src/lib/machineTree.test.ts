@@ -46,6 +46,8 @@ function ds(over: Partial<DevserverEntry> & Pick<DevserverEntry, "id">): Devserv
     library_id: null,
     status: "disconnected",
     auto_hide_control: false,
+    os: "",
+    pretty_name: null,
     ...over,
   };
 }

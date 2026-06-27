@@ -197,8 +197,8 @@ async function refreshDevserversLive(): Promise<void> {
   }
 }
 
-export async function addLocalWorkspace(path: string): Promise<void> {
-  await backend.addLocalWorkspace(path);
+export async function addLocalWorkspace(path: string, label?: string): Promise<void> {
+  await backend.addLocalWorkspace(path, label);
   await refreshWorkspaces();
 }
 

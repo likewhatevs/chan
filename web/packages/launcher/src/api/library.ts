@@ -152,6 +152,17 @@ export interface DevserverEntry {
    * open. Set from the add/edit dialog; false when unset.
    */
   auto_hide_control: boolean;
+  /**
+   * The devserver host's OS family (`macos | windows | linux | other`),
+   * self-reported at connect, driving the machine icon. Empty before the first
+   * connect or from a devserver too old to report it (a neutral icon then).
+   */
+  os: string;
+  /**
+   * Best-effort human OS string for the machine-icon tooltip (e.g. a linux
+   * `PRETTY_NAME`); null when unknown.
+   */
+  pretty_name: string | null;
 }
 
 /** Write payload for add/edit devserver. `token` absent on edit leaves it unchanged. */
@@ -175,7 +186,7 @@ export interface DevserverInput {
 
 export interface LibraryApi {
   listWorkspaces(): Promise<WorkspaceEntry[]>;
-  addLocalWorkspace(path: string): Promise<WorkspaceEntry>;
+  addLocalWorkspace(path: string, label?: string): Promise<WorkspaceEntry>;
   /** Turn a local workspace on/off. An unforced off of a workspace with live
    * terminal sessions answers 409 `live_terminals` (parse with
    * `liveTerminalsCount`); retry with `force: true` to off it anyway. */
@@ -284,7 +295,7 @@ async function req<T>(method: string, path: string, body?: unknown): Promise<T> 
 /** The live HTTP client. Ships once the /api/library/* handlers are deployed. */
 export const liveApi: LibraryApi = {
   listWorkspaces: () => req("GET", "/api/library/workspaces"),
-  addLocalWorkspace: (path) => req("POST", "/api/library/workspaces", { path }),
+  addLocalWorkspace: (path, label) => req("POST", "/api/library/workspaces", { path, label }),
   setWorkspaceOn: (id, on, force) =>
     req(
       "POST",

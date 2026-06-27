@@ -952,8 +952,9 @@ fn start_discovery_listener(
 /// binary's compile target; `pretty_name` is the linux `/etc/os-release`
 /// `PRETTY_NAME` when readable, absent elsewhere (the family alone drives the
 /// icon). Memoized: the OS is fixed for the process, and `/api/devserver/info`
-/// is an unauthenticated probe a connecting client may poll.
-fn detect_os() -> (String, Option<String>) {
+/// is an unauthenticated probe a connecting client may poll. Also drives the
+/// launcher's LOCAL machine icon via the `chan-launcher-host-os` meta tag.
+pub(crate) fn detect_os() -> (String, Option<String>) {
     static OS: OnceLock<(String, Option<String>)> = OnceLock::new();
     OS.get_or_init(|| {
         let family = match std::env::consts::OS {

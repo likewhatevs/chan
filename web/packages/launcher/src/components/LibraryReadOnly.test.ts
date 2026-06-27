@@ -13,7 +13,7 @@ import Library from "./Library.svelte";
 import { loadLibrary } from "../state/library.svelte";
 
 // Force the read-only surface for the whole file (hoisted before the imports).
-vi.mock("../state/capabilities", () => ({ readOnly: true }));
+vi.mock("../state/capabilities", () => ({ readOnly: true, hostOs: "linux" }));
 
 vi.mock("../api/backend", async () => {
   const { mockApi } = await import("../api/mock");
