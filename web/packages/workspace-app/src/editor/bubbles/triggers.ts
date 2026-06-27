@@ -13,7 +13,10 @@
 //     trigger char (so `foo#bar` and `email@domain.com` don't open
 //     bubbles).
 //   - Skip when the caret is inside an InlineCode / FencedCode
-//     syntax range - those characters are literal source.
+//     syntax range - those characters are literal source. The one
+//     carve-out is a recognized inline `` `code` `` file link: typing
+//     inside it opens the wiki picker in "code" mode to re-point the
+//     target in place (see inlineCodeChangeSpec).
 //
 // Multiple patterns can never overlap (their trigger characters are
 // disjoint) so we check in order: wiki > image > contact > tag. The
@@ -32,10 +35,36 @@ const SKIP_INSIDE = new Set<string>([
   "CodeInfo",
 ]);
 
-export function computeBubbleSpec(state: EditorState): BubbleSpec | null {
+export interface BubbleSpecOpts {
+  /// Read the editing file's workspace-rooted path. Lets the inline-code
+  /// carve-out resolve a bare-stem code link against the same directory
+  /// the decoration used, so both agree on which spans are links.
+  getCurrentPath?: () => string | null;
+  /// Resolution gate: does this inline `code` token currently resolve to a
+  /// real workspace file? Injected (not imported) so this trigger module
+  /// stays free of the DOM-heavy widget layer. Absent -> the change picker
+  /// never opens fresh (the structural stay-open below is unaffected).
+  isInlineCodeFileLink?: (text: string, currentPath: string | null) => boolean;
+  /// The currently-armed inline-code change region (content range),
+  /// position-mapped by the controller across edits. Present while a
+  /// `` `code` `` change picker is open so it keeps matching structurally
+  /// as the user edits the token; absent decides the OPEN gate (a
+  /// resolved file only) so a plain snippet never pops the picker.
+  armedInlineCode?: { from: number; to: number } | null;
+}
+
+export function computeBubbleSpec(
+  state: EditorState,
+  opts?: BubbleSpecOpts,
+): BubbleSpec | null {
   const sel = state.selection.main;
   if (!sel.empty) return null;
   const pos = sel.head;
+  // Inline-code file-link change carve-out. Runs BEFORE the skip-range
+  // guard because InlineCode is itself a skip range; a recognized file
+  // link is the one case where the caret inside code opens a bubble.
+  const codeChange = inlineCodeChangeSpec(state, pos, opts);
+  if (codeChange) return codeChange;
   if (caretInsideSkipRange(state, pos)) return null;
   // Special case: caret inside an existing Image's URL portion ->
   // image bubble in "raw" template mode. Detect this BEFORE the
@@ -205,6 +234,67 @@ function caretInsideSkipRange(state: EditorState, pos: number): boolean {
     cur = cur.parent;
   }
   return false;
+}
+
+/// The content range (between the backtick markers) of the InlineCode
+/// node the caret sits inside, or null. Fenced code blocks are NOT
+/// InlineCode, so they keep skipping. Mirrors scanInlineCodeLinks'
+/// open/close-marker walk so both see the same content bounds.
+function inlineCodeContentAtCaret(
+  state: EditorState,
+  pos: number,
+): { from: number; to: number } | null {
+  let cur: ReturnType<ReturnType<typeof syntaxTree>["resolveInner"]> | null =
+    syntaxTree(state).resolveInner(pos, -1);
+  while (cur && cur.name !== "InlineCode") cur = cur.parent;
+  if (!cur) return null;
+  const cursor = cur.cursor();
+  if (!cursor.firstChild()) return null;
+  const from = cursor.to; // end of the opening backtick marker
+  let to = from;
+  do {
+    to = cursor.from; // start of the (last) closing backtick marker
+  } while (cursor.nextSibling());
+  if (from >= to) return null;
+  if (pos < from || pos > to) return null;
+  return { from, to };
+}
+
+/// In-place change trigger for an inline `` `code` `` file link. When the
+/// caret is inside one, return a raw-style wiki spec ("code" templateMode)
+/// so the picker re-points the target without leaving the line. The OPEN
+/// gate is resolution-based (only a confirmed file arms it, so a plain
+/// snippet like `` `npm` `` never pops the picker); once armed, the
+/// controller keeps the region matching structurally while the user edits
+/// the token through non-resolving intermediates (`notes/pas...`).
+function inlineCodeChangeSpec(
+  state: EditorState,
+  pos: number,
+  opts: BubbleSpecOpts | undefined,
+): BubbleSpec | null {
+  const region = inlineCodeContentAtCaret(state, pos);
+  if (!region) return null;
+  const text = state.doc.sliceString(region.from, region.to);
+  // A whitespace run means the span is no longer a single path token (a
+  // code snippet, or the user typed a space) - drop the picker. The text
+  // is never empty here: deleting the last content char dissolves the
+  // InlineCode node, so inlineCodeContentAtCaret already returned null.
+  if (/\s/.test(text)) return null;
+  const armed = opts?.armedInlineCode ?? null;
+  const continuing =
+    !!armed && region.from <= armed.to && region.to >= armed.from;
+  if (!continuing) {
+    const currentPath = opts?.getCurrentPath?.() ?? null;
+    if (!opts?.isInlineCodeFileLink?.(text, currentPath)) return null;
+  }
+  return {
+    kind: "wiki",
+    triggerStart: region.from,
+    triggerEnd: region.to,
+    query: state.doc.sliceString(region.from, pos),
+    templateMode: "code",
+    origin: "inline-code",
+  };
 }
 
 function linkUrlAtCaret(

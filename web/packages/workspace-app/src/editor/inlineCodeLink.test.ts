@@ -1,7 +1,24 @@
+import { EditorState } from "@codemirror/state";
+import { ensureSyntaxTree } from "@codemirror/language";
 import { describe, expect, test } from "vitest";
 import { codeSpanInternalTarget } from "./widgets/wikilink";
+import { computeBubbleSpec } from "./bubbles/triggers";
+import { chanMarkdown } from "./markdown/grammar";
 import wikilink from "./widgets/wikilink.ts?raw";
 import wysiwyg from "./Wysiwyg.svelte?raw";
+
+/// A parsed (markdown) editor state with the caret at `pos`. ensureSyntaxTree
+/// forces a synchronous parse so computeBubbleSpec's syntaxTree() lookup sees
+/// the InlineCode / FencedCode nodes - no view mount, no DOM.
+function stateAt(doc: string, pos: number): EditorState {
+  const state = EditorState.create({
+    doc,
+    selection: { anchor: pos },
+    extensions: [chanMarkdown()],
+  });
+  ensureSyntaxTree(state, doc.length, 10000);
+  return state;
+}
 
 // An inline `code` span whose text resolves to a real workspace file renders
 // as a Cmd/Ctrl-clickable internal link (detect + open, single match).
@@ -38,7 +55,14 @@ describe("codeSpanInternalTarget (the detect decision)", () => {
 
 describe("inline-code link decoration + open wiring", () => {
   test("decorates only a resolved real file, as a non-atomic data-carrying mark", () => {
-    expect(wikilink).toMatch(/if \(getKind\(target\) !== "file"\) return;/);
+    // The detect decoration and the in-place change trigger share ONE gate
+    // (codeSpanInternalTarget + getKind === "file"), so both agree on which
+    // spans are links.
+    expect(wikilink).toMatch(/export function inlineCodeLinkTarget\(/);
+    expect(wikilink).toMatch(/if \(getKind\(target\) !== "file"\) return null;/);
+    expect(wikilink).toMatch(
+      /const target = inlineCodeLinkTarget\(text, currentPath\);/,
+    );
     expect(wikilink).toMatch(
       /class: "cm-md-code-link",\s*attributes: \{ "data-code-link-target": target \},/,
     );
@@ -62,5 +86,72 @@ describe("inline-code link decoration + open wiring", () => {
   test("Wysiwyg wires both the decorator and the Cmd/Ctrl-click opener", () => {
     expect(wysiwyg).toMatch(/inlineCodeLinkClickHandler\(\{\s*onWikiClick,/);
     expect(wysiwyg).toMatch(/inlineCodeLinkDecorations\(\{\s*onWikiClick,/);
+  });
+
+  test("Wysiwyg wires the inline-code change resolution gate", () => {
+    expect(wysiwyg).toMatch(
+      /isInlineCodeFileLink:\s*\(text, path\) =>\s*inlineCodeLinkTarget\(text, path\) !== null,/,
+    );
+  });
+});
+
+// Typing inside a recognized inline `code` file link opens the wiki picker in
+// "code" mode so the target can be re-pointed in place. The picker only OPENS
+// on a resolved file (the injected gate); once armed it stays open structurally
+// while the user edits the token through non-resolving intermediates.
+describe("inline-code link change carve-out (computeBubbleSpec)", () => {
+  // `notes/foo` wrapped in backticks: backtick(0) content[1..10] backtick(10).
+  const DOC = "`notes/foo`";
+
+  test("an armed region opens a code-mode wiki spec over the token", () => {
+    const spec = computeBubbleSpec(stateAt(DOC, 10), {
+      getCurrentPath: () => "notes/a.md",
+      armedInlineCode: { from: 1, to: 10 },
+    });
+    expect(spec).toMatchObject({
+      kind: "wiki",
+      triggerStart: 1,
+      triggerEnd: 10,
+      query: "notes/foo",
+      templateMode: "code",
+      origin: "inline-code",
+    });
+  });
+
+  test("the query is the token up to the caret while editing inside", () => {
+    const spec = computeBubbleSpec(stateAt(DOC, 4), {
+      armedInlineCode: { from: 1, to: 10 },
+    });
+    expect(spec?.origin).toBe("inline-code");
+    expect(spec?.query).toBe("not");
+  });
+
+  test("opens fresh only when the token resolves to a real file", () => {
+    // A snippet (gate false) stays plain code; a real file (gate true) arms it.
+    const snippet = computeBubbleSpec(stateAt("`npm`", 4), {
+      isInlineCodeFileLink: () => false,
+    });
+    expect(snippet).toBeNull();
+    const fileLink = computeBubbleSpec(stateAt(DOC, 10), {
+      getCurrentPath: () => "notes/a.md",
+      isInlineCodeFileLink: () => true,
+    });
+    expect(fileLink?.origin).toBe("inline-code");
+  });
+
+  test("a whitespace token (a code snippet) never arms the picker", () => {
+    const spec = computeBubbleSpec(stateAt("`a b`", 4), {
+      armedInlineCode: { from: 1, to: 4 },
+      isInlineCodeFileLink: () => true,
+    });
+    expect(spec).toBeNull();
+  });
+
+  test("a fenced code block stays skipped (no change picker)", () => {
+    const spec = computeBubbleSpec(stateAt("```\nnotes/foo\n```", 6), {
+      armedInlineCode: { from: 4, to: 13 },
+      isInlineCodeFileLink: () => true,
+    });
+    expect(spec).toBeNull();
   });
 });

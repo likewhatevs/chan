@@ -22,14 +22,16 @@ describe("wiki file completion uses graph link targets", () => {
     // ("No matches"). rawSearchTerm reduces it to the last segment so
     // the linked file surfaces and the pill is openable / re-pickable.
     expect(wiki).toMatch(/function rawSearchTerm\(q: string\): string \{/);
+    // "raw" (a markdown URL slot) and "code" (an inline-code link) both fill
+    // an existing slot, so basename search + file-only mode key off the
+    // shared slotMode flag.
     expect(wiki).toMatch(
-      /const term = opts\.templateMode === "raw" \? rawSearchTerm\(query\) : query;/,
+      /const slotMode =\s*opts\.templateMode === "raw" \|\| opts\.templateMode === "code";/,
     );
-    // Raw mode never enters heading/block authoring modes (the `#`/`^`
-    // there belong to the URL, not the picker).
-    expect(wiki).toMatch(
-      /opts\.templateMode === "raw" \? \{ kind: "file" \} : classifyQuery\(/,
-    );
+    expect(wiki).toMatch(/const term = slotMode \? rawSearchTerm\(query\) : query;/);
+    // Slot mode never enters heading/block authoring modes (the `#`/`^`
+    // there belong to the URL/anchor, not the picker).
+    expect(wiki).toMatch(/slotMode \? \{ kind: "file" \} : classifyQuery\(/);
   });
 
   test("file-mode wiki bubble keeps file and heading targets", () => {
@@ -106,7 +108,7 @@ describe("raw-mode self-link (open the link in the slot)", () => {
       /import \{ parseInternalLink \} from "\.\.\/widgets\/wikilink";/,
     );
     expect(wiki).toMatch(
-      /function selfHit\(\): SelfHit \| null \{[\s\S]*?if \(!opts\.onOpenLink\) return null;[\s\S]*?opts\.templateMode !== "raw" \|\| mode\.kind !== "file"[\s\S]*?doc\.sliceString\(opts\.triggerStart, triggerEnd\)[\s\S]*?parseInternalLink\(literal, "", opts\.fromPath \?\? null\)/,
+      /function selfHit\(\): SelfHit \| null \{[\s\S]*?if \(!opts\.onOpenLink\) return null;[\s\S]*?!slotMode \|\| mode\.kind !== "file"[\s\S]*?doc\.sliceString\(opts\.triggerStart, triggerEnd\)[\s\S]*?parseInternalLink\(literal, "", opts\.fromPath \?\? null\)/,
     );
     // External / anchor-only slots resolve to null -> no Self row.
     expect(wiki).toMatch(/if \(!parsed\) return null;/);

@@ -16,17 +16,43 @@
 // one (e.g., the user types more chars within the same `[[query`).
 
 import { type Extension, Prec } from "@codemirror/state";
-import { EditorView, keymap } from "@codemirror/view";
+import { EditorView, keymap, type ViewUpdate } from "@codemirror/view";
 import type { BubbleHandle, BubbleSpec } from "./types";
 import { computeBubbleSpec } from "./triggers";
 
 export function bubbleListener(opts: {
   onSpec: (spec: BubbleSpec | null) => void;
+  getCurrentPath?: () => string | null;
+  isInlineCodeFileLink?: (text: string, currentPath: string | null) => boolean;
+  /// Extra recompute trigger beyond doc/selection changes. The host wires
+  /// this to the kind-resolve broadcast (an effect-only transaction that is
+  /// neither docChanged nor selectionSet) so an inline-code link that
+  /// resolves while the caret is already inside it opens the picker at once.
+  recomputeOn?: (u: ViewUpdate) => boolean;
 }): Extension {
   let prev: BubbleSpec | null = null;
+  // The inline-code change region currently armed, position-mapped across
+  // edits. Lets the trigger detector keep matching that one inline `code`
+  // span structurally while the user edits its token (the picker only
+  // OPENS on a resolved file; see triggers.inlineCodeChangeSpec).
+  let armed: { from: number; to: number } | null = null;
   return EditorView.updateListener.of((u) => {
-    if (!(u.docChanged || u.selectionSet)) return;
-    const spec = computeBubbleSpec(u.state);
+    if (armed && u.docChanged) {
+      armed = {
+        from: u.changes.mapPos(armed.from),
+        to: u.changes.mapPos(armed.to, 1),
+      };
+    }
+    if (!(u.docChanged || u.selectionSet || opts.recomputeOn?.(u))) return;
+    const spec = computeBubbleSpec(u.state, {
+      getCurrentPath: opts.getCurrentPath,
+      isInlineCodeFileLink: opts.isInlineCodeFileLink,
+      armedInlineCode: armed,
+    });
+    armed =
+      spec?.origin === "inline-code"
+        ? { from: spec.triggerStart, to: spec.triggerEnd }
+        : null;
     if (specEqual(prev, spec)) return;
     prev = spec;
     opts.onSpec(spec);

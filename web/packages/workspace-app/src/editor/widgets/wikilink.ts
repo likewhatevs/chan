@@ -165,8 +165,11 @@ const watchedViews = new Set<EditorView>();
 
 /// State effect dispatched after a kind resolves so each registered
 /// view's decoration walker re-runs and picks up the new kind. Module-
-/// scoped so cross-mount resolves still propagate.
-const kindResolvedEffect = StateEffect.define<void>();
+/// scoped so cross-mount resolves still propagate. Exported so the bubble
+/// listener can also recompute on it: a caret sitting in an inline-code
+/// link whose kind was still in flight opens the change picker the moment
+/// the resolve lands, not on the next caret move.
+export const kindResolvedEffect = StateEffect.define<void>();
 
 function registerView(view: EditorView): void {
   watchedViews.add(view);
@@ -518,6 +521,22 @@ export function codeSpanInternalTarget(
   return parsed.target;
 }
 
+/// The confirmed-file target an inline `code` span links to, or null. Combines
+/// the cheap shape check (codeSpanInternalTarget) with the async file-existence
+/// gate (getKind === "file") so the detect decoration AND the in-place change
+/// trigger agree on exactly which spans are links. An unresolved kind kicks off
+/// the resolve and returns null until it lands (the kindResolvedEffect then
+/// re-runs the decoration walker).
+export function inlineCodeLinkTarget(
+  text: string,
+  currentPath: string | null,
+): string | null {
+  const target = codeSpanInternalTarget(text, currentPath);
+  if (!target) return null;
+  if (getKind(target) !== "file") return null;
+  return target;
+}
+
 function codeLinkMark(target: string): Decoration {
   return Decoration.mark({
     class: "cm-md-code-link",
@@ -548,11 +567,10 @@ function scanInlineCodeLinks(
       } while (cursor.nextSibling());
       if (contentFrom >= contentTo) return;
       const text = state.doc.sliceString(contentFrom, contentTo);
-      const target = codeSpanInternalTarget(text, currentPath);
-      if (!target) return;
       // Only a resolved real file earns the link affordance; an in-flight or
       // 404 resolve leaves the span plain and re-runs on kindResolvedEffect.
-      if (getKind(target) !== "file") return;
+      const target = inlineCodeLinkTarget(text, currentPath);
+      if (!target) return;
       ranges.push({
         from: contentFrom,
         to: contentTo,

@@ -28,7 +28,7 @@ import { createCaretAnchor } from "./anchor";
 import { api } from "../../api/client";
 import type { LinkTarget, TreeEntry } from "../../api/types";
 import { indexStatus } from "../../state/store.svelte";
-import { decodePercent, relativizePath, wikiLinkToMarkdown } from "../links";
+import { decodePercent, encodeRelPath, relativizePath, wikiLinkToMarkdown } from "../links";
 import { parseInternalLink } from "../widgets/wikilink";
 import {
   filterBlocks,
@@ -55,7 +55,9 @@ export interface WikiBubbleOpts {
   /// typed `[[` from scratch.
   /// "raw": commit inserts just `path`. Used when the caret is inside
   /// an existing `[label](path)` URL portion (the brackets stay).
-  templateMode?: "wrap" | "raw";
+  /// "code": like "raw" but the inserted path is percent-encoded so it
+  /// survives inline-code link detection. Used inside `` `code` `` links.
+  templateMode?: "wrap" | "raw" | "code";
   /// Path of the file being edited (workspace-rooted POSIX, no leading
   /// slash), or null when there is no source file (chat bubble, unsaved
   /// draft). Used to relativize the inserted link target so notes stay
@@ -212,12 +214,14 @@ export function openWikiBubble(opts: WikiBubbleOpts): WikiBubbleHandle {
 
   let query = opts.initialQuery;
   let triggerEnd = opts.triggerEnd;
-  // Raw mode edits an existing `[label](url)` URL slot. The `#`/`^` in
-  // a URL is the on-disk anchor, not the heading/block authoring
-  // separator, so never classify into those modes here - stay in file
-  // mode and search the URL's basename (see rawSearchTerm / fetchFile).
-  let mode: Mode =
-    opts.templateMode === "raw" ? { kind: "file" } : classifyQuery(query);
+  // "raw" (a markdown `[label](url)` / `![alt](url)` URL slot) and "code"
+  // (an inline `` `code` `` file link) both fill an existing slot instead
+  // of wrapping a fresh construct: file mode only, basename search, and no
+  // `#`/`^` authoring separators (a `#`/`^` here is part of the slot's
+  // on-disk URL/anchor). They differ only at commit: "code" percent-
+  // encodes the inserted path so it survives inline-code link detection.
+  const slotMode = opts.templateMode === "raw" || opts.templateMode === "code";
+  let mode: Mode = slotMode ? { kind: "file" } : classifyQuery(query);
   // File-mode results from /api/link-targets.
   let fileHits: LinkTarget[] = [];
   // Client-synthesized workspace-PATH candidates (see computePathHits),
@@ -265,7 +269,7 @@ export function openWikiBubble(opts: WikiBubbleOpts): WikiBubbleHandle {
   /// unresolvable (parseInternalLink returns null for `http`/`mailto`/`#...`).
   function selfHit(): SelfHit | null {
     if (!opts.onOpenLink) return null;
-    if (opts.templateMode !== "raw" || mode.kind !== "file") return null;
+    if (!slotMode || mode.kind !== "file") return null;
     const literal = opts.view.state.doc.sliceString(opts.triggerStart, triggerEnd);
     const parsed = parseInternalLink(literal, "", opts.fromPath ?? null);
     if (!parsed) return null;
@@ -334,7 +338,7 @@ export function openWikiBubble(opts: WikiBubbleOpts): WikiBubbleHandle {
       // Advertise the heading / block modes (type `#` or `^` after the
       // target) while authoring a fresh `[[` link. Suppressed in raw
       // mode, where those separators are part of the URL being edited.
-      const modeHint = opts.templateMode === "raw" ? "" : " - # heading - ^ block";
+      const modeHint = slotMode ? "" : " - # heading - ^ block";
       status.textContent = `${hits.length} result${hits.length === 1 ? "" : "s"} - ↵ insert${openHint}${modeHint}`;
     }
     for (let i = 0; i < hits.length; i++) {
@@ -418,7 +422,7 @@ export function openWikiBubble(opts: WikiBubbleOpts): WikiBubbleHandle {
     if (debounceTimer !== undefined) clearTimeout(debounceTimer);
     const seq = ++reqSeq;
     debounceTimer = window.setTimeout(() => {
-      const term = opts.templateMode === "raw" ? rawSearchTerm(query) : query;
+      const term = slotMode ? rawSearchTerm(query) : query;
       api
         .linkTargets(term, SEARCH_LIMIT)
         .then((results) => {
@@ -615,7 +619,7 @@ export function openWikiBubble(opts: WikiBubbleOpts): WikiBubbleHandle {
       dismiss();
       return;
     }
-    const raw = opts.templateMode === "raw";
+    const raw = slotMode;
     if (mode.kind === "block") {
       // Block commit may need a fresh `^id` written to the target file.
       // Run async, then dispatch the link insert. The bubble stays
@@ -650,9 +654,11 @@ export function openWikiBubble(opts: WikiBubbleOpts): WikiBubbleHandle {
 
   /// Format an on-disk file link for a resolved (path, anchor). `path`
   /// is a workspace-rooted POSIX path (no leading slash). Three forms:
-  ///   raw mode       -> bare path filling the URL slot of an existing
-  ///                     `[label](...)` (the brackets stay); relativized
-  ///                     so a note outside the workspace root resolves.
+  ///   slot mode (`raw`) -> bare relativized path filling an existing slot
+  ///                     (the surrounding `[label](...)` / backticks stay).
+  ///                     "code" mode percent-encodes it so an inline-code
+  ///                     link survives detection (which rejects a space);
+  ///                     a markdown URL slot keeps the verbatim path.
   ///   wiki-mode file -> `[[path#anchor]]`, preserving the file's
   ///                     existing wiki-link style.
   ///   default        -> relative markdown `[stem](./path#anchor)`.
@@ -663,7 +669,11 @@ export function openWikiBubble(opts: WikiBubbleOpts): WikiBubbleHandle {
   ): string {
     if (raw) {
       const rel = opts.fromPath ? relativizePath(path, opts.fromPath) : path;
-      return anchor ? `${rel}#${anchor}` : rel;
+      // Inline-code links carry no markdown delimiters around the slot, so
+      // a literal space would break re-detection - percent-encode the path
+      // in "code" mode (a markdown URL slot keeps its existing raw form).
+      const slot = opts.templateMode === "code" ? encodeRelPath(rel) : rel;
+      return anchor ? `${slot}#${anchor}` : slot;
     }
     if (fileUsesWikiLinks) {
       const ref = anchor ? `${path}#${anchor}` : path;
@@ -819,8 +829,7 @@ export function openWikiBubble(opts: WikiBubbleOpts): WikiBubbleHandle {
       shell.reposition();
       if (q === query) return;
       query = q;
-      const newMode: Mode =
-        opts.templateMode === "raw" ? { kind: "file" } : classifyQuery(q);
+      const newMode: Mode = slotMode ? { kind: "file" } : classifyQuery(q);
       // Resolve a basename target (`Welcome`) to its real rel_path
       // (`Welcome.md`) so the heading/block fetch finds the file.
       if (newMode.kind === "heading" || newMode.kind === "block") {

@@ -26,6 +26,8 @@
   import {
     inlineCodeLinkClickHandler,
     inlineCodeLinkDecorations,
+    inlineCodeLinkTarget,
+    kindResolvedEffect,
     wikiLinkDecorations,
     type WikiLinkClickArgs,
   } from "./widgets/wikilink";
@@ -163,6 +165,22 @@
   /// reference (no stale closure).
   let activeBubble: BubbleHandle | null = null;
   let activeKind: BubbleSpec["kind"] | null = null;
+  /// The open bubble's trigger anchor + template mode. The reuse fast-path
+  /// in handleSpec must match BOTH (not just the kind) before updating an
+  /// open bubble in place: openWikiBubble captures triggerStart +
+  /// templateMode as closure consts (used by commit / anchor / selfHit),
+  /// so reusing the handle across a caret jump to a different construct or
+  /// mode would commit against a stale range. A mismatch dismisses +
+  /// remounts instead.
+  let activeTriggerStart: number | null = null;
+  let activeTemplateMode: BubbleSpec["templateMode"];
+
+  function clearActiveBubble(): void {
+    activeBubble = null;
+    activeKind = null;
+    activeTriggerStart = null;
+    activeTemplateMode = undefined;
+  }
 
   /// Image atom Cmd/Ctrl-click handler. The image widget only fires
   /// onImageClick on Cmd/Ctrl-click now (plain click drops the caret
@@ -183,15 +201,21 @@
     if (spec === null) {
       if (activeBubble) {
         activeBubble.dismiss();
-        activeBubble = null;
-        activeKind = null;
+        clearActiveBubble();
       }
       return;
     }
-    // Same bubble kind already open: update its query / trigger end
-    // in place. Different kind or no bubble open: dismiss the old
-    // and mount fresh.
-    if (activeBubble && activeKind === spec.kind) {
+    // Same bubble kind AT THE SAME anchor + mode already open: update its
+    // query / trigger end in place. A different kind, anchor, or mode (a
+    // caret jump to another construct) dismisses the old and mounts fresh,
+    // since the open bubble's triggerStart / templateMode are fixed at
+    // open time.
+    if (
+      activeBubble &&
+      activeKind === spec.kind &&
+      activeTriggerStart === spec.triggerStart &&
+      (activeTemplateMode ?? "wrap") === (spec.templateMode ?? "wrap")
+    ) {
       // setTriggerEnd MUST run BEFORE setQuery: setQuery re-renders
       // the bubble (including the image preview, which reads
       // triggerStart..triggerEnd from the doc), and a stale
@@ -205,12 +229,10 @@
     }
     if (activeBubble) {
       activeBubble.dismiss();
-      activeBubble = null;
-      activeKind = null;
+      clearActiveBubble();
     }
     const onDismiss = () => {
-      activeBubble = null;
-      activeKind = null;
+      clearActiveBubble();
     };
     if (spec.kind === "wiki") {
       activeBubble = openWikiBubble({
@@ -272,11 +294,16 @@
         initialQuery: spec.query,
         uploadDir: dirOf(currentPath),
         currentPath,
-        templateMode: spec.templateMode ?? "wrap",
+        // Images only ever carry "wrap"/"raw"; "code" is wiki-only.
+        templateMode: spec.templateMode === "raw" ? "raw" : "wrap",
         onOpenLink: (path) => openImageZoom(path, currentPath),
         onDismiss,
       });
       activeKind = "image";
+    }
+    if (activeBubble) {
+      activeTriggerStart = spec.triggerStart;
+      activeTemplateMode = spec.templateMode;
     }
   }
 
@@ -715,7 +742,22 @@
   function writeSideExtensions(ro: boolean): Extension[] {
     if (ro) return [];
     return [
-      bubbleListener({ onSpec: handleSpec }),
+      bubbleListener({
+        onSpec: handleSpec,
+        getCurrentPath: () => currentPath,
+        // Resolution gate for the inline-code change picker: only a span
+        // that resolves to a real file arms it (shares the decoration's
+        // kind cache, so both agree on which spans are links).
+        isInlineCodeFileLink: (text, path) =>
+          inlineCodeLinkTarget(text, path) !== null,
+        // A link kind resolving while the caret already sits inside it
+        // is an effect-only transaction; recompute so the picker opens
+        // without waiting for the next caret move.
+        recomputeOn: (u) =>
+          u.transactions.some((tr) =>
+            tr.effects.some((e) => e.is(kindResolvedEffect)),
+          ),
+      }),
       bubbleKeymap(() => activeBubble),
       imageDropHandlers({
         getUploadDir: () => dirOf(currentPath),
@@ -746,8 +788,7 @@
     // through the keymap anymore.
     if (activeBubble) {
       activeBubble.dismiss();
-      activeBubble = null;
-      activeKind = null;
+      clearActiveBubble();
     }
     view.dispatch({
       effects: writeSideCompartment.reconfigure(writeSideExtensions(readonly)),

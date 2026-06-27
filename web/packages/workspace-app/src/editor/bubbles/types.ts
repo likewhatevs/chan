@@ -19,14 +19,22 @@ export type BubbleSpec = {
   triggerStart: number;
   triggerEnd: number;
   query: string;
-  /// Image-only: how the bubble formats its commit.
-  ///   "wrap" (default): replace the trigger with `![](path)`. Used
-  ///     when the user typed `![` from scratch.
-  ///   "raw": replace the trigger with just `path`. Used when the
-  ///     caret is inside an existing image's URL portion (the
-  ///     surrounding `![alt](`...`)` is already there and we don't
-  ///     want to nuke it).
-  templateMode?: "wrap" | "raw";
+  /// How the bubble formats its commit.
+  ///   "wrap" (default): replace the trigger with the full construct
+  ///     (`![](path)` / `[[path]]` / `[stem](path)`). Used when the user
+  ///     typed the opener from scratch.
+  ///   "raw": replace the trigger with just `path`. Used when the caret
+  ///     is inside an existing image/link URL slot (the surrounding
+  ///     `![alt](`...`)` / `[label](`...`)` is already there).
+  ///   "code": like "raw" but the inserted path is percent-encoded so it
+  ///     round-trips through inline-code link detection (which rejects a
+  ///     literal space). Used inside an inline `` `code` `` file link.
+  templateMode?: "wrap" | "raw" | "code";
+  /// Set when this spec is the in-place change trigger for an inline
+  /// `` `code` `` file link. The controller latches onto the region so
+  /// the picker stays open while the user edits the token through
+  /// non-resolving intermediates (it only OPENS on a resolved file).
+  origin?: "inline-code";
 };
 
 /// Active-bubble handle exposed back to the host. Mirrors the legacy
