@@ -24,7 +24,7 @@ A single round under one architect. Wave 1 (immediate): positioning docs and the
 
 ## Team and coordination
 
-Three lanes, coordinated through the shared phase-style bus. The `@@handle` references resolve via the roster in [`.agents/roster/README.md`](../../.agents/roster/README.md):
+Three lanes, coordinated through the shared phase-style bus:
 
 - @@LaneA (architect plus positioning docs): the docs re-steer across README, design.md, the manual, CLAUDE.md, AGENTS.md, multi-user fixes, screenshot staging, coordination, and commits.
 - @@LaneB (in-app About slide): redone on-spec; npm build plus cargo build plus browser smoke green.

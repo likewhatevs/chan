@@ -1,6 +1,6 @@
 # How chan is developed
 
-If you've landed here from a PR or just browsing the repo, this doc explains the multi-agent development pattern behind the consolidated phase reports in [`phases/`](phases/). It's not a user-facing document; it's an explainer for outside contributors and curious readers.
+If you've landed here from a PR or just browsing the repo, this doc explains the multi-agent development pattern behind the consolidated release reports in [`team/`](../team/). It's not a user-facing document; it's an explainer for outside contributors and curious readers.
 
 ## TL;DR
 
@@ -20,7 +20,7 @@ Teams are provisioned by the `cs terminal team` tooling: a config declares the m
 
 ## How work flows
 
-Phases organize the year-scale roadmap; a phase closes with a consolidated report in `docs/phases/` and usually a release tag. Within a phase, a round runs on a small set of on-disk artifacts in the team's working directory:
+Phases organize the year-scale roadmap; a phase closes with a consolidated report in `team/` and usually a release tag. Within a phase, a round runs on a small set of on-disk artifacts in the team's working directory:
 
 1. **A scope** - the owner's high-level ask for the round.
 2. **Task files** (`tasks/task-{from}-{to}-{n}.md`) - what each member is asked to do. Owned by the recipient, append-only; once work starts, new asks become new tasks, not amendments.
@@ -37,7 +37,7 @@ Phases organize the year-scale roadmap; a phase closes with a consolidated repor
 
 ## What you'll see in the repo
 
-* `docs/phases/phase-N.md` - one consolidated report per phase: its roadmap, rounds, and retrospective. The front door to the project history.
+* `team/release-*.md` - one consolidated report per release era: its roadmap, rounds, and retrospective. The front door to the project history.
 * `.agents/` - the operational playbook the assistants work from: coordination, gating, verification, and commit discipline.
 * While a round is active, its working directory (config, bootstrap, tasks, journals) is the live coordination bus; it is distilled into the phase report at close.
 
