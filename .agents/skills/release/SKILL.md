@@ -33,10 +33,10 @@ Self-upgrade reads the latest manifest from `/dl` on chan.app. Cutting a release
 2. Bump the version pins above in one commit.
 3. Dry-run the release workflow before tagging: trigger `release.yml` via `workflow_dispatch` with `publish=false`. macOS sign/notarize only runs on Actions, so this is the only way to validate that path off a workstation.
 4. Push the `vX.Y.Z` tag. The pre-push hook gates every push, including tags. A backgrounded gated push can SIGPIPE (exit 141) and silently fail to update the remote, so push in the foreground, redirect output to a file, and verify with `git ls-remote` before relying on the tag.
-5. Watch the workflow. macOS signing secrets are validated up front; a missing secret fails fast with a pointer to `docs/release/macos-signing.md` and the desktop updater notes in `.agents/desktop.md`.
+5. Watch the workflow. macOS signing secrets are validated up front; a missing secret fails fast with a pointer to the macOS signing procedure (`docs/release/README.md`) and the desktop updater notes in `.agents/desktop.md`.
 
 ## Signing notes
 
-- macOS Developer ID signing + notarization material lives in GitHub Actions Secrets; the per-secret table is in `docs/release/macos-signing.md`.
+- macOS Developer ID signing + notarization material lives in GitHub Actions Secrets; the per-secret table is in the team's private dev/ tree (see `docs/release/README.md`).
 - The Tauri updater minisign key is separate from the Apple Developer ID cert. Rotation procedures for both live in `.agents/desktop.md`.
 - Secret VALUES never appear in journals, chat, or commits. Only the secret NAMES are referenced in workflow YAML and docs.

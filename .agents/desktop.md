@@ -26,7 +26,7 @@ The chan-desktop `.app` (and the bundled `.dmg`) are codesigned with an Apple De
 }
 ```
 
-The identity NAME is a public identifier (the same string that `security find-identity -v -p codesigning` prints), safe to land in the repo. The matching private key + cert blob stay outside the repo entirely: in the developer's macOS Keychain for local builds; in `secrets.APPLE_CERTIFICATE_BASE64` + `secrets.APPLE_CERTIFICATE_PASSWORD` for CI (imported into a temp keychain by `apple-actions/import-codesign-certs@v3` in `release-desktop.yml`). See the [macOS signing brief](../docs/release/macos-signing.md) for the full per-secret table.
+The identity NAME is a public identifier (the same string that `security find-identity -v -p codesigning` prints), safe to land in the repo. The matching private key + cert blob stay outside the repo entirely: in the developer's macOS Keychain for local builds; in `secrets.APPLE_CERTIFICATE_BASE64` + `secrets.APPLE_CERTIFICATE_PASSWORD` for CI (imported into a temp keychain by `apple-actions/import-codesign-certs@v3` in `release-desktop.yml`). See the [release signing notes](../docs/release/README.md) for the full per-secret table (kept in the team's private dev/ tree).
 
 `bundle.macOS.providerShortName` is omitted because chan-desktop's Apple Developer account is Individual enrollment with a single ASC team. Populate the field only if the account is associated with multiple teams.
 
@@ -40,11 +40,11 @@ The identity NAME is a public identifier (the same string that `security find-id
 
 Developer ID Application certs expire every 5 years; rotation also applies if the cert is revoked or replaced. Steps:
 
-1. Generate the new cert per the [macOS signing brief](../docs/release/macos-signing.md) "Developer ID Application certificate generation".
+1. Generate the new cert per the macOS signing procedure (see [release signing notes](../docs/release/README.md), "Developer ID Application certificate generation").
 2. Update `bundle.macOS.signingIdentity` in `tauri.conf.json` to the new identity string. Single-field swap.
 3. Refresh `APPLE_CERTIFICATE_BASE64` + `APPLE_CERTIFICATE_PASSWORD`
    + `APPLE_SIGNING_IDENTITY` + `APPLE_TEAM_ID` in GitHub Actions
-   Secrets via `docs/release/populate-apple-secrets.sh` (re-run the relevant steps).
+   Secrets via the `populate-apple-secrets.sh` helper kept in the team's private dev/ tree (re-run the relevant steps).
 4. Refresh the local Keychain: import the new `.p12`; remove the old cert (`security delete-certificate -c "Developer ID Application: <Old Name> ..."`) so the `sign-prereqs` `grep -c "Developer ID Application:"` detection picks the new one unambiguously.
 
 No bridge release is needed for Developer ID cert rotation (unlike the minisign updater key rotation below). Gatekeeper trusts any Developer ID Application cert chained to Apple's root, regardless of which one signed the previous release, so the next signed bundle under the new identity is accepted by clients that had the old one.
@@ -118,4 +118,4 @@ CI behaviour is identical to the prior path: the credentials reach notarytool th
 
 ### CI does not need the Keychain profile
 
-`release-desktop.yml` reads `APPLE_ID` + `APPLE_PASSWORD` + `APPLE_TEAM_ID` straight from `secrets.APPLE_*` (per the `docs/release/macos-signing.md` brief). The env-var path runs unchanged on the runner; no `xcrun notarytool store-credentials` step is needed in CI.
+`release-desktop.yml` reads `APPLE_ID` + `APPLE_PASSWORD` + `APPLE_TEAM_ID` straight from `secrets.APPLE_*` (per the macOS signing procedure; see `docs/release/README.md`). The env-var path runs unchanged on the runner; no `xcrun notarytool store-credentials` step is needed in CI.
