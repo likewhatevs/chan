@@ -9,7 +9,6 @@
   import Library from "./components/Library.svelte";
   import NewWorkspaceDialog from "./components/NewWorkspaceDialog.svelte";
   import ConfirmDialog from "./components/ConfirmDialog.svelte";
-  import ControlClosedSurvey from "./components/ControlClosedSurvey.svelte";
   import {
     library,
     loadLibrary,
@@ -20,7 +19,7 @@
   import { dialog } from "./state/dialog.svelte";
   import { confirm } from "./state/confirm.svelte";
   import { checksVisible } from "./state/selection.svelte";
-  import { controlClosed, controlClosedId, onControlClosedEvent } from "./state/controlClosed.svelte";
+  import { controlClosedId, onControlClosedEvent } from "./state/controlClosed.svelte";
   import { clearControlAttention } from "./state/controlAttention.svelte";
   import { onTauriEvent } from "./api/desktop";
   import { applyTheme } from "./state/theme.svelte";
@@ -30,7 +29,8 @@
     applyTheme();
     loadLibrary();
     // A connected devserver's control terminal exited: the desktop emits
-    // `devserver-control-closed` with its id. Survey re-run / edit / abandon.
+    // `devserver-control-closed` with its id, and the launcher flashes that
+    // control row's eye yellow for attention (the amber "reconnecting" cue).
     // No-op off-desktop (the global Tauri event bridge is absent in a browser).
     let unlisten: (() => void) | null = null;
     void onTauriEvent("devserver-control-closed", onControlClosedEvent).then((un) => {
@@ -98,10 +98,6 @@
 
 {#if confirm.open}
   <ConfirmDialog />
-{/if}
-
-{#if controlClosed.open}
-  <ControlClosedSurvey />
 {/if}
 
 <style>
