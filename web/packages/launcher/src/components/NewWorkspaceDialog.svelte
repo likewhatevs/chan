@@ -123,8 +123,13 @@
     }
     const idx = s.lastIndexOf(":");
     if (idx <= 0 || idx === s.length - 1) return { host: s, port: null, token: "" };
-    const port = Number(s.slice(idx + 1));
-    return { host: s.slice(0, idx), port: Number.isInteger(port) ? port : null, token: "" };
+    const host = s.slice(0, idx).trim();
+    const port = Number(s.slice(idx + 1).trim());
+    // Reject a malformed host -- whitespace, or a leftover colon from a typo'd
+    // double colon / scheme fragment. A bracketed [::1] IPv6 literal ends in "]",
+    // not ":", so it survives.
+    if (!host || /\s/.test(host) || host.endsWith(":")) return { host: "", port: null, token: "" };
+    return { host, port: Number.isInteger(port) ? port : null, token: "" };
   }
 
   function validPort(p: number | null): p is number {

@@ -1,16 +1,16 @@
 <script lang="ts">
-  // One window/terminal row, shared by the flat feed and the nested machine tree.
-  // The mutable surface carries two icon actions: [FOCUS] (openWindow: focus a
-  // live window / un-hide a buried one) and [SHOW/HIDE] (toggleWindow: Eye when
-  // visible, EyeOff when hidden, keyed on the server-persisted `hidden`). A
-  // control terminal whose inner process exited slow-flashes its eye yellow for
-  // attention; the user acting on the window clears it. The read-only surface
-  // (gateway/devserver, no desktop bridge) renders the row static with the
-  // connection dot and no actions.
+  // One window/terminal row in the machine tree (control terminals, standalone
+  // terminals, and the windows nested in a workspace card). The mutable surface
+  // carries two icon actions: [FOCUS] (openWindow: focus a live window / un-hide
+  // a buried one) and [SHOW/HIDE] (toggleWindow: Eye when visible, EyeOff when
+  // hidden, keyed on the server-persisted `hidden`). A control terminal whose
+  // inner process exited slow-flashes its eye yellow for attention; the user
+  // acting on the window clears it. The read-only surface (gateway/devserver, no
+  // desktop bridge) renders the row static with the connection dot and no actions.
   //
   // `icon` adds a leading kind glyph (accent for the control terminal) and, for a
-  // control terminal awaiting attention, an amber "reconnecting…" pill -- the
-  // nested-tree presentation. The flat feed leaves it off (iconless rows).
+  // control terminal awaiting attention, an amber "reconnecting…" pill; the
+  // machine tree passes it for every row.
   import { AppWindow, Eye, EyeOff, Focus, SquareTerminal } from "lucide-svelte";
   import { focusWindow, toggleWindow, reportError, clearError } from "../state/library.svelte";
   import { windowRowLabel } from "../lib/windowLabel";

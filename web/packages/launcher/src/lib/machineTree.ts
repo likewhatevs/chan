@@ -14,7 +14,7 @@
 // {#each} (a repeat throws Svelte each_key_duplicate and freezes the tree).
 
 import type { DevserverEntry, WindowRecord, WorkspaceEntry } from "../api/library";
-import { LOCAL_LIBRARY_ID, librarySectionLabel } from "./windowLabel";
+import { LOCAL_LIBRARY_ID } from "./windowLabel";
 
 /** Order windows within a machine: the connect control terminal pinned FIRST,
  * then standalone terminals before workspace windows, then by ordinal. */
@@ -46,43 +46,6 @@ function devserverName(ds: DevserverEntry): string {
 function samePath(a: string | null, b: string): boolean {
   if (!a) return false;
   return a.replace(/\/+$/, "") === b.replace(/\/+$/, "");
-}
-
-// ---- The flat feed grouping (one list per library) ----------------------
-
-export interface LibraryGroup {
-  libraryId: string;
-  label: string;
-  windows: WindowRecord[];
-}
-
-/** Group windows by library for the flat feed: LOCAL first, then each remote
- * devserver by label; windows deduped + sorted. `remoteNameOf` resolves a remote
- * library id to the user's devserver name (null when not yet known). */
-export function groupWindowsByLibrary(
-  windows: WindowRecord[],
-  remoteNameOf: (libraryId: string) => string | null,
-): LibraryGroup[] {
-  const map = new Map<string, WindowRecord[]>();
-  for (const w of dedupeWindows(windows)) {
-    const arr = map.get(w.library_id) ?? [];
-    arr.push(w);
-    map.set(w.library_id, arr);
-  }
-  const groups: LibraryGroup[] = [...map.entries()].map(([libraryId, ws]) => ({
-    libraryId,
-    label: librarySectionLabel(
-      libraryId,
-      libraryId === LOCAL_LIBRARY_ID ? null : remoteNameOf(libraryId),
-    ),
-    windows: ws.slice().sort(sortWindows),
-  }));
-  groups.sort((a, b) => {
-    if (a.libraryId === LOCAL_LIBRARY_ID) return -1;
-    if (b.libraryId === LOCAL_LIBRARY_ID) return 1;
-    return a.label.localeCompare(b.label);
-  });
-  return groups;
 }
 
 // ---- The machine tree (nested) ------------------------------------------

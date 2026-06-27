@@ -297,10 +297,16 @@
       {/if}
     {/if}
     {#if machineIsEmpty(node) && node.kind === "local"}
-      <p class="empty-hint">
-        No workspaces yet. Add one with the buttons above, or run
-        <code>chan open /path/to/project</code> in a terminal.
-      </p>
+      {#if readOnly}
+        <p class="empty-hint">
+          No workspaces yet. Manage workspaces from the desktop app or the chan CLI.
+        </p>
+      {:else}
+        <p class="empty-hint">
+          No workspaces yet. Add one with the buttons above, or run
+          <code>chan open /path/to/project</code> in a terminal.
+        </p>
+      {/if}
     {/if}
   </div>
 {/snippet}

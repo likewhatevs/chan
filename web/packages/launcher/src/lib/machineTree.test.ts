@@ -4,12 +4,7 @@
 // orphan fallbacks, LOCAL-first machine ordering).
 
 import { describe, it, expect } from "vitest";
-import {
-  sortWindows,
-  dedupeWindows,
-  groupWindowsByLibrary,
-  buildMachineTree,
-} from "./machineTree";
+import { sortWindows, dedupeWindows, buildMachineTree } from "./machineTree";
 import type { DevserverEntry, WindowRecord, WorkspaceEntry } from "../api/library";
 
 function win(
@@ -73,22 +68,6 @@ describe("dedupeWindows", () => {
     const out = dedupeWindows([a, b]);
     expect(out.length).toBe(1);
     expect(out[0]!.ordinal).toBe(1);
-  });
-});
-
-describe("groupWindowsByLibrary", () => {
-  it("puts LOCAL first, labels remotes, and pins the control terminal first", () => {
-    const windows = [
-      win({ window_id: "r-term", library_id: "lib-remote", kind: "terminal", ordinal: 1 }),
-      win({ window_id: "r-control", library_id: "lib-remote", control: true, ordinal: 0 }),
-      win({ window_id: "l-term", library_id: "local", kind: "terminal", ordinal: 1 }),
-    ];
-    const groups = groupWindowsByLibrary(windows, (id) => (id === "lib-remote" ? "prod" : null));
-    expect(groups.map((g) => g.libraryId)).toEqual(["local", "lib-remote"]);
-    expect(groups[0]!.label).toBe("🏠 Local");
-    expect(groups[1]!.label).toBe("🌐 prod");
-    // The remote group's control terminal sorts first.
-    expect(groups[1]!.windows[0]!.window_id).toBe("r-control");
   });
 });
 

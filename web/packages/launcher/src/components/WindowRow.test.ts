@@ -2,8 +2,7 @@
 // [SHOW/HIDE] (Eye visible / EyeOff hidden); `icon` adds a leading kind glyph and
 // the control terminal's amber "reconnecting…" pill + eye flash when its library
 // needs attention. Exercises the real Svelte 5 runtime per jsdom. The read-only
-// surface (static dot, no actions) is covered through WindowFeedReadOnly + the
-// Library read-only nesting tests.
+// surface (static dot, no actions) is covered in LibraryReadOnly.test.ts.
 
 import { describe, it, expect, afterEach, vi } from "vitest";
 import { mount, unmount, flushSync } from "svelte";

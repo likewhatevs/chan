@@ -347,10 +347,3 @@ export async function toggleWindow(w: WindowRecord): Promise<void> {
 export async function focusWindow(w: WindowRecord): Promise<void> {
   await backend.openWindow(w.window_id);
 }
-
-/** The user's name for a remote library, joined by its library id. */
-export function remoteLibraryName(libraryId: string): string | null {
-  const ds = library.devservers.find((d) => d.library_id === libraryId);
-  if (!ds) return null;
-  return ds.label || `${ds.host}:${ds.port}`;
-}

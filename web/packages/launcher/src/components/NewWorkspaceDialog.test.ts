@@ -144,6 +144,16 @@ describe("New workspace dialog -- devserver", () => {
     expect(el.querySelector('[role="alert"]')?.textContent).toContain("address");
   });
 
+  it("rejects a malformed host (a typo'd double colon)", () => {
+    openNewDialog("devserver");
+    const el = render();
+    setInput(addressInput(el), "host::8787");
+    flushSync();
+    btn(el, "Add dev server").click();
+    flushSync();
+    expect(el.querySelector('[role="alert"]')?.textContent).toContain("address");
+  });
+
   it("gives the action row a clearing margin (the dialog-margin fix)", () => {
     openNewDialog("devserver");
     const el = render();
