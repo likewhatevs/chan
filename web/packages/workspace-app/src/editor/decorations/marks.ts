@@ -120,10 +120,7 @@ function handleLink(ctx: TokenContext): void {
   } while (cursor.nextSibling());
   if (linkMarks.length < 4 || !urlRange) {
     // Reference-style links and other non-`[label](url)` shapes are not
-    // decorated here. A label with a balanced inner bracket pair
-    // (`[[foo] bar](path)`) also lands here: lezer parses the inner `[foo]` as a
-    // shortcut-reference Link (2 marks, no URL) and never forms the outer link,
-    // so there is nothing to decorate and the construct stays raw text.
+    // decorated here.
     return;
   }
   // Skip internal links - those are owned by widgets/wikilink.ts and
