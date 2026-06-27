@@ -6,6 +6,26 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [v0.54.0] - 2026-06-27
+
+A feature round: the chan-desktop launcher reorganized machine-first, container images published from the release, in-place editing of inline-code file links, the ambient status notification moved clear of the terminal prompt, and `chan open` taught to serve where its shell actually runs.
+
+### Added
+
+- **Releases publish container images to Docker Hub.** Alongside the CLI and desktop artifacts, the release now builds and pushes multi-arch (amd64 + arm64) images for `chan` and the three gateway services -- `chan-gateway-identity`, `chan-gateway-profile`, and `chan-gateway-devserver-proxy` -- under the `chanapp` namespace, all public. Each release gets an immutable `X.Y.Z` tag; `latest` tracks the newest GA release only, and prerelease `-rc` tags push immutable images without moving `latest`. The path is exercised on a non-publishing dry-run build that builds every image without a registry.
+- **Re-point an inline-code file link in place.** Typing inside an inline `` `path` `` link that resolves to a real workspace file opens a file picker to change its target without leaving the line, re-rendering as a link on commit. (The detect-and-open half shipped in v0.53.0.)
+
+### Changed
+
+- **The chan-desktop launcher is organized machine-first.** The local machine and each dev server are equal top-level blocks. Each block opens its own terminals and lists windows control-terminal-first, then standalone terminals, then per-workspace windows nested inside their workspace; the old flat window feed is gone. Adding a workspace and adding a dev server are now separate actions, the bulk-selection checkboxes reveal on a Select toggle (Gmail-style) with a docked bulk bar, workspace cards lift on hover, and a dev server whose control process disconnects shows an inline "reconnecting" flash instead of a modal.
+- **The ambient status notification sits in the top-right.** It moved from the bottom-left, where it overlapped the terminal prompt, to the top-right with its collapse control on the right; transfer notifications now stack downward beneath it. The session-handover and survey overlays are unchanged.
+- **`chan open` routes by where its shell is running.** `chan open <path>` now detects whether its shell belongs to chan-desktop or a dev server and serves there by default -- standalone when it can detect neither -- instead of always trying the desktop handoff first. The existing `--standalone` plus the new `--desktop` / `--devserver` force a target; `--devserver` from inside a dev server is refused (no nested dev servers). When a workspace is already held (for example by a local dev server), the standalone path now points you at `--devserver`. This fixes a dev-server shell whose `chan open` opened on chan-desktop instead of the dev server it runs on.
+
+### Notes
+
+- Prerelease `-rc` tags now publish as GitHub prereleases (previously a `-rc` tag published as a full release); the moving `latest` image tag and the GitHub "latest release" stay GA-only.
+- Validation: a non-publishing cross-OS dry-run build (which also builds the container images) plus on-device smoke testing of the launcher and the editor.
+
 ## [v0.53.1] - 2026-06-27
 
 A patch release: the Windows `chan ps` server-kind column, terminal clipboard copy over OSC 52 in chan-desktop, and a markdown editor link whose label contains brackets.
