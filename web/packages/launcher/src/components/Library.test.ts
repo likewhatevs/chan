@@ -349,18 +349,21 @@ describe("Library: nested machine tree", () => {
     mountList();
     // The connected ds-1's "api" workspace owns one window (its window survives
     // the shared mock across tests, unlike a local one that an off discards);
-    // collapsed by default with a count badge.
+    // collapsed by default with a count badge and no nested-windows panel.
     expect(target!.querySelector(".count-badge")?.textContent).toContain("1");
-    expect(target!.textContent).not.toContain("api Window 1");
+    expect(target!.querySelector(".ws-windows")).toBeNull();
     const expand = byAria("Expand api");
     expect(expand).toBeTruthy();
     expand!.click();
     flushSync();
-    // Expanded: the nested window row appears; collapsing hides it again.
-    expect(target!.textContent).toContain("api Window 1");
+    // Expanded: the nested-windows panel appears with the window row, labelled
+    // just "Window N" (the card already names the workspace, no path repeated).
+    const panel = target!.querySelector(".ws-windows");
+    expect(panel).not.toBeNull();
+    expect(panel!.textContent).toContain("Window 1");
     byAria("Collapse api")!.click();
     flushSync();
-    expect(target!.textContent).not.toContain("api Window 1");
+    expect(target!.querySelector(".ws-windows")).toBeNull();
   });
 });
 

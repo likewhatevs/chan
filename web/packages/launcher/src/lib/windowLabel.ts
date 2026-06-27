@@ -16,20 +16,19 @@ export function basename(path: string): string {
 }
 
 /**
- * A row's label: the recomposed "<base> Window N" for a workspace, or
- * "Terminal Window N" for a standalone terminal. No icon here; the icon is
- * the machine's (the block carries it), so a row reads the same under any
- * library.
+ * A row's label: "Window N" for a workspace window (its card already names the
+ * workspace, so the base is not repeated here) or "Terminal Window N" for a
+ * standalone terminal. No icon here; the icon is the machine's (the block
+ * carries it), so a row reads the same under any library.
  */
-export function rowLabel(kind: WindowKind, ordinal: number, workspacePath: string | null): string {
+export function rowLabel(kind: WindowKind, ordinal: number): string {
   if (kind === "terminal") return `Terminal Window ${ordinal}`;
-  const base = workspacePath ? basename(workspacePath) : "Workspace";
-  return `${base} Window ${ordinal}`;
+  return `Window ${ordinal}`;
 }
 
 /** Convenience over a whole record. The devserver's connect control terminal
  * reads as "Control terminal" rather than the recomposed "Terminal Window 0". */
 export function windowRowLabel(w: WindowRecord): string {
   if (w.control) return "Control terminal";
-  return rowLabel(w.kind, w.ordinal, w.workspace_path);
+  return rowLabel(w.kind, w.ordinal);
 }

@@ -60,9 +60,6 @@
     {/if}
     <div class="row-main">
       <span class="row-name">{windowRowLabel(w)}</span>
-      {#if w.workspace_path}
-        <span class="row-sub" title={w.workspace_path}>{w.workspace_path}</span>
-      {/if}
     </div>
     <span class="dot" class:live={w.connected} title={w.connected ? "Connected" : "Detached"}></span>
   </div>
@@ -80,9 +77,6 @@
           <span class="reconnecting">reconnecting…</span>
         {/if}
       </span>
-      {#if w.workspace_path}
-        <span class="row-sub" title={w.workspace_path}>{w.workspace_path}</span>
-      {/if}
     </div>
     <div class="row-actions">
       <button

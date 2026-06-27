@@ -14,14 +14,11 @@ describe("basename", () => {
   });
 });
 
-describe("rowLabel recompose from kind/ordinal/workspace_path", () => {
+describe("rowLabel recompose from kind/ordinal", () => {
   it("names a terminal window by ordinal", () => {
-    expect(rowLabel("terminal", 2, null)).toBe("Terminal Window 2");
+    expect(rowLabel("terminal", 2)).toBe("Terminal Window 2");
   });
-  it("names a workspace window by its folder base", () => {
-    expect(rowLabel("workspace", 1, "/srv/api")).toBe("api Window 1");
-  });
-  it("falls back when a workspace path is missing", () => {
-    expect(rowLabel("workspace", 3, null)).toBe("Workspace Window 3");
+  it("names a workspace window as just Window N (its card names the workspace)", () => {
+    expect(rowLabel("workspace", 1)).toBe("Window 1");
   });
 });

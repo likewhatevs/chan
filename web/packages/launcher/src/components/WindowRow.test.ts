@@ -60,11 +60,17 @@ describe("WindowRow", () => {
     expect(el.textContent).not.toContain("reconnecting");
   });
 
-  it("renders a leading glyph when icon=true", () => {
-    const el = render(win({ window_id: "w", library_id: "local", kind: "workspace", workspace_path: "/p" }), {
-      icon: true,
-    });
+  it("renders a leading glyph and a path-free 'Window N' label for a workspace window", () => {
+    const el = render(
+      win({ window_id: "w", library_id: "local", kind: "workspace", workspace_path: "/p", ordinal: 1 }),
+      { icon: true },
+    );
     expect(el.querySelector(".row-glyph")).not.toBeNull();
+    // The window row no longer repeats the workspace path (the card carries it),
+    // and the label drops the base prefix -- just "Window N".
+    expect(el.querySelector(".row-sub")).toBeNull();
+    expect(el.textContent).toContain("Window 1");
+    expect(el.textContent).not.toContain("/p");
   });
 
   it("a hidden window shows the Show (EyeOff) toggle", () => {
