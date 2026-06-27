@@ -861,6 +861,11 @@ fn spawn_devserver_tunnel(
 fn build_devserver_app(state: Arc<DevserverState>, host: Arc<WorkspaceHost>) -> Router {
     let public = Router::new()
         .route("/api/devserver/info", get(handle_info))
+        // The launcher root the devserver serves has no `/api/health` of its own
+        // (only the per-tenant routers under each workspace prefix do), so the
+        // `--service` supervisor's watchdog probes `http://<addr>/api/health` and
+        // must reach a live route here, not the root fallback's 404.
+        .route("/api/health", get(handle_health))
         .with_state(state.clone());
     let authed = Router::new()
         .route(
@@ -948,6 +953,24 @@ async fn handle_info(State(state): State<Arc<DevserverState>>) -> Json<Devserver
         protocol: DEVSERVER_API_PROTOCOL,
         host_label: state.host_label.clone(),
         library_id: state.library_id.clone(),
+    })
+}
+
+/// Liveness shape for `GET /api/health` on the devserver root, mirroring the
+/// per-tenant health route: `instance` carries the stable `library_id` so a
+/// probe can tell one devserver from another across restarts.
+#[derive(Serialize)]
+struct DevserverHealth {
+    status: &'static str,
+    instance: String,
+}
+
+/// `GET /api/health` on the devserver root. The `--service` supervisor's
+/// watchdog polls this to decide the backing devserver is still up.
+async fn handle_health(State(state): State<Arc<DevserverState>>) -> Json<DevserverHealth> {
+    Json(DevserverHealth {
+        status: "ok",
+        instance: state.library_id.clone(),
     })
 }
 
@@ -1313,6 +1336,37 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(off.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn devserver_root_answers_api_health() {
+        use tower::ServiceExt;
+
+        // The `--service` supervisor's watchdog probes `/api/health` on the
+        // devserver root with no bearer; it must get 200, not the root
+        // fallback's 404, or the supervisor declares a live devserver dead.
+        let home = tempfile::tempdir().expect("home");
+        let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let state = test_state(home.path(), addr);
+        let host = state.host.clone();
+        let app = build_devserver_app(state, host);
+
+        let resp = app
+            .oneshot(
+                HttpRequest::builder()
+                    .uri("/api/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["status"], "ok");
+        assert_eq!(json["instance"], "lib-test");
     }
 
     #[test]
