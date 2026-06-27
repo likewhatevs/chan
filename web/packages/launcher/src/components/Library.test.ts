@@ -1,12 +1,10 @@
-// Component test: the merged Library tree. The Local group (home header +
-// new-terminal + select-all) over local rows; then ONE group per registered
-// devserver -- connected or not -- whose globe header carries the host-copy
-// label, new-terminal, settings, and connect/disconnect, with its served
-// workspaces nested as rows. Covers what the old WorkspaceList + DevserverList +
-// WorkspaceListConfirm tests did, plus the new merged behaviors (a disconnected
-// devserver still shows as a group, host click-to-copy). Exercises the real
-// Svelte 5 runtime (reactive re-render after connect / pending / status), per
-// jsdom; readOnly is false here (the mutable surface).
+// Component test: the machine-first Library tree. The LOCAL block (home header +
+// new-terminal + new-workspace) over its workspace cards; then one block per
+// registered devserver -- connected or not -- whose globe header carries the
+// name/address edit-config click target, new-terminal (connected only), and
+// connect/disconnect, with its served workspaces nested as collapsible cards.
+// Exercises the real Svelte 5 runtime (reactive re-render after connect /
+// pending / status), per jsdom; readOnly is false here (the mutable surface).
 
 import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import { mount, unmount, flushSync } from "svelte";
@@ -135,14 +133,15 @@ describe("Library: Local group", () => {
 });
 
 describe("Library: devserver groups", () => {
-  it("renders a connected devserver as its own group: Disconnect + enabled New terminal + Settings + endpoint", () => {
+  it("renders a connected devserver as its own group: Disconnect + enabled New terminal + Edit config + endpoint", () => {
     mountList();
     // Seed devserver "prod" (ds-1) is connected.
     expect(byAria("Disconnect prod")).toBeTruthy();
     const newTerm = byAria("New terminal on prod");
     expect(newTerm).toBeTruthy();
     expect(newTerm!.disabled).toBe(false);
-    expect(byAria("Settings for prod")).toBeTruthy();
+    // The header name/address block is the edit-config click target.
+    expect(byAria("Edit config for prod")).toBeTruthy();
     // The header carries the endpoint as host:port.
     expect(target!.textContent).toContain("box.example.com:8787");
     // The devserver is bulk-selectable once the checkboxes are revealed.
@@ -172,7 +171,7 @@ describe("Library: devserver groups", () => {
     expect(connect!.disabled).toBe(false);
     // New terminal is hidden until connected (it appears on connect).
     expect(byAria("New terminal on fresh")).toBeUndefined();
-    expect(byAria("Settings for fresh")).toBeTruthy();
+    expect(byAria("Edit config for fresh")).toBeTruthy();
     // A disconnected devserver shows the connect prompt, no content.
     expect(target!.textContent).toContain("Not connected");
   });
@@ -222,23 +221,6 @@ describe("Library: devserver groups", () => {
     flushSync();
     const check = target!.querySelector('input[aria-label="Select prod"]') as HTMLInputElement;
     expect(check.checked).toBe(true);
-  });
-});
-
-describe("Library: host label click-to-copy", () => {
-  it("copies the hostname lowercased to the clipboard", async () => {
-    const writeText = vi.fn().mockResolvedValue(undefined);
-    // jsdom has no clipboard; define a stub for the copy handler.
-    Object.defineProperty(navigator, "clipboard", {
-      value: { writeText },
-      configurable: true,
-    });
-    mountList();
-    const copy = byAria("Copy host box.example.com")!;
-    expect(copy).toBeTruthy();
-    copy.click();
-    await settle();
-    expect(writeText).toHaveBeenCalledWith("box.example.com");
   });
 });
 

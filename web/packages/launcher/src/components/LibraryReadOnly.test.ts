@@ -1,10 +1,11 @@
 // Read-only surface (gateway/devserver, no desktop bridge): the Library shows
 // the on-state statically with NO mutation controls -- no new-workspace /
 // new-terminal, no add-devserver, no checkboxes, no on/off or open-window, no
-// connect/disconnect. The [edit config] pencil stays (a read-only config view),
-// and a card can still expand to read its windows (static rows with the
-// connection dot). `readOnly` is a boot-time const, so it is pinned via a module
-// mock for the whole file. The mutable surface is covered in Library.test.ts.
+// connect/disconnect, and no edit-config affordance (the devserver header is a
+// static identity, not a click target). A card can still expand to read its
+// windows (static rows with the connection dot). `readOnly` is a boot-time
+// const, so it is pinned via a module mock for the whole file. The mutable
+// surface is covered in Library.test.ts.
 
 import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import { mount, unmount } from "svelte";
@@ -48,7 +49,7 @@ afterEach(() => {
 });
 
 describe("Library read-only parity", () => {
-  it("hides every mutation control but keeps the settings pencil and the static on-state", () => {
+  it("hides every mutation control including edit-config, keeps the static on-state", () => {
     mountList();
     const l = labels();
     // No add entry points (new workspace/terminal, add devserver).
@@ -63,8 +64,10 @@ describe("Library read-only parity", () => {
     expect(l.some((x) => x.startsWith("Turn off") || x.startsWith("Turn on"))).toBe(false);
     expect(l.some((x) => x.startsWith("Disconnect ") || x.startsWith("Connect "))).toBe(false);
     expect(l.some((x) => x.startsWith("New window of"))).toBe(false);
-    // The settings pencil stays (read-only config view).
-    expect(l.some((x) => x.startsWith("Settings for"))).toBe(true);
+    // No edit-config affordance on read-only (the devserver header is static).
+    expect(l.some((x) => x.startsWith("Edit config") || x.startsWith("Settings for"))).toBe(false);
+    // The devserver identity still renders (name + address), just not clickable.
+    expect(target!.textContent).toContain("box.example.com:8787");
     // The workspace on-state shows as a static pill.
     expect(target!.querySelector(".pill")).not.toBeNull();
   });

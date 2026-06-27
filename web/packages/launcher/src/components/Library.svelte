@@ -143,17 +143,6 @@
   const dsSpinning = (ds: DevserverEntry): boolean =>
     ds.status === "connecting" || isPending(dsKey(ds.id));
 
-  // Click the devserver host label to copy the hostname (lowercased) -- the handy
-  // thing to paste into a shell. Best-effort: a surface without the async
-  // clipboard API just no-ops.
-  async function copyHost(ds: DevserverEntry): Promise<void> {
-    try {
-      await navigator.clipboard?.writeText(ds.host.toLowerCase());
-    } catch {
-      // Clipboard denied/unavailable: a non-fatal convenience, swallow it.
-    }
-  }
-
   // A machine renders its TERMINALS/WORKSPACES content when it is the local
   // machine or a connected devserver; a disconnected devserver shows the prompt.
   function hasContent(node: MachineNode): boolean {
@@ -271,7 +260,7 @@
 {#snippet machineContent(node: MachineNode)}
   {@const kind = node.kind === "local" ? "workspace" : "served"}
   {@const devserverId = node.devserver?.id ?? null}
-  <div class="machine-content" class:empty={machineIsEmpty(node)}>
+  <div class="machine-content">
     {#if node.control.length || node.terminals.length}
       <div class="section-label">Terminals</div>
       <div class="term-list">
@@ -309,6 +298,22 @@
       {/if}
     {/if}
   </div>
+{/snippet}
+
+<!-- The devserver identity block: name + status/token on one row, the address
+     on the next. On the mutable surface the whole block is the click target to
+     open the edit-config form, with an inline pencil beside the address; the
+     read-only surface renders it static with no edit affordance. -->
+{#snippet dsIdentity(ds: DevserverEntry, withPencil: boolean)}
+  <span class="ds-name-row">
+    <span class="row-name">{devserverName(ds)}</span>
+    {#if connected(ds)}<span class="status-dot live" title="Connected"></span>{/if}
+    {#if ds.has_token}<span class="chip" title="A connect token is stored">🔒 token</span>{/if}
+  </span>
+  <span class="ds-addr-row">
+    <span class="row-sub" title={endpoint(ds)}>{endpoint(ds)}</span>
+    {#if withPencil}<Pencil size={12} class="addr-pencil" />{/if}
+  </span>
 {/snippet}
 
 {#each tree.machines as node (node.kind === "local" ? "local" : node.devserver!.id)}
@@ -352,21 +357,18 @@
             onchange={() => toggleSelected("devserver", ds.id)} />
         {/if}
         <span class="machine-icon" aria-hidden="true"><Globe size={16} /></span>
-        <div class="row-main">
-          <span class="row-name">
-            <button
-              class="host-copy"
-              type="button"
-              title="Copy host"
-              aria-label={`Copy host ${ds.host}`}
-              onclick={() => copyHost(ds)}>
-              {devserverName(ds)}
-            </button>
-            {#if connected(ds)}<span class="status-dot live" title="Connected"></span>{/if}
-            {#if ds.has_token}<span class="chip" title="A connect token is stored">🔒 token</span>{/if}
-          </span>
-          <span class="row-sub" title={endpoint(ds)}>{endpoint(ds)}</span>
-        </div>
+        {#if readOnly}
+          <div class="ds-id">{@render dsIdentity(ds, false)}</div>
+        {:else}
+          <button
+            class="ds-id editable"
+            type="button"
+            title="Edit config"
+            aria-label={`Edit config for ${devserverName(ds)}`}
+            onclick={() => openEditDevserver(ds)}>
+            {@render dsIdentity(ds, true)}
+          </button>
+        {/if}
         <div class="machine-actions">
           {#if !readOnly && connected(ds)}
             <button
@@ -378,14 +380,6 @@
               <SquareTerminal size={16} />
             </button>
           {/if}
-          <button
-            class="icon-btn"
-            type="button"
-            title={ds.status === "disconnected" ? "Edit config" : "Edit config (read-only while connected)"}
-            aria-label={`Settings for ${devserverName(ds)}`}
-            onclick={() => openEditDevserver(ds)}>
-            <Pencil size={16} />
-          </button>
           {#if !readOnly}
             {#if dsSpinning(ds)}
               <button
@@ -452,8 +446,15 @@
 {/if}
 
 <style>
+  /* Each machine (LOCAL or a devserver) is a contained card: a slightly elevated
+     surface with a border, radius, and a subtle shadow. */
   .machine {
-    margin-top: 1.75rem;
+    margin-bottom: 0.8rem;
+    padding: 0.3rem 0.5rem 0.7rem;
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    background: var(--bg-card);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.28);
   }
 
   /* The machine header: icon + name + status on the left, machine-level actions
@@ -494,20 +495,48 @@
     box-shadow: 0 0 6px color-mix(in srgb, var(--accent) 70%, transparent);
   }
 
-  /* The devserver host label is a button (click-to-copy) but reads as the row
-     name -- strip the button chrome and inherit the surrounding text type. */
-  button.host-copy {
-    border: none;
-    background: transparent;
-    padding: 0;
-    cursor: pointer;
-    font: inherit;
-    color: inherit;
+  /* The devserver identity block (name row over address row). On the mutable
+     surface it is a button: the whole block opens the edit-config form, lifting
+     a hover tint; the read-only surface renders it as a static div. */
+  .ds-id {
+    display: flex;
+    flex-direction: column;
+    gap: 0.1rem;
+    min-width: 0;
+    border-radius: 8px;
+    padding: 0.2rem 0.45rem;
+    margin: -0.2rem -0.45rem;
   }
 
-  button.host-copy:hover {
-    color: var(--text);
-    text-decoration: underline;
+  button.ds-id {
+    border: none;
+    background: transparent;
+    text-align: left;
+    font: inherit;
+    color: inherit;
+    cursor: pointer;
+  }
+
+  button.ds-id.editable:hover {
+    background: color-mix(in srgb, var(--text-secondary) 8%, transparent);
+  }
+
+  .ds-name-row {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+  }
+
+  .ds-addr-row {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+  }
+
+  /* The inline edit pencil beside the address (mutable surface only). */
+  .ds-id :global(.addr-pencil) {
+    flex-shrink: 0;
+    color: var(--text-secondary);
   }
 
   .machine-actions {
@@ -518,11 +547,10 @@
     flex-shrink: 0;
   }
 
-  /* The connected/local content, indented under a left border. */
+  /* The connected/local content (terminals + workspaces), tucked just inside the
+     machine card with no left rule. */
   .machine-content {
-    margin: 0.35rem 0 0 0.5rem;
-    padding-left: 0.85rem;
-    border-left: 1px solid var(--border);
+    margin: 0.4rem 0.15rem 0 0.25rem;
   }
 
   .section-label {
@@ -553,13 +581,6 @@
     color: var(--text-secondary);
   }
 
-  /* A totally empty LOCAL machine drops the left border so its hint reads as a
-     standalone note rather than a stub of an empty list. */
-  .machine-content.empty {
-    border-left: none;
-    padding-left: 0.5rem;
-  }
-
   .empty-hint {
     margin: 0.35rem 0 0;
     font-size: 0.85rem;
@@ -588,7 +609,7 @@
     margin-bottom: 0.4rem;
     border: 1px solid var(--border);
     border-radius: 10px;
-    background: var(--bg-card);
+    background: var(--bg-elev);
     overflow: hidden;
     transform-origin: center;
     transition:
@@ -620,7 +641,7 @@
   }
 
   .ws-head.selected {
-    background: color-mix(in srgb, var(--brand) 10%, var(--bg-card));
+    background: color-mix(in srgb, var(--brand) 10%, var(--bg-elev));
   }
 
   /* The expand chevron rotates from ► (collapsed) to ▼ (expanded). */
@@ -669,7 +690,7 @@
   /* The nested windows panel (darker, inside the card). */
   .ws-windows {
     border-top: 1px solid var(--border);
-    background: color-mix(in srgb, #000 14%, var(--bg-card));
+    background: color-mix(in srgb, #000 14%, var(--bg-elev));
     padding: 0.25rem;
   }
 
