@@ -40,7 +40,7 @@
   } from "../state/library.svelte";
   import { liveTerminalsCount } from "../api/library";
   import { requestConfirm } from "../state/confirm.svelte";
-  import { isSelected, toggleSelected } from "../state/selection.svelte";
+  import { checksVisible, isSelected, toggleSelected } from "../state/selection.svelte";
   import { isPending, servedKey, wsKey, dsKey } from "../state/pending.svelte";
   import { openEditDevserver, openNewDialog } from "../state/dialog.svelte";
   import { basename } from "../lib/windowLabel";
@@ -136,20 +136,6 @@
   const dsSpinning = (ds: DevserverEntry): boolean =>
     ds.status === "connecting" || isPending(dsKey(ds.id));
 
-  // Select-all-local convenience for the Local group header checkbox: checked when
-  // every local workspace is selected; toggling brings all to the same state.
-  const allLocalSelected = $derived(
-    localWorkspaces.length > 0 && localWorkspaces.every((w) => isSelected("workspace", w.workspace_id)),
-  );
-  function toggleAllLocal(): void {
-    const target = !allLocalSelected;
-    for (const w of localWorkspaces) {
-      if (isSelected("workspace", w.workspace_id) !== target) {
-        toggleSelected("workspace", w.workspace_id);
-      }
-    }
-  }
-
   // Click the devserver host label to copy the hostname (lowercased) -- the handy
   // thing to paste into a shell. Best-effort: a surface without the async
   // clipboard API just no-ops.
@@ -169,7 +155,7 @@
       (kind === "workspace"
         ? isSelected("workspace", ws.workspace_id)
         : isSelected("served", ws.prefix, devserverId ?? undefined))}>
-    {#if !readOnly}
+    {#if !readOnly && checksVisible()}
       <input
         class="row-check"
         type="checkbox"
@@ -238,15 +224,6 @@
 <!-- Local group: a home-iconed header (new-terminal action) over the local rows. -->
 <section class="group">
   <div class="group-header">
-    {#if !readOnly}
-      <input
-        class="row-check"
-        type="checkbox"
-        checked={allLocalSelected}
-        disabled={localWorkspaces.length === 0}
-        aria-label="Select all local workspaces"
-        onchange={toggleAllLocal} />
-    {/if}
     <span class="group-icon" aria-hidden="true"><House size={15} /></span>
     <h2 class="group-name">Local</h2>
     {#if !readOnly}
@@ -284,7 +261,7 @@
 {#each devservers as ds (ds.id)}
   <section class="group">
     <div class="group-header">
-      {#if !readOnly}
+      {#if !readOnly && checksVisible()}
         <input
           class="row-check"
           type="checkbox"

@@ -1,10 +1,13 @@
 <script lang="ts">
-  // The launcher's top bar: the "Library" title with its subtitle and the theme
-  // toggle. The add-workspace and add-devserver entry points live in the library
-  // tree (the LOCAL header's [new workspace] and the bottom "Add dev server"
-  // dashed button), and open-terminal lives in each machine header, so the top
-  // bar stays the global chrome: title + theme.
+  // The launcher's top bar: the "Library" title with its subtitle, a Gmail-style
+  // Select-mode toggle, and the theme toggle. The add-workspace and add-devserver
+  // entry points live in the library tree (the LOCAL header's [new workspace] and
+  // the bottom "Add dev server" dashed button), and open-terminal lives in each
+  // machine header, so the top bar stays the global chrome: title + select + theme.
+  import { SquareCheckBig } from "lucide-svelte";
   import { themeState, toggleTheme } from "../state/theme.svelte";
+  import { selection, toggleSelectMode } from "../state/selection.svelte";
+  import { readOnly } from "../state/capabilities";
 </script>
 
 <header class="topbar">
@@ -13,6 +16,17 @@
     <p class="subtitle">This machine &amp; your dev servers</p>
   </div>
   <div class="actions">
+    {#if !readOnly}
+      <button
+        class="icon-btn select"
+        class:active={selection.selectMode}
+        type="button"
+        aria-label={selection.selectMode ? "Exit select mode" : "Select"}
+        title={selection.selectMode ? "Exit select" : "Select"}
+        onclick={toggleSelectMode}>
+        <SquareCheckBig size={16} />
+      </button>
+    {/if}
     <button
       class="icon-btn"
       type="button"
@@ -60,6 +74,9 @@
   }
 
   .icon-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     width: 2rem;
     height: 2rem;
     border: 1px solid var(--btn-border);
@@ -74,5 +91,12 @@
   .icon-btn:hover {
     border-color: var(--brand);
     color: var(--brand);
+  }
+
+  /* Select mode active: the toggle holds the accent so it reads as engaged. */
+  .icon-btn.select.active {
+    border-color: var(--accent);
+    color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 14%, transparent);
   }
 </style>

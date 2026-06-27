@@ -44,6 +44,8 @@ describe("launcher root", () => {
     expect(topbar.textContent).toContain("Library");
     expect(topbar.textContent).toContain("This machine & your dev servers");
     expect(target.querySelector('[aria-label="Toggle theme"]')).not.toBeNull();
+    // The Gmail-style Select-mode toggle (reveals the row checkboxes).
+    expect(topbar.querySelector("button.select")).not.toBeNull();
     // The add-workspace / add-devserver / open-terminal entry points all moved
     // into the library tree, so the top bar carries no [+] or terminal action.
     expect(topbar.querySelector('[aria-label="New workspace"]')).toBeNull();

@@ -21,6 +21,7 @@
   } from "./state/library.svelte";
   import { dialog, openNewDialog } from "./state/dialog.svelte";
   import { confirm } from "./state/confirm.svelte";
+  import { checksVisible } from "./state/selection.svelte";
   import { controlClosed, controlClosedId, onControlClosedEvent } from "./state/controlClosed.svelte";
   import { clearControlAttention } from "./state/controlAttention.svelte";
   import { onTauriEvent } from "./api/desktop";
@@ -78,7 +79,7 @@
 
 <TopBar />
 
-<main class="content">
+<main class="content" class:with-bulk-bar={!readOnly && checksVisible()}>
   {#if library.error}
     <div class="banner" role="alert">
       <span class="banner-text">{library.error}</span>
@@ -141,6 +142,12 @@
     max-width: 44rem;
     margin: 0 auto;
     padding: 1.5rem 1.25rem 4rem;
+  }
+
+  /* In select mode the bottom-docked bulk bar overlays the viewport; extra
+     bottom padding keeps the last rows clear of it. */
+  .content.with-bulk-bar {
+    padding-bottom: 6rem;
   }
 
   .banner {

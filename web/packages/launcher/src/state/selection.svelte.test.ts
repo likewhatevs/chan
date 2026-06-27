@@ -15,6 +15,9 @@ import {
   requestBulkDelete,
   cancelBulkDelete,
   confirmBulkDelete,
+  setSelectMode,
+  toggleSelectMode,
+  checksVisible,
 } from "./selection.svelte";
 import {
   addLocalWorkspace,
@@ -159,6 +162,44 @@ describe("devserver multi-select", () => {
     await confirmBulkDelete();
     expect(library.devservers.some((d) => d.id === ds.id)).toBe(false);
     expect(library.devservers.length).toBe(before - 1);
+    expect(selectedCount()).toBe(0);
+  });
+});
+
+describe("select mode lifecycle", () => {
+  it("reveals checks on enter and hides + clears the selection on exit", () => {
+    expect(checksVisible()).toBe(false);
+    setSelectMode(true);
+    expect(selection.selectMode).toBe(true);
+    expect(checksVisible()).toBe(true);
+    toggleSelected("workspace", "ws-1");
+    expect(selectedCount()).toBe(1);
+    setSelectMode(false);
+    expect(selection.selectMode).toBe(false);
+    expect(checksVisible()).toBe(false);
+    // Leaving select mode clears the selection so no stale check lingers.
+    expect(selectedCount()).toBe(0);
+  });
+
+  it("keeps checks visible while a row stays selected, even in browse mode", () => {
+    toggleSelected("devserver", "ds-1");
+    expect(selection.selectMode).toBe(false);
+    expect(checksVisible()).toBe(true);
+  });
+
+  it("toggleSelectMode flips the mode", () => {
+    expect(selection.selectMode).toBe(false);
+    toggleSelectMode();
+    expect(selection.selectMode).toBe(true);
+    toggleSelectMode();
+    expect(selection.selectMode).toBe(false);
+  });
+
+  it("a full clearSelection() also leaves select mode", () => {
+    setSelectMode(true);
+    toggleSelected("workspace", "ws-1");
+    clearSelection();
+    expect(selection.selectMode).toBe(false);
     expect(selectedCount()).toBe(0);
   });
 });

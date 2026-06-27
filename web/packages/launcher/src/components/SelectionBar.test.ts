@@ -14,6 +14,7 @@ import {
   toggleSelected,
   clearSelection,
   requestBulkDelete,
+  setSelectMode,
 } from "../state/selection.svelte";
 
 let target: HTMLElement | null = null;
@@ -38,9 +39,21 @@ function mountBar(): void {
 }
 
 describe("global SelectionBar", () => {
-  it("is hidden with an empty selection", () => {
+  it("is hidden in browse mode with an empty selection", () => {
     mountBar();
     expect(target!.querySelector('[aria-label="Bulk actions"]')).toBeNull();
+  });
+
+  it("shows docked in select mode with a hint and disabled actions at zero selected", () => {
+    mountBar();
+    setSelectMode(true);
+    flushSync();
+    expect(target!.querySelector('[aria-label="Bulk actions"]')).not.toBeNull();
+    expect(target!.textContent).toContain("Select workspaces or servers");
+    const turnOn = [...target!.querySelectorAll("button")].find((b) =>
+      b.textContent?.includes("Turn on"),
+    ) as HTMLButtonElement;
+    expect(turnOn.disabled).toBe(true);
   });
 
   it("shows a combined count across kinds and the global action buttons", () => {
@@ -54,10 +67,9 @@ describe("global SelectionBar", () => {
 
     expect(target!.querySelector('[aria-label="Bulk actions"]')).not.toBeNull();
     expect(target!.textContent).toContain("3 selected");
-    expect(target!.textContent).toContain("Turn On");
-    expect(target!.textContent).toContain("Turn Off");
+    expect(target!.textContent).toContain("Turn on");
+    expect(target!.textContent).toContain("Turn off");
     expect(target!.textContent).toContain("Remove");
-    expect(target!.textContent).toContain("Clear");
   });
 
   it("flips to the delete-confirm prompt and back", () => {

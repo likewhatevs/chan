@@ -36,6 +36,10 @@ interface SelItem {
 }
 
 interface SelectionState {
+  /** Gmail-style select mode: while on, the registry rows reveal their
+   * checkboxes. Entered/left from the top-bar Select toggle; leaving clears the
+   * selection so no stale check or highlight lingers. */
+  selectMode: boolean;
   /** Selected rows across all kinds. A plain array — deeply reactive under
    * $state (a bare Set would need svelte/reactivity's SvelteSet to track). */
   selected: SelItem[];
@@ -48,11 +52,35 @@ interface SelectionState {
 }
 
 export const selection = $state<SelectionState>({
+  selectMode: false,
   selected: [],
   busy: false,
   confirmingDelete: false,
   note: null,
 });
+
+/** Whether the rows reveal their selection checkboxes: in select mode, or
+ * whenever something is already selected (so a live selection is never orphaned
+ * behind hidden checks). Drives both the per-row checkbox gate and the bottom
+ * bulk bar's visibility. */
+export function checksVisible(): boolean {
+  return selection.selectMode || selection.selected.length > 0;
+}
+
+/** Enter/leave select mode. Leaving clears the selection and any pending
+ * delete-confirm so no stale check, highlight, or confirm survives the exit. */
+export function setSelectMode(on: boolean): void {
+  selection.selectMode = on;
+  if (!on) {
+    selection.selected = [];
+    selection.confirmingDelete = false;
+    selection.note = null;
+  }
+}
+
+export function toggleSelectMode(): void {
+  setSelectMode(!selection.selectMode);
+}
 
 function indexOf(kind: SelKind, id: string, devserverId?: string): number {
   return selection.selected.findIndex(
@@ -81,11 +109,13 @@ export function toggleSelected(kind: SelKind, id: string, devserverId?: string):
   selection.note = null;
 }
 
-/** Clear one kind's selection, or every selection (no arg — the bar's Clear). */
+/** Clear one kind's selection, or every selection (no arg). A full clear also
+ * leaves select mode, so it doubles as the exit path. */
 export function clearSelection(kind?: SelKind): void {
   selection.selected = kind ? selection.selected.filter((s) => s.kind !== kind) : [];
   selection.confirmingDelete = false;
   selection.note = null;
+  if (!kind) selection.selectMode = false;
 }
 
 /** Loop a singular op over a snapshot of selected items, counting per-item

@@ -13,7 +13,7 @@ import { mount, unmount, flushSync } from "svelte";
 import Library from "./Library.svelte";
 import ConfirmDialog from "./ConfirmDialog.svelte";
 import { library, loadLibrary, saveDevserver } from "../state/library.svelte";
-import { isSelected, toggleSelected, clearSelection } from "../state/selection.svelte";
+import { isSelected, toggleSelected, clearSelection, setSelectMode } from "../state/selection.svelte";
 import { beginPending, clearAllPending, dsKey, isPending, wsKey } from "../state/pending.svelte";
 import { confirm, requestConfirm, resolveConfirm, cancelConfirm } from "../state/confirm.svelte";
 import { ApiError, type DevserverEntry, type WorkspaceEntry } from "../api/library";
@@ -77,10 +77,13 @@ describe("Library: Local group", () => {
     expect(labels.some((l) => l.startsWith("Turn off") || l.startsWith("Turn on"))).toBe(true);
   });
 
-  it("has a home header with a new-terminal action and a select-all checkbox", () => {
+  it("has a home header with new-terminal + new-workspace actions and no select-all", () => {
     mountList();
     expect(byAria("New local terminal")).toBeTruthy();
-    expect(target!.querySelector('input[aria-label="Select all local workspaces"]')).not.toBeNull();
+    expect(byAria("New local workspace")).toBeTruthy();
+    // The select-all-local checkbox is gone (the mock has none); selection is
+    // per-row, revealed by the top-bar Select toggle.
+    expect(target!.querySelector('input[aria-label="Select all local workspaces"]')).toBeNull();
   });
 
   it("spins a local row from a pending marker, disabled, with the spinner svg", () => {
@@ -140,20 +143,25 @@ describe("Library: devserver groups", () => {
     expect(newTerm).toBeTruthy();
     expect(newTerm!.disabled).toBe(false);
     expect(byAria("Settings for prod")).toBeTruthy();
-    // The devserver is bulk-selectable (check feeds the global bar).
-    expect(target!.querySelector('input[aria-label="Select prod"]')).not.toBeNull();
     // The header carries the endpoint as host:port.
     expect(target!.textContent).toContain("box.example.com:8787");
+    // The devserver is bulk-selectable once the checkboxes are revealed.
+    setSelectMode(true);
+    flushSync();
+    expect(target!.querySelector('input[aria-label="Select prod"]')).not.toBeNull();
   });
 
   it("nests the connected devserver's served workspaces as rows with a checkbox and no Forget", () => {
     mountList();
     expect(target!.textContent).toContain("/srv/api");
     expect(ariaLabels().some((l) => l.startsWith("Forget"))).toBe(false);
-    expect(target!.querySelector('input[aria-label="Select api"]')).not.toBeNull();
     // The served row carries the workspace on/off + new-window actions.
     expect(byAria("New window of api")).toBeTruthy();
     expect(byAria("Turn off api")).toBeTruthy();
+    // ...and reveals a select checkbox in select mode.
+    setSelectMode(true);
+    flushSync();
+    expect(target!.querySelector('input[aria-label="Select api"]')).not.toBeNull();
   });
 
   it("still shows a DISCONNECTED devserver as a group header with Connect (New terminal disabled)", async () => {
