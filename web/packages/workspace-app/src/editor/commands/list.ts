@@ -114,11 +114,16 @@ export function continueListOnEnter(view: EditorView): boolean {
 /// N+2… becomes …N, N+1, N+2, N+3…). The renumber edits are appended to
 /// the caller's `changes` so the insert + renumber land in ONE dispatch
 /// (one undo). Walks the contiguous run of same-indent ordered siblings,
-/// reusing each line's own `.`/`)` separator, and stops at the first line
-/// that is not a same-indent ordered item or that breaks the +1 sequence,
-/// so a deliberately non-contiguous tail or a nested sublist is left
-/// intact. Mirrors @codemirror/lang-markdown's renumberList gap-stop (the
-/// rich-prompt Enter path uses it), so both editors renumber alike.
+/// reusing each line's own `.`/`)` separator, and steps over a SINGLE
+/// blank line between items so a LOOSE (blank-separated) list renumbers
+/// too. It stops at the first line that is not a same-indent ordered item
+/// continuing the +1 sequence, or at two blank lines in a row (which end
+/// a CommonMark list), so a deliberately non-contiguous tail, a nested
+/// sublist, or a separate following list is left intact. This matches
+/// @codemirror/lang-markdown's renumberList (the rich-prompt Enter path)
+/// for tight and single-blank loose ordered lists; the two can still
+/// diverge on exotic multi-blank / nested-block boundaries that only the
+/// full parse tree resolves.
 function appendOrderedRenumber(
   state: EditorState,
   lineNumber: number,
@@ -126,8 +131,19 @@ function appendOrderedRenumber(
   changes: { from: number; to: number; insert: string }[],
 ): void {
   let prev = prefix.number!;
-  for (let n = lineNumber + 1; n <= state.doc.lines; n++) {
-    const line = state.doc.line(n);
+  let n = lineNumber + 1;
+  while (n <= state.doc.lines) {
+    let line = state.doc.line(n);
+    if (line.text.trim() === "") {
+      // A single blank line separates the items of a loose list; step
+      // over it. Two or more blanks in a row end the list (CommonMark),
+      // and so does a trailing blank, so stop there.
+      if (n + 1 > state.doc.lines || state.doc.line(n + 1).text.trim() === "") {
+        break;
+      }
+      n += 1;
+      line = state.doc.line(n);
+    }
     const tp = parseListPrefix(line.text);
     if (!tp || !tp.ordered || tp.number === null) break;
     if (tp.indent !== prefix.indent) break;
@@ -140,6 +156,7 @@ function appendOrderedRenumber(
       insert: String(prev + 2),
     });
     prev = tp.number;
+    n += 1;
   }
 }
 

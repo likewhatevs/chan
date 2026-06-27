@@ -107,6 +107,28 @@ describe("continueListOnEnter", () => {
     expect(snapshot().doc).toBe("1. one\n2. \n3. two\n5. five");
   });
 
+  test("mid-list insert renumbers across a single blank (loose list)", () => {
+    // A loose ordered list separates items with a blank line; the tail must
+    // still renumber across it, or item 2 stays a duplicate `2.`.
+    mount("1. a\n\n2. b", 4);
+    expect(continueListOnEnter(view)).toBe(true);
+    expect(snapshot()).toEqual({ doc: "1. a\n2. \n\n3. b", head: 8 });
+  });
+
+  test("mid-list insert renumbers a multi-item loose list, stops at a paragraph", () => {
+    mount("1. a\n\n2. b\n\ntext", 4);
+    expect(continueListOnEnter(view)).toBe(true);
+    expect(snapshot().doc).toBe("1. a\n2. \n\n3. b\n\ntext");
+  });
+
+  test("mid-list insert stops at a two-blank gap (separate list)", () => {
+    // Two blank lines in a row end a CommonMark list, so the item after
+    // them belongs to a separate list and is left alone.
+    mount("1. a\n\n\n2. b", 4);
+    expect(continueListOnEnter(view)).toBe(true);
+    expect(snapshot().doc).toBe("1. a\n2. \n\n\n2. b");
+  });
+
   test("task list emits a fresh unchecked box", () => {
     mount("- [x] done", 10);
     expect(continueListOnEnter(view)).toBe(true);
