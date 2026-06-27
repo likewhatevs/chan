@@ -34,30 +34,39 @@ describe("launcher root", () => {
     library.error = null;
   });
 
-  it("renders the top bar and its actions", () => {
+  it("renders the top bar: title, subtitle, theme toggle, and no [+]", () => {
     target = document.createElement("div");
     document.body.appendChild(target);
     app = mount(App, { target });
 
-    expect(target.querySelector(".topbar")).not.toBeNull();
-    expect(target.querySelector('[aria-label="New workspace"]')).not.toBeNull();
-    expect(target.querySelector('[aria-label="Toggle theme"]')).not.toBeNull();
-    // The open-terminal action moved out of the top bar into the Local group
-    // header (the library tree), so the top bar no longer carries it.
     const topbar = target.querySelector(".topbar")!;
+    expect(topbar).not.toBeNull();
+    expect(topbar.textContent).toContain("Library");
+    expect(topbar.textContent).toContain("This machine & your dev servers");
+    expect(target.querySelector('[aria-label="Toggle theme"]')).not.toBeNull();
+    // The add-workspace / add-devserver / open-terminal entry points all moved
+    // into the library tree, so the top bar carries no [+] or terminal action.
+    expect(topbar.querySelector('[aria-label="New workspace"]')).toBeNull();
+    expect(topbar.querySelector('[aria-label="New local workspace"]')).toBeNull();
     expect(topbar.querySelector('[aria-label="Open terminal"]')).toBeNull();
     expect(topbar.querySelector('[aria-label="New local terminal"]')).toBeNull();
   });
 
-  it("renders the Local group's new-terminal action once the library loads", async () => {
+  it("renders the Local new-terminal + new-workspace actions and the add-devserver button once loaded", async () => {
     target = document.createElement("div");
     document.body.appendChild(target);
     app = mount(App, { target });
     await settle();
     flushSync();
 
-    // The open-terminal action lives in the Local group header now.
+    // The open-terminal + new-workspace actions live in the Local group header.
     expect(target.querySelector('[aria-label="New local terminal"]')).not.toBeNull();
+    expect(target.querySelector('[aria-label="New local workspace"]')).not.toBeNull();
+    // The decoupled add-devserver entry is the bottom dashed button in the tree.
+    const addDs = [...target.querySelectorAll("button")].find((b) =>
+      b.textContent?.includes("Add dev server"),
+    );
+    expect(addDs).toBeTruthy();
   });
 
   it("shows a dismissable error banner that the [X] clears (no reload needed)", async () => {

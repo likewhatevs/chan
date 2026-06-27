@@ -1,6 +1,8 @@
-// The New-workspace dialog's open/choice/edit state. The dialog carries two
-// choices (Local directory, Devserver); the devserver body doubles as the
-// edit form, prefilled from `editing` (null = add a new one).
+// The New-workspace / devserver dialog's open/choice/edit state. Two
+// context-anchored entry points open it pre-set to a choice: the LOCAL
+// [new workspace] button opens "local", the bottom "Add dev server" button
+// opens "devserver". There is no in-dialog chooser. The devserver body doubles
+// as the edit form, prefilled from `editing` (null = add a new one).
 
 import type { DevserverEntry } from "../api/library";
 
@@ -28,10 +30,6 @@ export function openEditDevserver(ds: DevserverEntry): void {
   dialog.choice = "devserver";
   dialog.editing = ds;
   dialog.open = true;
-}
-
-export function selectChoice(choice: DialogChoice): void {
-  dialog.choice = choice;
 }
 
 export function closeDialog(): void {

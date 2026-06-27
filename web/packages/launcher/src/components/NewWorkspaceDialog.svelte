@@ -1,21 +1,27 @@
 <script lang="ts">
-  // The New / Edit dialog. Two choices: a local directory or a devserver
-  // (the old "Remote" choice is gone). The devserver body doubles as the
-  // edit form, prefilled from the registry entry; one form does Add (POST)
-  // and Save changes (PUT). It carries the token field (a proxied/gateway
-  // devserver connects without scraping) masked as a password, write-only:
-  // on edit, a blank token keeps the stored one. The component mounts fresh
-  // each time the dialog opens, so its fields seed from the edit target and
-  // need no manual reset.
+  // The New-workspace / devserver dialog. `dialog.choice` (set by the entry
+  // point that opened it) drives the body: a local directory or a devserver.
+  // There is no in-dialog chooser. The devserver body doubles as the edit form,
+  // prefilled from the registry entry; one form does Add (POST) and Save changes
+  // (PUT). The component mounts fresh each time the dialog opens, so its fields
+  // seed from the edit target and need no manual reset.
+  //
+  // The devserver Address is one field accepting EITHER a bare `host:port` (the
+  // local ssh-forward case) OR a full `http(s)://host:port?token=…` URL (the
+  // gateway/devserver-proxy case carrying a fixed token; port optional). It is
+  // parsed client-side into the host/port/token the bridge already stores -- no
+  // wire change, no separate Token field. The token rides write-only: an edit
+  // that leaves the Address as `host:port` keeps the stored token.
   import Modal from "./Modal.svelte";
-  import { closeDialog, dialog, selectChoice, type DialogChoice } from "../state/dialog.svelte";
+  import { SquareTerminal } from "lucide-svelte";
+  import { closeDialog, dialog } from "../state/dialog.svelte";
   import { addLocalWorkspace, pickFolder, saveDevserver } from "../state/library.svelte";
   import { readOnly } from "../state/capabilities";
 
   const editing = dialog.editing;
   // A devserver with a live connection (connecting or connected) can't be edited
   // (the backend rejects the write), so the form opens read-only: inputs
-  // disabled, no Save — disconnect first to edit. Captured at open (the dialog
+  // disabled, no Save -- disconnect first to edit. Captured at open (the dialog
   // mounts fresh each time).
   const readOnlyEdit = editing != null && editing.status !== "disconnected";
 
@@ -26,27 +32,25 @@
   // desktop embed swaps in a native folder picker (both POST the same path).
   let localPath = $state("");
 
-  // Devserver form, seeded from the edit target. Host + port are separate
-  // fields (the desktop forms the dial URL from them). Port binds to a number
-  // input (null while empty) and is validated to an integer 1–65535 on submit.
-  let host = $state(editing?.host ?? "");
-  let port = $state<number | null>(editing?.port ?? null);
+  // Devserver form, seeded from the edit target. Address shows the stored
+  // `host:port` (the token is write-only and never echoed); Name + Connect
+  // script + Auto-hide seed from the entry.
+  let address = $state(editing ? `${editing.host}:${editing.port}` : "");
   let name = $state(editing?.label ?? "");
   let script = $state(editing?.script ?? "");
-  let token = $state("");
   // Auto-hide the connect control terminal once the devserver connects.
   let autoHideControl = $state(editing?.auto_hide_control ?? false);
 
-  const title = $derived(
-    editing ? (readOnlyEdit ? "Devserver" : "Edit devserver") : "New workspace",
-  );
-  const showChoices = $derived(!editing);
   const showLocal = $derived(dialog.choice === "local" && !editing);
-
-  function choose(c: DialogChoice): void {
-    selectChoice(c);
-    error = null;
-  }
+  const title = $derived(
+    editing
+      ? readOnlyEdit
+        ? "Devserver"
+        : "Edit devserver"
+      : showLocal
+        ? "New workspace"
+        : "Add dev server",
+  );
 
   function msg(e: unknown): string {
     return e instanceof Error ? e.message : String(e);
@@ -90,31 +94,60 @@
     }
   }
 
-  // The host is a bare hostname or IP (no scheme, no port); the desktop forms
-  // the dial URL from host + port. The port must be an integer in the valid TCP
-  // range (1–65535). A blank host or an out-of-range / non-integer port is
-  // rejected before the write.
+  interface ParsedAddress {
+    host: string;
+    port: number | null;
+    token: string;
+  }
+
+  // Parse the polymorphic Address into host/port/token, mirroring what
+  // `chan open <url>` accepts so the form and the CLI stay consistent:
+  //   - `http(s)://host:port?token=…`  → host + port (defaulted by scheme when
+  //     absent) + the `token` query param;
+  //   - bare `host:port`               → host + port, no token.
+  // Returns null only for blank input; an invalid port surfaces as `port: null`
+  // for the caller to reject with a single message.
+  function parseAddress(raw: string): ParsedAddress | null {
+    const s = raw.trim();
+    if (!s) return null;
+    if (/^https?:\/\//i.test(s)) {
+      try {
+        const u = new URL(s);
+        const host = u.hostname;
+        const port = u.port ? Number(u.port) : u.protocol === "https:" ? 443 : 80;
+        const token = u.searchParams.get("token") ?? "";
+        return { host, port: Number.isInteger(port) ? port : null, token };
+      } catch {
+        return { host: "", port: null, token: "" };
+      }
+    }
+    const idx = s.lastIndexOf(":");
+    if (idx <= 0 || idx === s.length - 1) return { host: s, port: null, token: "" };
+    const port = Number(s.slice(idx + 1));
+    return { host: s.slice(0, idx), port: Number.isInteger(port) ? port : null, token: "" };
+  }
+
   function validPort(p: number | null): p is number {
     return p !== null && Number.isInteger(p) && p >= 1 && p <= 65535;
   }
 
   async function submitDevserver(): Promise<void> {
-    const h = host.trim();
-    const p = port;
-    if (!h || !validPort(p)) {
-      error = "Enter a host and a port (1–65535).";
+    const parsed = parseAddress(address);
+    if (!parsed || !parsed.host || !validPort(parsed.port)) {
+      error = "Enter an address like 127.0.0.1:8787 or https://host:port?token=…";
       return;
     }
-    const t = token.trim();
     submitting = true;
     try {
       await saveDevserver(
         {
-          host: h,
-          port: p,
+          host: parsed.host,
+          port: parsed.port,
           label: name.trim() || undefined,
           script: script.trim() || undefined,
-          token: t || undefined,
+          // Write-only: an edit that leaves the Address as host:port carries no
+          // token, so the stored one is kept; a full URL with ?token replaces it.
+          token: parsed.token || undefined,
           auto_hide_control: autoHideControl,
         },
         editing?.id,
@@ -129,32 +162,14 @@
 </script>
 
 <Modal {title} onclose={closeDialog}>
-  {#if showChoices}
-    <div class="choices" role="radiogroup" aria-label="New workspace type">
-      <button
-        class="choice"
-        class:on={dialog.choice === "local"}
-        role="radio"
-        aria-checked={dialog.choice === "local"}
-        type="button"
-        onclick={() => choose("local")}>Local directory</button>
-      <button
-        class="choice"
-        class:on={dialog.choice === "devserver"}
-        role="radio"
-        aria-checked={dialog.choice === "devserver"}
-        type="button"
-        onclick={() => choose("devserver")}>Devserver</button>
-    </div>
-  {/if}
-
   {#if showLocal}
-    <p class="intro">A local folder with your markdown files (a git repository, or any directory).</p>
+    <p class="intro">Add a folder on this machine as a workspace.</p>
     <label class="field">
       Folder path
       <div class="path-row">
         <input
           type="text"
+          class="mono"
           bind:value={localPath}
           placeholder="/Users/you/notes"
           autocomplete="off"
@@ -165,67 +180,48 @@
         {/if}
       </div>
     </label>
+    <div class="tip">
+      <SquareTerminal size={16} />
+      <span>
+        Tip — you can also run <code>chan open &lt;path&gt;</code> in any terminal to add a
+        workspace.
+      </span>
+    </div>
   {:else}
     {#if readOnlyEdit}
       <p class="intro">
         This devserver has a live connection, so its settings are read-only. Disconnect it to edit.
       </p>
     {:else}
-      <p class="intro">
-        Connect to a chan devserver, a headless box serving many workspaces. The desktop dials
-        the host and port; its workspaces appear in their own group.
-      </p>
+      <p class="intro">Connect a remote machine to run terminals &amp; workspaces.</p>
     {/if}
-    <div class="row2">
-      <label class="field">
-        Host
-        <input
-          type="text"
-          bind:value={host}
-          placeholder="box.example.com"
-          autocomplete="off"
-          spellcheck="false"
-          disabled={readOnlyEdit}
-          onkeydown={(e) => onFieldKey(e, submitDevserver)} />
-      </label>
-      <label class="field">
-        Port
-        <input
-          type="number"
-          min="1"
-          max="65535"
-          bind:value={port}
-          placeholder="8787"
-          autocomplete="off"
-          spellcheck="false"
-          disabled={readOnlyEdit}
-          onkeydown={(e) => onFieldKey(e, submitDevserver)} />
-      </label>
-    </div>
     <label class="field">
-      Name
+      Name <span class="muted">(optional)</span>
       <input
         type="text"
         bind:value={name}
-        placeholder="optional"
+        placeholder="dev2.example.net"
         autocomplete="off"
         disabled={readOnlyEdit}
         onkeydown={(e) => onFieldKey(e, submitDevserver)} />
     </label>
     <label class="field">
-      Token <span class="muted">(connect to a proxied or gateway devserver without scraping)</span>
+      Address
       <input
-        type="password"
-        bind:value={token}
-        placeholder={editing?.has_token ? "stored; leave blank to keep" : "optional"}
+        type="text"
+        class="mono"
+        bind:value={address}
+        placeholder="127.0.0.1:8787 or https://host:port?token=…"
         autocomplete="off"
+        spellcheck="false"
         disabled={readOnlyEdit}
         onkeydown={(e) => onFieldKey(e, submitDevserver)} />
     </label>
     <label class="field">
-      Connect command <span class="muted">(optional; runs in a control terminal)</span>
+      Connect script <span class="muted">(optional; runs in a control terminal)</span>
       <textarea
         rows="2"
+        class="mono"
         bind:value={script}
         placeholder="ssh box -L 8787:localhost:8787 chan devserver --bind 127.0.0.1 --port 8787"
         autocomplete="off"
@@ -236,6 +232,13 @@
       <input type="checkbox" bind:checked={autoHideControl} disabled={readOnlyEdit} />
       Auto-hide control terminal on success
     </label>
+    <div class="tip">
+      <SquareTerminal size={16} />
+      <span>
+        Tip — <code>chan open &lt;url&gt; [--script "…"]</code> adds a dev server from the command
+        line with the same result.
+      </span>
+    </div>
   {/if}
 
   {#if error}
@@ -244,42 +247,21 @@
 
   <div class="dialog-footer">
     {#if showLocal}
-      <button class="btn primary" type="button" disabled={submitting} onclick={submitLocal}>Add</button>
+      <button class="btn primary" type="button" disabled={submitting} onclick={submitLocal}>
+        Create workspace
+      </button>
     {:else if readOnlyEdit}
       <!-- Connected: read-only, so the only action is to dismiss. -->
       <button class="btn primary" type="button" onclick={closeDialog}>OK</button>
     {:else}
       <button class="btn primary" type="button" disabled={submitting} onclick={submitDevserver}>
-        {editing ? "Save changes" : "Add devserver"}
+        {editing ? "Save changes" : "Add dev server"}
       </button>
     {/if}
   </div>
 </Modal>
 
 <style>
-  .choices {
-    display: flex;
-    gap: 0.5rem;
-    margin-bottom: 1rem;
-  }
-
-  .choice {
-    flex: 1;
-    padding: 0.5rem 0.75rem;
-    border: 1px solid var(--btn-border);
-    border-radius: 7px;
-    background: var(--btn-bg);
-    color: var(--text-secondary);
-    font-size: 0.9rem;
-    cursor: pointer;
-  }
-
-  .choice.on {
-    border-color: var(--brand);
-    color: var(--text);
-    background: color-mix(in srgb, var(--brand) 14%, transparent);
-  }
-
   .intro {
     margin: 0 0 1rem;
     color: var(--text-secondary);
@@ -318,6 +300,11 @@
     font-family: inherit;
   }
 
+  /* Address + path + script read as literal text the user pastes from a shell. */
+  .mono {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace !important;
+  }
+
   .field textarea {
     resize: vertical;
   }
@@ -353,14 +340,34 @@
     opacity: 0.8;
   }
 
-  .row2 {
-    display: grid;
-    grid-template-columns: 1.8fr 1fr;
+  /* The command-line tip box: a terminal-iconed hint that the same thing can be
+     done from a shell (chan open). */
+  .tip {
+    display: flex;
     gap: 0.6rem;
+    align-items: flex-start;
+    margin: 0.25rem 0 0;
+    padding: 0.65rem 0.75rem;
+    border: 1px solid var(--border);
+    border-radius: 9px;
+    background: color-mix(in srgb, var(--text-secondary) 8%, transparent);
+    color: var(--text-secondary);
+    font-size: 0.82rem;
+    line-height: 1.5;
+  }
+
+  .tip :global(svg) {
+    flex-shrink: 0;
+    margin-top: 0.1rem;
+  }
+
+  .tip code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    color: var(--accent);
   }
 
   .error {
-    margin: 0.25rem 0 0;
+    margin: 0.5rem 0 0;
     padding: 0.5rem 0.65rem;
     border-radius: 7px;
     background: color-mix(in srgb, var(--danger) 16%, transparent);
@@ -368,8 +375,8 @@
     font-size: 0.85rem;
   }
 
-  /* The corrected action row: a clear top margin so the submit button never
-     overlaps the last field, the bug the old launcher's dialog had. */
+  /* The action row keeps a clear top margin so the submit button never overlaps
+     the last field. */
   .dialog-footer {
     display: flex;
     justify-content: flex-end;

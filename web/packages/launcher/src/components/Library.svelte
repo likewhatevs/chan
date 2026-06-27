@@ -14,11 +14,13 @@
   import {
     AppWindow,
     CircleAlert,
+    FolderPlus,
     Globe,
     House,
     LoaderCircle,
     Pencil,
     Plug,
+    Plus,
     Power,
     SquareTerminal,
     Unplug,
@@ -40,7 +42,7 @@
   import { requestConfirm } from "../state/confirm.svelte";
   import { isSelected, toggleSelected } from "../state/selection.svelte";
   import { isPending, servedKey, wsKey, dsKey } from "../state/pending.svelte";
-  import { openEditDevserver } from "../state/dialog.svelte";
+  import { openEditDevserver, openNewDialog } from "../state/dialog.svelte";
   import { basename } from "../lib/windowLabel";
   import { readOnly } from "../state/capabilities";
   import type { DevserverEntry, WorkspaceEntry } from "../api/library";
@@ -257,6 +259,14 @@
           onclick={() => run(openTerminal())}>
           <SquareTerminal size={16} />
         </button>
+        <button
+          class="icon-btn"
+          type="button"
+          title="New workspace"
+          aria-label="New local workspace"
+          onclick={() => openNewDialog("local")}>
+          <FolderPlus size={16} />
+        </button>
       </div>
     {/if}
   </div>
@@ -361,6 +371,15 @@
   </section>
 {/each}
 
+<!-- The decoupled add-devserver entry point: a full-width dashed button below
+     the machine list (not a top-bar [+]). Hidden on the read-only surface. -->
+{#if !readOnly}
+  <button class="add-devserver" type="button" onclick={() => openNewDialog("devserver")}>
+    <Plus size={16} />
+    Add dev server
+  </button>
+{/if}
+
 <style>
   /* The group header is an interactive row: the select check + icon + name on the
      left, the group-level actions on the right. Sits above the .rows list (shared
@@ -409,5 +428,30 @@
     align-items: center;
     gap: 0.4rem;
     margin-left: auto;
+  }
+
+  /* The decoupled add-devserver entry: a full-width dashed button under the
+     machine list, brightening to the accent on hover. */
+  .add-devserver {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    width: 100%;
+    margin-top: 1.5rem;
+    padding: 0.75rem;
+    border: 1px dashed var(--btn-border);
+    border-radius: 11px;
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: 0.9rem;
+    font-weight: 500;
+    cursor: pointer;
+  }
+
+  .add-devserver:hover {
+    border-color: color-mix(in srgb, var(--accent) 45%, var(--btn-border));
+    color: var(--text);
+    background: color-mix(in srgb, var(--text-secondary) 6%, transparent);
   }
 </style>
