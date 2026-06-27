@@ -208,9 +208,12 @@ enum Command {
     /// Open a workspace, or register a devserver.
     ///
     /// `chan open {PATH}` registers the directory as a workspace (creating
-    /// it if needed) and serves it: with chan-desktop running it hands the
-    /// workspace to a native window and returns; otherwise it binds a local
-    /// loopback server and prints the URL. Serving is load-bearing — a bare
+    /// it if needed) and serves it. Where it serves is the shell's parentage
+    /// by default: from a chan-desktop terminal it hands the workspace to a
+    /// native window and returns; from a `chan devserver` terminal it registers
+    /// the workspace with that devserver; from a plain shell it binds a local
+    /// loopback server and prints the URL. `--standalone` / `--desktop` /
+    /// `--devserver` force a specific target. Serving is load-bearing — a bare
     /// `chan workspace add` only registers; serving mounts the workspace so
     /// the editor, terminal, and devserver can reach it.
     ///
@@ -300,11 +303,30 @@ enum Command {
         no_settings: bool,
         /// Force a standalone server: bind this workspace directly and skip
         /// both the chan-desktop handoff and the local devserver
-        /// registration, even when one is running on this box. The escape
-        /// hatch for automation and for serving a workspace the local
-        /// devserver / desktop should not take over.
-        #[arg(long)]
+        /// registration, even when one is running on this box. Overrides the
+        /// shell-parentage default. The escape hatch for automation and for
+        /// serving a workspace the local devserver / desktop should not take
+        /// over. Mutually exclusive with --desktop / --devserver.
+        #[arg(long, conflicts_with_all = ["desktop", "devserver"])]
         standalone: bool,
+        /// Force the chan-desktop handoff: hand this workspace to a running
+        /// same-user desktop to open in a native window, then exit. Overrides
+        /// the shell-parentage default. Falls through to a standalone server
+        /// when no desktop is reachable (skew, error, GUI absent, or
+        /// CHAN_NO_DESKTOP_HANDOFF). Mutually exclusive with --standalone /
+        /// --devserver.
+        #[arg(long, conflicts_with_all = ["standalone", "devserver"])]
+        desktop: bool,
+        /// Force the local-devserver registration: register this workspace
+        /// with a running same-user devserver, which mounts it and owns its
+        /// writer lock, then exit. Overrides the shell-parentage default.
+        /// Falls through to a standalone server when no devserver is reachable
+        /// (skew, error, or CHAN_NO_DEVSERVER_HANDOFF). Refused from inside a
+        /// devserver shell -- nesting a devserver in a devserver is
+        /// unsupported; omit the flag to register with the current one.
+        /// Mutually exclusive with --standalone / --desktop.
+        #[arg(long, conflicts_with_all = ["standalone", "desktop"])]
+        devserver: bool,
     },
     /// Show which registered workspaces are currently being served, and
     /// by what.
@@ -922,6 +944,8 @@ where
             search_aggression,
             no_settings,
             standalone,
+            desktop,
+            devserver,
         } => {
             // Polymorphic dispatch: a `scheme://host` value registers a
             // devserver via the desktop handoff; anything else is a local
@@ -945,7 +969,11 @@ where
                             no_browser,
                             search_aggression,
                             no_settings,
-                            standalone,
+                            flags: OpenFlags {
+                                standalone,
+                                desktop,
+                                devserver,
+                            },
                             verbose,
                         },
                         personality,
@@ -1579,8 +1607,141 @@ struct ServeArgs {
     no_browser: bool,
     search_aggression: Option<SearchAggression>,
     no_settings: bool,
-    standalone: bool,
+    flags: OpenFlags,
     verbose: bool,
+}
+
+/// The explicit, mutually exclusive `chan open` target flags. clap's
+/// `conflicts_with_all` rejects more than one at parse time; the routing
+/// resolver ([`decide_open_route`]) guards the same invariant.
+#[derive(Debug, Clone, Copy)]
+struct OpenFlags {
+    standalone: bool,
+    desktop: bool,
+    devserver: bool,
+}
+
+/// Where `chan open` routes a workspace: bind a standalone server here, hand
+/// it to chan-desktop, or register it with the local devserver.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OpenTarget {
+    Standalone,
+    Desktop,
+    Devserver,
+}
+
+/// The kind of chan instance that spawned the shell `chan open` runs in,
+/// resolved from `$CHAN_CONTROL_SOCKET`. Drives the no-flag default.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Parentage {
+    /// A chan-desktop terminal: its control socket answers `Desktop`.
+    Desktop,
+    /// A `chan devserver` terminal: its control socket answers `Devserver`.
+    Devserver,
+    /// No chan parent detected (a plain shell, not chan-spawned), an
+    /// unreachable holder, or a standalone serve -- the load-bearing
+    /// "undetectable -> standalone" case.
+    None,
+}
+
+/// Why the routing decision could not pick a target.
+#[derive(Debug, PartialEq, Eq)]
+enum RouteError {
+    /// More than one of --standalone / --desktop / --devserver was set.
+    /// clap's `conflicts_with_all` normally rejects this first; the resolver
+    /// guards it too so the decision stays self-contained.
+    MultipleTargets,
+    /// An explicit --devserver from inside a devserver shell: nesting one
+    /// multi-tenant server in another is unsupported.
+    NestedDevserver,
+}
+
+/// Resolve a `chan open` routing decision from the explicit flags, the shell's
+/// parentage, and whether the desktop handoff is forced. PURE: the I/O
+/// (parentage probe, the actual handoff / registration) lives in the caller.
+///
+/// Precedence: an explicit flag wins (subject to the nested-devserver
+/// refusal); otherwise a devserver parentage registers with that devserver
+/// (a stronger signal than a forced-desktop env var inherited into the
+/// shell), a desktop parentage hands off, and an undetectable parentage binds
+/// a standalone server -- unless `forced_desktop` (a `Personality::Desktop`
+/// binary or `CHAN_DESKTOP_HANDOFF=1`, the desktop shim's contract) elects the
+/// desktop handoff for that otherwise-standalone case.
+fn decide_open_route(
+    flags: OpenFlags,
+    parentage: Parentage,
+    forced_desktop: bool,
+) -> Result<OpenTarget, RouteError> {
+    let explicit = match (flags.standalone, flags.desktop, flags.devserver) {
+        (false, false, false) => None,
+        (true, false, false) => Some(OpenTarget::Standalone),
+        (false, true, false) => Some(OpenTarget::Desktop),
+        (false, false, true) => Some(OpenTarget::Devserver),
+        _ => return Err(RouteError::MultipleTargets),
+    };
+
+    if let Some(target) = explicit {
+        if target == OpenTarget::Devserver && parentage == Parentage::Devserver {
+            return Err(RouteError::NestedDevserver);
+        }
+        return Ok(target);
+    }
+
+    Ok(match parentage {
+        // In a devserver shell: register with the current devserver. This
+        // beats a forced-desktop env var that leaked into the session, which
+        // is what routed a devserver shell to chan-desktop before.
+        Parentage::Devserver => OpenTarget::Devserver,
+        Parentage::Desktop => OpenTarget::Desktop,
+        // No detectable parent. The desktop shim / Desktop personality still
+        // forces the handoff (the Windows bundle's console chan.exe depends on
+        // it); otherwise bind a standalone server.
+        Parentage::None => {
+            if forced_desktop {
+                OpenTarget::Desktop
+            } else {
+                OpenTarget::Standalone
+            }
+        }
+    })
+}
+
+/// Resolve the kind of chan instance that spawned this shell by an `Identify`
+/// round-trip on `$CHAN_CONTROL_SOCKET` -- the same control-socket /
+/// serving-kind machinery `chan ps` uses. A chan-spawned terminal exports
+/// that socket (`terminal_sessions`); a desktop shell points at the desktop's
+/// embedded server, a devserver shell at the devserver. An absent socket (a
+/// plain shell), an unreachable holder, or a `standalone` kind all resolve to
+/// [`Parentage::None`].
+async fn detect_parentage() -> Parentage {
+    let Some(socket) = std::env::var("CHAN_CONTROL_SOCKET")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+    else {
+        return Parentage::None;
+    };
+    let Ok(message) = chan_shell::send_control_request(
+        &PathBuf::from(socket),
+        chan_shell::ControlRequest::Identify,
+    )
+    .await
+    else {
+        return Parentage::None;
+    };
+    match serde_json::from_str::<chan_shell::Identity>(&message) {
+        Ok(chan_shell::Identity {
+            kind: chan_shell::ServeKind::Desktop,
+            ..
+        }) => Parentage::Desktop,
+        Ok(chan_shell::Identity {
+            kind: chan_shell::ServeKind::Devserver,
+            ..
+        }) => Parentage::Devserver,
+        // A standalone holder, or a reply we cannot parse: not a context that
+        // changes the default.
+        _ => Parentage::None,
+    }
 }
 
 /// Make a serve root absolute against the process cwd. `canonicalize`
@@ -1675,32 +1836,12 @@ async fn cmd_open_devserver(
 /// True when this CLI runs inside a chan terminal that a `chan devserver`
 /// serves — `chan open {url}` would otherwise register a devserver into a
 /// devserver, which the registry (a desktop-config concept) does not nest.
-/// Resolved by an `Identify` round-trip on `$CHAN_CONTROL_SOCKET`; an absent
-/// socket / unreachable holder / any other serving kind ⇒ not a devserver
-/// context (so a plain shell or a desktop terminal proceeds to the handoff).
+/// Shares [`detect_parentage`]'s `Identify` round-trip on
+/// `$CHAN_CONTROL_SOCKET`; an absent socket / unreachable holder / any other
+/// serving kind ⇒ not a devserver context (so a plain shell or a desktop
+/// terminal proceeds to the handoff).
 async fn in_devserver_context() -> bool {
-    let Some(socket) = std::env::var("CHAN_CONTROL_SOCKET")
-        .ok()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-    else {
-        return false;
-    };
-    let Ok(message) = chan_shell::send_control_request(
-        &PathBuf::from(socket),
-        chan_shell::ControlRequest::Identify,
-    )
-    .await
-    else {
-        return false;
-    };
-    matches!(
-        serde_json::from_str::<chan_shell::Identity>(&message),
-        Ok(chan_shell::Identity {
-            kind: chan_shell::ServeKind::Devserver,
-            ..
-        })
-    )
+    detect_parentage().await == Parentage::Devserver
 }
 
 async fn cmd_serve(args: ServeArgs, personality: Personality) -> Result<()> {
@@ -1714,7 +1855,7 @@ async fn cmd_serve(args: ServeArgs, personality: Personality) -> Result<()> {
         no_browser,
         search_aggression,
         no_settings,
-        standalone,
+        flags,
         verbose,
     } = args;
     let lib = library()?;
@@ -1747,61 +1888,90 @@ async fn cmd_serve(args: ServeArgs, personality: Personality) -> Result<()> {
             .with_context(|| format!("creating workspace root {}", root.display()))?;
     }
 
-    // CLI-to-desktop handoff. The Desktop personality (chan-desktop dispatched
-    // as `chan`) integrates with a running desktop; a truly standalone `chan`
-    // binary owns its own server and never hands off — UNLESS it was launched by
-    // the desktop's own shim, which sets `CHAN_DESKTOP_HANDOFF=1`
-    // (`handoff_forced`). That is how the Windows desktop bundle works: its shim
-    // re-execs the separate console `chan.exe` (always `Standalone`), so it opts
-    // into the handoff explicitly, matching the macOS/Linux desktop shim that
-    // re-execs the desktop binary with `Personality::Desktop`. When a same-user
-    // chan-desktop is running in a GUI session, ask it to open this workspace in
-    // a native window and EXIT. The desktop then owns the workspace's flock; the
-    // CLI must NOT also open it (the single-writer invariant). This runs BEFORE
-    // `open_workspace` so a successful handoff never double-opens. Every fallback
-    // (no desktop, refused, stale socket, bad handshake, version skew,
-    // GUI-absent) drops through to the standalone server path below.
-    let want_desktop_handoff =
+    // Routing. `chan open` resolves ONE target -- standalone serve, desktop
+    // handoff, or devserver registration -- then dispatches, falling THROUGH to
+    // a working standalone serve on any handoff/registration failure so a
+    // workspace is never left unserved. The target is an explicit
+    // --standalone/--desktop/--devserver flag, else the shell's parentage
+    // default (a desktop terminal hands off, a devserver terminal registers, an
+    // undetectable shell binds standalone). `Personality::Desktop` and
+    // `CHAN_DESKTOP_HANDOFF=1` (`handoff_forced`, the desktop shim's contract
+    // -- the Windows console chan.exe depends on it) force the desktop target
+    // when no parent is detected. All of this runs BEFORE `open_workspace` so a
+    // successful handoff/registration never double-opens (the single-writer
+    // invariant).
+    let forced_desktop =
         personality == Personality::Desktop || chan_server::handoff::handoff_forced();
-    if want_desktop_handoff && !standalone {
-        if let Some(outcome) = maybe_handoff_to_desktop(&root).await {
-            return outcome;
+    // The parentage probe is an `Identify` round-trip; skip it when an explicit
+    // --standalone/--desktop already decides the route (parentage only matters
+    // for the no-flag default and the --devserver nested-shell refusal).
+    let parentage = if flags.standalone || flags.desktop {
+        Parentage::None
+    } else {
+        detect_parentage().await
+    };
+    let target = match decide_open_route(flags, parentage, forced_desktop) {
+        Ok(target) => target,
+        Err(RouteError::NestedDevserver) => anyhow::bail!(
+            "you are already in a devserver; omit --devserver to register with \
+             it, or use --standalone / --desktop"
+        ),
+        // clap's `conflicts_with_all` rejects this at parse time; bail with the
+        // same intent if it ever reaches here.
+        Err(RouteError::MultipleTargets) => {
+            anyhow::bail!("choose at most one of --standalone, --desktop, --devserver")
         }
-    }
+    };
 
-    // CLI-to-devserver registration. Unlike the desktop handoff this runs
-    // for the standalone binary too and does NOT require a GUI session: a
-    // devserver is exactly where SSH-only boxes live. A running same-user
-    // devserver mounts this workspace and owns its flock, so the CLI prints
-    // a note and exits WITHOUT opening it (the single-writer invariant).
-    // Runs BEFORE `open_workspace` so a successful registration never
-    // double-opens. --standalone and CHAN_NO_DEVSERVER_HANDOFF opt out; every
-    // non-registered outcome drops through to the standalone server path below.
-    if !standalone && !chan_server::devserver_handoff::devserver_handoff_opt_out() {
-        use chan_server::devserver_handoff::Outcome;
-        match chan_server::devserver_handoff::try_register_devserver(&root).await {
-            Outcome::Registered { prefix: _ } => {
-                println!(
-                    "chan: registered {} with the local devserver",
-                    root.display()
-                );
-                return Ok(());
+    match target {
+        // CLI-to-desktop handoff. When a same-user chan-desktop is running in a
+        // GUI session, ask it to open this workspace in a native window and
+        // EXIT; the desktop then owns the flock. Launch-if-absent is gated on
+        // `forced_desktop` so only a `Personality::Desktop` binary (whose
+        // `current_exe` IS the desktop) launches the GUI; a standalone binary
+        // that reached this target via a live desktop parentage falls through
+        // instead. Every fallback (no desktop, refused, skew, GUI-absent,
+        // CHAN_NO_DESKTOP_HANDOFF) drops through to the standalone path below.
+        OpenTarget::Desktop => {
+            if let Some(outcome) = maybe_handoff_to_desktop(&root, forced_desktop).await {
+                return outcome;
             }
-            Outcome::VersionSkew => {
-                eprintln!(
-                    "chan: a local devserver is running a different version; \
-                     cannot register. Starting a standalone server."
-                );
-            }
-            Outcome::Error(message) => {
-                eprintln!(
-                    "chan: the local devserver could not mount this workspace \
-                     ({message}); starting a standalone server."
-                );
-            }
-            // No devserver discovered: the load-bearing default path.
-            Outcome::NoDevserver => {}
         }
+        // CLI-to-devserver registration. A running same-user devserver mounts
+        // this workspace and owns its flock, so the CLI prints a note and exits
+        // WITHOUT opening it. CHAN_NO_DEVSERVER_HANDOFF opts out (skip the
+        // attempt, serve standalone); every non-registered outcome drops
+        // through to the standalone path below.
+        OpenTarget::Devserver => {
+            if !chan_server::devserver_handoff::devserver_handoff_opt_out() {
+                use chan_server::devserver_handoff::Outcome;
+                match chan_server::devserver_handoff::try_register_devserver(&root).await {
+                    Outcome::Registered { prefix: _ } => {
+                        println!(
+                            "chan: registered {} with the local devserver",
+                            root.display()
+                        );
+                        return Ok(());
+                    }
+                    Outcome::VersionSkew => {
+                        eprintln!(
+                            "chan: a local devserver is running a different version; \
+                             cannot register. Starting a standalone server."
+                        );
+                    }
+                    Outcome::Error(message) => {
+                        eprintln!(
+                            "chan: the local devserver could not mount this workspace \
+                             ({message}); starting a standalone server."
+                        );
+                    }
+                    // No devserver discovered: the load-bearing default path.
+                    Outcome::NoDevserver => {}
+                }
+            }
+        }
+        // Bind a standalone server here -- the direct path below.
+        OpenTarget::Standalone => {}
     }
 
     ensure_workspace_registered(&lib, &root)?;
@@ -2913,7 +3083,7 @@ async fn recent_launchd_log() -> String {
 /// The caller already restricted this to the Desktop personality and excluded
 /// tunnel mode. Here we add the GUI-session + explicit-opt-out gates, then
 /// hand off to a running desktop or launch one.
-async fn maybe_handoff_to_desktop(root: &Path) -> Option<Result<()>> {
+async fn maybe_handoff_to_desktop(root: &Path, launch_if_absent: bool) -> Option<Result<()>> {
     // Explicit opt-out for automation, and the headless auto-skip: over SSH
     // (no GUI session) there's no window to show, so a printed URL is the
     // only useful outcome. Both keep the load-bearing standalone path.
@@ -2956,9 +3126,19 @@ async fn maybe_handoff_to_desktop(root: &Path) -> Option<Result<()>> {
             );
             None
         }
-        // No running desktop: launch the GUI and open the workspace in it.
-        // A Desktop invocation never falls back to the browser here.
-        chan_server::handoff::Outcome::NoDesktop => maybe_launch_desktop(root).await,
+        // No running desktop. A forced-desktop invocation (a
+        // `Personality::Desktop` binary, or `CHAN_DESKTOP_HANDOFF=1`) launches
+        // the GUI and opens the workspace in it -- and never falls back to the
+        // browser. A standalone binary that reached the desktop target only via
+        // a live-desktop parentage instead falls through to a standalone serve:
+        // its `current_exe` is NOT the desktop, so it must not try to spawn one.
+        chan_server::handoff::Outcome::NoDesktop => {
+            if launch_if_absent {
+                maybe_launch_desktop(root).await
+            } else {
+                None
+            }
+        }
     }
 }
 
@@ -4625,6 +4805,146 @@ mod tests {
         assert!(!looks_like_devserver_url(r"C:\Users\u\notes"));
         assert!(!looks_like_devserver_url("://nohost"));
         assert!(!looks_like_devserver_url("https://"));
+    }
+
+    /// No-flag triple, for the parentage-default cases.
+    const NO_FLAGS: OpenFlags = OpenFlags {
+        standalone: false,
+        desktop: false,
+        devserver: false,
+    };
+
+    #[test]
+    fn route_explicit_flag_forces_its_target() {
+        // Each explicit flag forces its target regardless of parentage.
+        for parentage in [Parentage::Desktop, Parentage::Devserver, Parentage::None] {
+            let standalone = OpenFlags {
+                standalone: true,
+                ..NO_FLAGS
+            };
+            assert_eq!(
+                decide_open_route(standalone, parentage, false),
+                Ok(OpenTarget::Standalone)
+            );
+            let desktop = OpenFlags {
+                desktop: true,
+                ..NO_FLAGS
+            };
+            assert_eq!(
+                decide_open_route(desktop, parentage, false),
+                Ok(OpenTarget::Desktop)
+            );
+        }
+        // --devserver forces the devserver target everywhere EXCEPT inside a
+        // devserver shell, where it is refused (covered separately).
+        let devserver = OpenFlags {
+            devserver: true,
+            ..NO_FLAGS
+        };
+        assert_eq!(
+            decide_open_route(devserver, Parentage::Desktop, false),
+            Ok(OpenTarget::Devserver)
+        );
+        assert_eq!(
+            decide_open_route(devserver, Parentage::None, false),
+            Ok(OpenTarget::Devserver)
+        );
+    }
+
+    #[test]
+    fn route_explicit_standalone_overrides_forced_desktop() {
+        // --standalone wins even when the desktop handoff is forced (the
+        // Windows shim's CHAN_DESKTOP_HANDOFF / Personality::Desktop).
+        let standalone = OpenFlags {
+            standalone: true,
+            ..NO_FLAGS
+        };
+        assert_eq!(
+            decide_open_route(standalone, Parentage::None, true),
+            Ok(OpenTarget::Standalone)
+        );
+        assert_eq!(
+            decide_open_route(standalone, Parentage::Desktop, true),
+            Ok(OpenTarget::Standalone)
+        );
+    }
+
+    #[test]
+    fn route_parentage_default_no_flag() {
+        // No flag: parentage picks the default.
+        assert_eq!(
+            decide_open_route(NO_FLAGS, Parentage::Desktop, false),
+            Ok(OpenTarget::Desktop)
+        );
+        assert_eq!(
+            decide_open_route(NO_FLAGS, Parentage::Devserver, false),
+            Ok(OpenTarget::Devserver)
+        );
+        assert_eq!(
+            decide_open_route(NO_FLAGS, Parentage::None, false),
+            Ok(OpenTarget::Standalone)
+        );
+    }
+
+    #[test]
+    fn route_forced_desktop_only_elects_when_undetectable() {
+        // forced_desktop elects the desktop target only when no parent is
+        // detected (the Windows bundle's plain console).
+        assert_eq!(
+            decide_open_route(NO_FLAGS, Parentage::None, true),
+            Ok(OpenTarget::Desktop)
+        );
+        // A live devserver parentage BEATS a forced-desktop env var that leaked
+        // into the shell -- the original devserver-shell-to-desktop bug.
+        assert_eq!(
+            decide_open_route(NO_FLAGS, Parentage::Devserver, true),
+            Ok(OpenTarget::Devserver)
+        );
+    }
+
+    #[test]
+    fn route_nested_devserver_refused() {
+        // Explicit --devserver from inside a devserver shell is refused; the
+        // no-flag default in the same shell registers transparently.
+        let devserver = OpenFlags {
+            devserver: true,
+            ..NO_FLAGS
+        };
+        assert_eq!(
+            decide_open_route(devserver, Parentage::Devserver, false),
+            Err(RouteError::NestedDevserver)
+        );
+        assert_eq!(
+            decide_open_route(NO_FLAGS, Parentage::Devserver, false),
+            Ok(OpenTarget::Devserver)
+        );
+    }
+
+    #[test]
+    fn route_multiple_targets_rejected() {
+        // The resolver guards mutual exclusion even though clap rejects it
+        // first (see `open_target_flags_are_mutually_exclusive`).
+        let two = OpenFlags {
+            standalone: true,
+            desktop: true,
+            devserver: false,
+        };
+        assert_eq!(
+            decide_open_route(two, Parentage::None, false),
+            Err(RouteError::MultipleTargets)
+        );
+    }
+
+    #[test]
+    fn open_target_flags_are_mutually_exclusive() {
+        // clap's `conflicts_with_all` rejects any two target flags at parse
+        // time; one alone parses.
+        assert!(Cli::try_parse_from(["chan", "open", ".", "--standalone"]).is_ok());
+        assert!(Cli::try_parse_from(["chan", "open", ".", "--desktop"]).is_ok());
+        assert!(Cli::try_parse_from(["chan", "open", ".", "--devserver"]).is_ok());
+        assert!(Cli::try_parse_from(["chan", "open", ".", "--standalone", "--desktop"]).is_err());
+        assert!(Cli::try_parse_from(["chan", "open", ".", "--standalone", "--devserver"]).is_err());
+        assert!(Cli::try_parse_from(["chan", "open", ".", "--desktop", "--devserver"]).is_err());
     }
 
     #[test]
