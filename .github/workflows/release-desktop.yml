@@ -93,7 +93,7 @@ jobs:
           [ -n "$APPLE_PASSWORD" ] || missing+=("APPLE_PASSWORD")
           if [ ${#missing[@]} -gt 0 ]; then
             echo "::error::Missing Apple signing secrets: ${missing[*]}"
-            echo "::error::Populate per docs/release/macos-signing.md."
+            echo "::error::Populate per docs/release/README.md."
             exit 1
           fi
 

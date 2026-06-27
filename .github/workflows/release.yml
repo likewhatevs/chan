@@ -519,7 +519,7 @@ jobs:
           [ -n "$TAURI_SIGNING_PRIVATE_KEY" ] || missing+=("TAURI_SIGNING_PRIVATE_KEY")
           if [ ${#missing[@]} -gt 0 ]; then
             echo "::error::Missing signing secrets: ${missing[*]}"
-            echo "::error::Populate Apple secrets per docs/release/macos-signing.md and updater key secrets per .agents/desktop.md."
+            echo "::error::Populate Apple secrets per docs/release/README.md and updater key secrets per .agents/desktop.md."
             exit 1
           fi
 
@@ -619,7 +619,7 @@ jobs:
     needs: context
     runs-on: windows-latest
     # Windows desktop is experimental and the NSIS installer is UNSIGNED (the
-    # SSL.com Authenticode cert is still pending — docs/release/windows-signing.md).
+    # SSL.com Authenticode cert is still pending -- docs/release/README.md).
     # A Windows build failure must NOT block the Linux+macOS release: continue-on-error
     # lets publish-release proceed, and the install page + /dl metadata already treat
     # the Windows assets as optional, so they simply omit Windows until the next good
