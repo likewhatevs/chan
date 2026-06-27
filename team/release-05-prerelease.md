@@ -7,7 +7,7 @@ Tags: #refactor #mcp #terminal #indexing #bugfixes #release
 
 ## Roadmap (the asks)
 
-@@Alex framed the phase as "a multi-step move, starting from big clean up and then drilling into smaller bugs and feature requests". He introduced @@Systacean as a new combined Syseng + Rustacean profile for this work.
+Alex framed the phase as "a multi-step move, starting from big clean up and then drilling into smaller bugs and feature requests". He introduced @@syseng as a new combined Syseng + Rustacean profile for this work.
 
 **Cleanup**
 - Merge the sibling `chan-term` terminal work onto main.
@@ -43,18 +43,18 @@ Six agent slots. See `../agents/README.md` for role cards.
 ```
 handle        role this phase
 ------------  ---------------------------------------------------
-@@Architect   plan, dispatch, tmux design memo, docs sweep,
+@@architect   plan, dispatch, tmux design memo, docs sweep,
               commit grouping, phase summary
-@@Backend     agent-surface removal, terminal MCP env export,
+Backend     agent-surface removal, terminal MCP env export,
               per-window desktop session keys
-@@Frontend    overlay removal, close-confirm + scroll bundle,
+@@webdev    overlay removal, close-confirm + scroll bundle,
               persistent-terminal client side
-@@Systacean   new combined profile (Syseng + Rustacean);
+@@syseng   new combined profile (Syseng + Rustacean);
               highest output volume: chan-llm prune, indexer
               scheduling, PTY registry, VCS-aware indexing,
               alt-screen fixes
-@@Webtest A   primary live smoke, PTY reattach acceptance matrix
-@@Webtest B   parallel scenarios on the shared test server
+Webtest A   primary live smoke, PTY reattach acceptance matrix
+Webtest B   parallel scenarios on the shared test server
 ```
 
 Coordination scheme: flat task files at the phase root, named `{agent}-{n}.md`, dispatched by the architect through a single central `journal.md`. No per-author directories and no separate event-channel files. The journal advanced through numbered housekeeping rounds where the architect reconciled status drift and re-dispatched blocked work.

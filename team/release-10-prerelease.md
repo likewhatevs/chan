@@ -30,13 +30,13 @@ Agent roster is at ../agents/README.md. Handles active this phase:
 ```
 handle       role
 -----------  -------------------------------------------------------
-@@Architect  plan, dispatch, review loop, decisions
-@@Alex       owner; manual macOS/desktop verification, scope calls,
+@@architect  plan, dispatch, review loop, decisions
+Alex       owner; manual macOS/desktop verification, scope calls,
              DNS-cutover runbook
-@@Desktect   chan-desktop in-process-registry merge (Track A)
-@@IconDocs   ad-hoc handle: Tauri icon regeneration + desktop
+@@architect   chan-desktop in-process-registry merge (Track A)
+@@agent   ad-hoc handle: Tauri icon regeneration + desktop
              docs/config audit (no permanent agent card)
-@@Frontend   terminal WebGL atlas-smoothness change (became
+@@webdev   terminal WebGL atlas-smoothness change (became
              FullStackA/B in later phases)
 ```
 

@@ -5,7 +5,7 @@ web + web-launcher + xwin), version pins at `0.43.0`, CHANGELOG `[v0.43.0]` fill
 behaviors
 are covered by unit + HTTP-layer tests and the full gate; the WKWebView-native bits (the desktop launcher
 visually rendering at the loopback, click-through, drag-drop folder-add) are desktop-only and deferred to
-@@Alex's end-to-end re-smoke against a fresh Mac app. Span: 2026-06-22.
+Alex's end-to-end re-smoke against a fresh Mac app. Span: 2026-06-22.
 Tags: #web-launcher #chan-library #devserver #devserver-proxy #embeddings #candle #accelerate #editor
 #cs-upload-download #team-reload #window-close #root-fallback
 

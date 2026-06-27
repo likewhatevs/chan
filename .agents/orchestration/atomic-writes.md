@@ -71,8 +71,8 @@ The full survey / survey-reply schema is preserved in git history. Minimal versi
 {
   "id": "<unique-id>",
   "type": "survey",
-  "from": "@@SomeAgent",
-  "to": "@@Host",
+  "from": "@@agent",
+  "to": "Host",
   "topic": "<short-topic-tag>",
   "questions": [
     {

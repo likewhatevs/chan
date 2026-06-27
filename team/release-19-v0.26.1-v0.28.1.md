@@ -11,7 +11,7 @@ Tags: #desktop #linux #drafts #graph #mentions #contacts #indexing #terminal #do
 
 Phase-19 followed the phase-18 public-flip prep with a parity-and-polish stream: make chan-desktop work as well on Linux as on macOS, move Drafts out of the metadata layer and into the workspace tree, and turn `@@mentions` into a first-class graph lens. Three brainstorm notes seeded it (`dev/phase-19/brainstorm/`):
 
-**Graph @@mention lens.** Expose `@@mention` as a first-class graph scope (like the `#tag` lens): click `@@Lead` and see every file that references it, anchored to its directory spine. The note called out three stacked gaps - no `mention:` scope kind in the graph UI, mention nodes only rendering as endpoints of already-visible file edges, and the graph index missing a mentioning file that was added while the server was down.
+**Graph `@@mention` lens.** Expose `@@mention` as a first-class graph scope (like the `#tag` lens): click `Lead` and see every file that references it, anchored to its directory spine. The note called out three stacked gaps - no `mention:` scope kind in the graph UI, mention nodes only rendering as endpoints of already-visible file edges, and the graph index missing a mentioning file that was added while the server was down.
 
 **Agent docs reorganization.** Consolidate scattered agent material (root CLAUDE.md/AGENTS.md, buried standards, `docs/agents/`, dispersed skills) into a single committed `.agents/` home: roster, playbook, orchestration, plus extracted standards (principles, writing rules, patterns), dropping the root CLAUDE.md/AGENTS.md auto-load in favor of an unmistakable `.agents/README.md` front door.
 

@@ -7,7 +7,7 @@ Tags: #features #bugfixes #reliability #graph #search #cli
 
 ## Roadmap (the asks)
 
-@@Alex submitted a "Chan pre-release roadmap" that also defined the working model: the architect coordinates through files in the phase directory; agents pick up `{name}-{n}.md` task briefs and report back. Work fell into four areas:
+Alex submitted a "Chan pre-release roadmap" that also defined the working model: the architect coordinates through files in the phase directory; agents pick up `{name}-{n}.md` task briefs and report back. Work fell into four areas:
 
 **Release cleanup.** Remove migration code from older pre-canonical versions of Chan. Add crystal-clear code comments and design documentation reflecting current decisions as a snapshot, not a changelog.
 

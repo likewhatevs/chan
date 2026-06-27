@@ -5,7 +5,7 @@ Span: 2026-06-11 to 2026-06-12.
 Versions: v0.31.0, v0.31.1.
 Tags: #desktop #windows #terminal #cs #bugfixes #release
 
-A solo round (one Claude session + @@Alex reviewing and desktop-testing), run in a dedicated `window-mgmt` git worktree off main and merged back fast-forward at close. The driving document was `dev/request.md` (untracked; its asks are summarized below), followed by three remark-driven follow-up rounds from @@Alex's desktop testing.
+A solo round (one Claude session + Alex reviewing and desktop-testing), run in a dedicated `window-mgmt` git worktree off main and merged back fast-forward at close. The driving document was `dev/request.md` (untracked; its asks are summarized below), followed by three remark-driven follow-up rounds from Alex's desktop testing.
 
 ## Roadmap (the asks)
 
@@ -23,19 +23,19 @@ Sixteen commits on `window-mgmt`, grouped:
 - **Bury-on-close (desktop):** prevent_close + hide with an every-time info dialog; a "Hidden Windows" Window-menu section (dynamic menu rebuild); window numbers survive burial; `WindowEvent::Destroyed` as the single cleanup point; the WindowConfig LRU captures at bury time and skips live labels on pop; the SPA's empty-window cascade uses `destroy()` to bypass burial; terminal windows with no live shells (registry query through the embedded host) really close.
 - **Server/cs:** refcounted `/ws` window presence (`?w=` tag), `GET /api/windows` (`{id, connected, saved}`, byte-pinned), `cs window list`, a `ControlTenant` split so the standalone terminal tenant runs its own control socket ($CHAN_CONTROL_SOCKET in its PTYs) with a pinned workspace-only refusal, and the window/survey reply routes on the terminal router so blocking round-trips work.
 - **Remote windows (desktop):** outbound/tunnel connections are polled for `saved && !connected` rows; reopening uses the remote-known label so the remote restores its session blob.
-- **Round 3:** Cmd+Shift+N follows the focused connection (the launcher is a singleton titled "Chan Desktop"; the main-N spawner is gone); per-process instance id on `/api/health` + SPA auto-reload on change; CI Xcode selection for modern window chrome; health answering on workspace-less tenants (a 503-noise regression caught by @@Alex from the desktop console); quit confirmation via `RunEvent::ExitRequested`.
+- **Round 3:** Cmd+Shift+N follows the focused connection (the launcher is a singleton titled "Chan Desktop"; the main-N spawner is gone); per-process instance id on `/api/health` + SPA auto-reload on change; CI Xcode selection for modern window chrome; health answering on workspace-less tenants (a 503-noise regression caught by Alex from the desktop console); quit confirmation via `RunEvent::ExitRequested`.
 - **Hygiene:** `make clean` covers gateway/desktop/web stamp; the dead Team Work cheatsheet row is gone; tab-title fade headroom.
 
 ## Verification
 
-Browser smokes covered everything reachable without a desktop build: split/swap/Esc-cancel/reload replay, overlay filtering in both modes, presence connect AND disconnect flips, `cs terminal list` / `cs window list` / blocking `cs pane` round-trips, tab-digit legibility, and the server-bounce auto-reload (marker command, ^C + re-run, the window reloaded itself with an interactive terminal). @@Alex desktop-verified the bury flow (dialog, menu, reopen), Cmd+, after the menu removal, real-close of shell-less terminal windows, the standalone-terminal `cs` matrix, and the outbound remote arc. Full `make pre-push` ran green in the worktree before each merge-back.
+Browser smokes covered everything reachable without a desktop build: split/swap/Esc-cancel/reload replay, overlay filtering in both modes, presence connect AND disconnect flips, `cs terminal list` / `cs window list` / blocking `cs pane` round-trips, tab-digit legibility, and the server-bounce auto-reload (marker command, ^C + re-run, the window reloaded itself with an interactive terminal). Alex desktop-verified the bury flow (dialog, menu, reopen), Cmd+, after the menu removal, real-close of shell-less terminal windows, the standalone-terminal `cs` matrix, and the outbound remote arc. Full `make pre-push` ran green in the worktree before each merge-back.
 
 ## Retrospective
 
 **Highlights:**
 - Root-causing the split-pane bug from source (replay cursor, not a render glitch) predicted Chrome reproducibility, which turned a desktop-only mystery into a fast browser-verifiable fix — and the follow-up deleted the whole cursor instead of patching its overshoot.
 - The `connected`/`saved` vocabulary for window presence stayed honest about what the server can know (a buried desktop window keeps its socket alive), which kept the remote-windows design simple.
-- Three rounds of @@Alex desktop testing each fed precise, actionable remarks; every regression they surfaced (503 noise, launcher multiplication) was reproduced, fixed, and pinned in the same round.
+- Three rounds of Alex desktop testing each fed precise, actionable remarks; every regression they surfaced (503 noise, launcher multiplication) was reproduced, fixed, and pinned in the same round.
 
 **Lowlights / carryovers:**
 - GTK in-place Window-menu mutation is unverified on Linux; the fallback (full `set_menu` rebuild) is documented but not wired.
@@ -46,6 +46,6 @@ Browser smokes covered everything reachable without a desktop build: split/swap/
 
 ## Notes
 
-- Quit confirmation, the launcher-singleton change, and new-window-on-remote landed after @@Alex's main desktop pass; they ride v0.31.0 with compile + pin-test coverage and his release-build validation.
+- Quit confirmation, the launcher-singleton change, and new-window-on-remote landed after Alex's main desktop pass; they ride v0.31.0 with compile + pin-test coverage and his release-build validation.
 - v0.31.1 (same day) fixed what his v0.31.0 validation caught: the quit dialog never fired (macOS predefined Quit bypasses the ExitRequested hook; replaced with a custom Quit item that asks first) and connecting/retry windows were unclosable (red dot buried them; now red dot / Cmd+W / Ctrl+Shift+W / Ctrl+D all cancel for real, with the Cmd+W routing done in the key bridge, which consumes the chord before the menu accelerator). It also added Linux's Ctrl+Shift+W Close Window item, stripped the GTK menubar from the About dialog, closed the staged-split orphan-PTY carryover, and de-flaked the PTY shell probes whose end markers could match their own command echo (the v0.31.0 tag-run flake).
 - The 400 GB stale `target/` discovered mid-round motivated the `make clean` expansion.

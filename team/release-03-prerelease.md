@@ -48,7 +48,7 @@ Several items (stale selection, context-menu placement, Agent Cmd+F, Cmd+I caret
 
 ## Rounds and waves
 
-Single round. Work ran over two calendar days. The architect dispatched tasks in a single pass from the initial checklist. There was one mid-phase reassignment (@@Syseng redirected from backend support to frontend-support tasks). No formal waves or gating between them; the team worked in parallel and converged on a shared pre-push gate at the end.
+Single round. Work ran over two calendar days. The architect dispatched tasks in a single pass from the initial checklist. There was one mid-phase reassignment (@@syseng redirected from backend support to frontend-support tasks). No formal waves or gating between them; the team worked in parallel and converged on a shared pre-push gate at the end.
 
 ## Team and coordination
 
@@ -57,18 +57,18 @@ Agent roster is in ../agents/README.md. Handles as used in the journals:
 ```
 handle       role this phase
 -----------  -------------------------------------------------
-@@Architect  plan, dispatch, decisions, summary
-@@Frontend   highest-output lane: Agent rename, URL state,
+@@architect  plan, dispatch, decisions, summary
+@@webdev   highest-output lane: Agent rename, URL state,
              dashboard shell, banners, resource colors
-@@Backend    backend rename, layout config + CLI,
+Backend    backend rename, layout config + CLI,
              graph/URL audit
-@@Rustacean  Rust review
-@@Syseng     reassigned mid-phase to frontend-support tasks:
+@@rustacean  Rust review
+@@syseng     reassigned mid-phase to frontend-support tasks:
              image guides, Cmd+I caret, File Browser find
-@@Webtest    live service, browser smoke, teardown
+Webtest    live service, browser smoke, teardown
 ```
 
-The journals also mention @@FrontendB and @@WebtestB. Both are the same physical slots reused under different handles mid-phase, not additional headcount. These were recorded as identity reconciliations and directly motivated the later single-canonical-handle convention.
+The journals also mention FrontendB and WebtestB. Both are the same physical slots reused under different handles mid-phase, not additional headcount. These were recorded as identity reconciliations and directly motivated the later single-canonical-handle convention.
 
 Coordination scheme: flat task files at the phase root using the `{agent}-{n}.md` pattern. The architect maintained a single `journal.md` covering the request checklist, dispatch table, ownership map, and dated log. No per-author directories and no separate event-channel files. Role churn was handled by writing role-change notes into the journal and creating reassignment task files rather than rewriting prior ones, which introduced addressing confusion.
 
@@ -88,7 +88,7 @@ Shipped:
 - Parent-dir and common-ancestor graph scopes; filesystem-mode folder filter.
 
 Tried then abandoned or not reproduced:
-- An attempted @@FrontendB split was reverted once Alex confirmed @@Frontend already owned those tasks.
+- An attempted FrontendB split was reverted once Alex confirmed @@webdev already owned those tasks.
 - A guessed payload to enable the LLM backend returned 200 but changed no preferences; the bounded fix reused the phase-1 fake-Codex fixture instead.
 - The "cursor as tall as the image" symptom could not be reproduced after the selection fix; left open pending the original screenshot.
 
@@ -109,8 +109,8 @@ Highlights:
 
 Lowlights and contention:
 - Agent overlay browser validation was blocked for most of the phase because the fixture drive had no enabled LLM backend and the agent shell never mounted. The workaround (reusing the phase-1 fake-Codex fixture) came late, which meant the smoke happened near the deadline.
-- Identity/role churn: one physical slot was addressed as @@Syseng, then @@FrontendB, before being corrected. This caused task-routing confusion and was the direct motivation for the single-canonical-handle rule adopted in later phases.
-- @@Frontend received many independent task slices in parallel before any validation loop closed. Later phases split this work across multiple named lanes explicitly.
+- Identity/role churn: one physical slot was addressed as @@syseng, then FrontendB, before being corrected. This caused task-routing confusion and was the direct motivation for the single-canonical-handle rule adopted in later phases.
+- @@webdev received many independent task slices in parallel before any validation loop closed. Later phases split this work across multiple named lanes explicitly.
 
 Constructive feedback:
 - Create explicit role-change tasks earlier and prune stale journal follow-ups continuously, not only at close. A journal that accumulates stale entries becomes a coordination liability.

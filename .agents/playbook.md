@@ -14,7 +14,7 @@ phases  coordination scheme
         append-only dated journals, typed event-channel files, and
         architect-orchestrated dispatch.
 8       a second team (chan-desktop) runs the same model in parallel;
-        @@Alex bridges the two architect leads.
+        Alex bridges the two architect leads.
 11+     lanes work in per-lane git worktrees for CODE while the
         coordination documents stay in one shared, append-only bus.
 15+     an isolated gate worktree gates the COMMITTED state; the team
@@ -27,9 +27,9 @@ The phase-13 r2 Team Work revamp REMOVED the fsnotify event-watcher / poke-dispa
 ## Coordination discipline
 
 - Append-only, even in coordination. Once an agent has started a task, new asks become NEW tasks, not amendments to the one in flight. Rewriting under someone loses the audit trail. (phase 7)
-- Lean poke bus. A poke is a one-line pointer to a **specific append-only section** ("see <file> §<heading>") — never the content itself. The substance lives in the dated/named `##` section; markdown headings make sections cheap to cite, so cite them. Fat pokes (status, decisions, analysis carried on the bus) stack, truncate, bury the substance, and can't be re-read or referenced later. Write the section first, then poke it. (phase 16; sharpened + re-ratified phase 31 — a standing rule we drifted from, per @@Alex)
+- Lean poke bus. A poke is a one-line pointer to a **specific append-only section** ("see <file> §<heading>") — never the content itself. The substance lives in the dated/named `##` section; markdown headings make sections cheap to cite, so cite them. Fat pokes (status, decisions, analysis carried on the bus) stack, truncate, bury the substance, and can't be re-read or referenced later. Write the section first, then poke it. (phase 16; sharpened + re-ratified phase 31 — a standing rule we drifted from, per Alex)
 - Every poke to an agent CLI must end with the agent's submit chord (`--submit=<agent>`), or it parks unsubmitted in the compose box and stalls the round. (phase 15)
-- Workers route decisions to the lead/architect; the lead consolidates and surveys @@Alex with `cs terminal survey` (a blocking overlay in the host's window). Workers do not survey the host directly, and do not use a TUI survey. (phases 15, 16)
+- Workers route decisions to the lead/architect; the lead consolidates and surveys Alex with `cs terminal survey` (a blocking overlay in the host's window). Workers do not survey the host directly, and do not use a TUI survey. (phases 15, 16)
 - Verify a write landed BEFORE you poke about it: grep or Read the file, then poke. Never bundle a heredoc-write plus a poke plus a grep into one shell command; truncation silently drops the later steps. (phase 8)
 - Redistribute spillover from the queue TAIL, not the head: the lane is already working its next-up item. (phase 7)
 - Status reports are curated highlights / lowlights / contention, not full tabular dumps; the detail stays in the task files. (phase 7+)
@@ -38,7 +38,7 @@ The phase-13 r2 Team Work revamp REMOVED the fsnotify event-watcher / poke-dispa
 
 - The only race-proof commit when peers stage concurrently is an explicit pathspec: `git commit -F msg -- <path> <path>` (flags BEFORE the `--`). A plain `git add` + `git commit`, even chained with `&&`, still lets a peer's concurrent staging contaminate your commit. (phase 8)
 - `git add <single-path>` does NOT unstage other files. Run `git diff --staged --stat` before committing and `git show --stat HEAD` after, every time, in the multi-agent tree. (phase 8)
-- Merge is not push. "Merge to main" means a local merge only; never push without an explicit ask from @@Alex. A standing commit clearance is not a standing push clearance. (phases 8, 12)
+- Merge is not push. "Merge to main" means a local merge only; never push without an explicit ask from Alex. A standing commit clearance is not a standing push clearance. (phases 8, 12)
 - A backgrounded gated push SIGPIPEs (exit 141) and silently fails to update the remote (the pre-push hook emits ~90KB over ~3 min). Push in the foreground, redirect to a file, and verify with `git ls-remote` before tagging. `--no-verify` is classifier-blocked. (phase 15)
 
 ## The gate and the quality bar
@@ -56,7 +56,7 @@ The phase-13 r2 Team Work revamp REMOVED the fsnotify event-watcher / poke-dispa
   caused multi-round wild-goose chases. In multi-agent runs a broad `pkill` kills every lane's server; the orchestrator serves from a renamed binary copy and lanes scope their pkills to their own path. (phase 15)
 - Static gates (svelte-check, `?raw` source-pattern vitest) MISS Svelte-5 runtime reactivity errors (for example `state_unsafe_mutation` from mutating `$state` inside a `$derived`). Browser-smoke any reactivity change. (phase 15)
 - Under tooling flakiness, agents confabulate: they invent file content matching their hypothesis, or mistake a stale Edit echo for a landed change. Anchor on `git status` / sha / `curl`, read atomically, and sha-verify before reasoning. (phase 8)
-- Terminal render glitches (focus-switch, paste) are WKWebView/desktop specific and do NOT reproduce in Chrome automation (Blink). Ask which client first; verify desktop fixes in chan-desktop, which only @@Alex can hand-smoke. (phases 13, 15)
+- Terminal render glitches (focus-switch, paste) are WKWebView/desktop specific and do NOT reproduce in Chrome automation (Blink). Ask which client first; verify desktop fixes in chan-desktop, which only Alex can hand-smoke. (phases 13, 15)
 
 ## Wire, rename, and cross-crate discipline
 
@@ -68,7 +68,7 @@ The phase-13 r2 Team Work revamp REMOVED the fsnotify event-watcher / poke-dispa
 ## Pre-release norms
 
 - chan is pre-release: no back-compat, no migration paths. Drop legacy fields / formats / ids outright; do not add graceful-degrade paths or escalate back-compat questions. (phases 12+)
-- Quality bar: keep the full gate green and ship no KNOWN bug. @@Alex accepts a few small bugs as the solo user but NOT a lower gate. Give a final validation pass and a local DMG before any upstream tag. (phase
+- Quality bar: keep the full gate green and ship no KNOWN bug. Alex accepts a few small bugs as the solo user but NOT a lower gate. Give a final validation pass and a local DMG before any upstream tag. (phase
   16)
 - Release cut mechanics: bump every version pin together (Cargo.toml `[workspace.package]`, tauri.conf.json, Cargo.lock, and web/). Tagging `vX.Y.Z` fires release.yml; self-upgrade is data-driven from the published `latest.json`, so cutting a release auto-supersedes prior versions. macOS sign/notarize only runs on Actions; dry-run via workflow_dispatch before tagging. (phases 14, 15)
 

@@ -34,23 +34,23 @@ Ten agent handles were active across the three rounds. The full roster and role 
 ```
 handle          role this phase
 --------------  --------------------------------------------------
-@@Architect     plan, dispatch, decisions, journal
-@@FullStackA    backend + frontend; busiest lane (about 100 tasks)
-@@FullStackB    same profile; chan-desktop + PTY work
-@@Systacean     CLI, build, deps, indexer, release cuts
-@@CI            new 6th slot: Actions, signing, release pipeline
-@@WebtestA      Chrome-MCP walkthrough lane
-@@WebtestB      Chrome-MCP walkthrough lane
-@@Desktect      chan-desktop product architect (Round 3 only)
-@@Desktacean    Tauri/Rust + macOS/Linux desktop (Round 3 only)
-@@Desktest      desktop tester (Round 3 only)
+@@architect     plan, dispatch, decisions, journal
+FullStackA    backend + frontend; busiest lane (about 100 tasks)
+FullStackB    same profile; chan-desktop + PTY work
+@@syseng     CLI, build, deps, indexer, release cuts
+CI            new 6th slot: Actions, signing, release pipeline
+WebtestA      Chrome-MCP walkthrough lane
+WebtestB      Chrome-MCP walkthrough lane
+@@architect      chan-desktop product architect (Round 3 only)
+@@rustacean    Tauri/Rust + macOS/Linux desktop (Round 3 only)
+Desktest      desktop tester (Round 3 only)
 ```
 
-The chan-desktop team (@@Desktect, @@Desktacean, @@Desktest) spun up mid-Round 3 and ran as a parallel team, with @@Alex bridging decisional traffic between leads.
+The chan-desktop team (@@architect, @@rustacean, Desktest) spun up mid-Round 3 and ran as a parallel team, with Alex bridging decisional traffic between leads.
 
 Coordination scheme: per-author directories under the phase, each holding numbered append-only task files plus one canonical `journal.md`. The shared event hub was `alex/`. Corrections were new dated appends with back-links, never rewrites. Event channels were `alex/event-<from>-<to>.md` (one file per directed channel). The architect-orchestrated loop: cut a task, poke the lane, the lane implements and runs the pre-push gate and pokes back commit-ready, the architect clears, the lane self-commits with per-path staging and a pre- and post-commit audit.
 
-This hand-run dispatch shape was the deliberate automation blueprint. The process spec pinned a watcher event-file naming convention enforced across three filter sites, and `raw/rich-prompt/events/` (in git history) holds real JSON event files from a live watcher smoke test where @@Alex pointed chan's own rich-prompt watcher at the journals directory. That smoke surfaced the watcher-versus-journal shape gap recorded in the retrospective.
+This hand-run dispatch shape was the deliberate automation blueprint. The process spec pinned a watcher event-file naming convention enforced across three filter sites, and `raw/rich-prompt/events/` (in git history) holds real JSON event files from a live watcher smoke test where Alex pointed chan's own rich-prompt watcher at the journals directory. That smoke surfaced the watcher-versus-journal shape gap recorded in the retrospective.
 
 ## What shipped, tried, and undone
 
@@ -89,7 +89,7 @@ This hand-run dispatch shape was the deliberate automation blueprint. The proces
 - Three releases cut during the phase, opening on v0.11.0 and closing on v0.13.0 (the public-flip version). The release cadence was denser than any prior phase.
 - Public-flip pre-flight landed clean: the history audit came back with nothing to rewrite, and all community files were in place before the flip.
 - Empirical audit at pickup worked in both directions; lanes caught architect-side scope errors before touching code.
-- The secrets-boundary pattern (architect directs CI on secret NAMES in workflow YAML; @@Alex populates VALUES in Actions Secrets) held cleanly across the signing work.
+- The secrets-boundary pattern (architect directs CI on secret NAMES in workflow YAML; Alex populates VALUES in Actions Secrets) held cleanly across the signing work.
 
 **Lowlights and contention:**
 - The per-PR CI gate was silently broken for about 15 commits because the clippy job was missing Linux GTK and glib dev headers. It took several gate-unblocker tasks to fully green the Actions matrix. A broken CI gate is not discovered by the lanes that were running; it surfaces only when someone checks the Actions tab.
@@ -104,11 +104,11 @@ For the team:
 - Shared-worktree commit discipline is correct but slipped under load. The fix is to collapse `git add <paths>`, the diff audit, and `git commit -- <paths>` into one chained invocation so no inter-command window exists for a peer's concurrent staging to contaminate the set. Plain `git add` + `git commit`, even chained with `&&`, does not close that window.
 - Webtest lanes must capture the launched process PID at spawn and signal only that PID. Never infer ownership by elapsed time. Never touch the installed application bundle or quarantine system paths during a verification walk.
 
-For @@Architect:
+For @@architect:
 - Ground every capability description and scope claim in the actual source before writing it. Do not paraphrase a peer's functional framing as a location or structural claim; they are different kinds of assertions.
 - Write recycle handover entries closer to the actual tear-down beat. Two lanes self-committed past committable markers in this phase because the handover was written before tear-down; the mismatch cost correction commits.
 
-For @@Alex:
+For Alex:
 - The mid-phase restructures (two rounds to three, and a cut cadence that drifted through four version tags) were each well-reasoned, and the journals absorbed them cleanly. The cost was repeated plan-churn that required all active lanes to re-read their queues. Locking the round structure earlier would reduce this overhead, though the de-risking rationale for the split was valid.
 
 ## Notes

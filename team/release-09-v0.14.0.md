@@ -7,7 +7,7 @@ Tags: #features #bugfixes #reliability #release #desktop #mcp
 
 ## Roadmap (the asks)
 
-Three source documents from @@Alex plus the architect's phase request drove this phase. All were marked read-only to agents.
+Three source documents from Alex plus the architect's phase request drove this phase. All were marked read-only to agents.
 
 **Carry-overs from phase 8 (request.md):** the open-source flip, a multi-model search picker, chan metadata import/export, a three-mode drive connection model (local fork / attached outbound / attached inbound), and a default "Chan" drive lifecycle.
 
@@ -19,7 +19,7 @@ Three source documents from @@Alex plus the architect's phase request drove this
 
 Phase 9 ran as a single round with two waves, using a two-Architect Core/Web split as an experiment before scaling to three leads.
 
-**Wave 1** addressed bugs and backend work in parallel: @@CoreArchitect owned the Rust side (MCP transport fix, FD pressure, drive metadata path migration, Drafts lifecycle, lock-poisoning hardening, metadata archive export/import) while @@WebArchitect owned the Svelte side (Rich Prompt four-route contract, Spawn Agents UI, page breaks, toolbar changes). Test lanes (@@WebtestA, @@WebtestB) filed wave reports in a fixed shape: scope, repro-status matrix, evidence, suspected owner, recommended commit boundary, and known gaps.
+**Wave 1** addressed bugs and backend work in parallel: @@architect owned the Rust side (MCP transport fix, FD pressure, drive metadata path migration, Drafts lifecycle, lock-poisoning hardening, metadata archive export/import) while @@architect owned the Svelte side (Rich Prompt four-route contract, Spawn Agents UI, page breaks, toolbar changes). Test lanes (WebtestA, WebtestB) filed wave reports in a fixed shape: scope, repro-status matrix, evidence, suspected owner, recommended commit boundary, and known gaps.
 
 **Wave 2** was the desktop runtime walk, handled by the desktop-specialist handles. It did not fully land; most desktop-native charter items were deferred to phase 10 and later.
 
@@ -32,25 +32,25 @@ Agent roster is in ../agents/README.md.
 ```
 handle           role this phase
 ---------------  ---------------------------------------------------
-@@Architect      request, design notes; split into two for the round
-@@CoreArchitect  chan-drive/server/MCP/terminal, event watcher,
+@@architect      request, design notes; split into two for the round
+@@architect  chan-drive/server/MCP/terminal, event watcher,
                  Drafts safety, FD work (no separate card; role split)
-@@WebArchitect   Svelte UI, Rich Prompt UX, Spawn Agents, page breaks
+@@architect   Svelte UI, Rich Prompt UX, Spawn Agents, page breaks
                  (no separate card; role split)
-@@Systacean      MCP transport fix, FD control, CAS, path-key metadata
-@@WebtestA       terminal/editor/search/list triage
-@@WebtestB       hamburger/focus/FB/Graph/Draft smoke
-@@WebtestLive    live iab walks, found two live bugs (no card)
-@@Desktect       cross-platform desktop-native lead
-@@Desktest       fresh-Mac Gatekeeper DMG walk (deferred)
-@@Desktacean     desktop systems lane
+@@syseng      MCP transport fix, FD control, CAS, path-key metadata
+WebtestA       terminal/editor/search/list triage
+WebtestB       hamburger/focus/FB/Graph/Draft smoke
+WebtestLive    live iab walks, found two live bugs (no card)
+@@architect       cross-platform desktop-native lead
+Desktest       fresh-Mac Gatekeeper DMG walk (deferred)
+@@rustacean     desktop systems lane
 ```
 
 Coordination scheme: per-author subdirectories under the phase directory, with wave-based reporting from each test lane to the architect. Dispatch was architect-orchestrated through copy-paste handover prompts naming the first dispatch per lane.
 
-The distinctive feature this phase was the Core/Web Architect split: @@Architect ran as two concurrent roles (@@CoreArchitect and @@WebArchitect) with an explicit boundary rule (Core owns Rust routes; Web owns Svelte and the contract surface) and a closing survey before merging conclusions. This was a controlled trial ahead of scaling to three leads. The two lanes converged on the same four-route contract without rework, validating the boundary rule.
+The distinctive feature this phase was the Core/Web Architect split: @@architect ran as two concurrent roles (@@architect and @@architect) with an explicit boundary rule (Core owns Rust routes; Web owns Svelte and the contract surface) and a closing survey before merging conclusions. This was a controlled trial ahead of scaling to three leads. The two lanes converged on the same four-route contract without rework, validating the boundary rule.
 
-The desktop handles (@@Desktect, @@Desktest, @@Desktacean) have cards but did not land a phase-9 journal because the desktop runtime walk was deferred to the end of the round and then carried forward.
+The desktop handles (@@architect, Desktest, @@rustacean) have cards but did not land a phase-9 journal because the desktop runtime walk was deferred to the end of the round and then carried forward.
 
 The Rich Prompt revamp itself proposed turning this coordination scheme into a product feature: a per-prompt `spool/` with `events/`, `journals/`, and `tasks/` mirroring the manual multi-agent process.
 
@@ -71,7 +71,7 @@ The Rich Prompt revamp itself proposed turning this coordination scheme into a p
 
 **Tried but partial or deferred (not undone):**
 - Path-keyed metadata batches 3 and 4 (multi-drive server routing and UI labels) carried forward.
-- `[[` search semantics: root-caused but awaiting @@Alex's product call (open into phase 10).
+- `[[` search semantics: root-caused but awaiting Alex's product call (open into phase 10).
 - Deterministic "too many open files" repro: addressed at the admission layer but a clean isolated repro was not achieved.
 - Desktop-native charter items: multi-drive server routing, three-mode connection, default "Chan" drive lifecycle, the DMG Gatekeeper walk.
 
@@ -84,7 +84,7 @@ The Rich Prompt revamp itself proposed turning this coordination scheme into a p
 
 **Highlights:**
 - The Codex MCP root-cause was precise: the transport framing mismatch (newline-delimited vs. Content-Length) was identified and fixed with a fallback path, unblocking external agent integration.
-- The PTY identity collision was caught live by @@WebtestLive and fixed in the same round, preventing a silent regression from shipping.
+- The PTY identity collision was caught live by WebtestLive and fixed in the same round, preventing a silent regression from shipping.
 - The Core/Web Architect split worked. The explicit boundary rule and the closing survey let two concurrent lanes converge on the same four-route contract without a rework cycle. This is the coordination pattern to carry forward when splitting front/back work.
 - FD pressure was addressed structurally at two layers (admission and index), not patched at the symptom site.
 
@@ -96,11 +96,11 @@ The Rich Prompt revamp itself proposed turning this coordination scheme into a p
 
 **Constructive feedback:**
 
-For agents: a test lane without a functioning browser should escalate the tooling block at the start of wave 1, not at the end after producing a full static report. Static evidence can confirm Rust correctness but cannot close UI claims; filing a partial report honestly labeled as such is more useful than a complete report that silently omits live coverage. @@Systacean's wave report shape (repro-status matrix, suspected owner, recommended commit boundary, known gaps) is the model to use.
+For agents: a test lane without a functioning browser should escalate the tooling block at the start of wave 1, not at the end after producing a full static report. Static evidence can confirm Rust correctness but cannot close UI claims; filing a partial report honestly labeled as such is more useful than a complete report that silently omits live coverage. @@syseng's wave report shape (repro-status matrix, suspected owner, recommended commit boundary, known gaps) is the model to use.
 
-For the architect: leaving the `[[` search semantics as an explicit product question for @@Alex rather than guessing was the right call. The Core/Web split with a closing survey is the right instrument before scaling the split further.
+For the architect: leaving the `[[` search semantics as an explicit product question for Alex rather than guessing was the right call. The Core/Web split with a closing survey is the right instrument before scaling the split further.
 
-For @@Alex: several roadmap bugs were filed against the installed v0.13.0 binary but were already fixed at HEAD. Re-running repros against a fresh build before filing would cut false-positive triage loops. Literal Cmd+P validation on a native run is the one item that cannot be closed by CI or agents; @@Alex accepted owning that check post-release.
+For Alex: several roadmap bugs were filed against the installed v0.13.0 binary but were already fixed at HEAD. Re-running repros against a fresh build before filing would cut false-positive triage loops. Literal Cmd+P validation on a native run is the one item that cannot be closed by CI or agents; Alex accepted owning that check post-release.
 
 ## Notes
 

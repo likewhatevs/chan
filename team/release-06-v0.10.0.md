@@ -30,11 +30,11 @@ The phase closed with six area-grouped commits plus a wrap commit, and cut v0.10
 
 See ../agents/README.md for full agent cards. Handles active this phase:
 
-- @@Architect: plan, design memo (graph layering, color, permissions), reviews, wrap.
-- @@Frontend: sole frontend slot, 15 task lanes covering graph UI flip, UX bundles, terminal chords, and rich-prompt overlay. (Card later renamed FullStack A/B.)
-- @@Backsystacean: combined Backend + Syseng + Rustacean slot covering the file classifier, kind registry, unified /api/inspector and /api/graph, /api/health, PTY hooks, and the folder-to-directory codemod. (Card later split into FullStack + Systacean.)
-- @@WebtestA: live test service, browser smoke, latency probes, regression hunt.
-- @@WebtestB: parallel API-level probe scenarios.
+- @@architect: plan, design memo (graph layering, color, permissions), reviews, wrap.
+- @@webdev: sole frontend slot, 15 task lanes covering graph UI flip, UX bundles, terminal chords, and rich-prompt overlay. (Card later renamed FullStack A/B.)
+- @@syseng: combined Backend + Syseng + Rustacean slot covering the file classifier, kind registry, unified /api/inspector and /api/graph, /api/health, PTY hooks, and the folder-to-directory codemod. (Card later split into FullStack + Systacean.)
+- WebtestA: live test service, browser smoke, latency probes, regression hunt.
+- WebtestB: parallel API-level probe scenarios.
 
 Coordination scheme: flat task files at the phase root named `{agent}-{n}.md`, dispatched by the architect through a single shared `journal.md` that held a checklist, a capacity proposal, a dispatch table, an "Extended requests" table for mid-phase additions, and a decisions log.
 
@@ -73,7 +73,7 @@ Investigated, not reproduced:
 
 Highlights:
 
-- The headline architectural ask landed end to end in a single session. @@Alex spotted the gap live (graph chip counts read zero for language/media/folder because /api/graph emitted only markdown-centric nodes); the producer fix merged the filesystem and language graphs into /api/graph, was contract-reviewed, and shipped the same day.
+- The headline architectural ask landed end to end in a single session. Alex spotted the gap live (graph chip counts read zero for language/media/folder because /api/graph emitted only markdown-centric nodes); the producer fix merged the filesystem and language graphs into /api/graph, was contract-reviewed, and shipped the same day.
 - Parallel webtest probes found five real defects: hardlink double-count, missing frontmatter-kind field, asymmetric frontmatter shape, missing symlinks in a listing, filesystem-graph special-file collapse. All were folded into a single fix bundle rather than scattered commits.
 - The forbid-unsafe build break was caught fast and resolved in-session without needing a follow-up round.
 
@@ -81,7 +81,7 @@ Lowlights:
 
 - The unsafe PTY block was introduced before the build was checked, leaving HEAD broken for a transient window. Forbid lints at the crate level are non-negotiable; checking the build before committing load-bearing changes is the minimum bar.
 - Two early frontmatter docs showed the flat shorthand instead of the nested registry shape because the design was drafted against an assumed parser shape. Reading the existing parser in the first design pass would have prevented two rewrite cycles.
-- @@Architect orientation lagged again: three lanes were in flight before the journal existed, requiring a reconciliation pass. This was the trigger for switching to per-author directories in phase 7.
+- @@architect orientation lagged again: three lanes were in flight before the journal existed, requiring a reconciliation pass. This was the trigger for switching to per-author directories in phase 7.
 - The desktop bundle version was missing from the version-bump file list, so the first DMG shipped with a stale label and had to be rebuilt.
 
 Lessons (carry forward):

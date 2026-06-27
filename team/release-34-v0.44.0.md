@@ -1,11 +1,11 @@
 # Phase 34 - launcher reflects reality (workspaces + devservers) + `chan open`/`close` + transfer bubble
 
 Status: ready for release as `v0.44.0`. All build work landed + committed; the workspace/server/CLI
-behaviors are covered by unit + HTTP-layer tests and each lane's own-gate, plus an @@Lead headless e2e
+behaviors are covered by unit + HTTP-layer tests and each lane's own-gate, plus an Lead headless e2e
 (local devserver + `chan open`/`close`/`--remove`) that caught and confirmed-fixed a real bug. The
 full-tree integrated gate runs at round close; version pins bump at tag. The WKWebView-native bits — the
 transfer bubble's live download/cancel, the clickable Open-windows dot, the close-guard prompt, the §4
-Open/Turn-on window mint, the file-browser content-peek — are desktop-only and deferred to @@Alex's
+Open/Turn-on window mint, the file-browser content-peek — are desktop-only and deferred to Alex's
 end-to-end smoke (he will run the `cs download` 1-2-files-then-cancel pass). Span: 2026-06-22.
 Tags: #web-launcher #chan-library #devserver #devserver-registry #chan-open-close #cs-upload-download
 #transfer-bubble #window-close-guard #cs-open-plaintext #rich-prompt #4-agent-team
@@ -15,7 +15,7 @@ still ran against an in-memory mock — so the desktop loopback showed a hardcod
 (`notes`/`Journal`/`prod`) instead of the user's real workspaces. Phase 34 closes that: the launcher
 becomes a true view of the real library on the desktop, finishes the `chan serve`/`unserve` →
 `chan open`/`close` verb migration, reshapes the devserver form to a single URL, and — folded in by
-@@Alex during the round — makes `cs upload`/`cs download` a visible, cancellable, reload-surviving
+Alex during the round — makes `cs upload`/`cs download` a visible, cancellable, reload-surviving
 surface tied to its window.
 
 ## What shipped
@@ -48,7 +48,7 @@ surface tied to its window.
   the dial; no-desktop → clear error). `chan close {path}` is best-effort unserve (idempotent); `--remove`
   also forgets the workspace. `ControlRequest::Unserve` → `Close { remove }`.
 
-**`cs upload`/`cs download` visible + cancellable + window-scoped (folded in by @@Alex):**
+**`cs upload`/`cs download` visible + cancellable + window-scoped (folded in by Alex):**
 
 - A per-window `transfers` model + `TransferBubble.svelte` (progress + Cancel/Retry/Dismiss), opened from a
   status-bar launcher; the bubble is the single download surface (the inspector download bar was retired).
@@ -76,8 +76,8 @@ surface tied to its window.
 
 ## Team / process
 
-4-agent round (@@Lead + @@Launcher + @@Desktop + @@CLI), seam-first. @@Lead pinned two mini-seams — the
-`DevserverRegistry` (round open) and the `WindowTransfers` close-guard signal (mid-round, when @@Alex folded
+4-agent round (Lead + Launcher + Desktop + CLI), seam-first. Lead pinned two mini-seams — the
+`DevserverRegistry` (round open) and the `WindowTransfers` close-guard signal (mid-round, when Alex folded
 in the transfer feature) — and the workers built their surfaces against the pinned contracts. Dispatch +
 journals under `dev/v0.44.0/team/` (gitignored live bus).
 
@@ -85,14 +85,14 @@ journals under `dev/v0.44.0/team/` (gitignored live bus).
 
 ### Done
 
-§1-§5 + every @@Alex fold-in (rich-prompt, notice copy, clickable dot, `cs open` plaintext + file-browser
+§1-§5 + every Alex fold-in (rich-prompt, notice copy, clickable dot, `cs open` plaintext + file-browser
 peek, the full transfer feature, the inspector-bar retirement, the `chan close --remove` devserver fix). All
-lanes own-gate-green; @@Lead headless e2e verified the devserver + `chan open`/`close`/`--remove` path and
+lanes own-gate-green; Lead headless e2e verified the devserver + `chan open`/`close`/`--remove` path and
 caught the `--remove` bug before ship.
 
-### Pending (deferred to @@Alex / next phase)
+### Pending (deferred to Alex / next phase)
 
-- **@@Alex's live desktop smoke** — the WKWebView bits (transfer bubble live download/cancel, the dot,
+- **Alex's live desktop smoke** — the WKWebView bits (transfer bubble live download/cancel, the dot,
   close-guard prompt, §4 Open, file-browser peek). Ships gated-green + live-unverified per the pre-release
   norm.
 - See "Next-phase follow-ups" below.
@@ -101,13 +101,13 @@ caught the `--remove` bug before ship.
 
 - **Seam-first held up twice.** Both mini-seams (`DevserverRegistry`, `WindowTransfers`) let three lanes
   build in parallel against stable contracts with no wire churn — the second one was pinned mid-round under
-  a feature @@Alex folded in late, and still landed clean.
-- **Worker judgment.** Agents deviated correctly from @@Lead's suggested task shapes when those were wrong
-  (e.g. @@CLI keying the close-guard on the `?w=` session id not the label; resolving the prefix from window
+  a feature Alex folded in late, and still landed clean.
+- **Worker judgment.** Agents deviated correctly from Lead's suggested task shapes when those were wrong
+  (e.g. CLI keying the close-guard on the `?w=` session id not the label; resolving the prefix from window
   records because `config_key` is empty for watcher windows; choosing the 8 KiB sniff over a full read).
-- **The e2e earned its keep.** @@Alex's request for a pre-ship devserver smoke caught a real
+- **The e2e earned its keep.** Alex's request for a pre-ship devserver smoke caught a real
   `chan close --remove` bug (lingering launcher entry + restart resurrection) that every per-lane unit gate
-  had passed. @@CLI's deeper root-cause fix (persist_state reconciliation) also closed a latent bug in the
+  had passed. CLI's deeper root-cause fix (persist_state reconciliation) also closed a latent bug in the
   launcher DELETE path.
 
 ### Lowlights
@@ -126,12 +126,12 @@ caught the `--remove` bug before ship.
 - **To the workers:** consistently strong — own-gates with `-D warnings` parity, atomic pathspec commits, and
   the good sense to flag gnarly findings (the flaky-trigger gotcha, the config_key emptiness) rather than
   paper over them. Keep it.
-- **To @@Lead (me):** I mis-framed the transfer feature as workspace-level and conflated "library-level
-  transfers" with the separate chan-library-metadata item — @@Alex had to correct me. I should have scoped
+- **To Lead (me):** I mis-framed the transfer feature as workspace-level and conflated "library-level
+  transfers" with the separate chan-library-metadata item — Alex had to correct me. I should have scoped
   the transfer feature's full shape (which surfaces, which level) up front instead of discovering it
-  reactively across pokes. I also under-specified the close-guard in the first transfer task (@@Launcher's
+  reactively across pokes. I also under-specified the close-guard in the first transfer task (Launcher's
   discovery didn't include it; I had to re-require it).
-- **To @@Alex:** folding many asks in mid-round (each reasonable on its own) compounded into significant
+- **To Alex:** folding many asks in mid-round (each reasonable on its own) compounded into significant
   late scope on a round that was otherwise near-closed; it worked only because the lanes stayed disciplined
   and the seams absorbed it. The reorder (do docs+gate, smoke later) was the right call to stop the growth.
 
@@ -140,7 +140,7 @@ caught the `--remove` bug before ship.
 1. **Standalone-terminal `cs download`/`cs upload`** (library-level transfers): the terminal tenant has no
    workspace and no per-tenant control socket, so this needs a terminal-tenant control socket + a
    workspace-less transfer handler + a defined transfer target/scope (with sandbox implications). This round
-   is workspace-only by @@Alex's decision.
+   is workspace-only by Alex's decision.
 2. **chan-library metadata.** Move the download/upload of workspace metadata to become chan-library metadata,
    with the functionality living in the chan-library SPA (web-launcher).
 3. **Transfer close-guard for connected-devserver windows.** The guard is local-library only today; a

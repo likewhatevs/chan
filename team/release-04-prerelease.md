@@ -15,7 +15,7 @@ Phase 4 did not run. It is a numbering skip: the project's active sequence jumps
 
 ## Team and coordination
 
-No agents were assigned and no work was recorded. The imported process.md defined a roster (architect plus backend, frontend, webtest, syseng, rustacean lanes) and a coordination scheme based on markdown files with ownership by @@mention, but those were template role definitions, not a record of anyone working this phase. Agent handles and roles are documented in ../agents/README.md.
+No agents were assigned and no work was recorded. The imported process.md defined a roster (architect plus backend, frontend, webtest, syseng, rustacean lanes) and a coordination scheme based on markdown files with ownership by `@@mention`, but those were template role definitions, not a record of anyone working this phase. Agent handles and roles are documented in ../agents/README.md.
 
 ## What shipped, tried, and undone
 

@@ -26,9 +26,9 @@ A single round under one architect. Wave 1 (immediate): positioning docs and the
 
 Three lanes, coordinated through the shared phase-style bus:
 
-- @@LaneA (architect plus positioning docs): the docs re-steer across README, design.md, the manual, CLAUDE.md, AGENTS.md, multi-user fixes, screenshot staging, coordination, and commits.
-- @@LaneB (in-app About slide): redone on-spec; npm build plus cargo build plus browser smoke green.
-- @@LaneC (marketing site plus /story): home, build.mjs, story; npm run check passing (build plus four smokes); forbidden-term greps at zero.
+- LaneA (architect plus positioning docs): the docs re-steer across README, design.md, the manual, CLAUDE.md, AGENTS.md, multi-user fixes, screenshot staging, coordination, and commits.
+- LaneB (in-app About slide): redone on-spec; npm build plus cargo build plus browser smoke green.
+- LaneC (marketing site plus /story): home, build.mjs, story; npm run check passing (build plus four smokes); forbidden-term greps at zero.
 
 ## What shipped, tried, and undone
 
@@ -41,7 +41,7 @@ Shipped to main (commits bd30b27a, 7e1af154, b2f8e94d):
 
 Pending at close:
 
-- /story ships from the founder draft; a voice pass by @@Alex was left open.
+- /story ships from the founder draft; a voice pass by Alex was left open.
 - The hero uses the team-work fleet image; there is no current editor screenshot (the stale ones were deleted), so a fresh editor capture is needed if an editor shot is wanted.
 
 ## Retrospective
@@ -49,12 +49,12 @@ Pending at close:
 Highlights:
 
 - Both worker lanes turned the mid-round re-steer around quickly and on-spec, self-verified green, and reported through status files.
-- @@LaneC handled the local/tunnel demotion and removed dangling editor-shot references without being handed the exact markup.
+- LaneC handled the local/tunnel demotion and removed dangling editor-shot references without being handed the exact markup.
 - A clean two-commit split (product copy vs round docs) with verified staging in a shared worktree.
 
 Lowlights and lessons:
 
-- The @@LaneC gate was nominally satisfied but the screenshots were only in the journal directory, not in web-marketing/assets/; the architect caught it only at staging time. Lesson: a "gate green" claim must point at the artifact's final location, not a working copy.
+- The LaneC gate was nominally satisfied but the screenshots were only in the journal directory, not in web-marketing/assets/; the architect caught it only at staging time. Lesson: a "gate green" claim must point at the artifact's final location, not a working copy.
 - The positioning copy was re-wrapped several times as the direction evolved. Lesson: lock the line before applying it to save passes.
 - The re-steer arrived in waves (keyboard-first, then modern-engineer, then multi-user, then screenshots, then delete old shots). Each was clear and sharpened the copy, but front-loading the full direction would have cut some rework.
 - Shell grep flakiness (output truncation on a no-match exit) cost a couple of retries; wrapping greps to force a zero exit fixed it.

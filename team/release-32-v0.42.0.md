@@ -4,7 +4,7 @@ Status: code complete, gated full-tree green (workspace + gateway workspace + we
 `0.42.0`, CHANGELOG `[v0.42.0]` filled; tagged `v0.42.0`. The library/store/HTTP behaviors are covered
 by unit + HTTP-layer tests and the full gate; the WKWebView-native bits (the desktop New Terminal /
 Cmd+Shift+N, intra-window d&d, the rich-prompt composer, Cmd+R reattach) are desktop-only and were
-confirmed by @@Alex's end-to-end re-smoke against a fresh Mac app + a fresh `chan devserver` on lima.
+confirmed by Alex's end-to-end re-smoke against a fresh Mac app + a fresh `chan devserver` on lima.
 Span: 2026-06-21 → 2026-06-22.
 Tags: #chan-library #devserver #gateway #devserver-proxy #per-devserver-tunnel #first-open
 #workspace-overlay #terminal-persistence #drag-and-drop #rich-prompt #dead-code
@@ -48,7 +48,7 @@ forwards to whatever the devserver's own router serves.
   with email-based sharing grants and a sharing-only **Devservers** dashboard (opening the whole
   devserver as a launcher is deferred — see "Still open"). Glossary + ADR-0001 record the model.
 
-**Desktop smoke fixes (confirmed by @@Alex's re-smoke):**
+**Desktop smoke fixes (confirmed by Alex's re-smoke):**
 
 - New Terminal and Cmd+Shift+N on a devserver window mint through the focused window's library instead
   of a local/legacy isolated terminal.

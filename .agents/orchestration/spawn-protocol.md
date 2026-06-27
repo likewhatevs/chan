@@ -1,6 +1,6 @@
 # Agent spawn protocol
 
-chan-server exposes an HTTP control channel for creating named terminal tabs, executing agent CLIs inside them, and managing their lifecycle. The intended caller is an orchestrating agent (e.g. a team `@@Lead` running inside a chan terminal) that needs to spawn helper agents on demand.
+chan-server exposes an HTTP control channel for creating named terminal tabs, executing agent CLIs inside them, and managing their lifecycle. The intended caller is an orchestrating agent (e.g. a team `Lead` running inside a chan terminal) that needs to spawn helper agents on demand.
 
 > **Status note**: this contract is a retained design blueprint. The watcher-driven runtime it rode on was removed in the Team Work revamp and is planned to return (see [README.md](README.md)); until then, treat this as the target shape, not current runtime.
 
@@ -20,7 +20,7 @@ Body:
 
 ```json
 {
-  "name": "@@AgentName",
+  "name": "@@agent",
   "command": "claude --model=claude-opus-4-7 --dangerously-skip-permissions",
   "env": {
     "EXTRA": "value"
@@ -28,7 +28,7 @@ Body:
 }
 ```
 
-* `name` - the tab's display name. The chan-server event watcher uses this to route `poke\n` dispatches by matching the `to` field of incoming events. Use the `@@Name` convention.
+* `name` - the tab's display name. The chan-server event watcher uses this to route `poke\n` dispatches by matching the `to` field of incoming events. Use the `@@agent` convention.
 * `command` - the full CLI to run, including flags. No argv-array form; chan splits on the shell quoting you provide.
 * `env` - optional extras merged into the PTY environment on top of chan's default `CHAN_*` env plumbing.
 
@@ -37,7 +37,7 @@ Response: `201 Created`
 ```json
 {
   "session": "<terminal-session-id>",
-  "tab_label": "@@AgentName"
+  "tab_label": "@@agent"
 }
 ```
 
@@ -57,8 +57,8 @@ When the spawned command emits stdout that matches one of chan-server's pre-flig
 {
   "id": "<unique>",
   "type": "pre-flight",
-  "from": "@@AgentName",
-  "to": "@@Lead",
+  "from": "@@agent",
+  "to": "Lead",
   "topic": "spawn-pre-flight",
   "questions": [
     {
@@ -88,7 +88,7 @@ Previously, the Team Work bubble overlay rendered this as a normal single-topic 
 1. An orchestrating agent decides to spawn a helper agent.
 2. It POSTs `/api/terminals` with the helper's name + CLI.
 3. chan-server creates the tab, launches the PTY, gets the tab name into the watcher dispatch registry.
-4. If the helper boots cleanly, that's it - the helper is now reachable by routing events at `@@HelperName`.
+4. If the helper boots cleanly, that's it - the helper is now reachable by routing events at `@@agent`.
 5. If the helper emits a pre-flight signal first, chan-server fires the `pre-flight` event into the orchestrator's watcher dir; user picks; chan-server acts.
 6. Helper does its work, sends events back via atomic writes (see [atomic-writes.md](./atomic-writes.md)).
 

@@ -1,12 +1,12 @@
 # Phase 30 - making the devserver window lifecycle actually work: reattach, discard, and the FD leak
 
-Status: code complete, gated full-tree green; **not yet landed/released** (awaiting @@Alex's land
+Status: code complete, gated full-tree green; **not yet landed/released** (awaiting Alex's land
 decision for the `v0.40.0` branch). `make pre-push` green over the committed state (the authoritative
 isolated full-tree gate at each checkpoint) and `cargo xwin` (`x86_64-pc-windows-msvc`, `-D warnings`)
 green for chan-server/chan/chan-workspace/chan-desktop. The reliability core is **double-proven** -
 headless against a `chan serve` oracle AND against a real lima devserver (the per-tenant
-`session_dir` path = @@Alex's exact repro). Desktop-only WKWebView/native checks (the control-terminal
-dialog, the launcher empty-state visual, the menu-reopen) are pending @@Alex's hand-smoke
+`session_dir` path = Alex's exact repro). Desktop-only WKWebView/native checks (the control-terminal
+dialog, the launcher empty-state visual, the menu-reopen) are pending Alex's hand-smoke
 (`dev/v0.40.0/team/followups/alex-desktop-residue.md`).
 Span: 2026-06-19.
 Tags: #devserver #terminal #reattach #fd-leak #window-lifecycle #discard-vs-bury #control-terminal #cli #ps #seam-first #windows #mcp #graph
@@ -21,7 +21,7 @@ FD leak are one root cause** - terminal sessions now live exactly as long as the
 serves the host library** (decision D1 - fixing "comes up empty / stuck on Loading"), the
 **control-terminal dialog** fires on a connected-phase exit, a **`chan workspace <…>`** CLI reorg, the
 new `chan ps`, menu-reopen of closed devserver windows, and the deferred Windows/graph items. Ran as a
-five-member team (@@Lead + @@Desktop / @@Devserver / @@Web / @@Core), **seam-first**: three wire
+five-member team (Lead + Desktop / Devserver / @@webdev / Core), **seam-first**: three wire
 contracts frozen up front, eight amendments ratified from the lanes' real implementations, all against
 one `contracts.md`.
 
@@ -98,21 +98,21 @@ one `contracts.md`.
   Seam C control dialog) frozen in `dev/v0.40.0/team/contracts.md` at t=0 after verifying every anchor
   against HEAD; **eight amendments** ratified from the lanes' real implementations - none reopened a
   frozen shape.
-- **Reliability core, double-proven** (the harnesses under `dev/v0.40.0/team/scratch/`): @@Devserver's
+- **Reliability core, double-proven** (the harnesses under `dev/v0.40.0/team/scratch/`): Devserver's
   dual-platform FD soak (reattach holds the fd count flat, no respawn; discard reaps; the broken
-  respawn path reproduces @@Alex's unbounded climb), @@Web's headless continuation + headline-acceptance
+  respawn path reproduces Alex's unbounded climb), @@webdev's headless continuation + headline-acceptance
   smokes (multi-terminal close→reopen resumes live PTYs + scrollback + identical layout; ^W/^D/empty
   vanish from `cs window list`; an adversarial no-session control proves the test discriminates), run
   on both a `chan serve` oracle AND the lima devserver's per-tenant `session_dir` path.
 - **CLI E2E** (`scratch/l4-cli-e2e.sh`): `chan workspace ls` identical direct vs devserver-routed;
   `chan workspace rm` routes `Unserve` and unmounts only that tenant; `chan ps` classifies the kind.
-- **Isolated full-tree gate** (@@Lead's separate worktree, immune to in-flight WIP): `make pre-push`
+- **Isolated full-tree gate** (Lead's separate worktree, immune to in-flight WIP): `make pre-push`
   (fmt, clippy `-D warnings`, all workspace tests, no-default + gateway builds, web vitest+svelte,
   marketing) + `cargo xwin`, green on the final tip.
 
 ## Deferred / follow-ups
 
-- **Desktop-only hand-smoke** (WKWebView/native, not Chrome-automatable) handed to @@Alex:
+- **Desktop-only hand-smoke** (WKWebView/native, not Chrome-automatable) handed to Alex:
   `dev/v0.40.0/team/followups/alex-desktop-residue.md` - the control-terminal dialog, the launcher
   empty-state visual, and the L10 menu-reopen.
 - **Process-group kill on session close** - the conservative SIGKILL-the-direct-child teardown leaves a

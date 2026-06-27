@@ -7,7 +7,7 @@ Tags: #features #bugfixes #graph #editor #search #indexing
 
 ## Roadmap (the asks)
 
-@@Alex framed the asks as "a list of items for this phase of product hardening, correctness, and UX impact":
+Alex framed the asks as "a list of items for this phase of product hardening, correctness, and UX impact":
 
 **Graph**
 - Clamp the depth slider per scope (single file = 1, N files = N, folder by subfolder count, drive knows its max depth).
@@ -31,7 +31,7 @@ Tags: #features #bugfixes #graph #editor #search #indexing
 
 Single-round phase. The architect dispatched work through flat task files (`{agent}-{n}.md`) at the phase root. Several lanes produced work in parallel before the journal was finalized, and the architect reconciled the dispatch table to the actual filenames afterward.
 
-Mid-phase, the codex @@Webtest agent crashed the browser extension and was replaced by two Opus 4.7 agents, one dual-roling as @@Backend. All work resolved in a single day.
+Mid-phase, the codex Webtest agent crashed the browser extension and was replaced by two Opus 4.7 agents, one dual-roling as Backend. All work resolved in a single day.
 
 ## Team and coordination
 
@@ -40,15 +40,15 @@ Agent roster is in `../agents/README.md`. Legacy handles used this phase:
 ```
 Handle        Role this phase
 -----------   -------------------------------------------------
-@@Architect   plan, dispatch, journal, summary
-@@Backend     HTTP boundary, content-search collapse,
+@@architect   plan, dispatch, journal, summary
+Backend     HTTP boundary, content-search collapse,
               FS-truth graph, languages endpoint
-@@Frontend    overlays, list guides, force layout, live
+@@webdev    overlays, list guides, force layout, live
               reload, language UI (largest lane)
-@@Syseng      filesystem/watcher/process hardening; ran the
+@@syseng      filesystem/watcher/process hardening; ran the
               pre-architect survey that scoped the round
-@@Rustacean   Rust quality, Cargo hygiene, polish
-@@Webtest     test service + smoke runner; ran as A/B after
+@@rustacean   Rust quality, Cargo hygiene, polish
+Webtest     test service + smoke runner; ran as A/B after
               a mid-phase agent recycle
 ```
 

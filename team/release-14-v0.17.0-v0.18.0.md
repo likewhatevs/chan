@@ -19,12 +19,12 @@ An addendum folded five phase-13 round-2 carryovers into the lanes: a circular `
 
 Round 1 ran before rounds 2 and 3 opened. The gateway migration is a single coherent body of work; git author dates place those commits from 2026-05-29 00:08 to 03:46.
 
-Round 2 and 3 ran concurrently across three lanes. @@LaneA (backend Rust) and @@LaneB (frontend only) started in parallel, gated on pinned contracts for the two cross-lane seams. @@LaneC ran C2 (journals reorg, no source-code overlap) concurrently and C1 (frontend comments/docs/copy) last, after @@LaneA and @@LaneB had settled the code. The coordination tree stayed untracked as the live bus throughout; the dated journal headers land on 2026-05-29 and 2026-05-30.
+Round 2 and 3 ran concurrently across three lanes. LaneA (backend Rust) and LaneB (frontend only) started in parallel, gated on pinned contracts for the two cross-lane seams. LaneC ran C2 (journals reorg, no source-code overlap) concurrently and C1 (frontend comments/docs/copy) last, after LaneA and LaneB had settled the code. The coordination tree stayed untracked as the live bus throughout; the dated journal headers land on 2026-05-29 and 2026-05-30.
 
 Lane work from rounds 2 and 3:
-- @@LaneA: cursor-paged `/api/fs-graph` (A1), depth-slider next-degree primitive (A2), pre-flight backend endpoints (A4), draft-banner stress test backend half (B5 assist), de-flake of three indexer/PTY tests (A5), drop `team-work-N` convention. Desktop relocation (A3) was staged but not completed (see Tried/Deferred).
-- @@LaneB: false unsaved-changes banner fix (B1), Cmd+, panes-flip desync fix (B2), `/dl` circular 404 guard rewrite (B3), graph directory expand/collapse with reload-persistence (B4), cursor-paged graph consumption (B4), locked pre-flight `PreflightOverlay.svelte` (B4), and the pristine comment sweep (B2 cleanup subagents).
-- @@LaneC C2: reorganized `docs/journals/` into per-phase second-brain reports (committed as `741aa787`). C1: ASCII typography sweep across all four frontend trees, grounded factual corrections (botched rename codemod, stale pre-Phase-5 `chan-core` references, outdated welcome-tile comment), and rewrote `web/src/editor/design.md` as a present-state snapshot.
+- LaneA: cursor-paged `/api/fs-graph` (A1), depth-slider next-degree primitive (A2), pre-flight backend endpoints (A4), draft-banner stress test backend half (B5 assist), de-flake of three indexer/PTY tests (A5), drop `team-work-N` convention. Desktop relocation (A3) was staged but not completed (see Tried/Deferred).
+- LaneB: false unsaved-changes banner fix (B1), Cmd+, panes-flip desync fix (B2), `/dl` circular 404 guard rewrite (B3), graph directory expand/collapse with reload-persistence (B4), cursor-paged graph consumption (B4), locked pre-flight `PreflightOverlay.svelte` (B4), and the pristine comment sweep (B2 cleanup subagents).
+- LaneC C2: reorganized `docs/journals/` into per-phase second-brain reports (committed as `741aa787`). C1: ASCII typography sweep across all four frontend trees, grounded factual corrections (botched rename codemod, stale pre-Phase-5 `chan-core` references, outdated welcome-tile comment), and rewrote `web/src/editor/design.md` as a present-state snapshot.
 
 ## Team and coordination
 
@@ -33,16 +33,16 @@ Lanes are positional phase-14 handles. The agent roster is in ../agents/README.m
 ```
 handle    role this phase
 --------  --------------------------------------------------
-@@Alex    human owner; authored the three roadmaps and
+Alex    human owner; authored the three roadmaps and
           addendum-1; sole push authority
-@@LaneA   backend hot paths + pre-flight server; Rust only
-@@LaneB   all frontend; no Rust; ran B2 cleanup as parallel
+LaneA   backend hot paths + pre-flight server; Rust only
+LaneB   all frontend; no Rust; ran B2 cleanup as parallel
           edit-only subagents over per-file partitions
-@@LaneC   /architect: C2 journals reorg (concurrent) then
+LaneC   /architect: C2 journals reorg (concurrent) then
           C1 frontend comments/docs/copy (closing wave)
 ```
 
-Coordination scheme: per-lane git worktrees (`../chan-p14-lane-{a,b,c}`) hold source code; all coordination docs (plans, journals, contracts, event channels) are edited in the main checkout by absolute path, keeping the bus one shared, append-only, conflict-free log. The cross-lane seams between @@LaneA and @@LaneB lived in `coordination/contracts.md`: @@LaneA proposed the contract shape, @@LaneB confirmed it, and the agreed API was PINNED before either side built against it. Two contracts were pinned this round: incremental graph delivery (section 1) and the new-workspace pre-flight state machine (section 2). Directional append-only inboxes (`event-<from>-<to>.md`) carried announcements and flags between every pair.
+Coordination scheme: per-lane git worktrees (`../chan-p14-lane-{a,b,c}`) hold source code; all coordination docs (plans, journals, contracts, event channels) are edited in the main checkout by absolute path, keeping the bus one shared, append-only, conflict-free log. The cross-lane seams between LaneA and LaneB lived in `coordination/contracts.md`: LaneA proposed the contract shape, LaneB confirmed it, and the agreed API was PINNED before either side built against it. Two contracts were pinned this round: incremental graph delivery (section 1) and the new-workspace pre-flight state machine (section 2). Directional append-only inboxes (`event-<from>-<to>.md`) carried announcements and flags between every pair.
 
 ## What shipped, tried, and undone
 
@@ -74,14 +74,14 @@ Coordination scheme: per-lane git worktrees (`../chan-p14-lane-{a,b,c}`) hold so
 
 **Tried then corrected**
 
-- The "blank remote window" investigation spent time proving the SPA loads fine over loopback before the real cause was found: a one-line flag-name typo (`--tunnel-workspace` should be `--tunnel-workspace-name`) in the desktop snippet. @@Alex landed the fix directly on main as `f2eb32a9` and swept the gateway-copy and gateway-docs occurrences; the lane's own snippet commit went redundant on rebase.
-- @@LaneB's first B2 cleanup attempt over whole directories over-ran badly (one subagent ran roughly 5 hours before a socket timeout). The second pass used tight per-file single-pass scopes with an explicit anti-loop instruction.
+- The "blank remote window" investigation spent time proving the SPA loads fine over loopback before the real cause was found: a one-line flag-name typo (`--tunnel-workspace` should be `--tunnel-workspace-name`) in the desktop snippet. Alex landed the fix directly on main as `f2eb32a9` and swept the gateway-copy and gateway-docs occurrences; the lane's own snippet commit went redundant on rebase.
+- LaneB's first B2 cleanup attempt over whole directories over-ran badly (one subagent ran roughly 5 hours before a socket timeout). The second pass used tight per-file single-pass scopes with an explicit anti-loop instruction.
 
 **Deliberately deferred**
 
 - A3 desktop relocation (`default_workspace.rs` / `serve.rs` / `main.rs`): best done once the locked OverlayShell exists and the flow can be verified in WKWebView. Coupled to the A5d empirical walk, which agents cannot automate (Chrome/Blink cannot reproduce WKWebView render).
-- Model-prompt policy: @@LaneA made a unilateral call (prompt only when semantic search is enabled but the model is missing, not on every fresh workspace) and flagged it for @@Alex to ratify; left as a carryover.
-- Identity charset mismatch: the SPA advertises `._-` for a workspace name while `--tunnel-workspace-name` accepts only `[a-z0-9-]`. Left open for @@Alex to resolve.
+- Model-prompt policy: LaneA made a unilateral call (prompt only when semantic search is enabled but the model is missing, not on every fresh workspace) and flagged it for Alex to ratify; left as a carryover.
+- Identity charset mismatch: the SPA advertises `._-` for a workspace name while `--tunnel-workspace-name` accepts only `[a-z0-9-]`. Left open for Alex to resolve.
 - Depth-slider paging optimization (frontier-only single-dir expands rather than a paged 0..N refetch): flagged for follow-up after the responsiveness baseline settles.
 - WKWebView desktop walk: a human-only verify (`make macos-chan-dmg`, then Cmd+Shift+N, Cmd+I, Cmd+P, self-upgrade 0.17.0 to 0.18.0 from `/dl`).
 
@@ -91,17 +91,17 @@ Coordination scheme: per-lane git worktrees (`../chan-p14-lane-{a,b,c}`) hold so
 
 The gateway nested-workspace structure held the line: zero gateway crates appear in `cargo metadata` at the root, so the single-binary, no-runtime-deps core stayed clean while the gateway gained its own CI gate, release `.deb` flow, and single-source domain config. The prod packaging path was validated end to end in a systemd sdme container.
 
-The contract-first coordination model proved its value. @@LaneA's first cut of the paged graph delivery matched the eventually-pinned contract exactly, so @@LaneB had zero rework on the graph seam. Against the live endpoint on `/tmp/linux`, the paged `/api/fs-graph` walked the full cursor chain (373 batches, 47,734 nodes at depth 4) and terminated correctly, and the pre-flight reached `ready` within roughly 3 seconds.
+The contract-first coordination model proved its value. LaneA's first cut of the paged graph delivery matched the eventually-pinned contract exactly, so LaneB had zero rework on the graph seam. Against the live endpoint on `/tmp/linux`, the paged `/api/fs-graph` walked the full cursor chain (373 batches, 47,734 nodes at depth 4) and terminated correctly, and the pre-flight reached `ready` within roughly 3 seconds.
 
-@@LaneA caught a third indexer-flake offender (`writes_to_drafts_subtree...`) not listed in the addendum, because it ran the full parallel `cargo test --all-targets` gate (the load profile that flakes) rather than a scoped subset. This is worth repeating: de-flake work should always validate against the full parallel run.
+LaneA caught a third indexer-flake offender (`writes_to_drafts_subtree...`) not listed in the addendum, because it ran the full parallel `cargo test --all-targets` gate (the load profile that flakes) rather than a scoped subset. This is worth repeating: de-flake work should always validate against the full parallel run.
 
 **Lowlights**
 
-@@LaneA over-committed to an SSH-forward diagnosis for the blank-remote-window report. The actual cause was a one-line flag-name typo that a 30-second grep of the desktop's `chan serve` command construction would have surfaced immediately. The pattern of ruling out transport before checking the exact flags emitted is backwards for desktop/CLI divergence bugs.
+LaneA over-committed to an SSH-forward diagnosis for the blank-remote-window report. The actual cause was a one-line flag-name typo that a 30-second grep of the desktop's `chan serve` command construction would have surfaced immediately. The pattern of ruling out transport before checking the exact flags emitted is backwards for desktop/CLI divergence bugs.
 
 The B2 whole-directory subagent scope caused a 5-hour over-run. Tight per-file scopes with an explicit anti-loop guard are the right shape for multi-agent cleanup passes from the start, not as a recovery measure.
 
-Three empirical checks could not be automated and were deferred: WKWebView desktop walk, graph-fills-in-gradually browser visual, and the locked-overlay render (the index completes fast and the embedding model is bundled, so the lock is rarely observable). Planning for the WKWebView dependency earlier would have let @@Alex schedule the manual verify without it becoming a carryover.
+Three empirical checks could not be automated and were deferred: WKWebView desktop walk, graph-fills-in-gradually browser visual, and the locked-overlay render (the index completes fast and the embedding model is bundled, so the lock is rarely observable). Planning for the WKWebView dependency earlier would have let Alex schedule the manual verify without it becoming a carryover.
 
 **Lessons**
 
@@ -110,7 +110,7 @@ Three empirical checks could not be automated and were deferred: WKWebView deskt
 - Watch for state keyed on an ephemeral id: the draft buffer with no session marker and the graph-tab persistence key bound to a regenerating tab id are two instances of the same class of bug that recurred this round.
 - Contract-first splits (propose, confirm, pin before building) pay off at integration in concurrent backend/frontend rounds; the shape produced zero seam rework here and is worth keeping as the default for that pairing.
 - Product calls that are not ratified up front (model-prompt policy, desktop pre-flight relocation) tend to land as flagged carryovers. Stating the intended default at roadmap time lets the lane finish cleanly.
-- Spec-first reorgs (sign off the shape before writing any report) keep large doc migrations coherent; @@LaneC's C2 approach is the right model for journals work.
+- Spec-first reorgs (sign off the shape before writing any report) keep large doc migrations coherent; LaneC's C2 approach is the right model for journals work.
 
 ## Notes
 

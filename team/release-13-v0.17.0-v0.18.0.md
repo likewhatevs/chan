@@ -7,7 +7,7 @@ Tags: #bugfixes #editor #graph #features #release #desktop
 
 ## Roadmap (the asks)
 
-Two rounds, each authored as a standalone roadmap file by @@Alex.
+Two rounds, each authored as a standalone roadmap file by Alex.
 
 **Round 1** was a combined bug list plus three enhancement areas.
 
@@ -29,29 +29,29 @@ Enhancements:
 
 **Round 1 (v0.17.0)**
 
-Two lanes ran in parallel against the same git checkout. @@LaneA owned the content surfaces (editor, terminal, Inspector); @@LaneB owned the structural shell (pane, graph, Dashboard). One hard cross-lane dependency: the Inspector kind-chips gate on @@LaneB's graph KIND routes going in first. @@LaneB also owned the merge gate: it gated the combined tree and cut v0.17.0 after both lanes finished.
+Two lanes ran in parallel against the same git checkout. LaneA owned the content surfaces (editor, terminal, Inspector); LaneB owned the structural shell (pane, graph, Dashboard). One hard cross-lane dependency: the Inspector kind-chips gate on LaneB's graph KIND routes going in first. LaneB also owned the merge gate: it gated the combined tree and cut v0.17.0 after both lanes finished.
 
 **Round 2 (v0.18.0)**
 
-Same two-lane structure with no cross-lane dependencies this time. @@LaneA ran as Team Work full-stack lead and spawned four in-session subagents to handle the work in parallel: backend deletion, frontend foundation, the Team Work component, and the notification-bubble stub. @@LaneB owned the shared files (editor glyphs and chords, desktop chord) and again served as merge gate, cutting v0.18.0.
+Same two-lane structure with no cross-lane dependencies this time. LaneA ran as Team Work full-stack lead and spawned four in-session subagents to handle the work in parallel: backend deletion, frontend foundation, the Team Work component, and the notification-bubble stub. LaneB owned the shared files (editor glyphs and chords, desktop chord) and again served as merge gate, cutting v0.18.0.
 
 ## Team and coordination
 
-Agent roster is in `../agents/README.md`. There was no separate @@Architect handle this phase; @@Alex wore the planning hat, authoring both roadmaps and the closing briefs.
+Agent roster is in `../agents/README.md`. There was no separate @@architect handle this phase; Alex wore the planning hat, authoring both roadmaps and the closing briefs.
 
 ```
 Handle    Role this phase
 --------  -------------------------------------------------
-@@Alex    owner and planner; authored roadmaps and briefs;
+Alex    owner and planner; authored roadmaps and briefs;
           sole authority to push tags
-@@LaneA   R1: content surfaces (editor, terminal, Inspector)
+LaneA   R1: content surfaces (editor, terminal, Inspector)
           R2: Team Work full-stack lead; spawned subagents
-@@LaneB   R1: structural shell (pane, graph, Dashboard);
+LaneB   R1: structural shell (pane, graph, Dashboard);
           R2: editor lists, chords, desktop chord;
           both rounds: merge gate and release cut
 ```
 
-Coordination scheme: append-only per-author directional event channels (`event-<from>-<to>.md`) and per-lane journals in the main checkout, with source code living in per-lane git worktrees. Round-2 entries were appended below a divider in each channel file so the same files served both rounds. @@LaneB serialized all merges; no remote push without an explicit @@Alex ask.
+Coordination scheme: append-only per-author directional event channels (`event-<from>-<to>.md`) and per-lane journals in the main checkout, with source code living in per-lane git worktrees. Round-2 entries were appended below a divider in each channel file so the same files served both rounds. LaneB serialized all merges; no remote push without an explicit Alex ask.
 
 ## What shipped, tried, and undone
 
@@ -84,7 +84,7 @@ The fsnotify-watcher agent-event coordination backend was deleted outright: the 
 
 **Post-cut note**
 
-v0.18.0 cut green across all CI jobs. A `chan.app/dl/*` 404 observed afterward was CDN propagation lag from GitHub Pages, not a release-cut failure. The 0.17.0-to-0.18.0 self-upgrade path via `/dl` was left as an @@Alex desktop verify.
+v0.18.0 cut green across all CI jobs. A `chan.app/dl/*` 404 observed afterward was CDN propagation lag from GitHub Pages, not a release-cut failure. The 0.17.0-to-0.18.0 self-upgrade path via `/dl` was left as an Alex desktop verify.
 
 ## Retrospective
 
@@ -98,13 +98,13 @@ v0.18.0 cut green across all CI jobs. A `chan.app/dl/*` 404 observed afterward w
 **Lowlights**
 
 - A round-1 Cmd+, regression on the desktop (WKWebView) could not be root-caused from the CLI because the Chrome MCP cannot drive WKWebView. A defensive matcher shipped; the fix was flagged empirically unverified at cut time.
-- The round-1 merge gate missed three of @@LaneA's closing slices on the first cycle because it compared against a stale status snapshot rather than reading the channel tail. @@Alex's nudge was required to surface the gap.
+- The round-1 merge gate missed three of LaneA's closing slices on the first cycle because it compared against a stale status snapshot rather than reading the channel tail. Alex's nudge was required to surface the gap.
 - A round-2 list-glyph first attempt was wrong and only the browser smoke caught it, producing one avoidable round-trip.
 
 **Lessons**
 
 - Reading the channel tail (not a last-noted status snapshot) before each merge-gate cycle is the correct discipline; stale status misses work that arrived after the last check.
-- Desktop-only bugs that cannot be reproduced with the Chrome MCP should be escalated to @@Alex as soon as they are confirmed WKWebView-specific, not left as unverified patches.
+- Desktop-only bugs that cannot be reproduced with the Chrome MCP should be escalated to Alex as soon as they are confirmed WKWebView-specific, not left as unverified patches.
 - Blanket string-scrubs need a pre-scan for assertions that check the old string's ABSENCE; those turn into false positives after the rename.
 - Stating "no legacy identifiers, pre-release so no back-compat" up front in the roadmap lets the responsible lane do the full scrub in its own commit rather than leaving it for the merge gate.
 - When a lane owns in-session subagents, declaring shared-file ownership before the subagents start prevents the silent contamination that a concurrent `git add` + `git commit` can cause.

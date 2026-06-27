@@ -9,38 +9,38 @@ Tags: #features #bugfixes #performance #editor #graph #release
 
 There was no single request file. The phase opened from three lane plans and a round-1 bug list. The asks grouped into four areas:
 
-**Drive streaming spine (@@LaneA):** Stream the drive listing so large drives do not block the UI. The goal was progressive file-tree hydration, so first paint would not stall while the full listing was computed.
+**Drive streaming spine (LaneA):** Stream the drive listing so large drives do not block the UI. The goal was progressive file-tree hydration, so first paint would not stall while the full listing was computed.
 
-**Editor and desktop bug bundle (@@LaneB):** A collected bug list that included a trailing-slash directory reject, an idle terminal garbling, a stuck reindex pill, and additional editor/desktop regressions.
+**Editor and desktop bug bundle (LaneB):** A collected bug list that included a trailing-slash directory reject, an idle terminal garbling, a stuck reindex pill, and additional editor/desktop regressions.
 
-**Graph inspector fixes and loading state (@@LaneC):** Graph inspector bugs, a loading state while the graph computed, and the overlay scope wipe.
+**Graph inspector fixes and loading state (LaneC):** Graph inspector bugs, a loading state while the graph computed, and the overlay scope wipe.
 
 **Release contract:** A repeatable document that codified the version contract and the cut process, so future releases could follow a known procedure.
 
 ## Rounds and waves
 
-Phase 11 ran as a single round with a continuation pass. @@Architect dispatched three lanes in parallel from the start. Per-lane git worktrees isolated code changes; coordination documents (event channels, per-author journals) lived in the main checkout. @@Architect serialized every merge and re-gated after each, and @@Alex provided one standing gate per lane before final close.
+Phase 11 ran as a single round with a continuation pass. @@architect dispatched three lanes in parallel from the start. Per-lane git worktrees isolated code changes; coordination documents (event channels, per-author journals) lived in the main checkout. @@architect serialized every merge and re-gated after each, and Alex provided one standing gate per lane before final close.
 
 Round close: all four areas were declared done or accounted for in handoff notes before the phase closed. Part of the bug bundle and some graph polish carried forward to phase 12 as explicit deferred items.
 
 ## Team and coordination
 
-Agent handles this phase were positional, not named. See ../agents/README.md for the agent roster. Only @@Architect resolves to a contact card; the lane handles have none.
+Agent handles this phase were positional, not named. See ../agents/README.md for the agent roster. Only @@architect resolves to a contact card; the lane handles have none.
 
 ```
 handle       role this phase                           card
 -----------  ----------------------------------------  ---------------
-@@Architect  plan, dispatch, merge serialization,      architect.md
+@@architect  plan, dispatch, merge serialization,      architect.md
              re-gating, round-close retrospective
-@@LaneA      drive streaming spine (backend +          (no card)
+LaneA      drive streaming spine (backend +          (no card)
              progressive frontend hydration)
-@@LaneB      editor + desktop bug bundle               (no card)
-@@LaneC      graph inspector + loading state +         (no card)
+LaneB      editor + desktop bug bundle               (no card)
+LaneC      graph inspector + loading state +         (no card)
              overlay scope wipe
-@@Alex       human owner; one standing gate per lane   (human owner)
+Alex       human owner; one standing gate per lane   (human owner)
 ```
 
-Coordination scheme: append-only directional event channels (`event-<from>-<to>.md`) under a `raw/coordination/` subtree, combined with per-author journals, all edited in the main checkout. Code changes lived in per-lane git worktrees. @@Architect serialized every merge back to main and re-ran the gate after each merge before letting the next lane land. This is the model phase 12 carried forward and refined.
+Coordination scheme: append-only directional event channels (`event-<from>-<to>.md`) under a `raw/coordination/` subtree, combined with per-author journals, all edited in the main checkout. Code changes lived in per-lane git worktrees. @@architect serialized every merge back to main and re-ran the gate after each merge before letting the next lane land. This is the model phase 12 carried forward and refined.
 
 This phase differs from phases 7-9 in two respects: lane handles are generic positional labels rather than the named roster, and the worktrees isolate code while coordination documents stay centralized.
 

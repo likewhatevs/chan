@@ -1,25 +1,25 @@
 # Phase 29 - devserver + chan-desktop hardening
 
-Status: code+docs complete, gated green, merged to `origin/main`, and **released as v0.39.0** (2026-06-18), with the **v0.39.1** patch (2026-06-18) fixing three issues from the connect-flow smoke. `make pre-push` green over the committed state; the Linux devserver smoked in lima, the lock and FD work cross-checked there. The chan-desktop reconnect / window-lifecycle paths were smoked on @@Alex's hardware and surfaced end-to-end gaps carried into the next round.
+Status: code+docs complete, gated green, merged to `origin/main`, and **released as v0.39.0** (2026-06-18), with the **v0.39.1** patch (2026-06-18) fixing three issues from the connect-flow smoke. `make pre-push` green over the committed state; the Linux devserver smoked in lima, the lock and FD work cross-checked there. The chan-desktop reconnect / window-lifecycle paths were smoked on Alex's hardware and surfaced end-to-end gaps carried into the next round.
 Span: 2026-06-18.
 Tags: #devserver #chan-desktop #lock #fd-leak #terminal-persistence #unserve #self-upgrade #control-terminal #graph #ipc
 
-A hardening round on the `chan devserver` + chan-desktop surface that phase-28 introduced: workspace lifecycle (on/off, unserve, remove), writer-lock correctness, the long-running-devserver file-descriptor leak, and standalone-terminal persistence at the launcher. Scoped from @@Alex's smoke of the v0.38.0 build - he wedged his own repo "locked" with no live process, the devserver climbed to EMFILE, and standalone terminals did not survive a launcher reattach. Ran as a five-member team (@@Lead + @@Desktop / @@Devserver / @@Core / @@CI); the reliability + persistence core (W5/W6/W7/W10) was the heart.
+A hardening round on the `chan devserver` + chan-desktop surface that phase-28 introduced: workspace lifecycle (on/off, unserve, remove), writer-lock correctness, the long-running-devserver file-descriptor leak, and standalone-terminal persistence at the launcher. Scoped from Alex's smoke of the v0.38.0 build - he wedged his own repo "locked" with no live process, the devserver climbed to EMFILE, and standalone terminals did not survive a launcher reattach. Ran as a five-member team (Lead + Desktop / Devserver / Core / CI); the reliability + persistence core (W5/W6/W7/W10) was the heart.
 
 ## Roadmap (the asks)
 
 `dev/old/v0.39.0/plan.md` is the design of record (ten workstreams):
 
-- **W1 - Control / standalone terminal redesign** - a true singleton control terminal, terminal-only, no auto-hide or floating spawn button. (@@Desktop.)
-- **W2 - Failing-script survey + stuck-connecting + empty window** - a clean retry/edit/abandon path. (@@Desktop; server audit @@Devserver.)
-- **W3 - Empty devserver (zero workspaces) loads** on connect and across a restart. (@@Devserver + @@Desktop.)
-- **W4 - Devserver workspace on/off** (unload without forget), persisted across restart. (@@Devserver + @@Desktop.)
-- **W5 - `chan unserve` + `chan remove` + desktop close→unserve** over the control socket. (@@Core; desktop wiring @@Desktop.)
-- **W6 - Lock correctness:** record the holder (pid/path/start), reclaim only a provably-dead holder. (@@Core, syseng; Windows builds @@CI.)
-- **W7 - Devserver file-descriptor exhaustion (EMFILE)** - investigate + fix. (@@Devserver lead, @@Core support.)
-- **W8 - Self-upgrade download progress** - terminal text + chan-desktop UI. (@@Core + @@Desktop.)
-- **W9 - chan-llm MCP server on Windows** - named-pipe transport feasibility (low-pri investigation). (@@CI.)
-- **W10 - Standalone terminal persistence at the launcher** - terminal windows/tabs persist like workspaces. (@@Devserver + @@Desktop.)
+- **W1 - Control / standalone terminal redesign** - a true singleton control terminal, terminal-only, no auto-hide or floating spawn button. (Desktop.)
+- **W2 - Failing-script survey + stuck-connecting + empty window** - a clean retry/edit/abandon path. (Desktop; server audit Devserver.)
+- **W3 - Empty devserver (zero workspaces) loads** on connect and across a restart. (Devserver + Desktop.)
+- **W4 - Devserver workspace on/off** (unload without forget), persisted across restart. (Devserver + Desktop.)
+- **W5 - `chan unserve` + `chan remove` + desktop close→unserve** over the control socket. (Core; desktop wiring Desktop.)
+- **W6 - Lock correctness:** record the holder (pid/path/start), reclaim only a provably-dead holder. (Core, syseng; Windows builds CI.)
+- **W7 - Devserver file-descriptor exhaustion (EMFILE)** - investigate + fix. (Devserver lead, Core support.)
+- **W8 - Self-upgrade download progress** - terminal text + chan-desktop UI. (Core + Desktop.)
+- **W9 - chan-llm MCP server on Windows** - named-pipe transport feasibility (low-pri investigation). (CI.)
+- **W10 - Standalone terminal persistence at the launcher** - terminal windows/tabs persist like workspaces. (Devserver + Desktop.)
 
 ## What shipped
 
@@ -56,7 +56,7 @@ A hardening round on the `chan devserver` + chan-desktop surface that phase-28 i
 
 - **Scoped own-gates** per change (fmt + clippy `-D warnings` + tests; `make web-check`), plus the full-tree `make pre-push` over the committed state.
 - **Lima devserver:** the FD-leak fix verified by classifying `/proc/<pid>/fd` by type across mount/unmount + reconnect churn (the `w7-*-fd.sh` harnesses); the lock-steal exercised against a `kill -9`'d serve.
-- **Desktop:** the on/off toggle, the control-terminal redesign, the connect-flow patch, and the standalone-terminal reattach were smoked on @@Alex's hardware.
+- **Desktop:** the on/off toggle, the control-terminal redesign, the connect-flow patch, and the standalone-terminal reattach were smoked on Alex's hardware.
 
 ## Deferred / follow-ups
 
