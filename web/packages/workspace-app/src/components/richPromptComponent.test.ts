@@ -61,7 +61,9 @@ describe("RichPrompt.svelte component", () => {
     // Bound to the terminal's draft (a prop), created lazily, content loaded
     // from + written back to draft.md; pasted images use the editor's
     // imageDropHandlers pointed at the draft folder.
-    expect(richPromptSrc).toMatch(/let \{ tab \}: \{ tab: TerminalTab \} = \$props\(\)/);
+    expect(richPromptSrc).toMatch(
+      /let \{[\s\S]{1,80}tab,[\s\S]{1,160}getTerminalCwdRel,[\s\S]{1,120}workspaceRoot = null,[\s\S]{1,400}tab: TerminalTab;[\s\S]{1,400}getTerminalCwdRel\?: \(\) => string \| null;[\s\S]{1,200}workspaceRoot\?: string \| null;[\s\S]{1,40}\} = \$props\(\)/,
+    );
     expect(richPromptSrc).toMatch(
       /import \{ imageDropHandlers \} from "\.\.\/editor\/bubbles\/image_drop"/,
     );
@@ -79,15 +81,15 @@ describe("RichPrompt.svelte component", () => {
     // (submitAgent()) + a client message id, only beginning a pending when the
     // frame actually went out (the data-loss guard).
     expect(richPromptSrc).toMatch(/const id = crypto\.randomUUID\(\);/);
-    // The wire payload is the draft text with image refs rewritten from
-    // draft-file-relative to workspace-rooted, so the receiving agent (at $CWD =
-    // workspace root) finds the pasted image instead of 404ing on ./image.png.
-    // The card/recall text (`lastQueued`) stays the ORIGINAL text — preview-correct.
+    // The wire payload is the draft text with image refs rewritten to plain
+    // paths the receiving agent (at the terminal's live CWD) can read instead
+    // of 404ing on ./image.png. The card/recall text (`lastQueued`) stays the
+    // ORIGINAL text -- preview-correct.
     expect(richPromptSrc).toMatch(
       /import \{ rewriteImagePathsForDelivery \} from "\.\.\/editor\/deliver_images"/,
     );
     expect(richPromptSrc).toMatch(
-      /const delivered = rewriteImagePathsForDelivery\(text, draftPath\);/,
+      /const delivered = rewriteImagePathsForDelivery\(\s*text,\s*draftPath,\s*getTerminalCwdRel\?\.\(\) \?\? null,\s*workspaceRoot,?\s*\);/,
     );
     expect(richPromptSrc).toMatch(
       /if \(!sendPromptToTerminal\(tab\.id, delivered, submitAgent\(\), id\)\) return true;/,

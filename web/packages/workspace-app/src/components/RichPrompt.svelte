@@ -54,7 +54,19 @@
 
   // The terminal this bubble belongs to (TerminalTab mounts one per active
   // terminal). Its `richPromptDraftPath` is the per-terminal draft backing.
-  let { tab }: { tab: TerminalTab } = $props();
+  let {
+    tab,
+    getTerminalCwdRel,
+    workspaceRoot = null,
+  }: {
+    tab: TerminalTab;
+    /// Live terminal CWD relative to the workspace root, read at submit so a
+    /// pasted image is delivered relative to where the agent runs. "" = the
+    /// CWD is the root; null = unknown / outside the root (absolute fallback).
+    getTerminalCwdRel?: () => string | null;
+    /// Absolute workspace root, for the absolute-path fallback.
+    workspaceRoot?: string | null;
+  } = $props();
 
   let host = $state<HTMLDivElement>();
   let rootEl = $state<HTMLDivElement>();
@@ -344,10 +356,16 @@
     if (!text.trim()) return true;
     const id = crypto.randomUUID();
     // The composer's pasted-image refs are relative to the DRAFT file (so the
-    // in-compose preview resolves them); the receiving agent runs at $CWD =
-    // workspace root, so deliver them workspace-rooted or it 404s the image.
-    // The draft/card text stays as-is — only the wire payload is rewritten.
-    const delivered = rewriteImagePathsForDelivery(text, draftPath);
+    // in-compose preview resolves them); the receiving agent runs at the
+    // terminal's live CWD, so deliver a plain path relative to that CWD (or an
+    // absolute path when the CWD is unknown / outside the root). The draft/card
+    // text stays as-is -- only the wire payload is rewritten.
+    const delivered = rewriteImagePathsForDelivery(
+      text,
+      draftPath,
+      getTerminalCwdRel?.() ?? null,
+      workspaceRoot,
+    );
     if (!sendPromptToTerminal(tab.id, delivered, submitAgent(), id)) return true;
     // Queued. KEEP the text in the composer as the greyed read-only card (the
     // lock $effect greys it the moment `isPending` flips). Persist it so a
