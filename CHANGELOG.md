@@ -12,7 +12,7 @@ A feature round: the chan-desktop launcher reorganized machine-first, container 
 
 ### Added
 
-- **Releases publish container images to Docker Hub.** Alongside the CLI and desktop artifacts, the release now builds and pushes multi-arch (amd64 + arm64) images for `chan` and the three gateway services -- `chan-gateway-identity`, `chan-gateway-profile`, and `chan-gateway-devserver-proxy` -- under the `chanapp` namespace, all public. Each release gets an immutable `X.Y.Z` tag; `latest` tracks the newest GA release only, and prerelease `-rc` tags push immutable images without moving `latest`. The path is exercised on a non-publishing dry-run build that builds every image without a registry.
+- **Releases publish container images to Docker Hub.** Alongside the CLI and desktop artifacts, the release now builds and pushes multi-arch (amd64 + arm64) images for `chan` and the three gateway services -- `chan-gateway-identity`, `chan-gateway-profile`, and `chan-gateway-devserver-proxy` -- under the `fiorix` namespace, all public. Each release gets an immutable `X.Y.Z` tag; `latest` tracks the newest GA release only, and prerelease `-rc` tags push immutable images without moving `latest`. The path is exercised on a non-publishing dry-run build that builds every image without a registry.
 - **Re-point an inline-code file link in place.** Typing inside an inline `` `path` `` link that resolves to a real workspace file opens a file picker to change its target without leaving the line, re-rendering as a link on commit. (The detect-and-open half shipped in v0.53.0.)
 
 ### Changed
