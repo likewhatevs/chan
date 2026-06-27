@@ -6,6 +6,20 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [v0.53.1] - 2026-06-27
+
+A patch release: the Windows `chan ps` server-kind column, terminal clipboard copy over OSC 52 in chan-desktop, and a markdown editor link whose label contains brackets.
+
+### Fixed
+
+- **`chan ps` shows the serving process kind on Windows.** The BY column resolved a holder's control socket only as a Unix temp-dir `.sock` file, so on Windows -- where the control socket is a `\\.\pipe\` named pipe -- the probe missed and the column printed the literal word `served`. It now enumerates the named-pipe namespace by pid and shows the real kind, falling back to `-` (never the bare word `served`) when the kind cannot be probed. The same probe restores `chan close` / `chan workspace rm` teardown over the wire on Windows.
+- **The terminal honors OSC 52 clipboard copies.** Text an agent copies via the OSC 52 escape (for example Claude Code's copy) now lands in the system clipboard -- through the native clipboard in chan-desktop and `navigator.clipboard` in the browser -- instead of being silently dropped. The query form is a no-op, so clipboard contents are never echoed back to the terminal.
+- **A markdown link whose label contains balanced brackets renders as a link.** `[[foo] bar](path)` (and the image form `![[foo] bar](img)`) now render as a clickable link instead of plain text, resolving the v0.53.0 known limitation; an upstream `@lezer/markdown` shortcut-reference rule had been swallowing the outer link, and the inner-bracket escape workaround is no longer needed.
+
+### Notes
+
+- Validated on a non-publishing cross-OS dry-run build plus on-device smoke testing (Windows `chan ps`, desktop OSC 52 copy on Windows and macOS, and the editor link in the browser).
+
 ## [v0.53.0] - 2026-06-26
 
 The first feature round since the unification: multi-client session presence, a self-managed cross-platform devserver daemon, terminal scrollback resume on reload, editor cursor persistence and inline-file links, and a regrouped chan-desktop launcher -- plus six rolled-forward v0.52.0-rc2 fixes and a `chan serve` terminology rename.
