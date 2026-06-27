@@ -228,6 +228,8 @@ table {
 th, td {
   border: 1px solid var(--chan-editor-table-border, #d0d7de);
   padding: 6px 8px;
+  overflow-wrap: normal;
+  word-break: normal;
 }
 th {
   background: var(--chan-editor-table-header-bg, #f6f8fa);

@@ -1703,6 +1703,12 @@
   :global(.md-wysiwyg-cm6 .cm-md-table) {
     border-collapse: collapse;
     font-size: 0.95em;
+    /* Size to content so a wide table overflows .cm-md-table-wrap (which
+       scrolls) instead of letting the editor's lineWrapping collapse every
+       column into char-by-char wrapping; min-width keeps a narrow table
+       filling the row. */
+    width: max-content;
+    min-width: 100%;
   }
   :global(.md-wysiwyg-cm6 .cm-md-table th),
   :global(.md-wysiwyg-cm6 .cm-md-table td) {
@@ -1710,6 +1716,10 @@
     padding: 0.3em 0.6em;
     text-align: left;
     vertical-align: top;
+    /* Undo the editor's inherited overflow-wrap (lineWrapping sets it to
+       anywhere) so cell text wraps on words, never mid-word. */
+    overflow-wrap: normal;
+    word-break: normal;
   }
   :global(.md-wysiwyg-cm6 .cm-md-table th) {
     background: var(--chan-editor-table-header-bg, var(--bg-card, rgba(0, 0, 0, 0.04)));
