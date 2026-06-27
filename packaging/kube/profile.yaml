@@ -21,7 +21,8 @@ spec:
     spec:
       containers:
         - name: profile
-          image: chan-gateway-profile:dev
+          # set <version> to the release tag you are deploying (see README.md).
+          image: fiorix/chan-gateway-profile:<version>
           # BIND_ADDR=0.0.0.0:7001 is baked into the image; config + tokens come
           # from the shared ConfigMap/Secret (only the keys profile reads apply).
           envFrom:

@@ -4,7 +4,7 @@ Kubernetes manifests for the chan-gateway stack, plus the local sdme validation 
 
 ## Two shapes
 
-- **Cluster manifests** (`config.yaml`, `secret.example.yaml`, `postgres.yaml`, `profile.yaml`, `identity.yaml`, `devserver-proxy.yaml`): separate Deployments + Services. Services reach each other by Service DNS name (`chan-gateway-profile:7001`, etc.). This is what you apply to a real cluster.
+- **Cluster manifests** (`config.yaml`, `secret.example.yaml`, `postgres.yaml`, `profile.yaml`, `identity.yaml`, `devserver-proxy.yaml`): separate Deployments + Services. Services reach each other by Service DNS name (`chan-gateway-profile:7001`, etc.). This is what you apply to a real cluster. The three service Deployments pull the published images from Docker Hub as `fiorix/<service>:<version>`; `<version>` is a placeholder you set to the release tag you are deploying (`0.55.0`, or `latest` for the newest GA -- see `packaging/docker/README.md` "Pull from Docker Hub" for the tag policy).
 - **sdme validation pod** (`sdme/gateway-pod.yaml`): the whole stack as ONE Pod. sdme runs a multi-container Pod as a single systemd-nspawn container sharing a network namespace via localhost, so there is no Service DNS; the manifest wires the inter-service URLs to `127.0.0.1`. This is the shape that comes up under sdme on a single host without a real cluster.
 
 The service env-var contract is `gateway/crates/*/packaging/*.env` and `gateway/README.md`. The inter-service trust model (which token each service shares) is in `.agents/gateway.md` "Service-to-service bearers".
@@ -35,7 +35,7 @@ packaging/docker/build.sh -t dev
 #    then docker push <registry-host>:5000/chan-gateway-identity:dev  (etc.)
 ```
 
-> NOTE (unverified on this host): the exact bridge from a locally-built OCI image to `sdme kube apply` (local registry vs `sdme fs import --oci-mode app` vs the OCI blob cache) was not run here — this host has no container engine and sdme needs root. Confirm the resolution path on the first privileged run and pin it in this section. The manifests themselves are standard k8s and are registry-agnostic (bare image names + `imagePullPolicy: IfNotPresent`).
+> NOTE (unverified on this host): the exact bridge from a locally-built OCI image to `sdme kube apply` (local registry vs `sdme fs import --oci-mode app` vs the OCI blob cache) was not run here — this host has no container engine and sdme needs root. Confirm the resolution path on the first privileged run and pin it in this section. This local-build path applies the sdme + test pods (`sdme/gateway-pod.yaml`, `test/upload-pod.yaml`), which stay on bare `:dev` image names + `imagePullPolicy: IfNotPresent`, so they are registry-agnostic; the three cluster service manifests instead pull `fiorix/<service>:<version>` from Docker Hub.
 
 ## D3: bring the stack up under sdme and prove it healthy
 
@@ -88,6 +88,13 @@ The `upload-tester` container drives a real headless Chromium that POSTs a file 
 
 ```sh
 cp packaging/kube/secret.example.yaml packaging/kube/secret.yaml   # replace every value; do not commit
+
+# Pin the three service manifests to the release you are deploying
+# ('latest' for the newest GA -- see packaging/docker/README.md):
+ver=0.55.0
+sed -i "s|<version>|$ver|" packaging/kube/profile.yaml \
+    packaging/kube/identity.yaml packaging/kube/devserver-proxy.yaml
+
 kubectl apply -f packaging/kube/config.yaml -f packaging/kube/secret.yaml \
     -f packaging/kube/postgres.yaml -f packaging/kube/profile.yaml \
     -f packaging/kube/identity.yaml -f packaging/kube/devserver-proxy.yaml

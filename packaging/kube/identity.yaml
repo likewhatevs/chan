@@ -22,7 +22,8 @@ spec:
     spec:
       containers:
         - name: identity
-          image: chan-gateway-identity:dev
+          # set <version> to the release tag you are deploying (see README.md).
+          image: fiorix/chan-gateway-identity:<version>
           # BIND_ADDR=0.0.0.0:7000 baked in; URLs + tokens from ConfigMap/Secret.
           envFrom:
             - configMapRef: { name: chan-gateway-config }

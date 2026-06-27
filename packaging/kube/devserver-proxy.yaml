@@ -24,7 +24,8 @@ spec:
     spec:
       containers:
         - name: devserver-proxy
-          image: chan-gateway-devserver-proxy:dev
+          # set <version> to the release tag you are deploying (see README.md).
+          image: fiorix/chan-gateway-devserver-proxy:<version>
           # BIND_ADDR=0.0.0.0:7002 + TUNNEL_BIND_ADDR=0.0.0.0:7100 baked in;
           # URLs/tokens from ConfigMap/Secret.
           envFrom:
