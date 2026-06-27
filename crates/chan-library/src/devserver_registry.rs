@@ -83,6 +83,18 @@ pub struct DevserverEntry {
     /// row without the field reads `disconnected`.
     #[serde(default)]
     pub status: DevserverStatus,
+    /// The devserver host's OS family (`macos | windows | linux | other`),
+    /// learned from its `DevserverInfo` self-report at connect and cached in the
+    /// live feed (survives disconnect). Empty before the first connect or from a
+    /// devserver too old to report it; the launcher shows a neutral icon then.
+    /// `#[serde(default)]`: a row without the field reads empty.
+    #[serde(default)]
+    pub os: String,
+    /// Best-effort human OS string for the launcher tooltip (e.g. a linux
+    /// `/etc/os-release` `PRETTY_NAME`); serialized as `null` when unknown
+    /// (uniform with `library_id`, so the launcher wire always carries the key).
+    #[serde(default)]
+    pub pretty_name: Option<String>,
 }
 
 /// The add/update payload. `host` + `port` are required; the rest are optional.

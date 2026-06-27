@@ -164,11 +164,27 @@ impl Library {
     /// metadata key. The directory itself is NOT created here; pass
     /// a path that already exists.
     pub fn register_workspace(&self, root: &Path) -> Result<KnownWorkspace> {
+        self.register_workspace_with_name(root, None)
+    }
+
+    /// Like [`register_workspace`](Self::register_workspace) but also sets the
+    /// workspace's display name. `Some(name)` stores a trimmed name (empty or
+    /// whitespace-only clears it); `None` leaves any existing name intact, so
+    /// re-registering a workspace without a name never wipes one set earlier.
+    pub fn register_workspace_with_name(
+        &self,
+        root: &Path,
+        display_name: Option<String>,
+    ) -> Result<KnownWorkspace> {
         if !root.exists() {
             return Err(ChanError::WorkspaceRootMissing(root.to_path_buf()));
         }
         let mut reg = self.inner.registry.lock().unwrap();
         let idx = reg.touch(root);
+        if let Some(name) = display_name {
+            let name = name.trim();
+            reg.workspaces[idx].display_name = (!name.is_empty()).then(|| name.to_string());
+        }
         let entry = reg.workspaces[idx].clone();
         paths::ensure_workspace_metadata_dirs(&entry.metadata_key)?;
         reg.save_to(&self.inner.config_path)?;

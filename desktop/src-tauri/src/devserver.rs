@@ -91,6 +91,14 @@ pub struct DevserverInfo {
     /// under it even on a zero-window connect (no window record to learn it from).
     #[serde(default)]
     pub library_id: String,
+    /// The devserver host's OS family (`macos | windows | linux | other`),
+    /// surfaced to the launcher as the machine icon. `#[serde(default)]`: empty
+    /// from a devserver too old to report it.
+    #[serde(default)]
+    pub os: String,
+    /// Best-effort human OS string for the launcher tooltip; absent when unknown.
+    #[serde(default)]
+    pub pretty_name: Option<String>,
 }
 
 /// One element of `GET /api/devserver/workspaces`: a tenant the desktop

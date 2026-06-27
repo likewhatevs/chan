@@ -119,8 +119,9 @@ pub fn validate_drafts_dir(name: &str, excluded: &[String]) -> bool {
 /// the workspace is first registered and preserved across
 /// `Library::move_workspace`.
 ///
-/// The registry intentionally carries no user-editable display name.
-/// UIs that need a label derive it from `root_path`.
+/// An optional `display_name` overrides the `root_path` basename a UI would
+/// otherwise show; it is set at add-time from the launcher's "Display name"
+/// field.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct KnownWorkspace {
     pub root_path: PathBuf,
@@ -128,6 +129,11 @@ pub struct KnownWorkspace {
     pub metadata_key: String,
     pub created_at: DateTime<Utc>,
     pub last_seen_at: DateTime<Utc>,
+    /// User-editable label a UI prefers over the `root_path` basename. `None`
+    /// keeps the basename. Omitted from `workspaces.toml` when unset
+    /// (`skip_serializing_if`) so an entry without a name stays byte-stable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
     #[serde(skip)]
     pub(crate) canonical_path: Option<PathBuf>,
 }
@@ -222,6 +228,7 @@ impl Registry {
                 metadata_key: paths::metadata_key_for_root(&canonical),
                 created_at: now,
                 last_seen_at: now,
+                display_name: None,
                 canonical_path: Some(canonical.clone()),
             });
         }

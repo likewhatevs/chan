@@ -26,7 +26,7 @@
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use anyhow::Context;
@@ -947,12 +947,49 @@ fn start_discovery_listener(
 // Management handlers.
 // ---------------------------------------------------------------------------
 
+/// The host's OS family + a best-effort human OS string for the launcher's
+/// machine icon. `os` is `macos | windows | linux | other` from the running
+/// binary's compile target; `pretty_name` is the linux `/etc/os-release`
+/// `PRETTY_NAME` when readable, absent elsewhere (the family alone drives the
+/// icon). Memoized: the OS is fixed for the process, and `/api/devserver/info`
+/// is an unauthenticated probe a connecting client may poll.
+fn detect_os() -> (String, Option<String>) {
+    static OS: OnceLock<(String, Option<String>)> = OnceLock::new();
+    OS.get_or_init(|| {
+        let family = match std::env::consts::OS {
+            "macos" => "macos",
+            "windows" => "windows",
+            "linux" => "linux",
+            _ => "other",
+        };
+        let pretty_name = (family == "linux")
+            .then(|| std::fs::read_to_string("/etc/os-release").ok())
+            .flatten()
+            .and_then(|text| parse_pretty_name(&text));
+        (family.to_string(), pretty_name)
+    })
+    .clone()
+}
+
+/// `PRETTY_NAME` from `/etc/os-release` content (e.g. `"Ubuntu 22.04.3 LTS"`),
+/// the freedesktop key every mainstream distro ships. `None` when no non-empty
+/// `PRETTY_NAME` line is present.
+fn parse_pretty_name(os_release: &str) -> Option<String> {
+    os_release.lines().find_map(|line| {
+        let value = line.strip_prefix("PRETTY_NAME=")?.trim().trim_matches('"');
+        (!value.is_empty()).then(|| value.to_string())
+    })
+}
+
 async fn handle_info(State(state): State<Arc<DevserverState>>) -> Json<DevserverInfo> {
+    let (os, pretty_name) = detect_os();
     Json(DevserverInfo {
         devserver_version: env!("CARGO_PKG_VERSION").to_string(),
         protocol: DEVSERVER_API_PROTOCOL,
         host_label: state.host_label.clone(),
         library_id: state.library_id.clone(),
+        os,
+        pretty_name,
     })
 }
 
@@ -1155,6 +1192,20 @@ fn canonical_root(root: &Path) -> PathBuf {
 mod tests {
     use super::*;
     use chan_library::workspace_slug;
+
+    #[test]
+    fn parses_pretty_name_from_os_release() {
+        // The freedesktop `PRETTY_NAME` is the launcher tooltip; surrounding
+        // quotes are stripped, and a missing/blank value yields no tooltip (the
+        // family icon stands alone).
+        let ubuntu = "NAME=\"Ubuntu\"\nPRETTY_NAME=\"Ubuntu 22.04.3 LTS\"\nID=ubuntu\n";
+        assert_eq!(
+            parse_pretty_name(ubuntu).as_deref(),
+            Some("Ubuntu 22.04.3 LTS")
+        );
+        assert_eq!(parse_pretty_name("ID=void\nNAME=void\n"), None);
+        assert_eq!(parse_pretty_name("PRETTY_NAME=\"\"\n"), None);
+    }
 
     #[test]
     fn token_marker_is_the_locked_wire_string() {

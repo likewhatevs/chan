@@ -717,7 +717,10 @@ async fn handle_list_workspaces(State(state): State<Arc<LauncherState>>) -> Resp
             let (status, error) = host.workspace_status(&ws.root_path);
             Some(LauncherWorkspace {
                 path: ws.root_path.to_string_lossy().into_owned(),
-                label: workspace_label(&ws.root_path),
+                label: ws
+                    .display_name
+                    .clone()
+                    .unwrap_or_else(|| workspace_label(&ws.root_path)),
                 on: status == WorkspaceStatus::Running,
                 status,
                 error,
@@ -816,6 +819,9 @@ fn set_overlay(host: &WorkspaceHost, root: &Path, on: bool) {
 #[derive(Deserialize)]
 struct AddWorkspace {
     path: String,
+    /// Optional display name; empty/absent keeps the directory basename.
+    #[serde(default)]
+    label: Option<String>,
 }
 
 /// `POST /api/library/workspaces` `{path}`: register the local folder in the host
@@ -834,9 +840,14 @@ async fn handle_add_workspace(
         Ok(prefix) => prefix,
         Err(e) => return (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
     };
-    if let Err(e) = state.host.library().register_workspace(root) {
-        return (StatusCode::BAD_REQUEST, e.to_string()).into_response();
-    }
+    let registered = match state
+        .host
+        .library()
+        .register_workspace_with_name(root, req.label.clone())
+    {
+        Ok(ws) => ws,
+        Err(e) => return (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
+    };
     match state
         .host
         .open_or_get_registered_workspace(root, tenant_config(addr, &prefix))
@@ -847,7 +858,10 @@ async fn handle_add_workspace(
             let workspace_id = hosted.prefix.trim_start_matches('/').to_string();
             Json(LauncherWorkspace {
                 path: hosted.root.to_string_lossy().into_owned(),
-                label: workspace_label(&hosted.root),
+                label: registered
+                    .display_name
+                    .clone()
+                    .unwrap_or_else(|| workspace_label(&hosted.root)),
                 on: true,
                 // Just mounted: live state is running, no error.
                 status: WorkspaceStatus::Running,
@@ -1200,6 +1214,8 @@ mod devserver_route_tests {
                     library_id: None,
                     status: DevserverStatus::Disconnected,
                     auto_hide_control: false,
+                    os: "linux".into(),
+                    pretty_name: Some("Debian GNU/Linux 12".into()),
                 }]),
             }
         }
@@ -1223,6 +1239,8 @@ mod devserver_route_tests {
                 library_id: None,
                 status: DevserverStatus::Disconnected,
                 auto_hide_control: input.auto_hide_control,
+                os: String::new(),
+                pretty_name: None,
             };
             self.rows.lock().unwrap().push(entry.clone());
             Ok(entry)

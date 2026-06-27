@@ -49,6 +49,16 @@ pub struct DevserverInfo {
     /// reconnects with zero windows, and a window record was the ONLY prior
     /// source of this id (Bug A).
     pub library_id: String,
+    /// The host's OS family, for the launcher's machine icon: `macos` |
+    /// `windows` | `linux` | `other`, from the running binary's compile target.
+    /// `#[serde(default)]`: empty from a devserver too old to report it.
+    #[serde(default)]
+    pub os: String,
+    /// Best-effort human OS string for the launcher tooltip, e.g. a linux
+    /// `/etc/os-release` `PRETTY_NAME` (`"Ubuntu 22.04.3 LTS"`). Absent when
+    /// unknown; the icon is driven by `os` alone, so this is cosmetic.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pretty_name: Option<String>,
 }
 
 /// One element of `GET /api/devserver/workspaces`, the box's workspace
@@ -166,6 +176,8 @@ mod tests {
             protocol: DEVSERVER_API_PROTOCOL,
             host_label: "build-box".into(),
             library_id: "lib-0123456789abcdef".into(),
+            os: "linux".into(),
+            pretty_name: Some("Ubuntu 22.04.3 LTS".into()),
         };
         let v = serde_json::to_value(&info).unwrap();
         assert_eq!(
@@ -175,9 +187,24 @@ mod tests {
                 "protocol": 1,
                 "host_label": "build-box",
                 "library_id": "lib-0123456789abcdef",
+                "os": "linux",
+                "pretty_name": "Ubuntu 22.04.3 LTS",
             })
         );
         assert_eq!(info, serde_json::from_value(v).unwrap());
+
+        // `os`/`pretty_name` are additive: a payload from a devserver too old
+        // to report them deserializes to the empty family + no pretty name, so
+        // the launcher just shows the neutral icon rather than refusing.
+        let old: DevserverInfo = serde_json::from_value(json!({
+            "devserver_version": "0.30.0",
+            "protocol": 1,
+            "host_label": "old-box",
+            "library_id": "lib-ffff",
+        }))
+        .unwrap();
+        assert_eq!(old.os, "");
+        assert_eq!(old.pretty_name, None);
     }
 
     #[test]

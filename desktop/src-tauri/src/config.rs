@@ -420,6 +420,9 @@ fn entry_from_devserver(
     // it), so the parse should not fail; fall back defensively to (raw, 0).
     let (host, port) =
         crate::devserver::parse_devserver_url(&d.url).unwrap_or_else(|_| (d.url.clone(), 0));
+    // The self-reported OS, cached in the feed at connect (empty before the first
+    // connect or from a devserver too old to report it).
+    let (os, pretty_name) = feed.os_of(&d.id).unwrap_or_default();
     DevserverEntry {
         id: d.id.clone(),
         host,
@@ -445,6 +448,9 @@ fn entry_from_devserver(
         library_id: feed.library_id_of(&d.id),
         // Whether the control terminal auto-hides on connect success.
         auto_hide_control: d.auto_hide_control,
+        // The launcher's machine icon + tooltip, from the devserver's self-report.
+        os,
+        pretty_name,
     }
 }
 

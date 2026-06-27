@@ -537,6 +537,11 @@ pub struct DevserverFeed {
     /// library_id when the live window feed is momentarily empty (no windows yet).
     /// Survives disconnect (the same devserver keeps its library_id on reconnect).
     library_ids: Mutex<HashMap<String, String>>,
+    /// Devserver id -> its self-reported OS (`os` family, optional `pretty_name`),
+    /// cached from the `DevserverInfo` probe at connect so `entry_from_devserver`
+    /// resolves the launcher's machine icon. Like `library_ids`, it survives
+    /// disconnect (the OS does not change across a reconnect).
+    os: Mutex<HashMap<String, (String, Option<String>)>>,
     /// Native labels of devserver windows the desktop has LOCALLY buried.
     /// `windows()` overrides their `connected` to false so the launcher dot
     /// reflects hidden the moment they're hidden — the desktop's bury state is the
@@ -564,6 +569,19 @@ impl DevserverFeed {
     /// snapshot read re-caches the same value.
     fn seed_library_id(&self, id: String, library_id: String) {
         self.library_ids.lock().unwrap().insert(id, library_id);
+    }
+
+    /// Seed a devserver's self-reported OS from the connect probe so the launcher
+    /// machine icon resolves from the FIRST render rather than waiting on a later
+    /// refetch. Idempotent; a reconnect re-seeds the same value.
+    fn seed_os(&self, id: String, os: String, pretty_name: Option<String>) {
+        self.os.lock().unwrap().insert(id, (os, pretty_name));
+    }
+
+    /// The cached OS (`os` family, optional `pretty_name`) of a devserver, or
+    /// `None` before its first connect. Survives disconnect (kept by `forget`).
+    fn os_of(&self, id: &str) -> Option<(String, Option<String>)> {
+        self.os.lock().unwrap().get(id).cloned()
     }
 
     /// Drop a disconnected devserver from the per-connection feeds (windows +
@@ -1679,6 +1697,14 @@ async fn connect_devserver_impl(
         state
             .devserver_feed
             .seed_library_id(id.clone(), info.library_id.clone());
+    }
+    // Seed the self-reported OS alongside the library_id so the launcher's
+    // machine icon renders from the first feed read. Non-empty only: a devserver
+    // too old to report `os` leaves the icon neutral rather than blanking it.
+    if !info.os.is_empty() {
+        state
+            .devserver_feed
+            .seed_os(id.clone(), info.os.clone(), info.pretty_name.clone());
     }
     // Mint the connect-script control terminal as a chan-library registry row
     // under this devserver's `library_id`. The native window was
