@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 import { promises as fs } from "node:fs";
+import { svelte } from "@sveltejs/vite-plugin-svelte";
+import { build as viteBuild } from "vite";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -10,7 +12,6 @@ const siteRoot = path.resolve(path.dirname(scriptPath), "..");
 const repoRoot = path.resolve(siteRoot, "..", "..", "..");
 const srcRoot = path.join(siteRoot, "src");
 const distRoot = path.join(siteRoot, "dist");
-const manualRoot = path.join(repoRoot, "docs", "manual");
 const githubRepoUrl = "https://github.com/fiorix/chan";
 const cliMetadataBase = "https://chan.app/dl/cli";
 const releasesMetadataPath = "/dl/releases.json";
@@ -49,14 +50,12 @@ const requiredInputs = [
   path.join(srcRoot, "site.js"),
   path.join(siteRoot, "chan-favicon.png"),
   path.join(siteRoot, "chan-mark.png"),
-  path.join(manualRoot, "index.md"),
 ];
 
 async function main() {
   await Promise.all(requiredInputs.map(assertFile));
 
   const version = await readWorkspaceVersion();
-  const manualPages = await readManualPages();
   const baseTemplate = await fs.readFile(path.join(srcRoot, "templates", "base.html"), "utf8");
   const homeTemplate = await fs.readFile(path.join(srcRoot, "pages", "home.html"), "utf8");
   const installTemplate = await fs.readFile(path.join(srcRoot, "pages", "install.html"), "utf8");
@@ -76,10 +75,11 @@ async function main() {
     renderPage(baseTemplate, {
       active: "home",
       bodyClass: "home-page",
-      title: "chan - the AI-native IDE for the modern engineer",
+      title: "chan - your new terminal and workspace manager",
       description:
-        "Chan is an AI-native IDE for the modern engineer: drive your projects in Markdown and put a fleet of AI agents to work, coordinating in the terminal. Hybrid search, a live graph, and code reports built in.",
+        "Chan is your new terminal and workspace manager (or IDE if you prefer). Local desktop and headless remote, on macOS, Linux, and Windows. Unblock 10x productivity.",
       content: fillTemplate(homeTemplate, { version, ...releaseTemplateValues }),
+      headExtra: '<link rel="stylesheet" href="/assets/launcher-demo.css" />\n<script type="module" src="/assets/launcher-demo.js"></script>',
     }),
   );
 
@@ -94,21 +94,7 @@ async function main() {
     }),
   );
 
-  const manualNav = renderManualNav(manualPages);
-  for (const page of manualPages) {
-    await writePage(
-      page.output,
-      renderPage(baseTemplate, {
-        active: "manual",
-        bodyClass: "manual-page",
-        title: `${page.title} - chan manual`,
-        description: `Chan manual: ${page.title}.`,
-        content: renderManualPage(page, manualNav),
-      }),
-    );
-  }
-
-  await copyManualAssets();
+  await buildLauncherDemo();
   await validateDist(version);
   console.log(`built marketing dist for chan ${version}`);
 }
@@ -158,51 +144,55 @@ async function copyDir(source, target) {
   }
 }
 
-// Copies manual-local image assets (docs/manual/**/*.{png,svg,...}) into
-// dist/manual, preserving their relative path, so manual pages can reference
-// images that also resolve in chan's editor. The .md sources are rendered
-// separately (readManualPages); only image files are copied here.
-const manualImageExtensions = new Set([".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".avif"]);
-
-async function copyManualAssets() {
-  await copyManualAssetsFrom(manualRoot, path.join(distRoot, "manual"));
-}
-
-async function copyManualAssetsFrom(sourceDir, targetDir) {
-  const entries = await fs.readdir(sourceDir, { withFileTypes: true });
-  for (const entry of entries) {
-    if (entry.name.startsWith(".") || entry.name.startsWith("_")) continue;
-    const from = path.join(sourceDir, entry.name);
-    if (entry.isDirectory()) {
-      await copyManualAssetsFrom(from, path.join(targetDir, entry.name));
-    } else if (entry.isFile() && manualImageExtensions.has(path.extname(entry.name).toLowerCase())) {
-      await fs.mkdir(targetDir, { recursive: true });
-      await fs.copyFile(from, path.join(targetDir, entry.name));
-    }
-  }
-}
-
 async function writePage(output, html) {
   const target = path.join(distRoot, output);
   await fs.mkdir(path.dirname(target), { recursive: true });
   await fs.writeFile(target, html);
 }
 
-function renderPage(template, { active, bodyClass, title, description, content }) {
+function renderPage(template, { active, bodyClass, title, description, content, headExtra = "" }) {
   return fillTemplate(template, {
     bodyClass,
     content,
     description: escapeHtml(description),
+    headExtra,
     siteNav: renderSiteNav(active),
     title: escapeHtml(title),
   });
 }
 
+async function buildLauncherDemo() {
+  await viteBuild({
+    configFile: false,
+    root: siteRoot,
+    plugins: [svelte()],
+    build: {
+      emptyOutDir: false,
+      minify: false,
+      outDir: path.join(distRoot, "assets"),
+      rollupOptions: {
+        input: path.join(srcRoot, "launcher-demo.ts"),
+        output: {
+          entryFileNames: "launcher-demo.js",
+          assetFileNames: (assetInfo) =>
+            assetInfo.names?.some((name) => name.endsWith(".css")) ? "launcher-demo.css" : "[name].[ext]",
+        },
+      },
+    },
+  });
+
+  const cssPath = path.join(distRoot, "assets", "launcher-demo.css");
+  let css = await fs.readFile(cssPath, "utf8");
+  css = css
+    .replaceAll(':root[data-theme="light"]', '.launcher-demo-frame[data-theme="light"]')
+    .replaceAll(":root", ".launcher-demo-frame")
+    .replace(/(^|})\s*body\s*{/g, "$1 .launcher-demo-frame {");
+  await fs.writeFile(cssPath, css);
+}
+
 function renderSiteNav(active) {
   const links = [
-    ["home", "/", "Home"],
     ["install", "/install/", "Install"],
-    ["manual", "/manual/", "Manual"],
     ["github", githubRepoUrl, "GitHub"],
   ];
   return links
@@ -221,290 +211,6 @@ function fillTemplate(template, values) {
   const missing = rendered.match(/{{[a-zA-Z0-9_]+}}/g);
   if (missing) throw new Error(`unfilled template values: ${[...new Set(missing)].join(", ")}`);
   return rendered;
-}
-
-async function readManualPages() {
-  const files = await walkMarkdown(manualRoot);
-  if (!files.some((file) => path.relative(manualRoot, file) === "index.md")) {
-    throw new Error("docs/manual/index.md is required");
-  }
-
-  const pages = [];
-  let indexLinkOrder = new Map();
-  for (const file of files) {
-    const source = path.relative(repoRoot, file);
-    const raw = await fs.readFile(file, "utf8");
-    const { attrs, body } = parseFrontMatter(raw, source);
-    const title = firstH1(body, source);
-    const rel = path.relative(manualRoot, file).split(path.sep).join("/");
-    const url = manualUrlFor(rel);
-    if (rel === "index.md") {
-      indexLinkOrder = manualIndexLinkOrder(body);
-    }
-    pages.push({
-      attrs,
-      depth: url.split("/").filter(Boolean).length - 1,
-      html: renderMarkdown(body, source, rel),
-      output: outputForUrl(url),
-      rel,
-      source,
-      title,
-      url,
-    });
-  }
-
-  pages.sort((a, b) => {
-    if (a.rel === "index.md") return -1;
-    if (b.rel === "index.md") return 1;
-    const aOrder = manualSortOrder(a, indexLinkOrder);
-    const bOrder = manualSortOrder(b, indexLinkOrder);
-    if (Number.isFinite(aOrder) && Number.isFinite(bOrder) && aOrder !== bOrder) {
-      return aOrder - bOrder;
-    }
-    if (Number.isFinite(aOrder) !== Number.isFinite(bOrder)) {
-      return Number.isFinite(aOrder) ? -1 : 1;
-    }
-    return a.rel.localeCompare(b.rel);
-  });
-  return pages;
-}
-
-function manualIndexLinkOrder(markdown) {
-  const order = new Map();
-  for (const m of markdown.matchAll(/\[[^\]]+]\(([^)#?]+\.md(?:#[^)]*)?)\)/g)) {
-    const url = manualHrefToCleanUrl(m[1], "index.md");
-    if (!url || url === "/manual/" || order.has(url)) continue;
-    order.set(url, order.size + 1);
-  }
-  return order;
-}
-
-function manualSortOrder(page, indexLinkOrder) {
-  const explicit = Number(page.attrs.order ?? Number.NaN);
-  if (Number.isFinite(explicit)) return explicit;
-  return indexLinkOrder.get(page.url) ?? Number.NaN;
-}
-
-async function walkMarkdown(dir) {
-  const entries = await fs.readdir(dir, { withFileTypes: true });
-  const files = [];
-  for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
-    if (entry.name.startsWith(".") || entry.name.startsWith("_")) continue;
-    const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      files.push(...(await walkMarkdown(full)));
-    } else if (entry.isFile() && entry.name.endsWith(".md")) {
-      files.push(full);
-    }
-  }
-  return files;
-}
-
-function parseFrontMatter(raw, source) {
-  const normalized = raw.replace(/\r\n/g, "\n");
-  if (!normalized.startsWith("---\n")) return { attrs: {}, body: normalized };
-  const end = normalized.indexOf("\n---\n", 4);
-  if (end === -1) throw new Error(`${source}: front matter starts but never closes`);
-  const block = normalized.slice(4, end).trim();
-  const attrs = {};
-  for (const line of block.split("\n").filter(Boolean)) {
-    const match = line.match(/^([A-Za-z][A-Za-z0-9_-]*):\s*(.*)$/);
-    if (!match) throw new Error(`${source}: invalid front matter line: ${line}`);
-    const [, key, value] = match;
-    if (!["order"].includes(key)) {
-      throw new Error(`${source}: unsupported front matter key: ${key}`);
-    }
-    if (key === "order" && !/^\d+$/.test(value)) {
-      throw new Error(`${source}: front matter order must be an integer`);
-    }
-    attrs[key] = value;
-  }
-  return { attrs, body: normalized.slice(end + "\n---\n".length) };
-}
-
-function firstH1(markdown, source) {
-  const match = markdown.match(/^#\s+(.+?)\s*$/m);
-  if (!match) throw new Error(`${source}: first H1 title is required`);
-  return stripMarkdown(match[1]);
-}
-
-function manualUrlFor(rel) {
-  const withoutExt = rel.replace(/\.md$/, "");
-  if (withoutExt === "index") return "/manual/";
-  if (withoutExt.endsWith("/index")) return `/manual/${withoutExt.slice(0, -"/index".length)}/`;
-  return `/manual/${withoutExt}/`;
-}
-
-// Maps a workspace-relative `.md` link (as authored in docs/manual) to the
-// clean published URL. Returns null for hrefs that are not workspace-relative
-// .md targets (external, root-absolute, anchor-only) so callers leave
-// them untouched. Manual pages are flat siblings today, but this resolves
-// against the source page's dir so nested pages would work too.
-function manualHrefToCleanUrl(href, pageRel) {
-  if (/^[a-z][a-z0-9+.-]*:/i.test(href)) return null; // scheme (http:, mailto:)
-  if (href.startsWith("#") || href.startsWith("/")) return null;
-  const hash = href.indexOf("#");
-  const pathPart = hash === -1 ? href : href.slice(0, hash);
-  const anchor = hash === -1 ? "" : href.slice(hash);
-  if (!/\.md$/.test(pathPart)) return null;
-  const pageDir = path.posix.dirname(pageRel); // "." for root pages
-  const base = pageDir === "." ? "" : `${pageDir}/`;
-  const targetRel = path.posix.normalize(`${base}${pathPart}`);
-  return `${manualUrlFor(targetRel)}${anchor}`;
-}
-
-// Resolves a manual image reference (as authored in docs/manual) to a published
-// src plus an optional width. A workspace-relative path resolves against the
-// source page's dir and maps under /manual/ so it works from the clean per-page
-// URL, while chan's editor resolves the same relative path against the file on
-// disk — one authored form renders in both. Absolute (/...) and external
-// (http:) srcs pass through untouched. A trailing `#w=<px>` fragment is chan's
-// image width hint and sizes the figure.
-function manualImage(raw, pageRel) {
-  const hash = raw.indexOf("#");
-  const pathPart = hash === -1 ? raw : raw.slice(0, hash);
-  const fragment = hash === -1 ? "" : raw.slice(hash + 1);
-  const widthMatch = fragment.match(/(?:^|&)w=(\d+)/);
-  const width = widthMatch ? Number(widthMatch[1]) : null;
-  let src = pathPart;
-  if (!/^[a-z][a-z0-9+.-]*:/i.test(pathPart) && !pathPart.startsWith("/")) {
-    const pageDir = path.posix.dirname(pageRel); // "." for root pages
-    const base = pageDir === "." ? "" : `${pageDir}/`;
-    src = `/manual/${path.posix.normalize(`${base}${pathPart}`)}`;
-  }
-  return { src, width };
-}
-
-function outputForUrl(url) {
-  if (!url.startsWith("/") || !url.endsWith("/")) throw new Error(`invalid clean URL: ${url}`);
-  return path.posix.join(url.slice(1), "index.html");
-}
-
-function renderManualNav(pages) {
-  const links = pages
-    .map((page) => {
-      const style = page.depth > 0 ? ` style="--depth:${page.depth}"` : "";
-      return `<a${style} href="${page.url}">${escapeHtml(page.title)}</a>`;
-    })
-    .join("\n");
-  return `<nav class="manual-nav" aria-label="Manual pages">\n${links}\n</nav>`;
-}
-
-function renderManualPage(page, manualNav) {
-  return `<div class="manual-layout">
-${manualNav}
-<article class="prose">
-${page.html}
-</article>
-</div>`;
-}
-
-function renderMarkdown(markdown, source, pageRel) {
-  const lines = markdown.replace(/\r\n/g, "\n").trimEnd().split("\n");
-  const html = [];
-  const usedIds = new Map();
-  let i = 0;
-  while (i < lines.length) {
-    const line = lines[i];
-    if (!line.trim()) {
-      i += 1;
-      continue;
-    }
-
-    if (line.startsWith("```")) {
-      const lang = line.slice(3).trim();
-      const code = [];
-      i += 1;
-      while (i < lines.length && !lines[i].startsWith("```")) {
-        code.push(lines[i]);
-        i += 1;
-      }
-      if (i >= lines.length) throw new Error(`${source}: unterminated code fence`);
-      i += 1;
-      const langClass = lang ? ` class="language-${escapeAttribute(lang)}"` : "";
-      html.push(`<pre><code${langClass}>${escapeHtml(code.join("\n"))}</code></pre>`);
-      continue;
-    }
-
-    const heading = line.match(/^(#{1,4})\s+(.+)$/);
-    if (heading) {
-      const level = heading[1].length;
-      const text = heading[2].trim();
-      const id = uniqueId(slugify(stripMarkdown(text)), usedIds);
-      html.push(`<h${level} id="${id}">${renderInline(text, pageRel)}</h${level}>`);
-      i += 1;
-      continue;
-    }
-
-    if (/^-\s+/.test(line)) {
-      const items = [];
-      while (i < lines.length && /^-\s+/.test(lines[i])) {
-        items.push(`<li>${renderInline(lines[i].replace(/^-\s+/, ""), pageRel)}</li>`);
-        i += 1;
-      }
-      html.push(`<ul>\n${items.join("\n")}\n</ul>`);
-      continue;
-    }
-
-    // A line that is only an image becomes a figure (the manual's diagrams and
-    // screenshots). The src is resolved so manual-local images authored as
-    // chan-relative paths publish under /manual/ (see manualImage).
-    const image = line.match(/^!\[([^\]]*)]\(([^)]+)\)\s*$/);
-    if (image) {
-      const { src, width } = manualImage(image[2], pageRel);
-      const style = width ? ` style="max-width:${width}px"` : "";
-      html.push(
-        `<figure class="inline-shot"${style}><img src="${escapeAttribute(src)}" alt="${escapeAttribute(image[1])}" /></figure>`,
-      );
-      i += 1;
-      continue;
-    }
-
-    const paragraph = [line.trim()];
-    i += 1;
-    while (
-      i < lines.length &&
-      lines[i].trim() &&
-      !lines[i].startsWith("```") &&
-      !/^(#{1,4})\s+/.test(lines[i]) &&
-      !/^-+\s+/.test(lines[i]) &&
-      !/^!\[[^\]]*]\([^)]+\)\s*$/.test(lines[i])
-    ) {
-      paragraph.push(lines[i].trim());
-      i += 1;
-    }
-    html.push(`<p>${renderInline(paragraph.join(" "), pageRel)}</p>`);
-  }
-  return html.join("\n");
-}
-
-function renderInline(text, pageRel) {
-  let rendered = escapeHtml(text);
-  rendered = rendered.replace(/`([^`]+)`/g, "<code>$1</code>");
-  rendered = rendered.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
-  rendered = rendered.replace(/\[([^\]]+)]\(([^)]+)\)/g, (_match, label, href) => {
-    const finalHref = manualHrefToCleanUrl(href, pageRel) ?? href;
-    return `<a href="${escapeAttribute(finalHref)}">${label}</a>`;
-  });
-  return rendered;
-}
-
-function stripMarkdown(text) {
-  return text.replace(/`([^`]+)`/g, "$1").replace(/\*\*([^*]+)\*\*/g, "$1").trim();
-}
-
-function slugify(text) {
-  const slug = text
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-  return slug || "section";
-}
-
-function uniqueId(base, used) {
-  const count = used.get(base) ?? 0;
-  used.set(base, count + 1);
-  return count === 0 ? base : `${base}-${count + 1}`;
 }
 
 function escapeHtml(value) {
@@ -532,13 +238,16 @@ async function validateDist(version) {
 
   const textFiles = files.filter((file) => /\.(html|css|js|sh|txt|xml)$/.test(file) || path.basename(file) === "CNAME");
   for (const file of textFiles) {
+    const rel = path.relative(distRoot, file).split(path.sep).join("/");
     const text = await fs.readFile(file, "utf8");
-    textByDistPath.set(path.relative(distRoot, file).split(path.sep).join("/"), text);
+    textByDistPath.set(rel, text);
     validateNoRemovedInstallSurface(file, text);
-    validateNoStalePublicCopy(file, text);
+    if (rel !== "assets/launcher-demo.js") {
+      validateNoStalePublicCopy(file, text);
+    }
   }
 
-  for (const required of ["index.html", "install/index.html", "manual/index.html", "install.sh", "CNAME"]) {
+  for (const required of ["index.html", "install/index.html", "install.sh", "CNAME"]) {
     if (!allDistPaths.has(required)) throw new Error(`dist is missing ${required}`);
   }
 

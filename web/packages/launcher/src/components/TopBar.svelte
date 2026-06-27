@@ -4,7 +4,7 @@
   // entry points live in the library tree (the LOCAL header's [new workspace] and
   // the bottom "Add dev server" dashed button), and open-terminal lives in each
   // machine header, so the top bar stays the global chrome: title + select + theme.
-  import { SquareCheckBig } from "lucide-svelte";
+  import { Moon, SquareCheckBig, Sun } from "lucide-svelte";
   import { themeState, toggleTheme } from "../state/theme.svelte";
   import { selection, toggleSelectMode } from "../state/selection.svelte";
   import { readOnly } from "../state/capabilities";
@@ -32,7 +32,13 @@
       type="button"
       aria-label="Toggle theme"
       title="Toggle theme"
-      onclick={toggleTheme}>{themeState.theme === "dark" ? "☀" : "☾"}</button>
+      onclick={toggleTheme}>
+      {#if themeState.theme === "dark"}
+        <Sun size={16} />
+      {:else}
+        <Moon size={16} />
+      {/if}
+    </button>
   </div>
 </header>
 
@@ -55,10 +61,14 @@
   }
 
   .brand {
+    display: block;
     font-size: 1.15rem;
     font-weight: 700;
+    gap: 0;
     letter-spacing: -0.01em;
+    line-height: 1.1;
     margin: 0;
+    text-decoration: none;
   }
 
   .subtitle {

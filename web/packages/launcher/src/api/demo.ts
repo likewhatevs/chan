@@ -1,0 +1,440 @@
+import {
+  ApiError,
+  type DevserverEntry,
+  type DevserverInput,
+  type LibraryApi,
+  type WindowRecord,
+  type WindowSet,
+  type WorkspaceEntry,
+} from "./library";
+
+interface DemoDevserver extends DevserverEntry {
+  token: string;
+}
+
+export interface LauncherDemoApi extends LibraryApi {
+  reset(): void;
+  attentionDevserverId: string;
+}
+
+const LIMA_LIBRARY_ID = "lib-lima";
+const WINDOWS_LIBRARY_ID = "lib-windows";
+// The control terminal that slow-flashes for attention belongs to the connected
+// lima-vm remote (linux-tunnel, the still-connecting one, has no terminal row to
+// flash, so the cue rides here instead).
+const ATTENTION_DEVSERVER_ID = "ds-lima";
+
+interface Seed {
+  workspaces: WorkspaceEntry[];
+  devservers: DemoDevserver[];
+  devserverWorkspaces: WorkspaceEntry[];
+  windows: WindowRecord[];
+  liveTerminals: [string, number][];
+  nextWs: number;
+  nextDs: number;
+}
+
+function seed(): Seed {
+  return {
+    nextWs: 1,
+    nextDs: 1,
+    workspaces: [
+      {
+        workspace_id: "ws-secret",
+        path: "/Users/hacker/dev/my-secret-project",
+        label: "",
+        on: true,
+        status: "running",
+        library_id: "local",
+        devserver_id: null,
+        prefix: "ws-secret",
+      },
+      {
+        workspace_id: "ws-openclaw",
+        path: "/Users/hacker/dev/github.com/openclaw/openclaw",
+        label: "",
+        on: false,
+        status: "stopped",
+        library_id: "local",
+        devserver_id: null,
+        prefix: "ws-openclaw",
+      },
+    ],
+    devservers: [
+      {
+        id: ATTENTION_DEVSERVER_ID,
+        host: "127.0.0.1",
+        port: 9001,
+        label: "lima-vm",
+        script: "limactl shell chan -- chan devserver --service=systemd",
+        has_token: false,
+        token: "",
+        library_id: LIMA_LIBRARY_ID,
+        status: "connected",
+        auto_hide_control: false,
+      },
+      {
+        id: "ds-windows",
+        host: "127.0.0.1",
+        port: 9002,
+        label: "windows-tunnel",
+        script: "ssh windows-tunnel -L 9002:localhost:8787 chan devserver --service=chan",
+        has_token: false,
+        token: "",
+        library_id: WINDOWS_LIBRARY_ID,
+        status: "connected",
+        auto_hide_control: false,
+      },
+      {
+        id: "ds-linux",
+        host: "127.0.0.1",
+        port: 9003,
+        label: "linux-tunnel",
+        script: "ssh linux-tunnel -L 9003:localhost:8787 chan devserver --service=systemd",
+        has_token: false,
+        token: "",
+        library_id: null,
+        status: "connecting",
+        auto_hide_control: false,
+      },
+    ],
+    devserverWorkspaces: [
+      {
+        workspace_id: "ds-lima:w/linux",
+        path: "/home/hacker.guest/dev/github.com/torvals/linux",
+        label: "",
+        on: true,
+        status: "running",
+        library_id: LIMA_LIBRARY_ID,
+        devserver_id: ATTENTION_DEVSERVER_ID,
+        prefix: "w/linux",
+      },
+      {
+        workspace_id: "ds-lima:w/systemd",
+        path: "/home/hacker.guest/dev/github.com/systemd/systemd",
+        label: "",
+        on: true,
+        status: "running",
+        library_id: LIMA_LIBRARY_ID,
+        devserver_id: ATTENTION_DEVSERVER_ID,
+        prefix: "w/systemd",
+      },
+      {
+        workspace_id: "ds-windows:w/explorerpatcher",
+        path: "\\\\?\\C:\\Users\\hacker\\dev\\github.com\\valinet\\ExplorerPatcher",
+        label: "ExplorerPatcher",
+        on: false,
+        status: "stopped",
+        library_id: WINDOWS_LIBRARY_ID,
+        devserver_id: "ds-windows",
+        prefix: "w/explorerpatcher",
+      },
+    ],
+    windows: [
+      terminal("w-local-term-1", "local", "Terminal Window 1", 1, "t/local-1", true),
+      terminal("w-local-term-2", "local", "Terminal Window 2", 2, "t/local-2", true),
+      workspaceWindow("w-secret-1", "local", "secret Window 1", 1, "/Users/hacker/dev/my-secret-project", "w/secret", true),
+      workspaceWindow("w-secret-2", "local", "secret Window 2", 2, "/Users/hacker/dev/my-secret-project", "w/secret-2", false),
+      terminal("w-lima-control", LIMA_LIBRARY_ID, "Control terminal", 0, "t/lima-control", true, true),
+      workspaceWindow("w-lima-linux-1", LIMA_LIBRARY_ID, "linux Window 1", 1, "/home/hacker.guest/dev/github.com/torvals/linux", "w/linux", false),
+      workspaceWindow("w-lima-systemd-1", LIMA_LIBRARY_ID, "systemd Window 1", 1, "/home/hacker.guest/dev/github.com/systemd/systemd", "w/systemd", true),
+      workspaceWindow("w-lima-systemd-2", LIMA_LIBRARY_ID, "systemd Window 2", 2, "/home/hacker.guest/dev/github.com/systemd/systemd", "w/systemd-2", false),
+      terminal("w-windows-control", WINDOWS_LIBRARY_ID, "Control terminal", 0, "t/windows-control", true, true),
+    ],
+    liveTerminals: [["ds-lima:w/systemd", 2]],
+  };
+}
+
+function terminal(
+  window_id: string,
+  library_id: string,
+  title: string,
+  ordinal: number,
+  prefix: string,
+  connected: boolean,
+  control = false,
+): WindowRecord {
+  return {
+    window_id,
+    library_id,
+    kind: "terminal",
+    title: `${library_id === "local" ? "🏠" : "🌐"} ${title}`,
+    ordinal,
+    workspace_path: null,
+    prefix,
+    token: "tok_demo",
+    persisted: true,
+    connected,
+    control,
+    hidden: !connected,
+  };
+}
+
+function workspaceWindow(
+  window_id: string,
+  library_id: string,
+  title: string,
+  ordinal: number,
+  workspace_path: string,
+  prefix: string,
+  connected: boolean,
+): WindowRecord {
+  return {
+    window_id,
+    library_id,
+    kind: "workspace",
+    title: `${library_id === "local" ? "🏠" : "🌐"} ${title}`,
+    ordinal,
+    workspace_path,
+    prefix,
+    token: "tok_demo",
+    persisted: true,
+    connected,
+    control: false,
+    hidden: !connected,
+  };
+}
+
+function clone<T>(value: T): T {
+  return structuredClone(value);
+}
+
+function publicDevserver(ds: DemoDevserver): DevserverEntry {
+  const { token: _token, ...pub } = ds;
+  return { ...pub };
+}
+
+function tick<T>(value: T): Promise<T> {
+  return Promise.resolve(value);
+}
+
+export function createLauncherDemoApi(): LauncherDemoApi {
+  let workspaces: WorkspaceEntry[] = [];
+  let devservers: DemoDevserver[] = [];
+  let devserverWorkspaces: WorkspaceEntry[] = [];
+  let windows: WindowRecord[] = [];
+  let liveTerminals = new Map<string, number>();
+  let nextWs = 1;
+  let nextDs = 1;
+  const subscribers = new Set<(set: WindowSet) => void>();
+
+  function reset(): void {
+    const s = seed();
+    workspaces = clone(s.workspaces);
+    devservers = clone(s.devservers);
+    devserverWorkspaces = clone(s.devserverWorkspaces);
+    windows = clone(s.windows);
+    liveTerminals = new Map(s.liveTerminals);
+    nextWs = s.nextWs;
+    nextDs = s.nextDs;
+    notify();
+  }
+
+  function notify(): void {
+    const set = { windows: windows.map((w) => ({ ...w })) };
+    for (const fn of subscribers) fn(set);
+  }
+
+  function mergedWorkspaces(): WorkspaceEntry[] {
+    const connectedIds = new Set(devservers.filter((d) => d.status === "connected").map((d) => d.id));
+    return [
+      ...workspaces,
+      ...devserverWorkspaces.filter((w) => w.devserver_id && connectedIds.has(w.devserver_id)),
+    ].map((w) => ({ ...w }));
+  }
+
+  function discardWorkspaceWindows(path: string, libraryId = "local"): void {
+    for (let i = windows.length - 1; i >= 0; i--) {
+      const w = windows[i]!;
+      if (w.library_id === libraryId && w.kind === "workspace" && w.workspace_path === path) {
+        windows.splice(i, 1);
+      }
+    }
+  }
+
+  reset();
+
+  return {
+    attentionDevserverId: ATTENTION_DEVSERVER_ID,
+    reset,
+    listWorkspaces: () => tick(mergedWorkspaces()),
+    addLocalWorkspace: (path) => {
+      const workspace_id = `ws-demo-${nextWs++}`;
+      const entry: WorkspaceEntry = {
+        workspace_id,
+        path,
+        label: "",
+        on: true,
+        status: "running",
+        library_id: "local",
+        devserver_id: null,
+        prefix: workspace_id,
+      };
+      workspaces.push(entry);
+      notify();
+      return tick({ ...entry });
+    },
+    setWorkspaceOn: (id, on, force) => {
+      const ws = workspaces.find((w) => w.workspace_id === id);
+      const liveKey = `local:${id}`;
+      if (!on && !force && liveTerminals.has(liveKey)) {
+        return Promise.reject(new ApiError(409, JSON.stringify({ error: "live_terminals", active_terminals: liveTerminals.get(liveKey) })));
+      }
+      if (ws) {
+        ws.on = on;
+        ws.status = on ? "running" : "stopped";
+        if (!on) discardWorkspaceWindows(ws.path);
+      }
+      notify();
+      return tick(undefined);
+    },
+    removeWorkspace: (id) => {
+      const i = workspaces.findIndex((w) => w.workspace_id === id);
+      if (i >= 0) {
+        discardWorkspaceWindows(workspaces[i]!.path);
+        workspaces.splice(i, 1);
+        notify();
+      }
+      return tick(undefined);
+    },
+    listDevservers: () => tick(devservers.map(publicDevserver)),
+    addDevserver: (input: DevserverInput) => {
+      const ds: DemoDevserver = {
+        id: `ds-demo-${nextDs++}`,
+        host: input.host,
+        port: input.port,
+        label: input.label ?? "",
+        script: input.script ?? "",
+        has_token: !!input.token,
+        token: input.token ?? "",
+        library_id: null,
+        status: "disconnected",
+        auto_hide_control: input.auto_hide_control ?? false,
+      };
+      devservers.push(ds);
+      notify();
+      return tick(publicDevserver(ds));
+    },
+    updateDevserver: (id, input) => {
+      const ds = devservers.find((d) => d.id === id);
+      if (!ds) throw new Error(`unknown devserver ${id}`);
+      ds.host = input.host;
+      ds.port = input.port;
+      ds.label = input.label ?? "";
+      ds.script = input.script ?? "";
+      ds.auto_hide_control = input.auto_hide_control ?? false;
+      if (input.token) {
+        ds.token = input.token;
+        ds.has_token = true;
+      }
+      notify();
+      return tick(publicDevserver(ds));
+    },
+    removeDevserver: (id) => {
+      const ds = devservers.find((d) => d.id === id);
+      if (ds?.library_id) windows = windows.filter((w) => w.library_id !== ds.library_id);
+      devserverWorkspaces = devserverWorkspaces.filter((w) => w.devserver_id !== id);
+      devservers = devservers.filter((d) => d.id !== id);
+      notify();
+      return tick(undefined);
+    },
+    connectDevserver: (id) => {
+      const ds = devservers.find((d) => d.id === id);
+      if (ds) {
+        ds.status = "connected";
+        if (!ds.library_id) ds.library_id = `lib-demo-${id}`;
+        for (const w of windows) if (w.library_id === ds.library_id) w.connected = true;
+        notify();
+      }
+      return tick(undefined);
+    },
+    disconnectDevserver: (id) => {
+      const ds = devservers.find((d) => d.id === id);
+      if (ds) {
+        ds.status = "disconnected";
+        if (ds.library_id) for (const w of windows) if (w.library_id === ds.library_id) w.connected = false;
+        notify();
+      }
+      return tick(undefined);
+    },
+    openDevserverTerminal: (id) => {
+      const ds = devservers.find((d) => d.id === id);
+      if (ds?.library_id) {
+        const ordinal = windows.filter((w) => w.library_id === ds.library_id && w.kind === "terminal" && !w.control).length + 1;
+        windows.push(terminal(`w-${id}-term-${windows.length + 1}`, ds.library_id, `Terminal Window ${ordinal}`, ordinal, `t/${id}-${ordinal}`, true));
+        notify();
+      }
+      return tick(undefined);
+    },
+    openDevserverWorkspace: (id, path) => {
+      const ds = devservers.find((d) => d.id === id);
+      if (ds?.library_id) {
+        const base = path.split("/").filter(Boolean).pop() ?? "workspace";
+        const ordinal = windows.filter((w) => w.library_id === ds.library_id && w.kind === "workspace" && w.workspace_path === path).length + 1;
+        windows.push(workspaceWindow(`w-${id}-ws-${windows.length + 1}`, ds.library_id, `${base} Window ${ordinal}`, ordinal, path, `w/${base}-${ordinal}`, true));
+        notify();
+      }
+      return tick(undefined);
+    },
+    setDevserverWorkspaceOn: (id, prefix, on, force) => {
+      const ws = devserverWorkspaces.find((w) => w.devserver_id === id && w.prefix === prefix);
+      const key = `${id}:${prefix}`;
+      if (!on && !force && liveTerminals.has(key)) {
+        return Promise.reject(new ApiError(409, JSON.stringify({ error: "live_terminals", active_terminals: liveTerminals.get(key) })));
+      }
+      if (ws) {
+        ws.on = on;
+        ws.status = on ? "running" : "stopped";
+        if (!on) discardWorkspaceWindows(ws.path, ws.library_id ?? "");
+      }
+      liveTerminals.delete(key);
+      notify();
+      return tick(undefined);
+    },
+    forgetDevserverWorkspace: (id, prefix) => {
+      const i = devserverWorkspaces.findIndex((w) => w.devserver_id === id && w.prefix === prefix);
+      if (i >= 0) {
+        const ws = devserverWorkspaces[i]!;
+        discardWorkspaceWindows(ws.path, ws.library_id ?? "");
+        devserverWorkspaces.splice(i, 1);
+        notify();
+      }
+      return tick(undefined);
+    },
+    pickFolder: () => tick("/Users/hacker/demo-reset"),
+    listWindows: () => tick(windows.map((w) => ({ ...w }))),
+    createWindow: (kind, workspacePath) => {
+      const ordinal = windows.filter((w) => w.library_id === "local" && w.kind === kind && (kind === "terminal" || w.workspace_path === workspacePath)).length + 1;
+      const base = workspacePath ? workspacePath.split("/").filter(Boolean).pop() ?? "workspace" : "local";
+      const rec = kind === "terminal"
+        ? terminal(`w-local-term-${windows.length + 1}`, "local", `Terminal Window ${ordinal}`, ordinal, `t/local-${windows.length + 1}`, true)
+        : workspaceWindow(`w-local-ws-${windows.length + 1}`, "local", `${base} Window ${ordinal}`, ordinal, workspacePath ?? "/Users/hacker/demo", `w/${base}-${ordinal}`, true);
+      windows.push(rec);
+      notify();
+      return tick({ ...rec });
+    },
+    openWindow: (id) => {
+      const w = windows.find((x) => x.window_id === id);
+      if (w) {
+        w.hidden = false;
+        w.connected = true;
+      }
+      notify();
+      return tick(undefined);
+    },
+    hideWindow: (id) => {
+      const w = windows.find((x) => x.window_id === id);
+      if (w) {
+        w.hidden = true;
+        w.connected = false;
+      }
+      notify();
+      return tick(undefined);
+    },
+    watchWindows: (onSet) => {
+      subscribers.add(onSet);
+      onSet({ windows: windows.map((w) => ({ ...w })) });
+      return () => subscribers.delete(onSet);
+    },
+  };
+}

@@ -23,10 +23,6 @@ web/packages/marketing/
 `-- chan-mark.png
 ```
 
-Manual source lives in `docs/manual/`. The site build renders that tree to `/manual/` and nested clean URLs. Manual navigation starts with the links in `docs/manual/index.md`, then falls back to path order for pages not linked from the manual landing page.
-
-Manual images live alongside the manual (for example `docs/manual/images/`) and are referenced with workspace-relative paths so they also render in chan's editor. The build copies them into `dist/manual/` and rewrites the paths to absolute `/manual/...` URLs; a trailing `#w=<px>` on an image link sizes the figure.
-
 ## Build
 
 ```sh
@@ -41,8 +37,7 @@ npm run check
 
 The build/check gate:
 
-- renders `/`, `/install/`, `/manual/`, nested manual pages, and `/install.sh`
-- packages the release manual bundle from generated manual pages
+- renders `/`, `/install/`, and `/install.sh`
 - writes `CNAME` for `chan.app`
 - copies static assets into `dist/`
 - fails on missing required inputs
@@ -52,7 +47,7 @@ The build/check gate:
 - fails if stale public copy claims reappear in generated output
 - dry-runs `/dl/**` release metadata generation from a local fixture
 - dry-runs collection of uploaded release assets into the metadata manifest
-- serves `dist/` on loopback and smokes `/`, `/install/`, `/manual/`, `/manual/install/`, `/install.sh`, and `/install.ps1` absence
+- serves `dist/` on loopback and smokes `/`, `/install/`, `/install.sh`, and `/install.ps1` absence
 
 ## Preview
 
@@ -73,7 +68,7 @@ After a `v*` tag release completes, verify the public release assets:
 npm run verify:release
 ```
 
-The verifier checks the latest GitHub Release for the desktop downloads, standalone CLI tarballs, and manual bundle. `VERSION` and `SHA256SUMS` are checked when present, but `/dl/**` metadata is the source of truth for downloads and updates.
+The verifier checks the latest GitHub Release for the desktop downloads and standalone CLI tarballs. `VERSION` and `SHA256SUMS` are checked when present, but `/dl/**` metadata is the source of truth for downloads and updates.
 
 Generate release metadata from an already verified asset manifest:
 
@@ -97,13 +92,6 @@ The generator writes:
 The manifest must list concrete GitHub Release asset URLs and SHA256 values. It must not use GitHub `releases/latest/download` URLs. The collector builds that manifest from uploaded GitHub Release assets and detached updater signature assets.
 
 A manual Pages deploy (`gh workflow run pages.yml`) ships marketing-only updates between releases. It rebuilds `/dl/**` from the latest GitHub Release rather than reading the live site, so the download page and update-check metadata survive the deploy. The release workflow regenerates `/dl/**` for each new tag; both paths derive the same metadata from GitHub Release assets.
-
-Build the release manual bundle locally:
-
-```sh
-npm run build
-npm run bundle:manual
-```
 
 While `github.com/fiorix/chan` is still private during pre-release work, use `--skip-latest-download-heads` for asset-shape checks. The public launch requires that flag to be absent so unauthenticated latest-download URLs are checked.
 

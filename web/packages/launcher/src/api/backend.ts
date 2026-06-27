@@ -8,4 +8,12 @@
 
 import { liveApi, type LibraryApi } from "./library";
 
-export const backend: LibraryApi = liveApi;
+export let backend: LibraryApi = liveApi;
+
+export function setBackend(api: LibraryApi): void {
+  backend = api;
+}
+
+export function resetBackend(): void {
+  backend = liveApi;
+}

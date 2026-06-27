@@ -3,6 +3,10 @@
   "version": "0.54.0",
   "private": true,
   "type": "module",
+  "exports": {
+    "./demo": "./src/LauncherDemo.svelte",
+    "./styles.css": "./src/styles.css"
+  },
   "scripts": {
     "dev": "vite",
     "build": "vite build",

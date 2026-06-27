@@ -1,22 +1,12 @@
 <section class="page-head">
-  <p class="eyebrow">install</p>
   <h1>Install Chan</h1>
-  <p>
-    Most people want <strong>Chan Desktop</strong>, the native app. Installing
-    it also sets up the <code>chan</code> and <code>cs</code> command line, with
-    nothing extra to download.
-  </p>
+  <p><strong>Chan Desktop</strong>, the native app, sets up the <code>chan</code> and <code>cs</code> symlinks in <code>~/.local/bin</code> so you can drive Chan from the command line.</p>
 </section>
 
 <section class="install-block">
   <div class="section-heading">
     <h2>Chan Desktop <span class="group-note">recommended</span></h2>
-    <p>
-      The native window for macOS, Linux, and Windows. It includes the
-      <code>chan</code> and <code>cs</code> command line, so this is the only
-      download most people need. See the <a href="/manual/install/">install
-      guide</a> for step-by-step instructions.
-    </p>
+    <p>The native app for macOS, Windows, and Linux.</p>
   </div>
 
   <div class="download-group">
@@ -25,6 +15,16 @@
       <div class="download-row">
         <span class="download-label">Disk image</span>
         <a class="arch-button" href="{{githubReleasesUrl}}" data-release-download="desktop-macos-dmg">DMG</a>
+      </div>
+    </div>
+  </div>
+
+  <div class="download-group">
+    <h3>Windows <span class="group-note">x64</span></h3>
+    <div class="download-matrix">
+      <div class="download-row">
+        <span class="download-label">Installer</span>
+        <a class="arch-button" href="{{githubReleasesUrl}}" data-release-download="desktop-windows-nsis">.exe</a>
       </div>
     </div>
   </div>
@@ -49,37 +49,19 @@
       </div>
     </div>
   </div>
-
-  <div class="download-group">
-    <h3>Windows <span class="group-note">x64</span></h3>
-    <div class="download-matrix">
-      <div class="download-row">
-        <span class="download-label">Installer</span>
-        <a class="arch-button" href="{{githubReleasesUrl}}" data-release-download="desktop-windows-nsis">.exe</a>
-      </div>
-    </div>
-  </div>
 </section>
 
 <section class="install-block">
   <div class="section-heading">
     <h2>Standalone CLI (headless)</h2>
-    <p>
-      Just the <code>chan</code> CLI and its <code>cs</code> symlink — for a
-      terminal-first <code>chan open</code>, an SSH workflow, or a headless
-      server. The shell installer is the fastest way on macOS or Linux:
-    </p>
+    <p>Install the headless version for running devservers. Use the shell installer:</p>
   </div>
 
   <div class="command-copy" data-copy-block>
     <code><span>$</span><b data-copy-value>curl -fsSL https://chan.app/install.sh | sh</b></code>
     <button type="button">Copy</button>
   </div>
-  <p class="minor">
-    Prefer a package or a manual download? Pick one below. For install options
-    (a custom prefix, a mirrored metadata source), see the
-    <a href="/manual/install/">install guide</a>.
-  </p>
+  <p class="minor">Or use packages and archives:</p>
 
   <div class="download-group">
     <h3>macOS <span class="group-note">Apple Silicon</span></h3>
@@ -87,6 +69,16 @@
       <div class="download-row">
         <span class="download-label">Archive</span>
         <a class="arch-button" href="{{githubReleasesUrl}}" data-release-download="cli-macos-arm64">.tar.gz</a>
+      </div>
+    </div>
+  </div>
+
+  <div class="download-group">
+    <h3>Windows <span class="group-note">x64</span></h3>
+    <div class="download-matrix">
+      <div class="download-row">
+        <span class="download-label">Archive</span>
+        <a class="arch-button" href="{{githubReleasesUrl}}" data-release-download="cli-windows-x64">.zip</a>
       </div>
     </div>
   </div>
@@ -111,16 +103,6 @@
       </div>
     </div>
   </div>
-
-  <div class="download-group">
-    <h3>Windows <span class="group-note">x64</span></h3>
-    <div class="download-matrix">
-      <div class="download-row">
-        <span class="download-label">Archive</span>
-        <a class="arch-button" href="{{githubReleasesUrl}}" data-release-download="cli-windows-x64">.zip</a>
-      </div>
-    </div>
-  </div>
 </section>
 
 <section class="install-section">
@@ -128,23 +110,14 @@
     <h2>After install</h2>
   </div>
   <div class="command-copy static">
-    <code><span>$</span><b>chan open ~/notes</b></code>
+    <code><span>$</span><b>chan open ~/my-project</b></code>
   </div>
-  <p>
-    The CLI starts a loopback server, prints the per-launch URL with its bearer
-    token, and serves the editor from the embedded web bundle.
-  </p>
 </section>
 
 <section class="install-block">
   <div class="section-heading">
     <h2>Chan Gateway <span class="group-note">self-hosting</span></h2>
-    <p>
-      You don't need this to use Chan. The gateway is the self-hosted tunnel
-      that fronts remote workspaces — install it only if you run your own.
-      The <a href="/manual/gateway/">gateway manual</a> covers setup and where
-      it sits in the architecture.
-    </p>
+    <p>You don't need this to use Chan. The gateway is the self-hosted tunnel that fronts remote workspaces — install it only if you run your own.</p>
   </div>
 
   <div class="download-group">
@@ -171,5 +144,33 @@
         <a class="arch-button" href="{{githubReleasesUrl}}" data-release-download="gateway-devserver-proxy-deb-arm64">arm64</a>
       </div>
     </div>
+  </div>
+</section>
+
+<section class="install-section">
+  <div class="section-heading">
+    <h2>Docker images</h2>
+    <p>You can use the <code>fiorix/chan</code> image for the headless devserver:</p>
+  </div>
+  <div class="command-copy multiline" data-copy-block>
+    <code><span>$</span><b data-copy-value>docker run -p 127.0.0.1:8787:8787 \
+  -e CHAN_HOME=/data/chan \
+  -v ~/.chan-docker:/data/chan \
+  -v ~/projects:/workspaces \
+  fiorix/chan devserver --bind 0.0.0.0 --port 8787</b></code>
+    <button type="button" aria-label="Copy">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <rect x="9" y="9" width="13" height="13" rx="2" />
+        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+      </svg>
+    </button>
+  </div>
+  <p class="minor">All other <code>chan-gateway</code> images can also be found here: <a href="https://hub.docker.com/u/fiorix">Docker Hub / fiorix</a>.</p>
+</section>
+
+<section class="install-block">
+  <div class="section-heading">
+    <h2>All packages</h2>
+    <p>Every desktop, CLI, and gateway artifact for each release is published on the <a href="{{githubReleasesUrl}}">GitHub releases page</a>, with checksums and release notes.</p>
   </div>
 </section>

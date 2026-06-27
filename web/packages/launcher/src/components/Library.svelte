@@ -46,6 +46,7 @@
   import { basename } from "../lib/windowLabel";
   import { buildMachineTree, type MachineNode, type WorkspaceNode } from "../lib/machineTree";
   import { readOnly } from "../state/capabilities";
+  import { demoState, resetDemo } from "../state/demo.svelte";
   import type { DevserverEntry, WorkspaceEntry } from "../api/library";
 
   // The whole tree, recomputed when any of the three feeds change (the two-array
@@ -336,9 +337,9 @@
             <button
               class="icon-btn"
               type="button"
-              title="New workspace"
-              aria-label="New local workspace"
-              onclick={() => openNewDialog("local")}>
+              title={demoState.enabled ? "Reset demo data" : "New workspace"}
+              aria-label={demoState.enabled ? "Reset demo data" : "New local workspace"}
+              onclick={() => (demoState.enabled ? run(resetDemo()) : openNewDialog("local"))}>
               <FolderPlus size={16} />
             </button>
           {/if}
@@ -415,6 +416,8 @@
       </div>
       {#if hasContent(node)}
         {@render machineContent(node)}
+      {:else if dsSpinning(ds)}
+        <p class="connect-prompt">Connecting…</p>
       {:else}
         <p class="connect-prompt">Not connected — connect to load terminals &amp; workspaces.</p>
       {/if}

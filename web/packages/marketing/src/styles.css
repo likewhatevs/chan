@@ -1,27 +1,31 @@
 :root {
-  --bg: #fbfbf8;
+  /* Cyan / orange / black / white. White + near-black are the base; orange is
+     the primary accent (CTA, brand hover) and cyan is the secondary accent
+     (eyebrow, list markers). Dark mode flips the base to black + white and
+     brightens both accents. */
+  --bg: #ffffff;
   --panel: #ffffff;
-  --fg: #191816;
-  --muted: #69655d;
-  --rule: #dddad2;
-  --accent: #c45a2c;
-  --accent-2: #247a76;
-  --code-bg: #f0eee8;
-  --shadow: 0 16px 48px rgba(26, 24, 20, 0.08);
+  --fg: #0b0c0e;
+  --muted: #5b626b;
+  --rule: #e4e7ec;
+  --accent: #e8590c;
+  --accent-2: #0c87a3;
+  --code-bg: #f1f3f6;
+  --shadow: 0 16px 48px rgba(8, 12, 18, 0.1);
   --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
   --sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
 [data-mode="dark"] {
-  --bg: #101112;
-  --panel: #17191a;
-  --fg: #f1efea;
-  --muted: #aaa39a;
-  --rule: #303435;
-  --accent: #ef8f58;
-  --accent-2: #6dc8c0;
-  --code-bg: #202324;
-  --shadow: 0 16px 48px rgba(0, 0, 0, 0.35);
+  --bg: #0a0b0d;
+  --panel: #121419;
+  --fg: #f2f5f8;
+  --muted: #97a0aa;
+  --rule: #222831;
+  --accent: #ff7a33;
+  --accent-2: #29d3ee;
+  --code-bg: #161a20;
+  --shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
 }
 
 *,
@@ -85,7 +89,10 @@ code {
 }
 
 .brand-mark {
-  background: var(--accent);
+  /* Grey logo: reads as grey-on-white in light mode and grey-on-black in dark,
+     using the per-mode neutral so it stays grey on either base, independent of
+     the accent. */
+  background: var(--muted);
   display: inline-block;
   height: 30px;
   mask: url("/chan-mark.png") center / contain no-repeat;
@@ -157,12 +164,31 @@ code {
 }
 
 .hero {
+  padding: 56px 0 80px;
+}
+
+/* The big home headline sits across the top; its block is centred but the two
+   lines stay left-aligned. The second line carries the accent. */
+.hero-headline {
+  font-size: clamp(3.4rem, 9vw, 8.5rem);
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  line-height: 0.9;
+  margin: 0 auto 56px;
+  max-width: 100%;
+  width: fit-content;
+}
+
+.hero-accent {
+  color: var(--accent);
+}
+
+/* Below the headline: copy on the left, the launcher mock on the right. */
+.hero-main {
   align-items: center;
   display: grid;
-  gap: 48px;
-  grid-template-columns: minmax(0, 0.85fr) minmax(320px, 1fr);
-  min-height: calc(100vh - 112px);
-  padding: 40px 0 72px;
+  gap: 56px;
+  grid-template-columns: minmax(0, 1fr) minmax(340px, 1.1fr);
 }
 
 .home-hero {
@@ -181,18 +207,11 @@ code {
   width: 100%;
 }
 
-.hero h1,
 .page-head h1 {
   font-size: clamp(3.8rem, 11vw, 8.25rem);
   letter-spacing: 0;
   line-height: 0.9;
   margin: 0 0 24px;
-}
-
-/* The hero headline's second line (the tagline) reads smaller than the big
-   "Chan," brand word above it. */
-.hero h1 .hero-sub {
-  font-size: 0.5em;
 }
 
 .eyebrow {
@@ -207,7 +226,59 @@ code {
 .page-head p {
   color: var(--muted);
   font-size: 1.18rem;
+}
+
+/* The home hero lede keeps an optimal measure; the install page-head intro
+   rolls to the full content width. */
+.lede {
   max-width: 58ch;
+}
+
+/* The large left-column tagline; the two keywords read bolder. */
+.hero-tagline {
+  color: var(--fg);
+  font-size: 1.5rem;
+  font-weight: 500;
+  line-height: 1.35;
+  margin: 0;
+}
+
+.hero-tagline strong {
+  font-weight: 800;
+}
+
+/* Thin rules bracket the feature line. */
+.hero-rule {
+  border: 0;
+  border-top: 1px solid var(--rule);
+  margin: 28px 0;
+}
+
+/* The globe + Ubiquitous feature line: accent icon, then the wrapping text. */
+.hero-feature {
+  align-items: flex-start;
+  color: var(--muted);
+  display: flex;
+  font-size: 1.05rem;
+  gap: 12px;
+  line-height: 1.5;
+  margin: 0;
+}
+
+.hero-feature strong {
+  color: var(--fg);
+}
+
+.hero-feature-icon {
+  color: var(--accent);
+  display: inline-flex;
+  flex-shrink: 0;
+  margin-top: 3px;
+}
+
+.hero-feature-icon svg {
+  height: 20px;
+  width: 20px;
 }
 
 .button-row {
@@ -220,10 +291,17 @@ code {
 .button {
   align-items: center;
   border: 1px solid var(--rule);
+  border-radius: 10px;
   display: inline-flex;
   font-weight: 700;
-  min-height: 44px;
-  padding: 0 16px;
+  gap: 8px;
+  min-height: 48px;
+  padding: 0 22px;
+}
+
+.button svg {
+  height: 18px;
+  width: 18px;
 }
 
 .button.primary {
@@ -270,6 +348,28 @@ code {
   overflow: hidden;
 }
 
+
+.launcher-hero {
+  aspect-ratio: 1 / 1;
+  background: #1c1c1e;
+  border-radius: 14px;
+}
+
+.launcher-demo-mount {
+  background: #1c1c1e;
+  display: none;
+  height: 100%;
+  overflow: hidden;
+}
+
+.launcher-demo-mount.mounted {
+  display: block;
+}
+
+.launcher-demo-mount.mounted + .launcher-fallback {
+  display: none;
+}
+
 .hero-shot img,
 .inline-shot img {
   display: block;
@@ -303,8 +403,7 @@ code {
 
 .feature-grid h2,
 .split-section h2,
-.section-heading h2,
-.prose h2 {
+.section-heading h2 {
   font-size: 1.22rem;
   letter-spacing: 0;
   line-height: 1.2;
@@ -313,9 +412,7 @@ code {
 
 .feature-grid p,
 .split-section p,
-.install-section p,
-.prose p,
-.prose li {
+.install-section p {
   color: var(--muted);
 }
 
@@ -495,6 +592,44 @@ code {
   display: grid;
 }
 
+/* A long multi-line command: lay the shell continuations out as written
+   instead of one nowrap scrolling row, with a copy icon pinned top-right. */
+.command-copy.multiline {
+  display: block;
+  position: relative;
+}
+
+.command-copy.multiline code {
+  display: block;
+  line-height: 1.6;
+  padding-right: 48px;
+  white-space: pre;
+}
+
+.command-copy.multiline code span {
+  margin-right: 0.6ch;
+}
+
+.command-copy.multiline button {
+  align-items: center;
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  display: inline-flex;
+  height: 30px;
+  justify-content: center;
+  min-width: 0;
+  padding: 0;
+  position: absolute;
+  right: 8px;
+  top: 8px;
+  width: 30px;
+}
+
+.command-copy.multiline button svg {
+  height: 15px;
+  width: 15px;
+}
+
 .command-copy code {
   align-items: center;
   border: 0;
@@ -565,78 +700,6 @@ body.lightbox-open {
   overflow: hidden;
 }
 
-.manual-layout {
-  align-items: start;
-  display: grid;
-  gap: 48px;
-  grid-template-columns: 240px minmax(0, 720px);
-  padding: 48px 0 80px;
-}
-
-.manual-nav {
-  border-right: 1px solid var(--rule);
-  display: grid;
-  gap: 4px;
-  padding-right: 18px;
-  position: sticky;
-  top: 24px;
-}
-
-.manual-nav a {
-  border-radius: 6px;
-  color: var(--muted);
-  font-size: 0.92rem;
-  padding: 7px 8px 7px calc(8px + var(--depth, 0) * 14px);
-  text-decoration: none;
-}
-
-.manual-nav a:hover {
-  background: var(--code-bg);
-  color: var(--fg);
-}
-
-.prose {
-  max-width: 720px;
-}
-
-.prose h1 {
-  font-size: clamp(2.2rem, 6vw, 4.4rem);
-  letter-spacing: 0;
-  line-height: 1;
-  margin: 0 0 28px;
-}
-
-.prose h2 {
-  border-top: 1px solid var(--rule);
-  margin-top: 36px;
-  padding-top: 24px;
-}
-
-.prose h3 {
-  margin: 28px 0 8px;
-}
-
-.prose a {
-  color: var(--accent);
-  font-weight: 700;
-  text-decoration-thickness: 1px;
-  text-underline-offset: 3px;
-}
-
-.prose pre {
-  background: var(--code-bg);
-  border: 1px solid var(--rule);
-  border-radius: 8px;
-  overflow-x: auto;
-  padding: 14px 16px;
-}
-
-.prose pre code {
-  background: transparent;
-  border: 0;
-  padding: 0;
-}
-
 .site-footer {
   border-top: 1px solid var(--rule);
   color: var(--muted);
@@ -669,10 +732,9 @@ body.lightbox-open {
     justify-content: flex-start;
   }
 
-  .hero,
+  .hero-main,
   .split-section,
-  .install-section,
-  .manual-layout {
+  .install-section {
     grid-template-columns: 1fr;
   }
 
@@ -684,13 +746,6 @@ body.lightbox-open {
   .feature-grid,
   .download-cards {
     grid-template-columns: 1fr;
-  }
-
-  .manual-nav {
-    border-right: 0;
-    border-bottom: 1px solid var(--rule);
-    padding: 0 0 18px;
-    position: static;
   }
 }
 
