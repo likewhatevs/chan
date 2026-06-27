@@ -32,6 +32,9 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: '20'
+      - name: Install web workspace deps
+        run: npm install
+        working-directory: chan/web
       - run: npm run check
         working-directory: chan/web/packages/marketing
       - name: Preserve existing release metadata

@@ -9,6 +9,11 @@
   "dependencies": {
     "@chan/launcher": "0.54.0"
   },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "^7.1.2",
+    "svelte": "^5.0.0",
+    "vite": "^8.0.16"
+  },
   "scripts": {
     "build": "node scripts/build.mjs",
     "check": "node --check scripts/build.mjs && node --check scripts/collect-release-assets.mjs && node --check scripts/generate-release-metadata.mjs && node --check scripts/preserve-release-metadata.mjs && node --check scripts/verify-release-assets.mjs && node --check scripts/smoke-dist.mjs && node --check scripts/smoke-install-sh.mjs && node --check scripts/smoke-release-assets-manifest.mjs && node --check scripts/smoke-release-metadata.mjs && node scripts/build.mjs && node scripts/smoke-dist.mjs && node scripts/smoke-install-sh.mjs && node scripts/smoke-release-assets-manifest.mjs && node scripts/smoke-release-metadata.mjs && sh -n dist/install.sh",

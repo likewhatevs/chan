@@ -734,6 +734,10 @@ jobs:
           path: artifacts
           pattern: release-*
 
+      - name: Install web workspace deps
+        run: npm install
+        working-directory: chan/web
+
       - name: Build site
         working-directory: chan/web/packages/marketing
         run: npm run build
@@ -773,6 +777,10 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: '20'
+
+      - name: Install web workspace deps
+        run: npm install
+        working-directory: chan/web
 
       - name: Build site and release metadata
         working-directory: chan/web/packages/marketing
