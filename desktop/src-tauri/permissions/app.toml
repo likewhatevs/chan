@@ -40,6 +40,7 @@ permissions = [
   "allow-probe-url",
   "allow-platform-os",
   "allow-read-clipboard-text",
+  "allow-write-clipboard-text",
   "allow-export-pdf-macos",
 ]
 
@@ -137,6 +138,11 @@ commands.allow = ["platform_os"]
 identifier = "allow-read-clipboard-text"
 description = "Enables the read_clipboard_text command."
 commands.allow = ["read_clipboard_text"]
+
+[[permission]]
+identifier = "allow-write-clipboard-text"
+description = "Enables the write_clipboard_text command (OSC 52 terminal copy)."
+commands.allow = ["write_clipboard_text"]
 
 [[permission]]
 identifier = "allow-export-pdf-macos"

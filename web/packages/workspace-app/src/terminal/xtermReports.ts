@@ -1,4 +1,5 @@
 import type { Terminal } from "@xterm/xterm";
+import { writeClipboardText } from "../api/desktop";
 
 type OscParserLike = {
   registerOscHandler?: (
@@ -17,6 +18,31 @@ export function installTerminalReportGuards(term: Terminal): void {
   parser.registerOscHandler(10, suppressOscSpecialColorReport);
   parser.registerOscHandler(11, suppressOscSpecialColorReport);
   parser.registerOscHandler(12, suppressOscSpecialColorReport);
+  parser.registerOscHandler(52, handleOsc52Clipboard);
+}
+
+/// Honour an OSC 52 copy sequence: decode its base64 payload and write it to
+/// the system clipboard. `@xterm/xterm` v6 has no built-in OSC 52 path, so
+/// without this the embedded agent's copy sequences are silently dropped. The
+/// read/query form (`?`) is consumed but never echoed — replying would leak the
+/// clipboard back into the PTY. Returns `true` synchronously to mark the
+/// sequence handled; the actual write is fire-and-forget because returning the
+/// Promise would stall xterm's parser until the clipboard settles.
+export function handleOsc52Clipboard(data: string): boolean {
+  const sep = data.indexOf(";");
+  if (sep < 0) return false; // not an OSC 52 we understand
+  const payload = data.slice(sep + 1); // selection param before ';' ignored
+  if (payload === "?") return true; // read/query form: consume, never echo
+  try {
+    const bytes = Uint8Array.from(atob(payload), (c) => c.charCodeAt(0));
+    const text = new TextDecoder().decode(bytes);
+    void writeClipboardText(text).catch((err) =>
+      console.warn("OSC 52 clipboard write failed", err),
+    );
+  } catch (err) {
+    console.warn("OSC 52 malformed base64", err);
+  }
+  return true;
 }
 
 export function suppressOscSpecialColorReport(data: string): boolean {

@@ -2537,6 +2537,19 @@ fn read_clipboard_text() -> Result<String, String> {
     }
 }
 
+/// Write clipboard text natively for the terminal's OSC 52 copy. An OSC 52
+/// sequence carries no user gesture, which a WKWebView's
+/// `navigator.clipboard.writeText()` can reject, so the SPA routes the write
+/// here through `arboard`. Sync so it runs on the main thread, which macOS's
+/// NSPasteboard expects. Any failure surfaces as an Err the SPA logs before
+/// falling back to the web API.
+#[tauri::command]
+fn write_clipboard_text(text: String) -> Result<(), String> {
+    arboard::Clipboard::new()
+        .and_then(|mut c| c.set_text(text))
+        .map_err(|e| e.to_string())
+}
+
 /// User's home directory as a plain string, for the Workspaces window
 /// to abbreviate paths to `~/...`. Returns an empty string when the
 /// platform can't resolve it.
@@ -3545,6 +3558,7 @@ fn main() {
             home_dir,
             platform_os,
             read_clipboard_text,
+            write_clipboard_text,
             reveal_in_finder,
             reload_window,
             open_devtools,

@@ -110,6 +110,28 @@ export async function readClipboardText(): Promise<string> {
   return (await navigator.clipboard?.readText()) ?? "";
 }
 
+/// Write clipboard text without needing a user gesture (the OSC 52 path).
+///
+/// An OSC 52 copy sequence arrives from the PTY with no user gesture, and
+/// chan-desktop's WKWebView can reject a gesture-less
+/// `navigator.clipboard.writeText()`. So on desktop we write it natively in
+/// Rust through the `write_clipboard_text` IPC, which goes straight to the OS
+/// clipboard and never needs a gesture. On web `navigator.clipboard.writeText()`
+/// is the only option — it is gesture-permitted in a foreground tab, which is
+/// where the terminal lives. Best-effort: a failed native IPC logs and falls
+/// back to the web API so the copy still has a chance to land.
+export async function writeClipboardText(text: string): Promise<void> {
+  if (isTauriDesktop()) {
+    try {
+      await tauriInvoke<void>("write_clipboard_text", { text });
+      return;
+    } catch (err) {
+      console.warn("writeClipboardText: write_clipboard_text IPC failed", err);
+    }
+  }
+  await navigator.clipboard?.writeText(text);
+}
+
 /// Absolute paths of the OS files currently on the macOS drag
 /// pasteboard (the `read_dropped_paths` IPC). Only meaningful when
 /// called from inside a `drop` event handler — the drag pasteboard
