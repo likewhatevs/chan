@@ -197,6 +197,7 @@ class MermaidWidget extends WidgetType {
   constructor(
     readonly source: string,
     readonly dark: boolean,
+    readonly onView: ((svg: string) => void) | undefined,
   ) {
     super();
   }
@@ -218,11 +219,39 @@ class MermaidWidget extends WidgetType {
     diagram.className = "cm-md-mermaid-diagram";
     diagram.textContent = "rendering…";
     inner.append(diagram);
+
+    // Hover "View" affordance -> open the pan/zoom overlay with the
+    // rendered SVG. Hidden until a render succeeds (so it never offers a
+    // missing / errored diagram); its mousedown is swallowed so opening
+    // the viewer never drops the caret into the source, which would
+    // de-render the block via the selection-intersect rule.
+    const onView = this.onView;
+    let renderedSvg: string | null = null;
+    let viewBtn: HTMLButtonElement | null = null;
+    if (onView) {
+      viewBtn = document.createElement("button");
+      viewBtn.type = "button";
+      viewBtn.className = "cm-md-mermaid-view";
+      viewBtn.textContent = "View";
+      viewBtn.style.display = "none";
+      viewBtn.addEventListener("mousedown", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+      });
+      viewBtn.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (renderedSvg) onView(renderedSvg);
+      });
+      inner.append(viewBtn);
+    }
     wrap.append(inner);
 
     void renderMermaid(this.source, this.dark).then((res) => {
       if (res.ok && res.svg) {
         diagram.innerHTML = res.svg;
+        renderedSvg = res.svg;
+        if (viewBtn) viewBtn.style.display = "";
         // Stash the face so the reverse (enter) flip can ghost it after
         // CM tears the widget down, and clear any stale error so the
         // source view stops accenting a now-fixed line.
@@ -252,14 +281,17 @@ class MermaidWidget extends WidgetType {
   }
 }
 
-export function mermaidDecorations(isDark: () => boolean): Extension {
+export function mermaidDecorations(
+  isDark: () => boolean,
+  onView?: (svg: string) => void,
+): Extension {
   const field = StateField.define<DecorationSet>({
     create(state) {
-      return scan(state, isDark());
+      return scan(state, isDark(), onView);
     },
     update(decorations, tr) {
       if (!tr.docChanged && !tr.selection) return decorations;
-      return scan(tr.state, isDark());
+      return scan(tr.state, isDark(), onView);
     },
     provide: (f) => EditorView.decorations.from(f),
   });
@@ -365,7 +397,11 @@ export function mermaidDecorations(isDark: () => boolean): Extension {
   ];
 }
 
-function scan(state: EditorState, dark: boolean): DecorationSet {
+function scan(
+  state: EditorState,
+  dark: boolean,
+  onView: ((svg: string) => void) | undefined,
+): DecorationSet {
   const sel = state.selection;
   const decos: Array<{ from: number; to: number; deco: Decoration }> = [];
   syntaxTree(state).iterate({
@@ -379,7 +415,7 @@ function scan(state: EditorState, dark: boolean): DecorationSet {
         from: node.from,
         to: node.to,
         deco: Decoration.replace({
-          widget: new MermaidWidget(info.source, dark),
+          widget: new MermaidWidget(info.source, dark, onView),
           block: true,
         }),
       });

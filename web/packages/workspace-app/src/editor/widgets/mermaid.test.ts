@@ -127,9 +127,17 @@ describe("mermaid wiring", () => {
     expect(mermaidSrc).toMatch(/cacheError\(this\.source, null\)/);
   });
 
-  test("no button: cursor is the only trigger; theme + rotateX wired", () => {
-    expect(mermaidSrc).not.toMatch(/createElement\("button"\)/);
-    expect(mermaidSrc).not.toMatch(/addEventListener\("click"/);
+  test("View affordance opens the zoom overlay; theme + rotateX wired", () => {
+    // The hover "View" button is the explicit zoom trigger, gated on the
+    // onView option and only revealed after a successful render; clicking
+    // the diagram body still defers to CM6 caret placement (cursor-out
+    // reveal), so the button is the only added interactive control.
+    expect(mermaidSrc).toMatch(
+      /readonly onView: \(\(svg: string\) => void\) \| undefined/,
+    );
+    expect(mermaidSrc).toMatch(/if \(onView\)/);
+    expect(mermaidSrc).toMatch(/createElement\("button"\)/);
+    expect(mermaidSrc).toMatch(/if \(renderedSvg\) onView\(renderedSvg\)/);
     expect(mermaidSrc).toMatch(/renderMermaid\(this\.source, this\.dark\)/);
     // closed-fence gate + cursor-out render.
     expect(mermaidSrc).toMatch(/closeFrom === openFrom/);
@@ -137,5 +145,7 @@ describe("mermaid wiring", () => {
     expect(wysiwygSrc).toMatch(
       /mermaidDecorations\([\s\S]{1,80}effectiveHybridSurfaceTheme\("editor"\) === "dark"/,
     );
+    // The decoration passes the diagram-zoom opener as onView.
+    expect(wysiwygSrc).toMatch(/openDiagramZoom\(svg\)/);
   });
 });

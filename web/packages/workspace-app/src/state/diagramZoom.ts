@@ -1,0 +1,217 @@
+// Fullscreen pan/zoom viewer for a rendered diagram (a mermaid SVG).
+// Imperative DOM helper, self-contained with inline styles, mirroring
+// imageZoom.ts's backdrop/Escape scaffolding so the two viewers feel of
+// a piece. The diagram mounts in a transform layer: wheel + on-screen
+// buttons + keyboard (+/-/=, 0) zoom, drag + arrows/WASD pan. Escape or a
+// plain backdrop click dismisses; the overlay cleans itself up.
+
+const MIN_SCALE = 0.2;
+const MAX_SCALE = 8;
+const ZOOM_STEP = 1.2; // per button press / keypress
+const PAN_STEP = 48; // px per arrow / WASD press
+
+/// Open the diagram viewer for a rendered SVG string (mermaid's already
+/// sanitized render output). No-op on empty input.
+export function openDiagramZoom(svg: string): void {
+  if (!svg) return;
+
+  const backdrop = document.createElement("div");
+  backdrop.className = "md-diagram-zoom";
+  backdrop.style.cssText =
+    "position:fixed;inset:0;z-index:40000;overflow:hidden;" +
+    "background:rgba(0,0,0,0.92);cursor:grab;";
+
+  // The layer is anchored at the backdrop centre (top/left 50%); the
+  // -50% in the transform recentres it on its own box, then pan/zoom ride
+  // on top.
+  const layer = document.createElement("div");
+  layer.className = "md-diagram-zoom-layer";
+  layer.style.cssText =
+    "position:absolute;top:50%;left:50%;transform-origin:center center;" +
+    "will-change:transform;";
+  layer.innerHTML = svg;
+  const svgEl = layer.querySelector("svg");
+  if (svgEl) {
+    svgEl.style.maxWidth = "88vw";
+    svgEl.style.maxHeight = "88vh";
+    svgEl.style.width = "auto";
+    svgEl.style.height = "auto";
+    svgEl.style.display = "block";
+  }
+  backdrop.appendChild(layer);
+
+  let scale = 1;
+  let tx = 0;
+  let ty = 0;
+  const apply = (): void => {
+    layer.style.transform =
+      `translate(-50%, -50%) translate(${tx}px, ${ty}px) scale(${scale})`;
+  };
+  const clamp = (s: number): number =>
+    Math.min(MAX_SCALE, Math.max(MIN_SCALE, s));
+  const zoom = (factor: number): void => {
+    scale = clamp(scale * factor);
+    apply();
+  };
+  const pan = (dx: number, dy: number): void => {
+    tx += dx;
+    ty += dy;
+    apply();
+  };
+  const reset = (): void => {
+    scale = 1;
+    tx = 0;
+    ty = 0;
+    apply();
+  };
+
+  // Wheel zoom toward the pointer: keep the point under the cursor fixed.
+  backdrop.addEventListener(
+    "wheel",
+    (e) => {
+      e.preventDefault();
+      const rect = layer.getBoundingClientRect();
+      const px = e.clientX - (rect.left + rect.width / 2);
+      const py = e.clientY - (rect.top + rect.height / 2);
+      const next = clamp(scale * (e.deltaY < 0 ? ZOOM_STEP : 1 / ZOOM_STEP));
+      const ratio = next / scale;
+      tx -= px * (ratio - 1);
+      ty -= py * (ratio - 1);
+      scale = next;
+      apply();
+    },
+    { passive: false },
+  );
+
+  // Drag to pan. `moved` tells a pan-drag apart from a click-to-close.
+  let dragging = false;
+  let moved = false;
+  let lastX = 0;
+  let lastY = 0;
+  const onMove = (e: MouseEvent): void => {
+    if (!dragging) return;
+    const dx = e.clientX - lastX;
+    const dy = e.clientY - lastY;
+    if (Math.abs(dx) > 2 || Math.abs(dy) > 2) moved = true;
+    lastX = e.clientX;
+    lastY = e.clientY;
+    pan(dx, dy);
+  };
+  const onUp = (): void => {
+    dragging = false;
+    backdrop.style.cursor = "grab";
+  };
+  backdrop.addEventListener("mousedown", (e) => {
+    if (e.button !== 0) return;
+    dragging = true;
+    moved = false;
+    lastX = e.clientX;
+    lastY = e.clientY;
+    backdrop.style.cursor = "grabbing";
+  });
+  document.addEventListener("mousemove", onMove, true);
+  document.addEventListener("mouseup", onUp, true);
+
+  const controls = document.createElement("div");
+  controls.className = "md-diagram-zoom-controls";
+  controls.style.cssText =
+    "position:fixed;bottom:18px;left:50%;transform:translateX(-50%);" +
+    "display:flex;gap:8px;";
+  controls.append(
+    ctrlButton("−", "Zoom out", () => zoom(1 / ZOOM_STEP)),
+    ctrlButton("Reset", "Reset view", reset),
+    ctrlButton("+", "Zoom in", () => zoom(ZOOM_STEP)),
+  );
+  backdrop.appendChild(controls);
+
+  const dismiss = (): void => {
+    document.removeEventListener("keydown", onKey, true);
+    document.removeEventListener("mousemove", onMove, true);
+    document.removeEventListener("mouseup", onUp, true);
+    backdrop.remove();
+  };
+  // Shortcuts are captured on the document so none leak to the editor's
+  // keymap while the overlay is open.
+  const onKey = (e: KeyboardEvent): void => {
+    switch (e.key) {
+      case "Escape":
+        e.preventDefault();
+        dismiss();
+        break;
+      case "+":
+      case "=":
+        e.preventDefault();
+        zoom(ZOOM_STEP);
+        break;
+      case "-":
+        e.preventDefault();
+        zoom(1 / ZOOM_STEP);
+        break;
+      case "0":
+        e.preventDefault();
+        reset();
+        break;
+      case "ArrowLeft":
+      case "a":
+      case "A":
+        e.preventDefault();
+        pan(PAN_STEP, 0);
+        break;
+      case "ArrowRight":
+      case "d":
+      case "D":
+        e.preventDefault();
+        pan(-PAN_STEP, 0);
+        break;
+      case "ArrowUp":
+      case "w":
+      case "W":
+        e.preventDefault();
+        pan(0, PAN_STEP);
+        break;
+      case "ArrowDown":
+      case "s":
+      case "S":
+        e.preventDefault();
+        pan(0, -PAN_STEP);
+        break;
+    }
+  };
+  // A click on the empty backdrop dismisses; a release that ended a
+  // pan-drag does not.
+  backdrop.addEventListener("click", (e) => {
+    if (moved) {
+      moved = false;
+      return;
+    }
+    if (e.target === backdrop || e.target === layer) dismiss();
+  });
+
+  apply();
+  document.body.appendChild(backdrop);
+  document.addEventListener("keydown", onKey, true);
+}
+
+function ctrlButton(
+  glyph: string,
+  label: string,
+  onClick: () => void,
+): HTMLButtonElement {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "md-diagram-zoom-btn";
+  btn.setAttribute("aria-label", label);
+  btn.textContent = glyph;
+  btn.style.cssText =
+    "min-width:34px;height:34px;padding:0 10px;border:none;" +
+    "border-radius:8px;background:rgba(255,255,255,0.16);color:#fff;" +
+    "cursor:pointer;font:14px/1 ui-monospace,Menlo,monospace;";
+  // Don't start a backdrop pan-drag (or a dismiss) from the button.
+  btn.addEventListener("mousedown", (e) => e.stopPropagation());
+  btn.addEventListener("click", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    onClick();
+  });
+  return btn;
+}

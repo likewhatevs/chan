@@ -49,6 +49,7 @@
   import { imageDragIndicator } from "./image_drag_indicator";
   import { htmlPasteHandler } from "./paste_html";
   import { openImageZoom } from "../state/imageZoom";
+  import { openDiagramZoom } from "../state/diagramZoom";
   import { headingFold } from "./fold";
   import * as fmt from "./commands/format";
   import * as clip from "./clipboard";
@@ -499,6 +500,7 @@
         tableDecorations(),
         mermaidDecorations(
           () => effectiveHybridSurfaceTheme("editor") === "dark",
+          (svg) => openDiagramZoom(svg),
         ),
         // Inline edit bubbles + paste/drop handlers go through the
         // write-side compartment so toggling `readonly` at runtime
@@ -1437,8 +1439,36 @@
     box-sizing: border-box;
   }
   :global(.md-wysiwyg-cm6 .cm-md-mermaid-inner) {
+    position: relative;
     transform-origin: center top;
     animation: cm-md-mermaid-flip-in 0.45s ease;
+  }
+  /* Hover "View" affordance over a rendered diagram: opens the pan/zoom
+     overlay. Hidden until the diagram is hovered (or the button is
+     keyboard-focused), mirroring the image actions row. */
+  :global(.md-wysiwyg-cm6 .cm-md-mermaid-view) {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    padding: 2px 10px;
+    border: 1px solid var(--border, #ddd);
+    border-radius: 6px;
+    background: var(--bg-card, rgba(0, 0, 0, 0.04));
+    color: var(--text, inherit);
+    font: 12px/1.4 var(--chan-editor-body-family);
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.15s ease;
+  }
+  :global(.md-wysiwyg-cm6 .cm-md-mermaid-inner:hover .cm-md-mermaid-view) {
+    opacity: 1;
+  }
+  :global(.md-wysiwyg-cm6 .cm-md-mermaid-view:focus-visible) {
+    opacity: 1;
+    outline: 2px solid var(--focus, #0a66ff);
+  }
+  :global(.md-wysiwyg-cm6 .cm-md-mermaid-view:hover) {
+    background: var(--bg-hover, rgba(0, 0, 0, 0.08));
   }
   @keyframes cm-md-mermaid-flip-in {
     from {
