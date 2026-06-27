@@ -37,6 +37,7 @@ jobs:
       publish: ${{ steps.context.outputs.publish }}
       tag: ${{ steps.context.outputs.tag }}
       version: ${{ steps.context.outputs.version }}
+      prerelease: ${{ contains(steps.context.outputs.version, '-') }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -744,6 +745,7 @@ jobs:
       - uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ needs.context.outputs.tag }}
+          prerelease: ${{ needs.context.outputs.prerelease }}
           files: |
             artifacts/**/*
           fail_on_unmatched_files: true
