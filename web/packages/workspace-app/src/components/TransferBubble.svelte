@@ -80,13 +80,14 @@
 {/if}
 
 <style>
-  /* Anchored top-right, just under the AppStatusBar pill, so the rows
-     grow DOWNWARD (a top anchor; the rows list flows top-to-bottom).
-     fixed (not absolute) so it tracks the status bar's viewport anchor
-     regardless of any positioned ancestor. */
+  /* Anchored top-right, just under the AppStatusBar pill (in lockstep
+     with its top offset), so the rows grow DOWNWARD (a top anchor; the
+     rows list flows top-to-bottom). fixed (not absolute) so it tracks
+     the status bar's viewport anchor regardless of any positioned
+     ancestor. */
   .transfer-bubble {
     position: fixed;
-    top: 3rem;
+    top: 5.5rem;
     right: 0.6rem;
     z-index: 40;
     width: 22rem;

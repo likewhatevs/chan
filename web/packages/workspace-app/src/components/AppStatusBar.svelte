@@ -204,7 +204,9 @@
   .app-statusbar {
     position: fixed;
     right: 12px;
-    top: 8px;
+    /* Sits below the pane tab-strip (the tab pills + the top-right
+       hamburger button, ~33px tall) so the pill never covers it. */
+    top: 48px;
     z-index: 28000;
     display: flex;
     align-items: center;
