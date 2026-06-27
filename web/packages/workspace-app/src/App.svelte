@@ -1374,7 +1374,7 @@
     <FileBrowserSidePane side="right" />
   {/if}
 </div>
-<!-- Bottom-left ambient status bar: indexer state, import
+<!-- Top-right ambient status bar: indexer state, import
      progress, transient ui.status messages. Window-level and
      lifted above every overlay so users keep visibility on
      long-running work no matter which panel they're in. -->

@@ -1,7 +1,7 @@
 <script lang="ts">
-  // Bottom-left counterpart of WikiStatusBar: a window-level pill
-  // that surfaces app-wide ambient state. Sections render only when
-  // they have content; the whole bar disappears when none do.
+  // Top-right window-level pill that surfaces app-wide ambient state.
+  // Sections render only when they have content; the whole bar
+  // disappears when none do.
   //
   // Sections (left -> right):
   //   - index    : indexer state (building / reindexing / error).
@@ -21,8 +21,9 @@
   // clears. Indexing progress and error messages are important
   // enough that the user shouldn't lose them just by holding still.
   //
-  // Position: fixed bottom-left so it's independent of the workspace
-  // layout, matching how BottomPill is anchored.
+  // Position: fixed top-right so it's independent of the workspace
+  // layout and clear of the terminal prompt + rich-prompt that sit at
+  // the bottom of a terminal pane.
   import {
     indexStatus,
     importStatus,
@@ -79,12 +80,6 @@
 
 {#if anyVisible}
   <div class="app-statusbar" class:collapsed>
-    <button
-      class="collapse"
-      title={collapsed ? "show status" : "hide status"}
-      onclick={toggleCollapse}
-      onmousedown={(e) => e.preventDefault()}
-    >{collapsed ? "›" : "‹"}</button>
     {#if !collapsed}
       <div class="row">
         {#if indexVisible}
@@ -188,11 +183,17 @@
         {/if}
       </div>
     {/if}
+    <button
+      class="collapse"
+      title={collapsed ? "show status" : "hide status"}
+      onclick={toggleCollapse}
+      onmousedown={(e) => e.preventDefault()}
+    >{collapsed ? "‹" : "›"}</button>
   </div>
 {/if}
 
 <style>
-  /* Mirror of WikiStatusBar, anchored bottom-left. position:fixed
+  /* Window-level pill anchored top-right. position:fixed
      so it floats above whatever layout the workspace settled on.
      z-index sits above every stacked overlay (modals at 26000,
      OverlayShell stack starts at 25002) but below the disconnect
@@ -202,8 +203,8 @@
      or file browser is open. */
   .app-statusbar {
     position: fixed;
-    left: 12px;
-    bottom: 8px;
+    right: 12px;
+    top: 8px;
     z-index: 28000;
     display: flex;
     align-items: center;
@@ -217,7 +218,7 @@
     color: var(--muted);
     user-select: none;
     /* Wobble + lift on hover, matching the editor status bar. */
-    transform-origin: left bottom;
+    transform-origin: right top;
     transition:
       opacity 200ms ease,
       transform 260ms cubic-bezier(0.34, 1.56, 0.64, 1),
