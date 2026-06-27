@@ -1,25 +1,23 @@
 <script lang="ts">
-  // The launcher root: the top bar over the registry lists and the window
-  // feed, with the New/Edit dialog mounted while open. Data loads on mount
-  // and the window feed stays live through its watch subscription.
+  // The launcher root: the top bar over the machine-first library tree, with the
+  // New/Edit dialog mounted while open. Data loads on mount and the tree stays
+  // live through the window-watch subscription.
   import { onMount } from "svelte";
   import { X } from "lucide-svelte";
   import TopBar from "./components/TopBar.svelte";
   import SelectionBar from "./components/SelectionBar.svelte";
   import Library from "./components/Library.svelte";
-  import WindowFeed from "./components/WindowFeed.svelte";
   import NewWorkspaceDialog from "./components/NewWorkspaceDialog.svelte";
   import ConfirmDialog from "./components/ConfirmDialog.svelte";
   import ControlClosedSurvey from "./components/ControlClosedSurvey.svelte";
   import {
     library,
     loadLibrary,
-    openTerminal,
     clearError,
     disconnectDevserver,
     reportError,
   } from "./state/library.svelte";
-  import { dialog, openNewDialog } from "./state/dialog.svelte";
+  import { dialog } from "./state/dialog.svelte";
   import { confirm } from "./state/confirm.svelte";
   import { checksVisible } from "./state/selection.svelte";
   import { controlClosed, controlClosedId, onControlClosedEvent } from "./state/controlClosed.svelte";
@@ -54,13 +52,6 @@
     };
   });
 
-  const isEmpty = $derived(
-    !library.loading &&
-      library.workspaces.length === 0 &&
-      library.devservers.length === 0 &&
-      library.windows.length === 0,
-  );
-
   // Clear a devserver's control-attention flash when it RECONNECTS (a
   // disconnected -> connected transition). Tracking the transition, not the
   // current state, avoids clearing the flash that the control-closed event just
@@ -94,36 +85,12 @@
     </div>
   {/if}
 
-  {#if isEmpty}
-    <div class="empty">
-      <h2>No workspaces yet</h2>
-      <p>
-        A workspace is just a directory — chan treats it as a project. Add your
-        first one, or open a terminal and run
-        <code>chan open /path/to/project</code>.
-      </p>
-      <div class="empty-actions">
-        {#if !readOnly}
-          <button class="btn primary" type="button" onclick={() => openNewDialog("local")}>
-            New workspace
-          </button>
-        {/if}
-        <button class="btn" type="button" onclick={() => openTerminal()}>
-          Open terminal
-        </button>
-      </div>
-      {#if readOnly}
-        <p class="manage-hint">Manage workspaces from the desktop app or the chan CLI.</p>
-      {/if}
-    </div>
-  {:else}
-    {#if !readOnly}
-      <SelectionBar />
-    {/if}
-    <Library />
-    <WindowFeed />
-  {/if}
+  <Library />
 </main>
+
+{#if !readOnly}
+  <SelectionBar />
+{/if}
 
 {#if dialog.open}
   <NewWorkspaceDialog />
@@ -185,45 +152,5 @@
 
   .banner-dismiss:hover {
     background: color-mix(in srgb, var(--danger) 22%, transparent);
-  }
-
-  .empty {
-    max-width: 28rem;
-    margin: 4rem auto;
-    text-align: center;
-    color: var(--text-secondary);
-  }
-
-  .empty h2 {
-    color: var(--text);
-    font-weight: 600;
-  }
-
-  .empty p {
-    line-height: 1.5;
-    margin-bottom: 1.25rem;
-  }
-
-  .empty p code {
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-size: 0.85em;
-    padding: 0.1em 0.35em;
-    border-radius: 4px;
-    background: color-mix(in srgb, var(--text-secondary) 16%, transparent);
-    color: var(--text);
-    white-space: nowrap;
-  }
-
-  .empty-actions {
-    display: flex;
-    gap: 0.6rem;
-    justify-content: center;
-    flex-wrap: wrap;
-  }
-
-  .manage-hint {
-    margin-top: 1rem;
-    font-size: 0.85rem;
-    color: var(--text-secondary);
   }
 </style>

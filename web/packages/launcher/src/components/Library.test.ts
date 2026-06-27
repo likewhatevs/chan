@@ -164,14 +164,17 @@ describe("Library: devserver groups", () => {
     expect(target!.querySelector('input[aria-label="Select api"]')).not.toBeNull();
   });
 
-  it("still shows a DISCONNECTED devserver as a group header with Connect (New terminal disabled)", async () => {
+  it("still shows a DISCONNECTED devserver as a header with Connect, a prompt, and no New terminal", async () => {
     await saveDevserver({ host: "fresh.example", port: 9100, label: "fresh" });
     mountList();
     const connect = byAria("Connect fresh");
     expect(connect).toBeTruthy();
     expect(connect!.disabled).toBe(false);
-    expect(byAria("New terminal on fresh")!.disabled).toBe(true);
+    // New terminal is hidden until connected (it appears on connect).
+    expect(byAria("New terminal on fresh")).toBeUndefined();
     expect(byAria("Settings for fresh")).toBeTruthy();
+    // A disconnected devserver shows the connect prompt, no content.
+    expect(target!.textContent).toContain("Not connected");
   });
 
   it("fires connect and flips the disconnected devserver to Disconnect", async () => {
@@ -319,6 +322,45 @@ describe("Library: workspace OFF confirm-and-retry", () => {
     expect(dlg?.getAttribute("aria-label")).toBe("Turn off workspace?");
     expect(target.textContent).toContain("still running");
     cancelConfirm();
+  });
+});
+
+describe("Library: nested machine tree", () => {
+  it("renders the LOCAL machine block with Terminals + Workspaces sections", () => {
+    mountList();
+    expect(target!.textContent).toContain("Local machine");
+    expect(target!.textContent).toContain("Terminals");
+    expect(target!.textContent).toContain("Workspaces");
+    // The local standalone terminal renders as a window row with a focus action.
+    expect(target!.querySelector('[aria-label="Focus window"]')).not.toBeNull();
+  });
+
+  it("pins the control terminal first in a connected devserver's terminals", () => {
+    mountList();
+    // ds-1 ("prod") is connected and owns a control terminal; it sorts first.
+    const machines = [...target!.querySelectorAll("section.machine")];
+    const prod = machines.find((m) => m.textContent?.includes("box.example.com:8787"));
+    expect(prod).toBeTruthy();
+    const firstRowName = prod!.querySelector(".term-list .row-name");
+    expect(firstRowName?.textContent?.trim()).toBe("Control terminal");
+  });
+
+  it("shows a window-count badge and expands a card to reveal its nested windows", () => {
+    mountList();
+    // The connected ds-1's "api" workspace owns one window (its window survives
+    // the shared mock across tests, unlike a local one that an off discards);
+    // collapsed by default with a count badge.
+    expect(target!.querySelector(".count-badge")?.textContent).toContain("1");
+    expect(target!.textContent).not.toContain("api Window 1");
+    const expand = byAria("Expand api");
+    expect(expand).toBeTruthy();
+    expand!.click();
+    flushSync();
+    // Expanded: the nested window row appears; collapsing hides it again.
+    expect(target!.textContent).toContain("api Window 1");
+    byAria("Collapse api")!.click();
+    flushSync();
+    expect(target!.textContent).not.toContain("api Window 1");
   });
 });
 
