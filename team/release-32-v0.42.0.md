@@ -79,6 +79,6 @@ These were scoped OUT of v0.42.0 (acknowledged, not regressions). They form one 
 - **Gateway "Open whole devserver."** Deferred this round (sharing-only dashboard shipped); becomes a
   trivial navigate-to-proxied-root once the launcher is served at `/`.
 - **Prod rollout** of the gateway devserver-proxy (gated on v0.42.0 — `gateway/docs/prod-rollout-handoff.md`).
-- **Windows Authenticode signing** (procedure in `docs/release/windows-signing.md`; purchase pending).
+- **Windows Authenticode signing** (procedure since moved to the team's private dev/ tree; purchase pending).
 - Simplify the window-"close" notification to say the window was buried, not closed, and can be
   reopened from the Window menu (next-session follow-up).

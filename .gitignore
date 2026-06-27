@@ -49,7 +49,7 @@ crates/chan-server/resources/models/
 /dev/
 
 # Local multi-agent Team Work scratch dirs (journals, tasks, bootstrap).
-# Coordination that needs to persist goes under docs/journals/phase-N/.
+# Coordination that needs to persist is distilled into team/release-*.md; the raw bus stays in the gitignored dev/ tree.
 /new-team-*/
 
 # In-workspace drafts dir chan creates when the repo itself is served

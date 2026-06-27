@@ -15,8 +15,8 @@ to the user's shell, `chan open` integrates with a running devserver over a name
 pipe and hands off to a running desktop, service install unifies under one
 `--service` flag, and the release pipeline builds and publishes the (unsigned) NSIS
 installer plus a standalone Windows CLI — surfaced on the install page. Signing is
-deferred until the SSL.com Authenticode cert issues (see
-`docs/release/windows-signing.md`).
+deferred until the SSL.com Authenticode cert issues (procedure since moved
+to the team's private dev/ tree).
 
 ## What landed (by commit)
 
@@ -46,8 +46,8 @@ deferred until the SSL.com Authenticode cert issues (see
 ## Notes
 
 - **Unsigned, temporarily.** The installer ships unsigned (SmartScreen may warn on
-  first run); Authenticode signing (W.1/W.2 in `docs/release/windows-signing.md`)
-  lands when the SSL.com cert issues.
+  first run); Authenticode signing (W.1/W.2 of the Windows signing procedure,
+  since moved to the team's private dev/ tree) lands when the SSL.com cert issues.
 - **Best-effort Windows.** The release job runs `continue-on-error`; a Windows build
   failure still ships the Linux and macOS release and omits Windows until the next
   good build.
