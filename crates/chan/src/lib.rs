@@ -1657,8 +1657,9 @@ enum RouteError {
 }
 
 /// Resolve a `chan open` routing decision from the explicit flags, the shell's
-/// parentage, and whether the desktop handoff is forced. PURE: the I/O
-/// (parentage probe, the actual handoff / registration) lives in the caller.
+/// parentage, whether the desktop handoff is forced, and whether a chan
+/// control socket is present in the environment. PURE: the I/O (parentage
+/// probe, the actual handoff / registration) lives in the caller.
 ///
 /// Precedence: an explicit flag wins (subject to the nested-devserver
 /// refusal); otherwise a devserver parentage registers with that devserver
@@ -1666,11 +1667,16 @@ enum RouteError {
 /// shell), a desktop parentage hands off, and an undetectable parentage binds
 /// a standalone server -- unless `forced_desktop` (a `Personality::Desktop`
 /// binary or `CHAN_DESKTOP_HANDOFF=1`, the desktop shim's contract) elects the
-/// desktop handoff for that otherwise-standalone case.
+/// desktop handoff for that otherwise-standalone case. `forced_desktop` only
+/// elects the handoff when NO chan control socket is present
+/// (`chan_context_present` false): a present-but-unidentified socket (a wedged
+/// or timed-out probe) means we are in some chan context, so prefer standalone
+/// over a possibly-leaked `CHAN_DESKTOP_HANDOFF` rather than misroute it.
 fn decide_open_route(
     flags: OpenFlags,
     parentage: Parentage,
     forced_desktop: bool,
+    chan_context_present: bool,
 ) -> Result<OpenTarget, RouteError> {
     let explicit = match (flags.standalone, flags.desktop, flags.devserver) {
         (false, false, false) => None,
@@ -1693,11 +1699,13 @@ fn decide_open_route(
         // is what routed a devserver shell to chan-desktop before.
         Parentage::Devserver => OpenTarget::Devserver,
         Parentage::Desktop => OpenTarget::Desktop,
-        // No detectable parent. The desktop shim / Desktop personality still
-        // forces the handoff (the Windows bundle's console chan.exe depends on
-        // it); otherwise bind a standalone server.
+        // No identified parent. The desktop shim / Desktop personality forces
+        // the handoff (the Windows bundle's console chan.exe depends on it)
+        // ONLY for a truly plain shell; a present-but-unidentified control
+        // socket prefers standalone so a devserver shell whose probe wedged is
+        // not misrouted to desktop. Otherwise bind a standalone server.
         Parentage::None => {
-            if forced_desktop {
+            if forced_desktop && !chan_context_present {
                 OpenTarget::Desktop
             } else {
                 OpenTarget::Standalone
@@ -1706,27 +1714,46 @@ fn decide_open_route(
     })
 }
 
+/// The chan control socket exported into a chan-spawned terminal
+/// (`$CHAN_CONTROL_SOCKET`), trimmed and non-empty, or `None` outside a chan
+/// session. Its mere presence marks "some chan context" even when the holder
+/// cannot be identified.
+fn chan_control_socket() -> Option<String> {
+    std::env::var("CHAN_CONTROL_SOCKET")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+/// Overall bound on the parentage probe's `Identify` round-trip. A holder that
+/// accepts the connection but never replies must not hang `chan open` (which
+/// then goes on to run a resident server -- this is the only deadline, never a
+/// command-wide one). Sized to the connect+read budget the desktop / devserver
+/// handoffs use.
+const PARENTAGE_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
+
 /// Resolve the kind of chan instance that spawned this shell by an `Identify`
 /// round-trip on `$CHAN_CONTROL_SOCKET` -- the same control-socket /
 /// serving-kind machinery `chan ps` uses. A chan-spawned terminal exports
 /// that socket (`terminal_sessions`); a desktop shell points at the desktop's
 /// embedded server, a devserver shell at the devserver. An absent socket (a
-/// plain shell), an unreachable holder, or a `standalone` kind all resolve to
-/// [`Parentage::None`].
+/// plain shell), an unreachable / wedged holder, or a `standalone` kind all
+/// resolve to [`Parentage::None`].
 async fn detect_parentage() -> Parentage {
-    let Some(socket) = std::env::var("CHAN_CONTROL_SOCKET")
-        .ok()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-    else {
-        return Parentage::None;
-    };
-    let Ok(message) = chan_shell::send_control_request(
-        &PathBuf::from(socket),
-        chan_shell::ControlRequest::Identify,
-    )
-    .await
-    else {
+    match chan_control_socket() {
+        Some(socket) => probe_parentage(&PathBuf::from(socket), PARENTAGE_PROBE_TIMEOUT).await,
+        None => Parentage::None,
+    }
+}
+
+/// Identify the serving kind behind `socket` with a `timeout`-bounded
+/// `Identify` round-trip. A wedged holder (accepts but never replies), a
+/// connect failure, a read error, or a non-desktop/devserver reply all resolve
+/// to [`Parentage::None`] so a stale / wedged socket cannot hang `chan open`.
+/// `timeout` is injectable so the bound is unit-testable.
+async fn probe_parentage(socket: &Path, timeout: Duration) -> Parentage {
+    let identify = chan_shell::send_control_request(socket, chan_shell::ControlRequest::Identify);
+    let Ok(Ok(message)) = tokio::time::timeout(timeout, identify).await else {
         return Parentage::None;
     };
     match serde_json::from_str::<chan_shell::Identity>(&message) {
@@ -1883,25 +1910,23 @@ async fn cmd_serve(args: ServeArgs, personality: Personality) -> Result<()> {
             std::process::exit(70);
         }
     }
-    if !root.exists() {
-        std::fs::create_dir_all(&root)
-            .with_context(|| format!("creating workspace root {}", root.display()))?;
-    }
-
-    // Routing. `chan open` resolves ONE target -- standalone serve, desktop
-    // handoff, or devserver registration -- then dispatches, falling THROUGH to
-    // a working standalone serve on any handoff/registration failure so a
-    // workspace is never left unserved. The target is an explicit
+    // Routing decision. `chan open` resolves ONE target -- standalone serve,
+    // desktop handoff, or devserver registration -- then dispatches, falling
+    // THROUGH to a working standalone serve on any handoff/registration failure
+    // so a workspace is never left unserved. The target is an explicit
     // --standalone/--desktop/--devserver flag, else the shell's parentage
     // default (a desktop terminal hands off, a devserver terminal registers, an
     // undetectable shell binds standalone). `Personality::Desktop` and
     // `CHAN_DESKTOP_HANDOFF=1` (`handoff_forced`, the desktop shim's contract
     // -- the Windows console chan.exe depends on it) force the desktop target
-    // when no parent is detected. All of this runs BEFORE `open_workspace` so a
-    // successful handoff/registration never double-opens (the single-writer
-    // invariant).
+    // when no parent is detected. The decision runs BEFORE any state mutation
+    // (like the VCS gate): a refused route must create nothing.
     let forced_desktop =
         personality == Personality::Desktop || chan_server::handoff::handoff_forced();
+    // Whether we are in any chan context, independent of whether its kind
+    // resolves -- a present-but-unidentified socket steers the no-parent
+    // default to standalone over a leaked CHAN_DESKTOP_HANDOFF.
+    let chan_context_present = chan_control_socket().is_some();
     // The parentage probe is an `Identify` round-trip; skip it when an explicit
     // --standalone/--desktop already decides the route (parentage only matters
     // for the no-flag default and the --devserver nested-shell refusal).
@@ -1910,7 +1935,7 @@ async fn cmd_serve(args: ServeArgs, personality: Personality) -> Result<()> {
     } else {
         detect_parentage().await
     };
-    let target = match decide_open_route(flags, parentage, forced_desktop) {
+    let target = match decide_open_route(flags, parentage, forced_desktop, chan_context_present) {
         Ok(target) => target,
         Err(RouteError::NestedDevserver) => anyhow::bail!(
             "you are already in a devserver; omit --devserver to register with \
@@ -1922,6 +1947,13 @@ async fn cmd_serve(args: ServeArgs, personality: Personality) -> Result<()> {
             anyhow::bail!("choose at most one of --standalone, --desktop, --devserver")
         }
     };
+
+    // Create the workspace root only AFTER the route is settled, so a refused
+    // route (nested devserver, conflicting flags) leaves no empty directory.
+    if !root.exists() {
+        std::fs::create_dir_all(&root)
+            .with_context(|| format!("creating workspace root {}", root.display()))?;
+    }
 
     match target {
         // CLI-to-desktop handoff. When a same-user chan-desktop is running in a
@@ -1975,7 +2007,18 @@ async fn cmd_serve(args: ServeArgs, personality: Personality) -> Result<()> {
     }
 
     ensure_workspace_registered(&lib, &root)?;
-    let workspace = lib.open_workspace(&root)?;
+    let workspace = match lib.open_workspace(&root) {
+        Ok(workspace) => workspace,
+        // A live foreign writer holds the flock -- often a local devserver that
+        // already serves this workspace. Point the user at --devserver to
+        // register with it instead of fighting for the lock. Worded as a
+        // possibility: we have not confirmed the holder IS a devserver.
+        Err(chan_workspace::ChanError::WorkspaceLocked) => anyhow::bail!(
+            "the workspace is held by another process; if a local dev server \
+             owns it, run `chan open --devserver` to register with it."
+        ),
+        Err(e) => return Err(e.into()),
+    };
 
     // Best-effort update notice. The banner reads cached state
     // (no network) so an air-gapped host pays zero startup cost.
@@ -4814,6 +4857,20 @@ mod tests {
         devserver: false,
     };
 
+    /// `decide_open_route` with the realistic context-presence implied by
+    /// parentage: a desktop / devserver parent exports a control socket; a
+    /// `None` parentage here stands for a plain shell with none. The
+    /// present-but-unidentified case is exercised explicitly in
+    /// `route_present_unidentified_prefers_standalone`.
+    fn route(
+        flags: OpenFlags,
+        parentage: Parentage,
+        forced_desktop: bool,
+    ) -> Result<OpenTarget, RouteError> {
+        let present = parentage != Parentage::None;
+        decide_open_route(flags, parentage, forced_desktop, present)
+    }
+
     #[test]
     fn route_explicit_flag_forces_its_target() {
         // Each explicit flag forces its target regardless of parentage.
@@ -4823,17 +4880,14 @@ mod tests {
                 ..NO_FLAGS
             };
             assert_eq!(
-                decide_open_route(standalone, parentage, false),
+                route(standalone, parentage, false),
                 Ok(OpenTarget::Standalone)
             );
             let desktop = OpenFlags {
                 desktop: true,
                 ..NO_FLAGS
             };
-            assert_eq!(
-                decide_open_route(desktop, parentage, false),
-                Ok(OpenTarget::Desktop)
-            );
+            assert_eq!(route(desktop, parentage, false), Ok(OpenTarget::Desktop));
         }
         // --devserver forces the devserver target everywhere EXCEPT inside a
         // devserver shell, where it is refused (covered separately).
@@ -4842,11 +4896,11 @@ mod tests {
             ..NO_FLAGS
         };
         assert_eq!(
-            decide_open_route(devserver, Parentage::Desktop, false),
+            route(devserver, Parentage::Desktop, false),
             Ok(OpenTarget::Devserver)
         );
         assert_eq!(
-            decide_open_route(devserver, Parentage::None, false),
+            route(devserver, Parentage::None, false),
             Ok(OpenTarget::Devserver)
         );
     }
@@ -4860,11 +4914,11 @@ mod tests {
             ..NO_FLAGS
         };
         assert_eq!(
-            decide_open_route(standalone, Parentage::None, true),
+            route(standalone, Parentage::None, true),
             Ok(OpenTarget::Standalone)
         );
         assert_eq!(
-            decide_open_route(standalone, Parentage::Desktop, true),
+            route(standalone, Parentage::Desktop, true),
             Ok(OpenTarget::Standalone)
         );
     }
@@ -4873,32 +4927,48 @@ mod tests {
     fn route_parentage_default_no_flag() {
         // No flag: parentage picks the default.
         assert_eq!(
-            decide_open_route(NO_FLAGS, Parentage::Desktop, false),
+            route(NO_FLAGS, Parentage::Desktop, false),
             Ok(OpenTarget::Desktop)
         );
         assert_eq!(
-            decide_open_route(NO_FLAGS, Parentage::Devserver, false),
+            route(NO_FLAGS, Parentage::Devserver, false),
             Ok(OpenTarget::Devserver)
         );
         assert_eq!(
-            decide_open_route(NO_FLAGS, Parentage::None, false),
+            route(NO_FLAGS, Parentage::None, false),
             Ok(OpenTarget::Standalone)
         );
     }
 
     #[test]
     fn route_forced_desktop_only_elects_when_undetectable() {
-        // forced_desktop elects the desktop target only when no parent is
-        // detected (the Windows bundle's plain console).
+        // forced_desktop elects the desktop target only for a truly plain shell
+        // (no control socket) -- the Windows bundle's plain console.
         assert_eq!(
-            decide_open_route(NO_FLAGS, Parentage::None, true),
+            route(NO_FLAGS, Parentage::None, true),
             Ok(OpenTarget::Desktop)
         );
         // A live devserver parentage BEATS a forced-desktop env var that leaked
         // into the shell -- the original devserver-shell-to-desktop bug.
         assert_eq!(
-            decide_open_route(NO_FLAGS, Parentage::Devserver, true),
+            route(NO_FLAGS, Parentage::Devserver, true),
             Ok(OpenTarget::Devserver)
+        );
+    }
+
+    #[test]
+    fn route_present_unidentified_prefers_standalone() {
+        // A control socket IS present but its kind did not resolve (a wedged or
+        // timed-out probe -> Parentage::None). Even with a leaked
+        // CHAN_DESKTOP_HANDOFF, prefer standalone over misrouting to desktop.
+        assert_eq!(
+            decide_open_route(NO_FLAGS, Parentage::None, true, true),
+            Ok(OpenTarget::Standalone)
+        );
+        // The plain-shell counterpart (no socket) still honors forced-desktop.
+        assert_eq!(
+            decide_open_route(NO_FLAGS, Parentage::None, true, false),
+            Ok(OpenTarget::Desktop)
         );
     }
 
@@ -4911,11 +4981,11 @@ mod tests {
             ..NO_FLAGS
         };
         assert_eq!(
-            decide_open_route(devserver, Parentage::Devserver, false),
+            route(devserver, Parentage::Devserver, false),
             Err(RouteError::NestedDevserver)
         );
         assert_eq!(
-            decide_open_route(NO_FLAGS, Parentage::Devserver, false),
+            route(NO_FLAGS, Parentage::Devserver, false),
             Ok(OpenTarget::Devserver)
         );
     }
@@ -4930,8 +5000,46 @@ mod tests {
             devserver: false,
         };
         assert_eq!(
-            decide_open_route(two, Parentage::None, false),
+            route(two, Parentage::None, false),
             Err(RouteError::MultipleTargets)
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn probe_parentage_times_out_on_a_wedged_holder() {
+        use tokio::net::UnixListener;
+        let dir = tempfile::tempdir().unwrap();
+        let sock = dir.path().join("hung.sock");
+        let listener = UnixListener::bind(&sock).unwrap();
+        // Accept the connection but never reply: the probe must elapse to None
+        // rather than hang `chan open`.
+        let _accept = tokio::spawn(async move {
+            while let Ok((stream, _)) = listener.accept().await {
+                // Hold the stream open without writing a response.
+                tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+                drop(stream);
+            }
+        });
+        let start = std::time::Instant::now();
+        let p = probe_parentage(&sock, std::time::Duration::from_millis(150)).await;
+        assert_eq!(p, Parentage::None);
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(2),
+            "probe must give up promptly, took {:?}",
+            start.elapsed()
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn probe_parentage_none_when_no_listener() {
+        // A path with no listener: the connect fails fast -> None, no hang.
+        let dir = tempfile::tempdir().unwrap();
+        let sock = dir.path().join("nope.sock");
+        assert_eq!(
+            probe_parentage(&sock, std::time::Duration::from_secs(3)).await,
+            Parentage::None
         );
     }
 
