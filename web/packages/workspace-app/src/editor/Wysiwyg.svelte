@@ -1184,19 +1184,20 @@
   :global(.md-wysiwyg-cm6 .cm-editor .cm-line.cm-md-list-line) {
     --cm-md-list-guide: color-mix(in srgb, var(--text-secondary, #888) 32%, transparent);
     --cm-md-list-prefix: calc((var(--cm-md-list-depth, 0) + 1) * 2ch);
-    padding-left: calc(32px + var(--cm-md-list-prefix)) !important;
+    /* Per-depth outline indent: shift each nesting level right by ~one
+       marker column so a nested item's glyph aligns under the FIRST TEXT
+       CHARACTER of its parent (Google-Docs style); the 2-space source
+       indent renders narrower than the marker column in the proportional
+       body font, so this makes up the difference, keyed off the body size
+       (~0.6em) to stay consistent across bullet / hyphen / ordered.
+       It lives in PADDING, not margin: CM6 drawSelection anchors a
+       full-line highlight at the content-box left edge, so an outline
+       carried as margin (outside the box) made the row selection bleed
+       leftward into the gutter. Folding it into padding-left keeps the
+       glyph, text, wrapped rows, and the highlight all inside the line. */
+    --cm-md-list-outline: calc(var(--cm-md-list-depth, 0) * var(--chan-editor-body-size, 11pt) * 0.6);
+    padding-left: calc(32px + var(--cm-md-list-prefix) + var(--cm-md-list-outline)) !important;
     text-indent: calc(-1 * var(--cm-md-list-prefix));
-    /* Outline indent: shift each nesting level right by ~one marker
-       column so a nested item's glyph aligns under the FIRST TEXT
-       CHARACTER of its parent line (Google-Docs style). The
-       markdown source only indents 2 spaces/level, which renders
-       narrower than the marker column in the proportional body font, so
-       the child glyph sat left of the parent text; this margin makes up
-       the difference. Keyed off the body size (~0.6em) so it scales and
-       stays consistent across bullet / hyphen / ordered. margin (not
-       padding) shifts the whole line, so row-1 and wrapped rows move
-       together and the hanging indent is preserved. */
-    margin-left: calc(var(--cm-md-list-depth, 0) * var(--chan-editor-body-size, 11pt) * 0.6);
     position: relative;
   }
   :global(.md-wysiwyg-cm6 .cm-editor .cm-line.cm-md-list-line::before) {
@@ -1204,16 +1205,14 @@
     position: absolute;
     top: 0;
     bottom: 0;
-    /* Anchor the guide at a FIXED x, independent of depth. The list line
-       carries a per-depth `margin-left` (the outline indent below), which
-       shifts the line's padding box, the containing block this `::before`
-       is positioned in. Without compensation `left: 10px` would ride that
-       shift, stepping every nested level's guide rightward so the bars no
-       longer line up into continuous vertical alignment rails (the whole
-       point of them). Subtracting the same `margin-left` term pins
-       every list line's leftmost bar to content-left + 10px, so the
-       level-k bar (at +k*2ch) is one continuous rail down the whole list. */
-    left: calc(10px - var(--cm-md-list-depth, 0) * var(--chan-editor-body-size, 11pt) * 0.6);
+    /* Anchor the guide at a FIXED x, independent of depth. The outline
+       indent now lives in padding (not margin), so the list line's
+       padding box -- the containing block for this `::before` -- no
+       longer shifts per depth, and the rails need no margin
+       compensation: a plain `left: 10px` pins every list line's leftmost
+       bar to content-left + 10px, so the level-k bar (at +k*2ch) is one
+       continuous rail down the whole list. */
+    left: 10px;
     /* One 1px-wide stripe per indent level: anchor + N stamps at
        2ch intervals = depth+1 vertical bars. repeating-linear-
        gradient keeps the spacing exact at any depth without per-
