@@ -572,13 +572,38 @@
   }
 
   /* A workspace card: a rounded panel whose header collapses/expands its nested
-     windows. */
+     windows. On hover the whole card wobbles -- the easeOutBack overshoot (the
+     1.56 in the bezier) on a small scale + a box-shadow lift -- matching the
+     context-menu / tab-menu bubble. The transform sits on the outer card only,
+     so the nested windows scale with it rather than double-wobbling, and
+     position+z-index raise the lifted card above its stacked neighbours. */
   .ws-card {
+    position: relative;
     margin-bottom: 0.4rem;
     border: 1px solid var(--border);
     border-radius: 10px;
     background: var(--bg-card);
     overflow: hidden;
+    transform-origin: center;
+    transition:
+      transform 260ms cubic-bezier(0.34, 1.56, 0.64, 1),
+      box-shadow 160ms ease;
+  }
+
+  .ws-card:hover {
+    transform: scale(1.02);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.24);
+    z-index: 1;
+  }
+
+  /* Reduced-motion: keep the box-shadow lift as a static cue, drop the wobble. */
+  @media (prefers-reduced-motion: reduce) {
+    .ws-card {
+      transition: box-shadow 160ms ease;
+    }
+    .ws-card:hover {
+      transform: none;
+    }
   }
 
   .ws-head {
