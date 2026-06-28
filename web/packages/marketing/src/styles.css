@@ -350,7 +350,9 @@ code {
 
 
 .launcher-hero {
-  aspect-ratio: 1 / 1;
+  /* Portrait so the launcher's new-workspace (add-devserver) form clears the
+     fold inside the demo frame instead of being clipped by overflow: hidden. */
+  aspect-ratio: 3 / 4;
   background: #1c1c1e;
   border-radius: 14px;
 }
