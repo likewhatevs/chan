@@ -6,9 +6,25 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Devserver service status reports the managed command.** `chan devserver --service --status` now shows the command behind the managed service, and `--restart` preserves the bound address and port across the service handoff.
+- **Marketing footer and install layout refreshed.** The download/install footer actions are split more clearly, swap order where needed, and fit the mobile layout without crowding.
+
 ### Changed
 
 - **Gateway gate/admin/public-host env vars renamed `WORKSPACE_*` -> `DEVSERVER_*`.** The devserver-proxy contract shared by identity, profile, and devserver-proxy is now `DEVSERVER_GATE_SECRET`, `DEVSERVER_ADMIN_TOKEN`, `DEVSERVER_ADMIN_URL`, `DEVSERVER_PUBLIC_SCHEME`, and `DEVSERVER_PUBLIC_PORT` (formerly `WORKSPACE_*`), matching the `devserver.<domain>` hostnames the services already derive. Self-hosters must rename these in their `/etc/chan-gateway/*.env` files (and any orchestration/secrets) before deploying -- the services require the new names. The `configure.sh` generator and the bundled `.env` templates emit the new names; the admin CLI's `CHAN_ADMIN_WORKSPACE_URL` is unchanged.
+
+### Fixed
+
+- **Mermaid zoom stays readable in dark mode.** The diagram zoom view re-renders on a light panel so dark-theme diagrams no longer disappear into a black overlay.
+- **List-line selection no longer bleeds into the gutter.** Selecting list items at nested depths keeps the highlight aligned with the text instead of extending past the marker.
+- **Cmd+E preserves the editor caret.** Toggling between rendered Markdown and source mode maps the current caret into the target mode instead of jumping away.
+- **Rich-prompt image paste sends a bare absolute drafts path.** Pasted images are written to drafts and inserted as the same bare absolute path shown in the prompt and delivered to the terminal, without Markdown image syntax or width hints.
+- **Windows serving lookups normalize verbatim paths.** `chan ps`, `chan close`, and related workspace lookup paths handle `\\?\`-prefixed Windows paths consistently.
+- **`cs open` focuses a newly created empty file.** Opening a new path from a terminal moves focus into the editor instead of leaving it in the terminal.
+- **Graph from here always opens a fresh graph tab.** Repeated file-scoped graph opens no longer reuse or overwrite an existing graph tab unexpectedly.
+- **Devserver disconnect and Abandon lifecycle tightened.** A disconnected devserver clears its workspace windows, Retry/Abandon can reach the desktop Abandon path, and the launcher leaves the control terminal for re-run instead of reaping it.
 
 ## [v0.55.0] - 2026-06-28
 
