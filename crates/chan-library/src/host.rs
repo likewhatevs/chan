@@ -1919,12 +1919,15 @@ fn hosted_from_runtime(runtime: &HostedWorkspaceRuntime) -> HostedWorkspace {
 }
 
 /// Canonical-form key for matching a caller path against a mounted
-/// runtime's root. Falls back to the input path when the filesystem
-/// can't canonicalize (workspace root missing or asleep), so the match
-/// still works on the exact request path. Mirrors the private
-/// `canonical_key` in `chan_workspace::library`.
+/// runtime's root, via [`chan_workspace::paths::canonicalize_normalized`]:
+/// it strips any Windows `\\?\` verbatim prefix so a path the caller resolved
+/// WITH the prefix and a runtime root resolved WITHOUT it (or vice versa)
+/// collapse to one key -- otherwise `chan ps` reads no serving PID and
+/// `chan close` finds no mounted runtime. Falls back to the (stripped) input
+/// when the filesystem can't canonicalize (workspace root missing or asleep).
+/// Mirrors the private `canonical_key` in `chan_workspace::library`.
 fn canonical_key(root: &Path) -> PathBuf {
-    root.canonicalize().unwrap_or_else(|_| root.to_path_buf())
+    chan_workspace::paths::canonicalize_normalized(root)
 }
 
 fn display_prefix(prefix: &str) -> &str {
@@ -1973,6 +1976,23 @@ mod tests {
     use crate::terminal_sessions::CreateOptions;
     use axum::body::to_bytes;
     use portable_pty::PtySize;
+
+    #[test]
+    fn canonical_key_strips_verbatim_prefix() {
+        // A caller path resolved WITH the Windows `\\?\` verbatim prefix and a
+        // runtime root resolved WITHOUT it must collapse to one key, or
+        // `chan ps` reads no serving PID and `chan close` finds no mounted
+        // runtime. Neither input is a real path on the test host, so both take
+        // the normalized fallback; the key must strip the prefix identically to
+        // `canonicalize_normalized`, the same helper the registry keys under.
+        let prefixed = Path::new(r"\\?\C:\Users\me\proj");
+        let plain = Path::new(r"C:\Users\me\proj");
+        assert_eq!(canonical_key(prefixed), canonical_key(plain));
+        assert_eq!(
+            canonical_key(prefixed),
+            chan_workspace::paths::canonicalize_normalized(plain)
+        );
+    }
 
     fn serve_config(prefix: &str) -> ServeConfig {
         ServeConfig {

@@ -1378,7 +1378,11 @@ async fn unserve_running(
     remove: bool,
     personality: Personality,
 ) -> Result<UnserveOutcome> {
-    let canonical = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    // Normalize (strip any Windows `\\?\` verbatim prefix) so the path carried
+    // in the Close request is in the same canonical form the serving host and
+    // the registry key their runtimes under, rather than a verbatim-prefixed
+    // form the two sides would have to agree to strip.
+    let canonical = chan_workspace::paths::canonicalize_normalized(path);
 
     // Desktop close handoff, mirroring the `chan open` handoff. A running
     // same-user chan-desktop owns the workspace flock AND its own library +
