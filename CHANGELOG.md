@@ -6,6 +6,31 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+An editor-polish and devserver-hardening round: mermaid diagrams zoom, dev servers show their OS, local workspaces take a display name, wide tables stay readable, pasted image paths resolve from the terminal, plus a batch of editor and Windows fixes.
+
+### Added
+
+- **Mermaid diagrams zoom.** Clicking a rendered mermaid diagram opens a pan-and-zoom view with keyboard control (`+`/`-`/`0`, arrow keys and WASD to pan, wheel to zoom, Escape to close), on both the web app and chan-desktop.
+- **Dev servers show their operating system.** A dev server self-reports its OS (and Linux distribution where available); the launcher shows an OS icon on the local machine card and on each remote dev server.
+- **Name a local workspace.** Adding a local workspace in the launcher accepts an optional display name, shown in place of the folder name.
+
+### Changed
+
+- **Wide tables stay readable.** A table wider than the editor now scrolls horizontally instead of wrapping every cell character-by-character, in both the editor and the rendered/printed output.
+- **Pasted image paths resolve from the terminal's directory.** An image pasted into the rich prompt is delivered as a path relative to the terminal's working directory (an absolute on-disk path when that directory is unknown or outside the workspace), so the receiving agent resolves it; the composer preview still shows the image.
+
+### Fixed
+
+- **Ordered lists renumber on a mid-list insert.** Inserting an item in the middle of a numbered list -- including a loose, blank-line-separated list -- renumbers the rest instead of leaving a duplicate number.
+- **List-line selection no longer bleeds into the left margin.** Selecting a list line highlights just the line instead of overflowing past the marker into the margin.
+- **The model download reports a clear error behind a broken proxy.** When a proxy environment variable is set but unusable, the dev server's model download fails with an actionable error instead of silently. Standard `HTTP(S)_PROXY` / `ALL_PROXY` / SOCKS proxies already worked; `NO_PROXY` and https-scheme proxies are documented as unsupported for the model download.
+- **Windows `chan open` and `chan ps`.** `chan open` on Windows no longer prints the stale-port error toast -- the dev server persists its bound port and the local on-toggle is best-effort -- and `chan ps` resolves a server's PID and kind under the `\\?\` verbatim path prefix.
+
+### Notes
+
+- Self-hosting docs and the Kubernetes manifests now point at the container images published to Docker Hub in v0.54.0; the project's internal dev-log was reorganized into a repo-root `team/` release-history layout.
+- Validation: a non-publishing cross-OS dry-run build plus on-device smoke testing of the editor, the launcher OS icon, the model download, and Windows.
+
 ## [v0.54.0] - 2026-06-27
 
 A feature round: the chan-desktop launcher reorganized machine-first, container images published from the release, in-place editing of inline-code file links, the ambient status notification moved clear of the terminal prompt, and `chan open` taught to serve where its shell actually runs.
