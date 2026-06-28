@@ -2348,6 +2348,8 @@ mod tests {
     const LOCAL_DROP_CAPABILITY_JSON: &str = include_str!("../capabilities/local-drop.json");
     const LAUNCHER_EVENTS_CAPABILITY_JSON: &str =
         include_str!("../capabilities/launcher-events.json");
+    const DEVSERVER_ABANDON_CAPABILITY_JSON: &str =
+        include_str!("../capabilities/devserver-abandon.json");
     const APP_PERMISSIONS_TOML: &str = include_str!("../permissions/app.toml");
 
     fn capability_permissions(raw: &str) -> Vec<String> {
@@ -2536,6 +2538,35 @@ mod tests {
         assert!(
             remote_urls.iter().any(|u| u == "http://localhost:*"),
             "workspace capability must include localhost loopback: {remote_urls:?}",
+        );
+    }
+
+    #[test]
+    fn devserver_abandon_capability_grants_only_abandon_to_remote_devserver_windows() {
+        // A tunnel-served devserver window (lib-<hex>::<window_id>) loads from a
+        // remote https origin, which workspace.json's loopback-only remote.urls
+        // does NOT cover -- so the disconnect overlay's Abandon
+        // (abandon_devserver_for_window) is denied there and the click is a
+        // silent no-op. This narrow capability re-grants ONLY that one command to
+        // lib-* windows over the tunnel origin. Pin the shape so an edit can't
+        // silently broaden the remote grant or drop the abandon reach.
+        let windows = capability_windows(DEVSERVER_ABANDON_CAPABILITY_JSON);
+        assert_eq!(
+            windows,
+            vec!["lib-*".to_string()],
+            "devserver-abandon must target only lib-* devserver windows: {windows:?}",
+        );
+        let perms = capability_permissions(DEVSERVER_ABANDON_CAPABILITY_JSON);
+        assert_eq!(
+            perms,
+            vec!["allow-abandon-devserver-for-window".to_string()],
+            "devserver-abandon must grant ONLY the abandon command: {perms:?}",
+        );
+        let remote_urls = capability_remote_urls(DEVSERVER_ABANDON_CAPABILITY_JSON);
+        assert_eq!(
+            remote_urls,
+            vec!["https://*.devserver.chan.app".to_string()],
+            "devserver-abandon must scope to the tunnel origin only: {remote_urls:?}",
         );
     }
 

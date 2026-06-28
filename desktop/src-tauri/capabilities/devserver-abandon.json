@@ -1,0 +1,10 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "devserver-abandon",
+  "description": "Grants ONLY the abandon_devserver_for_window command to watcher-opened devserver windows (lib-*) that are REMOTELY served from a devserver tunnel (https://*.devserver.chan.app). workspace.json already puts abandon in the workspace-window set for lib-* windows, but its remote.urls is loopback-only, so a tunnel-origin devserver window's disconnect-overlay Abandon button is ACL-denied and the click is a silent no-op. Scoped to the single abandon command on lib-* windows over the tunnel origin, mirroring the tight remote scope on workspace.json / launcher-events.json: no other remote IPC reaches devserver-served content.",
+  "remote": {
+    "urls": ["https://*.devserver.chan.app"]
+  },
+  "windows": ["lib-*"],
+  "permissions": ["allow-abandon-devserver-for-window"]
+}
