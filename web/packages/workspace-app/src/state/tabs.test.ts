@@ -2491,6 +2491,43 @@ describe("toggleActiveFileTabMode source<->rendered gate (#3/#7)", () => {
     toggleActiveFileTabMode();
     expect(activePane().tabs[0]).toMatchObject({ mode: "source" });
   });
+
+  test("markdown toggle remaps the caret across the source<->wysiwyg boundary (#16)", () => {
+    // The image markdown spans offsets 5..17; its rendered widget is a single
+    // position, so a caret on it maps to/from the URL offset across the flip.
+    const tab = fileTab({
+      path: "notes/a.md",
+      fileKind: "document",
+      mode: "wysiwyg",
+      content: "text ![](pic.png) more",
+      caret: { from: 5, to: 5 },
+    });
+    resetLayout([tab]);
+    // wysiwyg -> source: the caret at the image collapses into its URL.
+    toggleActiveFileTabMode();
+    expect(activePane().tabs[0]).toMatchObject({ mode: "source" });
+    expect((activePane().tabs[0] as FileTab).caret).toEqual({ from: 9, to: 9 });
+    // source -> wysiwyg: the URL caret maps back onto the image position.
+    toggleActiveFileTabMode();
+    expect(activePane().tabs[0]).toMatchObject({ mode: "wysiwyg" });
+    expect((activePane().tabs[0] as FileTab).caret).toEqual({ from: 5, to: 5 });
+  });
+
+  test("non-markdown toggle (JSON) leaves the caret untouched (#16)", () => {
+    // pretty<->source has no offset correspondence, so the caret is preserved
+    // as-is rather than remapped through the markdown image logic.
+    const tab = fileTab({
+      path: "data/x.json",
+      fileKind: "text",
+      mode: "pretty",
+      content: '{"a":1}',
+      caret: { from: 3, to: 3 },
+    });
+    resetLayout([tab]);
+    toggleActiveFileTabMode();
+    expect(activePane().tabs[0]).toMatchObject({ mode: "source" });
+    expect((activePane().tabs[0] as FileTab).caret).toEqual({ from: 3, to: 3 });
+  });
 });
 
 describe("Team Work dialog reload-survival (#4)", () => {

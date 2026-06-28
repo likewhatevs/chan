@@ -15,6 +15,10 @@ import { api, sessionWindowId } from "../api/client";
 import { ApiError } from "../api/errors";
 import type { DraftPromoteResponse, TerminalRosterEntry } from "../api/types";
 import type { FindRange } from "../editor/find";
+import {
+  renderedCaretForSourceCaret,
+  sourceCaretForRenderedCaret,
+} from "../editor/caret_mapping";
 import { stripTrailingWhitespaceText } from "../editor/tools";
 import { uiConfirm } from "./confirm.svelte";
 import { editorToolsPrefs } from "./editorTools.svelte";
@@ -3799,9 +3803,11 @@ export function setMode(tab: Tab, mode: Mode): void {
 /// files and "source" for source-only ones — the same split FileEditorTab's
 /// in-menu "Show Source Code" toggle uses (`hasRenderedMode` /
 /// `renderedModeForTab`). Routed via the Mod+E chord; the right-click "Show
-/// Source Code" entry runs FileEditorTab's `doToggleMode` (which adds caret
-/// remapping). This helper does the basic flip and lets the editor's internal
-/// effect handle position fidelity. No-op when the active tab isn't a file tab.
+/// Source Code" entry runs FileEditorTab's `doToggleMode`. Both paths remap the
+/// caret across the markdown source<->wysiwyg boundary (an image collapses to a
+/// single rendered position, so the offset shifts) before flipping, so the
+/// caret lands on the same logical spot. No-op when the active tab isn't a file
+/// tab.
 export function toggleActiveFileTabMode(): void {
   const node = layout.nodes[layout.activePaneId];
   if (!node || node.kind !== "leaf") return;
@@ -3809,7 +3815,18 @@ export function toggleActiveFileTabMode(): void {
   if (!tab || tab.kind !== "file") return;
   const rendered = defaultModeForPath(tab.path, tab.fileKind);
   if (rendered === "source") return;
-  setMode(tab, tab.mode === "source" ? rendered : "source");
+  const next = tab.mode === "source" ? rendered : "source";
+  // Caret remapping only applies to the markdown<->wysiwyg pair; pretty
+  // (JSON) and table (CSV) reflow the text wholesale, so there is no
+  // offset correspondence to preserve.
+  if (tab.caret && rendered === "wysiwyg") {
+    const mapped =
+      next === "wysiwyg"
+        ? renderedCaretForSourceCaret(tab.content, tab.caret)
+        : sourceCaretForRenderedCaret(tab.content, tab.caret);
+    setTabCaret(tab, mapped.from, mapped.to);
+  }
+  setMode(tab, next);
 }
 
 /// Tab-state mutators. These exist so child components (FileEditorTab
