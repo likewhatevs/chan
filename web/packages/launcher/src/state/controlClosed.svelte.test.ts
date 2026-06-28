@@ -7,7 +7,12 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { controlClosedId, onControlClosedEvent } from "./controlClosed.svelte";
 import { library, loadLibrary } from "./library.svelte";
-import { hasControlAttention, clearAllControlAttention } from "./controlAttention.svelte";
+import {
+  hasControlAttention,
+  clearAllControlAttention,
+  resolvePendingControlAttention,
+} from "./controlAttention.svelte";
+import type { DevserverEntry, WindowRecord } from "../api/library";
 
 vi.mock("../api/backend", async () => {
   const { mockApi } = await import("../api/mock");
@@ -20,6 +25,39 @@ beforeEach(async () => {
   // the devserver id to its library id.
   await loadLibrary();
 });
+
+function devserver(over: Partial<DevserverEntry> & Pick<DevserverEntry, "id">): DevserverEntry {
+  return {
+    host: "host",
+    port: 8787,
+    label: "",
+    script: "",
+    has_token: true,
+    library_id: null,
+    status: "connected",
+    auto_hide_control: false,
+    os: "",
+    pretty_name: null,
+    ...over,
+  };
+}
+
+function controlWindow(
+  over: Partial<WindowRecord> & Pick<WindowRecord, "window_id" | "library_id">,
+): WindowRecord {
+  return {
+    kind: "terminal",
+    title: "Control terminal",
+    ordinal: 0,
+    workspace_path: null,
+    prefix: "control",
+    token: "token",
+    persisted: false,
+    connected: true,
+    control: true,
+    ...over,
+  };
+}
 
 describe("controlClosedId", () => {
   it("parses a bare string id", () => {
@@ -44,6 +82,38 @@ describe("onControlClosedEvent (flash-only)", () => {
     expect(hasControlAttention(libId)).toBe(false);
     onControlClosedEvent("ds-1");
     expect(hasControlAttention(libId)).toBe(true);
+  });
+
+  it("falls back to the control window row before the devserver registry learns library_id", () => {
+    library.devservers = [devserver({ id: "fresh-ds", library_id: null })];
+    library.windows = [
+      controlWindow({
+        window_id: "control-terminal-fresh-ds",
+        library_id: "lib-fresh",
+      }),
+    ];
+
+    onControlClosedEvent("fresh-ds");
+
+    expect(hasControlAttention("lib-fresh")).toBe(true);
+  });
+
+  it("replays an exit event that arrives before the control window feed row", () => {
+    library.devservers = [devserver({ id: "racy-ds", library_id: null })];
+    library.windows = [];
+
+    onControlClosedEvent("racy-ds");
+    expect(hasControlAttention("lib-racy")).toBe(false);
+
+    library.windows = [
+      controlWindow({
+        window_id: "control-terminal-racy-ds",
+        library_id: "lib-racy",
+      }),
+    ];
+    resolvePendingControlAttention();
+
+    expect(hasControlAttention("lib-racy")).toBe(true);
   });
 
   it("ignores an unrecognized payload", () => {

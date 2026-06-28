@@ -14,7 +14,10 @@
   import { confirm } from "./state/confirm.svelte";
   import { checksVisible } from "./state/selection.svelte";
   import { onControlClosedEvent } from "./state/controlClosed.svelte";
-  import { clearControlAttention } from "./state/controlAttention.svelte";
+  import {
+    clearControlAttention,
+    resolvePendingControlAttention,
+  } from "./state/controlAttention.svelte";
   import { onTauriEvent } from "./api/desktop";
   import { applyTheme } from "./state/theme.svelte";
   import { readOnly } from "./state/capabilities";
@@ -48,6 +51,7 @@
       }
       wasConnected.set(ds.id, now);
     }
+    resolvePendingControlAttention();
   });
 </script>
 
