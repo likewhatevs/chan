@@ -559,8 +559,9 @@ describe("tab close confirmation", () => {
     });
 
     test("an explicit landAtTop open ignores the saved caret and lands at top", async () => {
-      // restoreSavedCaretAfterLoad returns before consulting readCaret when
-      // landAtTop is set, so the saved caret never overrides the explicit top.
+      // restoreSavedCaretAfterLoad handles landAtTop before consulting
+      // readCaret, so the saved caret never overrides the explicit top, and it
+      // issues a caret command so the editor re-claims focus after the load.
       vi.mocked(readCaret).mockClear();
       vi.spyOn(api, "readStream").mockResolvedValue({
         path: "notes/c.md",
@@ -575,6 +576,28 @@ describe("tab close confirmation", () => {
       expect(t?.kind).toBe("file");
       if (t?.kind !== "file") return;
       expect(t.caret).toEqual({ from: 0, to: 0 });
+      expect(t.caretCommand).toEqual({ from: 0, to: 0 });
+      expect(readCaret).not.toHaveBeenCalled();
+    });
+
+    test("a landAtTop open of an empty new file commands the caret so it claims focus (#A1)", async () => {
+      // A brand-new `cs open <file>` streams in empty. The editor's own
+      // caret-restore bails on a zero-length doc, so the open must issue a
+      // post-load caret command to pull focus into the editor.
+      vi.mocked(readCaret).mockClear();
+      vi.spyOn(api, "readStream").mockResolvedValue({
+        path: "notes/new.md",
+        content: "",
+        mtime: 1,
+        mtime_ns: "1",
+        writable: true,
+      });
+      const pane = resetLayout([]);
+      await openInPane(pane.id, "notes/new.md", { landAtTop: true });
+      const t = activePane().tabs[0];
+      expect(t?.kind).toBe("file");
+      if (t?.kind !== "file") return;
+      expect(t.caretCommand).toEqual({ from: 0, to: 0 });
       expect(readCaret).not.toHaveBeenCalled();
     });
   });

@@ -2406,28 +2406,40 @@ export async function openInPane(
   restoreSavedCaretAfterLoad(paneId, newTab.id, path, opts);
 }
 
-/// After a fresh open finishes streaming, land the caret at the per-file saved
-/// position for an IMPLICIT open (a link / mention / reopen of a closed file).
-/// Explicit opens (landAtTop) and open-at-selection set the caret at open time
-/// and skip this. Restoring AFTER the load lands the caret on the FULL doc (the
-/// large-file park, so it is never clamped to a partial stream) and only when
-/// the caret is still parked at top, so it never overrides a caret the user
-/// moved while the file streamed in.
+/// Once a fresh open finishes streaming, settle the caret and pull focus into
+/// the editor:
+///   - an explicit top-open (landAtTop, e.g. `cs open <file>`) issues a caret
+///     command at the document start so the editor re-claims focus once the
+///     content lands. An empty new file otherwise never grabs focus: the
+///     editor's own caret-restore bails on a zero-length doc.
+///   - an implicit open (a link / mention / reopen of a closed file) lands the
+///     per-file SAVED caret, and only while the caret is still parked at top,
+///     so it never overrides a caret the user moved while the file streamed in.
+///   - an open-at-selection (initialSelection) set its caret at open time and
+///     is skipped here.
+/// Running AFTER the load lands on the FULL doc (the large-file park), never
+/// clamped to a partial stream.
 function restoreSavedCaretAfterLoad(
   paneId: string,
   tabId: string,
   path: string,
   opts: OpenFileOptions,
 ): void {
-  if (opts.landAtTop || opts.initialSelection) return;
-  const saved = readCaret(path);
-  if (!saved) return;
+  if (opts.initialSelection) return;
   const node = layout.nodes[paneId];
   if (!node || node.kind !== "leaf") return;
   const t = node.tabs.find(
     (tab): tab is FileTab => tab.kind === "file" && tab.id === tabId,
   );
   if (!t || t.error || t.fileMissing) return;
+  // Explicit top-open: re-claim focus at the doc start regardless of any
+  // saved caret (so this never consults readCaret).
+  if (opts.landAtTop) {
+    issueCaretCommand(t, 0, 0);
+    return;
+  }
+  const saved = readCaret(path);
+  if (!saved) return;
   if (t.caret && (t.caret.from !== 0 || t.caret.to !== 0)) return;
   issueCaretCommand(t, saved.from, saved.to);
 }
