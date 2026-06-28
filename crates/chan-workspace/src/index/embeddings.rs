@@ -618,9 +618,8 @@ mod tests {
     #[test]
     fn proxy_issue_falls_through_to_a_usable_var() {
         use std::collections::HashMap;
-        let look = |m: HashMap<&'static str, &'static str>| {
-            move |v: &str| m.get(v).map(|s| s.to_string())
-        };
+        let look =
+            |m: HashMap<&'static str, &'static str>| move |v: &str| m.get(v).map(|s| s.to_string());
         // No proxy set -> no issue.
         assert_eq!(proxy_issue_from(look(HashMap::new())), None);
         // A usable proxy -> no issue.

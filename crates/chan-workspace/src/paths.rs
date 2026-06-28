@@ -515,7 +515,10 @@ mod tests {
         // must collapse to one key.
         let prefixed = Path::new(r"\\?\C:\Users\me\proj");
         let plain = Path::new(r"C:\Users\me\proj");
-        assert_eq!(metadata_key_for_root(prefixed), metadata_key_for_root(plain));
+        assert_eq!(
+            metadata_key_for_root(prefixed),
+            metadata_key_for_root(plain)
+        );
         assert_eq!(canonical_root_hash8(prefixed), canonical_root_hash8(plain));
     }
 
