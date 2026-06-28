@@ -54,8 +54,8 @@ function gatewayAssets(version) {
 // Optional assets are collected only when the release actually shipped them, so
 // a release without them does not fail metadata generation. Windows is the
 // first: the desktop NSIS installer and the standalone Windows CLI zip are not
-// published yet (see docs/release/windows-signing.md), so they light up on the
-// install page the moment release.yml starts uploading them.
+// published yet, so they light up on the install page the moment release.yml
+// starts uploading them.
 function optionalAssets(version) {
   return [
     `Chan_${version}_x64-setup.exe`,
