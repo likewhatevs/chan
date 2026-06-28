@@ -35,7 +35,7 @@ flowchart TB
   Launcher --> LBundle["launcher SPA bundle"]
   Client["browser / webview"] -->|HTTP/WS| API
   Client -->|GET /| Static
-  Client -->|GET / (library root)| Launcher
+  Client -->|"GET / (library root)"| Launcher
 ```
 
 ## Boundaries
