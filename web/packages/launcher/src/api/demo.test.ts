@@ -15,6 +15,7 @@ describe("launcher demo api", () => {
     expect(devservers.filter((d) => d.status === "connected").length).toBeGreaterThanOrEqual(2);
     expect(windows.filter((w) => w.kind === "terminal" && w.library_id === "local").length).toBeGreaterThanOrEqual(2);
     expect(windows.some((w) => w.control)).toBe(true);
+    expect(workspaces.map((w) => w.path)).not.toContainEqual(expect.stringMatching(/^\\\\\?\\/));
   });
 
   it("adds devservers and resets back to the seed", async () => {

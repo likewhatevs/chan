@@ -128,7 +128,7 @@ function seed(): Seed {
       },
       {
         workspace_id: "ds-windows:w/explorerpatcher",
-        path: "\\\\?\\C:\\Users\\hacker\\dev\\github.com\\valinet\\ExplorerPatcher",
+        path: "C:\\Users\\hacker\\dev\\github.com\\valinet\\ExplorerPatcher",
         label: "ExplorerPatcher",
         on: false,
         status: "stopped",
