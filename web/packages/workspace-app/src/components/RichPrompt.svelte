@@ -8,7 +8,9 @@
   // Drafts-backed: the bubble edits a real per-terminal chan-workspace
   // DRAFT (`tab.richPromptDraftPath` -> `<draftsDir>/<name>/draft.md`). That file IS
   // the prompt text, and pasted images land in the SAME draft folder via the
-  // editor's image-paste machinery (imageDropHandlers) + insert `![](path)`.
+  // editor's image-paste machinery (imageDropHandlers), which inserts the BARE
+  // ABSOLUTE path to the file -- no `![]` wrapper (its leading `!` would be run
+  // as a command), and the composer text equals the text sent on the wire.
   // So an agent reads the media as FILES (chan MCP read_media / disk under
   // ~/.chan) - no base64, seamless across claude/codex/gemini. The draft is
   // created lazily on first open, persists across hide/show + reload, is
@@ -38,7 +40,6 @@
     outdentListItem,
   } from "../editor/commands/list";
   import { imageDropHandlers } from "../editor/bubbles/image_drop";
-  import { rewriteImagePathsForDelivery } from "../editor/deliver_images";
   import { makeThemeCompartment } from "../editor/base";
   import { effectiveHybridSurfaceTheme } from "../state/store.svelte";
   import { currentOS } from "../state/shortcuts";
@@ -56,15 +57,12 @@
   // terminal). Its `richPromptDraftPath` is the per-terminal draft backing.
   let {
     tab,
-    getTerminalCwdRel,
     workspaceRoot = null,
   }: {
     tab: TerminalTab;
-    /// Live terminal CWD relative to the workspace root, read at submit so a
-    /// pasted image is delivered relative to where the agent runs. "" = the
-    /// CWD is the root; null = unknown / outside the root (absolute fallback).
-    getTerminalCwdRel?: () => string | null;
-    /// Absolute workspace root, for the absolute-path fallback.
+    /// Absolute workspace root. A pasted image lands in the draft folder and
+    /// is inserted as its bare absolute on-disk path, built from this root, so
+    /// the composer text equals the text sent on the wire.
     workspaceRoot?: string | null;
   } = $props();
 
@@ -355,18 +353,11 @@
     const text = view.state.doc.toString();
     if (!text.trim()) return true;
     const id = crypto.randomUUID();
-    // The composer's pasted-image refs are relative to the DRAFT file (so the
-    // in-compose preview resolves them); the receiving agent runs at the
-    // terminal's live CWD, so deliver a plain path relative to that CWD (or an
-    // absolute path when the CWD is unknown / outside the root). The draft/card
-    // text stays as-is -- only the wire payload is rewritten.
-    const delivered = rewriteImagePathsForDelivery(
-      text,
-      draftPath,
-      getTerminalCwdRel?.() ?? null,
-      workspaceRoot,
-    );
-    if (!sendPromptToTerminal(tab.id, delivered, submitAgent(), id)) return true;
+    // Display == wire: the composer text is sent verbatim. A pasted image is
+    // already inserted as its bare absolute on-disk path (imageDropHandlers in
+    // "absolute-path" mode), which the receiving agent reads directly, so
+    // there is no display-vs-wire transform.
+    if (!sendPromptToTerminal(tab.id, text, submitAgent(), id)) return true;
     // Queued. KEEP the text in the composer as the greyed read-only card (the
     // lock $effect greys it the moment `isPending` flips). Persist it so a
     // reload restores the card, and remember it for ArrowUp recall / Esc drop.
@@ -482,12 +473,15 @@
             ]),
           ),
           markdown({ addKeymap: false }),
-          // Real editor image paste/drop: pasted images upload into the draft
-          // folder and insert ![](path); the draft text (with the refs) rides
-          // the prompt frame on submit, and the agent reads the files.
+          // Editor image paste/drop: a pasted image uploads into the draft
+          // folder and is inserted as its bare absolute on-disk path (no `![]`
+          // wrapper, so the leading `!` is not run as a command). That exact
+          // path -- the composer text -- rides the prompt frame on submit, and
+          // the agent reads the file.
           imageDropHandlers({
             getUploadDir: () => draftDir(),
-            getCurrentPath: () => draftPath,
+            insertMode: "absolute-path",
+            getWorkspaceRoot: () => workspaceRoot,
           }),
           EditorView.lineWrapping,
           theme.extension,

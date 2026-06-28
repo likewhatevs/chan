@@ -59,17 +59,22 @@ describe("RichPrompt.svelte component", () => {
 
   test("Drafts-backed: per-terminal draft.md + editor image paste into the draft folder", () => {
     // Bound to the terminal's draft (a prop), created lazily, content loaded
-    // from + written back to draft.md; pasted images use the editor's
-    // imageDropHandlers pointed at the draft folder.
+    // from + written back to draft.md; a pasted image uploads into the draft
+    // folder and is inserted as its bare absolute on-disk path (display ==
+    // wire), so imageDropHandlers runs in "absolute-path" mode with the
+    // workspace root and no `![]`/relativization (no getCurrentPath).
     expect(richPromptSrc).toMatch(
-      /let \{[\s\S]{1,80}tab,[\s\S]{1,160}getTerminalCwdRel,[\s\S]{1,120}workspaceRoot = null,[\s\S]{1,400}tab: TerminalTab;[\s\S]{1,400}getTerminalCwdRel\?: \(\) => string \| null;[\s\S]{1,200}workspaceRoot\?: string \| null;[\s\S]{1,40}\} = \$props\(\)/,
+      /let \{[\s\S]{1,80}tab,[\s\S]{1,120}workspaceRoot = null,[\s\S]{1,400}tab: TerminalTab;[\s\S]{1,400}workspaceRoot\?: string \| null;[\s\S]{1,40}\} = \$props\(\)/,
     );
+    // The CWD-relative delivery prop is gone with the submit-time transform.
+    expect(richPromptSrc).not.toMatch(/getTerminalCwdRel/);
     expect(richPromptSrc).toMatch(
       /import \{ imageDropHandlers \} from "\.\.\/editor\/bubbles\/image_drop"/,
     );
     expect(richPromptSrc).toMatch(
-      /imageDropHandlers\(\{[\s\S]{1,160}getUploadDir: \(\) => draftDir\(\)[\s\S]{1,120}getCurrentPath: \(\) => draftPath/,
+      /imageDropHandlers\(\{[\s\S]{1,200}getUploadDir: \(\) => draftDir\(\)[\s\S]{1,160}insertMode: "absolute-path"[\s\S]{1,160}getWorkspaceRoot: \(\) => workspaceRoot/,
     );
+    expect(richPromptSrc).not.toMatch(/getCurrentPath: \(\) => draftPath/);
     expect(richPromptSrc).toMatch(/await api\.createDraft\(\)/);
     expect(richPromptSrc).toMatch(/tab\.richPromptDraftPath = path/);
     expect(richPromptSrc).toMatch(/await api\.read\(path\)/);
@@ -81,18 +86,13 @@ describe("RichPrompt.svelte component", () => {
     // (submitAgent()) + a client message id, only beginning a pending when the
     // frame actually went out (the data-loss guard).
     expect(richPromptSrc).toMatch(/const id = crypto\.randomUUID\(\);/);
-    // The wire payload is the draft text with image refs rewritten to plain
-    // paths the receiving agent (at the terminal's live CWD) can read instead
-    // of 404ing on ./image.png. The card/recall text (`lastQueued`) stays the
-    // ORIGINAL text -- preview-correct.
+    // Display == wire: the composer text is sent verbatim (a pasted image is
+    // already its bare absolute on-disk path), so there is NO submit-time
+    // delivery transform -- the rewrite machinery is gone.
+    expect(richPromptSrc).not.toMatch(/rewriteImagePathsForDelivery/);
+    expect(richPromptSrc).not.toMatch(/deliver_images/);
     expect(richPromptSrc).toMatch(
-      /import \{ rewriteImagePathsForDelivery \} from "\.\.\/editor\/deliver_images"/,
-    );
-    expect(richPromptSrc).toMatch(
-      /const delivered = rewriteImagePathsForDelivery\(\s*text,\s*draftPath,\s*getTerminalCwdRel\?\.\(\) \?\? null,\s*workspaceRoot,?\s*\);/,
-    );
-    expect(richPromptSrc).toMatch(
-      /if \(!sendPromptToTerminal\(tab\.id, delivered, submitAgent\(\), id\)\) return true;/,
+      /if \(!sendPromptToTerminal\(tab\.id, text, submitAgent\(\), id\)\) return true;/,
     );
     expect(richPromptSrc).toMatch(/beginPendingPrompt\(tab, id\);/);
     const submitBody = richPromptSrc.match(/function submit\(\): boolean \{[\s\S]*?\n  \}/)?.[0];

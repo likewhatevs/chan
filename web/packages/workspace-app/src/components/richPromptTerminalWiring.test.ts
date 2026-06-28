@@ -70,14 +70,14 @@ describe("TerminalTab Rich Prompt wiring", () => {
     );
   });
 
-  test("mounts <RichPrompt> on the active terminal, passing the tab + live CWD getter + root", () => {
+  test("mounts <RichPrompt> on the active terminal, passing the tab + workspace root", () => {
     expect(terminal).toMatch(/import RichPrompt from "\.\/RichPrompt\.svelte"/);
     // The tab is passed so the bubble binds to THIS terminal's per-terminal
     // Drafts-backed draft; visibility is per-terminal (keyed by tab id), not a
-    // window-global flag. The CWD getter + workspace root let a pasted image
-    // be delivered relative to where the receiving agent actually runs.
+    // window-global flag. The workspace root lets a pasted image be inserted as
+    // its bare absolute on-disk path (display == wire).
     expect(terminal).toMatch(
-      /\{#if active && isRichPromptVisible\(tab\.id\)\}[\s\S]{1,120}<RichPrompt[\s\S]{1,200}\{tab\}[\s\S]{1,160}getTerminalCwdRel=\{terminalCwdRel\}[\s\S]{1,160}workspaceRoot=\{workspace\.info\?\.root \?\? null\}/,
+      /\{#if active && isRichPromptVisible\(tab\.id\)\}[\s\S]{1,120}<RichPrompt[\s\S]{1,200}\{tab\}[\s\S]{1,160}workspaceRoot=\{workspace\.info\?\.root \?\? null\}/,
     );
   });
 

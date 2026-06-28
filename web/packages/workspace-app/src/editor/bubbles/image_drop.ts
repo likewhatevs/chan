@@ -1,9 +1,15 @@
 // Editor-level drop / paste handlers for image files.
 //
 // Separate from the image bubble: drop / paste fire on the EditorView
-// itself (no `![` typing required). On a successful upload we insert
-// `![](path)` at the drop / paste position; the image atom widget
-// renders it on the next decoration tick.
+// itself (no `![` typing required). On a successful upload the file is
+// written into the doc per `ImageDropOptions.insertMode`:
+//  - "markdown" (default): a `![](path)` embed at the drop / paste
+//    position; the image atom widget renders it on the next decoration
+//    tick.
+//  - "absolute-path": the bare absolute on-disk path, so the inserted
+//    text equals the text delivered downstream (the rich prompt, where a
+//    leading `!` is run as a command and a display-vs-wire transform must
+//    not happen).
 //
 // This module only handles IMAGE files. Plain text drops / pastes
 // fall through to CM6's defaults (markdown text, etc.).
@@ -26,15 +32,48 @@ import {
 const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
 const DEFAULT_INSERT_WIDTH_PX = 250;
 
+/// How an uploaded image is written into the doc. "markdown": a
+/// `![](rel#w=N)` embed (the notes editor; the image atom widget renders
+/// it). "absolute-path": the bare absolute on-disk path with no `![]()`
+/// wrapper, `#w=` hint, or relativization (the rich prompt), so the
+/// inserted text equals the text delivered on the wire.
+export type ImageInsertMode = "markdown" | "absolute-path";
+
 export interface ImageDropOptions {
   /// Upload destination; defaults to the editing file's directory if
   /// known, otherwise the server's configured attachments_dir. Read
   /// lazily so swapping tabs picks up the new path.
   getUploadDir: () => string | null;
-  /// Editing file's workspace-rooted path. The uploaded `path` is
-  /// relativized against this so the inserted `![](src)` resolves
-  /// correctly through resolveImageSrc.
-  getCurrentPath: () => string | null;
+  /// Editing file's workspace-rooted path. In "markdown" mode the
+  /// uploaded `path` is relativized against this so the inserted
+  /// `![](src)` resolves through resolveImageSrc. Unused in
+  /// "absolute-path" mode.
+  getCurrentPath?: () => string | null;
+  /// Insert mode (default "markdown").
+  insertMode?: ImageInsertMode;
+  /// Absolute workspace root, used by "absolute-path" mode to resolve the
+  /// server's workspace-rooted upload path to a bare absolute on-disk
+  /// path. Read lazily (the workspace may load after the editor mounts).
+  getWorkspaceRoot?: () => string | null;
+}
+
+/// The drop / paste handlers read the lazy `ImageDropOptions` getters at
+/// event time into this resolved snapshot, which rides through the
+/// sequential upload loop.
+interface InsertCtx {
+  uploadDir: string | null;
+  currentPath: string | null;
+  insertMode: ImageInsertMode;
+  workspaceRoot: string | null;
+}
+
+function resolveInsertCtx(opts: ImageDropOptions): InsertCtx {
+  return {
+    uploadDir: opts.getUploadDir(),
+    currentPath: opts.getCurrentPath?.() ?? null,
+    insertMode: opts.insertMode ?? "markdown",
+    workspaceRoot: opts.getWorkspaceRoot?.() ?? null,
+  };
 }
 
 export function imageDropHandlers(opts: ImageDropOptions): Extension {
@@ -88,13 +127,7 @@ export function imageDropHandlers(opts: ImageDropOptions): Extension {
       if (images.length === 0) return false;
       event.preventDefault();
       const pos = posFromEvent(view, event);
-      uploadAndInsertAll(
-        view,
-        images,
-        pos,
-        opts.getUploadDir(),
-        opts.getCurrentPath(),
-      );
+      uploadAndInsertAll(view, images, pos, resolveInsertCtx(opts));
       return true;
     },
     paste(event, view) {
@@ -117,13 +150,7 @@ export function imageDropHandlers(opts: ImageDropOptions): Extension {
       if (images.length === 0) return false;
       event.preventDefault();
       const pos = pasteInsertPos(view);
-      uploadAndInsertAll(
-        view,
-        images,
-        pos,
-        opts.getUploadDir(),
-        opts.getCurrentPath(),
-      );
+      uploadAndInsertAll(view, images, pos, resolveInsertCtx(opts));
       return true;
     },
   });
@@ -241,8 +268,7 @@ function uploadAndInsertAll(
   view: EditorView,
   files: File[],
   pos: number,
-  uploadDir: string | null,
-  currentPath: string | null,
+  ctx: InsertCtx,
 ): void {
   // Upload sequentially so we can chain the inserts at adjacent
   // positions (each insert shifts subsequent positions; we map
@@ -266,40 +292,21 @@ function uploadAndInsertAll(
         continue;
       }
       try {
-        const res = await api.uploadAttachment(file, uploadDir);
+        const res = await api.uploadAttachment(file, ctx.uploadDir);
         invalidateImageCatalog();
-        const pathArg = currentPath
-          ? relativizePath(res.path, currentPath)
-          : res.path;
-        // Percent-encode the path so an uploaded file whose name has a
-        // space (or other URL-special char) round-trips: an unencoded
-        // `![](./My Photo.png)` truncates at the space on the backend
-        // graph scan and resolves wrong. resolveImageSrc decodes on
-        // read. The `#w=N` fragment is appended after encoding.
-        const encPath = encodeRelPath(pathArg);
-        // Default new images to 250px wide. The widget reads
-        // `#w=N` from the src fragment and clamps via CSS; the
-        // user can drag the corner handle to resize. Dropped /
-        // pasted images are almost always too big at intrinsic
-        // size on a notes page, hence the small default.
         const onListLine = listLineAt(view.state, cursor) !== null;
-        const imageMarkdown = `![](${encPath}#w=${DEFAULT_INSERT_WIDTH_PX})`;
-        // Trailing separator keeps the next keystroke off the image:
-        // a space inline on a list line, a newline as its own block.
-        const insert = onListLine ? `${imageMarkdown} ` : `${imageMarkdown}\n`;
+        const { text: insert, caret } = buildImageInsert(res.path, {
+          insertMode: ctx.insertMode,
+          currentPath: ctx.currentPath,
+          workspaceRoot: ctx.workspaceRoot,
+          onListLine,
+        });
         view.dispatch({
           changes: { from: cursor, to: cursor, insert },
-          // Land the caret just past the image block, BEFORE the
-          // trailing separator, so it stays on the image's line
-          // instead of dropping to the next line / past the space.
-          // The atomic image widget renders the caret right after
-          // itself (see caret_mapping.ts: a caret at the image's end
-          // boundary is not "inside", so it maps through unchanged).
-          selection: { anchor: cursor + imageMarkdown.length },
-          // Scroll the doc so the new caret stays in view.
-          // Pasting / dropping at the bottom can push the cursor
-          // off-screen; `scrollIntoView: true` tells CM6 to
-          // correct that immediately.
+          selection: { anchor: cursor + caret },
+          // Scroll the doc so the new caret stays in view. Pasting /
+          // dropping at the bottom can push the cursor off-screen;
+          // `scrollIntoView: true` tells CM6 to correct that immediately.
           scrollIntoView: true,
         });
         cursor += insert.length;
@@ -309,4 +316,61 @@ function uploadAndInsertAll(
       }
     }
   })();
+}
+
+/// Build the text inserted for an uploaded image plus the caret offset
+/// within it. `uploadedPath` is the server's workspace-rooted upload path.
+///
+/// "markdown": a `![](rel#w=N)` embed. The path is relativized against
+/// `currentPath` and percent-encoded so a name with a space (or other
+/// URL-special char) round-trips -- an unencoded `![](./My Photo.png)`
+/// truncates at the space on the backend graph scan and resolves wrong
+/// (resolveImageSrc decodes on read); the `#w=N` fragment is appended
+/// after encoding. New images default to 250px wide (the widget reads
+/// `#w=N` and clamps via CSS; the corner handle resizes) because a
+/// dropped / pasted image is almost always too big at intrinsic size. A
+/// trailing separator keeps the next keystroke off the image (a space
+/// inline on a list line, a newline as its own block); the caret lands
+/// just past the atom, BEFORE that separator, so it stays on the image's
+/// line (the atomic widget renders the caret at its end boundary -- see
+/// caret_mapping.ts).
+///
+/// "absolute-path": the bare absolute on-disk path with a single trailing
+/// space and no `![]()` wrapper, `#w=` hint, or relativization, so the
+/// inserted text equals the text delivered on the wire (a leading `!` is
+/// run as a command; a display-vs-wire transform must not happen). The
+/// caret lands past the space so the prompt text follows.
+export function buildImageInsert(
+  uploadedPath: string,
+  ctx: {
+    insertMode: ImageInsertMode;
+    currentPath: string | null;
+    workspaceRoot: string | null;
+    onListLine: boolean;
+  },
+): { text: string; caret: number } {
+  if (ctx.insertMode === "absolute-path") {
+    const text = `${absoluteDraftPath(ctx.workspaceRoot, uploadedPath)} `;
+    return { text, caret: text.length };
+  }
+  const pathArg = ctx.currentPath
+    ? relativizePath(uploadedPath, ctx.currentPath)
+    : uploadedPath;
+  const imageMarkdown = `![](${encodeRelPath(pathArg)}#w=${DEFAULT_INSERT_WIDTH_PX})`;
+  const text = ctx.onListLine ? `${imageMarkdown} ` : `${imageMarkdown}\n`;
+  return { text, caret: imageMarkdown.length };
+}
+
+/// Join the absolute workspace root with the server's workspace-rooted
+/// upload path into a bare absolute on-disk path. Forward-slash
+/// normalized with any trailing slash trimmed (the upload path is
+/// POSIX-style). A null / empty root cannot form an absolute path, so it
+/// falls back to the bare workspace-relative path (still wrapper-free).
+function absoluteDraftPath(
+  workspaceRoot: string | null,
+  uploadedPath: string,
+): string {
+  if (!workspaceRoot) return uploadedPath;
+  const root = workspaceRoot.replace(/\\/g, "/").replace(/\/+$/, "");
+  return `${root}/${uploadedPath}`;
 }

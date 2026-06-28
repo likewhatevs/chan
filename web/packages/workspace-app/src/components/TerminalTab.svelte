@@ -2049,11 +2049,7 @@
        its pane, so each terminal shows its own bubble (not a window-global
        one). Toggled by Cmd+Shift+P / the right-click menu. -->
   {#if active && isRichPromptVisible(tab.id)}
-    <RichPrompt
-      {tab}
-      getTerminalCwdRel={terminalCwdRel}
-      workspaceRoot={workspace.info?.root ?? null}
-    />
+    <RichPrompt {tab} workspaceRoot={workspace.info?.root ?? null} />
   {/if}
   <!-- Per-terminal survey overlay: a survey raised on THIS terminal
        (`cs terminal survey --tab-name`) renders anchored over it, keyed by
