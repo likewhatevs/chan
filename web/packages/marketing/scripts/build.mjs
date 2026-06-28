@@ -77,7 +77,7 @@ async function main() {
       bodyClass: "home-page",
       title: "chan - your new terminal and workspace manager",
       description:
-        "Chan is your new terminal and workspace manager (or IDE if you prefer). Local desktop and headless remote, on macOS, Linux, and Windows. Unblock 10x productivity.",
+        "Chan is your new terminal and workspace manager (or IDE if you prefer). Local and remote, on macOS, Linux, and Windows. Unblock 10x productivity.",
       content: fillTemplate(homeTemplate, { version, ...releaseTemplateValues }),
       headExtra: '<link rel="stylesheet" href="/assets/launcher-demo.css" />\n<script type="module" src="/assets/launcher-demo.js"></script>',
     }),
