@@ -41,6 +41,7 @@
     indexStatus,
     openGraphForContact,
     openGraphForLanguage,
+    openGraphForTag,
     paneWidths,
     persistPaneWidths,
     persistTreeExpanded,
@@ -495,8 +496,9 @@
   /// (link / backlink / hashtag / contact / language) and supports
   /// double-click / depth-slider expansion, so the from-here graph stays
   /// rich. `pendingSelectId` lands the new graph already selected on the
-  /// node. Upward navigation is the breadcrumb (`rescopeFromHere`, still
-  /// in-place); this is the only "set as scope" path that spawns a tab.
+  /// node. Like the language / tag / contact lenses (their `openGraphFor*`
+  /// helpers), this spawns a new tab; only the breadcrumb
+  /// (`rescopeFromHere`) re-scopes in place.
   function graphFromHere(path: string, isDir: boolean): void {
     let scopeId: string;
     if (isDir) {
@@ -2983,12 +2985,12 @@
           <div class="missing">{hint}</div>
         </div>
       {:else}
-        <!-- `onSetAsScope` wires "Graph from here" per selection
-             kind: file / directory selections re-root the current
-             graph via `graphFromHere`; language / tag /
-             resolved-mention lenses re-scope via
-             `rescopeFromHere`. The breadcrumb covers upward
-             navigation, mirroring the same semantic. -->
+        <!-- `onSetAsScope` wires "Graph from here" to always open a NEW
+             graph tab, per selection kind: file / directory via
+             `graphFromHere`; language / tag / resolved-mention via
+             `openGraphForLanguage` / `openGraphForTag` /
+             `openGraphForContact`. The breadcrumb (`rescopeFromHere`)
+             owns in-place upward navigation. -->
         <InspectorBody
           selection={inspectorSelection}
           onOpen={
@@ -3024,32 +3026,28 @@
                     inspectorSelection.kind === "directory",
                   )
               : inspectorSelection?.kind === "language"
-                ? // "Graph from here" on a language
-                  // bubble re-scopes the current graph to that
-                  // language's lens (mirrors the breadcrumb /
-                  // dir re-scope path, stays in semantic mode).
-                  () => rescopeFromHere(`language:${inspectorSelection.language}`)
+                ? // "Graph from here" on a language bubble opens a NEW
+                  // graph tab scoped to that language's lens (semantic
+                  // mode), matching the file / directory path.
+                  () => openGraphForLanguage(inspectorSelection.language)
                 : inspectorSelection?.kind === "tag"
-                  ? // The tag inspector gets
-                    // the same "Graph from here" affordance as the
-                    // language bubble. Re-scopes the current graph
-                    // to the tag's lens (bidirectional BFS), so
-                    // clicking a hashtag node lets the user
-                    // descend into its neighbourhood without
-                    // having to navigate to Search + click the
-                    // chip there.
-                    () => rescopeFromHere(`tag:${inspectorSelection.nodeId}`)
+                  ? // The tag inspector's "Graph from here" opens a NEW
+                    // graph tab scoped to the tag's lens (bidirectional
+                    // BFS around the hashtag node), so the user can
+                    // descend into its neighbourhood without going
+                    // through Search + the chip there.
+                    () =>
+                      openGraphForTag(
+                        inspectorSelection.nodeId,
+                        inspectorSelection.label,
+                      )
                   : inspectorSelection?.kind === "mention" && selectedContactPath
-                    ? // The mention inspector
-                      // gets the same "Graph from here" affordance
-                      // as the tag inspector when the mention
-                      // resolves to a contact file. Routes through
-                      // `contact:<relPath>` so the lens fires the
-                      // bidirectional BFS around that contact. An
-                      // unresolved mention (no matching file) has
-                      // no meaningful from-here target, so the
-                      // button stays hidden in that case.
-                      () => rescopeFromHere(`contact:${selectedContactPath}`)
+                    ? // The mention inspector's "Graph from here" opens a
+                      // NEW graph tab scoped to the resolved contact
+                      // (bidirectional BFS around it). An unresolved
+                      // mention (no matching file) has no from-here
+                      // target, so the button stays hidden.
+                      () => openGraphForContact(selectedContactPath!)
                     : undefined
           }
           documentsOverride={selectionDocumentsInScope}
