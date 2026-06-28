@@ -16,7 +16,7 @@ The split is load-bearing:
   or transport.
 - The gateway is a separate Cargo workspace with its own lockfile and dependency stack, so the core single-binary
   build never pulls in Postgres, OAuth, or proxy-only code. It consumes the in-repo tunnel crates through the
-  tunnel protocol boundary. See [`gateway/design.md`](gateway/design.md).
+  tunnel protocol boundary. See [`gateway/README.md`](./gateway/README.md).
 - The embedding-model bundler is an explicit release helper, not an implicit `cargo build` step.
 - Naming traps: the launcher is the `web-launcher` package, devserver is a `chan-server` mode, and `chan-llm` is an
   MCP tool sandbox rather than a provider client.

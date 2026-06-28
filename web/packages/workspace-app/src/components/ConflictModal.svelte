@@ -16,8 +16,9 @@
   //                can manually copy parts of either side around or
   //                pick Reload / Overwrite later.
   //
-  // Three-way diff is explicitly out of scope (chan#2 says so); a
-  // future "show diff" button can extend the modal.
+  // Three-way diff is deliberately outside this modal; a future
+  // "show diff" button can extend the flow without changing the
+  // conflict-resolution choices.
 
   import {
     conflictDialog,

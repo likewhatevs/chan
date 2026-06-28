@@ -311,11 +311,11 @@ export function isCsv(path: string): boolean {
   return ext === "csv" || ext === "tsv";
 }
 
-/// Field delimiter for a tabular file. Workspaces both the parser and
+/// Field delimiter for a tabular file. Feeds both the parser and
 /// the on-save serializer so a round-trip preserves the source
-/// shape. `.tsv` uses tab; `.csv` defaults to comma. Per-tab
-/// override for files with a non-standard delimiter is tracked as
-/// a follow-up (GH issue #29 "Out of scope").
+/// shape. `.tsv` uses tab; `.csv` defaults to comma. A per-tab
+/// override can layer on top of this fallback without changing the
+/// common extension-based behavior.
 export function csvDelimiter(path: string): string {
   return extOf(path) === "tsv" ? "\t" : ",";
 }

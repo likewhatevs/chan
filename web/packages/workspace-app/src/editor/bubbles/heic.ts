@@ -12,8 +12,6 @@
 // `heic2any` ships libheif as a WASM module which we lazy-import
 // only when a HEIC actually arrives, so users without HEIC photos
 // pay zero runtime cost (the chunk is built but never fetched).
-//
-// See GitHub issue #30 for the full requirements.
 
 /// Conservative WebP quality. 0.85 keeps photo content visually
 /// indistinguishable from the HEIC original while still cutting
