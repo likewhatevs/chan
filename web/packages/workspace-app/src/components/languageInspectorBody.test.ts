@@ -47,9 +47,9 @@ describe("GraphPanel maps a language node to the language selection", () => {
     );
   });
 
-  test("Graph from here on a language re-scopes to the language lens", () => {
+  test("Graph from here on a language opens a new graph tab", () => {
     expect(panel).toMatch(
-      /inspectorSelection\?\.kind === "language"[\s\S]*?rescopeFromHere\(`language:\$\{inspectorSelection\.language\}`\)/,
+      /inspectorSelection\?\.kind === "language"[\s\S]*?openGraphForLanguage\(inspectorSelection\.language\)/,
     );
   });
 });
