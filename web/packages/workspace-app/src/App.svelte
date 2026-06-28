@@ -812,12 +812,18 @@
       selectNextPane();
       return;
     }
-    // Cmd+S (Ctrl+S non-Mac) opens workspace-wide search on web. Save is
-    // autosave-only so this chord is safe to claim; preventDefault suppresses
-    // the browser save-page dialog. Desktop routes this via KEY_BRIDGE_JS
-    // (stops propagation before this handler). Excludes Shift; Cmd+Shift+S
-    // is strikethrough in the editor.
-    if (meta && !e.altKey && !e.shiftKey && e.code === "KeyS") {
+    // Search toggle. macOS: Cmd+S. Linux/Windows: Ctrl+Shift+S, so plain
+    // Ctrl+S falls through (bare Ctrl+S collides with a Claude Code chord).
+    // Save is autosave-only so the chord is safe to claim; preventDefault
+    // suppresses the browser save-page dialog. Desktop routes this via
+    // KEY_BRIDGE_JS (stops propagation before this handler). Branch per-OS
+    // like the reload chord below; Cmd+Shift+S stays the editor's
+    // strikethrough (mac only).
+    const searchChord =
+      currentOS() === "mac"
+        ? e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey && e.code === "KeyS"
+        : e.ctrlKey && e.shiftKey && !e.metaKey && !e.altKey && e.code === "KeyS";
+    if (searchChord) {
       e.preventDefault();
       // Search is workspace-only; swallow the chord in terminal mode so the
       // browser save dialog still stays suppressed but nothing else fires.

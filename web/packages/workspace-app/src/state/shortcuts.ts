@@ -332,14 +332,18 @@ export const SHORTCUTS: readonly Shortcut[] = [
   // Autosave is the canonical write path (debounced on idle +
   // tab-close + visibility hooks), so Cmd+S is free for
   // workspace-wide search. preventDefault on web suppresses the
-  // browser save-page dialog. Distinct from Cmd+Shift+S
-  // strikethrough (owned by the editor).
+  // browser save-page dialog. The stored chord is the macOS form
+  // (Cmd+S); on Linux/Windows plain Ctrl+S collides with a Claude Code
+  // chord, so search diverges to Ctrl+Shift+S there (in `osChord`, like
+  // reload). Distinct from Cmd+Shift+S strikethrough (mac, owned by the
+  // editor).
   {
     id: "app.search.toggle",
     label: "Search",
     web: "Mod+S",
     native: "Mod+S",
     group: "App",
+    note: "Ctrl+Shift+S on Linux / Windows",
     escapeTerminal: true,
   },
   // Dashboard direct chord, OUT of Hybrid Nav (it was the only surface still
@@ -530,6 +534,7 @@ export function formatChord(chord: Chord, os: OS): string {
 /// stored chord; Linux / Windows get a DIFFERENT chord because the macOS one
 /// collides with a control code there).
 const RELOAD_SHORTCUT_ID = "app.window.reload";
+const SEARCH_SHORTCUT_ID = "app.search.toggle";
 const TERMINAL_COPY_ID = "terminal.copy";
 const TERMINAL_PASTE_ID = "terminal.paste";
 const RICH_PROMPT_ID = "terminal.richPrompt";
@@ -539,6 +544,8 @@ const RICH_PROMPT_ID = "terminal.richPrompt";
 /// a few diverge into a different chord entirely on Linux / Windows:
 ///   - Reload: Cmd+R (mac) vs Ctrl+Shift+R (plain Ctrl+R is the shell's
 ///     reverse-search).
+///   - Search: Cmd+S (mac) vs Ctrl+Shift+S (bare Ctrl+S collides with a
+///     Claude Code chord).
 ///   - Terminal copy / paste: Cmd+C/V (mac) vs Ctrl+Shift+C/V (bare Ctrl+C/V
 ///     is the shell's SIGINT / EOF). TerminalTab's clipboard handler splits on
 ///     the same rule at the event layer; this keeps the displayed hint + the
@@ -555,6 +562,7 @@ export function osChord(
   const chord = s[platform];
   if (!chord) return undefined;
   if (s.id === RELOAD_SHORTCUT_ID && os !== "mac") return "Mod+Shift+R";
+  if (s.id === SEARCH_SHORTCUT_ID && os !== "mac") return "Mod+Shift+S";
   if (s.id === TERMINAL_COPY_ID && os !== "mac") return "Mod+Shift+C";
   if (s.id === TERMINAL_PASTE_ID && os !== "mac") return "Mod+Shift+V";
   // Rich Prompt: Cmd+Shift+P on macOS. Off macOS the Win / Super key is

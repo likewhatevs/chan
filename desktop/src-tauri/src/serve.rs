@@ -1900,7 +1900,11 @@ const KEY_BRIDGE_JS: &str = r#"
             fire(e, 'app.tab.close');
           }
           return;
-        case 'KeyS': fire(e, 'app.search.toggle');    return;
+        // Search. macOS binds Cmd+S (metaKey); Linux/Windows moves to
+        // Ctrl+Shift+S (shift branch below) so bare Ctrl+S no longer
+        // collides with a Claude Code chord and reaches the page / shell.
+        // Gating on metaKey mirrors the reload + Cmd+W idiom above.
+        case 'KeyS': if (e.metaKey) fire(e, 'app.search.toggle'); return;
         case 'KeyF': fire(e, 'app.find.open');        return;
         case 'KeyG': fire(e, 'app.find.next');        return;
         // Cmd+I does NOT open Dashboard; it is reserved for the
@@ -1933,6 +1937,10 @@ const KEY_BRIDGE_JS: &str = r#"
         // the !shift branch above); the !metaKey form fires only for the
         // Ctrl+Shift+R that Linux/Windows users press.
         case 'KeyR': if (!e.metaKey) invokeIpc(e, 'reload_window'); return;
+        // Search on Linux/Windows: Ctrl+Shift+S. Gate on !metaKey so
+        // macOS Cmd+Shift+S stays the editor's strikethrough (macOS
+        // searches on Cmd+S in the !shift branch above).
+        case 'KeyS': if (!e.metaKey) fire(e, 'app.search.toggle'); return;
         // Close on Linux/Windows: Ctrl+Shift+W (plain Ctrl+W stays
         // readline delete-word inside a focused terminal, which is why
         // the !shift branch never claims it off macOS). Gate on

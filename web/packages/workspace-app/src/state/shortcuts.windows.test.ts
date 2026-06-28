@@ -40,8 +40,10 @@ describe("Windows shortcut labels are Ctrl-based", () => {
         osChord(SHORTCUTS.find((s) => s.id === id)!, platform, "windows")!,
         "windows",
       );
-    // Shell collisions → Ctrl+Shift (bare Ctrl+C/R stay SIGINT / search).
+    // Shell / app collisions → Ctrl+Shift, freeing bare Ctrl+C (SIGINT),
+    // Ctrl+R (reverse-search), and Ctrl+S (a Claude Code chord).
     expect(pick("app.window.reload", "native")).toBe("Ctrl+Shift+R");
+    expect(pick("app.search.toggle", "native")).toBe("Ctrl+Shift+S");
     expect(pick("terminal.copy", "native")).toBe("Ctrl+Shift+C");
     expect(pick("terminal.paste", "native")).toBe("Ctrl+Shift+V");
     // Rich Prompt: Win key ruled out → Ctrl+Shift+P native, Alt+Shift+P web.
