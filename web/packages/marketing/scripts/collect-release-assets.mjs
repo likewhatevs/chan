@@ -6,6 +6,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 
 import { gatewayServices } from "./gateway-services.mjs";
+import { gatewayPackageVersion, validateReleaseTag, versionFromTag } from "./release-version.mjs";
 
 const defaultRepo = "fiorix/chan";
 
@@ -126,14 +127,12 @@ function parseArgs(args) {
   if (options.releaseJson && !options.assetDir) {
     throw new Error("--release-json requires --asset-dir");
   }
-  if (options.tag && !/^v\d+\.\d+\.\d+$/.test(options.tag)) {
-    throw new Error("--tag must use vX.Y.Z");
-  }
+  if (options.tag) validateReleaseTag(options.tag, "--tag");
   return options;
 }
 
 function printHelp() {
-  console.log(`usage: node scripts/collect-release-assets.mjs --out release-assets.json [--tag vX.Y.Z]
+  console.log(`usage: node scripts/collect-release-assets.mjs --out release-assets.json [--tag vX.Y.Z[-rcN]]
 
 Collects uploaded GitHub Release assets into the manifest consumed by
 generate-release-metadata.mjs. The script downloads asset bytes to compute
@@ -163,10 +162,8 @@ async function loadRelease(options) {
 
 async function collectManifest(release, options) {
   const tag = requireString(release.tag_name, "release.tag_name");
-  if (!/^v\d+\.\d+\.\d+$/.test(tag)) {
-    throw new Error(`release tag must use vX.Y.Z: ${tag}`);
-  }
-  const version = tag.slice(1);
+  const version = versionFromTag(tag);
+  const gatewayVersion = gatewayPackageVersion(version);
   const publishedAt = requireString(
     release.published_at ?? release.created_at,
     "release.published_at",
@@ -179,7 +176,7 @@ async function collectManifest(release, options) {
   }
 
   const assets = [];
-  for (const name of [...cliAssets(), ...desktopAssets(version), ...gatewayAssets(version)]) {
+  for (const name of [...cliAssets(), ...desktopAssets(version), ...gatewayAssets(gatewayVersion)]) {
     assets.push(await collectAsset(name, releaseAssets, options));
   }
   for (const name of optionalAssets(version)) {

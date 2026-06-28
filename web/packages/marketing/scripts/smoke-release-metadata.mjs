@@ -11,6 +11,8 @@ const scriptPath = fileURLToPath(import.meta.url);
 const scriptsRoot = path.dirname(scriptPath);
 const siteRoot = path.resolve(scriptsRoot, "..");
 const fixture = path.join(siteRoot, "fixtures", "release-assets", "v0.15.4.json");
+const fixtureVersion = "0.15.4";
+const prereleaseVersion = "0.56.0-rc1";
 
 async function main() {
   const out = await fs.mkdtemp(path.join(os.tmpdir(), "chan-release-metadata-"));
@@ -89,6 +91,35 @@ async function main() {
       /^[a-f0-9]{64}$/.test(winById.get("cli-windows-x64").sha256),
       "windows cli sha256",
     );
+
+    const prerelease = rewriteFixtureVersion(
+      JSON.parse(await fs.readFile(fixture, "utf8")),
+      prereleaseVersion,
+    );
+    const prereleaseManifest = path.join(out, "prerelease.json");
+    await fs.writeFile(prereleaseManifest, `${JSON.stringify(prerelease)}\n`);
+    const prereleaseOut = path.join(out, "prerelease");
+    await runNode(path.join(scriptsRoot, "generate-release-metadata.mjs"), [
+      "--manifest",
+      prereleaseManifest,
+      "--out",
+      prereleaseOut,
+    ]);
+    const prereleaseReleases = await readJson(path.join(prereleaseOut, "releases.json"));
+    const prereleaseCli = await readJson(
+      path.join(prereleaseOut, "cli", `v${prereleaseVersion}.json`),
+    );
+    const prereleaseDownloads = prereleaseReleases.releases[0].downloads;
+    assert(prereleaseReleases.latest === prereleaseVersion, "prerelease latest version");
+    assert(prereleaseCli.version === prereleaseVersion, "prerelease CLI version");
+    assert(
+      prereleaseDownloads.some((download) => download.asset === "chan-gateway-admin_0.56.0.rc1-1_amd64.deb"),
+      "prerelease gateway asset mapped",
+    );
+    assert(
+      prereleaseDownloads.some((download) => download.asset === "Chan-0.56.0-rc1-1.x86_64.rpm"),
+      "prerelease desktop rpm mapped",
+    );
   } finally {
     await fs.rm(out, { recursive: true, force: true });
   }
@@ -109,6 +140,35 @@ function runNode(file, args) {
 
 async function readJson(file) {
   return JSON.parse(await fs.readFile(file, "utf8"));
+}
+
+function rewriteFixtureVersion(manifest, nextVersion) {
+  const oldTag = manifest.tag;
+  const nextTag = `v${nextVersion}`;
+  manifest.version = nextVersion;
+  manifest.tag = nextTag;
+  manifest.assets = manifest.assets.map((asset) => {
+    const name = rewriteAssetName(asset.name, nextVersion);
+    return {
+      ...asset,
+      name,
+      url: asset.url
+        .replace(`/${oldTag}/`, `/${nextTag}/`)
+        .replace(encodeURIComponent(asset.name), encodeURIComponent(name))
+        .replace(asset.name, name),
+    };
+  });
+  return manifest;
+}
+
+function rewriteAssetName(name, nextVersion) {
+  const gatewayVersion = nextVersion.replace("-", ".");
+  if (name.startsWith("chan-gateway-")) {
+    return name.replace(`_${fixtureVersion}-1_`, `_${gatewayVersion}-1_`);
+  }
+  return name
+    .replaceAll(`Chan_${fixtureVersion}`, `Chan_${nextVersion}`)
+    .replaceAll(`Chan-${fixtureVersion}`, `Chan-${nextVersion}`);
 }
 
 function assert(condition, message) {

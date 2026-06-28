@@ -19,27 +19,33 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { validateReleaseTag } from "./release-version.mjs";
+
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 
 async function main() {
   const options = parseArgs(process.argv.slice(2));
   const workDir = await fs.mkdtemp(path.join(os.tmpdir(), "chan-dl-"));
-  const manifest = path.join(workDir, "release-assets.json");
+  try {
+    const manifest = path.join(workDir, "release-assets.json");
 
-  // --allow-missing-release: before the first release there is nothing
-  // to publish, and a marketing deploy must still succeed. When no
-  // release exists the collector skips writing the manifest.
-  const collectArgs = ["--allow-missing-release", "--out", manifest];
-  if (options.tag) collectArgs.push("--tag", options.tag);
-  runScript("collect-release-assets.mjs", collectArgs);
+    // --allow-missing-release: before the first release there is nothing
+    // to publish, and a marketing deploy must still succeed. When no
+    // release exists the collector skips writing the manifest.
+    const collectArgs = ["--allow-missing-release", "--out", manifest];
+    if (options.tag) collectArgs.push("--tag", options.tag);
+    runScript("collect-release-assets.mjs", collectArgs);
 
-  if (!(await fileExists(manifest))) {
-    console.warn("warning: no GitHub Release found; /dl omitted from this build");
-    return;
+    if (!(await fileExists(manifest))) {
+      console.warn("warning: no GitHub Release found; /dl omitted from this build");
+      return;
+    }
+
+    runScript("generate-release-metadata.mjs", ["--manifest", manifest, "--out", options.out]);
+    console.log(`rebuilt /dl metadata from the latest GitHub Release under ${options.out}`);
+  } finally {
+    await fs.rm(workDir, { force: true, recursive: true });
   }
-
-  runScript("generate-release-metadata.mjs", ["--manifest", manifest, "--out", options.out]);
-  console.log(`rebuilt /dl metadata from the latest GitHub Release under ${options.out}`);
 }
 
 function parseArgs(args) {
@@ -60,14 +66,12 @@ function parseArgs(args) {
     }
   }
   if (!options.out) throw new Error("--out requires a value");
-  if (options.tag && !/^v\d+\.\d+\.\d+$/.test(options.tag)) {
-    throw new Error("--tag must use vX.Y.Z");
-  }
+  if (options.tag) validateReleaseTag(options.tag, "--tag");
   return options;
 }
 
 function printHelp() {
-  console.log(`usage: node scripts/preserve-release-metadata.mjs [--out dist/dl] [--tag vX.Y.Z]
+  console.log(`usage: node scripts/preserve-release-metadata.mjs [--out dist/dl] [--tag vX.Y.Z[-rcN]]
 
 Rebuilds /dl into a freshly built Pages artifact from the latest GitHub
 Release (or --tag), so a marketing-only deploy keeps the download page and

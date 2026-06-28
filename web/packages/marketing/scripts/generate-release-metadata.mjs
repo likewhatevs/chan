@@ -3,6 +3,8 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 
+import { escapeRegExp, gatewayPackageVersion, versionFromTag } from "./release-version.mjs";
+
 // The standalone Linux CLI tarball is musl (fully static): a too-new build
 // glibc must not gate older machines. install.sh maps Linux arch to these
 // musl targets. The .deb/.rpm packages stay gnu (the distro provides glibc)
@@ -148,7 +150,7 @@ function cliDownloads() {
 // actually shipped (service names can differ across releases) with no list to
 // drift. Asset name shape: `chan-gateway-<service>_<version>-1_<arch>.deb`.
 function gatewayDownloads(manifest) {
-  const versionRe = manifest.version.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const versionRe = escapeRegExp(gatewayPackageVersion(manifest.version));
   const re = new RegExp(`^chan-gateway-(.+)_${versionRe}-1_(amd64|arm64)\\.deb$`);
   const found = [];
   for (const name of manifest.assets.keys()) {
@@ -239,10 +241,11 @@ assets, or publish Pages.
 
 function normalizeManifest(raw, source) {
   const version = requireString(raw.version, "version");
-  if (!/^\d+\.\d+\.\d+$/.test(version)) {
-    throw new Error(`${source}: version must be a bare X.Y.Z version`);
-  }
   const tag = requireString(raw.tag, "tag");
+  const tagVersion = versionFromTag(tag);
+  if (version !== tagVersion) {
+    throw new Error(`${source}: version must match ${tag}`);
+  }
   if (tag !== `v${version}`) {
     throw new Error(`${source}: tag must be v${version}`);
   }

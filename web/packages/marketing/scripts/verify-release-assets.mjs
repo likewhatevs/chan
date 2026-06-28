@@ -3,6 +3,7 @@
 import { execFileSync } from "node:child_process";
 
 import { gatewayServices } from "./gateway-services.mjs";
+import { gatewayPackageVersion, versionFromTag } from "./release-version.mjs";
 
 const repo = "fiorix/chan";
 const apiBase = `https://api.github.com/repos/${repo}`;
@@ -15,6 +16,7 @@ async function main() {
     : await fetchJson(`${apiBase}/releases/latest`);
   const tag = release.tag_name;
   const version = versionFromTag(tag);
+  const gatewayVersion = gatewayPackageVersion(version);
   const assets = new Map((release.assets ?? []).map((asset) => [asset.name, asset]));
 
   const publicAssets = [
@@ -38,7 +40,7 @@ async function main() {
     // Makefile's GATEWAY_RELEASE_CRATES (see ./gateway-services.mjs).
     ...gatewayServices.flatMap((service) =>
       ["amd64", "arm64"].map(
-        (arch) => `chan-gateway-${service}_${version}-1_${arch}.deb`,
+        (arch) => `chan-gateway-${service}_${gatewayVersion}-1_${arch}.deb`,
       ),
     ),
   ];
@@ -129,20 +131,13 @@ function parseArgs(args) {
 }
 
 function printHelp() {
-  console.log(`usage: node scripts/verify-release-assets.mjs [--tag vX.Y.Z] [--skip-asset-url-heads]
+  console.log(`usage: node scripts/verify-release-assets.mjs [--tag vX.Y.Z[-rcN]] [--skip-asset-url-heads]
 
 Without --tag, verifies the GitHub latest release and each asset URL exposed by
 the GitHub API. Desktop updater payloads must include detached signature
 assets. VERSION and SHA256SUMS are checked when present, but /dl metadata is
 the release source of truth.
 `);
-}
-
-function versionFromTag(tag) {
-  if (!/^v\d+\.\d+\.\d+$/.test(tag ?? "")) {
-    throw new Error(`release tag must use vX.Y.Z: ${tag}`);
-  }
-  return tag.slice(1);
 }
 
 function checksumContains(body, name) {

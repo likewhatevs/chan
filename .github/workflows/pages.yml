@@ -11,6 +11,11 @@ name: Pages
 # releases ship via a deliberate `gh workflow run pages.yml`.
 on:
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing vX.Y.Z or vX.Y.Z-rcN tag to preserve in /dl metadata
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -38,7 +43,15 @@ jobs:
       - run: npm run check
         working-directory: chan/web/packages/marketing
       - name: Preserve existing release metadata
-        run: npm run preserve:metadata
+        env:
+          RELEASE_TAG: ${{ github.event.inputs.release_tag }}
+          TMPDIR: /var/tmp
+        run: |
+          if [ -n "$RELEASE_TAG" ]; then
+            npm run preserve:metadata -- --tag "$RELEASE_TAG"
+          else
+            npm run preserve:metadata
+          fi
         working-directory: chan/web/packages/marketing
       - uses: actions/upload-pages-artifact@v5
         with:
@@ -46,7 +59,7 @@ jobs:
 
   deploy:
     name: deploy site
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' || github.event.inputs.release_tag != ''
     needs: build
     runs-on: ubuntu-latest
     environment:

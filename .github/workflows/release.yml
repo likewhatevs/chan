@@ -1,7 +1,7 @@
 name: Release
 
 # Phase 11 release contract:
-# - Public tags are vX.Y.Z.
+# - Public tags are vX.Y.Z or vX.Y.Z-rcN.
 # - Workflow dispatch without publish=true is a dry run.
 # - Tag pushes and workflow_dispatch publish=true are release-cut gates.
 # - Publishing uploads assets first, verifies the uploaded assets, generates
@@ -14,7 +14,7 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: Existing vX.Y.Z tag to publish, required when publish is true from a branch
+        description: Existing vX.Y.Z or vX.Y.Z-rcN tag to publish, required when publish is true from a branch
         required: false
         type: string
       publish:
@@ -69,10 +69,8 @@ jobs:
             fi
           fi
 
-          # Accept vX.Y.Z and an optional prerelease suffix (e.g. v0.50.0-rc1)
-          # so a non-publishing dry run validates against a prerelease pin;
-          # published tags remain vX.Y.Z.
-          if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]]; then
+          # Accept vX.Y.Z and an optional prerelease suffix (e.g. v0.50.0-rc1).
+          if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]; then
             echo "::error::release tag must use vX.Y.Z or vX.Y.Z-rcN, got $tag"
             exit 1
           fi
@@ -790,8 +788,8 @@ jobs:
         run: |
           set -e
           npm run build
-          node scripts/collect-release-assets.mjs --tag "$TAG" --out /tmp/chan-release-assets.json
-          node scripts/generate-release-metadata.mjs --manifest /tmp/chan-release-assets.json --out dist/dl
+          node scripts/collect-release-assets.mjs --tag "$TAG" --out /var/tmp/chan-release-assets.json
+          node scripts/generate-release-metadata.mjs --manifest /var/tmp/chan-release-assets.json --out dist/dl
           find dist/dl -type f | sort
 
       - uses: actions/upload-pages-artifact@v5
