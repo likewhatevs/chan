@@ -470,6 +470,16 @@
     align-items: center;
     gap: 0.6rem;
     padding: 0.4rem 0.2rem;
+    transform-origin: center;
+    transition: transform 220ms cubic-bezier(0.34, 1.56, 0.64, 1);
+  }
+
+  /* The machine identity row is the machine's badge: on hover it wobbles like
+     a card (the easeOutBack overshoot). :has() suppresses it while one of its
+     own action buttons is hovered, so the button wobbles alone -- no
+     wobble-within-a-wobble, matching the outer-card-only rule on .ws-card. */
+  .machine-header:hover:not(:has(:global(.icon-btn):hover)) {
+    transform: scale(1.015);
   }
 
   .machine-icon {
@@ -623,18 +633,27 @@
       box-shadow 160ms ease;
   }
 
-  .ws-card:hover {
+  /* :has() suppresses the card wobble while one of its own buttons (header
+     actions or a nested window row) is hovered, so the button wobbles alone. */
+  .ws-card:hover:not(:has(:global(.icon-btn):hover)) {
     transform: scale(1.02);
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.24);
     z-index: 1;
   }
 
-  /* Reduced-motion: keep the box-shadow lift as a static cue, drop the wobble. */
+  /* Reduced-motion: keep the box-shadow lift as a static cue, drop the wobble.
+     Selectors match the active rules above so they win inside the query. */
   @media (prefers-reduced-motion: reduce) {
     .ws-card {
       transition: box-shadow 160ms ease;
     }
-    .ws-card:hover {
+    .ws-card:hover:not(:has(:global(.icon-btn):hover)) {
+      transform: none;
+    }
+    .machine-header {
+      transition: none;
+    }
+    .machine-header:hover:not(:has(:global(.icon-btn):hover)) {
       transform: none;
     }
   }
