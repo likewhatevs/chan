@@ -32,7 +32,7 @@ Because the source is the single source of truth, the editor sidesteps a class o
    - **Naked URLs**: mark only, no hide.
    - **Tables**: read-only grid widget; click drops the caret at the source start, which reveals the pipe form for editing.
    - **Mermaid**: a closed ```` ```mermaid ```` fence renders as a diagram atom while the caret is outside; caret inside reveals source. The mermaid library is dynamic-imported on first render.
-   - **Tag `#word` / mention `@@name` pills**: mark-based (no replace), with click handling delegated through one content-DOM listener.
+   - **Tag `#word` / mention `@@{name}` pills**: mark-based (no replace), with click handling delegated through one content-DOM listener.
 
 6. **Selection rule for ranges.** A non-empty selection that crosses any token's range reveals all of those tokens uniformly. No special cases.
 
@@ -91,7 +91,7 @@ editor/
 │   ├── table.ts           GFM table grid atom (read-only)
 │   ├── mermaid.ts         diagram atom for closed mermaid fences
 │   ├── tag.ts             mark-based pill on #word
-│   ├── mention.ts         mark-based pill on @@name
+│   ├── mention.ts         mark-based pill on @@{name}
 │   └── checkbox.ts        widget on `[ ]` / `[x]` task markers
 ├── bubbles/
 │   ├── controller.ts      bubbleListener + high-prec bubbleKeymap

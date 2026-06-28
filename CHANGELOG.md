@@ -1007,11 +1007,11 @@ correctness, and standalone-terminal persistence.
 
 ## [v0.28.0] - 2026-06-05
 
-Phase 19: a graph @@mention lens, a startup index-reconcile fix, the agent-docs reorg into a committed `.agents/` home, and a marketing story page.
+Phase 19: a graph `@@mention` lens, a startup index-reconcile fix, the agent-docs reorg into a committed `.agents/` home, and a marketing story page.
 
 ### Added
 
-- Graph `@@mention` lens. Clicking a standalone `@@handle` from the file inspector, an editor mention, or a search mention row opens a focused graph centered on the `@@Name` node with an edge to every file that references it, each re-anchored through its parent-directory spine back to the workspace root. Mirrors the existing `#tag` lens. Search now surfaces mention rows alongside tags.
+- Graph `@@mention` lens. Clicking a standalone `@@handle` from the file inspector, an editor mention, or a search mention row opens a focused graph centered on the `@@{name}` node with an edge to every file that references it, each re-anchored through its parent-directory spine back to the workspace root. Mirrors the existing `#tag` lens. Search now surfaces mention rows alongside tags.
 - A chan story page on the marketing site (`/story`) carrying the project motivation, an architecture diagram, and a tour of the IDE.
 
 ### Changed

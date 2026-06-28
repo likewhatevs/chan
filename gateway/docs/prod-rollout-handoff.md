@@ -1,6 +1,6 @@
 # Prod rollout handoff — devserver-proxy migration (v0.42.0)
 
-Orientation for the agent (or @@Alex) rolling the gateway devserver-proxy migration to production. The rollout is GATED on the v0.42.0 release.
+Orientation for the agent (or Alex) rolling the gateway devserver-proxy migration to production. The rollout is GATED on the v0.42.0 release.
 
 ## Prerequisite: v0.42.0 is cut
 The prod `.deb`s are built from the released `chan` source, so before rolling out:
@@ -13,7 +13,7 @@ The prod `.deb`s are built from the released `chan` source, so before rolling ou
   If `workspace-proxy` is still present, STOP — the code migration has not landed and the cutover would build the old binary under the new name.
 
 ## The two reference docs
-1. **`gateway/docs/cutover-runbook.md`** — the OPS sequence @@Alex owns: DNS/cert, the nginx `server_name` + `grpc_pass` swap (+ the confirmed `client_body_timeout 1d` / `client_header_timeout 1d` 60s-flap fix), the renamed deb, the feature flags (`oauth_login` + `share_workspaces`, Step 7b), the prod GitHub OAuth app (Step 7c), the §7.3 staging smoke, ship.
+1. **`gateway/docs/cutover-runbook.md`** — the OPS sequence Alex owns: DNS/cert, the nginx `server_name` + `grpc_pass` swap (+ the confirmed `client_body_timeout 1d` / `client_header_timeout 1d` 60s-flap fix), the renamed deb, the feature flags (`oauth_login` + `share_workspaces`, Step 7b), the prod GitHub OAuth app (Step 7c), the §7.3 staging smoke, ship.
 2. **`gateway/docs/prod-cutover-devserver-proxy.md`** — the chan-prod-setup file-by-file rename (services `.sdme`, nginx vhosts, DNS, cert SANs, `build-debs`, `secrets-init`, `deploy`), the residual-sweep verify, and rollback.
 
 ## Order

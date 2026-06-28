@@ -35,7 +35,7 @@ The charter asked for two SEPARATE sdme zones. On this host that is not reachabl
 
 Each zone bridge (`vz-<zone>`) reuses `169.254.0.0/16`, and the host drops container-initiated TCP to itself and forwards nothing between zone bridges. So a container can only initiate TCP to a **same-zone** peer. The tunnel is `chan devserver → devserver-proxy` (client → server), so the two must share a zone. Bridging two isolated zones would need host `iptables`/forwarding changes (root); this round's sudo is `sdme`-only (`NOPASSWD /usr/local/bin/sdme`).
 
-The containers are still fully separate (own netns, fs, process tree); the tunnel genuinely crosses between two containers. Only the L2 zone is shared. Running the proxy and devserver in two ACTUAL zones is a host-networking follow-up (open the firewall / add inter-zone forwarding as root), tracked for @@Alex alongside the production `--tunnel-url` e2e.
+The containers are still fully separate (own netns, fs, process tree); the tunnel genuinely crosses between two containers. Only the L2 zone is shared. Running the proxy and devserver in two ACTUAL zones is a host-networking follow-up (open the firewall / add inter-zone forwarding as root), tracked for Alex alongside the production `--tunnel-url` e2e.
 
 ## Run
 

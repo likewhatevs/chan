@@ -32,7 +32,7 @@ sequenceDiagram
   participant SOCK as control socket (per-user UDS)
   participant SRV as chan-server handler
   participant T as window bus / PTY registry / workspace
-  U->>CS: cs terminal write --tab-name @@Alice "..."
+  U->>CS: cs terminal write --tab-name @@agent "..."
   CS->>CS: resolve $CHAN_CONTROL_SOCKET (+ $CHAN_WINDOW_ID)
   CS->>SOCK: ControlRequest JSON line (tag = "type")
   SOCK->>SRV: decode, match on the `type` tag
