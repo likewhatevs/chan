@@ -17,21 +17,14 @@ Two HTTP clients live inside the binary:
 
 Both clients use plain `reqwest` with a shared bearer configuration; the CLI sets a 15-second per-call timeout (no global timeout on the watch stream so it can idle between snapshots).
 
-## Public surface
+## Operational contracts
 
-Full command list is in [`README.md`](README.md). Notable behaviours:
+### Identity resolution
 
-### `<ident>` resolution
+User-facing identifiers resolve by uuid, email substring, or exact username, in
+that order. Ambiguous and missing matches are distinct operator errors.
 
-`AdminClient::resolve_user` tries, in order:
-
-1. Parse `ident` as a uuid; if it parses, fetch by id.
-2. If it contains `@`, treat as an email substring; require exactly one match.
-3. Else treat as an exact username and require exactly one match.
-
-Ambiguous matches (more than one) error with `ambiguous`; no match errors with the `NotFound` exit code.
-
-### `user block`
+### User block
 
 The block flow lives server-side: profile-service fans out to devserver-proxy in the same operation. The CLI still calls both for robustness against split deployments where the CLI's devserver-proxy URL may differ from the profile container's view of devserver-proxy, but the second call is idempotent (`killed: 0` is fine when profile already swept the registrations).
 
@@ -42,11 +35,11 @@ Order:
 
 The ordering ensures a partial failure leaves the user in a "blocked but maybe a tunnel still alive" state rather than the inverse, which is the safer direction.
 
-### `flag`
+### Feature flags
 
 Manage feature flags and per-user overrides via profile-service's admin tree. `flag list` and `flag overrides <key>` render a table / `--json`; `flag create` is idempotent (re-issuing for the same key bumps `default_enabled` and description); `flag grant <key> <ident> [--enabled|--disabled]` upserts the per-user override, and `flag revoke` clears it. `<ident>` resolution is the same uuid / email / username pipeline as the user subcommand. Default for `flag grant` is `--enabled`; `--disabled` lets an operator record a deny override against a default-on flag.
 
-### `tunnel watch`
+### Tunnel watch
 
 devserver-proxy's `/admin/v1/tunnels/watch` is an SSE stream. `watch_loop` consumes the stream, parses `event: snapshot` blocks, and re-renders. TTY mode clears the screen between renders (`\x1b[2J\x1b[H`) so the output behaves like `watch -n1`. `--json` emits one JSON line per event for `jq` piping.
 
@@ -98,13 +91,9 @@ Errors surface as `anyhow::Error` chains; the top-level dispatch calls `eprintln
 
 Network failures (`reqwest::Error`) reach `exit_code_for` as plain `anyhow::Error` instances, which exit 1.
 
-## What's wired
-
-The crate list mirrors `Cargo.toml`; only the non-obvious choices need explaining. `reqwest` carries the `stream` feature so `tunnel watch` can consume the SSE byte stream incrementally (`tokio-stream` drives the byte chunks). The `tokio` runtime is `current_thread` because the commands are sequential and short-lived, so a multi-threaded runtime is wasted overhead.
-
 ## What is not wired
 
 - Shell completion (`clap` has `--generate` for it; not generated yet)
-- A config file (`~/.chan-gateway-admin/config.toml`)
+- A persistent config file for admin defaults
 - Batch operations (`--input batch.jsonl`)
 - Inline editor for `user update --email` (the CLI takes a flag, no `$EDITOR` round trip)

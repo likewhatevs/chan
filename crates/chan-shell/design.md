@@ -110,15 +110,15 @@ Two serde conventions recur because byte-compatibility with the SPA and the serv
 
 ## 5. The control-socket transport
 
-`control.rs` is the client half: resolve the environment, make paths absolute, and round-trip one request. `OpenEnv` carries the `($CHAN_WINDOW_ID, $CHAN_CONTROL_SOCKET)` pair a window-targeting action needs; `control_socket_env` resolves just the socket for a session-scoped action. The env lookups are split from the validation (`open_env_from`) so the validation is unit-testable without mutating the process environment.
+The client transport layer resolves the environment, makes paths absolute, and round-trips one request. `OpenEnv` carries the `($CHAN_WINDOW_ID, $CHAN_CONTROL_SOCKET)` pair a window-targeting action needs; `control_socket_env` resolves just the socket for a session-scoped action. The env lookups are split from the validation (`open_env_from`) so the validation is unit-testable without mutating the process environment.
 
 `send_control_request` is platform-neutral over a small `transport` module -- the only `#[cfg]`-split surface. On unix it connects a `UnixStream`; on windows it opens a named-pipe client (retrying `ERROR_PIPE_BUSY` and a momentarily-absent pipe under a bounded deadline so a genuinely-missing server still fails fast). Above that split the protocol is identical: serialize the request, append a newline, write it, half-close the write side, then read one response line. The `\n` frames the request, so the half-close is belt-and-suspenders rather than load-bearing.
 
-A `ControlResponse::Timeout` is converted into a typed `ControlTimeout` error (in `exit_code.rs`) instead of a generic `anyhow` bail. The dispatch edge downcasts it, prints the elapsed-window line, and exits `SURVEY_TIMEOUT` (124, matching GNU `timeout(1)`), so a caller can tell "no answer in time" apart from a real failure (exit 1) and a delivered answer (exit 0).
+A `ControlResponse::Timeout` is converted into a typed `ControlTimeout` error instead of a generic `anyhow` bail. The dispatch edge downcasts it, prints the elapsed-window line, and exits `SURVEY_TIMEOUT` (124, matching GNU `timeout(1)`), so a caller can tell "no answer in time" apart from a real failure (exit 1) and a delivered answer (exit 0).
 
 ## 6. The agent submit-chord map
 
-A coding agent running inside a chan terminal submits its compose buffer on a different byte sequence depending on which agent it is, so the hands-free completion poke (`cs terminal write --submit=<agent>`) has to append the right one. `submit.rs` owns that map and the command -> agent derivation, and is the single source of truth mirrored by the SPA's TypeScript (`submitMode.ts` detects the agent name; the server applies the chord).
+A coding agent running inside a chan terminal submits its compose buffer on a different byte sequence depending on which agent it is, so the hands-free completion poke (`cs terminal write --submit=<agent>`) has to append the right one. The submit-chord layer owns that map and the command -> agent derivation, and is the single source of truth mirrored by the SPA's TypeScript detection; the server applies the chord.
 
 `SubmitAgent::derive` maps a spawn command, with an optional `CHAN_AGENT` env override, to the agent whose encoding it uses. The override wins when it names a known agent or an explicit shell (`none` / `shell`); otherwise a loose whole-word sniff of the command recognizes `claude` / `codex` / `gemini` anywhere as a word, so `claude --resume` and `/usr/local/bin/codex-cli` resolve while `claudette` does not.
 
@@ -126,47 +126,10 @@ Each agent has a `{}`-templated chord whose built-in default reproduces the live
 
 gemini is the one agent that needs the chord as a SEPARATE PTY write: gemini 0.42 coalesces a bulk `text + CR` write into one read and treats the trailing CR as a newline in its draft, not an Enter. `submit_writes` returns one write for every other agent and two for gemini (the body, then the bare chord), which the caller must deliver as distinct, idle-gated events so the CR registers as its own keypress.
 
-## 7. Public API surface
+## 7. Interface contracts
 
-A curated sketch; the wire enums' full variant set and every CLI flag live in the code and the `--help` text, not here.
+The serde wire contract is always compiled and independent of the `client` feature: request tags use `type`, responses use `status`, and the response vocabulary is intentionally only `ok`, `error`, or `timeout`. SPA-facing payloads keep their camelCase/nullability rules from section 4.
 
-```rust
-// Always compiled (serde only; no client feature).
-pub enum ControlRequest { /* tag = "type", snake_case; the request families */ }
-pub enum ControlResponse { Ok { message }, Error { message }, Timeout { message } }
-pub enum PaneOp { Focus, Split, Resize, CloseTab, ClosePane, CloseAll } // tag = "kind"
-pub enum SplitDir { Right, Bottom }
-pub struct SurveySpec { /* camelCase; the JSON the SPA renders */ }
-pub enum SurveyReply { Option, Followup, Dismissed }                    // tag = "kind"
-pub struct SurveyFollowup { dir, from, to }
-pub enum TeamOp { New, Load }
-pub struct Identity { kind: ServeKind, version: String }
-pub enum ServeKind { Standalone, Desktop, Devserver }
+The submit-chord map is also wire-layer state, not client-only code. chan-server applies the same agent derivation and write splitting that the `cs` client exposes, so server-spawned teams and terminal-side `cs terminal write --submit` stay byte-compatible.
 
-// Submit map: compiled without `client`; the server applies these too.
-pub enum SubmitAgent { Claude, Codex, Gemini }
-pub fn apply_submit_chord(data: String, submit: Option<SubmitAgent>) -> String;
-pub fn submit_writes(data: String, submit: Option<SubmitAgent>) -> Vec<String>;
-pub fn set_chord_overrides(overrides: HashMap<String, String>);
-
-// `client` feature only.
-pub enum ShellAction { /* cs <action> */ }
-pub enum TerminalAction { /* cs terminal <action> */ }
-pub async fn run_cs<I>(args: I) -> Result<()>;        // parse argv + dispatch
-pub async fn dispatch(action: ShellAction) -> Result<()>;
-pub async fn send_control_request(socket: &Path, req: ControlRequest) -> Result<String>;
-pub fn open_env() -> Result<OpenEnv>;                 // $CHAN_WINDOW_ID + socket
-pub fn control_socket_env() -> Result<PathBuf>;       // session-scoped: socket only
-pub fn absolutize(path: PathBuf) -> Result<PathBuf>;
-pub fn invoked_as_cs(arg0: &OsStr) -> bool;
-pub fn invoked_as_chan(arg0: &OsStr) -> bool;
-pub fn invoked_arg0() -> OsString;                    // prefers $ARGV0 (AppImage)
-```
-
-`send_control_request` returns the server's `Ok.message` as a `String` (the caller parses any embedded JSON), bails on `Error`, and raises the typed `ControlTimeout` on `Timeout`. The clap derive in the client layer is wire-load-bearing: every flag name and `infer_subcommands` setting is part of the `cs` contract, so a change there is a runtime-visible edit, not just a build artifact.
-
-## 8. Consumers
-
-  - `chan-server`: wire-only (`default-features = false`). Decodes `ControlRequest`, runs the handlers, encodes `ControlResponse`, and reads the `SubmitAgent` chord map for its team spawner. Never links clap or the client transport.
-  - `chan`: `features = ["client"]`. Rewrites `cs ...` into its own `chan shell ...` path and calls `dispatch`; uses `invoked_as_cs` so a `cs -> chan` symlink on PATH parses as `cs`.
-  - `chan-desktop` (`desktop/src-tauri`): `features = ["client"]`. Has no `chan` binary, so when launched as `cs` it parses `cs` argv directly through `run_cs`, giving desktop users the identical `cs` client.
+The `client` feature owns the clap surface and transport. Its flag names, `infer_subcommands` behavior, `$CHAN_CONTROL_SOCKET` / `$CHAN_WINDOW_ID` environment contract, path-absolutization before send, and alias detection for `cs` / `chan` are runtime-visible behavior. A control request returning `Timeout` maps to the dedicated survey-timeout exit code; `Ok.message` remains the carrier for formatted text or embedded JSON.

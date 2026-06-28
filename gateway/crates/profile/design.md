@@ -95,23 +95,11 @@ The router splits into three sub-routers:
 - `/v1/admin/*`: gated by `admin_auth` middleware. Only `PROFILE_ADMIN_TOKEN` admits.
 - `/healthz`: no auth.
 
-All bearer comparisons run through `subtle::ConstantTimeEq` (`bearer_eq` in `http.rs`). Both checks always run on the service API so a wrong token cannot oracle which leg matched first.
+All bearer comparisons run through `subtle::ConstantTimeEq` via the shared
+`bearer_eq` helper. Both checks always run on the service API so a wrong token
+cannot oracle which leg matched first.
 
 profile-service holds a `WorkspaceAdminClient` (from `gateway_common::workspace_admin_client`) when `DEVSERVER_ADMIN_URL` and `DEVSERVER_ADMIN_TOKEN` are set. The block flow fires `kill_user_tunnels` server-side at the same moment `blocked_at` is written, so live devserver-proxy registrations die without an extra hop from the operator CLI.
-
-## Public surface
-
-JSON in, JSON out. Status codes:
-
-- 200 OK: successful read or update
-- 201 Created: successful create
-- 204 No Content: successful delete or audit write
-- 400 Bad Request: malformed input (missing email, bad uuid)
-- 401 Unauthorized: missing or wrong bearer
-- 404 Not Found: user / token id absent
-- 409 Conflict: unique violation (`23505`); used for username taken and rename-cap reached
-
-Full HTTP route list is in [`README.md`](README.md).
 
 ## Key decisions
 
@@ -138,27 +126,8 @@ New users get `u<12 hex chars from the row id>` as a placeholder handle. identit
 
 ### Rename cap of 4
 
-`update_username` runs a single CTE that performs the CAS update and selects the "rename to current value" no-op row in one statement:
-
-```
-WITH current AS (
-    SELECT id, lower(username) AS handle, username_edits
-    FROM users WHERE id = $1
-),
-renamed AS (
-    UPDATE users
-       SET username = $2, username_edits = username_edits + 1, ...
-     WHERE id = $1
-       AND id IN (SELECT id FROM current
-                  WHERE username_edits < 4 AND handle <> $2)
-    RETURNING ...
-)
-SELECT * FROM renamed
-UNION ALL
-SELECT ... FROM users
-WHERE id = $1 AND lower(username) = $2
-  AND NOT EXISTS (SELECT 1 FROM renamed)
-```
+`update_username` performs the compare-and-swap update and the "rename to current
+value" no-op case in one statement.
 
 When the CTE returns no rows the handler runs one follow-up SELECT to distinguish "user not found" (404) from "rename cap reached" (409). Collapsing the original two-statement diagnosis into the CTE closes the TOCTOU window where a concurrent rename could change state between the CAS UPDATE and the diagnostic SELECT. The unique index on `lower(username)` still raises `23505` on the rare name collision, which surfaces as 409 with the database's error message.
 
@@ -221,7 +190,7 @@ Column lists are constants `format!`'d into queries; user input always rides thr
 
 ## Error model
 
-`profile::Error` (`src/error.rs`):
+`profile::Error`:
 
 | Variant       | HTTP | Notes                              |
 |---------------|------|------------------------------------|
@@ -233,12 +202,6 @@ Column lists are constants `format!`'d into queries; user input always rides thr
 | Anyhow        | 500  | startup / unexpected               |
 
 Database errors are logged with `tracing::error!(error = ?e, ...)`; clients see a generic `internal error` message.
-
-## What's wired
-
-- sqlx with `runtime-tokio` + `tls-rustls` + Postgres
-- `subtle` for constant-time bearer comparison
-- `gateway_common::workspace_admin_client::WorkspaceAdminClient` (best-effort devserver-proxy eviction on admin block)
 
 ## What is not wired
 

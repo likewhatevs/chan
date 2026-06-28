@@ -2,11 +2,8 @@
 
 ## Cross-crate context
 
-chan-tunnel is split into three crates under `crates/`:
-
-- `chan-tunnel-proto` (this crate): the wire types, the sync framing codec, the validators, and the `H2Duplex` adapter. No runtime state.
-- `chan-tunnel-client`: the dial side. Embedded in `chan-server`, driven by `chan devserver`.
-- `chan-tunnel-server`: the terminator. Owns the `Validator` seam, the live-tunnel `Registry`, and per-request substream forwarding. Embedded by the gateway's `devserver-proxy`.
+chan-tunnel has three boundaries: shared wire contracts, a dial-side client
+embedded by `chan devserver`, and a terminator embedded by the gateway.
 
 End to end, `chan devserver` embeds the client and dials the terminator at `POST {tunnel-host}/v1/tunnel`; after the control handshake the single h2 stream becomes a yamux session, and the terminator opens one substream per public request:
 
@@ -58,15 +55,8 @@ Out of scope here, owned by the I/O crates:
 
 The end-to-end control and data path is the sequence diagram above (Cross-crate context). This section covers the on-wire framing the two control frames share.
 
-Framing for the two control messages is identical in both directions:
-
-```
-+--------+----------------------------+
-|  u32   | json bytes                 |
-|  BE    | length given by the prefix |
-+--------+----------------------------+
-0        4                            4 + len
-```
+Framing for the two control messages is identical in both directions: a
+big-endian `u32` length prefix followed by that many JSON bytes.
 
 After `HelloAck` is fully read on the client and fully written on the server, the byte stream belongs to yamux. The codec in this crate is not used again on that connection.
 
@@ -74,80 +64,13 @@ After `HelloAck` is fully read on the client and fully written on the server, th
 
 The split between the sync codec (`BytesMut`-based `encode_frame` / `decode_frame`) and the async helpers (tokio `read_frame` / `write_frame` over `AsyncRead`/`AsyncWrite`) is deliberate: the sync codec is self-contained and reusable from any I/O loop. The async helpers exist because both real callers run on tokio; a caller on a different runtime would consume the sync codec directly.
 
-## 4. Public API surface
+## 4. Contract surface
 
-```rust
-// Constants
-pub const TUNNEL_PATH: &str = "/v1/tunnel";
-pub const MAX_CONTROL_FRAME_BYTES: usize = 64 * 1024;
+This crate owns the stable tunnel path, the control-frame size cap, the Hello / HelloAck schemas, the refusal-code vocabulary, the shared identifier validators, the frame codec, and the h2 duplex adapter. Client and server crates may orchestrate I/O differently, but they must use these shared contracts for the bytes and validation rules.
 
-// Control frames
-pub struct ProtocolVersion(pub u16); // #[serde(transparent)]
-impl ProtocolVersion { pub const V1: ProtocolVersion = ProtocolVersion(1); }
+Control frames are owned serde values with plain strings and enums, no borrowed lifetimes. `Hello` carries protocol, client version for logs, and workspace; `HelloAck` is either success with the assigned prefix/user/workspace or refusal with a stable code plus safe message. Refusal codes are additive and machine-matchable.
 
-pub struct Hello {
-    pub protocol: ProtocolVersion,
-    pub client_version: String, // logs only, not routing
-    pub workspace: String,
-}
-
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum HelloAck {
-    Ok(HelloAckOk),
-    Refused(HelloAckErr),
-}
-
-pub struct HelloAckOk {
-    pub protocol: ProtocolVersion,
-    pub prefix: String, // "/{workspace}"
-    pub user: String,
-    pub workspace: String,
-}
-
-pub struct HelloAckErr {
-    pub protocol: ProtocolVersion,
-    pub code: String,    // stable, machine-readable; see error_code
-    pub message: String, // human-readable, safe to surface
-}
-
-pub mod error_code {
-    pub const TOO_MANY_WORKSPACES: &str = "too_many_workspaces";
-    pub const INVALID_WORKSPACE_NAME: &str = "invalid_workspace_name";
-    pub const UNSUPPORTED_PROTOCOL: &str = "unsupported_protocol";
-    pub const INTERNAL: &str = "internal";
-}
-
-// Sync codec
-pub fn encode_frame<T: Serialize>(value: &T, out: &mut BytesMut)
-    -> Result<(), FrameError>;
-pub fn decode_frame<T: DeserializeOwned>(buf: &mut BytesMut)
-    -> Result<T, FrameError>;
-pub enum FrameError { TooLarge(u32), Incomplete { need: usize }, Json(_) }
-
-// Async helpers (tokio)
-pub async fn read_frame<R, T>(r: &mut R) -> Result<T, IoFrameError>
-    where R: AsyncRead + Unpin, T: DeserializeOwned;
-pub async fn write_frame<W, T>(w: &mut W, value: &T)
-    -> Result<(), IoFrameError>
-    where W: AsyncWrite + Unpin, T: Serialize;
-pub enum IoFrameError { Frame(FrameError), Io(std::io::Error) }
-
-// Workspace + username rules
-pub const MAX_WORKSPACE_NAME_LEN: usize = 32;
-pub const MAX_USERNAME_LEN: usize = 64;
-pub fn is_valid_workspace_name(s: &str) -> bool;
-pub fn is_valid_username(s: &str) -> bool;
-pub fn sanitize_workspace_name(input: &str) -> Option<String>;
-
-// h2 duplex adapter
-pub struct H2Duplex { /* ... */ }
-impl H2Duplex {
-    pub fn new(send: SendStream<Bytes>, recv: RecvStream) -> Self;
-}
-// implements AsyncRead + AsyncWrite + Unpin
-```
-
-All public types are owned (`String`, plain enums); no borrowed lifetimes. Errors flatten to primitives on `Display` so client and server can surface them through their own umbrella enums without re-exporting `h2::Error` or `serde_json::Error`.
+The codec split remains deliberate: the sync codec is reusable from any I/O loop, while the tokio helpers are convenience for the current callers. Errors flatten cleanly so client and server can convert them into their own umbrella enums without re-exporting h2 or serde internals.
 
 ## 5. Wire format / framing
 
@@ -222,36 +145,13 @@ Slightly looser than the workspace validator because real identity services emit
 
 ## 7. Error model
 
-Two enums, both flat:
-
-```rust
-pub enum FrameError {
-    TooLarge(u32),
-    Incomplete { need: usize },
-    Json(serde_json::Error),
-}
-
-pub enum IoFrameError {
-    Frame(FrameError),
-    Io(std::io::Error),
-}
-```
+Two error categories, both flat: frame errors (`TooLarge`, recoverable `Incomplete`, JSON decode) and async I/O wrapper errors (frame or I/O).
 
 `FrameError::Incomplete` is recoverable: the caller leaves the `BytesMut` untouched, reads at least `need` more bytes, and tries again. Every other variant is terminal for the handshake; the caller closes the stream.
 
-The async helpers return `IoFrameError`; the sync codec returns `FrameError`. Client and server both convert into their own umbrella enums via `From`, flattening through `Display` so `h2::Error` and `serde_json::Error` never appear in their public surfaces.
+The async helpers return `IoFrameError`; the sync codec returns `FrameError`. Client and server both convert into their own umbrella enums via `From`, flattening through `Display` so `h2::Error` and `serde_json::Error` never leak across crate boundaries.
 
-## 8. Consumers
-
-- `chan-tunnel-client` (this workspace): runtime dep. Imports the control types, `read_frame` / `write_frame`, `is_valid_workspace_name`, `MAX_WORKSPACE_NAME_LEN`, `TUNNEL_PATH`, and `H2Duplex`.
-- `chan-tunnel-server` (this workspace): runtime dep. Imports the same control types plus `error_code` and `is_valid_username`.
-
-Transitively:
-
-- `crates/chan-server`: depends on chan-tunnel-client and re-exports `is_valid_workspace_name`, `sanitize_workspace_name`, and `MAX_WORKSPACE_NAME_LEN` (module `chan_server::tunnel`) so the `chan` CLI can validate the user-typed workspace name before dialing.
-- `gateway/crates/devserver-proxy` (separate Cargo workspace): chan-tunnel-server at runtime; chan-tunnel-client and this crate as dev-deps for the end-to-end test in `tests/api.rs`.
-
-## 9. Open questions / future extensions
+## 8. Open questions / future extensions
 
 - Multi-workspace over a single tunnel -- already met above the protocol, so no wire change is planned. `chan devserver` registers one tunnel (keyed on its token-resolved devserver id) and the gateway's devserver-proxy routes workspaces by the preserved `{workspace}` path segment, so a whole library rides one h2/yamux session without a `Hello { workspaces: Vec<...> }` shape or a per-workspace registry rework.
 - Negotiated frame cap. Both sides hard-code 64 KiB; a larger cap negotiated inside `Hello` would let future versions carry richer initial metadata without a protocol bump.

@@ -6,7 +6,7 @@
 
 In scope:
 
-  - Shared prompts and tool descriptions for chan workspace access (`prompts`): the default system prompt, a no-tools variant, a session directive for external MCP agents, and the per-tool description constants.
+  - Shared prompt text and tool descriptions for chan workspace access: the default system prompt, a no-tools variant, a session directive for external MCP agents, and the per-tool description constants.
   - Direct tool dispatch through `tools::execute`.
   - MCP stdio / async-I/O hosting behind the optional `mcp` feature, including the standalone `chan-llm-mcp` binary.
   - Media reads for MCP clients, capped by server policy.
@@ -88,7 +88,7 @@ Writes are full-file replacements. `write_file` accepts `expected_mtime_ns` for 
 
 Responses are capped so a runaway call cannot bloat a model turn: `read_file` truncates past 256 KiB (with a `truncated` marker), `list_files` caps at 2,000 entries, `search_content` clamps `limit` to 100, `repo_report` returns at most 200 per-file rows, and `write_file` rejects content above the 2 MiB chan-workspace text-write limit before crossing the dispatch boundary.
 
-Tool descriptions live as constants in `prompts` and are duplicated as string literals inside the `#[tool(description = ...)]` attributes in `mcp.rs` (the rmcp macros only accept literals); the `mcp_descriptions_match_prompts` test pins the two copies together so drift breaks the build.
+Tool descriptions live as constants in the shared prompt catalog and are duplicated as string literals inside the MCP `#[tool(description = ...)]` attributes (the rmcp macros only accept literals); the `mcp_descriptions_match_prompts` test pins the two copies together so drift breaks the build.
 
 ## Configuration
 

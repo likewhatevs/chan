@@ -3,23 +3,23 @@
 How the launcher is built and reached. The [`README`](README.md) covers the
 stack and the dev loop; this file is the design of record for *where* the
 launcher is served and *how* its `/api/library/*` surface is authorized. Ground
-every change here against `src/api/library.ts` (the wire),
-`crates/chan-server/src/routes/library.rs` (the bundle + handlers),
-`crates/chan-server/src/static_assets.rs` (`LauncherAssets`/`serve_launcher`),
-and `crates/chan-library/src/host.rs` (the `WorkspaceHost` root-fallback hook).
+every change here against the launcher client wire, the server library API, the
+static bundle embed, and the `WorkspaceHost` root-fallback hook. Those four
+boundaries are the contract; individual source-file ownership belongs in code
+review, not in this design doc.
 
 ## Diagram
 
 ```mermaid
 flowchart TB
     subgraph spa["web-launcher SPA (one bundle, ~29 KB)"]
-        LIB["api/library.ts -- pure /api/library/* HTTP client<br/>workspaces · windows · devservers (deferred)<br/>bearer via ?t= (Authorization header; ?t= query for the watch WS)"]
+        LIB["launcher API client -- pure /api/library/* HTTP<br/>workspaces · windows · devservers (deferred)<br/>bearer via ?t= (Authorization header; ?t= query for the watch WS)"]
         UI["TopBar · WorkspaceList · WindowFeed · NewWorkspaceDialog<br/>reads &lt;meta chan-launcher-readonly&gt; → hides mutation controls"]
     end
 
     subgraph cs["chan-server"]
-        SL["static_assets.rs<br/>LauncherAssets = RustEmbed(web-launcher/dist)<br/>serve_launcher(uri, read_only)"]
-        LR["routes/library.rs :: launcher_router(host, bearer, serve_addr)<br/>windows: list/mint/watch/discard (both surfaces)<br/>workspaces: list (both) · add/on/off/rm (loopback only → 403 on read-only)"]
+        SL["static asset layer<br/>embedded launcher bundle<br/>serve_launcher(uri, read_only)"]
+        LR["library router<br/>windows: list/mint/watch/discard (both surfaces)<br/>workspaces: list (both) · add/on/off/rm (loopback only → 403 on read-only)"]
         IRF["install_launcher_root_fallback(host, bearer, serve_addr)"]
     end
 
@@ -39,7 +39,7 @@ flowchart TB
         direction LR
         DEV["devserver (build_devserver_app)<br/>bearer=None tunnel-trust · serve_addr=None read-only"]
         GW["gateway-proxied = the devserver reached via<br/>devserver-proxy at {owner}.devserver.chan.app/<br/>(proxy strips ?t=/Cookie/Authorization, gates at edge)"]
-        LOOP["desktop loopback (embedded.rs)<br/>bearer=Some(per-launch token) · serve_addr=Some(addr) full mutation"]
+        LOOP["desktop loopback<br/>bearer=Some(per-launch token) · serve_addr=Some(addr) full mutation"]
     end
     DEV --- GW
     IRF --- DEV
@@ -48,13 +48,13 @@ flowchart TB
 
 ## What the launcher is
 
-The launcher is a pure `/api/library/*` HTTP client (`src/api/library.ts`): it
-never opens native windows, never dials a devserver, and never parses an opaque
-window or workspace id. Every type mirrors a struct the library serializes -- the
-field names *are* the wire, pinned by server byte-tests. It is served at the
-devserver/library root `/`, and because `vite.config.ts` sets `base: "./"` its
-relative assets resolve under any mount. It renders three registries: workspaces,
-windows, and devservers (deferred -- see below).
+The launcher is a pure `/api/library/*` HTTP client: it never opens native
+windows, never dials a devserver, and never parses an opaque window or workspace
+id. Every type mirrors a struct the library serializes -- the field names *are*
+the wire, pinned by server byte-tests. It is served at the devserver/library root
+`/`, and the bundle uses a relative asset base so assets resolve under any mount.
+It renders three registries: workspaces, windows, and devservers (deferred -- see
+below).
 
 ## The `/api/library/*` surface
 
@@ -85,7 +85,7 @@ never the reverse. The same bundle is installed on each surface:
 
 1. **devserver** (`build_devserver_app`) -- served over the tunnel to the gateway
    proxy and on the box's `127.0.0.1` bind;
-2. **desktop loopback** (`desktop/src-tauri/src/embedded.rs`, `host.router()`);
+2. **desktop loopback** through the embedded `WorkspaceHost`;
 3. **gateway-proxied** -- the devserver reached through `devserver-proxy` at
    `{owner}.devserver.chan.app/`.
 
@@ -115,7 +115,7 @@ flowchart TB
     RTR --> ARO
 
     subgraph surfx["serving surfaces (same bundle)"]
-        LOOP["desktop loopback (embedded.rs)<br/>bearer=Some · serve_addr=Some"]
+        LOOP["desktop loopback<br/>bearer=Some · serve_addr=Some"]
         DEV["devserver / gateway (build_devserver_app)<br/>bearer=None · serve_addr=None"]
     end
 
@@ -158,16 +158,14 @@ Off is a plain unmount: the launcher's `setWorkspaceOn` sends no `force`, so the
 devserver's confirm-before-off (a `409` carrying the live-terminal count) stays a
 `/api/devserver/*` and UI concern rather than a wire status on this surface.
 
-## Build-wiring
+## Build integration
 
-`LauncherAssets` is a `RustEmbed` over `web-launcher/dist/`, mirroring `WebAssets`
-for `web/dist`. `web-launcher/dist` is a gitignored build artifact, so
-`crates/chan-server/build.rs` `create_dir_all`s it and emits `rerun-if-changed`
-(a fresh checkout or isolated gate worktree compiles, and a rebuilt launcher
-relinks). A `make web-launcher` target (`npm install`, build, stamp) is a
-prerequisite of `web` and `web-check`, so every consumer that funnels through the
-root `make web` -- the `chan` CLI, `desktop/Makefile`, `packaging/linux`, and
-`release.yml` -- builds the launcher with no per-consumer edit.
+The launcher bundle is embedded beside the main workspace bundle and follows the
+same rebuild contract: fresh checkouts and isolated gate worktrees compile before
+the frontend artifact exists, while a rebuilt launcher forces the embedding
+server crate to relink. The top-level web targets build the launcher before any
+CLI, desktop, packaging, or release consumer embeds the server bundle, so every
+distribution path ships the same launcher without per-consumer wiring.
 
 ## Deferred
 

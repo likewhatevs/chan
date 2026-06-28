@@ -62,34 +62,6 @@ Module names and signatures are self-explanatory; the parts that are not are the
 - `static_files`: `serve<R: RustEmbed>` is the SPA fallback handler -- it tries the requested path, falls back to `index.html` for paths without an extension, serves the consumer's banner as 503 (so a missing bundle surfaces to monitoring) if no `index.html` is embedded, else 404. Why it is generic and why the banner stays per-consumer: Key decisions.
 - `shutdown`: `shutdown_signal()` completes on the first of SIGTERM (Unix) or Ctrl-C; every service binary gates its graceful shutdown on it.
 
-## Public surface
-
-`profile_client::ProfileClient` exposes one method per profile-service endpoint -- user CRUD, feature flags, workspaces and grants -- each named for what it does. The rows whose semantics are not obvious from the name:
-
-| Method               | Semantics                                              |
-|----------------------|-------------------------------------------------------|
-| `upsert_by_identity` | atomic find-or-create-or-link in one call             |
-| `update_username`    | rename; consumes one of the `MAX_USERNAME_EDITS` slots |
-| `workspace_access`   | per-request access gate -- returns the `role` or 404   |
-| `claim_grants`       | claim pending grants by the user's verified emails    |
-
-Reads on the dashboard / OAuth-callback path go through `send_idempotent` (one retry; see Architecture); writes do not.
-
-`workspace_admin_client::WorkspaceAdminClient`:
-
-| Method                    | Purpose                    |
-|---------------------------|----------------------------|
-| `kill_user_tunnels(user)` | bulk evict; returns count  |
-| `list_user_tunnels(user)` | snapshot for the dashboard |
-
-`devserver_gate`:
-
-| Function                                | Purpose                     |
-|-----------------------------------------|-----------------------------|
-| `encode_entry(secret, sub, drv, aud)`   | identity mints (30s exp)    |
-| `encode_session(secret, sub, drv, aud)` | devserver-proxy mints (24h) |
-| `decode(secret, token, typ, aud, drv)`  | verify; returns `Claims`    |
-
 ## Key decisions
 
 ### No axum coupling in the data-layer types
@@ -104,15 +76,19 @@ Reads on the dashboard / OAuth-callback path go through `send_idempotent` (one r
 
 Both identity and devserver-proxy depend on the same JWT envelope and the same HS256 verification config (hard-required alg, no fallback). One module here is the canonical place for both; the secret is shared between the two services via env var (`DEVSERVER_GATE_SECRET`).
 
-### `static_files::serve` is generic over `RustEmbed`
+### Static asset serving stays generic
 
-`rust_embed` resolves `#[folder = "web/dist/"]` relative to the crate that has the derive. Each consumer owns its own `Assets` struct; the shared crate cannot derive once and share the embedded bytes. The function takes the `R: RustEmbed` type parameter and calls `R::get(path)`; the consumer site is two lines of declaration plus one call.
+Each consumer owns its own embedded asset set; the shared crate cannot derive
+once and share the embedded bytes. The static handler stays generic so each
+service can supply its own bundle while sharing the SPA fallback behavior.
 
 Only identity-service ships an SPA, so it is the module's only consumer; the module stays generic in case a future service grows a UI.
 
 ### Banners stay per-consumer
 
-Each consumer's "frontend not built" banner names the right crate and its right `npm run build` directory. Parameterising the banner template would obscure that; each consumer ships its own `&'static [u8]` constant.
+Each consumer's "frontend not built" banner names the right build target.
+Parameterising the banner template would obscure that, so each consumer ships
+its own static banner.
 
 ## Invariants
 
@@ -151,11 +127,6 @@ Each consumer's "frontend not built" banner names the right crate and its right 
 | `WrongType`      | `typ` did not match expected value               |
 
 Consumers map these into their local axum errors.
-
-## What's wired
-
-- `reqwest` runs both clients with the `rustls-tls` and `json` features.
-- `domain`, `validators` and `token_bucket` are std-only (SipHash via `DefaultHasher`), so the cross-cutting primitives carry no third-party surface. Only `static_files` reaches for axum (response types only), `mime_guess` and `rust-embed`, and only `devserver_gate` reaches for `jsonwebtoken`.
 
 ## What is not wired
 

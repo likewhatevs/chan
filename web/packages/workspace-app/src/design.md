@@ -1,27 +1,41 @@
 # chan web frontend
 
-Design reference for the chan web frontend: first the two web SPAs and how each is served, then the color system both share. Update this file in the same commit as a change to the frontend serving topology, `App.svelte`'s palette blocks, the editor theme sheets under `web/packages/workspace-app/src/editor/themes/`, or `web/packages/workspace-app/src/editor/highlight.ts`.
+Design reference for the chan web frontend: first the two web SPAs and how each
+is served, then the color system both share. Update this file with changes to the
+frontend serving topology, palette variable model, editor theme contract, syntax
+highlight palette, or kind taxonomy.
 
 ## Two web frontends
 
-chan ships **two** Svelte 5 + Vite web SPAs, both embedded into chan-server as `RustEmbed` bundles (`crates/chan-server/src/static_assets.rs`) and both built on the color system below:
+chan ships **two** Svelte 5 + Vite web SPAs, both embedded into chan-server as
+bundles and both built on the color system below:
 
-- **The main SPA** (`web/packages/workspace-app/`, this directory) is served from `WebAssets` (`RustEmbed` over `web/dist`) through `serve_static`, the router `.fallback`, so it answers a workspace tenant's routes. `serve_static` runs `inject_chan_meta` to stamp two tags the SPA reads at boot via `api/transport.ts`: `<meta chan-prefix>` (the URL mount prefix, so a reverse-proxied instance builds correct `/api` URLs) and `<meta chan-settings-disabled>` (greys the Settings surface).
-- **The launcher SPA** (`web/packages/launcher/`) is served at the host/library root `/` from `LauncherAssets` via `serve_launcher` + the `WorkspaceHost` root fallback. It reads `<meta chan-launcher-readonly>` to hide mutation controls on read-only surfaces. The launcher is reached on **all three surfaces** -- devserver/tunnel, gateway-proxied (`{owner}.devserver.chan.app/`), and desktop loopback -- the same bundle per-surface installed, with per-surface auth (None tunnel-trust / Some loopback window token) and a read-only-gateway vs full-loopback workspace-mutation split. Its internals are documented in `web/packages/launcher/design.md`.
+- **The main SPA** is served as the workspace tenant fallback. The server stamps
+  boot metadata for the URL mount prefix and whether Settings is disabled, so a
+  reverse-proxied instance builds correct `/api` URLs and can grey restricted
+  controls.
+- **The launcher SPA** is served at the host/library root `/` through the
+  `WorkspaceHost` root fallback. It reads `<meta chan-launcher-readonly>` to hide
+  mutation controls on read-only surfaces. The launcher is reached on **all three
+  surfaces** -- devserver/tunnel, gateway-proxied
+  (`{owner}.devserver.chan.app/`), and desktop loopback -- the same bundle
+  per-surface installed, with per-surface auth (None tunnel-trust / Some loopback
+  window token) and a read-only-gateway vs full-loopback workspace-mutation
+  split. Its serving and auth contract is documented in the launcher design doc.
 
 The two are complementary: the launcher is the cross-workspace registry (pick / add / toggle a workspace, mint a window), and opening a workspace window lands the user in the main SPA. Both honor the theme axes + canonical palette below, so a launcher served over a tunnel and the workspace UI on loopback read identically.
 
 ```mermaid
 flowchart TB
-    subgraph web["web/packages/workspace-app/ -- main SPA (the workspace UI)"]
-        WAPP["App.svelte · editor · file browser · graph · terminals · dashboard<br/>over /api/* (files · drafts · index · contacts · config · fs/transfer · /ws)<br/>reads &lt;meta chan-prefix&gt; + &lt;meta chan-settings-disabled&gt; (api/transport.ts)"]
+    subgraph web["main SPA (the workspace UI)"]
+        WAPP["workspace app · editor · file browser · graph · terminals · dashboard<br/>over /api/* (files · drafts · index · contacts · config · fs/transfer · /ws)<br/>reads &lt;meta chan-prefix&gt; + &lt;meta chan-settings-disabled&gt;"]
     end
-    subgraph launcher["web/packages/launcher/ -- launcher SPA (the registry)"]
+    subgraph launcher["launcher SPA (the registry)"]
         LAPP["TopBar · WorkspaceList · WindowFeed · NewWorkspaceDialog<br/>pure /api/library/* client (workspaces · windows · devservers)<br/>reads &lt;meta chan-launcher-readonly&gt; → hides mutation controls"]
     end
-    subgraph cs["chan-server static_assets.rs -- two RustEmbed bundles"]
-        WEBA["WebAssets = RustEmbed(web/dist)<br/>serve_static + inject_chan_meta · router .fallback (workspace tenant)"]
-        LAUNA["LauncherAssets = RustEmbed(web-launcher/dist)<br/>serve_launcher · WorkspaceHost root fallback at /"]
+    subgraph cs["chan-server -- two embedded bundles"]
+        WEBA["workspace bundle<br/>static fallback + injected boot metadata (workspace tenant)"]
+        LAUNA["launcher bundle<br/>WorkspaceHost root fallback at /"]
     end
     WAPP -->|served by| WEBA
     LAPP -->|served by| LAUNA
@@ -44,70 +58,36 @@ The rest of this document is the single reference for the chan frontend color sy
 
 The frontend has two independent theme dimensions. Both can change at runtime.
 
-1. **Color scheme** (`data-theme="light"` or `data-theme="dark"`). Controls the entire CSS-variable palette: backgrounds, text, accents, pill hues, graph node hues, etc. Defined in `App.svelte` as a `:global(:root), :global([data-theme="dark"])` block (dark is the default) plus a `:global([data-theme="light"])` override block. `state/store.svelte.ts` applies the resolved choice to `<html>`. Because the blocks key off the *attribute* (not the `html` element), a Hybrid surface can re-apply a scheme to its own subtree: each surface root (editor, browser, graph, terminal, dashboard) sets `data-theme={surfaceThemeOverride(kind)}` from the `hybrid_surface_themes` preference, overriding the global pick for just that surface.
+1. **Color scheme** (`data-theme="light"` or `data-theme="dark"`). Controls the entire CSS-variable palette: backgrounds, text, accents, pill hues, graph node hues, etc. The dark scheme is the default variable block and light is an override block. App state applies the resolved choice to `<html>`. Because the blocks key off the *attribute* (not the `html` element), a Hybrid surface can re-apply a scheme to its own subtree: each surface root (editor, browser, graph, terminal, dashboard) sets `data-theme={surfaceThemeOverride(kind)}` from the `hybrid_surface_themes` preference, overriding the global pick for just that surface.
 
-2. **Editor theme** (`data-editor-theme="github"`, `"google_docs"`, or `"word"`). Controls the editor surface only: body font, heading scale, code font, link color, code-block slab bg, table borders, blockquote rule. Defined in `web/packages/workspace-app/src/editor/themes/{base,github,google_docs,word}.css` as `--chan-editor-*` variables. `base.css` declares neutral defaults; each named theme overrides under `:root[data-editor-theme="<name>"]`, with dark variants at both `:root[...][data-theme="dark"]` and the descendant form `:root[...] [data-theme="dark"]` so a per-surface dark override restyles the editor too. `state/editorTheme.ts` applies the attribute to `<html>` (default `github`); the preference (`editor_theme`) lives server-side and propagates to every open window via the WS `config_changed` event. The picker is the editor surface's config flip-side (`HybridEditorConfig.svelte`).
+2. **Editor theme** (`data-editor-theme="github"`, `"google_docs"`, or `"word"`). Controls the editor surface only: body font, heading scale, code font, link color, code-block slab bg, table borders, blockquote rule. It is expressed as `--chan-editor-*` variables with neutral defaults and per-theme overrides. Dark variants must support both root-level and descendant `data-theme="dark"` selectors so a per-surface dark override restyles the editor too. App state applies the editor-theme attribute to `<html>` (default `github`); the preference (`editor_theme`) lives server-side and propagates to every open window via the WS `config_changed` event. The picker is the editor surface's config flip-side.
 
 The axes are orthogonal. Any combination of color scheme by editor theme is valid (6 combinations total). Only the color-scheme axis affects app chrome (panes, status bar, file tree, panels, modals); the editor-theme axis is scoped to the editor surface.
 
-A third, fixed dimension is the **syntax-highlight palette**. It is GitHub Primer (light or dark, branched off the color scheme) and is shared across all three editor themes, so a python snippet reads identically regardless of which document chrome is active. It paints fenced code blocks (per-language packs lazy-load via `editor/markdown/code_languages.ts`) and whole files in Source mode. See `web/packages/workspace-app/src/editor/highlight.ts` -- including the one deliberate Primer divergence: plain identifiers get no color because Primer's orange collides with chan's brand orange.
+A third, fixed dimension is the **syntax-highlight palette**. It is GitHub Primer
+(light or dark, branched off the color scheme) and is shared across all three
+editor themes, so a python snippet reads identically regardless of which document
+chrome is active. It paints fenced code blocks (per-language packs lazy-load) and
+whole files in Source mode. One deliberate Primer divergence is part of the
+contract: plain identifiers get no color because Primer's orange collides with
+chan's brand orange.
 
 ## Canonical semantic palette
 
 Each concept gets one hue across surfaces (graph node, file-tree row, info-pane accents, editor pill). Picking a hue per concept means the same item reads the same color whether you see it in the graph, the editor, or the inspector.
 
-```
-Concept          Hue          Why
------------      ---------    --------------------------------------
-Document         Orange       Brand color (chan ensō logo)
-Media / image    Purple       Hue-separated from documents
-Tag (#)          Green        Hue-separated from media
-Contact (@)      Yellow       Warm warning family (distinct from doc)
-Date / time      Grey         Neutral, low emphasis
-Broken / error   Red          Standard alert family
-Source / text    Royalblue    Code + config files, apart from doc orange
-Binary           Dark grey    Opaque files recede behind text kinds
-Folder           Grey         Structure, not content; a step away from
-                              binary so the two don't collapse
-Language         Pink         Graph language nodes
-Drafts dir       Yellow tint  Marks the in-workspace Drafts directory
-```
+Concept hues are stable across surfaces: document orange, media purple, tag
+green, contact/warning yellow, date/folder neutral grey, broken/error red,
+source royalblue, binary dark grey, language pink, and drafts yellow tint.
 
 ## Resolved values per surface
 
-```
-Concept    Graph node      File tree            Editor pill
----------  --------------  -------------------  ---------------
-Document   --g-doc         FileText icon        --pill-wiki-*
-Media      --g-img         Image icon           --pill-image-*
-Tag        --g-tag         n/a                  --pill-tag-*
-Contact    --warn-text     --warn-text on name  --pill-contact-*
-Date       n/a             n/a                  --pill-date-*
-Broken     n/a             n/a                  --pill-broken-*
-Source     --g-source      FileCode icon        n/a
-Binary     --g-binary      File icon            n/a
-Folder     --g-folder      Folder icon          n/a
-Language   --g-language    n/a                  n/a
-Drafts     --fb-drafts-*   --fb-drafts-*        n/a
-```
+Graph nodes, file-tree icons, and editor pills read from the same concept
+palette rather than inventing local hues. Some concepts have no representation
+on a given surface (for example tags do not have file-tree icons, and folders do
+not have editor pills).
 
 There is no dedicated `--g-contact` token; the graph reads `--warn-text` directly for contact and mention nodes. Add one only if the graph ever needs to diverge from the warning hue.
-
-### Hex values
-
-```
-Token            Dark       Light      Concept
----------------  ---------  ---------  -----------------
---g-doc          #ff8a3d    #c25a1f    Document hue
---g-img          #b07dff    #7a4cd8    Media hue
---g-tag          #6cd07a    #2f9444    Tag hue
---g-source       #4169e1    #2851c4    Source / code hue
---g-binary       #5e5e62    #4e4e54    Binary hue
---g-folder       #8e8e93    #6c6c70    Directory hue
---g-language     #ff4db8    #c71585    Language hue
---warn-text      #e3b341    #9a6700    Contact / warning
---fb-drafts-fg   #e3b341    #9a6700    Drafts dir tint
-```
 
 `--chan-color-language` is the source token for the language hue; `--g-language` and `--chan-color-code` alias it.
 
@@ -115,7 +95,8 @@ Pill backgrounds (`--pill-*-bg`) are alpha tints of the concept hue (~0.15-0.20 
 
 ## Kind taxonomy
 
-`web/packages/workspace-app/src/state/kinds.ts` defines the unified taxonomy used by every chip, tree icon, and inspector header glyph. Three families:
+The frontend defines one unified taxonomy used by every chip, tree icon, and
+inspector header glyph. Three families:
 
 - **FileKind**: things that exist as files in the workspace. `document` | `contact` | `text` | `media` | `binary` | `pending`.
 - **EntityKind**: graph-only entities (tokens extracted from markdown bodies, no file backing). `tag` | `mention` | `date`.
@@ -139,151 +120,64 @@ flowchart TD
     ExtText -->|yes| Text["text"]
     ExtText -->|no| Binary["binary"]
     ServerWins -.->|"server UTF-8 sniff state"| Pending["pending: FileClass::Other<br/>awaiting text/binary, renders neutrally"]
-    Note["ext sets mirror chan-workspace/src/fs_ops.rs<br/>widen in lockstep"] -.-> ExtText
+    Note["ext sets mirror the server classifier<br/>widen in lockstep"] -.-> ExtText
 ```
 
-`classifyEntry(entry)` / `classifyFile(path, serverKind?)` is the single classifier. The server projects a `kind` discriminator on every regular file it lists, and that wire value wins whenever present. The path-only fallback (`classifyPath` in `state/fileTypes.ts`) runs only for bare paths held outside a tree listing (graph ghost rows, broken-link targets): images + PDFs are `media`, `.md` is `document`, `.txt` plus the source/config/shell extension set and well-known basenames (Makefile, LICENSE, ...) are `text`, everything else is `binary`. The extension sets mirror `chan-workspace/src/fs_ops.rs` and must be widened in lockstep. `pending` is a server-side state for unknown extensions awaiting the UTF-8 content sniff; it only reaches the SPA from the recursive whole-tree listing and renders neutrally.
+`classifyEntry(entry)` / `classifyFile(path, serverKind?)` is the single classifier. The server projects a `kind` discriminator on every regular file it lists, and that wire value wins whenever present. The path-only fallback runs only for bare paths held outside a tree listing (graph ghost rows, broken-link targets): images + PDFs are `media`, `.md` is `document`, `.txt` plus the source/config/shell extension set and well-known basenames (Makefile, LICENSE, ...) are `text`, everything else is `binary`. The extension sets mirror the server classifier and must be widened in lockstep. `pending` is a server-side state for unknown extensions awaiting the UTF-8 content sniff; it only reaches the SPA from the recursive whole-tree listing and renders neutrally.
 
-`web/packages/workspace-app/src/components/KindChip.svelte` is the single chip component. Inspector headers pass `block` (flex:1 fill); the search results list passes `compact` (smaller font + fixed-width column). `ghost` and `dim` modify opacity for graph ghost rows and search filename-match rows respectively. Passing `onClick` renders the chip as a button (the "scope the graph to this file" affordance).
+One chip component renders every kind. Inspector headers pass `block` (flex:1
+fill); the search results list passes `compact` (smaller font + fixed-width
+column). `ghost` and `dim` modify opacity for graph ghost rows and search
+filename-match rows respectively. Passing `onClick` renders the chip as a button
+(the "scope the graph to this file" affordance).
 
 ### Per-kind mapping
 
-```
-kind        label       palette token       lucide icon
-----------  ----------  ------------------  -----------
-document    document    --g-doc             FileText
-contact     contact     --warn-text         User
-text        text        --g-doc (alias)     FileCode
-media       media       --g-img             Image
-binary      binary      --g-binary          File
-pending     pending     --text-secondary    File
-tag         tag         --g-tag             Hash
-mention     mention     --warn-text         User
-date        date        --text-secondary    Calendar
-folder      directory   --g-folder          Folder
-```
+Documents and source-like text share the document hue family but use different
+icons and labels. Contacts and mentions share the warning/contact palette; media,
+binary, tags, dates, and folders each use their corresponding concept hue and
+glyph.
 
-`text` aliases the document orange in `colorVarFor` -- the two share the hue family and the visual distinction is icon + label, not color. (The graph's source-file nodes use `--g-source` royalblue; that mapping lives in `GraphCanvas.svelte`, not in the chip.)
+`text` aliases the document orange in `colorVarFor` -- the two share the hue family and the visual distinction is icon + label, not color. The graph's source-file nodes use `--g-source` royalblue; the graph renderer owns that mapping, not the chip.
 
 A `mention` shares the contact palette by design: a resolved mention points at a contact file, an unresolved mention is the same concept without a backing file. Distinguishing the two is the role of the inspector, not the chip.
 
 ## Functional and chrome variables
 
-Color-scheme axis (`App.svelte`):
-
-```
-Group       Variable               Use
-----------  ---------------------  --------------------------------
-Surface     --bg                   Canvas
-            --bg-card              Card / chip / inline-code bg
-            --bg-elev              Elevated panel
-            --inspector-bg         Right inspector panel
-            --tab-active-bg        Active tab face
-            --tab-inactive-bg      Inactive tab face
-            --code-bg              Inline + fence default code bg
-                                   (overridden by editor theme)
-Text        --text                 Primary body
-            --text-secondary       Secondary / dim
-            --text-heading         Heading-specific tone
-            --link                 Hyperlink color
-Lines       --border               Hairline
-            --separator            Resize-handle bar
-            --separator-hover      Resize-handle hover
-States      --hover-bg             Hover tint
-            --selection-bg         Text selection
-            --page-shade           Off-page tint when page width is
-                                   capped
-            --zebra-bg             Alternating tree row tint
-            --smart-bg             Smart-suggest tint
-            --pane-focus           Active pane outline
-Functional  --accent               Success green
-            --warn-text            Warning amber (= contact hue)
-            --danger-text          Errors / destructive
-            --info-text            Unsaved-buffer dot
-Buttons     --btn-bg               Button face
-            --btn-border           Button border
-            --btn-hover            Button hover ring
-Bubbles     --bubble-bg            Chat/overlay bubble face
-            --bubble-right-bg      Right-aligned bubble face
-Shadow      --pane-shadow          Floating-pane drop shadow (light
-                                   glow on dark, soft black on light)
-Drafts      --fb-drafts-fg/-bg     Drafts dir row + graph tint
-```
-
-Editor-theme axis (`web/packages/workspace-app/src/editor/themes/*.css`):
-
-```
-Group       Variable                          Use
-----------  --------------------------------  ----------------------
-Body        --chan-editor-body-family         Body font
-            --chan-editor-body-size           Body size
-            --chan-editor-body-color          Body ink
-            --chan-editor-bg                  Editor bg
-Heading     --chan-editor-heading-family      Heading font
-            --chan-editor-heading-color       Heading ink
-            --chan-editor-h{1..6}-size        Size
-            --chan-editor-h{1..6}-weight      Weight
-            --chan-editor-h{1..6}-line-height Line height
-            --chan-editor-h6-color            H6 override (dim)
-            --chan-editor-h1-border-bottom    GitHub-style page rule
-            --chan-editor-h1-padding-bottom   "
-            --chan-editor-h2-border-bottom    "
-            --chan-editor-h2-padding-bottom   "
-Code        --chan-editor-code-family         Code font
-            --chan-editor-code-size           Code size
-            --chan-editor-source-size         Source-view size
-            --chan-editor-inline-code-bg      Inline code bg
-            --chan-editor-inline-code-color   Inline code ink
-            --chan-editor-code-block-bg       Fence slab bg
-            --chan-editor-code-block-color    Fence ink
-            --chan-editor-code-block-border   Fence border
-Inline      --chan-editor-link-color          Editor link color
-Block       --chan-editor-quote-color         Blockquote ink
-            --chan-editor-quote-border        Blockquote bar
-            --chan-editor-hr-color            `---` rule color
-            --chan-editor-table-border        Table borders
-            --chan-editor-table-header-bg     Table header bg
-            --chan-editor-table-stripe-bg     Table stripe bg
-```
+The color-scheme axis owns app chrome: surfaces, text, lines, hover/selection
+states, functional colors, buttons, bubbles, shadows, and drafts tint. The
+editor-theme axis owns document chrome: body, headings, code, inline links, and
+block elements. Keep the axes separate so a color-scheme change does not imply a
+document-theme change.
 
 ## Axis intersection
-
-A fenced code block exercises all three layers:
-
-```
-                github theme      google_docs theme   word theme
-light slab bg   #f6f8fa           #f8f9fa             #f7f7f7
-dark slab bg    #151b23           #28292b             #1f1f1f
-syntax (light)  Primer Light      Primer Light        Primer Light
-syntax (dark)   Primer Dark       Primer Dark         Primer Dark
-H1/H2 rule      yes (1px hr)      no                  no
-```
 
 Slab bg and the H1/H2 hairline rule track the editor theme; the syntax palette only tracks the color scheme.
 
 ## Adding a new concept
 
 1. Pick a hue family. Try to reuse an existing one (document orange, media purple, tag green, contact yellow, source royalblue, language pink, neutral grey, error red) before introducing a new hue. Each new hue has to defend its hue distance from those already in use.
-2. Add the dark + light hex to the two `App.svelte` palette blocks under domain-specific variable names (`--<concept>-fg`, `--<concept>-bg`, etc.).
+2. Add the dark + light hex to the color-scheme palette blocks under domain-specific variable names (`--<concept>-fg`, `--<concept>-bg`, etc.).
 3. Pipe the new variable into every surface that should display the concept (graph node, file tree row, info accents, editor pill, etc.). Each surface reads its own variable name so a future hue swap is a one-line palette edit.
 4. Add the row(s) to this document.
 
 ## Adding a new editor theme
 
-1. Create `web/packages/workspace-app/src/editor/themes/<name>.css`. Override only the `--chan-editor-*` tokens that should diverge from `base.css`; missing tokens fall through to the color-scheme palette.
-2. Light goes under `:root[data-editor-theme="<name>"]`; dark goes under `:root[data-editor-theme="<name>"][data-theme="dark"]` plus the descendant `[data-theme="dark"]` form for per-surface overrides.
-3. Import the sheet in `web/packages/workspace-app/src/main.ts` next to the other theme imports.
-4. Add the value to the `EditorTheme` union in `web/packages/workspace-app/src/api/types.ts` and register the option in `HybridEditorConfig.svelte`.
-5. Decide whether the theme wants the GitHub-style H1/H2 rule; opt in by setting `--chan-editor-h{1,2}-border-bottom` and `--chan-editor-h{1,2}-padding-bottom` (base.css defaults these to `none` / `0`).
+1. Add a named editor-theme stylesheet. Override only the `--chan-editor-*`
+   tokens that should diverge from the neutral base; missing tokens fall through
+   to the color-scheme palette.
+2. Light goes under `:root[data-editor-theme="<name>"]`; dark goes under
+   `:root[data-editor-theme="<name>"][data-theme="dark"]` plus the descendant
+   `[data-theme="dark"]` form for per-surface overrides.
+3. Register the stylesheet with app startup.
+4. Add the value to the API type contract and register the option in the editor
+   config picker.
+5. Decide whether the theme wants the GitHub-style H1/H2 rule; opt in by setting `--chan-editor-h{1,2}-border-bottom` and `--chan-editor-h{1,2}-padding-bottom` (the neutral base defaults these to `none` / `0`).
 
 The new theme inherits the GitHub Primer syntax-highlight palette automatically; it is not part of the editor-theme contract.
 
-## Source-of-truth pointers
+## Change discipline
 
-- `web/packages/workspace-app/src/App.svelte` palette blocks: color-scheme axis.
-- `web/packages/workspace-app/src/state/store.svelte.ts`: applies `data-theme`, owns the per-Hybrid-surface overrides.
-- `web/packages/workspace-app/src/editor/themes/`: editor-theme axis.
-- `web/packages/workspace-app/src/state/editorTheme.ts`: applies `data-editor-theme`.
-- `web/packages/workspace-app/src/editor/highlight.ts`: syntax-highlight palette (GitHub Primer, shared across editor themes).
-- `web/packages/workspace-app/src/editor/base.ts` `themeExtensions()`: how CodeMirror picks the highlight + chrome (cursor, gutter) per color scheme.
-- `web/packages/workspace-app/src/state/kinds.ts` + `web/packages/workspace-app/src/state/fileTypes.ts`: kind taxonomy + path fallback classifier.
+Palette, editor-theme, syntax-highlight, serving-topology, and kind-taxonomy
+changes update this document in the same commit. When widening text/source
+extension handling, update the server classifier and frontend fallback together.

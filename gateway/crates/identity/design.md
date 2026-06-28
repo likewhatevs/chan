@@ -24,9 +24,7 @@ Static SPA assets are baked in at build time via `rust_embed` and served by `gat
 
 The session layer (`SessionManagerLayer` from `tower_sessions`) sits at the outermost edge and applies to every route. **Cookie scope is host-only on `id.chan.app`.** No `Domain` attribute. devserver-proxy does not share this cookie.
 
-## Public surface
-
-Full route table is in [`README.md`](README.md). Highlights:
+## User-facing flows
 
 ### OAuth flow
 
@@ -183,7 +181,7 @@ All forward to profile-service over the service bearer. Validation re-runs in pr
 identity reads the per-user resolved flag map from profile (`GET /v1/users/:id/flags`) at two points:
 
 - OAuth callback (`oauth_login`): the allowlist gate described in the callback flow above. Fresh deploys ship `default_enabled = false`, so the operator must `chan-admin flag grant oauth_login <ident>` for the first user before they can sign in.
-- `/api/me` (full map): the SPA gates UI affordances on the resolved values. Today that's `share_workspaces` (hides the Workspaces tab and the share panel inside `Workspaces.svelte` when off). The map is re-fetched on every `/api/me`, so a rollout takes effect on the next dashboard reload -- no SPA logout / login dance.
+- `/api/me` (full map): the SPA gates UI affordances on the resolved values. Today that's `share_workspaces` (hides the Workspaces tab and the share panel when off). The map is re-fetched on every `/api/me`, so a rollout takes effect on the next dashboard reload -- no SPA logout / login dance.
 
 Profile errors on either call degrade-soft: identity falls back to an empty flag map, which is the safe default (every flag off = no sign-in, no UI features). Tracing log captures the failure so the operator can see why callers were getting denied.
 
@@ -227,7 +225,7 @@ Handled by profile-service's `upsert_by_identity`. identity passes the email alo
 - first and last char in `[a-z0-9]`
 - inner chars in `[a-z0-9-]`
 
-Plus (in `http.rs`):
+Additional username guards:
 
 - `RESERVED_USERNAMES` blocks anything that could collide with a top-level path under `chan.app/`. Sorted alphabetically; checked with `binary_search`.
 - `rustrict` filter blocks profanity / leet-speak heuristically. False positives surface as 400; users can unblock specific handles via the `RUSTRICT_ALLOWLIST` env var (comma-separated, case-insensitive).
@@ -280,7 +278,7 @@ identity derives `BASE_URL` (its OAuth-callback origin) and `devserver_wildcard_
 
 ## Error model
 
-`identity::Error` (`src/error.rs`):
+`identity::Error`:
 
 | Variant       | HTTP | Notes                                  |
 |---------------|------|----------------------------------------|
@@ -294,13 +292,6 @@ identity derives `BASE_URL` (its OAuth-callback origin) and `devserver_wildcard_
 | Reqwest       | 502  | network failure to a sibling service   |
 
 `From<gateway_common::profile_client::ProfileError>` and `From<gateway_common::workspace_admin_client::WorkspaceAdminError>` plug sibling-service errors into the local enum so request handlers can `?` straight through.
-
-## What's wired
-
-The non-obvious dependency choices:
-
-- `tower_sessions` over a Postgres session store, with host-only cookie scope.
-- `oauth2` with `rustls-tls` for PKCE + token exchange.
 
 ## What is not wired
 

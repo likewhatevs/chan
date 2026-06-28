@@ -1,6 +1,6 @@
 # chan-report design
 
-Canonical design reference for `chan-report`. Update in the same commit as any change that affects the public API shape, the on-disk JSONL schema, the COCOMO model defaults, or the rules the walker applies.
+Canonical design reference for `chan-report`. Update in the same commit as any change that affects the exported interface shape, the on-disk JSONL schema, the COCOMO model defaults, or the rules the walker applies.
 
 ## 1. Problem and scope
 
@@ -50,23 +50,13 @@ Index dataflow: `scan` walks and counts each file into the `Index`; incremental 
   - `Report` is a pure value type computed from `Index` plus a `Scope` and `CocomoParams`. Snapshots never mutate state.
   - The walker is only used during `Index::scan`. Incremental updates take a relative path from the caller and skip the walker entirely.
 
-## 3. Public API
+## 3. Data model contracts
 
-Headline types in `lib.rs`:
+`Index` is the mutable state boundary: it owns the per-file rows, the per-directory aggregation cache, and the accept filter captured during the initial scan. Incremental updates must apply that same filter before changing rows so watcher-driven state converges with a full rescan.
 
-  - `ReportOptions` configures the initial walk: root, follow_symlinks, include_hidden, respect_gitignore, exclude_globs, cocomo.
-  - `Scope` selects what a snapshot covers: `All`, `Prefix(String)`, or `Files(Vec<String>)`. Paths are workspace-relative POSIX strings.
-  - `Index` holds the per-file state, the per-directory aggregation cache, and the cached accept-filter (so incremental updates apply the same hidden / gitignore / exclude rules as the initial scan). Public methods: `scan(opts)`, `update(rel)`, `remove(rel)`, `rename(from, to)`, `file(rel)`, `len`, `is_empty`, `snapshot(scope, cocomo_params)`, `dir_report(dir, params)`, `write_jsonl`, `load_jsonl(reader, opts)`.
-  - `UpdateOutcome` (Inserted / Updated / Unchanged / Removed / Skipped) lets the watcher coalesce no-op writes.
-  - `Report`, `ReportMeta`, `Totals`, `LanguageStats`, `FileStats`, `FileBucket`, `CocomoSummary` are plain serde structs with primitive fields. No lifetimes on public types; FFI-shaped.
-  - `SCHEMA_VERSION` is the current JSONL schema number.
-  - `ChanReportError` is the single umbrella error enum, with primitive (string / integer) payloads only.
+`Report` is a pure snapshot derived from an `Index`, a scope, and COCOMO parameters. Scopes cover the whole tree, a prefix, or an explicit file set, but all produce the same report shape so consumers can render one model.
 
-`run(opts)` is a one-shot helper equivalent to `Index::scan(opts)?.snapshot(&Scope::All, &opts.cocomo)`.
-
-`count_file(root, rel)` is exposed so chan-workspace (or tests) can re-count without going through `Index`.
-
-`report_to_jsonl_string(&report)` serializes an already-built `Report` for consumers that hold the value rather than the index.
+Update outcomes distinguish real changes from no-ops; chan-workspace uses that signal to debounce JSONL writes. Public data stays serde-friendly and FFI-shaped: owned fields, primitive payloads, one schema version, and one umbrella error type.
 
 ### File bucket axis
 
@@ -74,26 +64,18 @@ Headline types in `lib.rs`:
 
 ### Subdirectory and per-file queries
 
-`Scope::Prefix("crates/chan-workspace")` rolls up every file under that prefix; `Scope::Files(...)` rolls up an explicit list. Both go through the same `snapshot` path so the same `Report` structure is returned regardless of scope, and the `by_language` / `totals` / `cocomo` fields reflect only the scoped subset. `Index::file(rel)` returns the raw `FileStats` for one file with no roll-up cost.
+A prefix scope rolls up every file under that relative prefix; an explicit-file
+scope rolls up only the listed files. Both go through the same `snapshot` path
+so the same `Report` structure is returned regardless of scope, and the
+`by_language` / `totals` / `cocomo` fields reflect only the scoped subset.
+`Index::file(rel)` returns the raw `FileStats` for one file with no roll-up
+cost.
 
 `Index::dir_report(dir, params)` is the O(1) read side of a maintained per-directory aggregation: every file's stats contribute to each ancestor directory up to the root (key `""`), updated on each `update` / `remove` / `rename` with an O(depth) ancestor walk. The returned `Report` carries the directory's totals, per-language roll-up (same ordering as the whole-tree roll-up), and a COCOMO over the directory's code total; `files` stays empty because directory inspectors only render the summary. `None` means no tracked file lives at or under the directory. The cache is never persisted; `scan` and `load_jsonl` rebuild it from the file rows.
 
 ## 4. JSONL on-disk format
 
 One record per line. `kind` is the discriminator. Records may appear in any order in a single file; consumers index by `kind` + `path` / `name`. Empty lines and lines beginning with `#` are ignored on load.
-
-```
-{"kind":"meta","schema":1,"root":"/abs/path","generated_at":"2026-05-12T12:00:00+00:00"}
-{"kind":"file","path":"src/lib.rs","language":"Rust","code":812,
- "comments":64,"blanks":92,"complexity":47,"bytes":41203,
- "mtime":"2026-05-10T09:11:02+00:00","bucket":{"kind":"source_code","language":"Rust"}}
-{"kind":"language","name":"Rust","files":210,"bytes":812031,"code":53120,
- "comments":4012,"blanks":6804,"complexity":2810}
-{"kind":"totals","files":812,"bytes":1203400,"code":91234,
- "comments":7321,"blanks":12044,"complexity":4521}
-{"kind":"cocomo","model":"basic-organic","effort_person_months":23.4,
- "schedule_months":8.1,"developers":2.9,"estimated_cost_usd":312450.0}
-```
 
 Rules:
 
@@ -140,27 +122,17 @@ One known asymmetry: the cached incremental `Filter` reapplies the ROOT `.gitign
 
 Per-file keyword count over a small, language-aware list. Cheap, deterministic, and documented as a heuristic. We deliberately do not implement cyclomatic complexity: the AST work is not worth it for a roll-up. The score is comparable within a language and roughly comparable across closely-related languages, but should never be treated as a defect signal.
 
-The keyword list mirrors scc's: `if`, `else`, `elsif`, `elif`, `for`, `while`, `switch`, `case`, `match`, `do`, `goto`, `continue`, `break`, `try`, `catch`, `except`, `&&`, `||`, `and`, `or`. Alphabetic keywords match on word boundaries; symbolic operators are substring matches. The hook for per-language overrides lives in `complexity.rs`, but every language currently uses the default list.
+The keyword list mirrors scc's: `if`, `else`, `elsif`, `elif`, `for`, `while`, `switch`, `case`, `match`, `do`, `goto`, `continue`, `break`, `try`, `catch`, `except`, `&&`, `||`, `and`, `or`. Alphabetic keywords match on word boundaries; symbolic operators are substring matches. The complexity scorer has a hook for per-language overrides, but every language currently uses the default list.
 
 Files larger than 16 MiB skip the in-memory read: tokei still counts them via its streaming path, but the complexity score is recorded as 0 (the second pass over multi-MB content is not worth it for a heuristic). The same fallback applies to non-UTF-8 content.
 
 ## 8. COCOMO
 
-Basic COCOMO computed from total SLOC (sum of `code` across all included files). Three modes:
-
-```
-    a       b     c     d
-  ----- ----- ----- -----
-   2.4  1.05   2.5  0.38   Organic        (default)
-   3.0  1.12   2.5  0.35   Semi-Detached
-   3.6  1.20   2.5  0.32   Embedded
-
-  effort_pm   = a * (KSLOC ^ b)
-  schedule    = c * (effort_pm ^ d)
-  developers  = effort_pm / schedule
-  cost_usd    = effort_pm * avg_monthly_salary_usd
-                          * overhead_multiplier
-```
+Basic COCOMO is computed from total SLOC (sum of `code` across all included
+files). The supported modes are Organic (default), Semi-Detached, and Embedded;
+each mode supplies the standard Basic COCOMO coefficients for effort and
+schedule. The cost estimate multiplies effort by the configured average monthly
+salary and overhead multiplier.
 
 `CocomoParams` defaults:
 
@@ -172,7 +144,7 @@ These are documented in the same place they're read so users can override them p
 
 ## 9. Tests
 
-Integration coverage lives in `tests/integration.rs` over tempdir-built mixed-language trees:
+Integration coverage uses tempdir-built mixed-language trees and pins the behavioral contracts:
 
   - Walker: gitignore filtering during scan and update.
   - Counter: language detection, SLOC, and complexity vs. known fixtures written inline.

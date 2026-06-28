@@ -1,6 +1,7 @@
 # chan editor (CM6) - design
 
-Load-bearing reference for the chan editor. Mirrors the role of `crates/chan-workspace/design.md` for the editor surface.
+Load-bearing reference for the chan editor. Mirrors the workspace design doc's
+role for the editor surface.
 
 ## Model
 
@@ -12,7 +13,7 @@ Because the source is the single source of truth, the editor sidesteps a class o
 
 1. **Doc invariant.** `view.state.doc.toString()` is the markdown source. Always. No transform layer. Autosave writes it directly.
 
-2. **Token detection.** `syntaxTree(state).iterate({from, to, enter})` from `@codemirror/lang-markdown` + GFM, extended with two custom lezer parsers: `[[wikilink]]` (inline) and YAML frontmatter (block-start, so headings inside `---...---` are not promoted). Fenced code bodies parse with lazy-loaded per-language packs (`markdown/code_languages.ts`). Tokens that are not lezer nodes - `#tag`, `@@mention`, dates - are matched by regex in their own ViewPlugins, skipping code ranges.
+2. **Token detection.** `syntaxTree(state).iterate({from, to, enter})` from `@codemirror/lang-markdown` + GFM, extended with two custom lezer parsers: `[[wikilink]]` (inline) and YAML frontmatter (block-start, so headings inside `---...---` are not promoted). Fenced code bodies parse with lazy-loaded per-language packs. Tokens that are not lezer nodes - `#tag`, `@@mention`, dates - are matched by regex in their own ViewPlugins, skipping code ranges.
 
 3. **Decoration taxonomy.**
    - **Hide markers**: `Decoration.replace({})` over `*`, `**`, `~~`, `` ` ``, `[`, `](`, `)`, and `# ` heading prefixes. Blockquote `>`, list markers, `---` rules, and ```` ``` ```` fences are NOT hidden: the marker is the visual cue (Obsidian convention) and hiding `---` / fences makes the block structure harder to edit.
@@ -36,13 +37,13 @@ Because the source is the single source of truth, the editor sidesteps a class o
 
 6. **Selection rule for ranges.** A non-empty selection that crosses any token's range reveals all of those tokens uniformly. No special cases.
 
-7. **Bubbles** (`[[`, `![`, `@@`, `@`, `#`) open/close from `computeBubbleSpec` (`bubbles/triggers.ts`), which inspects the doc text around `state.selection.main.head` on every transaction via `bubbleListener`; the host (Wysiwyg.svelte) mounts/reuses the bubble UI. Triggers also fire in "raw" mode when the caret sits inside an existing Link/Image URL slot or `[[...]]` body, so commit replaces the right range. Triggers never fire inside code ranges, and the reserved macro words (`@today`, `@date`, `@pagebreak`, `@break`) suppress the contact bubble. The bubble keymap intercepts before CM6's defaults via a high-precedence `keymap.of`. Bubbles must NOT call `view.focus()` mid-flow - the caret stays in the document and the popover runs alongside it.
+7. **Bubbles** (`[[`, `![`, `@@`, `@`, `#`) open/close from `computeBubbleSpec`, which inspects the doc text around `state.selection.main.head` on every transaction via `bubbleListener`; the editor host mounts/reuses the bubble UI. Triggers also fire in "raw" mode when the caret sits inside an existing Link/Image URL slot or `[[...]]` body, so commit replaces the right range. Triggers never fire inside code ranges, and the reserved macro words (`@today`, `@date`, `@pagebreak`, `@break`) suppress the contact bubble. The bubble keymap intercepts before CM6's defaults via a high-precedence `keymap.of`. Bubbles must NOT call `view.focus()` mid-flow - the caret stays in the document and the popover runs alongside it.
 
-8. **Find** uses `find.ts` `scanMatches`. The `findField` and `FindAdapter` shape live in `base.ts` and are shared by both Source and WYSIWYG modes.
+8. **Find** uses one shared `scanMatches` pipeline. The `findField` and `FindAdapter` shape are shared by both Source and WYSIWYG modes.
 
 9. **Fold** uses `@codemirror/language` `foldService` with a heading-level-aware computer: line `^#{n} ` folds end-of-line -> start of next `#{<=n}` line (or doc end). The chevron gutter is custom (headings only): `foldGutter()` would chevron every foldable block because lang-markdown marks paragraphs, quotes, and fences foldable too.
 
-10. **Autosave** writes `view.state.doc.toString()` on `update.docChanged` to the bindable `value` prop (`createValueSync` in `base.ts` guards the echo so a prop write-back can't clobber the caret). The debounced `scheduleAutosave` pipeline in `state/tabs.svelte.ts` owns the write. No serialize step. The CAS contract on `PUT /api/files` (`expected_mtime_ns`, 409 + `current_mtime_ns` on conflict) is the conflict gate; a watcher event for a non-self write flags a "changed on disk" banner instead of auto-reloading. `state/editorBuffer.ts` keeps a debounced localStorage copy keyed by path for hang-recovery.
+10. **Autosave** writes `view.state.doc.toString()` on `update.docChanged` to the bindable `value` prop. The echo guard prevents prop write-back from clobbering the caret, and the debounced autosave pipeline owns the server write. No serialize step. The CAS contract on `PUT /api/files` (`expected_mtime_ns`, 409 + `current_mtime_ns` on conflict) is the conflict gate; a watcher event for a non-self write flags a "changed on disk" banner instead of auto-reloading. A debounced localStorage mirror keyed by path is kept for hang-recovery.
 
 ## Decoration pipeline
 
@@ -81,7 +82,12 @@ flowchart TD
 
 ## Modes
 
-`FileEditorTab.svelte` hosts the editors and owns a per-tab mode: `wysiwyg` | `source` | `pretty` | `table`. Markdown-class files (.md/.txt) pair WYSIWYG with source; JSON opens as a collapsible tree (`JsonPretty.svelte`) and CSV/TSV as an editable grid (`CsvTable.svelte` + `csv.ts`), each with source as the toggle. Any other text-kind file is source-only - source IS the sensible surface for a .py / .toml / Makefile. Source mode highlights by extension via the same lazy language packs.
+The file editor host owns a per-tab mode: `wysiwyg` | `source` | `pretty` |
+`table`. Markdown-class files (.md/.txt) pair WYSIWYG with source; JSON opens
+as a collapsible tree and CSV/TSV as an editable grid, each with source as the
+toggle. Any other text-kind file is source-only - source IS the sensible surface
+for a .py / .toml / Makefile. Source mode highlights by extension via the same
+lazy language packs.
 
 `FileEditorTab` picks the initial mode by file class, then toggles source against the single rendered surface each class pairs with; plain text is source-only.
 
@@ -96,29 +102,29 @@ stateDiagram-v2
 
     state "Markdown class" as Markdown {
         [*] --> wysiwyg
-        wysiwyg: wysiwyg (Wysiwyg.svelte)
-        mdsrc: source (Source.svelte)
+        wysiwyg: wysiwyg surface
+        mdsrc: source surface
         wysiwyg --> mdsrc: Show Source
         mdsrc --> wysiwyg: Show Rendered
     }
 
     state "JSON class" as Json {
         [*] --> pretty
-        pretty: pretty (JsonPretty.svelte)
-        jsonsrc: source (Source.svelte)
+        pretty: pretty tree surface
+        jsonsrc: source surface
         pretty --> jsonsrc: Show Source
         jsonsrc --> pretty: Show Pretty Tree
     }
 
     state "CSV / TSV class" as Csv {
         [*] --> table
-        table: table (CsvTable.svelte)
-        csvsrc: source (Source.svelte)
+        table: editable grid surface
+        csvsrc: source surface
         table --> csvsrc: Show Source
         csvsrc --> table: Show Table
     }
 
-    Text: source only (Source.svelte) - no rendered toggle
+    Text: source only - no rendered toggle
 ```
 
 ## Bubbles
@@ -156,22 +162,10 @@ sequenceDiagram
 
 ## Server contract
 
-The editor calls these endpoints:
-
-| Method | Path | Purpose |
-|--------|------|---------|
-| GET    | `/api/files/{path}`              | load file (`?stream=1` for large) |
-| PUT    | `/api/files/{path}`              | autosave + `^block` anchors (CAS via `expected_mtime_ns`, 409 on conflict) |
-| GET    | `/api/search/files`              | wiki picker |
-| GET    | `/api/link-targets`              | wiki picker target list |
-| GET    | `/api/resolve-link`              | wiki pill kind classification |
-| GET    | `/api/headings/{path}`           | `[[file#` mode |
-| GET    | `/api/contacts`                  | `@` picker, `@@` pill resolution |
-| GET    | `/api/mentions`                  | mention rows in the contact picker |
-| GET    | `/api/graph`                     | tag picker source |
-| GET    | `/api/files`                     | image catalog |
-| POST   | `/api/attachments`               | multipart upload (50MB cap) |
-| WS     | `/ws`                            | watch events (self-writes filtered) |
+The editor relies on three server contracts: file reads/writes with optimistic
+CAS, picker/classification lookups for links, contacts, tags, headings, and
+images, and a watch stream whose self-write filtering keeps autosave from
+reloading the buffer it just wrote.
 
 ## Autosave and conflicts
 
@@ -208,7 +202,8 @@ sequenceDiagram
 
 ## Implementation notes
 
-- List continuation and indent/outdent (`commands/list.ts`) match the current line with a regex, not the syntax tree, so the edit stays cheap and local.
+- List continuation and indent/outdent match the current line with a regex, not
+  the syntax tree, so the edit stays cheap and local.
 - Heavy or optional modules load lazily on first use: mermaid (diagram render), turndown (HTML-paste -> markdown), HEIC -> WebP conversion before image upload, and the per-language code packs (one vite chunk each).
 
 ## Out of scope

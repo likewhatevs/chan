@@ -1,8 +1,7 @@
 # chan-library — design
 
 The orchestration layer that mounts many tenants under one server and is the single source of truth for
-"what windows exist" — identical local or remote. Grounded in `host.rs`, `workspace_persist.rs`, the
-window-feed routes.
+"what windows exist" — identical local or remote.
 
 ## What it provides
 
@@ -20,8 +19,8 @@ window-feed routes.
   token-gated); read-only over the tunnel (the proxy can't forward a verifiable role — grantee mutation
   awaits a signed role header, deferred).
 - **Library-owned lifecycle**: first-open one-terminal marker, workspace on/off overlay
-  (`workspace_persist.rs`, path-keyed + shared so standalone and devserver-restart reuse a persisted
-  index — no rebuild), terminal persistence.
+  (path-keyed + shared so standalone and devserver-restart reuse a persisted index — no rebuild),
+  terminal persistence.
 
 ```mermaid
 flowchart TB

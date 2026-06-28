@@ -67,7 +67,11 @@ Host-keyed apex/wildcard dispatch, then the ordered auth gate on the wildcard pa
 
 The tunnel listener is unchanged: `chan-tunnel-server` runs raw h2 on `TUNNEL_BIND_ADDR`, with the validator chain `CapturingValidator -> ThrottlingValidator -> IdentityValidator`. On a successful handshake the registry caches `(username -> user_id)`.
 
-The `Registry` (`registry.rs`) is the in-process map from `(username, devserver_id)` to the live `TunnelHandle` plus the username cache. The second key is the devserver id (the registration name), not a workspace slug. The proxy gate looks up the user's single registration by username alone (`get_user_devserver`). The admin tree reads from the same registry that the proxy handler reads.
+The `Registry` is the in-process map from `(username, devserver_id)` to the live
+`TunnelHandle` plus the username cache. The second key is the devserver id (the
+registration name), not a workspace slug. The proxy gate looks up the user's
+single registration by username alone (`get_user_devserver`). The admin tree
+reads from the same registry that the proxy handler reads.
 
 ## Devserver gate
 
@@ -112,9 +116,7 @@ sequenceDiagram
     DS-->>B: data
 ```
 
-## Public surface
-
-Full route table is in [`README.md`](README.md). Critical paths:
+## Gateway contracts
 
 ### Tunnel registration (apex only)
 
@@ -156,15 +158,13 @@ Request bodies are wrapped in `http_body_util::Limited` at `MAX_REQUEST_BYTES` (
 
 ### Admin tree
 
-Routes:
-
-- `GET    /admin/v1/tunnels`                       list every live tunnel
-- `POST   /admin/v1/tunnels/:user/:workspace/kill`     evict one tunnel
-- `GET    /admin/v1/users/:user/tunnels`           per-user snapshot
-- `POST   /admin/v1/users/:user/tunnels/kill`      bulk evict for a user
-- `GET    /admin/v1/tunnels/watch`                 SSE snapshot stream
-
-All bearer-gated by `DEVSERVER_ADMIN_TOKEN` (constant-time compare via `subtle`). Lives on the apex hostname so tenant content cannot reach it via fetch. There is deliberately no per-IP rate limit on this tree: behind nginx every request arrives from one upstream IP, so a per-IP bucket degenerates into a single global one that an attacker could use to lock out the operator CLI; nginx is the rate-limit layer for this surface.
+The admin tree supports live tunnel snapshots, per-user snapshots, evictions,
+bulk user evictions, and an SSE watch stream. All routes are bearer-gated by
+`DEVSERVER_ADMIN_TOKEN` and live on the apex hostname so tenant content cannot
+reach them via fetch. There is deliberately no per-IP rate limit on this tree:
+behind nginx every request arrives from one upstream IP, so a per-IP bucket
+degenerates into a single global one that an attacker could use to lock out the
+operator CLI; nginx is the rate-limit layer for this surface.
 
 ## Key decisions
 
@@ -229,7 +229,7 @@ The apex, wildcard, and the dashboard redirect's id host all derive from one bas
 
 ## Error model
 
-`devserver_proxy::Error` (`src/error.rs`):
+`devserver_proxy::Error`:
 
 | Variant       | HTTP | Notes                                     |
 |---------------|------|-------------------------------------------|
@@ -245,16 +245,9 @@ The apex, wildcard, and the dashboard redirect's id host all derive from one bas
 
 devserver-proxy carries no `Conflict` variant: nothing on this surface PATCHes a unique-constrained row.
 
-## What's wired
-
-The dependency set is in `Cargo.toml`; the two choices that are not obvious from the manifest:
-
-- `hyper` runs an h1 client over a yamux substream (not a fresh socket) for the HTTP proxy path
-- the `DeadlineBody` wrapper carries the end-to-end HTTP request timeout over the response body stream (see [HTTP upstream](#http-upstream))
-
 ## What is not wired
 
-- A SPA: no `web/` bundle, no static_files in this crate
+- A SPA: no frontend bundle or static-file handler in this crate
 - Sessions: no `tower_sessions` integration anywhere
 - Per-tunnel labels (the workspace slug is the default; `Hello` carries no separate label)
 - Per-PAT scopes (tunnel scope is implicit on validated PATs)

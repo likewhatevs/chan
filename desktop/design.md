@@ -99,7 +99,7 @@ A workspace is opt-in: chan-desktop never creates one on your behalf. There is n
 
 The user creates or opens a workspace only when they want one, through the [New] modal. The [New] button opens a single modal with a segmented two-way choice:
 
-- **Local directory**: native folder picker, then Open registers the folder via `add_workspace` and immediately starts + opens it. There is deliberately NO desktop-side pre-flight scan or feature toggle here: chan's SPA owns first-boot readiness (PreflightOverlay.svelte) and the optional Semantic / Reports layers post-boot. A desktop scan dialog would duplicate and race the SPA boot surface.
+- **Local directory**: native folder picker, then Open registers the folder via `add_workspace` and immediately starts + opens it. There is deliberately NO desktop-side pre-flight scan or feature toggle here: chan's SPA owns first-boot readiness through its preflight overlay and the optional Semantic / Reports layers post-boot. A desktop scan dialog would duplicate and race the SPA boot surface.
 - **Remote**: URL + optional name form (`add_outbound_workspace`); we dial out.
 
 The auto-start on add is specific to the desktop UI: the user's intent there is "make this workspace usable now". `chan add` from a terminal only registers; the desktop shows the new row with On = off.
@@ -142,7 +142,9 @@ The desktop avoids inventing durable validation rules. It defers to chan-workspa
 
 ## 5. Self-contained runtime
 
-chan-desktop is self-contained. It links `chan-workspace` and `chan-server` directly and embeds the web bundle (`web/dist`) via rust-embed at build time. No `chan` binary is shipped in the app bundle, and none is required at runtime.
+chan-desktop is self-contained. It links `chan-workspace` and `chan-server`
+directly and embeds the web bundle at build time. No `chan` binary is shipped in
+the app bundle, and none is required at runtime.
 
 Local workspaces open through the embedded chan-server `WorkspaceHost`, which owns a single `chan_workspace::Library`. Every registry mutation runs in-process against that `Library`.
 
@@ -225,11 +227,22 @@ Non-goal: chan-desktop installation should be "drag Chan.app to /Applications". 
 
 chan-desktop is also the `chan` / `cs` command line: on boot it owns `~/.local/bin/{chan,cs}` shims that resolve to the running desktop binary, so a desktop install gives you `chan open` and the shell-first workflows with nothing extra to download. A standalone `chan` (the `chan.app/install.sh` installer or a release tarball) is still available and independent; the two share the same `~/.chan` registry, so a workspace added by one shows up in the other.
 
-The shims are installed per package kind (`src-tauri/src/cs_install.rs`, `install_bin_shims()`, called on boot): a macOS `.app` or Linux deb/rpm gets real symlinks to the installed binary; a Linux AppImage gets tiny `exec -a` wrapper scripts, because `current_exe()` inside an AppImage is the ephemeral mount. Both names resolve to the same binary, and the argv[0] stem dispatch (`chan_shell::invoked_arg0`, which prefers `$ARGV0` over `argv[0]` so an AppImage that lost argv[0] to `AppRun` still reaches the inner CLI instead of the GUI) selects the CLI / control-client / GUI path. Best-effort, idempotent, and self-healing: a shim we wrote is re-pointed or rewritten on the next launch when it goes stale (the binary moved, the AppImage updated), and a `chan` / `cs` the user installed themselves is never clobbered.
+The shims are installed on boot per package kind: a macOS `.app` or Linux
+deb/rpm gets real symlinks to the installed binary; a Linux AppImage gets tiny
+`exec -a` wrapper scripts, because `current_exe()` inside an AppImage is the
+ephemeral mount. Both names resolve to the same binary, and the argv[0] stem
+dispatch (`chan_shell::invoked_arg0`, which prefers `$ARGV0` over `argv[0]` so
+an AppImage that lost argv[0] to `AppRun` still reaches the inner CLI instead of
+the GUI) selects the CLI / control-client / GUI path. Best-effort, idempotent,
+and self-healing: a shim we wrote is re-pointed or rewritten on the next launch
+when it goes stale (the binary moved, the AppImage updated), and a `chan` / `cs`
+the user installed themselves is never clobbered.
 
 ## 8. Distribution
 
-The download entry point is https://chan.app/install. Desktop artifacts are built by the release workflow (`.github/workflows/release.yml`; `release-desktop.yml` is the matching dry-run for branches):
+The download entry point is https://chan.app/install. Desktop artifacts are
+built by the release workflow; the branch dry-run lane exercises the same
+artifact matrix:
 
 - macOS arm64: notarised DMG containing `Chan.app`. Drag to /Applications. Signed and notarised in CI with the Developer ID identity imported from secrets.
 - Linux: `.AppImage` plus distro packages (`.deb`, `.rpm`), unsigned.
@@ -242,7 +255,8 @@ Cargo install (`cargo install chan-desktop`) builds the self-contained desktop f
 
 The AppImage bundles its own GUI stack (libgtk-3, libwebkit2gtk-4.1) and the GL/EGL/gbm libraries `linuxdeploy-plugin-gtk` pulls in, built on the Ubuntu CI runner. On a host whose Mesa is newer than the bundle (rolling distros such as CachyOS / Arch on an AMD radeonsi iGPU), the bundled libgtk cannot create an EGL display against the host Mesa and the webview aborts at creation with `EGL_BAD_PARAMETER`. No single bundled GTK/Mesa works across every distro indefinitely; the host's GTK and Mesa are always built against each other.
 
-`src-tauri/src/linux_gui_stack.rs` (called at the top of `fn main()`) prefers the host GUI stack, falling back to the bundle:
+The Linux GUI-stack bootstrap runs before webview creation. It prefers the host
+GUI stack, falling back to the bundle:
 
 - It runs only inside an AppImage (keyed on `cs_install::appimage_path()`) and is a no-op on macOS / Windows / `.deb` / `.rpm` / `cargo run`.
 - Presence gate: only when BOTH `libgtk-3.so.0` AND `libwebkit2gtk-4.1.so.0` resolve in the host `ldconfig -p` cache does it shadow the bundle (a partial shadow is worse than either stack alone).
@@ -261,7 +275,7 @@ The `CHAN_LINUX_SYSTEM_GUI` env knob selects the policy:
 chan-desktop updates itself through `tauri-plugin-updater`, gated by the `updater:*` capabilities. A fire-and-forget check runs once per launcher process launch.
 
 - Update bundles are verified with a minisign signature. The production public key is embedded in `src-tauri/tauri.conf.json` under `plugins.updater.pubkey`; the matching private key lives outside the repo in the release owner's secret store.
-- The client probes a single static manifest at `https://chan.app/dl/desktop/latest.json`, generated at release time by `web/packages/marketing/scripts/generate-release-metadata.mjs` (run from `.github/workflows/release.yml`) and deployed to GitHub Pages with the rest of chan.app; there is no dynamic `/dl` server. The manifest carries a top-level `version` plus a `platforms` map keyed by `{os}-{arch}` (e.g. `darwin-aarch64`); Tauri picks the running target's entry and compares `version`.
+- The client probes a single static manifest at `https://chan.app/dl/desktop/latest.json`, generated at release time and deployed to GitHub Pages with the rest of chan.app; there is no dynamic `/dl` server. The manifest carries a top-level `version` plus a `platforms` map keyed by `{os}-{arch}` (e.g. `darwin-aarch64`); Tauri picks the running target's entry and compares `version`.
 - One executable to upgrade. The desktop binary IS `chan` (section 1), so there is no second CLI to update -- the `~/.local/bin/{chan,cs}` shims point at the one binary. `chan upgrade` from the desktop-dispatched binary (`Personality::Desktop`) does NOT replace a tarball: it delegates over the well-known handoff socket to the running desktop, which drives this same `tauri-plugin-updater` (check → download → install → `restart()`). If no desktop is running the CLI launches one first; after a successful install the desktop re-affirms the shims (so they keep pointing at the upgraded binary). `chan upgrade --check` reports availability synchronously without installing. The standalone `chan` (install.sh) is the only path that still self-upgrades by replacing its CLI tarball in place.
 
 Key rotation and updater-payload signing/verification are documented in `.agents/desktop.md` ("Auto-upgrade signing") and the [`updater-bridge.md`](./updater-bridge.md) runbook.
@@ -284,11 +298,7 @@ Remote workspaces are explicit attachments. They are not a fallback for failed e
 
 ### 11.1 Outbound URL attach
 
-Outbound attach means the server already exists and chan-desktop opens it by URL. Example:
-
-```
-chan open /tmp/foo
-```
+Outbound attach means the server already exists and chan-desktop opens it by URL.
 
 The user copies the printed URL, including the bearer token, into the [New] modal's Remote form. The desktop opens that URL in a workspace webview (through the connecting screen, section 6.4) and does not try to start, stop, reclaim, or inspect the server process. This works whether the URL points at another machine or at `127.0.0.1` on the same machine.
 

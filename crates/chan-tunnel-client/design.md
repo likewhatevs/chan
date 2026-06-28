@@ -2,11 +2,8 @@
 
 ## Cross-crate context
 
-chan-tunnel is split across three crates under `crates/` in this repository:
-
-- `chan-tunnel-proto`: pure wire types (`Hello`, `HelloAck`, `ProtocolVersion`, the `error_code` refusal constants), the framing codec, the workspace-name and username validators, and `H2Duplex`. See [`chan-tunnel-proto/design.md`](../chan-tunnel-proto/design.md) for byte-level details.
-- `chan-tunnel-client` (this crate): dials the terminator, runs the Hello round-trip, multiplexes yamux substreams onto an axum router. Embedded into `chan-server` (`crates/chan-server`) and driven by `chan devserver`.
-- `chan-tunnel-server`: terminator library, consumed by the gateway's `devserver-proxy`. Owns `Validator`, `Registry`, and the substream-forwarding seam.
+chan-tunnel has three boundaries: shared wire contracts, this dial-side client
+embedded by `chan devserver`, and a terminator embedded by the gateway.
 
 End-to-end shape: `chan devserver` calls `chan_tunnel_client::run(cfg, router)`; the terminator accepts the connection in `serve_tunnel_listener` and registers the devserver in its `Registry`. The dial / handshake / yamux flow is the section-2 diagram below, set in the cross-crate system diagram in [`chan-tunnel-proto/design.md`](../chan-tunnel-proto/design.md).
 
@@ -69,7 +66,7 @@ Connection lifecycle:
 
 ## 3. Components / responsibilities
 
-`handshake` and `serve_substreams` are free functions over a generic `S: AsyncRead + AsyncWrite + Unpin + Send + 'static` so wire tests (e.g. `gateway/crates/devserver-proxy/tests/api.rs`) can pass a duplex built from a raw h2 stream and exercise the Hello round-trip without standing up TLS. The same generic lets `dial` pass an `H2Duplex` produced from a real h2 stream.
+`handshake` and `serve_substreams` are free functions over a generic `S: AsyncRead + AsyncWrite + Unpin + Send + 'static` so wire tests can pass a duplex built from a raw h2 stream and exercise the Hello round-trip without standing up TLS. The same generic lets `dial` pass an `H2Duplex` produced from a real h2 stream.
 
 ### Per-substream serving
 
@@ -97,83 +94,15 @@ When `ClientConfig::proxy` is set, `open_tcp` connects to the proxy and issues a
 
 `ClientConfig::events` is an `Option<mpsc::Sender<TunnelEvent>>`. Backpressure: `run` uses `try_send`, so a slow consumer drops events rather than blocking the dial loop. The events are tee material for logs and a UI; missing one isn't load-bearing.
 
-## 4. Public API surface
-
-```rust
-pub const DEFAULT_MAX_CONCURRENT_SUBSTREAMS: usize = 128;
-
-pub struct ClientConfig {
-    pub tunnel_url: Url,
-    pub token: String,
-    pub workspace: String,
-    pub client_version: String,
-    pub public: bool,
-    pub initial_backoff: Duration,
-    pub max_backoff: Duration,
-    pub dial_timeout: Duration,
-    pub events: Option<mpsc::Sender<TunnelEvent>>,
-    pub proxy: Option<Url>,
-    pub max_concurrent_substreams: usize,
-}
-impl Default for ClientConfig { /* devserver.chan.app/v1/tunnel */ }
-
-pub struct Registration {
-    pub prefix: String,
-    pub user: String,
-    pub workspace: String,
-}
-
-pub enum TunnelEvent {
-    Connected(Registration),
-    Disconnected { retry_in: Duration },
-    DialFailed { error: String, retry_in: Duration },
-}
-
-pub enum ClientError {
-    InvalidUrl(String),
-    Tls(String),
-    Io(std::io::Error),
-    Handshake(String),
-    RemoteRefusal { code: String, message: String },
-    TransportClosed,
-}
-
-pub async fn dial(cfg: &ClientConfig)
-    -> Result<(Registration, YamuxConnection<Compat<H2Duplex>>),
-              ClientError>;
-
-pub async fn dial_with_tls(
-    cfg: &ClientConfig,
-    tls: Option<&Arc<RustlsClientConfig>>,
-) -> Result<(Registration, YamuxConnection<Compat<H2Duplex>>),
-            ClientError>;
-
-pub fn build_tls_config() -> Result<RustlsClientConfig, ClientError>;
-
-pub async fn handshake<S>(cfg: &ClientConfig, socket: S)
-    -> Result<(Registration, YamuxConnection<Compat<S>>), ClientError>
-    where S: AsyncRead + AsyncWrite + Unpin + Send + 'static;
-
-pub async fn serve_substreams<S>(
-    conn: YamuxConnection<S>,
-    router: axum::Router,
-) -> Result<(), ClientError>
-    where S: futures::AsyncRead + futures::AsyncWrite
-           + Unpin + Send + 'static;
-
-pub async fn serve_substreams_with_limit<S>(
-    conn: YamuxConnection<S>,
-    router: axum::Router,
-    max_concurrent_substreams: usize,
-) -> Result<(), ClientError>
-    where S: futures::AsyncRead + futures::AsyncWrite
-           + Unpin + Send + 'static;
-
-pub async fn run(cfg: ClientConfig, router: axum::Router)
-    -> Result<(), ClientError>;
-```
+## 4. Runtime contracts
 
 `run` is the long-lived future. Dropping it cancels everything (yamux, the h2 driver task, the in-flight dial). It returns only on configuration errors that retrying cannot recover from (empty token, invalid workspace name, unsupported URL scheme, no native CA roots available).
+
+The config boundary carries connection policy, identity, retry policy, optional proxy settings, the event channel, and the substream concurrency cap. Defaults point at the production tunnel host; callers that bypass `run` can still reuse the same dial / handshake / serve phases for tests and embedded integrations.
+
+A successful registration carries only the public prefix, user, and workspace name assigned by the terminator. Event delivery is best-effort: connected, disconnected, and dial-failed events are useful for UI/logs but never block reconnect progress.
+
+The error surface is intentionally flat. Structured remote refusals preserve the server's stable code for UI matching; transport, TLS, frame, and serialization details collapse before crossing this crate boundary.
 
 ## 5. Wire format / framing
 
@@ -201,17 +130,11 @@ Client-specific notes:
 
 ## 7. Error model
 
-Single umbrella enum `ClientError` with six variants (see section 4). `From` impls flatten `chan_tunnel_proto::FrameError` and `IoFrameError` through `Display` so the public surface stays free of `h2::Error`, `serde_json::Error`, and `rustls::Error`. `RemoteRefusal` is the one structured variant: it preserves the server's stable refusal code for UI matching.
+Single umbrella enum `ClientError` with six variants (see section 4). `From` impls flatten `chan_tunnel_proto::FrameError` and `IoFrameError` through `Display` so the crate boundary stays free of `h2::Error`, `serde_json::Error`, and `rustls::Error`. `RemoteRefusal` is the one structured variant: it preserves the server's stable refusal code for UI matching.
 
 `run` itself returns `Result<(), ClientError>` and only errors on non-recoverable misconfiguration; transient failures (TLS, h2, 401, network) loop with backoff and are surfaced through `TunnelEvent::DialFailed` instead.
 
-## 8. Consumers
-
-- `crates/chan-server`: runtime dep. `chan devserver --tunnel-token` calls `chan_tunnel_client::run(cfg, router)` to expose its inner axum app through the tunnel; consumes `TunnelEvent` and `Registration` to wire the prefix and surface "connected / retrying" status to the operator.
-- `crates/chan-tunnel-server`: dev-dep. The e2e test (`tests/listener_e2e.rs`) uses `dial` to drive a real client against `serve_tunnel_listener` over localhost h2c.
-- `gateway/crates/devserver-proxy`: dev-dep. `tests/api.rs` uses `handshake` + `serve_substreams` over a hand-built h2 stream to register a fake `chan devserver` against the proxy's real listener.
-
-## 9. Open questions / future extensions
+## 8. Open questions / future extensions
 
 - Per-leg dial timeouts. Today `dial_timeout` is a single global cap on proxy CONNECT + TCP + TLS + h2 + Hello. Splitting into legs would give better diagnostics (which step stalled) but multiplies the config surface; punted until operators ask.
 - TLS session resumption. `build_tls_config` does not configure a session store; every reconnect re-runs the full TLS handshake. For a host that flaps frequently, a small in-process resumption store would shave a round trip.
