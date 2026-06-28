@@ -708,6 +708,7 @@ body.lightbox-open {
   display: flex;
   flex-wrap: wrap;
   gap: 14px;
+  justify-content: space-between;
   padding-top: 24px;
 }
 
@@ -725,15 +726,6 @@ body.lightbox-open {
     padding-inline: 18px;
   }
 
-  .site-header {
-    grid-template-columns: 1fr auto;
-  }
-
-  .site-nav {
-    grid-column: 1 / -1;
-    justify-content: flex-start;
-  }
-
   .hero-main,
   .split-section,
   .install-section {
@@ -743,6 +735,20 @@ body.lightbox-open {
   .hero {
     min-height: auto;
     padding-top: 28px;
+  }
+
+  /* Single-column hero: center the Install / GitHub buttons under the copy
+     instead of left-aligning them against the now-centered stack. */
+  .button-row {
+    justify-content: center;
+  }
+
+  /* The 3/4 portrait ratio on a narrow column is too short for the launcher
+     demo's add-devserver form; pin a desktop-equivalent pixel height so the
+     form clears instead of being clipped by the frame's overflow: hidden. */
+  .launcher-hero {
+    aspect-ratio: auto;
+    height: 680px;
   }
 
   .feature-grid,
