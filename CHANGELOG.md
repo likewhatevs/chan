@@ -6,6 +6,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [v0.55.0] - 2026-06-28
+
 An editor-polish and devserver-hardening round: mermaid diagrams zoom, dev servers show their OS, local workspaces take a display name, wide tables stay readable, pasted image paths resolve from the terminal, plus a batch of editor and Windows fixes.
 
 ### Added
