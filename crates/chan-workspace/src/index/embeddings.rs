@@ -57,6 +57,16 @@ pub enum EmbedError {
     Tokenizer(String),
     #[error("hf-hub: {0}")]
     HfHub(String),
+    /// A proxy env var (`HTTP(S)_PROXY`/`ALL_PROXY`) is set to a value the model
+    /// downloader's HTTP client (hf-hub/ureq) cannot use, so a download would run
+    /// without the proxy and fail in a constrained env. Surfaced with the
+    /// offending var + value instead of the opaque transport error.
+    #[error(
+        "proxy env var {var} = {value:?} is not usable by the model downloader \
+         (only http:// and socks proxies are supported; an https://-scheme proxy \
+         or a malformed value is rejected). Set an http:// proxy URL for the model host."
+    )]
+    ProxyConfig { var: String, value: String },
     #[error("config decode: {0}")]
     Config(String),
     #[error("operation cancelled")]
@@ -81,6 +91,65 @@ fn candle_err<E: std::fmt::Display>(e: E) -> EmbedError {
 }
 fn tok_err<E: std::fmt::Display>(e: E) -> EmbedError {
     EmbedError::Tokenizer(e.to_string())
+}
+
+/// The proxy env vars hf-hub's ureq client consults, in its precedence order
+/// (`ureq::Proxy::try_from_system`): the first that parses to a usable proxy
+/// wins. Mirrored here so a download failure can point at a set-but-unusable
+/// proxy var.
+const PROXY_VARS: [&str; 6] = [
+    "ALL_PROXY",
+    "all_proxy",
+    "HTTPS_PROXY",
+    "https_proxy",
+    "HTTP_PROXY",
+    "http_proxy",
+];
+
+/// Whether ureq's `Proxy::new` would accept this value: a bare `host[:port]`
+/// (treated as http) or an `http`/`socks{,4,4a,5}` scheme. An `https`-scheme
+/// proxy or any other scheme is rejected -- the gap behind a silent
+/// constrained-env download failure.
+fn proxy_value_usable(value: &str) -> bool {
+    match value.split_once("://") {
+        Some((scheme, rest)) => {
+            !rest.is_empty() && matches!(scheme, "http" | "socks" | "socks4" | "socks4a" | "socks5")
+        }
+        None => !value.is_empty(),
+    }
+}
+
+/// The first set-but-unusable proxy var, or `None` when no proxy var is set or at
+/// least one set var IS usable (ureq falls through to it, like `try_from_system`).
+fn proxy_env_issue() -> Option<(String, String)> {
+    proxy_issue_from(|var| std::env::var(var).ok())
+}
+
+fn proxy_issue_from(lookup: impl Fn(&str) -> Option<String>) -> Option<(String, String)> {
+    let mut first_unusable = None;
+    for var in PROXY_VARS {
+        let Some(value) = lookup(var) else { continue };
+        let value = value.trim();
+        if value.is_empty() {
+            continue;
+        }
+        if proxy_value_usable(value) {
+            return None;
+        }
+        first_unusable.get_or_insert_with(|| (var.to_string(), value.to_string()));
+    }
+    first_unusable
+}
+
+/// Map an hf-hub fetch failure to a clear [`EmbedError::ProxyConfig`] when a
+/// proxy var is set to a value ureq cannot use (the likely cause in a
+/// constrained env), else the raw hf-hub error. Only the DOWNLOAD path goes
+/// through here, so a cached model never trips it.
+fn hf_fetch_err<E: std::fmt::Display>(e: E) -> EmbedError {
+    match proxy_env_issue() {
+        Some((var, value)) => EmbedError::ProxyConfig { var, value },
+        None => EmbedError::HfHub(e.to_string()),
+    }
 }
 
 /// Maximum input length in tokens. BGE family is 512.
@@ -161,6 +230,13 @@ impl Embedder {
         let _ = lookup_model(model_id)?;
         std::fs::create_dir_all(cache_dir)?;
 
+        // hf-hub builds its own ureq agent and already honors HTTP_PROXY /
+        // HTTPS_PROXY / ALL_PROXY (and SOCKS) from the environment via
+        // `try_proxy_from_env`, so a normal proxied env needs no extra config
+        // here. It does NOT honor NO_PROXY, and ureq rejects an https://-scheme
+        // proxy URL -- both unsupported for the model download. When a fetch fails
+        // AND a proxy var is set to a value ureq cannot use, `hf_fetch_err`
+        // surfaces that up front instead of the opaque transport error.
         let api = ApiBuilder::new()
             .with_cache_dir(cache_dir.to_path_buf())
             .with_progress(true)
@@ -168,15 +244,9 @@ impl Embedder {
             .map_err(|e| EmbedError::HfHub(e.to_string()))?;
         let repo = api.model(model_id.to_owned());
 
-        let config_path = repo
-            .get("config.json")
-            .map_err(|e| EmbedError::HfHub(e.to_string()))?;
-        let tokenizer_path = repo
-            .get("tokenizer.json")
-            .map_err(|e| EmbedError::HfHub(e.to_string()))?;
-        let weights_path = repo
-            .get("model.safetensors")
-            .map_err(|e| EmbedError::HfHub(e.to_string()))?;
+        let config_path = repo.get("config.json").map_err(hf_fetch_err)?;
+        let tokenizer_path = repo.get("tokenizer.json").map_err(hf_fetch_err)?;
+        let weights_path = repo.get("model.safetensors").map_err(hf_fetch_err)?;
 
         let config_raw = std::fs::read_to_string(&config_path)?;
         let config: Config =
@@ -530,6 +600,48 @@ mod tests {
     fn unknown_model_is_error() {
         let err = lookup_model("not-a-model").unwrap_err();
         assert!(matches!(err, EmbedError::UnknownModel(_)));
+    }
+
+    #[test]
+    fn proxy_value_usable_accepts_http_and_socks_only() {
+        assert!(proxy_value_usable("http://proxy:8080"));
+        assert!(proxy_value_usable("socks5://proxy:1080"));
+        assert!(proxy_value_usable("socks://proxy:1080"));
+        // A bare host[:port] is treated as http by ureq.
+        assert!(proxy_value_usable("proxy.example:8080"));
+        // The known gaps: an https-scheme proxy and any other scheme.
+        assert!(!proxy_value_usable("https://proxy:8080"));
+        assert!(!proxy_value_usable("ftp://x"));
+        assert!(!proxy_value_usable(""));
+    }
+
+    #[test]
+    fn proxy_issue_falls_through_to_a_usable_var() {
+        use std::collections::HashMap;
+        let look = |m: HashMap<&'static str, &'static str>| {
+            move |v: &str| m.get(v).map(|s| s.to_string())
+        };
+        // No proxy set -> no issue.
+        assert_eq!(proxy_issue_from(look(HashMap::new())), None);
+        // A usable proxy -> no issue.
+        assert_eq!(
+            proxy_issue_from(look(HashMap::from([("HTTP_PROXY", "http://p:8080")]))),
+            None
+        );
+        // Only an https-scheme proxy -> flagged with the offending var + value.
+        assert_eq!(
+            proxy_issue_from(look(HashMap::from([("HTTPS_PROXY", "https://p:8080")]))),
+            Some(("HTTPS_PROXY".to_string(), "https://p:8080".to_string()))
+        );
+        // An unusable ALL_PROXY but a usable HTTP_PROXY -> ureq uses the latter,
+        // so no issue (mirrors try_from_system's fall-through precedence).
+        assert_eq!(
+            proxy_issue_from(look(HashMap::from([
+                ("ALL_PROXY", "https://bad"),
+                ("HTTP_PROXY", "http://good:8080"),
+            ]))),
+            None
+        );
     }
 
     #[test]
