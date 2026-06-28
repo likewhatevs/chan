@@ -103,9 +103,7 @@ pub fn workspaces_dir() -> PathBuf {
 /// 8-hex suffix is a deterministic hash of the same canonical path
 /// string, preventing collisions between similar slugs.
 pub fn metadata_key_for_root(workspace_root: &Path) -> String {
-    let canonical = workspace_root
-        .canonicalize()
-        .unwrap_or_else(|_| workspace_root.to_path_buf());
+    let canonical = canonicalize_normalized(workspace_root);
     let canonical_s = canonical.as_os_str().to_string_lossy();
     let slug = metadata_slug(&canonical_s);
     format!("{slug}-{}", canonical_hash8(&canonical_s))
@@ -121,10 +119,40 @@ pub fn metadata_key_for_root(workspace_root: &Path) -> String {
 /// chan-library), so the keyed pathspec `/{basename-slug}-{8hex}` is unique
 /// even across two same-basename workspaces.
 pub fn canonical_root_hash8(workspace_root: &Path) -> String {
-    let canonical = workspace_root
-        .canonicalize()
-        .unwrap_or_else(|_| workspace_root.to_path_buf());
+    let canonical = canonicalize_normalized(workspace_root);
     canonical_hash8(&canonical.as_os_str().to_string_lossy())
+}
+
+/// Canonicalize `workspace_root`, stripping any Windows `\\?\` verbatim
+/// (extended-length) prefix so a path keys and compares identically whether a
+/// process resolved it with or without the prefix. The CLI and the serving
+/// devserver must agree on this, or a workspace's lock record keys under one
+/// form and `chan ps` looks it up under the other and reads no PID.
+/// `dunce::canonicalize` avoids emitting the prefix for legacy-length paths;
+/// [`strip_verbatim_prefix`] then guarantees it is gone (long paths, or the
+/// fallback when the FS can't canonicalize) and makes the normalization
+/// testable off-Windows. Falls back to the (stripped) input when the root is
+/// missing or asleep.
+pub fn canonicalize_normalized(workspace_root: &Path) -> PathBuf {
+    match dunce::canonicalize(workspace_root) {
+        Ok(canonical) => strip_verbatim_prefix(&canonical),
+        Err(_) => strip_verbatim_prefix(workspace_root),
+    }
+}
+
+/// Strip a leading Windows `\\?\` verbatim prefix (`\\?\UNC\srv\share` ->
+/// `\\srv\share`, `\\?\C:\x` -> `C:\x`) as a pure string operation, regardless
+/// of build OS, so the normalization is deterministic and unit-testable
+/// off-Windows. Any other path passes through unchanged.
+pub fn strip_verbatim_prefix(p: &Path) -> PathBuf {
+    let s = p.as_os_str().to_string_lossy();
+    if let Some(rest) = s.strip_prefix(r"\\?\UNC\") {
+        PathBuf::from(format!(r"\\{rest}"))
+    } else if let Some(rest) = s.strip_prefix(r"\\?\") {
+        PathBuf::from(rest)
+    } else {
+        p.to_path_buf()
+    }
 }
 
 /// sha256 of an already-canonicalized path string → its first 8 hex chars.
@@ -453,6 +481,42 @@ mod tests {
         let key = metadata_key_for_root(&p);
         assert!(key.starts_with("-Users-fiorix-dev-github.com-fiorix-chan-"));
         assert_eq!(key.rsplit_once('-').unwrap().1.len(), 8);
+    }
+
+    #[test]
+    fn strip_verbatim_prefix_removes_windows_extended_length_prefix() {
+        // The disk-designator and UNC verbatim prefixes are stripped; a plain
+        // path is unchanged. A pure string op, so it runs the same on every OS.
+        assert_eq!(
+            strip_verbatim_prefix(Path::new(r"\\?\C:\Users\me\proj")),
+            PathBuf::from(r"C:\Users\me\proj")
+        );
+        assert_eq!(
+            strip_verbatim_prefix(Path::new(r"\\?\UNC\server\share\proj")),
+            PathBuf::from(r"\\server\share\proj")
+        );
+        assert_eq!(
+            strip_verbatim_prefix(Path::new(r"C:\Users\me\proj")),
+            PathBuf::from(r"C:\Users\me\proj")
+        );
+        assert_eq!(
+            strip_verbatim_prefix(Path::new("/home/me/proj")),
+            PathBuf::from("/home/me/proj")
+        );
+    }
+
+    #[test]
+    fn metadata_key_identical_across_verbatim_prefix() {
+        // The CLI and the serving devserver must derive the SAME metadata key
+        // (hence the same lock-record key) whether a process resolved the root
+        // with or without the Windows `\\?\` prefix; otherwise `chan ps` keys
+        // under one form and reads no PID under the other. Neither input is a
+        // real path on the test host, so both take the normalized fallback and
+        // must collapse to one key.
+        let prefixed = Path::new(r"\\?\C:\Users\me\proj");
+        let plain = Path::new(r"C:\Users\me\proj");
+        assert_eq!(metadata_key_for_root(prefixed), metadata_key_for_root(plain));
+        assert_eq!(canonical_root_hash8(prefixed), canonical_root_hash8(plain));
     }
 
     #[test]

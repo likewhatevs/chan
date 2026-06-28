@@ -542,7 +542,7 @@ fn sweep_orphans_in(
 /// missing or asleep), so the map still tracks "this exact request
 /// path" through the rest of the operation.
 fn canonical_key(root: &Path) -> PathBuf {
-    root.canonicalize().unwrap_or_else(|_| root.to_path_buf())
+    paths::canonicalize_normalized(root)
 }
 
 /// Drop dead entries from the live-workspaces map. A `Weak<Workspace>`

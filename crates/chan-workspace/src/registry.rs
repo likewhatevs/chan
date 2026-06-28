@@ -146,9 +146,7 @@ impl KnownWorkspace {
         if let Some(p) = &self.canonical_path {
             return p.clone();
         }
-        self.root_path
-            .canonicalize()
-            .unwrap_or_else(|_| self.root_path.clone())
+        paths::canonicalize_normalized(&self.root_path)
     }
 }
 
@@ -174,11 +172,7 @@ impl Registry {
         // here is non-fatal: an entry whose workspace root is missing or
         // asleep stays comparable lexically.
         for d in &mut reg.workspaces {
-            d.canonical_path = Some(
-                d.root_path
-                    .canonicalize()
-                    .unwrap_or_else(|_| d.root_path.clone()),
-            );
+            d.canonical_path = Some(paths::canonicalize_normalized(&d.root_path));
         }
         Ok(reg)
     }
@@ -265,19 +259,19 @@ impl Registry {
     }
 }
 
-/// Canonicalize-or-fall-back-to-input. Used for the per-call target
-/// path; entries cache their own canonical form on insert / load.
+/// Canonicalize-or-fall-back-to-input, normalized (any Windows `\\?\` verbatim
+/// prefix stripped) so a path keys and compares identically across processes.
+/// Used for the per-call target path; entries cache their own canonical form on
+/// insert / load.
 fn canonicalize_or_keep(root: &Path) -> PathBuf {
-    root.canonicalize().unwrap_or_else(|_| root.to_path_buf())
+    paths::canonicalize_normalized(root)
 }
 
 /// Re-canonicalize an entry's `root_path` ignoring its cache. Used
 /// as the slow-path fallback when the cached canonical doesn't match
 /// the target.
 fn fresh_canonical(d: &KnownWorkspace) -> PathBuf {
-    d.root_path
-        .canonicalize()
-        .unwrap_or_else(|_| d.root_path.clone())
+    paths::canonicalize_normalized(&d.root_path)
 }
 
 /// Index of the workspace whose canonical, cached then fresh, matches
