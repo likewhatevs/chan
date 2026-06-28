@@ -44,6 +44,37 @@ Because the source is the single source of truth, the editor sidesteps a class o
 
 10. **Autosave** writes `view.state.doc.toString()` on `update.docChanged` to the bindable `value` prop (`createValueSync` in `base.ts` guards the echo so a prop write-back can't clobber the caret). The debounced `scheduleAutosave` pipeline in `state/tabs.svelte.ts` owns the write. No serialize step. The CAS contract on `PUT /api/files` (`expected_mtime_ns`, 409 + `current_mtime_ns` on conflict) is the conflict gate; a watcher event for a non-self write flags a "changed on disk" banner instead of auto-reloading. `state/editorBuffer.ts` keeps a debounced localStorage copy keyed by path for hang-recovery.
 
+## Decoration pipeline
+
+Every ViewUpdate re-walks the viewport syntax tree and merges the four decoration kinds, plus the regex tag/mention/date plugins, into the one DecorationSet CM6 paints.
+
+```mermaid
+flowchart TD
+  subgraph TRIG["ViewUpdate re-run triggers"]
+    direction LR
+    T1["docChanged"]
+    T2["viewportChanged"]
+    T3["selectionSet"]
+    T4["geometryChanged"]
+  end
+  TRIG --> Walker["walker ViewPlugin (decorationWalker)"]
+  Walker --> Iter["iterate viewport syntaxTree, dispatch by node name"]
+  Iter --> Reg["chanDecorations registry: marks + headings + blocks"]
+  Reg --> K1["hide markers: Decoration.replace empty"]
+  Reg --> K2["inline marks: Decoration.mark class"]
+  Reg --> K3["line decorations: Decoration.line class"]
+  Reg --> K4["atomic widgets: Decoration.replace widget"]
+  TRIG -->|"minus geometryChanged"| Regex["regex ViewPlugins: tag / mention / date"]
+  Regex --> Skip["scan viewport text, skip code ranges"]
+  Skip --> K2
+  Skip --> K4
+  K1 --> DSet["DecorationSet"]
+  K2 --> DSet
+  K3 --> DSet
+  K4 --> DSet
+  DSet --> Render["CM6 paints the viewport"]
+```
+
 ## Why 1-char marks work
 
 `*a*` is three real characters in the doc: `*`, `a`, `*`. The `*` markers at `[0, 1]` and `[2, 3]` get hide-decorations whenever the selection does NOT intersect them. A caret at offset 1 (between `*` and `a`) intersects both `[0, 1]` (caret == to) and `[2, 3]` (caret == from), so both markers reveal. No special case. Backspace deletes a real `*` character the user can see, and round-trip is the identity function. A rendered-tree model that represents `*a*` as a single marked node has no integer caret position satisfying `from < caret < to` when `to - from == 1`, which is the structural reason that model needs a per-pattern boundary patch and this one does not.
@@ -52,93 +83,75 @@ Because the source is the single source of truth, the editor sidesteps a class o
 
 `FileEditorTab.svelte` hosts the editors and owns a per-tab mode: `wysiwyg` | `source` | `pretty` | `table`. Markdown-class files (.md/.txt) pair WYSIWYG with source; JSON opens as a collapsible tree (`JsonPretty.svelte`) and CSV/TSV as an editable grid (`CsvTable.svelte` + `csv.ts`), each with source as the toggle. Any other text-kind file is source-only - source IS the sensible surface for a .py / .toml / Makefile. Source mode highlights by extension via the same lazy language packs.
 
-## Layout
+`FileEditorTab` picks the initial mode by file class, then toggles source against the single rendered surface each class pairs with; plain text is source-only.
 
+```mermaid
+stateDiagram-v2
+    [*] --> pick
+    pick: open via defaultModeForPath(path, fileKind)
+    pick --> Markdown: md / txt
+    pick --> Json: json
+    pick --> Csv: csv / tsv
+    pick --> Text: other text
+
+    state "Markdown class" as Markdown {
+        [*] --> wysiwyg
+        wysiwyg: wysiwyg (Wysiwyg.svelte)
+        mdsrc: source (Source.svelte)
+        wysiwyg --> mdsrc: Show Source
+        mdsrc --> wysiwyg: Show Rendered
+    }
+
+    state "JSON class" as Json {
+        [*] --> pretty
+        pretty: pretty (JsonPretty.svelte)
+        jsonsrc: source (Source.svelte)
+        pretty --> jsonsrc: Show Source
+        jsonsrc --> pretty: Show Pretty Tree
+    }
+
+    state "CSV / TSV class" as Csv {
+        [*] --> table
+        table: table (CsvTable.svelte)
+        csvsrc: source (Source.svelte)
+        table --> csvsrc: Show Source
+        csvsrc --> table: Show Table
+    }
+
+    Text: source only (Source.svelte) - no rendered toggle
 ```
-editor/
-├── design.md              this file
-├── base.ts                shared CM6 setup: themeExtensions (Primer
-│                           highlight + chrome), theme compartment,
-│                           findField + setFindEffect + makeFindAdapter,
-│                           createValueSync ($bindable echo guard)
-├── Wysiwyg.svelte         the editor (decoration stack + widgets +
-│                           bubbles + format commands + paste/drop)
-├── Source.svelte          plain CM6 source mode; per-extension
-│                           highlighting; reuses base.ts; no widgets
-├── JsonPretty.svelte      read-only collapsible JSON tree (+ JsonNode)
-├── CsvTable.svelte        editable CSV/TSV grid
-├── highlight.ts           GitHub Primer syntax palettes (light/dark)
-├── markdown/
-│   ├── grammar.ts         lang-markdown + GFM + WikiLink + Frontmatter
-│   │                       + lazy codeLanguages
-│   ├── wikilink.ts        lezer inline parser for [[...]]
-│   ├── frontmatter.ts     block parser for ---...--- at doc start
-│   ├── code_languages.ts  per-language packs, one vite chunk each
-│   └── debug.ts           dev-console syntax-tree dump
-├── decorations/
-│   ├── walker.ts          ViewPlugin: walks viewport syntaxTree, runs
-│   │                       on docChanged | viewportChanged |
-│   │                       selectionSet | geometryChanged
-│   ├── index.ts           handler registry (chanDecorations)
-│   ├── selection.ts       selectionInRange / lineIntersect helpers
-│   ├── marks.ts           bold/italic/strike/code/links/naked URL
-│   ├── headings.ts        heading line classes + prefix hide
-│   └── blocks.ts          lists, task lists, blockquote, hr, fences
-├── widgets/
-│   ├── wikilink.ts        atom for [[note]] + internal links
-│   ├── image.ts           atom + drag-resize + #w=N / #left / #right
-│   ├── date.ts            atom; click opens the calendar popover
-│   ├── table.ts           GFM table grid atom (read-only)
-│   ├── mermaid.ts         diagram atom for closed mermaid fences
-│   ├── tag.ts             mark-based pill on #word
-│   ├── mention.ts         mark-based pill on @@{name}
-│   └── checkbox.ts        widget on `[ ]` / `[x]` task markers
-├── bubbles/
-│   ├── controller.ts      bubbleListener + high-prec bubbleKeymap
-│   ├── triggers.ts        computeBubbleSpec (caret-context scan)
-│   ├── types.ts           BubbleSpec / BubbleHandle
-│   ├── anchor.ts          1x1 caret-anchored host element
-│   ├── wiki.ts            wiki picker: search, `#` headings, `^`
-│   │                       blocks (CAS-writes the anchor), create-note
-│   ├── image.ts           image picker + upload
-│   ├── image_drop.ts      editor-level drop/paste image upload
-│   ├── heic.ts            HEIC -> WebP conversion before upload
-│   ├── tag.ts             tag picker (graph tags)
-│   ├── contact.ts         `@` contact / `@@` mention picker
-│   └── empty_state.ts     shared empty / still-indexing states
-├── overlays/
-│   ├── date_popover.ts    month grid + format dropdown for date pills
-│   └── preview_popover.ts read-only file preview (read mode, locked)
-├── commands/
-│   ├── format.ts          toggleBold/Italic/.../setBlockKind
-│   ├── list.ts            Enter-continuation, indent/outdent (regex
-│   │                       on the current line, not the syntax tree)
-│   ├── date_macros.ts     @today / @date expansion
-│   └── page_break.ts      @pagebreak / @break -> page-break atom
-├── extensions/
-│   ├── popover.ts         viewport-watching positioner
-│   ├── wikiBlocks.ts      client-side ^block target parser
-│   ├── image.ts           image src resolve/encode helpers
-│   └── list_guide_visibility.ts  fade list guides after caret leaves
-├── fold.ts                heading-only foldService + custom gutter
-├── find.ts                pure scanMatches
-├── bubble.ts              popover shell (openBubbleShell)
-├── links.ts               wikiLinkToMarkdown, normalizeHref, etc.
-├── dateFormats.ts         date catalog + matcher
-├── breathing_room.ts      bottom padding + smooth scroll at EOF
-├── click_caret.ts         dead-zone clicks still place the caret
-├── caret_mapping.ts       source<->rendered caret map on mode flips
-├── clipboard.ts           context-menu Cut/Copy/Paste (plain text)
-├── paste_html.ts          HTML clipboard -> markdown (lazy turndown)
-├── print.ts               print / export-to-PDF pipeline
-├── external_links.ts      open http(s)/mailto/tel (browser or Tauri)
-├── link_preview.ts        wiki-pill preview from the context menu
-├── image_drag_indicator.ts  drop-line + badge during image drag-move
-├── right_click_no_select.ts suppress CM6 right-click selection
-├── csv.ts                 CSV/TSV parser + serializer
-├── mermaid_render.ts      lazy mermaid loader/renderer
-└── tools.ts               trailing-whitespace highlight/strip,
-                            collapse-all-code-blocks
+
+## Bubbles
+
+Each transaction recomputes the bubble spec; the host mounts or reuses one popover and commits a range replace through a high-precedence keymap, never stealing focus from the document.
+
+```mermaid
+sequenceDiagram
+    actor User
+    participant View as CM6 EditorView
+    participant Listener as bubbleListener
+    participant Triggers as computeBubbleSpec
+    participant Host as Wysiwyg handleSpec
+    participant Popover as bubble UI
+    participant Keymap as bubbleKeymap
+
+    User->>View: type or move caret
+    View->>Listener: ViewUpdate per transaction
+    Note over Listener: recompute only on docChanged, selectionSet, or recomputeOn
+    Listener->>Triggers: computeBubbleSpec(state)
+    Note over Triggers: caret-context scan, URL slot or wikilink body becomes raw mode, code ranges and reserved macros suppress
+    Triggers-->>Listener: BubbleSpec or null
+    Listener->>Host: onSpec(spec)
+    alt same kind, anchor and mode
+        Host->>Popover: setTriggerEnd then setQuery, reuse popover
+    else different kind or null
+        Host->>Popover: dismiss old, mount fresh at caret anchor
+    end
+    Note over Host,Popover: caret stays in the doc, never calls view.focus
+    User->>Keymap: keydown Enter, Escape or arrows
+    Keymap->>Popover: handleKey before CM6 defaults
+    Popover->>View: dispatch replace triggerStart..triggerEnd
+    Note over Popover,View: commit without view.focus
 ```
 
 ## Server contract
@@ -159,6 +172,44 @@ The editor calls these endpoints:
 | GET    | `/api/files`                     | image catalog |
 | POST   | `/api/attachments`               | multipart upload (50MB cap) |
 | WS     | `/ws`                            | watch events (self-writes filtered) |
+
+## Autosave and conflicts
+
+A keystroke flows through the echo guard and debounced autosave to a CAS `PUT /api/files`; a stale mtime returns 409 and opens the conflict dialog, while a non-self `/ws` event only raises the changed-on-disk banner.
+
+```mermaid
+sequenceDiagram
+    actor User
+    participant CM as "Editor (CM6)"
+    participant Sync as "createValueSync"
+    participant Tab as "tab.content (App effect)"
+    participant Save as "scheduleAutosave"
+    participant LS as "editorBuffer (localStorage)"
+    participant Srv as "PUT /api/files"
+    participant WS as "/ws watcher"
+
+    User->>CM: type (docChanged)
+    CM->>Sync: onDocChanged(update)
+    Note over Sync: echo guard skips self-applied external writes
+    Sync->>Tab: value = doc.toString()
+    Tab->>Save: scheduleAutosave debounced
+    Tab->>LS: queueBufferWrite debounced mirror
+    Save->>Srv: write content + expected_mtime_ns
+    alt mtime matches
+        Srv-->>Save: 200 OK + mtime_ns
+        Note over Save: t.saved updated, mirrorToSiblings
+    else mtime stale
+        Srv-->>Save: 409 + current_mtime_ns
+        Save->>User: open conflictDialog Reload or Overwrite
+    end
+    WS-->>Tab: non-self write event
+    Note over Tab: flagExternalChange raises changed-on-disk banner, no reload
+```
+
+## Implementation notes
+
+- List continuation and indent/outdent (`commands/list.ts`) match the current line with a regex, not the syntax tree, so the edit stays cheap and local.
+- Heavy or optional modules load lazily on first use: mermaid (diagram render), turndown (HTML-paste -> markdown), HEIC -> WebP conversion before image upload, and the per-language code packs (one vite chunk each).
 
 ## Out of scope
 

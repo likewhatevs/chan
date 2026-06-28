@@ -2,13 +2,36 @@
 
 ## Cross-crate context
 
-chan-tunnel is split into three crates under `crates/` in this repository:
+chan-tunnel is split into three crates under `crates/`:
 
-- `chan-tunnel-proto` (this crate): pure wire types and a sync codec — Hello / HelloAck, the workspace-name and username validators, the `H2Duplex` adapter, and the `TUNNEL_PATH` / `MAX_CONTROL_FRAME_BYTES` constants. No runtime state.
-- `chan-tunnel-client`: dials a tunnel terminator over h2/TLS (or h2c), runs the Hello round-trip, hands the post-handshake duplex to yamux, and serves inbound substreams with a user-supplied axum router. Embedded into `chan-server` (`crates/chan-server`), driven by `chan devserver`.
-- `chan-tunnel-server`: terminates tunnel connections, exposes the `Validator` seam, registers live tunnels in a shared `Registry`, and opens fresh yamux substreams to forward public requests. Embedded by the gateway's `devserver-proxy` (`gateway/crates/devserver-proxy`).
+- `chan-tunnel-proto` (this crate): the wire types, the sync framing codec, the validators, and the `H2Duplex` adapter. No runtime state.
+- `chan-tunnel-client`: the dial side. Embedded in `chan-server`, driven by `chan devserver`.
+- `chan-tunnel-server`: the terminator. Owns the `Validator` seam, the live-tunnel `Registry`, and per-request substream forwarding. Embedded by the gateway's `devserver-proxy`.
 
-End-to-end shape: `chan devserver` (running on a box) embeds chan-tunnel-client and dials the terminator at `POST {tunnel-host}/v1/tunnel`. After Hello / HelloAck the single h2 stream becomes a yamux session; the terminator opens one substream per public request and runs hyper h1 over it.
+End to end, `chan devserver` embeds the client and dials the terminator at `POST {tunnel-host}/v1/tunnel`; after the control handshake the single h2 stream becomes a yamux session, and the terminator opens one substream per public request:
+
+```mermaid
+sequenceDiagram
+    participant V as Public visitor
+    participant C as chan devserver client
+    participant S as tunnel terminator
+    Note over C,S: Dial plus control handshake, once per tunnel
+    C->>S: POST /v1/tunnel plus Bearer token
+    S->>S: validate token and tunnel scope
+    S-->>C: 200 OK, h2 stream stays open
+    C->>S: Hello frame (protocol, workspace)
+    S->>S: validate workspace and run pre_ack hook
+    S-->>C: HelloAck Ok frame (prefix, user, workspace)
+    Note over C,S: h2 stream now belongs to yamux, both directions
+    V->>S: public HTTP request
+    S->>C: open one yamux substream
+    S->>C: forward h1 request over substream
+    C->>C: serve via axum router over hyper h1
+    C-->>S: h1 response over substream
+    S-->>V: public HTTP response
+```
+
+The control + data path: one control handshake per tunnel, then a yamux substream per public request.
 
 This document is the canonical reference for the wire format and framing. The client and server design.md files reference back here for any byte-level detail.
 
@@ -33,25 +56,7 @@ Out of scope here, owned by the I/O crates:
 
 ## 2. Architecture overview
 
-```
-client                                           server
-------                                           ------
-                  POST /v1/tunnel
-                  Authorization: Bearer <token>
-                ---------------------------------->
-                  HTTP/2 stream opens
-
-                  [u32 len][json Hello]
-                ---------------------------------->
-                                                  validate token,
-                                                  run pre_ack hook
-                  [u32 len][json HelloAck]
-                <----------------------------------
-                  yamux frames (both directions)
-                <=================================>
-                  per-public-request substreams
-                  carry h1 (req+headers+body / resp)
-```
+The end-to-end control and data path is the sequence diagram above (Cross-crate context). This section covers the on-wire framing the two control frames share.
 
 Framing for the two control messages is identical in both directions:
 
@@ -67,18 +72,7 @@ After `HelloAck` is fully read on the client and fully written on the server, th
 
 ## 3. Components / responsibilities
 
-| File                | Owns                                       |
-|---------------------|--------------------------------------------|
-| `control.rs`        | `Hello`, `HelloAck`, `HelloAckOk`,         |
-|                     | `HelloAckErr`, `ProtocolVersion`,          |
-|                     | `error_code` constants                     |
-| `frame.rs`          | sync codec (`encode_frame`, `decode_frame`)|
-| `io.rs`             | tokio helpers (`read_frame`, `write_frame`)|
-| `workspace_name.rs` | workspace + username validators, sanitizer |
-| `h2_duplex.rs`      | `H2Duplex` adapter over h2 streams         |
-| `lib.rs`            | re-exports + `TUNNEL_PATH`, byte cap       |
-
-The split between `frame.rs` (sync, `BytesMut`-based) and `io.rs` (async, tokio `AsyncRead/Write`) is deliberate: the sync codec is self-contained and reusable from any I/O loop. The async helpers exist because both real callers run on tokio; a caller on a different runtime would consume `frame.rs` directly.
+The split between the sync codec (`BytesMut`-based `encode_frame` / `decode_frame`) and the async helpers (tokio `read_frame` / `write_frame` over `AsyncRead`/`AsyncWrite`) is deliberate: the sync codec is self-contained and reusable from any I/O loop. The async helpers exist because both real callers run on tokio; a caller on a different runtime would consume the sync codec directly.
 
 ## 4. Public API surface
 
@@ -95,7 +89,6 @@ pub struct Hello {
     pub protocol: ProtocolVersion,
     pub client_version: String, // logs only, not routing
     pub workspace: String,
-    pub public: bool,           // #[serde(default)] -> false
 }
 
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -118,7 +111,6 @@ pub struct HelloAckErr {
 }
 
 pub mod error_code {
-    pub const MISSING_PUBLIC_SCOPE: &str = "missing_public_scope";
     pub const TOO_MANY_WORKSPACES: &str = "too_many_workspaces";
     pub const INVALID_WORKSPACE_NAME: &str = "invalid_workspace_name";
     pub const UNSUPPORTED_PROTOCOL: &str = "unsupported_protocol";
@@ -183,17 +175,17 @@ The control frames are exchanged once per tunnel lifetime; encode cost is irrele
 
 `encode_frame` checks the cap before writing; `decode_frame` checks it before allocating. Both refuse frames over the cap with `FrameError::TooLarge(len)`.
 
-### Hello.public
+### No `public` bit (always authenticated)
 
-`#[serde(default)]`, so a Hello without the field decodes as `public = false`; private is the safe default. `true` is a privilege-escalation request — the terminator's auth gate skips its sign-in check for a public workspace — so the server gates it on an extra token scope (`chan_tunnel_server::TUNNEL_PUBLIC_SCOPE`) and refuses with `missing_public_scope` when the scope is absent.
+Earlier revisions carried a `Hello.public` flag (`#[serde(default)]`, so absence decoded as `false`) that asked the terminator to skip its sign-in check for a public workspace; `true` was a privilege-escalation request, gated server-side on an extra token scope (`TUNNEL_PUBLIC_SCOPE`) and refused with `missing_public_scope` when the scope was absent. The per-devserver model removed all of it: the tunnel is always authenticated and there is no anonymous-readable path, so `Hello.public`, `TUNNEL_PUBLIC_SCOPE`, and the `missing_public_scope` refusal are gone. The gateway authorizes a viewer with a single `devserver_access(owner, devserver, caller)` check, where one grant covers the whole library; see `chan-tunnel-server/design.md` and the gateway's `devserver-proxy/design.md`. A legacy client that still sends a `public` key is harmless: `Hello` decoding ignores unknown fields.
 
 ### HelloAck: Ok or Refused
 
-`HelloAck` is a `kind`-tagged enum. The success arm carries the registration; the `Refused` arm carries a stable machine-readable `code` plus a human-readable `message`, written into the same stream the success ack would have used. Without it, every pre-ack refusal (cap reached, missing scope, bad workspace name) would surface to the client as a bare transport disconnect, indistinguishable from a network failure. Clients match on known codes and fall back to the `message` for unknown ones, keeping the refusal vocabulary additive.
+`HelloAck` is a `kind`-tagged enum. The success arm carries the registration; the `Refused` arm carries a stable machine-readable `code` plus a human-readable `message`, written into the same stream the success ack would have used. Without it, every pre-ack refusal (cap reached, bad workspace name, unsupported protocol) would surface to the client as a bare transport disconnect, indistinguishable from a network failure. Clients match on known codes and fall back to the `message` for unknown ones, keeping the refusal vocabulary additive.
 
 ### HelloAckOk.prefix
 
-Server-assigned public path prefix, shape `/{workspace}` — one leading slash, no trailing slash. The username is not in the path: the production fronting proxy routes per-user wildcard subdomains (`{user}.devserver.chan.app`), so the host carries the user and the path carries the workspace. chan-server embeds the prefix as `<meta name="chan-prefix">` so the SPA's relative URLs resolve under the workspace without the operator passing a prefix flag.
+Server-assigned public path prefix, shape `/{workspace}` -- one leading slash, no trailing slash. The username is not in the path: the production fronting proxy routes per-user wildcard subdomains (`{user}.devserver.chan.app`), so the host carries the user and the path carries the workspace. chan-server embeds the prefix as `<meta name="chan-prefix">` so the SPA's relative URLs resolve under the workspace without the operator passing a prefix flag.
 
 ### ProtocolVersion negotiation
 
@@ -216,7 +208,7 @@ This crate is the validator surface for two values that flow into public routing
 
 ### Workspace name (`is_valid_workspace_name`)
 
-Rules: 1..=32 ASCII bytes; characters `[a-z0-9-]`; first and last character alphanumeric (no leading/trailing hyphen). Both sides call it: the client refuses to send an invalid name, and the server refuses to accept one (`invalid_workspace_name` refusal). The duplication is intentional — the server does not trust clients, and the client check surfaces a config error locally without a round-trip.
+Rules: 1..=32 ASCII bytes; characters `[a-z0-9-]`; first and last character alphanumeric (no leading/trailing hyphen). Both sides call it: the client refuses to send an invalid name, and the server refuses to accept one (`invalid_workspace_name` refusal). The duplication is intentional -- the server does not trust clients, and the client check surfaces a config error locally without a round-trip.
 
 `sanitize_workspace_name` is a best-effort transform from a free-form string (often the workspace directory's basename) into a valid name: lowercase ASCII, collapse non-alnum runs to single `-`, trim, truncate. Returns `None` when the result would be empty so the caller can prompt the user instead of inventing a name.
 
@@ -261,5 +253,5 @@ Transitively:
 
 ## 9. Open questions / future extensions
 
-- Multi-workspace over a single tunnel — already met above the protocol, so no wire change is planned. `chan devserver` registers one tunnel (keyed on its token-resolved devserver id) and the gateway's devserver-proxy routes workspaces by the preserved `{workspace}` path segment, so a whole library rides one h2/yamux session without a `Hello { workspaces: Vec<...> }` shape or a per-workspace registry rework.
+- Multi-workspace over a single tunnel -- already met above the protocol, so no wire change is planned. `chan devserver` registers one tunnel (keyed on its token-resolved devserver id) and the gateway's devserver-proxy routes workspaces by the preserved `{workspace}` path segment, so a whole library rides one h2/yamux session without a `Hello { workspaces: Vec<...> }` shape or a per-workspace registry rework.
 - Negotiated frame cap. Both sides hard-code 64 KiB; a larger cap negotiated inside `Hello` would let future versions carry richer initial metadata without a protocol bump.

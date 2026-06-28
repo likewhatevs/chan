@@ -21,7 +21,7 @@ Two public hostnames pointed at the same process:
   - `/healthz` -- liveness.
   - Anything else -- 404.
 
-- `*.devserver.chan.app` (wildcard): the devserver's own content — the
+- `*.devserver.chan.app` (wildcard): the devserver's own content -- the
   launcher SPA at the root and tenant workspaces under `/{workspace}`. One
   devserver per user; the `{workspace}` path segment is tenant routing, never
   a gate key.
@@ -37,6 +37,33 @@ Two public hostnames pointed at the same process:
     forward the FULL path unchanged into the tunnel. Anything else -- 404.
 
 A single axum router serves both apex and wildcard via a Host-keyed dispatch. The wildcard host's `{user}` is parsed out of the request's `Host` header; the prefix before `.devserver.chan.app` is the username, and it alone resolves the user's single devserver registration.
+
+```mermaid
+flowchart TD
+    Req["Incoming request"] --> Host{"Host header"}
+    Host -->|"neither apex nor wildcard"| NFapex["404 not found"]
+    Host -->|"apex devserver.chan.app"| Apex{"apex route"}
+    Host -->|"wildcard user.devserver.chan.app"| Root{"bare / with no credential?"}
+
+    Apex -->|"POST /v1/tunnel"| Tun["h2c handshake (nginx grpc_pass)"]
+    Apex -->|"/admin/v1/*"| Adm["admin tree (bearer-gated)"]
+    Apex -->|"/healthz"| Hz["200 ok"]
+    Apex -->|"else"| NFapex
+
+    Root -->|"yes"| Dash["302 to dashboard front door"]
+    Root -->|"no (run ordered gate)"| Live{"live devserver for user?"}
+    Live -->|"no"| NFgate["404 (HTML or JSON)"]
+    Live -->|"yes"| Mgmt{"/api/devserver/* path?"}
+    Mgmt -->|"yes"| NFgate
+    Mgmt -->|"no"| Tparam{"?t= entry token?"}
+    Tparam -->|"present, valid (aud + drv)"| Mint["mint session cookie, 303 clean URL"]
+    Tparam -->|"present, invalid"| NFgate
+    Tparam -->|"absent"| Cookie{"valid devserver_gate cookie?"}
+    Cookie -->|"yes"| Pass["strip creds, forward full path into tunnel"]
+    Cookie -->|"no"| NFgate
+```
+
+Host-keyed apex/wildcard dispatch, then the ordered auth gate on the wildcard path; the textual rules below carry the exact contract.
 
 The tunnel listener is unchanged: `chan-tunnel-server` runs raw h2 on `TUNNEL_BIND_ADDR`, with the validator chain `CapturingValidator -> ThrottlingValidator -> IdentityValidator`. On a successful handshake the registry caches `(username -> user_id)`.
 
@@ -58,8 +85,8 @@ The shared JWT type and signing helpers live in `gateway_common::devserver_gate`
 
 ## Whole-devserver open (launcher)
 
-The owner opens their whole devserver — landing on the launcher served at the
-devserver root — through identity's `GET /s/:owner`, which mints an entry token
+The owner opens their whole devserver -- landing on the launcher served at the
+devserver root -- through identity's `GET /s/:owner`, which mints an entry token
 the same way the per-workspace landing does. The proxy exchanges it for the
 session cookie and forwards `/` to the launcher:
 
@@ -71,17 +98,17 @@ sequenceDiagram
     participant DS as chan devserver (launcher)
 
     B->>ID: GET /s/{owner}  (owner-only)
-    Note over ID: resolve the owner's live devserver (drv);<br/>mint a 30s entry JWT (drv, aud)
+    Note over ID: resolve the owner's live devserver (drv),<br/>mint a 30s entry JWT (drv, aud)
     ID-->>B: 303 {owner}.devserver.chan.app/?t={entry_jwt}
     B->>PX: GET /?t={entry_jwt}
     Note over PX: gate: decode the entry JWT (aud + drv)
-    PX-->>B: Set-Cookie devserver_gate (Path=/); 303 /  (strip ?t=)
+    PX-->>B: Set-Cookie devserver_gate (Path=/), 303 /  (strip ?t=)
     B->>PX: GET /  (devserver_gate cookie)
-    Note over PX: gate passes; strip Cookie/Authorization;<br/>forward / unchanged
-    PX->>DS: GET /  (over the tunnel; no client creds)
+    Note over PX: gate passes, strip Cookie/Authorization,<br/>forward / unchanged
+    PX->>DS: GET /  (over the tunnel, no client creds)
     DS-->>B: launcher SPA
     B->>PX: GET /api/library/...  (cookie)
-    PX->>DS: GET /api/library/...  (gated; tunnel-trust)
+    PX->>DS: GET /api/library/...  (gated, tunnel-trust)
     DS-->>B: data
 ```
 
@@ -105,7 +132,7 @@ Auth gate for `*.devserver.chan.app/{workspace}/...`, in order:
 
 The gate always runs: every devserver is authenticated, there is no un-gated pass-through. On pass, the FULL inbound path (only `?t=` stripped) is forwarded into the tunnel; the devserver routes the `{workspace}` tenant internally.
 
-The wildcard root `/` follows the same gate. An unauthenticated `/` (no `?t=`, no `devserver_gate` cookie) 302s to the dashboard, but a `/` carrying a credential falls through to the gate and is forwarded to the devserver root, where the launcher SPA is served (`proxy::handle` is segment-preserving, so `/` forwards unchanged). The launcher's same-origin `/api/library/*` calls ride the same cookie gate. Note the proxy strips every inbound client credential before forwarding — `?t=`, `Cookie`, and `Authorization` — so the devserver authenticates a proxied request by trusting the gated tunnel, not a forwarded bearer; the gate at the proxy edge is the sole authorization for tenant content.
+The wildcard root `/` follows the same gate. An unauthenticated `/` (no `?t=`, no `devserver_gate` cookie) 302s to the dashboard, but a `/` carrying a credential falls through to the gate and is forwarded to the devserver root, where the launcher SPA is served (`proxy::handle` is segment-preserving, so `/` forwards unchanged). The launcher's same-origin `/api/library/*` calls ride the same cookie gate. Note the proxy strips every inbound client credential before forwarding -- `?t=`, `Cookie`, and `Authorization` -- so the devserver authenticates a proxied request by trusting the gated tunnel, not a forwarded bearer; the gate at the proxy edge is the sole authorization for tenant content.
 
 The 404 path checks `Accept: text/html`; browsers get the styled "workspace not found" page, everything else gets the JSON `{"error":"not found"}` shape. Owners returning after the 24h cookie expires bounce through `id.chan.app/workspaces`; a bookmark to a devserver URL is not a session.
 
@@ -220,13 +247,10 @@ devserver-proxy carries no `Conflict` variant: nothing on this surface PATCHes a
 
 ## What's wired
 
-- axum 0.7 (HTTP) and `chan-tunnel-server` (h2c) as a library
-- `jsonwebtoken` for HS256 verify and mint (session shape only)
-- `hyper` h1 client over yamux substreams for the HTTP proxy path
-- `tokio_tungstenite::client_async` for the WebSocket proxy path
-- `http_body_util::Limited` for request and response byte caps
-- `tokio::time::timeout_at` + the `DeadlineBody` wrapper for the end-to-end HTTP request timeout
-- `gateway-common` for the shared devserver_gate JWT type, the token-bucket primitive, the username validator, and the domain derivation
+The dependency set is in `Cargo.toml`; the two choices that are not obvious from the manifest:
+
+- `hyper` runs an h1 client over a yamux substream (not a fresh socket) for the HTTP proxy path
+- the `DeadlineBody` wrapper carries the end-to-end HTTP request timeout over the response body stream (see [HTTP upstream](#http-upstream))
 
 ## What is not wired
 

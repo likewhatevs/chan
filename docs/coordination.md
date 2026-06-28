@@ -28,6 +28,36 @@ Phases organize the year-scale roadmap; a phase closes with a consolidated repor
 4. **Pokes** - one-line pointers typed into the recipient's terminal ("read this task file"). Context lives in the files, not the poke.
 5. **Surveys** - when a decision needs the owner, the lead raises a blocking survey in the owner's window (`cs terminal survey`); the answer routes back to the lead.
 
+```mermaid
+flowchart TD
+  Host["Host: owner sets round scope"]
+  Lead["Lead: plans round, sequences work"]
+  Tasks["task files: owned, append-only"]
+  Poke["lean poke: one-line pointer plus submit chord"]
+  Workers["Workers: implement in disjoint owned lanes"]
+  Journals["journals: append-only running log"]
+  Aggregate["Lead aggregates open questions"]
+  Survey["cs terminal survey: blocking overlay in Host window"]
+  Decide["Host decides: picks an option"]
+  Gate["pre-push gate: fmt, clippy, test, builds"]
+  Main["real commits land on main"]
+
+  Host -->|scope| Lead
+  Lead -->|"cut and sequence"| Tasks
+  Tasks --> Poke
+  Poke --> Workers
+  Workers --> Journals
+  Workers -->|"decisions route up"| Aggregate
+  Aggregate -->|"raise survey"| Survey
+  Survey --> Decide
+  Decide -->|"answer routes to Lead"| Lead
+  Workers -->|"scoped-green commits"| Gate
+  Lead -->|"owns full-tree gate"| Gate
+  Gate -->|green| Main
+```
+
+The round at a glance: the owner's scope flows down through the lead into owned task lanes, decisions route back up as surveys, and only gate-green work lands on `main`.
+
 ## Why this pattern
 
 * **Append-only journals**: nothing gets rewritten under another member. If a decision changes, a new dated section appends; the prior section stays as the audit trail.

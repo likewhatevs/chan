@@ -1,24 +1,12 @@
 # chan-tunnel-server: design
 
-> The tunnel is per-DEVSERVER. Read this before the sections below, some of
-> which still use older per-workspace language:
->
-> - The registry's second key is the token-resolved `devserver_id`
->   (`Validated.devserver_id`, lowercase hex SHA-256 of the PAT), not the
->   client's `Hello.workspace` (an ignored `"devserver"` placeholder). One
->   devserver per user carries the whole library through one registration; the
->   `{workspace}` path segment is tenant routing only.
-> - The tunnel is always authenticated; there is no `public` bit anywhere
->   (`Hello.public`, `TUNNEL_PUBLIC_SCOPE`, `ServerError::MissingPublicScope`, the
->   `missing_public_scope` refusal, and the `public` field on
->   `TunnelHandle`/`WorkspaceInfo`/`TunnelInfo` are all absent).
-> - The gateway consumer is `devserver-proxy`; the public host is
->   `{user}.devserver.chan.app`; it mounts its own segment-preserving `proxy.rs`.
->   The turn-key `public_router` / `PublicConfig` (the `public.rs` module) this
->   crate once shipped is gone — its forwarding/cap/upgrade hygiene lives in
->   `devserver-proxy/src/proxy.rs`. The "Public router" section and the
->   `PublicConfig`-keyed body-cap / rate-limit / forwarded-header items below
->   document that removed module and are retained for reference only.
+## Keying and authentication model
+
+The tunnel is per-DEVSERVER and always authenticated:
+
+- The registry's second key is the token-resolved `devserver_id` (`Validated.devserver_id`, lowercase hex SHA-256 of the PAT), not the client's `Hello.workspace` (an ignored `"devserver"` placeholder). One devserver per user carries the whole library through one registration; the `{workspace}` path segment is tenant routing only. The code keeps the historical `workspace` name on the registry's inner key, the public API types, and the `workspace_tunnel` task; the value it carries is the `devserver_id`.
+- There is no `public` bit anywhere: `Hello.public`, `TUNNEL_PUBLIC_SCOPE`, `ServerError::MissingPublicScope`, the `missing_public_scope` refusal, and the `public` field on `TunnelHandle` / `WorkspaceInfo` / `TunnelInfo` do not exist. A viewer is authorized by the gateway's one `devserver_access(owner, devserver, caller)` check (a grant is the whole library).
+- The gateway consumer is `devserver-proxy`; the public host is `{user}.devserver.chan.app`; it mounts its own segment-preserving `proxy.rs`. The forwarding, cap, and upgrade hygiene this crate once prototyped now lives in `devserver-proxy/src/proxy.rs`; the public-side controls in section 6 document the contract that layer meets.
 
 ## Cross-crate context
 
@@ -27,8 +15,6 @@ chan-tunnel is split across three crates under `crates/` in this repository:
 - `chan-tunnel-proto`: pure wire types (`Hello`, `HelloAck`, `ProtocolVersion`, `error_code`), framing codec, workspace-name and username validators, `H2Duplex`. See [`chan-tunnel-proto/design.md`](../chan-tunnel-proto/design.md) for byte-level details.
 - `chan-tunnel-client`: dial side, driven by `chan devserver` (embedded in `chan-server`).
 - `chan-tunnel-server` (this crate): library form of the terminator. Embedded by the gateway's `devserver-proxy` (`gateway/crates/devserver-proxy`), which supplies an identity-service `Validator` (returning the token-resolved `devserver_id`) and runs behind nginx for TLS.
-
-End-to-end shape (gateway deployment): `chan devserver --tunnel-token` calls `chan_tunnel_client::run(cfg, router)` which dials `devserver.chan.app/v1/tunnel`. nginx terminates TLS and `grpc_pass`-es `/v1/tunnel` as h2c to `serve_tunnel_listener`. Each accepted connection becomes a yamux session managed by a per-tunnel driver task and indexed in the shared `Registry`. The public side looks up the `TunnelHandle` for `(user, devserver_id)`, opens a fresh outbound substream, and runs hyper h1 client over it to forward the request (with WebSocket upgrade bridging). `devserver-proxy` mounts its own proxy layer (`proxy.rs`): it parses `{user}` out of the wildcard host (`{user}.devserver.chan.app`), gates on `devserver_access`, and forwards the full `/{workspace}/...` path (segment-preserving) by calling `TunnelHandle::open` directly. (The turn-key `public_router` this crate used to ship was deleted — see the migration note.)
 
 This document covers terminator-side design. The wire format is in chan-tunnel-proto's design.md.
 
@@ -52,68 +38,93 @@ Out of scope:
 
 ## 2. Architecture overview
 
+```mermaid
+flowchart TD
+    client["chan devserver: dial POST /v1/tunnel + Bearer"]
+    nginx["nginx grpc_pass (h2c)"]
+    listener["serve_tunnel_listener: TCP accept + Semaphore permit"]
+    h2["h2 handshake, first stream POST /v1/tunnel"]
+    validate{"validator.validate() BEFORE 200"}
+    reject["reply 401 / 403 / 504"]
+    ack["200, handshake_validated Hello/HelloAck + pre_ack cap"]
+    register["register_with_cap()"]
+    driver["workspace_tunnel: per-tunnel task owns yamux Connection"]
+    registry[("Registry: user -> devserver_id -> handle")]
+    proxy["devserver-proxy proxy.rs (public request)"]
+    get["registry.get_user_devserver -> TunnelHandle"]
+    open["TunnelHandle.open() -> yamux substream"]
+    h1["hyper h1 send_request over substream"]
+
+    client --> nginx --> listener --> h2 --> validate
+    validate -- "fail" --> reject
+    validate -- "ok" --> ack --> register --> driver
+    register -. "insert handle" .-> registry
+    proxy --> get
+    get -. "lookup" .-> registry
+    get --> open
+    open -. "OpenRequest" .-> driver
+    open --> h1
+    driver -. "yamux substream" .-> h1
+    h1 -. "forward to" .-> client
 ```
-                 fronting layer (nginx grpc_pass)
-                              |
-                              v h2c
-                 +---------------------------+
-                 | serve_tunnel_listener     |
-                 |  - TCP accept (permit)    |
-                 |  - h2::server handshake   |
-                 |  - 1st stream: POST       |
-                 |    /v1/tunnel + Bearer    |
-                 |  - validator.validate()   |
-                 |    [BEFORE 200]           |
-                 |  - 200, then              |
-                 |    handshake_validated()  |
-                 |  - register_with_cap()    |
-                 +-------------+-------------+
-                               |
-                               v
-                       (Hello, Validated,
-                        YamuxConnection)
-                               |
-                               v
-                 +-----------------------------+
-                 | workspace_tunnel (per-tunnel)|
-                 |  - owns yamux conn          |
-                 |  - serves OpenRequest       |
-                 |    -> outbound substream    |
-                 |  - shutdown on eviction     |
-                 +-------------+---------------+
-                               |
-              +----------------+-----------------+
-              |                                  |
-              v                                  v
-      +------------------+              +---------------+
-      |  Registry        | <-- get ---- | devserver-    |
-      | user ->          |  TunnelHandle| proxy's       |
-      | devserver_id     |              | proxy.rs      |
-      |  -> handle       |              +-------+-------+
-      +------------------+                      |
-                                                v
-                             hyper h1 client over yamux::Stream
-                                 (forward + upgrade bridging)
-```
+
+*Terminator data path: dial through nginx to the listener, the validate-before-200 handshake into the registry, and the public request path through devserver-proxy back over a yamux substream.*
 
 ## 3. Components / responsibilities
 
-| File           | Owns                                            |
-|----------------|-------------------------------------------------|
-| `lib.rs`       | `Validator`, `Validated`, `ServerError`,        |
-|                | `TUNNEL_SCOPE`, `handshake`,                     |
-|                | `handshake_validated`, refusal mapping,         |
-|                | yamux config, handshake timeouts                |
-| `tunnel.rs`    | `serve_tunnel_listener`, `handle_tunnel_conn`,  |
-|                | `extract_bearer`                                |
-| `driver.rs`    | `workspace_tunnel`: per-tunnel task that owns   |
-|                | the yamux connection                            |
-| `registry.rs`  | `Registry`, `TunnelHandle`, `WorkspaceInfo`,    |
-|                | `TunnelInfo`, `OpenError`, eviction policy,     |
-|                | atomic per-user cap (keyed on `devserver_id`)   |
-| (`public.rs` — the turn-key `public_router` — was DELETED; see the migration note.) |
-
 ### Listener flow (`tunnel.rs`)
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C as chan devserver
+    participant L as serve_tunnel_listener
+    participant H as handle_tunnel_conn
+    participant V as Validator
+    participant R as Registry
+
+    C->>L: TCP connect
+    L->>L: try_acquire permit (MAX_INFLIGHT 1024)
+    Note over L: at cap drops socket and continues
+    L->>H: spawn task with owned permit
+    C->>H: h2 handshake (10s)
+    C->>H: first stream POST /v1/tunnel + Bearer (10s)
+
+    alt method != POST or path != /v1/tunnel
+        H-->>C: 404 Not Found
+    else missing or empty Bearer
+        H-->>C: 401 Unauthorized
+    else gates pass
+        H->>H: spawn frame driver (extra stream 409, then ENHANCE_YOUR_CALM)
+        H->>V: validate(token) (10s)
+        alt validate timeout
+            H-->>C: 504 Gateway Timeout
+        else InvalidToken
+            H-->>C: 401 Unauthorized
+        else Identity error
+            H-->>C: 502 Bad Gateway
+        else Validated but no tunnel scope
+            H-->>C: 403 Forbidden
+        else Validated with tunnel scope
+            V-->>H: Validated (user, devserver_id, scopes)
+            Note over H,C: validate-before-200 invariant: 200 only AFTER auth passes
+            H-->>C: 200 OK (body open)
+            H->>C: handshake_validated reads Hello (15s)
+            C->>H: Hello frame
+            Note over H,C: protocol/workspace/pre_ack failures refused in-band (HelloAck Refused)
+            H->>C: HelloAck Ok
+            H->>R: register_with_cap (authoritative per-user cap)
+            alt raced past cap
+                H->>H: drop yconn (client sees transport disconnect)
+            else registered
+                R-->>H: handle, open_rx, shutdown_rx
+                H->>H: drop permit, run workspace_tunnel
+            end
+        end
+    end
+```
+
+*Listener handshake ordering and the validate-before-200 invariant; the numbered steps below carry the per-stage contracts.*
 
 `serve_tunnel_listener(listener, validator, registry, max_workspaces_per_user)`:
 
@@ -131,8 +142,8 @@ Out of scope:
    - Defense-in-depth username check (`is_valid_username`).
    - `read_frame::<Hello>` with `HELLO_READ_TIMEOUT` (15s) bound.
    - Reject non-V1 protocol and invalid workspace names. Each rejection writes a `HelloAck::Refused { code, message }` frame (best-effort) before returning so the client receives a structured error instead of a transport disconnect.
-   - Run `pre_ack(&hello, &validated)` for post-validate policy. The listener's closure does a best-effort per-user count check (now over distinct `devserver_id`s — one devserver per user). On failure, the `ServerError` is mapped to a stable refusal code (`chan_tunnel_proto::error_code`) and a `HelloAck::Refused` is written before returning.
-   - On success, write `HelloAck::Ok(HelloAckOk { prefix: "/{workspace}", user, workspace, .. })` and wrap the duplex in yamux server mode with a 256-substream cap.
+   - Run `pre_ack(&hello, &validated)` for post-validate policy. The listener's closure does a best-effort per-user count check (now over distinct `devserver_id`s -- one devserver per user). On failure, the `ServerError` is mapped to a stable refusal code (`chan_tunnel_proto::error_code`) and a `HelloAck::Refused` is written before returning.
+   - On success, write `HelloAck::Ok(HelloAckOk { prefix: "/{devserver_id}", user, workspace, .. })` and wrap the duplex in yamux server mode with a 256-substream cap.
 11. `registry.register_with_cap(...)` returns a `TunnelHandle`, the open-request `mpsc::Receiver`, and the eviction `oneshot::Receiver`. This is the authoritative cap check: the `pre_ack` count was best-effort, and two parallel dials could both pass it; `register_with_cap` does count + insert under one lock acquisition. A loser here has already received HelloAck; dropping the yamux connection on the early return surfaces as a transport disconnect. The in-flight semaphore permit is dropped after registration so a long-lived tunnel does not consume an accept slot.
 12. `workspace_tunnel(...)` runs until close or eviction. On exit, `registry.deregister_if_owner(&handle)`.
 
@@ -150,7 +161,7 @@ On exit the driver replies `OpenError::Disconnected` to any open requests still 
 
 ### Registry (`registry.rs`)
 
-- Two-level map `user -> devserver_id -> Entry` (keys `Arc<str>`) under `parking_lot::Mutex`. The split lets `get(&str, &str)` resolve via `Borrow<str>` without allocating, and makes per-user enumeration a direct inner-map walk. Empty user buckets are removed. (The inner key is named `workspace` in the code; only its meaning — the token-resolved devserver id — changed.)
+- Two-level map `user -> devserver_id -> Entry` (keys `Arc<str>`) under `parking_lot::Mutex`. The split lets `get(&str, &str)` resolve via `Borrow<str>` without allocating, and makes per-user enumeration a direct inner-map walk. Empty user buckets are removed. (The inner key is named `workspace` in the code; its value is the token-resolved `devserver_id`.)
 - `Entry { handle: TunnelHandle, _shutdown_tx: oneshot::Sender<()> }`. Dropping the entry drops the sender, which wakes the per-tunnel driver's receiver, which closes yamux.
 - Collision: last-writer-wins. `register_with_cap` evicts any prior entry for the same key, logs the prior registration's age (flap visibility), and returns the new handle. This matches "chan-serve restart reclaims its workspace."
 - Per-user cap: `register_with_cap` refuses (`RegisterCapped`) when the user already holds `max_workspaces_per_user` distinct registrations (devserver ids) and this key is not among them; `0` disables the check. Count and insert happen under the same lock, so parallel dials cannot race past the cap.
@@ -158,27 +169,16 @@ On exit the driver replies `OpenError::Disconnected` to any open requests still 
 - `deregister_if_owner` removes the entry only if it still points at the same handle (mpsc channel identity), so a driver shutting down after eviction can't accidentally remove its successor.
 - Admin views: `list_workspaces_for(user)` and `list_all()`, both sorted, carrying the peer address and connect time for dashboard / `ps`-style tooling (the `public` bit is gone). `evict(user, devserver_id)` forces a tunnel offline.
 
-### Public router (`public.rs`) — DELETED
+### Public request path (`devserver-proxy/src/proxy.rs`)
 
-> This module was removed: it had no production consumer (the gateway mounts its
-> own `proxy.rs`) and encoded the rejected `/{user}/{workspace}/` per-workspace
-> shape. The forwarding/upgrade/cap mechanics it described now live in the
-> gateway's `devserver-proxy/src/proxy.rs`. The rest of this section is retained
-> for historical reference only.
+Public-side forwarding lives in the gateway's `proxy.rs`; this crate exposes only `TunnelHandle::open`. The proxy parses `{user}` from the wildcard host (`{user}.devserver.chan.app`), gates the viewer with a per-devserver cookie/JWT `devserver_gate`, and forwards the full segment-preserving `/{workspace}/...` path over the substream. The forwarding contract it meets:
 
-`public_router(registry)` built an `axum::Router` with three routes (`/{user}/{workspace}`, `/{user}/{workspace}/`, `/{user}/{workspace}/*rest`) mounted on `any` method. All three called `proxy(...)`:
+- One outbound substream per public request, driven by `hyper::client::conn::http1` with `with_upgrades()`. h1 maps cleanly because the substream is already muxed (see "Why h1 over yamux").
+- A single deadline covers `handle.open()` (502 on `Disconnected`, 504 on timeout), the h1 handshake, and `send_request` up to response headers.
+- `OnUpgrade` is pre-extracted from the public request before the body is moved, so a `101 SWITCHING_PROTOCOLS` can bridge both halves with `copy_bidirectional` raced against the idle watchdog. The watchdog stamps activity from `Instant`-derived milliseconds (monotonic) so wall-clock jumps (NTP slew, suspend/resume) cannot register as activity.
+- Forwarded-header sanitisation and request/response body caps (section 6) bound what a public visitor can inject or stream through to chan-serve.
 
-1. Optional host gate: with a non-empty `allowed_host_suffixes`, a `Host` header that doesn't end with one of the suffixes gets 421 Misdirected Request.
-2. `registry.get(user, workspace)` returns a `TunnelHandle`, else 502 ("tunnel not connected").
-3. A single deadline (`upstream_request_timeout`) covers the next three awaits: `handle.open()` (502 on `Disconnected`, 504 on timeout), the h1 handshake over the substream, and `send_request` up to response headers.
-4. `hyper::client::conn::http1::handshake(io)` over the substream; spawn the conn driver with `with_upgrades()`.
-5. Pre-extract `OnUpgrade` from the public request *before* forwarding so it isn't lost when the body is moved.
-6. `build_forwarded`: rewrite path (drop `/{user}/{workspace}` prefix, keep the query), strip URI scheme/authority (h1 over a substream doesn't use them), sanitise headers (section 6), set `X-Forwarded-For` / `X-Forwarded-Proto` / `X-Forwarded-Host`.
-7. `sender.send_request(forwarded).await` yields the response.
-8. If status is `101 SWITCHING_PROTOCOLS`: pre-extract the tunnel-side `OnUpgrade`, spawn a task that awaits both upgrade futures, wraps each half in an `Activity` adapter (stamps a shared atomic on every byte that moves), and runs `copy_bidirectional` raced against an idle watchdog.
-9. Otherwise: strip `Content-Length`, wrap the response body in `http_body_util::Limited` at `response_body_cap`, and stream it back.
-
-The `Activity` stamps use `Instant`-derived milliseconds (monotonic) so wall-clock jumps (NTP slew, suspend/resume) cannot register as activity. The watchdog samples the counter every `UPGRADE_IDLE_TIMEOUT / 4` (floored at 15s; 75s with the 5-minute constant) and tears the bridge down when a full sample window passes with no bytes in either direction.
+See the gateway's `devserver-proxy/design.md` for the full layer.
 
 ### Why h1 over yamux, not h2
 
@@ -237,10 +237,10 @@ pub async fn serve_tunnel_listener(
     max_workspaces_per_user: usize, // 0 disables the cap
 ) -> std::io::Result<()>;
 
-// (public_router / public_router_with / PublicConfig / DEFAULT_REQUEST_BODY_CAP
-//  were DELETED — the gateway mounts its own proxy via TunnelHandle::open.)
+// Public-side forwarding is the gateway's: it mounts its own proxy on top of
+// TunnelHandle::open (no public_router / PublicConfig in this crate).
 
-// Registry — the 2nd key is the token-resolved devserver_id (named `workspace`
+// Registry -- the 2nd key is the token-resolved devserver_id (named `workspace`
 // in the API for back-compat; the design doesn't rename it).
 pub struct Registry { /* ... */ }
 impl Registry {
@@ -287,25 +287,26 @@ Server-specific notes:
 - Failures after the 200 (bad protocol, bad workspace name, `pre_ack` policy) are reported in-band as `HelloAck::Refused` with a stable code, written best-effort before the stream is dropped. `refusal_for` maps `TooManyWorkspaces` to its dedicated code; anything else surfaces as `internal` with the error's `Display` as message.
 - `HELLO_READ_TIMEOUT = 15s` bounds slow-loris-style peers that connect, get the 200, and never frame a `Hello`. 15s is plenty for trans-pacific; tighter would risk false positives on slow mobile uplinks.
 - The yamux config overrides the upstream default of 8192 max concurrent streams down to 256. Per-tunnel cap; a visitor opening many slow requests is bounded.
-- `HelloAckOk.prefix` is `/{devserver_id}` (the resolved id the registration is keyed on; the devserver client ignores it — tenants self-prefix at their public slugs). The username travels in the wildcard host on the public side, not in the path.
+- `HelloAckOk.prefix` is `/{devserver_id}` (the resolved id the registration is keyed on; the devserver client ignores it -- tenants self-prefix at their public slugs). The username travels in the wildcard host on the public side, not in the path.
 
 ## 6. Trust boundaries / validation
 
 - **Token authentication**: the consumer's `Validator` impl is the only authority. This crate calls it; on success it gets a `Validated { user_id, username, scopes }`. Order is fixed: validator runs *before* the 200 response so 401 / 403 propagate to the client distinctly. After 200, policy failures are reported via `HelloAck::Refused` instead. The validator contract (documented on the trait) forbids implementations from logging or echoing the token: the listener logs `ServerError` values, so anything echoed lands in operator journals.
 - **Tunnel scope**: the validator returns scopes; the listener refuses tokens missing `TUNNEL_SCOPE` (`"tunnel"`) with 403.
-- **Public scope**: REMOVED. The tunnel is always authenticated — there is no anonymous-readable path — so `TUNNEL_PUBLIC_SCOPE` / `Hello.public` / `MissingPublicScope` are gone. The gateway authorizes a viewer with one `devserver_access(owner, devserver, caller)` check (a grant is the whole library); see the gateway's `devserver-proxy/design.md` and ADR-0001.
+- **Public scope**: REMOVED. The tunnel is always authenticated -- there is no anonymous-readable path -- so `TUNNEL_PUBLIC_SCOPE` / `Hello.public` / `MissingPublicScope` are gone. The gateway authorizes a viewer with one `devserver_access(owner, devserver, caller)` check (a grant is the whole library); see the gateway's `devserver-proxy/design.md` and ADR-0001.
 - **Username validation** (`is_valid_username`): defense-in-depth. The username flows into public routing; if the upstream identity service ever emits `..`, slashes, or whitespace, the public side would mis-route. The handshake refuses any username that wouldn't be URL-safe.
 - **Workspace name validation** (`is_valid_workspace_name`): every Hello's `workspace` field is checked; clients pre-check too but we don't trust them.
-- **Per-user registration cap**: `max_workspaces_per_user` bounds how many distinct registrations (now distinct `devserver_id`s — effectively one per user) one user can keep. Checked best-effort in `pre_ack` (clean refusal on the wire) and authoritatively under the registry lock at insert.
+- **Per-user registration cap**: `max_workspaces_per_user` bounds how many distinct registrations (now distinct `devserver_id`s -- effectively one per user) one user can keep. Checked best-effort in `pre_ack` (clean refusal on the wire) and authoritatively under the registry lock at insert.
 - **Method / path gate**: 404 for anything other than `POST /v1/tunnel`. The drainer task rejects additional streams on the same connection with 409 and abrupt-shutdowns the connection (ENHANCE_YOUR_CALM) after 16 rejections.
 - **Bearer parsing**: scheme name is case-insensitive (RFC 6750); the scheme/token separator is one or more SP / HTAB (RFC 7230 BWS); empty / whitespace-only tokens are rejected.
 - **Listener back-pressure cap**: at most `MAX_INFLIGHT_HANDSHAKES` (1024) connections may sit in the authenticate-and-handshake stages simultaneously. Above that the TCP socket is closed immediately so a flood of half-open peers cannot exhaust memory. Per-stage timeouts (h2 handshake 10s, first stream 10s, validate 10s, Hello read 15s) bound each slot.
+- **Public-side controls (now in `devserver-proxy/src/proxy.rs`)**: the items below describe the forwarding hygiene the gateway's `proxy.rs` enforces; this crate's deleted `public.rs` prototyped them. The `PublicConfig::` names are the original knobs and the rationale is the contract the proxy meets.
 - **Request body cap on the public side**: `PublicConfig::request_body_cap` (default 10 MiB) via `tower_http::limit::RequestBodyLimitLayer`. Without a cap a public client could stream gigabytes through to chan-serve (paid for in tunnel egress and chan-serve memory).
 - **Response body cap**: `PublicConfig::response_body_cap` (default 100 MiB) wraps the upstream body in `http_body_util::Limited`. Past the cap the body stream errors mid-flight; the public client sees a truncated read. The `Content-Length` header is stripped before wrapping, so a truncated body cannot disagree with a declared length (hyper refuses to serialise that mismatch); the response goes out chunked. Counterpart to the request cap: a compromised chan-serve cannot burn unbounded egress on a single request.
 - **Upstream request timeout**: `PublicConfig::upstream_request_timeout` (default 30s) is a shared deadline across opening the substream, the h1 handshake, and waiting for response headers; 504 Gateway Timeout on miss. Body streaming after headers is intentionally uncapped so long downloads / uploads are not artificially limited.
 - **Upgrade idle watchdog**: hijacked WebSockets are torn down when no bytes move in either direction for a full watchdog tick (`UPGRADE_IDLE_TIMEOUT / 4`, floored at 15s). Keeps a public client that 101'd and went silent from pinning the substream forever.
 - **Public-side host allowlist**: when `PublicConfig::allowed_host_suffixes` is non-empty, the public router replies 421 Misdirected Request to any request whose `Host` header (port stripped, case-insensitive) does not end with one of the listed suffixes. Empty (default) trusts the fronting proxy's host routing. Defence-in-depth for a public listener that is ever exposed directly.
-- **Per-visitor rate limit**: optional, off by default. `PublicConfig::rate_limit_per_second` (`0` disables) plus `rate_limit_burst` wire a `tower_governor` layer keyed on `PeerIpKeyExtractor` (raw `ConnectInfo`, NOT X-Forwarded-For — consistent with the header-trust model below). Above the burst, requests return 429. When the public listener sits behind nginx and the visible peer is always the proxy, the limiter keys on a single tenant; rate-limiting then belongs upstream (`limit_req_zone $binary_remote_addr`).
+- **Per-visitor rate limit**: optional, off by default. `PublicConfig::rate_limit_per_second` (`0` disables) plus `rate_limit_burst` wire a `tower_governor` layer keyed on `PeerIpKeyExtractor` (raw `ConnectInfo`, NOT X-Forwarded-For -- consistent with the header-trust model below). Above the burst, requests return 429. When the public listener sits behind nginx and the visible peer is always the proxy, the limiter keys on a single tenant; rate-limiting then belongs upstream (`limit_req_zone $binary_remote_addr`).
 - **Forwarded-header sanitisation** (`build_forwarded`): the public router strips `Forwarded`, `X-Forwarded-Proto`, `X-Forwarded-Host`, `X-Real-IP`, `Proxy-Authorization`, and `Proxy-Authenticate` from incoming requests before re-injecting its own values; the public side does not get to dictate any of these to chan-serve. It also strips `Authorization`, `Cookie`, and `Set-Cookie`: public visitors must not be able to inject bearer tokens or cookie state into the local chan-serve process (public-side authentication is the fronting host's job). `X-Forwarded-Proto` is set to `https` (production assumption: the fronting layer terminates TLS); `X-Forwarded-Host` comes from the original `Host` header. `X-Forwarded-For` is the one knob: with `trust_forwarded_for = false` (default) the incoming value is discarded and downstream sees only the ConnectInfo IP; with `true` the ConnectInfo IP is appended to the incoming chain. Trusting it is only safe when the immediate upstream *overwrites* XFF (nginx `proxy_set_header X-Forwarded-For $remote_addr`); otherwise a public client can spoof its source IP, so the default is the safe one.
 
 ## 7. Error model
@@ -320,8 +321,8 @@ Single umbrella enum `ServerError` with seven variants (see section 4). Conversi
   - `serve_tunnel_listener` on the h2c listener that nginx `grpc_pass`-es into.
   - A `Validator` backed by the gateway's identity service (wrapped with throttling), which returns the token-resolved `devserver_id` and caches `username -> user_id` for the proxy's auth gate.
   - A thin facade over `chan_tunnel_server::Registry`, used by the proxy, dashboard, and admin handlers.
-  - Its own reverse-proxy layer (`proxy.rs`) for `{user}.devserver.chan.app/{workspace}/...`: wildcard-host routing, a per-devserver `devserver_gate` cookie/JWT auth gate, and segment-PRESERVING forward (the `{workspace}` segment is kept) over hyper h1 and tungstenite WebSocket substreams from `TunnelHandle::open`. (The turn-key `public_router` was deleted; the proxy was always the real path.)
-  - chan-tunnel-client as a dev-dep so `tests/api.rs` can register a fake devserver against a real listener — this is the e2e coverage of the substream-forwarding + WS-bridge mechanics.
+  - Its own reverse-proxy layer (`proxy.rs`) for `{user}.devserver.chan.app/{workspace}/...`: wildcard-host routing, a per-devserver `devserver_gate` cookie/JWT auth gate, and segment-PRESERVING forward (the `{workspace}` segment is kept) over hyper h1 and tungstenite WebSocket substreams from `TunnelHandle::open`.
+  - chan-tunnel-client as a dev-dep so `tests/api.rs` can register a fake devserver against a real listener -- this is the e2e coverage of the substream-forwarding + WS-bridge mechanics.
 - This crate's own e2e test (`tests/listener_e2e.rs`) drives a real chan-tunnel-client against `serve_tunnel_listener` over localhost, covering the auth gates, the devserver_id keying, refusal codes, the per-user cap, and reconnect eviction.
 
 ## 9. Open questions / future extensions

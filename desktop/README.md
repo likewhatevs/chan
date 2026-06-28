@@ -21,29 +21,14 @@ make check    # cargo check
 make clean    # cargo clean
 ```
 
-The desktop app stores its config at:
-
-- macOS: `~/Library/Application Support/Chan Desktop/config.json`
-- Linux: `~/.config/chan-desktop/config.json`
-- Windows: `%APPDATA%/Chan Desktop/config.json`
+The desktop app stores its config at `~/.chan/desktop/config.json` -- the same `~/.chan` home as the CLI registry, not a separate OS app-data directory.
 
 ## Workspace modes
 
 - Local embedded: desktop owns the local workspace runtime through its embedded `chan-server` host.
 - Remote outbound: desktop opens an already-running `chan open` URL pasted by the user. The remote server owns its own lifecycle.
-- Remote inbound: desktop listens on a loopback tunnel endpoint and an external `chan devserver` connects to it.
 
 There is no local sidecar fallback mode. Running `chan open` directly is still supported, but desktop treats it as a remote attachment.
-
-## Layout
-
-```
-src/             vanilla HTML / CSS / JS frontend (no bundler)
-src-tauri/       Rust crate. main.rs wires Tauri commands;
-                 config.rs owns the on-disk config store.
-Makefile         shortcuts; manual cargo / cargo tauri calls also work
-design.md        what this app actually does, end to end
-```
 
 ## License
 

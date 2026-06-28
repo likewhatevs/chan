@@ -30,6 +30,40 @@ Full route table is in [`README.md`](README.md). Highlights:
 
 ### OAuth flow
 
+```mermaid
+sequenceDiagram
+    participant B as Browser
+    participant I as identity
+    participant P as OAuth provider
+    participant PR as profile-service
+
+    B->>I: GET /auth/:provider
+    Note over I: authorize_url + PKCE<br/>stash pending_oauth (state, verifier)
+    I-->>B: 302 to provider authorize_url
+    B->>P: authorize + consent
+    P-->>B: redirect /callback?code&state
+    B->>I: GET /auth/:provider/callback
+    Note over I: consume pending_oauth (remove)<br/>ct_eq(state) BEFORE provider compare
+    I->>P: exchange code + PKCE verifier
+    P-->>I: tokens + userinfo
+    I->>PR: upsert_by_identity
+    PR-->>I: user record
+    alt user.is_blocked()
+        I->>PR: audit login_denied
+        I-->>B: 403 Forbidden
+    end
+    I->>PR: get_user_flags
+    alt oauth_login not granted
+        I->>PR: audit login_denied
+        I-->>B: 303 /?denied=oauth_login
+    end
+    Note over I: session.cycle_id() at privilege boundary<br/>then insert user_id
+    I->>PR: audit login + claim_grants (sweep)
+    I-->>B: 303 post-login dest
+```
+
+*Sign-in flow: stash `pending_oauth`, consume it on callback, constant-time state check and the `oauth_login` gate run before `cycle_id`, then upsert and claim grants.*
+
 `/auth/:provider` (GET):
 
 1. Look up the provider config. Unknown provider returns 404.
@@ -80,6 +114,35 @@ The dashboard renders one card per devserver and flips it online/offline against
 
 ### Devserver-gate mint
 
+```mermaid
+sequenceDiagram
+    actor Browser
+    participant ID as identity
+    participant Profile as profile
+    participant Proxy as devserver-proxy
+
+    Browser->>ID: GET /s/owner or /s/owner/workspace
+    alt anonymous session
+        ID-->>Browser: stash post_login_redirect, 303 to / for sign-in
+    else signed-in caller
+        ID->>Profile: find_user_by_username owner
+        Profile-->>ID: owner user record or 404
+        ID->>Proxy: admin list_user_tunnels owner
+        Proxy-->>ID: live devserver_id or 404
+        ID->>Profile: devserver_access owner devserver caller
+        Profile-->>ID: role owner viewer editor or 404
+        Note over ID: mint 30s entry JWT HS256 sub=caller drv=devserver_id aud=owner.devserver.chan.app
+        ID-->>Browser: 303 to owner.devserver.chan.app/workspace/?t=JWT
+        Browser->>Proxy: GET /workspace/?t=JWT
+        Note over Proxy: verify HS256 exp aud drv typ=entry
+        Proxy-->>Browser: 303 clean URL, Set-Cookie devserver_gate 24h session JWT
+        Browser->>Proxy: GET /workspace/ with devserver_gate cookie
+        Proxy-->>Browser: cookie verified, proxied to live devserver
+    end
+```
+
+*Share-landing handoff: resolve owner and live devserver, run the profile access check, mint a 30s entry JWT, then devserver-proxy verifies it and sets the `devserver_gate` cookie.*
+
 The share-landing handlers (below) mint the entry token; there is no standalone open endpoint. The mint is keyed on the owner's single devserver:
 
 1. Resolve session; refuse if anonymous or blocked.
@@ -101,11 +164,11 @@ devserver-proxy verifies the JWT, mints its own 24h session-shape JWT, sets it a
 
 The post-login redirect is validated to start with a single `/` and to contain no `:` or `//` prefix, so a hostile stash cannot point the callback at another origin.
 
-`GET /s/:owner` is the whole-devserver open: it lands the caller on the launcher served at the devserver root instead of a single workspace. Same shape as the per-workspace landing — validate `owner`, stash + login if unauthenticated, then resolve the owner's live devserver, mint a 30s entry JWT (`drv` = that devserver id, `aud` = `{owner}.devserver.chan.app`), and 303 to the proxy root `…/?t=<jwt>`. It is restricted to the **owner**: the caller must equal `:owner`, otherwise 404 (the same shape as an unknown handle, so it does not reveal ownership). The launcher's `/api/library/*` surface is gated only at the proxy edge and carries no per-caller role on the gateway surface, so a grantee opening the root would get full library mutation; whole-devserver open is therefore owner-only, and grantees use the per-workspace landing (`/s/:owner/:workspace`).
+`GET /s/:owner` is the whole-devserver open: it lands the caller on the launcher served at the devserver root instead of a single workspace. Same shape as the per-workspace landing -- validate `owner`, stash + login if unauthenticated, then resolve the owner's live devserver, mint a 30s entry JWT (`drv` = that devserver id, `aud` = `{owner}.devserver.chan.app`), and 303 to the proxy root `…/?t=<jwt>`. It is restricted to the **owner**: the caller must equal `:owner`, otherwise 404 (the same shape as an unknown handle, so it does not reveal ownership). The launcher's `/api/library/*` surface is gated only at the proxy edge and carries no per-caller role on the gateway surface, so a grantee opening the root would get full library mutation; whole-devserver open is therefore owner-only, and grantees use the per-workspace landing (`/s/:owner/:workspace`).
 
 ### Devserver sharing grants (SPA surface)
 
-The owner manages grants from the dashboard. A grant is whole-devserver — the sharing unit — giving the grantee the owner's entire library. A devserver is not created or deleted from the dashboard: it appears when a `chan devserver` registers over the tunnel and goes offline when it disconnects. Routes (all session-gated; the session user is implicitly the owner):
+The owner manages grants from the dashboard. A grant is whole-devserver -- the sharing unit -- giving the grantee the owner's entire library. A devserver is not created or deleted from the dashboard: it appears when a `chan devserver` registers over the tunnel and goes offline when it disconnects. Routes (all session-gated; the session user is implicitly the owner):
 
 - `POST /api/devservers/:devserver_id/grants` body `{grantee_email, role}` (create / role-promote)
 - `GET  /api/devservers/:devserver_id/grants`
@@ -120,17 +183,17 @@ All forward to profile-service over the service bearer. Validation re-runs in pr
 identity reads the per-user resolved flag map from profile (`GET /v1/users/:id/flags`) at two points:
 
 - OAuth callback (`oauth_login`): the allowlist gate described in the callback flow above. Fresh deploys ship `default_enabled = false`, so the operator must `chan-admin flag grant oauth_login <ident>` for the first user before they can sign in.
-- `/api/me` (full map): the SPA gates UI affordances on the resolved values. Today that's `share_workspaces` (hides the Workspaces tab and the share panel inside `Workspaces.svelte` when off). The map is re-fetched on every `/api/me`, so a rollout takes effect on the next dashboard reload — no SPA logout / login dance.
+- `/api/me` (full map): the SPA gates UI affordances on the resolved values. Today that's `share_workspaces` (hides the Workspaces tab and the share panel inside `Workspaces.svelte` when off). The map is re-fetched on every `/api/me`, so a rollout takes effect on the next dashboard reload -- no SPA logout / login dance.
 
 Profile errors on either call degrade-soft: identity falls back to an empty flag map, which is the safe default (every flag off = no sign-in, no UI features). Tracing log captures the failure so the operator can see why callers were getting denied.
 
 ### Claim sweep on OAuth callback
 
-After `upsert_by_identity`, identity calls `POST /v1/users/:id/grants/claim` with the user's primary email plus the freshly-observed provider email (deduped). Pending grants whose `grantee_email` matches any of those addresses are assigned to `:id` and stamped `accepted_at = now()`. Best-effort: a failure logs and continues so an unhealthy profile call does not block sign-in. Previous providers' emails are not resent — they were swept on their own callbacks.
+After `upsert_by_identity`, identity calls `POST /v1/users/:id/grants/claim` with the user's primary email plus the freshly-observed provider email (deduped). Pending grants whose `grantee_email` matches any of those addresses are assigned to `:id` and stamped `accepted_at = now()`. Best-effort: a failure logs and continues so an unhealthy profile call does not block sign-in. Previous providers' emails are not resent -- they were swept on their own callbacks.
 
 ### Desktop authorize (PAT mint for chan-desktop)
 
-OAuth-style consent flow at `/desktop/authorize` (entry, validates the query and stashes it in the session), `/desktop/authorize/consent` (server-rendered HTML consent page, CSRF nonce, `frame-ancestors 'none'`), and `POST /desktop/authorize/confirm` (allow / deny). On allow, a PAT is minted with `TokenOrigin::Desktop` and the browser is 302'd to `chan://auth/callback#id=…&secret=…&state=…` — the secret rides in the URL fragment so it never reaches access logs. The `redirect_uri` is exact-matched against `chan://auth/callback`, `expires_in` is required and clamped to 90 days, and scopes are checked against a strict allowlist (`tunnel`, `tunnel.public`). Unauthenticated entries bounce through the SPA sign-in; the OAuth callback resumes the flow at the consent page. Deny paths (blocked account, `oauth_login` not granted, user cancel) redirect to the same `chan://` target with a stable `error=` reason so the desktop client can render it. See the `desktop_authorize` module doc for the full hardening posture.
+OAuth-style consent flow at `/desktop/authorize` (entry, validates the query and stashes it in the session), `/desktop/authorize/consent` (server-rendered HTML consent page, CSRF nonce, `frame-ancestors 'none'`), and `POST /desktop/authorize/confirm` (allow / deny). On allow, a PAT is minted with `TokenOrigin::Desktop` and the browser is 302'd to `chan://auth/callback#id=…&secret=…&state=…` -- the secret rides in the URL fragment so it never reaches access logs. The `redirect_uri` is exact-matched against `chan://auth/callback`, `expires_in` is required and clamped to 90 days, and scopes are checked against a strict allowlist (`tunnel`, `tunnel.public`). Unauthenticated entries bounce through the SPA sign-in; the OAuth callback resumes the flow at the consent page. Deny paths (blocked account, `oauth_login` not granted, user cancel) redirect to the same `chan://` target with a stable `error=` reason so the desktop client can render it. See the `desktop_authorize` module doc for the full hardening posture.
 
 ### Account delete
 
@@ -145,7 +208,7 @@ OAuth-style consent flow at `/desktop/authorize` (entry, validates the query and
 
 ### Pluggable providers
 
-Each provider lives at `src/providers/<name>.rs` behind a small `Provider` trait (authorize_url, exchange, fetch user info). Adding a new provider is one new file plus wiring in `Config::from_env`.
+A small `Provider` trait (authorize_url, exchange, fetch user info) backs each one. Adding a new provider is one new file plus wiring in `Config::from_env`.
 
 Not wired:
 
@@ -234,17 +297,14 @@ identity derives `BASE_URL` (its OAuth-callback origin) and `devserver_wildcard_
 
 ## What's wired
 
-- axum 0.7 + `tower_sessions` + Postgres session store (host-only cookie scope)
-- `oauth2` crate with `rustls-tls` for PKCE + token exchange
-- `reqwest` for profile-service, devserver-proxy admin, and the OAuth providers' REST APIs
-- `gateway-common` for the profile-service client, the workspace-admin client, the shared devserver_gate JWT type, and the SPA static-asset handler
-- `jsonwebtoken` for HS256 entry-token mint
-- `subtle`, `rustrict`, `rand::rngs::OsRng`, `sha2::Sha256`
-- Svelte SPA embedded at build time
+The non-obvious dependency choices:
+
+- `tower_sessions` over a Postgres session store, with host-only cookie scope.
+- `oauth2` with `rustls-tls` for PKCE + token exchange.
 
 ## What is not wired
 
 - WebAuthn / passkeys
 - Magic-link sign-in
-- Device flow (RFC 8628) for browserless clients — chan-desktop's `/desktop/authorize` flow still rides the user's browser
+- Device flow (RFC 8628) for browserless clients -- chan-desktop's `/desktop/authorize` flow still rides the user's browser
 - Refresh of the devserver-gate session cookie on the devserver.chan.app side (24h hard exp; users re-enter via the dashboard)

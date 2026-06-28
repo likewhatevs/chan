@@ -8,7 +8,7 @@ chan-tunnel is split across three crates under `crates/` in this repository:
 - `chan-tunnel-client` (this crate): dials the terminator, runs the Hello round-trip, multiplexes yamux substreams onto an axum router. Embedded into `chan-server` (`crates/chan-server`) and driven by `chan devserver`.
 - `chan-tunnel-server`: terminator library, consumed by the gateway's `devserver-proxy`. Owns `Validator`, `Registry`, and the substream-forwarding seam.
 
-End-to-end shape: `chan devserver` calls `chan_tunnel_client::run(cfg, router)`. `run` POSTs to `{tunnel-host}/v1/tunnel` over h2/TLS, exchanges Hello / HelloAck through the resulting bidirectional stream, then yamux-multiplexes per-request substreams. The terminator accepts the connection in `serve_tunnel_listener`, registers the devserver in its `Registry`, and opens fresh substreams to forward public requests.
+End-to-end shape: `chan devserver` calls `chan_tunnel_client::run(cfg, router)`; the terminator accepts the connection in `serve_tunnel_listener` and registers the devserver in its `Registry`. The dial / handshake / yamux flow is the section-2 diagram below, set in the cross-crate system diagram in [`chan-tunnel-proto/design.md`](../chan-tunnel-proto/design.md).
 
 This document is the dial and handshake reference. The wire format itself lives in chan-tunnel-proto's design.md.
 
@@ -35,35 +35,29 @@ Out of scope:
 
 ## 2. Architecture overview
 
+```mermaid
+flowchart TD
+    Cfg["ClientConfig + axum::Router"] --> Run["run: validate config, build_tls_config once"]
+    Run --> Dial["dial_with_tls (within dial_timeout)"]
+    Dial --> Norm["normalize URL to /v1/tunnel"]
+    Norm --> Tcp["open_tcp: TCP, optional CONNECT proxy"]
+    Tcp --> Conn["TLS h2-ALPN (or h2c) + h2 client"]
+    Conn --> Post["POST /v1/tunnel, Authorization: Bearer"]
+    Post --> Status{"response status"}
+    Status -->|"401 / 403 / other"| Failed["emit DialFailed"]
+    Status -->|200| Hs["H2Duplex + handshake: Hello / HelloAck"]
+    Hs -->|refused| Failed
+    Hs -->|ok| Reg["emit Connected, reset backoff"]
+    Reg --> Serve["serve_substreams: yamux poll_next_inbound loop"]
+    Serve --> Sub["per substream: hyper h1 with_upgrades to axum oneshot"]
+    Sub --> Serve
+    Serve -->|"conn ends"| Disc["emit Disconnected"]
+    Failed --> Sleep["sleep jittered backoff, then double up to max_backoff"]
+    Disc --> Sleep
+    Sleep --> Dial
 ```
-+--------------------------+             +--------------------+
-|  ClientConfig            |             |   axum::Router     |
-|  (url, token, workspace, |             |  (provided by the  |
-|   backoff, timeout,      |             |   embedder, e.g.   |
-|   events, proxy,         |             |   chan devserver's |
-|   substream cap)         |             |   inner app)       |
-+--------------------------+             +--------------------+
-            |                                    ^
-            v                                    |
-       run(cfg, router)                          |
-            |                                    |
-            v                                    |
-   +------------------+   tcp + tls + h2  +-----+--------+
-   | dial_with_tls    |------------------>| serve_       |
-   |  - normalize url |    H2Duplex       |  substreams  |
-   |  - CONNECT proxy |    (proto crate)  |  (yamux loop)|
-   |    (optional)    |                   +-----+--------+
-   |  - TLS (h2 ALPN) |                         |
-   |  - h2 client     |                         | per inbound
-   |  - Authorization |                         | yamux::Stream
-   |  - read 200/4xx  |                         v
-   |  - handshake()   |            hyper h1 server (per stream)
-   +------------------+                 with_upgrades()
-            |                                    |
-            v                                    v
-   (Registration,                      axum router oneshot
-    yamux Client)
-```
+
+*Dial loop: validate, connect, handshake, then serve yamux substreams; any failure or disconnect backs off and re-dials.*
 
 Connection lifecycle:
 
@@ -74,15 +68,6 @@ Connection lifecycle:
 5. Sleep a jittered backoff (+/- 20%), double the base (capped at `max_backoff`), loop.
 
 ## 3. Components / responsibilities
-
-| File         | Owns                                              |
-|--------------|---------------------------------------------------|
-| `lib.rs`     | `ClientConfig`, `Registration`, `TunnelEvent`,    |
-|              | `ClientError`, `handshake`, `serve_substreams`,   |
-|              | `serve_substreams_with_limit`, `run`, jitter      |
-| `dial.rs`    | TCP / CONNECT-proxy leg, TLS + h2 connect, URL    |
-|              | normalization, request POST, status mapping,      |
-|              | `H2Duplex` construction, `build_tls_config`       |
 
 `handshake` and `serve_substreams` are free functions over a generic `S: AsyncRead + AsyncWrite + Unpin + Send + 'static` so wire tests (e.g. `gateway/crates/devserver-proxy/tests/api.rs`) can pass a duplex built from a raw h2 stream and exercise the Hello round-trip without standing up TLS. The same generic lets `dial` pass an `H2Duplex` produced from a real h2 stream.
 
@@ -106,7 +91,7 @@ Exponential, doubled per attempt, capped at `max_backoff`. Reset to `initial_bac
 
 ### Outbound HTTP proxy (CONNECT)
 
-When `ClientConfig::proxy` is set, `open_tcp` connects to the proxy and issues an HTTP/1.1 `CONNECT host:port`, with `Proxy-Authorization: Basic ...` derived from the proxy URL's userinfo when present. The response headers are read byte-by-byte up to the `\r\n\r\n` terminator (hard-capped at 16 KiB) so no bytes belonging to the tunnelled upstream — the TLS ClientHello or h2 preface — are over-read by a buffered reader. Only 2xx CONNECT responses proceed. Only `http://` proxies are supported (plain CONNECT); HTTPS-to-proxy and SOCKS are out of scope. `HTTP_PROXY` / `NO_PROXY` env vars are not honoured automatically so embedders get a deterministic surface.
+When `ClientConfig::proxy` is set, `open_tcp` connects to the proxy and issues an HTTP/1.1 `CONNECT host:port`, with `Proxy-Authorization: Basic ...` derived from the proxy URL's userinfo when present. The response headers are read byte-by-byte up to the `\r\n\r\n` terminator (hard-capped at 16 KiB) so no bytes belonging to the tunnelled upstream -- the TLS ClientHello or h2 preface -- are over-read by a buffered reader. Only 2xx CONNECT responses proceed. Only `http://` proxies are supported (plain CONNECT); HTTPS-to-proxy and SOCKS are out of scope. `HTTP_PROXY` / `NO_PROXY` env vars are not honoured automatically so embedders get a deterministic surface.
 
 ### TunnelEvent channel
 

@@ -21,18 +21,46 @@ Out of scope:
 
 ## Architecture
 
+```mermaid
+flowchart TD
+    Client["MCP client / agent host"]
+
+    subgraph standalone["Standalone (no server holds the lock)"]
+        Stdio["chan __mcp / chan-llm-mcp"]
+        OpenWs["open_workspace (takes flock)"]
+        ServeStdio["serve_stdio: stdio -> serve_io"]
+    end
+
+    subgraph inproc["In-process (chan-server holds the lock)"]
+        Proxy["chan __mcp-proxy"]
+        Sock["Unix socket / named pipe"]
+        Bridge["bridge accept loop (reuses held flock)"]
+    end
+
+    ServeIo["serve_io(reader, writer)"]
+    Sniff{"sniff first byte"}
+    NDJSON["NDJSON JSON-RPC (pass-through)"]
+    Framed["Content-Length frames (duplex pump)"]
+    Rmcp["rmcp serve -> tools::execute"]
+    Ws[("Arc&lt;Workspace&gt;")]
+
+    Client --> Stdio
+    Client --> Proxy
+    Stdio --> OpenWs
+    OpenWs --> ServeStdio
+    ServeStdio --> ServeIo
+    Proxy --> Sock
+    Sock --> Bridge
+    Bridge --> ServeIo
+    ServeIo --> Sniff
+    Sniff -->|"other byte"| NDJSON
+    Sniff -->|"C / c"| Framed
+    NDJSON --> Rmcp
+    Framed --> Rmcp
+    Rmcp --> Ws
 ```
-MCP client / host
-        |
-        v
-chan_llm::mcp::Server  -- feature "mcp"
-        |
-        v
-chan_llm::tools::execute
-        |
-        v
-chan_workspace::Workspace
-```
+
+Both transport entry paths converge on `serve_io`, which sniffs the framing and dispatches every tool call through `tools::execute` onto the shared `Arc<Workspace>`.
 
 `mcp::Server` owns a `ToolContext`, which is just an `Arc<Workspace>`. Each JSON tool call goes through `tools::execute`. MCP handlers run workspace work on `spawn_blocking` so synchronous chan-workspace reads, writes, graph, search, and report work do not pin the async transport worker. The MCP-only `read_media` path still reads through `Workspace::read`, so it keeps the same path sandbox and regular-file checks that the editor uses.
 

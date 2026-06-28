@@ -8,25 +8,37 @@ It mirrors the production definitions in the sibling `chan-prod-setup` repo. Per
 
 ## Why the all-container, prod-like stack
 
-The gateway's cross-tenant isolation is carried by two host-scoped cookies: `id_session` (host-only on `id.<domain>`) and `devserver_gate` (host-only and path-scoped on `{user}.workspace.<domain>/{workspace}/`). No `.<domain>`-wide cookie exists, so a browser never auto-attaches an identity session to a fetch on another tenant's subdomain. That design, plus the reverse-proxy header hygiene (hop-by-hop stripping, dropped inbound Host/Cookie/Authorization, recomputed `X-Forwarded-*`), only fully exercises behind a real TLS terminator with real subdomains. Running the same containers and the same nginx as prod is how you exercise it.
+The gateway's cross-tenant isolation is carried by two host-scoped cookies: `id_session` (host-only on `id.<domain>`) and `devserver_gate` (host-only and path-scoped on `{user}.devserver.<domain>/{workspace}/`). No `.<domain>`-wide cookie exists, so a browser never auto-attaches an identity session to a fetch on another tenant's subdomain. That design, plus the reverse-proxy header hygiene (hop-by-hop stripping, dropped inbound Host/Cookie/Authorization, recomputed `X-Forwarded-*`), only fully exercises behind a real TLS terminator with real subdomains. Running the same containers and the same nginx as prod is how you exercise it.
 
 ## Topology
 
+```mermaid
+flowchart TD
+    browser["browser (https)"]
+    lima["127.0.0.1:443 (Lima forwards the VM :443 to the macOS host)"]
+    browser --> lima
+
+    subgraph zone["chan-svc zone (private bridge, inside Lima)"]
+        nginx["chan-nginx: TLS terminator (the only published container, :80 / :443)"]
+        chanid["chan-id :7000"]
+        profile["chan-profile :7001"]
+        proxy["chan-devserver-proxy :7002 + :7100"]
+        psql["chan-psql :5432 (also published :5432 for host cargo test)"]
+    end
+
+    lima --> nginx
+    nginx -->|"id.localtest.me"| chanid
+    nginx -->|"devserver.localtest.me apex (admin, healthz)"| proxy
+    nginx -->|"/v1/tunnel (h2c, grpc_pass) -> :7100"| proxy
+    nginx -->|"*.devserver.localtest.me (tenant + WS upgrade)"| proxy
+
+    chanid -->|"PROFILE_SERVICE_URL"| profile
+    chanid -->|"WORKSPACE_ADMIN_URL"| proxy
+    proxy -->|"IDENTITY_URL"| chanid
+    profile -->|"DATABASE_URL"| psql
 ```
-  browser (https)
-        |
-        v  127.0.0.1:443  (Lima forwards the VM's :443 to the macOS host)
-  +---------------------- chan-svc zone (private bridge, inside Lima) ------+
-  |  chan-nginx   TLS terminator; the ONLY published container (:80,:443)  |
-  |     id.<domain>          -> chan-id:7000                               |
-  |     <domain> (apex)      -> chan-devserver-proxy:7002  (admin, healthz)|
-  |       /v1/tunnel (h2c)   -> chan-devserver-proxy:7100  (grpc_pass)     |
-  |     *.workspace.<domain> -> chan-devserver-proxy:7002  (tenant + WS)   |
-  |                                                                        |
-  |  chan-id:7000   chan-profile:7001   chan-devserver-proxy:7002 + :7100  |
-  |  chan-psql:5432   (also published :5432 for host-side cargo test)      |
-  +------------------------------------------------------------------------+
-```
+
+chan-nginx terminates TLS at the zone edge and fans the routes out across the `chan-svc` containers; this is the one route map for the stack (the nginx section below mirrors it).
 
 Services bind their default ports (`7000/7001/7002/7100`) INSIDE their containers and resolve each other by container hostname on the `chan-svc` zone (for example identity reads `chan-profile:7001`). Nothing binds on the macOS host except what Lima forwards (nginx `:443`, and Postgres `:5432` for host-run tests). Because no gateway port lands on the macOS host, the macOS AirPlay `:7000` clash never arises and the code defaults stay at the 7000 range, identical to prod.
 
@@ -105,20 +117,13 @@ limactl shell default sudo sdme start chan-id
 
 ## nginx container + TLS
 
-nginx is its own container (`chan-nginx`), the TLS terminator and the only one that publishes ports. Mirror `chan-prod-setup/services/chan-nginx.sdme` and `chan-prod-setup/etc/nginx/`; the route map is:
+nginx is its own container (`chan-nginx`), the TLS terminator and the only one that publishes ports. Mirror `chan-prod-setup/services/chan-nginx.sdme` and `chan-prod-setup/etc/nginx/`; the routes are the ones in [Topology](#topology) above (`id.<domain>` -> chan-id:7000 with `proxy_pass`, the `devserver.<domain>` apex + `*.devserver.<domain>` -> chan-devserver-proxy:7002, and `/v1/tunnel` -> chan-devserver-proxy:7100 with `grpc_pass` h2c).
 
-```
-id.<domain>                  -> chan-id:7000               (proxy_pass)
-<domain> (apex)              -> chan-devserver-proxy:7002  (admin + healthz)
-<domain>/v1/tunnel           -> chan-devserver-proxy:7100  (grpc_pass, h2c)
-*.workspace.<domain>         -> chan-devserver-proxy:7002  (tenant + WS upgrade)
-```
-
-The one dev difference is the certificate. Prod uses certbot with the dns-01 Cloudflare plugin to get a real `*.workspace.<domain>` wildcard (http-01 cannot issue wildcards). Locally, issue a local-CA wildcard with [`mkcert`](https://github.com/FiloSottile/mkcert) and mount it into the nginx container in place of `/etc/letsencrypt`:
+The one dev difference is the certificate. Prod uses certbot with the dns-01 Cloudflare plugin to get a real `*.devserver.<domain>` wildcard (http-01 cannot issue wildcards). Locally, issue a local-CA wildcard with [`mkcert`](https://github.com/FiloSottile/mkcert) and mount it into the nginx container in place of `/etc/letsencrypt`:
 
 ```sh
 mkcert -install
-mkcert "*.localtest.me" "*.workspace.localtest.me" localtest.me
+mkcert "*.localtest.me" "*.devserver.localtest.me" localtest.me
 ```
 
 Create chan-nginx on the zone, publishing `:443`, with the mkcert cert and your `:443` vhosts bind-mounted in:
@@ -148,18 +153,18 @@ Register a test workspace from the sibling `chan` repo over the TLS apex:
 ```sh
 export CHAN_TUNNEL_TOKEN=chan_pat_...     # mint under the dashboard Tokens tab
 cargo run -p chan -- serve <workspace-dir> \
-  --tunnel-url=https://workspace.localtest.me/v1/tunnel \
+  --tunnel-url=https://devserver.localtest.me/v1/tunnel \
   --tunnel-workspace-name=blog
 ```
 
-Clicking Open on the dashboard lands on `https://<user>.workspace.localtest.me/blog/`.
+Clicking Open on the dashboard lands on `https://<user>.devserver.localtest.me/blog/`.
 
 ## From local to a real VPS
 
 Because the local stack already IS the prod container shape, going to a real host changes only what is environment-specific, exactly as `chan-prod-setup` automates (`configure.sh` then `make all`):
 
-- **DNS.** Real records for `id.<domain>`, `<domain>` (apex), and a wildcard `*.workspace.<domain>` pointed at the host; inbound `:80/:443` DNAT to chan-nginx in the zone.
-- **Certificates.** Swap mkcert for certbot with your provider's dns-01 plugin to get the real `*.workspace.<domain>` wildcard (the wildcard forces dns-01; any DNS provider with a certbot plugin works).
+- **DNS.** Real records for `id.<domain>`, the `devserver.<domain>` apex, and a wildcard `*.devserver.<domain>` pointed at the host; inbound `:80/:443` DNAT to chan-nginx in the zone.
+- **Certificates.** Swap mkcert for certbot with your provider's dns-01 plugin to get the real `*.devserver.<domain>` wildcard (the wildcard forces dns-01; any DNS provider with a certbot plugin works).
 - **Secrets.** Real per-service secrets bind-mounted from `/var/lib/chan/secrets` instead of the inlined dev values; `COOKIE_SECURE=true`.
 
 The containers, the zone, the nginx routes, and the cookie isolation are identical to what you ran locally.
@@ -212,8 +217,8 @@ Safe whenever no live stack is connected to `chan_gateway`.
 
 ## Troubleshooting
 
-- **`connection refused on localhost:5432`** — `sdme ps` should list chan-psql Running; if stopped, `sdme start chan-psql`; if wedged under load, `sdme exec chan-psql -- /usr/bin/systemctl restart postgresql`.
-- **A service can't reach another** — they resolve by container hostname ON the `chan-svc` zone, so every service container (and chan-psql) must be created with `--network-zone chan-svc`; check `sdme ps` and the hostname-based URLs in each unit's env.
-- **Browser rejects the local cert** — run `mkcert -install` so the local CA is trusted, and reissue the wildcard if you changed the domain.
-- **Signed-in but the workspace 404s** — confirm nginx serves https and `FORWARDED_PROTO=https` is set on devserver-proxy; a scheme mismatch makes the `devserver_gate` cookie fail to attach.
-- **Tests pass locally but break on CI** — same migration set must run (`migrations/0001..N` in order); a forgotten file shows up as missing-column errors on first use.
+- **`connection refused on localhost:5432`** -- `sdme ps` should list chan-psql Running; if stopped, `sdme start chan-psql`; if wedged under load, `sdme exec chan-psql -- /usr/bin/systemctl restart postgresql`.
+- **A service can't reach another** -- they resolve by container hostname ON the `chan-svc` zone, so every service container (and chan-psql) must be created with `--network-zone chan-svc`; check `sdme ps` and the hostname-based URLs in each unit's env.
+- **Browser rejects the local cert** -- run `mkcert -install` so the local CA is trusted, and reissue the wildcard if you changed the domain.
+- **Signed-in but the workspace 404s** -- confirm nginx serves https and `FORWARDED_PROTO=https` is set on devserver-proxy; a scheme mismatch makes the `devserver_gate` cookie fail to attach.
+- **Tests pass locally but break on CI** -- same migration set must run (`migrations/0001..N` in order); a forgotten file shows up as missing-column errors on first use.

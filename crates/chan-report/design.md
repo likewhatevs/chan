@@ -27,36 +27,24 @@ Out of scope:
 
 ## 2. Architecture overview
 
+```mermaid
+flowchart TD
+    Scan["scan(opts)"] --> Walk["walk_root (ignore crate)"]
+    Walk --> Count["count_file_impl (tokei per-file)"]
+    Incr["update / remove / rename"] -->|"apply Filter, re-count"| Count
+    Incr -->|"drop row + per-dir delta"| Index
+    Count --> Cx["complexity::score (keyword scoring)"]
+    Cx --> FS["FileStats per file"]
+    FS --> Index["Index: HashMap rel to FileStats plus per-dir aggregates"]
+    Index --> Snap["snapshot(Scope, CocomoParams)"]
+    Snap --> Filt["filter by scope: All / Prefix / Files"]
+    Filt --> Roll["roll_up: per-language + totals"]
+    Roll --> Cocomo["cocomo::compute (Basic COCOMO)"]
+    Cocomo --> Report["Report"]
+    Report --> Jsonl["write_jsonl"]
 ```
-       +---------------------+
-       |     Index           |    HashMap<rel_path, FileStats>
-       |                     |    + per-directory aggregates
-       +-----+--------+------+
-             |        |
-       scan  |        | update / remove / rename
-             v        v
-       +---------------+      +-------------------+
-       |   walk        |----->|  count_file       |
-       | (ignore crate)|      | (tokei per-file)  |
-       +---------------+      +-------------------+
-                                       |
-                                       v
-                              +-------------------+
-                              |  complexity       |
-                              | (keyword scoring) |
-                              +-------------------+
 
-   snapshot(Scope, CocomoParams)
-             |
-             v
-       +----------+    +-----------+    +---------+
-       |  filter  +--->|  roll-ups +--->|  COCOMO |
-       |  by scope|    |  per-lang |    |         |
-       +----------+    +-----------+    +---------+
-                              |
-                              v
-                          Report  -->  write_jsonl
-```
+Index dataflow: `scan` walks and counts each file into the `Index`; incremental `update` / `remove` / `rename` re-count a single file and patch the per-directory aggregates; `snapshot` filters by scope, rolls up, and runs COCOMO into a `Report` for `write_jsonl`.
 
   - `Index` is the state. All mutating operations are O(1 file) plus an O(depth) ancestor walk for the directory cache, so a watcher can call them on every event.
   - `Report` is a pure value type computed from `Index` plus a `Scope` and `CocomoParams`. Snapshots never mutate state.

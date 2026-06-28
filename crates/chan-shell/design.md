@@ -74,6 +74,30 @@ The split exists so chan-server can share the wire contract WITHOUT linking clap
 
 Rather than enumerate every variant, the requests group into a handful of families by how the server resolves their target:
 
+```mermaid
+flowchart TD
+  REQ["cs ControlRequest line (tag = type)"] --> MATCH["chan-server handle_request: match the type tag"]
+  MATCH --> F1["window-id keyed push<br/>open / graph / dashboard / terminal new / upload / download"]
+  MATCH --> F2["registry-resolved, no window id<br/>terminal write/list/restart/close, search, window list, team, identify"]
+  MATCH --> F3["SPA-blocking parked oneshot<br/>pane query/exec, terminal survey"]
+  MATCH --> F4["desktop Tauri-bridge lifecycle<br/>window new/open/close/hide"]
+  MATCH --> F5["process / tenant teardown<br/>close"]
+  F1 --> T1["require_window_id, then push command<br/>over the window bus to that window id"]
+  F2 --> T2["resolve via terminal / session registry<br/>selected by tab name and group"]
+  F3 --> T3["push over window bus, park a oneshot,<br/>hold until the SPA POSTs its reply"]
+  F4 --> T4["DesktopBridge dispatch to DesktopWindowOp to Tauri<br/>(standalone chan refuses)"]
+  F5 --> T5["UnserveScope: standalone serve exits,<br/>host unmounts just that tenant"]
+  T1 --> OK["Ok { message }"]
+  T2 --> OK
+  T4 --> OK
+  T5 --> OK
+  T3 --> OK
+  T3 --> TO["Timeout { message }"]
+  MATCH --> ERR["Error { message }<br/>missing window id / registry unavailable"]
+```
+
+Each family resolves its target a different way -- window-id push, registry lookup, a parked SPA round-trip, the desktop bridge, or teardown -- and only the SPA-blocking family can answer `Timeout`. The breakdown:
+
   - Open a UI tab or action in the originating window. Window-id keyed, non-blocking: the server pushes a window command to exactly that window and returns. `cs open` / `cs graph` / `cs dashboard` / `cs terminal new` / `cs upload` / `cs download`.
   - Act on or inspect live PTY sessions and tenant state through the server's registry. No window id; selected by tab name and/or group. `cs terminal write` / `list` / `restart` / `close` / `scrollback`, `cs search`, `cs window list`, `cs terminal team`, and `chan ps`'s `Identify`.
   - Blocking round-trips to a SPA window's frontend. The layout lives only in the browser, so the server pushes a query / exec over the window bus, parks a oneshot, and holds the connection until the SPA replies. `cs pane` (the read-only layout report and the focus / split / resize / close mutations), and `cs terminal survey` (which blocks until the user answers, defers, or dismisses).
@@ -146,14 +170,3 @@ pub fn invoked_arg0() -> OsString;                    // prefers $ARGV0 (AppImag
   - `chan-server`: wire-only (`default-features = false`). Decodes `ControlRequest`, runs the handlers, encodes `ControlResponse`, and reads the `SubmitAgent` chord map for its team spawner. Never links clap or the client transport.
   - `chan`: `features = ["client"]`. Rewrites `cs ...` into its own `chan shell ...` path and calls `dispatch`; uses `invoked_as_cs` so a `cs -> chan` symlink on PATH parses as `cs`.
   - `chan-desktop` (`desktop/src-tauri`): `features = ["client"]`. Has no `chan` binary, so when launched as `cs` it parses `cs` argv directly through `run_cs`, giving desktop users the identical `cs` client.
-
-File responsibilities:
-
-```
-  wire.rs       ControlRequest / ControlResponse + payload types (serde)
-  submit.rs     SubmitAgent map, command -> agent derive, chord overrides
-  control.rs    client transport: OpenEnv, absolutize, one-line round-trip
-  cli.rs        clap ShellAction / TerminalAction tree + dispatch + output
-  exit_code.rs  named exit codes + ControlTimeout (survey --timeout -> 124)
-  lib.rs        re-exports, the client feature gates, arg0 / invoked_as_*
-```

@@ -6,28 +6,17 @@ The self-hostable server side of chan's tunnel: the identity, profile, and devse
 
 ## What's here
 
-- `profile`: internal HTTP API over Postgres. Users, linked OAuth identities, workspaces + sharing grants, feature flags, auth audit.
-- `identity`: id.chan.app. OAuth2 sign-in (GitHub / Google / GitLab) with PKCE, Postgres-backed sessions, embedded Svelte SPA, personal access tokens (incl. the `chan://` desktop-authorize consent flow), devserver-gate entry-token mint.
-- `devserver-proxy`: devserver.chan.app (apex) + `*.devserver.chan.app` (wildcard). Each `chan devserver` instance dials `POST /v1/tunnel` (raw h2c) and registers over an authenticated yamux tunnel; HTTP and WebSocket traffic at `{user}.devserver.chan.app/{workspace}/*` is reverse-proxied into it. Entry is gated by the devserver-gate handoff: identity mints an entry JWT, devserver-proxy verifies it and mints a host-only, path-scoped `devserver_gate` cookie. The gate always runs; without a valid token / cookie a request 404s (same shape as an unknown workspace, so probes can't enumerate).
+Five crates; see [`CONTEXT.md`](CONTEXT.md) for the topology and request-flow diagram.
+
+- `profile`: internal HTTP API over Postgres. Users, OAuth identities, devserver grants, feature flags, auth audit.
+- `identity`: id.chan.app. OAuth2 sign-in (GitHub / Google / GitLab) with PKCE, Postgres-backed sessions, the embedded SPA, personal access tokens (incl. the `chan://` desktop-authorize consent flow).
+- `devserver-proxy`: devserver.chan.app. Terminates each `chan devserver`'s yamux tunnel and reverse-proxies it back out at `{user}.devserver.chan.app/{workspace}/*`, behind the always-on devserver-gate (an unauthenticated request 404s like an unknown workspace, so probes can't enumerate).
 - `admin`: operator CLI against profile's and devserver-proxy's admin trees.
 - `gateway-common`: shared library (domain derivation, HTTP clients, devserver-gate JWT, token bucket, validators).
 
 Personal access tokens (PATs, `chan_pat_...`) are the only credential the chan CLI / chan-tunnel side uses; they carry the `tunnel` scope. Adding another OAuth provider is one new file under `crates/identity/src/providers/` plus wiring in `Config::from_env`. Microsoft and Apple are intentionally excluded (Microsoft because tenant admins can mint unverified-email accounts that defeat our email-as-link key; Apple because the OAuth setup is high-touch for the value at this scale).
 
 ## Layout
-
-```
-gateway/
-  Cargo.toml                       # workspace
-  crates/identity/                 # bin: identity-service (id.chan.app)
-  crates/identity/web/dist/        # @chan/profile bundle, embedded into identity-service
-  crates/devserver-proxy/          # bin: devserver-proxy-service (devserver.chan.app)
-  crates/profile/                  # bin: profile-service (internal)
-  crates/admin/                    # bin: chan-gateway-admin (operator CLI)
-  crates/gateway-common/           # lib: shared clients / JWT / validators
-  migrations/                      # sqlx migrations (Postgres)
-  docs/                            # dev-setup.md and friends
-```
 
 identity's SPA (`@chan/profile`) and the shared chrome (`@chan/web-shared`) live in the `./web` npm workspace at the repo root, so id.chan.app and the editor read as the same product: Svelte 5 + Vite + TypeScript, dark default with the same CSS variable palette.
 

@@ -18,7 +18,76 @@ Small axum service in front of Postgres. Schema:
 - `feature_flags (key PK, description, default_enabled, created_at, updated_at)`: registry of named flags.
 - `feature_flag_overrides (flag_key, user_id, enabled, set_at, PRIMARY KEY (flag_key, user_id))`: per-user explicit enable/disable rows. The effective value for `(flag, user)` is the override row when present, else `default_enabled`.
 
-Migrations live in the workspace root `migrations/` directory and run on startup.
+```mermaid
+erDiagram
+    USERS {
+        uuid id PK
+        text email UK "lower(email) unique"
+        text username UK "lower(username) unique"
+        int username_edits
+        timestamptz blocked_at "null means active"
+    }
+    IDENTITIES {
+        uuid id PK
+        uuid user_id FK
+        text provider UK "unique(provider, provider_subject)"
+        text provider_subject UK
+    }
+    API_TOKENS {
+        uuid id PK
+        uuid user_id FK
+        text token_hash UK
+        text scopes "text[] default tunnel"
+        timestamptz revoked_at
+    }
+    API_TOKEN_AUDIT {
+        bigint id PK
+        uuid token_id FK
+        text action "created/used/revoked"
+    }
+    AUTH_AUDIT {
+        bigint id PK
+        uuid user_id FK
+        text action "login/blocked/etc"
+    }
+    DEVSERVERS {
+        uuid id PK
+        uuid owner_user_id FK "UK part"
+        text devserver_id "UK part, sha256(PAT)"
+        text label
+    }
+    DEVSERVER_GRANTS {
+        uuid id PK
+        uuid owner_user_id FK "UK part"
+        text devserver_id FK "UK part"
+        text grantee_email "UK lower(email)"
+        uuid grantee_user_id FK "nullable until claim"
+        text role "viewer or editor"
+    }
+    FEATURE_FLAGS {
+        text key PK
+        bool default_enabled
+    }
+    FEATURE_FLAG_OVERRIDES {
+        text flag_key PK "FK"
+        uuid user_id PK "FK"
+        bool enabled
+    }
+    USERS ||--o{ IDENTITIES : "user_id cascade"
+    USERS ||--o{ API_TOKENS : "user_id cascade"
+    USERS ||--o{ AUTH_AUDIT : "user_id cascade"
+    USERS ||--o{ DEVSERVERS : "owner_user_id cascade"
+    USERS ||--o{ DEVSERVER_GRANTS : "owner cascade"
+    USERS |o--o{ DEVSERVER_GRANTS : "grantee cascade"
+    USERS ||--o{ FEATURE_FLAG_OVERRIDES : "user_id cascade"
+    API_TOKENS ||--o{ API_TOKEN_AUDIT : "token_id cascade"
+    DEVSERVERS ||--o{ DEVSERVER_GRANTS : "owner+devserver_id cascade"
+    FEATURE_FLAGS ||--o{ FEATURE_FLAG_OVERRIDES : "flag_key cascade"
+```
+
+*Gateway Postgres schema: table relationships and key constraints; the bullet list above stays the authoritative column and constraint detail.*
+
+Migrations run on startup.
 
 The router splits into three sub-routers:
 
@@ -167,12 +236,9 @@ Database errors are logged with `tracing::error!(error = ?e, ...)`; clients see 
 
 ## What's wired
 
-- axum 0.7 HTTP server
 - sqlx with `runtime-tokio` + `tls-rustls` + Postgres
 - `subtle` for constant-time bearer comparison
-- `tower-http` tracing layer
 - `gateway_common::workspace_admin_client::WorkspaceAdminClient` (best-effort devserver-proxy eviction on admin block)
-- migrations checked on startup
 
 ## What is not wired
 

@@ -4,69 +4,19 @@
 
 ## Workspace layout
 
-```
-crates/
-  chan                  binary. CLI + dispatch into subcommands;
-                        embeds the frontend via chan-server's
-                        rust-embed bundle.
-  chan-server           HTTP + WebSocket surface. Wraps chan-workspace
-                        in axum routes; hosts the in-process MCP
-                        server over a Unix-domain socket.
-  chan-workspace            filesystem boundary, workspace registry, search
-                        + graph indexer, watch, report engine.
-  chan-llm              MCP-only library: chan MCP server, tool
-                        schemas, embedded prompts, key resolution.
-  chan-report           report engine shared with chan-workspace.
-  chan-shell            the `cs` surface: clap actions, the
-                        control-socket client, and the per-agent
-                        submit-chord map. Rides the chan and
-                        chan-desktop binaries; chan-server links only
-                        its wire types (ControlRequest /
-                        ControlResponse), not clap or the transport.
-  chan-tunnel-{proto,
-    client, server}     h2/yamux workspace tunnel: wire protocol, the
-                        client chan-server dials, and the
-                        standalone server hosted near the gateway.
-  fetch-models          build helper. Pre-fetches the default
-                        embedding model into chan-server's
-                        resources/ so release builds bundle it.
-                        Not invoked by `cargo build`.
+The crate set and its roles are inventoried under [Component architecture](#component-architecture); the directory names map onto it directly. A few boundaries are not obvious from the tree:
 
-web/                    Svelte frontend, embedded into the binary
-                        at build time via rust-embed.
+- `chan-server` links only chan-shell's wire types (`ControlRequest` / `ControlResponse`), not its clap actions or its transport.
+- `gateway/` is a separate nested Cargo workspace with its own lock and deps (Postgres-backed, linux amd64/arm64 only), so it is NOT a member of the root workspace and the core single-binary build never pulls in its sqlx / oauth2 stack. It consumes the in-repo `chan-tunnel-*` crates by path. See [`gateway/design.md`](gateway/design.md) and the per-crate design docs.
+- `fetch-models` is a build helper that pre-fetches the default embedding model into chan-server's `resources/` so release builds bundle it; it is NOT invoked by `cargo build`.
 
-desktop/                Tauri shell (`chan-desktop`). Embeds
-                        chan-server for normal local workspaces and
-                        renders the editor in a webview window.
-                        Remote workspaces are explicit attach modes,
-                        not local fallback behavior. Per-window
-                        state is keyed by `w=<window-label>`.
-                        Desktop-only native bridges, such as File
-                        Browser drag-out export, call existing
-                        chan-server HTTP routes and stage temporary
-                        OS payloads instead of reading workspace content
-                        directly from Tauri filesystem code.
-
-gateway/                Account / sign-in / reverse-proxy surface for
-                        chan.app: profile + identity (id.chan.app) and
-                        devserver-proxy (devserver.chan.app), plus the
-                        admin CLI and shared gateway-common. A separate
-                        nested Cargo workspace (own lock + deps),
-                        Postgres-backed and linux amd64/arm64 only, so
-                        it is NOT a member of the root workspace and the
-                        core single-binary build never pulls in its
-                        sqlx/oauth2 stack. Consumes the in-repo
-                        chan-tunnel-* crates by path. See
-                        gateway/design.md and per-crate design docs.
-```
-
-Every crate above is a member of this repo's root workspace (gateway/ is the one exception: a nested workspace of its own). The crate split keeps app-level HTTP / frontend concerns out of chan-workspace / chan-llm so native shells (iOS / Android, future) can link `chan-workspace` via uniffi without dragging in this repo's axum / tower / reqwest stack.
+The crate split keeps app-level HTTP / frontend concerns out of chan-workspace / chan-llm so native shells (iOS / Android, future) can link `chan-workspace` via uniffi without dragging in this repo's axum / tower / reqwest stack.
 
 ## Component architecture
 
 A by-component map (this complements the by-concern prose in the rest of this document). Naming notes:
-`chan-launcher` is not a crate — it is the **`web-launcher`** package; `chan-devserver` is not a crate —
-it is a *mode* of `chan-server` (`run_devserver`); `chan-llm` is not a provider client — it is an **MCP
+`chan-launcher` is not a crate -- it is the **`web-launcher`** package; `chan-devserver` is not a crate --
+it is a *mode* of `chan-server` (`run_devserver`); `chan-llm` is not a provider client -- it is an **MCP
 tool sandbox** (the model lives in an external agent CLI running in a terminal tenant); the **gateway** is
 a separate Cargo workspace.
 
@@ -83,7 +33,7 @@ a separate Cargo workspace.
 | `chan-shell` | lib crate | the `cs` control-socket client + shared wire types |
 | `chan-tunnel-{proto,client,server}` | lib crates | tunnel wire protocol / outbound dialer / gateway terminator |
 | `fetch-models` | bin crate | build-time embedding-model bundler |
-| `chan-desktop` (`desktop/src-tauri`) | bin crate | native Tauri shell — macOS `.dmg`, Windows NSIS, Linux AppImage/deb/rpm |
+| `chan-desktop` (`desktop/src-tauri`) | bin crate | native Tauri shell -- macOS `.dmg`, Windows NSIS, Linux AppImage/deb/rpm |
 | `web/packages/workspace-app` (`@chan/workspace-app`) | SPA | the main UI: editor/terminal/graph/file-browser, embedded as `web/dist` |
 | `web/packages/launcher` (`@chan/launcher`) | SPA | the launcher (real workspace + devserver list + window feed); served at `/` across all 3 surfaces |
 | `web/packages/marketing` (`@chan/marketing`) | static site | chan.app marketing + install + `/dl` metadata |
@@ -91,82 +41,84 @@ a separate Cargo workspace.
 | `web/packages/profile` (`@chan/profile`) | SPA | the gateway identity/profile SPA (lifted), embedded as `gateway/crates/identity/web/dist` |
 | `gateway/*` | separate workspace | account / sign-in / reverse-proxy for chan.app (`gateway-common`, `profile`, `identity`+SPA, `devserver-proxy`, `admin`) |
 
-### Dependency / layering (who builds on whom)
-
-```mermaid
-flowchart TB
-  Report["chan-report"] --> Workspace["chan-workspace"]
-  Workspace --> Server["chan-server"]
-  Workspace --> Library["chan-library"]
-  Workspace --> Llm["chan-llm"]
-  Library --> Server
-  Server --> Devserver["chan-devserver mode"]
-  Library --> Devserver
-  Devserver --> TunnelC["chan-tunnel-client"]
-  TunnelC -. proto .-> TunnelP["chan-tunnel-proto"]
-  Server --> Desktop["chan-desktop"]
-  Library --> Desktop
-  Server --> CLI["chan (CLI)"]
-  Shell["chan-shell"] --> CLI
-  Shell --> Server
-  Llm -. hosted by .-> Server
-  fetchmodels["fetch-models"] -. bundles model into .-> Server
-  classDef core fill:#eef,stroke:#557;
-  class Report,Workspace core;
-```
-
-Bottom-up: **chan-report** feeds **chan-workspace** (the core). chan-workspace is wrapped per-tenant by
-**chan-server**, orchestrated multi-tenant by **chan-library**, and exposed to agents by **chan-llm**. The
-**devserver** mode composes server+library + **chan-tunnel-client** (`-proto` shared). **chan** (CLI) and
-**chan-desktop** are the drivers; **chan-shell** is their control client. The dependency direction is
-load-bearing for the inversion seams: chan-library holds the launcher's `DevserverRegistry` trait + the
-`WindowTransfers` signal as `Arc<dyn ...>`/owned types, and chan-server (which depends on chan-library)
-re-exports them and implements the routes — the low-level crate exposes the slot, the higher one fills it.
-
-### Runtime topology (your machine + a box + chan.app)
+### System architecture
 
 ```mermaid
 flowchart LR
-  subgraph User["your machine"]
-    DesktopApp["chan-desktop (loads web-launcher @ loopback /)"] --> Loop["embedded chan-library (local)"]
-    Loop --> WSlocal["chan-workspace files"]
-    Loop --> LaunchL["serves web-launcher at / — lists the REAL workspaces + devservers (full mutation)"]
+  Browser["any browser"]
+
+  subgraph Machine["your machine"]
+    Cli["chan CLI + cs"]
+    Desktop["chan-desktop (Tauri shell)"]
+    Host["WorkspaceHost (chan-library)"]
+    Server["chan-server (per-tenant router)"]
+    Core["chan-workspace (FS, search, graph)"]
+    Spa["web SPA (workspace-app + launcher)"]
   end
-  subgraph Box["a server / box you own"]
-    DS["chan devserver = chan-server + chan-library"] --> WSremote["chan-workspace files"]
-    DS --> LaunchD["serves web-launcher at / (read-only mutation; empty devservers list)"]
-    Agent["external agent CLI"] -->|MCP| DS
+
+  subgraph Box["a box you own"]
+    BoxCli["chan open PATH (on box)"]
+    Dev["chan devserver (WorkspaceHost + chan-server)"]
+    Agent["external agent CLI"]
+    TunC["chan-tunnel-client"]
   end
+
   subgraph Cloud["chan.app gateway (separate workspace)"]
-    IdSPA["identity (+ SPA): OAuth, PAT, sharing, /s/:owner Open"]
-    Profile["profile-service (Postgres)"]
-    Proxy["devserver-proxy (transparent pipe)"]
-    IdSPA --- Profile
-    IdSPA --- Proxy
+    Identity["identity + profile SPA"]
+    Pg[("Postgres")]
+    Proxy["devserver-proxy + chan-tunnel-server"]
   end
-  DS == authenticated outbound tunnel ==> Proxy
-  Browser["any browser"] -->|"user.devserver.chan.app/slug or / (launcher)"| Proxy
-  Proxy -->|yamux substream, raw HTTP/WS| DS
-  DesktopApp -.connect remote.-> Proxy
-  Browser -->|"login / share links / Open devserver"| IdSPA
+
+  Desktop -->|"embeds"| Host
+  Host -->|"per-tenant mount"| Server
+  Host -->|"launcher at /"| Spa
+  Server --> Core
+  Server -->|"rust-embed"| Spa
+  Cli -->|"chan open: loopback bind 127.0.0.1"| Server
+  Browser -->|"HTTP / WS"| Server
+
+  BoxCli -->|"per-user discovery socket"| Dev
+  Agent -->|"in-process MCP socket"| Dev
+  Dev -->|"hands router to"| TunC
+  TunC ==>|"dial-out tunnel (h2/yamux, chan-tunnel-proto)"| Proxy
+  Proxy -->|"yamux substream to tenant slug"| Dev
+
+  Browser -->|"user.devserver.chan.app"| Proxy
+  Browser -->|"login / share links"| Identity
+  Identity --- Pg
+  Proxy -.->|"devserver_access check"| Identity
+  Desktop -.->|"attach remote"| Proxy
 ```
+
+The whole-chan view: your machine (the CLI plus the desktop shell that embeds the host, the
+per-tenant server, the core, and the SPA), a box you own running a dial-out `chan devserver`, and
+the chan.app gateway (identity + Postgres + the devserver-proxy).
+
+Bottom-up layering: **chan-report** feeds **chan-workspace** (the core); chan-workspace is wrapped
+per-tenant by **chan-server**, orchestrated multi-tenant by **chan-library**, and exposed to agents by
+**chan-llm**; the **devserver** mode composes server + library + **chan-tunnel-client** (`-proto`
+shared); **chan** (CLI) and **chan-desktop** are the drivers, **chan-shell** their control client. The
+dependency direction is load-bearing for the inversion seams: chan-library holds the launcher's
+`DevserverRegistry` trait + the `WindowTransfers` signal as `Arc<dyn ...>`/owned types, and chan-server
+(which depends on chan-library) re-exports them and implements the routes -- the low-level crate
+exposes the slot, the higher one fills it.
 
 ### The launcher: one SPA, three surfaces, reflecting the real library
 
 The launcher (`web-launcher`) is served at `/` by the `chan-library` `WorkspaceHost` root fallback and
 reached identically on the desktop loopback, a `chan devserver`, and the gateway-proxied root. Its registry
-CRUD (workspaces **and** devservers) is the **live `/api/library/*` client** — on the desktop loopback it
+CRUD (workspaces **and** devservers) is the **live `/api/library/*` client** -- on the desktop loopback it
 lists + mutates the user's real `~/.chan` workspaces and configured devservers (no mock).
 
 - **Workspaces** ride `/api/library/workspaces` (list + add/on/off/rm); per-row **Open** mints a new
   workspace window, **Turn on** mounts an off workspace. Mutation is loopback-only; read-only over the tunnel.
 - **Devservers** ride `/api/library/devservers` (list + add/edit/remove), backed by a **`DevserverRegistry`**
   bridge: chan-library defines the trait (held by `WorkspaceHost`, mirror of `workspace_overlay`),
-  chan-desktop implements it over its config (URL-shaped entries; the bearer token is write-only —
+  chan-desktop implements it over its config (URL-shaped entries; the bearer token is write-only --
   `has_token` reported, never echoed); the headless devserver/gateway surface installs none, so it serves an
   empty list and 404s mutation. A devserver entry is a single full URL (scheme included), the forward hook
   for the eventual devserver-proxy dial.
-- **Windows** ride `/api/library/windows` (+ `/watch` WS) — the authoritative `WindowRecord` feed the
+- **Windows** ride `/api/library/windows` (+ `/watch` WS) -- the authoritative `WindowRecord` feed the
   desktop, the launcher, and `cs window list` reconcile to; the clickable status dot toggles a window
   open/hidden, and `cs upload`/`cs download` surface a per-window transfer bubble whose in-flight count is
   reported over `/ws` (`WindowTransfers`) so closing a window mid-transfer prompts hold/cancel.
@@ -219,96 +171,12 @@ Owns: HTTP + WebSocket routes, per-launch token auth middleware, embedded-fronte
 + graph + watch primitives, on `chan-llm` for the MCP server,
 and on `chan-tunnel-client` for tunnel transport.
 
-Module layout (`crates/chan-server/src/`):
+The `src/` and `routes/` modules mirror the surface above; a few route contracts are not obvious from the route name:
 
-```
-auth.rs              per-launch bearer token + axum middleware
-bus.rs               watcher/progress bridge into the WS broadcast
-config.rs            ServerConfig (server.toml)
-control_socket.rs    first-party control socket for local `cs` helpers
-devserver.rs         headless multi-workspace devserver runtime: binds a
-                     WorkspaceHost, mounts the /api/devserver/* management
-                     API + the CLI discovery socket, persists what is
-                     mounted across restarts
-devserver_api.rs     devserver management-API wire contract (versioned
-                     HTTP/JSON a desktop client drives)
-devserver_handoff.rs CLI-to-devserver workspace registration over a
-                     well-known per-user Unix socket
-embed_seed.rs        extract the baked-in model bundle on first launch
-error.rs             Error + err_*() response builders
-handoff.rs           macOS CLI-to-desktop workspace handoff (per-user
-                     Unix-domain socket)
-host.rs              in-process multi-workspace host runtime
-indexer.rs           background search/graph indexer (boot + per-event)
-mcp_bridge.rs        Unix-socket MCP server for external agent CLIs
-preferences.rs       EditorPrefs (preferences.toml)
-qr.rs                terminal QR for the launch banner
-self_writes.rs       suppress watcher events that echo our own writes
-signal.rs            SIGINT/SIGTERM + idle-timeout watchers; clock
-state.rs             AppState, WorkspaceCell
-static_assets.rs     WebAssets (rust-embed) + SPA fallback
-store.rs             shared atomic load/save for TOML configs
-submit_config.rs     runtime overrides for the per-agent submit chords
-survey.rs            survey bus: blocked-transport side of
-                     `cs terminal survey`
-terminal_sessions.rs long-lived PTY session registry
-tunnel_guard.rs      middleware refusing settings writes in
-                     the --no-settings lockdown
-util.rs              slug + opaque-JSON route helpers
-window_bus.rs        window bus: blocked-transport side of `cs pane`
-window_presence.rs   which window ids currently hold a /ws socket
-lib.rs               ServeConfig, sanitize_prefix, build_app, serve,
-                     run_devserver, router
-
-routes/
-  attachments.rs     POST /api/attachments (multipart upload)
-  build_info.rs      GET /api/build-info
-  contacts.rs        POST /api/contacts/import (multipart CSV)
-  cs_link.rs         POST /api/preflight/cs-link (offer the `cs`
-                     symlink when it is missing from PATH)
-  drafts.rs          drafts surface (in-workspace .Drafts/)
-  excluded_dirs.rs   GET/PUT /api/index/excluded-dirs (per-workspace
-                     indexer blocklist)
-  files.rs           /api/files, /api/files/*path, /api/move.
-                     Editable file opens support JSON reads and
-                     NDJSON streaming reads through
-                     `GET /api/files/*path?stream=1`.
-  fonts.rs           bundled-font download endpoint
-  fs_graph.rs        GET /api/fs-graph (filesystem-shaped scopes)
-  graph.rs           /api/links, /api/graph, /api/graph/languages,
-                     /api/backlinks/*path, /api/link-targets,
-                     /api/resolve-link, /api/headings. `/api/graph`
-                     and `/api/backlinks/*path` also expose NDJSON
-                     streams with `?stream=1`.
-  health.rs          GET /api/health (per-process instance id; also
-                     answers on workspace-less tenants)
-  index.rs           per-workspace semantic-search state + enablement
-  inspector.rs       inspector payloads shared by file browser,
-                     graph, and search
-  mentions.rs        GET /api/mentions (@-mention typeahead)
-  metadata.rs        chan metadata archive routes
-  preferences.rs     /api/server/config + /api/config (unified view)
-  preflight.rs       GET /api/preflight + POST decision (first-boot
-                     workspace readiness overlay)
-  report.rs          /api/report/{file,prefix}. Per-file reports also
-                     expose NDJSON with
-                     `GET /api/report/file?path=...&stream=1`.
-  reports_toggle.rs  per-workspace reports feature toggle
-  screensaver.rs     per-workspace screensaver overlay state
-  search.rs          /api/search/{files,content}, /api/index/*
-  sessions.rs        /api/session* (per-window editor session blob)
-  storage.rs         POST /api/storage/reset
-  survey.rs          survey reply + `[F]` followup-file generator
-  team_config.rs     Team Work config, persisted inside the workspace
-  terminal.rs        PTY WebSocket + terminal control APIs (exports
-                     CHAN_MCP_* and CHAN_CONTROL_SOCKET env)
-  window.rs          window reply route (the SPA side of `cs pane`)
-  windows.rs         GET /api/windows (this tenant's known windows:
-                     {id, connected, saved})
-  workspace.rs       GET/PATCH /api/workspace, GET /api/cloud-workspaces
-  ws.rs              GET /ws (watcher side channel; ?w= window tag
-                     feeds window presence)
-```
+- NDJSON streaming reads ride a `?stream=1` query: `GET /api/files/*path?stream=1` (editable opens), `GET /api/graph` and `GET /api/backlinks/*path`, and `GET /api/report/file?path=...&stream=1` (per-file reports).
+- `GET /api/health` carries a per-process instance id and also answers on a workspace-less tenant.
+- `/api/devserver/*` is a reserved local-only namespace; the gateway proxy 404s it on the public wildcard.
+- `GET /ws` is the watcher side channel; its `?w=` window tag feeds window presence.
 
 Async HTTP handlers treat chan-workspace as a synchronous filesystem boundary. Routes snapshot the live `Arc<Workspace>` with `try_workspace()`, return a retryable workspace-busy response while metadata import has temporarily removed the workspace cell, and run filesystem, graph, report, search, archive, and upload/download work on blocking threads.
 
@@ -338,7 +206,7 @@ The frontend lives under `web/` (Svelte + Vite + Tailwind) and ships as a build 
 Vite is configured with `base: "./"` so asset URLs in the bundle are relative to whatever path the SPA shell is loaded from. That matters for two paths:
 
 - `--prefix /seg`: a reverse proxy can mount many `chan open` instances under one host, e.g. `workspace.example.com/{user}/`. The router is `Router::new().nest(prefix, inner)`, and every `index.html` response gets a `<meta name="chan-prefix" content="/seg">` injected after the `<head>` tag (`static_assets::inject_chan_prefix`). The frontend reads that meta tag at boot and prepends the prefix to every fetch and WebSocket URL.
-- Tunnel mode: a `chan devserver` carries its WHOLE library through one gateway registration. The proxy is segment-PRESERVING — it forwards `{user}.devserver.chan.app/{workspace}/...` into the tunnel substream UNCHANGED (it does NOT strip the `{workspace}` segment). The devserver mounts each tenant at its public slug `/{workspace}`, and that tenant's SPA shell already carries `<meta name="chan-prefix" content="/{workspace}">`, so a multi-tenant devserver does not swap one prefix on connect: each tenant self-prefixes at its slug and the proxy forwards every API/WS URL under `/{workspace}/...` unchanged.
+- Tunnel mode: a `chan devserver` carries its WHOLE library through one gateway registration. The proxy is segment-PRESERVING -- it forwards `{user}.devserver.chan.app/{workspace}/...` into the tunnel substream UNCHANGED (it does NOT strip the `{workspace}` segment). The devserver mounts each tenant at its public slug `/{workspace}`, and that tenant's SPA shell already carries `<meta name="chan-prefix" content="/{workspace}">`, so a multi-tenant devserver does not swap one prefix on connect: each tenant self-prefixes at its slug and the proxy forwards every API/WS URL under `/{workspace}/...` unchanged.
 
 Single-page-app fallback: any path that isn't an `/api` route, a `/ws` upgrade, or a baked asset returns `index.html` so client-side routes work. Misses on `/api/*` and `/ws` return real 404s instead of the SPA shell so callers don't silently get HTML when they expected JSON.
 
@@ -348,7 +216,7 @@ Single-page-app fallback: any path that isn't an `/api` route, a `/ws` upgrade, 
 
 The gateway tunnel is `chan devserver --tunnel-token <PAT>` (`CHAN_TUNNEL_TOKEN`). When set, the devserver runs its local management server AND hands the same devserver router to `chan_tunnel_client::run`, which dials `devserver.chan.app/v1/tunnel` and serves yamux substreams. The model is per-DEVSERVER, not per-workspace:
 
-- One devserver per user; the public host is `{user}.devserver.chan.app`. The registration is keyed on the DEVSERVER identity (`devserver_id`), which the gateway resolves backend-side from the token (the PAT's SHA-256) via the `Validated.devserver_id` the tunnel validator returns — NOT a workspace name the client supplies. The client's `Hello.workspace` is an ignored `"devserver"` placeholder.
+- One devserver per user; the public host is `{user}.devserver.chan.app`. The registration is keyed on the DEVSERVER identity (`devserver_id`), which the gateway resolves backend-side from the token (the PAT's SHA-256) via the `Validated.devserver_id` the tunnel validator returns -- NOT a workspace name the client supplies. The client's `Hello.workspace` is an ignored `"devserver"` placeholder.
 - Always authenticated; there is no anonymous-readable path (the `public` flag is gone). `{user}.devserver.chan.app` is the trust boundary: the gateway gates on one `devserver_access(owner, devserver, caller)` check (a grant is the WHOLE library) and issues a host-only session cookie scoped `Path=/` over the whole host (no per-workspace path scope, since the grant is whole-devserver).
 - The path `{workspace}` segment is tenant routing only and never gates. The proxy forwards it unchanged (segment-preserving) and the devserver routes the tenant by it. The management API (`/api/devserver/*`) is local-only; the proxy 404s it on the public wildcard.
 
@@ -360,16 +228,45 @@ Both paths install signal watchers (SIGINT / SIGTERM on Unix, Ctrl-C on Windows)
 
 `WorkspaceHost` (`crates/chan-server/src/host.rs`) is an in-process owner that mounts several workspaces behind one runtime instead of one `chan open` child per workspace. It is a thin owner around the existing per-workspace server: each mounted workspace builds its own `AppState`, watcher, indexer, MCP bridge, control socket, terminal registry, and route prefix, and the host dispatches by URL prefix without sharing route state across tenants. Two embedders use it. chan-desktop embeds a `WorkspaceHost` for local workspaces (see [`desktop/design.md`](desktop/design.md)). `chan devserver` (`crates/chan-server/src/devserver.rs`, `run_devserver`) binds one to a real address as a headless multi-workspace aggregator for boxes reached over SSH or a LAN.
 
+```mermaid
+flowchart TB
+  subgraph DV["chan devserver (run_devserver)"]
+    Host["WorkspaceHost (chan-library)"]
+    Gate["mount_at gate: reject reserved /api; prefix = /{slug}-{8hex}, keyed by canonical-root hash"]
+    App["merged axum app (build_devserver_app)"]
+    Mgmt["/api/devserver/* management (devserver_api)"]
+    Tenants["host.router(): per-tenant /{slug}-{8hex}/..."]
+    Launcher["root fallback: / and /api/library/*"]
+    Host --> Gate
+    Gate --> Tenants
+    App --> Mgmt
+    App --> Tenants
+    App --> Launcher
+  end
+  Owner["owner: direct host:port or ssh -L"] -->|"Surface 1: local mgmt (bearer)"| Mgmt
+  Mgmt -->|"list / mount / forget"| Host
+  CLI["chan open PATH (exits, no 2nd bind)"] -->|"Surface 2: RegisterWorkspace RPC"| Disc["per-user Unix discovery socket (devserver_handoff)"]
+  Disc -->|"mount, returns prefix"| Host
+  App -->|"Surface 3: --tunnel-token PAT"| Tun["chan-tunnel-client (dials devserver.chan.app/v1/tunnel)"]
+  Tun -->|"yamux substream, raw HTTP/WS"| Proxy["gateway devserver-proxy"]
+  Proxy -->|"{user}.devserver.chan.app/{slug}-{8hex}/"| Browser["browser"]
+  Proxy -.->|"404s /api/devserver/*"| Mgmt
+  classDef core fill:#eef,stroke:#557;
+  class Host core;
+```
+
+Three surfaces ride one `WorkspaceHost`: local management (bearer), the per-user discovery socket a `chan open` registers through, and the optional gateway tunnel.
+
 The devserver wraps the host in two surfaces:
 
-- A management HTTP/JSON API under the reserved `/api/devserver/*` namespace; `devserver_api.rs` is the versioned wire contract. It lists, mounts, and forgets workspaces and opens standalone terminals. Workspace tenants mount at their PUBLIC slug `/{slug}` (top-level) — the path the gateway forwards as `{user}.devserver.chan.app/{slug}/` — so the explicit `/api/devserver/*` and `/api/library/*` management routes answer first and `/{slug}/...` falls through to the per-tenant router; `api` is the one reserved top-level slug, and two workspaces whose basename slugs collide are rejected at mount (slug uniqueness within a devserver). Standalone terminal tenants keep an opaque `/api/term-*` prefix (launcher-local, not public).
+- A management HTTP/JSON API under the reserved `/api/devserver/*` namespace; `devserver_api.rs` is the versioned wire contract. It lists, mounts, and forgets workspaces and opens standalone terminals. Workspace tenants mount at their PUBLIC slug `/{slug}` (top-level) -- the path the gateway forwards as `{user}.devserver.chan.app/{slug}/` -- so the explicit `/api/devserver/*` and `/api/library/*` management routes answer first and `/{slug}/...` falls through to the per-tenant router; `api` is the one reserved top-level slug, and two workspaces whose basename slugs collide are rejected at mount (slug uniqueness within a devserver). Standalone terminal tenants keep an opaque `/api/term-*` prefix (launcher-local, not public).
 - A per-user Unix discovery socket (`devserver_handoff.rs`). When a devserver is running on a box, a `chan open PATH` there registers its workspace with the running devserver and exits instead of binding a second listener, so the devserver keeps the single-writer flock. Discovery is a well-known per-user endpoint (not the per-pid MCP / control sockets) and is a second endpoint alongside the macOS desktop handoff (`handoff.rs`); a box can run a devserver, a desktop, both, or neither. It is Unix-only: other targets resolve to "no devserver" and the CLI stays standalone. The registration handshake carries a protocol version, and a mismatch falls back to standalone rather than decoding an unknown shape. `chan open --standalone` forces a standalone bind and skips both the devserver registration and the desktop handoff.
 
-Optionally, `chan devserver --tunnel-token <PAT>` also publishes the whole library through the gateway (see "Bind vs tunnel"): the foreground devserver hands the SAME devserver router to `chan_tunnel_client`, registering ONE devserver at `{user}.devserver.chan.app`. The management API rides the same router but the proxy 404s `/api/devserver/*` on the public wildcard, so only tenant content (`/{slug}/...`) is reachable through the gateway; the owner manages the devserver over the direct (host:port / `ssh -L`) connection. Tunnel mode is foreground-only — combined with `--systemd`/`--launchd` it is refused, since the supervised backend would have to persist the token in the unit file / launchd plist.
+Optionally, `chan devserver --tunnel-token <PAT>` also publishes the whole library through the gateway (see "Bind vs tunnel"): the foreground devserver hands the SAME devserver router to `chan_tunnel_client`, registering ONE devserver at `{user}.devserver.chan.app`. The management API rides the same router but the proxy 404s `/api/devserver/*` on the public wildcard, so only tenant content (`/{slug}/...`) is reachable through the gateway; the owner manages the devserver over the direct (host:port / `ssh -L`) connection. Tunnel mode is foreground-only -- combined with `--systemd`/`--launchd` it is refused, since the supervised backend would have to persist the token in the unit file / launchd plist.
 
 What was mounted survives a restart. The enabled workspace roots and the devserver bearer token persist in `~/.chan/devserver/config.json` (0600); the enabled set is re-mounted on the next start, and the reused token keeps a reconnecting client working. Per-window pane and tab layout is not persisted by the devserver: each tenant is a full workspace mount that stores its own per-window SPA session, so a reconnecting client re-hydrates its panes from the tenant. Terminal PTY contents reset across a restart because PTYs are fresh processes.
 
-Two service-manager backends supervise the foreground devserver so it outlives the launching shell, each re-attaching when its service is already running. On Linux, `chan devserver --systemd` writes + starts a `chan-devserver.service` systemd **user** unit and ensures linger so it also survives logout. On macOS, `chan devserver --launchd` writes + bootstraps a per-user **LaunchAgent** (`app.chan.devserver`) in the `gui/<uid>` domain — it outlives the shell and the GUI login session, but not a full logout (launchd has no per-user linger without a root LaunchDaemon). systemd follows the unit journal; launchd follows a log file (`~/.chan/devserver/devserver.log`), since launchd has no journal. A future Windows service backend slots in the same way.
+Two service-manager backends supervise the foreground devserver so it outlives the launching shell, each re-attaching when its service is already running. On Linux, `chan devserver --systemd` writes + starts a `chan-devserver.service` systemd **user** unit and ensures linger so it also survives logout. On macOS, `chan devserver --launchd` writes + bootstraps a per-user **LaunchAgent** (`app.chan.devserver`) in the `gui/<uid>` domain -- it outlives the shell and the GUI login session, but not a full logout (launchd has no per-user linger without a root LaunchDaemon). systemd follows the unit journal; launchd follows a log file (`~/.chan/devserver/devserver.log`), since launchd has no journal. A future Windows service backend slots in the same way.
 
 The token-delivery contract is the load-bearing invariant shared by every supervision backend: the **supervisor process itself** prints the locked `CHAN_DEVSERVER_TOKEN=` marker (`chan_server::DEVSERVER_TOKEN_MARKER`) to its own stdout, reading the token from the persisted 0600 `~/.chan/devserver/config.json`. The chan-desktop control terminal scrapes that marker from the supervisor's stdout to acquire the bearer token and reconnect. Delivery does not depend on the supervised service's own stdout reaching the controlling terminal through the platform log stream: on systemd the supervisor also tails the unit journal for human-facing logs, but a host where the user has no readable journal (a uid below `SYS_UID_MAX`, or a user outside the `systemd-journal`/`adm` groups) still receives the token because the supervisor emits it directly. A `Type=simple` unit reports active before the service's first config persist, so the supervisor briefly polls the config until the token lands. If the token cannot be surfaced the supervisor exits non-zero rather than babysit a service no client can authenticate to; the service itself keeps running, so a later re-attach recovers it. The launchd backend follows the agent's log file rather than a journal but honors this same direct-emit-and-fail-loud contract; a future Windows backend must too, regardless of how that platform exposes service logs.
 
@@ -413,4 +310,4 @@ Both TOML config files round-trip through `crate::store::{load_toml, save_toml}`
 | Tunnel transport                   | chan-tunnel-client |
 | Self-upgrade flow                  | chan binary |
 
-The split keeps app-level concerns (HTTP, WebSocket, frontend bundle, editor preferences, terminal PTY) out of chan-workspace so native shells can link the workspace layer via uniffi without dragging in axum / reqwest / the rest of the HTTP stack. The Tauri desktop shell (`desktop/`) takes the other path: it embeds chan-server in-process and renders the same SPA in native webview windows — see [`desktop/design.md`](desktop/design.md).
+The split keeps app-level concerns (HTTP, WebSocket, frontend bundle, editor preferences, terminal PTY) out of chan-workspace so native shells can link the workspace layer via uniffi without dragging in axum / reqwest / the rest of the HTTP stack. The Tauri desktop shell (`desktop/`) takes the other path: it embeds chan-server in-process and renders the same SPA in native webview windows -- see [`desktop/design.md`](desktop/design.md).

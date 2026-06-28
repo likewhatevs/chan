@@ -20,63 +20,7 @@ Subsystem guides: [desktop.md](desktop.md) (chan-desktop), [gateway.md](gateway.
 
 ## Layout
 
-```
-crates/
-  chan                  the binary. Parses CLI args, dispatches
-                        subcommands, mounts the embedded frontend.
-                        Self-upgrade lives in src/update.rs.
-  chan-server           HTTP + WebSocket surface. Wraps chan-workspace
-                        in axum routes; exposes the in-process MCP
-                        server over a Unix-domain socket. The
-                        per-module and per-route inventory lives in
-                        ../design.md (do not duplicate it here).
-  chan-workspace        filesystem boundary, workspace registry, search
-                        + graph indexer, watch, report engine. The
-                        only crate that touches user content on
-                        disk.
-  chan-llm              MCP-only library: the chan MCP `Server`,
-                        tool schemas, embedded prompt text, and the
-                        MCP key/config plumbing. chan-server
-                        consumes only `chan_llm::mcp::Server` via
-                        `crates/chan-server/src/mcp_bridge.rs`.
-  chan-report           report engine shared with chan-workspace.
-  chan-shell            the `cs` surface: clap actions, the
-                        control-socket client, and the per-agent
-                        submit chords. chan-server links only its
-                        wire types.
-  chan-tunnel-{proto,
-    client, server}     h2/yamux workspace tunnel. chan-server pulls
-                        chan-tunnel-client; the standalone tunnel
-                        server lives next door for the cloud side.
-  fetch-models          build helper. Pre-fetches the BGE-small
-                        embedding model into chan-server/resources/
-                        so release builds bundle it. Run via
-                        `make models`; not invoked by `cargo build`
-                        directly.
-
-web/                    Svelte frontend, embedded into the binary
-                        at build time via rust-embed.
-
-desktop/                Tauri shell. Cross-platform desktop wrapper
-                        (`chan-desktop`) that embeds chan-server for
-                        normal local workspaces and mounts the editor
-                        in a webview window. Remote workspaces are
-                        explicit attach modes, not local fallback
-                        behavior. Per-window state is keyed by a
-                        `w=<window-label>` URL parameter. Agent guide:
-                        .agents/desktop.md.
-
-gateway/                Account / sign-in / reverse-proxy surface for
-                        chan.app (id.chan.app + devserver.chan.app).
-                        Separate nested Cargo workspace (profile,
-                        identity, devserver-proxy, admin,
-                        gateway-common); Postgres-backed, linux amd64/
-                        arm64 only. NOT a member of the root workspace,
-                        so the core build stays Postgres-free. Agent
-                        guide: .agents/gateway.md.
-```
-
-Every crate above (plus `desktop/src-tauri`) is a member of the root workspace; `gateway/` is the one nested workspace of its own. Native shells (iOS / Android) link `chan-workspace` via uniffi without dragging in this repo's HTTP stack.
+The crate, `web/`, `desktop/`, and `gateway/` split is self-explanatory from the tree on disk. The per-module and per-route inventory plus the Component architecture, dependency/layering, and runtime-topology diagrams live in [`../design.md`](../design.md) (do not duplicate them here), including which crates are root-workspace members vs the one nested `gateway/` workspace and the uniffi path for native shells.
 
 ## Build & Test
 

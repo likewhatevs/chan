@@ -6,13 +6,7 @@ The gateway is what makes a local `chan devserver` reachable on a public URL wit
 
 ## What this workspace is
 
-The `gateway/` Cargo workspace runs the account, sign-in, and reverse-proxy surface for chan.app, a separate nested Cargo workspace. Five crates:
-
-- `profile`: internal HTTP API over the gateway Postgres. Owns users, linked OAuth identities, the auth audit log, the `devservers` and `devserver_grants` tables (the sharing model), and feature flags; it also backs the operator token read / revoke surface over the shared `api_tokens` table. Called only by sibling gateway services over a Bearer; not public.
-- `identity`: public service at `id.chan.app`. Runs OAuth2 sign-in (GitHub, Google, GitLab), holds the only cookie session in the suite (`id_session`, host-only on `id.chan.app`), and serves the only Svelte SPA (profile, PAT lifecycle, the devserver / share dashboard). Owns the PAT lifecycle tables (`api_tokens`, `api_token_audit`) on its own Postgres pool, mints the devserver-gate entry tokens that hand a user off to `*.devserver.chan.app`, and exposes `/internal/v1/tokens/validate`, which devserver-proxy calls on every tunnel handshake. Calls `profile` over HTTP for users / identities / grants and devserver-proxy admin for the live-devserver list.
-- `devserver-proxy`: public service at `devserver.chan.app` (apex) and `*.devserver.chan.app` (wildcard). Apex carries the tunnel registration endpoint (`POST /v1/tunnel` via raw h2c on a separate internal listener), the `/admin/v1/*` tree, and `/healthz`. Wildcard carries the per-user tenant content surface, gated by a host-only `devserver_gate` JWT cookie scoped `Path=/` and minted on first entry. Holds no Postgres and ships no SPA; it renders no UI of its own and forwards the launcher that the devserver serves at its own root.
-- `admin`: operator CLI (`chan-gateway-admin`). Talks to `profile` admin routes and devserver-proxy admin routes over Bearer auth. Subcommand groups: `user`, `token`, `tunnel`, `flag`.
-- `gateway-common`: shared internal library. Holds the typed `profile_client`, the devserver-proxy admin client (`workspace_admin_client`, type `WorkspaceAdminClient`, the generic cross-service admin client that targets devserver-proxy), the shared `devserver_gate` JWT envelope (HS256), single-source domain derivation, the SPA-fallback static-asset handler, the brute-force token bucket, and the username validators. No binary, no Postgres.
+The `gateway/` Cargo workspace runs the account, sign-in, and reverse-proxy surface for chan.app, a separate nested Cargo workspace. Its crates under `gateway/crates/` are the services in the Topology below, which names each one with the host it answers on and what it owns; each crate's `design.md` is the full surface. The ownership that is not obvious from the layout: `profile` is the only crate that touches the sharing tables (`devservers`, `devserver_grants`); `identity` holds the only cookie session, the PAT tables, and the `/internal/v1/tokens/validate` endpoint the proxy hits on every handshake; `devserver-proxy` holds no Postgres and ships no SPA; `gateway-common` is the single home of the `devserver_gate` JWT envelope and the cross-service clients.
 
 Each public-facing crate ships two docs: `README.md` is the consumer-facing entry (pitch, install, build, route table, env vars) and `design.md` is the canonical design reference (problem, architecture, public surface, key decisions, invariants, error model). Update `design.md` in the same commit as any change that affects HTTP routes, the on-the-wire shape of a public response, the session contract, or the inter-service trust model.
 
@@ -28,7 +22,7 @@ flowchart TB
     subgraph gw["chan gateway (nested Cargo workspace)"]
         ID["identity-service · id.chan.app<br/>OAuth · sessions · PATs · /s/:owner open · token validate"]
         PROXY["devserver-proxy<br/>devserver.chan.app apex: admin + tunnel + healthz<br/>*.devserver.chan.app wildcard: launcher root + tenants + devserver_gate"]
-        PROFILE["profile-service<br/>internal HTTP over Postgres · users · identities · devserver grants"]
+        PROFILE["profile-service · internal, not public<br/>Postgres: users · identities · devservers + devserver_grants"]
         ADMIN["admin CLI"]
         COMMON["gateway-common<br/>domain · devserver_gate · profile_client"]
         PG[("Postgres")]
@@ -39,7 +33,7 @@ flowchart TB
     end
 
     IDSPA -->|OAuth · manage devservers · Open| ID
-    ID -->|mint entry token (drv, aud)| IDSPA
+    ID -->|"mint entry token (drv, aud)"| IDSPA
     ID <-->|users · grants · access| PROFILE
     PROFILE --- PG
     ID --- PG

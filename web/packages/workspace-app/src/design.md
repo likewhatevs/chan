@@ -6,20 +6,20 @@ Design reference for the chan web frontend: first the two web SPAs and how each 
 
 chan ships **two** Svelte 5 + Vite web SPAs, both embedded into chan-server as `RustEmbed` bundles (`crates/chan-server/src/static_assets.rs`) and both built on the color system below:
 
-- **`web/packages/workspace-app/` — the main SPA** (this directory): the per-workspace UI — editor, file browser, graph, terminals, dashboard — talking to `/api/*` (files, drafts, index, contacts, config, `fs/transfer`, plus the `/ws` event stream). chan-server serves it from `WebAssets` (`RustEmbed` over `web/dist`) through `serve_static`, the router `.fallback`, so it answers a workspace tenant's routes. `serve_static` runs `inject_chan_meta` to stamp two tags the SPA reads at boot via `api/transport.ts`: `<meta chan-prefix>` (the URL mount prefix, so a reverse-proxied instance builds correct `/api` URLs) and `<meta chan-settings-disabled>` (greys the Settings surface).
-- **`web/packages/launcher/` — the launcher SPA**: a small, pure `/api/library/*` HTTP client (workspaces · windows · devservers) served at the host/library root `/` from `LauncherAssets` via `serve_launcher` + the `WorkspaceHost` root fallback. It reads `<meta chan-launcher-readonly>` to hide mutation controls on read-only surfaces. The launcher is reached on **all three surfaces** — devserver/tunnel, gateway-proxied (`{owner}.devserver.chan.app/`), and desktop loopback — the same bundle per-surface installed, with per-surface auth (None tunnel-trust / Some loopback window token) and a read-only-gateway vs full-loopback workspace-mutation split. Its internals are documented in `web/packages/launcher/design.md`.
+- **The main SPA** (`web/packages/workspace-app/`, this directory) is served from `WebAssets` (`RustEmbed` over `web/dist`) through `serve_static`, the router `.fallback`, so it answers a workspace tenant's routes. `serve_static` runs `inject_chan_meta` to stamp two tags the SPA reads at boot via `api/transport.ts`: `<meta chan-prefix>` (the URL mount prefix, so a reverse-proxied instance builds correct `/api` URLs) and `<meta chan-settings-disabled>` (greys the Settings surface).
+- **The launcher SPA** (`web/packages/launcher/`) is served at the host/library root `/` from `LauncherAssets` via `serve_launcher` + the `WorkspaceHost` root fallback. It reads `<meta chan-launcher-readonly>` to hide mutation controls on read-only surfaces. The launcher is reached on **all three surfaces** -- devserver/tunnel, gateway-proxied (`{owner}.devserver.chan.app/`), and desktop loopback -- the same bundle per-surface installed, with per-surface auth (None tunnel-trust / Some loopback window token) and a read-only-gateway vs full-loopback workspace-mutation split. Its internals are documented in `web/packages/launcher/design.md`.
 
 The two are complementary: the launcher is the cross-workspace registry (pick / add / toggle a workspace, mint a window), and opening a workspace window lands the user in the main SPA. Both honor the theme axes + canonical palette below, so a launcher served over a tunnel and the workspace UI on loopback read identically.
 
 ```mermaid
 flowchart TB
-    subgraph web["web/packages/workspace-app/ — main SPA (the workspace UI)"]
+    subgraph web["web/packages/workspace-app/ -- main SPA (the workspace UI)"]
         WAPP["App.svelte · editor · file browser · graph · terminals · dashboard<br/>over /api/* (files · drafts · index · contacts · config · fs/transfer · /ws)<br/>reads &lt;meta chan-prefix&gt; + &lt;meta chan-settings-disabled&gt; (api/transport.ts)"]
     end
-    subgraph launcher["web/packages/launcher/ — launcher SPA (the registry)"]
+    subgraph launcher["web/packages/launcher/ -- launcher SPA (the registry)"]
         LAPP["TopBar · WorkspaceList · WindowFeed · NewWorkspaceDialog<br/>pure /api/library/* client (workspaces · windows · devservers)<br/>reads &lt;meta chan-launcher-readonly&gt; → hides mutation controls"]
     end
-    subgraph cs["chan-server static_assets.rs — two RustEmbed bundles"]
+    subgraph cs["chan-server static_assets.rs -- two RustEmbed bundles"]
         WEBA["WebAssets = RustEmbed(web/dist)<br/>serve_static + inject_chan_meta · router .fallback (workspace tenant)"]
         LAUNA["LauncherAssets = RustEmbed(web-launcher/dist)<br/>serve_launcher · WorkspaceHost root fallback at /"]
     end
@@ -50,7 +50,7 @@ The frontend has two independent theme dimensions. Both can change at runtime.
 
 The axes are orthogonal. Any combination of color scheme by editor theme is valid (6 combinations total). Only the color-scheme axis affects app chrome (panes, status bar, file tree, panels, modals); the editor-theme axis is scoped to the editor surface.
 
-A third, fixed dimension is the **syntax-highlight palette**. It is GitHub Primer (light or dark, branched off the color scheme) and is shared across all three editor themes, so a python snippet reads identically regardless of which document chrome is active. It paints fenced code blocks (per-language packs lazy-load via `editor/markdown/code_languages.ts`) and whole files in Source mode. See `web/packages/workspace-app/src/editor/highlight.ts` — including the one deliberate Primer divergence: plain identifiers get no color because Primer's orange collides with chan's brand orange.
+A third, fixed dimension is the **syntax-highlight palette**. It is GitHub Primer (light or dark, branched off the color scheme) and is shared across all three editor themes, so a python snippet reads identically regardless of which document chrome is active. It paints fenced code blocks (per-language packs lazy-load via `editor/markdown/code_languages.ts`) and whole files in Source mode. See `web/packages/workspace-app/src/editor/highlight.ts` -- including the one deliberate Primer divergence: plain identifiers get no color because Primer's orange collides with chan's brand orange.
 
 ## Canonical semantic palette
 
@@ -121,6 +121,27 @@ Pill backgrounds (`--pill-*-bg`) are alpha tints of the concept hue (~0.15-0.20 
 - **EntityKind**: graph-only entities (tokens extracted from markdown bodies, no file backing). `tag` | `mention` | `date`.
 - **ContainerKind**: `folder` (directory rows in the file tree).
 
+`classifyEntry`/`classifyFile` resolve a workspace entry to one kind:
+
+```mermaid
+flowchart TD
+    Entry["classifyEntry(entry)"] --> IsDir{"entry.is_dir?"}
+    IsDir -->|yes| Folder["folder"]
+    IsDir -->|no| CF["classifyFile(path, serverKind?)"]
+    CF --> HasServer{"serverKind present?"}
+    HasServer -->|"yes (wire kind wins)"| ServerWins["return serverKind:<br/>document / contact / text / media / pending"]
+    HasServer -->|"no (bare path)"| CP["classifyPath(path) fallback<br/>graph ghosts, broken-link targets"]
+    CP --> ExtImg{"image ext or .pdf?"}
+    ExtImg -->|yes| Media["media"]
+    ExtImg -->|no| ExtMd{"ext == .md?"}
+    ExtMd -->|yes| Document["document"]
+    ExtMd -->|no| ExtText{"in TEXT/MARKDOWN ext set<br/>or TEXT_BASENAMES?"}
+    ExtText -->|yes| Text["text"]
+    ExtText -->|no| Binary["binary"]
+    ServerWins -.->|"server UTF-8 sniff state"| Pending["pending: FileClass::Other<br/>awaiting text/binary, renders neutrally"]
+    Note["ext sets mirror chan-workspace/src/fs_ops.rs<br/>widen in lockstep"] -.-> ExtText
+```
+
 `classifyEntry(entry)` / `classifyFile(path, serverKind?)` is the single classifier. The server projects a `kind` discriminator on every regular file it lists, and that wire value wins whenever present. The path-only fallback (`classifyPath` in `state/fileTypes.ts`) runs only for bare paths held outside a tree listing (graph ghost rows, broken-link targets): images + PDFs are `media`, `.md` is `document`, `.txt` plus the source/config/shell extension set and well-known basenames (Makefile, LICENSE, ...) are `text`, everything else is `binary`. The extension sets mirror `chan-workspace/src/fs_ops.rs` and must be widened in lockstep. `pending` is a server-side state for unknown extensions awaiting the UTF-8 content sniff; it only reaches the SPA from the recursive whole-tree listing and renders neutrally.
 
 `web/packages/workspace-app/src/components/KindChip.svelte` is the single chip component. Inspector headers pass `block` (flex:1 fill); the search results list passes `compact` (smaller font + fixed-width column). `ghost` and `dim` modify opacity for graph ghost rows and search filename-match rows respectively. Passing `onClick` renders the chip as a button (the "scope the graph to this file" affordance).
@@ -142,7 +163,7 @@ date        date        --text-secondary    Calendar
 folder      directory   --g-folder          Folder
 ```
 
-`text` aliases the document orange in `colorVarFor` — the two share the hue family and the visual distinction is icon + label, not color. (The graph's source-file nodes use `--g-source` royalblue; that mapping lives in `GraphCanvas.svelte`, not in the chip.)
+`text` aliases the document orange in `colorVarFor` -- the two share the hue family and the visual distinction is icon + label, not color. (The graph's source-file nodes use `--g-source` royalblue; that mapping lives in `GraphCanvas.svelte`, not in the chip.)
 
 A `mention` shares the contact palette by design: a resolved mention points at a contact file, an unresolved mention is the same concept without a backing file. Distinguishing the two is the role of the inspector, not the chip.
 

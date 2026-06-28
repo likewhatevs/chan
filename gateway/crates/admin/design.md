@@ -100,13 +100,7 @@ Network failures (`reqwest::Error`) reach `exit_code_for` as plain `anyhow::Erro
 
 ## What's wired
 
-- `clap` for argument parsing
-- `reqwest` (with `stream` feature) for HTTP and SSE
-- `tokio` current-thread runtime
-- `tokio-stream` for SSE byte-stream consumption
-- `comfy-table` for ASCII table rendering
-- `serde_json` for `--json` mode
-- `chrono` for human-readable timestamps and uptime formatting
+The crate list mirrors `Cargo.toml`; only the non-obvious choices need explaining. `reqwest` carries the `stream` feature so `tunnel watch` can consume the SSE byte stream incrementally (`tokio-stream` drives the byte chunks). The `tokio` runtime is `current_thread` because the commands are sequential and short-lived, so a multi-threaded runtime is wasted overhead.
 
 ## What is not wired
 

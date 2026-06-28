@@ -52,19 +52,6 @@ flowchart TB
 
 ## 3. Files and responsibilities
 
-```
-File                         Owns
----------------------------  ----------------------------------------------
-src/main.rs                  standalone binary shim: builds the tokio
-                             runtime, run(.., Standalone), shutdown_background
-src/lib.rs                   the whole CLI: Cli/Command clap structs, parse +
-                             dispatch, every cmd_* handler, Personality, run
-src/update.rs                self-upgrade: startup banner, background probe,
-                             chan upgrade (download + SHA256 + atomic replace)
-src/devserver_daemon.rs      `--service=chan` self-managed daemon: cross-OS
-                             foreground devserver + daemon.json / daemon.lock
-```
-
 This crate ships no frontend code. `chan open` serves the SPA through `chan-server`'s build-time `rust-embed` bundle, so the editor / terminal / launcher assets reach the user without this crate touching `web/dist`.
 
 ## 4. Subcommand dispatch
@@ -86,6 +73,26 @@ Each `cmd_*` handler is orchestration only: it opens a `Library`, resolves a `Wo
 ## 5. serve: mounting chan-server and the embedded frontend
 
 `cmd_serve` is where `chan` becomes a running editor. It does more than bind a socket because a workspace has exactly one writer-lock holder, and `chan open` has to cooperate with whatever might already own that lock on the box. The order of operations encodes that single-writer invariant:
+
+```mermaid
+flowchart TB
+  Start["cmd_serve(path, personality)"] --> Abs["absolutize_serve_root(root)"]
+  Abs --> Vcs{"--here, or no parent VCS?"}
+  Vcs -->|"parent repo found"| Exit70["print_vcs_parent_error + exit 70"]
+  Vcs -->|"ok"| Route["decide_open_route -> OpenTarget"]
+  Route --> Mkdir["create_dir_all(root): only after route settled"]
+  Mkdir --> Target{"match OpenTarget"}
+  Target -->|"Desktop"| Hand["maybe_handoff_to_desktop"]
+  Hand -->|"Some: desktop owns flock"| Ret1(["return early"])
+  Hand -->|"None: no desktop / refused / skew"| Serve
+  Target -->|"Devserver"| Reg["try_register_devserver"]
+  Reg -->|"Registered: devserver owns flock"| Ret2(["return Ok early"])
+  Reg -->|"NoDevserver / skew / error"| Serve
+  Target -->|"Standalone"| Serve
+  Serve["open_workspace: acquire writer flock exactly once"] --> Run["chan_server::serve: HTTP/WS + embedded SPA"]
+```
+
+*cmd_serve resolves one open route, then every handoff path returns early so only the standalone tail acquires the writer flock.*
 
   1. **Absolutize and gate.** The serve root is made absolute against the CLI's cwd (the desktop handoff runs with cwd `/`, and the registry is keyed by canonical path, so a relative root must not leak). Unless `--here` is passed, a root inside a Git / Mercurial / Subversion working tree is refused with a structured marker on stderr and exit 70, so a wrapping shell can offer the repo root instead.
   2. **Desktop handoff.** When the `Desktop` personality is active (or `CHAN_DESKTOP_HANDOFF=1` forces it, which is how the Windows desktop bundle re-execs the standalone console binary into a handoff), a same-user `chan-desktop` in a GUI session is asked to open the workspace in a native window, and the CLI exits. The desktop then owns the flock; the CLI must not also open it.

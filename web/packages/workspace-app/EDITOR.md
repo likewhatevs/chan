@@ -8,7 +8,27 @@ The editor is **live-preview**: any line or inline element shows its rendered fo
 
 This mirrors Obsidian's Live Preview model. The user types markdown freely; the editor renders it on the fly and re-shows the markers as soon as the user needs to edit them.
 
-A whole-document **Source view** is also available — the "Show Source Code" toggle (Cmd/Ctrl+E, or the tab's right-click menu) flips to the raw text in a plain CodeMirror editor. The toggle is gated to files that have a rendered surface: markdown ↔ `wysiwyg`, JSON ↔ `pretty`, CSV/TSV ↔ `table`. A plain source file (`.rs`, `.py`, `.toml`, `Makefile`) has only the source view, so the toggle is a no-op there — it never forces an invalid markdown render on non-markdown text.
+```mermaid
+stateDiagram-v2
+    state "Inline mark or block prefix" as Mark {
+        [*] --> MarkRendered
+        MarkRendered : Rendered form shown
+        MarkSource : Markdown source revealed
+        MarkRendered --> MarkSource : caret enters or selection crosses range
+        MarkSource --> MarkRendered : caret leaves range, collapse back
+    }
+    state "Atom image, wiki pill, date pill" as Atom {
+        [*] --> AtomWidget
+        AtomWidget : Atomic widget shown, caret skips it
+        AtomSource : Source revealed for edit
+        AtomWidget --> AtomSource : arrow-key entry into range
+        AtomSource --> AtomWidget : caret leaves atom, collapse back
+    }
+```
+
+*The reveal cycle: marks render when the caret is away and reveal their source when it enters; atoms render as a widget the caret skips and reveal source on arrow-key entry -- both collapse back on exit.*
+
+A whole-document **Source view** is also available -- the "Show Source Code" toggle (Cmd/Ctrl+E, or the tab's right-click menu) flips to the raw text in a plain CodeMirror editor. The toggle is gated to files that have a rendered surface: markdown ↔ `wysiwyg`, JSON ↔ `pretty`, CSV/TSV ↔ `table`. A plain source file (`.rs`, `.py`, `.toml`, `Makefile`) has only the source view, so the toggle is a no-op there -- it never forces an invalid markdown render on non-markdown text.
 
 ## Per-element behavior
 
@@ -59,14 +79,14 @@ A whole-document **Source view** is also available — the "Show Source Code" to
 ### Date macros `@today`, `@date`
 
 - Typed verbatim as reserved macro words. Committing the trigger (press **Space** or **Enter**) rewrites it as a date string in the user's default format (`workspace.info.preferences.date_format`, falling back to ISO); the committing space / newline is consumed, not inserted (so the flow is "type `@today`, hit Space, see the date, keep typing"). The freshly-written date is then auto-detected by the date matcher and rendered as a date **pill** (clicking the pill opens the calendar / format popover).
-  - `@today`: bakes today's date and moves on — no popover.
+  - `@today`: bakes today's date and moves on -- no popover.
   - `@date`: same insertion, then opens the calendar / format popover anchored at the date so the user can navigate to a different day or switch format without selecting one first.
 - `today` / `date` are also reserved by the contact-bubble trigger detection, so typing `@today` / `@date` does not steal Enter for an `@`-mention commit.
-- Dates are an editor-only convenience: they insert a plain date string, never a special marker. They are never indexed — no graph edges, no FTS column, no per-date search. (See the chan-workspace task at the bottom.)
+- Dates are an editor-only convenience: they insert a plain date string, never a special marker. They are never indexed -- no graph edges, no FTS column, no per-date search. (See the chan-workspace task at the bottom.)
 
 ### Page-break macros `@pagebreak`, `@break`
 
-- Typed as reserved macro words like the date macros. Committing the trigger rewrites it into a page-break atom — an `<hr class="chan-page-break">` line — rendered as an atomic page break (caret motion skips it in one keystroke). The macro words `@pagebreak`, `@break` (alongside `@today`, `@date`) suppress the contact bubble so the `@` does not open an `@`-mention search.
+- Typed as reserved macro words like the date macros. Committing the trigger rewrites it into a page-break atom -- an `<hr class="chan-page-break">` line -- rendered as an atomic page break (caret motion skips it in one keystroke). The macro words `@pagebreak`, `@break` (alongside `@today`, `@date`) suppress the contact bubble so the `@` does not open an `@`-mention search.
 
 ### Lists `- item`, `1. item`, `- [ ] task`
 
@@ -98,7 +118,7 @@ A whole-document **Source view** is also available — the "Show Source Code" to
 
 There is residual date-extraction code in chan-workspace that can be removed now that dates are an editor-only convenience (see above). Referenced by symbol (line numbers drift):
 
-- `crates/chan-workspace/src/markdown/tokens.rs` — the date-token header doc, the `Token::Date { iso }` enum variant, its date pattern match + token emission, and the date tests.
-- `crates/chan-workspace/src/workspace.rs` — the explicit `Token::Date { .. } => {}` skip in `build_edges`.
+- `crates/chan-workspace/src/markdown/tokens.rs` -- the date-token header doc, the `Token::Date { iso }` enum variant, its date pattern match + token emission, and the date tests.
+- `crates/chan-workspace/src/workspace.rs` -- the explicit `Token::Date { .. } => {}` skip in `build_edges`.
 
 The skip already prevents date tokens from polluting the graph, so no behavior changes in production today. Delete the variant + tests when convenient to drop the carrying cost.

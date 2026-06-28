@@ -4,7 +4,7 @@ This document is the source of truth for what chan-desktop is and is not. It is 
 
 ## 1. Purpose
 
-chan-desktop is the native desktop shell for chan. For normal local workspaces it embeds chan-server in the desktop process and serves the same Svelte editor on a loopback HTTP port. It links `chan-workspace` and `chan-server` directly, and registry mutations run in-process against the embedded `chan-workspace` `Library`. The same binary also IS the `chan` / `cs` command line: invoked through a `chan` or `cs` name (argv0, or `$ARGV0` inside an AppImage) it dispatches the CLI before any GUI init, and on boot it owns the `~/.local/bin/{chan,cs}` shims (section 7) — so a desktop install ships the CLI *with* the app, nothing extra to download. The desktop app exists so that:
+chan-desktop is the native desktop shell for chan. For normal local workspaces it embeds chan-server in the desktop process and serves the same Svelte editor on a loopback HTTP port. It links `chan-workspace` and `chan-server` directly, and registry mutations run in-process against the embedded `chan-workspace` `Library`. The same binary also IS the `chan` / `cs` command line: invoked through a `chan` or `cs` name (argv0, or `$ARGV0` inside an AppImage) it dispatches the CLI before any GUI init, and on boot it owns the `~/.local/bin/{chan,cs}` shims (section 7) -- so a desktop install ships the CLI *with* the app, nothing extra to download. The desktop app exists so that:
 
 - a non-CLI user can install one signed bundle and open a folder through a familiar OS dialog instead of a terminal,
 - multiple workspaces can be supervised at once, with one launcher window acting as the inventory and on/off control,
@@ -19,21 +19,23 @@ Non-goals:
 
 One desktop process hosts many running local workspaces:
 
+```mermaid
+flowchart TD
+    User["User"] --> Launcher
+    subgraph Desktop["chan-desktop (one supervisor process)"]
+        Launcher["Launcher window (inventory + on/off)"]
+        Host["WorkspaceHost (embedded chan-server)"]
+        Listener["Single 127.0.0.1:PORT listener (HTTP + WS)"]
+        Launcher -->|"toggle On"| Host
+        Host --> Listener
+    end
+    Listener --> WS1["Tenant /notes-ab12cd34 (AppState, watcher, indexer, token)"]
+    Listener --> WS2["Tenant /foo-9988ef00 (AppState, watcher, indexer, token)"]
+    WS1 -->|"http://127.0.0.1:PORT/notes-ab12cd34/?t=TOKEN"| View1["Tauri webview window"]
+    WS2 -->|"http://127.0.0.1:PORT/foo-9988ef00/?t=TOKEN"| View2["Tauri webview window"]
 ```
-                +-------------------+
-   user -->     |  chan-desktop     |   launcher plus workspace
-                |  (supervisor)     |   webview windows
-                +---------+---------+
-                          | embeds
-                          v
-                +-------------------+
-                |  WorkspaceHost    |   many local workspaces
-                |  (HTTP + WS)      |
-                +---------+---------+
-                          | http://127.0.0.1:PORT/<prefix>/?t=TOKEN
-                          v
-                    Tauri webview
-```
+
+*One supervisor embeds a WorkspaceHost that serves many local workspaces on a single 127.0.0.1 listener under per-path-hash prefixes, each opened in a Tauri webview via a tokened URL.*
 
 There are two workspace attachment modes:
 
@@ -44,11 +46,35 @@ There is no fallback serve mode. If a user wants to run `chan open` directly, th
 
 ## 3. Workspace lifecycle
 
+```mermaid
+stateDiagram-v2
+    [*] --> Off : CLI chan add registers, On=off
+    [*] --> Serving : Desktop New add registers + auto-start
+
+    Off : Registered, Off
+    Serving : Serving, mounted in WorkspaceHost
+
+    Off --> Serving : Toggle On
+    Serving --> Off : Toggle Off, unmount + destroy windows
+    Serving --> Serving : Open, mint another webview, capped
+
+    Off --> [*] : Forget, unregister, fs untouched
+    Serving --> [*] : Forget, stop + unregister, fs untouched
+
+    note right of Serving
+        Isolated AppState, watcher, indexer,
+        terminal registry, MCP bridge, token.
+        Emits serves-changed, opens workspace webview.
+    end note
+```
+
+*Local-workspace lifecycle: desktop New auto-starts while CLI `chan add` stays Off; Toggle On mounts an isolated runtime, Toggle Off unmounts and destroys windows, Forget unregisters and leaves the filesystem untouched.*
+
 ### 3.0 Source of truth
 
-The `chan` registry at `~/.chan/config.toml` is the single source of truth for the set of known workspaces. Desktop-driven mutations (add, remove) run in-process against the embedded host's shared `chan_workspace::Library` — the same code path the CLI uses, without spawning it. Routing everything through the one shared `Library` is what keeps a freshly-added workspace openable immediately: mutating only the on-disk registry would leave the host's in-memory snapshot stale.
+The `chan` registry at `~/.chan/config.toml` is the single source of truth for the set of known workspaces. Desktop-driven mutations (add, remove) run in-process against the embedded host's shared `chan_workspace::Library` -- the same code path the CLI uses, without spawning it. Routing everything through the one shared `Library` is what keeps a freshly-added workspace openable immediately: mutating only the on-disk registry would leave the host's in-memory snapshot stale.
 
-The desktop owns a small config of its own at `~/.chan/desktop/config.json` — the same `~/.chan` home as the CLI registry, not a separate OS app-data directory. It holds desktop-only state: outbound URL attachments, the set of workspaces that were *on* (`workspaces`, the shared `{path, on}` overlay the devserver persists too), and the closed-window restore stack (section 6.3). The On column is still derived live from the in-memory map of active local runtimes, but that on-set is persisted on every toggle and on clean shutdown, so a restart re-serves the workspaces the user left running (the §3.2 boot matrix). Accepted trade-off: a crash with an entry persisted re-serves it next boot; a re-serve failure there surfaces a notice and is left off (it drops from the set on the next clean shutdown).
+The desktop owns a small config of its own at `~/.chan/desktop/config.json` -- the same `~/.chan` home as the CLI registry, not a separate OS app-data directory. It holds desktop-only state: outbound URL attachments, the set of workspaces that were *on* (`workspaces`, the shared `{path, on}` overlay the devserver persists too), and the closed-window restore stack (section 6.3). The On column is still derived live from the in-memory map of active local runtimes, but that on-set is persisted on every toggle and on clean shutdown, so a restart re-serves the workspaces the user left running (the §3.2 boot matrix). Accepted trade-off: a crash with an entry persisted re-serves it next boot; a re-serve failure there surfaces a notice and is left off (it drops from the set on the next clean shutdown).
 
 A filesystem watcher (`notify` + debounce) runs over `~/.chan/` for the lifetime of the process and emits a `registry-changed` Tauri event when the registry file itself changes (events are filtered to that file: `preferences.toml` churn from pane drags must not storm the launcher). The frontend reacts by re-fetching `list_workspaces` and re-rendering. Concrete consequence: if the user runs `chan add ~/notes` from a terminal, the row appears in the desktop window without any explicit refresh.
 
@@ -68,8 +94,8 @@ Clicking a local row's Where cell reveals the folder in the OS file manager. Wor
 
 A workspace is opt-in: chan-desktop never creates one on your behalf. There is no default workspace, no `~/Documents/Chan`, and no embedded manual seeded anywhere. Boot opens the launcher and then follows the matrix:
 
-- **Nothing was on** (a fresh profile, or a registry whose workspaces are all off) — the launcher shows its (possibly empty) list and a **standalone terminal window** opens. That terminal is the workspace-less `kind=terminal` window you also get from Cmd+T / Cmd+Shift+N (section 6.5) — the "you always have a shell" floor.
-- **Workspaces were on at the last clean shutdown** (`workspaces`, section 3.0) — each is re-served and its window reopened; no standalone terminal opens (you already have windows). A workspace that fails to re-serve surfaces a system notice and is left off.
+- **Nothing was on** (a fresh profile, or a registry whose workspaces are all off) -- the launcher shows its (possibly empty) list and a **standalone terminal window** opens. That terminal is the workspace-less `kind=terminal` window you also get from Cmd+T / Cmd+Shift+N (section 6.5) -- the "you always have a shell" floor.
+- **Workspaces were on at the last clean shutdown** (`workspaces`, section 3.0) -- each is re-served and its window reopened; no standalone terminal opens (you already have windows). A workspace that fails to re-serve surfaces a system notice and is left off.
 
 The user creates or opens a workspace only when they want one, through the [New] modal. The [New] button opens a single modal with a segmented two-way choice:
 
@@ -128,11 +154,11 @@ The single codesigned and notarised artifact is the chan-desktop app itself; the
 
 Every window is a Tauri webview with a label prefix that encodes its kind, and Tauri capabilities are granted by label glob:
 
-- `main` — the singleton launcher (section 3.1). The `main-*` glob is also covered by the launcher capability so any launcher-class window inherits the same permission set.
-- `workspace-<hash>-<seq>` — local workspace windows. The hash identifies the workspace (it is also the embedded route prefix), the per-process `seq` makes every label unique so multi-window works; the stable prefix is what teardown and capability matching key on.
-- `outbound-<hash>-<seq>` — remote workspace windows, hashed from the attachment identity, namespaced apart from local labels.
-- `terminal-win-<seq>` — standalone terminal windows (section 6.5).
-- `about` — the bundled About window: singleton, same content on every platform (mirrors the SPA Dashboard About slide), and the target the macOS system About item is redirected to.
+- `main` -- the singleton launcher (section 3.1). The `main-*` glob is also covered by the launcher capability so any launcher-class window inherits the same permission set.
+- `workspace-<hash>-<seq>` -- local workspace windows. The hash identifies the workspace (it is also the embedded route prefix), the per-process `seq` makes every label unique so multi-window works; the stable prefix is what teardown and capability matching key on.
+- `outbound-<hash>-<seq>` -- remote workspace windows, hashed from the attachment identity, namespaced apart from local labels.
+- `terminal-win-<seq>` -- standalone terminal windows (section 6.5).
+- `about` -- the bundled About window: singleton, same content on every platform (mirrors the SPA Dashboard About slide), and the target the macOS system About item is redirected to.
 
 All embedded-SPA windows (workspace / outbound / terminal) load the SPA with `?w=<label>` so per-window session state (`session.json` panes/tabs) is keyed by the window, and get a " Window N" title suffix where N is the lowest free number among live windows sharing a base title, so the OS window switcher disambiguates.
 
@@ -151,13 +177,39 @@ Quitting prompts for confirmation once (running terminals and workspace runtimes
 
 ### 6.3 Bury-on-close and window restore
 
+```mermaid
+stateDiagram-v2
+    [*] --> Live: open pops compatible LRU entry
+    Live: Live SPA window, terminals and layout warm
+    Buried: Buried hidden window, snapshot on LRU
+    Destroyed: Destroyed, gone
+
+    Live --> CloseGate: OS close button
+    state CloseGate <<choice>>
+    CloseGate --> CaptureBury: normal SPA window
+    CloseGate --> Destroyed: empty terminal or connecting screen
+    Live --> Destroyed: programmatic close cascade
+
+    CaptureBury: Snapshot label, URL hash, zoom to LRU
+    CaptureBury --> Buried: hide webview, persist hidden
+
+    Buried --> Live: unbury via Window menu or Cmd+Shift+N
+    Buried --> Reopen: next open pops compatible entry
+    Reopen: Reuse ?w= to re-hydrate session.json
+    Reopen --> Live: re-apply hash and zoom
+    Buried --> [*]: app quit, LRU survives restart
+    Destroyed --> [*]
+```
+
+*OS close buries an SPA window (snapshotting label, URL hash, and zoom onto the restore LRU); empty terminals, connecting screens, and programmatic closes destroy outright; the next open unburies or pops a compatible entry to re-hydrate `session.json`, hash, and zoom.*
+
 The OS close button on an SPA window *buries* it instead of destroying it: the webview hides, live terminals and layout stay warm, and a notice dialog teaches the behaviour. Buried windows are listed in the Window menu and unburied from there or by Cmd+Shift+N on their family. Two cases really close: a standalone terminal window with no live shells, and a window still on the connecting screen (burying it would leave an unkillable hidden retry loop). Programmatic closes (the SPA's empty-window cascade, workspace-off teardown) destroy outright and never bury.
 
-At bury time the desktop captures a restore snapshot — window label, URL hash, zoom level — onto a small LRU stack in the desktop config, keyed by workspace identity. The next open of that workspace pops a compatible entry and reuses the label (so `?w=` re-hydrates the panes/tabs from `session.json`), re-applies the URL hash (overlay state: file-browser path, search query, graph scope), and restores the zoom. The stack survives restarts, so "the window I had open" comes back across a quit, and entries whose label is still alive are skipped rather than popped (a buried window must keep its entry for the quit-while-buried case).
+At bury time the desktop captures a restore snapshot -- window label, URL hash, zoom level -- onto a small LRU stack in the desktop config, keyed by workspace identity. The next open of that workspace pops a compatible entry and reuses the label (so `?w=` re-hydrates the panes/tabs from `session.json`), re-applies the URL hash (overlay state: file-browser path, search query, graph scope), and restores the zoom. The stack survives restarts, so "the window I had open" comes back across a quit, and entries whose label is still alive are skipped rather than popped (a buried window must keep its entry for the quit-while-buried case).
 
 ### 6.4 The connecting screen (outbound)
 
-Outbound windows do not load the remote URL directly: a down remote would paint a blank white webview (WKWebView never finishes navigating). They load a bundled connecting/retry page instead, which shows the attempt log, probes the remote through the `probe_url` IPC (any HTTP response counts as up; only transport failures retry), and on success navigates the same window to the fully-assembled target URL — `?w=` and restored hash included — so it becomes a normal workspace window in place. The page cannot probe the remote itself: the strict CSP blocks cross-origin fetches, and Rust owns the per-attempt timeout. Cmd/Ctrl+W and the close button on the connecting screen cancel and really close.
+Outbound windows do not load the remote URL directly: a down remote would paint a blank white webview (WKWebView never finishes navigating). They load a bundled connecting/retry page instead, which shows the attempt log, probes the remote through the `probe_url` IPC (any HTTP response counts as up; only transport failures retry), and on success navigates the same window to the fully-assembled target URL -- `?w=` and restored hash included -- so it becomes a normal workspace window in place. The page cannot probe the remote itself: the strict CSP blocks cross-origin fetches, and Rust owns the per-attempt timeout. Cmd/Ctrl+W and the close button on the connecting screen cancel and really close.
 
 ### 6.5 Standalone terminal windows
 
@@ -210,7 +262,7 @@ chan-desktop updates itself through `tauri-plugin-updater`, gated by the `update
 
 - Update bundles are verified with a minisign signature. The production public key is embedded in `src-tauri/tauri.conf.json` under `plugins.updater.pubkey`; the matching private key lives outside the repo in the release owner's secret store.
 - The client probes a single static manifest at `https://chan.app/dl/desktop/latest.json`, generated at release time by `web/packages/marketing/scripts/generate-release-metadata.mjs` (run from `.github/workflows/release.yml`) and deployed to GitHub Pages with the rest of chan.app; there is no dynamic `/dl` server. The manifest carries a top-level `version` plus a `platforms` map keyed by `{os}-{arch}` (e.g. `darwin-aarch64`); Tauri picks the running target's entry and compares `version`.
-- One executable to upgrade. The desktop binary IS `chan` (section 1), so there is no second CLI to update — the `~/.local/bin/{chan,cs}` shims point at the one binary. `chan upgrade` from the desktop-dispatched binary (`Personality::Desktop`) does NOT replace a tarball: it delegates over the well-known handoff socket to the running desktop, which drives this same `tauri-plugin-updater` (check → download → install → `restart()`). If no desktop is running the CLI launches one first; after a successful install the desktop re-affirms the shims (so they keep pointing at the upgraded binary). `chan upgrade --check` reports availability synchronously without installing. The standalone `chan` (install.sh) is the only path that still self-upgrades by replacing its CLI tarball in place.
+- One executable to upgrade. The desktop binary IS `chan` (section 1), so there is no second CLI to update -- the `~/.local/bin/{chan,cs}` shims point at the one binary. `chan upgrade` from the desktop-dispatched binary (`Personality::Desktop`) does NOT replace a tarball: it delegates over the well-known handoff socket to the running desktop, which drives this same `tauri-plugin-updater` (check → download → install → `restart()`). If no desktop is running the CLI launches one first; after a successful install the desktop re-affirms the shims (so they keep pointing at the upgraded binary). `chan upgrade --check` reports availability synchronously without installing. The standalone `chan` (install.sh) is the only path that still self-upgrades by replacing its CLI tarball in place.
 
 Key rotation and updater-payload signing/verification are documented in `.agents/desktop.md` ("Auto-upgrade signing") and the [`updater-bridge.md`](./updater-bridge.md) runbook.
 
@@ -242,5 +294,5 @@ The user copies the printed URL, including the bearer token, into the [New] moda
 
 ## 12. Native file integrations
 
-- **Download**: the SPA's Download action fetches the bytes over its existing loopback connection (XHR, so the in-app indicator gets progress) and hands them to a Tauri command that writes into the OS Downloads folder and returns the saved path — WKWebView/WebView2 have no download-manager UI, so `<a download>` would silently do nothing.
+- **Download**: the SPA's Download action fetches the bytes over its existing loopback connection (XHR, so the in-app indicator gets progress) and hands them to a Tauri command that writes into the OS Downloads folder and returns the saved path -- WKWebView/WebView2 have no download-manager UI, so `<a download>` would silently do nothing.
 - **Export to PDF** (macOS): `window.print()` is a no-op in WKWebView, so the desktop drives the real macOS print pipeline (`printOperationWithPrintInfo:`) silently to a file, which honours `@page`, auto-pagination, and explicit page breaks exactly like the browser's print-to-PDF path. The frontend gates the call to macOS desktop.

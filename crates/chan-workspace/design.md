@@ -35,12 +35,12 @@ Out of scope:
 
 ```mermaid
 flowchart TB
-  Lib["Library — registry at ~/.chan"] --> WS["Workspace (writer-locked handle)"]
+  Lib["Library -- registry at ~/.chan"] --> WS["Workspace (writer-locked handle)"]
   subgraph Subsystems
-    FS["Filesystem — cap-std, CAS, trash, drafts"]
-    Search["Search — tantivy BM25 (+ optional candle embeddings)"]
-    Graph["Graph — sqlite: links, tags, mentions, headings"]
-    Watch["Watch — notify -> debounced incremental index"]
+    FS["Filesystem -- cap-std, CAS, trash, drafts"]
+    Search["Search -- tantivy BM25 (+ optional candle embeddings)"]
+    Graph["Graph -- sqlite: links, tags, mentions, headings"]
+    Watch["Watch -- notify -> debounced incremental index"]
   end
   WS --> FS
   WS --> Search
@@ -186,6 +186,45 @@ Chunking is configurable per-index via `Chunking` (`Headings`, `WholeDoc`, `Fixe
 
 `Index::build_all` runs the per-file read + markdown chunking on a bounded thread pool. Worker count comes from `SearchAggression`: `Conservative` pins one reader, `Balanced` (the default) uses `available_parallelism - 2` clamped to [1, 6], `Aggressive` uses `available_parallelism - 1` clamped to [1, 8]. The file-descriptor budget (`fd_budget`) can cap the count further and paces workers when the process is near its `nofile` limit: the crate runs inside the editor process, where macOS commonly starts with a soft limit of 256, and an eager SQLite pool plus Tantivy fanout can otherwise exhaust the table during first boot on a large workspace. Workers ship parsed chunks to the main thread over a bounded `sync_channel` (workers * 4); the main thread is the only writer into tantivy and the only producer of embed batches, so writer-mutex contention and embed ordering stay simple. Cores are held back so the server's tokio runtime and the OS UI thread keep breathing during a reindex of a large workspace. Progress ticks remain monotonic from the consumer's perspective even when worker completions land out of order.
 
+```mermaid
+flowchart TB
+  Files["list_indexable -> files[]"]
+  Budget["aggression.budget(): worker_count, queue_bound, embed_batch_chunks"]
+  Fd["fd_budget: cap_index_read_workers + pace_reindex_worker"]
+  Ch["bounded sync_channel(queue_bound)"]
+  subgraph Pool["bounded read + chunk worker pool"]
+    W1["worker: read_to_string + chunking::chunk"]
+    W2["worker: read_to_string + chunking::chunk"]
+  end
+  Drain["main thread: drain rx (only writer)"]
+  Bm25["bm25.index_chunks(rel, chunks)"]
+  Skip{"on-disk shard (model, body_hash) matches?"}
+  Pend["accumulate pending chunks"]
+  Flush{"pending_chunks >= embed_batch_chunks?"}
+  Commit["bm25.commit() then flush_embed_batch (embed forward pass)"]
+  Shards["per-file vector shards"]
+  Final["tail flush, orphan cleanup, final bm25.commit, stamp vectors_model -> BuildSummary"]
+
+  Budget --> Fd
+  Fd -->|"caps worker_count"| Pool
+  Files -->|"file indices via AtomicUsize next"| Pool
+  W1 --> Ch
+  W2 --> Ch
+  Ch -->|"WorkerOut"| Drain
+  Drain --> Bm25
+  Bm25 -->|"if do_vectors"| Skip
+  Skip -->|"match: embeds_reused++"| Drain
+  Skip -->|"no match"| Pend
+  Pend --> Flush
+  Flush -->|"below threshold"| Drain
+  Flush -->|"threshold reached"| Commit
+  Commit --> Shards
+  Drain -->|"channel drained"| Final
+  Final -.->|"tail flush"| Shards
+```
+
+*build_all fans file reads across an fd-budget-capped, SearchAggression-sized worker pool, funnels parsed chunks through a bounded sync_channel to the single main-thread writer that commits BM25 per flush and runs EMBED_BATCH embed passes into per-file vector shards.*
+
 #### Embed-phase checkpointing
 
 Embedding dominates the wall-clock cost of a full rebuild on real workspaces (BM25 is a tantivy commit per chunk, cheap; embedding scales linearly with chunk count and waits on the model). To avoid throwing that work away on a crash, the per-file vector shard carries a `body_hash` field (sha256 over the canonical `(chunk_id, body)` sequence) stamped at write time. On the next `build_all`, the per-file path re-chunks from disk, computes a fresh `body_hash`, and asks the on-disk shard for its `(model, body_hash)` pair; on match the file skips the embed queue (the vectors are still valid because identical chunks under the same model deterministically produce identical embeddings). The count of files that took the skip path surfaces as `BuildSummary.embeds_reused`, so the CLI and tests can observe partial-rebuild resumption rather than infer it.
@@ -194,9 +233,9 @@ Each per-file shard under `embeddings/` carries its own `FORMAT_VERSION` (curren
 
 #### Embed batch cadence and the CPU backend
 
-`build_all` accumulates parsed chunks across files and flushes them to the embedder in `EMBED_BATCH_CHUNKS`-sized groups (the value comes from `SearchAggression::budget()`: 64 / 128 / 256 chunks for Conservative / Balanced / Aggressive). Each flush first commits the BM25 writer, then runs one blocking forward pass over the batch and writes the resulting per-file vector shards. Committing per flush is what makes `indexed_vectors`, the `reindex_with` progress events, and the BM25→hybrid search upgrade advance incrementally as a long cold build runs, instead of landing only when the whole pass returns: a large cold reindex would otherwise report zero vectors and a frozen progress chip for the minutes the embed takes. The cadence is deliberately kept below a typical workspace's chunk count (chunks-per-file is usually ~10), so a cold build commits in several visible steps rather than one tail flush. The batch size is a flush/commit cadence only — the embedder always runs `INFER_BATCH`-sized forward passes internally — so it carries no embedding-throughput cost.
+`build_all` accumulates parsed chunks across files and flushes them to the embedder in `EMBED_BATCH_CHUNKS`-sized groups (the value comes from `SearchAggression::budget()`: 64 / 128 / 256 chunks for Conservative / Balanced / Aggressive). Each flush first commits the BM25 writer, then runs one blocking forward pass over the batch and writes the resulting per-file vector shards. Committing per flush is what makes `indexed_vectors`, the `reindex_with` progress events, and the BM25→hybrid search upgrade advance incrementally as a long cold build runs, instead of landing only when the whole pass returns: a large cold reindex would otherwise report zero vectors and a frozen progress chip for the minutes the embed takes. The cadence is deliberately kept below a typical workspace's chunk count (chunks-per-file is usually ~10), so a cold build commits in several visible steps rather than one tail flush. The batch size is a flush/commit cadence only -- the embedder always runs `INFER_BATCH`-sized forward passes internally -- so it carries no embedding-throughput cost.
 
-Embedding runs on CPU by default: the candle Metal backend exhausts GPU memory and stalls on large workspaces, so the GPU path is opt-in via `CHAN_ENABLE_GPU=1`. On macOS the CPU path links Apple's Accelerate framework as candle's BLAS backend — the target-gated `accelerate` feature, wired alongside `metal` under `cfg(target_os = "macos")` — routing bge-small's matmuls through Accelerate's `sgemm` for a measured ~1.5–2× cold-reindex speedup over candle's default SIMD-threaded `gemm` (modest because the default is already vectorized, and the forward pass also spends time in non-matmul ops). The feature pulls the Apple-only `accelerate-src`, so the static-musl Linux release binary structurally cannot pull it in.
+Embedding runs on CPU by default: the candle Metal backend exhausts GPU memory and stalls on large workspaces, so the GPU path is opt-in via `CHAN_ENABLE_GPU=1`. On macOS the CPU path links Apple's Accelerate framework as candle's BLAS backend -- the target-gated `accelerate` feature, wired alongside `metal` under `cfg(target_os = "macos")` -- routing bge-small's matmuls through Accelerate's `sgemm` for a measured ~1.5–2× cold-reindex speedup over candle's default SIMD-threaded `gemm` (modest because the default is already vectorized, and the forward pass also spends time in non-matmul ops). The feature pulls the Apple-only `accelerate-src`, so the static-musl Linux release binary structurally cannot pull it in.
 
 #### Walk filter
 
@@ -290,13 +329,33 @@ When the report subsystem is active, the same watcher fan-outs each event into t
   - `ProviderError` and path-less events (the watcher's "scope unknown" signal) clear the pending map and trigger a full `Workspace::reconcile`, the same convergence path used for cold-open catch-up.
   - Counters (`pending_count`, `indexed_total`, `forgotten_total`, `reconciles_total`) back the status surface. Drop the handle (or call `stop()`) to tear down synchronously: watcher first (closing the channel), then the worker joined.
 
+```mermaid
+flowchart TD
+  Notify["notify event on watcher thread"] --> Filter{"is_filtered(rel, WalkFilter)"}
+  Filter -->|"VCS control file -- force-forwarded"| Send
+  Filter -->|".chan internal -- always dropped"| Drop["event dropped"]
+  Filter -->|"excluded dir component -- dropped"| Drop
+  Filter -->|"ordinary path"| Send["mpsc channel to indexer worker"]
+  Send --> Apply{"apply_event by WatchKind"}
+  Apply -->|"Modified / Created with path"| Sched["schedule_pending: now + debounce"]
+  Apply -->|"Removed"| Forget["forget_file immediately"]
+  Apply -->|"Renamed"| Rename["forget_file(src) now + schedule_pending(dst)"]
+  Apply -->|"ProviderError or path-less"| Recon["clear pending + Workspace::reconcile"]
+  Sched --> Deadline{"deadline matured?"}
+  Rename --> Deadline
+  Deadline -->|"newer event -- push deadline forward"| Sched
+  Deadline -->|"matured"| Index["index_file"]
+```
+
+*notify events pass one shared ignore set (.chan dropped, VCS control files force-forwarded), then the indexer worker per-path trailing-edge debounces edits, flushes Removed/rename-source immediately, and clears pending plus full-reconciles on ProviderError/path-less events.*
+
 ### Bootstrap snapshot
 
 `Workspace::bootstrap()` returns a lightweight structural snapshot (directory tree shape, file counts, byte sizes) that the UI can render immediately on open, before any index or report job runs. It is a STAT-ONLY walk: no file content is read, no graph edge is parsed, so it does not pressure the fd budget the way the index / report jobs do. It honors the same `WalkFilter` as the indexer (one ignore policy), while the on-demand listing APIs stay unfiltered. The root response carries the first level eagerly (root files + dirs, each dir with recursive subtree stats) plus whole-workspace aggregates; deeper levels load lazily via `Workspace::bootstrap_dir(rel)` on File Browser expand or Graph depth-increase.
 
 ### Report
 
-The per-workspace code/SLOC/COCOMO report wraps `chan-report`'s incremental `Index`. chan-workspace owns the persisted JSONL (`~/.chan/workspaces/<metadata_key>/report/report.jsonl`), the load-else-rescan open path (any load error — missing file, schema mismatch, partial write — falls back to a full scan that replaces the bad file on the next flush), and a dedicated writer thread that debounces flush signals (500 ms window) and atomic-writes the JSONL. Watch events fan into the in-memory index before the user's callback runs, so a handler that immediately calls `Workspace::report()` sees the change; `Unchanged` outcomes do not schedule a write. The walk applies the same excluded-dirs policy as the index walk so a source-tree workspace doesn't roll up its dependency trees.
+The per-workspace code/SLOC/COCOMO report wraps `chan-report`'s incremental `Index`. chan-workspace owns the persisted JSONL (`~/.chan/workspaces/<metadata_key>/report/report.jsonl`), the load-else-rescan open path (any load error -- missing file, schema mismatch, partial write -- falls back to a full scan that replaces the bad file on the next flush), and a dedicated writer thread that debounces flush signals (500 ms window) and atomic-writes the JSONL. Watch events fan into the in-memory index before the user's callback runs, so a handler that immediately calls `Workspace::report()` sees the change; `Unchanged` outcomes do not schedule a write. The walk applies the same excluded-dirs policy as the index walk so a source-tree workspace doesn't roll up its dependency trees.
 
 Public surface: `report()` (whole tree), `report_for_prefix`, `report_for_files`, `report_for_dir` (O(1) cached directory roll-up; `None` for untracked dirs so HTTP can 404), and `report_jsonl_path`. The subsystem is gated by the per-workspace `reports_enabled` flag and activated by `Workspace::boot()`, which consumers call after open to kick off the optional layers (reports; semantic search initializes lazily through the index accessor).
 
@@ -308,18 +367,7 @@ On-disk shape: slim YAML frontmatter holding only top-level `aliases` plus the c
 
 Indexer reads the frontmatter in `parse_for_graph` to tag the corresponding `nodes` row as `kind = 'contact'`. Same row, different kind: backlinks, link-autocomplete, and forget_file all keep working unchanged because they key on `rel_path`, not `kind`. Downstream consumers (`Workspace::contacts`, editor `@` picker, `GET /api/contacts`) filter on `kind = 'contact'` to surface contacts as a distinct UI surface.
 
-Pure-function split:
-
-| File              | Responsibility                                |
-| ----------------- | --------------------------------------------- |
-| `provider.rs`     | `ProviderKind` enum (parser dispatch tag)     |
-| `google.rs`       | Google CSV parser; ` ::: ` multi-value form   |
-| `emit.rs`         | `Contact -> markdown`; hand-formatted YAML    |
-| `slug.rs`         | filename derivation, sanitization, collisions |
-| `extract.rs`      | email extraction from contact bodies          |
-| `import.rs`       | orchestrator: writes via `Workspace::write_text`  |
-
-The orchestrator is exposed as `Workspace::import_contacts` (and `import_contacts_with` for progress reporting) so the import flow inherits the path sandbox, editable-text gate, and atomic-rename rules. One bad contact does not abort a batch: per-file errors land in `ImportSummary` as `Failed` outcomes.
+The contacts module splits into pure parser/emitter/slug helpers behind one orchestrator. The import orchestrator is exposed as `Workspace::import_contacts` (and `import_contacts_with` for progress reporting) so the import flow inherits the path sandbox, editable-text gate, and atomic-rename rules. One bad contact does not abort a batch: per-file errors land in `ImportSummary` as `Failed` outcomes.
 
 Imported notes are user-owned the moment they land. chan does not re-edit them. Re-importing either skips existing files or overwrites them (per `ImportOpts.overwrite`); there is no merge.
 
@@ -569,6 +617,43 @@ Push vs. pull, and how the signals relate:
   - `Workspace::reconcile()` is the diff-based recovery path. Walks the live tree, compares each editable-text file's mtime against the graph row, and emits journal-bracketed `index_file` / `forget_file` calls only for the deltas. Unchanged files are skipped, so reconcile costs O(N) stat + the per-file embed only for changed files. Use cases: cold open after offline edits, watcher-overflow recovery (inotify `IN_Q_OVERFLOW` / FSEvents coalesce-loss), post-`replay_pending_writes` sanity. The diff compares `(mtime, size)` tuples against the graph's stamped row; a same-mtime-different-size rewrite is caught via the size delta. Rows that carry `size = NULL` (stamped before a size was recorded) fall back to mtime-only for that row, and a subsequent `index_file` backfills size.
   - `Workspace::needs_replay_writes()` is the per-file companion: set at workspace open when a non-empty `pending_writes.json` journal exists under `graph_dir/`. Each entry is a `(rel, op)` pair written by `index_file` / `forget_file` before either backend is touched and removed after both commit. A crash between the graph commit and the search-index commit leaves the entry behind; `Workspace::replay_pending_writes()` re-runs the journaled ops against the current on-disk truth and clears the journal. `Index` entries degrade to `forget` when the file no longer exists; `forget` entries are idempotent against an already-cleaned backend. All per-file mutation paths serialize through an internal `write_serial` mutex so the journal never disagrees with the in-flight backend state.
 
+```mermaid
+stateDiagram-v2
+    [*] --> Open
+    state "Open: read disk markers + journal" as Open
+    state "needs_rebuild (rebuild.inprogress)" as NeedsRebuild
+    state "needs_replay_writes (pending_writes.json)" as NeedsReplay
+    state "Reindexing (is_reindexing RAII guard)" as Reindexing
+    state "Replay (replay_pending_writes)" as Replay
+    state "Reconcile (mtime/size stat diff)" as Reconcile
+    state "Serving queries (graph + index agree)" as Serving
+    state "Per-file write (journal-bracketed)" as PerFile
+
+    Open --> NeedsRebuild : rebuild.inprogress present
+    Open --> NeedsReplay : pending_writes.json non-empty
+    Open --> Reconcile : edits while process down
+    Open --> Serving : clean, both backends agree
+
+    NeedsRebuild --> Reindexing : reindex full rebuild
+    Reindexing --> Serving : BM25 commit clears marker
+
+    NeedsReplay --> Replay : replay each journaled op
+    Replay --> Reconcile : post-recovery sanity pass
+
+    Reconcile --> Serving : per-file index_file / forget_file
+
+    Serving --> PerFile : live edit, watcher push hint
+    PerFile --> Serving : commit graph+index, clear journal
+    Serving --> Reconcile : watcher overflow / ProviderError
+
+    note right of Reconcile
+      pull side: on-disk mtime/size is authority
+      push side: watcher hints, in-proc is_reindexing
+    end note
+```
+
+*Open-time recovery signals and the in-process vs on-disk convergence paths: persisted markers/journal drive pull-side rebuild/replay/reconcile while the watcher pushes incremental hints, with the live filesystem stat as authority.*
+
 Cardinality is per-file for `IndexFile` / `RenameRewrite` / `GraphRebuild` and per-batch for `EmbedBatch`; on a 10k-file workspace a full reindex can push tens of thousands of events. Consumers that fan out over a transport (chan-server WebSocket, native FFI bridge) should coalesce or rate-limit upstream of the socket; the producer side does not throttle.
 
 ### Contacts
@@ -717,7 +802,7 @@ Drafts (the scratch namespace for Cmd+N) are NOT stored in this metadata tree. T
 
 `<metadata_key>` is the path slug plus an 8-hex hash of the canonical path at first registration. `Library::move_workspace` preserves it when the local path moves, so metadata follows without moving files on disk.
 
-Per platform: desktop targets (macOS, Linux, Windows) use `~/.chan` (or the home-equivalent) for config, state, and cache alike — one visible directory, easy to inspect and delete. iOS and Android collapse `config_dir` onto the app-sandbox state dir because the home dir inside the sandbox is not user-writable and the "brand-visible" argument for `~/.chan/` does not apply on mobile (the user cannot browse the sandbox anyway).
+Per platform: desktop targets (macOS, Linux, Windows) use `~/.chan` (or the home-equivalent) for config, state, and cache alike -- one visible directory, easy to inspect and delete. iOS and Android collapse `config_dir` onto the app-sandbox state dir because the home dir inside the sandbox is not user-writable and the "brand-visible" argument for `~/.chan/` does not apply on mobile (the user cannot browse the sandbox anyway).
 
 ### Workspace contents
 
@@ -761,33 +846,25 @@ A schema bump in any store is user-data-safe: only chan-managed cache is destroy
 
 `chan-workspace` is consumed by sibling crates in this repository.
 
-### `chan` (CLI binary, `crates/chan`)
+### `chan`
 
 The `chan` binary parses CLI args (clap) and dispatches subcommands (`add`, `list`, `remove`, `serve`, `shell`, `index`, `reports`, `search`, `graph`, `status`, `config`, `metadata`, `contacts`, `upgrade`, plus the hidden `__mcp` / `__mcp-proxy`). It depends on `chan-workspace` with `default-features = false`, then re-enables `embeddings` (and `metal` on macOS, `cuda` opt-in on Linux) through its own feature passthroughs so `--no-default-features` propagates end-to-end. It also depends on `chan-server` for the `serve` subcommand and on `chan-llm` (with `mcp`) for the in-process MCP server.
 
-Usage shape:
-
-  - `Library::open()` once at startup.
-  - `library.list_workspaces()`, `register_workspace`, `unregister_workspace` for the registry subcommands.
-  - `library.open_workspace(root)` to get an `Arc<Workspace>`, then `workspace.search(...)`, `workspace.reindex(...)`, `workspace.list_tree()` for `index` / `search` / direct CLI access.
-  - `Library::reset_workspace` for `chan reset`.
-  - `metadata_archive` export / import for `chan workspace metadata`.
-
-### `chan-server` (HTTP + WebSocket, `crates/chan-server`)
+### `chan-server`
 
 `chan-server` wraps `chan-workspace`'s `Library` / `Workspace` handles in axum routes and serves the embedded Svelte frontend (rust-embed). It exposes REST endpoints for filesystem ops, search, graph traversal, link autocomplete, contacts, reports, drafts, and trash management; a WebSocket channel for `WatchEvent`s and `ProgressEvent`s; session blob endpoints that proxy directly to `put_session`; and the in-process MCP bridge that hosts chan-llm's tool service over a Unix-domain socket.
 
 It depends on `chan-workspace` with `default-features = false` and forwards `embeddings`, `metal`, `cuda` through its own feature gates. All HTTP filesystem ops route through `Workspace` so the sandbox, special-file refusal, atomic writes, and editable-text gate apply automatically; `chan-server` never reads or writes workspace contents directly. On WebSocket connect it answers a status probe with `Workspace::is_reindexing()` / `needs_rebuild()` / `index_stats()` so a freshly attached client can render indexing state without waiting for the next push.
 
-### `chan-llm` (`crates/chan-llm`)
+### `chan-llm`
 
 The MCP tool sandbox. Holds an `Arc<Workspace>` and dispatches every tool call (`read_file`, `write_file`, `list_files`, `resolve_path`, `search_content`, `repo_report`, graph tools, `read_media`) through the Workspace API so the sandbox and gates apply to agent-driven access.
 
-### `chan-desktop` (`desktop/src-tauri`)
+### `chan-desktop`
 
 The Tauri shell embeds chan-server and reuses the same `Library` / `Workspace` handles; the workspace lifecycle (open, serve handoff, registry) is identical to the CLI path.
 
-### `fetch-models` (build helper, `crates/fetch-models`)
+### `fetch-models`
 
 `fetch-models` is a build-time helper that pre-fetches the default embedding model (`chan_workspace::DEFAULT_MODEL`, `BAAI/bge-small-en-v1.5`) into `crates/chan-server/resources/models.tar.zst` so chan-server's rust-embed step bundles it into the release binary. It depends on `chan-workspace` with the `embeddings` feature explicitly enabled to reuse the same hf-hub + tokenizers stack the runtime uses, so a contributor's `cargo build` does not pay the model download unless `make models` (or `make build-release`) runs. It uses the embedder's fetcher entry point and does not open a `Workspace`.
 
