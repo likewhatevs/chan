@@ -1191,14 +1191,17 @@
        CHARACTER of its parent (Google-Docs style); the 2-space source
        indent renders narrower than the marker column in the proportional
        body font, so this makes up the difference, keyed off the body size
-       (~0.6em) to stay consistent across bullet / hyphen / ordered.
-       It lives in PADDING, not margin: CM6 drawSelection anchors a
-       full-line highlight at the content-box left edge, so an outline
-       carried as margin (outside the box) made the row selection bleed
-       leftward into the gutter. Folding it into padding-left keeps the
-       glyph, text, wrapped rows, and the highlight all inside the line. */
+       (~0.6em) to stay consistent across bullet / hyphen / ordered. */
     --cm-md-list-outline: calc(var(--cm-md-list-depth, 0) * var(--chan-editor-body-size, 11pt) * 0.6);
-    padding-left: calc(32px + var(--cm-md-list-prefix) + var(--cm-md-list-outline)) !important;
+    /* No fixed gutter before the marker: the negative text-indent hangs the
+       marker at the line's content-left, aligned with the editor's normal
+       text edge. CM6 drawSelection anchors a whole-line / multi-line
+       highlight's open side at the FIRST .cm-line's content-left, so any
+       fixed gutter LEFT of the marker would paint as empty highlight
+       reaching past the marker into that gutter. The per-depth outline still
+       steps nested markers right, so a nested line keeps a small indent
+       inside its own highlight. */
+    padding-left: calc(var(--cm-md-list-prefix) + var(--cm-md-list-outline)) !important;
     text-indent: calc(-1 * var(--cm-md-list-prefix));
     position: relative;
   }
@@ -1207,14 +1210,12 @@
     position: absolute;
     top: 0;
     bottom: 0;
-    /* Anchor the guide at a FIXED x, independent of depth. The outline
-       indent now lives in padding (not margin), so the list line's
-       padding box -- the containing block for this `::before` -- no
-       longer shifts per depth, and the rails need no margin
-       compensation: a plain `left: 10px` pins every list line's leftmost
-       bar to content-left + 10px, so the level-k bar (at +k*2ch) is one
-       continuous rail down the whole list. */
-    left: 10px;
+    /* Anchor the guide at a FIXED x, independent of depth: the padding box
+       (the containing block for this `::before`) starts at the line's
+       content-left for every depth, so `left: 0` pins every list line's
+       leftmost bar to the content-left and the level-k bar (at +k*2ch) is
+       one continuous rail down the whole list. */
+    left: 0;
     /* One 1px-wide stripe per indent level: anchor + N stamps at
        2ch intervals = depth+1 vertical bars. repeating-linear-
        gradient keeps the spacing exact at any depth without per-
