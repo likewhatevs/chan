@@ -9,17 +9,11 @@
   import Library from "./components/Library.svelte";
   import NewWorkspaceDialog from "./components/NewWorkspaceDialog.svelte";
   import ConfirmDialog from "./components/ConfirmDialog.svelte";
-  import {
-    library,
-    loadLibrary,
-    clearError,
-    disconnectDevserver,
-    reportError,
-  } from "./state/library.svelte";
+  import { library, loadLibrary, clearError } from "./state/library.svelte";
   import { dialog } from "./state/dialog.svelte";
   import { confirm } from "./state/confirm.svelte";
   import { checksVisible } from "./state/selection.svelte";
-  import { controlClosedId, onControlClosedEvent } from "./state/controlClosed.svelte";
+  import { onControlClosedEvent } from "./state/controlClosed.svelte";
   import { clearControlAttention } from "./state/controlAttention.svelte";
   import { onTauriEvent } from "./api/desktop";
   import { applyTheme } from "./state/theme.svelte";
@@ -36,19 +30,8 @@
     void onTauriEvent("devserver-control-closed", onControlClosedEvent).then((un) => {
       unlisten = un;
     });
-    // A workspace window's disconnect overlay chose Abandon: the desktop resolved
-    // its devserver and asks the launcher to disconnect it, reusing the connect
-    // spinner lifecycle. No-op off-desktop (the event never fires in a browser).
-    let unlistenAbandon: (() => void) | null = null;
-    void onTauriEvent("devserver-abandon", (payload) => {
-      const id = controlClosedId(payload);
-      if (id) void disconnectDevserver(id).catch(reportError);
-    }).then((un) => {
-      unlistenAbandon = un;
-    });
     return () => {
       unlisten?.();
-      unlistenAbandon?.();
     };
   });
 
