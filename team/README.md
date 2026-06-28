@@ -54,7 +54,8 @@ New agents should also read [`.agents/playbook.md`](../.agents/playbook.md), the
 - [release-44-v0.53.1](release-44-v0.53.1.md) - a Windows, clipboard, and editor patch.
 - [release-45-v0.54.0](release-45-v0.54.0.md) - machine-first launcher, Docker publishing, editor polish, and chan open routing.
 - [release-pub-site](release-pub-site.md) - a standalone branding and positioning re-steer plus marketing site refresh (not a numbered release era).
-- [release-0.55.0](release-0.55.0.md) - editor polish, devserver hardening, and docs consolidation.
+- [release-0.55.0](release-0.55.0.md) - editor polish, devserver hardening, docs consolidation, and the validation carryover into v0.56.0.
+- [release-0.56.0](release-0.56.0.md) - design-doc cleanup, the `DEVSERVER_*` gateway contract, v0.55 validation carryovers, and devserver lifecycle hardening.
 
 ## Conventions
 
