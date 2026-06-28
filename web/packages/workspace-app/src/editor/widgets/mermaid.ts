@@ -241,7 +241,18 @@ class MermaidWidget extends WidgetType {
       viewBtn.addEventListener("click", (e) => {
         e.preventDefault();
         e.stopPropagation();
-        if (renderedSvg) onView(renderedSvg);
+        if (!renderedSvg) return;
+        // The zoom viewer presents the diagram on a light panel, so it
+        // always shows the light-themed render. In a dark editor the cached
+        // face is the dark render, so re-render light for the overlay; in a
+        // light editor the cached face is already the light render.
+        if (this.dark) {
+          void renderMermaid(this.source, false).then((res) => {
+            if (res.ok && res.svg) onView(res.svg);
+          });
+        } else {
+          onView(renderedSvg);
+        }
       });
       inner.append(viewBtn);
     }

@@ -12,6 +12,9 @@ function backdrop(): HTMLElement | null {
 function layer(): HTMLElement | null {
   return document.querySelector(".md-diagram-zoom-layer");
 }
+function panel(): HTMLElement | null {
+  return document.querySelector(".md-diagram-zoom-panel");
+}
 
 afterEach(() => {
   document.querySelectorAll(".md-diagram-zoom").forEach((e) => e.remove());
@@ -24,6 +27,17 @@ describe("openDiagramZoom", () => {
     expect(bd).toBeTruthy();
     expect(layer()?.querySelector("svg")).toBeTruthy();
     expect(bd.querySelectorAll(".md-diagram-zoom-btn").length).toBe(3);
+  });
+
+  test("backs the SVG with a light panel surface inside the layer", () => {
+    openDiagramZoom(SVG);
+    const p = panel();
+    expect(p).toBeTruthy();
+    // The light panel holds the SVG so a light-themed diagram reads against
+    // it instead of vanishing on the dark backdrop.
+    expect(p?.querySelector("svg")).toBeTruthy();
+    expect(layer()?.contains(p!)).toBe(true);
+    expect(p?.style.background).toBeTruthy();
   });
 
   test("no-ops on an empty svg", () => {

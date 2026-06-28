@@ -137,7 +137,11 @@ describe("mermaid wiring", () => {
     );
     expect(mermaidSrc).toMatch(/if \(onView\)/);
     expect(mermaidSrc).toMatch(/createElement\("button"\)/);
-    expect(mermaidSrc).toMatch(/if \(renderedSvg\) onView\(renderedSvg\)/);
+    // The zoom always presents the light render on a light panel: a dark
+    // editor re-renders light for the overlay, a light editor passes the
+    // cached (already light) face.
+    expect(mermaidSrc).toMatch(/renderMermaid\(this\.source, false\)/);
+    expect(mermaidSrc).toMatch(/onView\(renderedSvg\)/);
     expect(mermaidSrc).toMatch(/renderMermaid\(this\.source, this\.dark\)/);
     // closed-fence gate + cursor-out render.
     expect(mermaidSrc).toMatch(/closeFrom === openFrom/);

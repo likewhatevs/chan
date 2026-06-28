@@ -1,9 +1,10 @@
 // Fullscreen pan/zoom viewer for a rendered diagram (a mermaid SVG).
 // Imperative DOM helper, self-contained with inline styles, mirroring
 // imageZoom.ts's backdrop/Escape scaffolding so the two viewers feel of
-// a piece. The diagram mounts in a transform layer: wheel + on-screen
-// buttons + keyboard (+/-/=, 0) zoom, drag + arrows/WASD pan. Escape or a
-// plain backdrop click dismisses; the overlay cleans itself up.
+// a piece. The diagram mounts on a light panel inside a transform layer:
+// wheel + on-screen buttons + keyboard (+/-/=, 0) zoom, drag + arrows/WASD
+// pan. Escape or a plain backdrop click dismisses; the overlay cleans
+// itself up.
 
 const MIN_SCALE = 0.2;
 const MAX_SCALE = 8;
@@ -11,7 +12,9 @@ const ZOOM_STEP = 1.2; // per button press / keypress
 const PAN_STEP = 48; // px per arrow / WASD press
 
 /// Open the diagram viewer for a rendered SVG string (mermaid's already
-/// sanitized render output). No-op on empty input.
+/// sanitized render output). Expects a LIGHT-themed render: the viewer
+/// presents it on a light panel regardless of the editor's theme. No-op on
+/// empty input.
 export function openDiagramZoom(svg: string): void {
   if (!svg) return;
 
@@ -29,15 +32,25 @@ export function openDiagramZoom(svg: string): void {
   layer.style.cssText =
     "position:absolute;top:50%;left:50%;transform-origin:center center;" +
     "will-change:transform;";
-  layer.innerHTML = svg;
-  const svgEl = layer.querySelector("svg");
+  // Back the diagram with a light neutral panel: the viewer is handed a
+  // light-themed render, whose pale strokes and text would vanish on the
+  // dim backdrop. The panel is the content surface; the backdrop stays
+  // dark. padding gives the diagram breathing room inside the surface.
+  const panel = document.createElement("div");
+  panel.className = "md-diagram-zoom-panel";
+  panel.style.cssText =
+    "background:#fff;border-radius:12px;padding:24px;box-sizing:border-box;" +
+    "box-shadow:0 10px 48px rgba(0,0,0,0.5);";
+  panel.innerHTML = svg;
+  const svgEl = panel.querySelector("svg");
   if (svgEl) {
-    svgEl.style.maxWidth = "88vw";
-    svgEl.style.maxHeight = "88vh";
+    svgEl.style.maxWidth = "calc(90vw - 48px)";
+    svgEl.style.maxHeight = "calc(90vh - 48px)";
     svgEl.style.width = "auto";
     svgEl.style.height = "auto";
     svgEl.style.display = "block";
   }
+  layer.appendChild(panel);
   backdrop.appendChild(layer);
 
   let scale = 1;
