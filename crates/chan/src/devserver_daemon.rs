@@ -129,10 +129,19 @@ pub fn status_devserver_chan(verbose: bool) -> Result<()> {
         print_daemon_paths(&daemon_lock_path(), &record_path);
     }
     match read_daemon_record(&record_path) {
-        Some(r) if is_record_live(&r) => println!(
-            "chan devserver (chan): running -- pid {}, bind {}, since {}",
-            r.pid, r.addr, r.started_at
-        ),
+        Some(r) if is_record_live(&r) => {
+            println!(
+                "chan devserver (chan): running -- pid {}, bind {}, since {}",
+                r.pid, r.addr, r.started_at
+            );
+            if let Ok(addr) = r.addr.parse::<SocketAddr>() {
+                println!(
+                    "  command: chan devserver --bind={} --port={}",
+                    addr.ip(),
+                    addr.port()
+                );
+            }
+        }
         Some(r) => println!(
             "chan devserver (chan): not running (stale pidfile for pid {}).",
             r.pid
@@ -140,6 +149,13 @@ pub fn status_devserver_chan(verbose: bool) -> Result<()> {
         None => println!("chan devserver (chan): not running."),
     }
     Ok(())
+}
+
+/// The address the running (or last) self-managed `chan` daemon recorded, so a
+/// flagless `--restart` keeps its bind/port instead of reverting to the default.
+/// None when no pidfile is present (never started, or cleanly stopped).
+pub fn persisted_devserver_addr_chan() -> Option<SocketAddr> {
+    read_daemon_record(&daemon_record_path())?.addr.parse().ok()
 }
 
 /// Acquire the lock and serve in the foreground, holding the guard for the

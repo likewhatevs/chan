@@ -80,6 +80,10 @@ mod devserver_daemon;
 /// collision and print an actionable hint instead of a bare "address in use".
 const DEFAULT_PORT: u16 = 8787;
 
+/// The devserver's default bind when `--bind` is omitted and no running service
+/// supplies one: loopback, matching the `--bind` help and the foreground default.
+const DEFAULT_DEVSERVER_BIND: IpAddr = IpAddr::V4(Ipv4Addr::LOCALHOST);
+
 /// Extended `long_about` for `chan open` (the workspace-serve form). The
 /// keybindings list is generated from `web/packages/workspace-app/src/state/shortcuts.ts` (the
 /// single source of truth for chan's chords). Resync after any change to that file
@@ -354,11 +358,14 @@ enum Command {
         /// 0.0.0.0 / :: to listen on all interfaces; there is no TLS and
         /// only a bearer-token gate, so reach a remote devserver over an
         /// `ssh -L` tunnel rather than binding it on a public interface.
-        #[arg(long, default_value = "127.0.0.1")]
-        bind: IpAddr,
-        /// Port to bind.
-        #[arg(long, default_value_t = DEFAULT_PORT)]
-        port: u16,
+        /// Omit on `--stop`/`--restart`/`--status` to preserve the running
+        /// service's bound address instead of reverting to the default.
+        #[arg(long)]
+        bind: Option<IpAddr>,
+        /// Port to bind. Default 8787; preserved from the running service on
+        /// `--restart` when omitted.
+        #[arg(long)]
+        port: Option<u16>,
         /// Run as a managed service instead of the foreground. `--service` with
         /// no value (or `=none`) picks the best backend for the OS: a systemd
         /// user service (`chan-devserver.service`) on Linux, a launchd
@@ -377,7 +384,8 @@ enum Command {
         stop: bool,
         /// Restart the supervised service (or START it if it is not running),
         /// then stay attached. Rewrites the unit / agent / pidfile first, so it
-        /// picks up the current binary and --bind/--port.
+        /// picks up the current binary; an explicit --bind/--port rebinds, while
+        /// omitting both preserves the running service's address.
         #[arg(long)]
         restart: bool,
         /// Report whether the supervised service is running, then exit. With no
@@ -2123,8 +2131,8 @@ fn devserver_port_collision_hint(port: u16, err: &chan_server::Error) -> Option<
 /// running.
 #[allow(clippy::too_many_arguments)]
 async fn cmd_devserver(
-    bind: IpAddr,
-    port: u16,
+    bind: Option<IpAddr>,
+    port: Option<u16>,
     service: Option<ServiceKind>,
     stop: bool,
     restart: bool,
@@ -2134,7 +2142,13 @@ async fn cmd_devserver(
     tunnel_token: Option<String>,
     verbose: bool,
 ) -> Result<()> {
-    let addr = SocketAddr::new(bind, port);
+    // Effective address for a fresh start: an explicit flag or the built-in
+    // default. The --stop/--restart branch overrides this to preserve the
+    // running service's address.
+    let addr = SocketAddr::new(
+        bind.unwrap_or(DEFAULT_DEVSERVER_BIND),
+        port.unwrap_or(DEFAULT_PORT),
+    );
     // --status / --stop / --restart act on a supervised service and short-circuit
     // the normal start path. With no explicit --service they target the per-OS
     // best pick (`Auto`).
@@ -2142,13 +2156,12 @@ async fn cmd_devserver(
         return run_devserver_status(service.unwrap_or(ServiceKind::Auto).resolve(), verbose).await;
     }
     if stop || restart {
-        return manage_supervised_devserver(
-            service.unwrap_or(ServiceKind::Auto).resolve(),
-            addr,
-            stop,
-            verbose,
-        )
-        .await;
+        let kind = service.unwrap_or(ServiceKind::Auto).resolve();
+        // Preserve the running service's bound address when --bind/--port are
+        // omitted, so a flagless --restart does not silently rebind to the
+        // default. Per field: explicit flag > running persisted > default.
+        let addr = service_target_addr(kind, bind, port);
+        return manage_supervised_devserver(kind, addr, stop, verbose).await;
     }
     if !addr.ip().is_loopback() {
         eprintln!(
@@ -2261,6 +2274,9 @@ async fn run_devserver_status(kind: ServiceKind, verbose: bool) -> Result<()> {
                     "chan devserver (systemd): {} -- {DEVSERVER_SYSTEMD_UNIT}",
                     if running { "running" } else { "not running" }
                 );
+                if let Some(cmd) = read_systemd_unit().and_then(|u| systemd_execstart_line(&u)) {
+                    println!("  command: {cmd}");
+                }
                 Ok(())
             } else {
                 anyhow::bail!("chan devserver: the systemd backend is Linux-only.")
@@ -2274,6 +2290,11 @@ async fn run_devserver_status(kind: ServiceKind, verbose: bool) -> Result<()> {
                     "chan devserver (launchd): {} -- {DEVSERVER_LAUNCHD_LABEL}",
                     if running { "running" } else { "not running" }
                 );
+                if let Some(cmd) =
+                    read_launch_agent_plist().and_then(|p| launchd_program_arguments(&p))
+                {
+                    println!("  command: {cmd}");
+                }
                 Ok(())
             } else {
                 anyhow::bail!("chan devserver: the launchd backend is macOS-only.")
@@ -2324,6 +2345,108 @@ async fn manage_supervised_devserver(
         }
         ServiceKind::Auto => unreachable!("Auto is resolved before dispatch"),
     }
+}
+
+/// The bound address for a `--stop`/`--restart` whose `--bind`/`--port` were
+/// omitted: each field falls back to the running backend's persisted address so
+/// a flagless restart keeps what the service runs on.
+fn service_target_addr(kind: ServiceKind, bind: Option<IpAddr>, port: Option<u16>) -> SocketAddr {
+    resolve_devserver_addr(bind, port, persisted_devserver_addr(kind))
+}
+
+/// Apply the `--stop`/`--restart` address precedence per field: an explicit CLI
+/// flag wins, else the running service's persisted value, else the built-in
+/// default. Pure (the FS read that yields `persisted` lives in the caller) so the
+/// precedence stays unit-testable.
+fn resolve_devserver_addr(
+    bind: Option<IpAddr>,
+    port: Option<u16>,
+    persisted: Option<SocketAddr>,
+) -> SocketAddr {
+    let ip = bind
+        .or_else(|| persisted.map(|a| a.ip()))
+        .unwrap_or(DEFAULT_DEVSERVER_BIND);
+    let port = port
+        .or_else(|| persisted.map(|a| a.port()))
+        .unwrap_or(DEFAULT_PORT);
+    SocketAddr::new(ip, port)
+}
+
+/// The address a supervised backend persisted for its running (or last) service,
+/// or None when nothing is recorded. systemd/launchd carry it in the unit /
+/// agent the supervisor wrote (which survive a `--stop`); the `chan` daemon
+/// carries it in its pidfile.
+fn persisted_devserver_addr(kind: ServiceKind) -> Option<SocketAddr> {
+    match kind {
+        ServiceKind::Chan => devserver_daemon::persisted_devserver_addr_chan(),
+        ServiceKind::Systemd => devserver_addr_from_persisted_args(&read_systemd_unit()?),
+        ServiceKind::Launchd => devserver_addr_from_persisted_args(&read_launch_agent_plist()?),
+        ServiceKind::Auto => None,
+    }
+}
+
+/// Parse the `--bind=<ip>` / `--port=<port>` the supervisor persisted into a unit
+/// ExecStart line or a launchd plist's ProgramArguments, into the bound address.
+/// Each value is read up to the next whitespace or `<`, so it works for both the
+/// shell-style ExecStart and the XML-wrapped plist `<string>`. None if either
+/// flag is missing or unparseable.
+fn devserver_addr_from_persisted_args(text: &str) -> Option<SocketAddr> {
+    let ip: IpAddr = persisted_flag_value(text, "--bind=")?.parse().ok()?;
+    let port: u16 = persisted_flag_value(text, "--port=")?.parse().ok()?;
+    Some(SocketAddr::new(ip, port))
+}
+
+/// The value immediately following `flag` in `text`, read up to the next
+/// whitespace or `<` (the XML element close in a plist).
+fn persisted_flag_value<'a>(text: &'a str, flag: &str) -> Option<&'a str> {
+    let start = text.find(flag)? + flag.len();
+    let rest = &text[start..];
+    let end = rest
+        .find(|c: char| c.is_whitespace() || c == '<')
+        .unwrap_or(rest.len());
+    Some(&rest[..end])
+}
+
+/// The persisted systemd unit contents, if the file exists.
+fn read_systemd_unit() -> Option<String> {
+    std::fs::read_to_string(systemd_user_unit_dir().ok()?.join(DEVSERVER_SYSTEMD_UNIT)).ok()
+}
+
+/// The persisted launchd agent plist contents, if the file exists.
+fn read_launch_agent_plist() -> Option<String> {
+    std::fs::read_to_string(launch_agent_path().ok()?).ok()
+}
+
+/// The `ExecStart=` command line from a systemd unit's text, for `--status`.
+fn systemd_execstart_line(unit: &str) -> Option<String> {
+    unit.lines()
+        .find_map(|l| l.strip_prefix("ExecStart=").map(|s| s.trim().to_string()))
+}
+
+/// A launchd plist's `ProgramArguments` joined into one command line, for
+/// `--status`. Pulls each `<string>` inside the `<array>` and unescapes it.
+fn launchd_program_arguments(plist: &str) -> Option<String> {
+    let array = plist
+        .split_once("<array>")
+        .and_then(|(_, rest)| rest.split_once("</array>"))
+        .map(|(inner, _)| inner)?;
+    let args: Vec<String> = array
+        .match_indices("<string>")
+        .filter_map(|(i, tag)| {
+            array[i + tag.len()..]
+                .split_once("</string>")
+                .map(|(value, _)| unescape_plist_xml(value))
+        })
+        .collect();
+    (!args.is_empty()).then(|| args.join(" "))
+}
+
+/// Reverse of [`xml_escape`] for displaying persisted plist `<string>` values.
+/// `&amp;` is undone last so an escaped entity body is not re-decoded.
+fn unescape_plist_xml(s: &str) -> String {
+    s.replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&amp;", "&")
 }
 
 /// Whether the foreground devserver binds a local TCP listener. Tunnel mode
@@ -5356,6 +5479,79 @@ mod tests {
             }
             other => panic!("expected Command::Devserver, got {other:?}"),
         }
+    }
+
+    /// `--stop`/`--restart` address precedence: explicit flag > running
+    /// persisted > default, applied per field so a flagless restart preserves
+    /// the running address (the bug) while a single flag overrides just that
+    /// field.
+    #[test]
+    fn resolve_devserver_addr_precedence() {
+        let ip = |s: &str| s.parse::<IpAddr>().unwrap();
+        let sock = |s: &str| s.parse::<SocketAddr>().unwrap();
+        assert_eq!(
+            resolve_devserver_addr(None, None, None),
+            sock("127.0.0.1:8787")
+        );
+        assert_eq!(
+            resolve_devserver_addr(None, None, Some(sock("0.0.0.0:9000"))),
+            sock("0.0.0.0:9000")
+        );
+        assert_eq!(
+            resolve_devserver_addr(Some(ip("1.2.3.4")), None, Some(sock("0.0.0.0:9000"))),
+            sock("1.2.3.4:9000")
+        );
+        assert_eq!(
+            resolve_devserver_addr(None, Some(5555), Some(sock("0.0.0.0:9000"))),
+            sock("0.0.0.0:5555")
+        );
+        assert_eq!(
+            resolve_devserver_addr(Some(ip("1.2.3.4")), Some(5555), None),
+            sock("1.2.3.4:5555")
+        );
+    }
+
+    /// The persisted-address parser handles both the systemd ExecStart line and
+    /// the launchd plist `<string>` form, and fails closed when a flag is absent.
+    #[test]
+    fn devserver_addr_parses_from_persisted_forms() {
+        assert_eq!(
+            devserver_addr_from_persisted_args(
+                "/usr/bin/chan devserver --bind=0.0.0.0 --port=9000"
+            ),
+            Some("0.0.0.0:9000".parse().unwrap())
+        );
+        assert_eq!(
+            devserver_addr_from_persisted_args(
+                "<string>--bind=192.168.1.5</string>\n<string>--port=8080</string>"
+            ),
+            Some("192.168.1.5:8080".parse().unwrap())
+        );
+        assert_eq!(
+            devserver_addr_from_persisted_args("/usr/bin/chan devserver --bind=0.0.0.0"),
+            None
+        );
+    }
+
+    /// `--status` command extraction: the systemd ExecStart value and the
+    /// launchd ProgramArguments joined (with plist `<string>` values unescaped).
+    #[test]
+    fn status_command_extracts_per_backend() {
+        let unit = "[Service]\nExecStart=/usr/bin/chan devserver --bind=0.0.0.0 --port=9000\nRestart=on-failure\n";
+        assert_eq!(
+            systemd_execstart_line(unit).as_deref(),
+            Some("/usr/bin/chan devserver --bind=0.0.0.0 --port=9000")
+        );
+        let plist = "<array>\n  <string>/usr/bin/chan</string>\n  <string>devserver</string>\n  <string>--bind=0.0.0.0</string>\n  <string>--port=9000</string>\n</array>";
+        assert_eq!(
+            launchd_program_arguments(plist).as_deref(),
+            Some("/usr/bin/chan devserver --bind=0.0.0.0 --port=9000")
+        );
+        let escaped = "<array><string>/a&amp;b/chan</string><string>devserver</string></array>";
+        assert_eq!(
+            launchd_program_arguments(escaped).as_deref(),
+            Some("/a&b/chan devserver")
+        );
     }
 
     /// The unit/plist ExecStart binary path prefers `$APPIMAGE` (the real,
