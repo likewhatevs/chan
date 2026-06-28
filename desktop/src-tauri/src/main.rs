@@ -1646,17 +1646,25 @@ async fn connect_devserver_impl(
             .insert(id.clone(), ct.prefix.clone());
         Some(ct)
     };
-    let token = match &control {
-        Some(ct) => {
+    let (token, port) = match &control {
+        Some(ct) => (
             scrape_control_terminal_token(
                 &app,
                 &state,
                 &serve::control_terminal_label(&id),
                 &ct.prefix,
             )
-            .await?
-        }
-        None => devserver::read_local_token()?,
+            .await?,
+            port,
+        ),
+        // Local devserver (no control script): read the CURRENT token AND port
+        // from its persisted config. The stored URL's port goes stale when a
+        // `--port 0` local devserver restarts on a different OS-assigned port;
+        // the config carries the live port.
+        None => (
+            devserver::read_local_token()?,
+            devserver::read_local_port().unwrap_or(port),
+        ),
     };
     let info = wait_for_devserver(&host, port).await?;
     if info.protocol != devserver::DEVSERVER_API_PROTOCOL {
@@ -2063,8 +2071,39 @@ pub(crate) async fn set_devserver_workspace_on_impl(
         Err(devserver::SetWorkspaceOnError::ActiveTerminals { active_terminals }) => {
             Ok(chan_server::SetWorkspaceOnOutcome::NeedsForce { active_terminals })
         }
-        Err(devserver::SetWorkspaceOnError::Other { message }) => Err(message),
+        // A LOCAL devserver registers its workspaces over the well-known
+        // discovery socket, which is the source of truth; the HTTP toggle is
+        // best-effort, so a transport failure (e.g. a stale port after a restart)
+        // is non-fatal and must not toast on `chan open`. A remote devserver
+        // (which always has a connect script / ssh tunnel) still surfaces it.
+        Err(devserver::SetWorkspaceOnError::Other { message }) => {
+            if devserver_is_local(state, &id) {
+                tracing::warn!(devserver = %id, "local devserver workspace toggle failed (non-fatal): {message}");
+                Ok(chan_server::SetWorkspaceOnOutcome::Done)
+            } else {
+                Err(message)
+            }
+        }
     }
+}
+
+/// Whether the connected devserver `id` is LOCAL: configured with no connect
+/// script (a remote devserver always has one -- an `ssh -L` tunnel or gateway
+/// dial -- even though both resolve to a loopback host, so the host alone can't
+/// tell them apart). A local devserver's workspace toggle is best-effort.
+fn devserver_is_local(state: &AppState, id: &str) -> bool {
+    state
+        .store
+        .lock()
+        .ok()
+        .and_then(|store| store.get().ok())
+        .and_then(|cfg| {
+            cfg.devservers
+                .iter()
+                .find(|d| d.id == id)
+                .map(|d| d.script.trim().is_empty())
+        })
+        .unwrap_or(false)
 }
 
 /// Open an additional in-app Tauri webview for a running local

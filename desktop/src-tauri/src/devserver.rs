@@ -254,6 +254,11 @@ fn local_devserver_config_path() -> std::path::PathBuf {
 #[derive(Debug, Deserialize)]
 struct LocalDevserverConfig {
     devserver_token: String,
+    /// The devserver's last bound port, so a local connect dials the CURRENT
+    /// port instead of a stored URL that goes stale when a `--port 0` devserver
+    /// restarts on a different OS-assigned port. Absent (`0`) on an older config.
+    #[serde(default)]
+    port: u16,
 }
 
 /// Read the bearer token of a devserver running on this same box from its
@@ -273,6 +278,17 @@ pub fn read_local_token() -> Result<String, String> {
         return Err("the local devserver config has no token yet".to_string());
     }
     Ok(cfg.devserver_token)
+}
+
+/// Read the last bound port of a devserver running on this same box from its
+/// persisted config, or `None` when the file is absent/unreadable or carries no
+/// bound port (`0`, an older config). A local connect dials this so it reaches
+/// the current port after the devserver restarts on a new OS-assigned port,
+/// instead of the stored URL's stale port.
+pub fn read_local_port() -> Option<u16> {
+    let bytes = std::fs::read(local_devserver_config_path()).ok()?;
+    let cfg: LocalDevserverConfig = serde_json::from_slice(&bytes).ok()?;
+    (cfg.port != 0).then_some(cfg.port)
 }
 
 /// Scrape the devserver bearer token from a control terminal's output, matching
@@ -861,10 +877,17 @@ mod tests {
     }
 
     #[test]
-    fn local_devserver_config_reads_just_the_token() {
-        let json = r#"{"devserver_token":"tok_box","workspaces":[],"terminals":[]}"#;
+    fn local_devserver_config_reads_token_and_port() {
+        // The desktop reads the token + the bound port; legacy/unknown keys are
+        // ignored, and an absent port defaults to 0 (an older config).
+        let json = r#"{"devserver_token":"tok_box","port":9605,"workspaces":[],"terminals":[]}"#;
         let cfg: LocalDevserverConfig = serde_json::from_str(json).unwrap();
         assert_eq!(cfg.devserver_token, "tok_box");
+        assert_eq!(cfg.port, 9605);
+
+        let no_port = r#"{"devserver_token":"tok_box"}"#;
+        let cfg: LocalDevserverConfig = serde_json::from_str(no_port).unwrap();
+        assert_eq!(cfg.port, 0);
     }
 
     #[test]

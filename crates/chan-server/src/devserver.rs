@@ -26,6 +26,7 @@
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
@@ -99,6 +100,12 @@ struct PersistedConfig {
     /// merging several libraries' feeds partitions by it.
     #[serde(default)]
     library_id: String,
+    /// The last bound TCP port. A local client (the desktop) re-discovers the
+    /// current port from here after a restart, instead of trusting a stored URL
+    /// that goes stale when a `--port 0` devserver restarts on a different
+    /// OS-assigned port. `0` (the default) means not yet bound.
+    #[serde(default)]
+    port: u16,
 }
 
 /// Persistence at `~/.chan/devserver/config.json`, written atomically and
@@ -226,6 +233,9 @@ struct DevserverState {
     /// Registered workspaces by stable prefix, on and off.
     workspaces: Mutex<HashMap<String, WorkspaceRecord>>,
     store: DevserverStore,
+    /// The actual bound TCP port (`local_addr().port()`); `0` until bound.
+    /// Persisted so a local client re-discovers the current port after a restart.
+    bound_port: AtomicU16,
 }
 
 impl DevserverState {
@@ -447,6 +457,7 @@ impl DevserverState {
         let cfg = PersistedConfig {
             devserver_token: self.token.clone(),
             library_id: self.library_id.clone(),
+            port: self.bound_port.load(Ordering::Relaxed),
         };
         if let Err(e) = self.store.save(&cfg) {
             tracing::warn!("persisting devserver config: {e}");
@@ -612,6 +623,7 @@ pub async fn run_devserver(library: Library, config: DevserverConfig) -> anyhow:
         host_label: config.host_label,
         workspaces: Mutex::new(HashMap::new()),
         store,
+        bound_port: AtomicU16::new(0),
     });
 
     // Mount the per-library SHARED terminal tenant before serving, so
@@ -723,6 +735,11 @@ pub async fn run_devserver(library: Library, config: DevserverConfig) -> anyhow:
             // the request on the impossible local_addr() error rather than
             // refusing to serve.
             let local_addr = listener.local_addr().unwrap_or(config.addr);
+            // Persist the bound port so a local client (the desktop) re-discovers
+            // the current port from the config after the devserver restarts on a
+            // new OS-assigned port, instead of dialing a stale stored URL.
+            state.bound_port.store(local_addr.port(), Ordering::Relaxed);
+            state.persist_state();
             println!("chan devserver: listening on http://{local_addr}");
             // Machine-readable token contract: the desktop control terminal
             // scrapes this exact marker from the connect-script output on every
@@ -1340,14 +1357,17 @@ mod tests {
         let cfg = PersistedConfig {
             devserver_token: "tok".into(),
             library_id: "lib-abc".into(),
+            port: 9605,
         };
         let json = serde_json::to_string(&cfg).unwrap();
         let back: PersistedConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(back.devserver_token, "tok");
         assert_eq!(back.library_id, "lib-abc");
-        // Tolerant of a missing/empty file shape.
+        assert_eq!(back.port, 9605);
+        // Tolerant of a missing/empty file shape; an absent port reads 0.
         let empty: PersistedConfig = serde_json::from_str("{}").unwrap();
         assert_eq!(empty.devserver_token, "");
+        assert_eq!(empty.port, 0);
         // Old-format keys (`enabled_workspaces`, `workspaces`, `terminals`)
         // degrade cleanly: workspace on/off lives in the overlay store now and
         // the per-label terminal subsystem is gone, so unknown keys are ignored
@@ -1430,11 +1450,13 @@ mod tests {
         let cfg = PersistedConfig {
             devserver_token: "abc".into(),
             library_id: "lib-xyz".into(),
+            port: 9605,
         };
         store.save(&cfg).unwrap();
         let loaded = store.load();
         assert_eq!(loaded.devserver_token, "abc");
         assert_eq!(loaded.library_id, "lib-xyz");
+        assert_eq!(loaded.port, 9605);
         // The atomic tmp+rename leaves no tmpfile behind after a save.
         let tmp = dir.path().join("nested").join("config.json.tmp");
         assert!(!tmp.exists(), "leftover tmpfile: {}", tmp.display());
@@ -1469,6 +1491,7 @@ mod tests {
             host_label: "test".into(),
             workspaces: Mutex::new(HashMap::new()),
             store: DevserverStore::at(home.join("devserver").join("config.json")),
+            bound_port: AtomicU16::new(0),
         })
     }
 
