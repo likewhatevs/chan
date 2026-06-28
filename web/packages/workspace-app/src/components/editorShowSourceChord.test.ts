@@ -5,8 +5,8 @@ import tabs from "../state/tabs.svelte.ts?raw";
 import editor from "./FileEditorTab.svelte?raw";
 
 // Mod+E "Show Source Code" chord. Pins: registry entry, keymap handler
-// in App.svelte, runCommand branch, toggleActiveFileTabMode helper,
-// and the chord-hint surface in the editor menu.
+// in App.svelte, runCommand branch, toggleActiveFileTabMode helper (mode
+// gate + caret remap), and the chord-hint surface in the editor menu.
 
 describe("shortcut registry entry", () => {
   test("app.editor.toggleMode entry exists with Mod+E (web + native)", () => {
@@ -54,7 +54,16 @@ describe("store-side helper", () => {
     // csv→table); source-only files (.rs/.py) yield "source" and the toggle
     // no-ops. Mirrors FileEditorTab's hasRenderedMode / renderedModeForTab gate.
     expect(tabs).toMatch(
-      /export function toggleActiveFileTabMode\(\): void \{[\s\S]{1,800}if \(!tab \|\| tab\.kind !== "file"\) return;[\s\S]{1,300}const rendered = defaultModeForPath\(tab\.path, tab\.fileKind\);[\s\S]{1,120}if \(rendered === "source"\) return;[\s\S]{1,200}setMode\(tab, tab\.mode === "source" \? rendered : "source"\);/,
+      /export function toggleActiveFileTabMode\(\): void \{[\s\S]{1,800}if \(!tab \|\| tab\.kind !== "file"\) return;[\s\S]{1,300}const rendered = defaultModeForPath\(tab\.path, tab\.fileKind\);[\s\S]{1,120}if \(rendered === "source"\) return;[\s\S]{1,200}const next = tab\.mode === "source" \? rendered : "source";[\s\S]{1,700}setMode\(tab, next\);/,
+    );
+  });
+
+  test("toggleActiveFileTabMode remaps the caret across the source<->wysiwyg flip (#16)", () => {
+    // Only the wysiwyg pair has an offset correspondence; the helper maps
+    // tab.caret through caret_mapping and setTabCaret before flipping, so
+    // Cmd+E keeps the caret where the right-click "Show Source" path does.
+    expect(tabs).toMatch(
+      /if \(tab\.caret && rendered === "wysiwyg"\) \{[\s\S]{1,200}renderedCaretForSourceCaret\(tab\.content, tab\.caret\)[\s\S]{1,120}sourceCaretForRenderedCaret\(tab\.content, tab\.caret\)[\s\S]{1,120}setTabCaret\(tab, mapped\.from, mapped\.to\);/,
     );
   });
 
