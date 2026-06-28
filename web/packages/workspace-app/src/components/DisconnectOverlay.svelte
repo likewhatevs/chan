@@ -5,15 +5,16 @@
   // propagating, so silently letting the user keep typing risks
   // divergence between the buffer and disk.
   //
-  // Replaces the previous toolbar WS pill, which named the problem
-  // but offered nothing actionable. The overlay greys out the entire
-  // UI and gives the user one button: retry now (skip the auto-
-  // reconnect backoff). The auto-reconnect still runs underneath, so
-  // doing nothing eventually heals on its own.
+  // The overlay greys out the entire UI and reads as a live
+  // reconnecting state: a spinner + status. The auto-reconnect loop
+  // runs underneath, so doing nothing heals on its own once the
+  // channel returns. A devserver-backed desktop window also offers a
+  // single Abandon action to give up on a stuck remote connection.
 
-  import { reconnectWatcher, ui } from "../state/store.svelte";
+  import { ui } from "../state/store.svelte";
   import { windowLibraryId } from "../api/client";
   import { isTauriDesktop, abandonDevserverForWindow } from "../api/desktop";
+  import { onDestroy } from "svelte";
 
   // Abandon is offered only on a devserver-backed desktop window: a stuck remote
   // connection the user can give up on. windowLibraryId() is "local" for the
@@ -24,7 +25,7 @@
 
   // Abandon: ask the desktop to disconnect this window's devserver. The window
   // closes async via the watcher; best-effort, so a failed/inert IPC just leaves
-  // the overlay (the user can still Retry or wait for auto-reconnect).
+  // the overlay (the auto-reconnect loop keeps trying underneath).
   function abandon(): void {
     void abandonDevserverForWindow();
   }
@@ -45,12 +46,10 @@
   /// Done with an $effect that owns the timer rather than a $derived
   /// computing on Date.now: $derived must be pure, and recording
   /// state transitions is a side effect.
-  import { onDestroy } from "svelte";
-
   const STARTUP_GRACE_MS = 600;
   let visible = $state(false);
   let hasBeenOpen = $state(false);
-  let retryBtn: HTMLButtonElement | null = $state(null);
+  let overlayEl: HTMLDivElement | null = $state(null);
 
   // Mirror `visible` into the shared store so App.svelte's document-level
   // key handlers can suppress pane/tab shortcuts while the overlay blocks
@@ -86,51 +85,38 @@
   /// keystrokes still flow to whatever was focused before the
   /// disconnect (typically the WYSIWYG / CodeMirror surface), so a
   /// user mid-edit could keep typing into a buffer the watcher
-  /// can't observe. Moving focus to the Retry button parks input
-  /// somewhere harmless until the channel comes back. Paired with
-  /// the keydown trap below, Tab can't leak focus back to the
-  /// background.
+  /// can't observe. Park focus on the Abandon button when it's
+  /// offered, else on the overlay itself. Paired with the keydown
+  /// trap below, Tab can't leak focus back to the background.
   $effect(() => {
     if (!visible) return;
     const active = document.activeElement as HTMLElement | null;
     active?.blur();
-    queueMicrotask(() => retryBtn?.focus());
+    queueMicrotask(() => (abandonBtn ?? overlayEl)?.focus());
   });
 
   function trapTab(e: KeyboardEvent): void {
-    // Keep focus on the dialog's buttons (Retry, plus Abandon when offered):
-    // Tab/Shift+Tab cycles between them and never leaks to the blocked UI behind.
+    // Keep focus on the dialog: Tab/Shift+Tab parks on the Abandon button
+    // when it's offered and never leaks to the blocked UI behind. With no
+    // button (the overlay is status-only), focus stays on the overlay.
     if (e.key !== "Tab") return;
     e.preventDefault();
-    const focusables = [retryBtn, abandonBtn].filter(
-      (b): b is HTMLButtonElement => b !== null,
-    );
-    if (focusables.length === 0) return;
-    const here = focusables.indexOf(document.activeElement as HTMLButtonElement);
-    const step = e.shiftKey ? -1 : 1;
-    const next = (here + step + focusables.length) % focusables.length;
-    focusables[next < 0 ? 0 : next]!.focus();
+    abandonBtn?.focus();
   }
 
-  const message = $derived.by(() => {
-    switch (ui.ws) {
-      case "connecting":
-        return "connecting to the chan server";
-      case "reconnecting":
-        return "reconnecting to the chan server";
-      case "closed":
-        return "disconnected from the chan server";
-      default:
-        return "";
-    }
-  });
+  // "closed" is never emitted by the transport (it pushes connecting /
+  // open / reconnecting only), so the visible overlay is always a
+  // reconnect in progress; "connecting" is the transient retry-attempt
+  // state, anything else reads as reconnecting.
+  const message = $derived(
+    ui.ws === "connecting"
+      ? "connecting to the chan server"
+      : "reconnecting to the chan server",
+  );
 
-  const subline = $derived.by(() => {
-    if (ui.ws === "closed") {
-      return "the server may have stopped; check the terminal where you ran `chan open`";
-    }
-    return "this usually clears on its own; press Retry to skip the wait";
-  });
+  const subline = canAbandon
+    ? "this usually clears on its own; abandon to give up on this connection"
+    : "this usually clears on its own";
 </script>
 
 {#if visible}
@@ -141,21 +127,20 @@
     aria-live="assertive"
     aria-label={message}
     tabindex="-1"
+    bind:this={overlayEl}
     onkeydown={trapTab}
   >
     <div class="card">
+      <div class="spinner" aria-hidden="true"></div>
       <div class="title">{message}</div>
       <div class="subline">{subline}</div>
-      <div class="actions">
-        <button class="retry" bind:this={retryBtn} onclick={reconnectWatcher}>
-          Retry now
-        </button>
-        {#if canAbandon}
+      {#if canAbandon}
+        <div class="actions">
           <button class="abandon" bind:this={abandonBtn} onclick={abandon}>
             Abandon
           </button>
-        {/if}
-      </div>
+        </div>
+      {/if}
     </div>
   </div>
 {/if}
@@ -187,6 +172,28 @@
     flex-direction: column;
     gap: 10px;
   }
+  /* Reconnecting indicator: a quiet ring spinner so the overlay reads
+     as an active wait, not a dead error. Static under reduced motion. */
+  .spinner {
+    width: 28px;
+    height: 28px;
+    align-self: center;
+    margin-bottom: 2px;
+    border: 3px solid var(--border);
+    border-top-color: var(--link);
+    border-radius: 50%;
+    animation: disconnect-spin 0.9s linear infinite;
+  }
+  @keyframes disconnect-spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .spinner {
+      animation: none;
+    }
+  }
   .title {
     font-size: 16px;
     font-weight: 600;
@@ -201,16 +208,6 @@
     gap: 10px;
     justify-content: center;
   }
-  .retry {
-    background: var(--link);
-    color: #fff;
-    border: 1px solid var(--link);
-    border-radius: 4px;
-    padding: 6px 14px;
-    font: inherit;
-    cursor: pointer;
-  }
-  .retry:hover { filter: brightness(1.1); }
   /* Abandon is the destructive escape hatch: muted until hover, then danger. */
   .abandon {
     background: transparent;
