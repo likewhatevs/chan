@@ -127,21 +127,13 @@ describe("mermaid wiring", () => {
     expect(mermaidSrc).toMatch(/cacheError\(this\.source, null\)/);
   });
 
-  test("View affordance opens the zoom overlay; theme + rotateX wired", () => {
-    // The hover "View" button is the explicit zoom trigger, gated on the
-    // onView option and only revealed after a successful render; clicking
-    // the diagram body still defers to CM6 caret placement (cursor-out
-    // reveal), so the button is the only added interactive control.
-    expect(mermaidSrc).toMatch(
-      /readonly onView: \(\(svg: string\) => void\) \| undefined/,
-    );
-    expect(mermaidSrc).toMatch(/if \(onView\)/);
-    expect(mermaidSrc).toMatch(/createElement\("button"\)/);
-    // The zoom always presents the light render on a light panel: a dark
-    // editor re-renders light for the overlay, a light editor passes the
-    // cached (already light) face.
-    expect(mermaidSrc).toMatch(/renderMermaid\(this\.source, false\)/);
-    expect(mermaidSrc).toMatch(/onView\(renderedSvg\)/);
+  test("no button: cursor is the only trigger; theme + rotateX wired", () => {
+    // There is no explicit diagram control: clicking the diagram body
+    // still defers to CM6 caret placement (cursor-out reveal), matching
+    // the other cursor-render atoms.
+    expect(mermaidSrc).not.toMatch(/createElement\("button"\)/);
+    expect(mermaidSrc).not.toMatch(/addEventListener\("click"/);
+    expect(mermaidSrc).not.toMatch(/readonly onView/);
     expect(mermaidSrc).toMatch(/renderMermaid\(this\.source, this\.dark\)/);
     // closed-fence gate + cursor-out render.
     expect(mermaidSrc).toMatch(/closeFrom === openFrom/);
@@ -149,7 +141,6 @@ describe("mermaid wiring", () => {
     expect(wysiwygSrc).toMatch(
       /mermaidDecorations\([\s\S]{1,80}effectiveHybridSurfaceTheme\("editor"\) === "dark"/,
     );
-    // The decoration passes the diagram-zoom opener as onView.
-    expect(wysiwygSrc).toMatch(/openDiagramZoom\(svg\)/);
+    expect(wysiwygSrc).not.toMatch(/openDiagramZoom/);
   });
 });

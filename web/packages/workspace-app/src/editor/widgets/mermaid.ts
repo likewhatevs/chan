@@ -194,11 +194,7 @@ function flipOutGhost(view: EditorView, from: number, widget: MermaidWidget): vo
 }
 
 class MermaidWidget extends WidgetType {
-  constructor(
-    readonly source: string,
-    readonly dark: boolean,
-    readonly onView: ((svg: string) => void) | undefined,
-  ) {
+  constructor(readonly source: string, readonly dark: boolean) {
     super();
   }
 
@@ -219,50 +215,11 @@ class MermaidWidget extends WidgetType {
     diagram.className = "cm-md-mermaid-diagram";
     diagram.textContent = "rendering…";
     inner.append(diagram);
-
-    // Hover "View" affordance -> open the pan/zoom overlay with the
-    // rendered SVG. Hidden until a render succeeds (so it never offers a
-    // missing / errored diagram); its mousedown is swallowed so opening
-    // the viewer never drops the caret into the source, which would
-    // de-render the block via the selection-intersect rule.
-    const onView = this.onView;
-    let renderedSvg: string | null = null;
-    let viewBtn: HTMLButtonElement | null = null;
-    if (onView) {
-      viewBtn = document.createElement("button");
-      viewBtn.type = "button";
-      viewBtn.className = "cm-md-mermaid-view";
-      viewBtn.textContent = "View";
-      viewBtn.style.display = "none";
-      viewBtn.addEventListener("mousedown", (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-      });
-      viewBtn.addEventListener("click", (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        if (!renderedSvg) return;
-        // The zoom viewer presents the diagram on a light panel, so it
-        // always shows the light-themed render. In a dark editor the cached
-        // face is the dark render, so re-render light for the overlay; in a
-        // light editor the cached face is already the light render.
-        if (this.dark) {
-          void renderMermaid(this.source, false).then((res) => {
-            if (res.ok && res.svg) onView(res.svg);
-          });
-        } else {
-          onView(renderedSvg);
-        }
-      });
-      inner.append(viewBtn);
-    }
     wrap.append(inner);
 
     void renderMermaid(this.source, this.dark).then((res) => {
       if (res.ok && res.svg) {
         diagram.innerHTML = res.svg;
-        renderedSvg = res.svg;
-        if (viewBtn) viewBtn.style.display = "";
         // Stash the face so the reverse (enter) flip can ghost it after
         // CM tears the widget down, and clear any stale error so the
         // source view stops accenting a now-fixed line.
@@ -292,17 +249,14 @@ class MermaidWidget extends WidgetType {
   }
 }
 
-export function mermaidDecorations(
-  isDark: () => boolean,
-  onView?: (svg: string) => void,
-): Extension {
+export function mermaidDecorations(isDark: () => boolean): Extension {
   const field = StateField.define<DecorationSet>({
     create(state) {
-      return scan(state, isDark(), onView);
+      return scan(state, isDark());
     },
     update(decorations, tr) {
       if (!tr.docChanged && !tr.selection) return decorations;
-      return scan(tr.state, isDark(), onView);
+      return scan(tr.state, isDark());
     },
     provide: (f) => EditorView.decorations.from(f),
   });
@@ -411,7 +365,6 @@ export function mermaidDecorations(
 function scan(
   state: EditorState,
   dark: boolean,
-  onView: ((svg: string) => void) | undefined,
 ): DecorationSet {
   const sel = state.selection;
   const decos: Array<{ from: number; to: number; deco: Decoration }> = [];
@@ -426,7 +379,7 @@ function scan(
         from: node.from,
         to: node.to,
         deco: Decoration.replace({
-          widget: new MermaidWidget(info.source, dark, onView),
+          widget: new MermaidWidget(info.source, dark),
           block: true,
         }),
       });
