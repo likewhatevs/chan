@@ -38,7 +38,7 @@ pub struct Config {
     /// axum listener on a non-443 port.
     pub workspace_public_port: String,
     /// Pre-built admin client for devserver-proxy. Required when
-    /// `WORKSPACE_ADMIN_TOKEN` is set; identity uses it on PAT revoke,
+    /// `DEVSERVER_ADMIN_TOKEN` is set; identity uses it on PAT revoke,
     /// account delete, and `/api/me` (dashboard reads). `None` only
     /// in dev / lab setups; the dashboard renders empty workspace lists
     /// and revoke / delete skip the tunnel-kill best-effort hop.
@@ -115,20 +115,20 @@ impl Config {
         }
 
         // Scheme of the workspace-gate redirect. Defaults to the
-        // shared PUBLIC_SCHEME; override with WORKSPACE_PUBLIC_SCHEME
+        // shared PUBLIC_SCHEME; override with DEVSERVER_PUBLIC_SCHEME
         // only when the workspace redirect scheme differs from the id
         // origin's (rare).
-        let workspace_public_scheme = match std::env::var("WORKSPACE_PUBLIC_SCHEME") {
+        let workspace_public_scheme = match std::env::var("DEVSERVER_PUBLIC_SCHEME") {
             Ok(v) if !v.trim().is_empty() => v.trim().to_string(),
             _ => public_scheme.clone(),
         };
         if workspace_public_scheme != "http" && workspace_public_scheme != "https" {
             anyhow::bail!(
-                "WORKSPACE_PUBLIC_SCHEME must be \"http\" or \"https\"; got \
+                "DEVSERVER_PUBLIC_SCHEME must be \"http\" or \"https\"; got \
                  {workspace_public_scheme:?}"
             );
         }
-        let workspace_public_port = match std::env::var("WORKSPACE_PUBLIC_PORT") {
+        let workspace_public_port = match std::env::var("DEVSERVER_PUBLIC_PORT") {
             Ok(p) => {
                 let p = p.trim();
                 if p.is_empty() {
@@ -138,12 +138,12 @@ impl Config {
                     // that isn't a positive integer so we don't ship
                     // a malformed URL.
                     rest.parse::<u16>().with_context(|| {
-                        format!("WORKSPACE_PUBLIC_PORT (after `:`) must be a u16; got {rest:?}")
+                        format!("DEVSERVER_PUBLIC_PORT (after `:`) must be a u16; got {rest:?}")
                     })?;
                     format!(":{rest}")
                 } else {
                     p.parse::<u16>().with_context(|| {
-                        format!("WORKSPACE_PUBLIC_PORT must be a u16 or `:u16`; got {p:?}")
+                        format!("DEVSERVER_PUBLIC_PORT must be a u16 or `:u16`; got {p:?}")
                     })?;
                     format!(":{p}")
                 }
@@ -151,25 +151,25 @@ impl Config {
             Err(_) => String::new(),
         };
 
-        // WORKSPACE_ADMIN_TOKEN enables the admin-side calls (revoke,
-        // delete, /api/me workspaces merge); WORKSPACE_ADMIN_URL is
+        // DEVSERVER_ADMIN_TOKEN enables the admin-side calls (revoke,
+        // delete, /api/me workspaces merge); DEVSERVER_ADMIN_URL is
         // required whenever the token is set.
-        let workspace_admin = std::env::var("WORKSPACE_ADMIN_TOKEN")
+        let workspace_admin = std::env::var("DEVSERVER_ADMIN_TOKEN")
             .ok()
             .filter(|s| !s.is_empty())
             .map(|tok| -> anyhow::Result<WorkspaceAdminClient> {
-                let admin_url: Url = std::env::var("WORKSPACE_ADMIN_URL")
-                    .context("WORKSPACE_ADMIN_URL is required when WORKSPACE_ADMIN_TOKEN is set")?
+                let admin_url: Url = std::env::var("DEVSERVER_ADMIN_URL")
+                    .context("DEVSERVER_ADMIN_URL is required when DEVSERVER_ADMIN_TOKEN is set")?
                     .parse()
-                    .context("WORKSPACE_ADMIN_URL must be a URL")?;
+                    .context("DEVSERVER_ADMIN_URL must be a URL")?;
                 WorkspaceAdminClient::new(admin_url, tok)
             })
             .transpose()?;
 
         let workspace_gate_secret =
-            std::env::var("WORKSPACE_GATE_SECRET").context("WORKSPACE_GATE_SECRET is required")?;
+            std::env::var("DEVSERVER_GATE_SECRET").context("DEVSERVER_GATE_SECRET is required")?;
         if workspace_gate_secret.is_empty() {
-            anyhow::bail!("WORKSPACE_GATE_SECRET must not be empty");
+            anyhow::bail!("DEVSERVER_GATE_SECRET must not be empty");
         }
 
         let mut providers: Vec<Arc<dyn Provider>> = Vec::new();

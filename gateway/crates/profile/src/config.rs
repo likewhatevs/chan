@@ -21,7 +21,7 @@ pub struct Config {
     /// 401 for every request, which is the safe default.
     pub admin_token: Option<String>,
     /// Pre-built admin client for devserver-proxy. `None` when
-    /// `WORKSPACE_ADMIN_TOKEN` is unset, in which case admin block
+    /// `DEVSERVER_ADMIN_TOKEN` is unset, in which case admin block
     /// skips the tunnel-kill call (the live substreams stay alive
     /// until they reconnect and the next validate refuses them).
     pub workspace_admin: Option<WorkspaceAdminClient>,
@@ -45,18 +45,18 @@ impl Config {
             .ok()
             .filter(|s| !s.is_empty());
 
-        // WORKSPACE_ADMIN_URL points at devserver-proxy's public listener; in
+        // DEVSERVER_ADMIN_URL points at devserver-proxy's public listener; in
         // single-listener deployments that's the same `devserver.chan.app`
         // host. Unset is OK in lab / one-machine setups: block-user
         // still works, the live tunnel just lingers until reconnect.
-        let workspace_admin = std::env::var("WORKSPACE_ADMIN_TOKEN")
+        let workspace_admin = std::env::var("DEVSERVER_ADMIN_TOKEN")
             .ok()
             .filter(|s| !s.is_empty())
             .map(|tok| -> anyhow::Result<WorkspaceAdminClient> {
-                let url: Url = std::env::var("WORKSPACE_ADMIN_URL")
-                    .context("WORKSPACE_ADMIN_URL is required when WORKSPACE_ADMIN_TOKEN is set")?
+                let url: Url = std::env::var("DEVSERVER_ADMIN_URL")
+                    .context("DEVSERVER_ADMIN_URL is required when DEVSERVER_ADMIN_TOKEN is set")?
                     .parse()
-                    .context("WORKSPACE_ADMIN_URL must be a URL")?;
+                    .context("DEVSERVER_ADMIN_URL must be a URL")?;
                 WorkspaceAdminClient::new(url, tok)
             })
             .transpose()?;

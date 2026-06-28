@@ -71,7 +71,7 @@ The `Registry` (`registry.rs`) is the in-process map from `(username, devserver_
 
 ## Devserver gate
 
-devserver-proxy reads no `tower_sessions` cookie. Authentication for the proxy path uses a JWT minted by identity-service, signed with `WORKSPACE_GATE_SECRET` (HMAC-SHA256). The secret is shared between identity (mints both shapes) and devserver-proxy (verifies, mints the session shape).
+devserver-proxy reads no `tower_sessions` cookie. Authentication for the proxy path uses a JWT minted by identity-service, signed with `DEVSERVER_GATE_SECRET` (HMAC-SHA256). The secret is shared between identity (mints both shapes) and devserver-proxy (verifies, mints the session shape).
 
 The gate is per-DEVSERVER: there is one devserver per user, one host (`{user}.devserver.chan.app`), one access check. A grant gives the whole devserver, so the `{workspace}` path segment never gates. Two tokens are involved:
 
@@ -164,7 +164,7 @@ Routes:
 - `POST   /admin/v1/users/:user/tunnels/kill`      bulk evict for a user
 - `GET    /admin/v1/tunnels/watch`                 SSE snapshot stream
 
-All bearer-gated by `WORKSPACE_ADMIN_TOKEN` (constant-time compare via `subtle`). Lives on the apex hostname so tenant content cannot reach it via fetch. There is deliberately no per-IP rate limit on this tree: behind nginx every request arrives from one upstream IP, so a per-IP bucket degenerates into a single global one that an attacker could use to lock out the operator CLI; nginx is the rate-limit layer for this surface.
+All bearer-gated by `DEVSERVER_ADMIN_TOKEN` (constant-time compare via `subtle`). Lives on the apex hostname so tenant content cannot reach it via fetch. There is deliberately no per-IP rate limit on this tree: behind nginx every request arrives from one upstream IP, so a per-IP bucket degenerates into a single global one that an attacker could use to lock out the operator CLI; nginx is the rate-limit layer for this surface.
 
 ## Key decisions
 
@@ -184,9 +184,9 @@ This is load-bearing for cross-tenant isolation:
 
 ### JWT, HS256, two-token
 
-Entry tokens have 30s exp so a leak (referer, browser history, ops log) closes in under a minute. Session cookies have 24h exp so day-to-day navigation is one click from the dashboard. Both signed with `WORKSPACE_GATE_SECRET` (HS256, no "alg: none" path; the validator hard-requires HS256). The crate is `jsonwebtoken`.
+Entry tokens have 30s exp so a leak (referer, browser history, ops log) closes in under a minute. Session cookies have 24h exp so day-to-day navigation is one click from the dashboard. Both signed with `DEVSERVER_GATE_SECRET` (HS256, no "alg: none" path; the validator hard-requires HS256). The crate is `jsonwebtoken`.
 
-There is no sliding session-cookie expiry and no server-side revocation (revoked-jti set); rotation of `WORKSPACE_GATE_SECRET` is the only immediate invalidation knob.
+There is no sliding session-cookie expiry and no server-side revocation (revoked-jti set); rotation of `DEVSERVER_GATE_SECRET` is the only immediate invalidation knob.
 
 ### Username cache populated on handshake
 
@@ -259,5 +259,5 @@ The dependency set is in `Cargo.toml`; the two choices that are not obvious from
 - Per-tunnel labels (the workspace slug is the default; `Hello` carries no separate label)
 - Per-PAT scopes (tunnel scope is implicit on validated PATs)
 - Multi-instance horizontal scale (one process, in-process registry)
-- Server-side session revocation (24h cookie exp is the only knob; rotating `WORKSPACE_GATE_SECRET` is the nuclear option)
+- Server-side session revocation (24h cookie exp is the only knob; rotating `DEVSERVER_GATE_SECRET` is the nuclear option)
 - Sliding session-cookie expiry

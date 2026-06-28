@@ -108,7 +108,7 @@ Each request-handler crate (`profile`, `identity`, `devserver-proxy`) defines a 
 
 identity-service owns the only session cookie in the suite: `id_session`, host-only on `id.chan.app` (no `Domain` attribute), `HttpOnly`, `SameSite=Lax`, 30-day inactivity expiry. `Secure` follows `COOKIE_SECURE`. devserver-proxy does not read this cookie.
 
-devserver-proxy's only cookie is `devserver_gate`: host-only on `{user}.devserver.chan.app`, scoped `Path=/` (the whole host), 24h hard exp, HS256 JWT signed with `WORKSPACE_GATE_SECRET`. Minted by devserver-proxy after verifying an entry JWT issued by identity. Not shared with id.
+devserver-proxy's only cookie is `devserver_gate`: host-only on `{user}.devserver.chan.app`, scoped `Path=/` (the whole host), 24h hard exp, HS256 JWT signed with `DEVSERVER_GATE_SECRET`. Minted by devserver-proxy after verifying an entry JWT issued by identity. Not shared with id.
 
 This split is the load-bearing piece of the cross-tenant isolation: no `.chan.app`-scoped cookie exists, so a browser does not auto-attach an id session to a fetch on `evil.devserver.chan.app`. Cookie sharing across the two services is replaced by an explicit entry-token handoff (entry JWT in the URL `?t=`, session cookie set by devserver-proxy on validation). The whole-host `Path=/` scope is safe precisely because the gate is per-devserver: a collaborator is granted the entire devserver, so there is no non-granted sub-tenant on the same host to isolate the cookie away from. User-to-user isolation rides the host-only `aud` claim, not the cookie path.
 
@@ -132,11 +132,11 @@ Three distinct bearers, all `openssl rand -hex 32`:
 
 - `PROFILE_AUTH_TOKEN`: identity-service -> profile-service service API. profile-service also accepts `PROFILE_ADMIN_TOKEN` here so a single-token deployment works; the middleware runs both checks unconditionally (`regular | admin`) so a wrong token never short-circuits on the first byte.
 - `IDENTITY_INTERNAL_TOKEN`: devserver-proxy -> identity-service `/internal/v1/tokens/validate`. Required; no fallback to `PROFILE_AUTH_TOKEN`. Rotating one does not rotate the other.
-- `WORKSPACE_ADMIN_TOKEN`: identity-service and profile-service -> devserver-proxy admin tree. profile uses it on admin block; identity uses it on revoke, delete, and dashboard reads. `WORKSPACE_ADMIN_TOKEN` is a generic cross-service name; the service it points at is devserver-proxy.
+- `DEVSERVER_ADMIN_TOKEN`: identity-service and profile-service -> devserver-proxy admin tree. profile uses it on admin block; identity uses it on revoke, delete, and dashboard reads. `DEVSERVER_ADMIN_TOKEN` is a generic cross-service name; the service it points at is devserver-proxy.
 
 Plus one symmetric secret:
 
-- `WORKSPACE_GATE_SECRET`: HS256 signing key shared by identity (mints entry JWTs) and devserver-proxy (verifies entry, mints session JWTs). The env-var name is generic because it is a cross-service shared secret; it names the signing key's role, not the `devserver_gate` cookie it ends up in.
+- `DEVSERVER_GATE_SECRET`: HS256 signing key shared by identity (mints entry JWTs) and devserver-proxy (verifies entry, mints session JWTs). The env-var name is generic because it is a cross-service shared secret; it names the signing key's role, not the `devserver_gate` cookie it ends up in.
 
 ## Contributor Patterns
 

@@ -83,8 +83,8 @@ echo
 echo "==> services starting"
 echo "    profile     127.0.0.1:17001"
 echo "    identity    http://id.localtest.me:17000"
-echo "    devserver-proxy http://workspace.localtest.me:17002 (apex)"
-echo "                http://*.workspace.localtest.me:17002 (wildcard)"
+echo "    devserver-proxy http://devserver.localtest.me:17002 (apex)"
+echo "                http://*.devserver.localtest.me:17002 (wildcard)"
 echo "                127.0.0.1:17100 (h2c tunnel)"
 echo
 echo "Open the dashboard: http://id.localtest.me:17000"

@@ -102,7 +102,7 @@ Reads on the dashboard / OAuth-callback path go through `send_idempotent` (one r
 
 ### Shared devserver_gate
 
-Both identity and devserver-proxy depend on the same JWT envelope and the same HS256 verification config (hard-required alg, no fallback). One module here is the canonical place for both; the secret is shared between the two services via env var (`WORKSPACE_GATE_SECRET`).
+Both identity and devserver-proxy depend on the same JWT envelope and the same HS256 verification config (hard-required alg, no fallback). One module here is the canonical place for both; the secret is shared between the two services via env var (`DEVSERVER_GATE_SECRET`).
 
 ### `static_files::serve` is generic over `RustEmbed`
 

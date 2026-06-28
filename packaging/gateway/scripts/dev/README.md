@@ -10,9 +10,9 @@ Dev port layout (offset by `+10000` from the prod-shaped ports so the runner can
 |---------------|---------|------------------------------------------|
 | profile       | `17001` | http://127.0.0.1:17001                   |
 | identity      | `17000` | http://id.localtest.me:17000             |
-| devserver-proxy   | `17002` | http://workspace.localtest.me:17002 (apex)   |
-|               |         | http://*.workspace.localtest.me:17002 (wild) |
-| workspace tunnel  | `17100` | http://workspace.localtest.me:17100 (h2c)    |
+| devserver-proxy   | `17002` | http://devserver.localtest.me:17002 (apex)   |
+|               |         | http://*.devserver.localtest.me:17002 (wild) |
+| workspace tunnel  | `17100` | http://devserver.localtest.me:17100 (h2c)    |
 
 ## One-time setup
 
@@ -78,15 +78,15 @@ export CHAN_TUNNEL_TOKEN=chan_pat_...
 
 cd ../chan
 cargo run -p chan -- serve <some-workspace-dir> \
-  --tunnel-url=http://workspace.localtest.me:17100/v1/tunnel \
+  --tunnel-url=http://devserver.localtest.me:17100/v1/tunnel \
   --tunnel-workspace-name=blog
 ```
 
-The `http://` scheme on the URL triggers chan-tunnel-client's h2c path (no TLS); devserver-proxy's tunnel listener is bound to `127.0.0.1:17100` and speaks h2c directly. Once connected, the dashboard's Workspaces tab lists the workspace; clicking Open redirects the browser through `/api/workspaces/open` to `http://<user>.workspace.localtest.me:17002/blog/`.
+The `http://` scheme on the URL triggers chan-tunnel-client's h2c path (no TLS); devserver-proxy's tunnel listener is bound to `127.0.0.1:17100` and speaks h2c directly. Once connected, the dashboard's Workspaces tab lists the workspace; clicking Open redirects the browser through `/api/workspaces/open` to `http://<user>.devserver.localtest.me:17002/blog/`.
 
 ## Notes
 
 * No TLS anywhere in this stack. `COOKIE_SECURE=false` is set in the identity env so the session cookie survives `http://`. Do not mirror this config into prod.
-* The workspace-gate JWT redirect uses `WORKSPACE_PUBLIC_SCHEME=http` and `WORKSPACE_PUBLIC_PORT=:17002`, so the URL identity builds points at the dev port. Production sets both to their defaults (`https` and empty).
+* The workspace-gate JWT redirect uses `DEVSERVER_PUBLIC_SCHEME=http` and `DEVSERVER_PUBLIC_PORT=:17002`, so the URL identity builds points at the dev port. Production sets both to their defaults (`https` and empty).
 * Postgres state persists across runs. To wipe and start fresh: `dropdb chan_gateway && createdb chan_gateway && packaging/gateway/scripts/dev/setup.sh`.
 * Stopping `run.sh` with Ctrl-C is clean. If a service hangs, kill the process group with `kill -INT -- -<pgid>` -- the dev runner publishes its pgid as `packaging/gateway/scripts/dev/.run.pid` for that case.

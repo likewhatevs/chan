@@ -149,7 +149,7 @@ The share-landing handlers (below) mint the entry token; there is no standalone 
 2. Resolve the owner handle to a user record via profile `GET /v1/users/by-username`. Unknown handle returns 404 (same shape as no-access).
 3. Resolve the owner's live devserver id from devserver-proxy (`list_user_tunnels`); no live devserver returns 404.
 4. Call profile `GET /v1/users/{owner_id}/devservers/{devserver_id}/access?as={session.user_id}`. Owner returns `owner`, an accepted grantee returns `viewer`/`editor`, anything else 404. A grant is whole-devserver, so the `{workspace}` segment never enters the access check.
-5. Mint a 30s `entry` JWT (HS256, `WORKSPACE_GATE_SECRET`) with `{sub: session.user_id, drv: <devserver_id>, aud: "{owner}.devserver.chan.app", ...}`. `sub` is the *caller's* id, not the owner's, so the devserver_gate cookie minted on the next leg carries the right identity for upstream collab attribution.
+5. Mint a 30s `entry` JWT (HS256, `DEVSERVER_GATE_SECRET`) with `{sub: session.user_id, drv: <devserver_id>, aud: "{owner}.devserver.chan.app", ...}`. `sub` is the *caller's* id, not the owner's, so the devserver_gate cookie minted on the next leg carries the right identity for upstream collab attribution.
 6. 303 to `https://{owner}.devserver.chan.app/{workspace}/?t=<jwt>` (per-workspace) or `https://{owner}.devserver.chan.app/?t=<jwt>` (whole-devserver root).
 
 devserver-proxy verifies the JWT, mints its own 24h session-shape JWT, sets it as a host-only `devserver_gate` cookie, and 303s to the clean URL. The shared JWT type lives in `gateway_common::devserver_gate`.
@@ -251,7 +251,7 @@ Plus (in `http.rs`):
 
 ### Devserver-gate mint, not session sharing
 
-`WORKSPACE_GATE_SECRET` is the only credential identity uses to talk auth to devserver-proxy. It is distinct from `PROFILE_AUTH_TOKEN`, `IDENTITY_INTERNAL_TOKEN` and `WORKSPACE_ADMIN_TOKEN`. identity uses it only to mint `typ: entry` tokens; devserver-proxy uses it to verify those and to mint its own `typ: session` cookies.
+`DEVSERVER_GATE_SECRET` is the only credential identity uses to talk auth to devserver-proxy. It is distinct from `PROFILE_AUTH_TOKEN`, `IDENTITY_INTERNAL_TOKEN` and `DEVSERVER_ADMIN_TOKEN`. identity uses it only to mint `typ: entry` tokens; devserver-proxy uses it to verify those and to mint its own `typ: session` cookies.
 
 ### IDENTITY_INTERNAL_TOKEN is required and distinct
 
@@ -265,7 +265,7 @@ Mirror of devserver-proxy's `ThrottlingValidator`. Throttled requests return 401
 
 The public hostnames are derived from one base domain (`CHAN_DOMAIN`, e.g. `chan.app`) plus `PUBLIC_SCHEME`, via `gateway_common::domain::Domains`. identity-service and the proxy read the same two vars and derive the same `id.<base>` / `devserver.<base>` / `.devserver.<base>` hosts, so they cannot drift. This matters because the devserver-gate JWT `aud` is the inbound host: if the two services disagreed on the domain, the handoff would fail or isolation assumptions would shift.
 
-identity derives `BASE_URL` (its OAuth-callback origin) and `devserver_wildcard_suffix` from `CHAN_DOMAIN`; the fine-grained vars (`BASE_URL`, `DEVSERVER_WILDCARD_SUFFIX`, `WORKSPACE_PUBLIC_SCHEME`) remain as explicit overrides for non-default layouts (e.g. a dev port). Defaults are dev-shaped (`localtest.me` / `http`); production sets `CHAN_DOMAIN` + `PUBLIC_SCHEME` once in the shared `/etc/chan-gateway/domain.env`. The domain is still coupled to DNS, the wildcard TLS cert, and nginx `server_name`, so it is deploy-time config, not a runtime knob.
+identity derives `BASE_URL` (its OAuth-callback origin) and `devserver_wildcard_suffix` from `CHAN_DOMAIN`; the fine-grained vars (`BASE_URL`, `DEVSERVER_WILDCARD_SUFFIX`, `DEVSERVER_PUBLIC_SCHEME`) remain as explicit overrides for non-default layouts (e.g. a dev port). Defaults are dev-shaped (`localtest.me` / `http`); production sets `CHAN_DOMAIN` + `PUBLIC_SCHEME` once in the shared `/etc/chan-gateway/domain.env`. The domain is still coupled to DNS, the wildcard TLS cert, and nginx `server_name`, so it is deploy-time config, not a runtime knob.
 
 ## Invariants
 

@@ -79,7 +79,7 @@ export COOKIE_SECURE=false
 export PROFILE_SERVICE_URL=http://127.0.0.1:7001
 export PROFILE_AUTH_TOKEN=dev-token
 export IDENTITY_INTERNAL_TOKEN=dev-internal-token
-export WORKSPACE_GATE_SECRET=dev-devserver-gate-secret
+export DEVSERVER_GATE_SECRET=dev-devserver-gate-secret
 export GITHUB_CLIENT_ID=...
 export GITHUB_CLIENT_SECRET=...
 cargo run -p identity
@@ -94,7 +94,7 @@ export BIND_ADDR=127.0.0.1:7002
 export TUNNEL_BIND_ADDR=127.0.0.1:7100
 export IDENTITY_URL=http://127.0.0.1:7000
 export IDENTITY_INTERNAL_TOKEN=dev-internal-token
-export WORKSPACE_GATE_SECRET=dev-devserver-gate-secret
+export DEVSERVER_GATE_SECRET=dev-devserver-gate-secret
 cargo run -p devserver-proxy
 ```
 
@@ -159,7 +159,7 @@ The binaries listen on `127.0.0.1:{7001,7000,7002}` by default; front them with 
 Two service env vars guard the admin tree; rotate them like any other secret:
 
 - profile-service: `PROFILE_ADMIN_TOKEN=<random>`
-- devserver-proxy:    `WORKSPACE_ADMIN_TOKEN=<random>`
+- devserver-proxy:    `DEVSERVER_ADMIN_TOKEN=<random>`
 
 A single-token deployment shares one secret across both services; `chan-gateway-admin` reads `CHAN_ADMIN_TOKEN` and sends it to each.
 

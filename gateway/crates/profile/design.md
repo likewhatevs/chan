@@ -97,7 +97,7 @@ The router splits into three sub-routers:
 
 All bearer comparisons run through `subtle::ConstantTimeEq` (`bearer_eq` in `http.rs`). Both checks always run on the service API so a wrong token cannot oracle which leg matched first.
 
-profile-service holds a `WorkspaceAdminClient` (from `gateway_common::workspace_admin_client`) when `WORKSPACE_ADMIN_URL` and `WORKSPACE_ADMIN_TOKEN` are set. The block flow fires `kill_user_tunnels` server-side at the same moment `blocked_at` is written, so live devserver-proxy registrations die without an extra hop from the operator CLI.
+profile-service holds a `WorkspaceAdminClient` (from `gateway_common::workspace_admin_client`) when `DEVSERVER_ADMIN_URL` and `DEVSERVER_ADMIN_TOKEN` are set. The block flow fires `kill_user_tunnels` server-side at the same moment `blocked_at` is written, so live devserver-proxy registrations die without an extra hop from the operator CLI.
 
 ## Public surface
 

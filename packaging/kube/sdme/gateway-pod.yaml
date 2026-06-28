@@ -13,8 +13,8 @@
 #       --from-literal=PROFILE_AUTH_TOKEN=$(openssl rand -hex 32) \
 #       --from-literal=PROFILE_ADMIN_TOKEN=$(openssl rand -hex 32) \
 #       --from-literal=IDENTITY_INTERNAL_TOKEN=$(openssl rand -hex 32) \
-#       --from-literal=WORKSPACE_GATE_SECRET=$(openssl rand -hex 32) \
-#       --from-literal=WORKSPACE_ADMIN_TOKEN=$(openssl rand -hex 32) \
+#       --from-literal=DEVSERVER_GATE_SECRET=$(openssl rand -hex 32) \
+#       --from-literal=DEVSERVER_ADMIN_TOKEN=$(openssl rand -hex 32) \
 #       --from-literal=GITHUB_CLIENT_ID=dev-placeholder \
 #       --from-literal=GITHUB_CLIENT_SECRET=dev-placeholder
 #   sudo sdme kube apply -f packaging/kube/sdme/gateway-pod.yaml --base-fs <base>
@@ -57,7 +57,7 @@ spec:
       envFrom:
         - secretRef: { name: gateway-secrets }
       env:
-        - { name: WORKSPACE_ADMIN_URL, value: "http://127.0.0.1:7002" }
+        - { name: DEVSERVER_ADMIN_URL, value: "http://127.0.0.1:7002" }
       readinessProbe:
         httpGet: { path: /healthz, port: 7001 }
         initialDelaySeconds: 3
@@ -74,7 +74,7 @@ spec:
         - { name: PUBLIC_SCHEME, value: "http" }
         - { name: COOKIE_SECURE, value: "false" }
         - { name: PROFILE_SERVICE_URL, value: "http://127.0.0.1:7001" }
-        - { name: WORKSPACE_ADMIN_URL, value: "http://127.0.0.1:7002" }
+        - { name: DEVSERVER_ADMIN_URL, value: "http://127.0.0.1:7002" }
       readinessProbe:
         httpGet: { path: /healthz, port: 7000 }
         initialDelaySeconds: 5

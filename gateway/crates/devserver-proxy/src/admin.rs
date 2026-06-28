@@ -10,7 +10,7 @@
 //!   * `POST   /users/:user/tunnels/kill`      bulk evict for one user
 //!   * `GET    /tunnels/watch`                 SSE stream of periodic snapshots
 //!
-//! All gated by a single bearer token (`WORKSPACE_ADMIN_TOKEN`). The
+//! All gated by a single bearer token (`DEVSERVER_ADMIN_TOKEN`). The
 //! tunnel registry is in-memory and process-local, so admin reads
 //! always see exactly what this devserver-proxy instance is serving --
 //! there is no cross-process aggregation because the deployment runs

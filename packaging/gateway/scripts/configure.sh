@@ -8,8 +8,8 @@
 # Prompts for the values that aren't safely defaultable (Postgres
 # password, base domain, OAuth credentials). Generates the shared
 # secrets (PROFILE_AUTH_TOKEN, IDENTITY_INTERNAL_TOKEN,
-# WORKSPACE_GATE_SECRET, and one admin token wired as
-# PROFILE_ADMIN_TOKEN / WORKSPACE_ADMIN_TOKEN / CHAN_ADMIN_TOKEN) and
+# DEVSERVER_GATE_SECRET, and one admin token wired as
+# PROFILE_ADMIN_TOKEN / DEVSERVER_ADMIN_TOKEN / CHAN_ADMIN_TOKEN) and
 # threads them across the files where they must match. Backs up any
 # existing env files before overwriting.
 
@@ -35,7 +35,7 @@ read -rp "Postgres database [chan_gateway]: " PG_DB
 PG_DB=${PG_DB:-chan_gateway}
 
 # Single source for the public hostnames. identity and devserver-proxy
-# derive id.<domain>, workspace.<domain>, and *.workspace.<domain> from
+# derive id.<domain>, devserver.<domain>, and *.devserver.<domain> from
 # this base, so they cannot drift.
 read -rp "Base domain [chan.app]: " CHAN_DOMAIN
 CHAN_DOMAIN=${CHAN_DOMAIN:-chan.app}
@@ -96,12 +96,12 @@ DATABASE_URL="postgres://${PG_USER}:${PG_PASS_ENC}@127.0.0.1/${PG_DB}"
 
 # Shared secrets. The admin token is one value wired into three vars
 # that must match: profile's PROFILE_ADMIN_TOKEN, devserver-proxy's
-# WORKSPACE_ADMIN_TOKEN, and the operator's CHAN_ADMIN_TOKEN.
-# IDENTITY_INTERNAL_TOKEN and WORKSPACE_GATE_SECRET are each shared by
+# DEVSERVER_ADMIN_TOKEN, and the operator's CHAN_ADMIN_TOKEN.
+# IDENTITY_INTERNAL_TOKEN and DEVSERVER_GATE_SECRET are each shared by
 # exactly two services (identity <-> devserver-proxy).
 PROFILE_AUTH_TOKEN=$(openssl rand -hex 32)
 IDENTITY_INTERNAL_TOKEN=$(openssl rand -hex 32)
-WORKSPACE_GATE_SECRET=$(openssl rand -hex 32)
+DEVSERVER_GATE_SECRET=$(openssl rand -hex 32)
 ADMIN_TOKEN=$(openssl rand -hex 32)
 
 install -d -m 0750 -o root -g chan-gateway /etc/chan-gateway
@@ -138,8 +138,8 @@ BIND_ADDR=127.0.0.1:7001
 DATABASE_URL=${DATABASE_URL}
 PROFILE_AUTH_TOKEN=${PROFILE_AUTH_TOKEN}
 PROFILE_ADMIN_TOKEN=${ADMIN_TOKEN}
-WORKSPACE_ADMIN_URL=http://127.0.0.1:7002
-WORKSPACE_ADMIN_TOKEN=${ADMIN_TOKEN}
+DEVSERVER_ADMIN_URL=http://127.0.0.1:7002
+DEVSERVER_ADMIN_TOKEN=${ADMIN_TOKEN}
 EOF
 )"
 
@@ -159,9 +159,9 @@ COOKIE_SECURE=true
 PROFILE_SERVICE_URL=http://127.0.0.1:7001
 PROFILE_AUTH_TOKEN=${PROFILE_AUTH_TOKEN}
 IDENTITY_INTERNAL_TOKEN=${IDENTITY_INTERNAL_TOKEN}
-WORKSPACE_GATE_SECRET=${WORKSPACE_GATE_SECRET}
-WORKSPACE_ADMIN_URL=http://127.0.0.1:7002
-WORKSPACE_ADMIN_TOKEN=${ADMIN_TOKEN}
+DEVSERVER_GATE_SECRET=${DEVSERVER_GATE_SECRET}
+DEVSERVER_ADMIN_URL=http://127.0.0.1:7002
+DEVSERVER_ADMIN_TOKEN=${ADMIN_TOKEN}
 ${PROVIDER_ENV}
 EOF
 )"
@@ -173,8 +173,8 @@ BIND_ADDR=127.0.0.1:7002
 TUNNEL_BIND_ADDR=127.0.0.1:7100
 IDENTITY_URL=http://127.0.0.1:7000
 IDENTITY_INTERNAL_TOKEN=${IDENTITY_INTERNAL_TOKEN}
-WORKSPACE_GATE_SECRET=${WORKSPACE_GATE_SECRET}
-WORKSPACE_ADMIN_TOKEN=${ADMIN_TOKEN}
+DEVSERVER_GATE_SECRET=${DEVSERVER_GATE_SECRET}
+DEVSERVER_ADMIN_TOKEN=${ADMIN_TOKEN}
 MAX_WORKSPACES_PER_USER=0
 EOF
 )"

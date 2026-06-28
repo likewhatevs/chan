@@ -21,7 +21,7 @@ export BIND_ADDR=127.0.0.1:7002
 export TUNNEL_BIND_ADDR=127.0.0.1:7100
 export IDENTITY_URL=http://127.0.0.1:7000
 export IDENTITY_INTERNAL_TOKEN=dev-internal-token
-export WORKSPACE_GATE_SECRET=dev-devserver-gate-secret
+export DEVSERVER_GATE_SECRET=dev-devserver-gate-secret
 cargo run -p devserver-proxy
 ```
 
@@ -39,7 +39,7 @@ Required:
 | Name                      | Notes                                       |
 |---------------------------|---------------------------------------------|
 | `IDENTITY_INTERNAL_TOKEN` | bearer presented on identity's validate     |
-| `WORKSPACE_GATE_SECRET`   | HS256 secret; equals identity's             |
+| `DEVSERVER_GATE_SECRET`   | HS256 secret; equals identity's             |
 
 Domain (single source):
 
@@ -58,7 +58,7 @@ Optional:
 | `APEX_HOST`                | `devserver.<domain>`     | apex host override   |
 | `WILDCARD_SUFFIX`          | `.devserver.<domain>`    | wildcard override    |
 | `DASHBOARD_URL`            | `<scheme>://id.<domain>/workspaces` | sign-in redirect |
-| `WORKSPACE_ADMIN_TOKEN`    | unset                    | enables `/admin/v1/*`|
+| `DEVSERVER_ADMIN_TOKEN`    | unset                    | enables `/admin/v1/*`|
 | `MAX_WORKSPACES_PER_USER`  | `0` (unlimited)          | concurrent tunnels   |
 | `MAX_RESPONSE_BYTES`       | `100 MiB` (`0` disables) | response body cap    |
 | `MAX_REQUEST_BYTES`        | `100 MiB` (`0` disables) | request body cap     |

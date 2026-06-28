@@ -26,7 +26,7 @@ data:
   # Inter-service URLs (Service DNS + container port).
   PROFILE_SERVICE_URL: "http://chan-gateway-profile:7001"
   IDENTITY_URL: "http://chan-gateway-identity:7000"
-  WORKSPACE_ADMIN_URL: "http://chan-gateway-devserver-proxy:7002"
+  DEVSERVER_ADMIN_URL: "http://chan-gateway-devserver-proxy:7002"
 
   # Cap concurrent workspace registrations per user (0 = unlimited).
   MAX_WORKSPACES_PER_USER: "0"

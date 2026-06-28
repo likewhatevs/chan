@@ -39,7 +39,7 @@ export BASE_URL=http://127.0.0.1:7000
 export PROFILE_SERVICE_URL=http://127.0.0.1:7001
 export PROFILE_AUTH_TOKEN=dev-service-token
 export IDENTITY_INTERNAL_TOKEN=dev-internal-token
-export WORKSPACE_GATE_SECRET=dev-workspace-gate-secret
+export DEVSERVER_GATE_SECRET=dev-workspace-gate-secret
 export GITHUB_CLIENT_ID=...
 export GITHUB_CLIENT_SECRET=...
 cargo run -p identity
@@ -60,7 +60,7 @@ Required:
 | `PROFILE_SERVICE_URL`     | profile-service HTTP base URL               |
 | `PROFILE_AUTH_TOKEN`      | bearer for profile-service calls            |
 | `IDENTITY_INTERNAL_TOKEN` | bearer devserver-proxy presents on validate |
-| `WORKSPACE_GATE_SECRET`   | HS256 secret; equals devserver-proxy's      |
+| `DEVSERVER_GATE_SECRET`   | HS256 secret; equals devserver-proxy's      |
 | At least one provider's `*_CLIENT_ID` + `*_CLIENT_SECRET` pair        |
 
 Provider credentials (each pair optional; leave both unset to disable):
@@ -84,10 +84,10 @@ Optional knobs:
 | `BASE_URL`                 | `<scheme>://id.<domain>`  | OAuth callback origin |
 | `COOKIE_SECURE`            | `false`                   | HTTPS-only cookie     |
 | `DEVSERVER_WILDCARD_SUFFIX`| `.devserver.<domain>`     | redirect host suffix  |
-| `WORKSPACE_PUBLIC_SCHEME`  | `PUBLIC_SCHEME`           | workspace redirect scheme |
-| `WORKSPACE_PUBLIC_PORT`    | unset                     | `:port` for dev       |
-| `WORKSPACE_ADMIN_URL`      | unset                     | devserver-proxy admin base |
-| `WORKSPACE_ADMIN_TOKEN`    | unset                     | enables tunnel evict on revoke / delete |
+| `DEVSERVER_PUBLIC_SCHEME`  | `PUBLIC_SCHEME`           | workspace redirect scheme |
+| `DEVSERVER_PUBLIC_PORT`    | unset                     | `:port` for dev       |
+| `DEVSERVER_ADMIN_URL`      | unset                     | devserver-proxy admin base |
+| `DEVSERVER_ADMIN_TOKEN`    | unset                     | enables tunnel evict on revoke / delete |
 | `RUSTRICT_ALLOWLIST`       | unset                     | comma-separated usernames exempt from the profanity filter |
 
 ## Routes

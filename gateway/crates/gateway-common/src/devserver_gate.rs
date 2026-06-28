@@ -20,7 +20,7 @@
 //! workspace slug for the same reason.
 //!
 //! Why HS256 (symmetric): both services run in the same trust zone
-//! and share the same secret already (`WORKSPACE_GATE_SECRET`, a
+//! and share the same secret already (`DEVSERVER_GATE_SECRET`, a
 //! cross-service secret kept generic across the rename). HS256
 //! gives the smallest token footprint and the simplest key rotation
 //! (one secret rotation invalidates every live token). Asymmetric

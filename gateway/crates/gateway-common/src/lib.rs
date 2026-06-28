@@ -32,7 +32,7 @@
 //!   * `devserver_gate`: shared JWT envelope and HS256 encode/decode
 //!     helpers for the devserver-gate handoff. identity mints entry
 //!     tokens; devserver-proxy verifies entry tokens and mints session
-//!     tokens. Same envelope, same secret (WORKSPACE_GATE_SECRET),
+//!     tokens. Same envelope, same secret (DEVSERVER_GATE_SECRET),
 //!     distinct `typ` claim.
 
 pub mod devserver_gate;

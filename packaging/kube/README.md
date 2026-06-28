@@ -15,12 +15,12 @@ The service env-var contract is `gateway/crates/*/packaging/*.env` and `gateway/
 |----------------------------------------|---------------------------|------------|
 | identity -> profile (service API)      | `PROFILE_AUTH_TOKEN`      | Secret     |
 | devserver-proxy -> identity (validate) | `IDENTITY_INTERNAL_TOKEN` | Secret     |
-| identity mint / proxy verify (gate)    | `WORKSPACE_GATE_SECRET`   | Secret     |
-| identity + profile -> proxy admin      | `WORKSPACE_ADMIN_TOKEN`   | Secret     |
+| identity mint / proxy verify (gate)    | `DEVSERVER_GATE_SECRET`   | Secret     |
+| identity + profile -> proxy admin      | `DEVSERVER_ADMIN_TOKEN`   | Secret     |
 | profile + identity -> Postgres         | `DATABASE_URL`            | Secret     |
 | public domain                          | `CHAN_DOMAIN`, `PUBLIC_SCHEME` | ConfigMap |
 
-`IDENTITY_INTERNAL_TOKEN` and `WORKSPACE_GATE_SECRET` MUST match across the two services that share them, or the tunnel handoff fails. identity refuses to start with no OAuth provider, so the Secret carries placeholder GitHub creds for boot.
+`IDENTITY_INTERNAL_TOKEN` and `DEVSERVER_GATE_SECRET` MUST match across the two services that share them, or the tunnel handoff fails. identity refuses to start with no OAuth provider, so the Secret carries placeholder GitHub creds for boot.
 
 ## Making the images available to sdme
 
@@ -49,8 +49,8 @@ sudo sdme kube secret create gateway-secrets \
     --from-literal=PROFILE_AUTH_TOKEN=$(openssl rand -hex 32) \
     --from-literal=PROFILE_ADMIN_TOKEN=$(openssl rand -hex 32) \
     --from-literal=IDENTITY_INTERNAL_TOKEN=$(openssl rand -hex 32) \
-    --from-literal=WORKSPACE_GATE_SECRET=$(openssl rand -hex 32) \
-    --from-literal=WORKSPACE_ADMIN_TOKEN=$(openssl rand -hex 32) \
+    --from-literal=DEVSERVER_GATE_SECRET=$(openssl rand -hex 32) \
+    --from-literal=DEVSERVER_ADMIN_TOKEN=$(openssl rand -hex 32) \
     --from-literal=GITHUB_CLIENT_ID=dev-placeholder \
     --from-literal=GITHUB_CLIENT_SECRET=dev-placeholder
 

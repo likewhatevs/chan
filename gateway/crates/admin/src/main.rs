@@ -4,7 +4,7 @@
 //! routes used for cross-service reads) and devserver-proxy's
 //! `/admin/v1/*` tree (tunnel ps / kill / watch). Authenticates with
 //! `CHAN_ADMIN_TOKEN`, which must match `PROFILE_ADMIN_TOKEN` on
-//! profile-service and `WORKSPACE_ADMIN_TOKEN` on devserver-proxy.
+//! profile-service and `DEVSERVER_ADMIN_TOKEN` on devserver-proxy.
 //!
 //! Output is shell-friendly: human-readable tables on a TTY,
 //! `--json` everywhere for piping into jq. Exit codes:
@@ -46,7 +46,7 @@ struct Cli {
     workspace_url: Option<String>,
 
     /// Bearer matching profile-service's PROFILE_ADMIN_TOKEN and
-    /// devserver-proxy's WORKSPACE_ADMIN_TOKEN. Single-token deployments
+    /// devserver-proxy's DEVSERVER_ADMIN_TOKEN. Single-token deployments
     /// share one secret across both services; deployments that
     /// rotate them independently can override per-call with the
     /// dedicated env vars.

@@ -60,7 +60,7 @@ Default rendering uses `comfy_table` with the `NOTHING` preset (no Unicode lines
 
 ### Single bearer
 
-`CHAN_ADMIN_TOKEN` is the only credential knob: one secret, sent to both services (single-token deployments set `PROFILE_ADMIN_TOKEN` and `WORKSPACE_ADMIN_TOKEN` to the same value). Deployments that rotate the two service tokens independently pass `--token` per invocation with the value matching the service that invocation talks to.
+`CHAN_ADMIN_TOKEN` is the only credential knob: one secret, sent to both services (single-token deployments set `PROFILE_ADMIN_TOKEN` and `DEVSERVER_ADMIN_TOKEN` to the same value). Deployments that rotate the two service tokens independently pass `--token` per invocation with the value matching the service that invocation talks to.
 
 ### Exit codes are part of the contract
 

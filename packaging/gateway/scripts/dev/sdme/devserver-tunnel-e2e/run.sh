@@ -20,7 +20,7 @@
 #
 # Identity is a tiny stub on the proxy's loopback (the proxy validates the
 # tunnel PAT against it); the per-request gate cookie is self-minted with the
-# same WORKSPACE_GATE_SECRET. Both are auth shims — the binaries under test
+# same DEVSERVER_GATE_SECRET. Both are auth shims — the binaries under test
 # (proxy + devserver + tunnel crates) are the real release builds.
 set -uo pipefail
 
@@ -115,7 +115,7 @@ $SDME exec "$C_PROXY" -- /usr/bin/systemd-run --unit=dsp --collect \
   --setenv=TUNNEL_BIND_ADDR=0.0.0.0:$PROXY_TUN_PORT \
   --setenv=IDENTITY_URL=http://127.0.0.1:$STUB_PORT \
   --setenv=IDENTITY_INTERNAL_TOKEN=$IDENTITY_TOKEN \
-  --setenv=WORKSPACE_GATE_SECRET=$GATE_SECRET \
+  --setenv=DEVSERVER_GATE_SECRET=$GATE_SECRET \
   --setenv=APEX_HOST=$APEX --setenv=WILDCARD_SUFFIX=$SUFFIX \
   --setenv=PUBLIC_SCHEME=http --setenv=FORWARDED_PROTO=http \
   --setenv=DASHBOARD_URL=http://id.localtest.me/workspaces \

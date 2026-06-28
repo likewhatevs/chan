@@ -4,7 +4,7 @@ gateway-common/src/devserver_gate.rs::encode_session.
 
 Claims envelope: {iss, sub, drv, aud, typ, iat, exp}. The proxy's
 resolve_gate() decodes with TokenType::Session and checks aud==Host and
-drv==devserver_id. We control WORKSPACE_GATE_SECRET, so a self-minted
+drv==devserver_id. We control DEVSERVER_GATE_SECRET, so a self-minted
 session cookie yields Gate::Pass with no identity round trip.
 
 Usage:

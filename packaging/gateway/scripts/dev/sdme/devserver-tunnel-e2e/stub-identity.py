@@ -10,7 +10,7 @@ answers every well-formed validate with a FIXED identity, so the proxy
 stays the real binary while we skip standing up postgres+profile+identity.
 The PAT itself is not checked (any token validates) — auth is out of
 scope for the tunnel-routing e2e; the gate cookie is minted separately
-with the same WORKSPACE_GATE_SECRET.
+with the same DEVSERVER_GATE_SECRET.
 
 Env (all optional, sane defaults):
   STUB_BIND        default 0.0.0.0:7000

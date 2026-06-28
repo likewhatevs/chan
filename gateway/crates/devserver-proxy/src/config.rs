@@ -40,7 +40,7 @@ pub struct Config {
     /// HMAC-SHA256 secret used to verify entry tokens from identity
     /// and mint session tokens for the `devserver_gate` cookie. Same
     /// value also configured on identity-service. The env var keeps the
-    /// generic `WORKSPACE_GATE_SECRET` name (a cross-service shared
+    /// generic `DEVSERVER_GATE_SECRET` name (a cross-service shared
     /// secret), so the field tracks the var rather than the cookie.
     /// Required.
     pub workspace_gate_secret: String,
@@ -134,9 +134,9 @@ impl Config {
         }
 
         let workspace_gate_secret =
-            std::env::var("WORKSPACE_GATE_SECRET").context("WORKSPACE_GATE_SECRET is required")?;
+            std::env::var("DEVSERVER_GATE_SECRET").context("DEVSERVER_GATE_SECRET is required")?;
         if workspace_gate_secret.is_empty() {
-            anyhow::bail!("WORKSPACE_GATE_SECRET must not be empty");
+            anyhow::bail!("DEVSERVER_GATE_SECRET must not be empty");
         }
 
         // Dashboard redirect target. Explicit env var wins; otherwise
@@ -157,7 +157,7 @@ impl Config {
             Err(_) => 0,
         };
 
-        let admin_token = std::env::var("WORKSPACE_ADMIN_TOKEN")
+        let admin_token = std::env::var("DEVSERVER_ADMIN_TOKEN")
             .ok()
             .filter(|s| !s.is_empty());
 

@@ -2,7 +2,7 @@
 //!
 //! No Postgres in this suite: devserver-proxy holds no sessions and
 //! no DB state. The proxy gate is driven by devserver-gate JWTs
-//! (HS256, shared `WORKSPACE_GATE_SECRET`), and tests mint those
+//! (HS256, shared `DEVSERVER_GATE_SECRET`), and tests mint those
 //! directly via `gateway_common::devserver_gate`.
 //!
 //! Tunnel registrations exercise the real chan-tunnel handshake
@@ -35,7 +35,7 @@ use devserver_proxy::identity_validator::CapturingValidator;
 use devserver_proxy::registry::Registry;
 
 const ADMIN_TOKEN: &str = "test-admin-token";
-const WORKSPACE_GATE_SECRET: &[u8] = b"test-devserver-gate-secret-32-bytes-aa";
+const DEVSERVER_GATE_SECRET: &[u8] = b"test-devserver-gate-secret-32-bytes-aa";
 const APEX_HOST: &str = "devserver.chan.app";
 const WILDCARD_SUFFIX: &str = ".devserver.chan.app";
 
@@ -114,7 +114,7 @@ impl TestApp {
             identity_url: "http://127.0.0.1:7000/".parse().unwrap(),
             identity_auth_token: "unused-in-tests".into(),
             dashboard_url: "https://id.chan.app/workspaces".into(),
-            workspace_gate_secret: std::str::from_utf8(WORKSPACE_GATE_SECRET).unwrap().into(),
+            workspace_gate_secret: std::str::from_utf8(DEVSERVER_GATE_SECRET).unwrap().into(),
             max_workspaces_per_user,
             admin_token: Some(ADMIN_TOKEN.to_string()),
             max_response_bytes: None,
@@ -286,10 +286,10 @@ async fn send_admin(
 fn mint(typ: devserver_gate::TokenType, sub: Uuid, drv: &str, aud: &str) -> String {
     match typ {
         devserver_gate::TokenType::Entry => {
-            devserver_gate::encode_entry(WORKSPACE_GATE_SECRET, sub, drv, aud).unwrap()
+            devserver_gate::encode_entry(DEVSERVER_GATE_SECRET, sub, drv, aud).unwrap()
         }
         devserver_gate::TokenType::Session => {
-            devserver_gate::encode_session(WORKSPACE_GATE_SECRET, sub, drv, aud).unwrap()
+            devserver_gate::encode_session(DEVSERVER_GATE_SECRET, sub, drv, aud).unwrap()
         }
     }
 }
@@ -603,7 +603,7 @@ async fn entry_token_for_grantee_mints_session_carrying_grantee_sub() {
         .unwrap();
     let aud = host_for("alice");
     let claims = devserver_gate::decode(
-        WORKSPACE_GATE_SECRET,
+        DEVSERVER_GATE_SECRET,
         cookie,
         devserver_gate::TokenType::Session,
         &aud,

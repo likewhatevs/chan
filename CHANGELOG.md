@@ -6,6 +6,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- **Gateway gate/admin/public-host env vars renamed `WORKSPACE_*` -> `DEVSERVER_*`.** The devserver-proxy contract shared by identity, profile, and devserver-proxy is now `DEVSERVER_GATE_SECRET`, `DEVSERVER_ADMIN_TOKEN`, `DEVSERVER_ADMIN_URL`, `DEVSERVER_PUBLIC_SCHEME`, and `DEVSERVER_PUBLIC_PORT` (formerly `WORKSPACE_*`), matching the `devserver.<domain>` hostnames the services already derive. Self-hosters must rename these in their `/etc/chan-gateway/*.env` files (and any orchestration/secrets) before deploying -- the services require the new names. The `configure.sh` generator and the bundled `.env` templates emit the new names; the admin CLI's `CHAN_ADMIN_WORKSPACE_URL` is unchanged.
+
 ## [v0.55.0] - 2026-06-28
 
 An editor-polish and devserver-hardening round: mermaid diagrams zoom, dev servers show their OS, local workspaces take a display name, wide tables stay readable, pasted image paths resolve from the terminal, plus a batch of editor and Windows fixes.

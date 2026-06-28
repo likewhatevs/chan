@@ -19,7 +19,7 @@ The request `GET /notes-<hash8>/` with `Host: alice.devserver.localtest.me` retu
 The two binaries under test — `devserver-proxy-service` and `chan` (with the tunnel-client/-proto crates) — are real release builds. Two pieces are shims, because auth is not what this test exercises:
 
 - **stub identity** (`stub-identity.py`): the proxy validates each tunnel dial's PAT against identity-service's `/internal/v1/tokens/validate`. The stub answers that one endpoint with a fixed `{user_id, username, devserver_id, scopes:["tunnel"]}`, so the proxy stays real without standing up postgres + profile + identity. It runs on the proxy container's loopback.
-- **gate cookie** (`mint-gate-token.py`): the proxy gates every tenant request with a `devserver_gate` HS256 cookie (`gateway-common::devserver_gate`). We hold `WORKSPACE_GATE_SECRET`, so the harness mints a `session` token directly (`sub`=user_id, `drv`=devserver_id, `aud`=Host) — `Gate::Pass`, no redirect.
+- **gate cookie** (`mint-gate-token.py`): the proxy gates every tenant request with a `devserver_gate` HS256 cookie (`gateway-common::devserver_gate`). We hold `DEVSERVER_GATE_SECRET`, so the harness mints a `session` token directly (`sub`=user_id, `drv`=devserver_id, `aud`=Host) — `Gate::Pass`, no redirect.
 
 ## Topology: why one zone, two containers
 

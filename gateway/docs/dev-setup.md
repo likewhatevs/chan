@@ -33,7 +33,7 @@ flowchart TD
     nginx -->|"*.devserver.localtest.me (tenant + WS upgrade)"| proxy
 
     chanid -->|"PROFILE_SERVICE_URL"| profile
-    chanid -->|"WORKSPACE_ADMIN_URL"| proxy
+    chanid -->|"DEVSERVER_ADMIN_URL"| proxy
     proxy -->|"IDENTITY_URL"| chanid
     profile -->|"DATABASE_URL"| psql
 ```
@@ -98,7 +98,7 @@ RUN set -eux; \
 Environment=BIND_ADDR=0.0.0.0:7000\n\
 Environment=BASE_URL=http://id.localtest.me\n\
 Environment=PROFILE_SERVICE_URL=http://chan-profile:7001\n\
-Environment=WORKSPACE_ADMIN_URL=http://chan-devserver-proxy:7002\n\
+Environment=DEVSERVER_ADMIN_URL=http://chan-devserver-proxy:7002\n\
 Environment=COOKIE_SECURE=false\n\
 Environment=GITHUB_CLIENT_ID=...  GITHUB_CLIENT_SECRET=...\n' \
         > /etc/systemd/system/chan-gateway-identity.service.d/dev-env.conf; \
@@ -113,7 +113,7 @@ limactl shell default sudo sdme create chan-id -r chan-id-dev --network-zone cha
 limactl shell default sudo sdme start chan-id
 ```
 
-`chan-profile` and `chan-devserver-proxy` follow the identical shape: install their `.deb`, set their bind addr and the hostname-based URLs (`profile` needs `DATABASE_URL=postgres://chan:chan@chan-psql:5432/chan_gateway`; `devserver-proxy` needs `IDENTITY_URL=http://chan-id:7000`, `TUNNEL_BIND_ADDR=0.0.0.0:7100`, `FORWARDED_PROTO=https`, and the `WORKSPACE_GATE_SECRET`/`IDENTITY_INTERNAL_TOKEN` shared secrets). Generate the shared secrets with `openssl rand -hex 32` and reuse the matching value across the two services that share each one. See `chan-prod-setup/services/` for the prod versions and `chan-prod-setup/bin/secrets-init.sh` for the full secret set.
+`chan-profile` and `chan-devserver-proxy` follow the identical shape: install their `.deb`, set their bind addr and the hostname-based URLs (`profile` needs `DATABASE_URL=postgres://chan:chan@chan-psql:5432/chan_gateway`; `devserver-proxy` needs `IDENTITY_URL=http://chan-id:7000`, `TUNNEL_BIND_ADDR=0.0.0.0:7100`, `FORWARDED_PROTO=https`, and the `DEVSERVER_GATE_SECRET`/`IDENTITY_INTERNAL_TOKEN` shared secrets). Generate the shared secrets with `openssl rand -hex 32` and reuse the matching value across the two services that share each one. See `chan-prod-setup/services/` for the prod versions and `chan-prod-setup/bin/secrets-init.sh` for the full secret set.
 
 ## nginx container + TLS
 

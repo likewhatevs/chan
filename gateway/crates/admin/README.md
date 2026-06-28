@@ -35,7 +35,7 @@ sudo apt install ./chan-gateway-admin_*.deb
 | `CHAN_ADMIN_PROFILE_URL`  | `http://127.0.0.1:7001`  | profile-service    |
 | `CHAN_ADMIN_WORKSPACE_URL`    | `http://127.0.0.1:7002`  | devserver-proxy        |
 
-Single-token deployments set `CHAN_ADMIN_TOKEN` to a value that matches both `PROFILE_ADMIN_TOKEN` (profile-service) and `WORKSPACE_ADMIN_TOKEN` (devserver-proxy). Deployments that rotate the two service tokens independently pass `--token` per invocation, with the value matching the service that invocation talks to.
+Single-token deployments set `CHAN_ADMIN_TOKEN` to a value that matches both `PROFILE_ADMIN_TOKEN` (profile-service) and `DEVSERVER_ADMIN_TOKEN` (devserver-proxy). Deployments that rotate the two service tokens independently pass `--token` per invocation, with the value matching the service that invocation talks to.
 
 ## Commands
 
