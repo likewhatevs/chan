@@ -6,6 +6,21 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [v0.56.3] - 2026-06-29
+
+A patch release for Markdown list alignment and pane shortcut hint correctness.
+
+### Changed
+
+- **Markdown list markers now share one theme contract.** GitHub, Google Docs, and Microsoft Word editor themes use the same bullet glyphs, task checkbox sizing, marker column, and spacing tokens, so marker alignment no longer drifts by theme font.
+- **Pane menu shortcut hints come from the shortcut registry.** The pane hamburger now shows only shortcuts wired for the current platform: web keeps split-pane hints blank and shows `Alt+[` / `Alt+]` pane navigation, while native keeps the direct `Cmd/Ctrl` pane chords.
+
+### Fixed
+
+- **Bullet, hyphen, ordered, and task-list markers align consistently.** The WYSIWYG editor renders bullet glyphs, literal hyphens, ordered markers, and task checkboxes through the shared marker column while preserving clickable task checkboxes and the source Markdown.
+- **Nested list indentation is reduced to the intended visual depth.** Nested lists now add a 2x default offset instead of the too-wide 4x experiment.
+- **Web no longer advertises native-only split shortcuts.** The browser build does not bind `Cmd+/` or `Ctrl+/` for split panes, so the pane menu no longer claims that shortcut while CodeMirror owns it for comment toggling inside the editor.
+
 ## [v0.56.2] - 2026-06-29
 
 A patch release for editor list rendering and workspace lifecycle correctness.
