@@ -6,6 +6,22 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [v0.56.2] - 2026-06-29
+
+A patch release for editor list rendering and workspace lifecycle correctness.
+
+### Changed
+
+- **Workspace lifecycle state is owner-side and typed.** Local desktop and devserver workspaces now surface `starting`, `closing`, `removing`, `running`, `stopped`, and `error` from the serving owner so launcher reloads keep the correct row state.
+- **Launcher rows lock during owner transitions.** Workspace power/remove controls now spin and stay disabled during `starting`, `closing`, and `removing`; devserver rows also preserve backend `connecting` state across reloads.
+
+### Fixed
+
+- **Markdown list guide bars were removed.** WYSIWYG/source list rendering no longer emits list-guide decorations or CSS hooks, avoiding the misaligned vertical bars entirely.
+- **First-level list text aligns with normal prose.** Bullet, ordered, and task-list markers hang left while the item text starts at the same margin as paragraph text.
+- **Close/remove refusal is consistent.** Local, devserver, CLI, desktop handoff, and control-socket close/remove paths now return the shared `{"error":"live_terminals","active_terminals":N}` body and leave live workspaces running and visible until forced.
+- **Server-hidden devserver windows reopen from launcher rows.** Desktop now resolves bare window ids against the connected devserver feed before falling back to local labels.
+
 ## [v0.56.1] - 2026-06-29
 
 A patch release for devserver control-terminal lifecycle correctness, launcher hover polish, and split desktop package targets.
