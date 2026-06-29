@@ -1113,12 +1113,13 @@
   /* Shared list marker column. The source space after each marker
      combines with --cm-md-list-marker-gap for the text gap. */
   :global(.md-wysiwyg-cm6 .cm-md-list-marker) {
-    --cm-md-list-marker-width: 2ch;
-    --cm-md-list-marker-gap: 3ch;
+    --cm-md-list-marker-width: var(--chan-editor-list-marker-width, 2ch);
+    --cm-md-list-marker-gap: var(--chan-editor-list-marker-gap, 3ch);
     display: inline-block;
     width: var(--cm-md-list-marker-width);
     margin-right: var(--cm-md-list-marker-gap);
     text-align: center;
+    font-family: var(--chan-editor-list-marker-family, inherit);
     color: inherit;
     box-sizing: border-box;
     vertical-align: baseline;
@@ -1128,7 +1129,7 @@
     font-variant-numeric: tabular-nums;
   }
   :global(.md-wysiwyg-cm6 .cm-md-task-checkbox) {
-    --cm-md-task-checkbox-width: 1em;
+    --cm-md-task-checkbox-width: var(--chan-editor-task-checkbox-width, 1em);
     display: inline;
     width: var(--cm-md-task-checkbox-width);
     height: var(--cm-md-task-checkbox-width);
@@ -1152,14 +1153,14 @@
     color: inherit;
     font-size: inherit;
     line-height: inherit;
-    transform: scale(0.5);
+    transform: scale(var(--chan-editor-list-glyph-scale, 0.5));
     transform-origin: center;
     vertical-align: baseline;
   }
   /* The square's solid ink area reads heavier than a circle of equal box,
      so trim + recenter it. */
   :global(.md-wysiwyg-cm6 .cm-md-ul-glyph.cm-md-ul-square) {
-    transform: scale(0.44);
+    transform: scale(var(--chan-editor-list-square-glyph-scale, 0.44));
   }
   :global(.md-wysiwyg-cm6 .cm-md-frontmatter) {
     color: var(--text-secondary, #888);

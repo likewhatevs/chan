@@ -75,4 +75,15 @@
   --chan-editor-table-border: var(--border, #ddd);
   --chan-editor-table-header-bg: var(--bg-card, rgba(0, 0, 0, 0.04));
   --chan-editor-table-stripe-bg: var(--bg-card, rgba(0, 0, 0, 0.02));
+
+  /* Lists. These stay theme-neutral so GitHub, Google Docs, and Word
+     share the same marker widgets, glyphs, and spacing. */
+  --chan-editor-list-marker-family:
+    -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica,
+    Arial, sans-serif;
+  --chan-editor-list-marker-width: 2ch;
+  --chan-editor-list-marker-gap: 3ch;
+  --chan-editor-task-checkbox-width: 1em;
+  --chan-editor-list-glyph-scale: 0.5;
+  --chan-editor-list-square-glyph-scale: 0.44;
 }

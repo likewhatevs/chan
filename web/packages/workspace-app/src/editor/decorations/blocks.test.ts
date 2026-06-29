@@ -2,6 +2,7 @@
 
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
+import { readFileSync } from "node:fs";
 import { describe, expect, test } from "vitest";
 import { chanMarkdown } from "../markdown/grammar";
 import { chanDecorations } from ".";
@@ -12,6 +13,9 @@ const removedListLineHook = ["cm", "md", "list", "line"].join("-");
 const removedDepthHook = ["cm", "md", "list", "depth"].join("-");
 const removedGuideAttr = ["data", "list", "guides"].join("-");
 const removedGuideExtension = ["list", "Guide", "Visibility"].join("");
+const baseThemeSource = readFileSync("src/editor/themes/base.css", "utf8");
+const googleDocsThemeSource = readFileSync("src/editor/themes/google_docs.css", "utf8");
+const wordThemeSource = readFileSync("src/editor/themes/word.css", "utf8");
 
 function mountDecorated(doc: string): { parent: HTMLDivElement; view: EditorView } {
   const parent = document.createElement("div");
@@ -57,12 +61,34 @@ describe("list guide removal", () => {
   });
 
   test("list spacing is scoped to bullet glyphs and nested lines", () => {
-    expect(wysiwygSource).toContain("--cm-md-list-marker-width: 2ch");
-    expect(wysiwygSource).toContain("--cm-md-list-marker-gap: 3ch");
+    expect(baseThemeSource).toContain("--chan-editor-list-marker-family");
+    expect(baseThemeSource).toContain("--chan-editor-list-marker-width: 2ch");
+    expect(baseThemeSource).toContain("--chan-editor-list-marker-gap: 3ch");
+    expect(baseThemeSource).toContain("--chan-editor-task-checkbox-width: 1em");
+    expect(baseThemeSource).toContain("--chan-editor-list-glyph-scale: 0.5");
+    expect(baseThemeSource).toContain("--chan-editor-list-square-glyph-scale: 0.44");
+    expect(wysiwygSource).toContain(
+      "--cm-md-list-marker-width: var(--chan-editor-list-marker-width, 2ch)",
+    );
+    expect(wysiwygSource).toContain(
+      "--cm-md-list-marker-gap: var(--chan-editor-list-marker-gap, 3ch)",
+    );
     expect(wysiwygSource).toContain(".cm-line.cm-md-list-indent");
     expect(wysiwygSource).toContain("padding-left: var(--cm-md-list-indent-extra, 0) !important");
     expect(wysiwygSource).toContain("width: var(--cm-md-list-marker-width)");
     expect(wysiwygSource).toContain("margin-right: var(--cm-md-list-marker-gap)");
+    expect(wysiwygSource).toContain(
+      "font-family: var(--chan-editor-list-marker-family, inherit)",
+    );
+    expect(wysiwygSource).toContain(
+      "--cm-md-task-checkbox-width: var(--chan-editor-task-checkbox-width, 1em)",
+    );
+    expect(wysiwygSource).toContain(
+      "transform: scale(var(--chan-editor-list-glyph-scale, 0.5))",
+    );
+    expect(wysiwygSource).toContain(
+      "transform: scale(var(--chan-editor-list-square-glyph-scale, 0.44))",
+    );
     expect(wysiwygSource).not.toContain("--cm-md-list-marker-indent");
     expect(wysiwygSource).not.toContain("--cm-md-list-marker-hang");
     expect(wysiwygSource).not.toContain("--cm-md-task-checkbox-hang");
@@ -73,6 +99,26 @@ describe("list guide removal", () => {
     expect(wysiwygSource).not.toMatch(
       new RegExp(`${removedListLineHook}[\\s\\S]{0,240}text-indent`),
     );
+  });
+
+  test("Google Docs and Word inherit the shared list marker contract", () => {
+    const tokens = [
+      "--chan-editor-list-marker-family",
+      "--chan-editor-list-marker-width",
+      "--chan-editor-list-marker-gap",
+      "--chan-editor-task-checkbox-width",
+      "--chan-editor-list-glyph-scale",
+      "--chan-editor-list-square-glyph-scale",
+    ];
+    for (const token of tokens) {
+      expect(baseThemeSource).toContain(token);
+      expect(googleDocsThemeSource).not.toContain(token);
+      expect(wordThemeSource).not.toContain(token);
+    }
+    expect(googleDocsThemeSource).not.toContain(".cm-md-list-marker");
+    expect(googleDocsThemeSource).not.toContain(".cm-md-ul-glyph");
+    expect(wordThemeSource).not.toContain(".cm-md-list-marker");
+    expect(wordThemeSource).not.toContain(".cm-md-ul-glyph");
   });
 });
 

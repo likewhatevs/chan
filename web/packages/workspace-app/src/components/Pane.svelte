@@ -530,26 +530,21 @@
       label: "Split right",
       icon: ArrowRight,
       command: "app.pane.splitRight",
-      // Show the direct global chord (Cmd+/ , Cmd+?) instead of the
-      // Pane-Mode `Cmd+. /` prefix. The desktop KEY_BRIDGE fires
-      // app.pane.splitRight on Slash and
-      // app.pane.splitDown on Shift+Slash; the label is a display
-      // mnemonic for the same physical key (Shift+/ reads as `?`).
-      chord: formatChord("Mod+/", os),
+      chord: chordLabel("app.pane.splitRight"),
       action: () => doPaneModeSplit("row"),
     },
     {
       label: "Split bottom",
       icon: ArrowDown,
-      command: "app.pane.splitBottom",
-      chord: formatChord("Mod+?", os),
+      command: "app.pane.splitDown",
+      chord: chordLabel("app.pane.splitDown"),
       action: () => doPaneModeSplit("column"),
     },
     {
       label: "Next pane",
       icon: ArrowRight,
       command: "app.pane.next",
-      chord: formatChord("Mod+]", os),
+      chord: chordLabel("app.pane.next"),
       action: () => {
         dispatchCommand("app.pane.next");
         closePaneHamburgerMenu();
@@ -559,7 +554,7 @@
       label: "Previous pane",
       icon: ArrowLeft,
       command: "app.pane.prev",
-      chord: formatChord("Mod+[", os),
+      chord: chordLabel("app.pane.prev"),
       action: () => {
         dispatchCommand("app.pane.prev");
         closePaneHamburgerMenu();

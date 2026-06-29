@@ -90,6 +90,16 @@ function menuLabels(): string[] {
     .filter(Boolean);
 }
 
+function menuRowChords(): Record<string, string> {
+  const rows: Record<string, string> = {};
+  for (const button of document.body.querySelectorAll(".hamburger-menu button")) {
+    const label = button.querySelector(".menu-row-label")?.textContent?.trim();
+    if (!label) continue;
+    rows[label] = button.querySelector(".menu-row-chord")?.textContent?.trim() ?? "";
+  }
+  return rows;
+}
+
 describe("Pane terminal tab activity marker", () => {
   test("tabs expose selected state and labelled close buttons", async () => {
     const active = terminalTab({ id: "term-active", title: "Active" });
@@ -203,18 +213,37 @@ describe("Pane right-click menus", () => {
     expect(labels).not.toContain("Close pane");
   });
 
-  test("pane hamburger pins roadmap chord labels to existing helpers", () => {
+  test("pane hamburger shows only web-wired pane navigation chords", async () => {
+    const pane: LeafNode = {
+      kind: "leaf",
+      id: "pane-web-chords",
+      tabs: [terminalTab()],
+      activeTabId: "term-1",
+    };
+    const target = await renderPane(pane, { paneMode: false });
+
+    target.querySelector<HTMLButtonElement>(".hamburger-trigger")?.click();
+    await tick();
+
+    const chords = menuRowChords();
+    expect(chords["Split right"]).toBe("");
+    expect(chords["Split bottom"]).toBe("");
+    expect(chords["Next pane"]).toBe("Alt+]");
+    expect(chords["Previous pane"]).toBe("Alt+[");
+  });
+
+  test("pane hamburger uses registry chord labels for pane navigation", () => {
     expect(paneSource).toMatch(
-      /label: "Split right"[\s\S]*?chord: formatChord\("Mod\+\/", os\)/,
+      /label: "Split right"[\s\S]*?command: "app\.pane\.splitRight"[\s\S]*?chord: chordLabel\("app\.pane\.splitRight"\)/,
     );
     expect(paneSource).toMatch(
-      /label: "Split bottom"[\s\S]*?chord: formatChord\("Mod\+\?", os\)/,
+      /label: "Split bottom"[\s\S]*?command: "app\.pane\.splitDown"[\s\S]*?chord: chordLabel\("app\.pane\.splitDown"\)/,
     );
     expect(paneSource).toMatch(
-      /label: "Next pane"[\s\S]*?command: "app\.pane\.next"[\s\S]*?chord: formatChord\("Mod\+]"/,
+      /label: "Next pane"[\s\S]*?command: "app\.pane\.next"[\s\S]*?chord: chordLabel\("app\.pane\.next"\)/,
     );
     expect(paneSource).toMatch(
-      /label: "Previous pane"[\s\S]*?command: "app\.pane\.prev"[\s\S]*?chord: formatChord\("Mod\+\["/,
+      /label: "Previous pane"[\s\S]*?command: "app\.pane\.prev"[\s\S]*?chord: chordLabel\("app\.pane\.prev"\)/,
     );
     expect(paneSource).toMatch(
       /label: "Close all tabs"[\s\S]*?command: "app\.pane\.closeTabs"[\s\S]*?chord: chordLabel\("app\.pane\.closeTabs"\)/,
