@@ -158,7 +158,7 @@ pub struct AppState {
     pub control_terminal_generation: std::sync::atomic::AtomicU64,
     /// Devservers with a connect request currently in flight. A second connect
     /// coalesces into the first instead of spawning another control terminal.
-    pub devserver_connecting: Mutex<std::collections::HashSet<String>>,
+    pub devserver_connecting: Arc<Mutex<std::collections::HashSet<String>>>,
     /// Teardown hook the launcher's [`DevserverConfigRegistry`] fires after an
     /// HTTP `DELETE /api/library/devservers/{id}` drops a row, so that path
     /// reaps a live connection/windows through [`teardown_devserver_connection`]
@@ -680,6 +680,25 @@ impl DevserverFeed {
         }
     }
 
+    /// Native labels for the latest connected-devserver window snapshots. This
+    /// lets launcher bridge ops resolve a bare `window_id` even when the remote
+    /// window is server-hidden and has no live or locally-buried native label.
+    fn window_labels(&self) -> Vec<String> {
+        self.windows
+            .lock()
+            .unwrap()
+            .values()
+            .flat_map(|snapshot| {
+                snapshot
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .map(window_watcher::native_label)
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    }
+
     /// The devserver id owning `library_id`, learned from the live window
     /// snapshots (each devserver's records carry its remote `library_id`). The
     /// reverse of [`library_id_of`]; the close handler uses it to find which
@@ -763,16 +782,8 @@ fn to_launcher_workspace(
     chan_server::LauncherWorkspace {
         workspace_id: slug.clone(),
         path: row.path,
-        // A connected devserver's row reflects the remote's on/off: on => the
-        // remote is serving it (running), off => stopped. The desktop sees no
-        // finer remote mount state here, and has no local mount error to report
-        // for a remote workspace.
-        status: if row.on {
-            chan_server::WorkspaceStatus::Running
-        } else {
-            chan_server::WorkspaceStatus::Stopped
-        },
-        error: None,
+        status: row.status,
+        error: row.error,
         label: row.label,
         on: row.on,
         library_id,
@@ -989,62 +1000,36 @@ async fn remove_workspace(
     path: String,
 ) -> Result<(), String> {
     let key = canonical_key(Path::new(&path));
-    // Stop the serve first: this removes the runtime synchronously
-    // and drops the host's Arc<Workspace>, but background indexer /
-    // request tasks may briefly keep their own clone, so the
-    // unregister below tolerates a short contention window.
-    serve::stop(Some(&app), &state, &key);
-
-    let Some(embedded) = state.embedded.get() else {
+    if state.embedded.get().is_none() {
         return Err("embedded local server is unavailable".to_string());
-    };
-    let library = embedded.library().clone();
-    let key_for_block = key.clone();
-
+    }
     emit_chan_busy(&app, true, "remove", &key);
-    let result =
-        tokio::task::spawn_blocking(move || unregister_with_retry(&library, &key_for_block)).await;
+    let key_for_block = key.clone();
+    let state_for_block = Arc::clone(&state);
+    let result = tokio::task::spawn_blocking(move || {
+        let embedded = state_for_block
+            .embedded
+            .get()
+            .ok_or_else(|| "embedded local server is unavailable".to_string())?;
+        embedded.remove_workspace_root(Path::new(&key_for_block), false)
+    })
+    .await;
     emit_chan_busy(&app, false, "remove", &key);
-    match result {
+    let outcome = match result {
         Ok(inner) => inner?,
         Err(e) => return Err(format!("unregistering workspace panicked: {e}")),
-    }
-    Ok(())
-}
-
-/// Drop a workspace from the shared registry after its serve has been
-/// stopped. `serve::stop` removes the runtime synchronously, but a
-/// background indexer rebuild or an in-flight HTTP/WS handler can
-/// still hold an `Arc<Workspace>` for a moment. `unregister_workspace`
-/// wipes per-workspace state and so needs exclusive access; until the
-/// last handle drops it returns `WorkspaceAlreadyOpen` (this process)
-/// or `WorkspaceLocked` (the flock). `reset_workspace` takes the flock
-/// before any registry mutation, so a failed attempt leaves no
-/// half-state and a retry is safe. Any other error surfaces
-/// immediately. Blocking: sleeps between attempts, so callers
-/// invoke it via `spawn_blocking`.
-fn unregister_with_retry(library: &chan_workspace::Library, key: &str) -> Result<(), String> {
-    use chan_workspace::ChanError;
-    const MAX_ATTEMPTS: usize = 20;
-    const BACKOFF: std::time::Duration = std::time::Duration::from_millis(150);
-    let root = Path::new(key);
-    for attempt in 1..=MAX_ATTEMPTS {
-        match library.unregister_workspace(root) {
-            // Ok(false) means it was already absent; both forms are
-            // success for a Forget action.
-            Ok(_) => return Ok(()),
-            Err(e @ (ChanError::WorkspaceAlreadyOpen | ChanError::WorkspaceLocked)) => {
-                if attempt == MAX_ATTEMPTS {
-                    return Err(format!(
-                        "workspace {key} is still shutting down ({e}); try Forget again in a moment"
-                    ));
-                }
-                std::thread::sleep(BACKOFF);
-            }
-            Err(e) => return Err(format!("unregistering workspace {key}: {e}")),
+    };
+    match outcome {
+        chan_server::WorkspaceLifecycleOutcome::Completed
+        | chan_server::WorkspaceLifecycleOutcome::NotFound => {
+            state.serves.lock().unwrap().remove(&key);
+            let _ = app.emit(serve::SERVES_CHANGED, ());
+            Ok(())
         }
+        chan_server::WorkspaceLifecycleOutcome::Refused { active_terminals } => Err(format!(
+            "refusing to remove {key}: {active_terminals} live terminal(s)"
+        )),
     }
-    unreachable!("retry loop returns on the final attempt")
 }
 
 #[tauri::command]
@@ -1064,9 +1049,15 @@ async fn set_workspace_on(
         // release (host.rs `wait_for_workspace_release`), so run it off the
         // runtime; this async command must not block the event loop.
         let state_owned = Arc::clone(&state);
-        tokio::task::spawn_blocking(move || serve::stop(Some(&app), &state_owned, &key))
-            .await
-            .map_err(|e| format!("stopping workspace {path}: {e}"))?;
+        let outcome =
+            tokio::task::spawn_blocking(move || serve::stop(Some(&app), &state_owned, &key, false))
+                .await
+                .map_err(|e| format!("stopping workspace {path}: {e}"))??;
+        if let chan_server::WorkspaceLifecycleOutcome::Refused { active_terminals } = outcome {
+            return Err(format!(
+                "refusing to stop {path}: {active_terminals} live terminal(s)"
+            ));
+        }
     }
     persist_workspaces(&state);
     Ok(())
@@ -1626,12 +1617,20 @@ async fn connect_devserver_impl(
             return Ok(());
         }
     }
+    if let Some(embedded) = state.embedded() {
+        embedded.signal_library_change();
+    }
+    let _ = app.emit(serve::SERVES_CHANGED, ());
     let result = connect_devserver_impl_inner(app.clone(), Arc::clone(&state), id.clone()).await;
     if result.is_err() {
         state.devservers.remove(&id);
         remove_devserver_windows(&app, &state, &id);
     }
     state.devserver_connecting.lock().unwrap().remove(&id);
+    if let Some(embedded) = state.embedded() {
+        embedded.signal_library_change();
+    }
+    let _ = app.emit(serve::SERVES_CHANGED, ());
     result
 }
 
@@ -2087,12 +2086,19 @@ pub(crate) async fn forget_devserver_workspace_impl(
     state: &Arc<AppState>,
     id: String,
     prefix: String,
-) -> Result<(), String> {
+    force: bool,
+) -> Result<chan_server::SetWorkspaceOnOutcome, String> {
     let conn = state
         .devservers
         .get(&id)
         .ok_or_else(|| format!("devserver {id} is not connected"))?;
-    devserver::forget_workspace(&conn, &devserver_route_prefix(&prefix)).await
+    match devserver::forget_workspace(&conn, &devserver_route_prefix(&prefix), force).await {
+        Ok(()) => Ok(chan_server::SetWorkspaceOnOutcome::Done),
+        Err(devserver::SetWorkspaceOnError::ActiveTerminals { active_terminals }) => {
+            Ok(chan_server::SetWorkspaceOnOutcome::NeedsForce { active_terminals })
+        }
+        Err(devserver::SetWorkspaceOnError::Other { message }) => Err(message),
+    }
 }
 
 /// Set a registered devserver workspace on (mount + mint a fresh tenant token)
@@ -2200,6 +2206,7 @@ fn register_devserver_from_handoff(
         Arc::clone(&state.store),
         Arc::clone(&state.devserver_remove_hook),
         Arc::clone(&state.devservers),
+        Arc::clone(&state.devserver_connecting),
         Arc::clone(&state.devserver_feed),
     );
     registry.add(DevserverInput {
@@ -2312,55 +2319,45 @@ fn open_workspace_from_handoff(
 }
 
 /// Tear down a local workspace handed off from `chan close` / `chan workspace rm`
-/// (handoff `CloseWorkspace`). The control socket reaches the embedded host but
-/// cannot touch `AppState.serves`; this path runs `serve::stop`, which DOES update
-/// the serve map (and closes the window via the watcher), then `persist_workspaces`
-/// snapshots the now-unmounted set so the next boot does not resurrect a closed
-/// workspace. `remove` also unregisters it from the shared library. Off the
-/// listener task — `serve::stop` can block on workspace release — so the CLI gets
-/// a prompt `Closed`; the desktop owns the teardown once it answers.
-fn close_workspace_from_handoff(
+/// (handoff `CloseWorkspace`). Runs through the embedded host's owner operation
+/// so live-terminal refusal is reported before anything is unregistered.
+async fn close_workspace_from_handoff(
     app: tauri::AppHandle,
     state: Arc<AppState>,
     path: PathBuf,
     remove: bool,
-) -> Result<(), String> {
+) -> Result<chan_server::WorkspaceLifecycleOutcome, String> {
     if state.embedded.get().is_none() {
         // No embedded host to tear down through: let the CLI fall back to the
         // control-socket path (Error → not HandedOff).
         return Err("embedded local server is unavailable".to_string());
     }
     let key = canonical_key(&path);
-    tauri::async_runtime::spawn(async move {
-        let app_for_stop = app.clone();
-        let state_for_stop = Arc::clone(&state);
-        let key_for_stop = key.clone();
-        // `serve::stop` → `close_prefix` can sleep waiting on workspace release;
-        // keep it off the runtime so the listener stays responsive.
-        let _ = tokio::task::spawn_blocking(move || {
-            serve::stop(Some(&app_for_stop), &state_for_stop, &key_for_stop);
-        })
-        .await;
+    let state_for_block = Arc::clone(&state);
+    let key_for_block = key.clone();
+    let outcome = tokio::task::spawn_blocking(move || {
+        let embedded = state_for_block
+            .embedded
+            .get()
+            .ok_or_else(|| "embedded local server is unavailable".to_string())?;
         if remove {
-            if let Some(embedded) = state.embedded.get() {
-                let library = embedded.library().clone();
-                let key_for_unreg = key.clone();
-                if let Ok(Err(e)) = tokio::task::spawn_blocking(move || {
-                    unregister_with_retry(&library, &key_for_unreg)
-                })
-                .await
-                {
-                    emit_system_notice(
-                        &app,
-                        "warning",
-                        format!("Could not remove {key} from chan close: {e}"),
-                    );
-                }
-            }
+            embedded.remove_workspace_root(Path::new(&key_for_block), false)
+        } else {
+            embedded.close_workspace_root(Path::new(&key_for_block), false)
         }
-        persist_workspaces(&state);
-    });
-    Ok(())
+    })
+    .await
+    .map_err(|e| format!("closing workspace from handoff panicked: {e}"))??;
+    match outcome {
+        chan_server::WorkspaceLifecycleOutcome::Completed
+        | chan_server::WorkspaceLifecycleOutcome::NotFound => {
+            state.serves.lock().unwrap().remove(&key);
+            persist_workspaces(&state);
+            let _ = app.emit(serve::SERVES_CHANGED, ());
+        }
+        chan_server::WorkspaceLifecycleOutcome::Refused { .. } => {}
+    }
+    Ok(outcome)
 }
 
 /// Drive `tauri-plugin-updater` in response to a `chan upgrade` from the
@@ -3307,7 +3304,7 @@ fn main() {
         control_terminal_prefixes: Mutex::new(HashMap::new()),
         control_terminal_runs: Mutex::new(HashMap::new()),
         control_terminal_generation: std::sync::atomic::AtomicU64::new(0),
-        devserver_connecting: Mutex::new(std::collections::HashSet::new()),
+        devserver_connecting: Arc::new(Mutex::new(std::collections::HashSet::new())),
         devserver_remove_hook: Arc::new(OnceLock::new()),
         quit_confirmed: std::sync::atomic::AtomicBool::new(false),
         quit_prompt_open: std::sync::atomic::AtomicBool::new(false),
@@ -3337,11 +3334,13 @@ fn main() {
             let config_store = Arc::clone(&state_for_setup.store);
             let remove_hook = Arc::clone(&state_for_setup.devserver_remove_hook);
             let conns_for_registry = Arc::clone(&state_for_setup.devservers);
+            let connecting_for_registry = Arc::clone(&state_for_setup.devserver_connecting);
             let feed_for_registry = Arc::clone(&state_for_setup.devserver_feed);
             match tauri::async_runtime::block_on(embedded::EmbeddedServer::start(
                 config_store,
                 remove_hook,
                 conns_for_registry,
+                connecting_for_registry,
                 feed_for_registry,
             )) {
                 Ok(server) => {
@@ -3576,9 +3575,20 @@ fn main() {
                                     state,
                                     PathBuf::from(workspace_path),
                                     remove,
-                                ) {
-                                    Ok(()) => Response::Closed {
+                                )
+                                .await
+                                {
+                                    Ok(
+                                        chan_server::WorkspaceLifecycleOutcome::Completed
+                                        | chan_server::WorkspaceLifecycleOutcome::NotFound,
+                                    ) => Response::Closed {
                                         desktop_version: CHAN_VERSION.into(),
+                                    },
+                                    Ok(chan_server::WorkspaceLifecycleOutcome::Refused {
+                                        active_terminals,
+                                    }) => Response::CloseRefused {
+                                        error: "live_terminals".into(),
+                                        active_terminals,
                                     },
                                     Err(message) => Response::Error { message },
                                 },

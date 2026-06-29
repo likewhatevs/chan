@@ -61,9 +61,11 @@ export interface WindowSet {
  * - `stopped`  not mounted (desired off, or never started)
  * - `starting` mount requested / in flight (the spinner state)
  * - `running`  mounted and serving
+ * - `closing`  unmount requested / in flight (spinner + locked controls)
+ * - `removing` remove requested / in flight (spinner + locked controls)
  * - `error`    mount failed (foreign lock, open error); see `WorkspaceEntry.error`
  */
-export type WorkspaceStatus = "stopped" | "starting" | "running" | "error";
+export type WorkspaceStatus = "stopped" | "starting" | "running" | "closing" | "removing" | "error";
 
 /**
  * A workspace row in the launcher's workspace feed. Local rows are folders in
@@ -81,7 +83,7 @@ export interface WorkspaceEntry {
   label: string;
   /** Persisted DESIRED state: tenant should be served (on) vs registered-but-off. */
   on: boolean;
-  /** Live mount lifecycle. The spinner shows while `starting`; `error` renders a
+  /** Live mount lifecycle. The spinner shows while transitional; `error` renders a
    * row error affordance carrying `error`. Drives the UI in place of `on`. */
   status: WorkspaceStatus;
   /** Short human reason, present only when `status === "error"`. */
@@ -216,8 +218,9 @@ export interface LibraryApi {
    * active_terminals:N}`; pass `force` to tear them down and turn off anyway. */
   setDevserverWorkspaceOn(id: string, prefix: string, on: boolean, force?: boolean): Promise<void>;
   /** Forget (unmount + drop) a connected devserver's served workspace by its
-   * mounted prefix (desktop action, 409 with no bridge). */
-  forgetDevserverWorkspace(id: string, prefix: string): Promise<void>;
+   * mounted prefix (desktop action, 409 with no bridge). An unforced forget with
+   * live terminals answers the same live_terminals body as off. */
+  forgetDevserverWorkspace(id: string, prefix: string, force?: boolean): Promise<void>;
   /** Open the desktop's native folder picker; resolves to the chosen absolute
    * path, or null if the user cancelled. A pure desktop action (no desktop
    * bridge → 409), offered only where window-ops are available. */
@@ -303,7 +306,7 @@ export const liveApi: LibraryApi = {
       `/api/library/workspaces/${encodeURIComponent(id)}/${on ? "on" : "off"}`,
       // The off route accepts a `{ force }` body (live-terminal confirm); on
       // takes no body.
-      on ? undefined : { force: force ?? false },
+      on ? undefined : { force },
     ),
   removeWorkspace: (id) => req("DELETE", `/api/library/workspaces/${encodeURIComponent(id)}`),
   listDevservers: () => req("GET", "/api/library/devservers"),
@@ -329,10 +332,13 @@ export const liveApi: LibraryApi = {
     req(
       "POST",
       `/api/library/devservers/${encodeURIComponent(id)}/workspaces/${on ? "on" : "off"}`,
-      on ? { prefix } : { prefix, force: force ?? false },
+      on ? { prefix } : { prefix, force },
     ),
-  forgetDevserverWorkspace: (id, prefix) =>
-    req("POST", `/api/library/devservers/${encodeURIComponent(id)}/workspaces/forget`, { prefix }),
+  forgetDevserverWorkspace: (id, prefix, force) =>
+    req("POST", `/api/library/devservers/${encodeURIComponent(id)}/workspaces/forget`, {
+      prefix,
+      force,
+    }),
   pickFolder: () => req("POST", "/api/library/fs/pick-folder"),
   listWindows: () => req("GET", "/api/library/windows"),
   watchWindows: (onSet) => {

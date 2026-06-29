@@ -18,6 +18,7 @@
 //! in memory while a serve is running, and the desktop webview
 //! reloads it fresh on every On toggle.
 
+use std::collections::HashSet;
 use std::fs;
 use std::io;
 use std::path::PathBuf;
@@ -337,6 +338,10 @@ pub struct DevserverConfigRegistry {
     /// reports each row's [`DevserverEntry::status`] — the launcher shows
     /// Connect vs Disconnect + gates Edit read-only off it.
     conns: Arc<DevserverConns>,
+    /// Devservers with a connect request currently in flight. Shared with
+    /// `AppState.devserver_connecting`, so list reports `connecting` during the
+    /// coalesced dial attempt.
+    connecting: Arc<Mutex<HashSet<String>>>,
     /// The connected-devserver feed (shared with `AppState.devserver_feed`), so
     /// `list` resolves each row's `library_id` from the live window snapshot.
     /// `WorkspaceHost::pane_color` matches a devserver window's `library_id`
@@ -349,12 +354,14 @@ impl DevserverConfigRegistry {
         store: Arc<Mutex<ConfigStore>>,
         on_remove: Arc<OnceLock<DevserverRemoveHook>>,
         conns: Arc<DevserverConns>,
+        connecting: Arc<Mutex<HashSet<String>>>,
         feed: Arc<crate::DevserverFeed>,
     ) -> Self {
         Self {
             store,
             on_remove,
             conns,
+            connecting,
             feed,
         }
     }
@@ -413,6 +420,7 @@ fn devserver_url(host: &str, port: u16) -> Result<String, String> {
 fn entry_from_devserver(
     d: &Devserver,
     conns: &DevserverConns,
+    connecting: &Arc<Mutex<HashSet<String>>>,
     feed: &crate::DevserverFeed,
 ) -> DevserverEntry {
     // The desktop stores the dial URL (formed from the user's host+port); the wire
@@ -430,13 +438,14 @@ fn entry_from_devserver(
         label: d.label.clone(),
         script: d.script.clone(),
         has_token: !d.token.is_empty(),
-        // The desktop's in-memory conn map is binary: present = connected,
-        // absent = disconnected. It tracks no in-flight connect, so `connecting`
-        // is never produced here; the launcher's optimistic bridge covers the
-        // connect click until the next feed refetch settles the status. A
-        // headless surface installs no registry, so this never runs there.
         status: if conns.is_connected(&d.id) {
             DevserverStatus::Connected
+        } else if connecting
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains(&d.id)
+        {
+            DevserverStatus::Connecting
         } else {
             DevserverStatus::Disconnected
         },
@@ -464,7 +473,7 @@ impl DevserverRegistry for DevserverConfigRegistry {
             .map(|cfg| {
                 cfg.devservers
                     .iter()
-                    .map(|d| entry_from_devserver(d, &self.conns, &self.feed))
+                    .map(|d| entry_from_devserver(d, &self.conns, &self.connecting, &self.feed))
                     .collect()
             })
             .unwrap_or_default()
@@ -486,7 +495,12 @@ impl DevserverRegistry for DevserverConfigRegistry {
         };
         cfg.devservers.push(entry.clone());
         store.save(&cfg).map_err(|e| e.to_string())?;
-        Ok(entry_from_devserver(&entry, &self.conns, &self.feed))
+        Ok(entry_from_devserver(
+            &entry,
+            &self.conns,
+            &self.connecting,
+            &self.feed,
+        ))
     }
 
     fn update(&self, id: &str, input: DevserverInput) -> Result<Option<DevserverEntry>, String> {
@@ -511,7 +525,7 @@ impl DevserverRegistry for DevserverConfigRegistry {
                 ds.token = tok.to_string();
             }
         }
-        let entry = entry_from_devserver(ds, &self.conns, &self.feed);
+        let entry = entry_from_devserver(ds, &self.conns, &self.connecting, &self.feed);
         store.save(&cfg).map_err(|e| e.to_string())?;
         Ok(Some(entry))
     }
@@ -773,6 +787,10 @@ fn config_path() -> io::Result<PathBuf> {
 mod tests {
     use super::*;
 
+    fn empty_connecting() -> Arc<Mutex<HashSet<String>>> {
+        Arc::new(Mutex::new(HashSet::new()))
+    }
+
     fn entry(key: &str, label: &str, hash: &str, saved_at: u64) -> WindowConfig {
         WindowConfig {
             key: key.to_string(),
@@ -996,6 +1014,7 @@ mod tests {
             Arc::clone(&store),
             Arc::new(OnceLock::new()),
             Arc::new(crate::devserver::DevserverConns::default()),
+            empty_connecting(),
             Arc::new(crate::DevserverFeed::default()),
         );
         let added = reg
@@ -1035,10 +1054,12 @@ mod tests {
             path: dir.path().join("config.json"),
         }));
         let conns = Arc::new(crate::devserver::DevserverConns::default());
+        let connecting = empty_connecting();
         let reg = DevserverConfigRegistry::new(
             Arc::clone(&store),
             Arc::new(OnceLock::new()),
             Arc::clone(&conns),
+            Arc::clone(&connecting),
             Arc::new(crate::DevserverFeed::default()),
         );
         let id = reg
@@ -1051,6 +1072,8 @@ mod tests {
             .id;
         // No live conn yet: disconnected.
         assert_eq!(reg.list()[0].status, DevserverStatus::Disconnected);
+        connecting.lock().unwrap().insert(id.clone());
+        assert_eq!(reg.list()[0].status, DevserverStatus::Connecting);
         // A live conn (what connect_devserver_impl sets on a successful dial).
         conns.set(
             id.clone(),
@@ -1062,6 +1085,7 @@ mod tests {
             },
         );
         assert_eq!(reg.list()[0].status, DevserverStatus::Connected);
+        connecting.lock().unwrap().remove(&id);
         // The control terminal dies -> the flip drops the conn -> the wire entry
         // flips to status:disconnected, but the persisted config row is untouched
         // (so a re-run/edit can reconnect it).
@@ -1082,6 +1106,7 @@ mod tests {
             Arc::clone(&store),
             Arc::new(OnceLock::new()),
             Arc::new(crate::devserver::DevserverConns::default()),
+            empty_connecting(),
             Arc::new(crate::DevserverFeed::default()),
         );
         let id = reg
@@ -1143,6 +1168,7 @@ mod tests {
             store,
             Arc::new(OnceLock::new()),
             Arc::new(crate::devserver::DevserverConns::default()),
+            empty_connecting(),
             Arc::new(crate::DevserverFeed::default()),
         );
         let missing = reg
@@ -1180,6 +1206,7 @@ mod tests {
             Arc::clone(&store),
             Arc::clone(&hook_cell),
             Arc::new(crate::devserver::DevserverConns::default()),
+            empty_connecting(),
             Arc::new(crate::DevserverFeed::default()),
         );
         let id = reg
@@ -1208,6 +1235,7 @@ mod tests {
             store,
             Arc::new(OnceLock::new()),
             Arc::new(crate::devserver::DevserverConns::default()),
+            empty_connecting(),
             Arc::new(crate::DevserverFeed::default()),
         );
         assert!(reg

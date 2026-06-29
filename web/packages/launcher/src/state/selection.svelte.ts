@@ -3,8 +3,7 @@
 // devservers — feeding ONE global bulk bar (rendered App-level above the lists).
 // Bulk turn on/off loops the per-kind singular op (the ops are independent +
 // idempotent, so no bulk endpoints are needed); bulk remove runs an ORDERED
-// cross-kind delete (forget served -> remove devservers -> remove local) so a
-// devserver and its served workspaces tear down in dependency order.
+// cross-kind delete (remove local -> forget served -> remove devservers).
 // Served rows carry their owning `devserverId` so the delete is self-sufficient
 // and immune to the live window-watch re-fetch dropping a row mid-bulk. Partial
 // failures are counted and surfaced; the per-row quick actions stay the
@@ -170,13 +169,11 @@ export function cancelBulkDelete(): void {
 }
 
 /** Ordered cross-kind bulk remove (the order is deliberate):
- *   1. Forget every selected SERVED workspace — a desktop action that REQUIRES
- *      the devserver still connected (it tells the remote to unmount+drop), so
- *      it must run before the devserver removal below disconnects it.
- *   2. Remove selected DEVSERVERS — `reg.remove`'s `on_remove` hook reaps the
- *      live connection + windows, so removal disconnects the devserver itself
- *      (no-op if it was not connected).
- *   3. Remove selected LOCAL workspaces.
+ *   1. Remove selected LOCAL workspaces.
+ *   2. Forget every selected SERVED workspace while its devserver connection is
+ *      still present.
+ *   3. Remove selected DEVSERVERS — `reg.remove`'s `on_remove` hook reaps the
+ *      live connection + windows.
  * Succeeded rows drop from the selection; failures stay so the count reflects
  * what is left. */
 export async function confirmBulkDelete(): Promise<void> {
@@ -192,9 +189,9 @@ export async function confirmBulkDelete(): Promise<void> {
   selection.busy = true;
   selection.note = null;
   const failures: SelItem[] = [];
+  failures.push(...(await runBulk(locals, (s) => removeWorkspace(s.id))));
   failures.push(...(await runBulk(served, (s) => forgetDevserverWorkspace(s.devserverId!, s.id))));
   failures.push(...(await runBulk(devservers, (s) => removeDevserver(s.id))));
-  failures.push(...(await runBulk(locals, (s) => removeWorkspace(s.id))));
   selection.busy = false;
   selection.confirmingDelete = false;
   // Keep only the failures selected (succeeded rows drop); surface the count.

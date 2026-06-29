@@ -201,6 +201,12 @@ pub enum Response {
     /// a note and exits. A skew / error / absent desktop instead falls back to
     /// the per-pid control-socket teardown.
     Closed { desktop_version: String },
+    /// The desktop refused a `CloseWorkspace` request because unmount/remove
+    /// would kill live terminal sessions.
+    CloseRefused {
+        error: String,
+        active_terminals: usize,
+    },
 }
 
 /// Resolve the well-known per-user socket path. Prefers
@@ -577,6 +583,9 @@ pub enum Outcome {
     /// The desktop answered but refused/failed (e.g. could not mount
     /// the workspace). Falls back to standalone after logging.
     DesktopError { message: String },
+    /// The desktop refused close/remove because live terminal sessions would be
+    /// killed.
+    CloseRefused { active_terminals: usize },
 }
 
 /// Try to hand `workspace_path` to a running same-user desktop. Connects
@@ -653,6 +662,7 @@ pub async fn try_handoff(workspace_path: &Path) -> Outcome {
         | Ok(Response::UpgradeChecked { .. })
         | Ok(Response::DevserverRegistered { .. })
         | Ok(Response::Closed { .. })
+        | Ok(Response::CloseRefused { .. })
         | Err(_) => Outcome::NoDesktop,
     }
 }
@@ -728,6 +738,7 @@ pub async fn try_handoff(workspace_path: &Path) -> Outcome {
         | Ok(Response::UpgradeChecked { .. })
         | Ok(Response::DevserverRegistered { .. })
         | Ok(Response::Closed { .. })
+        | Ok(Response::CloseRefused { .. })
         | Err(_) => Outcome::NoDesktop,
     }
 }
@@ -862,6 +873,9 @@ pub async fn try_close_workspace(_workspace_path: &std::path::Path, _remove: boo
 fn map_close_response(line: &str) -> Outcome {
     match serde_json::from_str::<Response>(line) {
         Ok(Response::Closed { .. }) => Outcome::HandedOff,
+        Ok(Response::CloseRefused {
+            active_terminals, ..
+        }) => Outcome::CloseRefused { active_terminals },
         Ok(Response::VersionSkew {
             desktop_version,
             desktop_protocol,
@@ -1019,6 +1033,7 @@ fn map_devserver_response(line: &str) -> Outcome {
         | Ok(Response::UpgradeStarted { .. })
         | Ok(Response::UpgradeChecked { .. })
         | Ok(Response::Closed { .. })
+        | Ok(Response::CloseRefused { .. })
         | Err(_) => Outcome::NoDesktop,
     }
 }
@@ -1125,6 +1140,7 @@ pub async fn try_upgrade(check_only: bool) -> UpgradeOutcome {
         Ok(Response::Opened { .. })
         | Ok(Response::DevserverRegistered { .. })
         | Ok(Response::Closed { .. })
+        | Ok(Response::CloseRefused { .. })
         | Err(_) => UpgradeOutcome::NoDesktop,
     }
 }
@@ -1236,6 +1252,15 @@ mod tests {
         let json = serde_json::to_string(&closed).unwrap();
         assert!(json.contains("\"status\":\"closed\""));
         assert_eq!(closed, serde_json::from_str::<Response>(&json).unwrap());
+
+        let refused = Response::CloseRefused {
+            error: "live_terminals".into(),
+            active_terminals: 2,
+        };
+        let json = serde_json::to_string(&refused).unwrap();
+        assert_eq!(refused, serde_json::from_str::<Response>(&json).unwrap());
+        assert!(json.contains("\"status\":\"close_refused\""));
+        assert!(json.contains("\"error\":\"live_terminals\""));
     }
 
     #[cfg(any(unix, windows))]
@@ -1245,6 +1270,15 @@ mod tests {
         // drops to the per-pid control-socket teardown rather than guessing.
         let closed = format!("{{\"status\":\"closed\",\"desktop_version\":\"{CHAN_VERSION}\"}}");
         assert!(matches!(map_close_response(&closed), Outcome::HandedOff));
+
+        let refused =
+            "{\"status\":\"close_refused\",\"error\":\"live_terminals\",\"active_terminals\":2}";
+        assert!(matches!(
+            map_close_response(refused),
+            Outcome::CloseRefused {
+                active_terminals: 2
+            }
+        ));
 
         let skew =
             "{\"status\":\"version_skew\",\"desktop_version\":\"0.1.0\",\"desktop_protocol\":99}";

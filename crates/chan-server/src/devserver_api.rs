@@ -21,6 +21,7 @@
 //! - Every other endpoint requires `Authorization: Bearer <token>` with the
 //!   devserver-level token, which is distinct from the per-workspace tokens.
 
+use chan_library::WorkspaceStatus;
 use serde::{Deserialize, Serialize};
 
 /// Wire-protocol version of the management API. The client reads it from
@@ -77,6 +78,13 @@ pub struct WorkspaceEntry {
     pub label: String,
     /// Whether the workspace is mounted right now.
     pub on: bool,
+    /// Live lifecycle status. Distinct from `on`: a workspace can be `on:true`
+    /// while `closing`, or `on:false` while `starting`.
+    #[serde(default)]
+    pub status: WorkspaceStatus,
+    /// Human reason when `status == "error"`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
     /// Per-workspace bearer token, minted devserver-side.
     pub token: String,
 }
@@ -157,6 +165,8 @@ pub struct SetWorkspaceOnRequest {
 /// then re-issues the off with `force:true` to kill them and unmount.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ActiveTerminalsRejection {
+    /// Discriminator shared with launcher-local workspace off/remove.
+    pub error: String,
     /// Live terminal sessions the off would kill.
     pub active_terminals: usize,
 }
@@ -214,6 +224,8 @@ mod tests {
             path: "/home/u/notes".into(),
             label: "notes".into(),
             on: true,
+            status: WorkspaceStatus::Running,
+            error: None,
             token: "tok_abc".into(),
         };
         let v = serde_json::to_value(&entry).unwrap();
@@ -224,6 +236,7 @@ mod tests {
                 "path": "/home/u/notes",
                 "label": "notes",
                 "on": true,
+                "status": "running",
                 "token": "tok_abc",
             })
         );
@@ -238,6 +251,8 @@ mod tests {
             path: "/a".into(),
             label: "a".into(),
             on: false,
+            status: WorkspaceStatus::Stopped,
+            error: None,
             token: String::new(),
         }];
         let v = serde_json::to_value(&list).unwrap();
@@ -248,6 +263,7 @@ mod tests {
                 "path": "/a",
                 "label": "a",
                 "on": false,
+                "status": "stopped",
                 "token": "",
             }])
         );
@@ -360,10 +376,14 @@ mod tests {
         // The 409 body the off path returns when live terminals block an
         // unforced unmount; the client reads `active_terminals` for its prompt.
         let rejection = ActiveTerminalsRejection {
+            error: "live_terminals".into(),
             active_terminals: 3,
         };
         let v = serde_json::to_value(&rejection).unwrap();
-        assert_eq!(v, json!({ "active_terminals": 3 }));
+        assert_eq!(
+            v,
+            json!({ "error": "live_terminals", "active_terminals": 3 })
+        );
         assert_eq!(rejection, serde_json::from_value(v).unwrap());
     }
 

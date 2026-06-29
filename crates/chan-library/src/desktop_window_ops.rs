@@ -140,7 +140,8 @@ pub enum DesktopWindowOp {
     ForgetDevserverWorkspace {
         id: String,
         prefix: String,
-        reply: oneshot::Sender<Result<(), String>>,
+        force: bool,
+        reply: oneshot::Sender<Result<SetWorkspaceOnOutcome, String>>,
     },
     /// Open the OS native folder-picker dialog and return the chosen
     /// directory, or `None` when the user cancels. The launcher's

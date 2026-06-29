@@ -470,7 +470,7 @@ export const mockApi: LibraryApi = {
 
   // Forget (unmount + drop) a connected devserver's served workspace by prefix:
   // remove the row + any of its windows, then push the feed.
-  forgetDevserverWorkspace: (id, prefix) => {
+  forgetDevserverWorkspace: (id, prefix, _force) => {
     const i = devserverWorkspaces.findIndex((w) => w.devserver_id === id && w.prefix === prefix);
     if (i >= 0) devserverWorkspaces.splice(i, 1);
     notify();

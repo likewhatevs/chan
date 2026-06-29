@@ -98,15 +98,17 @@ describe("Library: Local group", () => {
     expect(spinning.querySelector("svg.spin")).toBeTruthy();
   });
 
-  it("spins a local row from backend status:starting alone (no marker)", () => {
+  it("spins a local row from backend transitional statuses alone (no marker)", () => {
     mountList();
     const id = library.workspaces.find((w) => w.devserver_id === null)!.workspace_id;
-    expect(isPending(wsKey(id))).toBe(false);
-    library.workspaces = library.workspaces.map(
-      (w): WorkspaceEntry => (w.workspace_id === id ? { ...w, status: "starting" } : w),
-    );
-    flushSync();
-    expect(target!.querySelector('button[aria-label^="Working on"]')).toBeTruthy();
+    for (const status of ["starting", "closing", "removing"] as const) {
+      expect(isPending(wsKey(id))).toBe(false);
+      library.workspaces = library.workspaces.map(
+        (w): WorkspaceEntry => (w.workspace_id === id ? { ...w, status } : w),
+      );
+      flushSync();
+      expect(target!.querySelector('button[aria-label^="Working on"]')).toBeTruthy();
+    }
   });
 
   it("surfaces status:error with the reason and keeps the toggle enabled (retry)", () => {

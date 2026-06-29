@@ -856,6 +856,10 @@ async fn handle_request(req: ControlRequest, ctx: &ControlSocketCtx) -> ControlR
 /// (so a devserver-served workspace disappears from the launcher and does not
 /// survive a restart), not just unmounts it. A standalone serve ignores it —
 /// it exits either way, and the caller forgets the local registry.
+fn live_terminals_body(active_terminals: usize) -> String {
+    format!(r#"{{"error":"live_terminals","active_terminals":{active_terminals}}}"#)
+}
+
 async fn handle_unserve(scope: &UnserveScope, path: &Path, remove: bool) -> ControlResponse {
     match scope {
         UnserveScope::Standalone { root, shutdown_tx } => {
@@ -881,24 +885,34 @@ async fn handle_unserve(scope: &UnserveScope, path: &Path, remove: bool) -> Cont
             // `DELETE /api/library/workspaces/{id}` equivalent), so the host's
             // own library + persisted overlay reflect it; a plain close just
             // unmounts the tenant and keeps the registration.
-            Some(host) if remove => match host.remove_workspace_for_root(path) {
-                Ok(true) => ControlResponse::Ok {
+            Some(host) if remove => match host.remove_workspace_for_root(path, false) {
+                Ok(chan_library::WorkspaceLifecycleOutcome::Completed) => ControlResponse::Ok {
                     message: format!("removed {}", path.display()),
                 },
-                Ok(false) => ControlResponse::Error {
+                Ok(chan_library::WorkspaceLifecycleOutcome::NotFound) => ControlResponse::Error {
                     message: format!("no workspace registered for {}", path.display()),
                 },
+                Ok(chan_library::WorkspaceLifecycleOutcome::Refused { active_terminals }) => {
+                    ControlResponse::Error {
+                        message: live_terminals_body(active_terminals),
+                    }
+                }
                 Err(e) => ControlResponse::Error {
                     message: format!("removing {}: {e}", path.display()),
                 },
             },
-            Some(host) => match host.close_workspace_for_root(path) {
-                Ok(true) => ControlResponse::Ok {
+            Some(host) => match host.close_workspace_for_root(path, false) {
+                Ok(chan_library::WorkspaceLifecycleOutcome::Completed) => ControlResponse::Ok {
                     message: format!("unmounted {}", path.display()),
                 },
-                Ok(false) => ControlResponse::Error {
+                Ok(chan_library::WorkspaceLifecycleOutcome::NotFound) => ControlResponse::Error {
                     message: format!("no workspace mounted for {}", path.display()),
                 },
+                Ok(chan_library::WorkspaceLifecycleOutcome::Refused { active_terminals }) => {
+                    ControlResponse::Error {
+                        message: live_terminals_body(active_terminals),
+                    }
+                }
                 Err(e) => ControlResponse::Error {
                     message: format!("unmounting {}: {e}", path.display()),
                 },
@@ -3344,14 +3358,16 @@ mod tests {
         fn close_workspace_for_root(
             &self,
             _root: &std::path::Path,
-        ) -> Result<bool, chan_library::Error> {
-            Ok(false)
+            _force: bool,
+        ) -> Result<chan_library::WorkspaceLifecycleOutcome, chan_library::Error> {
+            Ok(chan_library::WorkspaceLifecycleOutcome::NotFound)
         }
         fn remove_workspace_for_root(
             &self,
             _root: &std::path::Path,
-        ) -> Result<bool, chan_library::Error> {
-            Ok(false)
+            _force: bool,
+        ) -> Result<chan_library::WorkspaceLifecycleOutcome, chan_library::Error> {
+            Ok(chan_library::WorkspaceLifecycleOutcome::NotFound)
         }
         fn assemble_window_records(&self) -> Vec<WindowRecord> {
             Vec::new()

@@ -65,7 +65,7 @@ use chan_workspace::{
 };
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use clap_complete::Shell;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 mod update;
 
@@ -1348,6 +1348,12 @@ async fn cmd_close(path: PathBuf, remove: bool, personality: Personality) -> Res
     match unserve_running(&lib, &path, remove, personality).await {
         Ok(UnserveOutcome::Unserved) => println!("closed: {}", path.display()),
         Ok(UnserveOutcome::NotServed) => println!("(not served: {})", path.display()),
+        Ok(UnserveOutcome::Refused { active_terminals }) => {
+            anyhow::bail!(
+                "refusing to close {}: {active_terminals} live terminal(s)",
+                path.display()
+            );
+        }
         // A reachable-but-failed teardown is still "best effort": report it,
         // then (with --remove) forget the workspace anyway.
         Err(e) => eprintln!(
@@ -1367,6 +1373,19 @@ enum UnserveOutcome {
     /// No live process holds the workspace (unregistered, no lock record,
     /// or the recorded holder is gone).
     NotServed,
+    /// A live holder refused teardown because live terminals would be killed.
+    Refused { active_terminals: usize },
+}
+
+#[derive(Deserialize)]
+struct LiveTerminalsBody {
+    error: String,
+    active_terminals: usize,
+}
+
+fn parse_live_terminals_refusal(message: &str) -> Option<usize> {
+    let body: LiveTerminalsBody = serde_json::from_str(message).ok()?;
+    (body.error == "live_terminals").then_some(body.active_terminals)
 }
 
 /// Shared by `chan close` and `chan workspace rm`. Discovers the process
@@ -1406,17 +1425,21 @@ async fn unserve_running(
         || chan_server::handoff::handoff_forced())
         && !chan_server::handoff::handoff_opt_out();
     if want_desktop_handoff {
-        if let chan_server::handoff::Outcome::HandedOff =
-            chan_server::handoff::try_close_workspace(&canonical, remove).await
-        {
-            // The desktop released its flock during teardown; wait it out so a
-            // `chan open` racing right behind doesn't see a transient
-            // WorkspaceLocked. Only the locally-registered case resolves a lock
-            // dir to wait on.
-            if let Some(paths) = lib.workspace_paths_for(path) {
-                wait_for_lock_release(&paths.lock);
+        match chan_server::handoff::try_close_workspace(&canonical, remove).await {
+            chan_server::handoff::Outcome::HandedOff => {
+                // The desktop released its flock during teardown; wait it out so a
+                // `chan open` racing right behind doesn't see a transient
+                // WorkspaceLocked. Only the locally-registered case resolves a lock
+                // dir to wait on.
+                if let Some(paths) = lib.workspace_paths_for(path) {
+                    wait_for_lock_release(&paths.lock);
+                }
+                return Ok(UnserveOutcome::Unserved);
             }
-            return Ok(UnserveOutcome::Unserved);
+            chan_server::handoff::Outcome::CloseRefused { active_terminals } => {
+                return Ok(UnserveOutcome::Refused { active_terminals });
+            }
+            _ => {}
         }
     }
 
@@ -1432,7 +1455,7 @@ async fn unserve_running(
         // socket. Nothing to tear down over the wire.
         return Ok(UnserveOutcome::NotServed);
     };
-    chan_shell::send_control_request(
+    match chan_shell::send_control_request(
         &socket,
         chan_shell::ControlRequest::Close {
             path: canonical,
@@ -1440,7 +1463,17 @@ async fn unserve_running(
         },
     )
     .await
-    .with_context(|| format!("asking the server (pid {}) to tear down", record.pid))?;
+    {
+        Ok(_) => {}
+        Err(e) => {
+            let message = e.to_string();
+            if let Some(active_terminals) = parse_live_terminals_refusal(&message) {
+                return Ok(UnserveOutcome::Refused { active_terminals });
+            }
+            return Err(e)
+                .with_context(|| format!("asking the server (pid {}) to tear down", record.pid));
+        }
+    }
     wait_for_lock_release(&paths.lock);
     Ok(UnserveOutcome::Unserved)
 }
@@ -1862,6 +1895,9 @@ async fn cmd_open_devserver(
         ),
         Outcome::DesktopError { message } => {
             anyhow::bail!("chan-desktop could not register the devserver: {message}")
+        }
+        Outcome::CloseRefused { .. } => {
+            anyhow::bail!("chan-desktop returned a close refusal while registering a devserver")
         }
         // No desktop = nowhere to register. Unlike the path form, a URL never
         // falls back to a standalone serve (mirrors the window-op "needs the
@@ -3296,6 +3332,13 @@ async fn maybe_handoff_to_desktop(root: &Path, launch_if_absent: bool) -> Option
             );
             None
         }
+        chan_server::handoff::Outcome::CloseRefused { .. } => {
+            eprintln!(
+                "chan: chan-desktop returned a close refusal while opening the workspace; \
+                 starting a standalone server."
+            );
+            None
+        }
         // No running desktop. A forced-desktop invocation (a
         // `Personality::Desktop` binary, or `CHAN_DESKTOP_HANDOFF=1`) launches
         // the GUI and opens the workspace in it -- and never falls back to the
@@ -3360,6 +3403,9 @@ async fn launch_desktop_and_handoff(root: &Path) -> Result<()> {
             }
             chan_server::handoff::Outcome::DesktopError { message } => {
                 anyhow::bail!("chan-desktop could not open the workspace: {message}");
+            }
+            chan_server::handoff::Outcome::CloseRefused { .. } => {
+                anyhow::bail!("chan-desktop returned a close refusal while opening the workspace");
             }
         }
         if std::time::Instant::now() >= deadline {

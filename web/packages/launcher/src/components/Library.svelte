@@ -133,10 +133,15 @@
     return ws.devserver_id === null ? wsKey(ws.workspace_id) : servedKey(ws.devserver_id, ws.prefix);
   }
 
-  // Workspace spinner = backend reports the mount in flight (`starting`) OR the
-  // optimistic bridge is open between a click and the first refetch.
+  // Workspace spinner = backend reports a lifecycle transition OR the optimistic
+  // bridge is open between a click and the first refetch.
   function spinning(ws: WorkspaceEntry): boolean {
-    return ws.status === "starting" || isPending(rowKey(ws));
+    return (
+      ws.status === "starting" ||
+      ws.status === "closing" ||
+      ws.status === "removing" ||
+      isPending(rowKey(ws))
+    );
   }
 
   const connected = (ds: DevserverEntry): boolean => ds.status === "connected";
@@ -202,7 +207,7 @@
         <span class="row-name">
           {displayName(ws)}
           {#if ws.status === "error"}
-            <span class="row-error" title={ws.error ?? "Mount failed"}>
+            <span class="row-error" title={ws.error ?? ""}>
               <CircleAlert size={14} />
             </span>
           {/if}

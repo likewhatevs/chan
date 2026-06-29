@@ -3,13 +3,17 @@
 //! This owns one loopback listener for the desktop process and
 //! mounts local workspaces into chan-server's multi-workspace host.
 
+use std::collections::HashSet;
 use std::net::{Ipv4Addr, SocketAddr, TcpListener};
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use axum::Router;
-use chan_server::{DesktopBridge, DesktopWindowOp, SharedWindowTitles, WindowRecord, WindowTitles};
+use chan_server::{
+    DesktopBridge, DesktopWindowOp, SharedWindowTitles, WindowRecord, WindowTitles,
+    WorkspaceLifecycleOutcome,
+};
 use tokio::sync::{mpsc, watch, Notify};
 
 use crate::config::{ConfigStore, DevserverConfigRegistry, DevserverRemoveHook};
@@ -48,6 +52,7 @@ impl EmbeddedServer {
         config_store: Arc<Mutex<ConfigStore>>,
         devserver_remove_hook: Arc<OnceLock<DevserverRemoveHook>>,
         devserver_conns: Arc<DevserverConns>,
+        devserver_connecting: Arc<Mutex<HashSet<String>>>,
         devserver_feed: Arc<crate::DevserverFeed>,
     ) -> Result<Self, String> {
         let library = chan_workspace::Library::open()
@@ -87,6 +92,7 @@ impl EmbeddedServer {
             Arc::clone(&config_store),
             devserver_remove_hook,
             devserver_conns,
+            devserver_connecting,
             devserver_feed,
         )));
         // Install the local-library pane-highlight colour store over the
@@ -260,11 +266,34 @@ impl EmbeddedServer {
         self.host.is_root_mounted(root)
     }
 
-    pub fn close_prefix(&self, prefix: &str) -> Result<(), String> {
+    pub fn close_prefix(
+        &self,
+        prefix: &str,
+        force: bool,
+    ) -> Result<WorkspaceLifecycleOutcome, String> {
         self.host
-            .close_workspace(prefix)
-            .map_err(|e| format!("closing embedded route {prefix}: {e}"))?;
-        Ok(())
+            .close_workspace(prefix, force)
+            .map_err(|e| format!("closing embedded route {prefix}: {e}"))
+    }
+
+    pub fn close_workspace_root(
+        &self,
+        root: &Path,
+        force: bool,
+    ) -> Result<WorkspaceLifecycleOutcome, String> {
+        self.host
+            .close_workspace_for_root(root, force)
+            .map_err(|e| format!("closing embedded workspace {}: {e}", root.display()))
+    }
+
+    pub fn remove_workspace_root(
+        &self,
+        root: &Path,
+        force: bool,
+    ) -> Result<WorkspaceLifecycleOutcome, String> {
+        self.host
+            .remove_workspace_for_root(root, force)
+            .map_err(|e| format!("removing embedded workspace {}: {e}", root.display()))
     }
 
     /// Return the tokened launch URL of the single shared `/terminal` tenant

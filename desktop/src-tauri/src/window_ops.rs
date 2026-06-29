@@ -96,8 +96,14 @@ async fn handle(app: AppHandle, state: Arc<AppState>, op: DesktopWindowOp) {
             let _ = reply
                 .send(crate::set_devserver_workspace_on_impl(&state, id, prefix, on, force).await);
         }
-        DesktopWindowOp::ForgetDevserverWorkspace { id, prefix, reply } => {
-            let _ = reply.send(crate::forget_devserver_workspace_impl(&state, id, prefix).await);
+        DesktopWindowOp::ForgetDevserverWorkspace {
+            id,
+            prefix,
+            force,
+            reply,
+        } => {
+            let _ =
+                reply.send(crate::forget_devserver_workspace_impl(&state, id, prefix, force).await);
         }
         DesktopWindowOp::PickFolder { reply } => {
             // The launcher's New-Workspace "Browse…" button fires this over the

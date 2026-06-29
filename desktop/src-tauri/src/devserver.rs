@@ -109,6 +109,10 @@ struct WorkspaceEntry {
     path: String,
     label: String,
     on: bool,
+    #[serde(default)]
+    status: chan_server::WorkspaceStatus,
+    #[serde(default)]
+    error: Option<String>,
     token: String,
 }
 
@@ -158,6 +162,8 @@ pub struct DevserverWorkspaceRow {
     pub path: String,
     pub label: String,
     pub on: bool,
+    pub status: chan_server::WorkspaceStatus,
+    pub error: Option<String>,
     pub url: String,
 }
 
@@ -410,6 +416,8 @@ fn row_from_entry(
         path: e.path,
         label: e.label,
         on: e.on,
+        status: e.status,
+        error: e.error,
         url,
     })
 }
@@ -543,29 +551,46 @@ pub async fn discard_library_window(conn: &DevserverConn, window_id: &str) -> Re
 /// The `DELETE` URL for unmounting a workspace tenant. The server route is
 /// an axum wildcard, so `prefix` (an absolute route path like
 /// `/api/notes-1a2b3c`) is appended verbatim after the collection path.
-fn workspace_delete_url(host: &str, port: u16, prefix: &str) -> String {
-    format!(
+fn workspace_delete_url(host: &str, port: u16, prefix: &str, force: bool) -> String {
+    let mut url = format!(
         "{}/api/devserver/workspaces{}",
         base_origin(host, port),
         prefix
-    )
+    );
+    if force {
+        url.push_str("?force=true");
+    }
+    url
 }
 
 /// `DELETE /api/devserver/workspaces/{prefix}`: unmount a workspace tenant
 /// from the devserver (the "Forget" action).
-pub async fn forget_workspace(conn: &DevserverConn, prefix: &str) -> Result<(), String> {
-    let url = workspace_delete_url(&conn.host, conn.port, prefix);
-    let resp = http_client()?
+pub async fn forget_workspace(
+    conn: &DevserverConn,
+    prefix: &str,
+    force: bool,
+) -> Result<(), SetWorkspaceOnError> {
+    let url = workspace_delete_url(&conn.host, conn.port, prefix, force);
+    let resp = http_client()
+        .map_err(SetWorkspaceOnError::other)?
         .delete(&url)
         .bearer_auth(&conn.token)
         .send()
         .await
-        .map_err(|e| format!("forgetting devserver workspace: {e}"))?;
+        .map_err(|e| SetWorkspaceOnError::other(format!("forgetting devserver workspace: {e}")))?;
+    if resp.status() == reqwest::StatusCode::CONFLICT {
+        let active_terminals = resp
+            .json::<ActiveTerminalsRejection>()
+            .await
+            .map(|r| r.active_terminals)
+            .unwrap_or(0);
+        return Err(SetWorkspaceOnError::ActiveTerminals { active_terminals });
+    }
     if !resp.status().is_success() {
-        return Err(format!(
+        return Err(SetWorkspaceOnError::other(format!(
             "devserver workspace delete returned HTTP {}",
             resp.status()
-        ));
+        )));
     }
     Ok(())
 }
@@ -724,6 +749,8 @@ mod tests {
         assert_eq!(entries[0].path, "/home/a/notes");
         assert_eq!(entries[0].label, "notes");
         assert!(entries[0].on);
+        assert_eq!(entries[0].status, chan_server::WorkspaceStatus::Stopped);
+        assert_eq!(entries[0].error, None);
         assert_eq!(entries[0].token, "tok_abc");
     }
 
@@ -755,8 +782,12 @@ mod tests {
     #[test]
     fn workspace_delete_url_appends_the_prefix_verbatim() {
         assert_eq!(
-            workspace_delete_url("127.0.0.1", 8787, "/api/notes-1a2b3c"),
+            workspace_delete_url("127.0.0.1", 8787, "/api/notes-1a2b3c", false),
             "http://127.0.0.1:8787/api/devserver/workspaces/api/notes-1a2b3c"
+        );
+        assert_eq!(
+            workspace_delete_url("127.0.0.1", 8787, "/api/notes-1a2b3c", true),
+            "http://127.0.0.1:8787/api/devserver/workspaces/api/notes-1a2b3c?force=true"
         );
     }
 
@@ -802,6 +833,8 @@ mod tests {
             path: "/home/a/notes".into(),
             label: "notes".into(),
             on: false,
+            status: chan_server::WorkspaceStatus::Stopped,
+            error: None,
             token: String::new(),
         };
         let row = row_from_entry(&conn, off).unwrap();
@@ -813,6 +846,8 @@ mod tests {
             path: "/home/a/notes".into(),
             label: "notes".into(),
             on: true,
+            status: chan_server::WorkspaceStatus::Running,
+            error: None,
             token: "tok_live".into(),
         };
         let row = row_from_entry(&conn, on).unwrap();

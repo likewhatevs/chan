@@ -396,7 +396,7 @@ export function createLauncherDemoApi(): LauncherDemoApi {
       notify();
       return tick(undefined);
     },
-    forgetDevserverWorkspace: (id, prefix) => {
+    forgetDevserverWorkspace: (id, prefix, _force) => {
       const i = devserverWorkspaces.findIndex((w) => w.devserver_id === id && w.prefix === prefix);
       if (i >= 0) {
         const ws = devserverWorkspaces[i]!;

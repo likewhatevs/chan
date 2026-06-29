@@ -32,7 +32,7 @@ use std::time::Duration;
 
 use anyhow::Context;
 use axum::body::Body;
-use axum::extract::{Path as AxumPath, State};
+use axum::extract::{Path as AxumPath, Query, State};
 use axum::http::{header, Request as HttpRequest, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
@@ -46,7 +46,7 @@ use crate::devserver_api::{
     ActiveTerminalsRejection, DevserverInfo, DevserverWindow, MountedPrefix, OpenWorkspaceRequest,
     SetWorkspaceOnRequest, WorkspaceEntry, DEVSERVER_API_PROTOCOL,
 };
-use crate::{Error, ServeConfig, WorkspaceHost};
+use crate::{Error, ServeConfig, WorkspaceHost, WorkspaceLifecycleOutcome, WorkspaceStatus};
 // Prefix allocation lives in chan-library (the window-record assembly needs the
 // stable OFF-workspace prefix); the devserver mounts at the same prefix.
 use chan_library::windows::WindowRegistry;
@@ -221,6 +221,18 @@ struct WorkspaceRecord {
     token: String,
 }
 
+#[derive(Debug)]
+enum SetWorkspaceOnResult {
+    Updated(Option<WorkspaceEntry>),
+    Refused { active_terminals: usize },
+}
+
+#[derive(Deserialize, Default)]
+struct ForceQuery {
+    #[serde(default)]
+    force: bool,
+}
+
 /// Shared runtime state behind the management API and the discovery socket.
 struct DevserverState {
     host: Arc<WorkspaceHost>,
@@ -314,7 +326,8 @@ impl DevserverState {
         &self,
         prefix: &str,
         on: bool,
-    ) -> Result<Option<WorkspaceEntry>, Error> {
+        force: bool,
+    ) -> Result<SetWorkspaceOnResult, Error> {
         // Snapshot under the lock, then release it before the mount/unmount:
         // `close_workspace` blocks on the bounded flock wait and the remount
         // awaits, and the list endpoint must stay responsive meanwhile.
@@ -332,15 +345,16 @@ impl DevserverState {
             // root and treat it as currently off; an unknown prefix is a 404.
             None => match self.library_root_for_prefix(prefix) {
                 Some(root) => (false, root),
-                None => return Ok(None),
+                None => return Ok(SetWorkspaceOnResult::Updated(None)),
             },
         };
         if currently_on == on {
             // Already in the requested state: idempotent no-op, current row.
             // A library-only off row has no map entry, so synthesize it.
-            return Ok(self
-                .entry_for(prefix)
-                .or_else(|| self.library_off_entry(prefix)));
+            return Ok(SetWorkspaceOnResult::Updated(
+                self.entry_for(prefix)
+                    .or_else(|| self.library_off_entry(prefix)),
+            ));
         }
         if on {
             // Off → on: mount at the SAME (stable) prefix, minting a fresh
@@ -349,7 +363,12 @@ impl DevserverState {
             self.mount_at(&root, prefix).await?;
         } else {
             // On → off: unmount, release the flock, keep the registration.
-            self.host.close_workspace(prefix)?;
+            match self.host.close_workspace(prefix, force)? {
+                WorkspaceLifecycleOutcome::Completed | WorkspaceLifecycleOutcome::NotFound => {}
+                WorkspaceLifecycleOutcome::Refused { active_terminals } => {
+                    return Ok(SetWorkspaceOnResult::Refused { active_terminals });
+                }
+            }
             let mut workspaces = self.workspaces.lock().unwrap_or_else(|e| e.into_inner());
             if let Some(record) = workspaces.get_mut(prefix) {
                 record.on = false;
@@ -357,24 +376,29 @@ impl DevserverState {
             }
         }
         self.persist_state();
-        Ok(self
-            .entry_for(prefix)
-            .or_else(|| self.library_off_entry(prefix)))
+        Ok(SetWorkspaceOnResult::Updated(
+            self.entry_for(prefix)
+                .or_else(|| self.library_off_entry(prefix)),
+        ))
     }
 
     /// The current [`WorkspaceEntry`] for `prefix`, or `None` when no
     /// workspace is registered there.
     fn entry_for(&self, prefix: &str) -> Option<WorkspaceEntry> {
         let workspaces = self.workspaces.lock().unwrap_or_else(|e| e.into_inner());
-        workspaces.get(prefix).map(entry_from_record)
+        workspaces
+            .get(prefix)
+            .map(|record| self.entry_from_record(record))
     }
 
     /// Forget the workspace at `prefix`: unmount it if on, then drop the
-    /// registration entirely. Returns whether a registered workspace existed
-    /// there — existence, NOT whether the host had it mounted, is the
-    /// "removed" signal, since an off row is registered-but-unmounted and
-    /// forgetting it must still report success. Distinct from on/off.
-    fn forget_workspace(&self, prefix: &str) -> Result<bool, Error> {
+    /// registration entirely. Refusal leaves both the live mount and the
+    /// registration intact. Distinct from on/off.
+    fn forget_workspace(
+        &self,
+        prefix: &str,
+        force: bool,
+    ) -> Result<WorkspaceLifecycleOutcome, Error> {
         // Devserver Forget is destructive: it is `chan workspace rm`,
         // unmount-if-running, then UNREGISTER from the host
         // library (reset Everything + bin the trash). The host library is the
@@ -389,26 +413,20 @@ impl DevserverState {
         }
         .or_else(|| self.library_root_for_prefix(prefix));
         let Some(root) = root else {
-            return Ok(false);
+            return Ok(WorkspaceLifecycleOutcome::NotFound);
         };
-        // Unmount if mounted (releases the per-workspace flock before the reset);
-        // a no-op when the row is off or library-only (not in the host).
-        let _ = self.host.close_workspace(prefix);
+        match self.host.remove_workspace_for_root(&root, force)? {
+            WorkspaceLifecycleOutcome::Refused { active_terminals } => {
+                return Ok(WorkspaceLifecycleOutcome::Refused { active_terminals });
+            }
+            WorkspaceLifecycleOutcome::Completed | WorkspaceLifecycleOutcome::NotFound => {}
+        }
         {
             let mut workspaces = self.workspaces.lock().unwrap_or_else(|e| e.into_inner());
             workspaces.remove(prefix);
         }
-        // Remove from the host library: reset Everything and bin the workspace
-        // trash. Unmount above dropped the tenant's handle, so the writer lock is
-        // released before the reset.
-        self.host.library().unregister_workspace(&root)?;
-        // FORGET purges the workspace's window records so they don't resurrect on
-        // reconnect (finding #8). OFF (`set_workspace_on {on:false}` above) only
-        // unmounts — `close_workspace` no longer discards — so an off devserver
-        // workspace keeps its layout for ON to restore.
-        self.host.discard_workspace_windows(&root);
         self.persist_state();
-        Ok(true)
+        Ok(WorkspaceLifecycleOutcome::Completed)
     }
 
     /// Persist devserver state across two stores: workspace on/off into the
@@ -478,7 +496,7 @@ impl DevserverState {
             let workspaces = self.workspaces.lock().unwrap_or_else(|e| e.into_inner());
             workspaces
                 .values()
-                .map(|record| (record.root.clone(), entry_from_record(record)))
+                .map(|record| (record.root.clone(), self.entry_from_record(record)))
                 .collect()
         };
         let mut entries: Vec<WorkspaceEntry> = Vec::new();
@@ -493,6 +511,8 @@ impl DevserverState {
                     path: ws.root_path.to_string_lossy().into_owned(),
                     label: workspace_label(&ws.root_path),
                     on: false,
+                    status: WorkspaceStatus::Stopped,
+                    error: None,
                     token: String::new(),
                 });
             }
@@ -531,8 +551,25 @@ impl DevserverState {
             path: root.to_string_lossy().into_owned(),
             label: workspace_label(&root),
             on: false,
+            status: WorkspaceStatus::Stopped,
+            error: None,
             token: String::new(),
         })
+    }
+
+    /// Build the wire [`WorkspaceEntry`] for a registered workspace record: an
+    /// off row reports `on:false` with an empty token; an on row its live token.
+    fn entry_from_record(&self, record: &WorkspaceRecord) -> WorkspaceEntry {
+        let (status, error) = self.host.workspace_status(&record.root);
+        WorkspaceEntry {
+            prefix: record.prefix.clone(),
+            path: record.root.to_string_lossy().into_owned(),
+            label: record.label.clone(),
+            on: record.on,
+            status,
+            error,
+            token: record.token.clone(),
+        }
     }
 
     /// Mount the per-library SHARED terminal tenant. `open_terminal_session`
@@ -553,18 +590,6 @@ impl DevserverState {
             )
             .await?;
         Ok(())
-    }
-}
-
-/// Build the wire [`WorkspaceEntry`] for a registered workspace record: an
-/// off row reports `on:false` with an empty token; an on row its live token.
-fn entry_from_record(record: &WorkspaceRecord) -> WorkspaceEntry {
-    WorkspaceEntry {
-        prefix: record.prefix.clone(),
-        path: record.root.to_string_lossy().into_owned(),
-        label: record.label.clone(),
-        on: record.on,
-        token: record.token.clone(),
     }
 }
 
@@ -1046,13 +1071,22 @@ async fn handle_open(
 async fn handle_forget(
     State(state): State<Arc<DevserverState>>,
     AxumPath(prefix_tail): AxumPath<String>,
+    Query(query): Query<ForceQuery>,
 ) -> Response {
     // The wildcard captures the prefix without its leading slash (the
     // client appends the prefix value verbatim to the route base).
     let prefix = format!("/{}", prefix_tail.trim_start_matches('/'));
-    match state.forget_workspace(&prefix) {
-        Ok(true) => StatusCode::NO_CONTENT.into_response(),
-        Ok(false) => StatusCode::NOT_FOUND.into_response(),
+    match state.forget_workspace(&prefix, query.force) {
+        Ok(WorkspaceLifecycleOutcome::Completed) => StatusCode::NO_CONTENT.into_response(),
+        Ok(WorkspaceLifecycleOutcome::NotFound) => StatusCode::NOT_FOUND.into_response(),
+        Ok(WorkspaceLifecycleOutcome::Refused { active_terminals }) => (
+            StatusCode::CONFLICT,
+            Json(ActiveTerminalsRejection {
+                error: "live_terminals".into(),
+                active_terminals,
+            }),
+        )
+            .into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
 }
@@ -1085,15 +1119,24 @@ async fn handle_set_workspace_on(
             return (
                 StatusCode::CONFLICT,
                 Json(ActiveTerminalsRejection {
+                    error: "live_terminals".into(),
                     active_terminals: active,
                 }),
             )
                 .into_response();
         }
     }
-    match state.set_workspace_on(&prefix, req.on).await {
-        Ok(Some(entry)) => Json(entry).into_response(),
-        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+    match state.set_workspace_on(&prefix, req.on, req.force).await {
+        Ok(SetWorkspaceOnResult::Updated(Some(entry))) => Json(entry).into_response(),
+        Ok(SetWorkspaceOnResult::Updated(None)) => StatusCode::NOT_FOUND.into_response(),
+        Ok(SetWorkspaceOnResult::Refused { active_terminals }) => (
+            StatusCode::CONFLICT,
+            Json(ActiveTerminalsRejection {
+                error: "live_terminals".into(),
+                active_terminals,
+            }),
+        )
+            .into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
 }
@@ -1210,6 +1253,17 @@ fn canonical_root(root: &Path) -> PathBuf {
 mod tests {
     use super::*;
     use chan_library::workspace_slug;
+
+    fn updated_row(result: SetWorkspaceOnResult) -> WorkspaceEntry {
+        match result {
+            SetWorkspaceOnResult::Updated(Some(row)) => row,
+            other => panic!("expected updated row, got {other:?}"),
+        }
+    }
+
+    fn updated_none(result: SetWorkspaceOnResult) -> bool {
+        matches!(result, SetWorkspaceOnResult::Updated(None))
+    }
 
     #[test]
     fn parses_pretty_name_from_os_release() {
@@ -1575,10 +1629,10 @@ mod tests {
         // Toggle off: unmounted in the host, still registered, empty token,
         // SAME prefix.
         let row = state
-            .set_workspace_on(&prefix, false)
+            .set_workspace_on(&prefix, false, false)
             .await
-            .expect("toggle off")
-            .expect("row present");
+            .map(updated_row)
+            .expect("toggle off");
         assert!(!row.on);
         assert!(row.token.is_empty(), "off row drops its token");
         assert_eq!(row.prefix, prefix, "prefix stays stable across off");
@@ -1590,9 +1644,9 @@ mod tests {
 
         // Idempotent off.
         let row = state
-            .set_workspace_on(&prefix, false)
+            .set_workspace_on(&prefix, false, false)
             .await
-            .unwrap()
+            .map(updated_row)
             .unwrap();
         assert!(!row.on);
 
@@ -1602,10 +1656,10 @@ mod tests {
         // from whatever the on row carries — a stable token keeps the URL
         // bookmarkable across off→on, which is the behavior we want.
         let row = state
-            .set_workspace_on(&prefix, true)
+            .set_workspace_on(&prefix, true, false)
             .await
-            .expect("toggle on")
-            .expect("row present");
+            .map(updated_row)
+            .expect("toggle on");
         assert!(row.on);
         assert_eq!(row.prefix, prefix);
         assert!(!row.token.is_empty(), "on row carries the workspace token");
@@ -1616,11 +1670,12 @@ mod tests {
         assert_eq!(state.host.mounted_prefixes().unwrap(), vec![prefix.clone()]);
 
         // An unknown prefix is a 404 (None), not an error.
-        assert!(state
-            .set_workspace_on("/api/nope-0", true)
-            .await
-            .expect("no error")
-            .is_none());
+        assert!(updated_none(
+            state
+                .set_workspace_on("/api/nope-0", true, false)
+                .await
+                .expect("no error")
+        ));
     }
 
     #[tokio::test]
@@ -1675,10 +1730,10 @@ mod tests {
         // yet this mounts it; every library workspace is toggleable.
         let prefix_a = allocate_workspace_prefix(ws_a.path()).expect("prefix");
         let row = state
-            .set_workspace_on(&prefix_a, true)
+            .set_workspace_on(&prefix_a, true, false)
             .await
-            .expect("toggle on")
-            .expect("library workspace is a known prefix");
+            .map(updated_row)
+            .expect("toggle on");
         assert!(row.on);
         assert_eq!(row.prefix, prefix_a);
         assert!(!row.token.is_empty(), "an on row carries a token");
@@ -1690,11 +1745,12 @@ mod tests {
         assert!(entries.iter().find(|e| e.prefix == prefix_a).unwrap().on);
 
         // An unknown prefix (no library workspace, no serving record) is a 404.
-        assert!(state
-            .set_workspace_on("/api/ghost-0", true)
-            .await
-            .expect("no error")
-            .is_none());
+        assert!(updated_none(
+            state
+                .set_workspace_on("/api/ghost-0", true, false)
+                .await
+                .expect("no error")
+        ));
     }
 
     #[tokio::test]
@@ -1713,7 +1769,10 @@ mod tests {
         let prefix = state.register_workspace(ws.path()).await.expect("mount");
         assert_eq!(state.workspace_entries().len(), 1);
 
-        assert!(state.forget_workspace(&prefix).expect("forget"));
+        assert!(state
+            .forget_workspace(&prefix, false)
+            .expect("forget")
+            .completed());
         assert!(
             state.host.mounted_prefixes().unwrap().is_empty(),
             "forget unmounts the workspace in the host"
@@ -1730,7 +1789,10 @@ mod tests {
         );
 
         // Idempotent: forgetting an unknown / already-removed prefix is false.
-        assert!(!state.forget_workspace(&prefix).expect("already removed"));
+        assert!(state
+            .forget_workspace(&prefix, false)
+            .expect("already removed")
+            .not_found());
     }
 
     #[tokio::test]
@@ -1742,9 +1804,9 @@ mod tests {
 
         let prefix = state.register_workspace(ws.path()).await.expect("mount");
         state
-            .set_workspace_on(&prefix, false)
+            .set_workspace_on(&prefix, false, false)
             .await
-            .unwrap()
+            .map(updated_row)
             .unwrap();
 
         // The library-owned overlay records the workspace registered-but-off (by
@@ -1787,8 +1849,9 @@ mod tests {
         // Remove A the over-the-control-socket way (host-level), bypassing the map.
         assert!(state
             .host
-            .remove_workspace_for_root(ws_a.path())
-            .expect("remove a"));
+            .remove_workspace_for_root(ws_a.path(), false)
+            .expect("remove a")
+            .completed());
 
         // A guaranteed persist_state.
         let ws_c = tempfile::tempdir().expect("ws c");
@@ -1837,8 +1900,9 @@ mod tests {
             .expect("mount a");
         assert!(state
             .host
-            .close_workspace_for_root(ws_a.path())
-            .expect("close a"));
+            .close_workspace_for_root(ws_a.path(), false)
+            .expect("close a")
+            .completed());
 
         // A later persist (a new registration).
         let ws_b = tempfile::tempdir().expect("ws b");

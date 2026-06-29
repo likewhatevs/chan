@@ -72,9 +72,32 @@ pub enum WorkspaceStatus {
     Starting,
     /// Mounted and serving. The launcher shows ON, solid.
     Running,
+    /// Unmount requested / in flight. The launcher shows a spinner and locks
+    /// power/remove controls until the close settles.
+    Closing,
+    /// Remove requested / in flight. The launcher shows a spinner and locks
+    /// power/remove controls until the row disappears or settles.
+    Removing,
     /// The last mount attempt failed; [`LauncherWorkspace::error`] carries the
     /// reason. The launcher clears the spinner and surfaces the reason.
     Error,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WorkspaceLifecycleOutcome {
+    Completed,
+    NotFound,
+    Refused { active_terminals: usize },
+}
+
+impl WorkspaceLifecycleOutcome {
+    pub fn completed(self) -> bool {
+        matches!(self, Self::Completed)
+    }
+
+    pub fn not_found(self) -> bool {
+        matches!(self, Self::NotFound)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -282,9 +305,14 @@ pub struct WorkspaceHost {
 /// running set) cannot express: a mount in flight, or why the last one failed.
 /// Held in [`WorkspaceHost::mount_state`] and projected into
 /// [`WorkspaceStatus`] by [`WorkspaceHost::workspace_status`].
+#[derive(Clone)]
 enum MountState {
     /// A mount is in flight (flock + tenant build not yet complete).
     Starting,
+    /// An unmount is in flight.
+    Closing,
+    /// A remove/unregister is in flight.
+    Removing,
     /// The last mount attempt failed; the string is the short human reason.
     Error(String),
 }
@@ -1449,16 +1477,20 @@ impl WorkspaceHost {
     }
 
     /// Close the mounted workspace whose root matches `root` (by canonical
-    /// form), returning whether one was found and closed. The control-socket
-    /// `Close` handler uses this to unmount a single hosted tenant by path
-    /// without disturbing the rest of the host. A terminal tenant (no
-    /// workspace root) never matches a real workspace root.
+    /// form), returning a typed lifecycle outcome. The control-socket `Close`
+    /// handler uses this to unmount a single hosted tenant by path without
+    /// disturbing the rest of the host. A terminal tenant (no workspace root)
+    /// never matches a real workspace root.
     ///
     /// On a successful unmount it also records the workspace OFF in the on/off
     /// overlay, so a devserver restart (which re-mounts from the overlay) does
     /// not bring a just-closed workspace back up. The launcher's in-memory view
     /// already reflects the unmount; this persists it.
-    pub fn close_workspace_for_root(&self, root: &Path) -> Result<bool, Error> {
+    pub fn close_workspace_for_root(
+        &self,
+        root: &Path,
+        force: bool,
+    ) -> Result<WorkspaceLifecycleOutcome, Error> {
         let target = canonical_key(root);
         let prefix = {
             let workspaces = self
@@ -1472,15 +1504,23 @@ impl WorkspaceHost {
         };
         match prefix {
             Some(prefix) => {
-                let closed = self.close_workspace(&prefix)?;
-                if closed {
+                let outcome = self.close_workspace(&prefix, force)?;
+                if outcome.completed() || outcome.not_found() {
                     if let Some(overlay) = self.workspace_overlay() {
                         overlay.set(&root.to_string_lossy(), false);
                     }
                 }
-                Ok(closed)
+                Ok(outcome)
             }
-            None => Ok(false),
+            None => {
+                if self.library.workspace_paths_for(root).is_some() {
+                    if let Some(overlay) = self.workspace_overlay() {
+                        overlay.set(&root.to_string_lossy(), false);
+                    }
+                }
+                self.clear_workspace_lifecycle(root);
+                Ok(WorkspaceLifecycleOutcome::NotFound)
+            }
         }
     }
 
@@ -1493,11 +1533,22 @@ impl WorkspaceHost {
     /// the host process so the host's in-memory library + the persisted overlay
     /// stay consistent (a CLI-side `config.toml` edit alone would leave them
     /// stale, so the workspace lingers in the launcher and survives a restart).
-    /// Returns whether a workspace was registered for `root`.
-    pub fn remove_workspace_for_root(&self, root: &Path) -> Result<bool, Error> {
+    pub fn remove_workspace_for_root(
+        &self,
+        root: &Path,
+        force: bool,
+    ) -> Result<WorkspaceLifecycleOutcome, Error> {
         // Unmount first (releases the per-workspace flock before the unregister's
-        // reset); a no-op when the workspace is registered-but-off or not held here.
-        let _ = self.close_workspace_for_root(root);
+        // reset); a no-op when the workspace is registered-but-off or not held
+        // here. Refusal leaves the runtime, registry, overlay, and windows intact.
+        match self.close_workspace_for_root(root, force)? {
+            WorkspaceLifecycleOutcome::Refused { active_terminals } => {
+                return Ok(WorkspaceLifecycleOutcome::Refused { active_terminals });
+            }
+            WorkspaceLifecycleOutcome::Completed | WorkspaceLifecycleOutcome::NotFound => {}
+        }
+
+        self.mark_mount_removing(root);
         let removed = self.library().unregister_workspace(root)?;
         // Forget the on/off state so a devserver restart doesn't re-mount it.
         if let Some(overlay) = self.workspace_overlay() {
@@ -1508,15 +1559,22 @@ impl WorkspaceHost {
         // and leaves the records — filtered from the live feed until ON restores
         // them.) A no-op when the workspace had no windows.
         self.discard_workspace_windows(root);
-        Ok(removed)
+        self.clear_mount_state(root);
+        self.notify_window_change();
+        if removed {
+            Ok(WorkspaceLifecycleOutcome::Completed)
+        } else {
+            Ok(WorkspaceLifecycleOutcome::NotFound)
+        }
     }
 
     /// Close the workspace mounted at `prefix`.
     ///
-    /// Returns `Ok(false)` when no workspace is mounted there. Closing
-    /// sends the shared shutdown signal before dropping the runtime,
-    /// so active WebSockets and terminal sessions get a clean exit
-    /// path.
+    /// Returns [`WorkspaceLifecycleOutcome::NotFound`] when no workspace is
+    /// mounted there. With `force == false`, refuses before teardown when the
+    /// tenant owns live terminal sessions. Closing sends the shared shutdown
+    /// signal before dropping the runtime, so active WebSockets and terminal
+    /// sessions get a clean exit path.
     ///
     /// This does NOT synchronously reap the tenant's PTYs: the shutdown
     /// signal lets the per-tenant prune task close them on its own schedule.
@@ -1524,8 +1582,29 @@ impl WorkspaceHost {
     /// workspaces through this), but a terminal-only tenant whose PTY must
     /// stop at once — a control terminal running a connect script — should be
     /// closed with [`close_terminal_tenant`](Self::close_terminal_tenant).
-    pub fn close_workspace(&self, prefix: &str) -> Result<bool, Error> {
+    pub fn close_workspace(
+        &self,
+        prefix: &str,
+        force: bool,
+    ) -> Result<WorkspaceLifecycleOutcome, Error> {
         let prefix = sanitize_prefix(prefix).map_err(Error::Config)?;
+        let (root, active_terminals) = {
+            let workspaces = self
+                .workspaces
+                .read()
+                .map_err(|_| Error::Config("workspace host lock poisoned".into()))?;
+            let Some(runtime) = workspaces.get(&prefix) else {
+                return Ok(WorkspaceLifecycleOutcome::NotFound);
+            };
+            (
+                runtime.root.clone(),
+                runtime.artifacts.terminal_sessions.roster().len(),
+            )
+        };
+        if active_terminals > 0 && !force {
+            return Ok(WorkspaceLifecycleOutcome::Refused { active_terminals });
+        }
+        self.mark_mount_closing(&root);
         let runtime = {
             let mut workspaces = self
                 .workspaces
@@ -1534,7 +1613,8 @@ impl WorkspaceHost {
             workspaces.remove(&prefix)
         };
         let Some(runtime) = runtime else {
-            return Ok(false);
+            self.clear_workspace_lifecycle(&root);
+            return Ok(WorkspaceLifecycleOutcome::NotFound);
         };
         // Turning a workspace OFF (unmount) PRESERVES its persisted window records
         // so turning it back ON restores the same windows/panes/tabs (the PTYs
@@ -1556,7 +1636,7 @@ impl WorkspaceHost {
             wait_for_workspace_release(&weak, &lock_dir);
         }
         self.notify_window_change();
-        Ok(true)
+        Ok(WorkspaceLifecycleOutcome::Completed)
     }
 
     /// Close the terminal-only tenant mounted at `prefix`, reaping its PTYs.
@@ -1691,24 +1771,31 @@ impl WorkspaceHost {
     }
 
     /// The launcher row's live `(status, error)` for a workspace root. `running`
-    /// when mounted (the `workspaces` map is authoritative and wins over any
-    /// stale overlay entry); else the transient overlay's `starting`/`error`;
-    /// else `stopped`. The launcher drives its spinner and toggle-disable off
-    /// this, not an optimistic timer.
+    /// when mounted unless a teardown state is active; else the transient
+    /// overlay's `starting`/`error`; else `stopped`. The launcher drives its
+    /// spinner and toggle-disable off this, not an optimistic timer.
     pub fn workspace_status(&self, root: &Path) -> (WorkspaceStatus, Option<String>) {
-        if self.is_root_mounted(root) {
-            return (WorkspaceStatus::Running, None);
-        }
         let key = canonical_key(root);
-        match self
+        let state = self
             .mount_state
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .get(&key)
-        {
+            .cloned();
+        match state {
+            Some(MountState::Closing) => return (WorkspaceStatus::Closing, None),
+            Some(MountState::Removing) => return (WorkspaceStatus::Removing, None),
+            _ => {}
+        }
+        if self.is_root_mounted(root) {
+            return (WorkspaceStatus::Running, None);
+        }
+        match state {
             Some(MountState::Starting) => (WorkspaceStatus::Starting, None),
-            Some(MountState::Error(reason)) => (WorkspaceStatus::Error, Some(reason.clone())),
-            None => (WorkspaceStatus::Stopped, None),
+            Some(MountState::Error(reason)) => (WorkspaceStatus::Error, Some(reason)),
+            Some(MountState::Closing) | Some(MountState::Removing) | None => {
+                (WorkspaceStatus::Stopped, None)
+            }
         }
     }
 
@@ -1744,6 +1831,24 @@ impl WorkspaceHost {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .insert(key, MountState::Starting);
+        self.notify_window_change();
+    }
+
+    fn mark_mount_closing(&self, root: &Path) {
+        let key = canonical_key(root);
+        self.mount_state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(key, MountState::Closing);
+        self.notify_window_change();
+    }
+
+    fn mark_mount_removing(&self, root: &Path) {
+        let key = canonical_key(root);
+        self.mount_state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(key, MountState::Removing);
         self.notify_window_change();
     }
 
@@ -1837,12 +1942,20 @@ impl WorkspaceHost {
 /// The control socket reaches the host through `Weak<dyn HostControl>` (the
 /// `install_self` back-reference), so it never names the concrete host type.
 impl HostControl for WorkspaceHost {
-    fn close_workspace_for_root(&self, root: &Path) -> Result<bool, Error> {
-        self.close_workspace_for_root(root)
+    fn close_workspace_for_root(
+        &self,
+        root: &Path,
+        force: bool,
+    ) -> Result<WorkspaceLifecycleOutcome, Error> {
+        self.close_workspace_for_root(root, force)
     }
 
-    fn remove_workspace_for_root(&self, root: &Path) -> Result<bool, Error> {
-        self.remove_workspace_for_root(root)
+    fn remove_workspace_for_root(
+        &self,
+        root: &Path,
+        force: bool,
+    ) -> Result<WorkspaceLifecycleOutcome, Error> {
+        self.remove_workspace_for_root(root, force)
     }
 
     fn assemble_window_records(&self) -> Vec<WindowRecord> {
@@ -2261,7 +2374,10 @@ mod tests {
             .expect("open");
         let app = host.clone().router();
 
-        assert!(host.close_workspace("/workspace").expect("close"));
+        assert!(host
+            .close_workspace("/workspace", false)
+            .expect("close")
+            .completed());
         let response = app
             .oneshot(
                 Request::builder()
@@ -2299,7 +2415,10 @@ mod tests {
             (WorkspaceStatus::Running, None)
         );
 
-        assert!(host.close_workspace("/workspace").expect("close"));
+        assert!(host
+            .close_workspace("/workspace", false)
+            .expect("close")
+            .completed());
         assert_eq!(
             host.workspace_status(root.path()),
             (WorkspaceStatus::Stopped, None)
@@ -2333,6 +2452,27 @@ mod tests {
         assert_eq!(
             host.workspace_status(root.path()),
             (WorkspaceStatus::Stopped, None)
+        );
+    }
+
+    #[tokio::test]
+    async fn host_workspace_status_surfaces_closing_and_removing() {
+        let cfg = tempfile::tempdir().expect("config dir");
+        let root = tempfile::tempdir().expect("workspace");
+        let lib = Library::open_at(cfg.path().join("config.toml")).expect("library");
+        lib.register_workspace(root.path()).expect("register");
+        let host = Arc::new(WorkspaceHost::new(lib.clone(), fake_builder()));
+
+        host.mark_mount_closing(root.path());
+        assert_eq!(
+            host.workspace_status(root.path()),
+            (WorkspaceStatus::Closing, None)
+        );
+
+        host.mark_mount_removing(root.path());
+        assert_eq!(
+            host.workspace_status(root.path()),
+            (WorkspaceStatus::Removing, None)
         );
     }
 
@@ -2371,7 +2511,10 @@ mod tests {
         host.open_registered_workspace(root.path(), serve_config("/first"))
             .await
             .expect("open first");
-        assert!(host.close_workspace("/first").expect("close first"));
+        assert!(host
+            .close_workspace("/first", false)
+            .expect("close first")
+            .completed());
 
         host.open_registered_workspace(root.path(), serve_config("/second"))
             .await
@@ -2413,7 +2556,10 @@ mod tests {
 
         // OFF: the workspace window is FILTERED from the live feed, the terminal
         // is unaffected, and the record is STILL persisted in the registry.
-        assert!(host.close_workspace("/workspace").expect("close"));
+        assert!(host
+            .close_workspace("/workspace", false)
+            .expect("close")
+            .completed());
         assert!(
             !feed_ids().contains(&ws.window_id),
             "off workspace window is hidden from the live feed"
@@ -2459,7 +2605,10 @@ mod tests {
         host.install_window_registry(registry.clone(), "local".into());
         assert_eq!(registry.snapshot().len(), 1);
 
-        assert!(host.remove_workspace_for_root(root.path()).expect("forget"));
+        assert!(host
+            .remove_workspace_for_root(root.path(), false)
+            .expect("forget")
+            .completed());
         assert!(
             registry.snapshot().is_empty(),
             "forget purges the window record"
@@ -2494,7 +2643,10 @@ mod tests {
             "flock is held while the workspace is mounted"
         );
 
-        assert!(host.close_workspace("/ws").expect("close"));
+        assert!(host
+            .close_workspace("/ws", false)
+            .expect("close")
+            .completed());
         assert!(
             chan_workspace::lock::is_free(&lock_dir),
             "flock is free the moment close_workspace returns"
@@ -2514,19 +2666,22 @@ mod tests {
 
         // The `chan close` host path: unmount the matching tenant by root.
         assert!(host
-            .close_workspace_for_root(root.path())
-            .expect("close by root"));
+            .close_workspace_for_root(root.path(), false)
+            .expect("close by root")
+            .completed());
         assert!(host.mounted_prefixes().expect("prefixes").is_empty());
 
         // An already-unmounted root and an unknown root both report false
         // (no panic, no error) so unserve is idempotent / 404-able.
-        assert!(!host
-            .close_workspace_for_root(root.path())
-            .expect("absent root"));
+        assert!(host
+            .close_workspace_for_root(root.path(), false)
+            .expect("absent root")
+            .not_found());
         let other = tempfile::tempdir().expect("other");
-        assert!(!host
-            .close_workspace_for_root(other.path())
-            .expect("unknown root"));
+        assert!(host
+            .close_workspace_for_root(other.path(), false)
+            .expect("unknown root")
+            .not_found());
     }
 
     #[tokio::test]
@@ -2554,7 +2709,10 @@ mod tests {
         assert!(host.live_workspace(other.path()).is_none());
 
         // After close, the handle is no longer live.
-        assert!(host.close_workspace("/workspace").expect("close"));
+        assert!(host
+            .close_workspace("/workspace", false)
+            .expect("close")
+            .completed());
         assert!(host.live_workspace(root.path()).is_none());
     }
 
@@ -2592,7 +2750,10 @@ mod tests {
         assert!(host.mounted_prefix_for_root(other.path()).is_none());
 
         // Closing the REAL prefix unmounts it; by-root resolution then reads off.
-        assert!(host.close_workspace(mount_prefix).expect("close"));
+        assert!(host
+            .close_workspace(mount_prefix, false)
+            .expect("close")
+            .completed());
         assert!(!host.is_root_mounted(root.path()));
         assert!(host.mounted_prefix_for_root(root.path()).is_none());
     }
@@ -2923,6 +3084,124 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn close_workspace_refuses_live_terminals_until_forced() {
+        let cfg = tempfile::tempdir().expect("config dir");
+        let root = tempfile::tempdir().expect("workspace");
+        let lib = Library::open_at(cfg.path().join("config.toml")).expect("library");
+        lib.register_workspace(root.path()).expect("register");
+        let host = Arc::new(WorkspaceHost::new(lib, fake_builder()));
+        host.open_registered_workspace(root.path(), serve_config("/ws"))
+            .await
+            .expect("open");
+
+        let registry = {
+            let workspaces = host.workspaces.read().expect("host lock");
+            workspaces
+                .get("/ws")
+                .expect("workspace mounted")
+                .artifacts
+                .terminal_sessions
+                .clone()
+        };
+        registry
+            .create(CreateOptions {
+                size: PtySize {
+                    rows: 24,
+                    cols: 80,
+                    pixel_width: 0,
+                    pixel_height: 0,
+                },
+                tab_name: None,
+                tab_group: None,
+                window_id: None,
+                mcp_env: false,
+                cwd: None,
+                command: None,
+                env: Default::default(),
+            })
+            .expect("spawn PTY");
+
+        assert_eq!(
+            host.close_workspace("/ws", false).expect("close"),
+            WorkspaceLifecycleOutcome::Refused {
+                active_terminals: 1
+            }
+        );
+        assert!(host.is_root_mounted(root.path()));
+        assert_eq!(
+            host.workspace_status(root.path()),
+            (WorkspaceStatus::Running, None)
+        );
+
+        assert!(host
+            .close_workspace("/ws", true)
+            .expect("force close")
+            .completed());
+        assert!(!host.is_root_mounted(root.path()));
+    }
+
+    #[tokio::test]
+    async fn remove_workspace_refuses_live_terminals_and_keeps_registration() {
+        let cfg = tempfile::tempdir().expect("config dir");
+        let root = tempfile::tempdir().expect("workspace");
+        let lib = Library::open_at(cfg.path().join("config.toml")).expect("library");
+        lib.register_workspace(root.path()).expect("register");
+        let host = Arc::new(WorkspaceHost::new(lib.clone(), fake_builder()));
+        host.open_registered_workspace(root.path(), serve_config("/ws"))
+            .await
+            .expect("open");
+
+        let registry = {
+            let workspaces = host.workspaces.read().expect("host lock");
+            workspaces
+                .get("/ws")
+                .expect("workspace mounted")
+                .artifacts
+                .terminal_sessions
+                .clone()
+        };
+        registry
+            .create(CreateOptions {
+                size: PtySize {
+                    rows: 24,
+                    cols: 80,
+                    pixel_width: 0,
+                    pixel_height: 0,
+                },
+                tab_name: None,
+                tab_group: None,
+                window_id: None,
+                mcp_env: false,
+                cwd: None,
+                command: None,
+                env: Default::default(),
+            })
+            .expect("spawn PTY");
+
+        assert_eq!(
+            host.remove_workspace_for_root(root.path(), false)
+                .expect("remove"),
+            WorkspaceLifecycleOutcome::Refused {
+                active_terminals: 1
+            }
+        );
+        assert!(host.is_root_mounted(root.path()));
+        assert!(
+            host.library()
+                .list_workspaces()
+                .iter()
+                .any(|ws| canonical_key(&ws.root_path) == canonical_key(root.path())),
+            "refused remove keeps the registration"
+        );
+
+        assert!(host
+            .remove_workspace_for_root(root.path(), true)
+            .expect("force remove")
+            .completed());
+        assert!(host.library().list_workspaces().is_empty());
+    }
+
+    #[tokio::test]
     async fn terminal_tenant_last_exit_reports_the_script_exit_code() {
         let cfg = tempfile::tempdir().expect("config dir");
         let lib = Library::open_at(cfg.path().join("config.toml")).expect("library");
@@ -3009,7 +3288,10 @@ mod tests {
 
         // Idempotent: still a no-op after a tenant is closed, and with an
         // empty map.
-        assert!(host.close_workspace("/a").expect("close a"));
+        assert!(host
+            .close_workspace("/a", false)
+            .expect("close a")
+            .completed());
         host.cancel_all_reindex();
     }
 

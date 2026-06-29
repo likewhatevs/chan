@@ -14,7 +14,7 @@ use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
-use chan_server::{WindowKind, WindowRecord};
+use chan_server::{WindowKind, WindowRecord, WorkspaceLifecycleOutcome};
 
 /// Per-process monotonic counter appended to every workspace-window
 /// label so the user can open more than one window for the same
@@ -52,16 +52,12 @@ const ICON_OUTBOUND: &str = "\u{1F310}"; // globe: a remote devserver we dial OU
 /// Live state for one running serve. Held in `AppState.serves`
 /// keyed by canonical workspace path.
 pub struct ServeHandle {
-    prefix: String,
     pub url: Option<String>,
 }
 
 impl ServeHandle {
-    fn embedded(prefix: String, url: String) -> Self {
-        Self {
-            prefix,
-            url: Some(url),
-        }
+    fn embedded(url: String) -> Self {
+        Self { url: Some(url) }
     }
 }
 
@@ -92,12 +88,12 @@ pub async fn start(
         let mut serves = state.serves.lock().unwrap();
         if serves.contains_key(&key) {
             drop(serves);
-            if let Err(e) = embedded.close_prefix(&prefix) {
+            if let Err(e) = embedded.close_prefix(&prefix, true) {
                 tracing::warn!(key = %key, error = %e, "closing duplicate embedded workspace failed");
             }
             return Ok(());
         }
-        serves.insert(key.clone(), ServeHandle::embedded(prefix, url.clone()));
+        serves.insert(key.clone(), ServeHandle::embedded(url.clone()));
     }
     let _ = app.emit(SERVES_CHANGED, ());
     // Mint the FIRST window only on a USER turn-on (`mint_first_window`) when this
@@ -118,7 +114,8 @@ pub async fn start(
     if mint_first_window && !has_window {
         if let Err(e) = embedded.mint_window(WindowKind::Workspace, Some(key.clone())) {
             if let Some(handle) = state.serves.lock().unwrap().remove(&key) {
-                stop_handle(None, &state, &key, handle);
+                drop(handle);
+                let _ = stop_handle(None, &state, &key, true);
             }
             let _ = app.emit(SERVES_CHANGED, ());
             return Err(e);
@@ -140,38 +137,60 @@ fn url_prefix_from_local_url(url: &str) -> Result<String, String> {
     }
 }
 
-/// Stop a running serve. No-op if the workspace isn't running. Removes
-/// the live entry before waiting so an immediate stop -> start can
-/// mount a fresh runtime instead of observing stale map state.
-pub fn stop(app: Option<&AppHandle>, state: &AppState, key: &str) {
-    let handle = state.serves.lock().unwrap().remove(key);
-    if let Some(h) = handle {
-        stop_handle(app, state, key, h);
+/// Stop a running serve. No-op if the workspace isn't running. The live map
+/// entry is removed only after the host accepts the close, so a live-terminal
+/// refusal leaves desktop state consistent with the still-running tenant.
+pub fn stop(
+    app: Option<&AppHandle>,
+    state: &AppState,
+    key: &str,
+    force: bool,
+) -> Result<WorkspaceLifecycleOutcome, String> {
+    if !state.serves.lock().unwrap().contains_key(key) {
+        return Ok(WorkspaceLifecycleOutcome::NotFound);
     }
+    let outcome = stop_handle(app, state, key, force)?;
+    if matches!(
+        outcome,
+        WorkspaceLifecycleOutcome::Completed | WorkspaceLifecycleOutcome::NotFound
+    ) {
+        state.serves.lock().unwrap().remove(key);
+    }
+    Ok(outcome)
 }
 
 /// Stop every running serve. Called from the Tauri Exit hook so
 /// embedded workspace state shuts down before the desktop exits.
 pub fn stop_all(state: &AppState) {
     let handles: Vec<(String, ServeHandle)> = state.serves.lock().unwrap().drain().collect();
-    for (key, h) in handles {
-        stop_handle(None, state, &key, h);
+    for (key, _handle) in handles {
+        let _ = stop_handle(None, state, &key, true);
     }
 }
 
-fn stop_handle(app: Option<&AppHandle>, state: &AppState, key: &str, handle: ServeHandle) {
+fn stop_handle(
+    app: Option<&AppHandle>,
+    state: &AppState,
+    key: &str,
+    force: bool,
+) -> Result<WorkspaceLifecycleOutcome, String> {
+    let mut outcome = WorkspaceLifecycleOutcome::NotFound;
     if let Some(embedded) = state.embedded.get() {
-        if let Err(e) = embedded.close_prefix(&handle.prefix) {
-            tracing::warn!(key = %key, error = %e, "closing embedded workspace failed");
-        }
+        outcome = embedded.close_workspace_root(Path::new(key), force)?;
     }
     if let Some(app) = app {
-        // No imperative window teardown: unmounting fired the library change
-        // signal, so the watcher reconciles the now-tenant-less windows closed
-        // (their token emptied → not shown) while KEEPING the persisted records,
-        // so turning the workspace back on reopens them at the same window_id.
-        let _ = app.emit(SERVES_CHANGED, ());
+        if matches!(
+            outcome,
+            WorkspaceLifecycleOutcome::Completed | WorkspaceLifecycleOutcome::NotFound
+        ) {
+            // No imperative window teardown: unmounting fired the library change
+            // signal, so the watcher reconciles the now-tenant-less windows closed
+            // (their token emptied → not shown) while KEEPING the persisted records,
+            // so turning the workspace back on reopens them at the same window_id.
+            let _ = app.emit(SERVES_CHANGED, ());
+        }
     }
+    Ok(outcome)
 }
 
 /// Stable Tauri window-label prefix for a local workspace. Used to
@@ -471,13 +490,15 @@ pub fn control_terminal_label(devserver_id: &str) -> String {
 /// pass the full label already (composite, or a legacy `terminal-`/`workspace-`
 /// scheme), so an id that is itself a live label OR already contains `::` is
 /// used verbatim. Otherwise match the native window whose label ends with
-/// `::{id}` — among the OPEN windows AND the buried list. A buried WATCHED window
-/// (local:: and the devserver `lib-<hex>::` family) has no live webview
-/// — the reconcile destroyed it on bury — so it can't be found among the open
-/// windows; its full composite label lives in the buried list so a buried
-/// devserver standalone terminal does not fall to the `local::` fallback. The
-/// view-driven un-bury in [`open_window_by_label`] needs the real `lib-<hex>::`
-/// label. Only a bare id matching NEITHER falls back to the `local::` composite.
+/// `::{id}` — among the OPEN windows, the buried list, and the connected
+/// devserver feed. A buried WATCHED window (local:: and the devserver
+/// `lib-<hex>::` family) has no live webview — the reconcile destroyed it on
+/// bury — so it can't be found among the open windows; its full composite label
+/// lives in the buried list. A server-hidden devserver window from a previous
+/// session may not be locally buried either; its composite label still lives in
+/// the feed. The view-driven un-bury in [`open_window_by_label`] needs the real
+/// `lib-<hex>::` label. Only a bare id matching NONE of these falls back to the
+/// `local::` composite.
 pub(crate) fn resolve_window_label(app: &AppHandle, id: &str) -> String {
     // A live window whose exact label IS `id` wins — covers `cs window` passing a
     // legacy `terminal-`/`workspace-` label that carries no `::`.
@@ -487,6 +508,7 @@ pub(crate) fn resolve_window_label(app: &AppHandle, id: &str) -> String {
     let mut candidates: Vec<String> = app.webview_windows().into_keys().collect();
     let state = app.state::<Arc<AppState>>();
     candidates.extend(state.buried_snapshot().into_iter().map(|(label, _)| label));
+    candidates.extend(state.devserver_feed.window_labels());
     resolve_label_from(id, &candidates)
 }
 
@@ -2008,6 +2030,18 @@ mod tests {
     }
 
     #[test]
+    fn resolve_label_matches_a_server_hidden_devserver_feed_label() {
+        // A server-hidden devserver window from a previous desktop session may
+        // have no live webview and no local buried-menu entry. The devserver
+        // window feed is still enough to recover the composite label.
+        let candidates = vec!["lib-dev1::w-hidden".to_string()];
+        assert_eq!(
+            resolve_label_from("w-hidden", &candidates),
+            "lib-dev1::w-hidden"
+        );
+    }
+
+    #[test]
     fn resolve_label_falls_back_to_local_for_an_unmatched_bare_id() {
         // A bare id matching NO candidate (neither an open window nor a buried
         // composite) resolves to the `local::` composite as a last resort — the
@@ -2153,21 +2187,19 @@ mod tests {
     #[test]
     fn registry_commands_run_in_process_not_via_chan_cli() {
         // chan-desktop runs without a `chan` binary: `add_workspace`
-        // and `remove_workspace` route through the embedded host's
-        // shared `Library` rather than spawning chan. (Optional-layer
-        // enablement is not a desktop concern at all: the SPA's
-        // onboarding card drives it post-boot through chan-server.)
-        // Pin the in-process call shape so a future change can't
-        // silently reintroduce a subprocess dependency, and assert
-        // the deleted subprocess argument shapes are gone.
+        // writes through the embedded host's shared `Library`, and
+        // `remove_workspace` routes through the embedded host lifecycle.
+        // Pin the in-process call shape so a future change can't silently
+        // reintroduce a subprocess dependency, and assert the deleted
+        // subprocess argument shapes are gone.
         const MAIN_RS: &str = include_str!("main.rs");
         assert!(
             MAIN_RS.contains("embedded.library()"),
             "registry commands must route through the embedded shared Library",
         );
         assert!(
-            MAIN_RS.contains("register_workspace") && MAIN_RS.contains("unregister_workspace"),
-            "add_workspace/remove_workspace must use Library register/unregister in-process",
+            MAIN_RS.contains("register_workspace") && MAIN_RS.contains("remove_workspace_root"),
+            "add_workspace/remove_workspace must use embedded in-process registry operations",
         );
         assert!(
             !MAIN_RS.contains("read_features_via_chan_index_status"),

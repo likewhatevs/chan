@@ -312,8 +312,12 @@ export async function setDevserverWorkspaceOn(
 }
 
 /** Forget (unmount + drop) a connected devserver's served workspace by prefix. */
-export async function forgetDevserverWorkspace(id: string, prefix: string): Promise<void> {
-  await backend.forgetDevserverWorkspace(id, prefix);
+export async function forgetDevserverWorkspace(
+  id: string,
+  prefix: string,
+  force?: boolean,
+): Promise<void> {
+  await backend.forgetDevserverWorkspace(id, prefix, force);
 }
 
 /** Mint a new terminal window of the local library. The window feed updates

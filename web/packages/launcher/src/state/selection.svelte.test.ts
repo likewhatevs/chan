@@ -205,7 +205,7 @@ describe("select mode lifecycle", () => {
 });
 
 describe("ordered cross-kind bulk remove", () => {
-  it("forgets served workspaces, then removes devservers, then local workspaces", async () => {
+  it("removes local workspaces, then forgets served workspaces, then removes devservers", async () => {
     // A mixed selection across all three kinds: a local workspace, a connected
     // devserver's served workspace (ds-1:w/api), and a fresh devserver. Ensure
     // ds-1 is connected first (a prior case may have disconnected it in the

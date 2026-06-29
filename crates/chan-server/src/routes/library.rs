@@ -36,7 +36,8 @@ use crate::devserver::bytes_eq;
 use crate::static_assets::serve_launcher;
 use crate::{
     CreateWindow, DesktopWindowOp, DevserverEntry, DevserverInput, LauncherWorkspace,
-    SetWorkspaceOnOutcome, WindowRecord, WindowSet, WorkspaceHost, WorkspaceStatus,
+    SetWorkspaceOnOutcome, WindowRecord, WindowSet, WorkspaceHost, WorkspaceLifecycleOutcome,
+    WorkspaceStatus,
 };
 
 /// State shared by the `/api/library/workspaces` handlers: the library host plus
@@ -582,6 +583,17 @@ struct LiveTerminalsRejection {
     active_terminals: usize,
 }
 
+fn live_terminals_response(active_terminals: usize) -> Response {
+    (
+        StatusCode::CONFLICT,
+        Json(LiveTerminalsRejection {
+            error: "live_terminals",
+            active_terminals,
+        }),
+    )
+        .into_response()
+}
+
 /// `POST /api/library/devservers/{id}/workspaces/on` `{prefix}`: turn a connected
 /// devserver's workspace (the remote mount `prefix`) on through the desktop
 /// bridge. 204/409 (`on` never blocks on terminals, so `force` is irrelevant).
@@ -628,14 +640,9 @@ async fn set_devserver_workspace_on(
         .await
     {
         Ok(SetWorkspaceOnOutcome::Done) => StatusCode::NO_CONTENT.into_response(),
-        Ok(SetWorkspaceOnOutcome::NeedsForce { active_terminals }) => (
-            StatusCode::CONFLICT,
-            Json(LiveTerminalsRejection {
-                error: "live_terminals",
-                active_terminals,
-            }),
-        )
-            .into_response(),
+        Ok(SetWorkspaceOnOutcome::NeedsForce { active_terminals }) => {
+            live_terminals_response(active_terminals)
+        }
         Err(msg) => (StatusCode::CONFLICT, msg).into_response(),
     }
 }
@@ -649,12 +656,22 @@ async fn handle_forget_devserver_workspace(
     AxumPath(id): AxumPath<String>,
     Json(body): Json<DevserverWorkspaceRef>,
 ) -> Response {
-    dispatch_window_op(&host, |reply| DesktopWindowOp::ForgetDevserverWorkspace {
-        id,
-        prefix: body.prefix,
-        reply,
-    })
-    .await
+    match host
+        .desktop_bridge()
+        .dispatch(|reply| DesktopWindowOp::ForgetDevserverWorkspace {
+            id,
+            prefix: body.prefix,
+            force: body.force,
+            reply,
+        })
+        .await
+    {
+        Ok(SetWorkspaceOnOutcome::Done) => StatusCode::NO_CONTENT.into_response(),
+        Ok(SetWorkspaceOnOutcome::NeedsForce { active_terminals }) => {
+            live_terminals_response(active_terminals)
+        }
+        Err(msg) => (StatusCode::CONFLICT, msg).into_response(),
+    }
 }
 
 /// `POST /api/library/fs/pick-folder`: open the OS native folder dialog through
@@ -919,41 +936,15 @@ async fn handle_workspace_off(
     let force = serde_json::from_slice::<WorkspaceOff>(&body)
         .unwrap_or_default()
         .force;
-    let Some((allocated, root)) = resolve_workspace(&state.host, &id) else {
+    let Some((_allocated, root)) = resolve_workspace(&state.host, &id) else {
         return StatusCode::NOT_FOUND.into_response();
     };
-    // Close the prefix the workspace is ACTUALLY mounted at — the desktop mounts
-    // at `workspace-<hash>`, not the slug — falling back to the allocated slug
-    // when it is not mounted (then the close is a no-op).
-    let prefix = state
-        .host
-        .mounted_prefix_for_root(&root)
-        .unwrap_or(allocated);
-    // Live terminals would be killed by the unmount — confirm first, in parity
-    // with the devserver off: an unforced off of a workspace with live terminals
-    // answers 409 + the shared `live_terminals` body the launcher already parses;
-    // the launcher then retries with `force: true`. OFF still preserves the
-    // window records; only the close is gated.
-    let active_terminals = state.host.tenant_terminal_session_count(&prefix);
-    if active_terminals > 0 && !force {
-        return (
-            StatusCode::CONFLICT,
-            Json(LiveTerminalsRejection {
-                error: "live_terminals",
-                active_terminals,
-            }),
-        )
-            .into_response();
-    }
-    match state.host.close_workspace(&prefix) {
-        Ok(_) => {
-            set_overlay(&state.host, &root, false);
-            // Settle any transient `starting`/`error` to `stopped`: a failed
-            // mount is not in the `workspaces` map, so `close_workspace` was a
-            // no-op for it and would otherwise leave its lifecycle overlay (and
-            // the launcher's error row) behind.
-            state.host.clear_workspace_lifecycle(&root);
+    match state.host.close_workspace_for_root(&root, force) {
+        Ok(WorkspaceLifecycleOutcome::Completed | WorkspaceLifecycleOutcome::NotFound) => {
             StatusCode::NO_CONTENT.into_response()
+        }
+        Ok(WorkspaceLifecycleOutcome::Refused { active_terminals }) => {
+            live_terminals_response(active_terminals)
         }
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
@@ -969,28 +960,17 @@ async fn handle_remove_workspace(
     if let Err(resp) = require_mutable(&state) {
         return *resp;
     }
-    let Some((allocated, root)) = resolve_workspace(&state.host, &id) else {
+    let Some((_allocated, root)) = resolve_workspace(&state.host, &id) else {
         return StatusCode::NOT_FOUND.into_response();
     };
-    // Unmount the ACTUAL mounted prefix first (releases the flock before the
-    // unregister's reset) — the desktop mounts at `workspace-<hash>`, not the
-    // slug — falling back to the allocated slug when registered-but-off (a no-op).
-    let prefix = state
-        .host
-        .mounted_prefix_for_root(&root)
-        .unwrap_or(allocated);
-    let _ = state.host.close_workspace(&prefix);
-    if let Err(e) = state.host.library().unregister_workspace(&root) {
-        return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+    match state.host.remove_workspace_for_root(&root, false) {
+        Ok(WorkspaceLifecycleOutcome::Completed) => StatusCode::NO_CONTENT.into_response(),
+        Ok(WorkspaceLifecycleOutcome::NotFound) => StatusCode::NOT_FOUND.into_response(),
+        Ok(WorkspaceLifecycleOutcome::Refused { active_terminals }) => {
+            live_terminals_response(active_terminals)
+        }
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
-    if let Some(overlay) = state.host.workspace_overlay() {
-        overlay.forget(&root.to_string_lossy());
-    }
-    // FORGET purges the window records (the workspace is gone). OFF preserves
-    // them (filtered from the live feed until ON re-includes them), so the
-    // discard belongs only here on the forget path.
-    state.host.discard_workspace_windows(&root);
-    StatusCode::NO_CONTENT.into_response()
 }
 
 // ---------------------------------------------------------------------------
@@ -1594,12 +1574,22 @@ mod devserver_route_tests {
         };
         let launcher = launcher_router(host.clone(), None, Some(serve_addr));
         let off_uri = format!("/api/library/workspaces/{id}/off");
+        let remove_uri = format!("/api/library/workspaces/{id}");
 
         // Unforced off → 409 + the shared live_terminals body with the count.
         let (status, body) = request(&launcher, "POST", &off_uri, None).await;
         assert_eq!(status, StatusCode::CONFLICT);
         assert_eq!(body["error"], "live_terminals");
         assert_eq!(body["active_terminals"], 1);
+        assert_eq!(host.tenant_terminal_session_count(&prefix), 1);
+
+        // Unforced remove uses the same owner-side guard and body, and leaves
+        // the running workspace intact.
+        let (status, body) = request(&launcher, "DELETE", &remove_uri, None).await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(body["error"], "live_terminals");
+        assert_eq!(body["active_terminals"], 1);
+        assert_eq!(host.tenant_terminal_session_count(&prefix), 1);
 
         // Retry with force → the off goes through (204).
         let (status, _) = request(&launcher, "POST", &off_uri, Some(r#"{"force":true}"#)).await;
@@ -1685,11 +1675,11 @@ mod window_op_route_tests {
                     | DesktopWindowOp::ConnectDevserver { reply, .. }
                     | DesktopWindowOp::DisconnectDevserver { reply, .. }
                     | DesktopWindowOp::OpenDevserverTerminal { reply, .. }
-                    | DesktopWindowOp::OpenDevserverWorkspace { reply, .. }
-                    | DesktopWindowOp::ForgetDevserverWorkspace { reply, .. } => {
+                    | DesktopWindowOp::OpenDevserverWorkspace { reply, .. } => {
                         let _ = reply.send(Ok(()));
                     }
-                    DesktopWindowOp::SetDevserverWorkspaceOn { reply, .. } => {
+                    DesktopWindowOp::SetDevserverWorkspaceOn { reply, .. }
+                    | DesktopWindowOp::ForgetDevserverWorkspace { reply, .. } => {
                         let _ = reply.send(Ok(SetWorkspaceOnOutcome::Done));
                     }
                     DesktopWindowOp::PickFolder { reply } => {
@@ -1912,18 +1902,30 @@ mod window_op_route_tests {
         ));
         tokio::spawn(async move {
             while let Some(op) = rx.recv().await {
-                if let DesktopWindowOp::SetDevserverWorkspaceOn {
-                    on, force, reply, ..
-                } = op
-                {
-                    let outcome = if !on && !force {
-                        SetWorkspaceOnOutcome::NeedsForce {
-                            active_terminals: 2,
-                        }
-                    } else {
-                        SetWorkspaceOnOutcome::Done
-                    };
-                    let _ = reply.send(Ok(outcome));
+                match op {
+                    DesktopWindowOp::SetDevserverWorkspaceOn {
+                        on, force, reply, ..
+                    } => {
+                        let outcome = if !on && !force {
+                            SetWorkspaceOnOutcome::NeedsForce {
+                                active_terminals: 2,
+                            }
+                        } else {
+                            SetWorkspaceOnOutcome::Done
+                        };
+                        let _ = reply.send(Ok(outcome));
+                    }
+                    DesktopWindowOp::ForgetDevserverWorkspace { force, reply, .. } => {
+                        let outcome = if !force {
+                            SetWorkspaceOnOutcome::NeedsForce {
+                                active_terminals: 2,
+                            }
+                        } else {
+                            SetWorkspaceOnOutcome::Done
+                        };
+                        let _ = reply.send(Ok(outcome));
+                    }
+                    _ => {}
                 }
             }
         });
@@ -1960,5 +1962,26 @@ mod window_op_route_tests {
         )
         .await;
         assert_eq!(status, StatusCode::NO_CONTENT, "on");
+        // Forget shares the same refusal body and force retry contract.
+        let (status, body) = send(
+            &router,
+            "POST",
+            "/api/library/devservers/ds1/workspaces/forget",
+            Some(r#"{"prefix":"myws"}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT, "unforced forget");
+        assert_eq!(
+            body, r#"{"error":"live_terminals","active_terminals":2}"#,
+            "needs-force body"
+        );
+        let (status, _) = send(
+            &router,
+            "POST",
+            "/api/library/devservers/ds1/workspaces/forget",
+            Some(r#"{"prefix":"myws","force":true}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NO_CONTENT, "forced forget");
     }
 }
