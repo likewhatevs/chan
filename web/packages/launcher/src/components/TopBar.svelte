@@ -96,6 +96,9 @@
     font-size: 1.1rem;
     line-height: 1;
     cursor: pointer;
+    transition:
+      border-color 160ms ease,
+      color 160ms ease;
   }
 
   .icon-btn:hover {
@@ -109,4 +112,5 @@
     color: var(--accent);
     background: color-mix(in srgb, var(--accent) 14%, transparent);
   }
+
 </style>

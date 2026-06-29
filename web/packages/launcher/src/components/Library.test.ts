@@ -327,23 +327,24 @@ describe("Library: nested machine tree", () => {
     expect(firstRowName?.textContent?.trim()).toBe("Control terminal");
   });
 
-  it("shows a window-count badge and expands a card to reveal its nested windows", () => {
+  it("shows a clickable window-count badge and expands a card to reveal its nested windows", () => {
     mountList();
     // The connected ds-1's "api" workspace owns one window (its window survives
     // the shared mock across tests, unlike a local one that an off discards);
     // collapsed by default with a count badge and no nested-windows panel.
-    expect(target!.querySelector(".count-badge")?.textContent).toContain("1");
+    const badge = target!.querySelector(".count-badge") as HTMLButtonElement;
+    expect(badge?.textContent).toContain("1");
+    expect(badge?.getAttribute("aria-expanded")).toBe("false");
     expect(target!.querySelector(".ws-windows")).toBeNull();
-    const expand = byAria("Expand api");
-    expect(expand).toBeTruthy();
-    expand!.click();
+    badge.click();
     flushSync();
     // Expanded: the nested-windows panel appears with the window row, labelled
     // just "Window N" (the card already names the workspace, no path repeated).
     const panel = target!.querySelector(".ws-windows");
     expect(panel).not.toBeNull();
     expect(panel!.textContent).toContain("Window 1");
-    byAria("Collapse api")!.click();
+    expect(target!.querySelector(".count-badge")?.getAttribute("aria-expanded")).toBe("true");
+    (target!.querySelector(".count-badge") as HTMLButtonElement).click();
     flushSync();
     expect(target!.querySelector(".ws-windows")).toBeNull();
   });

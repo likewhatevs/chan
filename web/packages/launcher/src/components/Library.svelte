@@ -206,10 +206,16 @@
         <span class="row-sub" title={ws.path}>{ws.path}</span>
       </div>
       {#if hasWindows}
-        <span class="count-badge" title={`${node.count} window${node.count === 1 ? "" : "s"}`}>
+        <button
+          class="count-badge"
+          type="button"
+          title={`${node.count} window${node.count === 1 ? "" : "s"}`}
+          aria-label={`${isExpanded(ws.workspace_id) ? "Collapse" : "Expand"} ${displayName(ws)} windows`}
+          aria-expanded={isExpanded(ws.workspace_id)}
+          onclick={() => toggleExpand(ws.workspace_id)}>
           <AppWindow size={12} />
           {node.count}
-        </span>
+        </button>
       {/if}
       {#if readOnly}
         <span class="pill" class:on={ws.on} aria-disabled="true">{ws.on ? "On" : "Off"}</span>
@@ -455,12 +461,25 @@
   /* Each machine (LOCAL or a devserver) is a contained card: a slightly elevated
      surface with a border, radius, and a subtle shadow. */
   .machine {
+    position: relative;
     margin-bottom: 0.8rem;
     padding: 0.3rem 0.5rem 0.7rem;
     border: 1px solid var(--border);
     border-radius: 14px;
     background: var(--bg-card);
     box-shadow: 0 1px 2px rgba(0, 0, 0, 0.28);
+    transform-origin: center;
+    transition:
+      transform 240ms cubic-bezier(0.34, 1.56, 0.64, 1),
+      box-shadow 160ms ease;
+  }
+
+  /* The machine card wobbles as a whole, including while the pointer is on
+     nested controls. Buttons keep their own hover highlights without scaling. */
+  .machine:hover {
+    transform: scale(1.015);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.24);
+    z-index: 1;
   }
 
   /* The machine header: icon + name + status on the left, machine-level actions
@@ -470,16 +489,6 @@
     align-items: center;
     gap: 0.6rem;
     padding: 0.4rem 0.2rem;
-    transform-origin: center;
-    transition: transform 220ms cubic-bezier(0.34, 1.56, 0.64, 1);
-  }
-
-  /* The machine identity row is the machine's badge: on hover it wobbles like
-     a card (the easeOutBack overshoot). :has() suppresses it while one of its
-     own action buttons is hovered, so the button wobbles alone -- no
-     wobble-within-a-wobble, matching the outer-card-only rule on .ws-card. */
-  .machine-header:hover:not(:has(:global(.icon-btn):hover)) {
-    transform: scale(1.015);
   }
 
   .machine-icon {
@@ -553,6 +562,11 @@
   .ds-id :global(.addr-pencil) {
     flex-shrink: 0;
     color: var(--text-secondary);
+    transition: color 160ms ease;
+  }
+
+  button.ds-id.editable:hover :global(.addr-pencil) {
+    color: var(--brand);
   }
 
   .machine-actions {
@@ -615,11 +629,8 @@
   }
 
   /* A workspace card: a rounded panel whose header collapses/expands its nested
-     windows. On hover the whole card wobbles -- the easeOutBack overshoot (the
-     1.56 in the bezier) on a small scale + a box-shadow lift -- matching the
-     context-menu / tab-menu bubble. The transform sits on the outer card only,
-     so the nested windows scale with it rather than double-wobbling, and
-     position+z-index raise the lifted card above its stacked neighbours. */
+     windows. Workspace cards stay visually stable; the controls inside them keep
+     only their hover highlights. */
   .ws-card {
     position: relative;
     margin-bottom: 0.4rem;
@@ -627,33 +638,14 @@
     border-radius: 10px;
     background: var(--bg-elev);
     overflow: hidden;
-    transform-origin: center;
-    transition:
-      transform 260ms cubic-bezier(0.34, 1.56, 0.64, 1),
-      box-shadow 160ms ease;
   }
 
-  /* :has() suppresses the card wobble while one of its own buttons (header
-     actions or a nested window row) is hovered, so the button wobbles alone. */
-  .ws-card:hover:not(:has(:global(.icon-btn):hover)) {
-    transform: scale(1.02);
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.24);
-    z-index: 1;
-  }
-
-  /* Reduced-motion: keep the box-shadow lift as a static cue, drop the wobble.
-     Selectors match the active rules above so they win inside the query. */
+  /* Reduced-motion: keep colour/background hover cues, drop the wobble. */
   @media (prefers-reduced-motion: reduce) {
-    .ws-card {
+    .machine {
       transition: box-shadow 160ms ease;
     }
-    .ws-card:hover:not(:has(:global(.icon-btn):hover)) {
-      transform: none;
-    }
-    .machine-header {
-      transition: none;
-    }
-    .machine-header:hover:not(:has(:global(.icon-btn):hover)) {
+    .machine:hover {
       transform: none;
     }
   }
@@ -671,6 +663,8 @@
 
   /* The expand chevron rotates from ► (collapsed) to ▼ (expanded). */
   .chevron {
+    --chevron-rotation: 0deg;
+
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -682,11 +676,15 @@
     color: var(--text-secondary);
     cursor: pointer;
     flex-shrink: 0;
-    transition: transform 0.12s ease;
+    transform: rotate(var(--chevron-rotation));
+    transform-origin: center;
+    transition:
+      transform 120ms ease,
+      color 160ms ease;
   }
 
   .chevron.expanded {
-    transform: rotate(90deg);
+    --chevron-rotation: 90deg;
   }
 
   .chevron:hover {
@@ -704,12 +702,22 @@
     align-items: center;
     gap: 0.25rem;
     padding: 0.1rem 0.4rem;
+    border: 1px solid transparent;
     border-radius: 6px;
     background: color-mix(in srgb, var(--text-secondary) 12%, transparent);
     color: var(--text-secondary);
     font-size: 0.7rem;
     font-weight: 600;
     flex-shrink: 0;
+    cursor: pointer;
+    transition:
+      background 160ms ease,
+      color 160ms ease;
+  }
+
+  .count-badge:hover {
+    background: color-mix(in srgb, var(--text-secondary) 18%, transparent);
+    color: var(--text);
   }
 
   /* The nested windows panel (darker, inside the card). */
@@ -746,11 +754,25 @@
     font-size: 0.9rem;
     font-weight: 500;
     cursor: pointer;
+    transition:
+      border-color 160ms ease,
+      background 160ms ease,
+      color 160ms ease;
   }
 
   .add-devserver:hover {
     border-color: color-mix(in srgb, var(--accent) 45%, var(--btn-border));
     color: var(--text);
     background: color-mix(in srgb, var(--text-secondary) 6%, transparent);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .count-badge,
+    .add-devserver {
+      transition:
+        border-color 160ms ease,
+        background 160ms ease,
+        color 160ms ease;
+    }
   }
 </style>

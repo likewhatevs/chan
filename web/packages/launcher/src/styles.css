@@ -55,6 +55,9 @@ body {
   color: var(--text);
   font-size: 0.9rem;
   cursor: pointer;
+  transition:
+    border-color 160ms ease,
+    filter 160ms ease;
 }
 
 .btn:hover:not(:disabled) {
@@ -85,6 +88,9 @@ body {
   color: var(--text-secondary);
   font-size: 0.82rem;
   cursor: pointer;
+  transition:
+    border-color 160ms ease,
+    color 160ms ease;
 }
 
 .btn-ghost:hover:not(:disabled) {
@@ -112,9 +118,7 @@ body {
   background: var(--btn-bg);
   color: var(--text-secondary);
   cursor: pointer;
-  transform-origin: center;
   transition:
-    transform 220ms cubic-bezier(0.34, 1.56, 0.64, 1),
     border-color 160ms ease,
     color 160ms ease;
 }
@@ -122,11 +126,6 @@ body {
 .icon-btn:hover:not(:disabled) {
   border-color: var(--brand);
   color: var(--text);
-  /* The easeOutBack overshoot (the 1.56 in the bezier) on a small scale
-     gives every action button the same hover wobble as the cards. Scale
-     only -- no box-shadow, which an overflow:hidden card would crop on the
-     buttons nested inside it. */
-  transform: scale(1.12);
 }
 
 .icon-btn:disabled {
@@ -145,16 +144,20 @@ body {
   color: var(--danger);
 }
 
-/* Reduced-motion: keep the border/colour hover cue, drop the wobble. */
+/* Reduced-motion: keep the border/colour hover cue. */
 @media (prefers-reduced-motion: reduce) {
+  .btn,
+  .btn-ghost {
+    transition:
+      border-color 160ms ease,
+      color 160ms ease,
+      filter 160ms ease;
+  }
+
   .icon-btn {
     transition:
       border-color 160ms ease,
       color 160ms ease;
-  }
-
-  .icon-btn:hover:not(:disabled) {
-    transform: none;
   }
 }
 

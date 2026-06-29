@@ -131,6 +131,7 @@
     background: transparent;
     color: inherit;
     cursor: pointer;
+    transition: background 160ms ease;
   }
 
   .banner-dismiss:hover {

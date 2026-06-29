@@ -81,7 +81,7 @@
     max-width: none;
     min-height: 0;
     overflow: auto;
-    padding: 0.3rem 1.25rem 0.5rem;
+    padding: 0.75rem 1.25rem 0.5rem;
   }
 
   :global(.launcher-demo-frame .content.with-bulk-bar) {

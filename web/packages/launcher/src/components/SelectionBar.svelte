@@ -111,6 +111,10 @@
     font-size: 0.82rem;
     font-weight: 600;
     cursor: pointer;
+    transition:
+      border-color 160ms ease,
+      background 160ms ease,
+      color 160ms ease;
   }
 
   .bulk-btn:hover:not(:disabled) {
@@ -140,4 +144,5 @@
     background: color-mix(in srgb, var(--danger) 20%, transparent);
     color: var(--danger);
   }
+
 </style>
