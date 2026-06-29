@@ -197,6 +197,25 @@ describe("Library: devserver groups", () => {
     expect(byAria("Connect prod")).toBeTruthy();
   });
 
+  it("does not retain a reaped control row from stale attention alone", () => {
+    const ds = library.devservers.find((d) => d.id === "ds-1")!;
+    library.devservers = library.devservers.map(
+      (d): DevserverEntry => (d.id === "ds-1" ? { ...d, status: "disconnected" } : d),
+    );
+    library.windows = library.windows.filter((w) => !(w.control && w.library_id === ds.library_id));
+    controlAttention.libs[ds.library_id!] = true;
+
+    mountList();
+
+    const machines = [...target!.querySelectorAll("section.machine")];
+    const prod = machines.find((m) => m.textContent?.includes("box.example.com:8787"));
+    expect(prod).toBeTruthy();
+    expect(prod!.textContent).not.toContain("Control terminal");
+    expect(prod!.textContent).not.toContain("disconnected...");
+    expect(prod!.textContent).toContain("Not connected");
+    expect(prod!.querySelector("button.icon-btn.attention")).toBeNull();
+  });
+
   it("fires connect and flips the disconnected devserver to Disconnect", async () => {
     await saveDevserver({ host: "fresh2.example", port: 9101, label: "fresh2" });
     mountList();

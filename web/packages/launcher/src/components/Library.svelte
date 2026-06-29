@@ -48,7 +48,6 @@
   import { buildMachineTree, type MachineNode, type WorkspaceNode } from "../lib/machineTree";
   import { readOnly, hostOs } from "../state/capabilities";
   import { demoState, resetDemo } from "../state/demo.svelte";
-  import { hasControlAttention } from "../state/controlAttention.svelte";
   import type { DevserverEntry, WorkspaceEntry } from "../api/library";
 
   // The whole tree, recomputed when any of the three feeds change (the two-array
@@ -147,14 +146,12 @@
     ds.status === "connecting" || isPending(dsKey(ds.id));
 
   // A disconnected devserver can still own a retained control terminal row. Keep
-  // that row mounted so its attention state can flash until the user acts.
+  // actual rows mounted so their attention state can flash until the user acts;
+  // stale attention without a row must not hold an empty content block open.
   function hasContent(node: MachineNode): boolean {
     return (
       node.kind === "local" ||
-      (node.devserver !== null &&
-        (connected(node.devserver) ||
-          node.control.length > 0 ||
-          (node.libraryId !== null && hasControlAttention(node.libraryId))))
+      (node.devserver !== null && (connected(node.devserver) || node.control.length > 0))
     );
   }
 

@@ -7,6 +7,7 @@
 - The desktop starts the control-exit watcher immediately after registering the control tenant prefix, before token scraping and devserver watcher setup. The watcher uses the captured script-backed run kind and generation, so later config edits or overlapping connect attempts cannot suppress or misroute the event.
 - Stale concurrent connect attempts are coalesced/generation-checked so an old control process cannot overwrite the active prefix or emit against a newer run.
 - The launcher keeps retained control rows visible for disconnected devservers when attention is pending, resolves pending attention by the stable `control-terminal-{devserverId}` row first, and only clears the flash after a real reconnect or successful focus/show action.
+- Explicitly closing the control terminal window now reaps its launcher row instead of leaving stale attention behind; script/PTY exit still keeps the row flashing so the user can inspect or re-run it.
 - The flashing control cue now says `disconnected...` instead of `reconnecting...`, including the marketing launcher demo mock.
 - The devserver design doc now calls out the foreground-script contract and recommends long-running scripts use a foreground command such as `exec ssh -N ...` rather than daemonizing.
 
@@ -26,6 +27,7 @@
 ## Validation
 
 - `cargo test -p chan-library terminal`
+- `cargo test -p chan-desktop control_window_close_reaps_without_attention_event`
 - `cargo test -p chan-server terminal`
 - `cargo check -p chan-desktop`
 - `make macos-chan-dmg`

@@ -1293,9 +1293,9 @@ fn remove_devserver_workspace_windows(app: &tauri::AppHandle, state: &AppState, 
 /// registry row + tenant, then drop the prefix tracking so the exit watcher
 /// (keyed on it) stops. Closing the control-terminal WINDOW alone doesn't stop
 /// the connect script -- its `/control-N` tenant outlives the window -- so
-/// `reap_control_window` reaps both (idempotent), killing the script PTY. Only
-/// the full forget teardown calls this; the disconnect paths keep the control
-/// terminal at "process exited" so the user can re-run.
+/// `reap_control_window` reaps both (idempotent), killing the script PTY. Used
+/// by explicit teardown and by an explicit user close of the control window;
+/// the PTY-exit path deliberately keeps the row for launcher attention.
 fn reap_devserver_control_terminal(app: &tauri::AppHandle, state: &AppState, id: &str) {
     serve::close_window_by_label(app, &serve::control_terminal_label(id));
     state.control_terminal_prefixes.lock().unwrap().remove(id);
@@ -1341,20 +1341,36 @@ fn teardown_devserver_connection(app: &tauri::AppHandle, state: &AppState, id: &
     remove_devserver_windows(app, state, id);
 }
 
-/// A devserver's control terminal is gone (its connect-script PTY exited, or the
-/// user closed the control window), or the user hit Abandon -- the connection is
-/// provably dead. Drop the conn from the shared registry the launcher reads
+/// A devserver's control script PTY exited, or the user hit Abandon -- the
+/// connection is provably dead. Drop the conn from the shared registry the
+/// launcher reads
 /// (`GET /api/library/devservers` -> `DevserverConfigRegistry::list` ->
 /// `entry_from_devserver`'s `conns.is_connected`), which flips `connected` false
 /// UNCONDITIONALLY (covers a Dismiss / no-response SPA survey), then remove the
 /// devserver's workspace windows and stop its watcher -- but KEEP the control
 /// terminal: it sits at "process exited" so the user can Re-run, or Abandon.
 /// Re-run/Edit reconnect flips `connected:true`; Abandon is idempotent (the conn
-/// is already gone). Shared by the control-PTY-exit watcher, the SPA
-/// control-window close, and Abandon's direct teardown.
+/// is already gone). Shared by the control-PTY-exit watcher and Abandon's direct
+/// teardown.
 fn flip_devserver_control_dead(app: &tauri::AppHandle, state: &AppState, id: &str) {
     state.devservers.remove(id);
     remove_devserver_windows(app, state, id);
+}
+
+/// The user explicitly closed the control terminal window. This is different
+/// from the connect script exiting inside an otherwise open terminal: the row
+/// should leave the launcher, not linger flashing for attention.
+fn close_devserver_control_terminal(app: &tauri::AppHandle, state: &AppState, id: &str) {
+    let was_connected = state.devservers.is_connected(id);
+    if was_connected {
+        state.devservers.remove(id);
+    }
+    reap_devserver_control_terminal(app, state, id);
+    if was_connected {
+        remove_devserver_windows(app, state, id);
+    } else if let Some(embedded) = state.embedded() {
+        embedded.signal_library_change();
+    }
 }
 
 /// Persist a window's `hidden` visibility to its OWNING
@@ -2739,26 +2755,16 @@ fn open_devtools(window: tauri::WebviewWindow) {
 #[tauri::command]
 fn request_close_window(app: tauri::AppHandle, window: tauri::WebviewWindow) -> Result<(), String> {
     let closing = window.label();
-    // A connected devserver's control terminal emptying (its connect-script
-    // tab was closed, or the script exited) takes the devserver connection
-    // down with it: that terminal IS the connection endpoint. Don't silently
-    // destroy into a dead state. Raise the launcher and survey the user
-    // (re-run the script / abandon), reusing the connect-failure pattern. Only
-    // while the devserver is still connected; a control terminal closed as
-    // part of a normal disconnect/forget goes through teardown's destroy, not
-    // this SPA close-cascade.
+    // A control terminal WINDOW close is explicit teardown of that row. The
+    // script/PTY-exit watcher is the path that keeps the row and emits launcher
+    // attention; once the window itself is closed, reap the row/tenant so it
+    // cannot linger flashing in the launcher.
     if let Some(id) = closing.strip_prefix("control-terminal-") {
         let state = app.state::<Arc<AppState>>();
-        if state.devservers.is_connected(id) {
-            let id = id.to_string();
-            let _ = show_window(&app, "main");
-            // The control terminal IS the connection endpoint, so its
-            // close kills the connection — flip `connected:false` before the SPA
-            // survey (covers a Dismiss/no-response leaving it shown connected).
-            flip_devserver_control_dead(&app, &state, &id);
-            let _ = app.emit("devserver-control-closed", id);
-            return window.destroy().map_err(err);
-        }
+        let id = id.to_string();
+        let _ = show_window(&app, "main");
+        close_devserver_control_terminal(&app, &state, &id);
+        return Ok(());
     }
     let others_remain = app
         .webview_windows()
@@ -4998,16 +5004,10 @@ fn handle_close_window(app: &tauri::AppHandle) {
     else {
         return;
     };
-    // A control terminal's Cmd+W must fire the abandon/re-run dialog (a
-    // connected devserver's control window IS the connection), not bury or
-    // close a tab. `control-terminal-*` is not a workspace webview label, so
-    // without this it would fall to `window.close()` → the CloseRequested
-    // bury-when-connected branch. Route it through `request_close_window`
-    // instead: connected → emits `devserver-control-closed` (the survey) +
-    // destroys; connecting → destroys (the scrape loop then surveys). This is
-    // the macOS half of the control-window close model — the menu accelerator
-    // pre-empts the webview, so the SPA's own Mod+W handler never sees it on
-    // macOS (it covers web/linux/windows).
+    // A control terminal's Cmd+W must be a real control-window close, not a tab
+    // close or a bury. Route it through `request_close_window`, which reaps the
+    // control row/tenant and disconnects only if that control terminal still owns
+    // a live devserver connection.
     if window.label().starts_with("control-terminal-") {
         let _ = request_close_window(app.clone(), window);
         return;
@@ -5095,6 +5095,30 @@ mod tests {
         assert!(MAIN_RS.contains("run_hidden_mcp_proxy_if_requested"));
         assert!(MAIN_RS.contains("run_mcp_proxy(socket)"));
         assert!(MAIN_RS.contains("chan_server::run_mcp_stdio_proxy"));
+    }
+
+    #[test]
+    fn control_window_close_reaps_without_attention_event() {
+        const MAIN_RS: &str = include_str!("main.rs");
+        let request_close = MAIN_RS
+            .split("fn request_close_window")
+            .nth(1)
+            .expect("request_close_window exists")
+            .split("let others_remain")
+            .next()
+            .expect("control close branch precedes normal close handling");
+        assert!(request_close.contains("close_devserver_control_terminal"));
+        assert!(!request_close.contains("devserver-control-closed"));
+
+        let exit_watcher = MAIN_RS
+            .split("fn spawn_control_terminal_exit_watcher")
+            .nth(1)
+            .expect("exit watcher exists")
+            .split("/// Connect to a configured devserver")
+            .next()
+            .expect("watcher section ends before connect implementation");
+        assert!(exit_watcher.contains("flip_devserver_control_dead"));
+        assert!(exit_watcher.contains("devserver-control-closed"));
     }
 
     #[test]
