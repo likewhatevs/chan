@@ -3,78 +3,73 @@
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { describe, expect, test } from "vitest";
-import { listDepth, listDepthClass, listLineClass } from "./blocks";
 import { chanMarkdown } from "../markdown/grammar";
 import { chanDecorations } from ".";
 import blocksSource from "./blocks.ts?raw";
 import wysiwygSource from "../Wysiwyg.svelte?raw";
 
-describe("listDepth", () => {
-  test("maps top-level list lines to depth zero", () => {
-    expect(listDepth("- item")).toBe(0);
-    expect(listDepth("1. item")).toBe(0);
-  });
+const removedListLineHook = ["cm", "md", "list", "line"].join("-");
+const removedDepthHook = ["cm", "md", "list", "depth"].join("-");
+const removedGuideAttr = ["data", "list", "guides"].join("-");
+const removedGuideExtension = ["list", "Guide", "Visibility"].join("");
 
-  test("maps two-space indents to one visual guide level", () => {
-    expect(listDepth("  - child")).toBe(1);
-    expect(listDepth("    - grandchild")).toBe(2);
+function mountDecorated(doc: string): { parent: HTMLDivElement; view: EditorView } {
+  const parent = document.createElement("div");
+  document.body.appendChild(parent);
+  const view = new EditorView({
+    parent,
+    state: EditorState.create({
+      doc,
+      extensions: [chanMarkdown(), chanDecorations()],
+    }),
   });
+  return { parent, view };
+}
 
-  test("treats a tab as one two-space list indent", () => {
-    expect(listDepth("\t- child")).toBe(1);
-  });
-
-  test("walks past 6 levels without losing alignment", () => {
-    // 14 spaces = 7 visual levels.
-    expect(listDepth("              - level 7")).toBe(7);
-    // 22 spaces = 11 levels, still depth-agnostic.
-    expect(listDepth("                      - level 11")).toBe(11);
-  });
-
-  test("soft-caps pathological indentation at 20 levels", () => {
-    // 80 spaces would be 40 levels uncapped; cap keeps the guide
-    // width bounded and the decoration cache finite.
-    expect(listDepth(" ".repeat(80) + "- deep")).toBe(20);
-  });
-});
-
-describe("listDepthClass", () => {
-  test("returns the stable cm-md-list-depth-N class string", () => {
-    expect(listDepthClass("- item")).toBe("cm-md-list-depth-0");
-    expect(listDepthClass("  - child")).toBe("cm-md-list-depth-1");
-    expect(listDepthClass("              - level 7")).toBe(
-      "cm-md-list-depth-7",
+describe("list guide removal", () => {
+  test("list markers render without line-depth decorations", () => {
+    const { parent, view } = mountDecorated(
+      "normal prose\n- bullet\n  - child\n1. ordered\n- [ ] task",
     );
-  });
-});
 
-describe("listLineClass", () => {
-  test("marks list lines that contain markdown images", () => {
-    expect(listLineClass("- Step with image ![alt](pic.png)")).toContain(
-      "cm-md-list-line-image",
-    );
-    expect(listLineClass("  ![](images/pic.png#w=200)")).toContain(
-      "cm-md-list-line-image",
-    );
-  });
+    expect(parent.querySelector(".cm-md-ul-marker")).toBeTruthy();
+    expect(parent.querySelector(".cm-md-ol-marker")).toBeTruthy();
+    expect(parent.querySelector(".cm-md-task-checkbox")).toBeTruthy();
+    expect(parent.querySelector(`.${removedListLineHook}`)).toBeNull();
+    expect(
+      Array.from(parent.querySelectorAll(".cm-line")).some((line) =>
+        Array.from(line.classList).some((cls) => cls.startsWith(removedDepthHook)),
+      ),
+    ).toBe(false);
 
-  test("does not mark ordinary list lines as image-bearing", () => {
-    expect(listLineClass("- Step with [link](doc.md)")).toBe(
-      "cm-md-list-line cm-md-list-depth-0",
-    );
-    expect(listLineClass("- Escaped \\![alt](pic.png)")).toBe(
-      "cm-md-list-line cm-md-list-depth-0",
-    );
+    view.destroy();
+    parent.remove();
   });
 
-  test("emits a unique class per indent level up to the 20-level cap", () => {
-    // Each depth level renders one guide line.
-    for (let depth = 0; depth <= 20; depth++) {
-      const text = " ".repeat(depth * 2) + "- level";
-      expect(listLineClass(text)).toBe(
-        `cm-md-list-line cm-md-list-depth-${depth}`,
-      );
-    }
+  test("guide extension and CSS hooks are absent from source", () => {
+    expect(blocksSource).not.toContain(removedListLineHook);
+    expect(blocksSource).not.toContain(removedDepthHook);
+    expect(wysiwygSource).not.toContain(removedListLineHook);
+    expect(wysiwygSource).not.toContain(removedDepthHook);
+    expect(wysiwygSource).not.toContain(removedGuideAttr);
+    expect(wysiwygSource).not.toContain(removedGuideExtension);
+  });
+
+  test("top-level list text alignment is marker-level CSS, not line padding", () => {
+    expect(wysiwygSource).toContain("--cm-md-list-marker-hang");
+    expect(wysiwygSource).toContain("--cm-md-task-checkbox-hang");
+    expect(wysiwygSource).toMatch(
+      /\.cm-md-ol-marker\)[\s\S]*--cm-md-list-marker-width: 2ch/,
+    );
+    expect(wysiwygSource).toMatch(
+      /margin-left: calc\(-1 \* var\(--cm-md-list-marker-hang\)\)/,
+    );
+    expect(wysiwygSource).not.toMatch(
+      new RegExp(`${removedListLineHook}[\\s\\S]{0,240}padding-left`),
+    );
+    expect(wysiwygSource).not.toMatch(
+      new RegExp(`${removedListLineHook}[\\s\\S]{0,240}text-indent`),
+    );
   });
 });
 
@@ -255,6 +250,7 @@ describe("list marker rendering (real positioned markers)", () => {
     });
 
     expect(parent.querySelector(".cm-md-ul-marker")).toBeNull();
+    expect(parent.querySelector(".cm-md-task-list-marker")).toBeTruthy();
     expect(parent.querySelector(".cm-md-task-checkbox")).toBeTruthy();
     expect(view.state.doc.toString()).toBe("- [ ] task");
 

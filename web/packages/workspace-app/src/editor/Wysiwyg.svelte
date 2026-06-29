@@ -67,7 +67,6 @@
   import type { FindAdapter } from "./find";
   import { breathingRoom } from "./breathing_room";
   import { clickToPlaceCaret } from "./click_caret";
-  import { listGuideVisibility } from "./extensions/list_guide_visibility";
   import {
     externalLinkClickHandler,
     externalUrlAtCoords as resolveExternalUrlAtCoords,
@@ -464,7 +463,6 @@
         // on every selection change.
         drawSelection(),
         breathingRoom(),
-        listGuideVisibility(),
         // Blank-area click helper: only fires when the precise hit-test
         // misses (a click past a short line's end or below the doc) to
         // drop the caret on the nearest row position. List markers are
@@ -1106,23 +1104,41 @@
   :global(.md-wysiwyg-cm6 .cm-md-fence-ghost-closer:hover) {
     opacity: 1;
   }
-  :global(.md-wysiwyg-cm6 .cm-md-task-checkbox) {
-    margin: 0 0.4em 0 0;
-    vertical-align: middle;
-    cursor: pointer;
-  }
   /* Outline-style ordered-list marker that replaces the source
      `1.` / `2.` text in the wysiwyg render. Inherits text colour
      + font from the surrounding line so it sits with the rest
      of the content; deeper labels (`1.1.1.`) expand naturally
      since the widget is inline-flow text. Source-mode view
      reads the unmodified markdown. */
-  :global(.md-wysiwyg-cm6 .cm-md-ol-marker) {
+  :global(.md-wysiwyg-cm6 .cm-md-ol-marker),
+  :global(.md-wysiwyg-cm6 .cm-md-ul-marker),
+  :global(.md-wysiwyg-cm6 .cm-md-task-list-marker) {
+    --cm-md-list-marker-width: 1ch;
+    --cm-md-list-marker-hang: 2ch;
+    display: inline-block;
+    width: var(--cm-md-list-marker-width);
+    margin-left: calc(-1 * var(--cm-md-list-marker-hang));
+    margin-right: calc(
+      var(--cm-md-list-marker-hang) - var(--cm-md-list-marker-width) - 1ch
+    );
+    text-align: right;
     color: var(--text-secondary, #888);
+  }
+  :global(.md-wysiwyg-cm6 .cm-md-ol-marker) {
+    --cm-md-list-marker-width: 2ch;
+    --cm-md-list-marker-hang: 3ch;
     font-variant-numeric: tabular-nums;
   }
-  :global(.md-wysiwyg-cm6 .cm-md-ul-marker) {
-    color: var(--text-secondary, #888);
+  :global(.md-wysiwyg-cm6 .cm-md-task-checkbox) {
+    --cm-md-task-checkbox-width: 1em;
+    --cm-md-task-checkbox-hang: 1.35em;
+    display: inline-block;
+    width: var(--cm-md-task-checkbox-width);
+    margin: 0
+      calc(var(--cm-md-task-checkbox-hang) - var(--cm-md-task-checkbox-width) - 1ch)
+      0 calc(-1 * var(--cm-md-task-checkbox-hang));
+    vertical-align: middle;
+    cursor: pointer;
   }
   /* Hyphen (`-`) lists keep their literal dash, distinct from the `*`/`+`
      Google-Docs depth glyphs (blocks.ts HYPHEN_MARK). No font-size:0 +
@@ -1134,7 +1150,6 @@
      matches ordered lists. */
   :global(.md-wysiwyg-cm6 .cm-md-ul-hyphen) {
     color: var(--text-secondary, #888);
-    margin-right: calc(var(--chan-editor-body-size, 11pt) * 0.28);
   }
   /* `*`/`+` bullet markers render as a REAL glyph CHARACTER carried by a
      replace-widget (blocks.ts BulletGlyphWidget): ● disc / ○ circle / ■
@@ -1154,91 +1169,12 @@
     color: var(--text-secondary, #888);
     font-size: calc(var(--chan-editor-body-size, 11pt) * 0.62);
     vertical-align: 0.08em;
-    margin-right: calc(var(--chan-editor-body-size, 11pt) * 0.28);
   }
   /* The square's solid ink area reads heavier than a circle of equal box,
      so trim + recenter it. */
   :global(.md-wysiwyg-cm6 .cm-md-ul-glyph.cm-md-ul-square) {
     font-size: calc(var(--chan-editor-body-size, 11pt) * 0.56);
     vertical-align: 0;
-  }
-  /* Left indent and guides on every line of every list (bullet,
-     ordered, task). Three-class chain matches the fence-row pattern
-     so the rule beats CM6's `.cm-line` default cascade.
-
-     Wrap alignment: padding-left scales per depth so soft-wrapped
-     visual rows hang under the parent line's content instead of
-     collapsing back to the gutter. The negative text-indent pulls
-     row 1 left by the same amount so the source indent + marker
-     still render at the visible left edge. Marker width is
-     approximated as 2ch (matches "- ", "1.", etc.); ordered or
-     task markers >2ch will hang slightly inside but never flush
-     left. See request.md "Multi-level indent ... long-sentence line". */
-  /* List-line guide rendering reads --cm-md-list-depth set inline by
-     listLineDecoration in editor/decorations/blocks.ts. The CSS is
-     depth-agnostic: padding + guide stripes both derive from the
-     variable so arbitrary nesting (capped at 20 in JS) renders
-     cleanly without per-depth selectors. */
-  :global(.md-wysiwyg-cm6 .cm-editor .cm-line.cm-md-list-line) {
-    --cm-md-list-guide: color-mix(in srgb, var(--text-secondary, #888) 32%, transparent);
-    --cm-md-list-prefix: calc((var(--cm-md-list-depth, 0) + 1) * 2ch);
-    /* Per-depth outline indent: shift each nesting level right by ~one
-       marker column so a nested item's glyph aligns under the FIRST TEXT
-       CHARACTER of its parent (Google-Docs style); the 2-space source
-       indent renders narrower than the marker column in the proportional
-       body font, so this makes up the difference, keyed off the body size
-       (~0.6em) to stay consistent across bullet / hyphen / ordered. */
-    --cm-md-list-outline: calc(var(--cm-md-list-depth, 0) * var(--chan-editor-body-size, 11pt) * 0.6);
-    /* No fixed gutter before the marker: the negative text-indent hangs the
-       marker at the line's content-left, aligned with the editor's normal
-       text edge. CM6 drawSelection anchors a whole-line / multi-line
-       highlight's open side at the FIRST .cm-line's content-left, so any
-       fixed gutter LEFT of the marker would paint as empty highlight
-       reaching past the marker into that gutter. The per-depth outline still
-       steps nested markers right, so a nested line keeps a small indent
-       inside its own highlight. */
-    padding-left: calc(var(--cm-md-list-prefix) + var(--cm-md-list-outline)) !important;
-    text-indent: calc(-1 * var(--cm-md-list-prefix));
-    position: relative;
-  }
-  :global(.md-wysiwyg-cm6 .cm-editor .cm-line.cm-md-list-line::before) {
-    content: "";
-    position: absolute;
-    top: 0;
-    bottom: 0;
-    /* Anchor the guide at a FIXED x, independent of depth: the padding box
-       (the containing block for this `::before`) starts at the line's
-       content-left for every depth, so `left: 0` pins every list line's
-       leftmost bar to the content-left and the level-k bar (at +k*2ch) is
-       one continuous rail down the whole list. */
-    left: 0;
-    /* One 1px-wide stripe per indent level: anchor + N stamps at
-       2ch intervals = depth+1 vertical bars. repeating-linear-
-       gradient keeps the spacing exact at any depth without per-
-       depth selectors or a cap. */
-    width: calc(2ch * var(--cm-md-list-depth, 0) + 1px);
-    background: repeating-linear-gradient(
-      to right,
-      var(--cm-md-list-guide) 0,
-      var(--cm-md-list-guide) 1px,
-      transparent 1px,
-      transparent 2ch
-    );
-    pointer-events: none;
-    opacity: 1;
-    transition: opacity 0.25s ease-out;
-  }
-  :global(.md-wysiwyg-cm6 .cm-editor .cm-line.cm-md-list-line.cm-md-list-line-image::before) {
-    top: auto;
-    bottom: 0.2em;
-    height: 1.4em;
-  }
-  /* listGuideVisibility() flips this attribute to "off" 1.5s after
-     the caret leaves a list line. The transition makes the bars
-     fade smoothly so the user perceives them as deferring to the
-     prose rather than blinking out. */
-  :global(.md-wysiwyg-cm6 .cm-editor[data-list-guides="off"] .cm-line.cm-md-list-line::before) {
-    opacity: 0;
   }
   :global(.md-wysiwyg-cm6 .cm-md-frontmatter) {
     color: var(--text-secondary, #888);

@@ -30,9 +30,6 @@
 //     class. The rendered editor reflects whatever the author
 //     typed, both for portability and so a dash-typed list still
 //     reads as a dash on screen.
-//   - All three list kinds emit a `cm-md-list-line` line decoration
-//     on every line within their range so CSS can add the small
-//     left indent that signals "this is a list".
 
 import { Decoration, EditorView, WidgetType } from "@codemirror/view";
 import type { TokenContext, TokenHandler } from "./walker";
@@ -153,60 +150,7 @@ const LINE_FRONTMATTER = Decoration.line({
   attributes: { class: "cm-md-frontmatter" },
 });
 const HIDE = Decoration.replace({});
-
-const LIST_LINE_DECO = new Map<string, ReturnType<typeof Decoration.line>>();
-const MARKDOWN_IMAGE_RE = /(^|[^\\])!\[[^\]\n]*\]\([^)\n]*\)/;
-
-// Soft cap on depth so the inline `--cm-md-list-depth` style can't be
-// abused into a pathological repeating-gradient width (e.g. pasted
-// content with 200 leading spaces). 20 covers the smoke-test target
-// and any sane nesting; deeper indents render at the 20-level guide
-// width without further visual change.
-const LIST_DEPTH_CAP = 20;
-
-/// Integer depth of a list line, computed from leading whitespace
-/// (2 columns = 1 depth level; tabs count as 2 columns). Capped at
-/// LIST_DEPTH_CAP so unbounded indentation can't blow up the cache or
-/// the rendered guide width.
-export function listDepth(text: string): number {
-  const leading = text.match(/^[ \t]*/)?.[0] ?? "";
-  let columns = 0;
-  for (const ch of leading) columns += ch === "\t" ? 2 : 1;
-  return Math.min(LIST_DEPTH_CAP, Math.floor(columns / 2));
-}
-
-/// Stable class string for a list line at the given indent. Same
-/// `cm-md-list-depth-N` shape as before but no longer capped at 6;
-/// `N` can range 0..LIST_DEPTH_CAP. The class survives for CSS hooks
-/// + grep; the load-bearing depth value rides on the line's inline
-/// `--cm-md-list-depth` style.
-export function listDepthClass(text: string): string {
-  return `cm-md-list-depth-${listDepth(text)}`;
-}
-
-export function listLineClass(text: string): string {
-  const classes = ["cm-md-list-line", listDepthClass(text)];
-  if (MARKDOWN_IMAGE_RE.test(text)) classes.push("cm-md-list-line-image");
-  return classes.join(" ");
-}
-
-function listLineDecoration(text: string): ReturnType<typeof Decoration.line> {
-  const className = listLineClass(text);
-  const cached = LIST_LINE_DECO.get(className);
-  if (cached) return cached;
-  // Inline style carries the depth into CSS so the guide and prefix
-  // rules can render N stripes / 2N+2ch padding without per-depth
-  // selectors. Cache by class string; same string ⇒ same depth.
-  const depth = listDepth(text);
-  const deco = Decoration.line({
-    attributes: {
-      class: className,
-      style: `--cm-md-list-depth: ${depth};`,
-    },
-  });
-  LIST_LINE_DECO.set(className, deco);
-  return deco;
-}
+const TASK_LIST_MARK = Decoration.mark({ class: "cm-md-task-list-marker" });
 
 const handleBlockquote: TokenHandler = (ctx) => {
   // Walk every line within the blockquote's range and emit the line
@@ -402,7 +346,11 @@ const handleTask: TokenHandler = (ctx) => {
   // TaskList emits a Task block-level node with a TaskMarker child
   // covering exactly `[ ]` / `[x]` / `[X]` - 3 chars).
   const line = ctx.state.doc.lineAt(ctx.node.from);
-  ctx.push(listLineDecoration(line.text), line.from, line.from);
+  const marker = /^([ \t]*)([-*+])\s+\[[ xX]\]/.exec(line.text);
+  if (marker) {
+    const from = line.from + marker[1].length;
+    ctx.push(TASK_LIST_MARK, from, from + marker[2].length);
+  }
   const cursor = ctx.node.node.cursor();
   if (!cursor.firstChild()) return;
   do {
@@ -420,17 +368,6 @@ const handleTask: TokenHandler = (ctx) => {
 };
 
 const handleBulletList: TokenHandler = (ctx) => {
-  // Per-line indent decoration. Walking the BulletList's full line
-  // range also covers nested lists; CM6 dedupes identical line
-  // attributes, so the duplicate is harmless.
-  const startLine = ctx.state.doc.lineAt(ctx.node.from).number;
-  const endLine = ctx.state.doc.lineAt(
-    Math.min(ctx.node.to, ctx.state.doc.length),
-  ).number;
-  for (let n = startLine; n <= endLine; n++) {
-    const line = ctx.state.doc.line(n);
-    ctx.push(listLineDecoration(line.text), line.from, line.from);
-  }
   decorateBulletList(ctx, ctx.node.node);
 };
 
@@ -606,14 +543,6 @@ function ancestorOrderedList(
 }
 
 const handleOrderedList: TokenHandler = (ctx) => {
-  const startLine = ctx.state.doc.lineAt(ctx.node.from).number;
-  const endLine = ctx.state.doc.lineAt(
-    Math.min(ctx.node.to, ctx.state.doc.length),
-  ).number;
-  for (let n = startLine; n <= endLine; n++) {
-    const line = ctx.state.doc.line(n);
-    ctx.push(listLineDecoration(line.text), line.from, line.from);
-  }
   // Skip the inner walk when this OrderedList is nested inside
   // another OrderedList - the outer pass already drove this subtree.
   if (ancestorOrderedList(ctx.node.node)) return;
