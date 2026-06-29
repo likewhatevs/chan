@@ -1,9 +1,10 @@
 .PHONY: dev build check fmt fmt-check lint test clean web tauri-cli \
         app-signed app-notarized sign-prereqs notarize-prereqs \
-        dmg-layout-proof xwin-prereqs xwin-check
+        dmg-layout-proof windows-installer xwin-prereqs xwin-check
 
 # Monorepo root. Override via CHAN_REPO=/path on CI.
 CHAN_REPO ?= ..
+CARGO ?= cargo
 NPM ?= npm
 TAURI_CLI_VERSION ?= ^2
 TAURI_CLI_ROOT := $(abspath $(CHAN_REPO)/target/tauri-cli)
@@ -43,6 +44,10 @@ dev: tauri-cli web
 
 build: tauri-cli web
 	cd src-tauri && $(TAURI) build
+
+windows-installer: tauri-cli web
+	cd $(CHAN_REPO) && $(CARGO) build --release -p chan
+	cd src-tauri && $(TAURI) build --bundles nsis --config tauri.windows.conf.json
 
 check:
 	cd src-tauri && cargo check
@@ -322,7 +327,7 @@ app-notarized: sign-prereqs notarize-prereqs tauri-cli web
 # Finder-less, this local layout is identical to what CI produces. Use to
 # verify the layout before a release cut.
 dmg-layout-proof: tauri-cli web
-	cd src-tauri && $(TAURI) build --bundles app
+	cd src-tauri && $(TAURI) build --bundles app --no-sign
 	@set -e; \
 	    APP="$(BUNDLE_DIR)/macos/Chan.app"; \
 	    if [ ! -d "$$APP" ]; then echo "error: Chan.app not found at $$APP"; exit 1; fi; \

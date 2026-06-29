@@ -17,11 +17,20 @@
 - The window-count badge toggles workspace window visibility.
 - The launcher demo spacing under the library header was bumped.
 
+## Desktop package targets
+
+- macOS and Windows desktop packaging are now split instead of sharing the old generic Tauri `build` path. `make macos-chan-dmg` builds the unsigned local `.app` with `--no-sign` and wraps it with the Finder-less DMG builder; signed/notarized release builds still use `make macos-chan-dmg-notarised`.
+- Windows NSIS settings moved from the base Tauri config into `tauri.windows.conf.json`, so macOS builds no longer validate Windows-only installer config.
+- `make windows-chan-installer` now mirrors the CI Windows packaging path: build both web bundles, build the console `chan.exe`, then run `cargo tauri build --bundles nsis --config tauri.windows.conf.json`.
+
 ## Validation
 
 - `cargo test -p chan-library terminal`
 - `cargo test -p chan-server terminal`
 - `cargo check -p chan-desktop`
+- `make macos-chan-dmg`
+- `make -n windows-chan-installer`
+- Windows overlay schema check: `cargo tauri build --config tauri.windows.conf.json --no-bundle --no-sign` progressed past config validation and stopped on macOS at the expected missing `target/release/chan.exe` sidecar.
 - `npm --prefix web run test --workspace @chan/launcher`
 - `npm --prefix web run check --workspace @chan/launcher`
 - `npm --prefix web run build --workspace @chan/launcher`

@@ -107,7 +107,7 @@ macos-chan-app: ## Build and sign the macOS .app bundle.
 
 .PHONY: macos-chan-dmg
 macos-chan-dmg: ## Build the macOS .dmg bundle.
-	$(MAKE) -C desktop build
+	$(MAKE) -C desktop dmg-layout-proof
 
 .PHONY: macos-chan-dmg-notarised
 macos-chan-dmg-notarised: ## Build, notarise, and staple the macOS .dmg.
@@ -115,6 +115,10 @@ macos-chan-dmg-notarised: ## Build, notarise, and staple the macOS .dmg.
 
 .PHONY: macos-chan-dmg-notarized
 macos-chan-dmg-notarized: macos-chan-dmg-notarised
+
+.PHONY: windows-chan-installer
+windows-chan-installer: ## Build the Windows NSIS desktop installer.
+	$(MAKE) -C desktop windows-installer
 
 .PHONY: pre-push
 pre-push: ## Run the local pre-push gate.
