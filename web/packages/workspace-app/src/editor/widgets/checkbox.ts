@@ -1,11 +1,11 @@
 // Task-list checkbox widget. Replaces the literal `[ ]` / `[x]` / `[X]`
-// source text with a real `<input type="checkbox">` that toggles the
-// underlying source on click.
+// source text with a marker-slot wrapper containing a real
+// `<input type="checkbox">` that toggles the underlying source on click.
 //
 // Live position: the click handler does NOT trust the from/to captured
 // at widget construction time (those may have shifted by the time the
 // user clicks). Instead it resolves the current position via
-// `view.posAtDOM(el)` and re-reads the 3 chars at that position to
+// `view.posAtDOM(wrap)` and re-reads the 3 chars at that position to
 // decide what to swap. Safe across intervening edits and atomic
 // undo/redo.
 //
@@ -24,6 +24,10 @@ export class CheckboxWidget extends WidgetType {
   }
 
   toDOM(view: EditorView): HTMLElement {
+    const wrap = document.createElement("span");
+    wrap.className = "cm-md-list-marker cm-md-task-checkbox-slot";
+    wrap.contentEditable = "false";
+
     const el = document.createElement("input");
     el.type = "checkbox";
     el.className = "cm-md-task-checkbox";
@@ -37,9 +41,10 @@ export class CheckboxWidget extends WidgetType {
       e.stopPropagation();
       // Manually dispatch the toggle here (mousedown + checkbox + the
       // preventDefault means the native `change` event won't fire).
-      togglePosition(view, el);
+      togglePosition(view, wrap);
     });
-    return el;
+    wrap.append(el);
+    return wrap;
   }
 
   ignoreEvent(): boolean {

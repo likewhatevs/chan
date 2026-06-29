@@ -1104,52 +1104,38 @@
   :global(.md-wysiwyg-cm6 .cm-md-fence-ghost-closer:hover) {
     opacity: 1;
   }
-  /* Outline-style ordered-list marker that replaces the source
-     `1.` / `2.` text in the wysiwyg render. Inherits text colour
-     + font from the surrounding line so it sits with the rest
-     of the content; deeper labels (`1.1.1.`) expand naturally
-     since the widget is inline-flow text. Source-mode view
-     reads the unmodified markdown. */
-  :global(.md-wysiwyg-cm6 .cm-md-ol-marker),
-  :global(.md-wysiwyg-cm6 .cm-md-ul-marker),
-  :global(.md-wysiwyg-cm6 .cm-md-task-list-marker) {
-    --cm-md-list-marker-width: 1ch;
-    --cm-md-list-marker-hang: 2ch;
+  /* Extra nested-list offset. Raw markdown already contributes 2ch per
+     depth in the default CM6 flow; this adds 2ch per depth so nested
+     levels render at 2x the current indent without changing source. */
+  :global(.md-wysiwyg-cm6 .cm-line.cm-md-list-indent) {
+    padding-left: var(--cm-md-list-indent-extra, 0) !important;
+  }
+  /* Shared list marker column. The source space after each marker
+     combines with --cm-md-list-marker-gap for the text gap. */
+  :global(.md-wysiwyg-cm6 .cm-md-list-marker) {
+    --cm-md-list-marker-width: 2ch;
+    --cm-md-list-marker-gap: 3ch;
     display: inline-block;
     width: var(--cm-md-list-marker-width);
-    margin-left: calc(-1 * var(--cm-md-list-marker-hang));
-    margin-right: calc(
-      var(--cm-md-list-marker-hang) - var(--cm-md-list-marker-width) - 1ch
-    );
-    text-align: right;
-    color: var(--text-secondary, #888);
+    margin-right: var(--cm-md-list-marker-gap);
+    text-align: center;
+    color: inherit;
+    box-sizing: border-box;
+    vertical-align: baseline;
   }
   :global(.md-wysiwyg-cm6 .cm-md-ol-marker) {
-    --cm-md-list-marker-width: 2ch;
-    --cm-md-list-marker-hang: 3ch;
+    text-align: right;
     font-variant-numeric: tabular-nums;
   }
   :global(.md-wysiwyg-cm6 .cm-md-task-checkbox) {
     --cm-md-task-checkbox-width: 1em;
-    --cm-md-task-checkbox-hang: 1.35em;
-    display: inline-block;
+    display: inline;
     width: var(--cm-md-task-checkbox-width);
-    margin: 0
-      calc(var(--cm-md-task-checkbox-hang) - var(--cm-md-task-checkbox-width) - 1ch)
-      0 calc(-1 * var(--cm-md-task-checkbox-hang));
-    vertical-align: middle;
+    height: var(--cm-md-task-checkbox-width);
+    margin: 0;
+    vertical-align: -0.08em;
+    color: inherit;
     cursor: pointer;
-  }
-  /* Hyphen (`-`) lists keep their literal dash, distinct from the `*`/`+`
-     Google-Docs depth glyphs (blocks.ts HYPHEN_MARK). No font-size:0 +
-     ::before substitution, so the source `-` renders as text. A small
-     right margin matches the disc/circle glyph-to-text gap so the dash
-     lists read evenly beside the glyph lists. Because the marker stays
-     real visible text, the caret lands past it onto the text - the same
-     path the ordered marker takes - so hyphen-list cursor behaviour
-     matches ordered lists. */
-  :global(.md-wysiwyg-cm6 .cm-md-ul-hyphen) {
-    color: var(--text-secondary, #888);
   }
   /* `*`/`+` bullet markers render as a REAL glyph CHARACTER carried by a
      replace-widget (blocks.ts BulletGlyphWidget): ● disc / ○ circle / ■
@@ -1160,21 +1146,20 @@
      literal `*`/`+` (the widget is render-only; source mode + round-trip
      are unchanged).
      Geometric glyphs fill most of the em box, so they read larger than a
-     normal bullet; 0.62em keeps the disc + open circle (a matched outer-
-     diameter pair) optically even, vertical-align nudges them onto the
-     text center line. margin-right doubles the glyph-to-text gap,
-     keyed off the body size so
-     it stays equal across glyphs and at every nesting depth. */
+     normal bullet; keep them deliberately smaller than surrounding text
+     while inheriting the same body colour. */
   :global(.md-wysiwyg-cm6 .cm-md-ul-glyph) {
-    color: var(--text-secondary, #888);
-    font-size: calc(var(--chan-editor-body-size, 11pt) * 0.62);
-    vertical-align: 0.08em;
+    color: inherit;
+    font-size: inherit;
+    line-height: inherit;
+    transform: scale(0.5);
+    transform-origin: center;
+    vertical-align: baseline;
   }
   /* The square's solid ink area reads heavier than a circle of equal box,
      so trim + recenter it. */
   :global(.md-wysiwyg-cm6 .cm-md-ul-glyph.cm-md-ul-square) {
-    font-size: calc(var(--chan-editor-body-size, 11pt) * 0.56);
-    vertical-align: 0;
+    transform: scale(0.44);
   }
   :global(.md-wysiwyg-cm6 .cm-md-frontmatter) {
     color: var(--text-secondary, #888);

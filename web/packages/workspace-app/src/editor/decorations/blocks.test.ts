@@ -27,13 +27,14 @@ function mountDecorated(doc: string): { parent: HTMLDivElement; view: EditorView
 }
 
 describe("list guide removal", () => {
-  test("list markers render without line-depth decorations", () => {
+  test("custom list widgets render without guide scaffolding", () => {
     const { parent, view } = mountDecorated(
-      "normal prose\n- bullet\n  - child\n1. ordered\n- [ ] task",
+      "normal prose\n* bullet\n  - child\n1. ordered\n- [ ] task",
     );
 
     expect(parent.querySelector(".cm-md-ul-marker")).toBeTruthy();
     expect(parent.querySelector(".cm-md-ol-marker")).toBeTruthy();
+    expect(parent.querySelector(".cm-md-list-marker")).toBeTruthy();
     expect(parent.querySelector(".cm-md-task-checkbox")).toBeTruthy();
     expect(parent.querySelector(`.${removedListLineHook}`)).toBeNull();
     expect(
@@ -55,15 +56,17 @@ describe("list guide removal", () => {
     expect(wysiwygSource).not.toContain(removedGuideExtension);
   });
 
-  test("top-level list text alignment is marker-level CSS, not line padding", () => {
-    expect(wysiwygSource).toContain("--cm-md-list-marker-hang");
-    expect(wysiwygSource).toContain("--cm-md-task-checkbox-hang");
-    expect(wysiwygSource).toMatch(
-      /\.cm-md-ol-marker\)[\s\S]*--cm-md-list-marker-width: 2ch/,
-    );
-    expect(wysiwygSource).toMatch(
-      /margin-left: calc\(-1 \* var\(--cm-md-list-marker-hang\)\)/,
-    );
+  test("list spacing is scoped to bullet glyphs and nested lines", () => {
+    expect(wysiwygSource).toContain("--cm-md-list-marker-width: 2ch");
+    expect(wysiwygSource).toContain("--cm-md-list-marker-gap: 3ch");
+    expect(wysiwygSource).toContain(".cm-line.cm-md-list-indent");
+    expect(wysiwygSource).toContain("padding-left: var(--cm-md-list-indent-extra, 0) !important");
+    expect(wysiwygSource).toContain("width: var(--cm-md-list-marker-width)");
+    expect(wysiwygSource).toContain("margin-right: var(--cm-md-list-marker-gap)");
+    expect(wysiwygSource).not.toContain("--cm-md-list-marker-indent");
+    expect(wysiwygSource).not.toContain("--cm-md-list-marker-hang");
+    expect(wysiwygSource).not.toContain("--cm-md-task-checkbox-hang");
+    expect(wysiwygSource).not.toMatch(/margin-left: calc\(-1 \*/);
     expect(wysiwygSource).not.toMatch(
       new RegExp(`${removedListLineHook}[\\s\\S]{0,240}padding-left`),
     );
@@ -77,12 +80,13 @@ describe("list marker rendering (real positioned markers)", () => {
   test("markers are real positioned characters, not zero-width + ::before", () => {
     expect(blocksSource).toContain("cm-md-ul-marker");
     expect(blocksSource).toContain("cm-md-ol-marker");
-    expect(wysiwygSource).toContain(".cm-md-ul-marker");
+    expect(blocksSource).toContain("cm-md-list-marker");
     expect(wysiwygSource).toContain(".cm-md-ol-marker");
+    expect(wysiwygSource).toContain(".cm-md-list-marker");
     // `*` / `+` markers are REPLACED by a real-width glyph widget (the
-    // disc/circle/square CHARACTER), so the marker is a real positioned
-    // char like the hyphen `-` and ordered `1.` markers - default CM
-    // cursor/click, no caret-snap. Hyphen `-` stays a styling mark.
+    // disc/circle/square CHARACTER), so the marker is real positioned
+    // text with default CM cursor/click and no caret-snap. Hyphen `-`
+    // and ordered markers stay literal in the shared marker column.
     expect(blocksSource).toContain("class BulletGlyphWidget");
     expect(blocksSource).toContain("Decoration.replace({ widget: new BulletGlyphWidget");
     expect(blocksSource).toContain("cm-md-ul-glyph");
@@ -91,7 +95,6 @@ describe("list marker rendering (real positioned markers)", () => {
     expect(blocksSource).toContain("cm-md-ul-square");
     expect(blocksSource).toContain("cm-md-ul-hyphen");
     expect(wysiwygSource).toContain(".cm-md-ul-glyph");
-    expect(wysiwygSource).toContain(".cm-md-ul-hyphen");
     // The old zero-width-char + ::before glyph rendering is gone (it was
     // the source of the bullet cursor/click bugs).
     expect(wysiwygSource).not.toContain(".cm-md-ul-bullet");
@@ -127,8 +130,8 @@ describe("list marker rendering (real positioned markers)", () => {
     document.body.appendChild(parent);
 
     // `*` and `+` both render the depth-0 disc GLYPH (Google Docs keys the
-    // glyph off depth, not the char). `-` is excluded from the cycle and
-    // keeps its literal dash via a styling mark.
+    // glyph off depth, not the char). `-` stays literal in the shared
+    // marker column.
     const view = new EditorView({
       parent,
       state: EditorState.create({
@@ -144,10 +147,8 @@ describe("list marker rendering (real positioned markers)", () => {
     expect(markers[0]?.textContent).toBe("●");
     expect(markers[1]?.classList.contains("cm-md-ul-disc")).toBe(true);
     expect(markers[1]?.textContent).toBe("●");
-    // `-` -> literal dash (styling mark, NOT a glyph widget).
     expect(markers[2]?.classList.contains("cm-md-ul-hyphen")).toBe(true);
     expect(markers[2]?.classList.contains("cm-md-ul-glyph")).toBe(false);
-    expect(markers[2]?.classList.contains("cm-md-ul-disc")).toBe(false);
     expect(markers[2]?.textContent).toBe("-");
     expect(view.state.doc.toString()).toBe("* star\n+ plus\n- dash");
 
@@ -168,12 +169,9 @@ describe("list marker rendering (real positioned markers)", () => {
     });
 
     const markers = Array.from(parent.querySelectorAll(".cm-md-ul-marker"));
-    // No depth cycle: hyphen lists are distinct dashes at every level.
+    expect(markers.length).toBe(3);
     for (const m of markers) {
       expect(m.classList.contains("cm-md-ul-hyphen")).toBe(true);
-      expect(m.classList.contains("cm-md-ul-disc")).toBe(false);
-      expect(m.classList.contains("cm-md-ul-circle")).toBe(false);
-      expect(m.classList.contains("cm-md-ul-square")).toBe(false);
       expect(m.textContent).toBe("-");
     }
     expect(view.state.doc.toString()).toBe("- l1\n  - l2\n    - l3");
@@ -213,7 +211,7 @@ describe("list marker rendering (real positioned markers)", () => {
     parent.remove();
   });
 
-  test("renders ordered markers as the source `1.` / `2.`", () => {
+  test("keeps ordered marker text while placing it in the shared marker column", () => {
     const parent = document.createElement("div");
     document.body.appendChild(parent);
 
@@ -250,9 +248,32 @@ describe("list marker rendering (real positioned markers)", () => {
     });
 
     expect(parent.querySelector(".cm-md-ul-marker")).toBeNull();
-    expect(parent.querySelector(".cm-md-task-list-marker")).toBeTruthy();
+    expect(parent.querySelector(".cm-md-task-list-marker")).toBeNull();
+    expect(parent.querySelector(".cm-md-task-checkbox-slot")).toBeTruthy();
+    expect(parent.querySelector(".cm-md-list-marker")).toBeTruthy();
     expect(parent.querySelector(".cm-md-task-checkbox")).toBeTruthy();
     expect(view.state.doc.toString()).toBe("- [ ] task");
+
+    view.destroy();
+    parent.remove();
+  });
+
+  test("adds 2x default nested indentation from depth two onward", () => {
+    const parent = document.createElement("div");
+    document.body.appendChild(parent);
+
+    const view = new EditorView({
+      parent,
+      state: EditorState.create({
+        doc: "* l1\n  * l2\n    1. l3",
+        extensions: [chanMarkdown(), chanDecorations()],
+      }),
+    });
+
+    const nested = Array.from(parent.querySelectorAll(".cm-md-list-indent"));
+    expect(nested.length).toBe(2);
+    expect(nested[0]?.getAttribute("style")).toContain("--cm-md-list-indent-extra: 2ch");
+    expect(nested[1]?.getAttribute("style")).toContain("--cm-md-list-indent-extra: 4ch");
 
     view.destroy();
     parent.remove();

@@ -21,15 +21,12 @@
 //   - Task (GFM task-list item): TaskMarker `[ ]` / `[x]` is replaced
 //     by the CheckboxWidget from widgets/checkbox.ts. The replace is
 //     boundary-inclusive - clicking the box edits the source.
-//   - BulletList: source markers (`-` / `*` / `+`) render as
-//     themselves; a `cm-md-ul-marker` mark applies the styling
-//     class so CSS can color/space the marker without replacing
-//     the source character.
-//   - OrderedList: source markers (`1.` / `2)` / etc.) render as
-//     themselves; a `cm-md-ol-marker` mark applies the styling
-//     class. The rendered editor reflects whatever the author
-//     typed, both for portability and so a dash-typed list still
-//     reads as a dash on screen.
+//   - BulletList: `*` / `+` markers are replaced by depth glyphs; `-`
+//     markers stay literal but use the shared marker column. Nested
+//     list rows get an extra visual indent without changing source.
+//   - OrderedList: markers (`1.` / `2)` / etc.) stay literal but use
+//     the shared marker column; nested rows get the same visual indent
+//     as bullets.
 
 import { Decoration, EditorView, WidgetType } from "@codemirror/view";
 import type { TokenContext, TokenHandler } from "./walker";
@@ -150,7 +147,6 @@ const LINE_FRONTMATTER = Decoration.line({
   attributes: { class: "cm-md-frontmatter" },
 });
 const HIDE = Decoration.replace({});
-const TASK_LIST_MARK = Decoration.mark({ class: "cm-md-task-list-marker" });
 
 const handleBlockquote: TokenHandler = (ctx) => {
   // Walk every line within the blockquote's range and emit the line
@@ -346,10 +342,11 @@ const handleTask: TokenHandler = (ctx) => {
   // TaskList emits a Task block-level node with a TaskMarker child
   // covering exactly `[ ]` / `[x]` / `[X]` - 3 chars).
   const line = ctx.state.doc.lineAt(ctx.node.from);
-  const marker = /^([ \t]*)([-*+])\s+\[[ xX]\]/.exec(line.text);
-  if (marker) {
-    const from = line.from + marker[1].length;
-    ctx.push(TASK_LIST_MARK, from, from + marker[2].length);
+  const prefix = /^([ \t]*)([-*+])\s+/.exec(line.text);
+  if (prefix) {
+    const from = line.from + prefix[1].length;
+    const to = line.from + prefix[0].length;
+    ctx.push(HIDE, from, to);
   }
   const cursor = ctx.node.node.cursor();
   if (!cursor.firstChild()) return;
@@ -405,7 +402,7 @@ class BulletGlyphWidget extends WidgetType {
   toDOM(): HTMLElement {
     const span = document.createElement("span");
     const i = this.depth % BULLET_GLYPH_CHARS.length;
-    span.className = `cm-md-ul-marker cm-md-ul-glyph ${BULLET_GLYPH_CLASSES[i]}`;
+    span.className = `cm-md-list-marker cm-md-ul-marker cm-md-ul-glyph ${BULLET_GLYPH_CLASSES[i]}`;
     span.textContent = BULLET_GLYPH_CHARS[i];
     return span;
   }
@@ -418,22 +415,12 @@ class BulletGlyphWidget extends WidgetType {
   }
 }
 
-/// Hyphen (`-`) lists render their literal dash, NOT a depth glyph. The
-/// `cm-md-ul-hyphen` class styles the marker (color) but keeps the source
-/// `-` as a real visible character, so it gets default CodeMirror
-/// cursor / click behavior - the same path the `*`/`+` glyph widget and
-/// the ordered `1.` marker take. The google-docs-style glyph treatment
-/// is for the `*` bullet style only, so hyphen lists stay a dash.
-const HYPHEN_MARK = Decoration.mark({
-  class: "cm-md-ul-marker cm-md-ul-hyphen",
-});
-
 /// Nesting depth of this ListItem: the count of ancestor ListItems
 /// above it (0 = top-level). Drives the Google-Docs glyph cycle
 /// (depth % 3). Walks the syntax ancestry rather than the indent so it
 /// tracks the actual list structure (a `*` one space deeper is still
 /// top-level until it nests under a parent item).
-function bulletDepth(item: import("@lezer/common").SyntaxNode): number {
+function listItemDepth(item: import("@lezer/common").SyntaxNode): number {
   let depth = 0;
   let cur = item.parent;
   while (cur) {
@@ -443,11 +430,34 @@ function bulletDepth(item: import("@lezer/common").SyntaxNode): number {
   return depth;
 }
 
+const nestedIndentExtra = (depth: number): number => depth * 2;
+
+function maybeDecorateNestedListItem(
+  ctx: TokenContext,
+  item: import("@lezer/common").SyntaxNode,
+): void {
+  const depth = listItemDepth(item);
+  if (depth === 0) return;
+  const line = ctx.state.doc.lineAt(item.from);
+  ctx.push(
+    Decoration.line({
+      attributes: {
+        class: "cm-md-list-indent",
+        style: `--cm-md-list-indent-extra: ${nestedIndentExtra(depth)}ch`,
+      },
+    }),
+    line.from,
+    line.from,
+  );
+}
+
+const HYPHEN_MARK = Decoration.mark({
+  class: "cm-md-list-marker cm-md-ul-marker cm-md-ul-hyphen",
+});
+
 /// Decoration for a bullet ListItem's marker. Hyphen (`-`) keeps its
-/// literal dash via a styling MARK (HYPHEN_MARK); `*` / `+` are REPLACED
-/// by a real-width depth-glyph widget (disc / circle / square, depth %
-/// 3). Both render a real positioned marker, so all list kinds share the
-/// default CodeMirror cursor / click path.
+/// literal dash in the shared marker column; `*` / `+` are REPLACED by
+/// a real-width depth-glyph widget (disc / circle / square, depth % 3).
 function bulletMarkerDecoration(markerChar: string, depth: number): Decoration {
   if (markerChar === "-") return HYPHEN_MARK;
   return Decoration.replace({ widget: new BulletGlyphWidget(depth) });
@@ -462,6 +472,7 @@ function decorateBulletList(
   do {
     if (cursor.name !== "ListItem") continue;
     const item = cursor.node;
+    maybeDecorateNestedListItem(ctx, item);
     const sub = item.cursor();
     let markFrom = -1;
     let markTo = -1;
@@ -479,7 +490,7 @@ function decorateBulletList(
     if (!hasTask && markFrom !== -1 && markTo !== -1) {
       const markerChar = ctx.state.doc.sliceString(markFrom, markTo);
       ctx.push(
-        bulletMarkerDecoration(markerChar, bulletDepth(item)),
+        bulletMarkerDecoration(markerChar, listItemDepth(item)),
         markFrom,
         markTo,
       );
@@ -487,66 +498,33 @@ function decorateBulletList(
   } while (cursor.nextSibling());
 }
 
-/// `cm-md-ol-marker` styles the ordered-list marker (`1.` / `2)` /
-/// etc.) in the source. We attach the class via `Decoration.mark`
-/// instead of replacing the source text with a generated label so
-/// the rendered editor reflects whatever the author typed. The
-/// outline-style dotted chain (`1.1.1.`) was removed: it diverged
-/// from the source bytes and surprised users who expected the
-/// rendered numbers to match what they typed.
-const ORDERED_MARK = Decoration.mark({ class: "cm-md-ol-marker" });
+const ORDERED_MARK = Decoration.mark({
+  class: "cm-md-list-marker cm-md-ol-marker",
+});
 
-/// Walk an OrderedList's direct ListItem children, mark each
-/// ListMark with the styling class, and recurse into nested
-/// OrderedLists so deeper levels pick up the same class. The
-/// recursion is local so an outer OL handler still drives the
-/// inner OLs without depending on the per-node handler firing
-/// again for nested OLs.
-function decorateOrderedList(
+function decorateListIndents(
   ctx: TokenContext,
-  ol: import("@lezer/common").SyntaxNode,
+  list: import("@lezer/common").SyntaxNode,
 ): void {
-  const cursor = ol.cursor();
+  const cursor = list.cursor();
   if (!cursor.firstChild()) return;
   do {
     if (cursor.name !== "ListItem") continue;
     const item = cursor.node;
+    maybeDecorateNestedListItem(ctx, item);
     const sub = item.cursor();
-    if (sub.firstChild()) {
-      do {
-        if (sub.name === "ListMark") {
-          ctx.push(ORDERED_MARK, sub.from, sub.to);
-          break;
-        }
-      } while (sub.nextSibling());
-    }
-    const childCursor = item.cursor();
-    if (childCursor.firstChild()) {
-      do {
-        if (childCursor.name === "OrderedList") {
-          decorateOrderedList(ctx, childCursor.node);
-        }
-      } while (childCursor.nextSibling());
-    }
+    if (!sub.firstChild()) continue;
+    do {
+      if (sub.name === "ListMark") {
+        ctx.push(ORDERED_MARK, sub.from, sub.to);
+        break;
+      }
+    } while (sub.nextSibling());
   } while (cursor.nextSibling());
 }
 
-function ancestorOrderedList(
-  node: import("@lezer/common").SyntaxNode,
-): boolean {
-  let cur = node.parent;
-  while (cur) {
-    if (cur.name === "OrderedList") return true;
-    cur = cur.parent;
-  }
-  return false;
-}
-
 const handleOrderedList: TokenHandler = (ctx) => {
-  // Skip the inner walk when this OrderedList is nested inside
-  // another OrderedList - the outer pass already drove this subtree.
-  if (ancestorOrderedList(ctx.node.node)) return;
-  decorateOrderedList(ctx, ctx.node.node);
+  decorateListIndents(ctx, ctx.node.node);
 };
 
 const handleFrontmatter: TokenHandler = (ctx) => {
