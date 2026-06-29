@@ -22,7 +22,7 @@ use tower::ServiceExt;
 
 use crate::desktop_window_ops::DesktopBridge;
 use crate::tenant::{HostControl, TenantArtifacts, TenantBuilder, UnserveMode};
-use crate::terminal_sessions::CloseReason;
+use crate::terminal_sessions::{CloseReason, TerminalExit};
 use crate::windows::{PersistedWindow, WindowKind, WindowRecord, WindowRegistry};
 use crate::{
     allocate_workspace_prefix, sanitize_prefix, DevserverRegistry, Error, ServeConfig, ServeHandle,
@@ -1432,20 +1432,20 @@ impl WorkspaceHost {
             .unwrap_or_default()
     }
 
-    /// The exit code of the terminal tenant (mounted at `prefix`)'s connect
+    /// The exit state of the terminal tenant (mounted at `prefix`)'s connect
     /// script once its PTY has exited, or `None` while it runs / when no tenant
     /// is mounted there. Sibling to [`terminal_tenant_scrollback`](
     /// Self::terminal_tenant_scrollback): the desktop polls BOTH while scraping
     /// a control terminal — a token in the scrollback means connected, a
-    /// `Some(code)` here means the script died, so the scrape can stop at once
+    /// `Some(exit)` here means the script died, so the scrape can stop at once
     /// (instead of waiting out the full timeout) and a tab closed mid-connect
     /// can survey on a real failure instead of stranding an empty window.
-    pub fn terminal_tenant_last_exit(&self, prefix: &str) -> Option<u32> {
+    pub fn terminal_tenant_last_exit(&self, prefix: &str) -> Option<TerminalExit> {
         let prefix = sanitize_prefix(prefix).ok()?;
         let workspaces = self.workspaces.read().ok()?;
         workspaces
             .get(&prefix)
-            .and_then(|runtime| runtime.artifacts.terminal_sessions.last_exit_code())
+            .and_then(|runtime| runtime.artifacts.terminal_sessions.last_exit())
     }
 
     /// Close the mounted workspace whose root matches `root` (by canonical
@@ -2964,15 +2964,21 @@ mod tests {
             .expect("spawn exiting PTY");
 
         // Poll the exit code the way the desktop scrape loop would.
-        let mut code = None;
+        let mut exit = None;
         for _ in 0..120 {
             if let Some(c) = host.terminal_tenant_last_exit("/ctl") {
-                code = Some(c);
+                exit = Some(c);
                 break;
             }
             tokio::time::sleep(std::time::Duration::from_millis(25)).await;
         }
-        assert_eq!(code, Some(7), "the failing script's exit code surfaces");
+        assert_eq!(
+            exit,
+            Some(TerminalExit::Code { code: 7 }),
+            "the failing script's exit code surfaces"
+        );
+        assert!(host.close_terminal_tenant("/ctl").expect("close tenant"));
+        assert!(host.terminal_tenant_last_exit("/ctl").is_none());
     }
 
     #[tokio::test]

@@ -59,6 +59,7 @@ pub use chan_library::desktop_window_ops::{
     DesktopBridge, DesktopWindowOp, DesktopWindowSender, NewWindowKind, SetWorkspaceOnOutcome,
     NO_DESKTOP,
 };
+pub use chan_library::terminal_sessions::TerminalExit;
 /// Re-export the single-sourced shell resolver so the desktop (which deps
 /// chan-server, not chan-library directly) can call `chan_server::user_shell()`
 /// for its PATH-harvest helper. Unix-only, matching the chan-library gate.

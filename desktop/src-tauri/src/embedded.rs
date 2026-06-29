@@ -342,13 +342,13 @@ impl EmbeddedServer {
         String::from_utf8_lossy(&self.host.terminal_tenant_scrollback(prefix)).into_owned()
     }
 
-    /// Exit status of the control-terminal tenant's PTY (the connect script),
+    /// Exit state of the control-terminal tenant's PTY (the connect script),
     /// or `None` while it is still running. The connect flow polls this beside
-    /// the scrollback scrape: `Some(code)` means the script exited (a failed
+    /// the scrollback scrape: `Some(exit)` means the script exited (a failed
     /// connect) so the scrape can fail fast instead of waiting out its full
     /// budget. The status is the tenant's, independent of the control window,
     /// so it still reports after the window is closed.
-    pub fn control_terminal_exit(&self, prefix: &str) -> Option<u32> {
+    pub fn control_terminal_exit(&self, prefix: &str) -> Option<chan_server::TerminalExit> {
         self.host.terminal_tenant_last_exit(prefix)
     }
 

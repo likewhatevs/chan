@@ -166,6 +166,12 @@ async function buildLauncherDemo() {
     configFile: false,
     root: siteRoot,
     plugins: [svelte()],
+    resolve: {
+      alias: {
+        "@chan/launcher/demo": path.join(repoRoot, "web/packages/launcher/src/LauncherDemo.svelte"),
+        "@chan/launcher/styles.css": path.join(repoRoot, "web/packages/launcher/src/styles.css"),
+      },
+    },
     build: {
       emptyOutDir: false,
       minify: false,

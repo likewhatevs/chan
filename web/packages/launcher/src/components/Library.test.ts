@@ -15,6 +15,7 @@ import { isSelected, toggleSelected, clearSelection, setSelectMode } from "../st
 import { beginPending, clearAllPending, dsKey, isPending, wsKey } from "../state/pending.svelte";
 import { confirm, requestConfirm, resolveConfirm, cancelConfirm } from "../state/confirm.svelte";
 import { ApiError, type DevserverEntry, type WorkspaceEntry } from "../api/library";
+import { controlAttention, clearAllControlAttention } from "../state/controlAttention.svelte";
 
 vi.mock("../api/backend", async () => {
   const { mockApi } = await import("../api/mock");
@@ -51,6 +52,7 @@ beforeEach(async () => {
   resetMockRemoteWorkspaces();
   clearSelection();
   clearAllPending();
+  clearAllControlAttention();
   library.error = null;
   cancelConfirm();
   await loadLibrary();
@@ -63,6 +65,7 @@ afterEach(() => {
   app = null;
   clearSelection();
   clearAllPending();
+  clearAllControlAttention();
 });
 
 describe("Library: Local group", () => {
@@ -174,6 +177,24 @@ describe("Library: devserver groups", () => {
     expect(byAria("Edit config for fresh")).toBeTruthy();
     // A disconnected devserver shows the connect prompt, no content.
     expect(target!.textContent).toContain("Not connected");
+  });
+
+  it("renders a disconnected devserver's retained control row when it needs attention", () => {
+    const ds = library.devservers.find((d) => d.id === "ds-1")!;
+    library.devservers = library.devservers.map(
+      (d): DevserverEntry => (d.id === "ds-1" ? { ...d, status: "disconnected" } : d),
+    );
+    controlAttention.libs[ds.library_id!] = true;
+
+    mountList();
+
+    const machines = [...target!.querySelectorAll("section.machine")];
+    const prod = machines.find((m) => m.textContent?.includes("box.example.com:8787"));
+    expect(prod).toBeTruthy();
+    expect(prod!.textContent).toContain("Control terminal");
+    expect(prod!.textContent).toContain("disconnected...");
+    expect(prod!.querySelector("button.icon-btn.attention")).not.toBeNull();
+    expect(byAria("Connect prod")).toBeTruthy();
   });
 
   it("fires connect and flips the disconnected devserver to Disconnect", async () => {

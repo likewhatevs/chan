@@ -9,6 +9,7 @@ import { describe, it, expect, afterEach, vi } from "vitest";
 import { mount, unmount, flushSync } from "svelte";
 import App from "./App.svelte";
 import { library } from "./state/library.svelte";
+import { controlAttention, clearAllControlAttention } from "./state/controlAttention.svelte";
 
 // Pin the in-memory mock as the backend so loadLibrary succeeds (no spurious
 // error banner from a failed fetch) and the banner test controls library.error.
@@ -32,6 +33,7 @@ describe("launcher root", () => {
     target = null;
     app = null;
     library.error = null;
+    clearAllControlAttention();
   });
 
   it("renders the top bar: title, subtitle, theme toggle, and no [+]", () => {
@@ -93,5 +95,18 @@ describe("launcher root", () => {
     flushSync();
     expect(library.error).toBeNull();
     expect(target.querySelector('.banner[role="alert"]')).toBeNull();
+  });
+
+  it("does not clear existing control attention on the first connected snapshot", async () => {
+    const libId = "lib-7f3a9c21b40d8e65";
+    controlAttention.libs[libId] = true;
+    target = document.createElement("div");
+    document.body.appendChild(target);
+    app = mount(App, { target });
+
+    await settle();
+    flushSync();
+
+    expect(controlAttention.libs[libId]).toBe(true);
   });
 });

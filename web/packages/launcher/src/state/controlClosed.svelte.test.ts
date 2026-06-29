@@ -98,6 +98,21 @@ describe("onControlClosedEvent (flash-only)", () => {
     expect(hasControlAttention("lib-fresh")).toBe(true);
   });
 
+  it("resolves by the current control window before a stale devserver library_id", () => {
+    library.devservers = [devserver({ id: "stale-ds", library_id: "lib-stale" })];
+    library.windows = [
+      controlWindow({
+        window_id: "control-terminal-stale-ds",
+        library_id: "lib-current",
+      }),
+    ];
+
+    onControlClosedEvent("stale-ds");
+
+    expect(hasControlAttention("lib-current")).toBe(true);
+    expect(hasControlAttention("lib-stale")).toBe(false);
+  });
+
   it("replays an exit event that arrives before the control window feed row", () => {
     library.devservers = [devserver({ id: "racy-ds", library_id: null })];
     library.windows = [];

@@ -1,6 +1,6 @@
 // Component test: the shared WindowRow. The mutable surface renders [FOCUS] +
 // [SHOW/HIDE] (Eye visible / EyeOff hidden); `icon` adds a leading kind glyph and
-// the control terminal's amber "reconnecting…" pill + eye flash when its library
+// the control terminal's amber "disconnected..." pill + eye flash when its library
 // needs attention. Exercises the real Svelte 5 runtime per jsdom. The read-only
 // surface (static dot, no actions) is covered in LibraryReadOnly.test.ts.
 
@@ -57,7 +57,7 @@ describe("WindowRow", () => {
     expect(el.querySelector('[aria-label="Hide window"]')).not.toBeNull();
     expect(el.querySelector(".row-glyph")).toBeNull();
     expect(el.querySelector(".dot")).toBeNull();
-    expect(el.textContent).not.toContain("reconnecting");
+    expect(el.textContent).not.toContain("disconnected");
   });
 
   it("renders a leading glyph and a path-free 'Window N' label for a workspace window", () => {
@@ -79,14 +79,30 @@ describe("WindowRow", () => {
     expect(el.querySelector('[aria-label="Hide window"]')).toBeNull();
   });
 
-  it("flashes the control eye and shows the reconnecting pill when its library needs attention", () => {
+  it("flashes the control eye and shows the disconnected pill when its library needs attention", () => {
     controlAttention.libs["lib-x"] = true;
     const el = render(win({ window_id: "c", library_id: "lib-x", control: true }), { icon: true });
     const eye = el.querySelector("button.icon-btn.attention");
     expect(eye).not.toBeNull();
     expect(eye!.getAttribute("aria-label")).toContain("needs attention");
-    expect(el.querySelector(".reconnecting")).not.toBeNull();
+    expect(el.querySelector(".disconnected")).not.toBeNull();
+    expect(el.textContent).toContain("disconnected...");
     expect(el.querySelector(".row-glyph.control")).not.toBeNull();
+  });
+
+  it("keeps control attention when focus fails", async () => {
+    const { backend } = await import("../api/backend");
+    const open = vi.spyOn(backend, "openWindow").mockRejectedValueOnce(new Error("stale window"));
+    controlAttention.libs["lib-x"] = true;
+    const el = render(win({ window_id: "c", library_id: "lib-x", control: true }), { icon: true });
+
+    (el.querySelector('[aria-label="Focus window"]') as HTMLButtonElement).click();
+    await new Promise((r) => setTimeout(r, 0));
+    flushSync();
+
+    expect(controlAttention.libs["lib-x"]).toBe(true);
+    expect(el.querySelector("button.icon-btn.attention")).not.toBeNull();
+    open.mockRestore();
   });
 
   it("FOCUS drives openWindow through the bridge", async () => {

@@ -19,9 +19,8 @@ export interface LauncherDemoApi extends LibraryApi {
 
 const LIMA_LIBRARY_ID = "lib-lima";
 const WINDOWS_LIBRARY_ID = "lib-windows";
-// The control terminal that slow-flashes for attention belongs to the connected
-// lima-vm remote (linux-tunnel, the still-connecting one, has no terminal row to
-// flash, so the cue rides here instead).
+// The control terminal that slow-flashes for attention belongs to a disconnected
+// remote with a retained control row, matching a finished connect script.
 const ATTENTION_DEVSERVER_ID = "ds-lima";
 
 interface Seed {
@@ -70,7 +69,7 @@ function seed(): Seed {
         has_token: false,
         token: "",
         library_id: LIMA_LIBRARY_ID,
-        status: "connected",
+        status: "disconnected",
         auto_hide_control: false,
         os: "linux",
         pretty_name: "Ubuntu 24.04.1 LTS",
@@ -142,10 +141,7 @@ function seed(): Seed {
       terminal("w-local-term-2", "local", "Terminal Window 2", 2, "t/local-2", true),
       workspaceWindow("w-secret-1", "local", "secret Window 1", 1, "/Users/hacker/dev/my-secret-project", "w/secret", true),
       workspaceWindow("w-secret-2", "local", "secret Window 2", 2, "/Users/hacker/dev/my-secret-project", "w/secret-2", false),
-      terminal("w-lima-control", LIMA_LIBRARY_ID, "Control terminal", 0, "t/lima-control", true, true),
-      workspaceWindow("w-lima-linux-1", LIMA_LIBRARY_ID, "linux Window 1", 1, "/home/hacker.guest/dev/github.com/torvals/linux", "w/linux", false),
-      workspaceWindow("w-lima-systemd-1", LIMA_LIBRARY_ID, "systemd Window 1", 1, "/home/hacker.guest/dev/github.com/systemd/systemd", "w/systemd", true),
-      workspaceWindow("w-lima-systemd-2", LIMA_LIBRARY_ID, "systemd Window 2", 2, "/home/hacker.guest/dev/github.com/systemd/systemd", "w/systemd-2", false),
+      terminal("control-terminal-ds-lima", LIMA_LIBRARY_ID, "Control terminal", 0, "control/lima", true, true),
       terminal("w-windows-control", WINDOWS_LIBRARY_ID, "Control terminal", 0, "t/windows-control", true, true),
     ],
     liveTerminals: [["ds-lima:w/systemd", 2]],

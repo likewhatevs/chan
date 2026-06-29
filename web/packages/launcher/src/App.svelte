@@ -27,7 +27,7 @@
     loadLibrary();
     // A connected devserver's control terminal exited: the desktop emits
     // `devserver-control-closed` with its id, and the launcher flashes that
-    // control row's eye yellow for attention (the amber "reconnecting" cue).
+    // control row's eye yellow for attention (the amber "disconnected" cue).
     // No-op off-desktop (the global Tauri event bridge is absent in a browser).
     let unlisten: (() => void) | null = null;
     void onTauriEvent("devserver-control-closed", onControlClosedEvent).then((un) => {
@@ -46,7 +46,8 @@
   $effect(() => {
     for (const ds of library.devservers) {
       const now = ds.status === "connected";
-      if (now && !(wasConnected.get(ds.id) ?? false) && ds.library_id) {
+      const prev = wasConnected.get(ds.id);
+      if (prev === false && now === true && ds.library_id) {
         clearControlAttention(ds.library_id);
       }
       wasConnected.set(ds.id, now);

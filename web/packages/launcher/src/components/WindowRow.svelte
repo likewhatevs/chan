@@ -9,7 +9,7 @@
   // desktop bridge) renders the row static with the connection dot and no actions.
   //
   // `icon` adds a leading kind glyph (accent for the control terminal) and, for a
-  // control terminal awaiting attention, an amber "reconnecting…" pill; the
+  // control terminal awaiting attention, an amber "disconnected..." pill; the
   // machine tree passes it for every row.
   import { AppWindow, Eye, EyeOff, Focus, SquareTerminal } from "lucide-svelte";
   import { focusWindow, toggleWindow, reportError, clearError } from "../state/library.svelte";
@@ -39,10 +39,11 @@
   // The FOCUS / SHOW-HIDE bridge ops reject on a surface with no desktop and on a
   // stale/reaped window. Catch here and surface the failure in the banner instead
   // of letting a floating promise reject into the console.
-  async function run(action: Promise<void>): Promise<void> {
+  async function run(rec: WindowRecord, action: Promise<void>): Promise<void> {
     clearError();
     try {
       await action;
+      acknowledge(rec);
     } catch (e) {
       reportError(e);
     }
@@ -74,7 +75,7 @@
       <span class="row-name">
         {windowRowLabel(w)}
         {#if icon && needsAttention(w)}
-          <span class="reconnecting">reconnecting…</span>
+          <span class="disconnected">disconnected...</span>
         {/if}
       </span>
     </div>
@@ -85,8 +86,7 @@
         title="Focus window"
         aria-label="Focus window"
         onclick={() => {
-          acknowledge(w);
-          run(focusWindow(w));
+          run(w, focusWindow(w));
         }}>
         <Focus size={16} />
       </button>
@@ -106,8 +106,7 @@
             ? "Show window"
             : "Hide window"}
         onclick={() => {
-          acknowledge(w);
-          run(toggleWindow(w));
+          run(w, toggleWindow(w));
         }}>
         {#if w.hidden}<EyeOff size={16} />{:else}<Eye size={16} />{/if}
       </button>
@@ -128,18 +127,18 @@
     color: var(--accent);
   }
 
-  /* The control terminal's "reconnecting…" cue: amber, flashing beside the name
+  /* The control terminal's "disconnected..." cue: amber, flashing beside the name
      while the devserver awaits attention (additive to the eye flash). */
-  .reconnecting {
+  .disconnected {
     display: inline-flex;
     align-items: center;
     font-size: 0.72rem;
     font-weight: 500;
     color: #e3b341;
-    animation: control-reconnecting 1.6s ease-in-out infinite;
+    animation: control-disconnected 1.6s ease-in-out infinite;
   }
 
-  @keyframes control-reconnecting {
+  @keyframes control-disconnected {
     0%,
     100% {
       opacity: 1;
@@ -172,7 +171,7 @@
 
   /* Respect reduced-motion: hold a steady yellow instead of pulsing. */
   @media (prefers-reduced-motion: reduce) {
-    .reconnecting {
+    .disconnected {
       animation: none;
     }
     .icon-btn.attention {

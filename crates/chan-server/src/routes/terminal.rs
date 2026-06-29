@@ -794,10 +794,10 @@ async fn terminal_ws(mut socket: WebSocket, state: Arc<AppState>, opts: Terminal
                             break;
                         }
                     }
-                    Ok(SessionEvent::Exit(code)) => {
+                    Ok(SessionEvent::Exit(exit)) => {
                         let id = session.id().to_owned();
                         state.terminal_sessions.remove(&id);
-                        let _ = send_frame(&mut socket, ServerFrame::Exit { code }).await;
+                        let _ = send_frame(&mut socket, ServerFrame::Exit { code: exit.legacy_code() }).await;
                         break;
                     }
                     Ok(SessionEvent::Error(message)) => {

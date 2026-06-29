@@ -48,6 +48,7 @@
   import { buildMachineTree, type MachineNode, type WorkspaceNode } from "../lib/machineTree";
   import { readOnly, hostOs } from "../state/capabilities";
   import { demoState, resetDemo } from "../state/demo.svelte";
+  import { hasControlAttention } from "../state/controlAttention.svelte";
   import type { DevserverEntry, WorkspaceEntry } from "../api/library";
 
   // The whole tree, recomputed when any of the three feeds change (the two-array
@@ -145,10 +146,16 @@
   const dsSpinning = (ds: DevserverEntry): boolean =>
     ds.status === "connecting" || isPending(dsKey(ds.id));
 
-  // A machine renders its TERMINALS/WORKSPACES content when it is the local
-  // machine or a connected devserver; a disconnected devserver shows the prompt.
+  // A disconnected devserver can still own a retained control terminal row. Keep
+  // that row mounted so its attention state can flash until the user acts.
   function hasContent(node: MachineNode): boolean {
-    return node.kind === "local" || (node.devserver !== null && connected(node.devserver));
+    return (
+      node.kind === "local" ||
+      (node.devserver !== null &&
+        (connected(node.devserver) ||
+          node.control.length > 0 ||
+          (node.libraryId !== null && hasControlAttention(node.libraryId))))
+    );
   }
 
   function machineIsEmpty(node: MachineNode): boolean {

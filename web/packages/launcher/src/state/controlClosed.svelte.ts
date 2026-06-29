@@ -4,7 +4,7 @@
 // terminal running its connect command (e.g. an ssh -L forward) -- stays alive.
 // When that command exits while connected, the desktop emits
 // `devserver-control-closed` carrying the devserver id. The launcher flashes the
-// control row's eye yellow (the amber "reconnecting" cue) for attention; the
+// control row's eye yellow (the amber "disconnected" cue) for attention; the
 // flash clears when the user acts on the window or the devserver reconnects.
 // Desktop-only: the driving event never fires in a plain browser.
 

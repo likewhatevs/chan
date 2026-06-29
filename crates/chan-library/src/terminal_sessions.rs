@@ -106,6 +106,10 @@ pub struct RegistryConfig {
 pub struct Registry {
     config: RegistryConfig,
     sessions: Mutex<HashMap<String, Arc<Session>>>,
+    /// Last PTY process exit observed in this registry. This is sticky at the
+    /// tenant/registry level so a control-terminal poller can still see the
+    /// script exit after an attached terminal websocket removes the session.
+    last_exit: Arc<Mutex<Option<TerminalExit>>>,
     /// Fires whenever the live roster changes (create / close / restart /
     /// broadcast-toggle). The roster broadcaster task awaits this and
     /// republishes a fresh snapshot onto the `/ws` bus so every window's
@@ -370,6 +374,48 @@ impl CloseReason {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+pub enum TerminalExit {
+    Code { code: u32 },
+    Signal { signal: String },
+    Unknown,
+}
+
+impl TerminalExit {
+    fn from_status(status: &portable_pty::ExitStatus) -> Self {
+        let rendered = status.to_string();
+        if let Some(signal) = rendered.strip_prefix("Terminated by ") {
+            return Self::Signal {
+                signal: signal.to_string(),
+            };
+        }
+        if rendered == "Success" || rendered.starts_with("Exited with code ") {
+            return Self::Code {
+                code: status.exit_code(),
+            };
+        }
+        Self::Unknown
+    }
+
+    pub fn legacy_code(&self) -> u32 {
+        match self {
+            Self::Code { code } => *code,
+            Self::Signal { .. } | Self::Unknown => 1,
+        }
+    }
+}
+
+impl std::fmt::Display for TerminalExit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Code { code } => write!(f, "status {code}"),
+            Self::Signal { signal } => write!(f, "signal {signal}"),
+            Self::Unknown => f.write_str("unknown status"),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum SessionEvent {
     Output(Vec<u8>),
@@ -377,7 +423,7 @@ pub enum SessionEvent {
         bytes_since_focus: u64,
     },
     Resize(PtySize),
-    Exit(u32),
+    Exit(TerminalExit),
     Error(String),
     Closed(CloseReason),
     /// The session was RESTARTED in place: its PTY is being replaced under the
@@ -523,6 +569,7 @@ impl Registry {
         Self {
             config,
             sessions: Mutex::new(HashMap::new()),
+            last_exit: Arc::new(Mutex::new(None)),
             roster_notify: Arc::new(Notify::new()),
             default_command: Mutex::new(None),
             persisted_windows: Mutex::new(HashSet::new()),
@@ -658,19 +705,27 @@ impl Registry {
             .collect()
     }
 
-    /// The exit code of any PTY in this registry that has exited, or `None`
+    /// The exit state of any PTY in this registry that has exited, or `None`
     /// while they all run. For the desktop's control-terminal connect flow:
     /// the control tenant runs exactly one PTY (the connect script), so
-    /// `Some(code)` means that script exited — the token will never come, so
+    /// `Some(exit)` means that script exited — the token will never come, so
     /// the desktop can stop the scrape early (instead of the full timeout) and
     /// survey on a failing connect instead of stranding an empty window.
-    /// Scans every mapped session, including ones already marked closed but
-    /// still retained, so a just-exited script is still visible.
-    pub fn last_exit_code(&self) -> Option<u32> {
+    /// The registry-level copy is sticky after a session has been removed by
+    /// the websocket path.
+    pub fn last_exit(&self) -> Option<TerminalExit> {
+        if let Some(exit) = self
+            .last_exit
+            .lock()
+            .expect("terminal registry poisoned")
+            .clone()
+        {
+            return Some(exit);
+        }
         let sessions = self.sessions.lock().expect("terminal registry poisoned");
         sessions
             .values()
-            .find_map(|session| *session.exit_code.lock().expect("session exit poisoned"))
+            .find_map(|session| session.exit.lock().expect("session exit poisoned").clone())
     }
 
     /// Set the command this tenant's terminals run when an open request
@@ -687,7 +742,7 @@ impl Registry {
 
     pub fn create(&self, mut opts: CreateOptions) -> Result<AttachHandle, CreateError> {
         // Clear dead-process ghosts before minting: a killed session lingers in
-        // the map (its controller thread records `exit_code` on exit but never
+        // the map (its controller thread records `exit` on exit but never
         // reaps the entry), so it would hold its tab name + occupy a
         // `session_cap` slot against a re-spawn under the same name. See
         // [`reap_exited`].
@@ -733,6 +788,7 @@ impl Registry {
             opts,
             announce_command,
             self.generation_counter.fetch_add(1, Ordering::Relaxed),
+            self.last_exit.clone(),
         )
         .map_err(CreateError::Spawn)?;
         let mut sessions = self.sessions.lock().expect("terminal registry poisoned");
@@ -798,6 +854,7 @@ impl Registry {
             opts,
             false,
             self.generation_counter.fetch_add(1, Ordering::Relaxed),
+            self.last_exit.clone(),
         )
         .map_err(CreateError::Spawn)?;
         let mut sessions = self.sessions.lock().expect("terminal registry poisoned");
@@ -1381,7 +1438,7 @@ impl Registry {
     /// viewer — so keeping it only leaks the slot and HOLDS its tab name,
     /// making a re-spawn under the same name collide and come up renamed (the
     /// `cs terminal restart` ghost-tab regression: a killed agent's entry lingered
-    /// because the controller thread records `exit_code` on exit but never
+    /// because the controller thread records `exit` on exit but never
     /// removes the entry). Distinct axis from `prune_idle_at`, which times
     /// out *live* detached sessions and deliberately keeps persisted windows:
     /// a dead process can't be reattached, only re-spawned, so a persisted
@@ -1401,7 +1458,7 @@ impl Registry {
                 .filter(|(_, session)| {
                     session.attach_count.load(Ordering::Relaxed) == 0
                         && session
-                            .exit_code
+                            .exit
                             .lock()
                             .expect("session exit poisoned")
                             .is_some()
@@ -1682,12 +1739,12 @@ struct Session {
     /// state of members they do not host.
     broadcast: AtomicBool,
     closed: AtomicBool,
-    /// The PTY's exit code, set once its child process exits (the same value
+    /// The PTY's exit state, set once its child process exits (the same value
     /// broadcast as [`SessionEvent::Exit`]). `None` while the process runs.
     /// Stored — not only broadcast — so a poller (the desktop's control-script
     /// scrape) can see the script died without subscribing to the event
     /// stream. Retained on the still-mapped session after a natural exit.
-    exit_code: Mutex<Option<u32>>,
+    exit: Mutex<Option<TerminalExit>>,
 }
 
 impl Session {
@@ -1697,6 +1754,7 @@ impl Session {
         opts: CreateOptions,
         announce_command: bool,
         generation: u64,
+        registry_last_exit: Arc<Mutex<Option<TerminalExit>>>,
     ) -> anyhow::Result<Arc<Self>> {
         let pty_system = native_pty_system();
         let pair = pty_system.openpty(opts.size)?;
@@ -1855,7 +1913,7 @@ impl Session {
             private_mode_tail: Mutex::new(Vec::new()),
             broadcast: AtomicBool::new(false),
             closed: AtomicBool::new(false),
-            exit_code: Mutex::new(None),
+            exit: Mutex::new(None),
         });
 
         // A single-purpose / devserver CONTROL tenant echoes a banner naming
@@ -1945,11 +2003,15 @@ impl Session {
 
                     match child.try_wait() {
                         Ok(Some(status)) => {
-                            let code = status.exit_code();
+                            let exit = TerminalExit::from_status(&status);
                             // Record before broadcasting so a poller that reads
                             // the registry right after the event still sees it.
-                            *session.exit_code.lock().expect("session exit poisoned") = Some(code);
-                            session.broadcast(SessionEvent::Exit(code));
+                            *session.exit.lock().expect("session exit poisoned") =
+                                Some(exit.clone());
+                            *registry_last_exit
+                                .lock()
+                                .expect("terminal registry poisoned") = Some(exit.clone());
+                            session.broadcast(SessionEvent::Exit(exit));
                             return;
                         }
                         Ok(None) => std::thread::sleep(Duration::from_millis(25)),
@@ -2570,7 +2632,7 @@ mod tests {
             private_mode_tail: Mutex::new(Vec::new()),
             broadcast: AtomicBool::new(false),
             closed: AtomicBool::new(false),
-            exit_code: Mutex::new(None),
+            exit: Mutex::new(None),
         })
     }
 
@@ -3201,6 +3263,69 @@ mod tests {
         }
     }
 
+    fn opts_with_command(command: &str) -> CreateOptions {
+        CreateOptions {
+            size: test_size(),
+            tab_name: None,
+            tab_group: None,
+            window_id: Some("win-exit".to_string()),
+            mcp_env: false,
+            cwd: None,
+            command: Some(command.to_string()),
+            env: Default::default(),
+        }
+    }
+
+    async fn wait_for_last_exit(registry: &Registry) -> TerminalExit {
+        for _ in 0..120 {
+            if let Some(exit) = registry.last_exit() {
+                return exit;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        panic!("terminal exit was not recorded");
+    }
+
+    #[tokio::test]
+    async fn last_exit_zero_is_sticky_after_session_removal() {
+        let registry = Registry::new(test_config(1024, 4, 10));
+        let handle = registry.create(opts_with_command("exit 0")).unwrap();
+        let id = handle.id().to_string();
+
+        assert_eq!(
+            wait_for_last_exit(&registry).await,
+            TerminalExit::Code { code: 0 }
+        );
+        assert!(registry.remove(&id));
+        assert_eq!(registry.last_exit(), Some(TerminalExit::Code { code: 0 }));
+    }
+
+    #[tokio::test]
+    async fn last_exit_nonzero_is_sticky_after_session_removal() {
+        let registry = Registry::new(test_config(1024, 4, 10));
+        let handle = registry.create(opts_with_command("exit 7")).unwrap();
+        let id = handle.id().to_string();
+
+        assert_eq!(
+            wait_for_last_exit(&registry).await,
+            TerminalExit::Code { code: 7 }
+        );
+        assert!(registry.remove(&id));
+        assert_eq!(registry.last_exit(), Some(TerminalExit::Code { code: 7 }));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn unix_signal_exit_is_recorded_as_exit_state() {
+        let registry = Registry::new(test_config(1024, 4, 10));
+        let _handle = registry.create(opts_with_command("kill -TERM $$")).unwrap();
+
+        match wait_for_last_exit(&registry).await {
+            TerminalExit::Signal { signal } => assert!(!signal.is_empty()),
+            other => panic!("expected a signal exit, got {other:?}"),
+        }
+    }
+
     #[test]
     fn persisted_window_session_survives_prune_and_reattaches() {
         // persist ⇒ keep: a detached session whose window has a durable blob is
@@ -3306,7 +3431,7 @@ mod tests {
 
     #[test]
     fn reap_exited_removes_a_dead_detached_session() {
-        // A killed agent: its controller thread recorded `exit_code` on process
+        // A killed agent: its controller thread recorded `exit` on process
         // exit but the entry lingered (the ghost-tab name-holding bug). Once
         // detached (frontend gone) it is a pure ghost ⇒ reaped, freeing the name.
         let registry = Registry::new(test_config(1024, 4, 10));
@@ -3315,7 +3440,7 @@ mod tests {
         {
             let sessions = registry.sessions.lock().unwrap();
             let session = sessions.values().next().unwrap();
-            *session.exit_code.lock().unwrap() = Some(0); // process exited
+            *session.exit.lock().unwrap() = Some(TerminalExit::Code { code: 0 });
         }
         assert_eq!(registry.reap_exited(), 1);
         assert_eq!(registry.len(), 0);
@@ -3331,7 +3456,7 @@ mod tests {
         {
             let sessions = registry.sessions.lock().unwrap();
             let session = sessions.values().next().unwrap();
-            *session.exit_code.lock().unwrap() = Some(0);
+            *session.exit.lock().unwrap() = Some(TerminalExit::Code { code: 0 });
         }
         assert_eq!(registry.reap_exited(), 0);
         assert_eq!(registry.len(), 1);
@@ -3344,7 +3469,7 @@ mod tests {
         // NOT a ghost — kept. Process-death is the reap axis, not detach.
         let registry = Registry::new(test_config(1024, 4, 10));
         let handle = registry.create(opts_with_window("win-live")).unwrap();
-        drop(handle); // detached, but exit_code stays None (still running)
+        drop(handle); // detached, but exit stays None (still running)
         assert_eq!(registry.reap_exited(), 0);
         assert_eq!(registry.len(), 1);
         registry.close_all(CloseReason::Shutdown);
@@ -3367,7 +3492,7 @@ mod tests {
         {
             let sessions = registry.sessions.lock().unwrap();
             let session = sessions.values().next().unwrap();
-            *session.exit_code.lock().unwrap() = Some(0); // process exited
+            *session.exit.lock().unwrap() = Some(TerminalExit::Code { code: 0 });
         }
         assert_eq!(registry.reap_exited(), 1);
         assert_eq!(*reaped.lock().unwrap(), vec!["win-term".to_string()]);
@@ -3388,7 +3513,7 @@ mod tests {
         {
             let sessions = registry.sessions.lock().unwrap();
             let session = sessions.values().next().unwrap();
-            *session.exit_code.lock().unwrap() = Some(0);
+            *session.exit.lock().unwrap() = Some(TerminalExit::Code { code: 0 });
         }
         assert_eq!(registry.reap_exited(), 0);
         assert!(reaped.lock().unwrap().is_empty());

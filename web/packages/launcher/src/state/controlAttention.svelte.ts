@@ -3,9 +3,8 @@
 // When a connected devserver's CONTROL terminal's inner process exits, the
 // desktop keeps the control window row (it no longer reaps it on PTY exit) and
 // emits `devserver-control-closed`. The launcher flashes that row's eye yellow in
-// the Open-windows feed to request attention, an additive cue beside the
-// re-run/edit/abandon survey modal. The flash clears when the user acts -- shows
-// or focuses the window, or reconnects the devserver.
+// the Open-windows feed to request attention. The flash clears when the user
+// acts -- shows or focuses the window, or reconnects the devserver.
 //
 // Keyed by the devserver's LIBRARY id (the id the control window record carries)
 // so the feed matches the flashing row directly. The `devserver-control-closed`
@@ -31,19 +30,19 @@ export const controlAttention = $state<ControlAttentionState>({
 });
 
 function controlLibraryId(devserverId: string): string | null {
-  const ds = library.devservers.find((d) => d.id === devserverId);
-  if (ds?.library_id) return ds.library_id;
-
-  const direct = library.windows.find((w) => w.control && w.library_id === devserverId);
-  if (direct) return direct.library_id;
-
   // The desktop emits as soon as the control script exits; on a first connect
   // that can beat the devserver registry refresh that fills `library_id`.
   // The control row is already in the window feed under its real library id.
   const byControlWindow = library.windows.find(
     (w) => w.control && w.window_id === `${CONTROL_WINDOW_PREFIX}${devserverId}`,
   );
-  return byControlWindow?.library_id ?? null;
+  if (byControlWindow) return byControlWindow.library_id;
+
+  const ds = library.devservers.find((d) => d.id === devserverId);
+  if (ds?.library_id) return ds.library_id;
+
+  const direct = library.windows.find((w) => w.control && w.library_id === devserverId);
+  return direct?.library_id ?? null;
 }
 
 /** Flag a devserver's control terminal for attention (its inner process exited).

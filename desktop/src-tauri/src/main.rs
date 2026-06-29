@@ -150,6 +150,15 @@ pub struct AppState {
     /// (reaping the script PTY) on disconnect/forget, and reconnect must never
     /// mistake it for a workspace window. Absent for a no-script devserver.
     pub control_terminal_prefixes: Mutex<HashMap<String, String>>,
+    /// Current scripted control run per devserver. The generation binds the
+    /// prefix, watcher, and connect result so a stale run cannot emit against or
+    /// overwrite a newer connect attempt.
+    pub control_terminal_runs: Mutex<HashMap<String, ControlTerminalRun>>,
+    /// Monotonic generation source for scripted control runs.
+    pub control_terminal_generation: std::sync::atomic::AtomicU64,
+    /// Devservers with a connect request currently in flight. A second connect
+    /// coalesces into the first instead of spawning another control terminal.
+    pub devserver_connecting: Mutex<std::collections::HashSet<String>>,
     /// Teardown hook the launcher's [`DevserverConfigRegistry`] fires after an
     /// HTTP `DELETE /api/library/devservers/{id}` drops a row, so that path
     /// reaps a live connection/windows through [`teardown_devserver_connection`]
@@ -164,6 +173,13 @@ pub struct AppState {
     /// True while the quit-confirmation dialog is showing, so a
     /// repeated Cmd+Q doesn't stack a second dialog.
     pub quit_prompt_open: std::sync::atomic::AtomicBool,
+}
+
+#[derive(Debug, Clone)]
+pub struct ControlTerminalRun {
+    pub generation: u64,
+    pub prefix: String,
+    pub script_based: bool,
 }
 
 /// One reopenable remote window: see `AppState::remote_reopen`.
@@ -1283,6 +1299,7 @@ fn remove_devserver_workspace_windows(app: &tauri::AppHandle, state: &AppState, 
 fn reap_devserver_control_terminal(app: &tauri::AppHandle, state: &AppState, id: &str) {
     serve::close_window_by_label(app, &serve::control_terminal_label(id));
     state.control_terminal_prefixes.lock().unwrap().remove(id);
+    state.control_terminal_runs.lock().unwrap().remove(id);
     if let Some(embedded) = state.embedded.get() {
         embedded.reap_control_window(&serve::control_terminal_label(id));
     }
@@ -1428,23 +1445,20 @@ async fn scrape_control_terminal_token(
     // a user close (below) rather than the build race.
     let mut window_seen = false;
     for _ in 0..MAX_ATTEMPTS {
-        // Scrape the token FIRST: a script that prints the token then exits
-        // cleanly is a success, and the scrollback survives the exit, so a
-        // token found this pass wins over the exit / close checks below.
-        if let Some(token) = devserver::scrape_token(&embedded.read_control_terminal_output(prefix))
-        {
-            return Ok(token);
-        }
         // No token yet, and the connect script's PTY has exited: a failed
         // connect (bad credentials, script error, a ^C-killed script). Fail fast
         // instead of waiting out the full backoff budget, so the launcher
         // surveys (abandon/edit/retry) promptly rather than sticking on
         // "connecting". The exit status is the tenant's, independent of the
         // control window, so this also catches the script dying in place.
-        if let Some(code) = embedded.control_terminal_exit(prefix) {
+        if let Some(exit) = embedded.control_terminal_exit(prefix) {
             return Err(format!(
-                "the devserver connect script exited (status {code}) before printing its token"
+                "the devserver connect script exited ({exit}) before the connection was established"
             ));
+        }
+        if let Some(token) = devserver::scrape_token(&embedded.read_control_terminal_output(prefix))
+        {
+            return Ok(token);
         }
         // The user closed the control terminal (^W / red button) before it
         // connected. A window close does NOT reap the tenant — the PTY outlives
@@ -1466,13 +1480,40 @@ async fn scrape_control_terminal_token(
     Err("the devserver did not print its token in the control terminal in time".to_string())
 }
 
-/// Watch a connected scripted devserver's control-terminal PTY for a
-/// connected-phase exit — the connect script returning on its own, or a ^C in
-/// the control window. The connect flow's scrape loop only watches the PTY
-/// until the token lands; once connected nothing else does, so a script that
-/// dies leaves the devserver unreachable with no signal (the user's "^C and no
-/// dialog shows"). On such an exit, fire the same `devserver-control-closed`
-/// launcher survey (re-run vs abandon) the empty-window close path emits — but,
+fn control_run_is_current(state: &AppState, id: &str, generation: u64, prefix: &str) -> bool {
+    state
+        .control_terminal_runs
+        .lock()
+        .unwrap()
+        .get(id)
+        .map(|run| run.generation == generation && run.prefix == prefix && run.script_based)
+        .unwrap_or(false)
+}
+
+fn ensure_control_run_live(
+    state: &AppState,
+    id: &str,
+    generation: u64,
+    prefix: &str,
+) -> Result<(), String> {
+    if !control_run_is_current(state, id, generation, prefix) {
+        return Err("the devserver connect attempt was replaced".to_string());
+    }
+    if let Some(exit) = state
+        .embedded
+        .get()
+        .and_then(|e| e.control_terminal_exit(prefix))
+    {
+        return Err(format!("the devserver connect script exited ({exit})"));
+    }
+    Ok(())
+}
+
+/// Watch a scripted devserver's control-terminal PTY from the moment its prefix
+/// is registered. The connect script returning on its own, or a ^C in the
+/// control window, means the script-backed connection is dead even if the exit
+/// happens before token scrape, while hidden, or after a successful connect. On
+/// such an exit, fire `devserver-control-closed` — but,
 /// unlike that path, WITHOUT closing the control window: the user didn't ask to
 /// close it, so it stays showing "process exited; press Ctrl+D", same as a
 /// non-control terminal. The fire is desktop-side (a poll of the tenant's exit
@@ -1482,34 +1523,27 @@ async fn scrape_control_terminal_token(
 /// Stops without firing once this watcher's control terminal is no longer the
 /// devserver's current one: a disconnect/forget removes the prefix (and reaps
 /// the tenant), and a fresh connect replaces it — either way that exit is not a
-/// surprise THIS watcher owns, so it must not double-survey or fire against a
+/// surprise THIS watcher owns, so it must not double-emit or fire against a
 /// reconnected session.
 fn spawn_control_terminal_exit_watcher(
     app: tauri::AppHandle,
     state: Arc<AppState>,
     id: String,
     prefix: String,
+    generation: u64,
+    script_based: bool,
 ) {
     tauri::async_runtime::spawn(async move {
         const POLL: std::time::Duration = std::time::Duration::from_millis(1000);
         loop {
-            // Still this devserver's live control terminal? A disconnect drops
-            // the prefix from the map (and reaps the tenant); a fresh connect
-            // overwrites it. Either way, stop — this watcher's job is done.
-            let current = state
-                .control_terminal_prefixes
-                .lock()
-                .unwrap()
-                .get(&id)
-                .cloned();
-            if current.as_deref() != Some(prefix.as_str()) {
+            if !control_run_is_current(&state, &id, generation, &prefix) {
                 return;
             }
             let exited = state
                 .embedded
                 .get()
                 .and_then(|e| e.control_terminal_exit(&prefix));
-            if let Some(code) = exited {
+            if let Some(exit) = exited {
                 // The connect-script PTY is gone, but KEEP the control window row
                 // and its (now dead) tenant: the launcher slow-flashes the row's
                 // eye to request attention, and "show window" reveals the terminal
@@ -1523,72 +1557,20 @@ fn spawn_control_terminal_exit_watcher(
                 // (for example `ssh -N` or a foreground `chan devserver`), so its PTY
                 // exiting means the session
                 // ended, FULL STOP. Disconnect ALWAYS: flip `connected:false` +
-                // survey re-run/abandon. This deliberately drops the old reachability
+                // and emit attention. This deliberately drops the old reachability
                 // probe that kept a "setup-style" script's devserver connected after
                 // the script exited 0 — that heuristic let a broken-pipe SSH linger
                 // as "connected" (the user's "^C and no dialog shows"). A persistent
                 // connection must now keep its script alive.
                 //
-                // Scriptless (host/port/token) devservers keep the reachability
-                // lifecycle, but they have NO control terminal — this watcher is
-                // spawned only when a connect script ran (`control.is_some()`), so it
-                // never runs for them. The `config.script` check makes that invariant
-                // explicit and preserves the scriptless contract if the spawn
-                // condition ever widens. (Lock held only for this synchronous read —
-                // never across the `fetch_info` await below.)
-                let script_based = state
-                    .store
-                    .lock()
-                    .unwrap()
-                    .get()
-                    .ok()
-                    .and_then(|cfg| {
-                        cfg.devservers
-                            .iter()
-                            .find(|d| d.id == id)
-                            .map(|d| !d.script.trim().is_empty())
-                    })
-                    .unwrap_or(false);
-                // Only while still connected: a disconnect-driven reap is expected
-                // teardown, not a surprise this watcher owns.
-                if state.devservers.is_connected(&id) {
-                    if script_based {
-                        tracing::info!(
-                            devserver = %id,
-                            status = code,
-                            "control script exited; disconnecting (script == connection) + surveying re-run vs abandon"
-                        );
-                        // Flip `connected:false` NOW, before the SPA survey, so a
-                        // Dismiss / no-response can't leave the launcher showing it
-                        // connected.
-                        flip_devserver_control_dead(&app, &state, &id);
-                        let _ = app.emit("devserver-control-closed", id);
-                    } else {
-                        // Defensive only: a scriptless devserver has no control
-                        // terminal today, so this branch is unreachable. Preserve the
-                        // reachability lifecycle if the watcher's spawn ever widens.
-                        let reachable = match state.devservers.get(&id) {
-                            Some(conn) => {
-                                devserver::fetch_info(&conn.host, conn.port).await.is_ok()
-                            }
-                            None => false,
-                        };
-                        if reachable {
-                            tracing::info!(
-                                devserver = %id,
-                                status = code,
-                                "scriptless control exit but the devserver is still reachable; staying connected"
-                            );
-                        } else {
-                            tracing::info!(
-                                devserver = %id,
-                                status = code,
-                                "scriptless control exit and unreachable; surveying re-run vs abandon"
-                            );
-                            flip_devserver_control_dead(&app, &state, &id);
-                            let _ = app.emit("devserver-control-closed", id);
-                        }
-                    }
+                if script_based && control_run_is_current(&state, &id, generation, &prefix) {
+                    tracing::info!(
+                        devserver = %id,
+                        exit = %exit,
+                        "control script exited; disconnecting (script == connection)"
+                    );
+                    flip_devserver_control_dead(&app, &state, &id);
+                    let _ = app.emit("devserver-control-closed", id);
                 }
                 return;
             }
@@ -1622,6 +1604,26 @@ async fn connect_devserver_impl(
     if state.devservers.is_connected(&id) {
         return Ok(());
     }
+    {
+        let mut connecting = state.devserver_connecting.lock().unwrap();
+        if !connecting.insert(id.clone()) {
+            return Ok(());
+        }
+    }
+    let result = connect_devserver_impl_inner(app.clone(), Arc::clone(&state), id.clone()).await;
+    if result.is_err() {
+        state.devservers.remove(&id);
+        remove_devserver_windows(&app, &state, &id);
+    }
+    state.devserver_connecting.lock().unwrap().remove(&id);
+    result
+}
+
+async fn connect_devserver_impl_inner(
+    app: tauri::AppHandle,
+    state: Arc<AppState>,
+    id: String,
+) -> Result<(), String> {
     let (url, script, auto_hide_control) = {
         let cfg = state.store.lock().unwrap().get().map_err(err)?;
         let ds = cfg
@@ -1640,8 +1642,13 @@ async fn connect_devserver_impl(
     let control = if script.trim().is_empty() {
         None
     } else {
+        reap_devserver_control_terminal(&app, &state, &id);
         let ct = serve::spawn_control_terminal_window(app.clone(), Arc::clone(&state), &id, script)
             .await?;
+        let generation = state
+            .control_terminal_generation
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            + 1;
         // Track the control tenant prefix NOW, before the fallible scrape /
         // wait / open below: a connect that fails partway leaves the script
         // PTY running, and the failure survey's Retry / Edit / Abandon reap it
@@ -1651,19 +1658,45 @@ async fn connect_devserver_impl(
             .lock()
             .unwrap()
             .insert(id.clone(), ct.prefix.clone());
-        Some(ct)
+        state.control_terminal_runs.lock().unwrap().insert(
+            id.clone(),
+            ControlTerminalRun {
+                generation,
+                prefix: ct.prefix.clone(),
+                script_based: true,
+            },
+        );
+        spawn_control_terminal_exit_watcher(
+            app.clone(),
+            Arc::clone(&state),
+            id.clone(),
+            ct.prefix.clone(),
+            generation,
+            true,
+        );
+        state.devserver_feed.seed_library_id(id.clone(), id.clone());
+        if let Some(embedded) = state.embedded() {
+            embedded.mint_control_window(
+                serve::control_terminal_label(&id),
+                id.clone(),
+                ct.prefix.clone(),
+            )?;
+            embedded.signal_library_change();
+        }
+        Some((ct, generation))
     };
     let (token, port) = match &control {
-        Some(ct) => (
-            scrape_control_terminal_token(
+        Some((ct, generation)) => {
+            let token = scrape_control_terminal_token(
                 &app,
                 &state,
                 &serve::control_terminal_label(&id),
                 &ct.prefix,
             )
-            .await?,
-            port,
-        ),
+            .await?;
+            ensure_control_run_live(&state, &id, *generation, &ct.prefix)?;
+            (token, port)
+        }
         // Local devserver (no control script): read the CURRENT token AND port
         // from its persisted config. The stored URL's port goes stale when a
         // `--port 0` local devserver restarts on a different OS-assigned port;
@@ -1674,6 +1707,9 @@ async fn connect_devserver_impl(
         ),
     };
     let info = wait_for_devserver(&host, port).await?;
+    if let Some((ct, generation)) = &control {
+        ensure_control_run_live(&state, &id, *generation, &ct.prefix)?;
+    }
     if info.protocol != devserver::DEVSERVER_API_PROTOCOL {
         return Err(format!(
             "devserver speaks management protocol {} but this desktop speaks {}; update whichever is older",
@@ -1708,11 +1744,14 @@ async fn connect_devserver_impl(
     // reported id) groups it separately. Non-empty only: `info.library_id` defaults
     // to "" if the devserver omitted it; the launcher's never-blank fallback is
     // only a safety net.
-    if !info.library_id.is_empty() {
-        state
-            .devserver_feed
-            .seed_library_id(id.clone(), info.library_id.clone());
-    }
+    let control_library_id = if info.library_id.is_empty() {
+        id.clone()
+    } else {
+        info.library_id.clone()
+    };
+    state
+        .devserver_feed
+        .seed_library_id(id.clone(), control_library_id.clone());
     // Seed the self-reported OS alongside the library_id so the launcher's
     // machine icon renders from the first feed read. Non-empty only: a devserver
     // too old to report `os` leaves the icon neutral rather than blanking it.
@@ -1730,11 +1769,12 @@ async fn connect_devserver_impl(
     // `reap_control_window` on the connect-script PTY exit. Minted HERE
     // (post-`wait_for_devserver`) because the library_id only arrives with `info`;
     // read-time assembly resolves the row's prefix/token/connected from the tenant.
-    if let Some(ct) = &control {
+    if let Some((ct, generation)) = &control {
+        ensure_control_run_live(&state, &id, *generation, &ct.prefix)?;
         if let Some(embedded) = state.embedded() {
             embedded.mint_control_window(
                 serve::control_terminal_label(&id),
-                info.library_id.clone(),
+                control_library_id.clone(),
                 ct.prefix.clone(),
             )?;
         }
@@ -1760,12 +1800,18 @@ async fn connect_devserver_impl(
             );
         }
     }
+    if let Some((ct, generation)) = &control {
+        ensure_control_run_live(&state, &id, *generation, &ct.prefix)?;
+    }
     // The window watcher is the SOLE driver of this devserver's native windows:
     // spawn it over the library feed (`/api/library/windows/watch`), and its
     // snapshots reconcile open whatever the devserver persisted. An EMPTY feed is
     // valid (a fresh devserver, or one the user emptied before disconnecting).
     let (cancel, snapshot, view) =
         window_watcher_wiring::spawn_devserver_window_watcher(app.clone(), conn.clone()).await?;
+    if let Some((ct, generation)) = &control {
+        ensure_control_run_live(&state, &id, *generation, &ct.prefix)?;
+    }
     // Feed the launcher: register this devserver's live window snapshot,
     // poll its served workspaces into the cache, and subscribe to its colour feed
     // with push-based updates. All stop when the disconnect flips `cancel` (they
@@ -1800,27 +1846,8 @@ async fn connect_devserver_impl(
     // terminal the very first time, never re-minted once the user closes it), so
     // the desktop just reconciles whatever the feed reports.
     //
-    // The control terminal stays open after connect. It runs the connect
-    // script, which may keep streaming or prompt for ssh credentials, so
-    // burying it on connect hid live output and read as a flash. The user
-    // closes it with the native red dot (which buries it; reopen from the
-    // [DEVSERVER] row dropdown via open_window_by_label), and disconnect/forget
-    // reaps both the window and its tenant through teardown_devserver_windows.
-    // The tenant prefix was tracked at spawn time (control is read above for
-    // the token scrape).
-    //
-    // Rule (a) of the control-terminal dialog: the scrape loop above stopped
-    // watching the PTY once the token landed, so a connected-phase exit (the
-    // script returning, or a ^C in the control window) would otherwise go
-    // unnoticed. Watch it from here so it surveys re-run/abandon.
-    if let Some(ct) = &control {
-        spawn_control_terminal_exit_watcher(
-            app.clone(),
-            Arc::clone(&state),
-            id.clone(),
-            ct.prefix.clone(),
-        );
-    }
+    // The control terminal stays open after connect. Its exit watcher was
+    // started as soon as the prefix was registered, before token scraping.
     // Auto-hide the control terminal on connect success when the devserver's
     // "auto-hide control terminal on success" is set. A PROGRAMMATIC hide → reuse
     // the silent-hide path so it does NOT fire the bury notice (unlike the OS
@@ -3272,6 +3299,9 @@ fn main() {
         devserver_watcher_views: Mutex::new(HashMap::new()),
         devserver_active_transfers: Mutex::new(std::collections::HashSet::new()),
         control_terminal_prefixes: Mutex::new(HashMap::new()),
+        control_terminal_runs: Mutex::new(HashMap::new()),
+        control_terminal_generation: std::sync::atomic::AtomicU64::new(0),
+        devserver_connecting: Mutex::new(std::collections::HashSet::new()),
         devserver_remove_hook: Arc::new(OnceLock::new()),
         quit_confirmed: std::sync::atomic::AtomicBool::new(false),
         quit_prompt_open: std::sync::atomic::AtomicBool::new(false),
