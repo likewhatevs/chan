@@ -5,7 +5,7 @@
 //! mounted workspace still gets its own `AppState`, watcher, indexer,
 //! MCP bridge, control socket, terminal registry, and route prefix.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, RwLock, Weak};
 use std::time::{Duration, Instant};
@@ -23,6 +23,10 @@ use tower::ServiceExt;
 use crate::desktop_window_ops::DesktopBridge;
 use crate::tenant::{HostControl, TenantArtifacts, TenantBuilder, UnserveMode};
 use crate::terminal_sessions::{CloseReason, TerminalExit};
+#[cfg(target_os = "linux")]
+use crate::terminal_sessions::{
+    FdStoreRestoreReport, FdStoreSessionImport, FdStoreSessionSnapshot, FdStoreSkippedSession,
+};
 use crate::windows::{PersistedWindow, WindowKind, WindowRecord, WindowRegistry};
 use crate::{
     allocate_workspace_prefix, sanitize_prefix, DevserverRegistry, Error, ServeConfig, ServeHandle,
@@ -977,6 +981,196 @@ impl WorkspaceHost {
             .get(&prefix)
             .map(|runtime| runtime.artifacts.terminal_sessions.roster().len())
             .unwrap_or(0)
+    }
+
+    /// Snapshots every live terminal PTY fd for a systemd fdstore restart.
+    ///
+    /// This is intentionally host-wide: individual terminal or workspace teardown
+    /// never stores fds. The caller is the devserver restart handshake, which
+    /// preserves all tenants as one process-level operation.
+    #[cfg(target_os = "linux")]
+    pub fn fdstore_terminal_sessions(&self) -> Vec<FdStoreSessionSnapshot> {
+        let Ok(workspaces) = self.workspaces.read() else {
+            return Vec::new();
+        };
+        workspaces
+            .values()
+            .flat_map(|runtime| {
+                runtime
+                    .artifacts
+                    .terminal_sessions
+                    .fdstore_sessions(&runtime.handle.prefix)
+            })
+            .collect()
+    }
+
+    /// Marks exact sessions as preserved for an imminent systemd fdstore
+    /// restart. A later process-wide shutdown detaches only these sessions
+    /// without killing their PTYs; unrelated sessions still close normally.
+    #[cfg(target_os = "linux")]
+    pub fn preserve_fdstore_terminal_sessions(&self, sessions: &[(String, String)]) {
+        let Ok(workspaces) = self.workspaces.read() else {
+            return;
+        };
+        for (prefix, session_id) in sessions {
+            if let Some(runtime) = workspaces.get(prefix) {
+                runtime
+                    .artifacts
+                    .terminal_sessions
+                    .preserve_fdstore_session(session_id);
+            }
+        }
+    }
+
+    /// Clears fdstore restart preservation marks when the lease expires before
+    /// systemd restarts the devserver.
+    #[cfg(target_os = "linux")]
+    pub fn clear_fdstore_terminal_session_preservation(&self, sessions: &[(String, String)]) {
+        let Ok(workspaces) = self.workspaces.read() else {
+            return;
+        };
+        for (prefix, session_id) in sessions {
+            if let Some(runtime) = workspaces.get(prefix) {
+                runtime
+                    .artifacts
+                    .terminal_sessions
+                    .clear_fdstore_session_preservation(session_id);
+            }
+        }
+    }
+
+    /// Restores inherited fdstore PTYs into their original mounted tenants.
+    ///
+    /// Guardrails are deliberately conservative: a PTY is restored only when its
+    /// tenant prefix is mounted and its owning `window_id` is still present in
+    /// the persisted window registry. If `.chan` metadata or a workspace mount
+    /// disappeared during the restart, the fd is dropped instead of reviving a
+    /// session into a layout the client can no longer reconcile.
+    #[cfg(target_os = "linux")]
+    pub fn restore_fdstore_terminal_sessions(
+        &self,
+        imports: Vec<FdStoreSessionImport>,
+    ) -> FdStoreRestoreReport {
+        let mut report = FdStoreRestoreReport::default();
+        let Some(registry) = self.window_registry() else {
+            for import in imports {
+                report.skip_session(&import.meta, "window registry not installed");
+            }
+            return report;
+        };
+        let valid_windows: HashSet<String> = registry
+            .snapshot()
+            .into_iter()
+            .map(|row| row.window_id)
+            .collect();
+        let mut by_prefix: HashMap<String, Vec<FdStoreSessionImport>> = HashMap::new();
+        for import in imports {
+            let Some(window_id) = import.meta.window_id.as_deref() else {
+                report.skip_session(&import.meta, "missing window id");
+                continue;
+            };
+            if !valid_windows.contains(window_id) {
+                report.skip_session(
+                    &import.meta,
+                    format!("window {window_id} is no longer persisted"),
+                );
+                continue;
+            }
+            by_prefix
+                .entry(import.meta.tenant_prefix.clone())
+                .or_default()
+                .push(import);
+        }
+
+        let Ok(workspaces) = self.workspaces.read() else {
+            for import in by_prefix.into_values().flatten() {
+                report.skip_session(&import.meta, "workspace host lock poisoned");
+            }
+            return report;
+        };
+        for (prefix, imports) in by_prefix {
+            let Some(runtime) = workspaces.get(&prefix) else {
+                for import in imports {
+                    report.skip_session(
+                        &import.meta,
+                        format!("tenant prefix {prefix} is not mounted"),
+                    );
+                }
+                continue;
+            };
+            let tenant_report = runtime
+                .artifacts
+                .terminal_sessions
+                .restore_fdstore_sessions(imports);
+            report.restored += tenant_report.restored;
+            report.skipped.extend(tenant_report.skipped);
+            report
+                .skipped_sessions
+                .extend(tenant_report.skipped_sessions);
+        }
+        if report.restored > 0 {
+            self.notify_window_change();
+        }
+        report
+    }
+
+    /// Cleans persisted standalone terminal windows whose fdstore PTY could not
+    /// be restored. Workspace windows are deliberately not removed here: a lost
+    /// pane PTY must not discard the user's workspace window/layout.
+    #[cfg(target_os = "linux")]
+    pub fn cleanup_skipped_fdstore_sessions(
+        &self,
+        skipped_sessions: &[FdStoreSkippedSession],
+    ) -> Vec<String> {
+        let Some(registry) = self.window_registry() else {
+            return Vec::new();
+        };
+        let mut seen = HashSet::new();
+        let mut removed = Vec::new();
+        for skipped in skipped_sessions {
+            let Some(window_id) = skipped.window_id.as_deref() else {
+                continue;
+            };
+            if !seen.insert(window_id.to_string()) {
+                continue;
+            }
+            if registry.remove_terminal(window_id) {
+                let reaped = self.reap_discarded_window_state(window_id);
+                self.notify_window_change();
+                removed.push(format!(
+                    "window {window_id}: removed dangling terminal window after fdstore restore skip (reaped {reaped} session(s))"
+                ));
+            }
+        }
+        removed
+    }
+
+    /// Cleans all standalone terminal window rows after inherited fdstore FDs
+    /// arrive without a readable restart manifest. With no trustworthy
+    /// session-to-window mapping left, terminal rows are the only safe rows to
+    /// reap; workspace and control windows remain under their normal owners.
+    #[cfg(target_os = "linux")]
+    pub fn cleanup_fdstore_metadata_loss_terminal_windows(&self) -> Vec<String> {
+        let Some(registry) = self.window_registry() else {
+            return Vec::new();
+        };
+        let window_ids: Vec<String> = registry
+            .snapshot()
+            .into_iter()
+            .filter(|row| matches!(row.kind, WindowKind::Terminal) && !row.control)
+            .map(|row| row.window_id)
+            .collect();
+        let mut removed = Vec::new();
+        for window_id in window_ids {
+            if registry.remove_terminal(&window_id) {
+                let reaped = self.reap_discarded_window_state(&window_id);
+                self.notify_window_change();
+                removed.push(format!(
+                    "window {window_id}: removed terminal window after fdstore metadata loss (reaped {reaped} session(s))"
+                ));
+            }
+        }
+        removed
     }
 
     /// Whether `accept` matches SOME live tenant's bearer token (workspace,
@@ -3705,6 +3899,78 @@ mod tests {
 
         assert!(host.discard_window(&rec.window_id).expect("discard"));
         assert_eq!(*reaped.lock().unwrap(), vec![rec.window_id.clone()]);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn fdstore_skip_cleanup_reaps_only_terminal_windows() {
+        let cfg = tempfile::tempdir().expect("config dir");
+        let lib = Library::open_at(cfg.path().join("config.toml")).expect("library");
+        let host = Arc::new(WorkspaceHost::new(lib, fake_builder()));
+        host.open_terminal_session(serve_config("/api/terminal"), None)
+            .await
+            .expect("mount shared terminal tenant");
+
+        let reaped: Arc<std::sync::Mutex<Vec<String>>> =
+            Arc::new(std::sync::Mutex::new(Vec::new()));
+        {
+            let tenants = host.workspaces.read().unwrap();
+            let sink = Arc::clone(&reaped);
+            tenants
+                .values()
+                .next()
+                .expect("shared terminal tenant")
+                .artifacts
+                .terminal_sessions
+                .install_blob_reaper(crate::terminal_sessions::BlobReaper::new(
+                    move |window_id: &str| {
+                        sink.lock().unwrap().push(window_id.to_string());
+                    },
+                ));
+        }
+
+        let store = tempfile::tempdir().expect("store dir");
+        let registry = Arc::new(WindowRegistry::open(store.path().join("windows.json")));
+        host.install_window_registry(registry.clone(), "local".into());
+        let term = host
+            .mint_window(WindowKind::Terminal, None)
+            .expect("mint terminal");
+        let workspace = host
+            .mint_window(WindowKind::Workspace, Some("/tmp/fdstore-notes".into()))
+            .expect("mint workspace");
+
+        let skipped = vec![
+            crate::terminal_sessions::FdStoreSkippedSession {
+                tenant_prefix: "/api/terminal".into(),
+                session_id: "s-term".into(),
+                window_id: Some(term.window_id.clone()),
+                child_pid: Some(4242),
+                reason: "fd was not inherited".into(),
+            },
+            crate::terminal_sessions::FdStoreSkippedSession {
+                tenant_prefix: "/workspace".into(),
+                session_id: "s-workspace".into(),
+                window_id: Some(workspace.window_id.clone()),
+                child_pid: Some(4243),
+                reason: "fd was not inherited".into(),
+            },
+        ];
+        let cleanup = host.cleanup_skipped_fdstore_sessions(&skipped);
+
+        assert!(cleanup.iter().any(|line| line.contains(&term.window_id)));
+        let rows = registry.snapshot();
+        assert!(!rows.iter().any(|row| row.window_id == term.window_id));
+        assert!(rows.iter().any(|row| row.window_id == workspace.window_id));
+        assert_eq!(*reaped.lock().unwrap(), vec![term.window_id.clone()]);
+
+        let term2 = host
+            .mint_window(WindowKind::Terminal, None)
+            .expect("mint second terminal");
+        let cleanup = host.cleanup_fdstore_metadata_loss_terminal_windows();
+        assert!(cleanup.iter().any(|line| line.contains(&term2.window_id)));
+        let rows = registry.snapshot();
+        assert!(!rows.iter().any(|row| row.window_id == term2.window_id));
+        assert!(rows.iter().any(|row| row.window_id == workspace.window_id));
     }
 
     #[tokio::test]

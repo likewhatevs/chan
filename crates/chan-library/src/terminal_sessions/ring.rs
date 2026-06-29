@@ -11,11 +11,15 @@ pub(super) struct RingBuffer {
 
 impl RingBuffer {
     pub(super) fn new(cap: usize) -> Self {
+        Self::new_at(cap, 0)
+    }
+
+    pub(super) fn new_at(cap: usize, seq: u64) -> Self {
         Self {
             cap: cap.max(1),
             chunks: VecDeque::new(),
-            start_seq: 0,
-            end_seq: 0,
+            start_seq: seq,
+            end_seq: seq,
             len: 0,
         }
     }

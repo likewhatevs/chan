@@ -2197,7 +2197,7 @@ async fn cmd_devserver(
         // omitted, so a flagless --restart does not silently rebind to the
         // default. Per field: explicit flag > running persisted > default.
         let addr = service_target_addr(kind, bind, port);
-        return manage_supervised_devserver(kind, addr, stop, verbose).await;
+        return manage_supervised_devserver(kind, addr, stop, verbose, force).await;
     }
     if !addr.ip().is_loopback() {
         eprintln!(
@@ -2348,6 +2348,7 @@ async fn manage_supervised_devserver(
     addr: SocketAddr,
     stop: bool,
     verbose: bool,
+    force: bool,
 ) -> Result<()> {
     match kind {
         ServiceKind::Chan => {
@@ -2362,7 +2363,7 @@ async fn manage_supervised_devserver(
                 if stop {
                     stop_devserver_under_systemd().await
                 } else {
-                    restart_devserver_under_systemd(addr).await
+                    restart_devserver_under_systemd(addr, force).await
                 }
             } else {
                 anyhow::bail!("chan devserver: the systemd backend is Linux-only.")
@@ -2696,9 +2697,12 @@ async fn bootstrap_systemd_unit(addr: SocketAddr, restart: bool) -> Result<()> {
 /// `chan devserver --systemd --restart`: rewrite the unit (current binary +
 /// `addr`), bounce it (or start it if stopped), then watch it. Linger
 /// is ensured first, mirroring the start path.
-async fn restart_devserver_under_systemd(addr: SocketAddr) -> Result<()> {
+async fn restart_devserver_under_systemd(addr: SocketAddr, force: bool) -> Result<()> {
     ensure_systemd_linger().await?;
     let was_running = unit_is_active().await;
+    if was_running {
+        prepare_systemd_fdstore_restart(addr, force).await?;
+    }
     bootstrap_systemd_unit(addr, true).await?;
     eprintln!(
         "chan devserver: {} the systemd user service {DEVSERVER_SYSTEMD_UNIT} (bind={addr})",
@@ -2710,6 +2714,80 @@ async fn restart_devserver_under_systemd(addr: SocketAddr) -> Result<()> {
         &format!("systemd user service {DEVSERVER_SYSTEMD_UNIT}"),
     )
     .await
+}
+
+async fn prepare_systemd_fdstore_restart(addr: SocketAddr, force: bool) -> Result<()> {
+    let Some(token) = chan_server::persisted_devserver_token() else {
+        if force {
+            eprintln!(
+                "chan devserver: WARNING: could not read the devserver token;                  restarting systemd service without fd preservation (--force)"
+            );
+            return Ok(());
+        }
+        anyhow::bail!(
+            "chan devserver --systemd --restart: could not read the devserver              token needed to prepare fd preservation. Re-run with --force to              restart destructively."
+        );
+    };
+
+    let url = format!("http://{addr}/api/devserver/systemd-fdstore/prepare");
+    let client = reqwest::Client::new();
+    let request = client.post(&url).bearer_auth(token).send();
+    let response = match tokio::time::timeout(Duration::from_secs(5), request).await {
+        Ok(Ok(response)) => response,
+        Ok(Err(e)) => {
+            return fdstore_prepare_failed(force, format!("request failed: {e}"));
+        }
+        Err(_) => {
+            return fdstore_prepare_failed(force, "request timed out".to_string());
+        }
+    };
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return fdstore_prepare_failed(force, format!("HTTP {status}: {body}"));
+    }
+
+    let body: serde_json::Value = response
+        .json()
+        .await
+        .with_context(|| format!("parsing systemd fdstore prepare response from {url}"))?;
+    let preserved = body
+        .get("preserved")
+        .and_then(|value| value.as_u64())
+        .unwrap_or(0);
+    let skipped: Vec<&str> = body
+        .get("skipped")
+        .and_then(|value| value.as_array())
+        .map(|values| values.iter().filter_map(|value| value.as_str()).collect())
+        .unwrap_or_default();
+    eprintln!(
+        "chan devserver: prepared systemd fdstore restart ({preserved} PTY fd(s) preserved, {} skipped)",
+        skipped.len()
+    );
+    for reason in skipped.iter().take(8) {
+        eprintln!("chan devserver: systemd fdstore prepare skipped: {reason}");
+    }
+    if skipped.len() > 8 {
+        eprintln!(
+            "chan devserver: systemd fdstore prepare skipped: {} more",
+            skipped.len() - 8
+        );
+    }
+    Ok(())
+}
+
+fn fdstore_prepare_failed(force: bool, reason: String) -> Result<()> {
+    if force {
+        eprintln!(
+            "chan devserver: WARNING: systemd fdstore prepare failed ({reason});              restarting destructively because --force was supplied"
+        );
+        Ok(())
+    } else {
+        anyhow::bail!(
+            "chan devserver --systemd --restart: systemd fdstore prepare failed              ({reason}). Re-run with --force to restart destructively."
+        )
+    }
 }
 
 /// `chan devserver --systemd --stop`: stop the running unit. Idempotent — a
@@ -2854,6 +2932,10 @@ fn write_devserver_unit(addr: SocketAddr) -> Result<PathBuf> {
          After=network.target\n\
          \n\
          [Service]\n\
+         Type=notify\n\
+         NotifyAccess=main\n\
+         FileDescriptorStoreMax=512\n\
+         KillMode=process\n\
          ExecStart={exe} devserver --bind={ip} --port={port}\n\
          Restart=on-failure\n\
          \n\
@@ -6150,6 +6232,19 @@ mod tests {
         // caller turns into a loud failure rather than supervising blind.
         let token = resolve_devserver_token(|| None, Duration::from_millis(150)).await;
         assert_eq!(token, None);
+    }
+
+    #[test]
+    fn devserver_systemd_unit_enables_notify_and_fdstore() {
+        let unit = "[Service]\n\
+Type=notify\n\
+NotifyAccess=main\n\
+FileDescriptorStoreMax=512\n\
+KillMode=process\n";
+        assert!(unit.contains("Type=notify"));
+        assert!(unit.contains("NotifyAccess=main"));
+        assert!(unit.contains("FileDescriptorStoreMax=512"));
+        assert!(unit.contains("KillMode=process"));
     }
 
     #[test]

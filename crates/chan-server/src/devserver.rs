@@ -21,7 +21,8 @@
 //! Per-window pane/tab layout is NOT persisted here; each tenant is a full
 //! workspace mount that already stores its own SPA session per window, so a
 //! reconnecting client re-hydrates its panes from the tenant. Terminal PTY
-//! contents reset (PTYs are fresh processes).
+//! contents reset except for an explicit Linux systemd fdstore restart, which
+//! re-associates inherited PTY masters with freshly built session objects.
 
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
@@ -29,6 +30,8 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
+#[cfg(target_os = "linux")]
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Context;
 use axum::body::Body;
@@ -36,10 +39,12 @@ use axum::extract::{Path as AxumPath, Query, State};
 use axum::http::{header, Request as HttpRequest, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{delete, get};
+use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 use chan_workspace::Library;
 use serde::{Deserialize, Serialize};
+#[cfg(target_os = "linux")]
+use std::os::fd::AsFd;
 
 use crate::auth::random_token;
 use crate::devserver_api::{
@@ -49,10 +54,16 @@ use crate::devserver_api::{
 use crate::{Error, ServeConfig, WorkspaceHost, WorkspaceLifecycleOutcome, WorkspaceStatus};
 // Prefix allocation lives in chan-library (the window-record assembly needs the
 // stable OFF-workspace prefix); the devserver mounts at the same prefix.
+#[cfg(target_os = "linux")]
+use chan_library::terminal_sessions::{
+    FdStoreSessionImport, FdStoreSessionMeta, FdStoreSkippedSession,
+};
 use chan_library::windows::WindowRegistry;
 use chan_library::{
     allocate_workspace_prefix, FileLocalColor, PersistedWorkspace, WorkspaceOverlay,
 };
+#[cfg(target_os = "linux")]
+use rand::RngCore;
 
 /// Inputs the CLI resolves for `chan devserver`. The `--systemd`
 /// supervision path is layered on in the CLI around this; the runtime
@@ -194,6 +205,477 @@ fn devserver_config_path() -> std::io::Result<PathBuf> {
 /// LOCKED wire string: the desktop matches this exact prefix, so both the
 /// foreground emit and the `--systemd` re-attach emit build to it.
 pub const DEVSERVER_TOKEN_MARKER: &str = "CHAN_DEVSERVER_TOKEN=";
+
+#[cfg(target_os = "linux")]
+const FDSTORE_MANIFEST_VERSION: u32 = 1;
+#[cfg(target_os = "linux")]
+const FDSTORE_FD_PREFIX: &str = "chan.pty.";
+#[cfg(target_os = "linux")]
+const FDSTORE_MANIFEST_TTL_SECS: u64 = 30;
+
+#[cfg(target_os = "linux")]
+#[derive(Debug, Serialize, Deserialize)]
+struct FdstoreRestartManifest {
+    version: u32,
+    nonce: String,
+    library_id: String,
+    created_unix_secs: u64,
+    sessions: Vec<FdstoreManifestSession>,
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Debug, Serialize, Deserialize)]
+struct FdstoreManifestSession {
+    fd_name: String,
+    meta: FdStoreSessionMeta,
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Debug, Serialize)]
+struct FdstorePrepareResponse {
+    preserved: usize,
+    nonce: String,
+    skipped: Vec<String>,
+}
+
+#[cfg(target_os = "linux")]
+struct FdstoreStartupRestore {
+    manifest_path: PathBuf,
+    fd_names: Vec<String>,
+    orphan_fd_names: Vec<String>,
+    cleanup_all_terminal_windows: bool,
+    manifest_library_id: Option<String>,
+    imports: Vec<FdStoreSessionImport>,
+    skipped: Vec<String>,
+    skipped_sessions: Vec<FdStoreSkippedSession>,
+}
+
+#[cfg(target_os = "linux")]
+impl FdstoreStartupRestore {
+    fn take() -> Self {
+        let manifest_path = fdstore_manifest_path();
+        let named_fds = chan_systemd::take_listen_fds();
+        if named_fds.is_empty() {
+            return Self::empty(manifest_path);
+        }
+
+        let mut fd_names = Vec::new();
+        let mut fd_by_name = HashMap::new();
+        for named in named_fds {
+            if named.name.starts_with(FDSTORE_FD_PREFIX) {
+                fd_names.push(named.name.clone());
+                fd_by_name.insert(named.name, named.fd);
+            }
+        }
+        if fd_by_name.is_empty() {
+            return Self::empty(manifest_path);
+        }
+
+        let manifest = match std::fs::read(&manifest_path)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<FdstoreRestartManifest>(&bytes).ok())
+        {
+            Some(manifest) => manifest,
+            None => {
+                let skipped = fd_names
+                    .iter()
+                    .map(|name| {
+                        format!("inherited fd {name}: restart manifest missing or unreadable")
+                    })
+                    .collect();
+                cleanup_invalid_fdstore_fds(&fd_names);
+                return Self {
+                    manifest_path,
+                    fd_names: Vec::new(),
+                    orphan_fd_names: Vec::new(),
+                    cleanup_all_terminal_windows: true,
+                    manifest_library_id: None,
+                    imports: Vec::new(),
+                    skipped,
+                    skipped_sessions: Vec::new(),
+                };
+            }
+        };
+
+        let now = fdstore_now_unix_secs();
+        if manifest.version != FDSTORE_MANIFEST_VERSION
+            || now.saturating_sub(manifest.created_unix_secs) > FDSTORE_MANIFEST_TTL_SECS
+        {
+            let mut skipped = fd_names
+                .iter()
+                .map(|name| {
+                    format!("inherited fd {name}: restart manifest version or age is invalid")
+                })
+                .collect::<Vec<_>>();
+            let mut skipped_sessions = Vec::new();
+            for session in &manifest.sessions {
+                push_fdstore_skipped_session(
+                    &mut skipped,
+                    &mut skipped_sessions,
+                    &session.meta,
+                    "restart manifest version or age is invalid",
+                );
+            }
+            cleanup_invalid_fdstore_fds(&fd_names);
+            return Self {
+                manifest_path,
+                fd_names: Vec::new(),
+                orphan_fd_names: Vec::new(),
+                cleanup_all_terminal_windows: false,
+                manifest_library_id: Some(manifest.library_id),
+                imports: Vec::new(),
+                skipped,
+                skipped_sessions,
+            };
+        }
+
+        let mut imports = Vec::new();
+        let mut skipped = Vec::new();
+        let mut skipped_sessions = Vec::new();
+        for session in manifest.sessions {
+            if !session.fd_name.starts_with(FDSTORE_FD_PREFIX) {
+                push_fdstore_skipped_session(
+                    &mut skipped,
+                    &mut skipped_sessions,
+                    &session.meta,
+                    format!(
+                        "fd name {} is outside chan fdstore namespace",
+                        session.fd_name
+                    ),
+                );
+                continue;
+            }
+            let Some(master_fd) = fd_by_name.remove(&session.fd_name) else {
+                push_fdstore_skipped_session(
+                    &mut skipped,
+                    &mut skipped_sessions,
+                    &session.meta,
+                    format!("fd {} was not inherited from systemd", session.fd_name),
+                );
+                continue;
+            };
+            imports.push(FdStoreSessionImport {
+                meta: session.meta,
+                master_fd,
+            });
+        }
+        let orphan_fd_names: Vec<String> = fd_by_name.keys().cloned().collect();
+        skipped.extend(
+            orphan_fd_names
+                .iter()
+                .map(|name| format!("inherited fd {name}: no matching manifest entry")),
+        );
+
+        Self {
+            manifest_path,
+            fd_names,
+            orphan_fd_names,
+            cleanup_all_terminal_windows: false,
+            manifest_library_id: Some(manifest.library_id),
+            imports,
+            skipped,
+            skipped_sessions,
+        }
+    }
+
+    fn empty(manifest_path: PathBuf) -> Self {
+        Self {
+            manifest_path,
+            fd_names: Vec::new(),
+            orphan_fd_names: Vec::new(),
+            cleanup_all_terminal_windows: false,
+            manifest_library_id: None,
+            imports: Vec::new(),
+            skipped: Vec::new(),
+            skipped_sessions: Vec::new(),
+        }
+    }
+
+    fn apply(self, state: &DevserverState) {
+        if self.fd_names.is_empty()
+            && self.orphan_fd_names.is_empty()
+            && !self.cleanup_all_terminal_windows
+            && self.imports.is_empty()
+            && self.skipped.is_empty()
+            && self.skipped_sessions.is_empty()
+        {
+            return;
+        }
+        let FdstoreStartupRestore {
+            manifest_path,
+            fd_names,
+            orphan_fd_names,
+            cleanup_all_terminal_windows,
+            manifest_library_id,
+            imports,
+            mut skipped,
+            mut skipped_sessions,
+        } = self;
+
+        let mut restored = 0usize;
+        if manifest_library_id.as_deref() != Some(state.library_id.as_str()) {
+            for import in imports {
+                push_fdstore_skipped_session(
+                    &mut skipped,
+                    &mut skipped_sessions,
+                    &import.meta,
+                    "manifest library id does not match this devserver",
+                );
+            }
+        } else {
+            let report = state.host.restore_fdstore_terminal_sessions(imports);
+            restored = report.restored;
+            skipped.extend(report.skipped);
+            skipped_sessions.extend(report.skipped_sessions);
+        }
+
+        if !orphan_fd_names.is_empty() {
+            signal_fdstore_children_from_names(&orphan_fd_names);
+        }
+        cleanup_skipped_fdstore_session_children(&skipped_sessions);
+        if cleanup_all_terminal_windows {
+            skipped.extend(state.host.cleanup_fdstore_metadata_loss_terminal_windows());
+        }
+        skipped.extend(
+            state
+                .host
+                .cleanup_skipped_fdstore_sessions(&skipped_sessions),
+        );
+
+        if !fd_names.is_empty() {
+            chan_systemd::fdstore_remove_many(fd_names.iter().map(String::as_str));
+        }
+        let _ = std::fs::remove_file(&manifest_path);
+        if restored > 0 || !skipped.is_empty() {
+            eprintln!(
+                "chan devserver: systemd fdstore restore: restored {restored}, skipped {}",
+                skipped.len()
+            );
+            for reason in skipped.iter().take(8) {
+                eprintln!("chan devserver: systemd fdstore skipped: {reason}");
+            }
+            if skipped.len() > 8 {
+                eprintln!(
+                    "chan devserver: systemd fdstore skipped: {} more",
+                    skipped.len() - 8
+                );
+            }
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn fdstore_manifest_path() -> PathBuf {
+    chan_workspace::paths::config_dir()
+        .join("devserver")
+        .join("fdstore-restart.json")
+}
+
+#[cfg(target_os = "linux")]
+fn fdstore_now_unix_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
+#[cfg(target_os = "linux")]
+fn fdstore_nonce() -> String {
+    let mut bytes = [0u8; 16];
+    rand::thread_rng().fill_bytes(&mut bytes);
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        use std::fmt::Write as _;
+        let _ = write!(&mut out, "{byte:02x}");
+    }
+    out
+}
+
+#[cfg(target_os = "linux")]
+fn fdstore_child_pid_from_name(name: &str) -> Option<u32> {
+    let suffix = name.strip_prefix(FDSTORE_FD_PREFIX)?;
+    let pid = suffix.rsplit('.').next()?.parse::<u32>().ok()?;
+    (pid != 0).then_some(pid)
+}
+
+#[cfg(target_os = "linux")]
+fn push_fdstore_skipped_session(
+    skipped: &mut Vec<String>,
+    skipped_sessions: &mut Vec<FdStoreSkippedSession>,
+    meta: &FdStoreSessionMeta,
+    reason: impl Into<String>,
+) {
+    let reason = reason.into();
+    skipped.push(format!("session {}: {reason}", meta.session_id));
+    skipped_sessions.push(FdStoreSkippedSession::from_meta(meta, reason));
+}
+
+#[cfg(target_os = "linux")]
+fn signal_fdstore_child(pid: u32) {
+    let Ok(raw_pid) = i32::try_from(pid) else {
+        return;
+    };
+    let Some(pid) = rustix::process::Pid::from_raw(raw_pid) else {
+        return;
+    };
+    let _ = rustix::process::kill_process(pid, rustix::process::Signal::HUP);
+    let _ = rustix::process::kill_process(pid, rustix::process::Signal::TERM);
+}
+
+#[cfg(target_os = "linux")]
+fn signal_fdstore_children_from_names(fd_names: &[String]) {
+    let mut seen = HashSet::new();
+    for pid in fd_names
+        .iter()
+        .filter_map(|name| fdstore_child_pid_from_name(name))
+    {
+        if seen.insert(pid) {
+            signal_fdstore_child(pid);
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn cleanup_skipped_fdstore_session_children(sessions: &[FdStoreSkippedSession]) {
+    let mut seen = HashSet::new();
+    for pid in sessions.iter().filter_map(|session| session.child_pid) {
+        if seen.insert(pid) {
+            signal_fdstore_child(pid);
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn cleanup_invalid_fdstore_fds(fd_names: &[String]) {
+    signal_fdstore_children_from_names(fd_names);
+    chan_systemd::fdstore_remove_many(fd_names.iter().map(String::as_str));
+}
+
+#[cfg(target_os = "linux")]
+fn write_fdstore_manifest(path: &Path, manifest: &FdstoreRestartManifest) -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let bytes = serde_json::to_vec_pretty(manifest).map_err(|e| e.to_string())?;
+    chan_workspace::fs_ops::atomic_write(path, &bytes).map_err(|e| e.to_string())?;
+    let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+    if let Some(parent) = path.parent() {
+        let _ = chan_workspace::fs_ops::sync_dir(parent);
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn schedule_fdstore_cleanup(
+    path: PathBuf,
+    nonce: String,
+    fd_names: Vec<String>,
+    host: Arc<WorkspaceHost>,
+    preserved_sessions: Vec<(String, String)>,
+) {
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_secs(FDSTORE_MANIFEST_TTL_SECS)).await;
+        let same_nonce = std::fs::read(&path)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<FdstoreRestartManifest>(&bytes).ok())
+            .is_some_and(|manifest| manifest.nonce == nonce);
+        if same_nonce {
+            chan_systemd::fdstore_remove_many(fd_names.iter().map(String::as_str));
+            host.clear_fdstore_terminal_session_preservation(&preserved_sessions);
+            let _ = std::fs::remove_file(&path);
+        }
+    });
+}
+
+#[cfg(target_os = "linux")]
+fn notify_systemd_ready() -> anyhow::Result<()> {
+    chan_systemd::notify_ready().context("notifying systemd READY=1")
+}
+
+#[cfg(target_os = "linux")]
+fn prepare_systemd_fdstore_restart(
+    state: &DevserverState,
+) -> Result<FdstorePrepareResponse, String> {
+    if std::env::var_os("NOTIFY_SOCKET").is_none_or(|value| value.is_empty()) {
+        return Err(
+            "NOTIFY_SOCKET is not set; fdstore restart is only available inside the systemd unit"
+                .to_string(),
+        );
+    }
+
+    let path = fdstore_manifest_path();
+    let _ = std::fs::remove_file(&path);
+    let snapshots = state.host.fdstore_terminal_sessions();
+    let nonce = fdstore_nonce();
+    let mut sessions = Vec::new();
+    let mut fd_names = Vec::new();
+    let mut skipped = Vec::new();
+
+    for (idx, snapshot) in snapshots.into_iter().enumerate() {
+        if snapshot.meta.window_id.is_none() {
+            skipped.push(format!(
+                "session {}: missing window id",
+                snapshot.meta.session_id
+            ));
+            continue;
+        }
+        let child_pid = snapshot.meta.child_pid.unwrap_or(0);
+        let fd_name = format!("{FDSTORE_FD_PREFIX}{nonce}.{idx}.{child_pid}");
+        if let Err(e) = chan_systemd::fdstore(&fd_name, snapshot.master_fd.as_fd()) {
+            chan_systemd::fdstore_remove_many(fd_names.iter().map(String::as_str));
+            return Err(format!("storing {fd_name} in systemd fdstore: {e}"));
+        }
+        fd_names.push(fd_name.clone());
+        sessions.push(FdstoreManifestSession {
+            fd_name,
+            meta: snapshot.meta,
+        });
+    }
+
+    if sessions.is_empty() {
+        return Ok(FdstorePrepareResponse {
+            preserved: 0,
+            nonce,
+            skipped,
+        });
+    }
+
+    let manifest = FdstoreRestartManifest {
+        version: FDSTORE_MANIFEST_VERSION,
+        nonce: nonce.clone(),
+        library_id: state.library_id.clone(),
+        created_unix_secs: fdstore_now_unix_secs(),
+        sessions,
+    };
+    if let Err(e) = write_fdstore_manifest(&path, &manifest) {
+        chan_systemd::fdstore_remove_many(fd_names.iter().map(String::as_str));
+        return Err(format!("writing systemd fdstore restart manifest: {e}"));
+    }
+    let preserved_sessions: Vec<(String, String)> = manifest
+        .sessions
+        .iter()
+        .map(|session| {
+            (
+                session.meta.tenant_prefix.clone(),
+                session.meta.session_id.clone(),
+            )
+        })
+        .collect();
+    state
+        .host
+        .preserve_fdstore_terminal_sessions(&preserved_sessions);
+    schedule_fdstore_cleanup(
+        path,
+        nonce.clone(),
+        fd_names,
+        state.host.clone(),
+        preserved_sessions,
+    );
+    Ok(FdstorePrepareResponse {
+        preserved: manifest.sessions.len(),
+        nonce,
+        skipped,
+    })
+}
 
 /// Read the persisted devserver bearer token from
 /// `~/.chan/devserver/config.json`, or `None` when it is absent, unreadable,
@@ -617,6 +1099,9 @@ impl DevserverState {
 /// echoes the bind+token line, binds the management + discovery surfaces,
 /// and serves.
 pub async fn run_devserver(library: Library, config: DevserverConfig) -> anyhow::Result<()> {
+    #[cfg(target_os = "linux")]
+    let fdstore_restore = FdstoreStartupRestore::take();
+
     let store =
         DevserverStore::at(devserver_config_path().context("resolving devserver config path")?);
     let mut persisted = store.load();
@@ -728,6 +1213,9 @@ pub async fn run_devserver(library: Library, config: DevserverConfig) -> anyhow:
     // failed re-mounts downgraded to off) land even before the first call.
     state.persist_state();
 
+    #[cfg(target_os = "linux")]
+    fdstore_restore.apply(&state);
+
     // Serve-handoff discovery. A bind failure is non-fatal: the management
     // API still works, only the `chan open` registration path is disabled.
     let _discovery = start_discovery_listener(state.clone());
@@ -792,6 +1280,8 @@ pub async fn run_devserver(library: Library, config: DevserverConfig) -> anyhow:
             // `--systemd` first start surfaces it through the unit journal the
             // launcher follows.
             println!("{DEVSERVER_TOKEN_MARKER}{token}");
+            #[cfg(target_os = "linux")]
+            notify_systemd_ready()?;
             crate::signal::graceful_serve(listener, app, signal_tx)
                 .await
                 .context("running devserver")?;
@@ -811,6 +1301,8 @@ pub async fn run_devserver(library: Library, config: DevserverConfig) -> anyhow:
                      discovery socket is reachable"
                 ),
             }
+            #[cfg(target_os = "linux")]
+            notify_systemd_ready()?;
             // No listener to drain: install the signal watcher and await
             // shutdown while the tunnel + reindex-cancel tasks run on `signal_tx`.
             crate::signal::graceful_wait(signal_tx).await;
@@ -938,6 +1430,10 @@ fn build_devserver_app(state: Arc<DevserverState>, host: Arc<WorkspaceHost>) -> 
             delete(handle_forget).post(handle_set_workspace_on),
         )
         .route("/api/devserver/windows", get(handle_list_windows))
+        .route(
+            "/api/devserver/systemd-fdstore/prepare",
+            post(handle_fdstore_prepare),
+        )
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             require_bearer,
@@ -1177,6 +1673,25 @@ async fn handle_list_windows(
     Json(Vec::new())
 }
 
+async fn handle_fdstore_prepare(State(state): State<Arc<DevserverState>>) -> Response {
+    #[cfg(target_os = "linux")]
+    {
+        match prepare_systemd_fdstore_restart(&state) {
+            Ok(response) => Json(response).into_response(),
+            Err(e) => (StatusCode::CONFLICT, e).into_response(),
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = state;
+        (
+            StatusCode::BAD_REQUEST,
+            "systemd fdstore restart is Linux-only".to_string(),
+        )
+            .into_response()
+    }
+}
+
 /// Gate every `/api/devserver/*` management route except `info` on the devserver
 /// bearer token. The token arrives in the `Authorization: Bearer` header (`cs`,
 /// the desktop). The management surface is header-only: it has no WebSocket
@@ -1305,6 +1820,18 @@ mod tests {
         // the `--systemd` re-attach emit build to it, so pin it here — an
         // accidental edit breaks reconnect.
         assert_eq!(DEVSERVER_TOKEN_MARKER, "CHAN_DEVSERVER_TOKEN=");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn fdstore_child_pid_is_parsed_from_chan_fd_name() {
+        assert_eq!(
+            fdstore_child_pid_from_name("chan.pty.nonce.0.4242"),
+            Some(4242)
+        );
+        assert_eq!(fdstore_child_pid_from_name("chan.pty.nonce.0.0"), None);
+        assert_eq!(fdstore_child_pid_from_name("other.pty.nonce.0.4242"), None);
+        assert_eq!(fdstore_child_pid_from_name("chan.pty.nonce.0.nope"), None);
     }
 
     #[tokio::test]

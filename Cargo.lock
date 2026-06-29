@@ -1086,6 +1086,7 @@ dependencies = [
  "chan-library",
  "chan-llm",
  "chan-shell",
+ "chan-systemd",
  "chan-tunnel-client",
  "chan-tunnel-proto",
  "chan-workspace",
@@ -1124,6 +1125,13 @@ dependencies = [
  "serde_json",
  "tokio",
  "toml 0.8.2",
+]
+
+[[package]]
+name = "chan-systemd"
+version = "0.56.4"
+dependencies = [
+ "rustix 1.1.4",
 ]
 
 [[package]]

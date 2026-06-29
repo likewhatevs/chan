@@ -9,6 +9,7 @@ members = [
     "crates/chan-llm",
     "crates/chan-report",
     "crates/chan-library",
+    "crates/chan-systemd",
     "crates/chan-server",
     "crates/chan-shell",
     "crates/chan-tunnel-client",
@@ -43,6 +44,7 @@ chan-workspace = { version = "0.56.4", path = "crates/chan-workspace", default-f
 chan-llm = { version = "0.56.4", path = "crates/chan-llm" }
 chan-report = { version = "0.56.4", path = "crates/chan-report" }
 chan-library = { version = "0.56.4", path = "crates/chan-library" }
+chan-systemd = { version = "0.56.4", path = "crates/chan-systemd" }
 chan-server = { version = "0.56.4", path = "crates/chan-server", default-features = false }
 # default-features off so chan-server can pull just the wire types
 # (`ControlRequest` / `ControlResponse`) without the clap-backed `cs`
@@ -87,7 +89,7 @@ portable-pty = "0.8"
 rand = "0.8"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 rmcp = { version = "1.6", features = ["transport-io"] }
-rustix = { version = "1.1", features = ["process"] }
+rustix = { version = "1.1", features = ["net", "process", "termios"] }
 rustls = { version = "0.23", default-features = false, features = ["ring"] }
 rustls-native-certs = "0.8"
 rustls-pki-types = "1"

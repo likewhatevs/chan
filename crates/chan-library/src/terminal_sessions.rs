@@ -5,7 +5,13 @@
 //! detach and reattach without killing the shell.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
+#[cfg(target_os = "linux")]
+use std::fs::File;
+#[cfg(target_os = "linux")]
+use std::io;
 use std::io::{Read, Write};
+#[cfg(target_os = "linux")]
+use std::os::fd::{AsFd, OwnedFd, RawFd};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -13,7 +19,7 @@ use std::time::Duration;
 
 use portable_pty::{native_pty_system, PtySize};
 use rand::RngCore;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, watch, Notify};
 use tokio::task::JoinHandle;
 
@@ -279,6 +285,121 @@ pub struct TerminalSessionSummary {
     pub pane_id: Option<String>,
     pub tab_id: Option<String>,
     pub cwd: Option<PathBuf>,
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct StoredPtySize {
+    pub rows: u16,
+    pub cols: u16,
+    pub pixel_width: u16,
+    pub pixel_height: u16,
+}
+
+#[cfg(target_os = "linux")]
+impl From<PtySize> for StoredPtySize {
+    fn from(size: PtySize) -> Self {
+        Self {
+            rows: size.rows,
+            cols: size.cols,
+            pixel_width: size.pixel_width,
+            pixel_height: size.pixel_height,
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl From<StoredPtySize> for PtySize {
+    fn from(size: StoredPtySize) -> Self {
+        Self {
+            rows: size.rows,
+            cols: size.cols,
+            pixel_width: size.pixel_width,
+            pixel_height: size.pixel_height,
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FdStoreSessionMeta {
+    pub tenant_prefix: String,
+    pub session_id: String,
+    pub tab_name: Option<String>,
+    pub tab_group: Option<String>,
+    pub window_id: Option<String>,
+    pub pane_id: Option<String>,
+    pub tab_id: Option<String>,
+    pub cwd: Option<PathBuf>,
+    pub command: Option<String>,
+    pub env: BTreeMap<String, String>,
+    pub mcp_env: bool,
+    pub child_pid: Option<u32>,
+    pub size: StoredPtySize,
+    pub seq: u64,
+    pub generation: u64,
+    pub alt_screen: bool,
+    pub private_modes: Vec<u16>,
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Debug)]
+pub struct FdStoreSessionSnapshot {
+    pub meta: FdStoreSessionMeta,
+    pub master_fd: OwnedFd,
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Debug)]
+pub struct FdStoreSessionImport {
+    pub meta: FdStoreSessionMeta,
+    pub master_fd: OwnedFd,
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FdStoreSkippedSession {
+    pub tenant_prefix: String,
+    pub session_id: String,
+    pub window_id: Option<String>,
+    pub child_pid: Option<u32>,
+    pub reason: String,
+}
+
+#[cfg(target_os = "linux")]
+impl FdStoreSkippedSession {
+    pub fn from_meta(meta: &FdStoreSessionMeta, reason: impl Into<String>) -> Self {
+        Self {
+            tenant_prefix: meta.tenant_prefix.clone(),
+            session_id: meta.session_id.clone(),
+            window_id: meta.window_id.clone(),
+            child_pid: meta.child_pid,
+            reason: reason.into(),
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct FdStoreRestoreReport {
+    pub restored: usize,
+    pub skipped: Vec<String>,
+    pub skipped_sessions: Vec<FdStoreSkippedSession>,
+}
+
+#[cfg(target_os = "linux")]
+impl FdStoreRestoreReport {
+    pub fn skip_session(&mut self, meta: &FdStoreSessionMeta, reason: impl Into<String>) {
+        let reason = reason.into();
+        let session_id = if meta.session_id.is_empty() {
+            "<missing>"
+        } else {
+            meta.session_id.as_str()
+        };
+        self.skipped.push(format!("session {session_id}: {reason}"));
+        self.skipped_sessions
+            .push(FdStoreSkippedSession::from_meta(meta, reason));
+    }
 }
 
 /// One live terminal session in the cross-window roster the SPA reads to
@@ -985,6 +1106,34 @@ impl Registry {
         }
     }
 
+    #[cfg(target_os = "linux")]
+    pub fn preserve_fdstore_session(&self, id: &str) -> bool {
+        let session = self
+            .sessions
+            .lock()
+            .expect("terminal registry poisoned")
+            .get(id)
+            .cloned();
+        if let Some(session) = session {
+            session.preserve_for_fdstore_restart();
+            true
+        } else {
+            false
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    pub fn clear_fdstore_session_preservation(&self, id: &str) {
+        if let Some(session) = self
+            .sessions
+            .lock()
+            .expect("terminal registry poisoned")
+            .get(id)
+        {
+            session.clear_fdstore_restart_preservation();
+        }
+    }
+
     pub fn close(&self, id: &str, reason: CloseReason) -> bool {
         let session = self
             .sessions
@@ -1428,7 +1577,7 @@ impl Registry {
             .map(|(_, session)| session)
             .collect();
         for session in sessions {
-            session.close(reason);
+            close_or_preserve_for_shutdown(&session, reason);
         }
         self.notify_roster_change();
     }
@@ -1605,6 +1754,70 @@ impl Registry {
         })
     }
 
+    #[cfg(target_os = "linux")]
+    pub fn fdstore_sessions(&self, tenant_prefix: &str) -> Vec<FdStoreSessionSnapshot> {
+        let sessions = self.sessions.lock().expect("terminal registry poisoned");
+        sessions
+            .values()
+            .filter_map(|session| session.fdstore_snapshot(tenant_prefix))
+            .collect()
+    }
+
+    #[cfg(target_os = "linux")]
+    pub fn restore_fdstore_sessions(
+        &self,
+        imports: Vec<FdStoreSessionImport>,
+    ) -> FdStoreRestoreReport {
+        let mut report = FdStoreRestoreReport::default();
+        for import in imports {
+            let meta = import.meta.clone();
+            if meta.tenant_prefix.is_empty() || meta.session_id.is_empty() {
+                report.skip_session(&meta, "missing tenant prefix or session id");
+                continue;
+            }
+            let id = meta.session_id.clone();
+            {
+                let sessions = self.sessions.lock().expect("terminal registry poisoned");
+                if sessions.contains_key(&id) {
+                    report.skip_session(&meta, "already exists");
+                    continue;
+                }
+                if sessions.len() >= self.config.terminal.session_cap {
+                    report.skip_session(&meta, "session cap reached");
+                    continue;
+                }
+            }
+            let generation = meta.generation;
+            let session =
+                match Session::from_imported(self.config.clone(), import, self.last_exit.clone()) {
+                    Ok(session) => session,
+                    Err(e) => {
+                        report.skip_session(&meta, e.to_string());
+                        continue;
+                    }
+                };
+            self.generation_counter
+                .fetch_max(generation.saturating_add(1), Ordering::Relaxed);
+            let window_id = session.window_id();
+            let mut sessions = self.sessions.lock().expect("terminal registry poisoned");
+            if sessions.len() >= self.config.terminal.session_cap || sessions.contains_key(&id) {
+                report.skip_session(&meta, "raced with another restore");
+                session.close(CloseReason::Shutdown);
+                continue;
+            }
+            sessions.insert(id, session);
+            drop(sessions);
+            if let Some(window_id) = window_id {
+                self.mark_window_persisted(&window_id);
+            }
+            report.restored += 1;
+        }
+        if report.restored > 0 {
+            self.notify_roster_change();
+        }
+        report
+    }
+
     fn unused_id(&self, sessions: &HashMap<String, Arc<Session>>) -> String {
         loop {
             let id = random_session_id();
@@ -1628,11 +1841,19 @@ impl Registry {
     }
 }
 
+fn close_or_preserve_for_shutdown(session: &Session, reason: CloseReason) {
+    if matches!(reason, CloseReason::Shutdown) && session.take_fdstore_restart_preservation() {
+        session.detach_for_fdstore_restart();
+    } else {
+        session.close(reason);
+    }
+}
+
 impl Drop for Registry {
     fn drop(&mut self) {
         if let Ok(mut sessions) = self.sessions.lock() {
             for (_, session) in sessions.drain() {
-                session.close(CloseReason::Shutdown);
+                close_or_preserve_for_shutdown(&session, CloseReason::Shutdown);
             }
         }
     }
@@ -1688,6 +1909,8 @@ struct Session {
     workspace_root: PathBuf,
     spawn_opts: CreateOptions,
     child_pid: Option<u32>,
+    #[cfg(target_os = "linux")]
+    master_fd: Option<OwnedFd>,
     command_tx: std::sync::mpsc::Sender<PtyCommand>,
     output_tx: broadcast::Sender<SessionEvent>,
     ring: Mutex<RingBuffer>,
@@ -1739,6 +1962,11 @@ struct Session {
     /// state of members they do not host.
     broadcast: AtomicBool,
     closed: AtomicBool,
+    /// Set only after a successful systemd fdstore prepare. A process-wide
+    /// shutdown drains this session without killing its child, so the inherited
+    /// PTY can be restored by the replacement devserver. Explicit terminal
+    /// close/restart paths ignore this flag and still tear the PTY down.
+    fdstore_preserve_on_shutdown: AtomicBool,
     /// The PTY's exit state, set once its child process exits (the same value
     /// broadcast as [`SessionEvent::Exit`]). `None` while the process runs.
     /// Stored — not only broadcast — so a poller (the desktop's control-script
@@ -1864,6 +2092,11 @@ impl Session {
 
         let mut child = pair.slave.spawn_command(cmd)?;
         let child_pid = child.process_id();
+        #[cfg(target_os = "linux")]
+        let master_fd = pair
+            .master
+            .as_raw_fd()
+            .and_then(|fd| clone_fd_from_proc(fd).ok());
         drop(pair.slave);
 
         let mut reader = pair.master.try_clone_reader()?;
@@ -1880,6 +2113,8 @@ impl Session {
             tab_id: Mutex::new(None),
             generation,
             workspace_root: config.workspace_root.clone(),
+            #[cfg(target_os = "linux")]
+            master_fd,
             spawn_opts: CreateOptions {
                 size: opts.size,
                 tab_name: None,
@@ -1913,6 +2148,7 @@ impl Session {
             private_mode_tail: Mutex::new(Vec::new()),
             broadcast: AtomicBool::new(false),
             closed: AtomicBool::new(false),
+            fdstore_preserve_on_shutdown: AtomicBool::new(false),
             exit: Mutex::new(None),
         });
 
@@ -2020,6 +2256,193 @@ impl Session {
                                 "terminal wait failed: {e}"
                             )));
                             return;
+                        }
+                    }
+                })?;
+        }
+
+        Ok(session)
+    }
+
+    #[cfg(target_os = "linux")]
+    fn fdstore_snapshot(&self, tenant_prefix: &str) -> Option<FdStoreSessionSnapshot> {
+        if self.closed.load(Ordering::Relaxed) {
+            return None;
+        }
+        let master_fd = self.master_fd.as_ref()?.as_fd().try_clone_to_owned().ok()?;
+        let size = *self.winsize.lock().expect("terminal winsize poisoned");
+        let private_modes = self
+            .private_modes
+            .lock()
+            .expect("terminal private modes poisoned")
+            .iter()
+            .copied()
+            .collect();
+        let meta = FdStoreSessionMeta {
+            tenant_prefix: tenant_prefix.to_string(),
+            session_id: self.id.clone(),
+            tab_name: self.tab_name.clone(),
+            tab_group: self.tab_group.clone(),
+            window_id: self.window_id(),
+            pane_id: self.pane_id(),
+            tab_id: self.tab_id(),
+            cwd: self.cwd().or_else(|| self.spawn_opts.cwd.clone()),
+            command: self.spawn_opts.command.clone(),
+            env: self.spawn_opts.env.clone(),
+            mcp_env: self.spawn_opts.mcp_env,
+            child_pid: self.child_pid,
+            size: size.into(),
+            seq: self.seq.load(Ordering::Relaxed),
+            generation: self.generation,
+            alt_screen: self.in_alt_screen.load(Ordering::Relaxed),
+            private_modes,
+        };
+        Some(FdStoreSessionSnapshot { meta, master_fd })
+    }
+
+    #[cfg(target_os = "linux")]
+    fn from_imported(
+        config: RegistryConfig,
+        import: FdStoreSessionImport,
+        registry_last_exit: Arc<Mutex<Option<TerminalExit>>>,
+    ) -> anyhow::Result<Arc<Self>> {
+        let FdStoreSessionImport { meta, master_fd } = import;
+        let size: PtySize = meta.size.into();
+        let cwd = meta
+            .cwd
+            .clone()
+            .unwrap_or_else(|| config.workspace_root.clone());
+        let reader_fd = master_fd.as_fd().try_clone_to_owned()?;
+        let writer_fd = master_fd.as_fd().try_clone_to_owned()?;
+        let mut reader = ImportedPtyFd(File::from(reader_fd));
+        let mut writer = File::from(writer_fd);
+        let (command_tx, command_rx) = std::sync::mpsc::channel::<PtyCommand>();
+        let (output_tx, _) = broadcast::channel::<SessionEvent>(BROADCAST_CAP);
+        let session = Arc::new(Self {
+            id: meta.session_id.clone(),
+            tab_name: meta.tab_name.clone(),
+            tab_group: meta.tab_group.clone(),
+            window_id: Mutex::new(meta.window_id.clone()),
+            pane_id: Mutex::new(meta.pane_id.clone()),
+            tab_id: Mutex::new(meta.tab_id.clone()),
+            generation: meta.generation,
+            workspace_root: config.workspace_root.clone(),
+            spawn_opts: CreateOptions {
+                size,
+                tab_name: None,
+                tab_group: None,
+                window_id: None,
+                mcp_env: meta.mcp_env,
+                cwd: Some(cwd),
+                command: meta.command.clone(),
+                env: meta.env.clone(),
+            },
+            child_pid: meta.child_pid,
+            master_fd: Some(master_fd),
+            command_tx,
+            output_tx,
+            ring: Mutex::new(RingBuffer::new_at(config.terminal.ring_bytes, meta.seq)),
+            seq: AtomicU64::new(meta.seq),
+            last_activity: AtomicI64::new(now_unix_secs() as i64),
+            last_output_at: AtomicI64::new(now_unix_millis()),
+            write_queue: Mutex::new(VecDeque::new()),
+            last_deliver_at: AtomicI64::new(0),
+            awaiting_gen: AtomicBool::new(false),
+            attach_count: AtomicUsize::new(0),
+            detached_at: AtomicI64::new(now_unix_secs() as i64),
+            winsize: Mutex::new(size),
+            focused: AtomicBool::new(false),
+            bytes_since_focus: AtomicU64::new(0),
+            in_alt_screen: AtomicBool::new(meta.alt_screen),
+            alt_screen_tail: Mutex::new(Vec::new()),
+            private_modes: Mutex::new(meta.private_modes.into_iter().collect()),
+            private_mode_tail: Mutex::new(Vec::new()),
+            broadcast: AtomicBool::new(false),
+            closed: AtomicBool::new(false),
+            fdstore_preserve_on_shutdown: AtomicBool::new(false),
+            exit: Mutex::new(None),
+        });
+
+        {
+            let session = session.clone();
+            let registry_last_exit = registry_last_exit.clone();
+            std::thread::Builder::new()
+                .name("chan-terminal-fdstore-reader".into())
+                .spawn(move || {
+                    let mut buf = [0u8; 8192];
+                    loop {
+                        match reader.read(&mut buf) {
+                            Ok(0) => {
+                                session.record_terminal_exit(
+                                    TerminalExit::Unknown,
+                                    &registry_last_exit,
+                                );
+                                break;
+                            }
+                            Ok(n) => session.record_output(&buf[..n]),
+                            Err(e) => {
+                                session.broadcast(SessionEvent::Error(format!(
+                                    "terminal read failed: {e}"
+                                )));
+                                session.record_terminal_exit(
+                                    TerminalExit::Unknown,
+                                    &registry_last_exit,
+                                );
+                                break;
+                            }
+                        }
+                    }
+                })?;
+        }
+
+        {
+            let session = session.clone();
+            std::thread::Builder::new()
+                .name("chan-terminal-fdstore-controller".into())
+                .spawn(move || {
+                    while let Ok(cmd) = command_rx.recv() {
+                        match cmd {
+                            PtyCommand::Input(data) => {
+                                if let Err(e) = writer.write_all(&data) {
+                                    session.broadcast(SessionEvent::Error(format!(
+                                        "terminal write failed: {e}"
+                                    )));
+                                    return;
+                                }
+                                let _ = writer.flush();
+                            }
+                            PtyCommand::Resize(size) => {
+                                if let Err(e) = resize_imported_master(&writer, size) {
+                                    session.broadcast(SessionEvent::Error(format!(
+                                        "terminal resize failed: {e}"
+                                    )));
+                                } else {
+                                    *session.winsize.lock().expect("terminal winsize poisoned") =
+                                        size;
+                                    session.broadcast(SessionEvent::Resize(size));
+                                }
+                            }
+                            PtyCommand::Redraw => {
+                                let size =
+                                    *session.winsize.lock().expect("terminal winsize poisoned");
+                                let result =
+                                    force_redraw_with_wobble(size, REDRAW_WOBBLE_DELAY, |size| {
+                                        resize_imported_master(&writer, size)
+                                    });
+                                if let Err(e) = result {
+                                    session.broadcast(SessionEvent::Error(format!(
+                                        "terminal redraw resize failed: {e}"
+                                    )));
+                                } else {
+                                    session.broadcast(SessionEvent::Resize(size));
+                                }
+                            }
+                            PtyCommand::Kill => {
+                                if let Some(pid) = session.child_pid {
+                                    signal_imported_child(pid);
+                                }
+                                return;
+                            }
                         }
                     }
                 })?;
@@ -2302,6 +2725,30 @@ impl Session {
         let _ = self.command_tx.send(PtyCommand::Kill);
     }
 
+    #[cfg(target_os = "linux")]
+    fn preserve_for_fdstore_restart(&self) {
+        self.fdstore_preserve_on_shutdown
+            .store(true, Ordering::Relaxed);
+    }
+
+    #[cfg(target_os = "linux")]
+    fn clear_fdstore_restart_preservation(&self) {
+        self.fdstore_preserve_on_shutdown
+            .store(false, Ordering::Relaxed);
+    }
+
+    fn take_fdstore_restart_preservation(&self) -> bool {
+        self.fdstore_preserve_on_shutdown
+            .swap(false, Ordering::Relaxed)
+    }
+
+    fn detach_for_fdstore_restart(&self) {
+        if self.closed.swap(true, Ordering::Relaxed) {
+            return;
+        }
+        self.broadcast(SessionEvent::Closed(CloseReason::Shutdown));
+    }
+
     /// Like [`close`](Self::close) but signals an in-place RESTART instead of a
     /// teardown: broadcast [`SessionEvent::Restarted`] (not `Closed`) before
     /// killing the old PTY, so an attached `/ws` reader re-attaches to the
@@ -2372,6 +2819,26 @@ impl Session {
             return;
         }
         *self.tab_id.lock().expect("terminal tab_id poisoned") = tab_id;
+    }
+
+    fn record_terminal_exit(
+        &self,
+        exit: TerminalExit,
+        registry_last_exit: &Arc<Mutex<Option<TerminalExit>>>,
+    ) {
+        if self.closed.load(Ordering::Relaxed) {
+            return;
+        }
+        let mut stored = self.exit.lock().expect("session exit poisoned");
+        if stored.is_some() {
+            return;
+        }
+        *stored = Some(exit.clone());
+        drop(stored);
+        *registry_last_exit
+            .lock()
+            .expect("terminal registry poisoned") = Some(exit.clone());
+        self.broadcast(SessionEvent::Exit(exit));
     }
 
     fn record_output(&self, bytes: &[u8]) {
@@ -2541,6 +3008,45 @@ impl Session {
     }
 }
 
+#[cfg(target_os = "linux")]
+struct ImportedPtyFd(File);
+
+#[cfg(target_os = "linux")]
+impl Read for ImportedPtyFd {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        self.0.read(buf)
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn clone_fd_from_proc(raw_fd: RawFd) -> io::Result<OwnedFd> {
+    let file = File::open(format!("/proc/self/fd/{raw_fd}"))?;
+    Ok(file.into())
+}
+
+#[cfg(target_os = "linux")]
+fn resize_imported_master(master: &File, size: PtySize) -> io::Result<()> {
+    let winsize = rustix::termios::Winsize {
+        ws_row: size.rows,
+        ws_col: size.cols,
+        ws_xpixel: size.pixel_width,
+        ws_ypixel: size.pixel_height,
+    };
+    rustix::termios::tcsetwinsize(master, winsize).map_err(io::Error::from)
+}
+
+#[cfg(target_os = "linux")]
+fn signal_imported_child(pid: u32) {
+    let Ok(raw_pid) = i32::try_from(pid) else {
+        return;
+    };
+    let Some(pid) = rustix::process::Pid::from_raw(raw_pid) else {
+        return;
+    };
+    let _ = rustix::process::kill_process(pid, rustix::process::Signal::HUP);
+    let _ = rustix::process::kill_process(pid, rustix::process::Signal::TERM);
+}
+
 enum PtyCommand {
     Input(Vec<u8>),
     Resize(PtySize),
@@ -2612,6 +3118,8 @@ mod tests {
                 env: Default::default(),
             },
             child_pid: None,
+            #[cfg(target_os = "linux")]
+            master_fd: None,
             command_tx,
             output_tx,
             ring: Mutex::new(RingBuffer::new(ring_bytes)),
@@ -2632,6 +3140,7 @@ mod tests {
             private_mode_tail: Mutex::new(Vec::new()),
             broadcast: AtomicBool::new(false),
             closed: AtomicBool::new(false),
+            fdstore_preserve_on_shutdown: AtomicBool::new(false),
             exit: Mutex::new(None),
         })
     }
