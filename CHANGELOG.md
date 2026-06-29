@@ -6,6 +6,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [v0.56.4] - 2026-06-29
+
+A patch release for wide Markdown table containment in the rendered editor.
+
+### Fixed
+
+- **Wide Markdown tables no longer widen the whole document.** Rendered tables keep their own horizontal scroll area, while normal prose before and after the table still wraps at the configured page-width cap.
+- **Page-width capped Markdown keeps its document shape.** A table with long columns no longer pushes CodeMirror's content width past the centered page, avoiding document-level horizontal scrolling and clipped paragraph text.
+
 ## [v0.56.3] - 2026-06-29
 
 A patch release for Markdown list alignment and pane shortcut hint correctness.

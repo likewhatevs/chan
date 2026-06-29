@@ -1,13 +1,13 @@
 {
   "name": "@chan/marketing",
-  "version": "0.56.3",
+  "version": "0.56.4",
   "private": true,
   "type": "module",
   "engines": {
     "node": ">=20"
   },
   "dependencies": {
-    "@chan/launcher": "0.56.3"
+    "@chan/launcher": "0.56.4"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^7.1.2",
