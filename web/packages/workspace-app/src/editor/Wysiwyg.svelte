@@ -829,6 +829,7 @@
 
   .md-wysiwyg-cm6 {
     flex: 1;
+    min-width: 0;
     min-height: 0;
     height: 100%;
     overflow: auto;
@@ -838,13 +839,21 @@
 
   :global(.md-wysiwyg-cm6 .cm-editor) {
     height: 100%;
+    width: 100%;
+    min-width: 0;
     font-size: var(--chan-editor-body-size, 16px);
     max-width: var(--chan-page-max-width, none);
     margin-inline: auto;
+    box-sizing: border-box;
   }
   :global(.md-wysiwyg-cm6 .cm-content) {
     font-family: var(--chan-editor-body-family);
     color: var(--chan-editor-body-color, var(--text));
+    /* CodeMirror's scroller is a flex row. Without a zero min-width,
+       the wide table widget becomes the content flex item's intrinsic
+       minimum and normal paragraph lines stop wrapping at the page cap. */
+    min-width: 0;
+    max-width: 100%;
     /* `--editor-top-pad` is set by the host (FileEditorTab on its
        .editor-host, InlineAssist on the prompt wrap) and consumed
        here so the first line of the editor clears the floating
@@ -1617,8 +1626,12 @@
 
   /* ---- table widget ---- */
   :global(.md-wysiwyg-cm6 .cm-md-table-wrap) {
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
     overflow-x: auto;
     margin: 0.5em 0;
+    contain: inline-size;
   }
   :global(.md-wysiwyg-cm6 .cm-md-table) {
     border-collapse: collapse;

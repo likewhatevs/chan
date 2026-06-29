@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 
+import { readFileSync } from "node:fs";
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { describe, expect, test } from "vitest";
@@ -36,5 +37,17 @@ describe("tableDecorations", () => {
 
     view.destroy();
     parent.remove();
+  });
+
+  test("wide tables are contained so prose still wraps at page width", () => {
+    const source = readFileSync("src/editor/Wysiwyg.svelte", "utf8");
+
+    expect(source).toMatch(/\.cm-content\)[\s\S]{1,500}min-width: 0;/);
+    expect(source).toMatch(
+      /\.cm-md-table-wrap\)[\s\S]{1,300}width: 100%;[\s\S]{1,300}max-width: 100%;[\s\S]{1,300}min-width: 0;[\s\S]{1,300}overflow-x: auto;[\s\S]{1,300}contain: inline-size;/,
+    );
+    expect(source).toMatch(
+      /\.cm-md-table\)[\s\S]{1,500}width: max-content;[\s\S]{1,200}min-width: 100%;/,
+    );
   });
 });
