@@ -1,4 +1,10 @@
-# v0.56.1 draft
+# v0.56.1: control-terminal exit attention and desktop package split
+
+Branch `release-v0.56.1-rc1`, cut from the v0.56.0 GA `main`. This was a short validation carryover: the rc built a macOS DMG for host smoke, the final feedback found one missed control-terminal lifecycle edge, and GA publishes as `v0.56.1`.
+
+## Theme
+
+Make script-backed devserver control terminals match the user's mental model. The foreground control script owns connection liveness, but the terminal window still owns launcher visibility once the user closes it.
 
 ## Control-terminal exit attention
 
@@ -38,3 +44,9 @@
 - `npm --prefix web run build --workspace @chan/launcher`
 - `npm --prefix web run check --workspace @chan/marketing`
 - `npm --prefix web run build --workspace @chan/marketing`
+
+## Release
+
+- The rc branch produced `Chan_0.56.1-rc1_aarch64.dmg` for host smoke.
+- Host smoke accepted the rc behavior except the closed-control-window row retention bug; the final patch reaps that row while keeping script-exit attention intact.
+- GA bumps all release pins to `0.56.1`, updates the changelog and this release report, then tags `v0.56.1`.

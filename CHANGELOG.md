@@ -6,6 +6,28 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [v0.56.1] - 2026-06-29
+
+A patch release for devserver control-terminal lifecycle correctness, launcher hover polish, and split desktop package targets.
+
+### Changed
+
+- **Script-backed control terminals own the devserver connection state.** A foreground control script that exits now marks the devserver disconnected whether it exits 0, fails, receives Ctrl-C / SIGINT, receives SIGTERM, or reports an unknown exit state.
+- **Control-terminal exit attention is sticky until the user acts.** A terminated script leaves the retained control row flashing in the launcher, with `disconnected...` copy and an eye action so the user can inspect or re-run it.
+- **Launcher hover motion belongs to machine cards.** Whole machine cards keep the hover wobble; buttons and workspace cards now rely on color/background affordances instead of nested motion.
+- **Desktop package targets are split by platform.** macOS and Windows desktop packaging now use separate Tauri config paths, so Windows NSIS settings no longer affect macOS builds.
+
+### Fixed
+
+- **Closing a disconnected control terminal reaps the launcher row.** If the user closes the already-disconnected control terminal window, the desktop now removes the stale control row instead of leaving it flashing forever.
+- **Concurrent control connects cannot overwrite newer runs.** Stale connect attempts are generation-checked, so an old control process cannot replace the active prefix or emit disconnect attention for a newer connection.
+
+### Notes
+
+- Validation: local focused cargo and launcher tests, macOS package build, the non-publishing macOS RC artifact, and host smoke of the RC DMG.
+
+## [v0.56.0] - 2026-06-28
+
 ### Added
 
 - **Devserver service status reports the managed command.** `chan devserver --service --status` now shows the command behind the managed service, and `--restart` preserves the bound address and port across the service handoff.
@@ -17,7 +39,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
-- **Mermaid zoom stays readable in dark mode.** The diagram zoom view re-renders on a light panel so dark-theme diagrams no longer disappear into a black overlay.
+- **Mermaid diagrams render normally again.** The click-to-zoom view was removed after host validation showed it regressed the diagram experience.
 - **List-line selection no longer bleeds into the gutter.** Selecting list items at nested depths keeps the highlight aligned with the text instead of extending past the marker.
 - **Cmd+E preserves the editor caret.** Toggling between rendered Markdown and source mode maps the current caret into the target mode instead of jumping away.
 - **Rich-prompt image paste sends a bare absolute drafts path.** Pasted images are written to drafts and inserted as the same bare absolute path shown in the prompt and delivered to the terminal, without Markdown image syntax or width hints.

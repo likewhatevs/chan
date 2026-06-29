@@ -1,6 +1,6 @@
 {
   "name": "@chan/web-shared",
-  "version": "0.56.1-rc1",
+  "version": "0.56.1",
   "private": true,
   "type": "module",
   "exports": {

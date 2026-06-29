@@ -56,6 +56,7 @@ New agents should also read [`.agents/playbook.md`](../.agents/playbook.md), the
 - [release-pub-site](release-pub-site.md) - a standalone branding and positioning re-steer plus marketing site refresh (not a numbered release era).
 - [release-0.55.0](release-0.55.0.md) - editor polish, devserver hardening, docs consolidation, and the validation carryover into v0.56.0.
 - [release-0.56.0](release-0.56.0.md) - design-doc cleanup, the `DEVSERVER_*` gateway contract, v0.55 validation carryovers, and devserver lifecycle hardening.
+- [release-0.56.1](release-0.56.1.md) - control-terminal exit attention, launcher hover polish, and split desktop package targets.
 
 ## Conventions
 
