@@ -19,7 +19,9 @@ use std::time::Duration;
 
 use portable_pty::{native_pty_system, PtySize};
 use rand::RngCore;
-use serde::{Deserialize, Serialize};
+#[cfg(target_os = "linux")]
+use serde::Deserialize;
+use serde::Serialize;
 use tokio::sync::{broadcast, watch, Notify};
 use tokio::task::JoinHandle;
 
@@ -2821,6 +2823,7 @@ impl Session {
         *self.tab_id.lock().expect("terminal tab_id poisoned") = tab_id;
     }
 
+    #[cfg(target_os = "linux")]
     fn record_terminal_exit(
         &self,
         exit: TerminalExit,
