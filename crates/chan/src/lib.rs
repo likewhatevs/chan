@@ -2926,7 +2926,13 @@ fn write_devserver_unit(addr: SocketAddr) -> Result<PathBuf> {
     let dir = systemd_user_unit_dir()?;
     std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
     let unit_path = dir.join(DEVSERVER_SYSTEMD_UNIT);
-    let unit = format!(
+    let unit = devserver_systemd_unit(&exe, addr);
+    std::fs::write(&unit_path, unit).with_context(|| format!("writing {}", unit_path.display()))?;
+    Ok(unit_path)
+}
+
+fn devserver_systemd_unit(exe: &Path, addr: SocketAddr) -> String {
+    format!(
         "[Unit]\n\
          Description=chan devserver\n\
          After=network.target\n\
@@ -2944,9 +2950,7 @@ fn write_devserver_unit(addr: SocketAddr) -> Result<PathBuf> {
         exe = exe.display(),
         ip = addr.ip(),
         port = addr.port(),
-    );
-    std::fs::write(&unit_path, unit).with_context(|| format!("writing {}", unit_path.display()))?;
-    Ok(unit_path)
+    )
 }
 
 /// `$XDG_CONFIG_HOME/systemd/user`, else `$HOME/.config/systemd/user`.
@@ -6236,15 +6240,17 @@ mod tests {
 
     #[test]
     fn devserver_systemd_unit_enables_notify_and_fdstore() {
-        let unit = "[Service]\n\
-Type=notify\n\
-NotifyAccess=main\n\
-FileDescriptorStoreMax=512\n\
-KillMode=process\n";
+        let unit = devserver_systemd_unit(
+            Path::new("/usr/local/bin/chan"),
+            "127.0.0.1:8799".parse().unwrap(),
+        );
         assert!(unit.contains("Type=notify"));
         assert!(unit.contains("NotifyAccess=main"));
         assert!(unit.contains("FileDescriptorStoreMax=512"));
         assert!(unit.contains("KillMode=process"));
+        assert!(
+            unit.contains("ExecStart=/usr/local/bin/chan devserver --bind=127.0.0.1 --port=8799")
+        );
     }
 
     #[test]
