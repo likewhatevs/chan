@@ -99,9 +99,10 @@ pub struct DevserverEntry {
 }
 
 /// The add/update payload. `host` + `port` are required; the rest are optional.
-/// `token` is write-only — `Some` sets it; `None` on an update keeps the stored
-/// one. (No `color`: a devserver's pane-highlight colour is set from the
-/// focus-border menu and persisted per chan-library, not via this dialog.)
+/// `token` is write-only — `Some` sets/replaces it; `None` on an update keeps
+/// the stored one unless `clear_token` is true. (No `color`: a devserver's
+/// pane-highlight colour is set from the focus-border menu and persisted per
+/// chan-library, not via this dialog.)
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct DevserverInput {
     /// The devserver host (hostname or IP, no scheme or port). Required; the
@@ -118,6 +119,10 @@ pub struct DevserverInput {
     /// Optional bearer token (write-only). `None` on update keeps the stored one.
     #[serde(default)]
     pub token: Option<String>,
+    /// Clear the stored bearer token on update. Ignored on add and overridden by
+    /// a non-empty `token`, so pasting a replacement URL wins over the checkbox.
+    #[serde(default)]
+    pub clear_token: bool,
     /// Auto-hide the connect control terminal on a successful connect (the
     /// dialog's checkbox). `#[serde(default)]`: an absent field reads `false`.
     #[serde(default)]
@@ -138,8 +143,9 @@ pub trait DevserverRegistry: Send + Sync {
     fn list(&self) -> Vec<DevserverEntry>;
     /// Add a devserver, returning the stored row with its assigned id.
     fn add(&self, input: DevserverInput) -> Result<DevserverEntry, String>;
-    /// Edit a devserver in place; a blank `token` keeps the stored one. Returns
-    /// the updated row, or `Ok(None)` when no devserver has `id`.
+    /// Edit a devserver in place; a blank `token` keeps the stored one unless
+    /// `clear_token` is true. Returns the updated row, or `Ok(None)` when no
+    /// devserver has `id`.
     fn update(&self, id: &str, input: DevserverInput) -> Result<Option<DevserverEntry>, String>;
     /// Remove a devserver; `Ok(false)` when no devserver has `id`.
     fn remove(&self, id: &str) -> Result<bool, String>;

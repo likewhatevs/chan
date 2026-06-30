@@ -74,6 +74,7 @@ impl Sandbox {
         let mut cmd = Command::new(CHAN);
         cmd.env("HOME", self.home.path())
             .env("XDG_RUNTIME_DIR", self.runtime.path())
+            .env("TMPDIR", self.runtime.path())
             .env("CHAN_NO_DESKTOP_HANDOFF", "1")
             .env("CHAN_NO_DEVSERVER_HANDOFF", "1")
             .env_remove("CHAN_CONTROL_SOCKET")
@@ -696,6 +697,101 @@ async fn close_then_reopen_under_pressure() {
     }
     // A final mount still succeeds, leaving the host in a clean state.
     let _final = mount_workspace(&client, addr, &token, &root).await;
+}
+
+/// A `chan close <path>` reaches the devserver through the per-tenant control
+/// socket. The served tenant is gone immediately, and the management API must
+/// report the row as off with no stale tenant token.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn chan_close_marks_devserver_workspace_off() {
+    let sandbox = Sandbox::new();
+    let (server, addr) = spawn_devserver(&sandbox, free_port()).await;
+    let token = devserver_token(&server);
+    let client = http();
+    let root = sandbox.workspace("close-state");
+
+    let prefix = mount_workspace(&client, addr, &token, &root).await;
+    let before = list_workspaces(&client, addr, &token)
+        .await
+        .into_iter()
+        .find(|row| row["prefix"] == prefix)
+        .expect("mounted row");
+    assert_eq!(before["on"], true);
+    assert_eq!(before["status"], "running");
+    assert!(
+        !before["token"].as_str().unwrap_or_default().is_empty(),
+        "mounted workspace carries a tenant token"
+    );
+
+    let out = sandbox
+        .command()
+        .arg("close")
+        .arg(&root)
+        .output()
+        .expect("run chan close");
+    assert!(
+        out.status.success(),
+        "chan close failed: status={:?}\nstdout={}\nstderr={}",
+        out.status,
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("closed"),
+        "chan close did not report success: {}",
+        String::from_utf8_lossy(&out.stdout),
+    );
+
+    let after = list_workspaces(&client, addr, &token)
+        .await
+        .into_iter()
+        .find(|row| row["prefix"] == prefix)
+        .expect("closed row stays registered");
+    assert_eq!(after["on"], false);
+    assert_eq!(after["status"], "stopped");
+    assert_eq!(after["token"], "");
+}
+
+/// A `chan close --remove <path>` reaches the same devserver control socket but
+/// asks the host to forget the workspace. The management API must drop the row
+/// immediately rather than retaining the devserver's stale in-memory record.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn chan_close_remove_drops_devserver_workspace() {
+    let sandbox = Sandbox::new();
+    let (server, addr) = spawn_devserver(&sandbox, free_port()).await;
+    let token = devserver_token(&server);
+    let client = http();
+    let root = sandbox.workspace("close-remove-state");
+
+    let prefix = mount_workspace(&client, addr, &token, &root).await;
+    assert!(
+        list_workspaces(&client, addr, &token)
+            .await
+            .iter()
+            .any(|row| row["prefix"] == prefix),
+        "mounted workspace should be listed before removal"
+    );
+
+    let out = sandbox
+        .command()
+        .arg("close")
+        .arg("--remove")
+        .arg(&root)
+        .output()
+        .expect("run chan close --remove");
+    assert!(
+        out.status.success(),
+        "chan close --remove failed: status={:?}\nstdout={}\nstderr={}",
+        out.status,
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+
+    let after = list_workspaces(&client, addr, &token).await;
+    assert!(
+        after.iter().all(|row| row["prefix"] != prefix),
+        "removed workspace must disappear from devserver list: {after:?}"
+    );
 }
 
 // ---------------------------------------------------------------------------

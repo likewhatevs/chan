@@ -331,6 +331,9 @@ export function createLauncherDemoApi(): LauncherDemoApi {
       if (input.token) {
         ds.token = input.token;
         ds.has_token = true;
+      } else if (input.clear_token) {
+        ds.token = "";
+        ds.has_token = false;
       }
       notify();
       return tick(publicDevserver(ds));
@@ -357,7 +360,14 @@ export function createLauncherDemoApi(): LauncherDemoApi {
       const ds = devservers.find((d) => d.id === id);
       if (ds) {
         ds.status = "disconnected";
-        if (ds.library_id) for (const w of windows) if (w.library_id === ds.library_id) w.connected = false;
+        if (ds.library_id) {
+          windows = windows.filter((w) => {
+            if (w.library_id !== ds.library_id) return true;
+            if (w.control) return false;
+            w.connected = false;
+            return true;
+          });
+        }
         notify();
       }
       return tick(undefined);

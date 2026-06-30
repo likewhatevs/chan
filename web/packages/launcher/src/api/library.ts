@@ -178,6 +178,8 @@ export interface DevserverInput {
   script?: string;
   /** Bearer for a proxied/gateway devserver, so the user connects without scraping. */
   token?: string;
+  /** Explicitly remove a stored bearer token on edit. */
+  clear_token?: boolean;
   /** Auto-hide the connect control terminal on a successful connect. */
   auto_hide_control?: boolean;
 }

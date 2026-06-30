@@ -36,8 +36,8 @@ use crate::devserver::bytes_eq;
 use crate::static_assets::serve_launcher;
 use crate::{
     CreateWindow, DesktopWindowOp, DevserverEntry, DevserverInput, LauncherWorkspace,
-    SetWorkspaceOnOutcome, WindowRecord, WindowSet, WorkspaceHost, WorkspaceLifecycleOutcome,
-    WorkspaceStatus,
+    SetWorkspaceOnOutcome, WindowKind, WindowRecord, WindowSet, WorkspaceHost,
+    WorkspaceLifecycleOutcome, WorkspaceStatus,
 };
 
 /// State shared by the `/api/library/workspaces` handlers: the library host plus
@@ -400,6 +400,19 @@ async fn handle_create_library_window(
     State(host): State<Arc<WorkspaceHost>>,
     Json(req): Json<CreateWindow>,
 ) -> Response {
+    if req.kind == WindowKind::Workspace {
+        let Some(path) = req.workspace_path.as_deref() else {
+            return (StatusCode::BAD_REQUEST, "workspace_path is required").into_response();
+        };
+        let (status, _) = host.workspace_status(Path::new(path));
+        if status != WorkspaceStatus::Running {
+            return (
+                StatusCode::CONFLICT,
+                "workspace is not running; turn it on before opening a window",
+            )
+                .into_response();
+        }
+    }
     match host.mint_window(req.kind, req.workspace_path) {
         Ok(record) => Json(record).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
@@ -1018,10 +1031,10 @@ async fn handle_add_devserver(
     }
 }
 
-/// `PUT /api/library/devservers/{id}` `{url, label?, script?, token?}`: edit a
-/// devserver in place; a blank/absent `token` keeps the stored one. Loopback-only.
-/// 404 when no devserver has the id (or no registry is installed); 400 on a
-/// registry rejection.
+/// `PUT /api/library/devservers/{id}` `{url, label?, script?, token?, clear_token?}`:
+/// edit a devserver in place; a blank/absent `token` keeps the stored one unless
+/// `clear_token` is true. Loopback-only. 404 when no devserver has the id (or no
+/// registry is installed); 400 on a registry rejection.
 async fn handle_update_devserver(
     State(state): State<Arc<LauncherState>>,
     AxumPath(id): AxumPath<String>,
@@ -1163,6 +1176,8 @@ mod devserver_route_tests {
 
     use axum::body::Body;
     use axum::http::{header, Request, StatusCode};
+    use chan_library::allocate_workspace_prefix;
+    use chan_library::windows::WindowRegistry;
     use chan_workspace::Library;
     use tower::ServiceExt;
 
@@ -1240,6 +1255,11 @@ mod devserver_route_tests {
             if let Some(label) = input.label {
                 row.label = label;
             }
+            if input.token.as_deref().is_some_and(|t| !t.trim().is_empty()) {
+                row.has_token = true;
+            } else if input.clear_token {
+                row.has_token = false;
+            }
             Ok(Some(row.clone()))
         }
         fn remove(&self, id: &str) -> Result<bool, String> {
@@ -1296,6 +1316,66 @@ mod devserver_route_tests {
             .unwrap();
         let json = serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
         (status, json)
+    }
+
+    #[tokio::test]
+    async fn workspace_window_mint_requires_running_workspace() {
+        let cfg = tempfile::tempdir().unwrap();
+        let store = tempfile::tempdir().unwrap();
+        let ws = tempfile::tempdir().unwrap();
+        let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_workspace(ws.path()).unwrap();
+        let host = Arc::new(WorkspaceHost::new(lib, crate::route_builder()));
+        host.install_window_registry(
+            Arc::new(WindowRegistry::open(store.path().join("windows.json"))),
+            "local".to_string(),
+        );
+        let app = launcher_router(host.clone(), None, None);
+        let body = serde_json::json!({
+            "kind": "workspace",
+            "workspace_path": ws.path().to_string_lossy(),
+        })
+        .to_string();
+
+        let stopped = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/library/windows")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(body.clone()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(stopped.status(), StatusCode::CONFLICT);
+        assert!(
+            host.assemble_window_records().is_empty(),
+            "rejected mints must not persist queued workspace windows"
+        );
+
+        let prefix = allocate_workspace_prefix(ws.path()).unwrap();
+        host.open_or_get_registered_workspace(
+            ws.path(),
+            super::tenant_config("127.0.0.1:0".parse().unwrap(), &prefix),
+        )
+        .await
+        .expect("mount workspace");
+
+        let running = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/library/windows")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(running.status(), StatusCode::OK);
+        assert_eq!(host.assemble_window_records().len(), 1);
     }
 
     #[tokio::test]

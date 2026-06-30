@@ -96,6 +96,7 @@ describe("Library: Local group", () => {
     expect(spinning).toBeTruthy();
     expect(spinning.disabled).toBe(true);
     expect(spinning.querySelector("svg.spin")).toBeTruthy();
+    expect(byAria("New window of notes")!.disabled).toBe(true);
   });
 
   it("spins a local row from backend transitional statuses alone (no marker)", () => {
@@ -108,6 +109,19 @@ describe("Library: Local group", () => {
       );
       flushSync();
       expect(target!.querySelector('button[aria-label^="Working on"]')).toBeTruthy();
+    }
+  });
+
+  it("disables New window unless the workspace status is running", () => {
+    mountList();
+    const id = library.workspaces.find((w) => w.devserver_id === null)!.workspace_id;
+    expect(byAria("New window of notes")!.disabled).toBe(false);
+    for (const status of ["stopped", "starting", "closing", "removing", "error"] as const) {
+      library.workspaces = library.workspaces.map(
+        (w): WorkspaceEntry => (w.workspace_id === id ? { ...w, on: true, status } : w),
+      );
+      flushSync();
+      expect(byAria("New window of notes")!.disabled).toBe(true);
     }
   });
 

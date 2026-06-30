@@ -441,12 +441,18 @@ pub async fn spawn_control_terminal_window(
     state: Arc<AppState>,
     devserver_id: &str,
     script: String,
+    display_name: &str,
 ) -> Result<ControlTerminal, String> {
     let Some(embedded) = state.embedded.get() else {
         return Err("embedded local server is unavailable".to_string());
     };
     let (url, prefix) = embedded.open_terminal_with_command(script).await?;
     let label = control_terminal_label(devserver_id);
+    let title = if display_name.trim().is_empty() {
+        "Control Terminal".to_string()
+    } else {
+        format!("Control Terminal - {}", display_name.trim())
+    };
     build_workspace_window(
         &app,
         WindowSpec {
@@ -455,7 +461,7 @@ pub async fn spawn_control_terminal_window(
             // The control terminal runs on the local embedded library's shared
             // terminal tenant, so it belongs to the `local` library.
             library_id: "local",
-            title: "Control Terminal",
+            title: &title,
             ordinal: None,
             url: &url,
             url_hash_seed: "",
@@ -960,7 +966,13 @@ fn build_workspace_window(app: &AppHandle, spec: WindowSpec<'_>) -> Result<(), S
         // builds, so `cs window list` shows what the title bar shows.
         let display_title = state
             .window_title_override(&label_owned)
-            .unwrap_or_else(|| format!("{title_owned} Window {display_number}"));
+            .unwrap_or_else(|| {
+                if kind_owned == "control" {
+                    title_owned.clone()
+                } else {
+                    format!("{title_owned} Window {display_number}")
+                }
+            });
         // Resolve the desktop-local OS geometry to restore for this window
         // (keyed by the native label, matched against the live monitor
         // signature). When we will reposition / resize, the window builds HIDDEN
@@ -2538,6 +2550,19 @@ mod tests {
         assert!(
             label.starts_with("control-terminal-"),
             "control terminal label must keep the control-terminal- prefix the glob matches: {label}",
+        );
+    }
+
+    #[test]
+    fn control_terminal_titles_do_not_use_window_number_suffix() {
+        const SERVE_RS: &str = include_str!("serve.rs");
+        assert!(
+            SERVE_RS.contains("if kind_owned == \"control\""),
+            "control windows should use their devserver-specific title verbatim"
+        );
+        assert!(
+            SERVE_RS.contains("Control Terminal -"),
+            "control window titles should include the devserver label/address"
         );
     }
 

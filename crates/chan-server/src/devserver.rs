@@ -333,9 +333,10 @@ impl DevserverState {
         // awaits, and the list endpoint must stay responsive meanwhile.
         let current = {
             let workspaces = self.workspaces.lock().unwrap_or_else(|e| e.into_inner());
-            workspaces
-                .get(prefix)
-                .map(|record| (record.on, record.root.clone()))
+            workspaces.get(prefix).map(|record| {
+                let currently_on = self.host.is_root_mounted(&record.root);
+                (currently_on, record.root.clone())
+            })
         };
         let (currently_on, root) = match current {
             Some(current) => current,
@@ -350,7 +351,17 @@ impl DevserverState {
         };
         if currently_on == on {
             // Already in the requested state: idempotent no-op, current row.
-            // A library-only off row has no map entry, so synthesize it.
+            // A library-only off row has no map entry, so synthesize it. If a
+            // host-level close already unmounted this workspace, normalize the
+            // stale in-memory record too; the row derivation below already masks
+            // the token, but clearing it here keeps future persists honest.
+            if !on {
+                let mut workspaces = self.workspaces.lock().unwrap_or_else(|e| e.into_inner());
+                if let Some(record) = workspaces.get_mut(prefix) {
+                    record.on = false;
+                    record.token.clear();
+                }
+            }
             return Ok(SetWorkspaceOnResult::Updated(
                 self.entry_for(prefix)
                     .or_else(|| self.library_off_entry(prefix)),
@@ -519,9 +530,11 @@ impl DevserverState {
         }
         // Defensive: a served workspace whose root left the library (forgotten
         // while still mounted) must still surface so a live mount never
-        // silently vanishes from the list.
+        // silently vanishes from the list. Once the host has also unmounted it,
+        // the stale devserver map row is not a real workspace anymore; this is
+        // the control-socket `chan close --remove` path.
         for (root, entry) in &by_root {
-            if !seen.contains(root) {
+            if !seen.contains(root) && entry.on {
                 entries.push(entry.clone());
             }
         }
@@ -561,14 +574,20 @@ impl DevserverState {
     /// off row reports `on:false` with an empty token; an on row its live token.
     fn entry_from_record(&self, record: &WorkspaceRecord) -> WorkspaceEntry {
         let (status, error) = self.host.workspace_status(&record.root);
+        let on = status == WorkspaceStatus::Running && self.host.is_root_mounted(&record.root);
+        let token = if on {
+            record.token.clone()
+        } else {
+            String::new()
+        };
         WorkspaceEntry {
             prefix: record.prefix.clone(),
             path: record.root.to_string_lossy().into_owned(),
             label: record.label.clone(),
-            on: record.on,
+            on,
             status,
             error,
-            token: record.token.clone(),
+            token,
         }
     }
 
@@ -1923,6 +1942,114 @@ mod tests {
             .find(|r| r.path == canon)
             .expect("A is still registered (off)");
         assert!(!a.on, "closed A stays off across a later persist_state");
+    }
+
+    #[tokio::test]
+    async fn host_close_reports_off_empty_token_immediately() {
+        // `chan close` reaches the host directly, bypassing DevserverState's
+        // workspace map. The management list must still report the real state
+        // immediately, not the stale record's old `on` flag and tenant token.
+        let home = tempfile::tempdir().expect("home");
+        let ws = tempfile::tempdir().expect("workspace");
+        let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let state = test_state(home.path(), addr);
+
+        let prefix = state.register_workspace(ws.path()).await.expect("mount");
+        let before = state
+            .workspace_entries()
+            .into_iter()
+            .find(|row| row.prefix == prefix)
+            .expect("row before close");
+        assert!(before.on);
+        assert_eq!(before.status, WorkspaceStatus::Running);
+        assert!(!before.token.is_empty());
+
+        assert!(state
+            .host
+            .close_workspace_for_root(ws.path(), false)
+            .expect("close")
+            .completed());
+
+        let after = state
+            .workspace_entries()
+            .into_iter()
+            .find(|row| row.prefix == prefix)
+            .expect("row after close");
+        assert!(!after.on);
+        assert_eq!(after.status, WorkspaceStatus::Stopped);
+        assert_eq!(after.token, "");
+    }
+
+    #[tokio::test]
+    async fn host_remove_drops_row_from_listing_immediately() {
+        // `chan close --remove` reaches the host directly too. The host removes
+        // the library row and unmounts the tenant, while DevserverState still
+        // has its old map record. The management list must not surface that
+        // stale record after removal.
+        let home = tempfile::tempdir().expect("home");
+        let ws = tempfile::tempdir().expect("workspace");
+        let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let state = test_state(home.path(), addr);
+
+        let prefix = state.register_workspace(ws.path()).await.expect("mount");
+        assert!(state
+            .workspace_entries()
+            .iter()
+            .any(|row| row.prefix == prefix));
+
+        assert!(state
+            .host
+            .remove_workspace_for_root(ws.path(), false)
+            .expect("remove")
+            .completed());
+
+        assert!(
+            state
+                .workspace_entries()
+                .iter()
+                .all(|row| row.prefix != prefix),
+            "removed workspace must disappear from the management listing"
+        );
+        assert!(
+            state.host.library().list_workspaces().is_empty(),
+            "removed workspace is unregistered from the host library"
+        );
+    }
+
+    #[tokio::test]
+    async fn stale_closed_record_can_be_turned_on_again() {
+        // A stale map record with `on:true` but no live host tenant used to make
+        // `set_workspace_on(..., true)` a no-op. The toggle must use the host's
+        // real mount state so a stale-off row remounts cleanly.
+        let home = tempfile::tempdir().expect("home");
+        let ws = tempfile::tempdir().expect("workspace");
+        let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let state = test_state(home.path(), addr);
+
+        let prefix = state.register_workspace(ws.path()).await.expect("mount");
+        assert!(state
+            .host
+            .close_workspace_for_root(ws.path(), false)
+            .expect("close")
+            .completed());
+
+        let stale = state
+            .workspace_entries()
+            .into_iter()
+            .find(|row| row.prefix == prefix)
+            .expect("stale row");
+        assert!(!stale.on);
+        assert_eq!(stale.status, WorkspaceStatus::Stopped);
+        assert_eq!(stale.token, "");
+
+        let remounted = state
+            .set_workspace_on(&prefix, true, false)
+            .await
+            .map(updated_row)
+            .expect("remount");
+        assert!(remounted.on);
+        assert_eq!(remounted.status, WorkspaceStatus::Running);
+        assert!(!remounted.token.is_empty());
     }
 
     #[tokio::test]

@@ -11,7 +11,8 @@
   // gateway/devserver-proxy case carrying a fixed token; port optional). It is
   // parsed client-side into the host/port/token the bridge already stores -- no
   // wire change, no separate Token field. The token rides write-only: an edit
-  // that leaves the Address as `host:port` keeps the stored token.
+  // that leaves the Address as `host:port` keeps the stored token. On edit, a
+  // full URL with an empty `?token=` explicitly clears it.
   import Modal from "./Modal.svelte";
   import { SquareTerminal } from "lucide-svelte";
   import { closeDialog, dialog } from "../state/dialog.svelte";
@@ -107,13 +108,13 @@
   interface ParsedAddress {
     host: string;
     port: number | null;
-    token: string;
+    token?: string;
   }
 
   // Parse the polymorphic Address into host/port/token, mirroring what
   // `chan open <url>` accepts so the form and the CLI stay consistent:
   //   - `http(s)://host:port?token=…`  → host + port (defaulted by scheme when
-  //     absent) + the `token` query param;
+  //     absent) + the `token` query param (`?token=` clears on edit);
   //   - bare `host:port`               → host + port, no token.
   // Returns null only for blank input; an invalid port surfaces as `port: null`
   // for the caller to reject with a single message.
@@ -125,21 +126,29 @@
         const u = new URL(s);
         const host = u.hostname;
         const port = u.port ? Number(u.port) : u.protocol === "https:" ? 443 : 80;
-        const token = u.searchParams.get("token") ?? "";
-        return { host, port: Number.isInteger(port) ? port : null, token };
+        const token = u.searchParams.get("token");
+        return {
+          host,
+          port: Number.isInteger(port) ? port : null,
+          token: token ?? undefined,
+        };
       } catch {
-        return { host: "", port: null, token: "" };
+        return { host: "", port: null };
       }
     }
     const idx = s.lastIndexOf(":");
-    if (idx <= 0 || idx === s.length - 1) return { host: s, port: null, token: "" };
+    if (idx <= 0 || idx === s.length - 1) {
+      return { host: s, port: null };
+    }
     const host = s.slice(0, idx).trim();
     const port = Number(s.slice(idx + 1).trim());
     // Reject a malformed host -- whitespace, or a leftover colon from a typo'd
     // double colon / scheme fragment. A bracketed [::1] IPv6 literal ends in "]",
     // not ":", so it survives.
-    if (!host || /\s/.test(host) || host.endsWith(":")) return { host: "", port: null, token: "" };
-    return { host, port: Number.isInteger(port) ? port : null, token: "" };
+    if (!host || /\s/.test(host) || host.endsWith(":")) {
+      return { host: "", port: null };
+    }
+    return { host, port: Number.isInteger(port) ? port : null };
   }
 
   function validPort(p: number | null): p is number {
@@ -161,8 +170,10 @@
           label: name.trim() || undefined,
           script: script.trim() || undefined,
           // Write-only: an edit that leaves the Address as host:port carries no
-          // token, so the stored one is kept; a full URL with ?token replaces it.
+          // token, so the stored one is kept; a full URL with ?token replaces it,
+          // and an empty ?token= clears it.
           token: parsed.token || undefined,
+          clear_token: parsed.token === "" || undefined,
           auto_hide_control: autoHideControl,
         },
         editing?.id,

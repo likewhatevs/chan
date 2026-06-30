@@ -226,7 +226,7 @@ export async function pickFolder(): Promise<string | null> {
   return (await backend.pickFolder()) ?? null;
 }
 
-/** Add (no id) or edit (id) a devserver; an empty `token` on edit is unchanged. */
+/** Add (no id) or edit (id) a devserver; an empty `token` on edit is unchanged unless cleared. */
 export async function saveDevserver(input: DevserverInput, id?: string): Promise<void> {
   if (id) await backend.updateDevserver(id, input);
   else await backend.addDevserver(input);

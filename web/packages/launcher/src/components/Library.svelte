@@ -232,8 +232,7 @@
         <button
           class="icon-btn"
           type="button"
-          disabled={!ws.on}
-          title={ws.on ? "Open window" : "Turn on to open a window"}
+          disabled={ws.status !== "running" || spinning(ws)}
           aria-label={`New window of ${displayName(ws)}`}
           onclick={() =>
             run(
@@ -326,7 +325,7 @@
     <span class="row-name">{devserverName(ds)}</span>
     <OsIcon os={ds.os} prettyName={ds.pretty_name} />
     {#if connected(ds)}<span class="status-dot live" title="Connected"></span>{/if}
-    {#if ds.has_token}<span class="chip" title="A connect token is stored">🔒 token</span>{/if}
+    {#if ds.has_token}<span class="chip">🔒 token</span>{/if}
   </span>
   <span class="ds-addr-row">
     <span class="row-sub" title={endpoint(ds)}>{endpoint(ds)}</span>

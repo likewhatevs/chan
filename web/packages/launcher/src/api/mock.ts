@@ -349,10 +349,13 @@ export const mockApi: LibraryApi = {
     ds.script = input.script ?? "";
     ds.auto_hide_control = input.auto_hide_control ?? false;
     // A token omitted on edit leaves the stored one unchanged (the write-only
-    // contract): only a non-empty token replaces it.
+    // contract): only a non-empty token replaces it. Clearing is explicit.
     if (input.token) {
       ds.token = input.token;
       ds.has_token = true;
+    } else if (input.clear_token) {
+      ds.token = "";
+      ds.has_token = false;
     }
     return tick(publicDevserver(ds));
   },
@@ -388,7 +391,12 @@ export const mockApi: LibraryApi = {
     if (ds) {
       ds.status = "disconnected";
       if (ds.library_id) {
-        for (const w of windows) if (w.library_id === ds.library_id) w.connected = false;
+        for (let i = windows.length - 1; i >= 0; i--) {
+          const w = windows[i]!;
+          if (w.library_id !== ds.library_id) continue;
+          if (w.control) windows.splice(i, 1);
+          else w.connected = false;
+        }
       }
       notify();
     }

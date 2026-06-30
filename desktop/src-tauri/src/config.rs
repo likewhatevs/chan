@@ -100,9 +100,9 @@ pub struct Devserver {
     pub label: String,
     /// Bearer token for the devserver. Write-only over the launcher wire: the
     /// registry reports its presence via `has_token` and never echoes the
-    /// value back. Stored so an edit can keep it; empty means none. (The
-    /// connect flow still scrapes/reads a fresh token at dial — this is the
-    /// launcher-supplied credential for the deferred proxied/OAuth dial.)
+    /// value back. Stored so a connect script can be just the transport setup
+    /// (for example `ssh -N`) while the credential comes from the Address URL;
+    /// empty means scrape/read a fresh token at dial.
     #[serde(default)]
     pub token: String,
     /// Wall-clock millis when the devserver was added.
@@ -326,7 +326,7 @@ pub type DevserverRemoveHook = Arc<dyn Fn(&str) + Send + Sync>;
 ///
 /// The token is write-only: `add`/`update` accept it, `list` and the returned
 /// entry only report [`has_token`](DevserverEntry::has_token). A blank/absent
-/// token on update keeps the stored one.
+/// token on update keeps the stored one unless the caller sets `clear_token`.
 pub struct DevserverConfigRegistry {
     store: Arc<Mutex<ConfigStore>>,
     /// Filled (once the `AppHandle` exists) with the live-connection teardown;
@@ -517,13 +517,18 @@ impl DevserverRegistry for DevserverConfigRegistry {
         ds.script = input.script.unwrap_or_default();
         // The auto-hide flag is full-replace like label/script (the edit form resubmits it).
         ds.auto_hide_control = input.auto_hide_control;
-        // Token is the lone keep-on-blank field: a write-only credential the
-        // launcher never reads back, so its edit form can't resubmit it.
-        if let Some(tok) = input.token {
-            let tok = tok.trim();
-            if !tok.is_empty() {
-                ds.token = tok.to_string();
-            }
+        // Token is write-only: the edit form can't echo the stored secret, so
+        // blank/absent still means keep. `clear_token` is the explicit removal
+        // path; a pasted replacement token wins over the checkbox.
+        let replacement_token = input
+            .token
+            .as_deref()
+            .map(str::trim)
+            .filter(|t| !t.is_empty());
+        if let Some(tok) = replacement_token {
+            ds.token = tok.to_string();
+        } else if input.clear_token {
+            ds.token.clear();
         }
         let entry = entry_from_devserver(ds, &self.conns, &self.connecting, &self.feed);
         store.save(&cfg).map_err(|e| e.to_string())?;
@@ -1024,6 +1029,7 @@ mod tests {
                 label: Some("lab".into()),
                 script: Some("ssh -L …".into()),
                 token: Some("tok_secret".into()),
+                clear_token: false,
                 auto_hide_control: false,
             })
             .expect("add");
@@ -1095,9 +1101,10 @@ mod tests {
     }
 
     /// `update` with a blank/absent token keeps the stored one; a non-blank
-    /// token replaces it. URL/label/script are full-replace.
+    /// token replaces it; `clear_token` removes it. URL/label/script are
+    /// full-replace.
     #[test]
-    fn registry_update_keeps_token_on_blank_replaces_on_set() {
+    fn registry_update_keeps_replaces_and_clears_token() {
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(Mutex::new(ConfigStore {
             path: dir.path().join("config.json"),
@@ -1156,6 +1163,21 @@ mod tests {
             store.lock().unwrap().get().unwrap().devservers[0].token,
             "tok_two"
         );
+        // An explicit clear removes it.
+        let cleared = reg
+            .update(
+                &id,
+                DevserverInput {
+                    host: "127.0.0.1".into(),
+                    port: 9000,
+                    clear_token: true,
+                    ..Default::default()
+                },
+            )
+            .expect("update")
+            .expect("found");
+        assert!(!cleared.has_token);
+        assert_eq!(store.lock().unwrap().get().unwrap().devservers[0].token, "");
     }
 
     #[test]

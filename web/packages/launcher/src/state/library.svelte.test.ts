@@ -6,6 +6,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import {
   addLocalWorkspace,
   connectDevserver,
+  disconnectDevserver,
   library,
   loadLibrary,
   openWorkspaceWindow,
@@ -105,6 +106,17 @@ describe("devserver registry", () => {
     expect(updated.has_token).toBe(true);
   });
 
+  it("edits a devserver and explicitly clears the stored token", async () => {
+    await saveDevserver({ host: "clear-token.test", port: 9005, token: "tok_clear" });
+    const ds = library.devservers.find((d) => d.host === "clear-token.test" && d.port === 9005)!;
+    expect(ds.has_token).toBe(true);
+
+    await saveDevserver({ host: "clear-token.test", port: 9005, clear_token: true }, ds.id);
+
+    const updated = library.devservers.find((d) => d.id === ds.id)!;
+    expect(updated.has_token).toBe(false);
+  });
+
   it("removes a devserver", async () => {
     await saveDevserver({ host: "gone.test", port: 9004 });
     const ds = library.devservers.find((d) => d.host === "gone.test" && d.port === 9004)!;
@@ -123,6 +135,17 @@ describe("devserver registry", () => {
     const remote = library.windows.filter((w) => w.library_id === ds.library_id);
     expect(remote.length).toBeGreaterThan(0);
     expect(remote.every((w) => w.connected)).toBe(true);
+  });
+
+  it("disconnects a devserver and removes its transient control row", async () => {
+    const ds = library.devservers.find((d) => d.id === "ds-1")!;
+    await connectDevserver(ds.id);
+    expect(library.windows.some((w) => w.library_id === ds.library_id && w.control)).toBe(true);
+
+    await disconnectDevserver(ds.id);
+
+    expect(library.devservers.find((d) => d.id === ds.id)?.status).toBe("disconnected");
+    expect(library.windows.some((w) => w.library_id === ds.library_id && w.control)).toBe(false);
   });
 });
 

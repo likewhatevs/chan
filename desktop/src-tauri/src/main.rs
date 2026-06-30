@@ -792,6 +792,28 @@ fn to_launcher_workspace(
     }
 }
 
+/// Refresh one connected devserver's workspace cache immediately after a
+/// launcher-driven mutation. The poll loop remains the fallback for missed
+/// changes, but the acting launcher should not wait up to five seconds to leave
+/// a stale on/off state.
+async fn refresh_devserver_workspace_cache(
+    state: &Arc<AppState>,
+    id: &str,
+    conn: &devserver::DevserverConn,
+) -> Result<(), String> {
+    let rows = devserver::fetch_workspaces(conn).await?;
+    let library_id = state.devserver_feed.library_id_of(id);
+    let mapped = rows
+        .into_iter()
+        .map(|r| to_launcher_workspace(id, library_id.clone(), r))
+        .collect();
+    state.devserver_feed.set_workspaces(id.to_string(), mapped);
+    if let Some(embedded) = state.embedded() {
+        embedded.signal_library_change();
+    }
+    Ok(())
+}
+
 /// The launcher addresses a devserver workspace by its slash-free slug (the
 /// `LauncherWorkspace.prefix` contract), but the devserver management API
 /// (`/api/devserver/workspaces{prefix}/on`, the DELETE) addresses it as an
@@ -1288,11 +1310,15 @@ fn remove_devserver_workspace_windows(app: &tauri::AppHandle, state: &AppState, 
 /// by explicit teardown and by an explicit user close of the control window;
 /// the PTY-exit path deliberately keeps the row for launcher attention.
 fn reap_devserver_control_terminal(app: &tauri::AppHandle, state: &AppState, id: &str) {
-    serve::close_window_by_label(app, &serve::control_terminal_label(id));
+    let label = serve::control_terminal_label(id);
+    serve::close_window_by_label(app, &label);
+    if state.remove_buried(&label) {
+        rebuild_window_menu(app);
+    }
     state.control_terminal_prefixes.lock().unwrap().remove(id);
     state.control_terminal_runs.lock().unwrap().remove(id);
     if let Some(embedded) = state.embedded.get() {
-        embedded.reap_control_window(&serve::control_terminal_label(id));
+        embedded.reap_control_window(&label);
     }
 }
 
@@ -1589,11 +1615,12 @@ fn spawn_control_terminal_exit_watcher(
 /// Connect to a configured devserver: run its connect script in a control
 /// terminal (when one is set), acquire its bearer token, confirm it answers,
 /// record the connection, open a standalone terminal on it, then tuck the
-/// control terminal away. When a script ran it, the token is scraped from the
-/// control terminal's output (so a remote devserver whose config the desktop
-/// cannot read still works); with no script, the devserver runs locally and
-/// the token comes from its `~/.chan/devserver/config.json`. Once connected
-/// the launcher polls the devserver's workspace list.
+/// control terminal away. A stored write-only token from the devserver Address
+/// wins after the script starts, so a tunnel script can be just `ssh -N`. With
+/// no stored token, scripted connects scrape `CHAN_DEVSERVER_TOKEN=...` from
+/// the control terminal; no-script local connects read
+/// `~/.chan/devserver/config.json`. Once connected the launcher polls the
+/// devserver's workspace list.
 ///
 /// Driven over the desktop bridge: the launcher's Connect button fires
 /// `POST /api/library/devservers/{id}/connect` → `DesktopWindowOp::ConnectDevserver`
@@ -1639,18 +1666,29 @@ async fn connect_devserver_impl_inner(
     state: Arc<AppState>,
     id: String,
 ) -> Result<(), String> {
-    let (url, script, auto_hide_control) = {
+    let (url, script, stored_token, configured_label, auto_hide_control) = {
         let cfg = state.store.lock().unwrap().get().map_err(err)?;
         let ds = cfg
             .devservers
             .iter()
             .find(|d| d.id == id)
             .ok_or_else(|| format!("no devserver {id}"))?;
-        (ds.url.clone(), ds.script.clone(), ds.auto_hide_control)
+        (
+            ds.url.clone(),
+            ds.script.clone(),
+            ds.token.trim().to_string(),
+            ds.label.trim().to_string(),
+            ds.auto_hide_control,
+        )
     };
     // Parse the stored URL into the (host, port) the raw-tunnel dial uses
     // (the port defaults from the scheme when omitted).
     let (host, port) = devserver::parse_devserver_url(&url)?;
+    let control_title = if configured_label.is_empty() {
+        format!("{host}:{port}")
+    } else {
+        configured_label.clone()
+    };
     // A configured script runs in a control terminal that brings the
     // devserver up; with no script the devserver is expected to be running
     // already.
@@ -1658,8 +1696,14 @@ async fn connect_devserver_impl_inner(
         None
     } else {
         reap_devserver_control_terminal(&app, &state, &id);
-        let ct = serve::spawn_control_terminal_window(app.clone(), Arc::clone(&state), &id, script)
-            .await?;
+        let ct = serve::spawn_control_terminal_window(
+            app.clone(),
+            Arc::clone(&state),
+            &id,
+            script,
+            &control_title,
+        )
+        .await?;
         let generation = state
             .control_terminal_generation
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
@@ -1700,26 +1744,35 @@ async fn connect_devserver_impl_inner(
         }
         Some((ct, generation))
     };
-    let (token, port) = match &control {
-        Some((ct, generation)) => {
-            let token = scrape_control_terminal_token(
-                &app,
-                &state,
-                &serve::control_terminal_label(&id),
-                &ct.prefix,
-            )
-            .await?;
+    let (token, port) = if !stored_token.is_empty() {
+        // The script, when present, is transport setup and must already be
+        // running before this token is used.
+        if let Some((ct, generation)) = &control {
             ensure_control_run_live(&state, &id, *generation, &ct.prefix)?;
-            (token, port)
         }
-        // Local devserver (no control script): read the CURRENT token AND port
-        // from its persisted config. The stored URL's port goes stale when a
-        // `--port 0` local devserver restarts on a different OS-assigned port;
-        // the config carries the live port.
-        None => (
-            devserver::read_local_token()?,
-            devserver::read_local_port().unwrap_or(port),
-        ),
+        (stored_token, port)
+    } else {
+        match &control {
+            Some((ct, generation)) => {
+                let token = scrape_control_terminal_token(
+                    &app,
+                    &state,
+                    &serve::control_terminal_label(&id),
+                    &ct.prefix,
+                )
+                .await?;
+                ensure_control_run_live(&state, &id, *generation, &ct.prefix)?;
+                (token, port)
+            }
+            // Local devserver (no control script, no stored token): read the
+            // CURRENT token AND port from its persisted config. The stored URL's
+            // port goes stale when a `--port 0` local devserver restarts on a
+            // different OS-assigned port; the config carries the live port.
+            None => (
+                devserver::read_local_token()?,
+                devserver::read_local_port().unwrap_or(port),
+            ),
+        }
     };
     let info = wait_for_devserver(&host, port).await?;
     if let Some((ct, generation)) = &control {
@@ -1750,6 +1803,9 @@ async fn connect_devserver_impl_inner(
         token,
         name,
     };
+    devserver::fetch_workspaces(&conn)
+        .await
+        .map_err(|e| format!("authenticating devserver management API: {e}"))?;
     state.devservers.set(id.clone(), conn.clone());
     // Seed this devserver's `library_id` into the launcher
     // feed BEFORE the control mint so the launcher resolves the control row's group
@@ -2093,7 +2149,12 @@ pub(crate) async fn forget_devserver_workspace_impl(
         .get(&id)
         .ok_or_else(|| format!("devserver {id} is not connected"))?;
     match devserver::forget_workspace(&conn, &devserver_route_prefix(&prefix), force).await {
-        Ok(()) => Ok(chan_server::SetWorkspaceOnOutcome::Done),
+        Ok(()) => {
+            if let Err(e) = refresh_devserver_workspace_cache(state, &id, &conn).await {
+                tracing::warn!(devserver = %id, error = %e, "refreshing devserver workspaces after forget failed");
+            }
+            Ok(chan_server::SetWorkspaceOnOutcome::Done)
+        }
         Err(devserver::SetWorkspaceOnError::ActiveTerminals { active_terminals }) => {
             Ok(chan_server::SetWorkspaceOnOutcome::NeedsForce { active_terminals })
         }
@@ -2121,7 +2182,12 @@ pub(crate) async fn set_devserver_workspace_on_impl(
         .get(&id)
         .ok_or_else(|| format!("devserver {id} is not connected"))?;
     match devserver::set_workspace_on(&conn, &devserver_route_prefix(&prefix), on, force).await {
-        Ok(()) => Ok(chan_server::SetWorkspaceOnOutcome::Done),
+        Ok(()) => {
+            if let Err(e) = refresh_devserver_workspace_cache(state, &id, &conn).await {
+                tracing::warn!(devserver = %id, error = %e, "refreshing devserver workspaces after toggle failed");
+            }
+            Ok(chan_server::SetWorkspaceOnOutcome::Done)
+        }
         // Live-terminal block is a confirmable outcome, not a failure: round-trip
         // the count so the launcher can offer the force-off.
         Err(devserver::SetWorkspaceOnError::ActiveTerminals { active_terminals }) => {
@@ -2215,6 +2281,7 @@ fn register_devserver_from_handoff(
         label: name,
         script,
         token: None,
+        clear_token: false,
         auto_hide_control: false,
     })?;
     // The launcher live-updates its devserver list from the window-watch feed
