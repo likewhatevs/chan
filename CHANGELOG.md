@@ -6,6 +6,27 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [v0.57.0] - 2026-06-30
+
+A devserver correctness release: Linux systemd restarts can preserve live PTYs through fdstore, and `chan close` keeps the devserver launcher state in sync immediately.
+
+### Added
+
+- **Linux systemd devserver restarts preserve live terminal PTYs.** `chan devserver --service=systemd --restart` asks the running devserver to store live PTY masters in systemd fdstore, writes a bounded restart manifest, restarts the user unit, and restores matching sessions into the replacement devserver.
+- **`chan-systemd` owns the systemd notify/fdstore boundary.** The new crate wraps `READY=1`, inherited named fd adoption, fdstore add/remove, and `FDPOLL=0` PTY storage behind Linux-only APIs.
+
+### Changed
+
+- **The systemd devserver unit now uses notify readiness and fdstore capacity.** Generated user units include `Type=notify`, `NotifyAccess=main`, `FileDescriptorStoreMax=512`, and `KillMode=process`, so restarts have an observable ready point and PTY masters survive the process handoff.
+- **Systemd restart preservation fails closed.** If live PTYs exist but fdstore preparation fails, `--restart` aborts and prints the reason; `--force` keeps the previous destructive restart behavior. Startup restore logs restored/skipped counts, removes consumed fdstore entries, and reaps standalone terminal rows whose PTYs could not be restored safely.
+- **Devserver connection tokens can be stored or explicitly cleared.** A stored write-only token can authenticate a script-backed devserver connection after the script opens the transport, and editing a devserver with an empty `?token=` clears the stored token.
+
+### Fixed
+
+- **`chan close` reports devserver workspaces off immediately.** Closing a devserver-served workspace through the control socket now makes the management list show `on:false`, `status:"stopped"`, and an empty token instead of leaking the stale in-memory on/token state.
+- **`chan close --remove` drops devserver workspace rows immediately.** Removing a served workspace through the control socket no longer lets the devserver's stale workspace map re-grow a removed row into the launcher feed.
+- **Launcher workspace actions follow real backend state.** Desktop refreshes a connected devserver's workspace cache after toggle/forget actions, and the launcher disables "new window" while a workspace is not actually running, avoiding queued windows for stopped workspaces.
+
 ## [v0.56.4] - 2026-06-29
 
 A patch release for wide Markdown table containment in the rendered editor.
