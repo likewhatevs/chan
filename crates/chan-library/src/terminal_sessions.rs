@@ -3058,8 +3058,7 @@ fn clone_master_fd(raw_fd: RawFd) -> io::Result<OwnedFd> {
     // PTY masters must be duplicated, not reopened through /proc/self/fd:
     // reopening can allocate a different PTY master, so fdstore preserves a
     // handle that is not keeping the live slave-side process attached.
-    let fd = filedescriptor::FileDescriptor::dup(&RawMasterFd(raw_fd))
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+    let fd = filedescriptor::FileDescriptor::dup(&RawMasterFd(raw_fd)).map_err(io::Error::other)?;
     fd.as_fd().try_clone_to_owned()
 }
 

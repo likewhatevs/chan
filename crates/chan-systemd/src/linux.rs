@@ -480,7 +480,7 @@ mod tests {
         assert_eq!(parse_pty_master_tty_index("pos:\t0\n"), None);
     }
 
-    fn systemd_fdstore_e2e_store(state: &PathBuf) {
+    fn systemd_fdstore_e2e_store(state: &Path) {
         let helper_unit = std::env::var("CHAN_SYSTEMD_FDSTORE_E2E_HELPER").unwrap();
         let (mut master, slave, slave_path) = open_test_pty_with_slave_path();
 
@@ -504,7 +504,7 @@ mod tests {
         panic!("timed out waiting for systemd to restart e2e unit");
     }
 
-    fn systemd_fdstore_e2e_restore(state: &PathBuf) {
+    fn systemd_fdstore_e2e_restore(state: &Path) {
         let helper_unit = read_state_helper_unit(state).expect("helper_unit in e2e state");
         let mut named = take_listen_fds();
         let idx = named

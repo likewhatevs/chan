@@ -436,7 +436,7 @@
       {:else if dsSpinning(ds)}
         <p class="connect-prompt">Connecting…</p>
       {:else}
-        <p class="connect-prompt">Not connected — connect to load terminals &amp; workspaces.</p>
+        <p class="connect-prompt">Not connected.</p>
       {/if}
     {/if}
   </section>

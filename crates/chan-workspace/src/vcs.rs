@@ -209,12 +209,16 @@ mod tests {
         std::fs::canonicalize(p).unwrap()
     }
 
+    fn temp_parent_home(tmp: &TempDir) -> Option<PathBuf> {
+        tmp.path().parent().map(|p| p.to_path_buf())
+    }
+
     #[test]
     fn none_when_no_vcs() {
         let tmp = TempDir::new().unwrap();
         let workspace = tmp.path().join("notes");
         mkdir(&workspace);
-        assert!(detect_parent_vcs_with_home(&workspace, None).is_none());
+        assert!(detect_parent_vcs_with_home(&workspace, temp_parent_home(&tmp)).is_none());
     }
 
     #[test]
@@ -223,7 +227,7 @@ mod tests {
         mkdir(&tmp.path().join(".git"));
         let workspace = tmp.path().join("docs/notes");
         mkdir(&workspace);
-        let got = detect_parent_vcs_with_home(&workspace, None).unwrap();
+        let got = detect_parent_vcs_with_home(&workspace, temp_parent_home(&tmp)).unwrap();
         assert_eq!(got.kind, VcsKind::Git);
         assert_eq!(canon(&got.repo_root), canon(tmp.path()));
     }
@@ -236,7 +240,7 @@ mod tests {
         std::fs::write(tmp.path().join(".git"), b"gitdir: /elsewhere\n").unwrap();
         let workspace = tmp.path().join("docs");
         mkdir(&workspace);
-        let got = detect_parent_vcs_with_home(&workspace, None).unwrap();
+        let got = detect_parent_vcs_with_home(&workspace, temp_parent_home(&tmp)).unwrap();
         assert_eq!(got.kind, VcsKind::Git);
     }
 
@@ -246,7 +250,7 @@ mod tests {
         mkdir(&tmp.path().join(".hg"));
         let workspace = tmp.path().join("docs");
         mkdir(&workspace);
-        let got = detect_parent_vcs_with_home(&workspace, None).unwrap();
+        let got = detect_parent_vcs_with_home(&workspace, temp_parent_home(&tmp)).unwrap();
         assert_eq!(got.kind, VcsKind::Mercurial);
     }
 
@@ -289,7 +293,7 @@ mod tests {
         mkdir(&tmp.path().join(".svn"));
         let workspace = tmp.path().join("docs");
         mkdir(&workspace);
-        let got = detect_parent_vcs_with_home(&workspace, None).unwrap();
+        let got = detect_parent_vcs_with_home(&workspace, temp_parent_home(&tmp)).unwrap();
         assert_eq!(got.kind, VcsKind::Subversion);
     }
 
@@ -300,7 +304,7 @@ mod tests {
         // because there's no better parent to suggest.
         let tmp = TempDir::new().unwrap();
         mkdir(&tmp.path().join(".git"));
-        assert!(detect_parent_vcs_with_home(tmp.path(), None).is_none());
+        assert!(detect_parent_vcs_with_home(tmp.path(), temp_parent_home(&tmp)).is_none());
     }
 
     #[test]
@@ -342,7 +346,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         mkdir(&tmp.path().join(".git"));
         let nonexistent = tmp.path().join("not-yet/sub");
-        let got = detect_parent_vcs_with_home(&nonexistent, None).unwrap();
+        let got = detect_parent_vcs_with_home(&nonexistent, temp_parent_home(&tmp)).unwrap();
         assert_eq!(got.kind, VcsKind::Git);
     }
 
@@ -362,7 +366,7 @@ mod tests {
         symlink(&real_git, parent.join(".git")).unwrap();
         let workspace = parent.join("docs");
         mkdir(&workspace);
-        let got = detect_parent_vcs_with_home(&workspace, None);
+        let got = detect_parent_vcs_with_home(&workspace, temp_parent_home(&tmp));
         assert!(got.is_none(), "expected None, got {got:?}");
     }
 
@@ -378,7 +382,7 @@ mod tests {
         symlink(&real_hg, parent.join(".hg")).unwrap();
         let workspace = parent.join("docs");
         mkdir(&workspace);
-        let got = detect_parent_vcs_with_home(&workspace, None);
+        let got = detect_parent_vcs_with_home(&workspace, temp_parent_home(&tmp));
         assert!(got.is_none(), "expected None, got {got:?}");
     }
 
@@ -400,7 +404,7 @@ mod tests {
         assert_eq!(rc, 0, "mkfifo failed: errno may apply");
         let workspace = parent.join("docs");
         mkdir(&workspace);
-        let got = detect_parent_vcs_with_home(&workspace, None);
+        let got = detect_parent_vcs_with_home(&workspace, temp_parent_home(&tmp));
         assert!(got.is_none(), "expected None, got {got:?}");
     }
 
