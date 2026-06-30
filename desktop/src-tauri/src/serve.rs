@@ -2107,7 +2107,9 @@ mod tests {
         const MAIN_RS: &str = include_str!("main.rs");
         assert!(MAIN_RS.contains("reload_window,"));
         assert!(MAIN_RS.contains("open_devtools,"));
-        assert!(MAIN_RS.contains("fn reload_window(window: tauri::WebviewWindow)"));
+        assert!(MAIN_RS.contains("fn reload_window("));
+        assert!(MAIN_RS.contains("state: State<Arc<AppState>>"));
+        assert!(MAIN_RS.contains("reload_devserver_window_from_feed"));
         assert!(MAIN_RS.contains("fn open_devtools(window: tauri::WebviewWindow)"));
     }
 

@@ -699,6 +699,20 @@ impl DevserverFeed {
             .collect()
     }
 
+    /// Current devserver window record for a composite native label, plus the
+    /// owning devserver id. Used by native window actions that must rebuild a
+    /// watched remote webview from the latest per-window tenant token.
+    fn record_for_native_label(&self, label: &str) -> Option<(String, chan_server::WindowRecord)> {
+        self.windows.lock().unwrap().iter().find_map(|(id, snap)| {
+            snap.lock()
+                .unwrap()
+                .iter()
+                .find(|r| window_watcher::native_label(r) == label)
+                .cloned()
+                .map(|record| (id.clone(), record))
+        })
+    }
+
     /// The devserver id owning `library_id`, learned from the live window
     /// snapshots (each devserver's records carry its remote `library_id`). The
     /// reverse of [`library_id_of`]; the close handler uses it to find which
@@ -2780,12 +2794,40 @@ fn show_window(app: &tauri::AppHandle, label: &str) -> Result<(), String> {
 /// directly so a SPA-side fault (frozen Svelte runtime, JS error
 /// in the chord handler) doesn't lock the dev affordance away.
 #[tauri::command]
-fn reload_window(window: tauri::WebviewWindow) -> Result<(), String> {
+fn reload_window(
+    app: tauri::AppHandle,
+    state: State<Arc<AppState>>,
+    window: tauri::WebviewWindow,
+) -> Result<(), String> {
+    if reload_devserver_window_from_feed(&app, state.inner(), window.label())? {
+        return Ok(());
+    }
     // Tauri 2's `WebviewWindow::eval` runs JS inside the webview;
     // we use it instead of the missing-in-2 `reload()` method.
     window
         .eval("window.location.reload()")
         .map_err(|e| format!("reloading window: {e}"))
+}
+
+fn reload_devserver_window_from_feed(
+    app: &tauri::AppHandle,
+    state: &Arc<AppState>,
+    label: &str,
+) -> Result<bool, String> {
+    if !label.starts_with("lib-") {
+        return Ok(false);
+    }
+    let Some((devserver_id, record)) = state.devserver_feed.record_for_native_label(label) else {
+        return Ok(false);
+    };
+    if record.token.is_empty() {
+        return Ok(false);
+    }
+    let Some(conn) = state.devservers.get(&devserver_id) else {
+        return Ok(false);
+    };
+    serve::open_watched_remote_window(app, &conn.host, conn.port, &conn.name, &record)?;
+    Ok(true)
 }
 
 /// Open the DevTools inspector on the calling webview. Mirrors
@@ -5256,6 +5298,35 @@ mod tests {
         // clear, so the eager seed mustn't blanket-ignore nulls.)
         feed.set_color("ds-1".to_string(), None);
         assert_eq!(feed.pane_color(lib), None);
+    }
+
+    #[test]
+    fn devserver_feed_resolves_current_record_by_native_label() {
+        let feed = DevserverFeed::default();
+        let snapshot = Arc::new(Mutex::new(vec![chan_server::WindowRecord {
+            window_id: "w-1".into(),
+            library_id: "lib-fed".into(),
+            kind: chan_server::WindowKind::Terminal,
+            title: "Terminal".into(),
+            ordinal: 1,
+            workspace_path: None,
+            prefix: "/terminal".into(),
+            token: "fresh-token".into(),
+            persisted: true,
+            connected: true,
+            active_transfer: false,
+            control: false,
+            hidden: false,
+        }]));
+        feed.register_windows("ds-1".to_string(), snapshot);
+
+        let (id, record) = feed
+            .record_for_native_label("lib-fed::w-1")
+            .expect("record by native label");
+
+        assert_eq!(id, "ds-1");
+        assert_eq!(record.token, "fresh-token");
+        assert!(feed.record_for_native_label("lib-fed::w-9").is_none());
     }
 
     #[test]

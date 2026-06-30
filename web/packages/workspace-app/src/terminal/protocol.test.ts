@@ -7,17 +7,19 @@ const route = readFileSync("../../../crates/chan-server/src/routes/terminal.rs",
 
 describe("terminal protocol invariants", () => {
   test("reattach defaults to a full replay; a cursor rides only with a generation", () => {
-    // The default `since` is still 0 (a full replay into a fresh xterm); a byte
-    // cursor is sent ONLY from a validated scrollback-snapshot cache hit, always
-    // paired with the session generation the server gates it against. A
-    // bare per-tab cursor -- the old "last line after a split" bug -- never goes
-    // on the wire on its own.
+    // The default `since` is still 0 (a full replay into a fresh xterm). A byte
+    // cursor is sent either from a validated scrollback-snapshot cache hit or
+    // from the in-memory cursor of an already-mounted xterm, always paired with
+    // the session generation the server gates it against. A bare per-tab cursor
+    // -- the old "last line after a split" bug -- never goes on the wire.
     expect(session).toContain(
       "String(Math.max(0, Math.floor(opts.since ?? 0)))",
     );
     expect(session).toContain("if (opts.generation != null)");
-    // The resume cursor originates from the snapshot cache, not a bare tab field.
+    // Fresh-xterm resume originates from the snapshot cache; live reconnect
+    // originates from the mounted xterm's in-memory cursor.
     expect(tab).toContain("readTerminalSnapshot");
+    expect(tab).toContain("const liveResumeSince");
   });
 
   test("server attach prelude sends control, binary replay, alt-screen prelude, then ready", () => {

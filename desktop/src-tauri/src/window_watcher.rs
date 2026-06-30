@@ -49,6 +49,10 @@ pub trait NativeSurface {
     /// Open (or rebuild-in-place at the same label) a native window for `record`:
     /// native label = [`native_label`]; the loaded tenant URL carries `?w=<window_id>`.
     fn open(&self, record: &WindowRecord);
+    /// Synchronize a native window that already exists for `record`. The default
+    /// is a no-op; surfaces that encode launch-only data in the webview URL can
+    /// rebuild in place when the authoritative record's launch data changes.
+    fn refresh(&self, _record: &WindowRecord) {}
     /// Close the native window labelled `label`.
     fn close(&self, label: &str);
 }
@@ -98,8 +102,13 @@ pub fn reconcile(
 
     // Open every desired window that has no native surface yet (reattach reuses the
     // existing label — the builder rebuilds in place, never a second window).
+    // Existing windows still get a refresh hook: a devserver restart can keep the
+    // same stable label while rotating the per-window tenant token embedded in the
+    // launch URL.
     for record in snapshot.iter().filter(|r| should_show(r, buried)) {
-        if !actual.contains(&native_label(record)) {
+        if actual.contains(&native_label(record)) {
+            surface.refresh(record);
+        } else {
             surface.open(record);
         }
     }
@@ -243,6 +252,7 @@ mod tests {
     struct FakeSurface {
         open_now: RefCell<HashSet<String>>,
         opened: RefCell<Vec<String>>,
+        refreshed: RefCell<Vec<String>>,
         closed: RefCell<Vec<String>>,
     }
     impl FakeSurface {
@@ -250,6 +260,7 @@ mod tests {
             Self {
                 open_now: RefCell::new(open_now.iter().map(|s| s.to_string()).collect()),
                 opened: RefCell::new(Vec::new()),
+                refreshed: RefCell::new(Vec::new()),
                 closed: RefCell::new(Vec::new()),
             }
         }
@@ -260,6 +271,9 @@ mod tests {
         }
         fn open(&self, record: &WindowRecord) {
             self.opened.borrow_mut().push(native_label(record));
+        }
+        fn refresh(&self, record: &WindowRecord) {
+            self.refreshed.borrow_mut().push(native_label(record));
         }
         fn close(&self, label: &str) {
             self.closed.borrow_mut().push(label.to_string());
@@ -323,6 +337,20 @@ mod tests {
         reconcile("local", &snap, &none(), &s);
         assert!(s.opened.borrow().is_empty(), "must NOT open a duplicate");
         assert!(s.closed.borrow().is_empty(), "must NOT close the live one");
+    }
+
+    #[test]
+    fn refreshes_an_existing_desired_window() {
+        // Same label still exists, but launch-only metadata can have changed
+        // underneath it (notably a devserver's per-window token after restart).
+        // Reconcile gives the surface a chance to rebuild in place without
+        // treating it as a duplicate open.
+        let s = FakeSurface::with(&["local::w-1"]);
+        let snap = vec![rec("local", "w-1", WindowKind::Terminal)];
+        reconcile("local", &snap, &none(), &s);
+        assert_eq!(*s.refreshed.borrow(), vec!["local::w-1"]);
+        assert!(s.opened.borrow().is_empty());
+        assert!(s.closed.borrow().is_empty());
     }
 
     #[test]

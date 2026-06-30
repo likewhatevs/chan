@@ -9,6 +9,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 - **Systemd fdstore devserver restarts preserve terminal replay state.** Restart manifests now carry a bounded replay tail alongside each stored PTY fd, restored PTY fds keep read/write access, and live terminal reconnects resume from the in-memory xterm cursor, avoiding false `terminal replay missed N bytes` banners and post-restore `Bad file descriptor` writes.
+- **Chan Desktop reconnects existing devserver windows after token rotation.** The native window watcher refreshes already-open devserver webviews when their tenant launch token changes, and Cmd+R rebuilds watched devserver windows from the current feed instead of reloading a stale `?t=` URL.
 
 ## [v0.57.0] - 2026-06-30
 

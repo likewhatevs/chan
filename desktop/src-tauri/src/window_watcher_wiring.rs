@@ -13,7 +13,7 @@
 //! of local windows, so reconnect/relaunch cannot duplicate windows and is
 //! unreachable by construction.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -56,6 +56,31 @@ impl WindowOpener {
                 port,
                 devserver_name,
             } => serve::open_watched_remote_window(app, host, *port, devserver_name, record),
+        }
+    }
+
+    fn is_remote(&self) -> bool {
+        matches!(self, WindowOpener::Remote { .. })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RemoteLaunchKey {
+    prefix: String,
+    token: String,
+    kind: chan_server::WindowKind,
+    workspace_path: Option<String>,
+    ordinal: u32,
+}
+
+impl RemoteLaunchKey {
+    fn from_record(record: &WindowRecord) -> Self {
+        Self {
+            prefix: record.prefix.clone(),
+            token: record.token.clone(),
+            kind: record.kind,
+            workspace_path: record.workspace_path.clone(),
+            ordinal: record.ordinal,
         }
     }
 }
@@ -101,6 +126,22 @@ struct TauriNativeSurface {
     /// window during the multi-notify boot burst). Self-cleaning: a label that
     /// has landed in `webview_windows` is dropped from the set.
     in_flight: Arc<Mutex<HashSet<String>>>,
+    /// Last launch-only state used for remote devserver windows. A devserver
+    /// restart keeps the same `{library_id}::{window_id}` label but rotates the
+    /// tenant token in the URL, so an existing webview may need an in-place
+    /// rebuild even though it is already "open" to the reconciler.
+    remote_launches: Arc<Mutex<HashMap<String, RemoteLaunchKey>>>,
+}
+
+impl TauriNativeSurface {
+    fn remember_remote_launch(&self, label: &str, record: &WindowRecord) {
+        if self.opener.is_remote() {
+            self.remote_launches
+                .lock()
+                .unwrap()
+                .insert(label.to_string(), RemoteLaunchKey::from_record(record));
+        }
+    }
 }
 
 impl NativeSurface for TauriNativeSurface {
@@ -135,12 +176,27 @@ impl NativeSurface for TauriNativeSurface {
                 error = %e,
                 "window watcher: opening a window failed",
             );
+        } else {
+            self.remember_remote_launch(&label, record);
+        }
+    }
+
+    fn refresh(&self, record: &WindowRecord) {
+        if !self.opener.is_remote() {
+            return;
+        }
+        let label = native_label(record);
+        let next = RemoteLaunchKey::from_record(record);
+        let current = self.remote_launches.lock().unwrap().get(&label).cloned();
+        if current.as_ref() != Some(&next) {
+            self.open(record);
         }
     }
 
     fn close(&self, label: &str) {
         // No longer in-flight (also covers a close before the build landed).
         self.in_flight.lock().unwrap().remove(label);
+        self.remote_launches.lock().unwrap().remove(label);
         // Destroying a window must run on the Tauri main thread.
         let app = self.app.clone();
         let dispatch = self.app.clone();
@@ -173,6 +229,7 @@ pub(crate) fn spawn_local_window_watcher(app: AppHandle, state: Arc<AppState>) {
         app,
         opener: WindowOpener::Local { addr },
         in_flight: Arc::new(Mutex::new(HashSet::new())),
+        remote_launches: Arc::new(Mutex::new(HashMap::new())),
     };
     let view = Arc::new(WatcherViewState::default());
     // Share the view state so the desktop close handlers can bury/unbury
@@ -455,6 +512,7 @@ pub(crate) async fn spawn_devserver_window_watcher(
             devserver_name,
         },
         in_flight: Arc::new(Mutex::new(HashSet::new())),
+        remote_launches: Arc::new(Mutex::new(HashMap::new())),
     };
     let feed = DevserverWindowFeed { snapshot, change };
     let view = Arc::new(WatcherViewState::default());
@@ -472,4 +530,69 @@ pub(crate) async fn spawn_devserver_window_watcher(
         }
     }));
     Ok((cancel_tx, snapshot_handle, view_handle))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rec() -> WindowRecord {
+        WindowRecord {
+            window_id: "w-1".into(),
+            library_id: "lib-test".into(),
+            kind: chan_server::WindowKind::Terminal,
+            title: "Terminal".into(),
+            ordinal: 1,
+            workspace_path: None,
+            prefix: "/terminal".into(),
+            token: "tok-1".into(),
+            persisted: true,
+            connected: false,
+            active_transfer: false,
+            control: false,
+            hidden: false,
+        }
+    }
+
+    #[test]
+    fn remote_launch_key_ignores_feed_status_fields() {
+        let a = rec();
+        let mut b = a.clone();
+        b.connected = true;
+        b.active_transfer = true;
+        b.control = true;
+        b.hidden = true;
+
+        assert_eq!(
+            RemoteLaunchKey::from_record(&a),
+            RemoteLaunchKey::from_record(&b)
+        );
+    }
+
+    #[test]
+    fn remote_launch_key_tracks_url_and_window_shape_fields() {
+        let base = rec();
+
+        let mut token = base.clone();
+        token.token = "tok-2".into();
+        assert_ne!(
+            RemoteLaunchKey::from_record(&base),
+            RemoteLaunchKey::from_record(&token)
+        );
+
+        let mut prefix = base.clone();
+        prefix.prefix = "/other".into();
+        assert_ne!(
+            RemoteLaunchKey::from_record(&base),
+            RemoteLaunchKey::from_record(&prefix)
+        );
+
+        let mut workspace = base.clone();
+        workspace.kind = chan_server::WindowKind::Workspace;
+        workspace.workspace_path = Some("/repo".into());
+        assert_ne!(
+            RemoteLaunchKey::from_record(&base),
+            RemoteLaunchKey::from_record(&workspace)
+        );
+    }
 }

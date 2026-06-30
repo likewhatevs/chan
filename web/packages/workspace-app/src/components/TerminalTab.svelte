@@ -780,22 +780,36 @@
     statusDetail = "";
     missedBytes = 0;
     sessionClosedReason = null;
-    sawSessionControl = false;
     const reattaching = Boolean(tab.terminalSessionId);
+    const liveResumeSince =
+      reattaching && sawSessionControl && serverGeneration !== null
+        ? receivedSeq
+        : undefined;
+    const liveResumeGeneration =
+      liveResumeSince !== undefined ? (serverGeneration ?? undefined) : undefined;
+    sawSessionControl = false;
     pendingPromptSeed = reattaching ? "" : (tab.seedInput ?? "");
     promptSeedSent = false;
-    // Try to resume from a cached scrollback snapshot. Only
-    // for a reattach to a known session AND when the cached geometry still
-    // matches the live xterm -- a serialized screen written into a different
-    // width reflows wrong (absolute cursor + hard-wrap baked at the old cols).
-    // On a hit, request the delta from the cached cursor + generation; the
-    // server honors them only if the generation still matches, else full replay.
+    // Try to resume from either this live xterm or a cached scrollback
+    // snapshot. Snapshot resume is only for a reattach to a known session AND
+    // when the cached geometry still matches the live xterm -- a serialized
+    // screen written into a different width reflows wrong (absolute cursor +
+    // hard-wrap baked at the old cols).
+    // On a live socket reconnect, the xterm instance still contains the screen
+    // it had before the drop, so resume from the in-memory cursor. On a remount
+    // or reload the xterm is brand-new; then only a cached snapshot may carry a
+    // cursor, because its ANSI content is primed alongside the cursor.
     pendingSnapshot = null;
-    receivedSeq = 0;
-    serverGeneration = null;
     let resumeSince: number | undefined;
     let resumeGeneration: number | undefined;
-    if (reattaching && tab.terminalSessionId) {
+    if (liveResumeSince !== undefined) {
+      resumeSince = liveResumeSince;
+      resumeGeneration = liveResumeGeneration;
+    } else {
+      receivedSeq = 0;
+      serverGeneration = null;
+    }
+    if (resumeSince === undefined && reattaching && tab.terminalSessionId) {
       const cached = readTerminalSnapshot(tab.terminalSessionId);
       if (cached && cached.cols === term.cols && cached.rows === term.rows) {
         pendingSnapshot = cached;
