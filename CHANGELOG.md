@@ -19,6 +19,8 @@ A devserver correctness release: Linux systemd restarts can preserve live PTYs t
 
 - **The systemd devserver unit now uses notify readiness and fdstore capacity.** Generated user units include `Type=notify`, `NotifyAccess=main`, `FileDescriptorStoreMax=512`, and `KillMode=process`, so restarts have an observable ready point and PTY masters survive the process handoff.
 - **Systemd restart preservation fails closed.** If live PTYs exist but fdstore preparation fails, `--restart` aborts and prints the reason; `--force` keeps the previous destructive restart behavior. Startup restore logs restored/skipped counts, removes consumed fdstore entries, and reaps standalone terminal rows whose PTYs could not be restored safely.
+- **Systemd fdstore handoff waits for supervisor acknowledgement.** Restart preparation now sends a systemd notify barrier after uploading PTY fds and writing the manifest; if systemd does not confirm the fdstore state, chan removes the uploaded fds and aborts the preserving restart.
+- **Inherited systemd descriptors get stronger process validation.** When systemd supplies `LISTEN_PIDFDID`, chan verifies it against its own pidfd inode before adopting inherited fds, and still clears all activation environment variables before continuing.
 - **Devserver connection tokens can be stored or explicitly cleared.** A stored write-only token can authenticate a script-backed devserver connection after the script opens the transport, and editing a devserver with an empty `?token=` clears the stored token.
 
 ### Fixed
@@ -26,6 +28,7 @@ A devserver correctness release: Linux systemd restarts can preserve live PTYs t
 - **`chan close` reports devserver workspaces off immediately.** Closing a devserver-served workspace through the control socket now makes the management list show `on:false`, `status:"stopped"`, and an empty token instead of leaking the stale in-memory on/token state.
 - **`chan close --remove` drops devserver workspace rows immediately.** Removing a served workspace through the control socket no longer lets the devserver's stale workspace map re-grow a removed row into the launcher feed.
 - **Launcher workspace actions follow real backend state.** Desktop refreshes a connected devserver's workspace cache after toggle/forget actions, and the launcher disables "new window" while a workspace is not actually running, avoiding queued windows for stopped workspaces.
+- **Non-Linux release builds keep the fdstore API quiet.** The fdstore implementation is isolated behind Linux and unsupported modules, so Windows and macOS builds see no Linux-only imports or dead fdstore helper code.
 
 ## [v0.56.4] - 2026-06-29
 
