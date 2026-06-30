@@ -3559,10 +3559,10 @@ fn main() {
                             // inject the minimal reload-only chord so Cmd+R / Ctrl+R
                             // reloads it.
                             .initialization_script(LAUNCHER_RELOAD_BRIDGE_JS)
-                            // Compact default; the persisted geometry above overrides
+                            // Compact default; persisted geometry above overrides
                             // it once the user resizes/moves the window.
-                            .inner_size(680.0, 720.0)
-                            .min_inner_size(560.0, 460.0)
+                            .inner_size(LAUNCHER_DEFAULT_WIDTH, LAUNCHER_DEFAULT_HEIGHT)
+                            .min_inner_size(LAUNCHER_MIN_WIDTH, LAUNCHER_MIN_HEIGHT)
                             .resizable(true);
                         let builder = if restored {
                             builder.visible(false)
@@ -3850,6 +3850,7 @@ fn main() {
             // destroyed) where prevention does work.
             RunEvent::ExitRequested { api, .. } => {
                 use std::sync::atomic::Ordering;
+                capture_launcher_geometry(_app);
                 if state_for_exit.quit_confirmed.load(Ordering::SeqCst) {
                     return; // user already confirmed; let the exit run
                 }
@@ -3865,6 +3866,7 @@ fn main() {
                 request_quit(_app);
             }
             RunEvent::Exit => {
+                capture_launcher_geometry(_app);
                 // Persist the on-set BEFORE teardown drains it, so the
                 // next boot re-serves exactly the workspaces that were
                 // on at this clean shutdown (the §3.2 boot matrix).
@@ -4982,6 +4984,14 @@ async fn discard_devserver_window_by_id(
 /// standalone terminal window instead), so there is no `Window N`
 /// suffix to disambiguate.
 const LAUNCHER_WINDOW_TITLE: &str = "Chan Desktop";
+const LAUNCHER_DEFAULT_WIDTH: f64 = 420.0;
+const LAUNCHER_DEFAULT_HEIGHT: f64 = 720.0;
+const LAUNCHER_MIN_WIDTH: f64 = 420.0;
+const LAUNCHER_MIN_HEIGHT: f64 = 420.0;
+
+fn capture_launcher_geometry(app: &tauri::AppHandle) {
+    serve::capture_window_geometry(app, "main");
+}
 
 /// Minimal reload-only key bridge for the launcher window. The launcher is
 /// remote-served (the embedded loopback SPA) and does NOT receive the full
@@ -5033,6 +5043,7 @@ fn request_quit(app: &tauri::AppHandle) {
         .count();
     if open == 0 {
         state.quit_confirmed.store(true, Ordering::SeqCst);
+        capture_launcher_geometry(app);
         app.exit(0);
         return;
     }
@@ -5056,6 +5067,7 @@ fn request_quit(app: &tauri::AppHandle) {
         state.quit_prompt_open.store(false, Ordering::SeqCst);
         if quit {
             state.quit_confirmed.store(true, Ordering::SeqCst);
+            capture_launcher_geometry(&app_for_reply);
             app_for_reply.exit(0);
         }
     });
@@ -5493,5 +5505,24 @@ mod tests {
         const MAIN_RS: &str = include_str!("main.rs");
         assert!(!MAIN_RS.contains(concat!("fn ", "open_new_launcher_window")));
         assert!(!MAIN_RS.contains(concat!("fn ", "next_launcher_label")));
+    }
+
+    #[test]
+    fn launcher_uses_compact_default_and_minimum_geometry() {
+        assert_eq!(LAUNCHER_DEFAULT_WIDTH, 420.0);
+        assert_eq!(LAUNCHER_DEFAULT_HEIGHT, 720.0);
+        assert_eq!(LAUNCHER_MIN_WIDTH, 420.0);
+        assert_eq!(LAUNCHER_MIN_HEIGHT, 420.0);
+    }
+
+    #[test]
+    fn launcher_geometry_is_captured_on_quit() {
+        const MAIN_RS: &str = include_str!("main.rs");
+        assert!(MAIN_RS.contains(concat!("fn capture", "_launcher_geometry")));
+        assert!(MAIN_RS.contains(concat!("RunEvent::Exit", "Requested { api, .. }")));
+        assert!(MAIN_RS.contains(concat!("RunEvent::", "Exit =>")));
+        assert!(MAIN_RS.contains(concat!("capture", "_launcher_geometry(_app);")));
+        assert!(MAIN_RS.contains(concat!("capture", "_launcher_geometry(app);")));
+        assert!(MAIN_RS.contains(concat!("capture", "_launcher_geometry(&app_for_reply);")));
     }
 }
