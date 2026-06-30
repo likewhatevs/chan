@@ -77,6 +77,7 @@ h2 = "0.4"
 http = "1"
 http-body = "1"
 http-body-util = "0.1"
+filedescriptor = "0.8"
 hyper = { version = "1", features = ["http2", "client", "server"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
 keyring = { version = "3", features = ["apple-native", "windows-native", "linux-native"] }

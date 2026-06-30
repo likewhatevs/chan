@@ -43,6 +43,7 @@ mod linux {
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     use anyhow::Context;
+    use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
     use chan_library::terminal_sessions::{
         FdStoreSessionImport, FdStoreSessionMeta, FdStoreSkippedSession,
     };
@@ -70,6 +71,8 @@ mod linux {
     struct ManifestSession {
         fd_name: String,
         meta: FdStoreSessionMeta,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        replay_b64: String,
     }
 
     pub(crate) struct StartupRestore {
@@ -165,30 +168,55 @@ mod linux {
             let mut skipped = Vec::new();
             let mut skipped_sessions = Vec::new();
             for session in manifest.sessions {
-                if !session.fd_name.starts_with(FD_PREFIX) {
+                let ManifestSession {
+                    fd_name,
+                    meta,
+                    replay_b64,
+                } = session;
+                if !fd_name.starts_with(FD_PREFIX) {
                     push_skipped_session(
                         &mut skipped,
                         &mut skipped_sessions,
-                        &session.meta,
-                        format!(
-                            "fd name {} is outside chan fdstore namespace",
-                            session.fd_name
-                        ),
+                        &meta,
+                        format!("fd name {fd_name} is outside chan fdstore namespace"),
                     );
                     continue;
                 }
-                let Some(master_fd) = fd_by_name.remove(&session.fd_name) else {
+                let Some(master_fd) = fd_by_name.remove(&fd_name) else {
                     push_skipped_session(
                         &mut skipped,
                         &mut skipped_sessions,
-                        &session.meta,
-                        format!("fd {} was not inherited from systemd", session.fd_name),
+                        &meta,
+                        format!("fd {fd_name} was not inherited from systemd"),
                     );
                     continue;
                 };
+                match chan_systemd::pty_master_has_live_slave(master_fd.as_fd()) {
+                    Ok(true) => {}
+                    Ok(false) => {
+                        push_skipped_session(
+                            &mut skipped,
+                            &mut skipped_sessions,
+                            &meta,
+                            "PTY slave has no live process",
+                        );
+                        continue;
+                    }
+                    Err(e) => {
+                        push_skipped_session(
+                            &mut skipped,
+                            &mut skipped_sessions,
+                            &meta,
+                            format!("checking PTY slave liveness: {e}"),
+                        );
+                        continue;
+                    }
+                }
+                let replay = decode_replay(&replay_b64, &meta, &mut skipped);
                 imports.push(FdStoreSessionImport {
-                    meta: session.meta,
+                    meta,
                     master_fd,
+                    replay,
                 });
             }
             let orphan_fd_names: Vec<String> = fd_by_name.keys().cloned().collect();
@@ -331,6 +359,7 @@ mod linux {
             sessions.push(ManifestSession {
                 fd_name,
                 meta: snapshot.meta,
+                replay_b64: BASE64.encode(&snapshot.replay),
             });
         }
 
@@ -421,6 +450,26 @@ mod linux {
         let suffix = name.strip_prefix(FD_PREFIX)?;
         let pid = suffix.rsplit('.').next()?.parse::<u32>().ok()?;
         (pid != 0).then_some(pid)
+    }
+
+    fn decode_replay(
+        replay_b64: &str,
+        meta: &FdStoreSessionMeta,
+        skipped: &mut Vec<String>,
+    ) -> Vec<u8> {
+        if replay_b64.is_empty() {
+            return Vec::new();
+        }
+        match BASE64.decode(replay_b64) {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                skipped.push(format!(
+                    "session {}: replay bytes could not be decoded; restoring PTY without replay: {e}",
+                    meta.session_id
+                ));
+                Vec::new()
+            }
+        }
     }
 
     fn push_skipped_session(

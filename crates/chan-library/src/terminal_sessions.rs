@@ -11,7 +11,7 @@ use std::fs::File;
 use std::io;
 use std::io::{Read, Write};
 #[cfg(target_os = "linux")]
-use std::os::fd::{AsFd, OwnedFd, RawFd};
+use std::os::fd::{AsFd, AsRawFd, OwnedFd, RawFd};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -101,6 +101,8 @@ const TRACKED_PRIVATE_MODES: &[u16] = &[
 /// across PTY reads: a handful of `;`-joined mode numbers. Past this, a dangling
 /// `\e[?…` is not a real mode toggle and is dropped rather than buffered.
 const PRIVATE_MODE_TAIL_CAP: usize = 64;
+#[cfg(target_os = "linux")]
+const FDSTORE_REPLAY_BYTES: usize = 128 * 1024;
 
 #[derive(Debug, Clone)]
 pub struct RegistryConfig {
@@ -349,6 +351,9 @@ pub struct FdStoreSessionMeta {
 pub struct FdStoreSessionSnapshot {
     pub meta: FdStoreSessionMeta,
     pub master_fd: OwnedFd,
+    /// Bounded tail of the server replay ring, carried through the restart
+    /// manifest so a fresh browser attach can repaint the imported PTY.
+    pub replay: Vec<u8>,
 }
 
 #[cfg(target_os = "linux")]
@@ -356,6 +361,7 @@ pub struct FdStoreSessionSnapshot {
 pub struct FdStoreSessionImport {
     pub meta: FdStoreSessionMeta,
     pub master_fd: OwnedFd,
+    pub replay: Vec<u8>,
 }
 
 #[cfg(target_os = "linux")]
@@ -2098,7 +2104,7 @@ impl Session {
         let master_fd = pair
             .master
             .as_raw_fd()
-            .and_then(|fd| clone_fd_from_proc(fd).ok());
+            .and_then(|fd| clone_master_fd(fd).ok());
         drop(pair.slave);
 
         let mut reader = pair.master.try_clone_reader()?;
@@ -2299,7 +2305,11 @@ impl Session {
             alt_screen: self.in_alt_screen.load(Ordering::Relaxed),
             private_modes,
         };
-        Some(FdStoreSessionSnapshot { meta, master_fd })
+        Some(FdStoreSessionSnapshot {
+            meta,
+            master_fd,
+            replay: self.fdstore_replay_tail(),
+        })
     }
 
     #[cfg(target_os = "linux")]
@@ -2308,7 +2318,11 @@ impl Session {
         import: FdStoreSessionImport,
         registry_last_exit: Arc<Mutex<Option<TerminalExit>>>,
     ) -> anyhow::Result<Arc<Self>> {
-        let FdStoreSessionImport { meta, master_fd } = import;
+        let FdStoreSessionImport {
+            meta,
+            master_fd,
+            replay,
+        } = import;
         let size: PtySize = meta.size.into();
         let cwd = meta
             .cwd
@@ -2343,7 +2357,11 @@ impl Session {
             master_fd: Some(master_fd),
             command_tx,
             output_tx,
-            ring: Mutex::new(RingBuffer::new_at(config.terminal.ring_bytes, meta.seq)),
+            ring: Mutex::new(RingBuffer::new_with_replay(
+                config.terminal.ring_bytes,
+                meta.seq,
+                &replay,
+            )),
             seq: AtomicU64::new(meta.seq),
             last_activity: AtomicI64::new(now_unix_secs() as i64),
             last_output_at: AtomicI64::new(now_unix_millis()),
@@ -2451,6 +2469,20 @@ impl Session {
         }
 
         Ok(session)
+    }
+
+    #[cfg(target_os = "linux")]
+    fn fdstore_replay_tail(&self) -> Vec<u8> {
+        let (chunks, _missed) = self
+            .ring
+            .lock()
+            .expect("terminal ring poisoned")
+            .snapshot_since(None);
+        let replay = chunks.concat();
+        if replay.len() <= FDSTORE_REPLAY_BYTES {
+            return replay;
+        }
+        replay[replay.len() - FDSTORE_REPLAY_BYTES..].to_vec()
     }
 
     fn attach(self: Arc<Self>, since: Option<u64>) -> AttachHandle {
@@ -3022,9 +3054,13 @@ impl Read for ImportedPtyFd {
 }
 
 #[cfg(target_os = "linux")]
-fn clone_fd_from_proc(raw_fd: RawFd) -> io::Result<OwnedFd> {
-    let file = File::open(format!("/proc/self/fd/{raw_fd}"))?;
-    Ok(file.into())
+fn clone_master_fd(raw_fd: RawFd) -> io::Result<OwnedFd> {
+    // PTY masters must be duplicated, not reopened through /proc/self/fd:
+    // reopening can allocate a different PTY master, so fdstore preserves a
+    // handle that is not keeping the live slave-side process attached.
+    let fd = filedescriptor::FileDescriptor::dup(&RawMasterFd(raw_fd))
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+    fd.as_fd().try_clone_to_owned()
 }
 
 #[cfg(target_os = "linux")]
@@ -3036,6 +3072,16 @@ fn resize_imported_master(master: &File, size: PtySize) -> io::Result<()> {
         ws_ypixel: size.pixel_height,
     };
     rustix::termios::tcsetwinsize(master, winsize).map_err(io::Error::from)
+}
+
+#[cfg(target_os = "linux")]
+struct RawMasterFd(RawFd);
+
+#[cfg(target_os = "linux")]
+impl AsRawFd for RawMasterFd {
+    fn as_raw_fd(&self) -> RawFd {
+        self.0
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -3278,6 +3324,39 @@ mod tests {
         let (replay, missed) = ring.snapshot_since(Some(0));
         assert_eq!(missed, 3);
         assert_eq!(replay.concat(), b"def");
+    }
+
+    #[test]
+    fn restored_ring_replays_preserved_history_without_false_missed_bytes() {
+        let ring = RingBuffer::new_with_replay(1024, 6, b"abcdef");
+
+        let (replay, missed) = ring.snapshot_since(Some(0));
+
+        assert_eq!(missed, 0);
+        assert_eq!(replay.concat(), b"abcdef");
+        assert_eq!(ring.end_seq(), 6);
+    }
+
+    #[test]
+    fn restored_ring_keeps_sequence_coordinates_when_replay_is_truncated() {
+        let ring = RingBuffer::new_with_replay(4, 10, b"abcdef");
+
+        let (replay, missed) = ring.snapshot_since(Some(0));
+
+        assert_eq!(missed, 6);
+        assert_eq!(replay.concat(), b"cdef");
+        assert_eq!(ring.end_seq(), 10);
+    }
+
+    #[test]
+    fn restored_ring_without_replay_reports_pre_import_bytes_as_missed() {
+        let ring = RingBuffer::new_with_replay(1024, 552, b"");
+
+        let (replay, missed) = ring.snapshot_since(Some(0));
+
+        assert_eq!(missed, 552);
+        assert!(replay.is_empty());
+        assert_eq!(ring.end_seq(), 552);
     }
 
     #[test]

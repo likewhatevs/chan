@@ -392,8 +392,9 @@ enum Command {
         /// `--service`, reports the per-OS best pick.
         #[arg(long)]
         status: bool,
-        /// Replace a running service whose bind address differs, or take over a
-        /// wedged one, instead of erroring. Applies to `--service` / `--restart`.
+        /// Replace a running service whose bind address differs, take over a
+        /// wedged one, or make a systemd restart destructive instead of
+        /// preserving PTYs. Applies to `--service` / `--restart`.
         #[arg(long)]
         force: bool,
         /// Tunnel endpoint URL. With --tunnel-token, the devserver also dials
@@ -2700,7 +2701,11 @@ async fn bootstrap_systemd_unit(addr: SocketAddr, restart: bool) -> Result<()> {
 async fn restart_devserver_under_systemd(addr: SocketAddr, force: bool) -> Result<()> {
     ensure_systemd_linger().await?;
     let was_running = unit_is_active().await;
-    if was_running {
+    if was_running && force {
+        eprintln!(
+            "chan devserver: WARNING: restarting systemd service destructively because --force was supplied"
+        );
+    } else if was_running {
         prepare_systemd_fdstore_restart(addr, force).await?;
     }
     bootstrap_systemd_unit(addr, true).await?;

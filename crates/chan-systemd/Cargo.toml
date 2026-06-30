@@ -13,3 +13,6 @@ name = "chan_systemd"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 rustix = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+rustix = { workspace = true, features = ["pty"] }

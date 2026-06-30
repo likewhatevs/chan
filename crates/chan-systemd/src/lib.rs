@@ -13,7 +13,8 @@ mod unsupported;
 
 #[cfg(target_os = "linux")]
 pub use linux::{
-    fdstore, fdstore_remove_many, notify_barrier, notify_ready, take_listen_fds, NamedFd,
+    fdstore, fdstore_remove_many, notify_barrier, notify_ready, pty_master_has_live_slave,
+    take_listen_fds, NamedFd,
 };
 #[cfg(not(target_os = "linux"))]
 pub use unsupported::{notify_barrier, notify_ready};

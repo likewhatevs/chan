@@ -30,6 +30,7 @@ anyhow = { workspace = true }
 async-trait = { workspace = true }
 axum = { workspace = true }
 dirs = { workspace = true }
+filedescriptor = { workspace = true }
 portable-pty = { workspace = true }
 rand = { workspace = true }
 rustix = { workspace = true }

@@ -24,6 +24,22 @@ impl RingBuffer {
         }
     }
 
+    #[cfg(any(target_os = "linux", test))]
+    pub(super) fn new_with_replay(cap: usize, end_seq: u64, replay: &[u8]) -> Self {
+        if replay.is_empty() {
+            return Self::new_at(cap, end_seq);
+        }
+        let replay = if replay.len() as u64 > end_seq {
+            &replay[replay.len().saturating_sub(end_seq as usize)..]
+        } else {
+            replay
+        };
+        let start_seq = end_seq.saturating_sub(replay.len() as u64);
+        let mut ring = Self::new_at(cap, start_seq);
+        ring.push(replay);
+        ring
+    }
+
     pub(super) fn push(&mut self, bytes: &[u8]) {
         let start = self.end_seq;
         self.end_seq = self.end_seq.saturating_add(bytes.len() as u64);
