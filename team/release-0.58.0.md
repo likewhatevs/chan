@@ -1,12 +1,12 @@
-# v0.58.0 draft: systemd PTY restore polish and desktop reconnect follow-up
+# v0.58.0: systemd PTY restore polish and desktop reconnect follow-up
 
-Cut from `main` after `v0.57.0`. This draft starts with the Linux fdstore restart follow-up that now passes the real systemd PTY e2e in Lima, plus the chan-desktop integration that retargets already-open devserver windows after a restart rotates tenant tokens.
+Cut from `main` after `v0.57.0`. This release includes the Linux fdstore restart follow-up that now passes the real systemd PTY e2e in Lima, plus the chan-desktop integration that retargets already-open devserver windows after a restart rotates tenant tokens.
 
 ## Theme
 
 Make systemd-managed devserver restarts feel like a reconnect, not a terminal loss. The backend now preserves the PTY master, validates that the slave side is still live, and carries enough replay tail for the browser to redraw without a false missed-bytes banner.
 
-## Landed
+## What landed
 
 ### Systemd fdstore PTY restore
 
@@ -22,8 +22,13 @@ Make systemd-managed devserver restarts feel like a reconnect, not a terminal lo
 - Native `reload_window` retargets `lib-*::w-*` devserver windows from the latest devserver feed before falling back to `window.location.reload()`, so Cmd+R no longer recycles a stale `?t=<old-token>` URL.
 - Same-component terminal socket reconnects resume from the mounted xterm's in-memory cursor when the server generation still matches, while fresh xterms still require a validated snapshot before sending a replay cursor.
 
+### Launcher polish
+
+- Disconnected devserver sections now show `Not connected.` instead of the longer terminal/workspace loading prompt.
+
 ## Validation
 
+- `make pre-push`
 - `cargo test -p chan-library --locked restored_ring`
 - `limactl shell default bash -lc 'cd /Users/fiorix/dev/github.com/fiorix/chan && CARGO_TARGET_DIR=$HOME/chan-target cargo test -p chan-systemd --locked'`
 - `limactl shell default bash -lc 'cd /Users/fiorix/dev/github.com/fiorix/chan && CARGO_TARGET_DIR=$HOME/chan-target CHAN_SYSTEMD_FDSTORE_E2E=1 cargo test -p chan-systemd systemd_fdstore_e2e --locked -- --nocapture'`

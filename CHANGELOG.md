@@ -6,6 +6,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [v0.58.0] - 2026-06-30
+
+A reconnect polish release: Linux systemd restarts preserve live terminal replay more reliably, and chan-desktop retargets already-open devserver windows after token rotation.
+
+### Changed
+
+- **Launcher disconnected copy is shorter.** Disconnected devserver sections now show `Not connected.` instead of the longer terminal/workspace loading prompt.
+
 ### Fixed
 
 - **Systemd fdstore devserver restarts preserve terminal replay state.** Restart manifests now carry a bounded replay tail alongside each stored PTY fd, restored PTY fds keep read/write access, and live terminal reconnects resume from the in-memory xterm cursor, avoiding false `terminal replay missed N bytes` banners and post-restore `Bad file descriptor` writes.
