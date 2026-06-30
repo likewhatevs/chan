@@ -2827,6 +2827,9 @@ fn reload_devserver_window_from_feed(
     let Some(conn) = state.devservers.get(&devserver_id) else {
         return Ok(false);
     };
+    if serve::retarget_watched_remote_window(app, &conn.host, conn.port, &record)? {
+        return Ok(true);
+    }
     serve::open_watched_remote_window(app, &conn.host, conn.port, &conn.name, &record)?;
     Ok(true)
 }

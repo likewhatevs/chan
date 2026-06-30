@@ -86,6 +86,15 @@ impl WindowOpener {
     fn is_remote(&self) -> bool {
         matches!(self, WindowOpener::Remote { .. })
     }
+
+    fn retarget(&self, app: &AppHandle, record: &WindowRecord) -> Result<bool, String> {
+        match self {
+            WindowOpener::Local { .. } => Ok(false),
+            WindowOpener::Remote { host, port, .. } => {
+                serve::retarget_watched_remote_window(app, host, *port, record)
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -213,7 +222,18 @@ impl NativeSurface for TauriNativeSurface {
         let next = RemoteLaunchKey::from_record(record);
         let current = self.remote_launches.lock().unwrap().get(&label).cloned();
         if current.as_ref() != Some(&next) {
-            self.open(record);
+            match self.opener.retarget(&self.app, record) {
+                Ok(true) => self.remember_remote_launch(&label, record),
+                Ok(false) => self.open(record),
+                Err(e) => {
+                    tracing::warn!(
+                        window = %record.window_id,
+                        error = %e,
+                        "window watcher: retargeting a devserver window failed; rebuilding",
+                    );
+                    self.open(record);
+                }
+            }
         }
     }
 

@@ -351,6 +351,43 @@ pub(crate) fn open_watched_remote_window(
     )
 }
 
+/// Retarget a live watched REMOTE window in place after its devserver rotated
+/// tenant tokens. This keeps the same native window and lets the existing
+/// reconnecting/retry surface navigate to the fresh target instead of destroying
+/// the webview and rebuilding it under the same label.
+pub(crate) fn retarget_watched_remote_window(
+    app: &AppHandle,
+    host: &str,
+    port: u16,
+    record: &WindowRecord,
+) -> Result<bool, String> {
+    let label = crate::window_watcher::native_label(record);
+    let Some(window) = app.get_webview_window(&label) else {
+        return Ok(false);
+    };
+    let url = crate::devserver::assemble_tenant_url(host, port, &record.prefix, &record.token)?;
+    let kind = match record.kind {
+        WindowKind::Terminal => Some("terminal"),
+        WindowKind::Workspace => None,
+    };
+    let target = workspace_window_target_url(
+        app,
+        &label,
+        &record.window_id,
+        &record.library_id,
+        &url,
+        "",
+        kind,
+    )?;
+    window
+        .navigate(target)
+        .map_err(|e| format!("retargeting {label}: {e}"))?;
+    if let Err(e) = window.show() {
+        tracing::warn!(label = %label, error = %e, "showing retargeted devserver window failed");
+    }
+    Ok(true)
+}
+
 /// Spawn a new outbound URL webview window. The desktop does not own
 /// the remote process; this only creates another webview pointed at
 /// the persisted URL.
@@ -859,34 +896,6 @@ fn build_workspace_window(app: &AppHandle, spec: WindowSpec<'_>) -> Result<(), S
         connecting,
         kind,
     } = spec;
-    let Ok(mut parsed) = url.parse::<tauri::Url>() else {
-        return Err(format!("bad chan URL for {window_label}: {url}"));
-    };
-    // The SPA keys its per-window session (panes/tabs, `/ws` presence) on
-    // `?w=`; that is the `session_id`, NOT the Tauri label (they diverge only
-    // for watcher-opened windows, where the label is the composite native key).
-    parsed.query_pairs_mut().append_pair("w", session_id);
-    // `kind=terminal` / `kind=control` are the SPA's only signal to enter
-    // terminal-only mode (no workspace fetch, terminal panes only);
-    // `control` additionally selects the singleton control sub-mode.
-    // Workspace/outbound windows pass `None` and the SPA stays in full
-    // workspace mode.
-    if let Some(kind) = kind {
-        parsed.query_pairs_mut().append_pair("kind", kind);
-    }
-    // `lib=<library_id>` next to `?w=`/`?kind=` tells the SPA which chan-library
-    // this window belongs to, so cross-window tab d&d accepts a drop only from
-    // the same library. Skipped when empty (an outbound URL attachment has no
-    // library identity; the SPA defaults a missing `?lib=` to `local`).
-    if !library_id.is_empty() {
-        parsed.query_pairs_mut().append_pair("lib", library_id);
-    }
-    // `pane=<hex>` is the window's library pane-highlight colour: the
-    // host's `pane_color` resolves the two sources behind one call — local
-    // (the installed `LocalColorStore`) vs a devserver (`DevserverEntry.color`
-    // matched by `library_id`). The editor reads it on boot to tint the
-    // active-pane highlight; absent -> the default accent. v1 = mint-time (no
-    // live recolour of already-open windows).
     if !library_id.is_empty() {
         let pane = app
             .state::<Arc<AppState>>()
@@ -903,13 +912,16 @@ fn build_workspace_window(app: &AppHandle, spec: WindowSpec<'_>) -> Result<(), S
             pane_color = ?pane,
             "build_workspace_window: ?pane= injection at mint time",
         );
-        if let Some(color) = pane {
-            parsed.query_pairs_mut().append_pair("pane", &color);
-        }
     }
-    if !url_hash_seed.is_empty() {
-        parsed.set_fragment(Some(url_hash_seed));
-    }
+    let parsed = workspace_window_target_url(
+        app,
+        window_label,
+        session_id,
+        library_id,
+        url,
+        url_hash_seed,
+        kind,
+    )?;
     // The connecting page receives its inputs before any page script runs
     // (same mechanism as KEY_BRIDGE_JS). `target` is the fully-assembled
     // navigate URL (remote + ?w=<label> + restored #fragment) so the SPA's
@@ -1331,6 +1343,58 @@ fn build_workspace_window(app: &AppHandle, spec: WindowSpec<'_>) -> Result<(), S
         }
     });
     res.map_err(|e| format!("scheduling workspace window for {window_label}: {e}"))
+}
+
+fn workspace_window_target_url(
+    app: &AppHandle,
+    window_label: &str,
+    session_id: &str,
+    library_id: &str,
+    url: &str,
+    url_hash_seed: &str,
+    kind: Option<&str>,
+) -> Result<tauri::Url, String> {
+    let Ok(mut parsed) = url.parse::<tauri::Url>() else {
+        return Err(format!("bad chan URL for {window_label}: {url}"));
+    };
+    // The SPA keys its per-window session (panes/tabs, `/ws` presence) on
+    // `?w=`; that is the `session_id`, NOT the Tauri label (they diverge only
+    // for watcher-opened windows, where the label is the composite native key).
+    parsed.query_pairs_mut().append_pair("w", session_id);
+    // `kind=terminal` / `kind=control` are the SPA's only signal to enter
+    // terminal-only mode (no workspace fetch, terminal panes only);
+    // `control` additionally selects the singleton control sub-mode.
+    // Workspace/outbound windows pass `None` and the SPA stays in full
+    // workspace mode.
+    if let Some(kind) = kind {
+        parsed.query_pairs_mut().append_pair("kind", kind);
+    }
+    // `lib=<library_id>` next to `?w=`/`?kind=` tells the SPA which chan-library
+    // this window belongs to, so cross-window tab d&d accepts a drop only from
+    // the same library. Skipped when empty (an outbound URL attachment has no
+    // library identity; the SPA defaults a missing `?lib=` to `local`).
+    if !library_id.is_empty() {
+        parsed.query_pairs_mut().append_pair("lib", library_id);
+    }
+    // `pane=<hex>` is the window's library pane-highlight colour: the
+    // host's `pane_color` resolves the two sources behind one call — local
+    // (the installed `LocalColorStore`) vs a devserver (`DevserverEntry.color`
+    // matched by `library_id`). The editor reads it on boot to tint the
+    // active-pane highlight; absent -> the default accent. v1 = mint-time (no
+    // live recolour of already-open windows).
+    if !library_id.is_empty() {
+        let pane = app
+            .state::<Arc<AppState>>()
+            .embedded()
+            .and_then(|embedded| embedded.pane_color(library_id));
+        if let Some(color) = pane {
+            parsed.query_pairs_mut().append_pair("pane", &color);
+        }
+    }
+    if !url_hash_seed.is_empty() {
+        parsed.set_fragment(Some(url_hash_seed));
+    }
+    Ok(parsed)
 }
 
 /// Custom centered notice shown when the OS close (red) button buries a
@@ -2072,6 +2136,34 @@ mod tests {
         let open = vec!["local::w-5".to_string()];
         assert_eq!(resolve_label_from("local::w-1", &open), "local::w-1");
         assert_eq!(resolve_label_from("lib-z::w-3", &[]), "lib-z::w-3");
+    }
+
+    #[test]
+    fn devserver_token_refresh_retargets_existing_window_before_rebuild() {
+        const SERVE_RS: &str = include_str!("serve.rs");
+        const WIRING_RS: &str = include_str!("window_watcher_wiring.rs");
+        let retarget = SERVE_RS
+            .split("fn retarget_watched_remote_window")
+            .nth(1)
+            .expect("retarget_watched_remote_window exists")
+            .split("/// Spawn a new outbound URL webview window")
+            .next()
+            .expect("retarget section ends before outbound builder");
+        assert!(retarget.contains(".navigate(target)"));
+        assert!(
+            !retarget.contains(concat!(".", "destroy")),
+            "retarget must not destroy the reconnecting webview",
+        );
+
+        let refresh = WIRING_RS
+            .split("fn refresh(&self, record")
+            .nth(1)
+            .expect("surface refresh exists")
+            .split("fn close(&self, label")
+            .next()
+            .expect("refresh section ends before close");
+        assert!(refresh.contains("opener.retarget"));
+        assert!(refresh.contains("Ok(false) => self.open(record)"));
     }
 
     #[test]
