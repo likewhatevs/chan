@@ -37,6 +37,7 @@ use tauri::{Emitter, Manager, RunEvent, State, WebviewUrl, WebviewWindowBuilder,
 
 use config::{Config, ConfigStore, Devserver, OutboundWorkspace, WindowConfig, WindowGeometry};
 use serve::ServeHandle;
+use window_watcher_wiring::DevserverWatcherStop;
 
 const CHAN_BUSY_CHANGED: &str = "chan-busy";
 const SYSTEM_NOTICE: &str = "system-notice";
@@ -122,13 +123,12 @@ pub struct AppState {
     /// disconnect tears down exactly its windows, and a reconnect re-opens its
     /// workspace windows with a fresh token under the same label.
     pub devserver_windows: Mutex<HashMap<String, Vec<DevserverWindow>>>,
-    /// Per connected devserver (`Devserver.id`), the `cancel` handle for its
-    /// window watcher. The watcher drives that devserver's native windows as a
-    /// pure reconcile of its `/api/library/windows` feed; flipping `cancel` on
-    /// disconnect stops it AND makes it reconcile its windows away (detach, not
-    /// reap — it learned its `library_id` lazily from the feed). Supersedes the
-    /// imperative `devserver_windows` tracking for the watcher-driven path.
-    pub devserver_watchers: Mutex<HashMap<String, tokio::sync::watch::Sender<bool>>>,
+    /// Per connected devserver (`Devserver.id`), the stop handle for its window
+    /// watcher. Disconnect stops the watcher and closes that devserver's native
+    /// windows; token-rotation handoff retires only the old watcher so the fresh
+    /// watcher can refresh existing same-label windows in place.
+    pub(crate) devserver_watchers:
+        Mutex<HashMap<String, tokio::sync::watch::Sender<DevserverWatcherStop>>>,
     /// Per connected devserver (`Devserver.id`), its window-watcher view state,
     /// the devserver analog of `local_watcher_view`. The close handler buries a
     /// devserver window through it so the reconcile CLOSES
@@ -845,7 +845,7 @@ fn devserver_route_prefix(slug: &str) -> String {
 /// (sync) [`DevserverFeed::workspaces`] serves it without blocking on HTTP. Fires
 /// [`EmbeddedServer::signal_library_change`] only when the list actually changes,
 /// so the launcher re-pushes on a real delta, not every tick. Stops when `cancel`
-/// flips true (disconnect), the same signal that stops the window watcher.
+/// leaves the running state, the same signal that stops the window watcher.
 ///
 /// The devserver's pane-highlight COLOUR is no longer polled here: it rides the
 /// push-based `/api/library/local-color/watch` feed via
@@ -855,13 +855,13 @@ fn spawn_devserver_workspace_poll(
     state: Arc<AppState>,
     id: String,
     conn: devserver::DevserverConn,
-    mut cancel: tokio::sync::watch::Receiver<bool>,
+    mut cancel: tokio::sync::watch::Receiver<DevserverWatcherStop>,
 ) {
     const POLL: std::time::Duration = std::time::Duration::from_secs(5);
     tauri::async_runtime::spawn(async move {
         let mut last_ws: Option<Vec<devserver::DevserverWorkspaceRow>> = None;
         loop {
-            if *cancel.borrow_and_update() {
+            if (*cancel.borrow_and_update()).is_stopped() {
                 return;
             }
             let mut changed = false;
@@ -1345,7 +1345,7 @@ fn remove_devserver_windows(app: &tauri::AppHandle, state: &AppState, id: &str) 
     // Cancel the window watcher (it detaches its windows, not reap -- the
     // devserver keeps its set server-side).
     if let Some(cancel) = state.devserver_watchers.lock().unwrap().remove(id) {
-        let _ = cancel.send(true);
+        let _ = cancel.send(DevserverWatcherStop::CloseWindows);
     }
     state.devserver_watcher_views.lock().unwrap().remove(id);
     remove_devserver_workspace_windows(app, state, id);
@@ -2101,12 +2101,13 @@ async fn reconnect_devserver(
                 // A rotated token means the devserver restarted: its old tenants
                 // are gone AND the running watcher's feed task can't auth with
                 // the stale token. RESPAWN the watcher on the fresh conn — cancel
-                // the old one + reconcile its windows away, then spawn anew so its
-                // first snapshot re-opens the restarted devserver's persisted set.
+                // the old subscription without closing its windows, then spawn
+                // anew so its first snapshot refreshes the restarted devserver's
+                // persisted set in place.
                 // (A non-rotated reconnect needs nothing: the feed task's own
                 // reconnect-on-drop self-heals with the same token.)
                 if let Some(cancel) = state.devserver_watchers.lock().unwrap().remove(&id) {
-                    let _ = cancel.send(true); // the watcher reconciles its windows away
+                    let _ = cancel.send(DevserverWatcherStop::RetireKeepWindows);
                 }
                 let (cancel, snapshot, view) =
                     window_watcher_wiring::spawn_devserver_window_watcher(
@@ -5238,6 +5239,29 @@ mod tests {
             .expect("watcher section ends before connect implementation");
         assert!(exit_watcher.contains("flip_devserver_control_dead"));
         assert!(exit_watcher.contains("devserver-control-closed"));
+    }
+
+    #[test]
+    fn token_rotation_retires_old_watcher_without_closing_windows() {
+        const MAIN_RS: &str = include_str!("main.rs");
+        let reconnect = MAIN_RS
+            .split("async fn reconnect_devserver")
+            .nth(1)
+            .expect("reconnect_devserver exists")
+            .split("/// Forget (unmount)")
+            .next()
+            .expect("reconnect section ends before forget implementation");
+        assert!(reconnect.contains("DevserverWatcherStop::RetireKeepWindows"));
+        assert!(!reconnect.contains("DevserverWatcherStop::CloseWindows"));
+
+        let disconnect = MAIN_RS
+            .split("fn remove_devserver_windows")
+            .nth(1)
+            .expect("remove_devserver_windows exists")
+            .split("/// Fully tear down")
+            .next()
+            .expect("disconnect section ends before full teardown");
+        assert!(disconnect.contains("DevserverWatcherStop::CloseWindows"));
     }
 
     #[test]

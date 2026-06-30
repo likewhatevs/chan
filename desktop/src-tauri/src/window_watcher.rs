@@ -29,6 +29,14 @@ use std::sync::{Arc, Mutex};
 use chan_server::WindowRecord;
 use tokio::sync::Notify;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WatchLoopStop {
+    /// Reconcile this watcher's known native windows away before stopping.
+    CloseWindows,
+    /// Stop the watcher and leave native windows for a replacement watcher.
+    KeepWindows,
+}
+
 /// The composite native-window key. `window_id` is unique only within its minting
 /// library (libraries mint independently; there is no global authority), so the
 /// globally-unique native key is `{library_id}::{window_id}`. This string IS the
@@ -176,9 +184,11 @@ impl WatcherViewState {
 
 /// Drive a library's native surface to its window set: reconcile on every feed
 /// change AND every local view change (bury/unbury), until `cancel` resolves
-/// (disconnect). The reconcile is idempotent (snapshot-not-delta), so reconnect
-/// = resubscribe + reconcile can never spawn a duplicate. On exit the surface is
-/// left as-is; disconnect reconciles to empty separately (detach, not reap).
+/// with an explicit stop action. The reconcile is idempotent (snapshot-not-delta),
+/// so reconnect = resubscribe + reconcile can never spawn a duplicate. A real
+/// disconnect reconciles to empty (detach, not reap); a watcher handoff can retire
+/// without closing native windows so the replacement watcher refreshes them in
+/// place.
 ///
 /// Correctness: both change `Notified`s are created BEFORE the snapshot. tokio
 /// captures the `notify_waiters()` generation at creation, so a change firing in
@@ -194,7 +204,7 @@ pub async fn watch_loop<F, S, C>(
 ) where
     F: WindowFeed,
     S: NativeSurface,
-    C: Future<Output = ()>,
+    C: Future<Output = WatchLoopStop>,
 {
     // The library id is LAZY. A devserver whose feed is EMPTY (the user deleted
     // every window before disconnecting — a valid state) has no record to read it
@@ -228,12 +238,15 @@ pub async fn watch_loop<F, S, C>(
         tokio::select! {
             _ = feed_changed => {}
             _ = view_changed => {}
-            _ = &mut cancel => {
-                // Disconnect: reconcile to empty so the library's native windows
-                // close (detach, NOT reap — the library keeps its set server-side,
-                // so a reconnect restores them). A no-op if nothing was opened.
-                if let Some(library_id) = &library_id {
-                    reconcile(library_id, &[], &view.buried_snapshot(), &surface);
+            stop = &mut cancel => {
+                if stop == WatchLoopStop::CloseWindows {
+                    // Disconnect: reconcile to empty so the library's native
+                    // windows close (detach, NOT reap — the library keeps its set
+                    // server-side, so a reconnect restores them). A no-op if
+                    // nothing was opened.
+                    if let Some(library_id) = &library_id {
+                        reconcile(library_id, &[], &view.buried_snapshot(), &surface);
+                    }
                 }
                 break;
             }
@@ -536,7 +549,11 @@ mod tests {
         let surface_in = Arc::clone(&surface);
         let cancel_in = Arc::clone(&cancel);
         let task = tokio::spawn(async move {
-            watch_loop(Some("local"), feed, surface_in, view, cancel_in.notified()).await;
+            watch_loop(Some("local"), feed, surface_in, view, async move {
+                cancel_in.notified().await;
+                WatchLoopStop::CloseWindows
+            })
+            .await;
         });
 
         // Give the loop time to run the gap iteration + the re-reconcile, then
@@ -604,7 +621,11 @@ mod tests {
         let surface_in = Arc::clone(&surface);
         let cancel_in = Arc::clone(&cancel);
         let task = tokio::spawn(async move {
-            watch_loop(Some("local"), feed, surface_in, view, cancel_in.notified()).await;
+            watch_loop(Some("local"), feed, surface_in, view, async move {
+                cancel_in.notified().await;
+                WatchLoopStop::CloseWindows
+            })
+            .await;
         });
 
         // The loop opens w-1 and parks in select.
@@ -632,6 +653,92 @@ mod tests {
             *surface.closed.lock().unwrap(),
             vec!["local::w-1".to_string()],
             "cancel closes exactly the window the loop opened",
+        );
+    }
+
+    /// Watcher handoff semantics: token rotation starts a replacement watcher for
+    /// the same library labels. The retired watcher must stop without reconciling
+    /// to empty, or it can destroy windows the replacement watcher just refreshed.
+    #[tokio::test]
+    async fn watch_loop_keeps_its_windows_on_handoff_cancel() {
+        #[derive(Default)]
+        struct RecordSurface {
+            open_now: std::sync::Mutex<HashSet<String>>,
+            closed: std::sync::Mutex<Vec<String>>,
+        }
+        impl NativeSurface for Arc<RecordSurface> {
+            fn open_labels(&self, _library_id: &str) -> HashSet<String> {
+                self.open_now.lock().unwrap().clone()
+            }
+            fn open(&self, record: &WindowRecord) {
+                self.open_now.lock().unwrap().insert(native_label(record));
+            }
+            fn close(&self, label: &str) {
+                self.open_now.lock().unwrap().remove(label);
+                self.closed.lock().unwrap().push(label.to_string());
+            }
+        }
+
+        struct StaticFeed {
+            notify: Arc<Notify>,
+        }
+        impl WindowFeed for StaticFeed {
+            fn snapshot(&self) -> Vec<WindowRecord> {
+                vec![rec("local", "w-1", WindowKind::Terminal)]
+            }
+            fn change_notify(&self) -> Arc<Notify> {
+                self.notify.clone()
+            }
+        }
+
+        let notify = Arc::new(Notify::new());
+        let feed = StaticFeed {
+            notify: notify.clone(),
+        };
+        let surface = Arc::new(RecordSurface::default());
+        let view = Arc::new(WatcherViewState::default());
+        let cancel = Arc::new(Notify::new());
+
+        let surface_in = Arc::clone(&surface);
+        let cancel_in = Arc::clone(&cancel);
+        let task = tokio::spawn(async move {
+            watch_loop(Some("local"), feed, surface_in, view, async move {
+                cancel_in.notified().await;
+                WatchLoopStop::KeepWindows
+            })
+            .await;
+        });
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        assert_eq!(
+            surface
+                .open_now
+                .lock()
+                .unwrap()
+                .iter()
+                .cloned()
+                .collect::<Vec<_>>(),
+            vec!["local::w-1".to_string()],
+            "the loop opens the library's window before handoff",
+        );
+
+        cancel.notify_waiters();
+        let _ = task.await;
+
+        assert_eq!(
+            surface
+                .open_now
+                .lock()
+                .unwrap()
+                .iter()
+                .cloned()
+                .collect::<Vec<_>>(),
+            vec!["local::w-1".to_string()],
+            "handoff cancel leaves existing windows for the replacement watcher",
+        );
+        assert!(
+            surface.closed.lock().unwrap().is_empty(),
+            "handoff cancel must not close windows",
         );
     }
 

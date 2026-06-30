@@ -24,12 +24,36 @@ use tokio::sync::{watch, Notify};
 
 use crate::devserver::DevserverConn;
 use crate::window_watcher::{
-    native_label, watch_loop, NativeSurface, WatcherViewState, WindowFeed,
+    native_label, watch_loop, NativeSurface, WatchLoopStop, WatcherViewState, WindowFeed,
 };
 use crate::{serve, AppState};
 
 /// Library id of the embedded local-disk library.
 const LOCAL_LIBRARY_ID: &str = "local";
+
+/// How a devserver watcher should stop. Disconnect closes that devserver's
+/// native windows; token-rotation handoff retires only the old watcher because a
+/// fresh watcher will refresh the same labels in place.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DevserverWatcherStop {
+    Running,
+    RetireKeepWindows,
+    CloseWindows,
+}
+
+impl DevserverWatcherStop {
+    pub(crate) fn is_stopped(self) -> bool {
+        self != Self::Running
+    }
+
+    fn watch_loop_stop(self) -> Option<WatchLoopStop> {
+        match self {
+            Self::Running => None,
+            Self::RetireKeepWindows => Some(WatchLoopStop::KeepWindows),
+            Self::CloseWindows => Some(WatchLoopStop::CloseWindows),
+        }
+    }
+}
 
 /// How a watched window opens its SPA — the only library-specific bit of the
 /// otherwise surface-agnostic [`TauriNativeSurface`]. Local windows load the
@@ -243,7 +267,7 @@ pub(crate) fn spawn_local_window_watcher(app: AppHandle, state: Arc<AppState>) {
         feed,
         surface,
         view,
-        std::future::pending::<()>(),
+        std::future::pending::<WatchLoopStop>(),
     ));
 }
 
@@ -281,13 +305,13 @@ async fn run_devserver_window_feed(
     snapshot: Arc<Mutex<Vec<WindowRecord>>>,
     change: Arc<Notify>,
     state: Arc<AppState>,
-    mut cancel: watch::Receiver<bool>,
+    mut cancel: watch::Receiver<DevserverWatcherStop>,
 ) {
     const RECONNECT_BACKOFF: Duration = Duration::from_secs(2);
     loop {
         // A `watch` (not a `Notify`) so the cancel PERSISTS: a disconnect that
         // flips it while we are between selects is still seen here, not missed.
-        if *cancel.borrow_and_update() {
+        if (*cancel.borrow_and_update()).is_stopped() {
             return;
         }
         tokio::select! {
@@ -302,7 +326,7 @@ async fn run_devserver_window_feed(
                 }
             }
         }
-        if *cancel.borrow_and_update() {
+        if (*cancel.borrow_and_update()).is_stopped() {
             return;
         }
         tokio::select! {
@@ -379,12 +403,12 @@ pub(crate) fn spawn_devserver_color_watch(
     state: Arc<AppState>,
     id: String,
     conn: DevserverConn,
-    mut cancel: watch::Receiver<bool>,
+    mut cancel: watch::Receiver<DevserverWatcherStop>,
 ) {
     const RECONNECT_BACKOFF: Duration = Duration::from_secs(2);
     tauri::async_runtime::spawn(async move {
         loop {
-            if *cancel.borrow_and_update() {
+            if (*cancel.borrow_and_update()).is_stopped() {
                 return;
             }
             tokio::select! {
@@ -399,7 +423,7 @@ pub(crate) fn spawn_devserver_color_watch(
                     }
                 }
             }
-            if *cancel.borrow_and_update() {
+            if (*cancel.borrow_and_update()).is_stopped() {
                 return;
             }
             tokio::select! {
@@ -460,9 +484,9 @@ async fn stream_color_feed(
 
 /// Spawn a connected devserver's window watcher: one [`watch_loop`] driven by the
 /// devserver's `/api/library/windows/watch` feed, opening windows as remote SPA
-/// webviews. Returns the `cancel` (a `watch::Sender`) — flip it to `true` on
-/// disconnect to stop the watcher + its feed task; the watcher itself reconciles
-/// its native windows away on cancel (detach, not reap).
+/// webviews. Returns the `cancel` (a `watch::Sender`) — send
+/// [`DevserverWatcherStop::CloseWindows`] on disconnect, or
+/// [`DevserverWatcherStop::RetireKeepWindows`] for token-rotation handoff.
 ///
 /// The `library_id` (`lib-<hex>`) is NOT needed up front: an EMPTY feed is valid
 /// (a devserver with no windows, or one the user emptied before disconnecting),
@@ -474,7 +498,7 @@ pub(crate) async fn spawn_devserver_window_watcher(
     conn: DevserverConn,
 ) -> Result<
     (
-        watch::Sender<bool>,
+        watch::Sender<DevserverWatcherStop>,
         Arc<Mutex<Vec<WindowRecord>>>,
         Arc<WatcherViewState>,
     ),
@@ -488,7 +512,7 @@ pub(crate) async fn spawn_devserver_window_watcher(
     // Arc the feed task mutates, so the launcher reads this devserver's live windows.
     let snapshot_handle = Arc::clone(&snapshot);
     let change = Arc::new(Notify::new());
-    let (cancel_tx, cancel_rx) = watch::channel(false);
+    let (cancel_tx, cancel_rx) = watch::channel(DevserverWatcherStop::Running);
     let host = conn.host.clone();
     let port = conn.port;
     let devserver_name = conn.name.clone();
@@ -523,9 +547,13 @@ pub(crate) async fn spawn_devserver_window_watcher(
     let view_handle = Arc::clone(&view);
     let mut cancel_loop = cancel_rx;
     tauri::async_runtime::spawn(watch_loop(None, feed, surface, view, async move {
-        while !*cancel_loop.borrow_and_update() {
+        loop {
+            let stop = *cancel_loop.borrow_and_update();
+            if let Some(stop) = stop.watch_loop_stop() {
+                return stop;
+            }
             if cancel_loop.changed().await.is_err() {
-                break;
+                return WatchLoopStop::CloseWindows;
             }
         }
     }));
