@@ -6,6 +6,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Systemd fdstore devserver restarts preserve terminal replay state.** Restart manifests now carry a bounded replay tail alongside each stored PTY fd, restored PTY fds keep read/write access, and live terminal reconnects resume from the in-memory xterm cursor, avoiding false `terminal replay missed N bytes` banners and post-restore `Bad file descriptor` writes.
+
 ## [v0.57.0] - 2026-06-30
 
 A devserver correctness release: Linux systemd restarts can preserve live PTYs through fdstore, and `chan close` keeps the devserver launcher state in sync immediately.
