@@ -47,7 +47,7 @@
   import { openImageBubble } from "./bubbles/image";
   import { imageDropHandlers } from "./bubbles/image_drop";
   import { imageDragIndicator } from "./image_drag_indicator";
-  import { htmlPasteHandler } from "./paste_html";
+  import { pasteHandler } from "./paste_html";
   import { openImageZoom } from "../state/imageZoom";
   import { headingFold } from "./fold";
   import * as fmt from "./commands/format";
@@ -766,9 +766,9 @@
       // HTML-paste handler runs ahead of CM6's default plain-text
       // paste so rich pastes get converted to markdown. Image-file
       // pastes (clipboard with image/* MIME) are owned by
-      // imageDropHandlers; the HTML handler skips them. Both are
+      // imageDropHandlers; the paste handler skips them. Both are
       // write-side, so they're disabled together.
-      htmlPasteHandler(),
+      pasteHandler(),
     ];
   }
 

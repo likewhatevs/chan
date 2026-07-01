@@ -1,4 +1,11 @@
-// HTML-paste -> markdown conversion.
+// Paste handling: HTML -> markdown conversion, plus a plain-text list-dedent.
+//
+// The paste handler covers three cases: image-file pastes defer to the
+// image-drop handler; rich HTML is converted to markdown via turndown; and a
+// plain-text paste of a list item into an existing list line has its leading
+// marker stripped (dedentListPaste) so a copied "- item" merges into the
+// current bullet instead of nesting as "- - item". Everything else defers to
+// CM6's default paste.
 //
 // When the clipboard carries an HTML representation (typical for a
 // paste from another rich-text editor, a Notion / Obsidian / Office
@@ -30,7 +37,7 @@ import { parseListPrefix } from "./commands/list";
 const RICH_TAG_RE =
   /<(?:a|b|blockquote|br|code|dd|del|dl|dt|em|figcaption|figure|h[1-6]|hr|i|img|kbd|li|mark|ol|p|pre|s|samp|strike|strong|sub|sup|table|td|th|tr|u|ul)\b/i;
 
-export function htmlPasteHandler(): Extension {
+export function pasteHandler(): Extension {
   return EditorView.domEventHandlers({
     paste(event, view) {
       const cd = event.clipboardData;
@@ -42,21 +49,41 @@ export function htmlPasteHandler(): Extension {
         }
       }
       const html = cd.getData("text/html");
-      if (!html) return false;
-      if (!RICH_TAG_RE.test(html)) return false;
-      event.preventDefault();
-      // Lazy import - the converter is only fetched on first rich
-      // paste. Vite emits this as its own chunk.
-      void htmlToMarkdown(html).then((md) => {
-        if (!md) return;
-        const sel = view.state.selection.main;
-        const insert = dedentListPaste(view.state, sel.from, md);
-        view.dispatch({
-          changes: { from: sel.from, to: sel.to, insert },
-          selection: { anchor: sel.from + insert.length },
+      if (html && RICH_TAG_RE.test(html)) {
+        event.preventDefault();
+        // Lazy import - the converter is only fetched on first rich
+        // paste. Vite emits this as its own chunk.
+        void htmlToMarkdown(html).then((md) => {
+          if (!md) return;
+          const sel = view.state.selection.main;
+          const insert = dedentListPaste(view.state, sel.from, md);
+          view.dispatch({
+            changes: { from: sel.from, to: sel.to, insert },
+            selection: { anchor: sel.from + insert.length },
+          });
         });
-      });
-      return true;
+        return true;
+      }
+      // Plain-text paste of a list item INTO a list line: strip the pasted
+      // marker so a copied "- item" merges into the current bullet instead of
+      // nesting under it (the "- - item" double-marker). Same dedent as the
+      // rich path, but for the common chan-to-chan copy, which is plain text
+      // (navigator.clipboard.writeText). Only intercept when the dedent
+      // actually changes the text; every other paste defers to CM6's default.
+      const text = cd.getData("text/plain");
+      if (text) {
+        const sel = view.state.selection.main;
+        const insert = dedentListPaste(view.state, sel.from, text);
+        if (insert !== text) {
+          event.preventDefault();
+          view.dispatch({
+            changes: { from: sel.from, to: sel.to, insert },
+            selection: { anchor: sel.from + insert.length },
+          });
+          return true;
+        }
+      }
+      return false;
     },
   });
 }
@@ -88,7 +115,7 @@ export function dedentListPaste(
 }
 
 // Exported for the vitest pin in `paste_html.test.ts`. Production
-// callers go through `htmlPasteHandler` above; the converter is
+// callers go through `pasteHandler` above; the converter is
 // kept exported so the escape-override behaviour can be exercised
 // directly without spinning up a CM6 view.
 export async function htmlToMarkdown(html: string): Promise<string> {
