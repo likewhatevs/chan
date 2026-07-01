@@ -6,6 +6,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Excalidraw diagrams with a `subgraph` now render as excalidraw everywhere.** A `mermaid-to-excalidraw` flowchart containing a `subgraph` failed to convert and silently degraded to a rasterized image of the diagram (logging `SubGraph element not found`), the v0.59.0 known limitation. The cause was a bug in `@excalidraw/mermaid-to-excalidraw`: mermaid 11 renders subgraph cluster elements with a render-id prefix (`id="diagN-Machine"`), but the library looked them up by exact id (`[id='Machine']`) instead of the prefix-tolerant match its node/edge lookups use, so the cluster was never found. Patched via `patch-package`; subgraph flowcharts now convert to real excalidraw shapes in both the browser and chan-desktop.
+
 ## [v0.59.0] - 2026-07-01
 
 A broad feature release: a `mermaid-to-excalidraw` diagram renderer, graph focus and lens fixes with an indexing placeholder, an actionable indexing dashboard, the `chan devserver --service` action-verb reshape, editor list and directory-link fixes, `cs copy` / `cs paste` clipboard bridging, a semantic-search opt-out that never embeds when off, and chan-desktop window-geometry, glyph, and clipboard fixes.
