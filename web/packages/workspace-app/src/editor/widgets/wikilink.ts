@@ -46,7 +46,12 @@ import { isImagePath, resolveImageSrc } from "../extensions/image";
 import { api } from "../../api/client";
 import { openPreviewPopover } from "../overlays/preview_popover";
 
-export type LinkKind = "file" | "contact" | "image" | "broken";
+export type LinkKind =
+  | "file"
+  | "contact"
+  | "image"
+  | "directory"
+  | "broken";
 
 /// Build a small lucide `user` icon as a stand-alone SVG node.
 /// Inline because the wikilink widget builds DOM directly (no svelte
@@ -206,7 +211,9 @@ function getKind(target: string): LinkKind | undefined {
   api
     .resolveLink(target)
     .then((res) => {
-      kindCache.set(target, res.kind);
+      // A link to a directory resolves (not broken); it opens the file
+      // browser at that folder on click rather than the text editor.
+      kindCache.set(target, res.is_dir ? "directory" : res.kind);
     })
     .catch(() => {
       kindCache.set(target, "broken");

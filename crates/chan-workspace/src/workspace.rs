@@ -167,6 +167,12 @@ pub struct ResolvedLink {
     /// that omit the field entirely.
     #[serde(default)]
     pub kind: crate::graph::NodeKind,
+    /// True when `path` is a directory rather than a file. Directory
+    /// links open the file browser at that folder instead of the text
+    /// editor. `#[serde(default)]` keeps wire compatibility with older
+    /// payloads that omit the field.
+    #[serde(default)]
+    pub is_dir: bool,
 }
 
 /// Result of `Workspace::rename_with_link_rewrite`. Captures both halves
@@ -916,6 +922,20 @@ impl Workspace {
         };
         match dir.symlink_metadata(&rel_path) {
             Ok(m) => m.is_file() && !m.file_type().is_symlink(),
+            Err(_) => false,
+        }
+    }
+
+    /// True iff the path resolves under the workspace and refers to a
+    /// directory (not a symlink, which `lstat` reports as non-directory).
+    /// `resolve_link` uses it to route a link that points at a folder to
+    /// the file browser instead of the text editor.
+    pub fn is_dir(&self, rel: &str) -> bool {
+        let Ok((dir, rel_path)) = self.resolve_io(rel) else {
+            return false;
+        };
+        match dir.symlink_metadata(&rel_path) {
+            Ok(m) => m.is_dir(),
             Err(_) => false,
         }
     }
@@ -2725,8 +2745,21 @@ impl Workspace {
                     path: candidate,
                     anchor,
                     kind,
+                    is_dir: false,
                 });
             }
+        }
+        // A link that points at a directory resolves to the folder
+        // itself; the caller opens it in the file browser rather than the
+        // editor. Kind is irrelevant here (directories are not graph
+        // nodes), so it keeps its default.
+        if self.is_dir(path) {
+            return Some(ResolvedLink {
+                path: path.to_string(),
+                anchor,
+                kind: crate::graph::NodeKind::default(),
+                is_dir: true,
+            });
         }
         None
     }
@@ -6774,6 +6807,23 @@ mod tests {
         let r = workspace.resolve_link("recipes/pasta").unwrap();
         assert_eq!(r.path, "recipes/pasta.md");
         assert_eq!(r.anchor, None);
+        assert!(!r.is_dir);
+    }
+
+    #[test]
+    fn resolve_link_directory_resolves_to_folder_with_is_dir() {
+        let (_cfg, _root, workspace) = link_fixture();
+        // `recipes` is a directory, not a file: no `.md`/`.txt`/exact
+        // file candidate matches, so it resolves to the folder itself.
+        let r = workspace.resolve_link("recipes").unwrap();
+        assert_eq!(r.path, "recipes");
+        assert!(r.is_dir);
+    }
+
+    #[test]
+    fn resolve_link_file_is_not_dir() {
+        let (_cfg, _root, workspace) = link_fixture();
+        assert!(!workspace.resolve_link("intro").unwrap().is_dir);
     }
 
     #[test]

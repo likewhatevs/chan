@@ -2469,7 +2469,14 @@ export async function openLinkTarget(
 ): Promise<void> {
   let path = target;
   try {
-    path = (await api.resolveLink(target)).path;
+    const res = await api.resolveLink(target);
+    // A link to a directory opens the file browser at that folder rather
+    // than the text editor (which would reject it as "not a text file").
+    if (res.is_dir) {
+      openBrowserInActivePane({ select: res.path });
+      return;
+    }
+    path = res.path;
   } catch {
     // Unresolvable (broken link / network): open the raw target so the
     // editor surfaces the missing file instead of silently no-op'ing.
