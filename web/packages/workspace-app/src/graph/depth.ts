@@ -1,7 +1,14 @@
 import type { FsGraphNode, GraphViewNode } from "../api/types";
 
 export const GRAPH_DEPTH_HARD_MAX = 10;
-export const FS_GRAPH_DEPTH_MAX = 6;
+/// Depth the fs-graph probe fetches AND the workspace/dir depth-slider
+/// cap. Set equal to GRAPH_DEPTH_HARD_MAX so the cap is effectively the
+/// tree's real depth: `graphDepthCap` clamps to
+/// `min(actualReachableDepth, this)`, so a deep (source-style) tree
+/// reveals in full while a shallow notes tree only reaches its own
+/// depth. Each fs-graph request stays bounded by the server's MAX_NODES
+/// cap regardless.
+export const FS_GRAPH_DEPTH_MAX = 10;
 
 type GraphDepthScope =
   | { kind: "file" }

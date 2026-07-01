@@ -40,7 +40,7 @@ describe("link edges coloured by source document type", () => {
 
   test("each link sub-group is stroked with its source-kind colour", () => {
     expect(canvas).toMatch(
-      /strokePass\(list, fileKindColor\(kind as DKind\), 0\.18\);/,
+      /strokePass\(list, fileKindColor\(kind as DKind\), alpha\);/,
     );
   });
 });

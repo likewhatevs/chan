@@ -38,10 +38,12 @@ use serde::{Deserialize, Serialize};
 use crate::error::err;
 use crate::state::AppState;
 
-/// Hard cap on `depth` for scope=directory. Six is enough for a project-
-/// style workspace (a few levels of grouping) without letting a single
-/// request walk a deep dependency tree disguised as a notes workspace.
-const MAX_DEPTH: usize = 6;
+/// Hard cap on `depth` for scope=directory. Ten matches the frontend's
+/// GRAPH_DEPTH_HARD_MAX so the depth slider can reveal the full tree of a
+/// deeper (e.g. source-style) workspace, not just the few levels a notes
+/// workspace uses. A single request stays bounded by MAX_NODES below, so
+/// a genuinely huge tree truncates by node count rather than by depth.
+const MAX_DEPTH: usize = 10;
 
 /// Hard cap on emitted nodes. Past this the response is truncated and
 /// `truncated: true` flags it on the wire so the frontend can warn
