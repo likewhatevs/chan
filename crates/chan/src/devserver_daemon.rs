@@ -9,7 +9,7 @@
 //! motivating `ssh -L ... chan devserver --service` case ties the devserver to
 //! the long-lived session that holds the tunnel. Closing that session stops the
 //! daemon; the walk-away "survives logout" model stays systemd/launchd's job via
-//! `--service` (auto) or the explicit backends.
+//! `--service=systemd` / `--service=launchd`.
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -37,7 +37,7 @@ fn daemon_record_path() -> PathBuf {
         .join("daemon.json")
 }
 
-/// `chan devserver --service=chan` (or the per-OS auto pick on Windows/other):
+/// `chan devserver --service=chan`:
 /// become the foreground daemon, or with `--force` turn down a running one and
 /// take over. Without `--force`, an already-running daemon on the SAME address
 /// is re-attached as a foreground watchdog; a different address errors (use
@@ -83,6 +83,26 @@ pub async fn run_devserver_as_chan(
 pub async fn restart_devserver_chan(addr: SocketAddr, verbose: bool) -> Result<()> {
     // --restart short-circuits before tunnel resolution, so it never carries one.
     run_devserver_as_chan(addr, true, verbose, None).await
+}
+
+/// `--service=chan --join`: attach to a running self-managed daemon as a
+/// foreground watchdog (re-emit the token marker, block on health until Ctrl-C).
+/// Errors when no daemon is running -- `--join` never starts one; run
+/// `chan devserver --service=chan` with no action to own it instead.
+pub async fn join_devserver_chan(verbose: bool) -> Result<()> {
+    let record_path = daemon_record_path();
+    if verbose {
+        print_daemon_paths(&daemon_lock_path(), &record_path);
+    }
+    match read_daemon_record(&record_path) {
+        Some(record) if daemon_lock_held(&daemon_lock_path()) && is_record_live(&record) => {
+            watchdog(record).await
+        }
+        _ => anyhow::bail!(
+            "chan devserver: no self-managed daemon is running to join; start one with \
+             `chan devserver --service=chan`."
+        ),
+    }
 }
 
 /// `--stop`: terminate the running daemon and clear the pidfile. Idempotent --

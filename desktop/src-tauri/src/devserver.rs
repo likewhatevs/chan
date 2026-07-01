@@ -300,7 +300,7 @@ pub fn read_local_port() -> Option<u16> {
 /// Scrape the devserver bearer token from a control terminal's output, matching
 /// the locked machine marker `CHAN_DEVSERVER_TOKEN=<token>` (the shared
 /// `chan_server::DEVSERVER_TOKEN_MARKER`) that `chan devserver` emits on every
-/// start AND `--systemd` re-attach. Single-sourcing the marker const keeps the
+/// start AND `--service=systemd --join` re-attach. Single-sourcing the marker const keeps the
 /// emitter and this scraper from drifting. The desktop scrapes this fresh on
 /// every connect (and on a script re-run), so a recycled or rotated devserver is
 /// handled by construction -- no stored/stale token to reuse.

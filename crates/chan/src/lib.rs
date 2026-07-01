@@ -358,43 +358,51 @@ enum Command {
         /// 0.0.0.0 / :: to listen on all interfaces; there is no TLS and
         /// only a bearer-token gate, so reach a remote devserver over an
         /// `ssh -L` tunnel rather than binding it on a public interface.
-        /// Omit on `--stop`/`--restart`/`--status` to preserve the running
-        /// service's bound address instead of reverting to the default.
+        /// Omit on `--restart` to preserve the running service's bound
+        /// address instead of reverting to the default.
         #[arg(long)]
         bind: Option<IpAddr>,
         /// Port to bind. Default 8787; preserved from the running service on
         /// `--restart` when omitted.
         #[arg(long)]
         port: Option<u16>,
-        /// Run as a managed service instead of the foreground. `--service` with
-        /// no value (or `=none`) picks the best backend for the OS: a systemd
-        /// user service (`chan-devserver.service`) on Linux, a launchd
-        /// LaunchAgent (`app.chan.devserver`) on macOS, and the self-managed
-        /// `chan` daemon on Windows + other Unix. `=chan` forces the cross-OS
-        /// self-managed FOREGROUND daemon (pidfile + flock); `=systemd` /
-        /// `=launchd` force that backend. systemd/launchd survive logout; the
-        /// `chan` daemon is foreground and shares the launching session's life.
-        /// Omit `--service` to run in the foreground (Ctrl-C to stop).
-        #[arg(long, value_enum, num_args = 0..=1, default_missing_value = "none")]
-        service: Option<ServiceKind>,
-        /// Stop the supervised service and exit. With no `--service`, targets the
-        /// per-OS best pick. Idempotent: a no-op when it is not running. A
-        /// foreground devserver is stopped with Ctrl-C.
-        #[arg(long, conflicts_with = "restart")]
+        /// Service backend. `none` (the default) runs in the FOREGROUND on
+        /// `--bind`/`--port` with no supervision (Ctrl-C to stop). `chan` is
+        /// the cross-OS self-managed foreground daemon (pidfile + flock), tied
+        /// to the launching session. `systemd` (Linux) and `launchd` (macOS)
+        /// are detached background services that survive logout; each needs an
+        /// explicit action verb (`--start`/`--stop`/`--restart`/`--status`/
+        /// `--join`) rather than a bare `--service`.
+        #[arg(long, value_enum, default_value = "none")]
+        service: ServiceKind,
+        /// Start the background service (write/refresh its unit, enable it on
+        /// boot, and start it), then return. systemd/launchd only. `chan` is a
+        /// foreground backend, so run it with no action to own it.
+        #[arg(long, group = "action")]
+        start: bool,
+        /// Stop the service AND disable it, so it does not come back on the next
+        /// login or boot, then return. Idempotent. A foreground devserver
+        /// (`--service=none`) is stopped with Ctrl-C.
+        #[arg(long, group = "action")]
         stop: bool,
-        /// Restart the supervised service (or START it if it is not running),
-        /// then stay attached. Rewrites the unit / agent / pidfile first, so it
-        /// picks up the current binary; an explicit --bind/--port rebinds, while
-        /// omitting both preserves the running service's address.
-        #[arg(long)]
+        /// Restart the service, then return. Rewrites the unit / agent / pidfile
+        /// first, so it picks up the current binary; an explicit --bind/--port
+        /// rebinds, while omitting both preserves the running service's address.
+        /// Starts the service if it is not already running.
+        #[arg(long, group = "action")]
         restart: bool,
-        /// Report whether the supervised service is running, then exit. With no
-        /// `--service`, reports the per-OS best pick.
-        #[arg(long)]
+        /// Report whether the service is running, then exit.
+        #[arg(long, group = "action")]
         status: bool,
-        /// Replace a running service whose bind address differs, take over a
-        /// wedged one, or make a systemd restart destructive instead of
-        /// preserving PTYs. Applies to `--service` / `--restart`.
+        /// Ensure the service is running (start it if down, attach if up) and
+        /// stay attached, blocking on its health until Ctrl-C. This is the
+        /// "bring it up and watch it" form connect scripts use; on Ctrl-C it
+        /// detaches and the service keeps running.
+        #[arg(long, group = "action")]
+        join: bool,
+        /// Take over a wedged `--service=chan` daemon, or make a
+        /// `--service=systemd --restart` destructive instead of preserving live
+        /// PTYs. Applies to `--service=chan` and `--restart`.
         #[arg(long)]
         force: bool,
         /// Tunnel endpoint URL. With --tunnel-token, the devserver also dials
@@ -845,14 +853,14 @@ pub enum Personality {
     Desktop,
 }
 
-/// Which supervisor backs `chan devserver --service`. The CLI value `none`
-/// (`Auto`) picks the best backend for the OS; the others force a specific one.
+/// Which backend backs `chan devserver --service`. `None` (the CLI value
+/// `none`, the default) is the plain FOREGROUND server with no supervision; the
+/// others each name a specific backend explicitly; there is no per-OS auto-pick.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 pub enum ServiceKind {
-    /// Best pick for the OS: systemd (Linux), launchd (macOS), the self-managed
-    /// `chan` daemon (Windows + other Unix).
+    /// No supervision: run in the foreground on `--bind`/`--port` (Ctrl-C stops).
     #[value(name = "none")]
-    Auto,
+    None,
     /// The cross-OS self-managed foreground daemon (pidfile + flock).
     Chan,
     /// A systemd user service (Linux only).
@@ -862,20 +870,109 @@ pub enum ServiceKind {
 }
 
 impl ServiceKind {
-    /// Resolve `Auto` to the concrete per-OS backend; the others pass through.
-    /// After this, the result is never `Auto`.
-    fn resolve(self) -> ServiceKind {
+    /// The `--service=<name>` value, for error messages.
+    fn cli_name(self) -> &'static str {
         match self {
-            ServiceKind::Auto => {
-                if cfg!(target_os = "linux") {
-                    ServiceKind::Systemd
-                } else if cfg!(target_os = "macos") {
-                    ServiceKind::Launchd
-                } else {
-                    ServiceKind::Chan
-                }
-            }
-            other => other,
+            ServiceKind::None => "none",
+            ServiceKind::Chan => "chan",
+            ServiceKind::Systemd => "systemd",
+            ServiceKind::Launchd => "launchd",
+        }
+    }
+}
+
+/// One action verb from the mutually-exclusive `--start`/`--stop`/`--restart`/
+/// `--status`/`--join` group. clap enforces at most one is set.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DevAction {
+    Start,
+    Stop,
+    Restart,
+    Status,
+    Join,
+}
+
+impl DevAction {
+    /// The `--<flag>` this verb came from, for error messages.
+    fn flag(self) -> &'static str {
+        match self {
+            DevAction::Start => "start",
+            DevAction::Stop => "stop",
+            DevAction::Restart => "restart",
+            DevAction::Status => "status",
+            DevAction::Join => "join",
+        }
+    }
+}
+
+/// The resolved operation `chan devserver` will run once the `(--service,
+/// action)` pair is validated.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DevPlan {
+    /// Run in the foreground: `--service=none` (no supervision) or the
+    /// `--service=chan` self-managed daemon. Both block until Ctrl-C.
+    Foreground(ServiceKind),
+    /// A management verb on the `chan` foreground daemon (never `Start`).
+    ChanVerb(DevAction),
+    /// A verb against a `systemd`/`launchd` background service.
+    Supervised(ServiceKind, DevAction),
+}
+
+/// The single action verb the user passed, if any. clap's `action` group makes
+/// at most one of the flags true, so the order here is immaterial.
+fn selected_devserver_action(
+    start: bool,
+    stop: bool,
+    restart: bool,
+    status: bool,
+    join: bool,
+) -> Option<DevAction> {
+    if start {
+        Some(DevAction::Start)
+    } else if stop {
+        Some(DevAction::Stop)
+    } else if restart {
+        Some(DevAction::Restart)
+    } else if status {
+        Some(DevAction::Status)
+    } else if join {
+        Some(DevAction::Join)
+    } else {
+        None
+    }
+}
+
+/// Validate a `(--service, action)` combination and resolve it to a [`DevPlan`],
+/// or return a user-facing error for an invalid pair. Pure + total so every cell
+/// of the validity matrix is unit-tested without a real service manager.
+///
+/// - `none` (foreground) takes no action verb.
+/// - `chan` (foreground) runs bare, or takes `--stop`/`--restart`/`--status`/
+///   `--join`, but not `--start` (there is no background to start).
+/// - `systemd`/`launchd` (detached) require an explicit verb; a bare
+///   `--service=systemd` is ambiguous and rejected.
+fn plan_devserver(service: ServiceKind, action: Option<DevAction>) -> Result<DevPlan, String> {
+    match (service, action) {
+        (ServiceKind::None, None) => Ok(DevPlan::Foreground(ServiceKind::None)),
+        (ServiceKind::None, Some(a)) => Err(format!(
+            "--service=none runs in the foreground (Ctrl-C to stop); --{} needs a managed \
+             backend (--service=chan/systemd/launchd)",
+            a.flag()
+        )),
+        (ServiceKind::Chan, None) => Ok(DevPlan::Foreground(ServiceKind::Chan)),
+        (ServiceKind::Chan, Some(DevAction::Start)) => Err(
+            "--service=chan is a foreground backend; run `chan devserver --service=chan` with \
+             no action to own it, or use --service=systemd/launchd for a detached background \
+             service"
+                .to_string(),
+        ),
+        (ServiceKind::Chan, Some(a)) => Ok(DevPlan::ChanVerb(a)),
+        (kind @ (ServiceKind::Systemd | ServiceKind::Launchd), None) => Err(format!(
+            "--service={} needs an action: one of --start/--stop/--status/--restart/--join",
+            kind.cli_name()
+        )),
+        (kind @ (ServiceKind::Systemd | ServiceKind::Launchd), Some(a)) => {
+            Ok(DevPlan::Supervised(kind, a))
         }
     }
 }
@@ -996,9 +1093,11 @@ where
             bind,
             port,
             service,
+            start,
             stop,
             restart,
             status,
+            join,
             force,
             tunnel_url,
             tunnel_token,
@@ -1007,9 +1106,11 @@ where
                 bind,
                 port,
                 service,
+                start,
                 stop,
                 restart,
                 status,
+                join,
                 force,
                 tunnel_url,
                 tunnel_token,
@@ -2159,47 +2260,99 @@ fn devserver_port_collision_hint(port: u16, err: &chan_server::Error) -> Option<
     ))
 }
 
-/// Run a headless multi-workspace devserver bound to `bind:port`. By default
-/// it runs in the foreground. `--service` supervises it under the platform
-/// service manager so it survives the launching shell: a systemd user unit
-/// (`chan-devserver.service`) on Linux, a launchd LaunchAgent
-/// (`app.chan.devserver`) on macOS, and a detached background process tracked
-/// by a PID file on Windows. It re-attaches when the service is already
-/// running.
+/// Run a headless multi-workspace devserver. `--service=none` (the default)
+/// runs in the foreground on `bind:port`; `--service=chan` is the self-managed
+/// foreground daemon; `--service=systemd`/`launchd` are detached background
+/// services driven by explicit action verbs (`--start`/`--stop`/`--restart`/
+/// `--status`/`--join`). [`plan_devserver`] validates the `(service, action)`
+/// pair before we touch any real service manager.
 #[allow(clippy::too_many_arguments)]
 async fn cmd_devserver(
     bind: Option<IpAddr>,
     port: Option<u16>,
-    service: Option<ServiceKind>,
+    service: ServiceKind,
+    start: bool,
     stop: bool,
     restart: bool,
     status: bool,
+    join: bool,
     force: bool,
     tunnel_url: String,
     tunnel_token: Option<String>,
     verbose: bool,
 ) -> Result<()> {
-    // Effective address for a fresh start: an explicit flag or the built-in
-    // default. The --stop/--restart branch overrides this to preserve the
-    // running service's address.
-    let addr = SocketAddr::new(
+    let action = selected_devserver_action(start, stop, restart, status, join);
+    let plan =
+        plan_devserver(service, action).map_err(|msg| anyhow::anyhow!("chan devserver: {msg}"))?;
+
+    // The requested address for a fresh foreground start: an explicit flag or
+    // the built-in default. Management verbs recompute it from the running
+    // service's persisted address (see `service_target_addr`).
+    let requested = SocketAddr::new(
         bind.unwrap_or(DEFAULT_DEVSERVER_BIND),
         port.unwrap_or(DEFAULT_PORT),
     );
-    // --status / --stop / --restart act on a supervised service and short-circuit
-    // the normal start path. With no explicit --service they target the per-OS
-    // best pick (`Auto`).
-    if status {
-        return run_devserver_status(service.unwrap_or(ServiceKind::Auto).resolve(), verbose).await;
+
+    match plan {
+        DevPlan::Foreground(ServiceKind::None) => {
+            warn_non_loopback_bind(requested);
+            let tunnel = build_devserver_tunnel(tunnel_token, tunnel_url);
+            // Tunnel mode defaults to NOT binding the loopback port (the gateway
+            // is the surface, and it 404s the management API anyway);
+            // `CHAN_DEVSERVER_LISTEN` overrides either way.
+            let listen = resolve_devserver_listen(tunnel.is_some(), devserver_listen_override())?;
+            run_devserver_foreground(requested, tunnel, listen).await
+        }
+        DevPlan::Foreground(ServiceKind::Chan) => {
+            warn_non_loopback_bind(requested);
+            // The `chan` daemon serves in-process (it never persists the token to
+            // a unit/plist), so the tunnel rides along with it just like the
+            // plain foreground.
+            let tunnel = build_devserver_tunnel(tunnel_token, tunnel_url);
+            devserver_daemon::run_devserver_as_chan(requested, force, verbose, tunnel).await
+        }
+        DevPlan::Foreground(kind) => {
+            unreachable!("plan_devserver only routes none/chan to Foreground, got {kind:?}")
+        }
+        DevPlan::ChanVerb(action) => {
+            // A --tunnel-token is meaningless with a chan management verb (the
+            // running daemon already owns any tunnel), so it is ignored here.
+            // Preserve the daemon's bound address when --bind/--port are omitted.
+            let addr = service_target_addr(ServiceKind::Chan, bind, port);
+            match action {
+                DevAction::Stop => devserver_daemon::stop_devserver_chan(verbose).await,
+                DevAction::Restart => devserver_daemon::restart_devserver_chan(addr, verbose).await,
+                DevAction::Status => devserver_daemon::status_devserver_chan(verbose),
+                DevAction::Join => devserver_daemon::join_devserver_chan(verbose).await,
+                DevAction::Start => {
+                    unreachable!("plan_devserver rejects --service=chan --start")
+                }
+            }
+        }
+        DevPlan::Supervised(kind, action) => {
+            // systemd/launchd would have to persist a tunnel PAT in the unit /
+            // plist (0644) to re-exec with it, so tunnel mode is refused here.
+            if tunnel_token.is_some() {
+                anyhow::bail!(
+                    "chan devserver: tunnel mode (--tunnel-token) is not supported under \
+                     --service={}; the supervised backend would persist the token in the \
+                     unit / agent (0644). Use --service=chan, or run the devserver in the \
+                     foreground.",
+                    kind.cli_name()
+                );
+            }
+            // Preserve the running service's bound address when --bind/--port are
+            // omitted (per field: explicit flag > persisted > default), so a
+            // flagless --restart/--join keeps what the service runs on.
+            let addr = service_target_addr(kind, bind, port);
+            run_supervised_devserver(kind, action, addr, force, verbose).await
+        }
     }
-    if stop || restart {
-        let kind = service.unwrap_or(ServiceKind::Auto).resolve();
-        // Preserve the running service's bound address when --bind/--port are
-        // omitted, so a flagless --restart does not silently rebind to the
-        // default. Per field: explicit flag > running persisted > default.
-        let addr = service_target_addr(kind, bind, port);
-        return manage_supervised_devserver(kind, addr, stop, verbose, force).await;
-    }
+}
+
+/// Warn when a devserver bind exposes a non-loopback interface: there is no TLS,
+/// only the per-launch bearer-token gate.
+fn warn_non_loopback_bind(addr: SocketAddr) {
     if !addr.ip().is_loopback() {
         eprintln!(
             "WARNING: binding to {} exposes the devserver on a non-loopback \
@@ -2208,93 +2361,71 @@ async fn cmd_devserver(
             addr.ip()
         );
     }
-    // Resolve tunnel mode from --tunnel-token. When set, the devserver also
-    // dials the gateway and publishes every mounted workspace behind one
-    // registration; the local management server still binds. The tunnel runs
-    // only in the FOREGROUND devserver: the token is a secret, and the
-    // supervised backends would have to persist it in the unit file / launchd
-    // plist (0644) to re-exec with it. The `chan` foreground daemon never
-    // persists it (it serves in-process), so the tunnel rides along with =chan
-    // and the plain foreground; only systemd/launchd refuse it.
-    let resolved = service.map(ServiceKind::resolve);
-    let tunnel = match tunnel_token {
-        Some(token) => {
-            // Warn when the token came in via the flag rather than the env var
-            // (clap doesn't expose the source, so compare to env directly). The
-            // flag value is in `ps` output until the process exits; the env var
-            // is not.
-            if std::env::var("CHAN_TUNNEL_TOKEN").ok().as_deref() != Some(token.as_str()) {
-                eprintln!(
-                    "WARNING: --tunnel-token is visible in `ps` output. \
-                     Prefer CHAN_TUNNEL_TOKEN env var instead."
-                );
-            }
-            if matches!(
-                resolved,
-                Some(ServiceKind::Systemd) | Some(ServiceKind::Launchd)
-            ) {
-                anyhow::bail!(
-                    "chan devserver: tunnel mode (--tunnel-token) is not supported under \
-                     --service=systemd / --service=launchd; the supervised backend would \
-                     persist the token in the unit / agent (0644). Use --service=chan, or \
-                     run the devserver in the foreground."
-                );
-            }
-            Some(chan_server::DevserverTunnel { tunnel_url, token })
-        }
-        None => None,
-    };
-    // `--service` supervises the devserver under the resolved backend so it
-    // outlives the launching terminal (systemd/launchd) or runs as a foreground
-    // self-managed daemon (chan).
-    if let Some(kind) = resolved {
-        return run_devserver_as_service(kind, addr, force, verbose, tunnel).await;
-    }
-    // Resolve the local-listener decision for the foreground path only. Tunnel
-    // mode defaults to NOT binding the loopback port (the gateway is the
-    // surface, and it 404s the management API anyway); `CHAN_DEVSERVER_LISTEN`
-    // overrides either way. The supervised backends always bind locally (they
-    // re-exec without the env var, and tunnel mode is refused there), so the
-    // resolution lives below the --service branch.
-    let listen = resolve_devserver_listen(tunnel.is_some(), devserver_listen_override())?;
-    run_devserver_foreground(addr, tunnel, listen).await
 }
 
-/// Dispatch a resolved `--service` backend: the self-managed `chan` daemon
-/// (cross-OS, foreground), a systemd user service (Linux), or a launchd
-/// LaunchAgent (macOS). The systemd/launchd backends compile on every target and
-/// are gated at runtime via `cfg!`, so a wrong-OS request errors clearly rather
-/// than silently doing nothing.
-async fn run_devserver_as_service(
+/// Build the foreground tunnel config from `--tunnel-token`, warning when the
+/// secret arrived on the command line (visible in `ps`) rather than via
+/// `CHAN_TUNNEL_TOKEN`. Only the foreground / `chan` paths reach this; the
+/// systemd/launchd refusal lives at the call site.
+fn build_devserver_tunnel(
+    tunnel_token: Option<String>,
+    tunnel_url: String,
+) -> Option<chan_server::DevserverTunnel> {
+    let token = tunnel_token?;
+    // clap does not expose the arg source, so compare to the env directly.
+    if std::env::var("CHAN_TUNNEL_TOKEN").ok().as_deref() != Some(token.as_str()) {
+        eprintln!(
+            "WARNING: --tunnel-token is visible in `ps` output. \
+             Prefer CHAN_TUNNEL_TOKEN env var instead."
+        );
+    }
+    Some(chan_server::DevserverTunnel { tunnel_url, token })
+}
+
+/// Dispatch a `systemd`/`launchd` action verb: `--start` (create + enable +
+/// start, then return), `--stop` (stop + disable), `--restart` (rewrite + bounce,
+/// then return), `--status`, or `--join` (ensure running, then attach + block).
+/// Both backends compile on every target and are gated at runtime via `cfg!`, so
+/// a wrong-OS request errors clearly rather than silently doing nothing.
+async fn run_supervised_devserver(
     kind: ServiceKind,
+    action: DevAction,
     addr: SocketAddr,
     force: bool,
     verbose: bool,
-    tunnel: Option<chan_server::DevserverTunnel>,
 ) -> Result<()> {
     match kind {
-        ServiceKind::Chan => {
-            devserver_daemon::run_devserver_as_chan(addr, force, verbose, tunnel).await
-        }
         ServiceKind::Systemd => {
-            if cfg!(target_os = "linux") {
-                run_devserver_under_systemd(addr).await
-            } else {
+            if !cfg!(target_os = "linux") {
                 anyhow::bail!(
                     "chan devserver: the systemd backend is Linux-only; use --service=chan."
-                )
+                );
+            }
+            match action {
+                DevAction::Start => start_devserver_under_systemd(addr).await,
+                DevAction::Stop => stop_devserver_under_systemd().await,
+                DevAction::Restart => restart_devserver_under_systemd(addr, force).await,
+                DevAction::Status => run_devserver_status(kind, verbose).await,
+                DevAction::Join => join_devserver_under_systemd(addr).await,
             }
         }
         ServiceKind::Launchd => {
-            if cfg!(target_os = "macos") {
-                run_devserver_under_launchd(addr).await
-            } else {
+            if !cfg!(target_os = "macos") {
                 anyhow::bail!(
                     "chan devserver: the launchd backend is macOS-only; use --service=chan."
-                )
+                );
+            }
+            match action {
+                DevAction::Start => start_devserver_under_launchd(addr).await,
+                DevAction::Stop => stop_devserver_under_launchd().await,
+                DevAction::Restart => restart_devserver_under_launchd(addr).await,
+                DevAction::Status => run_devserver_status(kind, verbose).await,
+                DevAction::Join => join_devserver_under_launchd(addr).await,
             }
         }
-        ServiceKind::Auto => unreachable!("Auto is resolved before dispatch"),
+        ServiceKind::None | ServiceKind::Chan => {
+            unreachable!("plan_devserver only routes systemd/launchd to Supervised")
+        }
     }
 }
 
@@ -2337,55 +2468,11 @@ async fn run_devserver_status(kind: ServiceKind, verbose: bool) -> Result<()> {
                 anyhow::bail!("chan devserver: the launchd backend is macOS-only.")
             }
         }
-        ServiceKind::Auto => unreachable!("Auto is resolved before dispatch"),
+        ServiceKind::None => unreachable!("--service=none has no service to report status on"),
     }
 }
 
-/// Dispatch `--stop` / `--restart` for a resolved backend: the self-managed
-/// `chan` daemon, a systemd user service (Linux), or a launchd LaunchAgent
-/// (macOS). `--restart` starts the service when it is not already running.
-async fn manage_supervised_devserver(
-    kind: ServiceKind,
-    addr: SocketAddr,
-    stop: bool,
-    verbose: bool,
-    force: bool,
-) -> Result<()> {
-    match kind {
-        ServiceKind::Chan => {
-            if stop {
-                devserver_daemon::stop_devserver_chan(verbose).await
-            } else {
-                devserver_daemon::restart_devserver_chan(addr, verbose).await
-            }
-        }
-        ServiceKind::Systemd => {
-            if cfg!(target_os = "linux") {
-                if stop {
-                    stop_devserver_under_systemd().await
-                } else {
-                    restart_devserver_under_systemd(addr, force).await
-                }
-            } else {
-                anyhow::bail!("chan devserver: the systemd backend is Linux-only.")
-            }
-        }
-        ServiceKind::Launchd => {
-            if cfg!(target_os = "macos") {
-                if stop {
-                    stop_devserver_under_launchd().await
-                } else {
-                    restart_devserver_under_launchd(addr).await
-                }
-            } else {
-                anyhow::bail!("chan devserver: the launchd backend is macOS-only.")
-            }
-        }
-        ServiceKind::Auto => unreachable!("Auto is resolved before dispatch"),
-    }
-}
-
-/// The bound address for a `--stop`/`--restart` whose `--bind`/`--port` were
+/// The bound address for a `--restart`/`--join` whose `--bind`/`--port` were
 /// omitted: each field falls back to the running backend's persisted address so
 /// a flagless restart keeps what the service runs on.
 fn service_target_addr(kind: ServiceKind, bind: Option<IpAddr>, port: Option<u16>) -> SocketAddr {
@@ -2419,7 +2506,7 @@ fn persisted_devserver_addr(kind: ServiceKind) -> Option<SocketAddr> {
         ServiceKind::Chan => devserver_daemon::persisted_devserver_addr_chan(),
         ServiceKind::Systemd => devserver_addr_from_persisted_args(&read_systemd_unit()?),
         ServiceKind::Launchd => devserver_addr_from_persisted_args(&read_launch_agent_plist()?),
-        ServiceKind::Auto => None,
+        ServiceKind::None => None,
     }
 }
 
@@ -2633,7 +2720,32 @@ async fn health_ok(client: &reqwest::Client, url: &str) -> bool {
     }
 }
 
-async fn run_devserver_under_systemd(addr: SocketAddr) -> Result<()> {
+/// `chan devserver --service=systemd --start`: ensure the unit is up (linger +
+/// write/enable/start when it is not already running), then return. Enables the
+/// unit so it also comes back on boot. Idempotent: a no-op (beyond re-providing
+/// the token) when the service is already active.
+async fn start_devserver_under_systemd(addr: SocketAddr) -> Result<()> {
+    ensure_systemd_linger().await?;
+    if unit_is_active().await {
+        emit_devserver_token_marker(DEVSERVER_TOKEN_WAIT).await?;
+        eprintln!(
+            "chan devserver: the systemd user service {DEVSERVER_SYSTEMD_UNIT} is already running."
+        );
+        return Ok(());
+    }
+    bootstrap_systemd_unit(addr, false).await?;
+    eprintln!(
+        "chan devserver: started the systemd user service {DEVSERVER_SYSTEMD_UNIT} (bind={addr})."
+    );
+    Ok(())
+}
+
+/// `chan devserver --service=systemd --join`: ensure the unit is running (start
+/// it if down, re-attach if up), then stay attached and block on the health
+/// watchdog until Ctrl-C. This is the "bring it up and watch it" form connect
+/// scripts use; unlike `--start` it does not return until the service stops or
+/// the user detaches.
+async fn join_devserver_under_systemd(addr: SocketAddr) -> Result<()> {
     ensure_systemd_linger().await?;
 
     if unit_is_active().await {
@@ -2695,9 +2807,10 @@ async fn bootstrap_systemd_unit(addr: SocketAddr, restart: bool) -> Result<()> {
     Ok(())
 }
 
-/// `chan devserver --systemd --restart`: rewrite the unit (current binary +
-/// `addr`), bounce it (or start it if stopped), then watch it. Linger
-/// is ensured first, mirroring the start path.
+/// `chan devserver --service=systemd --restart`: rewrite the unit (current
+/// binary + `addr`), bounce it (or start it if stopped), then return. Linger is
+/// ensured first, mirroring the start path. Preserves live PTYs across the bounce
+/// via the systemd fdstore unless `--force`. Use `--join` to stay attached.
 async fn restart_devserver_under_systemd(addr: SocketAddr, force: bool) -> Result<()> {
     ensure_systemd_linger().await?;
     let was_running = unit_is_active().await;
@@ -2713,12 +2826,7 @@ async fn restart_devserver_under_systemd(addr: SocketAddr, force: bool) -> Resul
         "chan devserver: {} the systemd user service {DEVSERVER_SYSTEMD_UNIT} (bind={addr})",
         if was_running { "restarted" } else { "started" }
     );
-    run_health_watchdog(
-        &addr.to_string(),
-        DaemonLiveness::Systemd,
-        &format!("systemd user service {DEVSERVER_SYSTEMD_UNIT}"),
-    )
-    .await
+    Ok(())
 }
 
 async fn prepare_systemd_fdstore_restart(addr: SocketAddr, force: bool) -> Result<()> {
@@ -2730,7 +2838,7 @@ async fn prepare_systemd_fdstore_restart(addr: SocketAddr, force: bool) -> Resul
             return Ok(());
         }
         anyhow::bail!(
-            "chan devserver --systemd --restart: could not read the devserver              token needed to prepare fd preservation. Re-run with --force to              restart destructively."
+            "chan devserver --service=systemd --restart: could not read the devserver              token needed to prepare fd preservation. Re-run with --force to              restart destructively."
         );
     };
 
@@ -2790,24 +2898,35 @@ fn fdstore_prepare_failed(force: bool, reason: String) -> Result<()> {
         Ok(())
     } else {
         anyhow::bail!(
-            "chan devserver --systemd --restart: systemd fdstore prepare failed              ({reason}). Re-run with --force to restart destructively."
+            "chan devserver --service=systemd --restart: systemd fdstore prepare failed              ({reason}). Re-run with --force to restart destructively."
         )
     }
 }
 
-/// `chan devserver --systemd --stop`: stop the running unit. Idempotent — a
-/// no-op when the unit is not active. The unit file stays on disk (it is still
-/// enabled, so a later `--restart` / login brings it back), matching the
-/// launchd `bootout` stop.
+/// `chan devserver --service=systemd --stop`: stop the running unit AND disable
+/// it, so it does not come back on the next login or boot. Idempotent: stop is
+/// a no-op when the unit is not active, and disable is skipped when no unit file
+/// is installed. The unit file itself stays on disk (disable only drops the
+/// `WantedBy` symlink), so `--status` can still show its last command.
 async fn stop_devserver_under_systemd() -> Result<()> {
-    if !unit_is_active().await {
-        eprintln!(
-            "chan devserver: the systemd user service {DEVSERVER_SYSTEMD_UNIT} is not running."
-        );
-        return Ok(());
+    let was_active = unit_is_active().await;
+    if was_active {
+        systemctl_user(&["stop", DEVSERVER_SYSTEMD_UNIT]).await?;
     }
-    systemctl_user(&["stop", DEVSERVER_SYSTEMD_UNIT]).await?;
-    eprintln!("chan devserver: stopped the systemd user service {DEVSERVER_SYSTEMD_UNIT}.");
+    // Disable only when a unit is installed, so a stop with nothing there does
+    // not surface a spurious "No such file" from systemctl.
+    if read_systemd_unit().is_some() {
+        systemctl_user(&["disable", DEVSERVER_SYSTEMD_UNIT]).await?;
+    }
+    if was_active {
+        eprintln!(
+            "chan devserver: stopped and disabled the systemd user service {DEVSERVER_SYSTEMD_UNIT}."
+        );
+    } else {
+        eprintln!(
+            "chan devserver: the systemd user service {DEVSERVER_SYSTEMD_UNIT} is not running (disabled)."
+        );
+    }
     Ok(())
 }
 
@@ -2845,8 +2964,9 @@ async fn resolve_devserver_token(
 /// streaming. A duplicate marker re-surfaced by the journal on readable hosts is
 /// harmless — the scraper takes the last one.
 ///
-/// Errors when the token never lands within `timeout`. The point of `--systemd`
-/// supervision is to hand a client a token to reconnect with; a unit that is
+/// Errors when the token never lands within `timeout`. The point of
+/// `--service=systemd` supervision is to hand a client a token to reconnect
+/// with; a unit that is
 /// active but whose token cannot be surfaced is unreachable, so fail loud rather
 /// than babysit it. The unit stays running, so a later re-attach can recover it.
 async fn emit_devserver_token_marker(timeout: Duration) -> Result<()> {
@@ -2883,7 +3003,7 @@ async fn ensure_systemd_linger() -> Result<()> {
     let output = run_tool("loginctl", &args).await?;
     if !output.status.success() {
         anyhow::bail!(
-            "chan devserver --systemd: linger is off (so the service would not \
+            "chan devserver --service=systemd: linger is off (so the service would not \
              survive logout) and `loginctl enable-linger` was denied:\n{}\n\
              enable it once, as root: sudo loginctl enable-linger {}",
             String::from_utf8_lossy(&output.stderr).trim(),
@@ -2931,12 +3051,28 @@ fn write_devserver_unit(addr: SocketAddr) -> Result<PathBuf> {
     let dir = systemd_user_unit_dir()?;
     std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
     let unit_path = dir.join(DEVSERVER_SYSTEMD_UNIT);
-    let unit = devserver_systemd_unit(&exe, addr);
+    let unit = devserver_systemd_unit(&exe, addr, devserver_chan_home().as_deref());
     std::fs::write(&unit_path, unit).with_context(|| format!("writing {}", unit_path.display()))?;
     Ok(unit_path)
 }
 
-fn devserver_systemd_unit(exe: &Path, addr: SocketAddr) -> String {
+/// The `CHAN_HOME` override to bake into a supervised service's environment, if
+/// set to a non-empty value. systemd/launchd start the service with a fresh
+/// environment (not the supervisor's), so a devserver launched under `CHAN_HOME`
+/// must carry it into the unit/plist, otherwise the service falls back to the
+/// real `~/.chan` while the supervisor reads the isolated config, splitting the
+/// token handshake. Mirrors how the log path already resolves through `CHAN_HOME`.
+fn devserver_chan_home() -> Option<String> {
+    std::env::var("CHAN_HOME").ok().filter(|v| !v.is_empty())
+}
+
+fn devserver_systemd_unit(exe: &Path, addr: SocketAddr, chan_home: Option<&str>) -> String {
+    // A CHAN_HOME-scoped supervisor passes it to the service, else the unit runs
+    // against the real ~/.chan. Quoted so a path with spaces survives.
+    let environment = match chan_home {
+        Some(home) => format!("Environment=\"CHAN_HOME={home}\"\n"),
+        None => String::new(),
+    };
     format!(
         "[Unit]\n\
          Description=chan devserver\n\
@@ -2947,6 +3083,7 @@ fn devserver_systemd_unit(exe: &Path, addr: SocketAddr) -> String {
          NotifyAccess=main\n\
          FileDescriptorStoreMax=512\n\
          KillMode=process\n\
+         {environment}\
          ExecStart={exe} devserver --bind={ip} --port={port}\n\
          Restart=on-failure\n\
          \n\
@@ -3058,13 +3195,31 @@ async fn run_tool(program: &str, args: &[&str]) -> Result<std::process::Output> 
 /// bundle id (`app.chan.desktop`).
 const DEVSERVER_LAUNCHD_LABEL: &str = "app.chan.devserver";
 
-/// Supervise the devserver under a per-user launchd LaunchAgent: write and load
-/// the agent (or re-attach to a running one), emit the token contract, then
-/// follow its log until it stops. Unlike systemd there is no linger to ensure —
-/// a LaunchAgent in the `gui/<uid>` domain already outlives the launching shell
-/// and the GUI login session (it does NOT survive a full logout; that would
-/// need a root LaunchDaemon).
-async fn run_devserver_under_launchd(addr: SocketAddr) -> Result<()> {
+/// `chan devserver --service=launchd --start`: ensure the agent is up
+/// (write/enable/bootstrap when it is not already running), then return. A
+/// LaunchAgent in the `gui/<uid>` domain outlives the launching shell and the
+/// GUI login session (it does NOT survive a full logout; that would need a root
+/// LaunchDaemon). Idempotent: a no-op (beyond re-providing the token) when it is
+/// already active.
+async fn start_devserver_under_launchd(addr: SocketAddr) -> Result<()> {
+    let uid = current_uid().await?;
+    if launchd_is_active(uid).await {
+        emit_devserver_token_marker(DEVSERVER_TOKEN_WAIT).await?;
+        eprintln!(
+            "chan devserver: the launchd agent {DEVSERVER_LAUNCHD_LABEL} is already running."
+        );
+        return Ok(());
+    }
+    bootstrap_launch_agent(uid, addr).await?;
+    eprintln!("chan devserver: started the launchd agent {DEVSERVER_LAUNCHD_LABEL} (bind={addr}).");
+    Ok(())
+}
+
+/// `chan devserver --service=launchd --join`: ensure the agent is running (start
+/// it if down, re-attach if up), then stay attached and follow its log until
+/// Ctrl-C. Unlike `--start` it does not return until the agent stops or the user
+/// detaches.
+async fn join_devserver_under_launchd(addr: SocketAddr) -> Result<()> {
     let uid = current_uid().await?;
 
     if launchd_is_active(uid).await {
@@ -3123,9 +3278,9 @@ async fn bootstrap_launch_agent(uid: u32, addr: SocketAddr) -> Result<()> {
     Ok(())
 }
 
-/// `chan devserver --launchd --restart`: rewrite + re-register the agent
-/// (current binary + `addr`) so it bounces (or starts if stopped), then watch
-/// it.
+/// `chan devserver --service=launchd --restart`: rewrite + re-register the agent
+/// (current binary + `addr`) so it bounces (or starts if stopped), then return.
+/// Use `--join` to stay attached.
 async fn restart_devserver_under_launchd(addr: SocketAddr) -> Result<()> {
     let uid = current_uid().await?;
     let was_running = launchd_is_active(uid).await;
@@ -3134,26 +3289,29 @@ async fn restart_devserver_under_launchd(addr: SocketAddr) -> Result<()> {
         "chan devserver: {} the launchd agent {DEVSERVER_LAUNCHD_LABEL} (bind={addr})",
         if was_running { "restarted" } else { "started" }
     );
-    run_health_watchdog(
-        &addr.to_string(),
-        DaemonLiveness::Launchd { uid },
-        &format!("launchd agent {DEVSERVER_LAUNCHD_LABEL}"),
-    )
-    .await
+    Ok(())
 }
 
-/// `chan devserver --launchd --stop`: bootout the agent. Idempotent — `bootout`
-/// errors when nothing is loaded, which we report as already-stopped. The plist
-/// stays on disk (launchd re-bootstraps it at next GUI login), matching the
-/// systemd stop.
+/// `chan devserver --service=launchd --stop`: bootout the agent AND disable it,
+/// so launchd does not re-bootstrap it at the next GUI login. Idempotent:
+/// `bootout` errors when nothing is loaded, which we report as already-stopped;
+/// `disable` is best-effort. The plist stays on disk, so `--status` can still
+/// show its last command; `--start`/`--restart` re-enable it.
 async fn stop_devserver_under_launchd() -> Result<()> {
     let uid = current_uid().await?;
     let service = launchd_service_target(uid);
     let output = run_tool("launchctl", &["bootout", service.as_str()]).await?;
+    // Persist the disable so RunAtLoad does not relaunch it at login. Best-effort:
+    // a no-op when it was never enabled, and it must not fail the stop.
+    let _ = run_tool("launchctl", &["disable", service.as_str()]).await;
     if output.status.success() {
-        eprintln!("chan devserver: stopped the launchd agent {DEVSERVER_LAUNCHD_LABEL}.");
+        eprintln!(
+            "chan devserver: stopped and disabled the launchd agent {DEVSERVER_LAUNCHD_LABEL}."
+        );
     } else {
-        eprintln!("chan devserver: the launchd agent {DEVSERVER_LAUNCHD_LABEL} is not running.");
+        eprintln!(
+            "chan devserver: the launchd agent {DEVSERVER_LAUNCHD_LABEL} is not running (disabled)."
+        );
     }
     Ok(())
 }
@@ -3225,7 +3383,7 @@ fn write_devserver_launch_agent(addr: SocketAddr) -> Result<PathBuf> {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("creating {}", parent.display()))?;
     }
-    let plist = devserver_launch_agent_plist(&exe, addr, &log);
+    let plist = devserver_launch_agent_plist(&exe, addr, &log, devserver_chan_home().as_deref());
     std::fs::write(&plist_path, plist)
         .with_context(|| format!("writing {}", plist_path.display()))?;
     Ok(plist_path)
@@ -3234,7 +3392,22 @@ fn write_devserver_launch_agent(addr: SocketAddr) -> Result<PathBuf> {
 /// Build the LaunchAgent plist XML. `RunAtLoad` starts it on bootstrap;
 /// `KeepAlive`/`SuccessfulExit=false` restarts it only on a crash (the launchd
 /// analogue of systemd `Restart=on-failure`); stdout/stderr go to `log`.
-fn devserver_launch_agent_plist(exe: &Path, addr: SocketAddr, log: &Path) -> String {
+fn devserver_launch_agent_plist(
+    exe: &Path,
+    addr: SocketAddr,
+    log: &Path,
+    chan_home: Option<&str>,
+) -> String {
+    // launchd starts the agent with a fresh environment, so a CHAN_HOME-scoped
+    // supervisor bakes it into the plist; else the agent runs against ~/.chan.
+    let environment = match chan_home {
+        Some(home) => format!(
+            "  <key>EnvironmentVariables</key>\n  \
+             <dict>\n    <key>CHAN_HOME</key>\n    <string>{}</string>\n  </dict>\n",
+            xml_escape(home)
+        ),
+        None => String::new(),
+    };
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -3249,7 +3422,7 @@ fn devserver_launch_agent_plist(exe: &Path, addr: SocketAddr, log: &Path) -> Str
     <string>--bind={ip}</string>
     <string>--port={port}</string>
   </array>
-  <key>RunAtLoad</key>
+{environment}  <key>RunAtLoad</key>
   <true/>
   <key>KeepAlive</key>
   <dict>
@@ -5541,11 +5714,11 @@ mod tests {
         assert_eq!(parse_listen_override("yes"), Some(true));
     }
 
-    /// `--stop` / `--restart` parse onto the supervisor flags, and they are
-    /// mutually exclusive (clap `conflicts_with`).
+    /// The action verbs parse onto their flags, and clap's `action` group makes
+    /// them mutually exclusive.
     #[test]
-    fn devserver_stop_restart_parse() {
-        let cli = Cli::parse_from(["chan", "devserver", "--service", "--stop"]);
+    fn devserver_action_group_parse() {
+        let cli = Cli::parse_from(["chan", "devserver", "--service=systemd", "--stop"]);
         match cli.command {
             Command::Devserver {
                 service,
@@ -5553,13 +5726,13 @@ mod tests {
                 restart,
                 ..
             } => {
-                assert_eq!(service, Some(ServiceKind::Auto));
+                assert_eq!(service, ServiceKind::Systemd);
                 assert!(stop);
                 assert!(!restart);
             }
             other => panic!("expected Command::Devserver, got {other:?}"),
         }
-        let cli = Cli::parse_from(["chan", "devserver", "--service", "--restart"]);
+        let cli = Cli::parse_from(["chan", "devserver", "--service=systemd", "--restart"]);
         match cli.command {
             Command::Devserver {
                 service,
@@ -5567,55 +5740,150 @@ mod tests {
                 restart,
                 ..
             } => {
-                assert_eq!(service, Some(ServiceKind::Auto));
+                assert_eq!(service, ServiceKind::Systemd);
                 assert!(restart);
                 assert!(!stop);
             }
             other => panic!("expected Command::Devserver, got {other:?}"),
         }
-        // --stop and --restart cannot be combined.
-        assert!(
-            Cli::try_parse_from(["chan", "devserver", "--service", "--stop", "--restart"]).is_err()
-        );
+        // At most one action verb may be supplied (clap `group = "action"`).
+        assert!(Cli::try_parse_from([
+            "chan",
+            "devserver",
+            "--service=systemd",
+            "--stop",
+            "--restart"
+        ])
+        .is_err());
+        assert!(Cli::try_parse_from([
+            "chan",
+            "devserver",
+            "--service=systemd",
+            "--start",
+            "--join"
+        ])
+        .is_err());
     }
 
-    /// `--service` parses to an enum: absent => None (foreground), bare or
-    /// `=none` => Auto (per-OS pick), and each explicit backend by name. `--status`
-    /// / `--force` are plain flags.
+    /// `--service` parses to an enum: absent or `=none` => `None` (foreground),
+    /// and each explicit backend by name. A bare `--service` with no value is
+    /// rejected (there is no per-OS auto pick anymore).
     #[test]
     fn devserver_service_kind_parse() {
         let kind = |args: &[&str]| match Cli::parse_from(args).command {
             Command::Devserver { service, .. } => service,
             other => panic!("expected Command::Devserver, got {other:?}"),
         };
-        assert_eq!(kind(&["chan", "devserver"]), None);
-        assert_eq!(
-            kind(&["chan", "devserver", "--service"]),
-            Some(ServiceKind::Auto)
-        );
+        assert_eq!(kind(&["chan", "devserver"]), ServiceKind::None);
         assert_eq!(
             kind(&["chan", "devserver", "--service", "none"]),
-            Some(ServiceKind::Auto)
+            ServiceKind::None
         );
         assert_eq!(
             kind(&["chan", "devserver", "--service", "chan"]),
-            Some(ServiceKind::Chan)
+            ServiceKind::Chan
         );
         assert_eq!(
             kind(&["chan", "devserver", "--service", "systemd"]),
-            Some(ServiceKind::Systemd)
+            ServiceKind::Systemd
         );
         assert_eq!(
             kind(&["chan", "devserver", "--service", "launchd"]),
-            Some(ServiceKind::Launchd)
+            ServiceKind::Launchd
         );
-        match Cli::parse_from(["chan", "devserver", "--status", "--force"]).command {
+        // A bare --service with no value now errors.
+        assert!(Cli::try_parse_from(["chan", "devserver", "--service"]).is_err());
+        match Cli::parse_from([
+            "chan",
+            "devserver",
+            "--service=systemd",
+            "--status",
+            "--force",
+        ])
+        .command
+        {
             Command::Devserver { status, force, .. } => {
                 assert!(status);
                 assert!(force);
             }
             other => panic!("expected Command::Devserver, got {other:?}"),
         }
+    }
+
+    /// Every cell of the `(--service, action)` validity matrix resolves to the
+    /// documented plan or errors: `none`/`chan` run bare, `none` rejects all
+    /// verbs, `chan` rejects only `--start`, and systemd/launchd require a verb.
+    #[test]
+    fn devserver_plan_validity_matrix() {
+        use DevAction::*;
+        use ServiceKind::{Chan, Launchd, Systemd};
+
+        assert_eq!(
+            plan_devserver(ServiceKind::None, Option::None),
+            Ok(DevPlan::Foreground(ServiceKind::None))
+        );
+        assert_eq!(
+            plan_devserver(Chan, Option::None),
+            Ok(DevPlan::Foreground(Chan))
+        );
+
+        // `none` (foreground) rejects every action verb.
+        for a in [Start, Stop, Restart, Status, Join] {
+            assert!(
+                plan_devserver(ServiceKind::None, Some(a)).is_err(),
+                "none + {a:?} should error"
+            );
+        }
+
+        // `chan` (foreground) takes management verbs but not `--start`.
+        assert!(plan_devserver(Chan, Some(Start)).is_err());
+        for a in [Stop, Restart, Status, Join] {
+            assert_eq!(plan_devserver(Chan, Some(a)), Ok(DevPlan::ChanVerb(a)));
+        }
+
+        // systemd/launchd require an explicit verb and accept all five.
+        for kind in [Systemd, Launchd] {
+            assert!(
+                plan_devserver(kind, Option::None).is_err(),
+                "{kind:?} with no action should error"
+            );
+            for a in [Start, Stop, Restart, Status, Join] {
+                assert_eq!(
+                    plan_devserver(kind, Some(a)),
+                    Ok(DevPlan::Supervised(kind, a))
+                );
+            }
+        }
+    }
+
+    /// `selected_devserver_action` collapses the five action bools to at most one
+    /// verb (clap's group makes the flags mutually exclusive).
+    #[test]
+    fn devserver_selected_action() {
+        assert_eq!(
+            selected_devserver_action(false, false, false, false, false),
+            None
+        );
+        assert_eq!(
+            selected_devserver_action(true, false, false, false, false),
+            Some(DevAction::Start)
+        );
+        assert_eq!(
+            selected_devserver_action(false, true, false, false, false),
+            Some(DevAction::Stop)
+        );
+        assert_eq!(
+            selected_devserver_action(false, false, true, false, false),
+            Some(DevAction::Restart)
+        );
+        assert_eq!(
+            selected_devserver_action(false, false, false, true, false),
+            Some(DevAction::Status)
+        );
+        assert_eq!(
+            selected_devserver_action(false, false, false, false, true),
+            Some(DevAction::Join)
+        );
     }
 
     /// `--stop`/`--restart` address precedence: explicit flag > running
@@ -6248,6 +6516,7 @@ mod tests {
         let unit = devserver_systemd_unit(
             Path::new("/usr/local/bin/chan"),
             "127.0.0.1:8799".parse().unwrap(),
+            None,
         );
         assert!(unit.contains("Type=notify"));
         assert!(unit.contains("NotifyAccess=main"));
@@ -6256,6 +6525,23 @@ mod tests {
         assert!(
             unit.contains("ExecStart=/usr/local/bin/chan devserver --bind=127.0.0.1 --port=8799")
         );
+        // Without CHAN_HOME the unit carries no Environment line (real ~/.chan).
+        assert!(!unit.contains("Environment="));
+    }
+
+    #[test]
+    fn devserver_systemd_unit_propagates_chan_home() {
+        let unit = devserver_systemd_unit(
+            Path::new("/usr/local/bin/chan"),
+            "127.0.0.1:8799".parse().unwrap(),
+            Some("/tmp/iso home"),
+        );
+        // The service inherits the supervisor's CHAN_HOME (quoted for the space),
+        // placed before ExecStart so systemd resolves it for the started process.
+        assert!(unit.contains("Environment=\"CHAN_HOME=/tmp/iso home\"\n"));
+        let env = unit.find("Environment=").unwrap();
+        let exec = unit.find("ExecStart=").unwrap();
+        assert!(env < exec);
     }
 
     #[test]
@@ -6264,6 +6550,7 @@ mod tests {
             Path::new("/usr/local/bin/chan"),
             "127.0.0.1:8799".parse().unwrap(),
             Path::new("/Users/x/.chan/devserver/devserver.log"),
+            None,
         );
         assert!(plist.contains("<string>app.chan.devserver</string>"));
         assert!(plist.contains("<string>/usr/local/bin/chan</string>"));
@@ -6273,6 +6560,22 @@ mod tests {
         assert!(plist.contains("<key>RunAtLoad</key>"));
         assert!(plist.contains("<key>SuccessfulExit</key>"));
         assert!(plist.contains("<string>/Users/x/.chan/devserver/devserver.log</string>"));
+        // Without CHAN_HOME there is no EnvironmentVariables block.
+        assert!(!plist.contains("EnvironmentVariables"));
+    }
+
+    #[test]
+    fn launch_agent_plist_propagates_chan_home() {
+        let plist = devserver_launch_agent_plist(
+            Path::new("/usr/local/bin/chan"),
+            "127.0.0.1:8799".parse().unwrap(),
+            Path::new("/tmp/iso/.chan/devserver/devserver.log"),
+            Some("/tmp/iso & home"),
+        );
+        assert!(plist.contains("<key>EnvironmentVariables</key>"));
+        assert!(plist.contains("<key>CHAN_HOME</key>"));
+        // The value is XML-escaped like every other plist string.
+        assert!(plist.contains("<string>/tmp/iso &amp; home</string>"));
     }
 
     #[test]
@@ -6281,6 +6584,7 @@ mod tests {
             Path::new("/opt/a & b/chan"),
             "127.0.0.1:1".parse().unwrap(),
             Path::new("/tmp/log"),
+            None,
         );
         assert!(plist.contains("/opt/a &amp; b/chan"));
         assert!(!plist.contains("a & b/chan"));

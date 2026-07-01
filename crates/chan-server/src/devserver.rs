@@ -57,7 +57,7 @@ use chan_library::{
 
 mod fdstore;
 
-/// Inputs the CLI resolves for `chan devserver`. The `--systemd`
+/// Inputs the CLI resolves for `chan devserver`. The `--service=systemd`
 /// supervision path is layered on in the CLI around this; the runtime
 /// itself only needs where to bind, how to label the box, and whether to
 /// also dial the gateway tunnel.
@@ -195,12 +195,12 @@ fn devserver_config_path() -> std::io::Result<PathBuf> {
 /// connect-script output to learn the devserver's bearer token, on every
 /// connect and reconnect; the token value runs from the `=` to end of line.
 /// LOCKED wire string: the desktop matches this exact prefix, so both the
-/// foreground emit and the `--systemd` re-attach emit build to it.
+/// foreground emit and the `--service=systemd --join` re-attach emit build to it.
 pub const DEVSERVER_TOKEN_MARKER: &str = "CHAN_DEVSERVER_TOKEN=";
 
 /// Read the persisted devserver bearer token from
 /// `~/.chan/devserver/config.json`, or `None` when it is absent, unreadable,
-/// or tokenless. The `--systemd` re-attach path prints the
+/// or tokenless. The `--service=systemd --join` re-attach path prints the
 /// [`DEVSERVER_TOKEN_MARKER`] from this, since a journal-follow does not
 /// re-emit the running unit's original start line.
 pub fn persisted_devserver_token() -> Option<String> {
@@ -796,8 +796,8 @@ pub async fn run_devserver(library: Library, config: DevserverConfig) -> anyhow:
             // scrapes this exact marker from the connect-script output on every
             // connect and reconnect, as the source of truth for the bearer
             // token. Emitted once the token and bound address are known; the
-            // `--systemd` first start surfaces it through the unit journal the
-            // launcher follows.
+            // `--service=systemd` first start surfaces it through the unit
+            // journal the launcher follows.
             println!("{DEVSERVER_TOKEN_MARKER}{token}");
             fdstore::notify_ready()?;
             crate::signal::graceful_serve(listener, app, signal_tx)
@@ -1322,8 +1322,8 @@ mod tests {
     fn token_marker_is_the_locked_wire_string() {
         // LOCKED contract: the desktop control terminal scrapes this exact
         // prefix from the connect-script output. Both the foreground emit and
-        // the `--systemd` re-attach emit build to it, so pin it here — an
-        // accidental edit breaks reconnect.
+        // the `--service=systemd --join` re-attach emit build to it, so pin it
+        // here; an accidental edit breaks reconnect.
         assert_eq!(DEVSERVER_TOKEN_MARKER, "CHAN_DEVSERVER_TOKEN=");
     }
 

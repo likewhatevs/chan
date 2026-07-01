@@ -259,7 +259,7 @@
         rows="2"
         class="mono"
         bind:value={script}
-        placeholder="ssh box -L 8787:localhost:8787 chan devserver --service=systemd"
+        placeholder="ssh box -L 8787:localhost:8787 chan devserver --service=systemd --join"
         autocomplete="off"
         spellcheck="false"
         disabled={readOnlyEdit}></textarea>
