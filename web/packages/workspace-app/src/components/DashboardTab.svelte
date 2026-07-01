@@ -43,12 +43,16 @@
   // cursor persists across window reloads. The tab is a $state
   // proxy from tabs.svelte.ts; mutating `tab.carouselSlide`
   // reactively updates the layout snapshot the next session save
-  // observes. `frontActive` is false while the pane is flipped to its
-  // config back (the two-face card keeps this front face mounted but
-  // rotated away); the carousel then force-pauses so it does not
-  // auto-rotate invisibly or yank a back-side slot pick.
-  type Props = { tab: DashboardTab; frontActive?: boolean };
-  let { tab, frontActive = true }: Props = $props();
+  // observes. `active` is the keep-alive visibility gate: the tab stays
+  // MOUNTED across tab switches and flips (so the Indexing graph keeps its
+  // force layout + poll state and never reloads on its own), hiding via
+  // the visibility contract when it is not the front-facing active tab.
+  // It is false while the pane is flipped to its config back or while
+  // another tab is active; the carousel then force-pauses so it does not
+  // auto-rotate invisibly, yank a back-side slot pick, or poll the indexer
+  // in the background.
+  type Props = { tab: DashboardTab; active?: boolean };
+  let { tab, active = true }: Props = $props();
 
   function onCarouselSlideChange(i: number): void {
     if (tab.carouselSlide === i) return;
@@ -127,7 +131,9 @@
 
 <div
   class="dashboard"
+  class:active
   aria-label="Dashboard"
+  aria-hidden={!active}
   data-theme={surfaceThemeOverride("dashboard")}
   oncontextmenu={onContextMenu}
   role="region"
@@ -182,21 +188,34 @@
   <EmptyPaneCarousel
     slide={tab.carouselSlide ?? 0}
     onSlideChange={onCarouselSlideChange}
-    active={frontActive}
+    {active}
     disabledSlots={tab.disabledSlots ?? []}
     autoRotate={tab.autoRotate ?? true}
   />
 </div>
 
 <style>
+  /* Keep-alive contract, mirroring .graph-tab / .editor-tab in Pane.svelte:
+     every dashboard tab in the pane stays mounted so the Indexing carousel
+     graph keeps its force layout + 3s poll across tab switches; inactive
+     ones hide via visibility (NEVER display:none — a 0x0 host would make
+     the indexing GraphCanvas refit to nothing and lose its layout). The
+     `active` prop additionally pauses the carousel + poll while hidden. */
   .dashboard {
-    flex: 1;
+    position: absolute;
+    inset: 0;
     min-height: 0;
     min-width: 0;
     display: flex;
     flex-direction: column;
     background: var(--bg);
     color: var(--text);
+    visibility: hidden;
+    pointer-events: none;
+  }
+  .dashboard.active {
+    visibility: visible;
+    pointer-events: auto;
   }
   /* Keeps an unchecked slot row's label aligned with the checked rows'
      (the Check icon is 14px via the shared .hamburger-menu svg rule). */

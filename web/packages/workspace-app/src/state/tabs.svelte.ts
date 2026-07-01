@@ -460,9 +460,11 @@ export type DashboardTab = {
   id: string;
   title: string;
   /// Persisted carousel slide index so a reload restores the user to the
-  /// slide they were last on. 0 is the About slide; 1 is Workspace; 2 is
-  /// the Indexing graph. The carousel's play/pause is server-persisted so
-  /// the auto-rotate preference survives a reload independently.
+  /// slide they were last on. 0 is Workspace; 1 is Search (the Indexing
+  /// graph); 2 is About - matching the `SLOTS` order in DashboardTab.svelte
+  /// and the `slideIndex === 1` indexing-poll gate in EmptyPaneCarousel.
+  /// The carousel's play/pause is server-persisted so the auto-rotate
+  /// preference survives a reload independently.
   carouselSlide?: number;
   /// Slide indices the user switched off via the Dashboard tab's
   /// right-click menu. Disabled slots are skipped in auto-rotation and
@@ -3478,10 +3480,26 @@ export function paneModeOpenGraph(ctx?: SpawnContext): void {
   p.activeTabId = tab.id;
 }
 
+/// Carousel slide index of the Search / Indexing graph. Matches the
+/// `slideIndex === 1` indexing-poll gate in EmptyPaneCarousel and the
+/// `SLOTS` order in DashboardTab.svelte (0 Workspace, 1 Search, 2 About).
+export const DASHBOARD_SEARCH_SLIDE = 1;
+
+/// Optional overrides applied to a freshly-spawned Dashboard tab: pre-select
+/// a carousel slide and/or start with auto-rotation off. Shared by the
+/// `cs dashboard` server command and the indexing-pill shortcut.
+export interface OpenDashboardOptions {
+  slide?: number;
+  autoRotate?: boolean;
+}
+
 /// Spawn a Dashboard tab inside the named pane (live layout). Mirrors
 /// the shape of `openTerminalInPane` + `openBrowserInActivePane`:
 /// append and flip active. No-op if the pane id doesn't resolve to a leaf.
-export function openDashboardInPane(paneId: string): void {
+export function openDashboardInPane(
+  paneId: string,
+  opts?: OpenDashboardOptions,
+): void {
   const node = layout.nodes[paneId];
   if (!node || node.kind !== "leaf") return;
   const tab: DashboardTab = {
@@ -3489,12 +3507,25 @@ export function openDashboardInPane(paneId: string): void {
     id: id("dashboard"),
     title: "Dashboard",
   };
+  if (opts?.slide !== undefined) tab.carouselSlide = opts.slide;
+  if (opts?.autoRotate !== undefined) tab.autoRotate = opts.autoRotate;
   node.tabs.push(tab);
   node.activeTabId = tab.id;
 }
 
-export function openDashboardInActivePane(): void {
-  openDashboardInPane(layout.activePaneId);
+export function openDashboardInActivePane(opts?: OpenDashboardOptions): void {
+  openDashboardInPane(layout.activePaneId, opts);
+}
+
+/// Open a Dashboard tab focused on the Indexing (Search) slide with
+/// auto-rotation paused. Target of clicking the indexing status pill: a user
+/// watching the index build lands straight on the live graph, and it stays
+/// there instead of rotating away.
+export function openIndexingDashboard(): void {
+  openDashboardInActivePane({
+    slide: DASHBOARD_SEARCH_SLIDE,
+    autoRotate: false,
+  });
 }
 
 /// Stage a "new draft editor" intent onto the currently-focused pane.

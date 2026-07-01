@@ -1502,12 +1502,6 @@
             }}
             onFlip={() => flipHybrid(pane.id)}
           />
-        {:else if active?.kind === "dashboard"}
-          <!-- `frontActive={!pane.showingBack}`: the two-face card keeps
-               this front carousel mounted while flipped to the config
-               back, so tell it to force-pause auto-rotate + the indexing
-               poll until it faces front again. -->
-          <DashboardTab tab={active} frontActive={!pane.showingBack} />
         {:else if !active}
           <div
             class="placeholder"
@@ -1596,6 +1590,25 @@
               void closeTab(pane.id, t.id);
             }}
             onFlip={() => flipHybrid(pane.id)}
+          />
+        {/each}
+        <!--
+          Dashboard tabs join the keep-alive family for the same reason as
+          graphs: the Indexing carousel slide hosts a GraphCanvas whose force
+          layout + 3s indexer poll were torn down and rebuilt on every tab
+          switch when DashboardTab rendered inside the active-tab if-chain, so
+          the graph visibly reloaded/re-laid-out each time it was re-shown.
+          Kept mounted + hidden via the same visibility contract, the graph
+          keeps its layout across switches and only refreshes in place; a
+          reload is now an explicit user action (Cmd+R or the right-click
+          Reload row). The `active` gate also pauses the carousel + poll while
+          the tab is hidden or flipped. No `focused` prop: a dashboard owns no
+          keyboard caret.
+        -->
+        {#each pane.tabs.filter((t) => t.kind === "dashboard") as t (t.id)}
+          <DashboardTab
+            tab={t}
+            active={!paneMode.active && !pane.showingBack && t.id === pane.activeTabId}
           />
         {/each}
       </div>

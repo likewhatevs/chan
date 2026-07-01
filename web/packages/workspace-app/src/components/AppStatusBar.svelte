@@ -31,7 +31,7 @@
     ui,
   } from "../state/store.svelte";
   import { transfers, toggleTransfers } from "../state/transfers.svelte";
-  import { paneMode } from "../state/tabs.svelte";
+  import { openIndexingDashboard, paneMode } from "../state/tabs.svelte";
 
   let collapsed = $state(false);
 
@@ -84,10 +84,17 @@
       <div class="row">
         {#if indexVisible}
           {@const s = indexStatus.value!}
-          <span
-            class="section"
+          <!-- The whole pill is a button: clicking it opens a Dashboard tab
+               on the Indexing (Search) slide with auto-rotation paused, so a
+               user watching the index build jumps straight to the live
+               per-directory graph. -->
+          <button
+            type="button"
+            class="section status-action"
             class:err={s.state === "error"}
-            aria-label="index status"
+            aria-label="open indexing dashboard"
+            title="Open indexing dashboard"
+            onclick={openIndexingDashboard}
           >
             <span
               class="dot"
@@ -125,7 +132,7 @@
               embedding
               <span class="num">{s.embedding.done}/{s.embedding.total}</span>
             {/if}
-          </span>
+          </button>
         {/if}
         {#if indexVisible && importVisible}
           <span class="sep"> - </span>
