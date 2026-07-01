@@ -1,0 +1,22 @@
+diff --git a/node_modules/@excalidraw/mermaid-to-excalidraw/dist/parser/flowchart.js b/node_modules/@excalidraw/mermaid-to-excalidraw/dist/parser/flowchart.js
+index 5713001..17635d0 100644
+--- a/node_modules/@excalidraw/mermaid-to-excalidraw/dist/parser/flowchart.js
++++ b/node_modules/@excalidraw/mermaid-to-excalidraw/dist/parser/flowchart.js
+@@ -103,8 +103,15 @@ const parseSubGraph = (data, containerEl, classes) => {
+         }
+         return n;
+     });
+-    // Get position
+-    const el = containerEl.querySelector(`[id='${data.id}']`);
++    // Get position. Mermaid v11 prefixes cluster ids with the render id
++    // (subgraph "Machine" -> <g class="cluster" id="diagN-Machine">), so an
++    // exact [id='Machine'] match misses it. Match the cluster whose id equals
++    // the subgraph id or ends with "-<id>", mirroring the substring lookup
++    // parseVertex/parseEdge already use.
++    const el = Array.from(containerEl.querySelectorAll(".cluster")).find((c) => {
++        const cid = c.getAttribute("id") || "";
++        return cid === data.id || cid.endsWith(`-${data.id}`);
++    }) || containerEl.querySelector(`[id='${data.id}']`);
+     if (!el) {
+         throw new Error("SubGraph element not found");
+     }
