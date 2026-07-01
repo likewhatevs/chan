@@ -1,12 +1,13 @@
 # v0.59.0-rc1: rolling release journal
 
-Working journal for the v0.59.0 cycle. Unlike the per-release notes above, this is a rolling doc: appended to as each work stream from `dev/v0.59.0/request.md` lands on its branch, and reconciled into a final `release-0.59.0.md` at cut time. Nothing here is on `main` yet. Each section stands alone so the release summary can be assembled from these entries.
+Working journal for the v0.59.0 cycle. Unlike the per-release notes above, this is a rolling doc: appended to as each work stream from `dev/v0.59.0/request.md` lands on its branch, and reconciled into a final `release-0.59.0.md` at cut time. As of this entry the `devserver-cmd`, `graph-tuning`, and `index-dashboard` streams are merged onto `main`; the editor, chan-desktop, and UX streams are still in flight, and the `v0.59.0-rc1` tag waits for all of them. Each section stands alone so the release summary can be assembled from these entries.
 
 ## Work streams (from `dev/v0.59.0/request.md`)
 
 - [x] **`chan devserver` command**: reshape `--service` into explicit action verbs (branch `devserver-cmd`)
-- [ ] Graph: grey out unselected nodes, first-order edge focus, auto-select root, `@@mention` "Graph from here" missing edges
-- [ ] Index & dashboard: clickable indexing notification to Dashboard, per-path indexing states, no reload on tab switch
+- [x] Graph: focus-on-select grey-out with first-order edge focus, deeper fs-graph, live force tuner (branch `graph-tuning`)
+  - [ ] Carryover, tracked in `dev/v0.59.0/graph-remaining-items.md`: auto-select root on open, restore the "data being indexed, hang tight..." empty-state message, `@@mention` "Graph from here" missing edges
+- [x] Index & dashboard: clickable indexing notification opening a paused Dashboard Indexing slide, per-path indexing pulse, no reload on tab switch (branch `index-dashboard`)
 - [ ] Editor: directory-link click to file browser, list continuation glyphs, enumerated-list indent, `mermaid-to-excalidraw`
 - [ ] Chan desktop: second-monitor hide/show window shrink, window-title glyphs
 - [ ] UX: friendlier `cs open` from standalone, unblock `cs download`/`upload` in workspaces
@@ -78,10 +79,68 @@ Runtime end-to-end (empirically verified, not just gated):
 
 ---
 
-## Session notes (process retrospective)
+## Session notes: devserver-cmd (process retrospective)
 
 Honest lowlights from the agent (me) this session, worth recording so the pattern does not repeat:
 
 - **Hard-wrapped Markdown.** I first wrote this journal wrapped at ~80 columns. House style for `.md` is free-flowing prose (one paragraph or bullet per line; only tables stay near ~80 cols). Rewrote unwrapped, and captured the rule in memory.
-- **Introduced em dashes.** My first-pass comments, docs, and this journal used the `—` character, against the no-em-dash house rule. Fixed my own additions and, at the maintainer's direction, a follow-up commit purges the pre-existing em dashes in the touched files.
+- **Introduced em dashes.** My first-pass comments, docs, and this journal used the em-dash character, against the no-em-dash house rule. Fixed my own additions and, at the maintainer's direction, a follow-up commit purges the pre-existing em dashes in the touched files.
 - **Scope discipline held elsewhere:** deferred unix sockets up front rather than half-building them, and kept `~/.chan` untouched while testing launchd (via `CHAN_HOME` isolation, which surfaced the propagation bug).
+
+---
+
+## Graph: live force tuner, focus-on-select, deeper fs-graph
+
+Branch `graph-tuning` (merged). Covers the focus and depth parts of the `## Graph` request; the remaining Graph asks are carryover (see the checklist and `dev/v0.59.0/graph-remaining-items.md`).
+
+### What landed
+
+Graph physics as a shared, tunable module. `web/packages/workspace-app/src/graph/force.ts` holds the `GraphForce` type and `DEFAULT_FORCE`, the single source of truth for the d3-force physics. `GraphCanvas` takes an optional `force` prop defaulting to `DEFAULT_FORCE`; every production caller omits it and gets the default. The tuned values: charge -90, link distance 125/128, link strength 1.12, collide 8, center 0.05, hierarchy 90/0.45, parent-X 0.18.
+
+graph-tuner playground (replaces the removed graph-demo). It mounts the real `GraphCanvas`, not a re-implementation, so what you tune is what the live graph does: live sliders for all ten force params, a Copy FORCE button that emits a literal to paste into `force.ts`, plus theme, root-anchor, regenerate, and a depth slider matching the Graph tab's workspace-scope depth. A data-source toggle switches between a synthetic generator and a real `/api/graph` snapshot of this repo's own source, captured to `src/graph-tuner/sampleGraph.json`.
+
+Focus-on-select in `GraphCanvas`. Clicking a node spotlights its first-degree neighbourhood: the selection and its neighbours stay full-strength with labels, incident edges light up, and everything else greys out.
+
+Bottom anchor as the default. `GraphCanvas` `focalAnchor` defaults to `bottom`, so the main Graph tab and the Dashboard slide grow the workspace spine upward from the root.
+
+Deeper fs-graph. `FS_GRAPH_DEPTH_MAX` (frontend) and `MAX_DEPTH` in the chan-server `fs_graph` route both move to 10, so the workspace depth slider reaches the full depth of a deeper source-style workspace; a single request stays bounded by `MAX_NODES`.
+
+Removed the dead sphere-tuner and d3-compare cytoscape-era playgrounds.
+
+### Validation
+
+svelte-check 0/0/0; workspace-app vitest green; chan-server `fs_graph` tests green; `cargo fmt --check` clean. Browser-verified in the tuner against real data (depth slider, focus-on-select spotlight, bottom anchor). The main Graph tab inside chan-desktop was not verified on this branch (checks ran against the web SPA on a local `chan open` server), so it is on the rc validation list.
+
+### Open items
+
+The `sampleGraph.json` fixture is 381 KB (a real-data sample, heavy for the tree): keep, slim to about 307 KB by deriving `contains` edges from paths, or drop. This branch also adds a root `AGENTS.md` so Codex reads the `.agents/` standards.
+
+---
+
+## Index and dashboard: per-path pulse, clickable notification, keep-alive
+
+Branch `index-dashboard` (merged). Covers the whole `## Index and dashboard` request.
+
+### What landed
+
+Clickable indexing notification to a paused Dashboard Indexing slide. The top-right indexing status pill (`AppStatusBar.svelte`) is a button; clicking it opens a Dashboard tab focused on the Indexing (Search) carousel slide with auto-rotation off, so a user watching the index build lands on the live graph and it does not rotate away. A shared `openIndexingDashboard()` helper (plus `DASHBOARD_SEARCH_SLIDE` and an `OpenDashboardOptions` overrides type) in `tabs.svelte.ts`; the server `cs dashboard` handler reuses the same `openDashboardInActivePane({ slide, autoRotate })` path.
+
+Per-path indexing pulse (fixes the "all nodes flash orange together" report). The root cause was backend: during the background embedding sweep the indexer reaches `Idle { embedding: Some(..) }` with no per-file label, so `build_indexing_state` marked every directory with indexable files as `Indexing` at once. `EmbedProgress` now carries `file: Option<String>`, populated from the live `IndexFile` label; `current_index_file` surfaces it during the embed sweep, and the sweep-broadening condition is narrowed so that whenever a real file label is known only that one directory pulses `Indexing` while the rest resolve to `Indexed`/`Pending`. The broad pulse stays only as a fallback for the gaps with no per-file signal.
+
+Dashboard tab keep-alive (fixes reload/re-layout on tab switch). `DashboardTab` moves into the keep-alive each-loop in `Pane.svelte`, mirroring graph/file/terminal tabs: it stays mounted and hides via the `visibility: hidden; pointer-events: none` contract (never `display:none`) with an `active` gate. The Indexing carousel's `GraphCanvas` force layout and 3s poll survive tab switches; the `active` gate also pauses the carousel and stops the indexer poll while hidden. Reload is an explicit user action (Cmd+R or the right-click Reload row).
+
+### Validation
+
+`cargo test -p chan-server` (new embedding-sweep-with-current-file test plus updated `EmbedProgress`/`set_idle` tests); workspace-app `npm run check` + full vitest green (new `paneDashboardTabKeepAlive.test.ts` and updated `dashboardTabAndCarousel.test.ts`); full `make pre-push` gate. Seeded a local standalone server: watched the pill build, clicked to the paused Indexing slide, confirmed `/api/indexing/state` reported one indexing directory at a time, and confirmed the graph did not reload on tab switch. Desktop (WKWebView) not separately verified, so it is on the rc validation list.
+
+### Open items
+
+The Indexing graph polls every 3s, so the pulse advances in 3s steps. Between embed batch flushes `current_file` can briefly be `None`, so a large workspace with long flush intervals can show a brief broad-pulse blip (by design). The right-click Reload row still does a full window reload; a lighter graph-only refresh could come later.
+
+---
+
+## Integration notes (release editor)
+
+Merged onto `main` in order: `devserver-cmd`, `graph-tuning`, `index-dashboard`, each as a `--no-ff` merge. The only conflict across all three was this journal, an add/add, confirmed up front with `git merge-tree`; every code file merged clean. This file is the reconciliation of the three per-branch journals into one, unwrapped and free of em dashes.
+
+Quality pass on the merged tree: removed five newly-introduced em dashes and reworded newly-added change-history ("archaeology") comments to present-tense in the index-dashboard test files (`paneDashboardTabKeepAlive.test.ts`, `dashboardTabAndCarousel.test.ts`) and the style comment in `DashboardTab.svelte`. `devserver-cmd` and `graph-tuning` introduced none. Remaining rc validation and the Graph carryover are tracked in `dev/v0.59.0/plan.md` and `dev/v0.59.0/graph-remaining-items.md`.
