@@ -7,7 +7,7 @@
 // build" hint instead of erroring out.
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 #[cfg(feature = "embeddings")]
 use std::sync::Once;
 use std::sync::{Arc, Mutex};
@@ -171,6 +171,12 @@ pub struct Index {
     /// Workspace forwards the Library filter here before each reindex
     /// so search and graph rebuilds use the same exclusions.
     walk_filter: Mutex<Arc<WalkFilter>>,
+    /// Monotonic vector-store generation, bumped by `clear_vectors` (a model
+    /// switch or a semantic opt-out). `build_all` and the per-file `write_file`
+    /// snapshot it and treat any vector write / stamp as void if it moved, so a
+    /// disable that races an in-flight embed converges to zero vectors instead
+    /// of leaving orphan shards and a stale `vectors_model` stamp behind.
+    vectors_epoch: AtomicU64,
 }
 
 impl std::fmt::Debug for Index {
@@ -247,6 +253,7 @@ impl Index {
             #[cfg(feature = "embeddings")]
             embedder: Mutex::new(None),
             walk_filter: Mutex::new(Arc::new(WalkFilter::default())),
+            vectors_epoch: AtomicU64::new(0),
         })
     }
 
@@ -307,16 +314,29 @@ impl Index {
                 return Ok(());
             }
             cfg.model = model;
-            // The vectors_* stamp described what *was* on disk; the
-            // wipe below makes that stamp invalid. Clear it so the
-            // next Index::open's model-mismatch check (and any human
-            // reading the TOML) cannot conclude we trust the empty
-            // store.
-            cfg.vectors_model = None;
-            cfg.vectors_dim = None;
             cfg.clone()
         };
         config::save(&self.index_dir, &to_save)?;
+        // The vectors on disk were produced by the previous model, so wipe
+        // them. `clear_vectors` also clears the `vectors_*` stamp so the next
+        // Index::open's model-mismatch check (and any human reading the TOML)
+        // cannot conclude we trust the empty store.
+        self.clear_vectors()
+    }
+
+    /// Bin every embedding shard, drop the loaded embedder, and clear the
+    /// on-disk `vectors_*` stamp, leaving BM25 untouched. Shared by `set_model`
+    /// (a model switch invalidates the vectors) and the semantic-search disable
+    /// path (opting out bins the vectors so a later re-enable rebuilds from
+    /// scratch). Idempotent: wiping an already-empty store is a no-op beyond
+    /// rewriting the (already-cleared) stamp.
+    pub fn clear_vectors(&self) -> Result<(), IndexError> {
+        // Bump the epoch before touching anything so a concurrent `build_all`
+        // or per-file `write_file` that started under the old epoch treats every
+        // vector write it issues from here on as void. This is what makes a
+        // disable that races an in-flight embed converge to zero vectors rather
+        // than leaving orphan shards behind.
+        self.vectors_epoch.fetch_add(1, Ordering::SeqCst);
         #[cfg(feature = "embeddings")]
         {
             *self.embedder.lock().unwrap() = None;
@@ -326,7 +346,31 @@ impl Index {
         }
         wipe_vectors_dir(&self.index_dir)?;
         std::fs::create_dir_all(self.index_dir.join("embeddings"))?;
+        // Clear the on-disk stamp LAST. If a wipe above fails we bail before
+        // reaching here, leaving `vectors_model` set rather than a
+        // `vectors_model=None` + trusted-orphan-shards state. For the
+        // model-switch caller (`set_model`) that leftover self-heals: it already
+        // persisted the NEW model, so `Index::open`'s mismatch check re-wipes.
+        // For the opt-out caller the model is unchanged, so a failed wipe is
+        // surfaced to the caller (logged, best-effort) rather than self-healed,
+        // an accepted filesystem-fault residual, not a normal-operation path.
+        let to_save = {
+            let mut cfg = self.config.lock().unwrap();
+            cfg.vectors_model = None;
+            cfg.vectors_dim = None;
+            cfg.clone()
+        };
+        config::save(&self.index_dir, &to_save)?;
         Ok(())
+    }
+
+    /// Current vector-store generation. `Workspace::reindex_with_aggression`
+    /// and `index_file_inner` snapshot this BEFORE reading `semantic_enabled`
+    /// and thread it back into `build_all` / `index_one`, so a disable that
+    /// flips the flag then bumps this (see `clear_vectors`) is observed even by
+    /// a build / save that read a stale `true` flag.
+    pub fn vectors_epoch(&self) -> u64 {
+        self.vectors_epoch.load(Ordering::SeqCst)
     }
 
     /// Get-or-init the embedder. Errors propagate (e.g. unknown
@@ -454,9 +498,21 @@ impl Index {
         // do_vectors gates every embed branch below, so this single line
         // turns the build BM25-only without touching the drain loop.
         #[cfg(feature = "embeddings")]
-        let embeddings_capped = Self::embeddings_capped_for(opts.include_vectors, total);
+        let embeddings_capped =
+            !opts.ignore_embed_cap && Self::embeddings_capped_for(opts.include_vectors, total);
         #[cfg(feature = "embeddings")]
         let do_vectors = opts.include_vectors && !embeddings_capped;
+        // Guard epoch. A `clear_vectors` (opt-out or model switch) that lands
+        // while this build runs bumps it; the flush and stamp steps below check
+        // it so a racing disable leaves zero vectors rather than orphan shards +
+        // a stale stamp. Prefer the caller's snapshot, taken BEFORE it read
+        // `semantic_enabled`, so a disable that finished during the flag read /
+        // file walk is still caught; fall back to a fresh load for callers
+        // (tests) that pass none.
+        #[cfg(feature = "embeddings")]
+        let build_epoch = opts
+            .guard_epoch
+            .unwrap_or_else(|| self.vectors_epoch.load(Ordering::SeqCst));
         #[cfg(feature = "embeddings")]
         if embeddings_capped {
             tracing::info!(
@@ -629,7 +685,12 @@ impl Index {
                             // IndexFile ticks to workspace the bar.
                             eta_secs: None,
                         });
-                        match self.flush_embed_batch(&mut pending, cancel, &model_at_start) {
+                        match self.flush_embed_batch(
+                            &mut pending,
+                            cancel,
+                            &model_at_start,
+                            build_epoch,
+                        ) {
                             Ok(errs) => errors.extend(errs),
                             Err(IndexError::Cancelled) => return Err(IndexError::Cancelled),
                             Err(e) => return Err(e),
@@ -668,7 +729,7 @@ impl Index {
                 label: Some(format!("tail files={} last={last}", pending.len())),
                 eta_secs: None,
             });
-            match self.flush_embed_batch(&mut pending, cancel, &model_at_start) {
+            match self.flush_embed_batch(&mut pending, cancel, &model_at_start, build_epoch) {
                 Ok(errs) => errors.extend(errs),
                 Err(IndexError::Cancelled) => return Err(IndexError::Cancelled),
                 Err(e) => return Err(e),
@@ -742,20 +803,38 @@ impl Index {
         // build that actually produces vectors.
         #[cfg(feature = "embeddings")]
         if do_vectors {
-            let to_save = {
-                let mut cfg = self.config.lock().unwrap();
-                cfg.vectors_model = Some(model_at_start.clone());
-                if let Some(e) = self.embedder.lock().unwrap().as_ref() {
-                    cfg.vectors_dim = Some(e.dim() as u32);
+            if self.vectors_epoch.load(Ordering::SeqCst) == build_epoch {
+                let to_save = {
+                    let mut cfg = self.config.lock().unwrap();
+                    cfg.vectors_model = Some(model_at_start.clone());
+                    if let Some(e) = self.embedder.lock().unwrap().as_ref() {
+                        cfg.vectors_dim = Some(e.dim() as u32);
+                    }
+                    cfg.clone()
+                };
+                if let Err(e) = config::save(&self.index_dir, &to_save) {
+                    // Non-fatal: BM25 + tantivy commits already
+                    // succeeded. A missed stamp means the next open
+                    // sees vectors_model=None (or the previous value)
+                    // and may decide to wipe; the search still works.
+                    tracing::warn!(?e, "failed to persist vectors_model stamp after build");
                 }
-                cfg.clone()
-            };
-            if let Err(e) = config::save(&self.index_dir, &to_save) {
-                // Non-fatal: BM25 + tantivy commits already
-                // succeeded. A missed stamp means the next open
-                // sees vectors_model=None (or the previous value)
-                // and may decide to wipe; the search still works.
-                tracing::warn!(?e, "failed to persist vectors_model stamp after build");
+            } else {
+                // A clear_vectors (semantic opt-out or model switch) landed
+                // while this build was embedding. Any shard we wrote after it is
+                // an orphan, so drop every vector we produced and skip the
+                // stamp: the disabled state must hold zero vectors, and
+                // clear_vectors already cleared `vectors_model` so config stays
+                // honest. Best-effort. Recreate the (now-removed) dir so the
+                // post-condition matches clear_vectors ("wiped but present").
+                for rel in self.vectors.known_paths() {
+                    let _ = self.vectors.delete_file(&rel);
+                }
+                let _ = wipe_vectors_dir(&self.index_dir);
+                let _ = std::fs::create_dir_all(self.index_dir.join("embeddings"));
+                tracing::info!(
+                    "build: vector store cleared mid-build; dropped orphan shards and skipped stamp"
+                );
             }
         }
         #[cfg(feature = "embeddings")]
@@ -783,9 +862,18 @@ impl Index {
         pending: &mut Vec<(String, Vec<chunking::Chunk>)>,
         cancel: Option<&AtomicBool>,
         model: &str,
+        build_epoch: u64,
     ) -> Result<Vec<(String, IndexError)>, IndexError> {
         let mut errors = Vec::new();
         if pending.is_empty() {
+            return Ok(errors);
+        }
+        // A clear_vectors landed since this build started (opt-out or model
+        // switch): stop embedding. These chunks are already BM25-indexed and
+        // committed, so dropping the pending batch just avoids burning CPU on
+        // vectors the disabled state would throw away.
+        if self.vectors_epoch.load(Ordering::SeqCst) != build_epoch {
+            pending.drain(..);
             return Ok(errors);
         }
         // Discriminator on the embed-step error.
@@ -875,6 +963,7 @@ impl Index {
         rel_path: &str,
         text: &str,
         include_vectors: bool,
+        guard_epoch: u64,
     ) -> Result<usize, IndexError> {
         // Snapshot the parts of config we need so a concurrent
         // `set_model` cannot rewrite the model id mid-call (which
@@ -889,7 +978,7 @@ impl Index {
         // is built without `embeddings`, we never produce vectors
         // regardless. BM25-only is a working subset.
         #[cfg(not(feature = "embeddings"))]
-        let _ = include_vectors;
+        let _ = (include_vectors, guard_epoch);
         #[cfg(feature = "embeddings")]
         {
             if include_vectors {
@@ -913,6 +1002,14 @@ impl Index {
                         Err(e) => Self::handle_embed_load_error(e)?,
                     }
                 }
+                // If a clear_vectors (semantic opt-out) landed since the caller
+                // snapshotted `guard_epoch` (before it read the opt-in flag),
+                // the shard we just wrote is an orphan. Undo it so the disabled
+                // state holds zero vectors. clear_vectors wipes the whole dir, so
+                // a missing shard here is fine (delete_file tolerates NotFound).
+                if self.vectors_epoch.load(Ordering::SeqCst) != guard_epoch {
+                    let _ = self.vectors.delete_file(rel_path);
+                }
             }
         }
         #[cfg(not(feature = "embeddings"))]
@@ -926,8 +1023,19 @@ impl Index {
     /// goes through the Workspace sandbox (path safety, special-file
     /// refusal, editable-text gate). The index never opens user
     /// files directly outside `build_all`'s controlled walk.
-    pub fn index_one(&self, rel_path: &str, text: &str) -> Result<usize, IndexError> {
-        let n = self.write_file(rel_path, text, true)?;
+    ///
+    /// `include_vectors` carries the workspace's `semantic_enabled` opt-in: a
+    /// `false` save writes BM25 only and produces no vector shard. `guard_epoch`
+    /// is the vector generation the caller sampled BEFORE reading that flag (see
+    /// `vectors_epoch`), so a disable racing this save is reconciled away.
+    pub fn index_one(
+        &self,
+        rel_path: &str,
+        text: &str,
+        include_vectors: bool,
+        guard_epoch: u64,
+    ) -> Result<usize, IndexError> {
+        let n = self.write_file(rel_path, text, include_vectors, guard_epoch)?;
         self.bm25.commit()?;
         Ok(n)
     }
@@ -1196,11 +1304,24 @@ pub struct SearchBudget {
 /// Knobs for `Index::build_all`.
 #[derive(Debug, Clone, Copy)]
 pub struct BuildOptions {
-    /// When `false`, skip embeddings (`chan workspace index --mode bm25` and
-    /// unit tests). Default: `true`.
+    /// Whether this build embeds. On the reindex path it is driven by the
+    /// per-workspace `semantic_enabled` opt-in; a `false` build writes BM25
+    /// only. Default: `true` (BM25-only builds set it explicitly, as do tests).
     pub include_vectors: bool,
     /// Search indexer resource budget. Default: balanced.
     pub aggression: SearchAggression,
+    /// Bypass the `EMBED_FILE_CAP` cold-build skip. The reindex path sets this
+    /// whenever semantic is enabled, so an opted-in workspace embeds its whole
+    /// tree instead of falling back to BM25-only above the cap. Default:
+    /// `false` (the cap applies).
+    pub ignore_embed_cap: bool,
+    /// Vector epoch the caller snapshotted BEFORE it read `semantic_enabled`
+    /// (`Workspace::reindex_with_aggression`). `build_all` compares against it
+    /// so a disable that flipped the flag then bumped the epoch (see
+    /// `clear_vectors`) is observed even when this build read a stale `true`.
+    /// `None` = snapshot internally at build start (tests / callers with no
+    /// concurrent opt-out).
+    pub guard_epoch: Option<u64>,
 }
 
 impl Default for BuildOptions {
@@ -1208,6 +1329,8 @@ impl Default for BuildOptions {
         Self {
             include_vectors: true,
             aggression: SearchAggression::Balanced,
+            ignore_embed_cap: false,
+            guard_epoch: None,
         }
     }
 }
@@ -1264,10 +1387,15 @@ fn wipe_index_dir(index_dir: &Path) -> Result<(), IndexError> {
 /// user keeps lexical search while the embeddings rebuild.
 fn wipe_vectors_dir(index_dir: &Path) -> Result<(), IndexError> {
     let p = index_dir.join("embeddings");
-    if p.exists() {
-        std::fs::remove_dir_all(&p)?;
+    // Tolerate an already-absent dir: NotFound is the desired end state, not an
+    // error. Dropping the `exists()` precheck also closes the TOCTOU where a
+    // concurrent remover (a second disable click, a racing model switch) deletes
+    // the dir between the check and the call.
+    match std::fs::remove_dir_all(&p) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e.into()),
     }
-    Ok(())
 }
 
 /// Walk the workspace and return every indexable file (`FileClass::EditableText`:
@@ -1433,6 +1561,7 @@ mod tests {
                     BuildOptions {
                         include_vectors: false,
                         aggression,
+                        ..BuildOptions::default()
                     },
                     &crate::progress::NoProgress,
                     None,
@@ -1686,6 +1815,32 @@ mod tests {
             false,
             Index::EMBED_FILE_CAP + 1
         ));
+    }
+
+    #[test]
+    fn clear_vectors_is_idempotent_and_tolerates_missing_dir() {
+        // The semantic-disable path calls clear_vectors; it must be safe to run
+        // on an empty store and to survive the embeddings dir being removed out
+        // from under it (H3: wipe tolerates NotFound). Each call leaves the dir
+        // present and the config stamp cleared.
+        let tmp = make_workspace();
+        std::fs::write(tmp.path().join("a.md"), "alpha\n").unwrap();
+        let dir = idx_dir(&tmp);
+        let idx = Index::open(tmp.path(), &dir).unwrap();
+
+        idx.clear_vectors().unwrap();
+        assert!(dir.join("embeddings").exists());
+
+        // Remove the dir mid-life, then clear again: no error, dir recreated.
+        std::fs::remove_dir_all(dir.join("embeddings")).unwrap();
+        idx.clear_vectors().unwrap();
+        assert!(dir.join("embeddings").exists());
+
+        let cfg = config::load(&dir).unwrap();
+        assert!(
+            cfg.vectors_model.is_none() && cfg.vectors_dim.is_none(),
+            "clear_vectors must leave the vectors_* stamp cleared",
+        );
     }
 
     #[test]

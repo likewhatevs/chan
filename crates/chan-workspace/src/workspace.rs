@@ -2088,11 +2088,24 @@ impl Workspace {
         // subtrees to skip. Re-derived here, so a blocklist edit + reindex
         // re-walks against the new set without mutating the shared snapshot.
         index.set_walk_filter(self.effective_walk_filter()?);
+        // Snapshot the vector epoch BEFORE reading the opt-in flag. A disable
+        // flips the flag then bumps the epoch (clear_vectors), so sampling the
+        // epoch first guarantees a build that read a stale `true` still observes
+        // the bump via its in-build guards and drops the vectors, closing the
+        // TOCTOU between the flag read and the build's epoch snapshot.
+        // `unwrap_or(false)` fails safe: a dashboard read error yields a
+        // BM25-only build, never an accidental embed. When opted in, bypass the
+        // file cap so the whole tree embeds rather than falling back to
+        // BM25-only above `EMBED_FILE_CAP`.
+        let guard_epoch = index.vectors_epoch();
+        let include_vectors = self.semantic_enabled().unwrap_or(false);
         let summary = index
             .build_all(
                 BuildOptions {
+                    include_vectors,
                     aggression,
-                    ..BuildOptions::default()
+                    ignore_embed_cap: include_vectors,
+                    guard_epoch: Some(guard_epoch),
                 },
                 progress,
                 cancel,
@@ -2350,11 +2363,13 @@ impl Workspace {
     }
 
     /// Flip the per-workspace Hybrid-search preference.
-    /// Idempotent — re-setting the current value is a no-op. The
-    /// `chan workspace index enable-semantic` / `disable-semantic` CLI and the
-    /// `/api/index/semantic/{enable,disable}` endpoints both route
-    /// here; the change persists to `<root>/dashboard.toml` so a
-    /// `chan open` restart honours it.
+    /// Enabling just persists the flag (the server's indexer rebuilds the
+    /// vectors); disabling is destructive: it bins the vector store so a later
+    /// re-enable rebuilds from scratch, mirroring `set_reports_enabled` dropping
+    /// `report.jsonl`. The `chan workspace index enable-semantic` /
+    /// `disable-semantic` CLI and the `/api/index/semantic/{enable,disable}`
+    /// endpoints both route here; the change persists to `<root>/dashboard.toml`
+    /// so a `chan open` restart honours it.
     pub fn set_semantic_enabled(&self, enabled: bool) -> Result<()> {
         self.update_dashboard(|cfg| {
             if cfg.semantic_enabled == enabled {
@@ -2362,7 +2377,22 @@ impl Workspace {
             }
             cfg.semantic_enabled = enabled;
             true
-        })
+        })?;
+        if !enabled {
+            // Opting out bins the vectors so a later re-enable rebuilds from
+            // scratch. Best-effort: BM25 is untouched, and a wipe error logs and
+            // proceeds rather than failing the toggle. The vector epoch (see
+            // `Index::clear_vectors`) stops an embed pass that races this wipe
+            // from leaving orphan shards, so only an outright filesystem wipe
+            // failure (rare, logged) can leave vectors on disk while disabled.
+            if let Err(e) = self.clear_semantic_index() {
+                tracing::warn!(
+                    error = %e,
+                    "set_semantic_enabled(false): failed to clear vector store"
+                );
+            }
+        }
+        Ok(())
     }
 
     /// Read the configured embedding model id from the
@@ -2377,6 +2407,14 @@ impl Workspace {
     /// vector metadata, and preserves BM25.
     pub fn set_semantic_model(&self, model: &str) -> Result<()> {
         self.index()?.set_model(model.to_owned())?;
+        Ok(())
+    }
+
+    /// Bin the semantic vector store, leaving BM25 intact. Delegates to
+    /// `Index::clear_vectors`. Called by the semantic-search disable path so a
+    /// re-enable rebuilds vectors from scratch.
+    pub fn clear_semantic_index(&self) -> Result<()> {
+        self.index()?.clear_vectors()?;
         Ok(())
     }
 
@@ -2656,9 +2694,15 @@ impl Workspace {
         } else {
             self.graph()?.forget_file(rel)?;
         }
-        // Hand the already-read content to the index so the read
-        // goes through the Workspace sandbox exactly once.
-        self.index()?.index_one(rel, &content)?;
+        // Hand the already-read content to the index so the read goes through
+        // the Workspace sandbox exactly once. Snapshot the vector epoch BEFORE
+        // reading the opt-in so a disable that races this save is reconciled by
+        // index_one's post-write check even if we read a stale `true`. Embed
+        // only when opted in; fail-safe to no-embed on a dashboard read error.
+        let index = self.index()?;
+        let guard_epoch = index.vectors_epoch();
+        let include_vectors = self.semantic_enabled().unwrap_or(false);
+        index.index_one(rel, &content, include_vectors, guard_epoch)?;
         Ok(())
     }
 
@@ -6410,6 +6454,94 @@ mod tests {
             "switching models must clear stale embeddings",
         );
         assert_eq!(workspace.search("alpha", &opts).unwrap().hits.len(), 1);
+    }
+
+    #[test]
+    fn reindex_disabled_writes_no_vectors_but_indexes_bm25() {
+        // A workspace with semantic search OFF (the default) must never embed
+        // on reindex: BM25 is populated and searchable, the vector count stays
+        // zero. This is the opt-out guarantee: a cached model on disk is not a
+        // reason to index.
+        let (_cfg, _root, workspace) = fixture();
+        assert!(
+            !workspace.semantic_enabled().unwrap(),
+            "a new workspace defaults to semantic OFF",
+        );
+        workspace
+            .write_text("note.md", "alpha beta gamma\n")
+            .unwrap();
+        workspace.reindex(None).unwrap();
+
+        let stats = workspace.index_stats().unwrap();
+        assert!(stats.indexed_docs > 0, "BM25 must be populated");
+        assert_eq!(
+            stats.indexed_vectors, 0,
+            "semantic off must produce zero vectors",
+        );
+        let opts = SearchOpts {
+            mode: SearchMode::Bm25,
+            limit: 10,
+            scope: None,
+        };
+        assert_eq!(workspace.search("alpha", &opts).unwrap().hits.len(), 1);
+    }
+
+    #[test]
+    fn per_file_index_disabled_writes_no_vectors() {
+        // The incremental per-file path honours the same opt-out: a save while
+        // semantic is off writes BM25 only, no vector shard.
+        let (_cfg, _root, workspace) = fixture();
+        workspace.write_text("note.md", "alpha beta\n").unwrap();
+        workspace.index_file("note.md").unwrap();
+        assert_eq!(
+            workspace.index_stats().unwrap().indexed_vectors,
+            0,
+            "per-file save with semantic off must not embed",
+        );
+        let opts = SearchOpts {
+            mode: SearchMode::Bm25,
+            limit: 10,
+            scope: None,
+        };
+        assert_eq!(workspace.search("alpha", &opts).unwrap().hits.len(), 1);
+    }
+
+    #[test]
+    fn disabling_semantic_bins_the_vector_store() {
+        // Toggling semantic OFF is destructive: it wipes the vector store so a
+        // later re-enable rebuilds from scratch, while BM25 is preserved.
+        // Mirrors the stale-shard setup used by the model-switch test since no
+        // embedder is loaded in tests.
+        let (_cfg, _root, workspace) = fixture();
+        workspace.write_text("note.md", "alpha beta\n").unwrap();
+        workspace.reindex(None).unwrap();
+        workspace.set_semantic_enabled(true).unwrap();
+        assert!(workspace.semantic_enabled().unwrap());
+
+        // Stand in for real embeddings: drop a shard file the wipe must remove.
+        let embeddings_dir = workspace.paths.index.join("embeddings");
+        std::fs::create_dir_all(&embeddings_dir).unwrap();
+        std::fs::write(embeddings_dir.join("stale.bin"), b"stale").unwrap();
+
+        workspace.set_semantic_enabled(false).unwrap();
+        assert!(!workspace.semantic_enabled().unwrap());
+        assert!(
+            !embeddings_dir.join("stale.bin").exists(),
+            "disabling semantic must bin the vector store",
+        );
+
+        // BM25 survives the wipe.
+        let opts = SearchOpts {
+            mode: SearchMode::Bm25,
+            limit: 10,
+            scope: None,
+        };
+        assert_eq!(workspace.search("alpha", &opts).unwrap().hits.len(), 1);
+
+        // Re-enabling flips the flag back (non-destructive; the server's
+        // indexer rebuilds the vectors from scratch).
+        workspace.set_semantic_enabled(true).unwrap();
+        assert!(workspace.semantic_enabled().unwrap());
     }
 
     #[test]
