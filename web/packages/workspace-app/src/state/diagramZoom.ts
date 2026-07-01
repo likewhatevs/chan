@@ -1,10 +1,11 @@
 // Fullscreen pan/zoom viewer for a rendered diagram (a mermaid SVG).
 // Imperative DOM helper, self-contained with inline styles, mirroring
 // imageZoom.ts's backdrop/Escape scaffolding so the two viewers feel of
-// a piece. The diagram mounts on a light panel inside a transform layer:
-// wheel + on-screen buttons + keyboard (+/-/=, 0) zoom, drag + arrows/WASD
-// pan. Escape or a plain backdrop click dismisses; the overlay cleans
-// itself up.
+// a piece. The diagram mounts on a light panel inside the layer. Zoom
+// (wheel + on-screen buttons + keyboard +/-/=, 0) resizes the SVG so the
+// browser re-rasterizes the vector crisply at each level; pan (drag +
+// arrows/WASD) rides on a layer translate. Escape or a plain backdrop
+// click dismisses; the overlay cleans itself up.
 
 const MIN_SCALE = 0.2;
 const MAX_SCALE = 8;
@@ -24,14 +25,16 @@ export function openDiagramZoom(svg: string): void {
     "position:fixed;inset:0;z-index:40000;overflow:hidden;" +
     "background:rgba(0,0,0,0.92);cursor:grab;";
 
-  // The layer is anchored at the backdrop centre (top/left 50%); the
-  // -50% in the transform recentres it on its own box, then pan/zoom ride
-  // on top.
+  // The layer is anchored at the backdrop centre (top/left 50%); the -50%
+  // in the transform recentres it on its own box, and the pan translate
+  // rides on top. It grows with the SVG, so the recentre keeps it on the
+  // backdrop centre at every zoom level. No will-change here: a promoted
+  // compositor layer rasterizes once into a texture (and can sit below
+  // device resolution on HiDPI), the very softness this viewer avoids;
+  // will-change is added only during a drag, for smooth panning.
   const layer = document.createElement("div");
   layer.className = "md-diagram-zoom-layer";
-  layer.style.cssText =
-    "position:absolute;top:50%;left:50%;transform-origin:center center;" +
-    "will-change:transform;";
+  layer.style.cssText = "position:absolute;top:50%;left:50%;";
   // Back the diagram with a light neutral panel: the viewer is handed a
   // light-themed render, whose pale strokes and text would vanish on the
   // dim backdrop. The panel is the content surface; the backdrop stays
@@ -43,19 +46,25 @@ export function openDiagramZoom(svg: string): void {
     "box-shadow:0 10px 48px rgba(0,0,0,0.5);";
   panel.innerHTML = svg;
   const svgEl = panel.querySelector("svg");
+  // The zoom scale multiplies this base (scale 1) width; it is captured from
+  // the fitted layout after insertion, falling back to the viewBox width
+  // when layout is unavailable (jsdom under test).
+  let baseWidth = 0;
+  let vbWidth = NaN;
   if (svgEl) {
     svgEl.style.display = "block";
     svgEl.style.maxWidth = "calc(90vw - 48px)";
     svgEl.style.maxHeight = "calc(90vh - 48px)";
     // mermaid emits width="100%" and NO height, so `width:auto` collapses
     // the SVG to 0x0 inside the shrink-to-fit panel (which then shrinks to
-    // just its padding). Give it an intrinsic pixel width from the viewBox;
-    // height auto keeps the aspect ratio and the max-w/h caps scale it down
-    // to fit the viewport. An SVG that already carries pixel dimensions
-    // (excalidraw's export) has the same viewBox width, so it lands the same
-    // size it would with `auto`; a viewBox-less SVG falls through to auto.
+    // just its padding). Give it an intrinsic pixel width from the viewBox
+    // so it renders; height auto keeps the aspect ratio and the max-w/h caps
+    // fit it to the viewport. That fitted size is what the viewer measures
+    // below for its base width. An SVG that already carries pixel dimensions
+    // (excalidraw's export) has the same viewBox width; a viewBox-less SVG
+    // falls through to auto.
     const viewBox = svgEl.getAttribute("viewBox");
-    const vbWidth = viewBox ? Number(viewBox.split(/[\s,]+/)[2]) : NaN;
+    vbWidth = viewBox ? Number(viewBox.split(/[\s,]+/)[2]) : NaN;
     if (Number.isFinite(vbWidth) && vbWidth > 0) {
       svgEl.style.width = `${vbWidth}px`;
       svgEl.style.height = "auto";
@@ -70,9 +79,12 @@ export function openDiagramZoom(svg: string): void {
   let scale = 1;
   let tx = 0;
   let ty = 0;
+  // Zoom resizes the SVG (the browser re-rasterizes the vector crisply at
+  // the new size); pan stays a layer translate (translate never blurs).
   const apply = (): void => {
+    if (svgEl && baseWidth > 0) svgEl.style.width = `${baseWidth * scale}px`;
     layer.style.transform =
-      `translate(-50%, -50%) translate(${tx}px, ${ty}px) scale(${scale})`;
+      `translate(-50%, -50%) translate(${tx}px, ${ty}px)`;
   };
   const clamp = (s: number): number =>
     Math.min(MAX_SCALE, Math.max(MIN_SCALE, s));
@@ -93,6 +105,10 @@ export function openDiagramZoom(svg: string): void {
   };
 
   // Wheel zoom toward the pointer: keep the point under the cursor fixed.
+  // The layer's box centre is (viewport centre + pan), which the resize
+  // leaves put (the -50% recentres the grown box), and the content scales by
+  // next/scale about that centre, so the transform model's anchor shift
+  // still holds: nudge the pan by the cursor offset times the size delta.
   backdrop.addEventListener(
     "wheel",
     (e) => {
@@ -127,6 +143,9 @@ export function openDiagramZoom(svg: string): void {
   const onUp = (): void => {
     dragging = false;
     backdrop.style.cursor = "grab";
+    // Drop the compositor promotion so the static frame paints at full
+    // device resolution, not from the drag texture.
+    layer.style.willChange = "auto";
   };
   backdrop.addEventListener("mousedown", (e) => {
     if (e.button !== 0) return;
@@ -135,6 +154,9 @@ export function openDiagramZoom(svg: string): void {
     lastX = e.clientX;
     lastY = e.clientY;
     backdrop.style.cursor = "grabbing";
+    // Promote to a compositor layer for the drag so the pan translate stays
+    // smooth; onUp drops it back to a crisp static paint.
+    layer.style.willChange = "transform";
   });
   document.addEventListener("mousemove", onMove, true);
   document.addEventListener("mouseup", onUp, true);
@@ -214,8 +236,23 @@ export function openDiagramZoom(svg: string): void {
     if (e.target === backdrop || e.target === layer) dismiss();
   });
 
-  apply();
   document.body.appendChild(backdrop);
+  // With the overlay laid out, capture the SVG's fitted width and pin the
+  // SVG to explicit pixels: zoom then re-rasterizes the vector at each size
+  // rather than GPU-stretching a cached texture. Dropping the fit caps lets
+  // the SVG grow past the viewport under zoom; pan reaches the rest. Fall
+  // back to the viewBox width when layout is unavailable (jsdom under test).
+  if (svgEl) {
+    const fitted = svgEl.getBoundingClientRect().width;
+    if (fitted > 0) {
+      baseWidth = fitted;
+    } else if (Number.isFinite(vbWidth) && vbWidth > 0) {
+      baseWidth = vbWidth;
+    }
+    svgEl.style.maxWidth = "none";
+    svgEl.style.maxHeight = "none";
+  }
+  apply();
   document.addEventListener("keydown", onKey, true);
 }
 

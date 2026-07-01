@@ -19,6 +19,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Directory links open the file browser.** A markdown link to a directory now renders as a valid directory link and opens the file browser at that folder, instead of showing as broken and rejecting the click with a "not a text file" notification.
 - **List continuation lines hang-indent, and ordered lists align with bullets.** Wrapped continuation lines of a list item now hang under the item text across every list type and nesting depth (tasks included), and ordered (numbered) lists indent to the same width as bullet and hyphen lists.
 - **`@@mention` / `#tag` / contact graph lenses keep every surfaced document's semantic edges.** A "Graph from here" on an `@@mention` (or a tag or contact) surfaces each document that references the seed together with every one of that document's own `@@mention` / `#tag` / language edges, so a co-referenced handle no longer drops out of the view.
+- **Crisp diagram zoom overlay.** The hover "View" pan/zoom overlay for `mermaid` and `mermaid-to-excalidraw` diagrams stays sharp at every zoom level. Zoom now resizes the SVG so the browser re-rasterizes the vector at each step instead of GPU-scaling a cached bitmap, which blurred strokes and text and could read soft even at 1x on HiDPI; panning still rides a compositor transform. An excalidraw diagram that bakes a mermaid subgraph to an embedded raster stays limited by that source image.
 
 ### Changed
 
