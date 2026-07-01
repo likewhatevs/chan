@@ -18,19 +18,21 @@
 //! future EXEC ops (return a success/partial result) share one bus.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
 use serde_json::Value;
 use tokio::sync::oneshot;
 
 /// A `request_id -> oneshot<Value>` registry. One entry per in-flight `cs
-/// pane` round-trip. Process-local: the ids only need to be unique within
-/// this server's lifetime, so a monotonic counter suffices.
+/// pane` / `cs paste` round-trip. The id is UNGUESSABLE (a random token, not a
+/// monotonic counter): the reply route (`POST /api/window/reply`) trusts
+/// whoever echoes the id, and the command is delivered only to the target
+/// window's socket, so a predictable id would let a token-bearing caller that
+/// never saw the command forge the reply (e.g. inject bytes into a blocked
+/// `cs paste > file`).
 #[derive(Default)]
 pub struct WindowBus {
     pending: Mutex<HashMap<String, oneshot::Sender<Value>>>,
-    counter: AtomicU64,
 }
 
 impl WindowBus {
@@ -38,13 +40,12 @@ impl WindowBus {
         Self::default()
     }
 
-    /// Mint a fresh `request_id`, park a oneshot under it, and return the id
-    /// plus the receiver the control handler awaits. The handler stamps the
-    /// id onto the outgoing `pane_query` window_command so the SPA echoes it
-    /// back in its reply.
+    /// Mint a fresh random `request_id`, park a oneshot under it, and return
+    /// the id plus the receiver the control handler awaits. The handler stamps
+    /// the id onto the outgoing window_command so the SPA echoes it back in its
+    /// reply.
     pub fn register(&self) -> (String, oneshot::Receiver<Value>) {
-        let n = self.counter.fetch_add(1, Ordering::Relaxed);
-        let request_id = format!("win-{n}");
+        let request_id = format!("win-{}", crate::auth::random_token());
         let (tx, rx) = oneshot::channel();
         self.pending
             .lock()

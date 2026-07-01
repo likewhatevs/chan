@@ -132,6 +132,39 @@ export async function writeClipboardText(text: string): Promise<void> {
   await navigator.clipboard?.writeText(text);
 }
 
+/// Write a PNG image onto the OS clipboard on desktop (`cs copy` of an
+/// image). chan-desktop's WKWebView rejects a gesture-less
+/// `navigator.clipboard.write()`, and `cs copy` arrives from a control
+/// command with no user gesture, so on desktop we hand the PNG bytes to the
+/// native `write_clipboard_image` IPC (arboard). Only meaningful on desktop;
+/// the web path uses `navigator.clipboard.write` directly in the caller.
+export async function writeClipboardImage(pngBytes: Uint8Array): Promise<void> {
+  // Tauri serializes a Uint8Array to a number[] for a Vec<u8> arg.
+  await tauriInvoke<void>("write_clipboard_image", { bytes: Array.from(pngBytes) });
+}
+
+/// Read a PNG image off the OS clipboard on desktop (`cs paste` of an image),
+/// as raw PNG bytes. Returns `null` when the clipboard holds no image. Native
+/// arboard read (`read_clipboard_image`) so it never trips WKWebView's paste
+/// button, mirroring `readClipboardText`.
+export async function readClipboardImage(): Promise<Uint8Array | null> {
+  const bytes = await tauriInvoke<number[] | null>("read_clipboard_image");
+  return bytes ? new Uint8Array(bytes) : null;
+}
+
+/// Write HTML (with a plain-text fallback) onto the OS clipboard on desktop
+/// (`cs copy --html`). Native arboard HTML setter so a real browser reading
+/// the OS clipboard (a paste into Gmail) keeps the formatting.
+export async function writeClipboardHtml(html: string, altText: string): Promise<void> {
+  await tauriInvoke<void>("write_clipboard_html", { html, altText });
+}
+
+/// Read HTML off the OS clipboard on desktop (`cs paste --html`). Returns
+/// `null` when the clipboard holds no HTML. Native arboard read.
+export async function readClipboardHtml(): Promise<string | null> {
+  return await tauriInvoke<string | null>("read_clipboard_html");
+}
+
 /// Absolute paths of the OS files currently on the macOS drag
 /// pasteboard (the `read_dropped_paths` IPC). Only meaningful when
 /// called from inside a `drop` event handler — the drag pasteboard

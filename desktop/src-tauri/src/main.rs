@@ -2744,6 +2744,90 @@ fn write_clipboard_text(text: String) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+/// Read a PNG image off the OS clipboard for `cs paste` of an image, bypassing
+/// WKWebView's paste button like the text read. arboard returns raw RGBA
+/// (`ImageData`), so encode it to PNG (what the terminal deals in). An
+/// image-less clipboard maps to `Ok(None)` so the SPA just tries the next
+/// representation. Sync so it runs on the main thread NSPasteboard expects.
+#[tauri::command]
+fn read_clipboard_image() -> Result<Option<Vec<u8>>, String> {
+    let image = match arboard::Clipboard::new().and_then(|mut c| c.get_image()) {
+        Ok(image) => image,
+        Err(arboard::Error::ContentNotAvailable) => return Ok(None),
+        Err(e) => return Err(e.to_string()),
+    };
+    let width = u32::try_from(image.width).map_err(|_| "clipboard image too wide".to_string())?;
+    let height = u32::try_from(image.height).map_err(|_| "clipboard image too tall".to_string())?;
+    let buffer = image::RgbaImage::from_raw(width, height, image.bytes.into_owned())
+        .ok_or_else(|| "clipboard image buffer size mismatch".to_string())?;
+    let mut png = std::io::Cursor::new(Vec::new());
+    buffer
+        .write_to(&mut png, image::ImageFormat::Png)
+        .map_err(|e| format!("encode clipboard png: {e}"))?;
+    Ok(Some(png.into_inner()))
+}
+
+/// Allocation/dimension caps for decoding an incoming clipboard PNG. A tiny
+/// PNG can declare enormous dimensions (a decompression bomb), so bound the
+/// decode instead of letting `w*h*4` OOM the desktop process. The alloc cap is
+/// the real guard; the dimension caps reject absurd sizes early.
+fn clipboard_image_limits() -> image::Limits {
+    let mut limits = image::Limits::no_limits();
+    limits.max_image_width = Some(16_384);
+    limits.max_image_height = Some(16_384);
+    limits.max_alloc = Some(512 * 1024 * 1024);
+    limits
+}
+
+/// Write a PNG image onto the OS clipboard for `cs copy` of an image. The SPA
+/// sends PNG bytes (it normalizes any raster to PNG first); arboard wants raw
+/// RGBA, so decode the PNG to RGBA `ImageData` under a bounded decoder (a
+/// hostile PNG can declare huge dimensions). Any failure surfaces as an Err the
+/// CLI reports. Sync so it runs on the main thread NSPasteboard expects.
+#[tauri::command]
+fn write_clipboard_image(bytes: Vec<u8>) -> Result<(), String> {
+    let mut reader = image::ImageReader::with_format(
+        std::io::Cursor::new(bytes.as_slice()),
+        image::ImageFormat::Png,
+    );
+    reader.limits(clipboard_image_limits());
+    let decoded = reader
+        .decode()
+        .map_err(|e| format!("decode clipboard png: {e}"))?
+        .to_rgba8();
+    let (width, height) = (decoded.width() as usize, decoded.height() as usize);
+    let image = arboard::ImageData {
+        width,
+        height,
+        bytes: std::borrow::Cow::Owned(decoded.into_raw()),
+    };
+    arboard::Clipboard::new()
+        .and_then(|mut c| c.set_image(image))
+        .map_err(|e| e.to_string())
+}
+
+/// Read HTML off the OS clipboard for `cs paste --html`. An HTML-less clipboard
+/// maps to `Ok(None)`. Native arboard read, mirroring `read_clipboard_text`.
+#[tauri::command]
+fn read_clipboard_html() -> Result<Option<String>, String> {
+    match arboard::Clipboard::new().and_then(|mut c| c.get().html()) {
+        Ok(html) => Ok(Some(html)),
+        Err(arboard::Error::ContentNotAvailable) => Ok(None),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+/// Write HTML (with a plain-text fallback) onto the OS clipboard for
+/// `cs copy --html`, so a real browser reading the OS clipboard (a paste into
+/// Gmail) keeps the formatting. arboard's HTML setter carries the alt text for
+/// plain-only targets.
+#[tauri::command]
+fn write_clipboard_html(html: String, alt_text: String) -> Result<(), String> {
+    arboard::Clipboard::new()
+        .and_then(|mut c| c.set().html(html, Some(alt_text)))
+        .map_err(|e| e.to_string())
+}
+
 /// User's home directory as a plain string, for the Workspaces window
 /// to abbreviate paths to `~/...`. Returns an empty string when the
 /// platform can't resolve it.
@@ -3797,6 +3881,10 @@ fn main() {
             platform_os,
             read_clipboard_text,
             write_clipboard_text,
+            read_clipboard_image,
+            write_clipboard_image,
+            read_clipboard_html,
+            write_clipboard_html,
             reveal_in_finder,
             reload_window,
             open_devtools,

@@ -11,7 +11,6 @@
 //! leader) rather than fanned out, but the parked-oneshot registry is the same.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
 use tokio::sync::oneshot;
@@ -26,12 +25,12 @@ pub enum HandoverReply {
 }
 
 /// A `request_id -> oneshot<HandoverReply>` registry. One entry per in-flight
-/// `cs session handover`. Process-local: the ids only need to be unique within
-/// this server's lifetime, so a monotonic counter suffices.
+/// `cs session handover`. The id is UNGUESSABLE (a random token): the answer
+/// route trusts whoever echoes the id, so a predictable id would let a
+/// token-bearing caller forge an accept/reject it never received the prompt for.
 #[derive(Default)]
 pub struct HandoverBus {
     pending: Mutex<HashMap<String, oneshot::Sender<HandoverReply>>>,
-    counter: AtomicU64,
 }
 
 impl HandoverBus {
@@ -47,8 +46,7 @@ impl HandoverBus {
     /// allow then.
     #[allow(dead_code)]
     pub fn register(&self) -> (String, oneshot::Receiver<HandoverReply>) {
-        let n = self.counter.fetch_add(1, Ordering::Relaxed);
-        let request_id = format!("handover-{n}");
+        let request_id = format!("handover-{}", crate::auth::random_token());
         let (tx, rx) = oneshot::channel();
         self.pending
             .lock()

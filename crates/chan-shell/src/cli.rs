@@ -12,11 +12,15 @@
 use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Context, Result};
+use base64::Engine as _;
 use clap::{Parser, Subcommand};
 
 use crate::control::{absolutize, control_socket_env, open_env, send_control_request};
 use crate::submit::{submit_writes, SubmitAgent};
-use crate::wire::{ControlRequest, PaneOp, SplitDir, SurveyFollowup, SurveySpec, TeamOp};
+use crate::wire::{
+    ControlRequest, PaneOp, PastePrefer, SplitDir, SurveyFollowup, SurveySpec, TeamOp,
+    MAX_CLIPBOARD_BYTES,
+};
 
 /// Top-level `cs` parser. The `chan` binary reaches `cs` through its own
 /// `Cli` (rewriting `cs ...` into `chan shell ...` in `parse_cli`), but
@@ -93,6 +97,42 @@ pub enum ShellAction {
     Download {
         #[arg(value_hint = clap::ValueHint::AnyPath)]
         path: PathBuf,
+    },
+    /// Copy stdin onto the window's clipboard, so a `Cmd+V` in another app
+    /// pastes it. Reads all of stdin (text, HTML, or an image) and sends it to
+    /// the browser / desktop clipboard. The content type is sniffed (plain
+    /// text, an `<html>`/`<!doctype html>` document, or a PNG/JPEG/GIF/WebP
+    /// image); non-PNG images are re-encoded to PNG, which is the format the
+    /// clipboard reliably accepts. `--html` forces the input to be treated as
+    /// HTML (a fragment that would not sniff as a document); `--mime` forces
+    /// any type. Example: `cs copy < photo.png`, then paste into Gmail.
+    Copy {
+        /// Force the clipboard MIME instead of sniffing stdin
+        /// (e.g. `text/html`, `image/png`).
+        #[arg(long)]
+        mime: Option<String>,
+        /// Treat stdin as HTML (shorthand for `--mime text/html`). Use for an
+        /// HTML fragment that would not sniff as a full document.
+        #[arg(long, conflicts_with = "mime")]
+        html: bool,
+    },
+    /// Paste the window's clipboard to stdout. Writes the raw bytes, so
+    /// `cs paste > file.png` yields a real PNG and a bare `cs paste` prints
+    /// clipboard text. When the clipboard holds several representations the
+    /// default is image-first, then text; `--text` / `--html` / `--image`
+    /// force one. The emitted MIME is reported on stderr. The bytes are raw:
+    /// clipboard text may carry control/escape sequences, so redirect to a
+    /// file (or pipe through a sanitizer) rather than dumping to a live TTY.
+    Paste {
+        /// Emit the plain-text representation only.
+        #[arg(long, conflicts_with_all = ["html", "image"])]
+        text: bool,
+        /// Emit the HTML (rich text) representation.
+        #[arg(long, conflicts_with_all = ["text", "image"])]
+        html: bool,
+        /// Emit the image representation (PNG).
+        #[arg(long, conflicts_with_all = ["text", "html"])]
+        image: bool,
     },
     /// Terminal operations against the current window's live sessions.
     ///
@@ -793,6 +833,8 @@ pub async fn dispatch(action: ShellAction) -> Result<()> {
             eprintln!("{message}");
             Ok(())
         }
+        ShellAction::Copy { mime, html } => cmd_shell_copy(mime, html).await,
+        ShellAction::Paste { text, html, image } => cmd_shell_paste(text, html, image).await,
         ShellAction::Terminal { action } => cmd_shell_terminal(action).await,
         ShellAction::Window { action } => match action {
             WindowAction::List { json, pretty } => cmd_window_list(json, pretty).await,
@@ -1241,6 +1283,100 @@ fn render_pane_layout_markdown(raw: &str) -> Result<String> {
         out.push('\n');
     }
     Ok(out)
+}
+
+/// `cs copy`: read all of stdin and push it onto the window's clipboard. The
+/// bytes ride a base64 string on the control socket (a JSON envelope), so an
+/// image and text share one path. `--html` maps to `--mime text/html`;
+/// otherwise the server sniffs the content type from the bytes.
+async fn cmd_shell_copy(mime: Option<String>, html: bool) -> Result<()> {
+    let env = open_env()?;
+    let mut buf = Vec::new();
+    {
+        use std::io::Read;
+        // Bound the read: the clipboard is for modest content, so cap it (and
+        // read one byte past the cap to detect an oversized input) instead of
+        // buffering an unbounded stdin -- `cs copy < /dev/zero` never EOFs.
+        std::io::stdin()
+            .take(MAX_CLIPBOARD_BYTES as u64 + 1)
+            .read_to_end(&mut buf)
+            .context("reading stdin for cs copy")?;
+    }
+    if buf.is_empty() {
+        anyhow::bail!("nothing on stdin to copy");
+    }
+    if buf.len() > MAX_CLIPBOARD_BYTES {
+        anyhow::bail!(
+            "clipboard payload too large (max {} MB)",
+            MAX_CLIPBOARD_BYTES / (1024 * 1024)
+        );
+    }
+    let mime = if html {
+        Some("text/html".to_string())
+    } else {
+        mime
+    };
+    let data_b64 = base64::engine::general_purpose::STANDARD.encode(&buf);
+    let message = send_control_request(
+        &env.control_socket,
+        ControlRequest::ClipboardCopy {
+            window_id: env.window_id,
+            data_b64,
+            mime,
+        },
+    )
+    .await?;
+    eprintln!("{message}");
+    Ok(())
+}
+
+/// The `{ mime, data_b64 }` reply the SPA sends back for `cs paste`, delivered
+/// as JSON in the control response `message`. `data_b64` is base64 of the raw
+/// clipboard bytes, which the CLI writes verbatim to stdout.
+#[derive(serde::Deserialize)]
+struct ClipboardPasteReply {
+    mime: String,
+    data_b64: String,
+}
+
+/// `cs paste`: read the window's clipboard to stdout. The server replies with
+/// a `{ mime, data_b64 }` JSON line; decode the base64 and write the RAW bytes
+/// to stdout (so `cs paste > file.png` yields the real asset), reporting the
+/// emitted MIME on stderr.
+async fn cmd_shell_paste(text: bool, html: bool, image: bool) -> Result<()> {
+    let env = open_env()?;
+    // clap marks the three flags mutually exclusive, so at most one is set.
+    let prefer = if text {
+        PastePrefer::Text
+    } else if html {
+        PastePrefer::Html
+    } else if image {
+        PastePrefer::Image
+    } else {
+        PastePrefer::Auto
+    };
+    let message = send_control_request(
+        &env.control_socket,
+        ControlRequest::ClipboardPaste {
+            window_id: env.window_id,
+            prefer,
+        },
+    )
+    .await?;
+    let reply: ClipboardPasteReply =
+        serde_json::from_str(&message).context("decoding clipboard paste reply")?;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(reply.data_b64.as_bytes())
+        .context("decoding clipboard base64")?;
+    {
+        use std::io::Write;
+        std::io::stdout()
+            .write_all(&bytes)
+            .context("writing clipboard bytes to stdout")?;
+    }
+    // The MIME goes to stderr so it never pollutes a `> file` redirect.
+    eprintln!("{}", reply.mime);
+    Ok(())
 }
 
 async fn cmd_shell_terminal(action: TerminalAction) -> Result<()> {
@@ -2174,6 +2310,57 @@ mod tests {
             ShellAction::Download { path } => assert_eq!(path.to_str(), Some("notes/a.md")),
             other => panic!("unexpected parse for `cs download notes/a.md`: {other:?}"),
         }
+    }
+
+    #[test]
+    fn copy_parses_bare_and_with_mime_flags() {
+        // A bare `cs copy` reads stdin and sniffs the type (no path arg).
+        match CsCli::try_parse_from(["cs", "copy"]).unwrap().action {
+            ShellAction::Copy { mime, html } => {
+                assert_eq!(mime, None);
+                assert!(!html);
+            }
+            other => panic!("unexpected parse for `cs copy`: {other:?}"),
+        }
+        match CsCli::try_parse_from(["cs", "copy", "--mime", "image/png"])
+            .unwrap()
+            .action
+        {
+            ShellAction::Copy { mime, html } => {
+                assert_eq!(mime.as_deref(), Some("image/png"));
+                assert!(!html);
+            }
+            other => panic!("unexpected parse for `cs copy --mime`: {other:?}"),
+        }
+        match CsCli::try_parse_from(["cs", "copy", "--html"])
+            .unwrap()
+            .action
+        {
+            ShellAction::Copy { html, .. } => assert!(html),
+            other => panic!("unexpected parse for `cs copy --html`: {other:?}"),
+        }
+        // `--html` and `--mime` are mutually exclusive.
+        assert!(CsCli::try_parse_from(["cs", "copy", "--html", "--mime", "text/html"]).is_err());
+    }
+
+    #[test]
+    fn paste_parses_and_rejects_conflicting_prefer_flags() {
+        match CsCli::try_parse_from(["cs", "paste"]).unwrap().action {
+            ShellAction::Paste { text, html, image } => {
+                assert!(!text && !html && !image);
+            }
+            other => panic!("unexpected parse for `cs paste`: {other:?}"),
+        }
+        match CsCli::try_parse_from(["cs", "paste", "--image"])
+            .unwrap()
+            .action
+        {
+            ShellAction::Paste { image, .. } => assert!(image),
+            other => panic!("unexpected parse for `cs paste --image`: {other:?}"),
+        }
+        // The three representation flags are mutually exclusive.
+        assert!(CsCli::try_parse_from(["cs", "paste", "--text", "--image"]).is_err());
+        assert!(CsCli::try_parse_from(["cs", "paste", "--html", "--text"]).is_err());
     }
 
     #[test]

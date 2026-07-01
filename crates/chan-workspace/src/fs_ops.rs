@@ -431,6 +431,29 @@ pub fn looks_like_text(bytes: &[u8]) -> bool {
     }
 }
 
+/// Sniff the raster image type of `bytes` by its leading magic bytes,
+/// returning the MIME string, or `None` when the header matches no known
+/// format. The `cs copy` path uses this to type stdin that arrives with no
+/// filename (the extension classifier in `classify` cannot help there).
+///
+/// Same hand-rolled, dependency-free spirit as `looks_like_text`: a handful
+/// of well-known signatures rather than pulling in `infer` / libmagic. Only
+/// the formats the clipboard round-trip cares about are listed; SVG is XML
+/// text (handled by `looks_like_text`), not sniffed here.
+pub fn sniff_image_mime(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        Some("image/png")
+    } else if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        Some("image/jpeg")
+    } else if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        Some("image/gif")
+    } else if bytes.len() >= 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+        Some("image/webp")
+    } else {
+        None
+    }
+}
+
 /// Caller-supplied list of directory names that the indexing /
 /// graph-rebuild walks should not descend into. Matched at any
 /// depth by exact basename, case-insensitive. `Library` loads the
@@ -1747,6 +1770,36 @@ mod tests {
         assert!(looks_like_text(&full[..1]));
         // But a NUL anywhere still wins over the truncation grace.
         assert!(!looks_like_text(&[full[0], 0x00]));
+    }
+
+    #[test]
+    fn sniff_image_mime_matches_known_signatures() {
+        assert_eq!(
+            sniff_image_mime(b"\x89PNG\r\n\x1a\nrest"),
+            Some("image/png")
+        );
+        assert_eq!(
+            sniff_image_mime(&[0xFF, 0xD8, 0xFF, 0xE0]),
+            Some("image/jpeg")
+        );
+        assert_eq!(sniff_image_mime(b"GIF89a..."), Some("image/gif"));
+        assert_eq!(sniff_image_mime(b"GIF87a..."), Some("image/gif"));
+        // WEBP is RIFF....WEBP: the size word between the two tags varies.
+        assert_eq!(
+            sniff_image_mime(b"RIFF\x24\x00\x00\x00WEBPVP8 "),
+            Some("image/webp")
+        );
+    }
+
+    #[test]
+    fn sniff_image_mime_rejects_non_images() {
+        assert_eq!(sniff_image_mime(b""), None);
+        assert_eq!(sniff_image_mime(b"plain text"), None);
+        // A truncated or wrong RIFF (no WEBP tag) is not an image.
+        assert_eq!(sniff_image_mime(b"RIFF\x24\x00\x00\x00WAVE"), None);
+        assert_eq!(sniff_image_mime(b"RIFF"), None);
+        // SVG is XML text, not sniffed here.
+        assert_eq!(sniff_image_mime(b"<svg xmlns=\"...\">"), None);
     }
 
     #[test]

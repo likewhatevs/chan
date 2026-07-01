@@ -293,3 +293,65 @@ Directory links (bug 1). `resolve_link` detects a directory target after its fil
 ### Still open
 
 Progressive outdent: Enter on an empty nested item exits the list in one press rather than outdenting a level at a time (optional keymap tweak, not done). The `mermaid-to-excalidraw` feature is deferred to the mermaid/ux stream.
+
+---
+
+## `cs copy` / `cs paste`: clipboard bridge for the terminal
+
+**Branch:** `cs-copy-paste` (rebased on `origin/main`, in the primary worktree). Committed as a `feat` plus this `docs` commit; not yet merged or pushed. **Status:** feature complete plus a full two-sided adversarial audit whose findings are all fixed; gated green (fmt, clippy, `cargo test`, `--no-default-features`, svelte-check, full vitest, web build, `cargo check -p chan-desktop`). Not yet exercised in a live browser or chan-desktop: this host has no browser/Chromium libs and the desktop image path is WKWebView specific, so the paste-of-an-image and decode-bomb paths are on the rc validation list. Maintainer-requested stream outside `dev/v0.59.0/request.md`.
+
+### What was asked
+
+Two requests, back to back. First: add `cs copy` and `cs paste` so an agent or human in the embedded terminal can bridge stdin/stdout to the user's clipboard on both the web UI and chan-desktop. The motivating cases are macOS shaped: select an image and `cs paste > file.png`, or `cs copy < file.png` then Cmd+V into Gmail in a real browser. Plain text and images should work out of the box; on the follow-up question the maintainer chose text plus images plus HTML (rich text), and image-first when the clipboard holds both an image and text. Second: spin up a rustacean and a webdev reviewer to adversarially attack each other's boundary (server vs client), find new bugs, prove them, and report an analysis; then, on the maintainer's word, fix everything found.
+
+### What shipped
+
+- The bridge rides the existing `cs pane` style window round-trip, reusing the generic `WindowBus` and the `POST /api/window/reply` route unchanged (its payload was already an opaque `serde_json::Value`), so no new reply route was needed. `cs copy` and `cs paste` both block for a real success/failure instead of firing and forgetting, because a browser clipboard write or read can fail on permission or a missing user gesture.
+- Wire and CLI (`crates/chan-shell`): `ControlRequest::ClipboardCopy` / `ClipboardPaste` plus a `PastePrefer` enum in `wire.rs`; `cs copy [--mime|--html]` and `cs paste [--text|--html|--image]` in `cli.rs`, with the copy path base64-encoding stdin and the paste path base64-decoding the reply to raw stdout (so a redirect yields the real asset) and printing the emitted MIME to stderr.
+- Server (`crates/chan-server/src/control_socket.rs`): `WindowCommand::ClipboardWrite` / `ClipboardRead`, a `clipboard_round_trip` built on the same bus as pane, and content sniffing that reuses `chan_workspace::fs_ops` (`looks_like_text` plus a new `sniff_image_mime` magic-byte helper next to `classify`, and a light HTML signature sniff), so detection lives server-side and chan-shell stays lean.
+- Frontend (`web/packages/workspace-app`): a new `api/clipboard.ts` bridge (base64, PNG normalization via canvas, an HTML two-representation ClipboardItem with a DOMParser plain-text fallback), the `clipboard_write` / `clipboard_read` dispatch and responders in `store.svelte.ts`, and image/HTML clipboard helpers in `api/desktop.ts` that branch browser `navigator.clipboard` vs the desktop IPC exactly like the existing text helpers.
+- Desktop (`desktop/src-tauri`): native `read/write_clipboard_image` and `read/write_clipboard_html` IPC over `arboard` (enabling its `image-data` feature, adding the `image` crate for PNG to RGBA), because WKWebView's async clipboard write is gesture gated, which is why text already went native.
+- Then, after the audit, all seven findings fixed (below).
+
+### The adversarial audit (second request)
+
+Two read-only reviewers ran in parallel, each owning one side and told to attack the other's trust assumptions, calibrate severity to the real threat model (loopback, single-user, bearer-token gated, so the adversaries are a semi-trusted same-user client and an in-origin script), and refute each finding against the code before reporting. They converged independently on the same top bug, which is strong signal it was real rather than a model artifact. Seven findings survived, all since fixed:
+
+- **F1 (blocker, functional):** `cs paste` of any image larger than about 1.5 MB (a normal screenshot or photo) failed. `POST /api/window/reply` had no body-limit override, so axum's default 2 MB applied; the base64 image reply exceeded it and 413'd, the SPA swallowed the failure as if it were a stale-id 404, the window-bus oneshot never fired, and the CLI hung the full 30 s then printed a misleading "no reply from the window". Fixed by raising the body limit on both reply-route registrations and narrowing the swallow to warn on a non-404. Both reviewers found this one.
+- **F2 (robustness/DoS):** no size cap anywhere on the copy pipeline, so `cs copy < /dev/zero` OOMed the CLI and a multi-GB payload OOMed the server and fanned out to every connected tab. Fixed with a shared `MAX_CLIPBOARD_BYTES` enforced at the CLI stdin read, a bounded control-socket `read_line`, and the server copy handler.
+- **F3 (robustness/DoS):** image decompression bombs (a tiny file declaring huge dimensions) OOMed the desktop process on decode and the SPA tab on the canvas normalization. Fixed with `image::Limits` on the desktop decode and a pixel-dimension guard plus a read-size guard on the web side.
+- **F4 (defense in depth, preconditioned on an in-origin script, pre-existing for `cs pane`):** predictable `win-N` request-ids, window_commands broadcast to every `/ws` subscriber, and a token-gated but not origin-bound reply route meant an in-origin script could race a forged reply into a pending `cs paste > file` and inject bytes. Hardened by moving the window_command filter server-side in the `/ws` pump (so other-window and untagged sockets stop receiving another window's ids and payloads) and by minting unguessable random request-ids across the window, survey, and handover buses. Honest residual below.
+- **F5 / F6 / F7 (low):** the web paste labeled the first image type as `image/png` regardless of the real type; a forced `--mime text/plain` on binary was silently lossy; `cs paste` writes raw bytes including control sequences to stdout. Fixed the label, added a non-UTF-8 rejection for a forced text mime, and documented the raw-bytes behavior in the help.
+
+### The tests
+
+- Rust: wire-tag round-trips for the new requests and `PastePrefer` strings; `sniff_image_mime`, `detect_clipboard_mime`, and `looks_like_html`; CLI parse tests for the copy/paste flags; an integration test that `POST /api/window/reply` accepts a body over 2 MB (the F1 regression guard, driving the real router); over-cap and non-UTF-8 rejections in the copy handler; a prefix-coupling test pinning the serialized `window_command` shape the `/ws` scan depends on; and the `window_command_target` extraction. Gate: chan-shell 81, chan-workspace 573, chan-server 497, all green, plus clippy and `--no-default-features`.
+- Web (vitest): the base64 round-trip, the write representations, the prefer read order, the over-cap read guard, and the actual-type image label. Full suite 206 files / 2116 tests green, plus svelte-check and the production build.
+- Desktop: `cargo check -p chan-desktop` green with the `arboard` image-data feature and the `image` crate.
+
+### Highlights (what went well)
+
+- The feature reused existing machinery instead of inventing it: the whole round-trip is the pane-query mechanism, the `WindowBus` and the reply route were already generic over an opaque payload, and the content detectors were already in `fs_ops`. The only genuinely new plumbing was the desktop `arboard` image/HTML IPC and the small web bridge, which itself reused the existing browser-vs-desktop branch shape.
+- The two-reviewer audit paid for itself immediately: the rustacean and the webdev, run without seeing each other's output, both landed on F1 first. That independent convergence is the reason I trusted the finding enough to call the feature a shipped-broken headline case rather than a maybe.
+- Severity was calibrated honestly to the loopback single-user model rather than inflated: F4 is presented as preconditioned on an in-origin foothold and pre-existing for `cs pane`, not as a remote exploit, and the residual that the hardening does not fully close is written down rather than hidden.
+
+### Lowlights (what I missed, what we missed, slowdowns, bugs I caused)
+
+- The big one: I declared the feature complete and reported it gate-green with no known bug, and it shipped a blocker. F1 broke the headline use case (paste of a normal photo), and my green gate never caught it, because there is no automated end-to-end clipboard test and this host has no browser to run one by hand. The gate proved the code compiles and the units pass; it proved nothing about the live round-trip, and I over-trusted its green. Two independent reviewers found in one pass what my own "done" report had missed.
+- The bugs the audit surfaced were mine, from the first pass. I added a byte-carrying reply path (`cs paste` to a redirected file) on top of a request-id scheme and a broadcast that were fine for printing pane-layout JSON but not for injecting bytes, and I never revisited that trust boundary when the stakes changed (F4). I added a stdin-to-clipboard path with no size cap (F2) and handed attacker-influenced image bytes to a decoder and a canvas with no limits (F3). None of these are exotic; they are the first questions an adversarial reviewer asks, and I did not ask them of my own code until prompted to.
+- What the codebase missed, not just me: the reply-hijack surface (predictable ids, broadcast window_commands, an origin-agnostic reply route) predates this feature and is shared by `cs pane` and `cs terminal survey`. It sat latent; clipboard only raised its impact from "forge some JSON the CLI prints" to "write attacker bytes to a user-chosen file". The full fix (per-window capability tokens) is bigger than this branch and is left as a tracked follow-up.
+- Slowdowns: chan-server recompiles took about a minute per server-side touch, so the loop of a small edit plus a scoped test was the dominant cost; the F1 body-limit test needed the full 60-line `route_test_app` harness, which is copy-pasted per test module in this crate rather than shared, so I duplicated it a third time; one backgrounded `cargo build --no-default-features` hit the 2-minute foreground timeout and had to be re-run detached; and the 32 MB over-cap test allocates real memory, a slow (about 1 s) but honest test.
+- I did not write a CHANGELOG entry (consistent with the other in-flight streams here, which note it as pending merge, but still a gap), and nothing is committed yet, so this work is not on a branch tip CI or the maintainer can pull.
+
+### Residual (accepted)
+
+- F4 is hardened, not closed: the single-user model has no per-window authentication, so a script already executing in the SPA origin (an XSS foothold, which already implies broad file and terminal compromise) can still connect `/ws?w=<victim>` to impersonate the target and race a reply. The two changes raise the bar from "any in-origin subscriber passively hijacks" to "must actively impersonate the specific window and win the race". Full closure needs per-window capability tokens, a separate design change.
+- The web decode-bomb guard is a canvas-and-re-encode guard: `createImageBitmap` may allocate the decoded bitmap before the dimension check runs, a residual hard to avoid from JS; the byte cap bounds the source file and the desktop path is fully bounded by `image::Limits`.
+- Desktop HTML read uses `arboard`'s HTML getter and is only reachable via an explicit `cs paste --html`; the default image-first order never selects it.
+
+### Follow-ups
+
+- Live verification once a server and a real browser or chan-desktop are available: paste of a multi-MB photo completes fast instead of the old 30 s hang (F1), copy-then-paste of an image round-trips, `cs copy --html` keeps formatting into Gmail, and the decode-bomb inputs fail cleanly on both surfaces (F3). This is the item that would have caught F1 before it shipped.
+- Per-window capability tokens to close F4 across `cs pane`, `cs terminal survey`, and clipboard.
+- A shared route-test harness so the `route_test_app` builder stops being copy-pasted per module.
+- CHANGELOG entry, and commit the branch (feature and audit fixes, split or squashed per the maintainer's preference).

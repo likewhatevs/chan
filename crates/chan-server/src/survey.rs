@@ -9,20 +9,18 @@
 //! stable `complete_survey` API keeps their coupling narrow.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
 use chan_shell::SurveyReply;
 use tokio::sync::oneshot;
 
 /// A `survey_id -> oneshot<SurveyReply>` registry. One entry per in-flight
-/// `cs terminal survey`. Process-local: the ids only need to be unique
-/// within this server's lifetime (the map is in memory), so a monotonic
-/// counter suffices.
+/// `cs terminal survey`. The id is UNGUESSABLE (a random token): the SPA's
+/// reply route trusts whoever echoes the id, so a predictable id would let a
+/// token-bearing caller forge an answer to a survey it never saw.
 #[derive(Default)]
 pub struct SurveyBus {
     pending: Mutex<HashMap<String, oneshot::Sender<SurveyReply>>>,
-    counter: AtomicU64,
 }
 
 impl SurveyBus {
@@ -35,8 +33,7 @@ impl SurveyBus {
     /// id onto the outgoing [`chan_shell::SurveySpec`] so the SPA echoes it
     /// back in its reply.
     pub fn register(&self) -> (String, oneshot::Receiver<SurveyReply>) {
-        let n = self.counter.fetch_add(1, Ordering::Relaxed);
-        let survey_id = format!("survey-{n}");
+        let survey_id = format!("survey-{}", crate::auth::random_token());
         let (tx, rx) = oneshot::channel();
         self.pending
             .lock()
