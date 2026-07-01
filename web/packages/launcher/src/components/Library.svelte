@@ -316,18 +316,20 @@
   </div>
 {/snippet}
 
-<!-- The devserver identity block: name + status/token on one row, the address
-     on the next. On the mutable surface the whole block is the click target to
-     open the edit-config form, with an inline pencil beside the address; the
-     read-only surface renders it static with no edit affordance. -->
+<!-- The devserver identity block: a left glyph column (the Globe kind mark over
+     the OS mark) beside two text rows -- name + status/token, then the address.
+     On the mutable surface the whole block is the click target to open the
+     edit-config form, with an inline pencil beside the address; the read-only
+     surface renders it static with no edit affordance. -->
 {#snippet dsIdentity(ds: DevserverEntry, withPencil: boolean)}
   <span class="ds-name-row">
+    <span class="ds-glyph" aria-hidden="true"><Globe size={16} /></span>
     <span class="row-name">{devserverName(ds)}</span>
-    <OsIcon os={ds.os} prettyName={ds.pretty_name} />
     {#if connected(ds)}<span class="status-dot live" title="Connected"></span>{/if}
     {#if ds.has_token}<span class="chip">🔒 token</span>{/if}
   </span>
   <span class="ds-addr-row">
+    <span class="ds-glyph"><OsIcon os={ds.os} prettyName={ds.pretty_name} /></span>
     <span class="row-sub" title={endpoint(ds)}>{endpoint(ds)}</span>
     {#if withPencil}<Pencil size={12} class="addr-pencil" />{/if}
   </span>
@@ -374,7 +376,6 @@
             aria-label={`Select ${devserverName(ds)}`}
             onchange={() => toggleSelected("devserver", ds.id)} />
         {/if}
-        <span class="machine-icon" aria-hidden="true"><Globe size={16} /></span>
         {#if readOnly}
           <div class="ds-id">{@render dsIdentity(ds, false)}</div>
         {:else}
@@ -556,16 +557,28 @@
     background: color-mix(in srgb, var(--text-secondary) 8%, transparent);
   }
 
+  /* Leading icon cell shared by both identity rows: the kind glyph (Globe) on the
+     name row, the OS mark directly under it on the address row, so the two marks
+     read as one left column. Fixed width keeps them aligned. */
+  .ds-glyph {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.15rem;
+    flex-shrink: 0;
+    color: var(--text-secondary);
+  }
+
   .ds-name-row {
     display: flex;
     align-items: center;
-    gap: 0.45rem;
+    gap: 0.4rem;
   }
 
   .ds-addr-row {
     display: flex;
     align-items: center;
-    gap: 0.35rem;
+    gap: 0.4rem;
   }
 
   /* The inline edit pencil beside the address (mutable surface only). */
