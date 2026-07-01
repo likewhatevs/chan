@@ -139,6 +139,48 @@ The Indexing graph polls every 3s, so the pulse advances in 3s steps. Between em
 
 ---
 
+## Editor: mermaid-to-excalidraw renderer + shared diagram widget
+
+### What landed
+
+A second diagram renderer, triggered by a fenced `mermaid-to-excalidraw` block. Built on `@excalidraw/mermaid-to-excalidraw` + `@excalidraw/excalidraw` (both MIT): `parseMermaidToExcalidraw` -> `convertToExcalidrawElements` -> `exportToSvg`, all headless (no React editor mounted), returning an SVG string exactly like the mermaid path.
+
+The mermaid widget was generalized rather than copied: `widgets/mermaid.ts` became `widgets/diagram.ts`, a renderer-agnostic block-replace widget parameterized by `{ lang, label, render, isDark, onView }`, with its own per-instance face/error caches so the two renderers never collide on a shared source key. `mermaidDecorations` and `excalidrawDecorations` are thin wrappers; `mermaid_render.ts` and a new `excalidraw_render.ts` supply the render functions over a shared `diagram_render.ts` (the `DiagramResult` type + `parseErrorPos`). The widget CSS moved from `cm-md-mermaid-*` to shared `cm-md-diagram-*`. Both libraries are dynamic-imported, so excalidraw + its React runtime code-split out of the eager editor bundle (confirmed in the vite chunk output: excalidraw lands in a lazy `prod-*.js`, not the entry).
+
+The click-to-zoom overlay (`state/diagramZoom.ts`, removed in `e0026410`) was reintroduced for BOTH renderers per the maintainer decision, on a hover "View" button. It always renders LIGHT on a light panel (a dark-editor diagram re-renders light for the overlay), which is the black-on-black fix from the original `04b0413e`.
+
+### Validation
+
+`npm run check` (0 errors / 0 warnings) + full vitest (2121 pass, including new `widgets/diagram.test.ts`, `excalidraw_render.test.ts`, and the restored `state/diagramZoom.test.ts`) + production build. Browser-verified on a standalone server in a dark editor: the mermaid flowchart still renders (no regression from the refactor), the excalidraw flowchart and sequence render with the embedded hand-drawn Excalifont (dark mode reads correctly, no black-on-black), a bad excalidraw block shows the actionable "Excalidraw error - line N" face, and the View -> zoom overlay opens on a light panel with working +/-/Reset/pan for BOTH renderers, dismissed cleanly with Escape.
+
+Found and fixed a real zoom bug inherited from the restored overlay: mermaid's SVG carries `width="100%"` and no height, so `width:auto` collapsed it to 0x0 inside the shrink-to-fit panel (the diagram vanished; this matches the empty / buggy-box behavior the maintainer hit before, and is the likely reason the overlay was originally removed). `diagramZoom.ts` now derives an intrinsic pixel width from the SVG's viewBox; excalidraw's export already carries pixel dimensions so it is unaffected. Pinned with two `diagramZoom.test.ts` cases.
+
+One benign console notice remains from excalidraw's font subsetter ("Failed to use workers for subsetting, falling back to the main thread"): it falls back to the main thread and the font still inlines (the Excalifont renders), so it is cosmetic.
+
+### Open items
+
+- The fence token: the request wrote `mermaid-to-excallidraw` (doubled l) but the upstream library is `mermaid-to-excalidraw`. Shipped with the upstream spelling as the default, isolated in one constant `EXCALIDRAW_LANG` in `widgets/diagram.ts` for a one-line swap; the maintainer survey to confirm the exact token is still open at journal time.
+- Light-editor inline render not separately screenshotted (strictly the easier case: default palette on a light surface, and the overlay is always light regardless of editor theme); dark mode (the risky case) is fully verified.
+- Desktop (WKWebView) not separately verified, so it is on the rc validation list.
+
+## UX: friendly `cs open` + coherent standalone-terminal command gating
+
+### What landed
+
+`cs open PATH` from a standalone terminal (which has no workspace to open a path into) now prints friendly guidance to run `chan open PATH` to load it as a workspace window, instead of the generic "needs a workspace" refusal. The standalone-vs-workspace gating, previously scattered across `handle_request` match arms and conflated with workspace resolution in `workspace_from_cell`, is now a single pure decision `terminal_tenant_refusal(&ControlRequest, ControlTenant) -> Option<String>` consulted once at the top of `handle_request`. It refuses only the workspace-content commands on a terminal tenant (`cs open` -> the chan-open guidance; `cs graph` / `search` -> the generic refusal; `cs terminal new --path` -> the path message) and lets window-routing, session/pane ops, and the cwd-scoped `cs upload` / `download` through.
+
+`cs upload` / `download` from a standalone terminal already worked (server-side tenant routing landed earlier in `c7deaab7`); this stream verified that against HEAD and did NOT re-add any restriction. Also fixed two stale comments that listed `dashboard` as a workspace-gated command (it is not gated) and removed the em dash from the `TERMINAL_ONLY_NEEDS_WORKSPACE` string (house style).
+
+### Validation
+
+`cargo fmt --check` + `cargo clippy -p chan-server --all-targets` under `RUSTFLAGS=-D warnings` + `cargo test -p chan-server` (495 pass). New tests: a platform-neutral `tenant_gate_tests` module table-driving `terminal_tenant_refusal` across every command/tenant pair, plus a `handle_request`-level test that `cs open` on a terminal tenant returns the `chan open` guidance.
+
+### Open items
+
+- `cs terminal team` keeps its own lazy in-handler workspace refusal (unchanged): coherent, but not folded into the pure decision, to avoid destabilizing the team path.
+
+---
+
 ## Integration notes (release editor)
 
 Merged onto `main` in order: `devserver-cmd`, `graph-tuning`, `index-dashboard`, each as a `--no-ff` merge. The only conflict across all three was this journal, an add/add, confirmed up front with `git merge-tree`; every code file merged clean. This file is the reconciliation of the three per-branch journals into one, unwrapped and free of em dashes.

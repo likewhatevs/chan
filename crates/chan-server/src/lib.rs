@@ -788,9 +788,10 @@ async fn build_terminal_app(
 
     // Control socket: same first-party `cs` surface as a workspace
     // serve, scoped to what a terminal tenant can answer. Terminal /
-    // pane / survey / window commands work; workspace commands
-    // (open / graph / dashboard / search / team) refuse with the
-    // terminal-only message. The buses are shared with AppState below
+    // pane / survey / window commands work, and so do the cwd-scoped
+    // upload / download; workspace-content commands (open / graph /
+    // search / team) refuse with the terminal-only message, except
+    // `cs open` which points at `chan open {path}`. The buses are shared with AppState below
     // so SPA replies (`/api/window/reply`, `/api/survey/reply`)
     // complete the blocked `cs pane` / `cs terminal survey` calls.
     // Socket paths are pid+random-suffixed (`/tmp/chan-control-<pid>-

@@ -32,7 +32,7 @@ Because the source is the single source of truth, the editor sidesteps a class o
    - **External markdown links `[label](https://...)`**: hide markers only (`[`, `](`, `)`); `link` mark on label; URL editable in place.
    - **Naked URLs**: mark only, no hide.
    - **Tables**: read-only grid widget; click drops the caret at the source start, which reveals the pipe form for editing.
-   - **Mermaid**: a closed ```` ```mermaid ```` fence renders as a diagram atom while the caret is outside; caret inside reveals source. The mermaid library is dynamic-imported on first render.
+   - **Diagrams (mermaid, mermaid-to-excalidraw)**: a closed ```` ```mermaid ```` or ```` ```mermaid-to-excalidraw ```` fence renders as a diagram atom while the caret is outside; caret inside reveals source. A hover "View" button opens a fullscreen pan/zoom overlay, always on a light panel with a light render so a dark-theme diagram never vanishes on the dark backdrop. Both fences share one widget (`widgets/diagram.ts`, one decoration field per fence language with its own caches) over per-renderer render modules (`mermaid_render.ts`, `excalidraw_render.ts`); each library is dynamic-imported on first render.
    - **Tag `#word` / mention `@@{name}` pills**: mark-based (no replace), with click handling delegated through one content-DOM listener.
 
 6. **Selection rule for ranges.** A non-empty selection that crosses any token's range reveals all of those tokens uniformly. No special cases.
@@ -204,7 +204,7 @@ sequenceDiagram
 
 - List continuation and indent/outdent match the current line with a regex, not
   the syntax tree, so the edit stays cheap and local.
-- Heavy or optional modules load lazily on first use: mermaid (diagram render), turndown (HTML-paste -> markdown), HEIC -> WebP conversion before image upload, and the per-language code packs (one vite chunk each).
+- Heavy or optional modules load lazily on first use: mermaid and mermaid-to-excalidraw + excalidraw (diagram render; excalidraw carries React, so both are dynamic-imported and code-split out of the eager editor bundle), turndown (HTML-paste -> markdown), HEIC -> WebP conversion before image upload, and the per-language code packs (one vite chunk each).
 
 ## Out of scope
 

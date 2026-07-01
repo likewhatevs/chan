@@ -6,12 +6,17 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Excalidraw diagram renderer.** A fenced ```` ```mermaid-to-excalidraw ```` block renders as an [excalidraw](https://github.com/excalidraw/mermaid-to-excalidraw) scene in the editor, alongside the existing `mermaid` renderer and sharing its whole lifecycle: cursor-out flip-in, a hover "View" pan/zoom overlay (always presented on a light panel so a dark-theme diagram stays visible), light/dark theming, failing-line error accents, and keep-alive across tab switches. Both fences run through one diagram widget now; excalidraw and its React runtime are dynamic-imported, so they stay out of the eager editor bundle.
+
 ### Fixed
 
 - **Supervised devservers honor `CHAN_HOME`.** `chan devserver --service=systemd`/`--service=launchd` bake `CHAN_HOME` into the generated unit `Environment=` and plist `EnvironmentVariables`, so the supervised service and the supervisor share the same isolated `~/.chan` and the bearer-token handshake resolves under isolation.
 
 ### Changed
 
+- **`cs open` from a standalone terminal points at `chan open`.** Running `cs open PATH` in a standalone terminal (which has no workspace to open a path into) now prints friendly guidance to run `chan open PATH` to load it as a workspace window, instead of the generic "needs a workspace" refusal. The standalone-vs-workspace command gate is now a single pure, unit-tested decision, and `cs upload` / `cs download` keep working from both a standalone terminal and inside a workspace.
 - **`chan devserver --service` uses explicit action verbs.** `--service=none` (the default) runs in the foreground with no supervision; `--service=chan` is the foreground self-managed daemon; `--service=systemd`/`--service=launchd` are detached background services that each require one of `--start` (write/enable/start, then return), `--stop` (stop and disable, so it does not return on boot or login), `--restart` (bounce, then return), `--status`, or `--join` (bring it up and stay attached, blocking on health). A bare `--service=systemd`/`--service=launchd` with no verb is rejected, and there is no per-OS auto-pick. Connect scripts use `--service=systemd --join`.
 
 ## [v0.58.0] - 2026-06-30
