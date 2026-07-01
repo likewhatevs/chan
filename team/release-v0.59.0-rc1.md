@@ -57,10 +57,12 @@ it stays put across tab switches instead of reloading.
   (`!paneMode.active && !pane.showingBack && t.id === pane.activeTabId`).
 - The Indexing carousel's `GraphCanvas` force layout and 3s poll survive tab
   switches instead of tearing down and rebuilding, so the graph no longer
-  reloads/re-lays-out on every switch. The `active` gate also pauses the carousel
-  and stops the indexer poll while the tab is hidden or flipped, so a kept-alive
-  background dashboard does no work. Reload is now an explicit user action:
-  Cmd+R or the existing right-click **Reload** row.
+  reloads/re-lays-out on every switch. The `active` gate also pauses the carousel,
+  stops the indexer poll, AND pauses the GraphCanvas render loop
+  (`paused={!active}`, mirroring GraphPanel) while the tab is hidden or flipped,
+  so a kept-alive background dashboard does no work and no background canvas
+  paint. Reload is now an explicit user action: Cmd+R or the existing right-click
+  **Reload** row.
 
 ### Highlights
 
