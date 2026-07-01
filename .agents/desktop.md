@@ -14,6 +14,14 @@ External `chan open` processes are still supported as explicit remote attachment
 
 There is no `chan-bin` Makefile step, no `bundle.macOS.files` entry, and no `bundle.externalBin`. `make dev` / `make build` / `make app-signed` / `make app-notarized` depend only on the `web` bundle (the rust-embed input) and the tauri CLI. The single codesigned + notarized artifact is the chan-desktop `.app` itself; Tauri's signing pass covers it directly, with no second binary to sign. This removed the v0.11.2-era universal2 / externalBin machinery entirely; multi-arch distribution is now purely a matter of how the `.app` itself is built and merged.
 
+## Window geometry
+
+Watcher-managed workspace (`local::*`) and devserver (`lib-*::*`) windows are destroyed when hidden and rebuilt when shown, so their OS size and position are desktop-owned state. `capture_window_geometry` records a window's rect on every bury, and `resolve_geometry_plan` + `apply_geometry_plan` reapply it when the window is rebuilt (`serve.rs`), keyed by the native label under a monitor signature (a small per-signature LRU in `config.rs`). The launcher restores the same way once at boot; standalone terminals keep their native window and let the OS hold the geometry.
+
+Geometry is captured, clamped, and applied in logical points (the global AppKit window coordinate space), not physical pixels, because two macOS behaviors make points the only unit that round-trips across mixed-DPI monitors. A `Restore` builds the window hidden, and a hidden NSWindow has no screen, so tao's `scale_factor()` reports the main display's scale: a `PhysicalSize` apply is converted through that scale, so a window bound for a different-scale monitor renders at `target_scale / main_scale` of its size, while a `LogicalSize` passes through `dpi` untouched and renders correctly on whatever monitor the window opens on. Separately, tao reports each monitor's bounds as points times that monitor's own scale, so monitors of different scales overlap in physical space and `monitor_for_rect` cannot tell which one a window sits on; `config::to_points` divides every monitor's bounds by its scale so the monitors tile without overlap and the containing monitor resolves unambiguously.
+
+`monitor_signature` stays in physical units because it only fingerprints the hardware layout. Capture reads the window's live `scale_factor()` (the window is still shown at bury time) to convert its physical rect to points, and the `WINGEO` tracing lines (`capture`, `resolve`, `applied`) carry the points rect, signature, scale, and monitors for diagnosing placement on real multi-monitor hardware.
+
 ## Apple Developer ID signing
 
 The chan-desktop `.app` (and the bundled `.dmg`) are codesigned with an Apple Developer ID Application certificate so Gatekeeper accepts the install on default-configured macOS. The signing identity is named in `src-tauri/tauri.conf.json` under `bundle.macOS.signingIdentity`:
