@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
 import source from "./GraphCanvas.svelte?raw";
+import { DEFAULT_FORCE } from "../graph/force";
 
 // Filesystem-hierarchy as graph spine. GraphCanvas's d3-force simulation
 // places every node above its ancestor chain to the workspace root
@@ -16,10 +17,20 @@ describe("filesystem-hierarchy layout shape", () => {
     );
   });
 
-  test("FORCE config defines hierarchyYSpacing + hierarchyYStrength + parentXStrength", () => {
-    expect(source).toMatch(/hierarchyYSpacing: \d+/);
-    expect(source).toMatch(/hierarchyYStrength: 0\./);
-    expect(source).toMatch(/parentXStrength: 0\./);
+  test("force config (../graph/force) defines the hierarchy-spine params", () => {
+    // The tuning object lives in the shared graph/force module so the
+    // graph-tuner playground and the live graph read one source of
+    // truth. GraphCanvas defaults its `force` prop to DEFAULT_FORCE.
+    expect(source).toMatch(
+      /import \{ DEFAULT_FORCE, type GraphForce \} from "\.\.\/graph\/force"/,
+    );
+    expect(source).toMatch(/force\?: GraphForce;/);
+    expect(source).toMatch(/force = DEFAULT_FORCE,/);
+    expect(DEFAULT_FORCE.hierarchyYSpacing).toBeGreaterThan(0);
+    expect(DEFAULT_FORCE.hierarchyYStrength).toBeGreaterThan(0);
+    expect(DEFAULT_FORCE.hierarchyYStrength).toBeLessThan(1);
+    expect(DEFAULT_FORCE.parentXStrength).toBeGreaterThan(0);
+    expect(DEFAULT_FORCE.parentXStrength).toBeLessThan(1);
   });
 
   test("nodeHierarchy: tag / mention / language nodes get depth = -1", () => {
@@ -69,15 +80,15 @@ describe("filesystem-hierarchy layout shape", () => {
     // so the spine grows up from the workspace root at the bottom.
     // Non-hierarchical nodes (depth < 0) fall back to centerStrength.
     expect(source).toMatch(
-      /forceY<DNode>\(\(d\) => \{[\s\S]*?return -d\.depth \* FORCE\.hierarchyYSpacing/,
+      /forceY<DNode>\(\(d\) => \{[\s\S]*?return -d\.depth \* force\.hierarchyYSpacing/,
     );
     expect(source).toMatch(
-      /\.strength\(\(d\) =>[\s\S]*?d\.depth < 0 \? FORCE\.centerStrength : FORCE\.hierarchyYStrength/,
+      /\.strength\(\(d\) =>[\s\S]*?d\.depth < 0 \? force\.centerStrength : force\.hierarchyYStrength/,
     );
   });
 
   test("buildSim registers the parentX force", () => {
-    expect(source).toMatch(/\.force\("parentX", parentXForce\(FORCE\.parentXStrength\)\)/);
+    expect(source).toMatch(/\.force\("parentX", parentXForce\(force\.parentXStrength\)\)/);
   });
 
   test("parentXForce pulls each hierarchical node toward its parent's X", () => {
@@ -119,5 +130,45 @@ describe("dblclick on a node = graph from here", () => {
     expect(source).toMatch(
       /function onDoubleClick\(e: MouseEvent\): void \{[\s\S]{1,200}const p = localCoords\(e\);[\s\S]{1,200}const n = pickNode\(p\.x, p\.y, PICK_SLACK_CLICK_PX\);[\s\S]{1,200}if \(n && onSetAsScope\) onSetAsScope\(\);/,
     );
+  });
+});
+
+describe("focus-on-select spotlights the 1st-degree neighbourhood", () => {
+  test("emphasis constants are defined", () => {
+    expect(source).toMatch(/const EDGE_ALPHA = 0\.18;/);
+    expect(source).toMatch(/const FOCUS_DIM_NODE = 0\./);
+    expect(source).toMatch(/const FOCUS_DIM_EDGE = 0\./);
+    expect(source).toMatch(/const FOCUS_LIT_EDGE = 0\./);
+  });
+
+  test("a selection defines the spotlight + an incident-edge test", () => {
+    expect(source).toMatch(/const hasSelection = selectedId !== null;/);
+    expect(source).toMatch(/const isIncidentEdge = \(e: DEdge\): boolean =>/);
+    // Incident = either endpoint is the selected node.
+    expect(source).toMatch(/return sId === selectedId \|\| tId === selectedId;/);
+  });
+
+  test("edges dim to FOCUS_DIM_EDGE under selection, then incident edges are relit", () => {
+    // Base pass dims the whole graph when a node is selected; a second
+    // pass redraws only the incident edges at full strength on top.
+    expect(source).toMatch(
+      /drawEdgeSet\(visibleEdgeRefs, hasSelection \? FOCUS_DIM_EDGE : EDGE_ALPHA\);/,
+    );
+    expect(source).toMatch(
+      /if \(hasSelection\) \{[\s\S]{0,160}drawEdgeSet\(visibleEdgeRefs\.filter\(isIncidentEdge\), FOCUS_LIT_EDGE\);/,
+    );
+  });
+
+  test("non-neighbour nodes fade to FOCUS_DIM_NODE", () => {
+    expect(source).toMatch(
+      /const isDimmed = hasSelection && !isSel && !isAdj;/,
+    );
+    expect(source).toMatch(/let baseAlpha = isDimmed \? FOCUS_DIM_NODE : 1;/);
+  });
+
+  test("selected node + 1st-degree neighbours still get labels", () => {
+    // Only the selection and its 1st-degree neighbours draw labels, so
+    // the focus spotlight stays readable.
+    expect(source).toMatch(/if \(isSel \|\| isAdj\) \{/);
   });
 });

@@ -39,6 +39,7 @@
   } from "d3-force";
   import type { GraphViewEdge, GraphViewNode } from "../api/types";
   import { draftsDir } from "../state/workspace.svelte";
+  import { DEFAULT_FORCE, type GraphForce } from "../graph/force";
 
   type RenderedEdgeKind =
     | "link"
@@ -79,12 +80,20 @@
     /// the parent owns the rescope (it has access to the current
     /// selection's `path` / `isDir` and to `graphFromHere`).
     onSetAsScope?: () => void;
-    /// Where the single focal node sits in the viewport. "center" (default)
-    /// centers it; "bottom" anchors it near the bottom edge so the cluster
-    /// grows upward from it. The Dashboard search-index graph uses "bottom"
-    /// to seat the workspace-root node just above the carousel scroller;
-    /// every other surface keeps "center".
+    /// Where the single focal node sits in the viewport. "bottom"
+    /// (default) anchors it near the bottom edge so the cluster grows
+    /// upward from it, so the workspace-root spine reads bottom-to-top.
+    /// The Dashboard search-index graph and the main Graph tab both
+    /// anchor at the bottom; "center" centers the focal instead and is
+    /// available for callers that want it.
     focalAnchor?: "center" | "bottom";
+    /// d3-force tuning. Defaults to DEFAULT_FORCE (../graph/force.ts),
+    /// the values the live graph ships with. Only the standalone
+    /// graph-tuner playground overrides this, driving the same shape
+    /// live from sliders; every production caller omits it. Pass a NEW
+    /// object to re-tune (the sim rebuilds + reheats on reference
+    /// change).
+    force?: GraphForce;
   };
   let {
     open,
@@ -98,7 +107,8 @@
     onSelect,
     onContextMenu,
     onSetAsScope,
-    focalAnchor = "center",
+    focalAnchor = "bottom",
+    force = DEFAULT_FORCE,
   }: Props = $props();
 
   // ---- types: d3-shaped working copies ---------------------------------
@@ -176,24 +186,22 @@
   /// Icon glyph occupies this fraction of the rendered diameter.
   const ICON_FRACTION = 0.6;
 
-  /// d3-force tuning. Tweak here, not in the per-call layout configs.
-  /// `hierarchyYSpacing` + `hierarchyYStrength` drive the
-  /// filesystem-spine forceY, and `parentXStrength` drives the
-  /// parent-anchored forceX, so each file node sits below its
-  /// directory and siblings cluster horizontally under the same
-  /// parent.
-  const FORCE = {
-    chargeStrength: -120,
-    linkDistance: 70,
-    linkDistanceTag: 50,
-    linkStrength: 0.55,
-    collidePad: 2,
-    velocityDecay: 0.55,
-    centerStrength: 0.04,
-    hierarchyYSpacing: 90,
-    hierarchyYStrength: 0.45,
-    parentXStrength: 0.18,
-  };
+  /// Focus-on-select emphasis. Selecting a node spotlights its
+  /// 1st-degree neighbourhood: the selected node + its direct neighbours
+  /// stay full-strength (and keep their labels), every other node fades
+  /// to FOCUS_DIM_NODE, the edges touching the selection light up at
+  /// FOCUS_LIT_EDGE, and all other edges recede to FOCUS_DIM_EDGE. With
+  /// nothing selected every node is full-strength and edges draw at
+  /// EDGE_ALPHA.
+  const EDGE_ALPHA = 0.18;
+  const FOCUS_DIM_NODE = 0.2;
+  const FOCUS_DIM_EDGE = 0.05;
+  const FOCUS_LIT_EDGE = 0.9;
+
+  /// d3-force tuning lives in ../graph/force.ts (DEFAULT_FORCE), the
+  /// single source of truth shared with the graph-tuner playground.
+  /// Callers can override it via the `force` prop (below); every
+  /// production caller passes nothing and gets DEFAULT_force.
 
   /// Stroke ring colour for non-missing nodes. Reads from the page
   /// background so touching nodes still separate visually.
@@ -733,16 +741,16 @@
         forceLink<DNode, DEdge>(dEdges)
           .id((d) => d.id)
           .distance((d) =>
-            d.kind === "link" ? FORCE.linkDistance : FORCE.linkDistanceTag,
+            d.kind === "link" ? force.linkDistance : force.linkDistanceTag,
           )
-          .strength(FORCE.linkStrength),
+          .strength(force.linkStrength),
       )
-      .force("charge", forceManyBody<DNode>().strength(FORCE.chargeStrength))
+      .force("charge", forceManyBody<DNode>().strength(force.chargeStrength))
       .force(
         "collide",
-        forceCollide<DNode>().radius((d) => d.radius + FORCE.collidePad),
+        forceCollide<DNode>().radius((d) => d.radius + force.collidePad),
       )
-      .force("x", forceX<DNode>(0).strength(FORCE.centerStrength))
+      .force("x", forceX<DNode>(0).strength(force.centerStrength))
       // Filesystem-hierarchy spine:
       //   * Hierarchical nodes (file / folder / media) get a
       //     depth-anchored forceY pulling each toward
@@ -765,13 +773,13 @@
           if (d.depth < 0) return 0;
           // Negative pull so deeper nodes rise ABOVE their
           // ancestors; the workspace root (depth 0) anchors the bottom.
-          return -d.depth * FORCE.hierarchyYSpacing;
+          return -d.depth * force.hierarchyYSpacing;
         }).strength((d) =>
-          d.depth < 0 ? FORCE.centerStrength : FORCE.hierarchyYStrength,
+          d.depth < 0 ? force.centerStrength : force.hierarchyYStrength,
         ),
       )
-      .force("parentX", parentXForce(FORCE.parentXStrength))
-      .velocityDecay(FORCE.velocityDecay)
+      .force("parentX", parentXForce(force.parentXStrength))
+      .velocityDecay(force.velocityDecay)
       .alpha(1)
       .alphaTarget(0)
       // The animation loop workspaces painting independently; the sim
@@ -914,31 +922,17 @@
     );
 
     const adj = selectedId !== null ? adjacency.get(selectedId) : null;
-
-    // Sibling dim: when a file node is selected, other file nodes
-    // that share the same parent directory render with a lower alpha
-    // so the cohort visually frames the selection without competing
-    // for attention. File covers both regular docs and images (the
-    // canvas re-classifies file kind via classifyFile in DKind), so
-    // narrowing on "file" catches everything in scope.
-    let siblingDim: Set<string> | null = null;
-    if (selectedId !== null) {
-      const sel = nodes.find((n) => n.id === selectedId);
-      const selPath = sel && sel.kind === "file" ? sel.path : null;
-      if (selPath !== null) {
-        const slash = selPath.lastIndexOf("/");
-        const parent = slash >= 0 ? selPath.slice(0, slash) : "";
-        siblingDim = new Set();
-        for (const n of nodes) {
-          if (n.id === selectedId) continue;
-          if (n.kind !== "file") continue;
-          const np = n.path;
-          const s2 = np.lastIndexOf("/");
-          const npParent = s2 >= 0 ? np.slice(0, s2) : "";
-          if (npParent === parent) siblingDim.add(n.id);
-        }
-      }
-    }
+    // Focus-on-select: with a node selected, its 1st-degree
+    // neighbourhood (itself + `adj`) is the spotlight; everything else
+    // dims so the selection reads at a glance. Drives both the node
+    // alpha (below) and the edge emphasis (incident edges lit, the rest
+    // faded).
+    const hasSelection = selectedId !== null;
+    const isIncidentEdge = (e: DEdge): boolean => {
+      const sId = typeof e.source === "object" ? e.source.id : e.source;
+      const tId = typeof e.target === "object" ? e.target.id : e.target;
+      return sId === selectedId || tId === selectedId;
+    };
 
     // Edges first so nodes paint on top. Group by kind so we only
     // change strokeStyle once per kind.
@@ -953,10 +947,6 @@
     // link reads orange (--g-doc), a source-file link royalblue
     // (--g-source), and so on, honouring the Graph settings palette.
     ctx.lineWidth = 1 / Math.max(0.5, transform.k);
-    const edgesByKind: Record<RenderedEdgeKind, DEdge[]> = {
-      link: [], tag: [], mention: [], contains: [], language: [], group: [],
-    };
-    for (const e of visibleEdgeRefs) edgesByKind[e.kind].push(e);
 
     // `link` edges are coloured per source document type, so they are
     // sub-grouped by the source node's kind and stroked in their own
@@ -1002,26 +992,45 @@
       }
     };
 
-    for (const kind of ["tag", "mention", "contains", "language", "group"] as const) {
-      strokePass(edgesByKind[kind], strokeForKind(kind), 0.18);
-    }
+    // Draw an edge list at one alpha, preserving the palette: each kind
+    // strokes in its own hue, and `link` edges sub-group by their source
+    // document's kind. Factored out so the base pass and the focus lit
+    // overlay share identical colour resolution.
+    const drawEdgeSet = (edgeList: DEdge[], alpha: number): void => {
+      const edgesByKind: Record<RenderedEdgeKind, DEdge[]> = {
+        link: [], tag: [], mention: [], contains: [], language: [], group: [],
+      };
+      for (const e of edgeList) edgesByKind[e.kind].push(e);
+      for (const kind of ["tag", "mention", "contains", "language", "group"] as const) {
+        strokePass(edgesByKind[kind], strokeForKind(kind), alpha);
+      }
+      // `link` edges grouped by source-document kind. Resolving the
+      // colour from the source node mirrors the node-fill palette so a
+      // doc's outgoing links share the doc's hue. Falls back to the doc
+      // colour when the source kind isn't a recognised file class (e.g.
+      // a tag/mention source, which shouldn't originate a `link` but is
+      // handled defensively).
+      const linkByKind = new Map<string, DEdge[]>();
+      for (const e of edgesByKind.link) {
+        const src = e.source as DNode;
+        const key = typeof src === "object" ? src.kind : "doc";
+        const bucket = linkByKind.get(key);
+        if (bucket) bucket.push(e);
+        else linkByKind.set(key, [e]);
+      }
+      for (const [kind, list] of linkByKind) {
+        strokePass(list, fileKindColor(kind as DKind), alpha);
+      }
+    };
 
-    // `link` edges grouped by source-document kind. Resolving the
-    // colour from the source node mirrors the node-fill palette so a
-    // doc's outgoing links share the doc's hue. Falls back to the doc
-    // colour when the source kind isn't a recognised file class (e.g.
-    // a tag/mention source, which shouldn't originate a `link` but is
-    // handled defensively).
-    const linkByKind = new Map<string, DEdge[]>();
-    for (const e of edgesByKind.link) {
-      const src = e.source as DNode;
-      const key = typeof src === "object" ? src.kind : "doc";
-      const bucket = linkByKind.get(key);
-      if (bucket) bucket.push(e);
-      else linkByKind.set(key, [e]);
-    }
-    for (const [kind, list] of linkByKind) {
-      strokePass(list, fileKindColor(kind as DKind), 0.18);
+    // Base pass: dim every edge when a selection is active so the
+    // spotlighted neighbourhood stands out; otherwise draw at the normal
+    // weight. Then, when selected, redraw the edges touching the
+    // selection on top at full strength so the 1st-degree connections
+    // light up against the faded rest.
+    drawEdgeSet(visibleEdgeRefs, hasSelection ? FOCUS_DIM_EDGE : EDGE_ALPHA);
+    if (hasSelection) {
+      drawEdgeSet(visibleEdgeRefs.filter(isIncidentEdge), FOCUS_LIT_EDGE);
     }
     ctx.globalAlpha = 1;
 
@@ -1031,7 +1040,10 @@
       const isSel = n.id === selectedId;
       const isAdj = adj?.has(n.id) === true;
       const isHover = n.id === hoverId;
-      const isSiblingDim = siblingDim?.has(n.id) === true;
+      // Out of the spotlight: a selection is active and this node is
+      // neither the selection nor one of its 1st-degree neighbours, so
+      // it fades to let the focused neighbourhood read.
+      const isDimmed = hasSelection && !isSel && !isAdj;
       // Ghost styling fires only for broken-link targets - files
       // that another doc points at but don't exist on disk. A
       // `@@name` mention is free-form by design (the indexer
@@ -1083,11 +1095,11 @@
       // their static neighbours. 1100ms cycle matches the
       // terminal-activity-pulse keyframe; pure sine so the motion
       // is calm and never snaps. Static (pending/indexed/standard)
-      // nodes keep the existing isSiblingDim alpha behaviour.
+      // nodes keep the focus-dim alpha behaviour.
       // `prefers-reduced-motion: reduce` users get a flat
       // mid-strength alpha (no pulse) so the indexing colour still
       // reads as distinct from pending/indexed without animating.
-      let baseAlpha = isSiblingDim ? 0.45 : 1;
+      let baseAlpha = isDimmed ? FOCUS_DIM_NODE : 1;
       if (n.indexState === "indexing") {
         if (reduceMotion) {
           baseAlpha = 0.78;
@@ -1635,6 +1647,30 @@
     // filter toggles settle fastest.
     const ms = added.length > 0 ? 900 : 600;
     scheduleRefit(ms);
+  });
+
+  /// Live re-tune: the graph-tuner playground swaps in a NEW `force`
+  /// object whenever a slider moves. Rebuild the simulation with the
+  /// new params (buildSim reads `force`) and give it a gentle reheat so
+  /// the layout visibly responds. The reference compare makes this a
+  /// strict no-op for every production caller: they never pass `force`,
+  /// so it stays === DEFAULT_FORCE for the component's lifetime, and it
+  /// keeps the initial mount (where start() already built the sim) from
+  /// rebuilding redundantly.
+  let prevForce: GraphForce | undefined;
+  $effect(() => {
+    // Seed the baseline inside the effect (first run) so the initial
+    // mount never rebuilds; thereafter rebuild only on a genuine
+    // reference change.
+    if (prevForce === undefined) {
+      prevForce = force;
+      return;
+    }
+    if (force === prevForce) return;
+    prevForce = force;
+    if (!sim) return;
+    buildSim();
+    sim.alpha(0.5).restart();
   });
 
   /// Cursor: pointer over a node when nothing is being dragged.
