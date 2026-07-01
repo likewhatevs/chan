@@ -81,4 +81,13 @@ describe("EmptyPaneCarousel gates the indexing poll on active", () => {
   test("auto-rotate is paused while inactive", () => {
     expect(carousel).toMatch(/!active \|\| !autoRotate/);
   });
+
+  test("the indexing GraphCanvas is paused while inactive (no background paint)", () => {
+    // GraphCanvas runs a continuous rAF render loop; kept alive but hidden it
+    // would keep painting an invisible canvas. Mirror GraphPanel's
+    // paused={!active} so a backgrounded dashboard does zero paint.
+    expect(carousel).toMatch(
+      /<GraphCanvas\s+open=\{slideIndex === 1\}\s+paused=\{!active\}/,
+    );
+  });
 });

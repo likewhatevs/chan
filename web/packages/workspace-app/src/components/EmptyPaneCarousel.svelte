@@ -601,6 +601,7 @@
             <div class="indexing-graph-host">
               <GraphCanvas
                 open={slideIndex === 1}
+                paused={!active}
                 nodes={indexingGraph.nodes}
                 edges={indexingGraph.edges}
                 visibleNodeIds={indexingNodeIds}
