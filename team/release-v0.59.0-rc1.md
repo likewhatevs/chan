@@ -144,3 +144,57 @@ The Indexing graph polls every 3s, so the pulse advances in 3s steps. Between em
 Merged onto `main` in order: `devserver-cmd`, `graph-tuning`, `index-dashboard`, each as a `--no-ff` merge. The only conflict across all three was this journal, an add/add, confirmed up front with `git merge-tree`; every code file merged clean. This file is the reconciliation of the three per-branch journals into one, unwrapped and free of em dashes.
 
 Quality pass on the merged tree: removed five newly-introduced em dashes and reworded newly-added change-history ("archaeology") comments to present-tense in the index-dashboard test files (`paneDashboardTabKeepAlive.test.ts`, `dashboardTabAndCarousel.test.ts`) and the style comment in `DashboardTab.svelte`. `devserver-cmd` and `graph-tuning` introduced none. Remaining rc validation and the Graph carryover are tracked in `dev/v0.59.0/plan.md` and `dev/v0.59.0/graph-remaining-items.md`.
+
+---
+
+## Semantic indexing: honor the opt-out (no silent embedding)
+
+**Branch:** `semantic-optout-gate` (worktree `../chan-semantic-optout`, off `main`). Not merged, not pushed. **Status:** complete, gated green (fmt, clippy, `cargo test`, both feature sets build), hardened across three adversarial review rounds. Not yet exercised in a live browser: the `cargo test` environment has no embedder loaded, so the runtime enable/download/rebuild path is on the rc validation list. Maintainer-requested stream outside `dev/v0.59.0/request.md`.
+
+### What was asked
+
+Verify a suspicion, then fix it: does chan start embedding (semantic indexing) whenever a cached BGE model is on disk, even when the user has chosen not to use semantic search, on the premise that "if the user turns it on it is instantly available"? If so, remove that behavior. The user's choice must be the only input to the enable/disable decision; a cached model on disk is not a reason to index. Concretely: with semantic search off, never compute embeddings; turning it off after it was on must bin the indices and wipe them; turning it back on rebuilds from scratch, the same as a reindex. Then a second pass to harden the on/off state machine adversarially (syseng against rustacean) across the chaotic cases: on then off, on then `rm -rf` index, off then on quickly.
+
+### What the investigation found (the suspicion was correct)
+
+`semantic_enabled` (per-workspace, `dashboard.toml`, default false) gated only the query path (bm25 vs hybrid). The indexer never read it: `BuildOptions::include_vectors` defaulted true, `Index::index_one` hard-coded embedding on, and disabling only flipped the flag without wiping. Because the BGE model is bundled and seeded on boot, `model_present` is effectively always true, so every cold boot, full reindex, and per-file save embedded regardless of the user's choice. That is exactly the reported behavior.
+
+### What shipped
+
+- Gate embedding on the opt-in at both write seams: `reindex_with_aggression` and the per-file `index_file_inner` set `include_vectors` from `semantic_enabled()` (fail-safe to false on a config read error). With the flag off, `build_all` and per-file saves write BM25 only, with no embedder load and no shards.
+- Destructive disable: `set_semantic_enabled(false)` bins the vector store via a new `Index::clear_vectors` (factored out of `set_model`), mirroring the existing destructive `set_reports_enabled`. BM25 keyword search is untouched, so search keeps working with semantic off.
+- Rebuild from scratch on enable: the `/api/index/semantic/enable` endpoint fires `Indexer::request_rebuild()` after persisting the flag, and the reindex now embeds because the gate reads true.
+- Cap bypass on explicit opt-in (maintainer decision): a new `BuildOptions::ignore_embed_cap`, set whenever semantic is enabled, so an opted-in workspace embeds its whole tree instead of falling back to BM25-only above the 2000-file `EMBED_FILE_CAP`. On this repo (about 4k files) enabling now populates vectors across the tree rather than only for files later edited.
+- Concurrency hardening (the second pass): a `vectors_epoch` generation counter on `Index`, bumped by `clear_vectors` and snapshotted by each build and per-file save before it reads the opt-in flag, so a disable that races an in-flight embed drops the vectors and skips the stamp instead of leaving orphan shards plus a stale `vectors_model`. Supporting changes: clear the on-disk stamp last (so a failed wipe is catchable rather than trusted), and make the embeddings-dir wipe tolerate a missing dir.
+- Frontend: none. The Settings toggle already calls the enable/disable endpoints; the behavior change is entirely server-side.
+- Touched files (3): `crates/chan-workspace/src/index/facade.rs`, `crates/chan-workspace/src/workspace.rs`, `crates/chan-server/src/routes/index.rs`. No new dependencies, no schema change. CHANGELOG entry is pending merge.
+
+### The tests
+
+- Four new deterministic tests, none needing an embedder (the disabled path never embeds, so "zero vectors, populated BM25" is model-independent; the disable-wipe test uses a stand-in stale shard exactly like the existing model-switch test): `reindex_disabled_writes_no_vectors_but_indexes_bm25`, `per_file_index_disabled_writes_no_vectors`, `disabling_semantic_bins_the_vector_store` (all in `workspace.rs`), and `clear_vectors_is_idempotent_and_tolerates_missing_dir` (in `facade.rs`).
+- Gate: 571 `chan-workspace` lib tests and 490 `chan-server` tests green, plus the workspace integration suites; `cargo clippy --all-targets` clean; `cargo fmt --check` clean; full-workspace `cargo build` and `cargo build --no-default-features` both green.
+- The race hardening is validated by adversarial code review, not a concurrency test: a deterministic test would need an embedder plus a hook to flip the flag mid-build, beyond the scope agreed for this pass.
+
+### Highlights (what went well)
+
+- The fix reused existing seams instead of inventing machinery: one bool (`include_vectors`) already gated all embedding, the wipe already lived inside `set_model`, the destructive-on-disable shape already existed in `set_reports_enabled`, and the reindex trigger already existed as `Indexer::request_rebuild`. The behavior change is small and idiomatic.
+- The adversarial second pass did its job: syseng and rustacean, run independently without seeing each other's output first, converged on the same defect in each round. That agreement is strong signal the findings were real rather than model artifacts.
+- Fail-safe defaults throughout: a config read error yields BM25-only, never an accidental embed.
+
+### Lowlights (what needed a nudge, bugs, slowdowns)
+
+- The first-pass gate carried a real HIGH bug that only the hardening pass caught. Disabling while an enable-triggered whole-tree embed was in flight resurrected the vectors it had just wiped and wrote a `vectors_model` stamp; because a disabled reindex skips vector cleanup and `Index::open` only wipes on a model mismatch, the orphan vectors and the lying stamp persisted across restarts. This is precisely the "turn on then off quickly" case. Fixed with the epoch counter.
+- The epoch fix itself had a residual that round-2 verification caught: the epoch was sampled after the opt-in flag was read, leaving a TOCTOU window (the file walk) where a disable could still slip vectors through and persist them. Fixed by sampling the epoch before the flag read and threading it into the build and per-file paths. Two iterations before the state machine was actually closed.
+- House-style slips, the same two the previous session flagged: first-pass code comments used em dashes (fixed in my additions), and the planning doc hard-wrapped prose (kept to the plan file, outside the tree). The no-em-dash and no-archaeology rules were applied to the committed comments.
+- One subagent verification run returned corrupted, off-topic output with zero tool calls and had to be re-run. Cost a round-trip; caught only because the result did not reference the code.
+- No live browser verification this session: the sandbox test environment has no embedder, so the download/enable/rebuild path and the bm25-to-hybrid upgrade were not exercised end to end. On the rc validation list.
+
+### Residual (accepted)
+
+If the disable-time `remove_dir_all` itself fails with a genuine filesystem I/O error (not the common already-absent case, which is tolerated), a few shards can linger while disabled. It is logged, not hidden, and `Index::open` does not auto-reclaim it because the model is unchanged. This sits outside the three chaotic cases scoped for the pass and is the only path outside the guarantee. A crash-safe wipe marker (like `rebuild.inprogress`) would close it if we decide it is worth the machinery.
+
+### Follow-ups
+
+- CHANGELOG entry on merge.
+- Live browser validation: enable via Settings, watch the whole-tree embed, toggle off and confirm the embeddings dir is binned and search stays bm25, toggle on and confirm the rebuild.
+- Optional: cache the `dashboard.toml` read (parsed once per reindex and once per per-file save today). A minor hot-path cost, not a correctness issue.
