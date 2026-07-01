@@ -1,6 +1,6 @@
 # v0.59.0-rc1: rolling release journal
 
-Working journal for the v0.59.0 cycle. Unlike the per-release notes above, this is a rolling doc: appended to as each work stream from `dev/v0.59.0/request.md` lands on its branch, and reconciled into a final `release-0.59.0.md` at cut time. As of this entry the `devserver-cmd`, `graph-tuning`, `index-dashboard`, `semantic-optout-gate`, and `editor-fixes` streams are merged onto `main`; chan-desktop, UX, and the `mermaid-to-excalidraw` feature are still in flight, and the `v0.59.0-rc1` tag waits for them. Each section stands alone so the release summary can be assembled from these entries.
+Working journal for the v0.59.0 cycle. Unlike the per-release notes above, this is a rolling doc: appended to as each work stream from `dev/v0.59.0/request.md` lands on its branch, and reconciled into a final `release-0.59.0.md` at cut time. As of this entry the `devserver-cmd`, `graph-tuning`, `index-dashboard`, `semantic-optout-gate`, `editor-fixes`, and `mermaid-ux` streams are merged onto `main`; only chan-desktop is still in flight, and the `v0.59.0-rc1` tag waits for it (plus the graph carryover). Each section stands alone so the release summary can be assembled from these entries.
 
 ## Work streams (from `dev/v0.59.0/request.md`)
 
@@ -9,9 +9,9 @@ Working journal for the v0.59.0 cycle. Unlike the per-release notes above, this 
   - [ ] Carryover, tracked in `dev/v0.59.0/graph-remaining-items.md`: auto-select root on open, restore the "data being indexed, hang tight..." empty-state message, `@@mention` "Graph from here" missing edges
 - [x] Index & dashboard: clickable indexing notification opening a paused Dashboard Indexing slide, per-path indexing pulse, no reload on tab switch (branch `index-dashboard`)
 - [x] Editor bugs: directory links open the file browser, list continuation hang-indent, enumerated-list indent, plus smart list-row paste (branch `editor-fixes`; setext bold-flash dropped by decision)
-  - [ ] Feature carryover: `mermaid-to-excalidraw` renderer (with the mermaid/ux stream, see `dev/v0.59.0/task-mermaid-ux.md`)
+  - [x] Feature: `mermaid-to-excalidraw` renderer via a shared diagram widget, lazy-loaded (branch `mermaid-ux`)
 - [ ] Chan desktop: second-monitor hide/show window shrink, window-title glyphs
-- [ ] UX: friendlier `cs open` from standalone, unblock `cs download`/`upload` in workspaces
+- [x] UX: friendlier `cs open` guidance, coherent standalone-terminal command gating, `cs download`/`upload` confirmed working from both standalone and workspace (branch `mermaid-ux`)
 - [x] Semantic indexing opt-out (maintainer-added, outside `request.md`): with semantic search off never embed, disabling wipes vectors, enabling rebuilds (branch `semantic-optout-gate`)
 
 ---
@@ -141,11 +141,82 @@ The Indexing graph polls every 3s, so the pulse advances in 3s steps. Between em
 
 ---
 
+## Editor: mermaid-to-excalidraw renderer + shared diagram widget
+
+### What landed
+
+A second diagram renderer, triggered by a fenced `mermaid-to-excalidraw` block. Built on `@excalidraw/mermaid-to-excalidraw` + `@excalidraw/excalidraw` (both MIT): `parseMermaidToExcalidraw` -> `convertToExcalidrawElements` -> `exportToSvg`, all headless (no React editor mounted), returning an SVG string exactly like the mermaid path.
+
+The mermaid widget was generalized rather than copied: `widgets/mermaid.ts` became `widgets/diagram.ts`, a renderer-agnostic block-replace widget parameterized by `{ lang, label, render, isDark, onView }`, with its own per-instance face/error caches so the two renderers never collide on a shared source key. `mermaidDecorations` and `excalidrawDecorations` are thin wrappers; `mermaid_render.ts` and a new `excalidraw_render.ts` supply the render functions over a shared `diagram_render.ts` (the `DiagramResult` type + `parseErrorPos`). The widget CSS moved from `cm-md-mermaid-*` to shared `cm-md-diagram-*`. Both libraries are dynamic-imported, so excalidraw + its React runtime code-split out of the eager editor bundle (confirmed in the vite chunk output: excalidraw lands in a lazy `prod-*.js`, not the entry).
+
+The click-to-zoom overlay (`state/diagramZoom.ts`, removed in `e0026410`) was reintroduced for BOTH renderers per the maintainer decision, on a hover "View" button. It always renders LIGHT on a light panel (a dark-editor diagram re-renders light for the overlay), which is the black-on-black fix from the original `04b0413e`.
+
+### Validation
+
+`npm run check` (0 errors / 0 warnings) + full vitest (2121 pass, including new `widgets/diagram.test.ts`, `excalidraw_render.test.ts`, and the restored `state/diagramZoom.test.ts`) + production build. Browser-verified on a standalone server in a dark editor: the mermaid flowchart still renders (no regression from the refactor), the excalidraw flowchart and sequence render with the embedded hand-drawn Excalifont (dark mode reads correctly, no black-on-black), a bad excalidraw block shows the actionable "Excalidraw error - line N" face, and the View -> zoom overlay opens on a light panel with working +/-/Reset/pan for BOTH renderers, dismissed cleanly with Escape.
+
+Found and fixed a real zoom bug inherited from the restored overlay: mermaid's SVG carries `width="100%"` and no height, so `width:auto` collapsed it to 0x0 inside the shrink-to-fit panel (the diagram vanished; this matches the empty / buggy-box behavior the maintainer hit before, and is the likely reason the overlay was originally removed). `diagramZoom.ts` now derives an intrinsic pixel width from the SVG's viewBox; excalidraw's export already carries pixel dimensions so it is unaffected. Pinned with two `diagramZoom.test.ts` cases.
+
+One benign console notice remains from excalidraw's font subsetter ("Failed to use workers for subsetting, falling back to the main thread"): it falls back to the main thread and the font still inlines (the Excalifont renders), so it is cosmetic.
+
+### Open items
+
+- The fence token: the request wrote `mermaid-to-excallidraw` (doubled l) but the upstream library is `mermaid-to-excalidraw`. Shipped with the upstream spelling as the default, isolated in one constant `EXCALIDRAW_LANG` in `widgets/diagram.ts` for a one-line swap; the maintainer survey to confirm the exact token is still open at journal time.
+- Light-editor inline render not separately screenshotted (strictly the easier case: default palette on a light surface, and the overlay is always light regardless of editor theme); dark mode (the risky case) is fully verified.
+- Desktop (WKWebView) not separately verified, so it is on the rc validation list.
+
+## UX: friendly `cs open` + coherent standalone-terminal command gating
+
+### What landed
+
+`cs open PATH` from a standalone terminal (which has no workspace to open a path into) now prints friendly guidance to run `chan open PATH` to load it as a workspace window, instead of the generic "needs a workspace" refusal. The standalone-vs-workspace gating, previously scattered across `handle_request` match arms and conflated with workspace resolution in `workspace_from_cell`, is now a single pure decision `terminal_tenant_refusal(&ControlRequest, ControlTenant) -> Option<String>` consulted once at the top of `handle_request`. It refuses only the workspace-content commands on a terminal tenant (`cs open` -> the chan-open guidance; `cs graph` / `search` -> the generic refusal; `cs terminal new --path` -> the path message) and lets window-routing, session/pane ops, and the cwd-scoped `cs upload` / `download` through.
+
+`cs upload` / `download` from a standalone terminal already worked (server-side tenant routing landed earlier in `c7deaab7`); this stream verified that against HEAD and did NOT re-add any restriction. Also fixed two stale comments that listed `dashboard` as a workspace-gated command (it is not gated) and removed the em dash from the `TERMINAL_ONLY_NEEDS_WORKSPACE` string (house style).
+
+### Validation
+
+`cargo fmt --check` + `cargo clippy -p chan-server --all-targets` under `RUSTFLAGS=-D warnings` + `cargo test -p chan-server` (495 pass). New tests: a platform-neutral `tenant_gate_tests` module table-driving `terminal_tenant_refusal` across every command/tenant pair, plus a `handle_request`-level test that `cs open` on a terminal tenant returns the `chan open` guidance.
+
+### Open items
+
+- `cs terminal team` keeps its own lazy in-handler workspace refusal (unchanged): coherent, but not folded into the pure decision, to avoid destabilizing the team path.
+
+---
+
+## Retrospective (mermaid-ux branch)
+
+### What was asked
+
+The `dev/v0.59.0/task-mermaid-ux.md` brief: the Editor *Feature* (a mermaid-to-excalidraw diagram renderer that follows and abstracts the existing mermaid renderer, with minimal integration points, clean APIs, documentation, lazy-loading, a license-compatible embedded bundle, and the existing renderer's lifecycle) plus the whole `UX` section (a friendlier `cs open` from a standalone terminal, and unblocking `cs download` / `upload` from standalone terminals through a clean gating refactor with unit-testable command-context gating). The four Editor bugs were explicitly out of scope (a different branch).
+
+### What shipped
+
+Both streams, on branch `mermaid-ux` off `origin/main`, in one commit (`d6712ac`), full `make pre-push` green and browser-verified. Stream A: the excalidraw renderer, the mermaid widget generalized into a shared `widgets/diagram.ts`, and the click-to-zoom overlay reintroduced for both renderers (a maintainer decision, since the overlay had been removed from the tree). Stream B: the friendly `cs open` guidance and a single pure `terminal_tenant_refusal` gate; `cs upload` / `download` were already working from standalone terminals, so that half was verified rather than re-implemented. Detail is in the two sections above. The fence token shipped as the upstream spelling `mermaid-to-excalidraw`, isolated in one constant `EXCALIDRAW_LANG` for a one-line change.
+
+### Highlights (what went well)
+
+- Abstract, do not copy: generalizing the intricate ~470-line mermaid widget into one parameterized `diagram.ts` means both renderers share the entire CM6 implementation (flip, reverse-flip ghost, atomic ranges, vertical step-into, error accents, per-instance caches); the new renderer is a thin wrapper plus a render module. This is the "abstract where necessary, minimal integration points" the brief asked for, not a parallel stack.
+- Caught the maintainer's exact prior bug. The empty / collapsed mermaid zoom reproduced in the browser, root-caused (mermaid's SVG is `width="100%"` with no height, so it collapses to 0x0 in the overlay's shrink-to-fit panel), fixed by deriving an intrinsic width from the viewBox, and pinned with tests. This is very likely why the zoom was removed originally, so the reintroduction closes that loop rather than reopening it.
+- Reconciled the brief against HEAD before building. `cs upload` / `download` already worked from standalone terminals, so Stream B did not re-add a restriction and spent its effort on the real gap (friendly `cs open` plus the pure gate).
+- Visual validation earned its keep. Beyond the mermaid-zoom collapse, it surfaced that excalidraw embeds subgraph flowcharts as an image (graceful, not an error), which sets honest expectations for the renderer.
+- Lazy-load discipline held. Excalidraw and its React runtime code-split out of the eager editor bundle, confirmed in the vite chunk output and pinned by a test that forbids a static import.
+
+### Lowlights (what was missed, could be better)
+
+- Survey hygiene. I fired two separate surveys (fence token, zoom scope) instead of consolidating into one; the token survey then timed out unanswered and I proceeded on the default. One batched survey would have been cleaner and less intrusive.
+- The subgraph image-fallback slipped the first validation round. The initial synthetic doc used a simple flowchart plus two clean diagrams, so the fact that flowcharts with subgraphs fall back to an embedded image only surfaced during the real-docs showcase pass. A subgraph case belonged in the first round.
+- The excalidraw font subsetter logs a benign "failed to use workers for subsetting, falling back to the main thread" warning. I left it as cosmetic instead of checking whether the worker asset can be bundled to silence it.
+- Coverage gaps left open: the light-editor inline render is inferred rather than screenshotted (only the harder dark case is captured), and desktop / WKWebView is unverified. Both are on the rc list.
+- What the brief itself missed: it described the existing renderer's lifecycle as including a working "view/zoom overlay" and warned about a black-on-black overlay, but that overlay had already been removed. The spec assumed a lifecycle that was not in the tree, which needed a maintainer decision to resolve. Briefs that reference existing behavior are worth reconciling against HEAD before they go out.
+- Dependency weight. Excalidraw pulls React and roughly 339 packages into `node_modules`. It is lazy-loaded and out of the eager bundle, but it is a large addition for a Svelte app and deserves a conscious eye at release time.
+
+---
+
 ## Integration notes (release editor)
 
-Merged onto `main` in order: `devserver-cmd`, `graph-tuning`, `index-dashboard`, `semantic-optout-gate`, then `editor-fixes`, each as a `--no-ff` merge. Every merge shared exactly one add/add conflict, on this journal, and every code file merged clean. `semantic-optout-gate` was cut from the reconciled `main` (strictly ahead, no code conflict); `editor-fixes` was cut from the original `main` and auto-merged over the other streams, its `tabs.svelte.ts` and `workspace.rs` edits sitting in functions disjoint from the index-dashboard and semantic-optout changes. A later `index-dashboard` follow-up (`7a026ba4`, pause the indexing `GraphCanvas` render loop while hidden) was merged on top; its code auto-merged clean and its journal delta folded into the Index section above. This file is the reconciliation of the per-branch journals into one, unwrapped and free of em dashes.
+Merged onto `main` in order: `devserver-cmd`, `graph-tuning`, `index-dashboard`, `semantic-optout-gate`, then `editor-fixes`, each as a `--no-ff` merge. Every merge shared exactly one add/add conflict, on this journal, and every code file merged clean. `semantic-optout-gate` was cut from the reconciled `main` (strictly ahead, no code conflict); `editor-fixes` was cut from the original `main` and auto-merged over the other streams, its `tabs.svelte.ts` and `workspace.rs` edits sitting in functions disjoint from the index-dashboard and semantic-optout changes. A later `index-dashboard` follow-up (`7a026ba4`, pause the indexing `GraphCanvas` render loop while hidden) was merged on top; its code auto-merged clean and its journal delta folded into the Index section above. Then `mermaid-ux` was merged: cut from an earlier `main`, it auto-merged over the later streams, and its only cross-stream file, `Wysiwyg.svelte` (also touched by `editor-fixes`), merged coherently (the list-decoration changes and the diagram-widget decorations sit in separate regions of the extensions list); the CHANGELOG add/add on the `### Added` bullets was resolved by keeping both. `mermaid-ux` adds a heavy frontend dependency (`@excalidraw/excalidraw`, which pulls React plus roughly 339 packages, lazy-loaded out of the eager editor bundle); it was full-gate green on its branch, and the rc1-cut full gate is the authoritative build check for the merged tree. This file is the reconciliation of the per-branch journals into one, unwrapped and free of em dashes.
 
-Quality pass on the merged tree: removed five newly-introduced em dashes and reworded newly-added change-history ("archaeology") comments to present-tense in the index-dashboard test files (`paneDashboardTabKeepAlive.test.ts`, `dashboardTabAndCarousel.test.ts`) and the style comment in `DashboardTab.svelte`. `devserver-cmd`, `graph-tuning`, `semantic-optout-gate`, and `editor-fixes` introduced none (the semantic `vectors_epoch` "old epoch" comment is present-tense domain language, not archaeology). Remaining rc validation and the Graph carryover are tracked in `dev/v0.59.0/plan.md` and `dev/v0.59.0/graph-remaining-items.md`.
+Quality pass on the merged tree: removed five newly-introduced em dashes and reworded newly-added change-history ("archaeology") comments to present-tense in the index-dashboard test files (`paneDashboardTabKeepAlive.test.ts`, `dashboardTabAndCarousel.test.ts`) and the style comment in `DashboardTab.svelte`. `devserver-cmd`, `graph-tuning`, `semantic-optout-gate`, `editor-fixes`, and `mermaid-ux` introduced none (the semantic `vectors_epoch` "old epoch" comment is present-tense domain language, not archaeology, and the one `—` in the mermaid-ux diff is a test asserting the `cs open` guidance string carries no em dash). Remaining rc validation and the Graph carryover are tracked in `dev/v0.59.0/plan.md` and `dev/v0.59.0/graph-remaining-items.md`.
 
 ---
 

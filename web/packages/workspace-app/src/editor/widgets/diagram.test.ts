@@ -1,0 +1,212 @@
+// @vitest-environment jsdom
+
+import { EditorSelection, EditorState } from "@codemirror/state";
+import { EditorView } from "@codemirror/view";
+import { describe, expect, test, vi } from "vitest";
+import { chanMarkdown } from "../markdown/grammar";
+import { EXCALIDRAW_LANG, excalidrawDecorations, mermaidDecorations } from "./diagram";
+import diagramSrc from "./diagram.ts?raw";
+import mermaidRenderSrc from "../mermaid_render.ts?raw";
+import excalidrawRenderSrc from "../excalidraw_render.ts?raw";
+import blocksSrc from "../decorations/blocks.ts?raw";
+import wysiwygSrc from "../Wysiwyg.svelte?raw";
+
+// Excalidraw + React are heavy; mock the two libraries so mounting an
+// excalidraw block in jsdom never pulls the real React runtime. The widget
+// only needs the render to be an async void, so a trivial SVG suffices.
+vi.mock("@excalidraw/mermaid-to-excalidraw", () => ({
+  parseMermaidToExcalidraw: async () => ({ elements: [], files: {} }),
+}));
+vi.mock("@excalidraw/excalidraw", () => ({
+  convertToExcalidrawElements: (els: unknown) => els,
+  exportToSvg: async () => document.createElementNS("http://www.w3.org/2000/svg", "svg"),
+}));
+
+const MERMAID_DOC = [
+  "before",
+  "",
+  "```mermaid",
+  "pie title Pets",
+  '  "Dogs" : 3',
+  '  "Cats" : 2',
+  "```",
+  "",
+  "after",
+].join("\n");
+
+const EXCALIDRAW_DOC = [
+  "before",
+  "",
+  "```mermaid-to-excalidraw",
+  "flowchart TD",
+  "  A --> B",
+  "```",
+  "",
+  "after",
+].join("\n");
+
+// An unclosed fence (still being typed): no closer ```.
+const UNCLOSED = ["before", "", "```mermaid", "pie title Pets"].join("\n");
+
+function mount(
+  extension: ReturnType<typeof mermaidDecorations>,
+  doc: string,
+  caret?: number,
+): { parent: HTMLElement; view: EditorView } {
+  const parent = document.createElement("div");
+  document.body.appendChild(parent);
+  const view = new EditorView({
+    parent,
+    state: EditorState.create({
+      doc,
+      selection: caret !== undefined ? EditorSelection.cursor(caret) : undefined,
+      // Mounting replaces the closed block with the diagram widget; the
+      // renderer library is not imported until the render runs, but that is
+      // an async void in the widget, so the field/decoration is jsdom-safe.
+      extensions: [chanMarkdown(), extension],
+    }),
+  });
+  return { parent, view };
+}
+
+describe("mermaid diagram cursor-render", () => {
+  const deco = mermaidDecorations(() => false);
+
+  test("cursor OUTSIDE a closed block renders the diagram widget", () => {
+    const { parent, view } = mount(deco, MERMAID_DOC, 0); // caret at "before"
+    expect(parent.querySelector(".cm-md-diagram-rendered")).toBeTruthy();
+    expect(parent.querySelector(".cm-md-diagram-body")).toBeTruthy();
+    // The block is replaced; the raw fence text is not in the DOM.
+    expect(parent.textContent).not.toContain("pie title Pets");
+    expect(view.state.doc.toString()).toBe(MERMAID_DOC);
+    view.destroy();
+    parent.remove();
+  });
+
+  test("cursor INSIDE the block suppresses the widget (source editable)", () => {
+    const { parent, view } = mount(deco, MERMAID_DOC, MERMAID_DOC.indexOf("pie title"));
+    expect(parent.querySelector(".cm-md-diagram-rendered")).toBeNull();
+    view.destroy();
+    parent.remove();
+  });
+
+  test("an unclosed (mid-typing) block never renders", () => {
+    const { parent, view } = mount(deco, UNCLOSED, 0);
+    expect(parent.querySelector(".cm-md-diagram-rendered")).toBeNull();
+    view.destroy();
+    parent.remove();
+  });
+});
+
+describe("excalidraw diagram cursor-render", () => {
+  test("the trigger token is the upstream spelling", () => {
+    // The request wrote `mermaid-to-excallidraw` (double l); the shipped
+    // token matches the upstream library, `mermaid-to-excalidraw`.
+    expect(EXCALIDRAW_LANG).toBe("mermaid-to-excalidraw");
+  });
+
+  test("a closed mermaid-to-excalidraw block renders the diagram widget", () => {
+    const { parent, view } = mount(excalidrawDecorations(() => false), EXCALIDRAW_DOC, 0);
+    expect(parent.querySelector(".cm-md-diagram-rendered")).toBeTruthy();
+    // The block is replaced; the raw fence source is not in the DOM.
+    expect(parent.textContent).not.toContain("flowchart TD");
+    view.destroy();
+    parent.remove();
+  });
+
+  test("a mermaid block does NOT render under the excalidraw renderer", () => {
+    // Each renderer matches only its own fence language; the two decoration
+    // fields never cross.
+    const { parent, view } = mount(excalidrawDecorations(() => false), MERMAID_DOC, 0);
+    expect(parent.querySelector(".cm-md-diagram-rendered")).toBeNull();
+    view.destroy();
+    parent.remove();
+  });
+});
+
+describe("diagram wiring", () => {
+  test("mermaid is dynamic-imported (never in the initial bundle)", () => {
+    expect(mermaidRenderSrc).toMatch(/import\("mermaid"\)/);
+    expect(mermaidRenderSrc).not.toMatch(/^import .* from "mermaid"/m);
+  });
+
+  test("excalidraw is dynamic-imported (never in the initial bundle)", () => {
+    // Both heavy libraries are pulled only when an excalidraw block first
+    // renders; a static import would drag React into the eager editor bundle.
+    expect(excalidrawRenderSrc).toMatch(/import\("@excalidraw\/mermaid-to-excalidraw"\)/);
+    expect(excalidrawRenderSrc).toMatch(/import\("@excalidraw\/excalidraw"\)/);
+    expect(excalidrawRenderSrc).not.toMatch(/^import .* from "@excalidraw\//m);
+  });
+
+  test("blocks.ts stays generic (no diagram special-case)", () => {
+    expect(blocksSrc).not.toMatch(/mermaid/i);
+    expect(blocksSrc).not.toMatch(/excalidraw/i);
+  });
+
+  test("View affordance opens the zoom overlay with a light render", () => {
+    // The hover "View" button is the explicit zoom trigger, gated on the
+    // onView option and only revealed after a successful render; clicking the
+    // diagram body still defers to CM6 caret placement (cursor-out reveal).
+    expect(diagramSrc).toMatch(/onView\?: \(svg: string\) => void/);
+    expect(diagramSrc).toMatch(/if \(onView\)/);
+    expect(diagramSrc).toMatch(/createElement\("button"\)/);
+    // The zoom always presents the light render on a light panel: a dark
+    // editor re-renders light for the overlay, a light editor passes the
+    // cached (already light) face.
+    expect(diagramSrc).toMatch(/this\.spec\.render\(this\.source, false\)/);
+    expect(diagramSrc).toMatch(/onView\(renderedSvg\)/);
+  });
+
+  test("vertical arrow keys step INTO a rendered block (no widget skip)", () => {
+    // A block-replace widget has no internal lines, so ArrowUp/Down skip it
+    // (atomicRanges snaps the caret past the atom). The fix is an
+    // ArrowUp/ArrowDown keymap that redirects a crossing move onto the block
+    // edge so scan() de-renders it. moveVertically needs real layout (jsdom
+    // has none), so the behaviour is browser-verified; this pins the
+    // mechanism so it can't silently drop out.
+    expect(diagramSrc).toMatch(/key:\s*"ArrowUp",\s*run:\s*stepInto\(false\)/);
+    expect(diagramSrc).toMatch(/key:\s*"ArrowDown",\s*run:\s*stepInto\(true\)/);
+    expect(diagramSrc).toMatch(/view\.moveVertically\(range, forward\)/);
+    expect(diagramSrc).toMatch(/EditorSelection\.cursor\(enter\)/);
+  });
+
+  test("reverse flip: cursor-enter ghosts the cached face and folds it out", () => {
+    // The forward flip plays on widget mount; the reverse needs a ghost
+    // because CM removes the widget DOM instantly on enter. Needs real layout
+    // + WAAPI (jsdom has neither), so behaviour is browser-verified; this pins
+    // the mechanism. The ghost rotateX-folds from 0 to -90 (mirror of the
+    // forward -90 -> 0) over the same duration.
+    expect(diagramSrc).toMatch(/cacheFace\(this\.spec, this\.source, this\.dark, res\.svg\)/);
+    expect(diagramSrc).toMatch(/function flipOutGhost/);
+    expect(diagramSrc).toMatch(/rotateX\(0deg\)/);
+    expect(diagramSrc).toMatch(/rotateX\(-90deg\)/);
+    expect(diagramSrc).toMatch(/if \(update\.docChanged \|\| !update\.selectionSet\) return/);
+    expect(diagramSrc).toMatch(/flipOutGhost\(update\.view, it\.from, widget\)/);
+  });
+
+  test("error locatability: failing line accented in source + actionable face", () => {
+    // Errors are cached per source on render and the source line they blame
+    // (openLine + N) is line-decorated while the cursor is inside the block;
+    // the rendered face leads with the line number. Browser-verified end to
+    // end (needs the library + layout); pinned here.
+    expect(diagramSrc).toMatch(/errorCache: new Map/);
+    expect(diagramSrc).toMatch(/cm-md-diagram-error-line/);
+    expect(diagramSrc).toMatch(/info\.openLine \+ err\.line/);
+    // Actionable face leads with the renderer label + line number.
+    expect(diagramSrc).toMatch(/\$\{label\} error - line \$\{res\.errorLine\}/);
+    // Error cleared on a successful re-render so a fixed line stops accenting.
+    expect(diagramSrc).toMatch(/cacheError\(this\.spec, this\.source, null\)/);
+  });
+
+  test("Wysiwyg wires BOTH renderers and the diagram-zoom opener", () => {
+    // Both decoration fields are registered, each reads the editor theme and
+    // passes the pan/zoom opener as onView.
+    expect(wysiwygSrc).toMatch(
+      /mermaidDecorations\([\s\S]{1,120}effectiveHybridSurfaceTheme\("editor"\) === "dark"/,
+    );
+    expect(wysiwygSrc).toMatch(
+      /excalidrawDecorations\([\s\S]{1,120}effectiveHybridSurfaceTheme\("editor"\) === "dark"/,
+    );
+    expect(wysiwygSrc).toMatch(/openDiagramZoom\(svg\)/);
+  });
+});

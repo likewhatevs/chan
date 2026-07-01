@@ -38,7 +38,7 @@
     type ImageClickArgs,
   } from "./widgets/image";
   import { tableDecorations } from "./widgets/table";
-  import { mermaidDecorations } from "./widgets/mermaid";
+  import { mermaidDecorations, excalidrawDecorations } from "./widgets/diagram";
   import { bubbleKeymap, bubbleListener } from "./bubbles/controller";
   import type { BubbleHandle, BubbleSpec } from "./bubbles/types";
   import { openWikiBubble } from "./bubbles/wiki";
@@ -49,6 +49,7 @@
   import { imageDragIndicator } from "./image_drag_indicator";
   import { pasteHandler } from "./paste_html";
   import { openImageZoom } from "../state/imageZoom";
+  import { openDiagramZoom } from "../state/diagramZoom";
   import { headingFold } from "./fold";
   import * as fmt from "./commands/format";
   import * as clip from "./clipboard";
@@ -495,7 +496,14 @@
         }),
         imageCaretRedirect(),
         tableDecorations(),
-        mermaidDecorations(() => effectiveHybridSurfaceTheme("editor") === "dark"),
+        mermaidDecorations(
+          () => effectiveHybridSurfaceTheme("editor") === "dark",
+          (svg) => openDiagramZoom(svg),
+        ),
+        excalidrawDecorations(
+          () => effectiveHybridSurfaceTheme("editor") === "dark",
+          (svg) => openDiagramZoom(svg),
+        ),
         // Inline edit bubbles + paste/drop handlers go through the
         // write-side compartment so toggling `readonly` at runtime
         // tears them down without rebuilding the editor.
@@ -1370,12 +1378,13 @@
     border-color: var(--text-secondary, #888);
     opacity: 0.9;
   }
-  /* Mermaid cursor-render: a closed ```mermaid block is replaced by its
-     rendered diagram when the cursor LEAVES it (the source code block is
-     blocks.ts's own, untouched, while the cursor is inside). The diagram
-     flips in on the HORIZONTAL (rotateX) axis -- like the image atom's
-     cursor-in-source / cursor-out-render, no button. */
-  :global(.md-wysiwyg-cm6 .cm-md-mermaid-rendered) {
+  /* Diagram cursor-render (mermaid, mermaid-to-excalidraw): a closed
+     diagram fence is replaced by its rendered diagram when the cursor
+     LEAVES it (the source code block is blocks.ts's own, untouched, while
+     the cursor is inside). The diagram flips in on the HORIZONTAL (rotateX)
+     axis -- like the image atom's cursor-in-source / cursor-out-render. A
+     hover "View" button opens the pan/zoom overlay. */
+  :global(.md-wysiwyg-cm6 .cm-md-diagram-rendered) {
     margin: 0.4rem 0;
     perspective: 1200px;
     /* Mirror the code-block slab's right inset. The CM6 fold gutter eats
@@ -1388,11 +1397,39 @@
     border-right: 18px solid transparent;
     box-sizing: border-box;
   }
-  :global(.md-wysiwyg-cm6 .cm-md-mermaid-inner) {
+  :global(.md-wysiwyg-cm6 .cm-md-diagram-inner) {
+    position: relative;
     transform-origin: center top;
-    animation: cm-md-mermaid-flip-in 0.45s ease;
+    animation: cm-md-diagram-flip-in 0.45s ease;
   }
-  @keyframes cm-md-mermaid-flip-in {
+  /* Hover "View" affordance over a rendered diagram: opens the pan/zoom
+     overlay. Hidden until the diagram is hovered (or the button is
+     keyboard-focused), mirroring the image actions row. */
+  :global(.md-wysiwyg-cm6 .cm-md-diagram-view) {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    padding: 2px 10px;
+    border: 1px solid var(--border, #ddd);
+    border-radius: 6px;
+    background: var(--bg-card, rgba(0, 0, 0, 0.04));
+    color: var(--text, inherit);
+    font: 12px/1.4 var(--chan-editor-body-family);
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.15s ease;
+  }
+  :global(.md-wysiwyg-cm6 .cm-md-diagram-inner:hover .cm-md-diagram-view) {
+    opacity: 1;
+  }
+  :global(.md-wysiwyg-cm6 .cm-md-diagram-view:focus-visible) {
+    opacity: 1;
+    outline: 2px solid var(--focus, #0a66ff);
+  }
+  :global(.md-wysiwyg-cm6 .cm-md-diagram-view:hover) {
+    background: var(--bg-hover, rgba(0, 0, 0, 0.08));
+  }
+  @keyframes cm-md-diagram-flip-in {
     from {
       transform: rotateX(-90deg);
       opacity: 0.2;
@@ -1402,18 +1439,18 @@
       opacity: 1;
     }
   }
-  :global(.md-wysiwyg-cm6 .cm-md-mermaid-diagram) {
+  :global(.md-wysiwyg-cm6 .cm-md-diagram-body) {
     display: flex;
     justify-content: center;
     min-height: 40px;
     padding: 8px 0;
     color: var(--text-secondary);
   }
-  :global(.md-wysiwyg-cm6 .cm-md-mermaid-diagram svg) {
+  :global(.md-wysiwyg-cm6 .cm-md-diagram-body svg) {
     max-width: 100%;
     height: auto;
   }
-  :global(.md-wysiwyg-cm6 .cm-md-mermaid-diagram.cm-md-mermaid-error) {
+  :global(.md-wysiwyg-cm6 .cm-md-diagram-body.cm-md-diagram-error) {
     display: block;
     color: var(--danger-text, #d33);
     font-family: ui-monospace, monospace;
@@ -1421,12 +1458,12 @@
     white-space: pre-wrap;
   }
   /* Actionable error face: the line number leads, the offending
-     source line is echoed verbatim, then mermaid's reason follows. */
-  :global(.md-wysiwyg-cm6 .cm-md-mermaid-error-head) {
+     source line is echoed verbatim, then the renderer's reason follows. */
+  :global(.md-wysiwyg-cm6 .cm-md-diagram-error-head) {
     font-weight: 600;
     margin-bottom: 2px;
   }
-  :global(.md-wysiwyg-cm6 .cm-md-mermaid-error-src) {
+  :global(.md-wysiwyg-cm6 .cm-md-diagram-error-src) {
     padding: 2px 6px;
     margin-bottom: 4px;
     border-left: 2px solid var(--danger-text, #d33);
@@ -1434,12 +1471,12 @@
     white-space: pre;
     overflow-x: auto;
   }
-  /* Failing-line accent: a left-border bar on the source line
-     mermaid blamed, shown only while the cursor is in the block's
+  /* Failing-line accent: a left-border bar on the source line the
+     renderer blamed, shown only while the cursor is in the block's
      source. A gutter-less linter marker - no global code-block restyle,
      no line-number column. `box-shadow` (not `border`) so the line
      doesn't reflow, and a faint tint to draw the eye. */
-  :global(.md-wysiwyg-cm6 .cm-editor .cm-line.cm-md-mermaid-error-line) {
+  :global(.md-wysiwyg-cm6 .cm-editor .cm-line.cm-md-diagram-error-line) {
     box-shadow: inset 2px 0 0 0 var(--danger-text, #d33);
     /* Faint translucent tint (not an opaque background) so a selection
        on this line still shows through - see the code-block ::before

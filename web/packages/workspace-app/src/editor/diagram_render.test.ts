@@ -1,7 +1,8 @@
 import { describe, expect, test } from "vitest";
-import { parseErrorPos } from "./mermaid_render";
+import { parseErrorPos } from "./diagram_render";
 
-// mermaid numbers parse errors against the string it parses, which is
+// mermaid (and mermaid-to-excalidraw, which parses mermaid underneath)
+// number parse errors against the string they parse, which is
 // `source.trim()`. parseErrorPos must add back the leading blank lines
 // `.trim()` removed so the line lands in the ORIGINAL source.
 describe("parseErrorPos", () => {

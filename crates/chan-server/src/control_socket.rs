@@ -216,10 +216,10 @@ pub fn pick_socket_path() -> PathBuf {
 }
 
 /// Which kind of tenant this control socket fronts. Workspace commands
-/// (`cs open/graph/dashboard/search`, team ops) need an actual
-/// workspace behind the cell; on a standalone terminal tenant the cell
-/// is None BY DESIGN, and the error must say so instead of the
-/// transient-sounding "workspace cell unavailable".
+/// (`cs open/graph/search`, team ops) need an actual workspace behind the
+/// cell; on a standalone terminal tenant the cell is None BY DESIGN, and
+/// the error must say so instead of the transient-sounding "workspace cell
+/// unavailable".
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ControlTenant {
     /// A workspace mount (`chan open`, a desktop workspace tenant):
@@ -233,7 +233,7 @@ pub enum ControlTenant {
 /// The workspace-only refusal for standalone terminals. A const so the
 /// CLI-facing wording is pinned by a test and greppable.
 pub const TERMINAL_ONLY_NEEDS_WORKSPACE: &str =
-    "this command needs a workspace; this is a standalone terminal session — run it from a terminal inside a workspace window";
+    "this command needs a workspace, but this is a standalone terminal session; run it from a terminal inside a workspace window";
 
 /// `cs terminal new --path X` on a standalone terminal window: there is no
 /// workspace root to resolve the path against, so reject it clearly rather
@@ -241,6 +241,171 @@ pub const TERMINAL_ONLY_NEEDS_WORKSPACE: &str =
 /// works (opens a terminal in the window by pure window routing).
 pub const TERM_NEW_PATH_NEEDS_WORKSPACE: &str =
     "cannot resolve --path on a standalone terminal window (no workspace root); run it from a terminal inside a workspace window, or drop --path to open a terminal here";
+
+/// The pure standalone-terminal gate: the single decision for which control
+/// commands a [`ControlTenant::TerminalOnly`] session refuses, and with what
+/// message. Decoupled from workspace resolution (it takes no workspace cell),
+/// so the policy is table-testable in isolation. A [`ControlTenant::Workspace`]
+/// session runs everything, so this only ever refuses on a standalone terminal.
+///
+/// The refusals are the workspace-content commands: `cs open`/`graph`/`search`
+/// need a mounted workspace, and `cs terminal new --path` needs a workspace root
+/// to resolve the cwd against. `cs open PATH` is special-cased: from a
+/// standalone terminal the user most likely meant the workspace-load
+/// `chan open PATH`, so it gets that guidance instead of the generic refusal.
+/// Everything else runs on a standalone terminal: window routing, session and
+/// pane ops, and the cwd-scoped `cs upload`/`download`.
+fn terminal_tenant_refusal(req: &ControlRequest, tenant: ControlTenant) -> Option<String> {
+    if tenant == ControlTenant::Workspace {
+        return None;
+    }
+    match req {
+        ControlRequest::OpenPath { path, .. } => Some(chan_open_guidance(path)),
+        ControlRequest::OpenGraph { .. } | ControlRequest::Search { .. } => {
+            Some(TERMINAL_ONLY_NEEDS_WORKSPACE.to_string())
+        }
+        ControlRequest::OpenTermNew { path: Some(_), .. } => {
+            Some(TERM_NEW_PATH_NEEDS_WORKSPACE.to_string())
+        }
+        _ => None,
+    }
+}
+
+/// Friendly guidance for `cs open PATH` on a standalone terminal: it has no
+/// workspace to open the path INTO, and the user most likely wanted to load
+/// that path AS a workspace window, which is `chan open PATH`.
+fn chan_open_guidance(path: &Path) -> String {
+    let path = path.display();
+    format!(
+        "cs open needs a workspace to open a path into, and this is a standalone terminal. Run 'chan open {path}' to load it as a workspace window."
+    )
+}
+
+/// The command-context gating policy is a pure decision (no workspace cell),
+/// so it is table-testable directly, independent of `handle_request` and its
+/// buses. Platform-neutral: not gated to unix like the socket round-trip tests.
+#[cfg(test)]
+mod tenant_gate_tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn open_path(p: &str) -> ControlRequest {
+        ControlRequest::OpenPath {
+            window_id: "w".into(),
+            path: PathBuf::from(p),
+        }
+    }
+    fn term_new(path: Option<&str>) -> ControlRequest {
+        ControlRequest::OpenTermNew {
+            window_id: "w".into(),
+            path: path.map(PathBuf::from),
+            tab_name: None,
+            tab_group: None,
+        }
+    }
+
+    #[test]
+    fn a_workspace_tenant_runs_everything() {
+        // Every command is allowed on a workspace tenant; the gate only ever
+        // refuses on a standalone terminal.
+        for req in [
+            open_path("/x/y"),
+            ControlRequest::OpenGraph {
+                window_id: "w".into(),
+                path: None,
+            },
+            ControlRequest::Search {
+                query: "q".into(),
+                limit: None,
+            },
+            term_new(Some("sub")),
+            ControlRequest::Upload {
+                window_id: "w".into(),
+                path: PathBuf::from("/x"),
+            },
+        ] {
+            assert_eq!(
+                terminal_tenant_refusal(&req, ControlTenant::Workspace),
+                None
+            );
+        }
+    }
+
+    #[test]
+    fn cs_open_on_a_terminal_tenant_points_at_chan_open() {
+        // `cs open PATH` from a standalone terminal is guided to `chan open
+        // PATH`, echoing the path, and carries no em-dash (house style).
+        let msg = terminal_tenant_refusal(&open_path("/home/u/notes"), ControlTenant::TerminalOnly)
+            .expect("cs open refuses on a terminal tenant");
+        assert!(msg.contains("chan open /home/u/notes"), "{msg}");
+        assert!(!msg.contains('—'), "no em dash in guidance: {msg}");
+    }
+
+    #[test]
+    fn workspace_content_commands_refuse_on_a_terminal_tenant() {
+        // graph + search need a mounted workspace; they get the generic
+        // terminal-only refusal (not the cs-open guidance).
+        for req in [
+            ControlRequest::OpenGraph {
+                window_id: "w".into(),
+                path: None,
+            },
+            ControlRequest::Search {
+                query: "q".into(),
+                limit: None,
+            },
+        ] {
+            assert_eq!(
+                terminal_tenant_refusal(&req, ControlTenant::TerminalOnly).as_deref(),
+                Some(TERMINAL_ONLY_NEEDS_WORKSPACE),
+            );
+        }
+    }
+
+    #[test]
+    fn terminal_new_gate_depends_on_the_path_arg() {
+        // `cs terminal new --path` needs a workspace root; `cs terminal new`
+        // with no path is pure window routing and runs on a standalone
+        // terminal.
+        assert_eq!(
+            terminal_tenant_refusal(&term_new(Some("sub")), ControlTenant::TerminalOnly).as_deref(),
+            Some(TERM_NEW_PATH_NEEDS_WORKSPACE),
+        );
+        assert_eq!(
+            terminal_tenant_refusal(&term_new(None), ControlTenant::TerminalOnly),
+            None,
+        );
+    }
+
+    #[test]
+    fn cwd_scoped_and_routing_commands_run_on_a_terminal_tenant() {
+        // upload / download are cwd-scoped and dashboard / window-list are
+        // pure routing: none of them need a workspace, so the gate lets them
+        // through on a standalone terminal.
+        for req in [
+            ControlRequest::Upload {
+                window_id: "w".into(),
+                path: PathBuf::from("/x"),
+            },
+            ControlRequest::Download {
+                window_id: "w".into(),
+                path: PathBuf::from("/x/note.txt"),
+            },
+            ControlRequest::OpenDashboard {
+                window_id: "w".into(),
+                carousel_index: None,
+                carousel_off: false,
+            },
+            ControlRequest::WindowList,
+        ] {
+            assert_eq!(
+                terminal_tenant_refusal(&req, ControlTenant::TerminalOnly),
+                None,
+                "{req:?} should run on a standalone terminal",
+            );
+        }
+    }
+}
 
 // `UnserveScope` lives in chan-library; its `Host` variant carries a
 // `Weak<dyn HostControl>`, so the control socket reaches the host (unserve)
@@ -475,6 +640,12 @@ async fn handle_request(req: ControlRequest, ctx: &ControlSocketCtx) -> ControlR
     // socket starts; resolve it per request, exactly as before.
     let terminal_registry = terminal_registry.get();
     let tenant = *tenant;
+    // Single chokepoint for standalone-terminal gating: refuse the
+    // workspace-content commands here (with the friendly `chan open`
+    // guidance for `cs open`) before any per-arm workspace resolution.
+    if let Some(message) = terminal_tenant_refusal(&req, tenant) {
+        return ControlResponse::Error { message };
+    }
     match req {
         ControlRequest::OpenPath { window_id, path } => {
             if let Err(message) = require_window_id(&window_id) {
@@ -519,19 +690,13 @@ async fn handle_request(req: ControlRequest, ctx: &ControlSocketCtx) -> ControlR
             // Opening a terminal is window routing, not a workspace operation:
             // the only workspace use is resolving an optional --path cwd. So a
             // standalone terminal tenant CAN open a terminal (no cwd to
-            // resolve); it just can't resolve a --path against a workspace it
-            // doesn't have. This mirrors `WindowList`'s tenant branch.
+            // resolve); a `--path` on a standalone terminal is already refused
+            // by `terminal_tenant_refusal`, so this branch never sees one.
+            // This mirrors `WindowList`'s tenant branch.
             match tenant {
-                ControlTenant::TerminalOnly => {
-                    if path.is_some() {
-                        return ControlResponse::Error {
-                            message: TERM_NEW_PATH_NEEDS_WORKSPACE.into(),
-                        };
-                    }
-                    into_response(open_term_new_standalone(
-                        &window_id, tab_name, tab_group, events_tx,
-                    ))
-                }
+                ControlTenant::TerminalOnly => into_response(open_term_new_standalone(
+                    &window_id, tab_name, tab_group, events_tx,
+                )),
                 ControlTenant::Workspace => {
                     let workspace = match workspace_from_cell(workspace_cell, tenant) {
                         Ok(workspace) => workspace,
@@ -2738,6 +2903,32 @@ mod tests {
             ControlResponse::Error { message } => {
                 assert_eq!(message, TERMINAL_ONLY_NEEDS_WORKSPACE);
                 assert!(message.contains("standalone terminal"));
+            }
+            other => panic!("unexpected non-error response: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn cs_open_on_a_terminal_tenant_guides_to_chan_open() {
+        // `cs open PATH` from a standalone terminal has no workspace to open
+        // into; instead of the generic refusal, handle_request surfaces the
+        // friendly `chan open PATH` guidance (the gate runs before any
+        // workspace resolution).
+        let workspace_cell: Arc<RwLock<Option<WorkspaceCell>>> = Arc::new(RwLock::new(None));
+        let ctx = test_ctx(workspace_cell, ControlTenant::TerminalOnly);
+
+        let response = handle_request(
+            ControlRequest::OpenPath {
+                window_id: "terminal-win-0".into(),
+                path: PathBuf::from("/home/u/notes"),
+            },
+            &ctx,
+        )
+        .await;
+
+        match response {
+            ControlResponse::Error { message } => {
+                assert!(message.contains("chan open /home/u/notes"), "{message}");
             }
             other => panic!("unexpected non-error response: {other:?}"),
         }
