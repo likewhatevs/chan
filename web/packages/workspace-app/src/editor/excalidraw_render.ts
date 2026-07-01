@@ -12,6 +12,7 @@
 // exactly as it does for a mermaid render.
 
 import { type DiagramResult, parseErrorPos } from "./diagram_render";
+import { renderMermaid } from "./mermaid_render";
 
 // The two libraries load together on first render and memoize. `exportToSvg`
 // is imported for its type so the elements cast below reads off its real
@@ -38,11 +39,15 @@ async function loadExcalidraw(): Promise<ExcalidrawModules> {
   return loader;
 }
 
-/// Render a mermaid definition to an excalidraw SVG string. A parse/convert
-/// failure resolves to { ok:false, error } rather than throwing, so the
-/// caller can show the message on the card's back face. mermaid-to-excalidraw
-/// parses mermaid underneath, so its errors carry the same "line N" format
-/// the mermaid renderer surfaces.
+/// Render a mermaid definition to an excalidraw SVG string. When the
+/// excalidraw conversion fails on a source the plain mermaid renderer can
+/// still draw, it degrades to that renderer so the block shows a diagram
+/// instead of an error (WebKit/WKWebView cannot convert a flowchart with a
+/// `subgraph`; see the catch below). A genuine parse failure resolves to
+/// { ok:false, error } rather than throwing, so the caller can show the
+/// message on the card's back face. mermaid-to-excalidraw parses mermaid
+/// underneath, so its errors carry the same "line N" format the mermaid
+/// renderer surfaces.
 export async function renderExcalidraw(
   source: string,
   dark: boolean,
@@ -67,6 +72,14 @@ export async function renderExcalidraw(
     });
     return { ok: true, svg: svg.outerHTML };
   } catch (err) {
+    // mermaid-to-excalidraw's cluster lookup throws "SubGraph element not
+    // found" in WebKit/WKWebView (chan-desktop): a flowchart with a
+    // `subgraph` converts in Blink but its cluster elements are not found
+    // here. Degrade to the plain mermaid renderer so the block still shows
+    // the diagram; only when mermaid ALSO fails (genuinely bad source) do we
+    // surface the excalidraw error, so the failing source line is accented.
+    const fallback = await renderMermaid(source, dark);
+    if (fallback.ok) return fallback;
     const error = (err as Error)?.message ?? String(err);
     const { line, col } = parseErrorPos(source, error);
     return { ok: false, error, errorLine: line, errorCol: col };
