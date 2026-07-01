@@ -35,7 +35,7 @@ describe("graph loading-state: indexing cue", () => {
 describe("graph empty-state: indexing vs genuinely-empty copy", () => {
   test("emptyStateMessage gates the index-derived modes on indexBuilding", () => {
     expect(graph).toMatch(
-      /const emptyStateMessage = \$derived\(\s*filesystemMode\s*\?\s*"no filesystem graph nodes for this scope"\s*:\s*indexBuilding\s*\?\s*"graph temporarily unavailable while indexing the workspace"\s*:\s*languageMode\s*\?\s*"no language graph nodes for this workspace yet"\s*:\s*"no markdown files in this workspace yet",?\s*\)/,
+      /const emptyStateMessage = \$derived\(\s*filesystemMode\s*\?\s*"no filesystem graph nodes for this scope"\s*:\s*indexBuilding\s*\?\s*"graph temporarily unavailable while indexing the workspace"\s*:\s*languageMode\s*\?\s*"no language graph nodes for this workspace yet"\s*:\s*"data being indexed, hang tight\.\.\.",?\s*\)/,
     );
   });
 

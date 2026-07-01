@@ -1425,7 +1425,15 @@ export function openGraphInPane(paneId: string, opts: OpenGraphOptions = {}): Gr
     expanded: { "": true },
     filters: opts.filters ? { ...opts.filters } : { ...DEFAULT_GRAPH_FILTERS },
     inspectorOpen: false,
-    pendingSelectId: opts.pendingSelectId ?? null,
+    // A semantic workspace graph (no lens) opens focused on the
+    // workspace-root node (id "", the server's directory_node_id("")), so
+    // focus-on-select spotlights the root neighbourhood and the inspector
+    // opens on it through the same pending-selection path the lenses use.
+    // Lens opens pass their own focal node, which the ?? preserves;
+    // filesystem / language modes have no root focus.
+    pendingSelectId:
+      opts.pendingSelectId ??
+      (scopeId === "workspace" && mode === "semantic" ? "" : null),
   };
   p.tabs.push(tab);
   p.activeTabId = tab.id;

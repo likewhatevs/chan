@@ -88,6 +88,7 @@
   } from "../state/kinds";
   import { chordFor } from "../state/shortcuts";
   import { FS_GRAPH_DEPTH_MAX, graphDepthCap, relativeDepth } from "../graph/depth";
+  import { pullMetaNeighbours } from "../graph/lensClosure";
 
   let {
     tab,
@@ -709,13 +710,15 @@
   );
 
   /// Copy for the canvas empty-state (not loading, no error, zero nodes).
-  /// Filesystem mode is structural — it reads the on-disk tree, not the
-  /// index — so it keeps its scope message regardless of index state. The
+  /// Filesystem mode is structural: it reads the on-disk tree, not the
+  /// index, so it keeps its scope message regardless of index state. The
   /// markdown and language graphs are both index-derived, so a zero-node
   /// result WHILE the index is still building means "not ready yet", not
-  /// "nothing here"; say so. `indexBuilding` is reactive (the status poller
-  /// flips it once the index settles), so the copy reverts to the
-  /// genuine-empty message on its own when indexing finishes.
+  /// "nothing here"; `indexBuilding` shows the temporarily-unavailable
+  /// copy. An idle zero-node markdown graph most often means the semantic
+  /// index has not populated yet, so it stays optimistic ("data being
+  /// indexed, hang tight..."); language mode keeps its genuine-empty
+  /// scope message.
   const emptyStateMessage = $derived(
     filesystemMode
       ? "no filesystem graph nodes for this scope"
@@ -723,7 +726,7 @@
         ? "graph temporarily unavailable while indexing the workspace"
         : languageMode
           ? "no language graph nodes for this workspace yet"
-          : "no markdown files in this workspace yet",
+          : "data being indexed, hang tight...",
   );
 
   /// Shallow-scope cue: when the scope's
@@ -1129,6 +1132,10 @@
         if (next.size === 0) break;
         frontier = next;
       }
+      // Pull each surfaced document's other @@mention / #tag / language
+      // meta-edges into scope so it renders its full first-order semantic
+      // edge set, not just the seed edge (bounded: only meta-nodes join).
+      pullMetaNeighbours(visited, nodes, edges);
       // Re-anchor every file the lens surfaced to its directory
       // spine so no file renders edgeless.
       pullContainsSpine(visited);
@@ -1160,6 +1167,10 @@
         if (next.size === 0) break;
         frontier = next;
       }
+      // Pull each surfaced document's other @@mention / #tag / language
+      // meta-edges into scope so it renders its full first-order semantic
+      // edge set, not just the seed edge (bounded: only meta-nodes join).
+      pullMetaNeighbours(visited, nodes, edges);
       // Re-anchor every file the lens surfaced to its directory
       // spine so no file renders edgeless.
       pullContainsSpine(visited);
@@ -1196,6 +1207,10 @@
         if (next.size === 0) break;
         frontier = next;
       }
+      // Pull each surfaced document's other @@mention / #tag / language
+      // meta-edges into scope so it renders its full first-order semantic
+      // edge set, not just the seed edge (bounded: only meta-nodes join).
+      pullMetaNeighbours(visited, nodes, edges);
       // Re-anchor every file the lens surfaced to its directory
       // spine so no file renders edgeless.
       pullContainsSpine(visited);

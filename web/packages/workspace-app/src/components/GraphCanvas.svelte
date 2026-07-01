@@ -40,6 +40,7 @@
   import type { GraphViewEdge, GraphViewNode } from "../api/types";
   import { draftsDir } from "../state/workspace.svelte";
   import { DEFAULT_FORCE, type GraphForce } from "../graph/force";
+  import { containmentSpine, spineEdgeKey } from "../graph/containmentSpine";
 
   type RenderedEdgeKind =
     | "link"
@@ -221,6 +222,9 @@
   let dEdges: DEdge[] = [];
   let nodeById = new Map<string, DNode>();
   let adjacency = new Map<string, Set<string>>();
+  /// Child-node id -> parent-directory-node id, from the `contains` edges.
+  /// Drives the focus-on-select containment spine (path home to the root).
+  let containsParent = new Map<string, string>();
   let visibleEdgeRefs: DEdge[] = [];
 
   /// Pan + zoom transform. Same shape as d3-zoom's: viewportPx =
@@ -514,6 +518,7 @@
 
   function rebuildAdjacency(): void {
     adjacency = new Map();
+    containsParent = new Map();
     backlinks = new Map();
     maxBacklinks = 0;
     for (const e of edges) {
@@ -523,6 +528,10 @@
       let b = adjacency.get(e.target);
       if (!b) { b = new Set(); adjacency.set(e.target, b); }
       b.add(e.source);
+      // `contains` runs parent dir -> child; edge endpoints are still
+      // string ids at rebuild time (before the force sim swaps in node
+      // refs), matching the adjacency keys above.
+      if (e.kind === "contains") containsParent.set(e.target, e.source);
       const c = (backlinks.get(e.target) ?? 0) + 1;
       backlinks.set(e.target, c);
       if (c > maxBacklinks) maxBacklinks = c;
@@ -928,10 +937,25 @@
     // alpha (below) and the edge emphasis (incident edges lit, the rest
     // faded).
     const hasSelection = selectedId !== null;
+    // Containment spine: a node in the directory tree (any file /
+    // directory / contact / symlink / media, i.e. anything with a
+    // `contains` parent) also lights its whole parent chain up to the
+    // workspace root, so the path home reads at a glance. Tag / mention /
+    // language meta-nodes have no `contains` edge, so their spine is empty.
+    const spine =
+      selectedId !== null
+        ? containmentSpine(selectedId, containsParent)
+        : { nodes: new Set<string>(), edges: new Set<string>() };
     const isIncidentEdge = (e: DEdge): boolean => {
       const sId = typeof e.source === "object" ? e.source.id : e.source;
       const tId = typeof e.target === "object" ? e.target.id : e.target;
       return sId === selectedId || tId === selectedId;
+    };
+    const isSpineEdge = (e: DEdge): boolean => {
+      if (spine.edges.size === 0) return false;
+      const sId = typeof e.source === "object" ? e.source.id : e.source;
+      const tId = typeof e.target === "object" ? e.target.id : e.target;
+      return spine.edges.has(spineEdgeKey(sId, tId));
     };
 
     // Edges first so nodes paint on top. Group by kind so we only
@@ -1030,7 +1054,10 @@
     // light up against the faded rest.
     drawEdgeSet(visibleEdgeRefs, hasSelection ? FOCUS_DIM_EDGE : EDGE_ALPHA);
     if (hasSelection) {
-      drawEdgeSet(visibleEdgeRefs.filter(isIncidentEdge), FOCUS_LIT_EDGE);
+      drawEdgeSet(
+        visibleEdgeRefs.filter((e) => isIncidentEdge(e) || isSpineEdge(e)),
+        FOCUS_LIT_EDGE,
+      );
     }
     ctx.globalAlpha = 1;
 
@@ -1043,7 +1070,7 @@
       // Out of the spotlight: a selection is active and this node is
       // neither the selection nor one of its 1st-degree neighbours, so
       // it fades to let the focused neighbourhood read.
-      const isDimmed = hasSelection && !isSel && !isAdj;
+      const isDimmed = hasSelection && !isSel && !isAdj && !spine.nodes.has(n.id);
       // Ghost styling fires only for broken-link targets - files
       // that another doc points at but don't exist on disk. A
       // `@@name` mention is free-form by design (the indexer
@@ -1148,9 +1175,10 @@
         ctx.globalAlpha = 1;
       }
       ctx.globalAlpha = 1;
-      // Label: only for the selected node + first-degree
-      // neighbours, so the canvas stays uncluttered at rest.
-      if (isSel || isAdj) {
+      // Label: the selected node, its first-degree neighbours, and the
+      // containment spine directories on the path to the root, so the
+      // canvas stays uncluttered at rest while the path home reads by name.
+      if (isSel || isAdj || spine.nodes.has(n.id)) {
         const fontPx = 11 / Math.max(0.5, transform.k);
         ctx.font = `${fontPx}px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif`;
         ctx.textAlign = "center";

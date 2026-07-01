@@ -155,20 +155,32 @@ describe("focus-on-select spotlights the 1st-degree neighbourhood", () => {
       /drawEdgeSet\(visibleEdgeRefs, hasSelection \? FOCUS_DIM_EDGE : EDGE_ALPHA\);/,
     );
     expect(source).toMatch(
-      /if \(hasSelection\) \{[\s\S]{0,160}drawEdgeSet\(visibleEdgeRefs\.filter\(isIncidentEdge\), FOCUS_LIT_EDGE\);/,
+      /if \(hasSelection\) \{[\s\S]{0,220}drawEdgeSet\(\s*visibleEdgeRefs\.filter\(\(e\) => isIncidentEdge\(e\) \|\| isSpineEdge\(e\)\),\s*FOCUS_LIT_EDGE,?\s*\);/,
     );
   });
 
-  test("non-neighbour nodes fade to FOCUS_DIM_NODE", () => {
+  test("non-neighbour nodes (outside the selection + spine) fade to FOCUS_DIM_NODE", () => {
     expect(source).toMatch(
-      /const isDimmed = hasSelection && !isSel && !isAdj;/,
+      /const isDimmed = hasSelection && !isSel && !isAdj && !spine\.nodes\.has\(n\.id\);/,
     );
     expect(source).toMatch(/let baseAlpha = isDimmed \? FOCUS_DIM_NODE : 1;/);
   });
 
-  test("selected node + 1st-degree neighbours still get labels", () => {
-    // Only the selection and its 1st-degree neighbours draw labels, so
-    // the focus spotlight stays readable.
-    expect(source).toMatch(/if \(isSel \|\| isAdj\) \{/);
+  test("a directory-tree selection lights its full containment spine", () => {
+    // The spine (parent chain to the workspace root) joins the lit node
+    // and edge sets; the walk itself is covered by
+    // graph/containmentSpine.test.ts.
+    expect(source).toMatch(/containmentSpine\(selectedId, containsParent\)/);
+    expect(source).toMatch(/const isSpineEdge = \(e: DEdge\): boolean =>/);
+    expect(source).toMatch(
+      /if \(e\.kind === "contains"\) containsParent\.set\(e\.target, e\.source\)/,
+    );
+  });
+
+  test("selection, 1st-degree neighbours, and spine directories get labels", () => {
+    // Labels draw for the selection, its 1st-degree neighbours, and the
+    // containment spine directories on the path to root, so the focus
+    // spotlight stays readable and the path home reads by name.
+    expect(source).toMatch(/if \(isSel \|\| isAdj \|\| spine\.nodes\.has\(n\.id\)\) \{/);
   });
 });
