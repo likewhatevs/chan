@@ -6,6 +6,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Excalidraw subgraph diagrams no longer blank out on chan-desktop.** A `mermaid-to-excalidraw` flowchart with a `subgraph` threw `SubGraph element not found` in the desktop webview (WKWebView) and left an error in place of the diagram, the v0.59.0 known limitation. The excalidraw block now falls back to the plain `mermaid` renderer whenever the excalidraw conversion fails on otherwise-valid mermaid source, so the diagram shows on desktop; the browser still renders the excalidraw scene, and a genuinely broken diagram still shows its error.
+
 ## [v0.59.0] - 2026-07-01
 
 A broad feature release: a `mermaid-to-excalidraw` diagram renderer, graph focus and lens fixes with an indexing placeholder, an actionable indexing dashboard, the `chan devserver --service` action-verb reshape, editor list and directory-link fixes, `cs copy` / `cs paste` clipboard bridging, a semantic-search opt-out that never embeds when off, and chan-desktop window-geometry, glyph, and clipboard fixes.
