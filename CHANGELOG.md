@@ -10,6 +10,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - **Smart list-row paste.** Pasting a copied list row into a continued list item now merges into that bullet instead of leaving a double marker, matching the existing rich-paste behavior for chan-to-chan plain-text copies.
 - **Excalidraw diagram renderer.** A fenced ```` ```mermaid-to-excalidraw ```` block renders as an [excalidraw](https://github.com/excalidraw/mermaid-to-excalidraw) scene in the editor, alongside the existing `mermaid` renderer and sharing its whole lifecycle: cursor-out flip-in, a hover "View" pan/zoom overlay (always presented on a light panel so a dark-theme diagram stays visible), light/dark theming, failing-line error accents, and keep-alive across tab switches. Both fences run through one diagram widget now; excalidraw and its React runtime are dynamic-imported, so they stay out of the eager editor bundle.
+- **`cs copy` / `cs paste` clipboard bridge.** New `cs copy` and `cs paste` commands bridge the embedded terminal's stdin/stdout to the system clipboard for text, images, and HTML, on both the web UI and chan-desktop. For example, `cs paste > file.png` writes a pasted image to a file, and `cs copy < file.png` puts an image on the clipboard to paste elsewhere; when the clipboard holds both an image and text, the image wins.
 
 ### Fixed
 
