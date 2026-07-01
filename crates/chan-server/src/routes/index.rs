@@ -260,6 +260,13 @@ struct ModelNotDownloadedBody {
 /// the `/download` endpoint.
 pub async fn api_semantic_enable(State(state): State<Arc<AppState>>) -> Response {
     let workspace = state.workspace();
+    // Enabling opts in, so kick a from-scratch rebuild: the reindex now embeds
+    // (semantic_enabled is true) and bypasses the file cap, so the whole tree
+    // gets vectors. If the indexer handle is unavailable (a rare reset/shutdown
+    // window) the flag is still persisted; vectors then fill in on the next
+    // explicit rebuild or as files are saved. The cold-boot trigger keys on an
+    // empty index, not on this flag.
+    let indexer = state.try_indexer().ok();
     match tokio::task::spawn_blocking(move || {
         let model_name = match workspace.semantic_model() {
             Ok(m) => m,
@@ -290,6 +297,9 @@ pub async fn api_semantic_enable(State(state): State<Arc<AppState>>) -> Response
         if let Err(e) = workspace.set_semantic_enabled(true) {
             return err_from(&e);
         }
+        if let Some(indexer) = &indexer {
+            indexer.request_rebuild();
+        }
         match build_state(&workspace) {
             Ok(s) => Json(s).into_response(),
             Err(e) => err_from(&e),
@@ -306,8 +316,10 @@ pub async fn api_semantic_enable(State(state): State<Arc<AppState>>) -> Response
     }
 }
 
-/// `POST /api/index/semantic/disable`. Always succeeds; idempotent
-/// at the `set_semantic_enabled` layer (no-op when already off).
+/// `POST /api/index/semantic/disable`. Flips the workspace to BM25 and bins the
+/// vector store (via `set_semantic_enabled(false)`), so a later enable rebuilds
+/// from scratch. Always succeeds; idempotent (a wipe of an already-off
+/// workspace is a no-op).
 pub async fn api_semantic_disable(State(state): State<Arc<AppState>>) -> Response {
     let workspace = state.workspace();
     match tokio::task::spawn_blocking(move || {
