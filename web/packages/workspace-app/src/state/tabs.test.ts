@@ -3762,6 +3762,32 @@ describe("openLinkTarget resolves a wiki/link stem before opening", () => {
     expect(live.fileMissing).toBeNull();
   });
 
+  test("a directory link opens the file browser at that folder, not the editor", async () => {
+    resetLayout([]);
+    const resolve = vi
+      .spyOn(api, "resolveLink")
+      .mockResolvedValue({ path: "team", kind: "file", is_dir: true });
+    const read = vi.spyOn(api, "readStream").mockResolvedValue({
+      path: "team",
+      content: "",
+      mtime: 1,
+      mtime_ns: "1",
+      writable: true,
+    });
+
+    await openLinkTarget("team");
+
+    expect(resolve).toHaveBeenCalledWith("team");
+    // A directory routes to the file browser: the editor read route is
+    // never hit, so it can't reject the folder as "not a text file".
+    expect(read).not.toHaveBeenCalled();
+    const tabs = activePane().tabs;
+    expect(tabs).toHaveLength(1);
+    const live = tabs[0];
+    if (live?.kind !== "browser") throw new Error("expected a browser tab");
+    expect(live.selected).toBe("team");
+  });
+
   test("falls back to the raw target when resolve fails (broken link still surfaces)", async () => {
     resetLayout([]);
     vi.spyOn(api, "resolveLink").mockRejectedValue(new ApiError(404, "not found"));

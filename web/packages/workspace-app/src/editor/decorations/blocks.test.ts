@@ -73,8 +73,14 @@ describe("list guide removal", () => {
     expect(wysiwygSource).toContain(
       "--cm-md-list-marker-gap: var(--chan-editor-list-marker-gap, 3ch)",
     );
-    expect(wysiwygSource).toContain(".cm-line.cm-md-list-indent");
-    expect(wysiwygSource).toContain("padding-left: var(--cm-md-list-indent-extra, 0) !important");
+    expect(wysiwygSource).toContain(".cm-line.cm-md-list-hang");
+    expect(wysiwygSource).toContain("--cm-md-list-hang-col: calc(");
+    expect(wysiwygSource).toContain(
+      "6px + (var(--cm-md-list-level, 0) + 1) * var(--cm-md-list-hang-col)",
+    );
+    expect(wysiwygSource).toContain(
+      "text-indent: calc(-1 * var(--cm-md-list-hang-col))",
+    );
     expect(wysiwygSource).toContain("width: var(--cm-md-list-marker-width)");
     expect(wysiwygSource).toContain("margin-right: var(--cm-md-list-marker-gap)");
     expect(wysiwygSource).toContain(
@@ -273,8 +279,11 @@ describe("list marker rendering (real positioned markers)", () => {
       parent.querySelectorAll(".cm-md-ol-marker"),
     ).map((el) => el.textContent);
     expect(markers).toEqual(["1.", "2."]);
-    expect(parent.textContent).toContain("1. one");
-    expect(parent.textContent).toContain("2. two");
+    // The whitespace between the marker and the item text is hidden
+    // (render-only) so the text hangs at the fixed marker column; the rendered
+    // marker and text sit adjacent while the source keeps the space intact.
+    expect(parent.textContent).toContain("1.one");
+    expect(parent.textContent).toContain("2.two");
     expect(view.state.doc.toString()).toBe("1. one\n2. two");
 
     view.destroy();
@@ -304,7 +313,7 @@ describe("list marker rendering (real positioned markers)", () => {
     parent.remove();
   });
 
-  test("adds 2x default nested indentation from depth two onward", () => {
+  test("tags every list line with its syntactic depth for the hanging indent", () => {
     const parent = document.createElement("div");
     document.body.appendChild(parent);
 
@@ -316,10 +325,14 @@ describe("list marker rendering (real positioned markers)", () => {
       }),
     });
 
-    const nested = Array.from(parent.querySelectorAll(".cm-md-list-indent"));
-    expect(nested.length).toBe(2);
-    expect(nested[0]?.getAttribute("style")).toContain("--cm-md-list-indent-extra: 2ch");
-    expect(nested[1]?.getAttribute("style")).toContain("--cm-md-list-indent-extra: 4ch");
+    // Every list line (all depths) gets the hang decoration; nesting is driven
+    // by the item's syntactic depth via --cm-md-list-level, so the CSS indents
+    // each level by one marker column.
+    const hung = Array.from(parent.querySelectorAll(".cm-md-list-hang"));
+    expect(hung.length).toBe(3);
+    expect(hung[0]?.getAttribute("style")).toContain("--cm-md-list-level: 0");
+    expect(hung[1]?.getAttribute("style")).toContain("--cm-md-list-level: 1");
+    expect(hung[2]?.getAttribute("style")).toContain("--cm-md-list-level: 2");
 
     view.destroy();
     parent.remove();

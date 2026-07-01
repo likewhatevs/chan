@@ -338,16 +338,16 @@ class GhostCloserWidget extends WidgetType {
 }
 
 const handleTask: TokenHandler = (ctx) => {
-  // Walk children to find the TaskMarker (lezer-markdown's GFM
-  // TaskList emits a Task block-level node with a TaskMarker child
-  // covering exactly `[ ]` / `[x]` / `[X]` - 3 chars).
+  // A GFM task list item: `[-*+] [ ] text`. lezer-markdown emits a Task
+  // block-level node with a TaskMarker child covering exactly `[ ]` / `[x]`
+  // / `[X]` (3 chars). We hide the source bullet marker AND the leading
+  // indent, render the checkbox in the shared list marker column, and tag the
+  // line so the same `.cm-md-list-hang` rule that handles plain lists gives it
+  // a depth-driven indent and a hanging indent (wrapped text under the item).
   const line = ctx.state.doc.lineAt(ctx.node.from);
-  const prefix = /^([ \t]*)([-*+])\s+/.exec(line.text);
-  if (prefix) {
-    const from = line.from + prefix[1].length;
-    const to = line.from + prefix[0].length;
-    ctx.push(HIDE, from, to);
-  }
+  const prefix = /^([ \t]*)([-*+])[ \t]+/.exec(line.text);
+  if (!prefix) return;
+  ctx.push(HIDE, line.from, line.from + prefix[0].length);
   const cursor = ctx.node.node.cursor();
   if (!cursor.firstChild()) return;
   do {
@@ -355,13 +355,33 @@ const handleTask: TokenHandler = (ctx) => {
       const text = ctx.state.doc.sliceString(cursor.from, cursor.to);
       if (text.length !== 3) return;
       const checked = text === "[x]" || text === "[X]";
-      const widget = Decoration.replace({
-        widget: new CheckboxWidget(checked),
-      });
-      ctx.push(widget, cursor.from, cursor.to);
-      return;
+      ctx.push(
+        Decoration.replace({ widget: new CheckboxWidget(checked) }),
+        cursor.from,
+        cursor.to,
+      );
+      // Hide the whitespace between the checkbox and the item text so the text
+      // sits at the fixed marker column the checkbox margin defines.
+      const gap =
+        ctx.state.doc.sliceString(cursor.to, line.to).match(/^[ \t]+/)?.[0]
+          .length ?? 0;
+      if (gap > 0) ctx.push(HIDE, cursor.to, cursor.to + gap);
+      break;
     }
   } while (cursor.nextSibling());
+  // Depth-driven indent + hanging indent, matching plain list items.
+  let li: import("@lezer/common").SyntaxNode | null = ctx.node.node.parent;
+  while (li && li.name !== "ListItem") li = li.parent;
+  ctx.push(
+    Decoration.line({
+      attributes: {
+        class: "cm-md-list-hang",
+        style: `--cm-md-list-level: ${li ? listItemDepth(li) : 0}`,
+      },
+    }),
+    line.from,
+    line.from,
+  );
 };
 
 const handleBulletList: TokenHandler = (ctx) => {
@@ -430,20 +450,36 @@ function listItemDepth(item: import("@lezer/common").SyntaxNode): number {
   return depth;
 }
 
-const nestedIndentExtra = (depth: number): number => depth * 2;
+/// Zero-width replace that hides the source whitespace between a list marker
+/// and the item text, so the text starts at exactly the fixed marker column.
+const HIDE_GAP = Decoration.replace({});
 
-function maybeDecorateNestedListItem(
+/// Indent + hanging indent for a list item, at any depth. The marker renders
+/// in a fixed-width column (marker width + gap); source whitespace that would
+/// otherwise offset the text off that column is hidden (render-only, the
+/// document keeps it) so the geometry is exact and independent of how the
+/// source was indented:
+///   - leading indent before the marker -> hidden; nesting is instead driven
+///     by the item's syntactic DEPTH via the `.cm-md-list-hang` CSS rule (one
+///     marker column per level, so a nested marker sits under its parent text).
+///   - whitespace between the marker and the text -> hidden, so the text starts
+///     at exactly the marker column and wrapped continuation lines hang on it.
+function decorateListHang(
   ctx: TokenContext,
   item: import("@lezer/common").SyntaxNode,
+  markFrom: number,
+  markTo: number,
 ): void {
-  const depth = listItemDepth(item);
-  if (depth === 0) return;
   const line = ctx.state.doc.lineAt(item.from);
+  if (markFrom > line.from) ctx.push(HIDE_GAP, line.from, markFrom);
+  const gap =
+    ctx.state.doc.sliceString(markTo, line.to).match(/^[ \t]+/)?.[0].length ?? 0;
+  if (gap > 0) ctx.push(HIDE_GAP, markTo, markTo + gap);
   ctx.push(
     Decoration.line({
       attributes: {
-        class: "cm-md-list-indent",
-        style: `--cm-md-list-indent-extra: ${nestedIndentExtra(depth)}ch`,
+        class: "cm-md-list-hang",
+        style: `--cm-md-list-level: ${listItemDepth(item)}`,
       },
     }),
     line.from,
@@ -472,7 +508,6 @@ function decorateBulletList(
   do {
     if (cursor.name !== "ListItem") continue;
     const item = cursor.node;
-    maybeDecorateNestedListItem(ctx, item);
     const sub = item.cursor();
     let markFrom = -1;
     let markTo = -1;
@@ -494,6 +529,7 @@ function decorateBulletList(
         markFrom,
         markTo,
       );
+      decorateListHang(ctx, item, markFrom, markTo);
     }
   } while (cursor.nextSibling());
 }
@@ -511,12 +547,12 @@ function decorateListIndents(
   do {
     if (cursor.name !== "ListItem") continue;
     const item = cursor.node;
-    maybeDecorateNestedListItem(ctx, item);
     const sub = item.cursor();
     if (!sub.firstChild()) continue;
     do {
       if (sub.name === "ListMark") {
         ctx.push(ORDERED_MARK, sub.from, sub.to);
+        decorateListHang(ctx, item, sub.from, sub.to);
         break;
       }
     } while (sub.nextSibling());

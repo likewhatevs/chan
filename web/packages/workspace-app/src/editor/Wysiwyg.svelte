@@ -47,7 +47,7 @@
   import { openImageBubble } from "./bubbles/image";
   import { imageDropHandlers } from "./bubbles/image_drop";
   import { imageDragIndicator } from "./image_drag_indicator";
-  import { htmlPasteHandler } from "./paste_html";
+  import { pasteHandler } from "./paste_html";
   import { openImageZoom } from "../state/imageZoom";
   import { headingFold } from "./fold";
   import * as fmt from "./commands/format";
@@ -766,9 +766,9 @@
       // HTML-paste handler runs ahead of CM6's default plain-text
       // paste so rich pastes get converted to markdown. Image-file
       // pastes (clipboard with image/* MIME) are owned by
-      // imageDropHandlers; the HTML handler skips them. Both are
+      // imageDropHandlers; the paste handler skips them. Both are
       // write-side, so they're disabled together.
-      htmlPasteHandler(),
+      pasteHandler(),
     ];
   }
 
@@ -1113,14 +1113,28 @@
   :global(.md-wysiwyg-cm6 .cm-md-fence-ghost-closer:hover) {
     opacity: 1;
   }
-  /* Extra nested-list offset. Raw markdown already contributes 2ch per
-     depth in the default CM6 flow; this adds 2ch per depth so nested
-     levels render at 2x the current indent without changing source. */
-  :global(.md-wysiwyg-cm6 .cm-line.cm-md-list-indent) {
-    padding-left: var(--cm-md-list-indent-extra, 0) !important;
+  /* Indent + hanging indent for list item lines at every depth. Source
+     whitespace around the marker is hidden (blocks.ts decorateListHang), so the
+     text starts at exactly the fixed marker column (marker width + gap) and
+     nesting is driven by syntactic depth here: each level adds one marker
+     column, so a nested marker sits under its parent's text. We pad the line by
+     (depth + 1) marker columns and pull the first line back by one column with
+     text-indent, so the marker and first line stay put while every wrapped
+     visual line hangs under the text. The 6px restores the base .cm-line gutter
+     that the !important padding-left override would otherwise drop. */
+  :global(.md-wysiwyg-cm6 .cm-line.cm-md-list-hang) {
+    --cm-md-list-hang-col: calc(
+      var(--chan-editor-list-marker-width, 2ch) +
+        var(--chan-editor-list-marker-gap, 3ch)
+    );
+    padding-left: calc(
+      6px + (var(--cm-md-list-level, 0) + 1) * var(--cm-md-list-hang-col)
+    ) !important;
+    text-indent: calc(-1 * var(--cm-md-list-hang-col));
   }
-  /* Shared list marker column. The source space after each marker
-     combines with --cm-md-list-marker-gap for the text gap. */
+  /* Shared list marker column (bullets, hyphens, ordered numbers, task
+     checkbox). The source whitespace after the marker is hidden by the
+     decoration layer, so --cm-md-list-marker-gap alone is the gap to the text. */
   :global(.md-wysiwyg-cm6 .cm-md-list-marker) {
     --cm-md-list-marker-width: var(--chan-editor-list-marker-width, 2ch);
     --cm-md-list-marker-gap: var(--chan-editor-list-marker-gap, 3ch);
@@ -1128,6 +1142,14 @@
     width: var(--cm-md-list-marker-width);
     margin-right: var(--cm-md-list-marker-gap);
     text-align: center;
+    /* Reset the list line's hanging-indent text-indent (which is inherited into
+       this inline-block) so the marker glyph / task checkbox positions normally
+       inside the column instead of being shifted into the gutter. nowrap keeps
+       a wide marker (e.g. a two-digit "10.") on one line: it overflows the
+       fixed column width rather than breaking, since the line's pre-wrap
+       white-space is otherwise inherited here. */
+    text-indent: 0;
+    white-space: nowrap;
     font-family: var(--chan-editor-list-marker-family, inherit);
     color: inherit;
     box-sizing: border-box;

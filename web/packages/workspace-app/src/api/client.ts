@@ -944,10 +944,14 @@ export const api = {
   /// the editor can stamp `data-refkind` and render a kind-aware
   /// pill without re-parsing the target's frontmatter.
   resolveLink: (target: string) =>
-    req<{ path: string; anchor?: string; kind: "file" | "contact" }>(
-      "GET",
-      `/api/resolve-link?target=${encodeURIComponent(target)}`,
-    ),
+    req<{
+      path: string;
+      anchor?: string;
+      kind: "file" | "contact";
+      /// True when `path` is a directory: the caller opens the file
+      /// browser at that folder instead of the text editor.
+      is_dir?: boolean;
+    }>("GET", `/api/resolve-link?target=${encodeURIComponent(target)}`),
   indexStatus: () => req<IndexStatus>("GET", "/api/index/status"),
   indexingState: () => req<IndexingStateResponse>("GET", "/api/indexing/state"),
   health: () => req<HealthResponse>("GET", "/api/health"),
