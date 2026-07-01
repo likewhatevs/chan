@@ -1013,8 +1013,16 @@ fn terminal_router(state: Arc<AppState>) -> Router {
         // Blocked-CLI reply routes: the SPA completes `cs pane`
         // (window bus) and `cs terminal survey` (survey bus) round
         // trips here. Both buses are workspace-free, and the terminal
-        // tenant's control socket parks on the same Arcs.
-        .route("/api/window/reply", post(api_window_reply))
+        // tenant's control socket parks on the same Arcs. `cs paste`
+        // rides the same window bus and its reply carries a base64 image,
+        // so the body limit is raised past axum's 2 MiB default to clear
+        // a `MAX_CLIPBOARD_BYTES` payload (else a normal photo 413s).
+        .route(
+            "/api/window/reply",
+            post(api_window_reply).layer(DefaultBodyLimit::max(
+                chan_shell::MAX_CONTROL_REQUEST_BYTES as usize,
+            )),
+        )
         .route("/api/survey/reply", post(api_survey_reply))
         // cs session handover reply: the leader accepts/rejects a parked
         // `cs session handover`, unblocking the requester's CLI.
@@ -1409,9 +1417,16 @@ fn router(state: Arc<AppState>) -> Router {
         // cs terminal survey reply: completes the parked survey
         // oneshot on the survey bus.
         .route("/api/survey/reply", post(api_survey_reply))
-        // cs pane reply: completes the parked window-bus oneshot with the
-        // SPA's layout snapshot. The reply half of the `cs pane` channel.
-        .route("/api/window/reply", post(api_window_reply))
+        // cs pane / cs paste reply: completes the parked window-bus oneshot
+        // with the SPA's layout snapshot or clipboard payload. The clipboard
+        // reply carries a base64 image, so the body limit clears a
+        // `MAX_CLIPBOARD_BYTES` payload past axum's 2 MiB default.
+        .route(
+            "/api/window/reply",
+            post(api_window_reply).layer(DefaultBodyLimit::max(
+                chan_shell::MAX_CONTROL_REQUEST_BYTES as usize,
+            )),
+        )
         // cs session handover reply: the leader accepts/rejects a parked
         // `cs session handover`, unblocking the requester's CLI.
         .route(

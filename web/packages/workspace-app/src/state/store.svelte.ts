@@ -67,6 +67,14 @@ import {
 } from "./transfers.svelte";
 import { isTauriDesktop, pickUploadFiles, runDesktopDownload } from "../api/desktop";
 import {
+  base64ToBytes,
+  bytesToBase64,
+  hintClipboardError,
+  readClipboardPayload,
+  writeClipboardPayload,
+  type PastePrefer,
+} from "../api/clipboard";
+import {
   appendDefaultMd,
   preserveExtension,
   proposeDefaultFilename,
@@ -885,6 +893,24 @@ type WindowCommandFrame =
       request_id: string;
       from_window_id: string;
       from_name?: string | null;
+    }
+  | {
+      type: "window_command";
+      window_id: string;
+      command: "clipboard_write";
+      request_id: string;
+      // The clipboard MIME (text/plain;charset=utf-8, text/html, image/png).
+      mime: string;
+      // base64 of the raw bytes to write.
+      data_b64: string;
+    }
+  | {
+      type: "window_command";
+      window_id: string;
+      command: "clipboard_read";
+      request_id: string;
+      // Which representation to emit: auto (image-first) | text | html | image.
+      prefer: "auto" | "text" | "html" | "image";
     };
 
 /// A tab's display title for `cs pane`: a file tab's basename, else its
@@ -1110,6 +1136,60 @@ async function respondPaneQuery(requestId: string): Promise<void> {
   }
 }
 
+/// Answer a `cs copy`: write the pushed bytes onto the clipboard and POST an
+/// `{ ok }` / `{ error }` ack to `/api/window/reply`, unblocking the waiting
+/// CLI. A browser clipboard write can fail on a missing user gesture or
+/// permission, so the error is reported (not swallowed) and the CLI exits
+/// non-zero. Transient, no session save.
+async function respondClipboardWrite(
+  requestId: string,
+  mime: string,
+  dataB64: string,
+): Promise<void> {
+  let payload: { ok: true } | { ok: false; error: string };
+  try {
+    await writeClipboardPayload(mime, base64ToBytes(dataB64));
+    payload = { ok: true };
+  } catch (e) {
+    payload = { ok: false, error: hintClipboardError(e) };
+  }
+  try {
+    await api.windowReply({ requestId, payload });
+  } catch (e) {
+    warnUnlessStaleReply(e);
+  }
+}
+
+/// Answer a `cs paste`: read the clipboard (honoring `prefer`) and POST the
+/// `{ mime, data_b64 }` reply (or `{ error }`) to `/api/window/reply`, which
+/// unblocks the waiting CLI with the bytes to write to stdout. Transient, no
+/// session save.
+async function respondClipboardRead(requestId: string, prefer: PastePrefer): Promise<void> {
+  let payload: { mime: string; data_b64: string } | { error: string };
+  try {
+    const { mime, bytes } = await readClipboardPayload(prefer);
+    payload = { mime, data_b64: bytesToBase64(bytes) };
+  } catch (e) {
+    payload = { error: e instanceof Error ? e.message : String(e) };
+  }
+  try {
+    await api.windowReply({ requestId, payload });
+  } catch (e) {
+    warnUnlessStaleReply(e);
+  }
+}
+
+/// A window-bus reply POST that 404s is expected (the CLI already timed out or
+/// disconnected -> a stale request id), so swallow it. Any OTHER failure (e.g.
+/// a 413 body-limit rejection, a network error) would otherwise leave the CLI
+/// hanging until its 30 s timeout with no clue why, so surface it to the
+/// console instead of dropping it silently.
+function warnUnlessStaleReply(e: unknown): void {
+  const status = (e as { status?: number } | null)?.status;
+  if (status === 404) return;
+  console.warn("clipboard reply POST failed", e);
+}
+
 /// Resolve a survey's target `tabName` (a terminal's `--tab-name`) to the SPA
 /// tab id its per-terminal overlay renders on, or null when no terminal matches
 /// (the survey then uses the window-wide fallback). Matches the stable session
@@ -1310,6 +1390,27 @@ async function handleWindowCommand(raw: unknown): Promise<void> {
     // (group-wide Select All / per-row). Flip the local tab so the existing
     // `set-broadcast` sync + sign + fan all run unchanged.
     setTerminalBroadcastBySession(frame.session_id, frame.on);
+    return;
+  }
+  if (
+    frame.command === "clipboard_write" &&
+    typeof frame.request_id === "string" &&
+    typeof frame.mime === "string" &&
+    typeof frame.data_b64 === "string"
+  ) {
+    // `cs copy` pushed bytes to write onto this window's clipboard; write them
+    // and POST the ack back to unblock the CLI.
+    await respondClipboardWrite(frame.request_id, frame.mime, frame.data_b64);
+    return;
+  }
+  if (
+    frame.command === "clipboard_read" &&
+    typeof frame.request_id === "string" &&
+    typeof frame.prefer === "string"
+  ) {
+    // `cs paste` asked this window for its clipboard; read it and POST the
+    // bytes back to unblock the CLI.
+    await respondClipboardRead(frame.request_id, frame.prefer);
     return;
   }
 }

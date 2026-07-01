@@ -8,10 +8,11 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock, RwLock};
 
+use base64::Engine;
 use chan_workspace::{TeamConfig, Workspace};
 use portable_pty::PtySize;
 use serde::Serialize;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::broadcast;
 use tokio::task::JoinHandle;
 
@@ -40,7 +41,8 @@ pub use chan_shell::{ControlRequest, ControlResponse};
 // pushes a SurveySpec to the SPA and formats the SurveyReply for the CLI.
 // TeamOp tags the `cs terminal team` op (new | load).
 use chan_shell::{
-    submit_writes, Identity, PaneOp, ServeKind, SubmitAgent, SurveyReply, SurveySpec, TeamOp,
+    submit_writes, Identity, PaneOp, PastePrefer, ServeKind, SubmitAgent, SurveyReply, SurveySpec,
+    TeamOp, MAX_CLIPBOARD_BYTES, MAX_CONTROL_REQUEST_BYTES,
 };
 
 #[derive(Debug, Serialize)]
@@ -146,6 +148,25 @@ enum WindowCommand {
         from_window_id: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         from_name: Option<String>,
+    },
+    // `cs copy`: ask the window to write `data_b64` (base64 of the terminal's
+    // stdin) onto the clipboard as `mime`. The SPA decodes it, writes via
+    // `navigator.clipboard` (or the desktop's native arboard IPC), and POSTs
+    // `{ ok }` / `{ error }` to `POST /api/window/reply` echoing `request_id`,
+    // which fires the parked window-bus oneshot. Round-trips (not
+    // fire-and-forget) so a clipboard denial surfaces as a CLI error.
+    ClipboardWrite {
+        request_id: String,
+        mime: String,
+        data_b64: String,
+    },
+    // `cs paste`: ask the window to read its clipboard back. `prefer` picks
+    // the representation when several are present (image-first by default).
+    // The SPA POSTs `{ mime, data_b64 }` (or `{ error }`) echoing
+    // `request_id`; the CLI base64-decodes it to raw stdout.
+    ClipboardRead {
+        request_id: String,
+        prefer: PastePrefer,
     },
 }
 
@@ -303,7 +324,12 @@ pub fn start(socket_path: PathBuf, ctx: ControlSocketCtx) -> std::io::Result<Con
 /// active `transport::Conn` yields (a unix stream or a windows named pipe).
 async fn serve_connection(conn: transport::Conn, ctx: ControlSocketCtx) {
     let (read, mut write) = conn.into_split();
-    let mut reader = BufReader::new(read);
+    // Bound the request read: a control request is one JSON line, and the
+    // largest legitimate one is a `cs copy` clipboard payload (base64 of up to
+    // MAX_CLIPBOARD_BYTES). Cap it so a hostile client cannot grow the request
+    // `String` without bound. An over-cap line is truncated (no trailing
+    // newline), so it fails to parse and answers a clean error instead of an OOM.
+    let mut reader = BufReader::new(read.take(MAX_CONTROL_REQUEST_BYTES));
     let mut line = String::new();
     let response = match reader.read_line(&mut line).await {
         Ok(0) => ControlResponse::Error {
@@ -817,6 +843,14 @@ async fn handle_request(req: ControlRequest, ctx: &ControlSocketCtx) -> ControlR
                 terminal_registry,
             )
             .await
+        }
+        ControlRequest::ClipboardCopy {
+            window_id,
+            data_b64,
+            mime,
+        } => handle_clipboard_copy(window_id, data_b64, mime, events_tx, window_bus).await,
+        ControlRequest::ClipboardPaste { window_id, prefer } => {
+            handle_clipboard_paste(window_id, prefer, events_tx, window_bus).await
         }
         ControlRequest::WindowNew => handle_window_new(desktop, workspace_cell, tenant).await,
         ControlRequest::WindowOpen { id } => into_response(
@@ -1579,6 +1613,209 @@ async fn handle_pane_exec(
         window_bus,
     )
     .await
+}
+
+/// How long a `cs copy` / `cs paste` round-trip waits for the SPA's reply.
+/// Longer than the pane query's 5s because a plain browser may raise a
+/// clipboard permission prompt the user has to click before the read/write
+/// resolves; the desktop's native path answers instantly.
+const CLIPBOARD_REPLY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// The shared `cs copy` / `cs paste` round-trip: mint a request id, push the
+/// clipboard window_command, park a oneshot on the window bus, and AWAIT the
+/// SPA's reply. Returns the opaque reply payload; the caller interprets it
+/// (copy reads `{ ok }` / `{ error }`, paste reads `{ mime, data_b64 }`). The
+/// `Err` arm carries a ready-made [`ControlResponse`] for the failure paths
+/// (send failed, cancelled, or timed out) so the handlers just `?`-style
+/// early-return it.
+async fn clipboard_round_trip<F>(
+    window_id: &str,
+    make_command: F,
+    events_tx: &broadcast::Sender<String>,
+    window_bus: &Arc<crate::window_bus::WindowBus>,
+) -> Result<serde_json::Value, ControlResponse>
+where
+    F: FnOnce(String) -> WindowCommand,
+{
+    let (request_id, rx) = window_bus.register();
+    if let Err(message) =
+        send_window_command(window_id, make_command(request_id.clone()), events_tx)
+    {
+        window_bus.cancel(&request_id);
+        return Err(ControlResponse::Error { message });
+    }
+    match tokio::time::timeout(CLIPBOARD_REPLY_TIMEOUT, rx).await {
+        Ok(Ok(payload)) => Ok(payload),
+        Ok(Err(_)) => {
+            window_bus.cancel(&request_id);
+            Err(ControlResponse::Error {
+                message: "clipboard request cancelled before a reply".into(),
+            })
+        }
+        Err(_elapsed) => {
+            window_bus.cancel(&request_id);
+            Err(ControlResponse::Error {
+                message: "no reply from the window (is it open in a browser?)".into(),
+            })
+        }
+    }
+}
+
+/// Pick the clipboard MIME for `cs copy` bytes that arrived with no `--mime`,
+/// reusing the file-browser content detectors. Order matters: an image is
+/// checked by magic bytes first (it would fail the text check anyway), then
+/// an HTML signature, then plain UTF-8 text. Returns `None` for bytes that
+/// are none of these, so the handler can tell the user to pass `--mime`.
+fn detect_clipboard_mime(bytes: &[u8]) -> Option<&'static str> {
+    if let Some(image) = chan_workspace::fs_ops::sniff_image_mime(bytes) {
+        return Some(image);
+    }
+    if looks_like_html(bytes) {
+        return Some("text/html");
+    }
+    if chan_workspace::fs_ops::looks_like_text(bytes) {
+        return Some("text/plain;charset=utf-8");
+    }
+    None
+}
+
+/// A light HTML signature sniff: after skipping a UTF-8 BOM and leading
+/// whitespace, does the content open with `<!doctype html` or `<html`
+/// (case-insensitive)? Deliberately conservative - a bare `<p>` fragment is
+/// left as plain text; the user forces HTML with `cs copy --html` when they
+/// mean a fragment.
+fn looks_like_html(bytes: &[u8]) -> bool {
+    let bytes = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(bytes);
+    let trimmed = match bytes.iter().position(|b| !b.is_ascii_whitespace()) {
+        Some(i) => &bytes[i..],
+        None => return false,
+    };
+    let head = &trimmed[..trimmed.len().min(15)];
+    let lower: Vec<u8> = head.iter().map(u8::to_ascii_lowercase).collect();
+    lower.starts_with(b"<!doctype html") || lower.starts_with(b"<html")
+}
+
+/// `cs copy`: push the stdin bytes onto the window's clipboard. Resolves the
+/// MIME (explicit `--mime`, else a content sniff), round-trips the write, and
+/// maps the SPA's ack to an Ok summary or an Error the CLI exits non-zero on.
+async fn handle_clipboard_copy(
+    window_id: String,
+    data_b64: String,
+    mime: Option<String>,
+    events_tx: &broadcast::Sender<String>,
+    window_bus: &Arc<crate::window_bus::WindowBus>,
+) -> ControlResponse {
+    if let Err(message) = require_window_id(&window_id) {
+        return ControlResponse::Error { message };
+    }
+    let bytes = match base64::engine::general_purpose::STANDARD.decode(&data_b64) {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            return ControlResponse::Error {
+                message: format!("invalid base64 clipboard payload: {e}"),
+            }
+        }
+    };
+    if bytes.is_empty() {
+        return ControlResponse::Error {
+            message: "nothing on stdin to copy".into(),
+        };
+    }
+    // Defense in depth behind the control-socket framing cap: refuse an
+    // over-cap payload rather than fan it out to every `/ws` subscriber.
+    if bytes.len() > MAX_CLIPBOARD_BYTES {
+        return ControlResponse::Error {
+            message: format!(
+                "clipboard payload too large (max {} MB)",
+                MAX_CLIPBOARD_BYTES / (1024 * 1024)
+            ),
+        };
+    }
+    let mime = match mime {
+        Some(mime) => mime,
+        None => match detect_clipboard_mime(&bytes) {
+            Some(mime) => mime.to_string(),
+            None => {
+                return ControlResponse::Error {
+                    message: "unsupported clipboard content; pass --mime to force a type".into(),
+                }
+            }
+        },
+    };
+    // A forced `--mime text/*` on binary would otherwise be lossy-decoded to
+    // U+FFFD on the clipboard while reporting success; refuse it instead. A
+    // sniffed text mime already passed the UTF-8 check in `looks_like_text`.
+    if mime.starts_with("text/") && std::str::from_utf8(&bytes).is_err() {
+        return ControlResponse::Error {
+            message: format!("clipboard content is not valid UTF-8 for {mime}"),
+        };
+    }
+    let byte_len = bytes.len();
+    let payload = match clipboard_round_trip(
+        &window_id,
+        |request_id| WindowCommand::ClipboardWrite {
+            request_id,
+            mime: mime.clone(),
+            data_b64,
+        },
+        events_tx,
+        window_bus,
+    )
+    .await
+    {
+        Ok(payload) => payload,
+        Err(response) => return response,
+    };
+    if payload.get("ok").and_then(serde_json::Value::as_bool) == Some(true) {
+        ControlResponse::Ok {
+            message: format!("copied {byte_len} bytes ({mime})"),
+        }
+    } else {
+        ControlResponse::Error {
+            message: payload
+                .get("error")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("clipboard write failed")
+                .to_string(),
+        }
+    }
+}
+
+/// `cs paste`: read the window's clipboard to stdout. Round-trips the read and
+/// returns the `{ mime, data_b64 }` reply as JSON in `Ok.message` (the CLI
+/// base64-decodes it to raw bytes), or surfaces the SPA's `{ error }` as an
+/// Error so the CLI exits non-zero.
+async fn handle_clipboard_paste(
+    window_id: String,
+    prefer: PastePrefer,
+    events_tx: &broadcast::Sender<String>,
+    window_bus: &Arc<crate::window_bus::WindowBus>,
+) -> ControlResponse {
+    if let Err(message) = require_window_id(&window_id) {
+        return ControlResponse::Error { message };
+    }
+    let payload = match clipboard_round_trip(
+        &window_id,
+        |request_id| WindowCommand::ClipboardRead { request_id, prefer },
+        events_tx,
+        window_bus,
+    )
+    .await
+    {
+        Ok(payload) => payload,
+        Err(response) => return response,
+    };
+    if let Some(error) = payload.get("error").and_then(serde_json::Value::as_str) {
+        return ControlResponse::Error {
+            message: error.to_string(),
+        };
+    }
+    match serde_json::to_string(&payload) {
+        Ok(json) => ControlResponse::Ok { message: json },
+        Err(e) => ControlResponse::Error {
+            message: format!("encode clipboard reply: {e}"),
+        },
+    }
 }
 
 fn require_window_id(window_id: &str) -> Result<(), String> {
@@ -2541,6 +2778,104 @@ fn parent_rel(rel: &str) -> String {
 mod tests {
     use super::*;
     use serde_json::Value;
+
+    #[test]
+    fn looks_like_html_matches_documents_not_fragments() {
+        assert!(looks_like_html(b"<!DOCTYPE html><html></html>"));
+        assert!(looks_like_html(b"<html lang=\"en\">"));
+        assert!(looks_like_html(b"  \n\t<HTML>"));
+        // A UTF-8 BOM before the doctype is skipped.
+        assert!(looks_like_html(b"\xEF\xBB\xBF<!doctype html>"));
+        // A bare fragment stays plain text (the user forces it with --html).
+        assert!(!looks_like_html(b"<p>hi</p>"));
+        assert!(!looks_like_html(b"plain text"));
+        assert!(!looks_like_html(b""));
+    }
+
+    #[test]
+    fn detect_clipboard_mime_orders_image_html_text() {
+        assert_eq!(
+            detect_clipboard_mime(b"\x89PNG\r\n\x1a\n..."),
+            Some("image/png")
+        );
+        assert_eq!(
+            detect_clipboard_mime(b"<!doctype html><html>"),
+            Some("text/html")
+        );
+        assert_eq!(
+            detect_clipboard_mime(b"just some words"),
+            Some("text/plain;charset=utf-8")
+        );
+        // Non-text, non-image bytes (a NUL) type as nothing: force with --mime.
+        assert_eq!(detect_clipboard_mime(&[0x00, 0x01, 0x02]), None);
+    }
+
+    #[tokio::test]
+    async fn clipboard_copy_rejects_oversized_payload() {
+        // A payload one byte past the cap is refused before the round-trip, so
+        // an over-cap `cs copy` never fans out to the `/ws` subscribers.
+        let (events_tx, _rx) = broadcast::channel(1);
+        let window_bus = Arc::new(crate::window_bus::WindowBus::new());
+        let oversized =
+            base64::engine::general_purpose::STANDARD.encode(vec![0u8; MAX_CLIPBOARD_BYTES + 1]);
+        let resp =
+            handle_clipboard_copy("w".into(), oversized, None, &events_tx, &window_bus).await;
+        match resp {
+            ControlResponse::Error { message } => {
+                assert!(
+                    message.contains("too large"),
+                    "unexpected message: {message}"
+                )
+            }
+            other => panic!("expected Error, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn clipboard_copy_rejects_non_utf8_forced_text() {
+        // A forced `--mime text/plain` on binary bytes is refused rather than
+        // lossy-decoded to U+FFFD on the clipboard while reporting success.
+        let (events_tx, _rx) = broadcast::channel(1);
+        let window_bus = Arc::new(crate::window_bus::WindowBus::new());
+        let data_b64 = base64::engine::general_purpose::STANDARD.encode([0xff, 0xfe, 0xfd]);
+        let resp = handle_clipboard_copy(
+            "w".into(),
+            data_b64,
+            Some("text/plain".into()),
+            &events_tx,
+            &window_bus,
+        )
+        .await;
+        match resp {
+            ControlResponse::Error { message } => {
+                assert!(message.contains("not valid UTF-8"), "unexpected: {message}")
+            }
+            other => panic!("expected Error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn window_command_frame_serializes_with_the_prefix_the_ws_pump_scans() {
+        // The `/ws` pump (`routes::ws::window_command_target`) reads the target
+        // window off the fixed `{"type":"window_command","window_id":"<id>",`
+        // prefix to avoid re-parsing a multi-MB clipboard payload per socket. A
+        // field reorder/rename here would silently defeat that targeting, so
+        // pin the serialized prefix.
+        let frame = WindowCommandFrame {
+            frame_type: "window_command",
+            window_id: "workspace-aa-0".to_string(),
+            command: WindowCommand::ClipboardWrite {
+                request_id: "r1".into(),
+                mime: "image/png".into(),
+                data_b64: "AAAA".into(),
+            },
+        };
+        let s = serde_json::to_string(&frame).unwrap();
+        assert!(
+            s.starts_with(r#"{"type":"window_command","window_id":"workspace-aa-0","#),
+            "frame prefix drifted: {s}"
+        );
+    }
 
     /// Fresh ControlSocketCtx around the given workspace cell: empty
     /// terminal-registry cell, fresh buses, fresh presence map.

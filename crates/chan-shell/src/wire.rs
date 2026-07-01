@@ -24,6 +24,22 @@ fn default_survey_timeout_secs() -> u64 {
     DEFAULT_SURVEY_TIMEOUT_SECS
 }
 
+/// Largest raw clipboard payload `cs copy` / `cs paste` will carry, in bytes.
+/// The clipboard is for modest content (text, a screenshot, an HTML snippet),
+/// not bulk transfer, so both sides refuse more than this rather than let an
+/// unbounded stdin (`cs copy < /dev/zero`) or a hostile client OOM the CLI,
+/// the server, or every connected tab. Shared here so the CLI cap, the server
+/// copy-handler cap, and the `POST /api/window/reply` body limit agree.
+pub const MAX_CLIPBOARD_BYTES: usize = 32 * 1024 * 1024;
+
+/// Largest control-socket request line the server will read, in bytes. It
+/// bounds the JSON envelope, so it must clear a `MAX_CLIPBOARD_BYTES` payload
+/// base64-encoded (~1.34x) plus the surrounding keys: 48 MiB leaves headroom.
+/// The server frames the request read with this cap so a hostile client can't
+/// grow the request `String` without bound; an over-cap line is truncated and
+/// fails to parse, yielding a clean error instead of an OOM.
+pub const MAX_CONTROL_REQUEST_BYTES: u64 = 48 * 1024 * 1024;
+
 /// A command from a `cs`-spawned terminal to the chan-server it belongs
 /// to. The internal `type` tag plus `snake_case` variant names are the
 /// wire strings the server matches on; do not rename without changing
@@ -84,6 +100,37 @@ pub enum ControlRequest {
     Download {
         window_id: String,
         path: PathBuf,
+    },
+    // Category 3 (blocking round-trip): bridge the terminal's stdin/stdout to
+    // the window's clipboard (`cs copy` / `cs paste`). The clipboard lives in
+    // the SPA (browser `navigator.clipboard`, or the desktop's native arboard
+    // IPC), so the server pushes a `clipboard_write` / `clipboard_read`
+    // window_command to the originating window, parks a oneshot on the window
+    // bus, and BLOCKS until the SPA POSTs the result to `POST
+    // /api/window/reply`, exactly like `PaneQuery`. Blocking (not
+    // fire-and-forget like `Upload`) so a browser clipboard denial (no user
+    // gesture / permission) surfaces as a real CLI error instead of a silent
+    // no-op.
+    //
+    // `data_b64` is base64 of the bytes read from `cs copy`'s stdin; `mime`
+    // is the optional `--mime` override (`--html` sets `text/html`). When
+    // absent the server sniffs the decoded bytes (image magic bytes -> HTML
+    // signature -> UTF-8 text) to pick one of `image/png`, `text/html`, or
+    // `text/plain;charset=utf-8`.
+    ClipboardCopy {
+        window_id: String,
+        data_b64: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        mime: Option<String>,
+    },
+    // `cs paste`: read the window's clipboard back to stdout. `prefer` picks
+    // which representation to emit when several are present; the SPA replies
+    // `{ mime, data_b64 }` and the CLI base64-decodes it to raw stdout (so
+    // `cs paste > file.png` yields a real PNG).
+    ClipboardPaste {
+        window_id: String,
+        #[serde(default)]
+        prefer: PastePrefer,
     },
     // Category 2: act on / inspect live PTY sessions the server owns. No
     // window_id; the server resolves sessions through its registry.
@@ -318,6 +365,23 @@ pub enum ControlRequest {
         #[serde(default)]
         remove: bool,
     },
+}
+
+/// Which clipboard representation `cs paste` emits when the clipboard holds
+/// more than one. `Auto` is image-first (so `cs paste > file.png` gets the
+/// picture), then plain text; the SPA falls through to whatever it can read.
+/// The explicit `Text` / `Html` / `Image` are the `--text` / `--html` /
+/// `--image` overrides. A bare snake_case string on the wire; the explicit
+/// `rename_all` pins it so a Rust rename cannot drift the format the SPA
+/// matches on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PastePrefer {
+    #[default]
+    Auto,
+    Text,
+    Html,
+    Image,
 }
 
 /// Which `cs terminal team` operation a [`ControlRequest::TerminalTeam`]
@@ -761,6 +825,74 @@ mod survey_wire_tests {
         let back: ControlRequest =
             serde_json::from_str(&serde_json::to_string(&req).unwrap()).unwrap();
         assert!(matches!(back, ControlRequest::Download { .. }));
+    }
+
+    #[test]
+    fn clipboard_copy_request_tag_and_fields() {
+        // `cs copy`: wire tag `clipboard_copy`, the window_id, base64 stdin,
+        // and an optional `mime` override (skipped when None). A rename here
+        // would silently break `cs copy` <-> the control-socket handler.
+        let req = ControlRequest::ClipboardCopy {
+            window_id: "workspace-aa-0".into(),
+            data_b64: "aGVsbG8=".into(),
+            mime: Some("text/html".into()),
+        };
+        let v: serde_json::Value = serde_json::to_value(&req).unwrap();
+        assert_eq!(v["type"], "clipboard_copy");
+        assert_eq!(v["window_id"], "workspace-aa-0");
+        assert_eq!(v["data_b64"], "aGVsbG8=");
+        assert_eq!(v["mime"], "text/html");
+        // mime None is skipped on the wire (the server sniffs instead).
+        let sniffed = ControlRequest::ClipboardCopy {
+            window_id: "w".into(),
+            data_b64: "x".into(),
+            mime: None,
+        };
+        let v: serde_json::Value = serde_json::to_value(&sniffed).unwrap();
+        assert!(v.get("mime").is_none(), "None mime is skipped");
+        let back: ControlRequest =
+            serde_json::from_str(&serde_json::to_string(&req).unwrap()).unwrap();
+        assert!(matches!(back, ControlRequest::ClipboardCopy { .. }));
+    }
+
+    #[test]
+    fn clipboard_paste_request_tag_and_prefer() {
+        // `cs paste`: wire tag `clipboard_paste`; `prefer` defaults to `auto`
+        // (image-first) and decodes from the `--text`/`--html`/`--image`
+        // overrides. The snake_case strings are the wire contract with the SPA.
+        let req = ControlRequest::ClipboardPaste {
+            window_id: "workspace-aa-0".into(),
+            prefer: PastePrefer::Image,
+        };
+        let v: serde_json::Value = serde_json::to_value(&req).unwrap();
+        assert_eq!(v["type"], "clipboard_paste");
+        assert_eq!(v["window_id"], "workspace-aa-0");
+        assert_eq!(v["prefer"], "image");
+        // An omitted `prefer` decodes onto the Auto default.
+        let back: ControlRequest =
+            serde_json::from_str(r#"{"type":"clipboard_paste","window_id":"w"}"#).unwrap();
+        assert!(matches!(
+            back,
+            ControlRequest::ClipboardPaste {
+                prefer: PastePrefer::Auto,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn paste_prefer_wire_strings() {
+        // The four selection strings are the wire contract; pin them so a
+        // Rust rename cannot drift what the SPA matches on.
+        for (variant, s) in [
+            (PastePrefer::Auto, "auto"),
+            (PastePrefer::Text, "text"),
+            (PastePrefer::Html, "html"),
+            (PastePrefer::Image, "image"),
+        ] {
+            assert_eq!(serde_json::to_value(variant).unwrap(), serde_json::json!(s));
+        }
+        assert_eq!(PastePrefer::default(), PastePrefer::Auto);
     }
 
     #[test]

@@ -56,11 +56,11 @@ chan-tunnel-proto = { version = "0.58.0", path = "crates/chan-tunnel-proto" }
 chan-tunnel-server = { version = "0.58.0", path = "crates/chan-tunnel-server" }
 
 anyhow = "1"
-# Native OS clipboard read for chan-desktop's terminal "Paste" menu, so it
-# bypasses WKWebView's programmatic-paste "Paste" button. Desktop-only (gnu);
-# never pulled into the static-musl standalone `chan` binary. default-features
-# off drops the `image-data` feature (and its image/fax/moxcms deps): we only
-# read text via get_text().
+# Native OS clipboard for chan-desktop: the terminal "Paste" menu and the
+# `cs copy` / `cs paste` bridge, bypassing WKWebView's programmatic-paste
+# "Paste" button. Desktop-only (gnu); never pulled into the static-musl
+# standalone `chan` binary. default-features off keeps the base dep text-only;
+# the desktop member opts into `image-data` for the image clipboard.
 arboard = { version = "3", default-features = false }
 async-trait = "0.1"
 axum = { version = "0.7", features = ["ws", "macros", "multipart"] }
@@ -80,6 +80,11 @@ http-body-util = "0.1"
 filedescriptor = "0.8"
 hyper = { version = "1", features = ["http2", "client", "server"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
+# PNG <-> RGBA for chan-desktop's `cs copy` / `cs paste` image clipboard: the
+# terminal deals in PNG, arboard's ImageData is raw RGBA. Desktop-only; the
+# member enables the `png` codec. default-features off keeps it lean (no other
+# codecs) and out of the standalone `chan` binary.
+image = { version = "0.25", default-features = false }
 keyring = { version = "3", features = ["apple-native", "windows-native", "linux-native"] }
 notify = "6"
 notify-debouncer-mini = "0.4"

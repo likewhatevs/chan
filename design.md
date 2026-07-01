@@ -101,7 +101,12 @@ lists + mutates the user's real `~/.chan` workspaces and configured devservers (
 - **Windows** ride `/api/library/windows` (+ `/watch` WS) -- the authoritative `WindowRecord` feed the
   desktop, the launcher, and `cs window list` reconcile to; the clickable status dot toggles a window
   open/hidden, and `cs upload`/`cs download` surface a per-window transfer bubble whose in-flight count is
-  reported over `/ws` (`WindowTransfers`) so closing a window mid-transfer prompts hold/cancel.
+  reported over `/ws` (`WindowTransfers`) so closing a window mid-transfer prompts hold/cancel. `cs
+  copy`/`cs paste` bridge the terminal's stdin/stdout to that window's clipboard (text, HTML, or a PNG
+  image) over the same `pane_query`-style window round-trip: the server pushes a `clipboard_write` /
+  `clipboard_read` window_command, parks a `WindowBus` oneshot, and blocks until the SPA replies through
+  `POST /api/window/reply`. The SPA writes/reads via `navigator.clipboard`, or the desktop's native
+  `arboard` IPC where WKWebView's async clipboard is gesture-gated.
 
 ## Crate responsibilities
 

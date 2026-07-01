@@ -15,7 +15,7 @@ publish = false
 # (`ControlRequest` / `ControlResponse`), so the server does not link
 # clap or the client transport.
 default = ["client"]
-client = ["dep:clap", "dep:tokio", "dep:serde_json", "dep:anyhow", "dep:toml"]
+client = ["dep:clap", "dep:tokio", "dep:serde_json", "dep:anyhow", "dep:toml", "dep:base64"]
 
 [dependencies]
 # The wire types are always available (serde only); everything else is
@@ -30,6 +30,11 @@ anyhow = { workspace = true, optional = true }
 # (before the `[[members]]` tables), so a parse + re-serialize is cleaner and
 # safer than a line edit. The server links the wire types without this.
 toml = { workspace = true, optional = true }
+# Client-only: `cs copy` base64-encodes its stdin into the ClipboardCopy
+# request and `cs paste` base64-decodes the reply to raw stdout. The bytes
+# ride a JSON string on the control socket, so base64 is the byte-safe
+# envelope. The server links the wire types without this.
+base64 = { workspace = true, optional = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }

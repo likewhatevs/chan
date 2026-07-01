@@ -30,9 +30,13 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 toml = { workspace = true }
 dirs = { workspace = true }
-# Native clipboard read for the terminal's right-click "Paste" (read_clipboard_text),
-# bypassing WKWebView's DOM-paste "Paste" button.
-arboard = { workspace = true }
+# Native clipboard for the terminal's right-click "Paste" (read_clipboard_text)
+# and the `cs copy` / `cs paste` bridge, bypassing WKWebView's DOM-paste "Paste"
+# button. `image-data` adds get_image/set_image (RGBA) for the image clipboard.
+arboard = { workspace = true, features = ["image-data"] }
+# PNG codec for the image clipboard: decode the PNG the SPA sends into arboard's
+# RGBA ImageData on `cs copy`, and encode arboard's RGBA back to PNG on `cs paste`.
+image = { workspace = true, features = ["png"] }
 # The whole `chan` CLI as a library: chan-desktop dispatches `chan`
 # in-process (`chan::run(.., Personality::Desktop)`) when invoked through a
 # `~/.local/bin/chan` shim, so a desktop install also gives you `chan`

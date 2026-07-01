@@ -33,6 +33,23 @@ pub struct WsQuery {
     w: Option<String>,
 }
 
+/// The target window id of a `window_command` broadcast frame, or `None` for
+/// any other frame (which is genuinely broadcast to every socket).
+///
+/// window_command frames serialize compactly with fields in declaration order
+/// as `{"type":"window_command","window_id":"<id>",...}` (see
+/// `WindowCommandFrame` in `control_socket`), so the id reads off that fixed
+/// prefix without parsing the rest of the command -- for `clipboard_write`
+/// that tail is a multi-MB base64 payload we must not re-parse on every
+/// connection. A format drift just makes this return `None`, so the frame is
+/// forwarded and the SPA's own `window_id` gate still filters it: it fails safe.
+fn window_command_target(frame: &str) -> Option<&str> {
+    const PREFIX: &str = "{\"type\":\"window_command\",\"window_id\":\"";
+    let rest = frame.strip_prefix(PREFIX)?;
+    let end = rest.find('"')?;
+    Some(&rest[..end])
+}
+
 pub async fn ws_upgrade(
     State(state): State<Arc<AppState>>,
     Query(q): Query<WsQuery>,
@@ -76,6 +93,7 @@ pub async fn ws_upgrade(
             shutdown_rx,
             scopes,
             transfer_guard,
+            window_id,
         )
         .await;
     })
@@ -123,6 +141,7 @@ async fn ws_pump(
     mut shutdown_rx: watch::Receiver<bool>,
     scopes: Arc<ScopeRegistry>,
     transfer_guard: Option<TransferGuard>,
+    window_id: Option<String>,
 ) {
     let (sub_id, scope_rx) = scopes.register();
     pump_loop(
@@ -134,6 +153,7 @@ async fn ws_pump(
         sub_id,
         scope_rx,
         transfer_guard.as_ref(),
+        window_id.as_deref(),
     )
     .await;
     // Unconditional teardown: drops every scope this socket held.
@@ -151,6 +171,7 @@ async fn pump_loop(
     sub_id: SubId,
     mut scope_rx: mpsc::UnboundedReceiver<String>,
     transfer_guard: Option<&TransferGuard>,
+    window_id: Option<&str>,
 ) {
     loop {
         tokio::select! {
@@ -182,6 +203,17 @@ async fn pump_loop(
             },
             recv = rx.recv() => match recv {
                 Ok(frame) => {
+                    // A window_command is addressed to ONE window: forward it
+                    // only to the socket serving that window (an untagged
+                    // socket is never a target). This keeps request_ids and
+                    // clipboard payloads off other windows' sockets server-side,
+                    // hardening the reply-hijack surface beyond the SPA's gate.
+                    // All other frame types stay broadcast to every socket.
+                    if let Some(target) = window_command_target(&frame) {
+                        if window_id != Some(target) {
+                            continue;
+                        }
+                    }
                     if socket.send(Message::Text(frame)).await.is_err() {
                         break;
                     }
@@ -254,6 +286,26 @@ mod tests {
         // The workspace root scope rides the same path.
         apply_client_frame(&reg, id, r#"{"type":"sub","dir":""}"#, None);
         assert!(reg.scope_exists(""));
+    }
+
+    #[test]
+    fn window_command_target_extracts_the_addressed_window() {
+        // A window_command frame yields its target window_id; the pump forwards
+        // it only to that window's socket.
+        let frame = r#"{"type":"window_command","window_id":"workspace-aa-0","command":"clipboard_write","request_id":"r1","mime":"image/png","data_b64":"AAAA"}"#;
+        assert_eq!(window_command_target(frame), Some("workspace-aa-0"));
+
+        // Non-window_command frames are broadcast (return None), so the pump
+        // forwards them to every socket unchanged.
+        assert_eq!(
+            window_command_target(r#"{"type":"progress","pct":10}"#),
+            None
+        );
+        assert_eq!(
+            window_command_target(r#"{"type":"session_roster","rows":[]}"#),
+            None
+        );
+        assert_eq!(window_command_target("not json"), None);
     }
 
     #[test]
