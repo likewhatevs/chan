@@ -41,6 +41,10 @@ permissions = [
   "allow-platform-os",
   "allow-read-clipboard-text",
   "allow-write-clipboard-text",
+  "allow-read-clipboard-image",
+  "allow-write-clipboard-image",
+  "allow-read-clipboard-html",
+  "allow-write-clipboard-html",
   "allow-export-pdf-macos",
 ]
 
@@ -143,6 +147,26 @@ commands.allow = ["read_clipboard_text"]
 identifier = "allow-write-clipboard-text"
 description = "Enables the write_clipboard_text command (OSC 52 terminal copy)."
 commands.allow = ["write_clipboard_text"]
+
+[[permission]]
+identifier = "allow-read-clipboard-image"
+description = "Enables the read_clipboard_image command."
+commands.allow = ["read_clipboard_image"]
+
+[[permission]]
+identifier = "allow-write-clipboard-image"
+description = "Enables the write_clipboard_image command."
+commands.allow = ["write_clipboard_image"]
+
+[[permission]]
+identifier = "allow-read-clipboard-html"
+description = "Enables the read_clipboard_html command."
+commands.allow = ["read_clipboard_html"]
+
+[[permission]]
+identifier = "allow-write-clipboard-html"
+description = "Enables the write_clipboard_html command."
+commands.allow = ["write_clipboard_html"]
 
 [[permission]]
 identifier = "allow-export-pdf-macos"
