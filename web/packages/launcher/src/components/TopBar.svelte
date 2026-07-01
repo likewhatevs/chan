@@ -13,7 +13,7 @@
 <header class="topbar">
   <div class="title">
     <h1 class="brand">Library</h1>
-    <p class="subtitle">This machine &amp; your dev servers</p>
+    <p class="subtitle">This machine &amp; dev servers</p>
   </div>
   <div class="actions">
     {#if !readOnly}
@@ -48,7 +48,10 @@
     align-items: flex-end;
     justify-content: space-between;
     gap: 1rem;
-    padding: 0.75rem 1.25rem;
+    /* Left padding lines the "Library" title up with the machine icons in the
+       cards below (the card border sits at the content edge; its icon rides one
+       card-padding step in). The border-bottom still spans the full width. */
+    padding: 0.75rem 1.25rem 0.75rem 2rem;
     border-bottom: 1px solid var(--border);
     position: sticky;
     top: 0;
@@ -81,6 +84,9 @@
     display: flex;
     gap: 0.5rem;
     flex-shrink: 0;
+    /* Two rail steps so the top-bar buttons drop into the workspace
+       [window][power] column, one level deeper than a machine header. */
+    padding-right: calc(2 * var(--rail-step));
   }
 
   .icon-btn {

@@ -466,8 +466,10 @@
 {/if}
 
 <style>
-  /* Each machine (LOCAL or a devserver) is a contained card: a slightly elevated
-     surface with a border, radius, and a subtle shadow. */
+  /* Each machine (LOCAL or a devserver) is a contained card whose background
+     hosts the whole set: the header identity plus its terminal + workspace
+     lists. The header is the top row; the lists sit below it as an indented peer
+     list on the same surface. The whole badge wobbles on hover. */
   .machine {
     position: relative;
     margin-bottom: 0.8rem;
@@ -482,7 +484,7 @@
       box-shadow 160ms ease;
   }
 
-  /* The machine card wobbles as a whole, including while the pointer is on
+  /* The whole machine badge wobbles as one, including while the pointer is on
      nested controls. Buttons keep their own hover highlights without scaling. */
   .machine:hover {
     transform: scale(1.015);
@@ -491,7 +493,7 @@
   }
 
   /* The machine header: icon + name + status on the left, machine-level actions
-     pushed to the far right. */
+     pushed to the far right. The top row of the card. */
   .machine-header {
     display: flex;
     align-items: center;
@@ -580,15 +582,18 @@
   .machine-actions {
     display: flex;
     align-items: center;
-    gap: 0.4rem;
+    gap: 0.5rem;
     margin-left: auto;
     flex-shrink: 0;
+    /* One rail step so the header buttons drop into the workspace
+       [window][power] column below them. */
+    padding-right: var(--rail-step);
   }
 
-  /* The connected/local content (terminals + workspaces), tucked just inside the
-     machine card with no left rule. */
+  /* The connected/local content (terminals + workspaces), tucked below the
+     header on the same card surface with no left rule. */
   .machine-content {
-    margin: 0.4rem 0.15rem 0 0.25rem;
+    margin: 0.5rem 0.15rem 0 0.25rem;
   }
 
   .section-label {
@@ -605,7 +610,9 @@
   .term-list :global(.row) {
     background: transparent;
     border-radius: 8px;
-    padding: 0.45rem 0.5rem;
+    /* Right inset matches the workspace card's inner right edge so the row
+       actions land in the shared [focus][show] column. */
+    padding: 0.45rem 0.75rem 0.45rem 0.5rem;
   }
 
   .term-list :global(.row:hover) {

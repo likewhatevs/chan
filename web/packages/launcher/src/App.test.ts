@@ -44,7 +44,7 @@ describe("launcher root", () => {
     const topbar = target.querySelector(".topbar")!;
     expect(topbar).not.toBeNull();
     expect(topbar.textContent).toContain("Library");
-    expect(topbar.textContent).toContain("This machine & your dev servers");
+    expect(topbar.textContent).toContain("This machine & dev servers");
     expect(target.querySelector('[aria-label="Toggle theme"]')).not.toBeNull();
     // The Gmail-style Select-mode toggle (reveals the row checkboxes).
     expect(topbar.querySelector("button.select")).not.toBeNull();
