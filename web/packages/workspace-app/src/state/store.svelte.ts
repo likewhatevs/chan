@@ -1225,23 +1225,17 @@ async function handleWindowCommand(raw: unknown): Promise<void> {
     return;
   }
   if (frame.command === "open_dashboard") {
-    openDashboardInActivePane();
-    // Apply the server's carousel_index and/or carousel_off to the
-    // just-created dashboard tab (the active tab of the active pane).
-    // carouselSlide + autoRotate are stable DashboardTab fields owned by
-    // Lane B; --carousel-off maps to autoRotate=false.
-    const pane = layout.nodes[layout.activePaneId];
-    if (pane && pane.kind === "leaf") {
-      const tab = pane.tabs.find((t) => t.id === pane.activeTabId);
-      if (tab && tab.kind === "dashboard") {
-        if (typeof frame.carousel_index === "number" && frame.carousel_index >= 0) {
-          tab.carouselSlide = Math.floor(frame.carousel_index);
-        }
-        if (frame.carousel_off === true) {
-          tab.autoRotate = false;
-        }
-      }
-    }
+    // Apply the server's carousel_index and/or carousel_off to the freshly
+    // spawned dashboard tab. carouselSlide + autoRotate are stable
+    // DashboardTab fields; --carousel-off maps to autoRotate=false.
+    const slide =
+      typeof frame.carousel_index === "number" && frame.carousel_index >= 0
+        ? Math.floor(frame.carousel_index)
+        : undefined;
+    openDashboardInActivePane({
+      slide,
+      autoRotate: frame.carousel_off === true ? false : undefined,
+    });
     setTransientStatus("opened dashboard");
     scheduleSessionSave();
     return;

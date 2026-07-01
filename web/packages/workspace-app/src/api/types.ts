@@ -768,8 +768,10 @@ export type IndexStatus =
       /// BM25-ready - preflight unlocks on idle regardless - and `null`
       /// (the backend emits an explicit null) or absent once settled. The
       /// status bar renders it as a passive "embedding done/total" chip,
-      /// never the active reindexing pill.
-      embedding?: { done: number; total: number } | null;
+      /// never the active reindexing pill. `file` is the workspace-relative
+      /// path currently being drained (absent between batch flushes); the
+      /// indexing spine uses it to pulse one directory at a time.
+      embedding?: { done: number; total: number; file?: string | null } | null;
     }
   | { state: "building"; current: number; total: number; file: string }
   | { state: "reindexing"; file: string }

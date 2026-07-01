@@ -36,11 +36,18 @@ const VCS_BURST_REBUILD_THRESHOLD: usize = 64;
 /// `total` the workspace file count. `done <= total` always (the
 /// producer's per-batch chunk counters overshoot, so we report file
 /// progress instead). Serialized camelCase to match the SPA.
-#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+///
+/// `file` is the workspace-relative path the embed pass is currently
+/// draining. It carries the same live label the foreground build stamps on
+/// `Building.file`, so the indexing-state endpoint can pulse the one directory
+/// being embedded instead of the whole spine. `None` between batch flushes.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct EmbedProgress {
     pub done: u32,
     pub total: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file: Option<String>,
 }
 
 /// Background-embed progress, owned independently of `IndexStatus`. The cold
@@ -803,6 +810,10 @@ struct EmbedPhaseState {
     started: bool,
     files_done: u32,
     files_total: u32,
+    /// Last per-file label seen on an IndexFile tick. Carried onto the
+    /// embed chip so a batch flush (which has no file of its own) still
+    /// reports the directory it just drained.
+    file: Option<String>,
 }
 
 impl ProgressCallback for StatusUpdater {
@@ -812,12 +823,13 @@ impl ProgressCallback for StatusUpdater {
                 // Clamp so the pill never shows current > total. Display-only.
                 let total = event.total as usize;
                 let current = (event.current as usize).min(total);
-                // Keep the file-progress counters fresh for the background-
-                // embed chip, and read the latch.
+                // Keep the file-progress counters + the current label fresh
+                // for the background-embed chip, and read the latch.
                 let started = {
                     let mut p = self.embed.lock().unwrap();
                     p.files_done = current as u32;
                     p.files_total = total as u32;
+                    p.file = event.label.clone();
                     p.started
                 };
                 // Before the first embed flush this is the foreground
@@ -849,8 +861,11 @@ impl ProgressCallback for StatusUpdater {
                     let progress = EmbedProgress {
                         done,
                         total: total as u32,
+                        // The live label of the file this drain tick is
+                        // embedding; lets the indexing spine pulse one dir.
+                        file: event.label.clone(),
                     };
-                    *self.bg_embed.lock().unwrap() = Some(progress);
+                    *self.bg_embed.lock().unwrap() = Some(progress.clone());
                     // Mirror onto the live status when it is Idle (the common
                     // case). A transient Reindexing from a concurrent watcher
                     // event resolves back through set_idle, which re-reads the
@@ -872,15 +887,15 @@ impl ProgressCallback for StatusUpdater {
             // file-based progress for a passive status chip; reconcile_idle
             // clears it to None when the pass returns.
             ProgressStage::EmbedBatch => {
-                let (done, total) = {
+                let (done, total, file) = {
                     let mut p = self.embed.lock().unwrap();
                     p.started = true;
-                    (p.files_done, p.files_total)
+                    (p.files_done, p.files_total, p.file.clone())
                 };
-                let embedding = Some(EmbedProgress { done, total });
+                let embedding = Some(EmbedProgress { done, total, file });
                 // Publish to the shared signal too, so a concurrent watcher
                 // reindex that lands in set_idle re-attaches this same chip.
-                *self.bg_embed.lock().unwrap() = embedding;
+                *self.bg_embed.lock().unwrap() = embedding.clone();
                 // Read live stats so the chip shows the growing index. If
                 // the workspace is gone (reset/shutdown) fall back to a
                 // zeroed Idle rather than dropping the embedding signal.
@@ -950,7 +965,7 @@ fn set_idle(workspace: &Workspace, shared: &IndexerShared) {
     // embed pass is still running, an incremental watcher reindex that lands
     // here must RE-ATTACH the chip, not drop it. The coordinator clears the
     // signal when the build resolves, so a settled index reads None here.
-    let embedding = *shared.bg_embed.lock().unwrap();
+    let embedding = shared.bg_embed.lock().unwrap().clone();
     match workspace.index_stats() {
         Ok(s) => {
             *shared.status.lock().unwrap() = IndexStatus::Idle {
@@ -1385,7 +1400,11 @@ mod tests {
         }));
 
         // A cold-build embed is in flight: the shared signal carries progress.
-        let bg_embed: BgEmbed = Arc::new(Mutex::new(Some(EmbedProgress { done: 3, total: 10 })));
+        let bg_embed: BgEmbed = Arc::new(Mutex::new(Some(EmbedProgress {
+            done: 3,
+            total: 10,
+            file: Some("notes/a.md".to_owned()),
+        })));
         let shared = IndexerShared {
             status: status.clone(),
             telemetry,
@@ -1396,7 +1415,14 @@ mod tests {
         set_idle(&workspace, &shared);
         match status.lock().unwrap().clone() {
             IndexStatus::Idle { embedding, .. } => {
-                assert_eq!(embedding, Some(EmbedProgress { done: 3, total: 10 }));
+                assert_eq!(
+                    embedding,
+                    Some(EmbedProgress {
+                        done: 3,
+                        total: 10,
+                        file: Some("notes/a.md".to_owned()),
+                    })
+                );
             }
             other => panic!("expected Idle re-attaching the chip, got {other:?}"),
         }

@@ -28,13 +28,22 @@ describe("DashboardTab type + helpers", () => {
 
   test("openDashboardInPane appends a Dashboard tab + activates it", () => {
     expect(tabs).toMatch(
-      /export function openDashboardInPane\(paneId: string\): void \{[\s\S]{1,800}kind: "dashboard",[\s\S]{1,400}node\.tabs\.push\(tab\);[\s\S]{1,200}node\.activeTabId = tab\.id;/,
+      /export function openDashboardInPane\(\s*paneId: string,\s*opts\?: OpenDashboardOptions,\s*\): void \{[\s\S]{1,800}kind: "dashboard",[\s\S]{1,400}node\.tabs\.push\(tab\);[\s\S]{1,200}node\.activeTabId = tab\.id;/,
     );
   });
 
-  test("openDashboardInActivePane delegates to openDashboardInPane(layout.activePaneId)", () => {
+  test("openDashboardInActivePane delegates to openDashboardInPane(layout.activePaneId, opts)", () => {
     expect(tabs).toMatch(
-      /export function openDashboardInActivePane\(\): void \{[\s\S]{1,200}openDashboardInPane\(layout\.activePaneId\);/,
+      /export function openDashboardInActivePane\(opts\?: OpenDashboardOptions\): void \{[\s\S]{1,200}openDashboardInPane\(layout\.activePaneId, opts\);/,
+    );
+  });
+
+  test("openIndexingDashboard opens the Search slide (1) with auto-rotate off", () => {
+    // Target of the AppStatusBar indexing pill click: jump straight to the
+    // live Indexing graph, paused so it does not rotate away.
+    expect(tabs).toMatch(/export const DASHBOARD_SEARCH_SLIDE = 1;/);
+    expect(tabs).toMatch(
+      /export function openIndexingDashboard\(\): void \{[\s\S]{1,200}slide: DASHBOARD_SEARCH_SLIDE,[\s\S]{1,80}autoRotate: false,/,
     );
   });
 
@@ -64,14 +73,20 @@ describe("Pane.svelte render branch + import", () => {
     );
   });
 
-  test("render branch matches active?.kind === \"dashboard\" and passes the live tab", () => {
-    // The live DashboardTab proxy is threaded through so the carousel
-    // slide cursor can round-trip into the session serializer.
-    // `frontActive={!pane.showingBack}` force-pauses the carousel while
-    // the two-face card is flipped to its config back.
+  test("DashboardTab is kept mounted via the keep-alive each-loop with an active gate", () => {
+    // Keep-alive (mirrors graph/file/terminal): the dashboard stays mounted
+    // across tab switches so the Indexing graph keeps its layout + poll
+    // state instead of reloading. The live DashboardTab proxy is threaded
+    // through so the carousel slide cursor round-trips into the session
+    // serializer; the `active` gate hides it + pauses the carousel/poll
+    // when it is not the front-facing active tab.
     expect(pane).toMatch(
-      /\{:else if active\?\.kind === "dashboard"\}[\s\S]{1,400}<DashboardTab tab=\{active\} frontActive=\{!pane\.showingBack\} \/>/,
+      /\{#each pane\.tabs\.filter\(\(t\) => t\.kind === "dashboard"\) as t \(t\.id\)\}[\s\S]{1,400}<DashboardTab[\s\S]{1,200}tab=\{t\}[\s\S]{1,200}active=\{!paneMode\.active && !pane\.showingBack && t\.id === pane\.activeTabId\}/,
     );
+    // The old front-face if-chain arm that remounted the dashboard off
+    // `active` on every switch is gone (the back-face DashboardSlotBack
+    // dispatch still keys off active?.kind — that one stays).
+    expect(pane).not.toMatch(/<DashboardTab\s+tab=\{active\}/);
   });
 });
 

@@ -389,6 +389,14 @@ pub async fn api_indexing_state(State(state): State<Arc<AppState>>) -> Response 
 fn current_index_file(status: IndexStatus) -> Option<String> {
     match status {
         IndexStatus::Building { file, .. } | IndexStatus::Reindexing { file } => Some(file),
+        // During the background embed sweep the search index is Idle, but the
+        // embed pass still drains file by file and stamps the live label onto
+        // the chip. Surface it so the indexing spine pulses one directory at a
+        // time instead of the whole tree (see build_indexing_state). `None`
+        // between batch flushes falls back to the broad sweep below.
+        IndexStatus::Idle {
+            embedding: Some(p), ..
+        } => p.file,
         IndexStatus::Idle { .. } | IndexStatus::Error { .. } => None,
     }
 }
@@ -443,29 +451,28 @@ fn build_indexing_state(
         }
     }
 
-    // Two signals widen "one dir is indexing" into "the whole sweep is
-    // indexing", so a long pass pulses the spine instead of looking idle:
+    // Broaden "one dir is indexing" into "the whole sweep is indexing" ONLY
+    // when there's active indexing but no per-file label to pin it to, so a
+    // long pass pulses the spine instead of looking idle - without painting
+    // every dir orange when we DO know which file is in flight:
     //
     // - `embedding_sweep`: the background embed phase. The indexer commits
     //   BM25 then flips to `Idle { embedding: Some(..) }` and re-embeds for
-    //   the rest of the (minutes-long) pass with NO per-file label, so
-    //   `current_file` is `None` the whole time. Without this every dir
-    //   would read as fully Indexed (BM25 done) and nothing would pulse,
-    //   even though vectors are still landing. Mark every dir with
-    //   indexable content for the duration.
+    //   the rest of the (minutes-long) pass. It now stamps the draining file
+    //   onto the chip, so `current_file` is usually a real path (matched
+    //   per-entry above -> one dir pulses) and only `None` between batch
+    //   flushes. The broad sweep is the fallback for those gaps.
     //
-    // - `current_file.is_some() && !current_file_matched_entry`: the
-    //   foreground build emits `Building.file` as a real workspace-relative
-    //   path during `GraphRebuild` / `IndexFile` (matched per-entry above,
-    //   one dir) but as the empty string `""` in the initial Building
-    //   window before the first per-file event (indexer.rs:310-314). The
-    //   empty label matches no entry, so treat it (and any future
-    //   non-path label) as a broad sweep rather than letting the pre-event
-    //   window read as Idle.
+    // - `current_file.is_some()`: the foreground build emits `Building.file`
+    //   as a real workspace-relative path during `GraphRebuild` / `IndexFile`
+    //   (matched per-entry above, one dir) but as the empty string `""` in the
+    //   initial Building window before the first per-file event
+    //   (indexer.rs:310-314). The empty label matches no entry.
     //
-    // Per-entry matches (IndexFile / Reindexing of a real file) still take
-    // the narrower one-dir path.
-    let broad_sweep = embedding_sweep || (current_file.is_some() && !current_file_matched_entry);
+    // Whenever the label DID match an entry (`current_file_matched_entry`) -
+    // a real IndexFile / Reindexing / embed-drain file - stay on the narrower
+    // one-dir path so individual paths transition independently.
+    let broad_sweep = (embedding_sweep || current_file.is_some()) && !current_file_matched_entry;
     let nodes = dirs
         .into_iter()
         .map(|(path, accum)| {
@@ -745,6 +752,49 @@ mod tests {
         );
     }
 
+    /// The embed sweep now carries the draining file's live label, so a
+    /// known `current_file` during embedding pulses ONLY that directory -
+    /// the rest (BM25-committed) read as Indexed. This is the fix for
+    /// "every node flashes orange together, then all turn green" on a
+    /// small workspace where the whole visible pass is the embed phase.
+    #[test]
+    fn indexing_state_embedding_sweep_with_current_file_pulses_one_dir() {
+        let entries = vec![
+            tree_entry("notes", true),
+            tree_entry("notes/embedding.md", false),
+            tree_entry("docs", true),
+            tree_entry("docs/done.md", false),
+        ];
+        // BM25 finished the whole tree before the embed phase started.
+        let indexed_paths =
+            BTreeSet::from(["notes/embedding.md".to_string(), "docs/done.md".to_string()]);
+
+        // Embed sweep AND a live per-file label for the file being drained.
+        let response =
+            build_indexing_state(&entries, &indexed_paths, Some("notes/embedding.md"), true);
+
+        // Only the dir holding the file being embedded pulses Indexing.
+        assert_eq!(
+            response
+                .nodes
+                .iter()
+                .find(|node| node.path == "notes")
+                .map(|node| node.state),
+            Some(IndexingDirectoryState::Indexing)
+        );
+        // A sibling whose files are all committed reads Indexed, not
+        // Indexing: with a matching file the embed sweep no longer
+        // broadens into an all-orange pulse.
+        assert_eq!(
+            response
+                .nodes
+                .iter()
+                .find(|node| node.path == "docs")
+                .map(|node| node.state),
+            Some(IndexingDirectoryState::Indexed)
+        );
+    }
+
     /// The initial Building
     /// window between `IndexStatus::Building { file: String::new(), .. }`
     /// (indexer.rs:310-314) and the first per-file event also
@@ -834,7 +884,11 @@ mod tests {
             indexed_docs: 3,
             indexed_vectors: 1,
             model: "m".to_string(),
-            embedding: Some(EmbedProgress { done: 1, total: 3 }),
+            embedding: Some(EmbedProgress {
+                done: 1,
+                total: 3,
+                file: None,
+            }),
         }));
         assert!(!is_embedding_sweep(&IndexStatus::Idle {
             indexed_docs: 3,
