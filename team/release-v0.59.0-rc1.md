@@ -139,6 +139,28 @@ The Indexing graph polls every 3s, so the pulse advances in 3s steps. Between em
 
 ---
 
+## Graph remaining: root auto-select, indexing placeholder, mention-lens edges
+
+Branch `graph-remaining-items` (off `main` after `graph-tuning` merged). Covers the three open `## Graph` asks that `graph-tuning` did not: auto-select the root on open, the "data being indexed" placeholder, and the `@@mention` "Graph from here" missing-edges bug. Frontend-only; the semantic graph server route is unchanged.
+
+### What landed
+
+Focus the workspace root on open (Item A). `openGraphInPane` seeds `pendingSelectId` to the workspace-root node id `""` (the server's `directory_node_id("")`) for a semantic workspace open, so `load()` resolves it through the same path the lenses use: the root node is selected, focus-on-select spotlights the root and its first-degree neighbourhood, and the inspector opens on it. This holds for the main-window Graph shortcut and every other non-lens open, and matches the lens opens (file / directory / `@@mention` / `#tag` / contact / language), which already pass their own focal node. Filesystem and language modes carry no root focus. A manual click still re-selects, and a lens's own `pendingSelectId` is preserved.
+
+Indexing placeholder (Item B). `GraphPanel`'s `emptyStateMessage` markdown-mode fallback reads "data being indexed, hang tight...". The filesystem / index-building / language sibling branches are unchanged, as only the markdown-mode string was called out.
+
+Mention / tag / contact lens edges (Item C). The bug is entirely client-side: `build_graph_view` (`/api/graph`) returns the complete workspace-wide semantic graph regardless of scope (verified with a throwaway `build_graph_view` integration test over the nested fixture and with `chan workspace graph --scope all`), so no edge is dropped on the server. The mention / tag / contact lenses BFS out from the seed to the documents that reference it and stop there; a surfaced document's other `@@mention` / `#tag` / language edges point one hop past the frontier, and the both-endpoints `visibleEdges` filter then culls them. New pure helper `web/packages/workspace-app/src/graph/lensClosure.ts` (`pullMetaNeighbours`) closes over those incident meta-nodes, bounded so only meta-nodes join and the neighbourhood never fans out through unrelated documents; the three BFS arms call it before the directory-spine pull. Directory scope is unaffected (it already admits every meta-node); its remaining gaps are cross-subtree file-to-file links, which is the tree-and-expand model, not this bug (see Open items).
+
+### Validation
+
+svelte-check 0/0/0; full workspace-app vitest green including new `graph/lensClosure.test.ts` (before/after: the `@@Alice` lens keeps 3 mention edges without the closure, 5 with it), `graphLensMetaClosure.test.ts` (arm wiring), and a `tabs.test.ts` case asserting a semantic workspace open seeds the root node id `""` as its pending selection (lens opens keep their own focal node; non-semantic modes and non-workspace scopes get none); the existing lens / spine / depth `?raw` tests stay green (the inline closure call fits their wildcard spans). No Rust touched. Browser-verified on a local `chan open --standalone` server over a nested `@@mention` + `#tag` fixture: the workspace Graph shortcut lands with the root `graph-smoke/` selected, its first-degree neighbourhood lit, and the inspector open on the workspace node; the `@@Alice` mention lens (opened via a `mention:@@Alice` graph link) lands with `@@Alice` selected, the inspector open, a single `mention=@@Alice` tab title, and every co-mentioning document plus its other handles and tags rendered. Desktop (WKWebView) not separately verified; graph scoping is pure JS and Blink-faithful, so it is on the rc validation list.
+
+### Open items
+
+Directory "Graph from here" still scopes to the expanded subtree, so a link from an in-subtree file to a collapsed nested or sibling-subtree file is not drawn until the user expands that directory or raises the depth slider. That is the directory lens's tree-and-expand model, distinct from the mention-lens bug fixed here; whether a directory lens should also pull in its 1-hop out-of-subtree link neighbours is a UX call left for the maintainer. Item B's markdown placeholder now overlaps semantically with the index-building branch ("graph temporarily unavailable while indexing the workspace"): both imply indexing, and the markdown fallback says so even when the index is idle. Only the markdown-mode wording was requested, so the index-building branch is left as is.
+
+---
+
 ## Integration notes (release editor)
 
 Merged onto `main` in order: `devserver-cmd`, `graph-tuning`, `index-dashboard`, each as a `--no-ff` merge. The only conflict across all three was this journal, an add/add, confirmed up front with `git merge-tree`; every code file merged clean. This file is the reconciliation of the three per-branch journals into one, unwrapped and free of em dashes.

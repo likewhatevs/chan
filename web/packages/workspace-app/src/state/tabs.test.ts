@@ -998,6 +998,25 @@ describe("pane state", () => {
     expect(activePane().activeTabId).toBe(browser.id);
   });
 
+  test("a semantic workspace graph opens focused on the root node", () => {
+    resetLayout([]);
+    // Root node id is "" (server directory_node_id("")): seeding it as the
+    // pending selection makes load() select it + open the inspector, so a
+    // non-lens graph never opens with nothing selected.
+    expect(openGraphInActivePane({ scopeId: "workspace" }).pendingSelectId).toBe("");
+    expect(openGraphInActivePane({}).pendingSelectId).toBe("");
+    // Lens opens keep their own focal node.
+    expect(
+      openGraphInActivePane({ scopeId: "mention:@@Alice", pendingSelectId: "@@Alice" })
+        .pendingSelectId,
+    ).toBe("@@Alice");
+    // Non-workspace scope and non-semantic modes get no auto-root focus.
+    expect(openGraphInActivePane({ scopeId: "dir:notes" }).pendingSelectId).toBeNull();
+    expect(
+      openGraphInActivePane({ mode: "language", scopeId: "workspace" }).pendingSelectId,
+    ).toBeNull();
+  });
+
   test("round-trips graph and file browser tab state", async () => {
     resetLayout([]);
     const graph = openGraphInActivePane({
