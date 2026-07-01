@@ -32,11 +32,12 @@ use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Notify;
 
-/// House glyph for a local workspace under `$HOME`. Titles are library-owned, so
-/// this is their single source.
-const ICON_LOCAL_HOME: &str = "\u{1F3E0}"; // house
-/// Glyph for a local workspace outside `$HOME`.
-const ICON_LOCAL_OTHER: &str = "\u{1F5A5}\u{FE0F}"; // desktop computer
+/// House glyph (⌂) for a local workspace under `$HOME`, mirroring the launcher's
+/// lucide House icon. Titles are library-owned, so this is their single source.
+const ICON_LOCAL_HOME: &str = "\u{2302}"; // ⌂ house
+/// Monochrome desktop-computer glyph for a local workspace outside `$HOME`. The
+/// U+FE0E text-presentation selector keeps it line-art alongside ⌂ / ⊕.
+const ICON_LOCAL_OTHER: &str = "\u{1F5A5}\u{FE0E}"; // 🖥︎ desktop computer
 
 // ---------------------------------------------------------------------------
 // The window wire contract. The serde field names ARE the wire, so a one-sided
@@ -68,8 +69,8 @@ pub struct WindowRecord {
     /// Window flavour.
     pub kind: WindowKind,
     /// Library-composed and persisted display title, auto-derived (no user
-    /// rename). Local perspective (`🏠 Terminal Window N` /
-    /// `🏠 {path} Window N`); the desktop re-decorates a remote library's rows
+    /// rename). Local perspective (`⌂ Terminal Window N` /
+    /// `⌂ {path} Window N`); the desktop re-decorates a remote library's rows
     /// from `kind`/`ordinal`/`workspace_path`, never by parsing this string.
     pub title: String,
     /// Per-(kind, workspace/library) "Window N": library-owned, persisted,
@@ -531,7 +532,7 @@ fn next_ordinal(
         .expect("u32 always has a free ordinal for a realistic window count")
 }
 
-/// Compose the persisted, library-perspective title: `🏠 Terminal Window N` for
+/// Compose the persisted, library-perspective title: `⌂ Terminal Window N` for
 /// a terminal; `{icon} {full path} Window N` for a workspace, where the icon is
 /// the house glyph under `$HOME` else the local-other glyph. The remote
 /// decoration (a remote arrow plus the devserver name) is the desktop's job for
@@ -547,7 +548,7 @@ fn compose_title(kind: WindowKind, ordinal: u32, workspace_path: Option<&str>) -
     }
 }
 
-/// 🏠 when `path` is under `$HOME`, else 🖥️ (a local workspace elsewhere).
+/// ⌂ when `path` is under `$HOME`, else 🖥︎ (a local workspace elsewhere).
 fn local_workspace_icon(path: &Path) -> &'static str {
     match dirs::home_dir() {
         Some(home) if path.starts_with(&home) => ICON_LOCAL_HOME,
@@ -672,7 +673,7 @@ mod tests {
     #[test]
     fn window_record_workspace_off_wire() {
         // Devserver library, workspace OFF (empty token), no client. `title`
-        // carries the library's OWN-perspective 🏠 (the desktop re-decorates).
+        // carries the library's OWN-perspective ⌂ (the desktop re-decorates).
         let rec = WindowRecord {
             window_id: "w-99aa88bb77cc66dd".into(),
             library_id: "lib-0f1e2d3c4b5a6978".into(),
@@ -1036,19 +1037,19 @@ mod tests {
     fn terminal_title_is_home_terminal_window_n() {
         let (reg, _d) = registry();
         let t = reg.create(WindowKind::Terminal, None);
-        assert_eq!(t.title, "🏠 Terminal Window 1");
+        assert_eq!(t.title, "⌂ Terminal Window 1");
     }
 
     #[test]
     fn workspace_title_icon_follows_home_prefix() {
-        // Under $HOME → 🏠; elsewhere → 🖥️. Drive both via compose_title so the
+        // Under $HOME → ⌂; elsewhere → 🖥︎. Drive both via compose_title so the
         // test does not depend on a real registry path.
         let home = dirs::home_dir().expect("home dir");
         let under_home = home.join("notes");
         let title = compose_title(WindowKind::Workspace, 1, Some(under_home.to_str().unwrap()));
         assert!(
             title.starts_with(ICON_LOCAL_HOME),
-            "under-home → 🏠: {title}"
+            "under-home → ⌂: {title}"
         );
         assert!(title.ends_with("Window 1"));
 
