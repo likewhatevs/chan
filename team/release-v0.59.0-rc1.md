@@ -1,6 +1,6 @@
 # v0.59.0-rc1: rolling release journal
 
-Working journal for the v0.59.0 cycle. Unlike the per-release notes above, this is a rolling doc: appended to as each work stream from `dev/v0.59.0/request.md` lands on its branch, and reconciled into a final `release-0.59.0.md` at cut time. As of this entry the `devserver-cmd`, `graph-tuning`, and `index-dashboard` streams are merged onto `main`; the editor, chan-desktop, and UX streams are still in flight, and the `v0.59.0-rc1` tag waits for all of them. Each section stands alone so the release summary can be assembled from these entries.
+Working journal for the v0.59.0 cycle. Unlike the per-release notes above, this is a rolling doc: appended to as each work stream from `dev/v0.59.0/request.md` lands on its branch, and reconciled into a final `release-0.59.0.md` at cut time. As of this entry the `devserver-cmd`, `graph-tuning`, `index-dashboard`, `semantic-optout-gate`, and `editor-fixes` streams are merged onto `main`; chan-desktop, UX, and the `mermaid-to-excalidraw` feature are still in flight, and the `v0.59.0-rc1` tag waits for them. Each section stands alone so the release summary can be assembled from these entries.
 
 ## Work streams (from `dev/v0.59.0/request.md`)
 
@@ -8,7 +8,8 @@ Working journal for the v0.59.0 cycle. Unlike the per-release notes above, this 
 - [x] Graph: focus-on-select grey-out with first-order edge focus, deeper fs-graph, live force tuner (branch `graph-tuning`)
   - [ ] Carryover, tracked in `dev/v0.59.0/graph-remaining-items.md`: auto-select root on open, restore the "data being indexed, hang tight..." empty-state message, `@@mention` "Graph from here" missing edges
 - [x] Index & dashboard: clickable indexing notification opening a paused Dashboard Indexing slide, per-path indexing pulse, no reload on tab switch (branch `index-dashboard`)
-- [ ] Editor: directory-link click to file browser, list continuation glyphs, enumerated-list indent, `mermaid-to-excalidraw`
+- [x] Editor bugs: directory links open the file browser, list continuation hang-indent, enumerated-list indent, plus smart list-row paste (branch `editor-fixes`; setext bold-flash dropped by decision)
+  - [ ] Feature carryover: `mermaid-to-excalidraw` renderer (with the mermaid/ux stream, see `dev/v0.59.0/task-mermaid-ux.md`)
 - [ ] Chan desktop: second-monitor hide/show window shrink, window-title glyphs
 - [ ] UX: friendlier `cs open` from standalone, unblock `cs download`/`upload` in workspaces
 - [x] Semantic indexing opt-out (maintainer-added, outside `request.md`): with semantic search off never embed, disabling wipes vectors, enabling rebuilds (branch `semantic-optout-gate`)
@@ -142,9 +143,9 @@ The Indexing graph polls every 3s, so the pulse advances in 3s steps. Between em
 
 ## Integration notes (release editor)
 
-Merged onto `main` in order: `devserver-cmd`, `graph-tuning`, `index-dashboard`, then `semantic-optout-gate`, each as a `--no-ff` merge. The three `request.md` streams shared one add/add conflict on this journal (predicted by `git merge-tree`); `semantic-optout-gate` was cut from the reconciled `main`, so it and its journal section merged with no conflict. Every code file merged clean. This file is the reconciliation of the per-branch journals into one, unwrapped and free of em dashes.
+Merged onto `main` in order: `devserver-cmd`, `graph-tuning`, `index-dashboard`, `semantic-optout-gate`, then `editor-fixes`, each as a `--no-ff` merge. Every merge shared exactly one add/add conflict, on this journal, and every code file merged clean. `semantic-optout-gate` was cut from the reconciled `main` (strictly ahead, no code conflict); `editor-fixes` was cut from the original `main` and auto-merged over the other streams, its `tabs.svelte.ts` and `workspace.rs` edits sitting in functions disjoint from the index-dashboard and semantic-optout changes. This file is the reconciliation of the per-branch journals into one, unwrapped and free of em dashes.
 
-Quality pass on the merged tree: removed five newly-introduced em dashes and reworded newly-added change-history ("archaeology") comments to present-tense in the index-dashboard test files (`paneDashboardTabKeepAlive.test.ts`, `dashboardTabAndCarousel.test.ts`) and the style comment in `DashboardTab.svelte`. `devserver-cmd`, `graph-tuning`, and `semantic-optout-gate` introduced none (the semantic `vectors_epoch` "old epoch" comment is present-tense domain language, not archaeology). Remaining rc validation and the Graph carryover are tracked in `dev/v0.59.0/plan.md` and `dev/v0.59.0/graph-remaining-items.md`.
+Quality pass on the merged tree: removed five newly-introduced em dashes and reworded newly-added change-history ("archaeology") comments to present-tense in the index-dashboard test files (`paneDashboardTabKeepAlive.test.ts`, `dashboardTabAndCarousel.test.ts`) and the style comment in `DashboardTab.svelte`. `devserver-cmd`, `graph-tuning`, `semantic-optout-gate`, and `editor-fixes` introduced none (the semantic `vectors_epoch` "old epoch" comment is present-tense domain language, not archaeology). Remaining rc validation and the Graph carryover are tracked in `dev/v0.59.0/plan.md` and `dev/v0.59.0/graph-remaining-items.md`.
 
 ---
 
@@ -196,6 +197,28 @@ If the disable-time `remove_dir_all` itself fails with a genuine filesystem I/O 
 
 ### Follow-ups
 
-- CHANGELOG entry on merge.
+- CHANGELOG entry: added at merge.
 - Live browser validation: enable via Settings, watch the whole-tree embed, toggle off and confirm the embeddings dir is binned and search stays bm25, toggle on and confirm the rebuild.
 - Optional: cache the `dashboard.toml` read (parsed once per reindex and once per per-file save today). A minor hot-path cost, not a correctness issue.
+
+---
+
+## Editor bugs: list hang-indent, smart list paste, directory links
+
+Branch `editor-fixes` (merged). Covers the Editor bug fixes from `request.md`; the `mermaid-to-excalidraw` feature is deferred to the mermaid/ux stream, and the setext-heading bold flash (bug 2) was dropped by maintainer decision (a non-issue; setext headings stay on). The list work is presentation-only: the markdown document is never rewritten, so everything round-trips.
+
+### What landed
+
+List hang-indent (bugs 3 and 4). Wrapped continuation lines hang under the item text across hyphen, asterisk, plus, ordered-period, ordered-paren, and task lists at every depth. Source whitespace around a marker is hidden render-only so text starts at a fixed marker column; a static CSS rule pads by that column and pulls the first line back with `text-indent`. Indentation follows the item's syntactic depth (one marker column per level), so ordered lists step the same width as bullets and nested markers sit under the parent's text. Task checkboxes share the marker column and stay clickable.
+
+Smart list paste. Pasting a copied list row into an existing list item (typically the empty one Enter just created) flows the content into that bullet instead of inserting a second marker. The rich-HTML path already dedented via `dedentListPaste`; the same dedent now runs on the plain-text path (a chan-to-chan copy uses `navigator.clipboard.writeText`). It fires only when the caret is on a list line and the pasted text starts with a marker; every other paste defers to CodeMirror.
+
+Directory links (bug 1). `resolve_link` detects a directory target after its file-candidate probe and returns it with a new additive `is_dir` wire flag (serde default, no `NodeKind` variant, no route change). The link renders as a valid directory pill instead of a broken strikethrough, and the click opens the file browser at that folder via `openBrowserInActivePane` instead of handing a directory to the text editor. File links and genuinely missing links keep their behavior.
+
+### Validation
+
+`cargo fmt --check`, `cargo clippy` with `RUSTFLAGS="-D warnings"`, `cargo check --workspace`, `cargo test -p chan-workspace` (the `resolve_link` suite is 15 tests, two new for the directory and non-directory cases); web `npm run check` (svelte-check 0), vitest 2090 (new `openLinkTarget` directory-routing test), build. Browser-verified against a workspace seeded with every list type at long wrap widths: zero text-column delta per depth; click-to-edit, undo, Enter continuation, checkbox toggle, Tab and Shift-Tab all correct; copy-paste round-trips preserved (including rows with an inline image); the directory link opened the file browser while file and missing links stayed as before. Verified on the pre-merge branch; the merge with `main` auto-merged clean, with the `tabs.svelte.ts` and `workspace.rs` edits in functions disjoint from the other streams.
+
+### Still open
+
+Progressive outdent: Enter on an empty nested item exits the list in one press rather than outdenting a level at a time (optional keymap tweak, not done). The `mermaid-to-excalidraw` feature is deferred to the mermaid/ux stream.

@@ -6,10 +6,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Smart list-row paste.** Pasting a copied list row into a continued list item now merges into that bullet instead of leaving a double marker, matching the existing rich-paste behavior for chan-to-chan plain-text copies.
+
 ### Fixed
 
 - **Supervised devservers honor `CHAN_HOME`.** `chan devserver --service=systemd`/`--service=launchd` bake `CHAN_HOME` into the generated unit `Environment=` and plist `EnvironmentVariables`, so the supervised service and the supervisor share the same isolated `~/.chan` and the bearer-token handshake resolves under isolation.
 - **Semantic search off means no embeddings.** With semantic search disabled, chan no longer computes or stores embeddings just because a model is cached on disk; the workspace opt-in is the only input to indexing. Turning semantic search off bins the existing vector store (keyword/BM25 search is unaffected), and turning it back on rebuilds embeddings from scratch.
+- **Directory links open the file browser.** A markdown link to a directory now renders as a valid directory link and opens the file browser at that folder, instead of showing as broken and rejecting the click with a "not a text file" notification.
+- **List continuation lines hang-indent, and ordered lists align with bullets.** Wrapped continuation lines of a list item now hang under the item text across every list type and nesting depth (tasks included), and ordered (numbered) lists indent to the same width as bullet and hyphen lists.
 
 ### Changed
 
