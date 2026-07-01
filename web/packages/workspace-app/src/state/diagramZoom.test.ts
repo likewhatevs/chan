@@ -79,15 +79,42 @@ describe("openDiagramZoom", () => {
     expect(backdrop()).toBeNull();
   });
 
-  test("+/arrow keys transform the layer and 0 resets it", () => {
-    openDiagramZoom(SVG);
-    const before = layer()!.style.transform;
+  test("+ zooms by resizing the SVG, arrows pan the layer, 0 resets both", () => {
+    // Zoom must resize the SVG (so the vector re-rasterizes crisply), NOT
+    // fold a scale() into the layer transform (which stretched a cached
+    // texture and blurred). Pan stays a layer translate.
+    openDiagramZoom(
+      '<svg xmlns="http://www.w3.org/2000/svg" width="100%" viewBox="0 0 320 240"><rect width="10" height="10"/></svg>',
+    );
+    const svg = layer()!.querySelector("svg")!;
+    const restTransform = layer()!.style.transform;
+    expect(svg.style.width).toBe("320px"); // base fit width (viewBox fallback)
+
     document.dispatchEvent(new KeyboardEvent("keydown", { key: "+" }));
-    expect(layer()!.style.transform).toContain("scale(1.2)");
+    expect(parseFloat(svg.style.width)).toBeCloseTo(320 * 1.2, 5);
+    expect(layer()!.style.transform).not.toContain("scale");
+    expect(layer()!.style.transform).toBe(restTransform); // zoom does not pan
+
     document.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight" }));
-    expect(layer()!.style.transform).toContain("-48px");
+    expect(layer()!.style.transform).toContain("-48px"); // pan translates layer
+    expect(svg.style.width).toBe("384px"); // pan leaves the zoom size put
+
     document.dispatchEvent(new KeyboardEvent("keydown", { key: "0" }));
-    expect(layer()!.style.transform).toBe(before);
+    expect(svg.style.width).toBe("320px"); // reset returns to the base size
+    expect(layer()!.style.transform).toBe(restTransform);
+  });
+
+  test("wheel up zooms in by growing the SVG", () => {
+    openDiagramZoom(
+      '<svg xmlns="http://www.w3.org/2000/svg" width="100%" viewBox="0 0 320 240"><rect width="10" height="10"/></svg>',
+    );
+    const svg = layer()!.querySelector("svg")!;
+    // deltaY < 0 is a zoom-in; with the pointer at the origin there is no pan
+    // drift, so the growth reads off the width alone.
+    backdrop()!.dispatchEvent(
+      new WheelEvent("wheel", { deltaY: -100, cancelable: true }),
+    );
+    expect(parseFloat(svg.style.width)).toBeGreaterThan(320);
   });
 
   test("captures its shortcuts so they do not leak to the editor", () => {
