@@ -28,7 +28,7 @@ fn next_window_seq() -> u64 {
 }
 
 use tauri::{
-    AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, WebviewUrl, WebviewWindowBuilder,
+    AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, WebviewUrl, WebviewWindowBuilder,
     WindowEvent,
 };
 
@@ -1578,14 +1578,23 @@ fn monitor_desc(m: &tauri::Monitor) -> config::MonitorDesc {
 }
 
 /// What to do with a window's geometry at build time. `Restore` re-applies a
-/// stored rect (clamped to the monitor it belongs to — position preserved when
-/// on-screen); `Default` leaves the builder's 1200x800 + OS position. A
-/// `Restore` builds the window hidden and applies physical geometry post-build
-/// (see [`apply_geometry_plan`]). `Debug` is logged in the `WINGEO` diagnostics.
+/// stored rect in LOGICAL points (clamped to the monitor it belongs to, position
+/// preserved when on-screen); `Default` leaves the builder's 1200x800 + OS
+/// position. A `Restore` builds the window hidden and applies the points geometry
+/// post-build (see [`apply_geometry_plan`]). `Debug` is logged in the `WINGEO`
+/// diagnostics.
 #[derive(Debug)]
 pub(crate) enum GeometryPlan {
     Default,
-    Restore { x: i32, y: i32, w: u32, h: u32 },
+    /// Logical-points restore rect. Points are the global AppKit window space, so
+    /// a hidden window whose scale falls back to the main display still lands at
+    /// the right size on its own monitor once the value is applied as logical.
+    Restore {
+        x: i32,
+        y: i32,
+        w: u32,
+        h: u32,
+    },
 }
 
 impl GeometryPlan {
@@ -1598,15 +1607,18 @@ impl GeometryPlan {
 
 /// Build a `Restore` plan from a stored geometry: clamp it to the WORK area of
 /// the monitor the stored rect belongs to (so the position is preserved when
-/// on-screen, and the size is bounded to that monitor — not the primary). Falls
+/// on-screen, and the size is bounded to that monitor, not the primary). Falls
 /// back to the union work-area box, then to the stored rect verbatim when no
-/// monitors are known. This is the fix for the external-monitor symptom: a window
-/// stored on a secondary / non-primary display no longer gets centered + shrunk
-/// to the primary on a fall-through.
+/// monitors are known. Stored geometry is LOGICAL points, so the monitors are
+/// converted to points first ([`config::to_points`]): physical monitor bounds
+/// overlap across mixed DPI and would misattribute a window on a secondary
+/// display to the primary, centering + shrinking it; points tile cleanly and
+/// identify the right monitor.
 fn plan_for_geometry(mons: &[config::MonitorDesc], g: &WindowGeometry) -> GeometryPlan {
-    let bbox = config::monitor_for_rect(mons, g.x, g.y, g.w, g.h)
-        .map(|i| config::work_area_bbox(&mons[i]))
-        .or_else(|| config::union_work_bbox(mons));
+    let pmons: Vec<config::MonitorDesc> = mons.iter().map(config::to_points).collect();
+    let bbox = config::monitor_for_rect(&pmons, g.x, g.y, g.w, g.h)
+        .map(|i| config::work_area_bbox(&pmons[i]))
+        .or_else(|| config::union_work_bbox(&pmons));
     match bbox {
         Some(b) => {
             let (x, y, w, h) = config::clamp_rect_to_bbox(g.x, g.y, g.w, g.h, b);
@@ -1655,18 +1667,25 @@ pub(crate) fn resolve_geometry_plan(app: &AppHandle, label: &str) -> GeometryPla
 }
 
 /// Apply a resolved [`GeometryPlan`] to a freshly-built (hidden, for a `Restore`)
-/// window, then reveal it. Physical px throughout; every step is best-effort so a
-/// geometry error degrades to a default-placed visible window rather than a
-/// stuck-hidden one. Logs the intended vs ACTUAL geometry (`WINGEO applied`) so
-/// the host can see whether macOS placed the window where asked.
+/// window, then reveal it. Logical points throughout (the stored geometry is
+/// points); every step is best-effort so a geometry error degrades to a
+/// default-placed visible window rather than a stuck-hidden one. Logs the
+/// intended points vs ACTUAL physical geometry (`WINGEO applied`) so the host can
+/// see whether macOS placed the window where asked.
 pub(crate) fn apply_geometry_plan(window: &tauri::WebviewWindow, label: &str, plan: GeometryPlan) {
     let GeometryPlan::Restore { x, y, w, h } = plan else {
         return;
     };
-    if let Err(e) = window.set_size(PhysicalSize::new(w, h)) {
+    // Apply LOGICAL points. A hidden or ordered-out NSWindow has no screen, so
+    // tao's scale_factor() falls back to the main display; a physical apply would
+    // then be divided by the wrong scale and shrink the window. dpi passes a
+    // Logical value through unchanged, so the window lands at the stored points
+    // (and thus the right physical size) on its own monitor once shown, and the
+    // size / position order no longer matters.
+    if let Err(e) = window.set_size(LogicalSize::new(w as f64, h as f64)) {
         tracing::warn!(label = %label, error = %e, "restoring window size failed");
     }
-    if let Err(e) = window.set_position(PhysicalPosition::new(x, y)) {
+    if let Err(e) = window.set_position(LogicalPosition::new(x as f64, y as f64)) {
         tracing::warn!(label = %label, error = %e, "restoring window position failed");
     }
     reveal_window(window, label);
@@ -1691,23 +1710,39 @@ fn reveal_window(window: &tauri::WebviewWindow, label: &str) {
     let _ = window.set_focus();
 }
 
-/// Capture a window's CURRENT OS geometry (outer position + inner size, physical
-/// px) under the live monitor signature and upsert it into the desktop-local
-/// geometry LRU keyed by `label`. Called at every bury arm BEFORE the window is
-/// hidden / destroyed, so a reopen restores the size + position the user left.
-/// Best-effort: skips on a query error or a degenerate (zero) size; geometry is
-/// desktop-owned, so this runs for local / devserver / outbound windows alike.
-/// Logs a `WINGEO capture` line (signature + coords + monitors) for the host.
+/// Capture a window's CURRENT OS geometry (outer position + inner size) as
+/// LOGICAL points under the live monitor signature and upsert it into the
+/// desktop-local geometry LRU keyed by `label`. Called at every bury arm BEFORE
+/// the window is hidden / destroyed, so a reopen restores the size + position the
+/// user left. The window is still shown here, so `scale_factor()` is its real
+/// monitor scale; converting the physical OS values to points makes the restore
+/// scale-independent. Best-effort: skips on a query error or a degenerate (zero)
+/// size; geometry is desktop-owned, so this runs for local / devserver / outbound
+/// windows alike. Logs a `WINGEO capture` line (signature + points + scale +
+/// monitors) for the host.
 pub(crate) fn capture_window_geometry(app: &AppHandle, label: &str) {
     let Some(window) = app.get_webview_window(label) else {
         return;
     };
-    let (Ok(pos), Ok(size)) = (window.outer_position(), window.inner_size()) else {
+    let (Ok(pos), Ok(size), Ok(scale)) = (
+        window.outer_position(),
+        window.inner_size(),
+        window.scale_factor(),
+    ) else {
         return;
     };
     if size.width == 0 || size.height == 0 {
         return;
     }
+    // Store points, not physical: points tile across mixed-DPI monitors and apply
+    // scale-independently, so a window rebuilt hidden on a different-scale display
+    // still restores at the right size (see `apply_geometry_plan`).
+    let lpos = pos.to_logical::<f64>(scale);
+    let lsize = size.to_logical::<f64>(scale);
+    let px = lpos.x.round() as i32;
+    let py = lpos.y.round() as i32;
+    let pw = lsize.width.round() as u32;
+    let ph = lsize.height.round() as u32;
     let mons = current_monitors(app);
     let monitor_sig = config::monitor_signature(&mons);
     let on_monitor = window
@@ -1718,10 +1753,11 @@ pub(crate) fn capture_window_geometry(app: &AppHandle, label: &str) {
     tracing::info!(
         label = %label,
         sig = %monitor_sig,
-        x = pos.x,
-        y = pos.y,
-        w = size.width,
-        h = size.height,
+        x = px,
+        y = py,
+        w = pw,
+        h = ph,
+        scale = scale,
         on_monitor = ?on_monitor,
         monitors = ?mons,
         "WINGEO capture",
@@ -1730,10 +1766,10 @@ pub(crate) fn capture_window_geometry(app: &AppHandle, label: &str) {
         label,
         WindowGeometry {
             monitor_sig,
-            x: pos.x,
-            y: pos.y,
-            w: size.width,
-            h: size.height,
+            x: px,
+            y: py,
+            w: pw,
+            h: ph,
             saved_at: 0,
         },
     );
@@ -2082,6 +2118,63 @@ const KEY_BRIDGE_JS: &str = r#"
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_mon(x: i32, y: i32, w: u32, h: u32, scale: f64) -> config::MonitorDesc {
+        // Work area == full bounds so the clamp is a no-op for on-screen rects,
+        // isolating these assertions to the monitor identification.
+        config::MonitorDesc {
+            x,
+            y,
+            w,
+            h,
+            work_x: x,
+            work_y: y,
+            work_w: w,
+            work_h: h,
+            scale,
+        }
+    }
+
+    fn test_geom(x: i32, y: i32, w: u32, h: u32) -> WindowGeometry {
+        WindowGeometry {
+            monitor_sig: String::new(),
+            x,
+            y,
+            w,
+            h,
+            saved_at: 0,
+        }
+    }
+
+    #[test]
+    fn plan_for_geometry_restores_points_on_the_correct_monitor() {
+        // Physical monitors: a 2x built-in main at the origin and a 1x external to
+        // its right. In tao's physical space the external's origin lands inside the
+        // main's doubled extent, so a naive physical plan would misattribute an
+        // external window to the main and shrink it. plan_for_geometry converts to
+        // points, where the monitors tile cleanly.
+        let mons = [
+            test_mon(0, 0, 3024, 1964, 2.0),
+            test_mon(1512, 0, 1920, 1080, 1.0),
+        ];
+
+        // Points window on the external, fully on-screen: the plan passes the
+        // points through unchanged (a physical plan would clamp it to the main).
+        let GeometryPlan::Restore { x, y, w, h } =
+            plan_for_geometry(&mons, &test_geom(1900, 200, 800, 600))
+        else {
+            panic!("on-screen rect must produce a Restore plan");
+        };
+        assert_eq!((x, y, w, h), (1900, 200, 800, 600));
+
+        // Points window on the 2x main stays put too.
+        let GeometryPlan::Restore { x, y, w, h } =
+            plan_for_geometry(&mons, &test_geom(100, 100, 600, 400))
+        else {
+            panic!("main-monitor rect must produce a Restore plan");
+        };
+        assert_eq!((x, y, w, h), (100, 100, 600, 400));
+    }
 
     #[test]
     fn resolve_label_matches_a_bare_window_id_to_its_composite_native_label() {

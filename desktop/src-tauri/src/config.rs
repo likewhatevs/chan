@@ -179,13 +179,35 @@ pub struct MonitorDesc {
     pub scale: f64,
 }
 
+/// The same descriptor in LOGICAL points: every physical bound divided by the
+/// monitor's own scale. tao reports monitor bounds as points times that
+/// monitor's scale, so mixed-scale monitors can OVERLAP in physical space;
+/// dividing each back to points restores the single, non-overlapping global
+/// points map that stored window geometry (also points) is identified and
+/// clamped against.
+pub fn to_points(m: &MonitorDesc) -> MonitorDesc {
+    let s = if m.scale > 0.0 { m.scale } else { 1.0 };
+    MonitorDesc {
+        x: (m.x as f64 / s).round() as i32,
+        y: (m.y as f64 / s).round() as i32,
+        w: (m.w as f64 / s).round() as u32,
+        h: (m.h as f64 / s).round() as u32,
+        work_x: (m.work_x as f64 / s).round() as i32,
+        work_y: (m.work_y as f64 / s).round() as i32,
+        work_w: (m.work_w as f64 / s).round() as u32,
+        work_h: (m.work_h as f64 / s).round() as u32,
+        scale: m.scale,
+    }
+}
+
 /// One captured OS window geometry, tagged with the monitor signature it was
-/// captured under. Physical pixels (OS desktop coordinates) so the clamp /
-/// restore math is unambiguous across mixed-DPI monitors; the signature pins the
-/// scale factor, so a matching-signature restore re-applies these verbatim with
-/// no rescale. `x,y` is the OUTER (top-left) position; `w,h` the INNER (content)
-/// size — matching `WebviewWindow::{outer_position, inner_size}` at capture and
-/// `set_position` / `set_size` at apply.
+/// captured under. LOGICAL points (the global AppKit window coordinate space):
+/// points tile cleanly across mixed-DPI monitors and are scale-independent to
+/// apply, so a restore lands at the right size and monitor even when the window
+/// is rebuilt hidden on a different-scale display. `x,y` is the OUTER (top-left)
+/// position; `w,h` the INNER (content) size, each converted from
+/// `WebviewWindow::{outer_position, inner_size}` at capture via the window's
+/// scale factor and re-applied as `LogicalPosition` / `LogicalSize` at build.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct WindowGeometry {
     /// Monitor signature at capture time (see [`monitor_signature`]). The
@@ -1457,6 +1479,38 @@ mod tests {
         assert_eq!(monitor_for_rect(&mons, 1800, 100, 1000, 700), Some(1));
         // Entirely off every screen -> None (caller falls back to union box).
         assert_eq!(monitor_for_rect(&mons, 9000, 9000, 400, 300), None);
+    }
+
+    #[test]
+    fn to_points_divides_bounds_by_scale() {
+        // A 2x monitor's physical bounds halve to points; scale is preserved.
+        let p = to_points(&mon(0, 0, 3024, 1964, 2.0));
+        assert_eq!((p.x, p.y, p.w, p.h), (0, 0, 1512, 982));
+        // mon() carves a 40px physical top bar; it halves to 20 points.
+        assert_eq!((p.work_x, p.work_y, p.work_w, p.work_h), (0, 20, 1512, 962));
+        assert_eq!(p.scale, 2.0);
+        // A 1x monitor is unchanged.
+        let m1 = mon(1512, 0, 1920, 1080, 1.0);
+        assert_eq!(to_points(&m1), m1);
+        // scale 0 guards to 1.0 so there is no divide-by-zero.
+        assert_eq!(to_points(&mon(0, 0, 100, 100, 0.0)).w, 100);
+    }
+
+    #[test]
+    fn monitor_for_rect_in_points_picks_the_external_where_physical_ties() {
+        // 2x built-in main at the origin, 1x external to its right. tao reports
+        // monitor bounds as points times the monitor's own scale, so the external's
+        // origin (1512x1) lands inside the main's doubled extent (1512x2 = 3024): a
+        // window on the external overlaps BOTH monitors' physical bounds equally, so
+        // monitor_for_rect ties to the first-enumerated (the main). Converting to
+        // points tiles the monitors and identifies the external cleanly.
+        let mons = [mon(0, 0, 3024, 1964, 2.0), mon(1512, 0, 1920, 1080, 1.0)];
+        let (wx, wy, ww, wh) = (1900, 200, 800, 600);
+        // Physical space misattributes the external window to the main (index 0).
+        assert_eq!(monitor_for_rect(&mons, wx, wy, ww, wh), Some(0));
+        // Points space picks the external (index 1).
+        let pmons: Vec<_> = mons.iter().map(to_points).collect();
+        assert_eq!(monitor_for_rect(&pmons, wx, wy, ww, wh), Some(1));
     }
 
     #[test]
