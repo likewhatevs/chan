@@ -16,11 +16,6 @@
   --accent: #3fb950;
   --brand: #e58c4d;
   --danger: #f85149;
-
-  /* One workspace-card level of right inset. Action-button groups that sit at a
-     shallower DOM depth reproduce this inset (the top bar doubles it) so every
-     button column right-aligns to the workspace [window][power] column. */
-  --rail-step: 0.7rem;
 }
 
 :root[data-theme="light"] {
@@ -272,7 +267,7 @@ body {
 .row-actions {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
+  gap: 0.4rem;
   flex-shrink: 0;
 }
 

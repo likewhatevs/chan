@@ -582,18 +582,15 @@
   .machine-actions {
     display: flex;
     align-items: center;
-    gap: 0.5rem;
+    gap: 0.4rem;
     margin-left: auto;
     flex-shrink: 0;
-    /* One rail step so the header buttons drop into the workspace
-       [window][power] column below them. */
-    padding-right: var(--rail-step);
   }
 
   /* The connected/local content (terminals + workspaces), tucked below the
      header on the same card surface with no left rule. */
   .machine-content {
-    margin: 0.5rem 0.15rem 0 0.25rem;
+    margin: 0.4rem 0.15rem 0 0.25rem;
   }
 
   .section-label {
@@ -610,9 +607,7 @@
   .term-list :global(.row) {
     background: transparent;
     border-radius: 8px;
-    /* Right inset matches the workspace card's inner right edge so the row
-       actions land in the shared [focus][show] column. */
-    padding: 0.45rem 0.75rem 0.45rem 0.5rem;
+    padding: 0.45rem 0.5rem;
   }
 
   .term-list :global(.row:hover) {
