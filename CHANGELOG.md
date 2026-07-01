@@ -6,6 +6,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [v0.59.0] - 2026-07-01
+
+A broad feature release: a `mermaid-to-excalidraw` diagram renderer, graph focus and lens fixes with an indexing placeholder, an actionable indexing dashboard, the `chan devserver --service` action-verb reshape, editor list and directory-link fixes, `cs copy` / `cs paste` clipboard bridging, a semantic-search opt-out that never embeds when off, and chan-desktop window-geometry, glyph, and clipboard fixes.
+
 ### Added
 
 - **Smart list-row paste.** Pasting a copied list row into a continued list item now merges into that bullet instead of leaving a double marker, matching the existing rich-paste behavior for chan-to-chan plain-text copies.
@@ -20,6 +24,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **List continuation lines hang-indent, and ordered lists align with bullets.** Wrapped continuation lines of a list item now hang under the item text across every list type and nesting depth (tasks included), and ordered (numbered) lists indent to the same width as bullet and hyphen lists.
 - **`@@mention` / `#tag` / contact graph lenses keep every surfaced document's semantic edges.** A "Graph from here" on an `@@mention` (or a tag or contact) surfaces each document that references the seed together with every one of that document's own `@@mention` / `#tag` / language edges, so a co-referenced handle no longer drops out of the view.
 - **Crisp diagram zoom overlay.** The hover "View" pan/zoom overlay for `mermaid` and `mermaid-to-excalidraw` diagrams stays sharp at every zoom level. Zoom now resizes the SVG so the browser re-rasterizes the vector at each step instead of GPU-scaling a cached bitmap, which blurred strokes and text and could read soft even at 1x on HiDPI; panning still rides a compositor transform. An excalidraw diagram that bakes a mermaid subgraph to an embedded raster stays limited by that source image.
+- **Desktop windows keep their size across hide/show on a second monitor.** chan-desktop stores and restores window position and size in logical points instead of physical pixels, so hiding a window on a secondary display and showing it again keeps its size (it previously shrank, and shrank further on each repeat).
+- **Launcher column alignment.** The launcher's action-button columns and the identity column line up.
+- **Image and rich-text clipboard work on chan-desktop.** The desktop clipboard image and HTML IPC commands that `cs copy` / `cs paste` use are granted in the app permission set, so image and HTML copy/paste work on chan-desktop instead of being denied at runtime.
 
 ### Changed
 

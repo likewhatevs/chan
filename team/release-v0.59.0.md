@@ -1,6 +1,6 @@
-# v0.59.0-rc1: rolling release journal
+# v0.59.0
 
-Working journal for the v0.59.0 cycle. Unlike the per-release notes above, this is a rolling doc: appended to as each work stream from `dev/v0.59.0/request.md` lands on its branch, and reconciled into a final `release-0.59.0.md` at cut time. As of this entry the `devserver-cmd`, `graph-tuning`, `index-dashboard`, `semantic-optout-gate`, `editor-fixes`, `mermaid-ux`, and `cs-copy-paste` streams are merged onto `main`; only chan-desktop is still in flight, and the `v0.59.0-rc1` tag waits for it. Each section stands alone so the release summary can be assembled from these entries.
+The v0.59.0 release report, consolidated from the per-branch journals as each stream landed on `main`. Every v0.59.0 work stream is merged onto `main` (the six `request.md` streams plus the maintainer-added semantic opt-out, `cs copy`/`cs paste` clipboard bridge, and the diagram-zoom crispness fix); the release is being cut as `v0.59.0`. Each section stands alone so the release summary can be assembled from these entries.
 
 ## Work streams (from `dev/v0.59.0/request.md`)
 
@@ -10,10 +10,11 @@ Working journal for the v0.59.0 cycle. Unlike the per-release notes above, this 
 - [x] Index & dashboard: clickable indexing notification opening a paused Dashboard Indexing slide, per-path indexing pulse, no reload on tab switch (branch `index-dashboard`)
 - [x] Editor bugs: directory links open the file browser, list continuation hang-indent, enumerated-list indent, plus smart list-row paste (branch `editor-fixes`; setext bold-flash dropped by decision)
   - [x] Feature: `mermaid-to-excalidraw` renderer via a shared diagram widget, lazy-loaded (branch `mermaid-ux`)
-- [ ] Chan desktop: second-monitor hide/show window shrink, window-title glyphs
+- [x] Chan desktop: window geometry restored in logical points (fixes second-monitor hide/show shrink), monochrome window-title glyphs, launcher column alignment, clipboard image/HTML ACL grants (pushed to `origin/main`)
 - [x] UX: friendlier `cs open` guidance, coherent standalone-terminal command gating, `cs download`/`upload` confirmed working from both standalone and workspace (branch `mermaid-ux`)
 - [x] Semantic indexing opt-out (maintainer-added, outside `request.md`): with semantic search off never embed, disabling wipes vectors, enabling rebuilds (branch `semantic-optout-gate`)
 - [x] `cs copy` / `cs paste` clipboard bridge (maintainer-added, outside `request.md`): copy/paste between the terminal and the system clipboard (branch `cs-copy-paste`)
+- [x] Diagram zoom crispness (maintainer-added rc fix, brief in `dev/v0.59.0/diagram-zoom-fix.md`): resize-to-re-rasterize so vector diagrams stay sharp at any zoom (branch `diagram-zoom-fix`)
 
 ---
 
@@ -215,7 +216,7 @@ Both streams, on branch `mermaid-ux` off `origin/main`, in one commit (`d6712ac`
 
 ## Integration notes (release editor)
 
-Merged onto `main` in order: `devserver-cmd`, `graph-tuning`, `index-dashboard`, `semantic-optout-gate`, then `editor-fixes`, each as a `--no-ff` merge. Every merge shared exactly one add/add conflict, on this journal, and every code file merged clean. `semantic-optout-gate` was cut from the reconciled `main` (strictly ahead, no code conflict); `editor-fixes` was cut from the original `main` and auto-merged over the other streams, its `tabs.svelte.ts` and `workspace.rs` edits sitting in functions disjoint from the index-dashboard and semantic-optout changes. A later `index-dashboard` follow-up (`7a026ba4`, pause the indexing `GraphCanvas` render loop while hidden) was merged on top; its code auto-merged clean and its journal delta folded into the Index section above. Then `mermaid-ux` was merged: cut from an earlier `main`, it auto-merged over the later streams, and its only cross-stream file, `Wysiwyg.svelte` (also touched by `editor-fixes`), merged coherently (the list-decoration changes and the diagram-widget decorations sit in separate regions of the extensions list); the CHANGELOG add/add on the `### Added` bullets was resolved by keeping both. `mermaid-ux` adds a heavy frontend dependency (`@excalidraw/excalidraw`, which pulls React plus roughly 339 packages, lazy-loaded out of the eager editor bundle); it was full-gate green on its branch, and the rc1-cut full gate is the authoritative build check for the merged tree. Finally `cs-copy-paste` (maintainer-added, outside `request.md`) merged with no conflicts at all; its overlaps `crates/chan-server/src/lib.rs` (also touched by mermaid-ux) and `state/store.svelte.ts` (also touched by index-dashboard) auto-merged in disjoint regions, it was full-gate green on its branch, and the editor added its missing CHANGELOG entry. Finally `graph-remaining-items` (the graph carryover, frontend-only) merged as a 3-way merge that conflicted only on this journal and the CHANGELOG (both reconciled by union); `tabs.svelte.ts` auto-merged coherently across the index-dashboard, editor-fixes, and graph edits, and it was svelte-check + vitest green and browser-verified on its branch. This file is the reconciliation of the per-branch journals into one, unwrapped and free of em dashes.
+Merged onto `main` in order: `devserver-cmd`, `graph-tuning`, `index-dashboard`, `semantic-optout-gate`, then `editor-fixes`, each as a `--no-ff` merge. Every merge shared exactly one add/add conflict, on this journal, and every code file merged clean. `semantic-optout-gate` was cut from the reconciled `main` (strictly ahead, no code conflict); `editor-fixes` was cut from the original `main` and auto-merged over the other streams, its `tabs.svelte.ts` and `workspace.rs` edits sitting in functions disjoint from the index-dashboard and semantic-optout changes. A later `index-dashboard` follow-up (`7a026ba4`, pause the indexing `GraphCanvas` render loop while hidden) was merged on top; its code auto-merged clean and its journal delta folded into the Index section above. Then `mermaid-ux` was merged: cut from an earlier `main`, it auto-merged over the later streams, and its only cross-stream file, `Wysiwyg.svelte` (also touched by `editor-fixes`), merged coherently (the list-decoration changes and the diagram-widget decorations sit in separate regions of the extensions list); the CHANGELOG add/add on the `### Added` bullets was resolved by keeping both. `mermaid-ux` adds a heavy frontend dependency (`@excalidraw/excalidraw`, which pulls React plus roughly 339 packages, lazy-loaded out of the eager editor bundle); it was full-gate green on its branch, and the rc1-cut full gate is the authoritative build check for the merged tree. Finally `cs-copy-paste` (maintainer-added, outside `request.md`) merged with no conflicts at all; its overlaps `crates/chan-server/src/lib.rs` (also touched by mermaid-ux) and `state/store.svelte.ts` (also touched by index-dashboard) auto-merged in disjoint regions, it was full-gate green on its branch, and the editor added its missing CHANGELOG entry. Finally `graph-remaining-items` (the graph carryover, frontend-only) merged as a 3-way merge that conflicted only on this journal and the CHANGELOG (both reconciled by union); `tabs.svelte.ts` auto-merged coherently across the index-dashboard, editor-fixes, and graph edits, and it was svelte-check + vitest green and browser-verified on its branch. The `chan-desktop` bundle (window geometry in logical points, monochrome title glyphs, launcher alignment, and the clipboard image/HTML ACL grants) was pushed directly to `origin/main` with `--no-verify` (`c193e827..2a4ed45e`); the release editor reviewed the ACL grant (one fine-grained permission per command, mirroring the text-clipboard grants, non-escalating on a loopback single-user app) and folded in its journal and CHANGELOG entries. `diagram-zoom-fix` then merged with no conflicts. The full `make pre-push` gate over this integrated tree at the release cut is the authoritative check for everything landed without re-gating. This file is the reconciliation of the per-branch journals into one, unwrapped and free of em dashes.
 
 Quality pass on the merged tree: removed five newly-introduced em dashes and reworded newly-added change-history ("archaeology") comments to present-tense in the index-dashboard test files (`paneDashboardTabKeepAlive.test.ts`, `dashboardTabAndCarousel.test.ts`) and the style comment in `DashboardTab.svelte`. `devserver-cmd`, `graph-tuning`, `semantic-optout-gate`, `editor-fixes`, and `mermaid-ux` introduced none (the semantic `vectors_epoch` "old epoch" comment is present-tense domain language, not archaeology, and the one em-dash occurrence in the mermaid-ux diff is a test asserting the `cs open` guidance string carries no em dash). Remaining rc validation and the Graph carryover are tracked in `dev/v0.59.0/plan.md` and `dev/v0.59.0/graph-remaining-items.md`.
 
@@ -380,3 +381,37 @@ svelte-check 0/0/0; full workspace-app vitest green including new `graph/lensClo
 ### Open items
 
 Directory "Graph from here" still scopes to the expanded subtree, so a link from an in-subtree file to a collapsed nested or sibling-subtree file is not drawn until the user expands that directory or raises the depth slider. That is the directory lens's tree-and-expand model, distinct from the mention-lens bug fixed here; whether a directory lens should also pull in its 1-hop out-of-subtree link neighbours is a UX call left for the maintainer. Item B's markdown placeholder now overlaps semantically with the index-building branch ("graph temporarily unavailable while indexing the workspace"): both imply indexing, and the markdown fallback says so even when the index is idle. Only the markdown-mode wording was requested, so the index-building branch is left as is.
+
+---
+
+## Chan desktop: window geometry, title glyphs, launcher alignment, clipboard ACL
+
+Pushed directly to `origin/main` (`c193e827..2a4ed45e`) and landed with `--no-verify`, so the authoritative check is the release-cut full gate. Covers the `## Chan desktop` request plus two adjacent fixes the maintainer bundled in.
+
+### What landed
+
+Window geometry in logical points. `crates/chan-library/src/windows.rs` and `desktop/src-tauri/src/{config.rs,serve.rs}` store and restore window position and size in logical points rather than physical pixels, so hiding a window on a second monitor and showing it again keeps its size instead of shrinking (and shrinking further on each repeat). Documented in `.agents/desktop.md`.
+
+Monochrome line-art window-title glyphs. The window-title globe and home glyphs are replaced with the newer monochrome line-art set that matches chan-launcher.
+
+Launcher column alignment. `web/packages/launcher/src/components/{Library.svelte,TopBar.svelte}` and `styles.css` align the action-button columns and the identity column.
+
+Clipboard image/HTML ACL grants. `desktop/src-tauri/permissions/app.toml` grants the four clipboard image and HTML IPC commands (`read/write_clipboard_image`, `read/write_clipboard_html`) that the `cs-copy-paste` stream registered in `generate_handler!` and the SPA invokes, but which carried no ACL grant, so Tauri denied them at runtime and `app_acl_grants_every_registered_command` failed. One fine-grained grant per command, mirroring the text-clipboard grants.
+
+### Validation
+
+Launcher alignment `make web-check` green; window geometry and glyphs gated earlier and hardware-verified by the maintainer; the ACL fix verified by `app_acl_grants_every_registered_command`. Because the bundle was pushed with `--no-verify`, the full `make pre-push` gate over the integrated tree is the release editor's closing check.
+
+---
+
+## Diagram zoom overlay: resize to re-rasterize (crisp vector)
+
+Branch `diagram-zoom-fix` (off `main`, merged). An rc-validation fix found while exercising the `mermaid-ux` renderer: the diagram "View" pan/zoom overlay rendered low-resolution. Full root cause and brief in `dev/v0.59.0/diagram-zoom-fix.md`.
+
+### What landed
+
+The overlay injects a vector SVG but zoomed it via `transform: scale()` on a `will-change: transform` layer, so the browser rasterized the SVG once at base size and stretched that bitmap on every zoom-in (soft even at 1x on HiDPI). Zoom now resizes the SVG element (`width = baseWidth * scale`) so the vector re-rasterizes crisply at each level; pan stays a compositor translate; `will-change` is dropped from the static layer and scoped to active drag; the fit caps are removed after measuring the base width so zoom can grow past the viewport. The excalidraw-embedded-raster case (mermaid subgraphs baked to an `<image>`) stays source-limited, as noted.
+
+### Validation
+
+`npm run check` (svelte-check 0/0) and full vitest (2151 tests); `state/diagramZoom.test.ts` locks resize-on-zoom, pan-is-translate, and reset. Browser-verified on-device by the maintainer: the mermaid flowchart and sequence and the excalidraw flowchart stay crisp at max zoom; the excalidraw subgraph stays soft, the expected known limitation.

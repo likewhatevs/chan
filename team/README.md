@@ -57,6 +57,7 @@ New agents should also read [`.agents/playbook.md`](../.agents/playbook.md), the
 - [release-0.55.0](release-0.55.0.md) - editor polish, devserver hardening, docs consolidation, and the validation carryover into v0.56.0.
 - [release-0.56.0](release-0.56.0.md) - design-doc cleanup, the `DEVSERVER_*` gateway contract, v0.55 validation carryovers, and devserver lifecycle hardening.
 - [release-0.56.1](release-0.56.1.md) - control-terminal exit attention, launcher hover polish, and split desktop package targets.
+- [release-v0.59.0](release-v0.59.0.md) - the v0.59.0 feature wave: the mermaid-to-excalidraw diagram renderer, graph focus and lens fixes with an indexing placeholder, the actionable indexing dashboard, the `chan devserver --service` action-verb reshape, editor list and directory-link fixes, `cs copy`/`cs paste` clipboard bridging, a semantic-search opt-out, and chan-desktop geometry/glyph/clipboard fixes.
 
 ## Conventions
 
