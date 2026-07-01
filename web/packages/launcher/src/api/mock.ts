@@ -29,7 +29,7 @@ let nextDs = 3;
 // Local workspace rows carry the merged-feed tags too: devserver_id null marks
 // them local (the SPA groups by devserver_id), library_id "local", and a
 // slash-free prefix that equals the workspace_id (local rows route on/off/rm by
-// workspace_id — mirrors the server's local LauncherWorkspace).
+// workspace_id -- mirrors the server's local LauncherWorkspace).
 const workspaces: WorkspaceEntry[] = [
   {
     workspace_id: "ws-1",
@@ -59,7 +59,7 @@ const devservers: MockDevserver[] = [
     host: "box.example.com",
     port: 8787,
     label: "prod",
-    script: "ssh box.example.com -L 8787:localhost:8787 chan devserver --service=systemd",
+    script: "ssh box.example.com -L 8787:localhost:8787 chan devserver --service=systemd --join",
     has_token: true,
     token: "tok_seeded_prod",
     library_id: DS_LIBRARY_ID,
@@ -99,7 +99,7 @@ const devserverWorkspaces: WorkspaceEntry[] = [
   },
 ];
 
-// How many live terminal sessions a workspace has — REMOTE rows keyed by
+// How many live terminal sessions a workspace has -- REMOTE rows keyed by
 // `devserver_id:prefix`, LOCAL rows by `local:<workspace_id>`. A workspace
 // listed here makes an UNFORCED off answer 409 `live_terminals` (mirroring the
 // server), so the SPA + tests exercise the confirm-and-retry path; a forced off
@@ -172,8 +172,8 @@ const windows: WindowRecord[] = [
     control: true,
   },
   {
-    // Seeded hidden window: a buried devserver window — webview destroyed
-    // (connected:false) and persisted hidden — so the feed renders a "Hidden
+    // Seeded hidden window: a buried devserver window -- webview destroyed
+    // (connected:false) and persisted hidden -- so the feed renders a "Hidden
     // windows" section and an EyeOff ("Show window") toggle.
     window_id: "w-ds1-term-1",
     library_id: DS_LIBRARY_ID,
@@ -210,7 +210,7 @@ function notify(): void {
   for (const fn of subscribers) fn(set);
 }
 
-/** Drop every local workspace window rooted at `path` from the feed — mirrors
+/** Drop every local workspace window rooted at `path` from the feed -- mirrors
  * the backend's `discard_workspace_windows` so an off/forgotten workspace
  * leaves no ghost window records. */
 function discardWorkspaceWindows(path: string): void {
@@ -295,7 +295,7 @@ export const mockApi: LibraryApi = {
       ws.status = on ? "running" : "stopped";
     }
     // Turning a workspace off PURGES its workspace windows from the feed,
-    // mirroring the backend's discard_workspace_windows (off + forget) — no
+    // mirroring the backend's discard_workspace_windows (off + forget) -- no
     // stale window records linger. On does not restore them (the user opens
     // new ones).
     if (!on && ws) {
@@ -368,7 +368,7 @@ export const mockApi: LibraryApi = {
 
   // The mock has no desktop to dial, so connecting just marks the devserver
   // connected (its served-workspace rows then merge into the feed) and its
-  // existing windows live, then pushes the feed — enough for the mock SPA and
+  // existing windows live, then pushes the feed -- enough for the mock SPA and
   // tests to see the connect action take effect. A real surface runs the
   // connect command and dials the URL through the desktop bridge.
   connectDevserver: (id) => {
@@ -516,7 +516,7 @@ export const mockApi: LibraryApi = {
   },
 
   // The mock has no desktop, so open/hide just flip the in-memory window's
-  // `connected` and push the feed — enough for the mock SPA and tests to see the
+  // `connected` and push the feed -- enough for the mock SPA and tests to see the
   // status dot react. A real surface drives the native window through the bridge.
   // Bridge ops: on the real desktop these funnel through bury/unbury,
   // which persists `hidden` and (un)spawns the webview. The mock mirrors both so

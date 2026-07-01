@@ -219,7 +219,7 @@
     <div class="tip">
       <SquareTerminal size={16} />
       <span>
-        Tip — you can also run <code>chan open &lt;path&gt;</code> in any terminal to add a
+        Tip: you can also run <code>chan open &lt;path&gt;</code> in any terminal to add a
         workspace.
       </span>
     </div>
@@ -259,7 +259,7 @@
         rows="2"
         class="mono"
         bind:value={script}
-        placeholder="ssh box -L 8787:localhost:8787 chan devserver --service=systemd"
+        placeholder="ssh box -L 8787:localhost:8787 chan devserver --service=systemd --join"
         autocomplete="off"
         spellcheck="false"
         disabled={readOnlyEdit}></textarea>
@@ -271,7 +271,7 @@
     <div class="tip">
       <SquareTerminal size={16} />
       <span>
-        Tip — keep connection scripts in the foreground, e.g.
+        Tip: keep connection scripts in the foreground, e.g.
         <code>exec ssh -N …</code>. <code>chan open &lt;url&gt; [--script "…"]</code> adds a dev
         server from the command line with the same result.
       </span>
