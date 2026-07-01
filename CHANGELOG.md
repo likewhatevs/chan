@@ -229,7 +229,7 @@ The first feature round since the unification: multi-client session presence, a 
 
 ## [v0.52.0] - 2026-06-26
 
-A repository-structure unification — the frontend consolidates into a single `./web` npm workspace, build and deploy tooling moves under `./packaging`, and the crate layer gets a naming, docs, and dependency-hygiene pass — plus a round of window and terminal lifecycle fixes.
+A repository-structure unification -- the frontend consolidates into a single `./web` npm workspace, build and deploy tooling moves under `./packaging`, and the crate layer gets a naming, docs, and dependency-hygiene pass -- plus a round of window and terminal lifecycle fixes.
 
 ### Changed
 
@@ -239,14 +239,14 @@ A repository-structure unification — the frontend consolidates into a single `
 
 ### Fixed
 
-- **Dead and offline windows are removable again.** `cs window rm` (and clearing an offline devserver row) now routes through the library's authoritative window discard — it drops the persisted registry row, ends the window's terminal sessions, and deletes their saved layout — so a dead window no longer reappears on the next `cs window list` or after a restart. Removing a window that still has live terminal shells is refused unless `--force` is passed, and `cs window rm` no longer blocks on a desktop confirm dialog.
+- **Dead and offline windows are removable again.** `cs window rm` (and clearing an offline devserver row) now routes through the library's authoritative window discard -- it drops the persisted registry row, ends the window's terminal sessions, and deletes their saved layout -- so a dead window no longer reappears on the next `cs window list` or after a restart. Removing a window that still has live terminal shells is refused unless `--force` is passed, and `cs window rm` no longer blocks on a desktop confirm dialog.
 - **`cs window rm` can remove a connected devserver's window from a local terminal**, not only from one of that devserver's own terminals.
 - **`cs terminal list` shows each terminal's owning window**, its kind (standalone-terminal / workspace / control / orphaned), and whether that window is alive or offline.
 - **A window's titlebar number matches `cs window list`.** Watcher-opened windows now title themselves from the library's persisted ordinal (the `#` column) instead of a desktop-local counter, so the titlebar `Window N` and the registry no longer drift.
 
 ### Notes
 
-- The unification restructures sources only — the rust-embed bundle paths and the `/dl` release-download contract are byte-stable. The window and terminal lifecycle items under **Fixed** are the release's only behavior changes.
+- The unification restructures sources only -- the rust-embed bundle paths and the `/dl` release-download contract are byte-stable. The window and terminal lifecycle items under **Fixed** are the release's only behavior changes.
 
 ## [v0.51.0] - 2026-06-25
 
@@ -285,7 +285,7 @@ Git BASH, and `chan open` integrates with a running devserver over a named pipe.
   lapses, so a lingering task can no longer keep the process alive.
 - **`cs open <path>` moves the cursor to the opened editor** instead of leaving it in
   the terminal that ran the command.
-- **The desktop "Window Hidden" notice mark follows the theme** — a fixed dark logo
+- **The desktop "Window Hidden" notice mark follows the theme** -- a fixed dark logo
   that had become invisible on the dark dialog.
 
 ## [v0.50.0] - 2026-06-25
@@ -301,7 +301,7 @@ position per monitor.
 
 - **`cs terminal survey --timeout=<secs>`** (default 600). On elapse the survey is
   cancelled and the command exits **124** (GNU `timeout` convention) with an
-  elapsed-seconds message on stderr (stdout stays clean for `$(...)` capture) — a
+  elapsed-seconds message on stderr (stdout stays clean for `$(...)` capture) -- a
   distinct timed-out outcome, not an inferred dropped connection.
 - **`cs terminal team new --brief <file>`** (and a Cmd+P team-dialog field) folds a
   brief verbatim into the generated `bootstrap.md`, so it survives a normal `new`.
@@ -329,7 +329,7 @@ position per monitor.
 - **The `system` theme resolves to dark when the OS appearance is undeterminable**
   (e.g. headless linux, where neither prefers-color-scheme query matches), on both
   the app and the launcher.
-- **Pane sizes persist across reload, including empty panes** — a divider drag now
+- **Pane sizes persist across reload, including empty panes** -- a divider drag now
   schedules a layout save.
 - **File-Browser inspector width persists across reload**, routed through the same
   per-tab state the editor inspector already uses.
@@ -358,8 +358,8 @@ ship as container images with Kubernetes manifests.
 ### Changed
 
 - **The launcher drives its spinners from real backend status.** Workspace and devserver
-  toggles reflect the backend lifecycle — workspace `stopped | starting | running |
-  error` and devserver `disconnected | connecting | connected` — instead of a fixed 45s
+  toggles reflect the backend lifecycle -- workspace `stopped | starting | running |
+  error` and devserver `disconnected | connecting | connected` -- instead of a fixed 45s
   optimistic timer. A toggle spins while its workspace is starting and is disabled
   mid-transition, an errored mount surfaces its reason on the row, and a devserver
   disconnect clears the connect spinner with no manual reload.
@@ -385,12 +385,12 @@ A devserver / launcher window-lifecycle, identity, and presentation release: the
 per-library pane focus-border colour now actually persists and reaches every window
 of a chan-library (a root-cause fix), same-basename workspaces coexist, the control
 terminal echoes the command it runs, a new `CHAN_HOME` isolates a chan instance, and
-a batch of presentation + hygiene fixes — several carried over from v0.47.0.
+a batch of presentation + hygiene fixes -- several carried over from v0.47.0.
 
 ### Added
 
-- **`CHAN_HOME` environment variable.** Point chan at a different home directory —
-  config, workspace registry, devserver tree, window/terminal state — without
+- **`CHAN_HOME` environment variable.** Point chan at a different home directory --
+  config, workspace registry, devserver tree, window/terminal state -- without
   changing `$HOME` (e.g. `CHAN_HOME=/tmp/scratch chan …` for a fully isolated
   instance). When it is set, chan-desktop also installs its `chan`/`cs` shims under
   `CHAN_HOME/.local/bin`.
@@ -400,8 +400,8 @@ a batch of presentation + hygiene fixes — several carried over from v0.47.0.
 
 ### Changed
 
-- **Devserver windows use a 🌐 globe icon** — in window titles and the launcher feed
-  — replacing the old outbox-tray / arrow glyph.
+- **Devserver windows use a 🌐 globe icon** -- in window titles and the launcher feed
+  -- replacing the old outbox-tray / arrow glyph.
 - **The shell is never hardcoded.** Terminals and the macOS PATH-harvest resolve the
   user's configured shell uniformly (`$SHELL` → passwd entry → `/bin/sh`); the old
   `/bin/sh` / `/bin/zsh` fallbacks are gone.
@@ -416,7 +416,7 @@ a batch of presentation + hygiene fixes — several carried over from v0.47.0.
 - **Per-library pane focus-border colour now persists and propagates.** Setting a
   pane's focus colour persists for the chan-library, and a newly-opened window (local
   or devserver, terminal or workspace) shows it. Previously the change never
-  persisted — the request was misrouted under the window's tenant prefix and 404'd —
+  persisted -- the request was misrouted under the window's tenant prefix and 404'd --
   so new windows fell back to the default blue.
 - **Pasted rich-prompt images resolve for the receiving agent.** An image pasted into
   the rich prompt is delivered as a workspace-rooted path, so the agent finds it at
@@ -427,7 +427,7 @@ a batch of presentation + hygiene fixes — several carried over from v0.47.0.
 - A **script-based devserver disconnects immediately** when its control script exits:
   no lingering "connected", the control row leaves the feed, and the re-run / abandon
   prompt appears.
-- The launcher's **control-closed survey fires again** — the remote-served launcher
+- The launcher's **control-closed survey fires again** -- the remote-served launcher
   was missing the `core:event` listen permission.
 - Same-name workspaces no longer **crash the launcher** with a duplicate-key error.
 - `chan open` on a port a devserver already holds (`:8787`) prints an **actionable
@@ -436,7 +436,7 @@ a batch of presentation + hygiene fixes — several carried over from v0.47.0.
   detached, instead of lingering as a ghost.
 - A devserver's **Control terminal groups under its devserver** in *Open windows*,
   not under a blank header.
-- Clicking the **eye on a just-closed window** is a clean no-op — no console errors.
+- Clicking the **eye on a just-closed window** is a clean no-op -- no console errors.
 
 ## [v0.47.0] - 2026-06-23
 
@@ -472,7 +472,7 @@ focus-border colour propagates live across all windows of a library.
 ### Fixed
 
 - The devserver group / Control terminal now appears on a fresh (zero-window) connect
-  and survives a reload — previously missing until a second window was minted.
+  and survives a reload -- previously missing until a second window was minted.
 - Control-terminal process exit surfaces the **re-run / edit / abandon** prompt again,
   flips the devserver to disconnected when it is actually unreachable, and removes the
   closed terminal from the feed.
@@ -492,52 +492,52 @@ devserver connection, and the app icon are hardened.
 
 ### Added
 
-- **Launcher — per-window Focus and Show/Hide controls.** Each "Open windows" row
+- **Launcher -- per-window Focus and Show/Hide controls.** Each "Open windows" row
   now has a **Focus** button (raise + focus the window, un-hiding it if buried) and
   an **Eye / Eye-off** show-hide toggle, replacing the single click-to-toggle dot.
-- **Launcher — in-flight spinners.** Turning a workspace on/off and connecting or
+- **Launcher -- in-flight spinners.** Turning a workspace on/off and connecting or
   disconnecting a devserver now show a spinner while the action runs; the spinner
   **survives a launcher reload** and reconciles to the latest state.
-- **Launcher — served workspaces are managed like local ones.** A served
+- **Launcher -- served workspaces are managed like local ones.** A served
   (devserver-mounted) workspace row gets a select checkbox and feeds **one** global
   bulk bar spanning local + served + devserver selections, with an ordered
   cross-kind Remove (forget served → remove devservers → remove local).
 
 ### Changed
 
-- **Launcher — the top-level open-terminal button uses the SquareTerminal icon.**
-- **Graph — "Open" on a file node opens the editor** (matching the File Browser);
+- **Launcher -- the top-level open-terminal button uses the SquareTerminal icon.**
+- **Graph -- "Open" on a file node opens the editor** (matching the File Browser);
   directory nodes still open the File Browser.
-- **App icon — the enso is no longer over-zoomed**, re-rendered with its original
+- **App icon -- the enso is no longer over-zoomed**, re-rendered with its original
   cream-paper margin (colours unchanged).
 
 ### Fixed
 
-- **Editor — a `[[wiki-link]]` to a resolvable note no longer shows a false
+- **Editor -- a `[[wiki-link]]` to a resolvable note no longer shows a false
   "document not found."** The link target is resolved to its real file before
   opening; genuinely broken links still surface the banner.
-- **Editor — reopening a closed File Browser tab (Cmd+Shift+T) restores its
+- **Editor -- reopening a closed File Browser tab (Cmd+Shift+T) restores its
   expanded directories** (and selection, scroll, and workspace toggle).
-- **Launcher — the error/warning banner can be dismissed** (an [X] button) without
+- **Launcher -- the error/warning banner can be dismissed** (an [X] button) without
   reloading.
-- **Launcher — `chan open <url>` shows the new devserver immediately**, with no
+- **Launcher -- `chan open <url>` shows the new devserver immediately**, with no
   manual reload.
-- **Desktop — `cs upload` opens a native file picker** on macOS, so uploads work
+- **Desktop -- `cs upload` opens a native file picker** on macOS, so uploads work
   from a desktop terminal (the web file input is blocked by WKWebView; download was
   unaffected).
-- **Desktop (macOS) — native confirm dialogs honor Return-to-default** — "Quit
+- **Desktop (macOS) -- native confirm dialogs honor Return-to-default** -- "Quit
   Chan?", Remove window, transfer-in-progress, and update-ready all respond to
   Return on the blue default button.
-- **Desktop — the devserver connection no longer leaks file descriptors.** The
+- **Desktop -- the devserver connection no longer leaks file descriptors.** The
   desktop built a fresh HTTP client per poll (~22 leaked connections/minute) until
   the devserver hit its 1024-fd cap and died (~40 min); it now reuses one client.
-- **Manual — the intro bullet list renders correctly** (a missing blank line had
+- **Manual -- the intro bullet list renders correctly** (a missing blank line had
   folded the bullets into the preceding paragraph).
 
 ## [v0.45.0] - 2026-06-23
 
 The desktop release. It finishes the launcher on the **desktop / WKWebView** surface the v0.44.0 headless
-gate couldn't reach, then — across follow-on rounds driven directly by desktop hand-smoke — builds out the
+gate couldn't reach, then -- across follow-on rounds driven directly by desktop hand-smoke -- builds out the
 full **devserver-in-the-launcher** experience and hardens the window lifecycle. A connected devserver's
 windows, served workspaces, and control terminal now appear in the launcher; the focus-border colour
 persists per chan-library (one for the local library, one per devserver); the launcher rows are redesigned
@@ -550,7 +550,7 @@ a devserver-reality docs pass.
 ### Added
 
 - **Desktop auto-update on launch.** chan-desktop checks for an update in the background at startup and
-  prompts to install (honors `CHAN_UPDATE_CHECK=0`) — a directly-booted desktop now self-updates instead
+  prompts to install (honors `CHAN_UPDATE_CHECK=0`) -- a directly-booted desktop now self-updates instead
   of only updating via an explicit `chan upgrade`.
 - **Devserver Connect from the launcher.** The launcher's Connect button now dials a configured devserver
   (runs its connect command in a control terminal and connects), enabled on the desktop surface and inert
@@ -563,17 +563,17 @@ a devserver-reality docs pass.
   streamed tarball, and a cancelled download leaves nothing behind. Workspace transfers stay bounded to
   the workspace root.
 - **Transfer close-guard for connected-devserver windows.** Closing a connected devserver's window
-  mid-transfer prompts Keep open vs Cancel — the in-flight signal now rides the windows feed.
-- **New desktop app icon** — a black enso on cream paper.
+  mid-transfer prompts Keep open vs Cancel -- the in-flight signal now rides the windows feed.
+- **New desktop app icon** -- a black enso on cream paper.
 - **Devserver windows + served workspaces in the launcher.** A connected devserver's standalone terminal,
   control terminal, and workspace windows now appear in the launcher's Open-windows (and the native Window
-  menu), and its `chan open` workspaces appear in the launcher list — grouped under the devserver, with
+  menu), and its `chan open` workspaces appear in the launcher list -- grouped under the devserver, with
   their on/off/Forget routed to it. Built on a devserver-feed source merged into the window feed +
   per-workspace cache, plus disconnect / New-Terminal / open-workspace bridge ops.
 - **Control terminal in the launcher.** A connected devserver's control terminal shows **first** in its
   window group (labelled "Control terminal"), with an optional **"Auto-hide control terminal on success"**
   on the connect form so it tucks away once the connection is up.
-- **Per-library focus-border colour.** The pane focus-border colour now persists per chan-library — set it
+- **Per-library focus-border colour.** The pane focus-border colour now persists per chan-library -- set it
   once and every standalone terminal and workspace window of that library uses it; the local library and
   each devserver each keep their own (file-backed, surviving reconnect/restart). Set from the pane's
   focus-border menu.
@@ -581,12 +581,12 @@ a devserver-reality docs pass.
   On-Off; New terminal / Edit / Connect-Disconnect), with multi-select bulk **Turn on / Turn off / Remove**.
   Edit opens read-only while a devserver is connected.
 - **Turn-off confirm for live terminals.** Turning off a workspace that still has live terminals now prompts
-  with the live-terminal count and offers to force it off — for both devserver and local workspaces.
+  with the live-terminal count and offers to force it off -- for both devserver and local workspaces.
 
 ### Changed
 
 - **Launcher live-refresh.** The desktop launcher's workspace list updates live as you `chan open` a
-  workspace or turn one on/off — no manual reload.
+  workspace or turn one on/off -- no manual reload.
 - **Open-windows rows are show/hide toggles.** Clicking an Open-windows entry shows or hides its window
   (the whole row, not just the dot).
 - **Graph "still indexing" state.** While the workspace index is building, the graph tab shows
@@ -601,14 +601,14 @@ a devserver-reality docs pass.
   authenticated).
 - **Devserver form is Host + Port.** The add/edit devserver dialog takes a host and a port (the URL is
   formed for you) instead of a single URL field; the optional token and connect command stay.
-- **Graph shortcut is `Cmd+Shift+M`** (Linux/Windows `Ctrl+Shift+M`) — restored after a mistaken retirement;
+- **Graph shortcut is `Cmd+Shift+M`** (Linux/Windows `Ctrl+Shift+M`) -- restored after a mistaken retirement;
   it opens a Graph tab in the current window and shows on the Graph tile. `Cmd+Shift+G` stays Find-previous;
   the hybrid-nav alias is `Mod+. M`.
 - **Graph navigation.** "Graph from here" and the inspector's "Open" each open a **new tab** (no in-place
   re-root), and the graph now renders the filesystem skeleton immediately and layers semantic edges in as
   the index settles (instead of showing "unavailable" until the index is ready).
 - **README reduced to a minimal pointer** (download from chan.app or build with the Makefile).
-- **Marketing homepage reworked and the docs consolidated into the manual** — a leaner home page, with the
+- **Marketing homepage reworked and the docs consolidated into the manual** -- a leaner home page, with the
   product documentation living under the manual (refreshed screenshots).
 
 ### Fixed
@@ -616,7 +616,7 @@ a devserver-reality docs pass.
 - **Launcher on-state on the desktop.** A desktop-served workspace now correctly shows as on (it showed
   "Turn on" despite being served); the launcher resolves a workspace's on-state and its on/off/remove
   actions by the workspace's canonical root, not the slug prefix the desktop never mounted at.
-- **Turned-off workspaces no longer leave stale windows in the launcher** — and turn-on restores them.
+- **Turned-off workspaces no longer leave stale windows in the launcher** -- and turn-on restores them.
   Turning a workspace off removes its windows from the launcher but **preserves their layout** (panes/tabs);
   turning it back on restores the same windows (the terminals restart). Only **Forget** purges the layout.
   Holds for both local and devserver workspaces (a devserver workspace's windows no longer resurrect on
@@ -626,15 +626,15 @@ a devserver-reality docs pass.
   greyed dot **shows it back** (previously it could be hidden but not reopened except via the Window menu).
   The OS close button updates the dot too.
 - **Control terminal appears on devserver reconnect** without needing to open a second terminal.
-- **Directory download progress no longer shows `NaN%`** — a streamed directory download (no Content-Length)
+- **Directory download progress no longer shows `NaN%`** -- a streamed directory download (no Content-Length)
   renders an indeterminate progress on the desktop, matching the browser.
 
 ## [v0.44.0] - 2026-06-22
 
 A round that makes the launcher a true view of the real library on the desktop, finishes the
 `chan serve`/`unserve` → `chan open`/`close` verb migration, and turns `cs upload`/`cs download` into a
-visible, cancellable, reload-surviving surface. The launcher's registry CRUD — workspaces **and**
-devservers — flipped off the in-memory mock onto the live `/api/library/*` client, so the desktop
+visible, cancellable, reload-surviving surface. The launcher's registry CRUD -- workspaces **and**
+devservers -- flipped off the in-memory mock onto the live `/api/library/*` client, so the desktop
 launcher lists the user's real `~/.chan` workspaces and configured devservers instead of a hardcoded
 fake set.
 
@@ -643,11 +643,11 @@ fake set.
 - **Launcher reflects reality.** The web-launcher registry CRUD flipped from the in-memory mock to the
   live HTTP client; the desktop loopback lists/mutates the real workspaces + devservers.
 - **Live devserver registry.** `GET/POST /api/library/devservers` + `PUT/DELETE /:id`, backed by a
-  `DevserverRegistry` bridge over the desktop config (token write-only — `has_token` reported, never
+  `DevserverRegistry` bridge over the desktop config (token write-only -- `has_token` reported, never
   echoed); empty + 404-mutation on the headless/gateway surface.
 - **Per-row Open / Turn on.** A workspace row's pill is now **Open** (mint a new workspace window) when on,
   **Turn on** when off; read-only surfaces keep the static pill.
-- **Transfer progress bubble for `cs upload`/`cs download`** — a prominent, cancellable surface (reusing
+- **Transfer progress bubble for `cs upload`/`cs download`** -- a prominent, cancellable surface (reusing
   the download-progress idiom), survives a window reload (in-flight restores as *interrupted*, never a
   frozen bar; download offers Retry, upload Dismiss), with a terminal-style **window close-guard**
   (closing a window mid-transfer prompts hold / cancel).
@@ -659,7 +659,7 @@ fake set.
 
 - **`chan serve`/`unserve` → `chan open`/`close`** (verbs + polymorphic target: a path opens/serves a local
   workspace with the existing desktop/devserver handoff; a `scheme://host` URL registers a devserver).
-- **Devserver form takes one full URL** (scheme included), not Host + Port — the forward hook for the
+- **Devserver form takes one full URL** (scheme included), not Host + Port -- the forward hook for the
   devserver-proxy dial; the desktop defaults the port from the scheme.
 - **Window-bury notice simplified** (no em dash).
 
@@ -674,7 +674,7 @@ fake set.
 
 A round centred on **one launcher, three surfaces**: the `web-launcher` SPA is served at `/` by the
 `chan-library` `WorkspaceHost` root fallback and reached identically on the desktop loopback, a
-`chan devserver`, and the gateway-proxied root through the existing transparent proxy — the native
+`chan devserver`, and the gateway-proxied root through the existing transparent proxy -- the native
 desktop `main.js` launcher was retired. Alongside it, the v0.42.0-reported "indexing stalls" turned out
 to be a slow (not broken, not a regression) single-tail-flush cold embed that *looked* frozen; it now
 commits progress incrementally and runs faster on macOS. Plus the editor / team / window-close
@@ -693,7 +693,7 @@ carryover and `cs upload`/`cs download`.
 
 ### Changed
 
-- **Embeddings cold reindex commits incrementally** — progress advances live and partial results are
+- **Embeddings cold reindex commits incrementally** -- progress advances live and partial results are
   searchable mid-run, instead of one tail flush that looked frozen.
 - **Apple Accelerate CPU BLAS** for embeddings on macOS (~1.5–2× faster cold reindex; target-gated, no
   Linux/musl impact).
@@ -711,8 +711,8 @@ carryover and `cs upload`/`cs download`.
 ## [v0.42.0] - 2026-06-22
 
 A round centred on **"opening a chan-library behaves identically whether it is local or remote."**
-The library now owns the open rules — first open mints exactly one terminal (and never again),
-workspace on/off and terminal-window persistence live in one place — so chan-desktop and a headless
+The library now owns the open rules -- first open mints exactly one terminal (and never again),
+workspace on/off and terminal-window persistence live in one place -- so chan-desktop and a headless
 `chan devserver` inherit one definition. Alongside it, the chan.app gateway migrated to a
 **per-devserver** model: a user's devserver is a first-class entity reached through an
 always-authenticated, segment-preserving reverse-proxy over a per-devserver tunnel.
@@ -722,15 +722,15 @@ always-authenticated, segment-preserving reverse-proxy over a per-devserver tunn
 - **Open a chan-library identically, local or remote.** The first time a library is opened with an
   empty window set it mints exactly one terminal and records that it has done so; close that terminal
   and reopen the library and it comes back with none. This rule now lives in the library itself, so
-  the desktop's local library and a connected `chan devserver` behave the same — replacing the
+  the desktop's local library and a connected `chan devserver` behave the same -- replacing the
   desktop's per-boot "always a shell" floor and the per-connection bootstrap flag.
 - **Per-devserver sharing on chan.app.** A user's devserver is a first-class entity with a stable id;
   the identity dashboard's **Devservers** page manages it and email-based **sharing grants**
   (viewer/editor), and per-workspace share links hand an authenticated browser straight to the
-  devserver. (Opening the *whole* devserver as a launcher is deferred — see below.)
+  devserver. (Opening the *whole* devserver as a launcher is deferred -- see below.)
 - **Library-aware drag-and-drop scope.** Tab and pane drags carry a structured
   `(library_id, container, workspace)` scope, so a terminal or workspace tab only drops within its own
-  library and workspace — consistent local and remote.
+  library and workspace -- consistent local and remote.
 
 ### Changed
 
@@ -738,8 +738,8 @@ always-authenticated, segment-preserving reverse-proxy over a per-devserver tunn
   `workspace-proxy → devserver-proxy` and `workspace-gate → devserver-gate`; tunnel registration is
   keyed on the token-resolved `devserver_id`, the tunnel always authenticates, and the proxy forwards
   the full request path unchanged to the devserver's own router (it renders nothing itself).
-- **New Terminal and Cmd+Shift+N on a devserver window** mint through the focused window's library — a
-  proper library terminal on the shared terminal tenant — instead of a local/legacy isolated terminal.
+- **New Terminal and Cmd+Shift+N on a devserver window** mint through the focused window's library -- a
+  proper library terminal on the shared terminal tenant -- instead of a local/legacy isolated terminal.
 - **Workspace on/off and terminal-window persistence are unified** into one library-owned shape, so a
   restart comes back serving exactly what was on, local and devserver alike.
 
@@ -758,8 +758,8 @@ always-authenticated, segment-preserving reverse-proxy over a per-devserver tunn
 
 ### Removed
 
-- The dead per-label devserver terminal subsystem — `POST /api/devserver/terminals` and its handlers,
-  `PersistedTerminal` persistence, and the Window-menu terminal-reopen path — superseded by library
+- The dead per-label devserver terminal subsystem -- `POST /api/devserver/terminals` and its handlers,
+  `PersistedTerminal` persistence, and the Window-menu terminal-reopen path -- superseded by library
   terminals on the shared tenant.
 - The tunnel's `public` wire field and the dead per-workspace public-router path; the tunnel is always
   authenticated.
@@ -767,27 +767,27 @@ always-authenticated, segment-preserving reverse-proxy over a per-devserver tunn
 ## [v0.41.0] - 2026-06-21
 
 A round centred on the window lifecycle: a single library window registry now owns every window
-(local and devserver), and a window watcher reconciles native windows against its live feed — so
+(local and devserver), and a window watcher reconciles native windows against its live feed -- so
 windows mint, persist, reconnect, reload, and restore their layout from one source of truth.
 On top of that: live cross-window settings sync, dashboard config moved out of the search index,
 broader reload-survival, and an async/perf pass.
 
 ### Added
 
-- **Live cross-window settings sync.** Changing a setting in one window of a workspace — theme,
-  fonts, pane widths, the page-width slider, overlay-maximize — now applies in every other open
+- **Live cross-window settings sync.** Changing a setting in one window of a workspace -- theme,
+  fonts, pane widths, the page-width slider, overlay-maximize -- now applies in every other open
   window of that workspace immediately, without a reload. A Settings save broadcasts a
   `config_changed` frame on the workspace's event bus and each window re-reads and reflects it.
 - **Web launcher: Gmail-style multi-select + bulk actions.** Select one or more workspace rows to
-  reveal a bulk-action bar — Turn On, Turn Off, Delete — that loops the single-workspace op over the
+  reveal a bulk-action bar -- Turn On, Turn Off, Delete -- that loops the single-workspace op over the
   selection and reports partial failures. Delete is bulk-only behind a confirm; the per-row On/Off
   pill stays the quick single toggle.
 - **Web launcher: Open terminal.** A top-bar button that mints a fresh local terminal window.
 - `cs terminal close --tab-name <n> | --tab-group <g>`: tear down terminal sessions by name or
-  group — the explicit teardown partner to `cs terminal restart` / `new`. Closing a session frees
+  group -- the explicit teardown partner to `cs terminal restart` / `new`. Closing a session frees
   its tab name; `--tab-group` tears down a whole group (e.g. a finished team) in one call.
 - Confirm-before-off for a workspace with live terminals: turning a workspace off when it still has
-  running terminals now prompts ("N terminals still running — turn off anyway?") and only unmounts
+  running terminals now prompts ("N terminals still running -- turn off anyway?") and only unmounts
   on confirm, instead of silently killing the shells. Enforced server-side so the desktop, `cs`, and
   the launcher all get the guard.
 
@@ -797,12 +797,12 @@ broader reload-survival, and an async/perf pass.
   per-library registry is the authoritative window set (it mints opaque window ids, assigns
   "Window N" ordinals, composes titles, and persists the set to disk). The desktop opens, closes,
   and restores native windows by reconciling against that set's live feed, for both local windows
-  and a connected `chan devserver` — replacing the per-surface imperative open/close paths. Standalone
+  and a connected `chan devserver` -- replacing the per-surface imperative open/close paths. Standalone
   terminals are now first-class library windows under the same lifecycle, so they mint, persist, and
   reopen like workspace windows. `cs window list` reads the same set, so `cs`, the launcher, the HTTP
   API, and the desktop never disagree.
 - The dashboard / overlay config (screensaver toggle, timeout, theme, pin, and the report /
-  semantic-search opt-ins) is no longer stored inside the search index config — it moves to a
+  semantic-search opt-ins) is no longer stored inside the search index config -- it moves to a
   per-workspace `dashboard.toml`, so a search reindex or a vector wipe can no longer reset it.
   Existing workspaces migrate their toggles in place on first open.
 - `cs-link-dismissed`, the page-width ratio, and overlay-maximize are now per-library server
@@ -811,12 +811,12 @@ broader reload-survival, and an async/perf pass.
 
 ### Fixed
 
-- **Reload-survival of the full layout.** A window reloads back to its exact prior state — a
+- **Reload-survival of the full layout.** A window reloads back to its exact prior state -- a
   standalone terminal, a terminal-only or empty-split layout, and a Hybrid pane flip (with its
   per-Hybrid theme) all now persist and restore, where before they reset on reload, off/on, or a
   desktop relaunch. (Terminal panes come back with fresh shells; the layout is preserved.)
 - **Transparent re-attach of a restarted terminal.** `cs terminal restart` now re-attaches the tab
-  to the relaunched session in place — the shell swaps under a live socket and the tab stays — instead
+  to the relaunched session in place -- the shell swaps under a live socket and the tab stays -- instead
   of dropping the tab and leaving a live-backend / dead-frontend ghost.
 - A killed terminal session is reaped from the registry so it stops appearing in `cs terminal list`
   and frees its tab name, so re-spawning under that name no longer collides and comes up renamed.
@@ -824,7 +824,7 @@ broader reload-survival, and an async/perf pass.
   editable so you can queue messages back to back, ArrowUp recalls the last queued message to edit,
   and Esc dequeues it (or abandons the current draft). A failed send restores the text for retry.
 - macOS GUI launch (Finder / Dock / Spotlight) now resolves the user's real interactive shell PATH
-  before the embedded server starts, so `~/.local/bin`, Homebrew, and custom dirs are visible — fixing
+  before the embedded server starts, so `~/.local/bin`, Homebrew, and custom dirs are visible -- fixing
   the false "create the `cs` alias" card under the restricted launchd PATH. The resolution is bounded
   with a ~3s timeout so a pathological shell rc can't hang app launch.
 - Cmd+R (and the devtools / zoom chords) are no longer dead on a devserver window: the desktop
@@ -833,7 +833,7 @@ broader reload-survival, and an async/perf pass.
 - The editor hang-recovery buffer is now namespaced per workspace, so two workspaces with a file at
   the same relative path (e.g. `README.md`) can no longer restore one's unsaved content into the other.
 - The onboarding nudge ("enable semantic search + reports") now shows only on a workspace's first
-  boot — gated on whether the workspace has any indexed content or an optional layer enabled — instead
+  boot -- gated on whether the workspace has any indexed content or an optional layer enabled -- instead
   of on every boot in a fresh WebView.
 - Performance / async hardening: PTY spawn and the `lsof` cwd probes run off the terminal-registry
   lock (and off the async runtime), so a terminal launch or a multi-session `cs term list` no longer
@@ -843,13 +843,13 @@ broader reload-survival, and an async/perf pass.
 
 ## [v0.40.0] - 2026-06-19
 
-Making the `chan devserver` window + terminal lifecycle actually work end to end — reconnect,
-window cleanup, and the file-descriptor leak — plus the devserver serving the host library, a CLI
+Making the `chan devserver` window + terminal lifecycle actually work end to end -- reconnect,
+window cleanup, and the file-descriptor leak -- plus the devserver serving the host library, a CLI
 reorganisation, and the deferred Windows/graph items.
 
 ### Added
 
-- `chan ps`: show which registered workspaces are currently being served, and by what — a standalone
+- `chan ps`: show which registered workspaces are currently being served, and by what -- a standalone
   `chan serve`, chan-desktop, or a `chan devserver`.
 - Menu-reopen of closed devserver windows: a connected devserver's closed-but-saved windows appear in
   the chan-desktop Window menu and reopen to their live terminal / saved workspace layout.
@@ -862,7 +862,7 @@ reorganisation, and the deferred Windows/graph items.
 
 - Reconnecting to a `chan devserver` (from chan-desktop or a browser tab) now **re-attaches to the
   live terminal sessions** instead of restarting them: standalone-terminal shells and a workspace's
-  terminals come back with their processes still running and scrollback intact — not fresh shells.
+  terminals come back with their processes still running and scrollback intact -- not fresh shells.
 - The devserver **file-descriptor leak** (EMFILE on a long-running devserver) is fixed at its root: a
   terminal session now lives exactly as long as its window is *saved*, so a discarded window's
   sessions are reaped immediately and busy detached sessions no longer leak descriptors across
@@ -870,8 +870,8 @@ reorganisation, and the deferred Windows/graph items.
 - Window cleanup is now explicit: closing a window with ^W / ^D / Ctrl+Shift+W, and empty windows,
   **discard** the window (gone from `cs window list`); only **burying** a window (the OS close button
   while connected, or a window with content) saves and hides it.
-- The control-terminal dialog now fires on a **connected-phase exit** — the connect script returning
-  on its own or via Ctrl-C — and on Cmd+W while it is still running, not only during connecting.
+- The control-terminal dialog now fires on a **connected-phase exit** -- the connect script returning
+  on its own or via Ctrl-C -- and on Cmd+W while it is still running, not only during connecting.
 - `chan devserver` now **serves the host library**: it lists every workspace `chan workspace ls`
   shows (each on/off-able), instead of coming up empty and chan-desktop hanging on "Loading…".
 - fs-graph paged-resume pages no longer carry parent-less `contains` edges (an internal correctness
@@ -879,14 +879,14 @@ reorganisation, and the deferred Windows/graph items.
 
 ### Changed
 
-- CLI: registry and content operations are grouped under a `chan workspace <…>` subcommand —
+- CLI: registry and content operations are grouped under a `chan workspace <…>` subcommand --
   `chan add` → `chan workspace add`, `chan list` → `chan workspace ls`, `chan remove` →
   `chan workspace rm`, and `index` / `reports` / `search` / `graph` / `status` / `metadata` /
   `contacts` likewise. The top level keeps `serve`, `unserve`, `ps`, `devserver`, `shell`, `config`,
   `upgrade`, and `completions`. (Pre-release: the old flat forms are removed, not aliased.)
 - The `chan` tagline is now "an AI-native workspace for your Markdown notes and projects."
 - "Forget" on a devserver workspace now removes it from the host library (the same as
-  `chan workspace rm`, binning its trash) — one destructive Forget across the CLI, chan-desktop, and
+  `chan workspace rm`, binning its trash) -- one destructive Forget across the CLI, chan-desktop, and
   the devserver, since the host library is the single source of truth.
 
 ## [v0.39.1] - 2026-06-18
@@ -900,7 +900,7 @@ A patch for three issues found smoke-testing the v0.39.0 `chan devserver` connec
   every other devserver terminal), so it also re-surfaces on reconnect. This also fixes Cmd+Shift+N
   on a focused devserver terminal silently falling back to the launcher.
 - The control terminal now surfaces the abandon / edit / retry dialog on every close or exit while
-  connecting — Ctrl-C, Ctrl-W, or the close button — not only when the connect script fails. Choosing
+  connecting -- Ctrl-C, Ctrl-W, or the close button -- not only when the connect script fails. Choosing
   abandon disconnects and resets the launcher back to "Connect" instead of leaving it stuck on
   "connecting".
 - Connect-failure error message: the missing period before "Its control terminal is still open …" is
@@ -914,19 +914,19 @@ correctness, and standalone-terminal persistence.
 ### Added
 
 - Devserver workspaces now have an on/off toggle: unload a remote workspace (releasing its writer
-  lock) without forgetting it, then toggle it back on — from the chan-desktop launcher. The off/on
+  lock) without forgetting it, then toggle it back on -- from the chan-desktop launcher. The off/on
   state persists across a devserver restart.
 - `chan unserve <path>`: tear down a running `chan serve` for a workspace from the command line (the
   CLI counterpart to the desktop on/off), releasing the writer lock so the workspace can be re-served
   or removed.
 - `chan remove <path>` now unserves a running serve first, then forgets everything about the
-  workspace — index, graph, sessions, tokens, report, registry entry, and the whole
-  `~/.chan/workspaces/<key>/` metadata directory — so it never fails with "workspace locked" on a
+  workspace -- index, graph, sessions, tokens, report, registry entry, and the whole
+  `~/.chan/workspaces/<key>/` metadata directory -- so it never fails with "workspace locked" on a
   live serve.
 - Self-upgrade download progress: a text meter (percent, size, elapsed, ETA) in the terminal and a
   progress bar in chan-desktop.
 - Standalone terminal persistence at the launcher: a devserver's terminal windows and their pane/tab
-  layout come back when chan-desktop reconnects or the devserver restarts — reconnecting to the live
+  layout come back when chan-desktop reconnects or the devserver restarts -- reconnecting to the live
   shells while the devserver is still up, or fresh shells with the saved layout after a restart.
   `cs window list` and the Window menu reflect them.
 
@@ -957,7 +957,7 @@ correctness, and standalone-terminal persistence.
 ### Fixed
 
 - Editor: opening a Markdown file with Windows (CRLF) line endings no longer freezes the editor in a reactive render loop. CodeMirror normalizes the document to LF internally, so the external-value sync now compares and writes against the same normalization; previously a `\r\n` file never matched the live (LF) document, re-dispatching on every reactive pass until Svelte tripped its update-depth guard.
-- `chan devserver --systemd`: a fresh start now surfaces the bearer token to the controlling terminal even when the invoking user cannot read the systemd journal (a uid below `SYS_UID_MAX`, or a user outside the `systemd-journal`/`adm` groups) — the supervisor emits the `CHAN_DEVSERVER_TOKEN=` marker directly from the persisted config rather than relying on the journal follow, and keeps supervising (or fails loud) instead of quitting when the journal stream ends.
+- `chan devserver --systemd`: a fresh start now surfaces the bearer token to the controlling terminal even when the invoking user cannot read the systemd journal (a uid below `SYS_UID_MAX`, or a user outside the `systemd-journal`/`adm` groups) -- the supervisor emits the `CHAN_DEVSERVER_TOKEN=` marker directly from the persisted config rather than relying on the journal follow, and keeps supervising (or fails loud) instead of quitting when the journal stream ends.
 
 ## [v0.38.0] - 2026-06-17
 
@@ -969,9 +969,9 @@ correctness, and standalone-terminal persistence.
 ### Changed
 
 - `chan serve` now requires an explicit workspace path. Running it with no path exits with an error asking you to pass one, instead of falling back to a default workspace.
-- New workspaces open with no docked file browser — just the empty pane — across the web app, chan-desktop, and devserver workspaces.
+- New workspaces open with no docked file browser -- just the empty pane -- across the web app, chan-desktop, and devserver workspaces.
 - A devserver's launcher section mirrors the local-workspace controls: a single Connect button with an Edit/Forget menu that becomes Disconnect plus a New Terminal button once connected; adding a devserver auto-connects it.
-- Per-devserver standalone terminals behave like local ones — Cmd+Shift+N opens another terminal on the same devserver, and terminal tabs drag and drop between that devserver's windows. Control terminals stay isolated from both.
+- Per-devserver standalone terminals behave like local ones -- Cmd+Shift+N opens another terminal on the same devserver, and terminal tabs drag and drop between that devserver's windows. Control terminals stay isolated from both.
 - Connecting to a scripted devserver reads its token from the connect-script's `CHAN_DEVSERVER_TOKEN=` output on every connect (including a `--systemd` re-attach), so reconnecting after a dropped connection or a devserver restart is seamless.
 
 ### Fixed
@@ -1007,9 +1007,9 @@ correctness, and standalone-terminal persistence.
 
 ### Fixed
 
-- Windows: opening a terminal no longer briefly hangs the app while Git BASH is being discovered — discovery is primed off the async request path.
+- Windows: opening a terminal no longer briefly hangs the app while Git BASH is being discovered -- discovery is primed off the async request path.
 - Windows: `chan` and `cs` resolve from the desktop install in cmd, PowerShell, and Git BASH, and a freshly-opened shell picks them up without a logout.
-- Windows: `chan` / `cs` now actually print their output (for example `chan --version`) when run from a terminal — the desktop binary reattaches to the parent console for the CLI path; output redirection (`> out.txt`) still works.
+- Windows: `chan` / `cs` now actually print their output (for example `chan --version`) when run from a terminal -- the desktop binary reattaches to the parent console for the CLI path; output redirection (`> out.txt`) still works.
 - Windows: `chan serve <path>` hands the workspace to a running chan-desktop (opening it in a window) instead of starting a standalone browser server and leaving the workspace stuck "off" in the launcher.
 - Windows: opening a file in a workspace no longer hangs the whole window while the workspace is still building its index. The graph reader pool no longer stalls behind the first index build (a contended read now fails fast instead of parking), and the reindex paces itself so the editor loads and the window stays responsive; the relationship/graph panels fill in once indexing finishes.
 - The Settings shortcut (Ctrl+,) is shown in the terminal-tab and editor-tab right-click menus.
@@ -1067,7 +1067,7 @@ correctness, and standalone-terminal persistence.
 
 ### Added
 
-- Linux and Windows gained File > Close Window on Ctrl+Shift+W (plain Ctrl+W remains a terminal readline chord): it closes the active tab in a workspace window, cancels a connecting window, and closes other windows natively — the same routing macOS has on Cmd+W.
+- Linux and Windows gained File > Close Window on Ctrl+Shift+W (plain Ctrl+W remains a terminal readline chord): it closes the active tab in a workspace window, cancels a connecting window, and closes other windows natively -- the same routing macOS has on Cmd+W.
 
 ### Changed
 
@@ -1086,7 +1086,7 @@ correctness, and standalone-terminal persistence.
 - Closing a desktop window with the OS close button now hides ("buries") it instead of destroying it: terminals keep running, the layout stays warm, and an informational dialog explains the behaviour. Buried windows are listed in a "Hidden Windows" section of the Window menu for reopening; a standalone terminal window with no shells left still closes for real.
 - Cmd/Ctrl+Shift+N now reopens the most recently hidden window of the focused window's family before opening a new one, and "New Window" follows the focused connection everywhere: another window of the same local workspace, the same outbound or tunneled remote, or another standalone terminal window.
 - Remote windows are reopenable ad hoc: chan-server gained `GET /api/windows` (saved per-window layouts joined with live socket presence), and chan-desktop polls outbound/tunnel connections to offer their reopenable windows in a "Remote Windows" menu section.
-- `cs window list` (or `cs w l`) shows every window the server knows about — open (a live event socket is connected) and/or saved (a persisted layout exists). Works in workspaces and standalone terminals.
+- `cs window list` (or `cs w l`) shows every window the server knows about -- open (a live event socket is connected) and/or saved (a persisted layout exists). Works in workspaces and standalone terminals.
 - Standalone terminal windows now expose the chan control socket: `cs terminal list/write/restart/scrollback`, `cs pane`, `cs terminal survey`, and `cs window list` work inside them, while workspace-only commands (open, graph, dashboard, search, team) refuse with a clear "this is a standalone terminal session" message.
 - Quitting Chan Desktop (Cmd+Q or the Quit menu) now asks for confirmation while any window is open or hidden, since quitting stops their terminals and local workspaces. A bare launcher still quits silently.
 - A window now reloads itself when the server process behind it restarts (e.g. an outbound `chan serve` was ^C'd and re-run): previously the window sat on a stale view with stuck terminals until a manual reload.
@@ -1111,21 +1111,21 @@ correctness, and standalone-terminal persistence.
 ### Changed
 
 - The "Set MCP env vars" control moved from the terminal right-click menu into Terminal Settings, where it is a single global toggle (off by default) that applies to newly opened workspace terminals.
-- Desktop windows are now numbered in the Window menu — "<workspace> Window 1", "Terminal Window 1", "Chan Desktop Window 1", and so on — with a number reused when a window closes, so duplicate windows are no longer indistinguishable.
+- Desktop windows are now numbered in the Window menu -- "<workspace> Window 1", "Terminal Window 1", "Chan Desktop Window 1", and so on -- with a number reused when a window closes, so duplicate windows are no longer indistinguishable.
 - The broadcast-input Select All / Deselect All shortcut now works on Linux and Windows as Ctrl+Shift+I (Cmd+Shift+I on macOS); it previously had no binding outside macOS.
 - The install script now also symlinks `cs` to `chan` in the install directory.
 
 ### Fixed
 
 - Enabling MCP env vars now actually sets CHAN_MCP_* in newly opened workspace terminals; the toggle had no effect after MCP was made off-by-default. Standalone terminal windows have no workspace and still do not expose MCP.
-- Dragging a terminal tab into another window no longer pulls the Chan Desktop launcher to the front when the source window closes — focus stays on the window you dropped into.
+- Dragging a terminal tab into another window no longer pulls the Chan Desktop launcher to the front when the source window closes -- focus stays on the window you dropped into.
 
 ## [v0.30.0] - 2026-06-10
 
 ### Changed
 
 - The Dashboard carousel now opens on Workspace first, then Search, then About (previously About led).
-- The per-workspace config — your default workspace directory and the recent workspaces list — moved off the Workspace dashboard slide and onto that slot's settings. Flip the slide with Cmd+, to reach it, below chan-reports and the metadata archive.
+- The per-workspace config -- your default workspace directory and the recent workspaces list -- moved off the Workspace dashboard slide and onto that slot's settings. Flip the slide with Cmd+, to reach it, below chan-reports and the metadata archive.
 - The workspace inspector's "Notes directories" section is now titled "Workspaces".
 
 ### Fixed

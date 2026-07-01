@@ -116,7 +116,7 @@ struct WorkspaceEntry {
     token: String,
 }
 
-/// `POST /api/devserver/workspaces/{prefix}/on` body — mirrors the server's
+/// `POST /api/devserver/workspaces/{prefix}/on` body -- mirrors the server's
 /// `SetWorkspaceOnRequest`. `on:false` keeps the workspace registered
 /// (unmount-but-remember), distinct from `DELETE` = Forget. `force` overrides
 /// the server's off-with-live-terminals guard (the 409 below).
@@ -127,7 +127,7 @@ struct SetWorkspaceOnRequest {
 }
 
 /// The server's 409 body when an unforced off is rejected because the tenant
-/// still has live terminals — mirrors `ActiveTerminalsRejection`.
+/// still has live terminals -- mirrors `ActiveTerminalsRejection`.
 #[derive(Debug, serde::Deserialize)]
 struct ActiveTerminalsRejection {
     active_terminals: usize,
@@ -173,7 +173,7 @@ pub struct DevserverWorkspaceRow {
 /// reqwest's keep-alive connection pool: the 5s workspace/colour poll
 /// (`main.rs`) opens two requests per cycle, and a per-call Client never reuses
 /// a connection, so the devserver held each one ESTABLISHED waiting for a reuse
-/// that never came — ~22 leaked conns/min until it hit its 1024-fd cap (~40 min)
+/// that never came -- ~22 leaked conns/min until it hit its 1024-fd cap (~40 min)
 /// and started failing every accept with "Too many open files"
 /// (`dev/devserver-bug/analysis.md`). A single cached Client shares one
 /// connection pool across all callers (the pool keys on host:port, so each
@@ -199,7 +199,7 @@ fn http_client() -> Result<reqwest::Client, String> {
 
 /// The management-API origin the desktop dials. Raw HTTP over the tunnel today
 /// (the common `ssh -L` loopback case). FOLLOW-UP: a proxied-HTTPS dial (with
-/// OAuth) will branch on the stored URL's scheme — [`parse_devserver_url`] keeps
+/// OAuth) will branch on the stored URL's scheme -- [`parse_devserver_url`] keeps
 /// the host/port; the scheme-aware branch is deferred (OAuth not built yet).
 fn base_origin(host: &str, port: u16) -> String {
     format!("http://{host}:{port}")
@@ -208,7 +208,7 @@ fn base_origin(host: &str, port: u16) -> String {
 /// Parse a stored devserver URL into the `(host, port)` the raw-tunnel dial
 /// uses. The port defaults from the scheme when the URL omits it (`https`→443,
 /// `http`→80), so `https://x.devserver.chan.app` resolves without an explicit
-/// port. Bare `host:port` (no scheme) is rejected — the launcher requires a
+/// port. Bare `host:port` (no scheme) is rejected -- the launcher requires a
 /// `scheme://host` URL. The scheme is preserved in the stored URL for the
 /// deferred proxied-HTTPS+OAuth dial branch (see [`base_origin`]); this only
 /// extracts what the current raw-tunnel dial needs.
@@ -400,7 +400,7 @@ pub async fn fetch_local_color(conn: &DevserverConn) -> Result<Option<String>, S
 
 /// Turn a wire `WorkspaceEntry` into a launcher row, assembling the tenant URL
 /// from its token. An off (registered-but-unmounted) row carries `token:""` and
-/// gets an empty URL — it has no live tenant; the launcher renders it off and
+/// gets an empty URL -- it has no live tenant; the launcher renders it off and
 /// Open turns it on first (which mints a fresh token).
 fn row_from_entry(
     conn: &DevserverConn,
@@ -427,7 +427,7 @@ fn row_from_entry(
 /// persisted windows for reopen in the Window menu. Deserialized 1:1 from the
 /// frozen wire; `title` is optional (mirrors `WindowInfo`). `prefix` + the
 /// CURRENT (re-minted) per-mount `token` assemble the reopen URL; `token` is
-/// empty when the tenant is off (not menu-reopenable — use the launcher row).
+/// empty when the tenant is off (not menu-reopenable -- use the launcher row).
 #[derive(Debug, Clone, Deserialize)]
 pub struct DevserverWindowRow {
     pub label: String,
@@ -466,7 +466,7 @@ pub async fn fetch_devserver_windows(
 }
 
 /// The full window set a connected devserver serves at
-/// `GET /api/library/windows` — the watcher's initial seed (it also carries the
+/// `GET /api/library/windows` -- the watcher's initial seed (it also carries the
 /// devserver's `library_id`, stamped per row, the watcher's first read of which
 /// library it is reconciling). The WS `/watch` then pushes every change. The new
 /// library feed that supersedes the per-tenant `fetch_devserver_windows`.
@@ -491,7 +491,7 @@ pub async fn fetch_library_windows(
 /// Mint a window on a connected devserver's library
 /// (`POST /api/library/windows`): the library assigns the id, persists the
 /// record, and fires the watch, so the desktop's watcher reconciles the new
-/// window open — no client-side open. Used for the first-connect boot terminal
+/// window open -- no client-side open. Used for the first-connect boot terminal
 /// (`kind: Terminal`) and launcher-open reroutes.
 pub async fn mint_library_window(
     conn: &DevserverConn,
@@ -524,7 +524,7 @@ pub async fn mint_library_window(
 /// `DELETE /api/library/windows/{window_id}`: discard a devserver window's
 /// registry record. The server drops the row, PERSISTS the removal
 /// (`save_best_effort`), and fires the watch so every client's reconcile closes
-/// the window. The devserver analog of the local `embedded.discard_window` — a
+/// the window. The devserver analog of the local `embedded.discard_window` -- a
 /// closed devserver window must DELETE its record, else it survives server-side
 /// and reopens (empty) on restart. A 404 (already gone) is success.
 pub async fn discard_library_window(conn: &DevserverConn, window_id: &str) -> Result<(), String> {
@@ -641,7 +641,7 @@ fn workspace_on_url(host: &str, port: u16, prefix: &str) -> String {
 /// or unmount (`on:false`) a registered workspace WITHOUT forgetting it. Turning
 /// on mints a fresh tenant token; turning off clears it. Idempotent server-side.
 /// An unforced off is rejected with 409 + a live-terminal count when the tenant
-/// has open terminals — surfaced as [`SetWorkspaceOnError::ActiveTerminals`] so
+/// has open terminals -- surfaced as [`SetWorkspaceOnError::ActiveTerminals`] so
 /// the SPA can confirm-then-force; `force: true` overrides the guard.
 pub async fn set_workspace_on(
     conn: &DevserverConn,
@@ -704,7 +704,7 @@ mod tests {
 
     #[test]
     fn parse_devserver_url_rejects_bare_host_port_and_garbage() {
-        // Bare host:port has no scheme — the launcher requires scheme://host.
+        // Bare host:port has no scheme -- the launcher requires scheme://host.
         assert!(parse_devserver_url("127.0.0.1:8787").is_err());
         assert!(parse_devserver_url("not a url").is_err());
         assert!(parse_devserver_url("").is_err());
@@ -892,7 +892,7 @@ mod tests {
     #[test]
     fn scrape_token_ignores_the_w5_running_banner() {
         // The terminal layer prepends a `running: {command}\r\n` banner to
-        // the control terminal's scrollback before the connect script runs — it is
+        // the control terminal's scrollback before the connect script runs -- it is
         // the FIRST ring bytes, ahead of any token the devserver emits. Confirm it
         // can't disturb the scrape.
         //
@@ -902,8 +902,8 @@ mod tests {
         let out = "running: ssh box -L 8787:localhost:8787 chan devserver\r\n\
                    CHAN_DEVSERVER_TOKEN=tok_real123\r\n$ ";
         assert_eq!(scrape_token(out).as_deref(), Some("tok_real123"));
-        // 2. Even pathologically — a command string that literally embeds the marker
-        //    — the banner is the FIRST bytes and `scrape_token` takes the LAST marker
+        // 2. Even pathologically -- a command string that literally embeds the marker
+        //    -- the banner is the FIRST bytes and `scrape_token` takes the LAST marker
         //    (`rmatch_indices`), so the devserver's real token (emitted AFTER the
         //    script connects) still wins; the banner's marker is never reached.
         let pathological = "running: CHAN_DEVSERVER_TOKEN=from_command chan devserver\r\n\

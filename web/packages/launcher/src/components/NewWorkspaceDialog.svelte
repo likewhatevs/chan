@@ -219,7 +219,7 @@
     <div class="tip">
       <SquareTerminal size={16} />
       <span>
-        Tip — you can also run <code>chan open &lt;path&gt;</code> in any terminal to add a
+        Tip: you can also run <code>chan open &lt;path&gt;</code> in any terminal to add a
         workspace.
       </span>
     </div>
@@ -271,7 +271,7 @@
     <div class="tip">
       <SquareTerminal size={16} />
       <span>
-        Tip — keep connection scripts in the foreground, e.g.
+        Tip: keep connection scripts in the foreground, e.g.
         <code>exec ssh -N …</code>. <code>chan open &lt;url&gt; [--script "…"]</code> adds a dev
         server from the command line with the same result.
       </span>

@@ -269,7 +269,7 @@ impl DevserverState {
     /// Mount `root` at `prefix` in the host and record it as on. The host
     /// opens through the shared `Library`, which requires the root to be
     /// registered first; registering an already-known root is a no-op. Does
-    /// NOT persist — callers batch the save. Returns the prefix actually
+    /// NOT persist -- callers batch the save. Returns the prefix actually
     /// mounted at (the host's idempotent re-register can return an existing
     /// prefix; for a fresh mount it is `prefix`).
     ///
@@ -306,7 +306,7 @@ impl DevserverState {
 
     /// Track `root` at `prefix` as registered-but-off (remembered, not
     /// mounted, no token). Re-surfaces an off row on restart and is the off
-    /// side of a toggle. Does NOT persist — callers batch the save.
+    /// side of a toggle. Does NOT persist -- callers batch the save.
     fn track_off(&self, root: &Path, prefix: &str) {
         let record = WorkspaceRecord {
             root: root.to_path_buf(),
@@ -420,7 +420,7 @@ impl DevserverState {
         // (library, devserver listing, CLI). `set_workspace_on {on:false}` is
         // the reversible unmount; this is the removal. Resolve the root from the
         // serving record OR, for a library workspace not currently served, the
-        // library itself — every library workspace is forgettable.
+        // library itself -- every library workspace is forgettable.
         let root = {
             let workspaces = self.workspaces.lock().unwrap_or_else(|e| e.into_inner());
             workspaces.get(prefix).map(|record| record.root.clone())
@@ -601,7 +601,7 @@ impl DevserverState {
     /// (it only ever mounted per-LABEL terminals via the lower-level
     /// `open_terminal_session_with_command`, which does NOT set the OnceLock), so
     /// every devserver Terminal window carried an empty token and the desktop
-    /// watcher's `should_show` (which requires a non-empty token) hid it —
+    /// watcher's `should_show` (which requires a non-empty token) hid it --
     /// vanishing on every reconnect. `Some(dir)` persists each window's pane
     /// layout. One shared tenant per library, so this is called once at startup.
     async fn mount_shared_terminal_tenant(&self) -> Result<(), Error> {
@@ -689,7 +689,7 @@ pub async fn run_devserver(library: Library, config: DevserverConfig) -> anyhow:
     // boot. Run after mounting the shared terminal tenant so the minted window
     // resolves to a real prefix+token. Persisted-workspace restore follows, so a
     // first boot whose persisted set turns a workspace ON still mints the
-    // terminal (the registry was empty at this point) — matching "open spawns one
+    // terminal (the registry was empty at this point) -- matching "open spawns one
     // terminal".
     state
         .host
@@ -743,7 +743,7 @@ pub async fn run_devserver(library: Library, config: DevserverConfig) -> anyhow:
 
     // Bind the local TCP listener up front (so a bind failure errors before we
     // dial the tunnel), unless the resolved config is tunnel-only. `addr` is
-    // still meaningful when unbound — the discovery socket and the per-tenant
+    // still meaningful when unbound -- the discovery socket and the per-tenant
     // window records use it; only the loopback TCP bind is skipped.
     let listener = if config.listen {
         Some(
@@ -807,7 +807,7 @@ pub async fn run_devserver(library: Library, config: DevserverConfig) -> anyhow:
         None => {
             // Tunnel-only: no local TCP listener. The discovery Unix socket and
             // the tunnel are already up; report the public endpoint instead of a
-            // bound address. The token marker is omitted — it is scraped only on
+            // bound address. The token marker is omitted -- it is scraped only on
             // a LOCAL connect, so it is moot with no listener (and tunnel mode is
             // foreground-only, so no supervisor follows a journal for it).
             match &tunnel_url {
@@ -957,14 +957,14 @@ fn build_devserver_app(state: Arc<DevserverState>, host: Arc<WorkspaceHost>) -> 
         ))
         .with_state(state);
     // Serve the web-launcher SPA at the library root `/` plus the `/api/library/*`
-    // data surface (windows; workspaces next) as the host's root fallback —
+    // data surface (windows; workspaces next) as the host's root fallback --
     // without it the root 404s, since `host_dispatch` only matches
     // workspace-tenant prefixes. The `/api/library/windows*` routes used to live
     // in `authed` above; they now live in the shared launcher bundle so the
     // desktop loopback gets them too (the loopback never built this router).
     //
     // `bearer = None` (TUNNEL-TRUST) on the gateway surface: the devserver has
-    // no inbound ports, and the gateway proxy is the sole auth boundary — it
+    // no inbound ports, and the gateway proxy is the sole auth boundary -- it
     // validates the `devserver_gate` at its edge and STRIPS every client
     // credential (`?t=`, Cookie, Authorization) before forwarding, so a
     // launcher XHR reaches `/api/library/*` with zero creds. A `Some(token)`
@@ -1125,7 +1125,7 @@ async fn handle_forget(
 
 /// Set whether the registered workspace addressed by the route is mounted.
 /// The catch-all captures `<prefix>/on` (the client appends the prefix
-/// verbatim then `/on`, mirroring the `DELETE` convention — an axum catch-all
+/// verbatim then `/on`, mirroring the `DELETE` convention -- an axum catch-all
 /// can't carry a fixed `/on` suffix, so the suffix rides inside the capture);
 /// we recover the prefix by stripping the trailing `/on`. A capture that is
 /// not `<prefix>/on` is not this endpoint and 404s. The body is
@@ -1408,7 +1408,7 @@ mod tests {
         assert!(state.host.mounted_prefixes().unwrap().contains(&prefix));
 
         // A SECOND workspace with the same basename under a DIFFERENT parent
-        // no longer collides — the hash keys the prefix to the root, so both
+        // no longer collides -- the hash keys the prefix to the root, so both
         // mount at distinct prefixes (the bug was the second being rejected).
         let other = tempfile::tempdir().expect("other");
         let notes2 = other.path().join("notes");
@@ -1704,7 +1704,7 @@ mod tests {
         // Toggle on: remounted at the SAME prefix. chan's per-workspace token
         // is persisted, so the on row carries that SAME stable token (the off
         // row merely hid it on the wire). The client rebuilds the tenant URL
-        // from whatever the on row carries — a stable token keeps the URL
+        // from whatever the on row carries -- a stable token keeps the URL
         // bookmarkable across off→on, which is the behavior we want.
         let row = state
             .set_workspace_on(&prefix, true, false)
@@ -1732,7 +1732,7 @@ mod tests {
     #[tokio::test]
     async fn lists_full_host_library_and_toggles_unserved_workspaces_on() {
         // GET /workspaces lists ONE row per HOST-LIBRARY workspace (what
-        // `chan list` shows), not just the devserver's served subset — so a
+        // `chan list` shows), not just the devserver's served subset -- so a
         // fresh devserver is not empty. An unserved library workspace is off at
         // its stable prefix; `{prefix}/on` mounts it even though it was never
         // registered on the devserver.
@@ -1757,7 +1757,7 @@ mod tests {
             .register_workspace(ws_b.path())
             .unwrap();
 
-        // The devserver surfaces BOTH — the full library — off, no token.
+        // The devserver surfaces BOTH -- the full library -- off, no token.
         let entries = state.workspace_entries();
         assert_eq!(
             entries.len(),
@@ -1777,7 +1777,7 @@ mod tests {
             "nothing mounted yet"
         );
 
-        // Toggle A on by its stable prefix — never registered on the devserver,
+        // Toggle A on by its stable prefix -- never registered on the devserver,
         // yet this mounts it; every library workspace is toggleable.
         let prefix_a = allocate_workspace_prefix(ws_a.path()).expect("prefix");
         let row = state
@@ -1829,7 +1829,7 @@ mod tests {
             "forget unmounts the workspace in the host"
         );
         // Destructive: unregistered from the host library, so gone from the
-        // listing — one registry, one removal.
+        // listing -- one registry, one removal.
         assert!(
             state.workspace_entries().is_empty(),
             "forgotten workspace is removed from the library listing"
@@ -1881,7 +1881,7 @@ mod tests {
         // `chan close --remove` routes through the HOST (remove_workspace_for_root),
         // which the devserver in-memory map never sees. A later persist_state (here,
         // a new registration) must NOT re-grow the removed workspace into the
-        // overlay from that stale map — persist reconciles against the library.
+        // overlay from that stale map -- persist reconciles against the library.
         let home = tempfile::tempdir().expect("home");
         let ws_a = tempfile::tempdir().expect("ws a");
         let ws_b = tempfile::tempdir().expect("ws b");
@@ -1938,7 +1938,7 @@ mod tests {
     async fn host_close_persists_off_through_a_later_persist() {
         // A plain `chan close` (host-level close_workspace_for_root) records the
         // workspace OFF, and a later persist_state must keep it off (derive `on`
-        // from what is mounted) rather than flip it back on from the stale map —
+        // from what is mounted) rather than flip it back on from the stale map --
         // else a restart re-mounts a just-closed workspace.
         let home = tempfile::tempdir().expect("home");
         let ws_a = tempfile::tempdir().expect("ws a");
@@ -2355,7 +2355,7 @@ mod tests {
         let host = state.host.clone();
         let app = build_devserver_app(state, host);
 
-        // Root `/` is served by the installed launcher root fallback — public
+        // Root `/` is served by the installed launcher root fallback -- public
         // (no bearer). Without the fallback `host_dispatch` 404s the root with
         // an empty body; the launcher always names itself: a 200 SPA shell when
         // the bundle is built, or a 404 whose body names the missing bundle when
@@ -2426,8 +2426,8 @@ mod tests {
         // The LOOPBACK surface installs the launcher bundle with `Some(token)`
         // (the desktop per-window token). Drive `launcher_router` directly with a
         // token to pin the bearer semantics: header for every route, `?t=` for the
-        // watch WS only. (The devserver/gateway surface uses `None` — tunnel-trust
-        // — verified in `library_windows_feed_lists_mints_and_discards`.)
+        // watch WS only. (The devserver/gateway surface uses `None` -- tunnel-trust
+        // -- verified in `library_windows_feed_lists_mints_and_discards`.)
         let home = tempfile::tempdir().expect("home");
         let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
         let state = test_state(home.path(), addr);
@@ -2509,7 +2509,7 @@ mod tests {
 
         // A window is served with its per-TENANT token, NOT the
         // launcher token, so the local-color (config) routes must accept a valid
-        // tenant token — while the launcher-MANAGEMENT routes (windows) stay
+        // tenant token -- while the launcher-MANAGEMENT routes (windows) stay
         // launcher-only.
         let home = tempfile::tempdir().expect("home");
         let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
@@ -2553,7 +2553,7 @@ mod tests {
         );
 
         // local-color PUT also passes the gate on the tenant token (whatever the
-        // handler then does — store-less may 4xx — it is not a 401).
+        // handler then does -- store-less may 4xx -- it is not a 401).
         let color_put = app
             .clone()
             .oneshot(
@@ -2570,7 +2570,7 @@ mod tests {
         assert_ne!(color_put.status(), StatusCode::UNAUTHORIZED);
 
         // The watch WS accepts the tenant token via `?t=` (a fresh window READS
-        // on-connect through the watch — it 401'd today).
+        // on-connect through the watch -- it 401'd today).
         let color_watch = app
             .clone()
             .oneshot(

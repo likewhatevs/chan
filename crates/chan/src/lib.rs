@@ -196,7 +196,7 @@ enum Command {
         shell: Shell,
     },
     /// Tear down a running server for a workspace, releasing its writer
-    /// lock — the inverse of `chan open {path}`. "Not currently served" is
+    /// lock -- the inverse of `chan open {path}`. "Not currently served" is
     /// treated as success (close is idempotent). With `--remove` it then
     /// also forgets the workspace from the registry, like `chan workspace
     /// rm`, independent of whether anything was serving it.
@@ -217,7 +217,7 @@ enum Command {
     /// native window and returns; from a `chan devserver` terminal it registers
     /// the workspace with that devserver; from a plain shell it binds a local
     /// loopback server and prints the URL. `--standalone` / `--desktop` /
-    /// `--devserver` force a specific target. Serving is load-bearing — a bare
+    /// `--devserver` force a specific target. Serving is load-bearing -- a bare
     /// `chan workspace add` only registers; serving mounts the workspace so
     /// the editor, terminal, and devserver can reach it.
     ///
@@ -839,11 +839,11 @@ where
 /// Which binary is driving the `chan` CLI, and therefore how the
 /// desktop-aware subcommands behave.
 ///
-/// - [`Personality::Standalone`] — the `chan` binary from install.sh (and
+/// - [`Personality::Standalone`] -- the `chan` binary from install.sh (and
 ///   the `cs -> chan` symlink). `chan open` always runs its own server and
 ///   opens the browser; it never hands off to a running chan-desktop.
 ///   `chan upgrade` replaces the CLI tarball in place.
-/// - [`Personality::Desktop`] — chan-desktop invoked as `chan` (via the
+/// - [`Personality::Desktop`] -- chan-desktop invoked as `chan` (via the
 ///   `~/.local/bin/chan` shim). `chan open` integrates with the desktop:
 ///   it hands the workspace to the running desktop, or launches the GUI.
 ///   `chan upgrade` drives the desktop's `tauri-plugin-updater`.
@@ -1135,7 +1135,7 @@ where
                 .await
             }
             // Desktop drives the running desktop's tauri-plugin-updater
-            // instead (no tarball). `yes` is moot — the fire-and-return flow
+            // instead (no tarball). `yes` is moot -- the fire-and-return flow
             // has no prompt.
             Personality::Desktop => cmd_upgrade_desktop(check, version).await,
         },
@@ -1401,7 +1401,7 @@ async fn cmd_remove(path: PathBuf, personality: Personality) -> Result<()> {
     let lib = library()?;
     // Tear down a running serve first: `reset_workspace` takes the writer
     // flock and would otherwise fail `WorkspaceLocked` on a live serve.
-    // Best-effort — if we can't reach the holder, fall through and let the
+    // Best-effort -- if we can't reach the holder, fall through and let the
     // reset surface the real error.
     // `remove: true` so a devserver/desktop host also unregisters the
     // workspace from its own library + overlay (not just the local config.toml).
@@ -1424,8 +1424,8 @@ fn remove_from_registry(lib: &Library, path: &Path) -> Result<()> {
     if removed {
         // `reset_workspace(Everything)` deliberately preserves the trash +
         // lock dirs (other callers rely on that). Forgetting a workspace means
-        // "forget everything", so drop the whole metadata dir — trash
-        // included — leaving no `~/.chan/workspaces/<key>/` behind.
+        // "forget everything", so drop the whole metadata dir -- trash
+        // included -- leaving no `~/.chan/workspaces/<key>/` behind.
         if let Some(root) = metadata_root {
             let _ = std::fs::remove_dir_all(&root);
         }
@@ -1437,7 +1437,7 @@ fn remove_from_registry(lib: &Library, path: &Path) -> Result<()> {
 }
 
 /// `chan close {path}`: tear down a running server holding `path`, releasing
-/// its writer lock. Best-effort — "not currently served" (and an unreachable
+/// its writer lock. Best-effort -- "not currently served" (and an unreachable
 /// holder) is treated as success, since the goal is "this workspace is not
 /// served". With `remove`, it then also forgets the workspace from the
 /// registry (`chan workspace rm`), INDEPENDENT of the teardown outcome.
@@ -1498,7 +1498,7 @@ fn parse_live_terminals_refusal(message: &str) -> Option<usize> {
 ///
 /// With `remove`, a HOST (devserver / desktop) also UNREGISTERS the workspace
 /// from its library + overlay, so the removal is reflected in the host's own
-/// registry — not just the caller's local `config.toml`. This is what keeps a
+/// registry -- not just the caller's local `config.toml`. This is what keeps a
 /// devserver-served workspace from lingering in the launcher (and surviving a
 /// restart) after `chan close --remove` / `chan workspace rm`.
 async fn unserve_running(
@@ -1553,7 +1553,7 @@ async fn unserve_running(
     };
     let Some(socket) = control_socket_for_pid(record.pid) else {
         // A record but no reachable control socket: the holder is gone
-        // (stale record — the lock is free / steal-able) or runs no control
+        // (stale record -- the lock is free / steal-able) or runs no control
         // socket. Nothing to tear down over the wire.
         return Ok(UnserveOutcome::NotServed);
     };
@@ -1584,7 +1584,7 @@ async fn unserve_running(
 /// (`chan-control-<pid>-<rand>`). A dedicated `chan open` serve has exactly
 /// one; a multi-tenant devserver has one per tenant under the same pid.
 /// Either way every socket routes the `Close { path }` verb to the server,
-/// which acts by path — so the first match is sufficient and we must NOT
+/// which acts by path -- so the first match is sufficient and we must NOT
 /// broadcast (once the first tenant unmounts, the rest 404). On unix the
 /// socket is a `.sock` file in `$TMPDIR`; on Windows it is a named pipe under
 /// the `\\.\pipe\` namespace.
@@ -1923,7 +1923,7 @@ async fn probe_parentage(socket: &Path, timeout: Duration) -> Parentage {
 /// not-yet-created path absolute lexically (so `chan open new-dir` still
 /// lands under the cwd); the final fallback returns the input unchanged
 /// (only reachable if both fail, e.g. an unreadable cwd). The result must
-/// be absolute so the desktop handoff — which runs with cwd "/" — and the
+/// be absolute so the desktop handoff -- which runs with cwd "/" -- and the
 /// canonical-path-keyed registry both see the directory the user ran in.
 fn absolutize_serve_root(root: PathBuf) -> PathBuf {
     std::fs::canonicalize(&root)
@@ -1940,10 +1940,10 @@ fn missing_workspace_path(cmd: &str, hint: &str) -> anyhow::Error {
 
 /// Discriminate `chan open`'s polymorphic argument: a value shaped like
 /// `scheme://host…` is a devserver URL; everything else is a local workspace
-/// path. We don't pull a URL crate for the discriminator — the desktop parses
+/// path. We don't pull a URL crate for the discriminator -- the desktop parses
 /// and validates the full URL when it dials. Requiring `://` with a non-empty
 /// scheme and authority keeps a Windows path (`C:\…`) or a bare `host:port`
-/// (no `//`) from misfiring as a URL — mirroring §3's "reject bare host:port"
+/// (no `//`) from misfiring as a URL -- mirroring §3's "reject bare host:port"
 /// so the path/URL split is unambiguous.
 fn looks_like_devserver_url(target: &str) -> bool {
     match target.split_once("://") {
@@ -1959,10 +1959,10 @@ fn looks_like_devserver_url(target: &str) -> bool {
 }
 
 /// `chan open {url}`: REGISTER a devserver by URL via the CLI→desktop handoff,
-/// then return. It does NOT dial/connect — connecting is the launcher's
+/// then return. It does NOT dial/connect -- connecting is the launcher's
 /// Connect button. The devserver entry lives in the desktop's config (the same
 /// registry the launcher reads), so this needs a running chan-desktop to land
-/// into; without one there is nowhere to persist it (no standalone fallback —
+/// into; without one there is nowhere to persist it (no standalone fallback --
 /// a URL is never served locally).
 async fn cmd_open_devserver(
     url: String,
@@ -2011,7 +2011,7 @@ async fn cmd_open_devserver(
 }
 
 /// True when this CLI runs inside a chan terminal that a `chan devserver`
-/// serves — `chan open {url}` would otherwise register a devserver into a
+/// serves -- `chan open {url}` would otherwise register a devserver into a
 /// devserver, which the registry (a desktop-config concept) does not nest.
 /// Shares [`detect_parentage`]'s `Identify` round-trip on
 /// `$CHAN_CONTROL_SOCKET`; an absent socket / unreachable holder / any other
@@ -2221,7 +2221,7 @@ async fn cmd_serve(args: ServeArgs, personality: Personality) -> Result<()> {
         // from themselves.
         settings_disabled: no_settings,
     };
-    // A standalone `chan open` defaults to `DEFAULT_PORT` (8787) — the SAME
+    // A standalone `chan open` defaults to `DEFAULT_PORT` (8787) -- the SAME
     // default as `chan devserver`. When a devserver already owns that port but
     // its handoff did NOT mount this workspace (version skew, mount error, or
     // the registration was opted out), the fall-through standalone bind here
@@ -2241,7 +2241,7 @@ async fn cmd_serve(args: ServeArgs, personality: Personality) -> Result<()> {
 /// on `DEFAULT_PORT` while a `chan devserver` already owns it. Returns `Some`
 /// only for an `AddrInUse` on exactly that port; every other error falls
 /// through to the generic "running server on {addr}" context unchanged (no
-/// behaviour change — this is purely a clearer message).
+/// behaviour change -- this is purely a clearer message).
 fn devserver_port_collision_hint(port: u16, err: &chan_server::Error) -> Option<String> {
     if port != DEFAULT_PORT {
         return None;
@@ -2253,7 +2253,7 @@ fn devserver_port_collision_hint(port: u16, err: &chan_server::Error) -> Option<
         return None;
     }
     Some(format!(
-        "port {DEFAULT_PORT} is already in use — most likely held by a running \
+        "port {DEFAULT_PORT} is already in use -- most likely held by a running \
          `chan devserver` (its default port). The handoff did not mount this \
          workspace there, so `chan open` fell through to a standalone server and \
          could not bind. Re-run with `--port N` to use a different port."
@@ -2577,7 +2577,7 @@ fn unescape_plist_xml(s: &str) -> String {
 /// Whether the foreground devserver binds a local TCP listener. Tunnel mode
 /// defaults to no-bind (the gateway is the surface); `CHAN_DEVSERVER_LISTEN`
 /// forces either way. Tunnel-off + LISTEN=0 leaves nothing reachable (no local
-/// listener, no tunnel — only the `chan open` discovery socket), so it is a
+/// listener, no tunnel -- only the `chan open` discovery socket), so it is a
 /// hard error rather than a silently-unreachable devserver.
 fn resolve_devserver_listen(tunnel_mode: bool, listen_override: Option<bool>) -> Result<bool> {
     let listen = listen_override.unwrap_or(!tunnel_mode);
@@ -2799,7 +2799,7 @@ async fn bootstrap_systemd_unit(addr: SocketAddr, restart: bool) -> Result<()> {
         );
     }
     // The freshly started service prints the token marker to its own stdout,
-    // which under the unit lands in the journal — invisible to this terminal
+    // which under the unit lands in the journal -- invisible to this terminal
     // on a host with no readable journal. Emit it directly from the persisted
     // config so the desktop reconnects regardless; fail loud if it never
     // lands rather than claim "started" on a token we cannot surface.
@@ -2955,14 +2955,14 @@ async fn resolve_devserver_token(
     }
 }
 
-/// Print the locked `CHAN_DEVSERVER_TOKEN=` marker to stdout — the same contract
-/// the foreground server emits — directly from the supervisor, read from the
+/// Print the locked `CHAN_DEVSERVER_TOKEN=` marker to stdout -- the same contract
+/// the foreground server emits -- directly from the supervisor, read from the
 /// persisted 0600 config. Token delivery must not depend on this user being able
 /// to read the unit journal (a uid below `SYS_UID_MAX`, or a user outside the
 /// `systemd-journal`/`adm` groups, cannot): the desktop control terminal scrapes
 /// this marker to reconnect, and the journal follow is only human-facing log
 /// streaming. A duplicate marker re-surfaced by the journal on readable hosts is
-/// harmless — the scraper takes the last one.
+/// harmless -- the scraper takes the last one.
 ///
 /// Errors when the token never lands within `timeout`. The point of
 /// `--service=systemd` supervision is to hand a client a token to reconnect
@@ -3186,7 +3186,7 @@ async fn run_tool(program: &str, args: &[&str]) -> Result<std::process::Output> 
 }
 
 // ---------------------------------------------------------------------------
-// macOS launchd backend — mirrors the systemd backend above. The functions are
+// macOS launchd backend -- mirrors the systemd backend above. The functions are
 // always compiled (they only shell out to `launchctl`) and called only under
 // `cfg!(target_os = "macos")`; the pure helpers stay unit-testable on any host.
 // ---------------------------------------------------------------------------
@@ -3333,12 +3333,12 @@ async fn current_uid() -> Result<u32> {
         .context("parsing the current uid from `id -u`")
 }
 
-/// `gui/<uid>` — the launchd domain target for the user's GUI login session.
+/// `gui/<uid>` -- the launchd domain target for the user's GUI login session.
 fn launchd_domain_target(uid: u32) -> String {
     format!("gui/{uid}")
 }
 
-/// `gui/<uid>/<label>` — the launchd service target for the devserver agent.
+/// `gui/<uid>/<label>` -- the launchd service target for the devserver agent.
 fn launchd_service_target(uid: u32) -> String {
     format!("gui/{uid}/{DEVSERVER_LAUNCHD_LABEL}")
 }
@@ -3360,7 +3360,7 @@ fn launch_agent_path() -> Result<PathBuf> {
         .join(format!("{DEVSERVER_LAUNCHD_LABEL}.plist")))
 }
 
-/// `~/.chan/devserver/devserver.log` — where the agent's stdout/stderr land
+/// `~/.chan/devserver/devserver.log` -- where the agent's stdout/stderr land
 /// (launchd has no journal). Co-located with the 0600 devserver config. Routed
 /// through the single chan-home authority (`config_dir`) so `CHAN_HOME` moves it.
 fn devserver_log_path() -> Result<PathBuf> {
@@ -3636,7 +3636,7 @@ async fn maybe_launch_desktop(_root: &Path) -> Option<Result<()>> {
 ///
 /// Only reached from the Desktop personality, so `current_exe()` IS the
 /// chan-desktop binary. Spawns the GUI detached, then polls the well-known
-/// handoff socket — the GUI binds it during setup — re-attempting
+/// handoff socket -- the GUI binds it during setup -- re-attempting
 /// `try_handoff` until it opens the workspace or a generous deadline passes
 /// (a cold GUI boot starts the embedded server and a window, which takes a
 /// few seconds).
@@ -3752,7 +3752,7 @@ fn macos_app_bundle(exe: &Path) -> Option<PathBuf> {
 /// `chan upgrade` for the Desktop personality: drive the running desktop's
 /// `tauri-plugin-updater` instead of replacing a CLI tarball.
 ///
-/// With `check_only` we query a running desktop and report — we do NOT launch
+/// With `check_only` we query a running desktop and report -- we do NOT launch
 /// one just to check (that would pop a window). Otherwise we find or launch
 /// the desktop and trigger the install (fire-and-return: the desktop owns the
 /// download/install/relaunch). `--version` pinning is unsupported (the desktop
@@ -3855,7 +3855,7 @@ async fn cmd_upgrade_desktop(_check_only: bool, _version_override: Option<String
 /// subcommands. Parallels `cmd_index_set_semantic`'s shape: open
 /// the workspace (with the path-resolution fallback to the registry's
 /// default), flip the per-workspace `reports_enabled` flag, surface
-/// the verb on stdout. `disable` is destructive — drops the
+/// the verb on stdout. `disable` is destructive -- drops the
 /// persisted `report.jsonl` so re-enable triggers a fresh scan;
 /// gated on `--yes` or an interactive prompt (explicit
 /// confirmation for a destructive action).
@@ -4058,7 +4058,7 @@ fn cmd_index_status(_path: Option<PathBuf>, _json: bool) -> Result<()> {
 
 /// Download the embedding model into the per-machine
 /// cache. Blocking; the hf-hub backend prints its own progress to
-/// stderr when stderr is a TTY. Idempotent — if the model is
+/// stderr when stderr is a TTY. Idempotent -- if the model is
 /// already laid out in the cache the call returns immediately.
 #[cfg(feature = "embeddings")]
 fn cmd_index_download_model(model: &str) -> Result<()> {
@@ -4182,7 +4182,7 @@ fn cmd_index_set_semantic(path: Option<PathBuf>, enabled: bool) -> Result<()> {
 /// process", and against an
 /// unregistered path leak "Error: registering <path>". So the
 /// helper looks up the registered workspace's index dir directly and
-/// loads `IndexConfig` from disk — no Workspace handle, no flock, no
+/// loads `IndexConfig` from disk -- no Workspace handle, no flock, no
 /// side-effects. Missing-from-registry → clean
 /// "not a chan workspace at <path>".
 #[cfg(feature = "embeddings")]
@@ -5585,7 +5585,7 @@ mod tests {
     fn absolutize_serve_root_is_always_absolute() {
         // The bug: a relative root (`.`) handed to the desktop made it
         // open "/". The invariant that fixes it is simply that the serve
-        // root is always absolute before the handoff — regardless of
+        // root is always absolute before the handoff -- regardless of
         // whether the dir exists yet.
         assert!(absolutize_serve_root(PathBuf::from(".")).is_absolute());
         assert!(absolutize_serve_root(PathBuf::from("does/not/exist/yet")).is_absolute());
