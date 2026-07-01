@@ -11,12 +11,13 @@ Working journal for the v0.59.0 cycle. Unlike the per-release notes above, this 
 - [ ] Editor: directory-link click to file browser, list continuation glyphs, enumerated-list indent, `mermaid-to-excalidraw`
 - [ ] Chan desktop: second-monitor hide/show window shrink, window-title glyphs
 - [ ] UX: friendlier `cs open` from standalone, unblock `cs download`/`upload` in workspaces
+- [x] Semantic indexing opt-out (maintainer-added, outside `request.md`): with semantic search off never embed, disabling wipes vectors, enabling rebuilds (branch `semantic-optout-gate`)
 
 ---
 
 ## `chan devserver` command: explicit action verbs
 
-**Branch:** `devserver-cmd` (worktree `../chan-devserver-cmd`, off `origin/main`). Not merged. **Status:** complete, gated green, empirically verified end-to-end on all reachable backends.
+**Branch:** `devserver-cmd` (worktree `../chan-devserver-cmd`, off `origin/main`). Merged. **Status:** complete, gated green, empirically verified end-to-end on all reachable backends.
 
 ### The request (verbatim intent)
 
@@ -141,15 +142,15 @@ The Indexing graph polls every 3s, so the pulse advances in 3s steps. Between em
 
 ## Integration notes (release editor)
 
-Merged onto `main` in order: `devserver-cmd`, `graph-tuning`, `index-dashboard`, each as a `--no-ff` merge. The only conflict across all three was this journal, an add/add, confirmed up front with `git merge-tree`; every code file merged clean. This file is the reconciliation of the three per-branch journals into one, unwrapped and free of em dashes.
+Merged onto `main` in order: `devserver-cmd`, `graph-tuning`, `index-dashboard`, then `semantic-optout-gate`, each as a `--no-ff` merge. The three `request.md` streams shared one add/add conflict on this journal (predicted by `git merge-tree`); `semantic-optout-gate` was cut from the reconciled `main`, so it and its journal section merged with no conflict. Every code file merged clean. This file is the reconciliation of the per-branch journals into one, unwrapped and free of em dashes.
 
-Quality pass on the merged tree: removed five newly-introduced em dashes and reworded newly-added change-history ("archaeology") comments to present-tense in the index-dashboard test files (`paneDashboardTabKeepAlive.test.ts`, `dashboardTabAndCarousel.test.ts`) and the style comment in `DashboardTab.svelte`. `devserver-cmd` and `graph-tuning` introduced none. Remaining rc validation and the Graph carryover are tracked in `dev/v0.59.0/plan.md` and `dev/v0.59.0/graph-remaining-items.md`.
+Quality pass on the merged tree: removed five newly-introduced em dashes and reworded newly-added change-history ("archaeology") comments to present-tense in the index-dashboard test files (`paneDashboardTabKeepAlive.test.ts`, `dashboardTabAndCarousel.test.ts`) and the style comment in `DashboardTab.svelte`. `devserver-cmd`, `graph-tuning`, and `semantic-optout-gate` introduced none (the semantic `vectors_epoch` "old epoch" comment is present-tense domain language, not archaeology). Remaining rc validation and the Graph carryover are tracked in `dev/v0.59.0/plan.md` and `dev/v0.59.0/graph-remaining-items.md`.
 
 ---
 
 ## Semantic indexing: honor the opt-out (no silent embedding)
 
-**Branch:** `semantic-optout-gate` (worktree `../chan-semantic-optout`, off `main`). Not merged, not pushed. **Status:** complete, gated green (fmt, clippy, `cargo test`, both feature sets build), hardened across three adversarial review rounds. Not yet exercised in a live browser: the `cargo test` environment has no embedder loaded, so the runtime enable/download/rebuild path is on the rc validation list. Maintainer-requested stream outside `dev/v0.59.0/request.md`.
+**Branch:** `semantic-optout-gate` (worktree `../chan-semantic-optout`, off `main`). Merged. **Status:** complete, gated green (fmt, clippy, `cargo test`, both feature sets build), hardened across three adversarial review rounds. Not yet exercised in a live browser: the `cargo test` environment has no embedder loaded, so the runtime enable/download/rebuild path is on the rc validation list. Maintainer-requested stream outside `dev/v0.59.0/request.md`.
 
 ### What was asked
 

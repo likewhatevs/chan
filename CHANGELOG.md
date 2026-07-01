@@ -9,6 +9,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 - **Supervised devservers honor `CHAN_HOME`.** `chan devserver --service=systemd`/`--service=launchd` bake `CHAN_HOME` into the generated unit `Environment=` and plist `EnvironmentVariables`, so the supervised service and the supervisor share the same isolated `~/.chan` and the bearer-token handshake resolves under isolation.
+- **Semantic search off means no embeddings.** With semantic search disabled, chan no longer computes or stores embeddings just because a model is cached on disk; the workspace opt-in is the only input to indexing. Turning semantic search off bins the existing vector store (keyword/BM25 search is unaffected), and turning it back on rebuilds embeddings from scratch.
 
 ### Changed
 
