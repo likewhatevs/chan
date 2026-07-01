@@ -198,7 +198,7 @@
   /* Keep-alive contract, mirroring .graph-tab / .editor-tab in Pane.svelte:
      every dashboard tab in the pane stays mounted so the Indexing carousel
      graph keeps its force layout + 3s poll across tab switches; inactive
-     ones hide via visibility (NEVER display:none — a 0x0 host would make
+     ones hide via visibility (NEVER display:none; a 0x0 host would make
      the indexing GraphCanvas refit to nothing and lose its layout). The
      `active` prop additionally pauses the carousel + poll while hidden. */
   .dashboard {

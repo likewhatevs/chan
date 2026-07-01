@@ -83,9 +83,9 @@ describe("Pane.svelte render branch + import", () => {
     expect(pane).toMatch(
       /\{#each pane\.tabs\.filter\(\(t\) => t\.kind === "dashboard"\) as t \(t\.id\)\}[\s\S]{1,400}<DashboardTab[\s\S]{1,200}tab=\{t\}[\s\S]{1,200}active=\{!paneMode\.active && !pane\.showingBack && t\.id === pane\.activeTabId\}/,
     );
-    // The old front-face if-chain arm that remounted the dashboard off
-    // `active` on every switch is gone (the back-face DashboardSlotBack
-    // dispatch still keys off active?.kind — that one stays).
+    // No front-face if-chain arm mounts the dashboard off `active` (which
+    // would remount it on every switch); the back-face DashboardSlotBack
+    // dispatch still keys off active?.kind, and that one stays.
     expect(pane).not.toMatch(/<DashboardTab\s+tab=\{active\}/);
   });
 });

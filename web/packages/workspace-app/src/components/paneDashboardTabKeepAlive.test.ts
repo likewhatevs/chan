@@ -7,12 +7,11 @@ import carousel from "./EmptyPaneCarousel.svelte?raw";
 // editors (see paneGraphTabKeepAlive): Pane.svelte renders every dashboard
 // tab from an each-block inside .face.front and flips an `active` prop;
 // inactive dashboards hide via the visibility:hidden contract (never
-// display:none — a 0x0 host would make the Indexing GraphCanvas refit to
-// nothing and lose its layout). Before this, DashboardTab mounted only the
-// active tab from the if-chain, so every switch remounted it and the
-// Indexing carousel's GraphCanvas + 3s indexer poll rebuilt from scratch —
-// the visible "reload on tab switch". These pins catch a regression back to
-// that.
+// display:none, which would make the Indexing GraphCanvas refit to nothing
+// and lose its layout). Mounting only the active tab from an if-chain would
+// remount on every switch and rebuild the Indexing carousel's GraphCanvas +
+// 3s indexer poll, the visible "reload on tab switch"; these pins guard the
+// each-block keep-alive against that.
 
 describe("dashboard tabs survive tab switches (keep-alive)", () => {
   test("dashboard each-block renders all dashboard tabs, keyed by tab id", () => {
@@ -21,13 +20,12 @@ describe("dashboard tabs survive tab switches (keep-alive)", () => {
     );
   });
 
-  test("dashboard tabs no longer mount from the active-tab if-chain", () => {
-    // The pre-fix branch mounted ONLY the active dashboard
-    // (`<DashboardTab tab={active} ...>` under the front-face if-chain), so
-    // every switch remounted it and the Indexing graph reloaded. The
-    // back-face DashboardSlotBack dispatch still keys off
-    // `active?.kind === "dashboard"` — that chain is fine; what must not
-    // return is a DashboardTab mounted off `active`.
+  test("dashboard tabs never mount from the active-tab if-chain", () => {
+    // Mounting the active dashboard from a front-face if-chain arm
+    // (`<DashboardTab tab={active} ...>`) would remount it on every switch
+    // and reload the Indexing graph. The back-face DashboardSlotBack
+    // dispatch still keys off `active?.kind === "dashboard"`; that chain is
+    // fine. What must not appear is a DashboardTab mounted off `active`.
     expect(pane).not.toMatch(/<DashboardTab\s+tab=\{active\}/);
   });
 
@@ -45,7 +43,7 @@ describe("dashboard tabs survive tab switches (keep-alive)", () => {
 describe("DashboardTab threads active + carries the keep-alive contract", () => {
   test("declares an `active` prop (defaulting true for non-pane hosts)", () => {
     expect(dashboardTab).toMatch(/let \{ tab, active = true \}: Props = \$props\(\);/);
-    // The old frontActive name is gone.
+    // The keep-alive prop is named `active`, not `frontActive`.
     expect(dashboardTab).not.toMatch(/frontActive/);
   });
 
@@ -66,7 +64,8 @@ describe("DashboardTab threads active + carries the keep-alive contract", () => 
     expect(dashboardTab).toMatch(
       /\.dashboard\.active \{\s*visibility: visible;\s*pointer-events: auto;\s*\}/,
     );
-    // flex:1 is dropped (no longer a flex child of the pane body).
+    // .dashboard is absolutely positioned, not a flex child of the pane
+    // body, so it carries no flex:1.
     expect(dashboardTab).not.toMatch(/\.dashboard \{[^}]*flex: 1;[^}]*\}/);
   });
 });
