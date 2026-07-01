@@ -6,9 +6,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [v0.59.1] - 2026-07-01
+
+A patch release clearing the v0.59.0 chan-desktop known limitation: a `mermaid-to-excalidraw` diagram that uses a `subgraph` now renders as excalidraw on desktop, not just in the browser. It also reverts the v0.59.0 launcher column alignment in favor of a left icon column, and swaps the remote window-title glyph to an up-right arrow.
+
 ### Fixed
 
-- **Excalidraw diagrams with a `subgraph` now render instead of failing.** A `mermaid-to-excalidraw` flowchart containing a `subgraph` failed to convert (logging `SubGraph element not found`) and left an error or a rasterized image in place of the diagram, the v0.59.0 known limitation. The root cause was a bug in `@excalidraw/mermaid-to-excalidraw`: mermaid 11 renders subgraph cluster elements with a render-id prefix (`id="diagN-Machine"`), but the library looked them up by exact id (`[id='Machine']`) instead of the prefix-tolerant match its node/edge lookups use, so the cluster was never found. This is now patched via `patch-package`, so subgraph flowcharts convert to real excalidraw shapes in the browser. As a safety net the excalidraw block also degrades to the plain `mermaid` renderer whenever the conversion still fails on otherwise-valid mermaid source (e.g. WKWebView on chan-desktop), so the diagram always shows and only a genuinely broken diagram surfaces its error.
+- **Excalidraw diagrams with a `subgraph` now render as excalidraw everywhere.** A `mermaid-to-excalidraw` flowchart containing a `subgraph` failed to convert (logging `SubGraph element not found`) and left an error or a rasterized image in place of the diagram — the v0.59.0 chan-desktop known limitation. The root cause was a bug in `@excalidraw/mermaid-to-excalidraw`: mermaid 11 renders subgraph cluster elements with a render-id prefix (`id="diagN-Machine"`), but the library looked them up by exact id (`[id='Machine']`) instead of the prefix-tolerant match its node/edge lookups use, so the cluster was never found. Patched via `patch-package`, so subgraph flowcharts now convert to real excalidraw shapes in both the browser and chan-desktop. As an added safety net the excalidraw block also degrades to the plain `mermaid` renderer if a conversion ever fails on otherwise-valid mermaid source, so a diagram always shows and only genuinely broken source surfaces its error.
+- **Launcher devserver identity reads as a left icon column.** Each devserver now leads its two rows with an icon — the Globe kind mark on the name row, the OS mark directly under it on the `host:port` row — so they align as one left column; the OS mark moves off the name row and the connected status dot stays on it. This also reverts the v0.59.0 `--rail-step` button-column alignment, so launcher button groups return to their per-element spacing and the "Library" title sits flush-left again.
+- **chan-desktop remote windows use an up-right-arrow title glyph.** Remote/devserver window and terminal titles now use ↗ instead of ⊕, which rendered as a plus in the macOS title-bar font; the glyph stays monochrome line-art. The launcher's Globe and the local-window glyphs are unchanged.
 
 ## [v0.59.0] - 2026-07-01
 
