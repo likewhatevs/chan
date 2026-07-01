@@ -181,6 +181,35 @@ One benign console notice remains from excalidraw's font subsetter ("Failed to u
 
 ---
 
+## Retrospective (mermaid-ux branch)
+
+### What was asked
+
+The `dev/v0.59.0/task-mermaid-ux.md` brief: the Editor *Feature* (a mermaid-to-excalidraw diagram renderer that follows and abstracts the existing mermaid renderer, with minimal integration points, clean APIs, documentation, lazy-loading, a license-compatible embedded bundle, and the existing renderer's lifecycle) plus the whole `UX` section (a friendlier `cs open` from a standalone terminal, and unblocking `cs download` / `upload` from standalone terminals through a clean gating refactor with unit-testable command-context gating). The four Editor bugs were explicitly out of scope (a different branch).
+
+### What shipped
+
+Both streams, on branch `mermaid-ux` off `origin/main`, in one commit (`d6712ac`), full `make pre-push` green and browser-verified. Stream A: the excalidraw renderer, the mermaid widget generalized into a shared `widgets/diagram.ts`, and the click-to-zoom overlay reintroduced for both renderers (a maintainer decision, since the overlay had been removed from the tree). Stream B: the friendly `cs open` guidance and a single pure `terminal_tenant_refusal` gate; `cs upload` / `download` were already working from standalone terminals, so that half was verified rather than re-implemented. Detail is in the two sections above. The fence token shipped as the upstream spelling `mermaid-to-excalidraw`, isolated in one constant `EXCALIDRAW_LANG` for a one-line change.
+
+### Highlights (what went well)
+
+- Abstract, do not copy: generalizing the intricate ~470-line mermaid widget into one parameterized `diagram.ts` means both renderers share the entire CM6 implementation (flip, reverse-flip ghost, atomic ranges, vertical step-into, error accents, per-instance caches); the new renderer is a thin wrapper plus a render module. This is the "abstract where necessary, minimal integration points" the brief asked for, not a parallel stack.
+- Caught the maintainer's exact prior bug. The empty / collapsed mermaid zoom reproduced in the browser, root-caused (mermaid's SVG is `width="100%"` with no height, so it collapses to 0x0 in the overlay's shrink-to-fit panel), fixed by deriving an intrinsic width from the viewBox, and pinned with tests. This is very likely why the zoom was removed originally, so the reintroduction closes that loop rather than reopening it.
+- Reconciled the brief against HEAD before building. `cs upload` / `download` already worked from standalone terminals, so Stream B did not re-add a restriction and spent its effort on the real gap (friendly `cs open` plus the pure gate).
+- Visual validation earned its keep. Beyond the mermaid-zoom collapse, it surfaced that excalidraw embeds subgraph flowcharts as an image (graceful, not an error), which sets honest expectations for the renderer.
+- Lazy-load discipline held. Excalidraw and its React runtime code-split out of the eager editor bundle, confirmed in the vite chunk output and pinned by a test that forbids a static import.
+
+### Lowlights (what was missed, could be better)
+
+- Survey hygiene. I fired two separate surveys (fence token, zoom scope) instead of consolidating into one; the token survey then timed out unanswered and I proceeded on the default. One batched survey would have been cleaner and less intrusive.
+- The subgraph image-fallback slipped the first validation round. The initial synthetic doc used a simple flowchart plus two clean diagrams, so the fact that flowcharts with subgraphs fall back to an embedded image only surfaced during the real-docs showcase pass. A subgraph case belonged in the first round.
+- The excalidraw font subsetter logs a benign "failed to use workers for subsetting, falling back to the main thread" warning. I left it as cosmetic instead of checking whether the worker asset can be bundled to silence it.
+- Coverage gaps left open: the light-editor inline render is inferred rather than screenshotted (only the harder dark case is captured), and desktop / WKWebView is unverified. Both are on the rc list.
+- What the brief itself missed: it described the existing renderer's lifecycle as including a working "view/zoom overlay" and warned about a black-on-black overlay, but that overlay had already been removed. The spec assumed a lifecycle that was not in the tree, which needed a maintainer decision to resolve. Briefs that reference existing behavior are worth reconciling against HEAD before they go out.
+- Dependency weight. Excalidraw pulls React and roughly 339 packages into `node_modules`. It is lazy-loaded and out of the eager bundle, but it is a large addition for a Svelte app and deserves a conscious eye at release time.
+
+---
+
 ## Integration notes (release editor)
 
 Merged onto `main` in order: `devserver-cmd`, `graph-tuning`, `index-dashboard`, each as a `--no-ff` merge. The only conflict across all three was this journal, an add/add, confirmed up front with `git merge-tree`; every code file merged clean. This file is the reconciliation of the three per-branch journals into one, unwrapped and free of em dashes.
