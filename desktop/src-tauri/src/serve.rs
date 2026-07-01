@@ -45,9 +45,10 @@ const MAX_WINDOWS_PER_WORKSPACE: usize = 10;
 /// these so the OS title bar + window switcher encode the kind at a glance,
 /// then the locator (path / URL). Emoji render as color glyphs in the macOS
 /// title bar; named constants so swapping the glyph set is a one-line change
-/// each. Monochrome line-art to mirror the launcher's lucide House / Globe icons.
+/// each. Monochrome line-art: the house mirrors the launcher's lucide House; the
+/// outbound is an up-right (dial-out) arrow that stays legible in title-bar fonts.
 const ICON_LOCAL_HOME: &str = "\u{2302}"; // ⌂ house: any local-disk workspace
-const ICON_OUTBOUND: &str = "\u{2295}"; // ⊕ globe: a remote devserver we dial OUT to
+const ICON_OUTBOUND: &str = "\u{2197}\u{FE0E}"; // ↗ up-right arrow: a remote devserver we dial OUT to
 
 /// Live state for one running serve. Held in `AppState.serves`
 /// keyed by canonical workspace path.
