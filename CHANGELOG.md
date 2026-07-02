@@ -6,11 +6,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-Two themes: interactive Excalidraw whiteboard tabs in the workspace app, and desktop-PWA plus leader/follower session integration for the launcher and multi-window sessions.
+Interactive Excalidraw whiteboard tabs and markdown slide preview in the workspace app, plus desktop-PWA and leader/follower session integration for the launcher and multi-window sessions.
 
 ### Added
 
 - **Interactive Excalidraw whiteboard tabs.** An `.excalidraw` file opens as an editable [Excalidraw](https://excalidraw.com) board in the workspace app, alongside the markdown, JSON, and CSV renderers. Draw on the canvas and it autosaves like any file tab; Mod+E flips between the board and its raw scene JSON. Session restore reopens the board, the 409 conflict dialog and the changed-on-disk banner apply unchanged, a theme flip re-themes the live canvas, and Ctrl+D duplicates on the board instead of closing the tab. Excalidraw and its React runtime are dynamic-imported, so the board stays out of the eager editor bundle. Creating a board works too: `.excalidraw` joins the editable-text set the workspace write gate accepts.
+- **Markdown slide preview.** A markdown file that declares `kind: slides` in a `chan:` frontmatter block presents as slides. Pages split on `@pagebreak` (or an `<hr class="chan-page-break">`), and the frontmatter tunes the slide `aspect_ratio` (16:9 or 4:3) and `zoom_factor`. Preview and present flows render each page theme-aware with keyboard navigation, page-width and zoom controls, and media alignment, and Mermaid and Excalidraw diagrams (including read-only Excalidraw images) render inside the slides. The current slide and preview mode persist per tab across reloads, and the file outline groups its headings by slide page.
 - **Installable launcher PWA.** The launcher serves a web app manifest at `/manifest.webmanifest` (root scope) with maskable app icons and a themed titlebar, so it installs as an app from the fixed-port devserver loopback and the https gateway origin. There is no service worker, and the workspace-app shell carries no manifest link, so an installed app captures the launcher and not any single workspace.
 - **Leader/follower session windows.** A self-managed launcher (devserver or PWA) opens its own in-app browser windows and gates window creation on per-tenant leadership: the window that leads a workspace manages that workspace's windows, and a follower launcher sees the create controls disabled. The workspace status bar shows this window's session role whenever more than one window shares a session. When the leader closes or hides a window, that window shows a "closed by the leader" or "hidden by the leader" overlay instead of sitting stale.
 - **Desktop "Open in Browser".** A Window-menu item opens the focused workspace window in the system browser through a browser-affinity window record, so chan-desktop never opens a native twin for it.
@@ -26,7 +27,6 @@ Two themes: interactive Excalidraw whiteboard tabs in the workspace app, and des
 
 - **The excalidraw fence renderer self-hosts its fonts.** The `mermaid-to-excalidraw` diagram renderer fetched its label fonts from the esm.sh CDN at render time, so diagram text degraded silently offline and on chan-desktop. The fonts now ship in the bundle and load locally, composed prefix-aware for served workspaces and desktop windows. The 12.7 MB CJK family is excluded, so CJK boards still fall back to the CDN.
 - **A follower window no longer deletes the session's layout.** On the web, a follower emptying or unloading its view no longer removes the session's persisted layout blob, which belongs to the leader. A solo web window and every desktop window still manage their own.
-- **The marketing launcher demo no longer opens the workspace overlay.** The embedded launcher mock keeps rendering, but its window tiles no longer open the non-public workspace demo overlay.
 
 ## [v0.60.0] - 2026-07-02
 
