@@ -37,8 +37,8 @@ describe("terminal protocol invariants", () => {
   });
 
   test("PTY output remains binary on both sides of the websocket", () => {
-    expect(route).toMatch(/SessionEvent::Output\(data\)[\s\S]*?Message::Binary\(data\)/);
-    expect(route).toMatch(/socket\.send\(Message::Binary\(chunk\.clone\(\)\)\)/);
+    expect(route).toMatch(/SessionEvent::Output\(data\)[\s\S]*?Message::binary\(data\)/);
+    expect(route).toMatch(/socket\.send\(Message::binary\(chunk\.clone\(\)\)\)/);
     expect(tab).toContain('ws.binaryType = "arraybuffer"');
     expect(tab).toContain("terminalMessageBytes(event.data)");
     expect(tab).not.toMatch(/term\?\.write\(String\(/);
