@@ -1346,6 +1346,36 @@ fn build_workspace_window(app: &AppHandle, spec: WindowSpec<'_>) -> Result<(), S
     res.map_err(|e| format!("scheduling workspace window for {window_label}: {e}"))
 }
 
+/// Compose the browser-facing URL for a freshly minted BROWSER window record:
+/// the loopback base for its serving tenant plus the `?w=` / `?lib=` params the
+/// SPA keys its per-window session on. The Window menu's "Open in Browser" hands
+/// this to the system browser; the record carries browser affinity, so the
+/// watcher never opens it as a native window.
+pub(crate) fn browser_window_url(
+    app: &AppHandle,
+    addr: SocketAddr,
+    record: &WindowRecord,
+) -> Result<tauri::Url, String> {
+    let label = crate::window_watcher::native_label(record);
+    let url = format!(
+        "http://{addr}{}/index.html?t={}",
+        record.prefix, record.token
+    );
+    let kind = match record.kind {
+        WindowKind::Terminal => Some("terminal"),
+        WindowKind::Workspace => None,
+    };
+    workspace_window_target_url(
+        app,
+        &label,
+        &record.window_id,
+        &record.library_id,
+        &url,
+        "",
+        kind,
+    )
+}
+
 fn workspace_window_target_url(
     app: &AppHandle,
     window_label: &str,

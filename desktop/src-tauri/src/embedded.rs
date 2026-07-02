@@ -505,6 +505,19 @@ impl EmbeddedServer {
             .map_err(|e| format!("minting a window: {e}"))
     }
 
+    /// Mint a BROWSER-affinity window: the watcher never opens a native twin for
+    /// it (the origin filter, D4), so the record exists purely for a browser tab
+    /// that holds its own `window_id`. Backs the Window menu's "Open in Browser".
+    pub fn mint_browser_window(
+        &self,
+        kind: chan_server::WindowKind,
+        workspace_path: Option<String>,
+    ) -> Result<WindowRecord, String> {
+        self.host
+            .mint_window_with_origin(kind, workspace_path, chan_server::WindowOrigin::Browser)
+            .map_err(|e| format!("minting a browser window: {e}"))
+    }
+
     /// The library's first-open rule: mint exactly one boot terminal the first
     /// time this library is opened with an empty window registry, then persist a
     /// marker so it never re-mints. Returns the minted record, or `None` when

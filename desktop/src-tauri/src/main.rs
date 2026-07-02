@@ -34,6 +34,7 @@ use serde::Serialize;
 use tauri::menu::{Menu, MenuItemKind, PredefinedMenuItem, WINDOW_SUBMENU_ID};
 use tauri::menu::{MenuItemBuilder, Submenu};
 use tauri::{Emitter, Manager, RunEvent, State, WebviewUrl, WebviewWindowBuilder, WindowEvent};
+use tauri_plugin_opener::OpenerExt;
 
 use config::{Config, ConfigStore, Devserver, OutboundWorkspace, WindowConfig, WindowGeometry};
 use serve::ServeHandle;
@@ -4033,6 +4034,11 @@ fn install_app_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
     let new_window = MenuItemBuilder::with_id("app-new-window", "New Window")
         .accelerator("CmdOrCtrl+Shift+N")
         .build(app)?;
+    // Open the FOCUSED workspace window's contents in the system browser: mints a
+    // browser-affinity record for the same workspace (chan-desktop skips it, D4)
+    // so the browser tab holds its own window_id, then opens the composed URL.
+    let open_in_browser =
+        MenuItemBuilder::with_id("app-open-in-browser", "Open in Browser").build(app)?;
     // File ▸ New Terminal. Cmd+T, ALWAYS enabled on both
     // platforms (no dynamic enable/disable: a disabled menu item still
     // swallows the accelerator on macOS, so a launcher-focused Cmd+T would
@@ -4101,7 +4107,12 @@ fn install_app_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
             .and_then(|k| k.as_submenu().cloned())
         {
             let sep = PredefinedMenuItem::separator(app)?;
-            window_submenu.prepend_items(&[&workspace_manager, &new_window, &sep])?;
+            window_submenu.prepend_items(&[
+                &workspace_manager,
+                &new_window,
+                &open_in_browser,
+                &sep,
+            ])?;
             // Drop the Window submenu's own Close Window so Cmd+W is owned
             // solely by File's routed item above (no double accelerator).
             strip_close(&window_submenu);
@@ -4192,6 +4203,7 @@ fn install_app_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
         let window = SubmenuBuilder::with_id(app, LINUX_WINDOW_SUBMENU_ID, "Window")
             .item(&workspace_manager)
             .item(&new_window)
+            .item(&open_in_browser)
             .build()?;
         MenuBuilder::new(app)
             .item(&file)
@@ -4230,6 +4242,11 @@ fn install_app_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
             "app-new-window" => {
                 if let Err(e) = open_new_window_for_focused_workspace(app) {
                     tracing::warn!(error = %e, "open new window for focused workspace failed");
+                }
+            }
+            "app-open-in-browser" => {
+                if let Err(e) = open_focused_window_in_browser(app) {
+                    tracing::warn!(error = %e, "open focused window in browser failed");
                 }
             }
             "app-new-terminal" => {
@@ -4852,6 +4869,46 @@ fn open_about_window(app: &tauri::AppHandle) -> Result<(), String> {
 /// `win-main` menu item, which is also the fallback surface when a
 /// focused window's backing connection can't be resolved (stale
 /// window for a forgotten attachment).
+/// Open the FOCUSED workspace window's contents in the system browser. Mints a
+/// browser-affinity record for the same workspace (chan-desktop's watcher skips
+/// non-native records, so no native twin opens), composes its loopback URL with
+/// its own `?w=` / `?lib=`, and hands it to the opener plugin. A no-op when the
+/// focused window is a launcher or terminal (nothing workspace-shaped to open).
+fn open_focused_window_in_browser(app: &tauri::AppHandle) -> Result<(), String> {
+    let Some(focused) = app
+        .webview_windows()
+        .into_values()
+        .find(|w| serve::is_workspace_webview_label(w.label()) && w.is_focused().unwrap_or(false))
+    else {
+        return Ok(());
+    };
+    let focused_label = focused.label().to_string();
+    let state = app.state::<Arc<AppState>>();
+    let embedded = state
+        .embedded()
+        .ok_or_else(|| "embedded local server is unavailable".to_string())?;
+    // Resolve the focused window's record from the live feed; only a workspace
+    // window has a workspace to serve in the browser.
+    let Some(record) = embedded
+        .assemble_window_records()
+        .into_iter()
+        .find(|r| crate::window_watcher::native_label(r) == focused_label)
+    else {
+        return Ok(());
+    };
+    if record.kind != chan_server::WindowKind::Workspace {
+        return Ok(());
+    }
+    // A fresh browser-affinity record for the same workspace: the browser tab
+    // gets its own window_id and the desktop never opens a native twin for it.
+    let minted =
+        embedded.mint_browser_window(chan_server::WindowKind::Workspace, record.workspace_path)?;
+    let url = serve::browser_window_url(app, embedded.addr(), &minted)?;
+    app.opener()
+        .open_url(url.to_string(), None::<&str>)
+        .map_err(|e| format!("opening the browser window URL: {e}"))
+}
+
 fn open_new_window_for_focused_workspace(app: &tauri::AppHandle) -> Result<(), String> {
     // Buried workspace-/outbound- windows take precedence in their family:
     // Cmd+Shift+N on a window whose family has a hidden sibling REOPENS that
