@@ -14,6 +14,11 @@
 
 export type WindowKind = "terminal" | "workspace";
 
+/** Which surface minted a window: a chan-desktop native window, or a launcher
+ * `window.open` target. Drives the desktop watcher's twin-window suppression so
+ * a browser-minted record never opens a native window. */
+export type WindowOrigin = "native" | "browser";
+
 export interface WindowRecord {
   /** Library-minted, persisted, opaque, stable. The reconciliation key. Never parsed. */
   window_id: string;
@@ -45,11 +50,26 @@ export interface WindowRecord {
    * and it rides the existing `/api/library/windows` feed.
    */
   hidden?: boolean;
+  /**
+   * Client-claimed affinity of the surface that minted this window: "native" (a
+   * chan-desktop window) or "browser" (a launcher `window.open` target).
+   * Skip-if-native on the wire, so ABSENT reads as native. The desktop watcher
+   * skips non-native records so a browser-minted window never gets a native twin.
+   */
+  origin?: WindowOrigin;
 }
 
 /** Full snapshot pushed on connect and on every change over the watch socket. */
 export interface WindowSet {
   windows: WindowRecord[];
+  /**
+   * Per-tenant leadership: `{ "<prefix>": "<leader-window-id>" }` keyed by the
+   * tenant route `prefix` (one prefix = one leader). Only tenants with a live
+   * leader appear; absent/empty means none. The launcher correlates
+   * `leaders[record.prefix]` against the acting window_id for leader-only
+   * affordances.
+   */
+  leaders?: Record<string, string>;
 }
 
 // ---- The workspace registry ---------------------------------------------
@@ -189,6 +209,19 @@ export interface DevserverInput {
 // in-memory mock (`./mock`) the launcher runs against until the handlers are
 // deployed. `watchWindows` returns an unsubscribe handle.
 
+/** Mint parameters beyond the window kind. */
+export interface CreateWindowOptions {
+  /** kind=workspace: the workspace root path. Omitted for a terminal. */
+  workspacePath?: string;
+  /** Client-claimed affinity. The window manager mints "browser"; desktop paths
+   * omit it (absent => native), so a browser-minted record never opens a native
+   * twin. */
+  origin?: WindowOrigin;
+  /** The caller's claimed leader window_id for the per-tenant mint gate. Absent
+   * on legacy/leaderless callers (leaderless or matching-leader allows). */
+  actingWindowId?: string;
+}
+
 export interface LibraryApi {
   listWorkspaces(): Promise<WorkspaceEntry[]>;
   addLocalWorkspace(path: string, label?: string): Promise<WorkspaceEntry>;
@@ -230,14 +263,26 @@ export interface LibraryApi {
   listWindows(): Promise<WindowRecord[]>;
   watchWindows(onSet: (set: WindowSet) => void): () => void;
   /** Mint a window of the local library (client supplies the kind; the library
-   * supplies the id + persists). A terminal window has no workspace_path. */
-  createWindow(kind: WindowKind, workspacePath?: string): Promise<WindowRecord>;
+   * supplies the id + persists). A terminal window has no workspacePath. The
+   * window manager mints `origin:"browser"` and stamps the acting window_id (its
+   * leader claim for the per-tenant mint gate); desktop paths omit both (absent
+   * origin => native, absent claim allowed when leaderless). */
+  createWindow(kind: WindowKind, opts?: CreateWindowOptions): Promise<WindowRecord>;
   /** Open (focus a live window / un-hide a buried one) via the desktop window
    * bridge. Rejects on a surface with no desktop attached. */
   openWindow(id: string): Promise<void>;
   /** Hide (bury) a window via the desktop window bridge — notification-free,
    * unlike the OS close button. Rejects with no desktop attached. */
   hideWindow(id: string): Promise<void>;
+  /** Discard (unpersist + reap) a window record: the web-op close, distinct from
+   * the desktop `/hide` bridge and reachable bridgeless. A follower never calls
+   * it. `actingWindowId` claims the caller's leader identity for the per-tenant
+   * gate; a mismatch against a live leader answers 403. */
+  discardWindow(id: string, actingWindowId?: string): Promise<void>;
+  /** Flip a window's server-persisted visibility (the bridgeless web op, not the
+   * desktop `/hide` bridge). `actingWindowId` is the same leader claim as
+   * discardWindow. */
+  setWindowVisibility(id: string, hidden: boolean, actingWindowId?: string): Promise<void>;
 }
 
 /** A non-2xx response, carrying the status and the server's text body. */
@@ -395,11 +440,25 @@ export const liveApi: LibraryApi = {
       ws?.close();
     };
   },
-  createWindow: (kind, workspacePath) =>
+  createWindow: (kind, opts) =>
     req("POST", "/api/library/windows", {
       kind,
-      ...(workspacePath ? { workspace_path: workspacePath } : {}),
+      ...(opts?.workspacePath ? { workspace_path: opts.workspacePath } : {}),
+      ...(opts?.actingWindowId ? { acting_window_id: opts.actingWindowId } : {}),
+      ...(opts?.origin ? { origin: opts.origin } : {}),
     }),
   openWindow: (id) => req("POST", `/api/library/windows/${encodeURIComponent(id)}/open`),
   hideWindow: (id) => req("POST", `/api/library/windows/${encodeURIComponent(id)}/hide`),
+  discardWindow: (id, actingWindowId) =>
+    req(
+      "DELETE",
+      `/api/library/windows/${encodeURIComponent(id)}${
+        actingWindowId ? `?acting_window_id=${encodeURIComponent(actingWindowId)}` : ""
+      }`,
+    ),
+  setWindowVisibility: (id, hidden, actingWindowId) =>
+    req("POST", `/api/library/windows/${encodeURIComponent(id)}/visibility`, {
+      hidden,
+      ...(actingWindowId ? { acting_window_id: actingWindowId } : {}),
+    }),
 };

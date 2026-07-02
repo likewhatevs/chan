@@ -425,7 +425,8 @@ export function createLauncherDemoApi(opts: LauncherDemoOptions = {}): LauncherD
     },
     pickFolder: () => tick("/Users/hacker/demo-reset"),
     listWindows: () => tick(windows.map((w) => ({ ...w }))),
-    createWindow: (kind, workspacePath) => {
+    createWindow: (kind, opts) => {
+      const workspacePath = opts?.workspacePath;
       const ordinal = windows.filter((w) => w.library_id === "local" && w.kind === kind && (kind === "terminal" || w.workspace_path === workspacePath)).length + 1;
       const base = workspacePath ? workspacePath.split("/").filter(Boolean).pop() ?? "workspace" : "local";
       const rec = kind === "terminal"
@@ -450,6 +451,23 @@ export function createLauncherDemoApi(opts: LauncherDemoOptions = {}): LauncherD
       if (w) {
         w.hidden = true;
         w.connected = false;
+      }
+      notify();
+      return tick(undefined);
+    },
+    // Web-op close/visibility for the widened LibraryApi. The demo embed's
+    // window manager is inert (see state/demo guard), so these are called only
+    // via the interface; discard drops the record, visibility mirrors open/hide.
+    discardWindow: (id) => {
+      windows = windows.filter((w) => w.window_id !== id);
+      notify();
+      return tick(undefined);
+    },
+    setWindowVisibility: (id, hidden) => {
+      const w = windows.find((x) => x.window_id === id);
+      if (w) {
+        w.hidden = hidden;
+        w.connected = !hidden;
       }
       notify();
       return tick(undefined);

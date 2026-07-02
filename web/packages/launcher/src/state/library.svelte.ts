@@ -330,7 +330,7 @@ export async function openTerminal(): Promise<void> {
  * library (the desktop embed focuses an existing one for the same path). The
  * window feed updates through the watch subscription, so nothing to refresh. */
 export async function openWorkspaceWindow(path: string): Promise<void> {
-  await backend.createWindow("workspace", path);
+  await backend.createWindow("workspace", { workspacePath: path });
 }
 
 /** Toggle a window's visibility (the feed's SHOW/HIDE Eye): hide it if it is

@@ -491,7 +491,8 @@ export const mockApi: LibraryApi = {
 
   listWindows: () => tick(windows.map((w) => ({ ...w }))),
 
-  createWindow: (kind, workspacePath) => {
+  createWindow: (kind, opts) => {
+    const workspacePath = opts?.workspacePath;
     const localTerminals = windows.filter(
       (w) => w.library_id === "local" && w.kind === "terminal",
     ).length;
@@ -509,6 +510,7 @@ export const mockApi: LibraryApi = {
       persisted: true,
       connected: true,
       control: false,
+      ...(opts?.origin ? { origin: opts.origin } : {}),
     };
     windows.push(rec);
     notify();
@@ -536,6 +538,28 @@ export const mockApi: LibraryApi = {
     if (w) {
       w.hidden = true;
       w.connected = false;
+    }
+    notify();
+    return tick(undefined);
+  },
+
+  // The web-op close and visibility flip the mock uses in place of the desktop
+  // bridge ops: discard drops the record, visibility mirrors open/hide's
+  // hidden+connected split. `actingWindowId` is a no-op in the mock (no gate).
+  discardWindow: (id) => {
+    const i = windows.findIndex((w) => w.window_id === id);
+    if (i >= 0) {
+      windows.splice(i, 1);
+      notify();
+    }
+    return tick(undefined);
+  },
+
+  setWindowVisibility: (id, hidden) => {
+    const w = windows.find((x) => x.window_id === id);
+    if (w) {
+      w.hidden = hidden;
+      w.connected = !hidden;
     }
     notify();
     return tick(undefined);
