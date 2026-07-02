@@ -36,7 +36,7 @@ describe("FileEditorTab focus follows the active pane", () => {
     // inner guard covers focus lost between the bump and the deferred
     // call. Both must be present.
     expect(fileEditorTab).toMatch(
-      /\$effect\(\(\) => \{\s*if \(!focused\) return;\s*tabFocusPulse\.value;\s*queueMicrotask\(\(\) => \{\s*if \(!focused\) return;\s*if \(tab\.mode === "wysiwyg"\) wysiwygRef\?\.focus\(\);\s*else sourceRef\?\.focus\(\);/,
+      /\$effect\(\(\) => \{\s*if \(!focused\) return;\s*tabFocusPulse\.value;\s*queueMicrotask\(\(\) => \{\s*if \(!focused\) return;\s*if \(tab\.mode === "wysiwyg"\) wysiwygRef\?\.focus\(\);\s*else if \(tab\.mode === "canvas"\) canvasRef\?\.focusCanvas\(\);\s*else sourceRef\?\.focus\(\);/,
     );
   });
 
