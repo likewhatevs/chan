@@ -1585,4 +1585,64 @@ mod terminal_router_tests {
         let state = crate::state::test_support::make_test_state(false);
         let _router = terminal_router(state);
     }
+
+    // The terminal tenant's transfer route re-roots its wildcard capture at
+    // the filesystem root, so `/api/files/<abs-path>` must resolve and serve
+    // the absolute target. Serving real bytes through the assembled router
+    // pins the capture shape the handler depends on.
+    #[tokio::test]
+    async fn terminal_router_serves_absolute_paths_via_wildcard_capture() {
+        use axum::body::to_bytes;
+        use tower::ServiceExt;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("probe.txt");
+        std::fs::write(&file, b"wildcard capture probe").expect("write probe");
+
+        let state = crate::state::test_support::make_test_state(false);
+        let app = terminal_router(state);
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri(format!("/api/files{}?download=1", file.display()))
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        let bytes = to_bytes(response.into_body(), 1 << 20).await.expect("body");
+        assert_eq!(&bytes[..], b"wildcard capture probe");
+    }
+
+    // api_headings and api_backlinks feed their wildcard capture verbatim
+    // into graph lookups keyed by workspace-relative paths WITHOUT a leading
+    // slash; a capture that included the slash would silently return empty
+    // results instead of erroring. This reflector pins axum's side of that
+    // contract: the catch-all capture excludes the slash separating it from
+    // the route prefix.
+    #[tokio::test]
+    async fn wildcard_capture_excludes_the_leading_slash() {
+        use tower::ServiceExt;
+
+        let app: Router = Router::new().route(
+            "/api/headings/*path",
+            axum::routing::get(
+                |axum::extract::Path(path): axum::extract::Path<String>| async move { path },
+            ),
+        );
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/api/headings/notes/a.md")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 16)
+            .await
+            .expect("body");
+        assert_eq!(&bytes[..], b"notes/a.md");
+    }
 }
