@@ -32,6 +32,7 @@
   } from "../state/store.svelte";
   import { transfers, toggleTransfers } from "../state/transfers.svelte";
   import { openIndexingDashboard, paneMode } from "../state/tabs.svelte";
+  import { isLeader, sessionState } from "../state/session.svelte";
 
   let collapsed = $state(false);
 
@@ -61,12 +62,18 @@
       ui.statusAction.label === ui.status,
   );
   const paneModeVisible = $derived(paneMode.active);
+  // Session role: shown only in a multi-window session (>1 participant) so a
+  // solo window stays quiet, matching the bar's hide model. Leadership is
+  // driven by the /ws roster (cs session list/handover).
+  const roleVisible = $derived(sessionState.participants.length > 1);
+  const role = $derived(isLeader() ? "leader" : "follower");
   const anyVisible = $derived(
     indexVisible ||
       importVisible ||
       transfersBubbleVisible ||
       statusVisible ||
-      paneModeVisible,
+      paneModeVisible ||
+      roleVisible,
   );
 
   function toggleCollapse(): void {
@@ -186,6 +193,15 @@
             {#if paneMode.spawnIntent}
               <span class="muted">→ stage {paneMode.spawnIntent.kind}</span>
             {/if}
+          </span>
+        {/if}
+        {#if (indexVisible || importVisible || transfersBubbleVisible || statusVisible || paneModeVisible) && roleVisible}
+          <span class="sep"> - </span>
+        {/if}
+        {#if roleVisible}
+          <span class="section" aria-label="session role">
+            <span class="dot"></span>
+            {role}
           </span>
         {/if}
       </div>
