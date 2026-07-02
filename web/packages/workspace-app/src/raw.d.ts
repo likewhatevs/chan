@@ -26,3 +26,20 @@ declare module "*.json?raw" {
 declare module "node:fs" {
   export function readFileSync(path: string, encoding: string): string;
 }
+
+// React is a runtime peer of @excalidraw/excalidraw, dynamic-imported
+// only by the one React island (editor/ExcalidrawCanvas.svelte).
+// @types/react is not a dev dep; excalidraw carries the React types it
+// needs internally, and the island only touches createElement plus the
+// createRoot handle, so declare just those two entry-point surfaces.
+declare module "react" {
+  export function createElement(type: unknown, props?: unknown): unknown;
+}
+
+declare module "react-dom/client" {
+  export interface Root {
+    render(node: unknown): void;
+    unmount(): void;
+  }
+  export function createRoot(container: Element): Root;
+}

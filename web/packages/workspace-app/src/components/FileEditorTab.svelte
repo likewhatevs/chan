@@ -51,6 +51,7 @@
     Scissors,
     Search as SearchIcon,
     Settings2,
+    Shapes,
     Square,
     Table2,
     Terminal as TerminalIcon,
@@ -101,6 +102,7 @@
 
   import {
     copyTextToClipboard,
+    effectiveHybridSurfaceTheme,
     fileOps,
     isDraftPath,
     openFsGraphForFile,
@@ -124,7 +126,7 @@
     tabFocusPulse,
   } from "../state/tabs.svelte";
   import { terminalFromHereTarget } from "../terminal/fromHere";
-  import { csvDelimiter, isCsv, isJson } from "../state/fileTypes";
+  import { csvDelimiter, isCsv, isExcalidraw, isJson } from "../state/fileTypes";
   import {
     PAGE_WIDTH_MAX_PCT,
     PAGE_WIDTH_MIN_PCT,
@@ -163,6 +165,22 @@
   let wysiwygRef: Wysiwyg | undefined = $state();
   let sourceRef: Source | undefined = $state();
 
+  // Excalidraw canvas body. Kept out of the eager bundle: the wrapper is
+  // dynamic-imported on first activation, then latched, so N restored
+  // whiteboards do not all spin up a React root at once (Pane keeps every
+  // file-tab body mounted). The typeof import(...) below is a type-only
+  // query and does not pull the module into the eager graph.
+  let canvasRef: { focusCanvas: () => void } | undefined = $state();
+  let ExcalidrawCanvas =
+    $state<typeof import("../editor/ExcalidrawCanvas.svelte").default | null>(null);
+  $effect(() => {
+    if (active && tab.mode === "canvas" && !ExcalidrawCanvas) {
+      void import("../editor/ExcalidrawCanvas.svelte").then((m) => {
+        ExcalidrawCanvas = m.default;
+      });
+    }
+  });
+
   // Pull keyboard focus into the editor whenever this pane is the
   // active one. `focused` is read first so it is a tracked dependency:
   // the effect re-runs when the pane gains focus (keyboard pane nav,
@@ -180,6 +198,7 @@
     queueMicrotask(() => {
       if (!focused) return;
       if (tab.mode === "wysiwyg") wysiwygRef?.focus();
+      else if (tab.mode === "canvas") canvasRef?.focusCanvas();
       else sourceRef?.focus();
     });
   });
@@ -483,13 +502,22 @@
   /// Arbitrary text tabs do not (source is the only sensible
   /// surface for a .py / .toml / Makefile).
   const hasRenderedMode = $derived(
-    tab.fileKind !== "text" || isJson(tab.path) || isCsv(tab.path),
+    tab.fileKind !== "text" ||
+      isJson(tab.path) ||
+      isCsv(tab.path) ||
+      isExcalidraw(tab.path),
   );
 
   /// Which render mode this tab pairs with source mode. Workspaces the
   /// toggle button copy + the icon picker below.
-  const renderedModeForTab = $derived<"wysiwyg" | "pretty" | "table">(
-    isJson(tab.path) ? "pretty" : isCsv(tab.path) ? "table" : "wysiwyg",
+  const renderedModeForTab = $derived<"wysiwyg" | "pretty" | "table" | "canvas">(
+    isExcalidraw(tab.path)
+      ? "canvas"
+      : isJson(tab.path)
+        ? "pretty"
+        : isCsv(tab.path)
+          ? "table"
+          : "wysiwyg",
   );
 
   function doToggleMode(): void {
@@ -1014,13 +1042,17 @@
               ? "Show Pretty Tree"
               : renderedModeForTab === "table"
                 ? "Show Table"
-                : "Show Rendered"}
+                : renderedModeForTab === "canvas"
+                  ? "Show Whiteboard"
+                  : "Show Rendered"}
           <button class="mbtn" onclick={doToggleMode}>
             <span class="mbtn-icon">
               {#if inSource && renderedModeForTab === "pretty"}
                 <Braces size={16} strokeWidth={1.75} aria-hidden="true" />
               {:else if inSource && renderedModeForTab === "table"}
                 <Table2 size={16} strokeWidth={1.75} aria-hidden="true" />
+              {:else if inSource && renderedModeForTab === "canvas"}
+                <Shapes size={16} strokeWidth={1.75} aria-hidden="true" />
               {:else if inSource}
                 <Pilcrow size={16} strokeWidth={1.75} aria-hidden="true" />
               {:else}
@@ -1054,19 +1086,23 @@
              This menu is the only surface for these features (no
              chord alternative). -->
         <div class="msep" role="separator"></div>
-        <button class="mbtn" onclick={doToggleOutline} class:on={tab.outlineOpen}>
-          <span class="mbtn-icon">
-            {#if tab.outlineOpen}
-              <ArrowLeft size={16} strokeWidth={1.75} aria-hidden="true" />
-            {:else}
-              <ArrowRight size={16} strokeWidth={1.75} aria-hidden="true" />
-            {/if}
-          </span>
-          <span class="mbtn-label">
-            {tab.outlineOpen ? "Hide Outline" : "Show Outline"}
-          </span>
-          <span class="mbtn-chord"></span>
-        </button>
+        <!-- Outline parses the buffer as markdown headings; an excalidraw
+             scene is JSON, so the row is hidden for those tabs. -->
+        {#if !isExcalidraw(tab.path)}
+          <button class="mbtn" onclick={doToggleOutline} class:on={tab.outlineOpen}>
+            <span class="mbtn-icon">
+              {#if tab.outlineOpen}
+                <ArrowLeft size={16} strokeWidth={1.75} aria-hidden="true" />
+              {:else}
+                <ArrowRight size={16} strokeWidth={1.75} aria-hidden="true" />
+              {/if}
+            </span>
+            <span class="mbtn-label">
+              {tab.outlineOpen ? "Hide Outline" : "Show Outline"}
+            </span>
+            <span class="mbtn-chord"></span>
+          </button>
+        {/if}
         <button class="mbtn" onclick={doToggleDetails} class:on={tab.inspectorOpen}>
           <span class="mbtn-icon">
             {#if tab.inspectorOpen}
@@ -1398,6 +1434,22 @@
           delimiter={csvDelimiter(tab.path)}
           readonly={readOnly}
         />
+      </div>
+    {:else if tab.mode === "canvas"}
+      <!-- Interactive Excalidraw board. The React island lazy-loads on
+           first activation and stays mounted; no oncontextmenu so the
+           board keeps its own right-click menu. onSceneChange writes the
+           serialized scene into the buffer, which autosave persists like
+           any other edit. -->
+      <div class="editor-host" role="presentation">
+        {#if ExcalidrawCanvas}
+          <ExcalidrawCanvas
+            bind:this={canvasRef}
+            content={tab.content}
+            dark={effectiveHybridSurfaceTheme("editor") === "dark"}
+            onSceneChange={(json) => (tab.content = json)}
+          />
+        {/if}
       </div>
     {:else}
       <!-- Source mode gets its own positioned host so FindBar

@@ -54,6 +54,7 @@
     Radio,
     RefreshCw,
     Search,
+    Shapes,
     Terminal,
     User,
     X,
@@ -77,6 +78,7 @@
     tree,
   } from "../state/store.svelte";
   import { workspace } from "../state/workspace.svelte";
+  import { isExcalidraw } from "../state/fileTypes";
   import {
     isTauriDesktop,
     openWebInspector,
@@ -1247,6 +1249,8 @@
           <span class="tab-icon" aria-hidden="true">
             {#if contactPaths.has(t.path)}
               <User size={14} strokeWidth={1.75} />
+            {:else if isExcalidraw(t.path)}
+              <Shapes size={14} strokeWidth={1.75} />
             {:else}
               <FileText size={14} strokeWidth={1.75} />
             {/if}
