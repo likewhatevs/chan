@@ -7,7 +7,8 @@
     "node": ">=20"
   },
   "dependencies": {
-    "@chan/launcher": "0.60.0-rc1"
+    "@chan/launcher": "0.60.0-rc1",
+    "@chan/workspace-app": "0.60.0-rc1"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^7.1.2",

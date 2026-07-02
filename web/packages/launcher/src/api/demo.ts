@@ -211,7 +211,14 @@ function tick<T>(value: T): Promise<T> {
   return Promise.resolve(value);
 }
 
-export function createLauncherDemoApi(): LauncherDemoApi {
+export type LauncherDemoOptions = {
+  /// Fired whenever the demo opens/focuses a window row. The marketing embed
+  /// hooks this to open the frontend-only workspace demo overlay; the demo
+  /// state change (hidden/connected) still happens either way.
+  onOpenWindow?: (id: string) => void;
+};
+
+export function createLauncherDemoApi(opts: LauncherDemoOptions = {}): LauncherDemoApi {
   let workspaces: WorkspaceEntry[] = [];
   let devservers: DemoDevserver[] = [];
   let devserverWorkspaces: WorkspaceEntry[] = [];
@@ -435,6 +442,7 @@ export function createLauncherDemoApi(): LauncherDemoApi {
         w.connected = true;
       }
       notify();
+      opts.onOpenWindow?.(id);
       return tick(undefined);
     },
     hideWindow: (id) => {

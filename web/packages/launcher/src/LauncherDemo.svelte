@@ -11,13 +11,18 @@
   import { setDemoReset } from "./state/demo.svelte";
   import { themeState } from "./state/theme.svelte";
 
+  let { onOpenWindow }: { onOpenWindow?: (id: string) => void } = $props();
+
   // The marketing mock always demos the dark theme to match the desktop
   // screenshots and the dark widget frame, regardless of the visitor's
   // prefers-color-scheme (which would otherwise start it light and render the
   // theme toggle as a moon instead of the desktop's sun).
   themeState.theme = "dark";
 
-  const api = createLauncherDemoApi();
+  // Initial-value capture is deliberate: the embed wires the handler once at
+  // mount and never swaps it.
+  // svelte-ignore state_referenced_locally
+  const api = createLauncherDemoApi({ onOpenWindow });
   setBackend(api);
 
   async function resetDemoData(): Promise<void> {
