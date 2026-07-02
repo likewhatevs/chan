@@ -1,6 +1,6 @@
 # chan: design
 
-`chan` is the user-facing AI-native IDE for the modern engineer: a CLI plus an HTTP server that serves a hybrid workspace (editor, terminal, Team Work, file browser, graph, dashboard) of tiling tabs and panes over a folder on disk. You drive projects in Markdown and put AI to work on them; multiple agents run in the terminal and coordinate through `cs` and the in-process MCP server. This document is the canonical design reference for the workspace. Update it in the same commit as any change that affects crate boundaries, server contracts, state ownership, or the frontend embed / serve story.
+`chan` is an IDE for the modern engineer: a single binary that serves a hybrid workspace containing a terminal, editor, file browser, graph, and dashboard as tiling tabs and panes over a folder on disk. You drive projects in Markdown and put AI to work on them; multiple agents run in the terminal and coordinate through `cs` and the in-process MCP server. This document is the canonical design reference for the workspace. Update it in the same commit as any change that affects crate boundaries, server contracts, state ownership, or the frontend embed / serve story.
 
 ## Component architecture
 
