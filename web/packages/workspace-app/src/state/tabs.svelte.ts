@@ -22,7 +22,7 @@ import {
 import { stripTrailingWhitespaceText } from "../editor/tools";
 import { uiConfirm } from "./confirm.svelte";
 import { editorToolsPrefs } from "./editorTools.svelte";
-import { classifyPath, isCsv, isEditableText, isJson } from "./fileTypes";
+import { classifyPath, isCsv, isEditableText, isExcalidraw, isJson } from "./fileTypes";
 import type { FileKind } from "./kinds";
 import {
   createTerminalKeyboardProtocolState,
@@ -75,7 +75,9 @@ function id(prefix: string): string {
 ///   - `pretty`: collapsible-tree renderer. JSON only today.
 ///   - `table`: tabular renderer with click-to-edit cells. CSV /
 ///     TSV only today.
-export type Mode = "wysiwyg" | "source" | "pretty" | "table";
+///   - `canvas`: interactive Excalidraw whiteboard. `.excalidraw`
+///     only; source mode exposes the raw scene JSON.
+export type Mode = "wysiwyg" | "source" | "pretty" | "table" | "canvas";
 export type EditorSelection = { from: number; to: number };
 export type OpenFileOptions = {
   initialSelection?: EditorSelection;
@@ -87,11 +89,13 @@ export type OpenFileOptions = {
   landAtTop?: boolean;
 };
 
-/// Default mode for a freshly opened file. JSON tabs land in
-/// "pretty"; CSV/TSV tabs land in "table"; markdown-class tabs
-/// stay on "wysiwyg"; everything else (other text formats) opens
-/// in source mode because that's the only mode they have.
+/// Default mode for a freshly opened file. Excalidraw scenes land in
+/// "canvas" (the interactive board); JSON tabs land in "pretty";
+/// CSV/TSV tabs land in "table"; markdown-class tabs stay on
+/// "wysiwyg"; everything else (other text formats) opens in source
+/// mode because that's the only mode they have.
 function defaultModeForPath(path: string, fileKind: FileKind): Mode {
+  if (isExcalidraw(path)) return "canvas";
   if (isJson(path)) return "pretty";
   if (isCsv(path)) return "table";
   return fileKind === "text" ? "source" : "wysiwyg";
@@ -107,6 +111,7 @@ function isModeValidForPath(
 ): boolean {
   if (mode === "pretty") return isJson(path);
   if (mode === "table") return isCsv(path);
+  if (mode === "canvas") return isExcalidraw(path);
   if (mode === "wysiwyg") return fileKind !== "text";
   // source is valid on every tab.
   return mode === "source";
@@ -1098,6 +1103,10 @@ function tabForReopen(src: Tab): Tab {
 export function openFind(tabId: string): void {
   const found = findFileTabById(tabId);
   if (!found) return;
+  // Canvas mode has no text host for the find bar to mount into; the
+  // whiteboard owns its own search. Opening find would set invisible
+  // state, so no-op (source mode of the same file still finds).
+  if (found.tab.mode === "canvas") return;
   if (!found.tab.find) found.tab.find = makeFindState();
   found.tab.find.open = true;
   found.tab.find.focusNonce += 1;
@@ -4051,7 +4060,10 @@ async function performSaveOnce(t: FileTab): Promise<void> {
     t.error = "file is still loading";
     return;
   }
-  if (isJson(t.path)) {
+  // Excalidraw scenes are JSON too: gate them like .json so a
+  // source-mode typo can't write a corrupt scene the canvas then
+  // refuses to restore.
+  if (isJson(t.path) || isExcalidraw(t.path)) {
     const reason = validateJsonBuffer(t.content);
     if (reason !== null) {
       t.error = `JSON parse error: ${reason}`;

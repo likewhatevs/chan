@@ -3826,3 +3826,75 @@ describe("openLinkTarget resolves a wiki/link stem before opening", () => {
     expect(activePane().tabs).toHaveLength(1);
   });
 });
+
+describe("excalidraw canvas mode", () => {
+  function activeFileMode(): string | null {
+    const t = activePane().tabs[0];
+    return t?.kind === "file" ? t.mode : null;
+  }
+
+  test("Mod+E flips an excalidraw tab between canvas and source", () => {
+    resetLayout([
+      fileTab({ path: "draw/board.excalidraw", fileKind: "text", mode: "canvas" }),
+    ]);
+    // toggleActiveFileTabMode is the Mod+E chord's handler; the rendered
+    // surface for .excalidraw is canvas, so it swaps canvas <-> source.
+    toggleActiveFileTabMode();
+    expect(activeFileMode()).toBe("source");
+    toggleActiveFileTabMode();
+    expect(activeFileMode()).toBe("canvas");
+  });
+
+  test("a fresh .excalidraw tab restores in canvas mode by default", async () => {
+    vi.spyOn(api, "readStream").mockResolvedValue({
+      path: "draw/board.excalidraw",
+      content: "{}",
+      mtime: 1,
+      writable: true,
+    });
+    // No persisted mode: validateRestoredMode falls to defaultModeForPath,
+    // which routes .excalidraw to canvas. fileKind is plain text.
+    await restoreLayout({
+      k: "l",
+      t: [{ k: "f", p: "draw/board.excalidraw", a: 1 }],
+      pc: "p",
+    });
+    const tab = activePane().tabs[0];
+    expect(tab?.kind).toBe("file");
+    if (tab?.kind !== "file") return;
+    expect(tab.mode).toBe("canvas");
+    expect(tab.fileKind).toBe("text");
+  });
+
+  test("a persisted canvas mode round-trips through serialize/restore", async () => {
+    vi.spyOn(api, "readStream").mockResolvedValue({
+      path: "draw/board.excalidraw",
+      content: "{}",
+      mtime: 1,
+      writable: true,
+    });
+    resetLayout([
+      fileTab({ path: "draw/board.excalidraw", fileKind: "text", mode: "canvas" }),
+    ]);
+    const snapshot = serializeLayout();
+    await restoreLayout(snapshot!);
+    expect(activeFileMode()).toBe("canvas");
+  });
+
+  test("a canvas mode persisted for a non-excalidraw path falls back", async () => {
+    vi.spyOn(api, "readStream").mockResolvedValue({
+      path: "notes/a.md",
+      content: "# hi",
+      mtime: 1,
+      writable: true,
+    });
+    // isModeValidForPath gates canvas to .excalidraw, so a stale canvas
+    // mode on a markdown path restores to the markdown default, not canvas.
+    await restoreLayout({
+      k: "l",
+      t: [{ k: "f", p: "notes/a.md", m: "canvas", a: 1 }],
+      pc: "p",
+    });
+    expect(activeFileMode()).toBe("wysiwyg");
+  });
+});

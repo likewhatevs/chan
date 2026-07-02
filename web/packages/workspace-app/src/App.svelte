@@ -1074,6 +1074,10 @@
     // (EOF) to the shell. The shell exit collapses the tab through
     // the existing terminal-session lifecycle.
     if (active.kind === "terminal") return;
+    // Excalidraw canvas: leave Ctrl+D for the board (its duplicate
+    // chord off macOS). Only in canvas mode; source mode of the same
+    // file closes the tab like any other editor.
+    if (active.kind === "file" && active.mode === "canvas") return;
     // Files / Graph / Doc tabs: pre-empt the default handler and
     // close the tab. stopPropagation prevents CodeMirror's
     // selectNextOccurrence from firing on the same keystroke.

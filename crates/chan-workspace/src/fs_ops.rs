@@ -362,12 +362,11 @@ fn classify_ext(ext: &str) -> Option<FileClass> {
         | "ps1" | "psm1" | "psd1" | "toml" | "yaml" | "yml" | "json" | "json5" | "jsonl"
         | "ndjson" | "ini" | "cfg" | "conf" | "properties" | "env" | "envrc" | "lock" | "html"
         | "htm" | "css" | "scss" | "sass" | "less" | "xml" | "xhtml" | "xsl" | "xslt" | "rss"
-        | "atom" | "csv" | "tsv" | "sql" | "log" | "mk" | "mak" | "cmake" | "bzl" | "ninja"
-        | "gradle" | "patch" | "diff" | "rst" | "adoc" | "asciidoc" | "org" | "tex" | "latex"
-        | "ltx" | "bib" | "gitignore" | "gitattributes" | "editorconfig" | "npmrc" | "nvmrc"
-        | "babelrc" | "prettierrc" | "eslintrc" | "eslintignore" | "dockerignore" => {
-            FileClass::Text
-        }
+        | "atom" | "csv" | "tsv" | "sql" | "log" | "excalidraw" | "mk" | "mak" | "cmake"
+        | "bzl" | "ninja" | "gradle" | "patch" | "diff" | "rst" | "adoc" | "asciidoc" | "org"
+        | "tex" | "latex" | "ltx" | "bib" | "gitignore" | "gitattributes" | "editorconfig"
+        | "npmrc" | "nvmrc" | "babelrc" | "prettierrc" | "eslintrc" | "eslintignore"
+        | "dockerignore" => FileClass::Text,
 
         _ => return None,
     };
@@ -1713,6 +1712,10 @@ mod tests {
         assert_eq!(classify("package.json"), FileClass::Text);
         assert_eq!(classify("data.csv"), FileClass::Text);
         assert_eq!(classify("schema.sql"), FileClass::Text);
+        // Whiteboard scene: Text so the write gate accepts CREATING a new
+        // board (an unknown extension with nothing on disk to sniff would
+        // otherwise be refused).
+        assert_eq!(classify("board.excalidraw"), FileClass::Text);
         // Text: web / markup.
         assert_eq!(classify("index.html"), FileClass::Text);
         assert_eq!(classify("style.css"), FileClass::Text);

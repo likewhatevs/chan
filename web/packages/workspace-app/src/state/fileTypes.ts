@@ -155,6 +155,10 @@ const TEXT_EXTENSIONS = new Set([
   "tsv",
   "sql",
   "log",
+  // Whiteboard scene. JSON on disk, so it rides the shared UTF-8 gate;
+  // the editor opens it in canvas mode (isExcalidraw), source mode
+  // exposes the raw scene JSON.
+  "excalidraw",
   // Build.
   "mk",
   "mak",
@@ -309,6 +313,15 @@ export function isJson(path: string): boolean {
 export function isCsv(path: string): boolean {
   const ext = extOf(path);
   return ext === "csv" || ext === "tsv";
+}
+
+/// True for Excalidraw whiteboard scenes. The editor tab opens these
+/// in "canvas" mode by default (the interactive board); source mode
+/// exposes the raw scene JSON. Same wire kind as any other text file
+/// (`text`) -- the scene is JSON on disk, so it rides the shared
+/// UTF-8 gate and joins TEXT_EXTENSIONS in lockstep with the server.
+export function isExcalidraw(path: string): boolean {
+  return extOf(path) === "excalidraw";
 }
 
 /// Field delimiter for a tabular file. Feeds both the parser and
