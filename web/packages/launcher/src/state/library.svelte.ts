@@ -11,6 +11,10 @@ interface LibraryState {
   workspaces: WorkspaceEntry[];
   devservers: DevserverEntry[];
   windows: WindowRecord[];
+  // Per-tenant leadership from the watch feed: prefix -> leader window_id. Empty
+  // (leaderless) when the tenant has no live leader. Correlated against this
+  // launcher's window handles to gate leader-only create controls.
+  leaders: Record<string, string>;
   loading: boolean;
   error: string | null;
 }
@@ -19,6 +23,7 @@ export const library = $state<LibraryState>({
   workspaces: [],
   devservers: [],
   windows: [],
+  leaders: {},
   loading: false,
   error: null,
 });
@@ -82,6 +87,7 @@ export async function loadLibrary(): Promise<void> {
     try {
       unwatch = backend.watchWindows((set) => {
         library.windows = set.windows;
+        library.leaders = set.leaders ?? {};
         // The feed also fires on workspace mount/unmount (chan open / on / off)
         // and on a devserver connect/disconnect (its windows enter/leave + its
         // served-workspace rows merge in/out, and its `connected` flag flips),
