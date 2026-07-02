@@ -397,6 +397,23 @@ export function setTransientStatus(
   }, ms);
 }
 
+/// Explicitly clear the status pill. This is the "explicitly cleared" half
+/// of the persistent-status contract: the one-shot error setters
+/// (create / rename / upload / paste / copy / delete failures) have no
+/// lifecycle owner, so without an explicit clear a persistent error sits
+/// forever, even behind the collapse chevron. Clearing is safe for every
+/// kind: a "Moving..." progress status re-clears when the move settles, and
+/// a workspace-warnings status re-asserts itself on the next info pass.
+export function dismissStatus(): void {
+  if (transientStatusTimer !== null) {
+    clearTimeout(transientStatusTimer);
+    transientStatusTimer = null;
+  }
+  ui.status = null;
+  ui.statusKind = null;
+  ui.statusAction = null;
+}
+
 // Route leaf-module notify() calls through the transient writer
 // so short action-confirmation pings auto-dismiss instead of
 // piling up on the status bar.
@@ -4410,7 +4427,7 @@ export const fileOps = {
         fileBrowserDraftsPathReason(path) ??
         (isEditableText(path)
           ? null
-          : `'${path}' is not an editable text file (only .md and .txt)`),
+          : `'${path}' is not an editable text file`),
     });
     if (!name) return;
     // The modal already validated against `isEditableText`, but
@@ -4464,7 +4481,15 @@ export const fileOps = {
       defaultValue,
       kind: "either",
       mode: "create",
-      validate: fileBrowserDraftsPathReason,
+      // Mirror createFile's editable-text gate for the file branch so an
+      // unknown extension (e.g. `foo.zzz`) is rejected inline instead of
+      // round-tripping to a server 415 that then sticks in the status bar.
+      // A directory target keeps its trailing slash and is always allowed.
+      validate: (path) =>
+        fileBrowserDraftsPathReason(path) ??
+        (path.endsWith("/") || isEditableText(path)
+          ? null
+          : `'${path}' is not an editable text file`),
     });
     if (!next) return;
     const isDir = next.endsWith("/");

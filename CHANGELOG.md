@@ -12,6 +12,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **A stuck status error can be dismissed.** The one-shot create, rename, upload, and paste errors that surface in the top-right status pill had no way to clear, so a single failure sat there until another status overwrote it. Persistent errors now carry a close button. The unified New File or Directory dialog also rejects an unknown file extension inline, mirroring New File, instead of round-tripping to a server error that then stuck in the pill.
 - **Markdown lists render again below a `---` line.** A document whose first line is `---` with no closing fence no longer collapses the whole parse into one empty block, so the horizontal rule, headings, lists, and task lists below it all style correctly. Bullet (`-`, `*`, `+`), ordered, and task markers behave identically. The wysiwyg decorations also refresh the moment the background parse finishes, so a large edit or a sibling split pane no longer leaves list markers showing as raw text until the next click.
 
 ## [v0.61.0] - 2026-07-02

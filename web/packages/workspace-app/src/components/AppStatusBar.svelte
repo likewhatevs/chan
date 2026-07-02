@@ -28,6 +28,7 @@
     indexStatus,
     importStatus,
     openWorkspaceWarningsDialog,
+    dismissStatus,
     ui,
   } from "../state/store.svelte";
   import { transfers, toggleTransfers } from "../state/transfers.svelte";
@@ -60,6 +61,13 @@
     statusVisible &&
       ui.statusAction?.kind === "workspace-warnings" &&
       ui.statusAction.label === ui.status,
+  );
+  // Persistent statuses with no typed action are the one-shot error pills
+  // (create / rename / upload failures). They have no lifecycle owner, so
+  // give them a click-to-dismiss. Transient statuses auto-clear and the
+  // workspace-warnings action opens its dialog instead.
+  const statusDismissable = $derived(
+    statusVisible && !statusActionVisible && ui.statusKind === "persistent",
   );
   const paneModeVisible = $derived(paneMode.active);
   // Session role: shown only in a multi-window session (>1 participant) so a
@@ -177,7 +185,19 @@
               onclick={activateStatus}
             >{ui.status}</button>
           {:else}
-            <span class="section status-msg" aria-label="status message">{ui.status}</span>
+            <span class="section status-msg" aria-label="status message">
+              {ui.status}
+              {#if statusDismissable}
+                <button
+                  type="button"
+                  class="status-dismiss"
+                  aria-label="dismiss status"
+                  title="Dismiss"
+                  onclick={dismissStatus}
+                  onmousedown={(e) => e.preventDefault()}
+                >×</button>
+              {/if}
+            </span>
           {/if}
         {/if}
         {#if (indexVisible || importVisible || statusVisible) && paneModeVisible}
@@ -289,6 +309,26 @@
   }
   .status-msg {
     color: var(--warn-text);
+  }
+  /* Small close affordance for a persistent error pill with no typed
+     action. Matches the collapse button's quiet styling. */
+  .status-dismiss {
+    border: 0;
+    background: transparent;
+    padding: 0 2px;
+    margin-left: 2px;
+    color: var(--muted);
+    cursor: pointer;
+    font: inherit;
+    line-height: 1;
+  }
+  .status-dismiss:hover {
+    color: var(--text);
+  }
+  .status-dismiss:focus-visible {
+    outline: 2px solid var(--link);
+    outline-offset: 2px;
+    border-radius: 4px;
   }
   .status-action {
     border: 0;
