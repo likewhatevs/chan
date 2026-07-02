@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-import { execFileSync } from "node:child_process";
 import { promises as fs } from "node:fs";
 import { svelte } from "@sveltejs/vite-plugin-svelte";
 import { build as viteBuild } from "vite";
@@ -96,7 +95,6 @@ async function main() {
   );
 
   await buildLauncherDemo();
-  buildWorkspaceSnapshot();
   await validateDist(version);
   console.log(`built marketing dist for chan ${version}`);
 }
@@ -167,22 +165,14 @@ async function buildLauncherDemo() {
   await viteBuild({
     configFile: false,
     root: siteRoot,
-    // Everything the demo build emits lives under /assets/; the dynamic
-    // chunk loader resolves CSS preloads and asset urls against this base.
+    // Everything the demo build emits lives under /assets/; the emitted bundle
+    // resolves CSS and asset urls against this base.
     base: "/assets/",
     plugins: [svelte()],
     resolve: {
       alias: {
         "@chan/launcher/demo": path.join(repoRoot, "web/packages/launcher/src/LauncherDemo.svelte"),
         "@chan/launcher/styles.css": path.join(repoRoot, "web/packages/launcher/src/styles.css"),
-        "@chan/workspace-app/demo": path.join(
-          repoRoot,
-          "web/packages/workspace-app/src/WorkspaceDemo.svelte",
-        ),
-        "@chan/workspace-app/demo-data": path.join(
-          repoRoot,
-          "web/packages/workspace-app/src/demo/data.ts",
-        ),
       },
     },
     build: {
@@ -193,10 +183,8 @@ async function buildLauncherDemo() {
         input: path.join(srcRoot, "launcher-demo.ts"),
         output: {
           entryFileNames: "launcher-demo.js",
-          // The workspace demo is a dynamic import from the launcher embed;
-          // it (and the whole workspace-app graph behind it) lands in its own
-          // deterministic chunk that only loads on the first tile click, so
-          // the landing page never pays for the editor/graph/terminal bundle.
+          // Fixed names so the generated home page can reference the emitted
+          // launcher-demo.js entry and launcher-demo.css by stable path.
           chunkFileNames: "[name].js",
           assetFileNames: "[name].[ext]",
         },
@@ -204,11 +192,10 @@ async function buildLauncherDemo() {
     },
   });
 
-  // Scope each demo bundle's global CSS (`:root` variable blocks, `body`
-  // rules) to its own frame so loading a demo chunk can never restyle the
-  // marketing page around it.
+  // Scope the launcher demo's global CSS (`:root` variable blocks, `body`
+  // rules) to its frame so the demo chunk can never restyle the marketing
+  // page around it.
   await scopeDemoCss("launcher-demo.css", ".launcher-demo-frame");
-  await scopeDemoCss("workspace-demo.css", ".workspace-demo-frame");
 }
 
 async function scopeDemoCss(fileName, frameSelector) {
@@ -225,21 +212,6 @@ async function scopeDemoCss(fileName, frameSelector) {
     .replaceAll(":root", frameSelector)
     .replace(/(^|})\s*body\s*{/g, `$1 ${frameSelector} {`);
   await fs.writeFile(cssPath, css);
-}
-
-// Snapshot this repo into the demo-workspace asset the frontend-only
-// workspace demo boots from: the tree, file contents, graph, and search all
-// derive from this JSON in memory, with no backend.
-function buildWorkspaceSnapshot() {
-  const script = path.join(
-    repoRoot,
-    "web/packages/workspace-app/scripts/snapshot-workspace.mjs",
-  );
-  execFileSync(
-    "node",
-    [script, "--repo", repoRoot, "--out", path.join(distRoot, "assets", "demo-workspace.json")],
-    { stdio: "inherit" },
-  );
 }
 
 function renderSiteNav(active) {
