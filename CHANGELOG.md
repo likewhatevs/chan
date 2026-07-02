@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [v0.61.0] - 2026-07-02
 
 Interactive Excalidraw whiteboard tabs and markdown slide preview in the workspace app, plus desktop-PWA and leader/follower session integration for the launcher and multi-window sessions.
 
