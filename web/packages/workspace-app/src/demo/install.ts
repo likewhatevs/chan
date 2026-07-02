@@ -12,8 +12,9 @@ import { MockWorkspaceStore } from "./store";
 
 export function installDemoWorkspace(data: MockWorkspaceData): MockWorkspaceStore {
   const store = new MockWorkspaceStore(data);
-  const graph = new DemoGraph(store);
-  const reports = new MockReports(data.reports?.files ?? []);
+  const reportRows = data.reports?.files ?? [];
+  const graph = new DemoGraph(store, reportRows);
+  const reports = new MockReports(reportRows);
   setFetchImpl(createDemoFetch(store, graph, reports));
   setSocketFactory(demoSocketFactory);
   return store;

@@ -15,6 +15,7 @@ import type {
   GraphViewEdge,
   GraphViewNode,
   HeadingRow,
+  ReportFileStats,
 } from "../api/types";
 import type { MockWorkspaceStore } from "./store";
 
@@ -157,13 +158,18 @@ export class DemoGraph {
   /// Lowercased document basename (with extension) to paths, for the wiki
   /// basename resolution the real link_targets table provides.
   #basenames = new Map<string, string[]>();
+  /// Report language + code per file, for the graph's language layer.
+  #reportByPath = new Map<string, { language: string; code: number }>();
 
-  constructor(store: MockWorkspaceStore) {
+  constructor(store: MockWorkspaceStore, reportRows: ReportFileStats[] = []) {
     this.#store = store;
     for (const e of store.entries()) {
       if (e.kind === "document" && e.content) {
         this.#files.set(e.path, parseMarkdown(e.content));
       }
+    }
+    for (const r of reportRows) {
+      this.#reportByPath.set(r.path, { language: r.language, code: r.code });
     }
     this.#rebuildBasenames();
   }
@@ -329,6 +335,33 @@ export class DemoGraph {
         pushEdge(viewEdge);
       }
     }
+
+    // Language layer (chan-server routes/graph.rs): one `language:<Name>` node
+    // per report language, and a language -> file edge for every file the
+    // report classifies. Node carries file count + summed SLOC.
+    const byLanguage = new Map<string, { files: number; code: number }>();
+    const languageEdges: GraphViewEdge[] = [];
+    for (const node of nodes.values()) {
+      if (node.kind !== "file") continue;
+      const rep = this.#reportByPath.get(node.id);
+      if (!rep) continue;
+      const agg = byLanguage.get(rep.language) ?? { files: 0, code: 0 };
+      agg.files++;
+      agg.code += rep.code;
+      byLanguage.set(rep.language, agg);
+      languageEdges.push({ source: `language:${rep.language}`, target: node.id, kind: "language" });
+    }
+    for (const [language, agg] of byLanguage) {
+      nodes.set(`language:${language}`, {
+        kind: "language",
+        id: `language:${language}`,
+        label: language,
+        language,
+        files: agg.files,
+        code: agg.code,
+      });
+    }
+    for (const edge of languageEdges) pushEdge(edge);
 
     return { nodes: [...nodes.values()], edges };
   }

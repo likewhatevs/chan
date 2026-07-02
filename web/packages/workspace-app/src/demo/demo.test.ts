@@ -38,6 +38,7 @@ function fixture(): MockWorkspaceData {
       { path: "design.md", kind: "document", size: 5, mtime: 100, content: "specs" },
       { path: "docs/a.md", kind: "document", size: A_MD.length, mtime: 100, content: A_MD },
       { path: "src/main.rs", kind: "text", size: 4, mtime: 100, content: "fn()" },
+      { path: "src/util.rs", kind: "text", size: 4, mtime: 100, content: "fn()" },
     ],
     reports: {
       files: [
@@ -258,6 +259,18 @@ describe("DemoGraph", () => {
     expect(targets).toEqual(["README.md", "design.md", "docs/missing-note.md"]);
     const broken = edges.filter((e) => e.broken).map((e) => e.target);
     expect(broken).toEqual(["docs/missing-note.md"]);
+  });
+
+  test("language layer: language nodes + language->file edges from reports", () => {
+    const d = fixture();
+    const g = new DemoGraph(new MockWorkspaceStore(d), d.reports?.files ?? []);
+    const view = g.view();
+    const rust = view.nodes.find((n) => n.id === "language:Rust");
+    expect(rust).toMatchObject({ kind: "language", label: "Rust", files: 2, code: 100 });
+    const langEdges = view.edges.filter((e) => e.kind === "language");
+    expect(langEdges).toContainEqual({ source: "language:Rust", target: "src/main.rs", kind: "language" });
+    // docs/a.md is a report row (Markdown) AND a graph file node -> gets an edge.
+    expect(langEdges).toContainEqual({ source: "language:Markdown", target: "docs/a.md", kind: "language" });
   });
 
   test("backlinks returns incoming raw edges with anchors", () => {
