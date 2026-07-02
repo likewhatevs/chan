@@ -22,6 +22,7 @@
     Upload,
   } from "lucide-svelte";
   import { api } from "../api/client";
+  import { handleDemoDownload } from "../api/transport";
   import { clampMenu } from "./menuClamp";
   import { portal } from "./portal";
   import type { TreeEntry } from "../api/types";
@@ -604,6 +605,7 @@
     menu = null;
   }
   function downloadSelection(path: string, isDir: boolean): void {
+    if (handleDemoDownload(path, isDir)) return;
     const link = document.createElement("a");
     link.href = api.downloadUrl(path);
     link.download = downloadFilename(path, isDir);

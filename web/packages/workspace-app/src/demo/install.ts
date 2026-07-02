@@ -2,8 +2,14 @@
 // WebSocket factory at the in-memory mock. Call before the app mounts (see
 // WorkspaceDemo.svelte). The real transport is unchanged until this runs.
 
-import { setFetchImpl, setSocketFactory, setXhrFactory } from "../api/transport";
+import {
+  setDownloadHandler,
+  setFetchImpl,
+  setSocketFactory,
+  setXhrFactory,
+} from "../api/transport";
 import type { MockWorkspaceData } from "./data";
+import { demoDownload } from "./download";
 import { DemoGraph } from "./graph";
 import { MockReports } from "./report";
 import { createDemoFetch } from "./router";
@@ -19,6 +25,7 @@ export function installDemoWorkspace(data: MockWorkspaceData): MockWorkspaceStor
   setFetchImpl(createDemoFetch(store, graph, reports));
   setSocketFactory(demoSocketFactory);
   setXhrFactory(() => createDemoUploadXhr(store, graph));
+  setDownloadHandler(() => demoDownload());
   return store;
 }
 
@@ -26,4 +33,5 @@ export function uninstallDemoWorkspace(): void {
   setFetchImpl(null);
   setSocketFactory(null);
   setXhrFactory(null);
+  setDownloadHandler(null);
 }
