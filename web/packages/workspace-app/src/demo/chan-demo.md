@@ -2,7 +2,7 @@
 
 Your new terminal and workspace manager.
 
-chan is an IDE for the modern engineer: a single binary that serves a hybrid workspace containg a terminal, editor, file browser, graph, and dashboard as tiling tabs and panes over a folder on disk.
+chan is an IDE for the modern engineer: a single binary that serves a hybrid workspace containing a terminal, editor, file browser, graph, and dashboard as tiling tabs and panes over a folder on disk.
 
 You drive projects in Markdown and put AI to work on them. Local and remote, on macOS, Linux, and Windows.
 
