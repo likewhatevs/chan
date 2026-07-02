@@ -83,9 +83,28 @@ pub fn absolutize(path: PathBuf) -> Result<PathBuf> {
 pub async fn send_control_request(socket: &Path, request: ControlRequest) -> Result<String> {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
-    let (read, mut write) = transport::connect(socket)
-        .await
-        .with_context(|| format!("connecting to chan control socket {}", socket.display()))?;
+    let (read, mut write) = transport::connect(socket).await.map_err(|err| {
+        // A missing or refused socket means the chan window or server that
+        // spawned this terminal has exited, leaving a stale
+        // $CHAN_CONTROL_SOCKET (common after a devserver restart). Say that
+        // instead of surfacing a raw connect trace for a path the user never
+        // set by hand.
+        if matches!(
+            err.kind(),
+            std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused
+        ) {
+            anyhow::anyhow!(
+                "the chan window or server that spawned this terminal is no longer running \
+                 (stale $CHAN_CONTROL_SOCKET {})",
+                socket.display()
+            )
+        } else {
+            anyhow::Error::new(err).context(format!(
+                "connecting to chan control socket {}",
+                socket.display()
+            ))
+        }
+    })?;
     let mut payload = serde_json::to_vec(&request).context("encoding control request")?;
     payload.push(b'\n');
     write
@@ -213,5 +232,22 @@ mod tests {
         .unwrap();
         assert_eq!(env.window_id, "win");
         assert_eq!(env.control_socket, PathBuf::from("/tmp/chan-control.sock"));
+    }
+
+    #[tokio::test]
+    async fn send_control_request_reports_a_stale_socket_in_plain_words() {
+        // A $CHAN_CONTROL_SOCKET pointing at a socket whose server has exited
+        // (the file is gone, common after a devserver restart) surfaces a
+        // friendly stale-socket message, not a raw connect trace.
+        let missing = std::env::temp_dir().join("chan-control-cs-test-does-not-exist.sock");
+        let _ = std::fs::remove_file(&missing);
+        let err = send_control_request(&missing, ControlRequest::WindowList)
+            .await
+            .unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("no longer running") && msg.contains("stale $CHAN_CONTROL_SOCKET"),
+            "{msg}"
+        );
     }
 }

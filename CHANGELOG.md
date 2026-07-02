@@ -8,6 +8,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- **`cs` workspace commands refuse clearly on a standalone terminal.** `cs session`, `cs graph`, `cs search`, and `cs terminal team` (including `--script`) now refuse from a standalone terminal window with a consistent "only available in a workspace window" message, instead of `cs session` silently succeeding against a session it cannot lead and `cs terminal team --script` emitting a bootstrap it cannot run. A stale `$CHAN_CONTROL_SOCKET` (the chan window or server that spawned the terminal has exited, common after a devserver restart) is reported in plain words instead of a raw connect trace.
 - **Opening a slides file reveals the Outline.** A markdown file that declares `kind: slides` in its `chan:` frontmatter block opens with the Outline panel already showing, where the Preview and Present controls live. It fires only on a first open, so closing the Outline and reloading keeps it closed, and a plain markdown file is unaffected.
 
 ### Fixed

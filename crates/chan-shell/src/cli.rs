@@ -60,7 +60,8 @@ pub enum ShellAction {
         path: Option<PathBuf>,
     },
     /// Open the documentation graph in the current window. With a path,
-    /// focuses the graph on that file or directory.
+    /// focuses the graph on that file or directory. Workspace windows only:
+    /// a standalone terminal has no workspace to graph.
     Graph {
         #[arg(value_hint = clap::ValueHint::AnyPath)]
         path: Option<PathBuf>,
@@ -146,6 +147,8 @@ pub enum ShellAction {
     /// Run the same content search the UI does, against the running
     /// window's workspace. Prints a markdown table by default; `--json`
     /// emits compact machine output and `--json --pretty` indents it.
+    /// Workspace windows only: a standalone terminal has no workspace to
+    /// search.
     Search {
         /// Query string. Multiple words are joined with spaces.
         #[arg(required = true, num_args = 1..)]
@@ -174,6 +177,7 @@ pub enum ShellAction {
     /// participants and the leader; `self --name=` renames you; `handover`
     /// requests (or, as leader, answers) a handover; `takeover` claims
     /// leadership when the leader is gone (`--force` seizes a live one).
+    /// Workspace windows only: standalone terminals have no shared session.
     #[command(infer_subcommands = true)]
     Session {
         #[command(subcommand)]
@@ -693,7 +697,9 @@ pub enum TerminalAction {
     /// writes it (plus the server-regenerated `bootstrap.md` + the
     /// tasks/journals/followups tree), `load` reads an existing one, and
     /// `--script` on either emits the whole bootstrap as a runnable shell
-    /// script instead of mutating anything.
+    /// script instead of mutating anything. Workspace windows only,
+    /// including `--script`: a standalone terminal has no workspace tree to
+    /// seed a team into.
     #[command(infer_subcommands = true)]
     #[command(after_long_help = TEAM_AFTER_HELP)]
     Team {

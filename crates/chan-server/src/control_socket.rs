@@ -251,17 +251,20 @@ pub enum ControlTenant {
     TerminalOnly,
 }
 
-/// The workspace-only refusal for standalone terminals. A const so the
-/// CLI-facing wording is pinned by a test and greppable.
-pub const TERMINAL_ONLY_NEEDS_WORKSPACE: &str =
-    "this command needs a workspace, but this is a standalone terminal session; run it from a terminal inside a workspace window";
-
-/// `cs terminal new --path X` on a standalone terminal window: there is no
-/// workspace root to resolve the path against, so reject it clearly rather
-/// than silently dropping the requested cwd. `cs terminal new` with no path
-/// works (opens a terminal in the window by pure window routing).
-pub const TERM_NEW_PATH_NEEDS_WORKSPACE: &str =
-    "cannot resolve --path on a standalone terminal window (no workspace root); run it from a terminal inside a workspace window, or drop --path to open a terminal here";
+/// The unified workspace-only refusal for standalone terminals. `what` names
+/// the cs subcommand (e.g. "open", "graph", "session list"); the optional
+/// `hint` is a trailing sentence. One message family so every workspace-only
+/// command reads the same way on a standalone terminal. No em dashes (house
+/// style, pinned by tests).
+pub fn workspace_only_refusal(what: &str, hint: Option<&str>) -> String {
+    let base = format!(
+        "cs {what} is only available in a workspace window; this is a standalone terminal."
+    );
+    match hint {
+        Some(hint) => format!("{base} {hint}"),
+        None => base,
+    }
+}
 
 /// The pure standalone-terminal gate: the single decision for which control
 /// commands a [`ControlTenant::TerminalOnly`] session refuses, and with what
@@ -269,36 +272,53 @@ pub const TERM_NEW_PATH_NEEDS_WORKSPACE: &str =
 /// so the policy is table-testable in isolation. A [`ControlTenant::Workspace`]
 /// session runs everything, so this only ever refuses on a standalone terminal.
 ///
-/// The refusals are the workspace-content commands: `cs open`/`graph`/`search`
-/// need a mounted workspace, and `cs terminal new --path` needs a workspace root
-/// to resolve the cwd against. `cs open PATH` is special-cased: from a
-/// standalone terminal the user most likely meant the workspace-load
-/// `chan open PATH`, so it gets that guidance instead of the generic refusal.
-/// Everything else runs on a standalone terminal: window routing, session and
-/// pane ops, and the cwd-scoped `cs upload`/`download`.
+/// The refusals are the workspace-only commands: `cs open`/`graph`/`search`
+/// need a mounted workspace; `cs terminal new --path` needs a workspace root to
+/// resolve the cwd; `cs session *` leads a shared workspace session; and `cs
+/// terminal team *` (including `--script`) writes into a workspace tree. `cs
+/// open PATH` additionally suggests the workspace-load `chan open PATH`.
+/// Everything else runs on a standalone terminal: window routing, pane ops,
+/// pathless `cs terminal new`, and the cwd-scoped `cs upload`/`download`.
 fn terminal_tenant_refusal(req: &ControlRequest, tenant: ControlTenant) -> Option<String> {
     if tenant == ControlTenant::Workspace {
         return None;
     }
     match req {
         ControlRequest::OpenPath { path, .. } => Some(chan_open_guidance(path)),
-        ControlRequest::OpenGraph { .. } | ControlRequest::Search { .. } => {
-            Some(TERMINAL_ONLY_NEEDS_WORKSPACE.to_string())
-        }
-        ControlRequest::OpenTermNew { path: Some(_), .. } => {
-            Some(TERM_NEW_PATH_NEEDS_WORKSPACE.to_string())
-        }
+        ControlRequest::OpenGraph { .. } => Some(workspace_only_refusal("graph", None)),
+        ControlRequest::Search { .. } => Some(workspace_only_refusal("search", None)),
+        ControlRequest::OpenTermNew { path: Some(_), .. } => Some(workspace_only_refusal(
+            "terminal new --path",
+            Some("Drop --path to open a terminal here."),
+        )),
+        ControlRequest::SessionList => Some(session_refusal("session list")),
+        ControlRequest::SessionSelf { .. } => Some(session_refusal("session self")),
+        ControlRequest::SessionHandover { .. } => Some(session_refusal("session handover")),
+        ControlRequest::SessionTakeover { .. } => Some(session_refusal("session takeover")),
+        ControlRequest::TerminalTeam { .. } => Some(workspace_only_refusal("terminal team", None)),
         _ => None,
     }
+}
+
+/// Session commands lead a shared workspace session, which a standalone
+/// terminal has none of.
+fn session_refusal(what: &str) -> String {
+    workspace_only_refusal(
+        what,
+        Some("Standalone terminals have no shared session to lead."),
+    )
 }
 
 /// Friendly guidance for `cs open PATH` on a standalone terminal: it has no
 /// workspace to open the path INTO, and the user most likely wanted to load
 /// that path AS a workspace window, which is `chan open PATH`.
 fn chan_open_guidance(path: &Path) -> String {
-    let path = path.display();
-    format!(
-        "cs open needs a workspace to open a path into, and this is a standalone terminal. Run 'chan open {path}' to load it as a workspace window."
+    workspace_only_refusal(
+        "open",
+        Some(&format!(
+            "Run 'chan open {}' to load it as a workspace window.",
+            path.display()
+        )),
     )
 }
 
@@ -324,12 +344,48 @@ mod tenant_gate_tests {
             tab_group: None,
         }
     }
+    fn session_reqs() -> Vec<ControlRequest> {
+        vec![
+            ControlRequest::SessionList,
+            ControlRequest::SessionSelf {
+                window_id: "w".into(),
+                name: "n".into(),
+            },
+            ControlRequest::SessionHandover {
+                window_id: "w".into(),
+                to: None,
+                accept: false,
+                reject: false,
+                timeout_secs: 0,
+            },
+            ControlRequest::SessionTakeover {
+                window_id: "w".into(),
+                force: false,
+            },
+        ]
+    }
+    fn team_reqs() -> Vec<ControlRequest> {
+        let mut reqs = Vec::new();
+        for op in [TeamOp::New, TeamOp::Load] {
+            for script in [false, true] {
+                reqs.push(ControlRequest::TerminalTeam {
+                    dir: "team".into(),
+                    op,
+                    config_toml: None,
+                    brief_content: None,
+                    script,
+                    window_id: None,
+                });
+            }
+        }
+        reqs
+    }
 
     #[test]
     fn a_workspace_tenant_runs_everything() {
         // Every command is allowed on a workspace tenant; the gate only ever
         // refuses on a standalone terminal.
-        for req in [
+        let mut reqs = vec![
             open_path("/x/y"),
             ControlRequest::OpenGraph {
                 window_id: "w".into(),
@@ -344,10 +400,14 @@ mod tenant_gate_tests {
                 window_id: "w".into(),
                 path: PathBuf::from("/x"),
             },
-        ] {
+        ];
+        reqs.extend(session_reqs());
+        reqs.extend(team_reqs());
+        for req in reqs {
             assert_eq!(
                 terminal_tenant_refusal(&req, ControlTenant::Workspace),
-                None
+                None,
+                "{req:?} runs on a workspace tenant",
             );
         }
     }
@@ -363,10 +423,11 @@ mod tenant_gate_tests {
     }
 
     #[test]
-    fn workspace_content_commands_refuse_on_a_terminal_tenant() {
-        // graph + search need a mounted workspace; they get the generic
-        // terminal-only refusal (not the cs-open guidance).
-        for req in [
+    fn workspace_only_commands_refuse_on_a_terminal_tenant_as_one_family() {
+        // graph / search / terminal-new-path / every session* / every team*
+        // (including --script) need a workspace, so they refuse on a standalone
+        // terminal, and every refusal reads as the same message family.
+        let mut reqs = vec![
             ControlRequest::OpenGraph {
                 window_id: "w".into(),
                 path: None,
@@ -375,11 +436,28 @@ mod tenant_gate_tests {
                 query: "q".into(),
                 limit: None,
             },
-        ] {
-            assert_eq!(
-                terminal_tenant_refusal(&req, ControlTenant::TerminalOnly).as_deref(),
-                Some(TERMINAL_ONLY_NEEDS_WORKSPACE),
+            term_new(Some("sub")),
+        ];
+        reqs.extend(session_reqs());
+        reqs.extend(team_reqs());
+        for req in reqs {
+            let msg = terminal_tenant_refusal(&req, ControlTenant::TerminalOnly)
+                .unwrap_or_else(|| panic!("{req:?} should refuse on a standalone terminal"));
+            assert!(
+                msg.contains("is only available in a workspace window")
+                    && msg.contains("this is a standalone terminal"),
+                "{req:?} refusal is off-family: {msg}",
             );
+            assert!(!msg.contains('—'), "no em dash: {msg}");
+        }
+    }
+
+    #[test]
+    fn session_refusals_explain_the_missing_shared_session() {
+        for req in session_reqs() {
+            let msg = terminal_tenant_refusal(&req, ControlTenant::TerminalOnly)
+                .expect("session commands refuse on a standalone terminal");
+            assert!(msg.contains("no shared session to lead"), "{req:?}: {msg}");
         }
     }
 
@@ -388,9 +466,9 @@ mod tenant_gate_tests {
         // `cs terminal new --path` needs a workspace root; `cs terminal new`
         // with no path is pure window routing and runs on a standalone
         // terminal.
-        assert_eq!(
-            terminal_tenant_refusal(&term_new(Some("sub")), ControlTenant::TerminalOnly).as_deref(),
-            Some(TERM_NEW_PATH_NEEDS_WORKSPACE),
+        assert!(
+            terminal_tenant_refusal(&term_new(Some("sub")), ControlTenant::TerminalOnly)
+                .is_some_and(|m| m.contains("terminal new --path")),
         );
         assert_eq!(
             terminal_tenant_refusal(&term_new(None), ControlTenant::TerminalOnly),
@@ -677,7 +755,7 @@ async fn handle_request(req: ControlRequest, ctx: &ControlSocketCtx) -> ControlR
             if let Err(message) = require_window_id(&window_id) {
                 return ControlResponse::Error { message };
             }
-            let workspace = match workspace_from_cell(workspace_cell, tenant) {
+            let workspace = match workspace_from_cell(workspace_cell) {
                 Ok(workspace) => workspace,
                 Err(message) => return ControlResponse::Error { message },
             };
@@ -693,7 +771,7 @@ async fn handle_request(req: ControlRequest, ctx: &ControlSocketCtx) -> ControlR
             if let Err(message) = require_window_id(&window_id) {
                 return ControlResponse::Error { message };
             }
-            let workspace = match workspace_from_cell(workspace_cell, tenant) {
+            let workspace = match workspace_from_cell(workspace_cell) {
                 Ok(workspace) => workspace,
                 Err(message) => return ControlResponse::Error { message },
             };
@@ -724,7 +802,7 @@ async fn handle_request(req: ControlRequest, ctx: &ControlSocketCtx) -> ControlR
                     &window_id, tab_name, tab_group, events_tx,
                 )),
                 ControlTenant::Workspace => {
-                    let workspace = match workspace_from_cell(workspace_cell, tenant) {
+                    let workspace = match workspace_from_cell(workspace_cell) {
                         Ok(workspace) => workspace,
                         Err(message) => return ControlResponse::Error { message },
                     };
@@ -766,7 +844,7 @@ async fn handle_request(req: ControlRequest, ctx: &ControlSocketCtx) -> ControlR
                     into_response(upload_path_standalone(&window_id, &path, events_tx))
                 }
                 ControlTenant::Workspace => {
-                    let workspace = match workspace_from_cell(workspace_cell, tenant) {
+                    let workspace = match workspace_from_cell(workspace_cell) {
                         Ok(workspace) => workspace,
                         Err(message) => return ControlResponse::Error { message },
                     };
@@ -783,7 +861,7 @@ async fn handle_request(req: ControlRequest, ctx: &ControlSocketCtx) -> ControlR
                     into_response(download_path_standalone(&window_id, &path, events_tx))
                 }
                 ControlTenant::Workspace => {
-                    let workspace = match workspace_from_cell(workspace_cell, tenant) {
+                    let workspace = match workspace_from_cell(workspace_cell) {
                         Ok(workspace) => workspace,
                         Err(message) => return ControlResponse::Error { message },
                     };
@@ -937,7 +1015,7 @@ async fn handle_request(req: ControlRequest, ctx: &ControlSocketCtx) -> ControlR
             )
         }
         ControlRequest::Search { query, limit } => {
-            let workspace = match workspace_from_cell(workspace_cell, tenant) {
+            let workspace = match workspace_from_cell(workspace_cell) {
                 Ok(workspace) => workspace,
                 Err(message) => return ControlResponse::Error { message },
             };
@@ -1186,7 +1264,6 @@ async fn handle_team(req: TeamRequest, ctx: &ControlSocketCtx) -> ControlRespons
     // arm used to do on this handler's behalf.
     let terminal_registry = ctx.terminal_registry.get();
     let workspace_cell = &ctx.workspace_cell;
-    let tenant = ctx.tenant;
     let events_tx = &ctx.events_tx;
 
     // Mirror the route's dir guard so a bad dir is a clean message, not a
@@ -1231,7 +1308,7 @@ async fn handle_team(req: TeamRequest, ctx: &ControlSocketCtx) -> ControlRespons
                     message: generate_bootstrap_script(dir, &config, brief_content.as_deref()),
                 };
             }
-            let workspace = match workspace_from_cell(workspace_cell, tenant) {
+            let workspace = match workspace_from_cell(workspace_cell) {
                 Ok(workspace) => workspace,
                 Err(message) => return ControlResponse::Error { message },
             };
@@ -1255,7 +1332,7 @@ async fn handle_team(req: TeamRequest, ctx: &ControlSocketCtx) -> ControlRespons
             spawn_and_poke_team(registry, dir, &config, window_id.as_deref(), events_tx).await
         }
         TeamOp::Load => {
-            let workspace = match workspace_from_cell(workspace_cell, tenant) {
+            let workspace = match workspace_from_cell(workspace_cell) {
                 Ok(workspace) => workspace,
                 Err(message) => return ControlResponse::Error { message },
             };
@@ -2199,7 +2276,7 @@ async fn handle_window_new(
     let kind = match tenant {
         ControlTenant::TerminalOnly => NewWindowKind::Terminal,
         ControlTenant::Workspace => {
-            let workspace = match workspace_from_cell(workspace_cell, tenant) {
+            let workspace = match workspace_from_cell(workspace_cell) {
                 Ok(workspace) => workspace,
                 Err(message) => return ControlResponse::Error { message },
             };
@@ -2286,7 +2363,7 @@ async fn handle_window_close(
     // Current workspace tenant only — a terminal tenant has no on-disk blob and a
     // foreign workspace's blob is unreachable from here (a known limitation).
     let had_blob = if !discarded && tenant == ControlTenant::Workspace {
-        match workspace_from_cell(workspace_cell, tenant) {
+        match workspace_from_cell(workspace_cell) {
             Ok(workspace) => {
                 let key = id.clone();
                 tokio::task::spawn_blocking(move || {
@@ -2372,18 +2449,19 @@ fn search_workspace(
 
 fn workspace_from_cell(
     workspace_cell: &Arc<RwLock<Option<WorkspaceCell>>>,
-    tenant: ControlTenant,
 ) -> Result<Arc<Workspace>, String> {
     let cell = workspace_cell
         .read()
         .map_err(|_| "workspace cell lock poisoned".to_string())?;
-    let cell = cell.as_ref().ok_or_else(|| match tenant {
-        // A workspace tenant's cell is only empty transiently (the
-        // storage-reset swap window); a terminal tenant's is empty by
-        // design and the caller should hear that, not a flake.
-        ControlTenant::Workspace => "workspace cell unavailable".to_string(),
-        ControlTenant::TerminalOnly => TERMINAL_ONLY_NEEDS_WORKSPACE.to_string(),
-    })?;
+    // Every caller reaches here only on a workspace tenant: the
+    // workspace-only commands are refused upstream by
+    // `terminal_tenant_refusal`, and the dual-tenant commands
+    // (upload/download/terminal-new/window-new/close) call this only in their
+    // `Workspace` arm. A workspace tenant's cell is empty only transiently
+    // (the storage-reset swap window).
+    let cell = cell
+        .as_ref()
+        .ok_or_else(|| "workspace cell unavailable".to_string())?;
     Ok(cell.workspace.clone())
 }
 
@@ -3236,8 +3314,14 @@ mod tests {
 
         match response {
             ControlResponse::Error { message } => {
-                assert_eq!(message, TERMINAL_ONLY_NEEDS_WORKSPACE);
-                assert!(message.contains("standalone terminal"));
+                assert!(
+                    message.contains("cs search is only available in a workspace window"),
+                    "{message}"
+                );
+                assert!(
+                    message.contains("this is a standalone terminal"),
+                    "{message}"
+                );
             }
             other => panic!("unexpected non-error response: {other:?}"),
         }
@@ -3274,7 +3358,7 @@ mod tests {
         // `cs upload` / `cs download` from a standalone terminal now WORK
         // (cwd / shell-uid scoped) instead of refusing. The CLI absolutized the
         // path; the control socket signals the window with it, leading `/`
-        // stripped, rather than returning TERMINAL_ONLY_NEEDS_WORKSPACE. A live
+        // stripped, rather than refusing as a workspace-only command. A live
         // /ws subscriber stands in for the connected window.
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("note.txt");
@@ -3405,7 +3489,15 @@ mod tests {
 
         match response {
             ControlResponse::Error { message } => {
-                assert_eq!(message, TERM_NEW_PATH_NEEDS_WORKSPACE)
+                assert!(
+                    message
+                        .contains("cs terminal new --path is only available in a workspace window"),
+                    "{message}"
+                );
+                assert!(
+                    message.contains("this is a standalone terminal"),
+                    "{message}"
+                );
             }
             other => panic!("unexpected non-error response: {other:?}"),
         }

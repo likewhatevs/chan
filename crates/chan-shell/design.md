@@ -116,6 +116,18 @@ The client transport layer resolves the environment, makes paths absolute, and r
 
 A `ControlResponse::Timeout` is converted into a typed `ControlTimeout` error instead of a generic `anyhow` bail. The dispatch edge downcasts it, prints the elapsed-window line, and exits `SURVEY_TIMEOUT` (124, matching GNU `timeout(1)`), so a caller can tell "no answer in time" apart from a real failure (exit 1) and a delivered answer (exit 0).
 
+A connect that fails because the socket file is gone or refused means the chan window or server that spawned the terminal has exited, leaving a stale `$CHAN_CONTROL_SOCKET` (common after a devserver restart). The client reports that in plain words rather than surfacing a raw connect trace for a path the user never set by hand.
+
+### Command availability by tenant
+
+The control socket serves two server tenants, and a command's availability follows from what it needs. The server enforces it in one chokepoint (`terminal_tenant_refusal`) so the policy is table-testable in isolation:
+
+- Standalone (runs on both a standalone terminal and a workspace window): `dashboard`, `upload`, `download`, `copy`, `paste`, pathless `terminal new`, `terminal write`/`list`/`restart`/`close`/`scrollback`/`survey`, `window list`, and `pane`. Uploads and downloads are cwd/shell-uid scoped on a standalone terminal and workspace-relative in a workspace window.
+- Workspace-only (refused on a standalone terminal, which has no workspace): `open`, `graph`, `search`, `terminal new --path`, every `session` subcommand, and every `terminal team` form including `--script`. The refusals share one message family via `workspace_only_refusal`, and `cs open` additionally points at `chan open PATH`.
+- Desktop-only (a separate axis): `window new`/`open`/`rm`/`hide` need the chan desktop app.
+
+The server gate reaches old `cs` binaries immediately (it lives server-side); only the friendlier client wording for a stale socket needs the new binary.
+
 ## 6. The agent submit-chord map
 
 A coding agent running inside a chan terminal submits its compose buffer on a different byte sequence depending on which agent it is, so the hands-free completion poke (`cs terminal write --submit=<agent>`) has to append the right one. The submit-chord layer owns that map and the command -> agent derivation, and is the single source of truth mirrored by the SPA's TypeScript detection; the server applies the chord.
