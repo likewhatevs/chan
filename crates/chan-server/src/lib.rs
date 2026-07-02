@@ -1614,6 +1614,11 @@ mod terminal_router_tests {
         let bytes = to_bytes(response.into_body(), 1 << 20).await.expect("body");
         assert_eq!(&bytes[..], b"wildcard capture probe");
     }
+}
+
+#[cfg(test)]
+mod wildcard_capture_tests {
+    use super::*;
 
     // api_headings and api_backlinks feed their wildcard capture verbatim
     // into graph lookups keyed by workspace-relative paths WITHOUT a leading

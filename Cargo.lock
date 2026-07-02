@@ -1186,7 +1186,6 @@ name = "chan-tunnel-server"
 version = "0.59.1"
 dependencies = [
  "async-trait",
- "axum",
  "bytes",
  "chan-tunnel-client",
  "chan-tunnel-proto",

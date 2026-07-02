@@ -18,7 +18,6 @@ url = { workspace = true }
 chan-tunnel-proto = { workspace = true }
 
 async-trait = { workspace = true }
-axum = { workspace = true }
 bytes = { workspace = true }
 chrono = { workspace = true }
 futures = { workspace = true }

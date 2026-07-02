@@ -2446,8 +2446,16 @@ mod tests {
         // An unknown non-API path outside every tenant prefix serves exactly
         // what the launcher root serves (the SPA shell, or the 404 naming the
         // unbuilt bundle): serve_launcher answers both from the root fallback.
+        // The body must identify the LAUNCHER either way; equality alone would
+        // also hold for two bare host 404s with the fallback not installed.
         let (root_status, root_body) = fetch("/").await;
         let (unknown_status, unknown_body) = fetch("/nonexistent-page").await;
+        assert!(
+            unknown_body.contains("Chan Launcher")
+                || unknown_body.contains("launcher bundle not built"),
+            "unknown path must be answered by the launcher fallback (status {unknown_status}, body starts: {:.120})",
+            unknown_body,
+        );
         assert_eq!(unknown_status, root_status);
         assert_eq!(unknown_body, root_body);
 
