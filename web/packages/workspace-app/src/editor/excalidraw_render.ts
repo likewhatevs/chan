@@ -12,6 +12,7 @@
 // exactly as it does for a mermaid render.
 
 import { type DiagramResult, parseErrorPos } from "./diagram_render";
+import { configureExcalidrawAssets } from "./excalidrawAssets";
 import { renderMermaid } from "./mermaid_render";
 
 // The two libraries load together on first render and memoize. `exportToSvg`
@@ -27,6 +28,9 @@ let loader: Promise<ExcalidrawModules> | null = null;
 
 async function loadExcalidraw(): Promise<ExcalidrawModules> {
   if (!loader) {
+    // Set before the import so the font registry resolves label fonts
+    // from the self-hosted bundle rather than the esm.sh CDN.
+    configureExcalidrawAssets();
     loader = Promise.all([
       import("@excalidraw/mermaid-to-excalidraw"),
       import("@excalidraw/excalidraw"),

@@ -11,8 +11,11 @@
 // URLs relative.
 
 import { svelte } from "@sveltejs/vite-plugin-svelte";
+import { createReadStream } from "node:fs";
+import { cp } from "node:fs/promises";
 import { createRequire } from "node:module";
-import { dirname, join } from "node:path";
+import { dirname, join, normalize, sep } from "node:path";
+import type { Plugin } from "vite";
 import { defineConfig } from "vitest/config";
 
 // Resolve svelte's client entry through node resolution so it works whether
@@ -21,9 +24,61 @@ import { defineConfig } from "vitest/config";
 const require = createRequire(import.meta.url);
 const svelteClient = join(dirname(require.resolve("svelte/package.json")), "src/index-client.js");
 
+// Self-host excalidraw's canvas fonts. Excalidraw fetches label fonts at
+// runtime from `EXCALIDRAW_ASSET_PATH + fonts/<Family>/<file>.woff2`;
+// without a local copy it falls through to the esm.sh CDN, so offline
+// sessions and chan-desktop degrade silently. Copy the package's prod
+// fonts verbatim into dist/static/excalidraw/fonts (chan-server serves
+// web/dist/static/* through its SPA fallback, prefix-aware) and serve the
+// same files from the dev server. Filenames must survive the copy since
+// excalidraw composes them itself, so no hashing. Xiaolai (the 12.7M CJK
+// family) is excluded, keeping dist growth near 0.5M; CJK boards fall back
+// to the CDN exactly as before self-hosting.
+function excalidrawFonts(): Plugin {
+  const SKIP_FAMILY = "Xiaolai";
+  let fontsSrc: string | null = null;
+  const resolveFontsSrc = (): string => {
+    if (fontsSrc === null) {
+      fontsSrc = join(dirname(require.resolve("@excalidraw/excalidraw")), "fonts");
+    }
+    return fontsSrc;
+  };
+  return {
+    name: "excalidraw-fonts",
+    async writeBundle(options) {
+      if (!options.dir) return;
+      await cp(resolveFontsSrc(), join(options.dir, "static/excalidraw/fonts"), {
+        recursive: true,
+        filter: (src) => !src.split(sep).includes(SKIP_FAMILY),
+      });
+    },
+    configureServer(server) {
+      const marker = "/static/excalidraw/fonts/";
+      server.middlewares.use((req, res, next) => {
+        const url = req.url ?? "";
+        const at = url.indexOf(marker);
+        if (at === -1) return next();
+        const rel = decodeURIComponent(url.slice(at + marker.length).split("?")[0]);
+        const base = resolveFontsSrc();
+        const filePath = normalize(join(base, rel));
+        // Path-traversal guard: stay inside the fonts dir.
+        if (filePath !== base && !filePath.startsWith(base + sep)) {
+          res.statusCode = 403;
+          res.end();
+          return;
+        }
+        res.setHeader("Content-Type", "font/woff2");
+        createReadStream(filePath)
+          .on("error", () => next())
+          .pipe(res);
+      });
+    },
+  };
+}
+
 export default defineConfig({
   base: "./",
-  plugins: [svelte()],
+  plugins: [svelte(), excalidrawFonts()],
   server: {
     port: 5173,
     // Allow vite to serve files from the chan repo root + the

@@ -66,7 +66,7 @@
   </div>
   <footer class="config-footer" class:bordered={footerBorder}>
     {#if footerCenter}
-      <div class="footer-center">{@render footerCenter()}</div>
+      <div class="config-footer-center">{@render footerCenter()}</div>
     {/if}
     <button type="button" class="config-ok" onclick={() => onDone?.()}>OK</button>
   </footer>
@@ -143,7 +143,10 @@
   .config-footer.bordered {
     border-top: 1px solid var(--border);
   }
-  .footer-center {
+  /* Renamed off the bare `.footer-center`: excalidraw's index.css ships
+     a global `.footer-center` rule (unscoped) that would otherwise match
+     this element once the canvas CSS loads. */
+  .config-footer-center {
     grid-column: 2;
     justify-self: center;
   }
