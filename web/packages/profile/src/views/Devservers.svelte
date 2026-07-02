@@ -122,7 +122,7 @@
     void loadGrants(devserverId);
   }
 
-  // Open the whole devserver: hand off to the identity `/s/:owner` route,
+  // Open the whole devserver: hand off to the identity `/s/{owner}` route,
   // which mints a `devserver_gate` entry token and redirects through the
   // proxy to the launcher served at the devserver root. These are the
   // signed-in user's OWN devservers, so the owner is always us. Only

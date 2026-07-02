@@ -125,6 +125,7 @@ Public share landing (no auth at the door):
 | Method | Path                     | Purpose                                 |
 |--------|--------------------------|-----------------------------------------|
 | GET    | `/s/{owner}/{workspace}` | per-tenant share link (OAuth-then-mint) |
+| GET    | `/s/{owner}`             | whole-devserver open (owner-only)       |
 
 Desktop authorize (PAT mint for chan-desktop; consent is session-gated, entry bounces through sign-in when needed):
 

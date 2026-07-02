@@ -9,7 +9,7 @@ rationale live in `docs/adr/`.
 ```mermaid
 flowchart TB
     subgraph browser["Browser"]
-        IDSPA["identity SPA — id.chan.app"]
+        IDSPA["identity SPA · id.chan.app"]
         LAUNCH["web-launcher SPA<br/>(served through the proxy at the devserver root)"]
     end
 
@@ -41,7 +41,7 @@ flowchart TB
 
 `admin-service` is the operator console; `gateway-common` holds the shared
 domain config, the `devserver_gate` JWT type, and the profile/workspace-admin
-clients. devserver-proxy renders no UI of its own — it forwards the launcher
+clients. devserver-proxy renders no UI of its own -- it forwards the launcher
 that the devserver serves at its root.
 
 ## The devserver model

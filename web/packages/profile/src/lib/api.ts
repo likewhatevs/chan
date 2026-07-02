@@ -125,11 +125,11 @@ export const api = {
   tokenAudit: (id: string) =>
     request<AuditEntry[]>(`/api/tokens/${id}/audit`),
 
-  // NOTE: whole-devserver "open" (root) + the /s/:owner share-link are
+  // NOTE: whole-devserver "open" (root) + the /s/{owner} share-link are
   // intentionally absent. Opening a shared devserver is the next phase
   // ("opening a devserver = opening a chan-library": a root launcher with
   // full terminal/workspace/state behavior). This round ships sharing
-  // management only; the per-tenant share link /s/:owner/:workspace still
+  // management only; the per-tenant share link /s/{owner}/{workspace} still
   // exists server-side for a known workspace.
 
   listDevserverGrants: (devserverId: string) =>

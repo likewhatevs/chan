@@ -144,8 +144,7 @@ devserver-proxy is the authority on live registrations; profile is the authority
 
 ### Email rewrite is admin-only
 
-`PATCH /v1/users/{id}` (the service-tier route) accepts only `display_name` and `avatar_url`. Email is the identity-linking key in `upsert_by_identity` branch (b): a service-bearer holder that could rewrite email could pivot account ownership to any account whose verified OAuth email matched the new value. Email mutation therefore lives behind the admin bearer on `POST /v1/admin/users/{id}/email`, runs in a single transaction with an `auth_audit` row of action `email_changed` (note carries the old + new addresses), and surfaces unique-constraint conflicts as
-409.
+`PATCH /v1/users/{id}` (the service-tier route) accepts only `display_name` and `avatar_url`. Email is the identity-linking key in `upsert_by_identity` branch (b): a service-bearer holder that could rewrite email could pivot account ownership to any account whose verified OAuth email matched the new value. Email mutation therefore lives behind the admin bearer on `POST /v1/admin/users/{id}/email`, runs in a single transaction with an `auth_audit` row of action `email_changed` (note carries the old + new addresses), and surfaces unique-constraint conflicts as 409.
 
 ### Devservers are first-class
 

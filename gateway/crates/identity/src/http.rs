@@ -1076,7 +1076,7 @@ fn is_devserver_id_shape(s: &str) -> bool {
 ///   1. If the caller has no session, stash the path and 303 to `/` so
 ///      the SPA shows the OAuth picker. The callback reads the stash and
 ///      303s back here after sign-in.
-///   2. With a session, resolve `:owner` (username -> User), read the
+///   2. With a session, resolve `{owner}` (username -> User), read the
 ///      owner's LIVE devserver_id from the proxy admin tunnel list, and
 ///      call profile `devserver_access?as=<self>` on it. Owner and grantee
 ///      both return a role; no-access (or no live devserver) returns 404.

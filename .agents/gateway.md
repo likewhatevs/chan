@@ -20,7 +20,7 @@ flowchart TB
     end
 
     subgraph gw["chan gateway (nested Cargo workspace)"]
-        ID["identity-service · id.chan.app<br/>OAuth · sessions · PATs · /s/:owner open · token validate"]
+        ID["identity-service · id.chan.app<br/>OAuth · sessions · PATs · /s/{owner} open · token validate"]
         PROXY["devserver-proxy<br/>devserver.chan.app apex: admin + tunnel + healthz<br/>*.devserver.chan.app wildcard: launcher root + tenants + devserver_gate"]
         PROFILE["profile-service · internal, not public<br/>Postgres: users · identities · devservers + devserver_grants"]
         ADMIN["admin CLI"]
@@ -148,7 +148,7 @@ Per-crate rules that come up often when editing this code. For the full design r
 - **Placeholder usernames are deterministic.** New rows seed `username = 'u' || substr(replace(uuid::text, '-', ''), 1, 12)`. identity-service renames on first sign-in; the hard cap of 4 lifetime renames is enforced in `update_username` via a CAS update. Don't invent an alternate seeding scheme.
 - **All SQL is parameterized.** Constants like `USER_COLS` are `format!`'d into queries; user input always goes through `.bind()` and `$N`.
 - **The devserver is the sharing unit.** `devserver_access(owner, devserver, caller)` is the single per-request access decision: `owner` when caller is the owner, the grant's `role` (`viewer` / `editor`) for a claimed grant, and 404 in every other case (no-grant and unknown-devserver share one shape so the endpoint cannot enumerate shares). A grant gives the WHOLE devserver, not a single workspace; `create_devserver_grant` auto-bootstraps the parent `devservers` row so callers don't need a separate hop.
-- **Block fans out server-side.** `POST /v1/admin/users/:id/block` also calls devserver-proxy `kill_user_tunnels` (best-effort) when a `WorkspaceAdminClient` is configured, so the in-process yamux registrations drop at the same time the DB row changes.
+- **Block fans out server-side.** `POST /v1/admin/users/{id}/block` also calls devserver-proxy `kill_user_tunnels` (best-effort) when a `WorkspaceAdminClient` is configured, so the in-process yamux registrations drop at the same time the DB row changes.
 
 ### identity
 
@@ -157,8 +157,8 @@ Per-crate rules that come up often when editing this code. For the full design r
 - **The devserver id is the PAT digest.** `devserver_id_from_pat` is the lowercase-hex SHA-256 of the raw PAT (same digest as the stored hash, hex-encoded). One token identifies one devserver; this 64-char string is the cross-service handle the tunnel registry keys on and the `drv` claim carries. The raw PAT never leaves identity.
 - **OAuth callback validates state before provider.** Plain `pending.provider != provider` runs only after a constant-time state compare so timing on the provider check can't be used to oracle the session's expected provider.
 - **Session id rotates on login.** `session.cycle_id()` runs at the privilege boundary, before storing `user_id`. Closes session fixation.
-- **Token revoke and account delete evict tunnels.** `DELETE /api/tokens/:id` and profile delete fire devserver-proxy `kill_user_tunnels` best-effort after the DB update.
-- **Entry-token mint is the share-landing route.** `GET /s/:owner` (whole-devserver open) and `GET /s/:owner/:workspace` (per-tenant) resolve the owner's single live devserver, call `profile.devserver_access`, mint a 30s entry JWT (`drv` = that live `devserver_id`, `aud` = `{owner}.devserver.chan.app`), and 303 to the proxy with `?t=<jwt>` so the token is minted at click time. `/s/:owner` is owner-only until the proxy injects a signed caller / role header; grantees use the per-tenant landing.
+- **Token revoke and account delete evict tunnels.** `DELETE /api/tokens/{id}` and profile delete fire devserver-proxy `kill_user_tunnels` best-effort after the DB update.
+- **Entry-token mint is the share-landing route.** `GET /s/{owner}` (whole-devserver open) and `GET /s/{owner}/{workspace}` (per-tenant) resolve the owner's single live devserver, call `profile.devserver_access`, mint a 30s entry JWT (`drv` = that live `devserver_id`, `aud` = `{owner}.devserver.chan.app`), and 303 to the proxy with `?t=<jwt>` so the token is minted at click time. `/s/{owner}` is owner-only until the proxy injects a signed caller / role header; grantees use the per-tenant landing.
 
 ### devserver-proxy
 

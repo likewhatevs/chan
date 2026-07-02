@@ -1,8 +1,10 @@
 //! chan-tunnel server library.
 //!
-//! The eventual entry point is an `axum::Router` exposing
+//! The entry point is `serve_tunnel_listener`, an h2c accept loop
+//! that runs `h2::server` directly on the TCP socket to serve
 //! `POST /v1/tunnel`; nginx (`grpc_pass`) forwards h2c from
-//! `devserver.chan.app/v1/tunnel` to devserver-proxy's tunnel listener.
+//! `devserver.chan.app/v1/tunnel` to devserver-proxy, which runs
+//! this listener.
 //! After the Hello/HelloAck handshake the duplex is handed to
 //! yamux, the registered workspace is inserted into the shared
 //! `Registry`, and the server side opens new substreams to forward
