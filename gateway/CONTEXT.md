@@ -14,7 +14,7 @@ flowchart TB
     end
 
     subgraph gw["chan gateway (nested Cargo workspace)"]
-        ID["identity-service · id.chan.app<br/>OAuth · sessions · PATs · /s/:owner open · token validate"]
+        ID["identity-service · id.chan.app<br/>OAuth · sessions · PATs · /s/{owner} open · token validate"]
         PROXY["devserver-proxy<br/>devserver.chan.app apex: admin + tunnel + healthz<br/>*.devserver.chan.app wildcard: launcher root + tenants + devserver_gate"]
         PROFILE["profile-service<br/>internal HTTP over Postgres · users · identities · devserver grants"]
         ADMIN["admin-service"]

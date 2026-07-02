@@ -46,10 +46,11 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use axum::body::Body;
-use axum::extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade};
+use axum::extract::ws::{CloseFrame, Message, Utf8Bytes, WebSocket, WebSocketUpgrade};
 use axum::extract::{ConnectInfo, FromRequestParts, Request};
 use axum::http::{header, request::Parts, HeaderMap, HeaderName, HeaderValue, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
+use bytes::Bytes;
 use chan_tunnel_server::TunnelHandle;
 use futures_util::{SinkExt, StreamExt};
 use gateway_common::devserver_gate::{self, TokenType};
@@ -59,6 +60,7 @@ use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode as TgCloseCode;
 use tokio_tungstenite::tungstenite::protocol::CloseFrame as TgCloseFrame;
 use tokio_tungstenite::tungstenite::Message as TgMessage;
+use tokio_tungstenite::tungstenite::Utf8Bytes as TgUtf8Bytes;
 use tokio_util::compat::FuturesAsyncReadCompatExt;
 use uuid::Uuid;
 
@@ -727,15 +729,23 @@ async fn bridge_ws(
     Ok(())
 }
 
+// axum and tungstenite each wrap ws text payloads in their own Utf8Bytes
+// type with no direct conversion between them; the Bytes round-trip in
+// to_tg_utf8 / to_ax_utf8 is zero-copy, and the re-validation cannot fail
+// because the source type already guarantees valid UTF-8.
+fn to_tg_utf8(s: Utf8Bytes) -> TgUtf8Bytes {
+    TgUtf8Bytes::try_from(Bytes::from(s)).expect("axum Utf8Bytes is valid UTF-8")
+}
+
 fn client_to_upstream(msg: Message) -> TgMessage {
     match msg {
-        Message::Text(s) => TgMessage::Text(s),
+        Message::Text(s) => TgMessage::Text(to_tg_utf8(s)),
         Message::Binary(b) => TgMessage::Binary(b),
         Message::Ping(b) => TgMessage::Ping(b),
         Message::Pong(b) => TgMessage::Pong(b),
         Message::Close(frame) => TgMessage::Close(frame.map(|f| TgCloseFrame {
             code: TgCloseCode::from(f.code),
-            reason: f.reason.into_owned().into(),
+            reason: to_tg_utf8(f.reason),
         })),
     }
 }
@@ -904,15 +914,21 @@ const NOT_FOUND_HTML: &str = r#"<!doctype html>
 // WebSocket frame translation
 // ---------------------------------------------------------------
 
+// Inverse of to_tg_utf8; same zero-copy Bytes round-trip, same
+// infallibility argument.
+fn to_ax_utf8(s: TgUtf8Bytes) -> Utf8Bytes {
+    Utf8Bytes::try_from(Bytes::from(s)).expect("tungstenite Utf8Bytes is valid UTF-8")
+}
+
 fn upstream_to_client(msg: TgMessage) -> Option<Message> {
     Some(match msg {
-        TgMessage::Text(s) => Message::Text(s),
+        TgMessage::Text(s) => Message::Text(to_ax_utf8(s)),
         TgMessage::Binary(b) => Message::Binary(b),
         TgMessage::Ping(b) => Message::Ping(b),
         TgMessage::Pong(b) => Message::Pong(b),
         TgMessage::Close(frame) => Message::Close(frame.map(|f| CloseFrame {
             code: f.code.into(),
-            reason: f.reason.into_owned().into(),
+            reason: to_ax_utf8(f.reason),
         })),
         TgMessage::Frame(_) => return None,
     })

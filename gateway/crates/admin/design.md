@@ -30,8 +30,8 @@ The block flow lives server-side: profile-service fans out to devserver-proxy in
 
 Order:
 
-1. `POST /v1/admin/users/:id/block` on profile-service. This sets `blocked_at`, revokes every live PAT, writes an `auth_audit` row and, server-side, fires devserver-proxy `kill_user_tunnels` for the user. If profile fails the CLI stops here.
-2. `POST /admin/v1/users/:user/tunnels/kill` on devserver-proxy. Belt-and-braces. A failure here surfaces as a warning on stderr but does not change the profile-side outcome.
+1. `POST /v1/admin/users/{id}/block` on profile-service. This sets `blocked_at`, revokes every live PAT, writes an `auth_audit` row and, server-side, fires devserver-proxy `kill_user_tunnels` for the user. If profile fails the CLI stops here.
+2. `POST /admin/v1/users/{user}/tunnels/kill` on devserver-proxy. Belt-and-braces. A failure here surfaces as a warning on stderr but does not change the profile-side outcome.
 
 The ordering ensures a partial failure leaves the user in a "blocked but maybe a tunnel still alive" state rather than the inverse, which is the safer direction.
 

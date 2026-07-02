@@ -35,12 +35,12 @@ sequenceDiagram
     participant P as OAuth provider
     participant PR as profile-service
 
-    B->>I: GET /auth/:provider
+    B->>I: GET /auth/{provider}
     Note over I: authorize_url + PKCE<br/>stash pending_oauth (state, verifier)
     I-->>B: 302 to provider authorize_url
     B->>P: authorize + consent
     P-->>B: redirect /callback?code&state
-    B->>I: GET /auth/:provider/callback
+    B->>I: GET /auth/{provider}/callback
     Note over I: consume pending_oauth (remove)<br/>ct_eq(state) BEFORE provider compare
     I->>P: exchange code + PKCE verifier
     P-->>I: tokens + userinfo
@@ -62,14 +62,14 @@ sequenceDiagram
 
 *Sign-in flow: stash `pending_oauth`, consume it on callback, constant-time state check and the `oauth_login` gate run before `cycle_id`, then upsert and claim grants.*
 
-`/auth/:provider` (GET):
+`/auth/{provider}` (GET):
 
 1. Look up the provider config. Unknown provider returns 404.
 2. Generate `(authorize_url, csrf_state, pkce_verifier)`.
 3. Insert `PendingOauth { provider, state, verifier }` into the session under `pending_oauth`.
 4. Redirect to `authorize_url`.
 
-`/auth/:provider/callback` (GET):
+`/auth/{provider}/callback` (GET):
 
 1. Read `code` and `state` from query params; refuse on `?error=...`.
 2. Remove `pending_oauth` from the session (consume on read).
@@ -95,7 +95,7 @@ PAT shape: `chan_pat_<32 random bytes, base64url, no pad>`.
   - Per-token-fingerprint throttle (4 rps refill, 16 burst, 4096-entry LRU map). Throttled requests return 401, identical on the wire to an unknown token.
   - `WHERE t.token_hash = $1 AND t.revoked_at IS NULL AND (t.expires_at IS NULL OR t.expires_at > now()) AND u.blocked_at IS NULL` joined to `users`. One statement does the lookup and bumps `last_used_at`.
   - Append `used` to `api_token_audit`.
-- Revoke (`DELETE /api/tokens/:id`):
+- Revoke (`DELETE /api/tokens/{id}`):
   - Mark the row revoked.
   - Best-effort: call devserver-proxy admin `kill_user_tunnels` for the user. Per-PAT eviction is not possible today (chan-tunnel-server does not track which token registered which substream); the conservative call is kill-all.
 
@@ -154,23 +154,23 @@ devserver-proxy verifies the JWT, mints its own 24h session-shape JWT, sets it a
 
 ### Share landing
 
-`GET /s/:owner/:workspace` is the public entry for copied share links. It is intentionally unauthenticated at the door so the owner can mint a URL that works for any recipient.
+`GET /s/{owner}/{workspace}` is the public entry for copied share links. It is intentionally unauthenticated at the door so the owner can mint a URL that works for any recipient.
 
 1. Validate `owner` (username shape) and `workspace` (1-64 lowercase alnum + `[._-]`); malformed values 404.
-2. No session: stash `/s/:owner/:workspace` under `post_login_redirect` and 303 to `/`. The SPA renders the OAuth picker; on callback, the stash is consumed and the user lands back here with a fresh session.
+2. No session: stash `/s/{owner}/{workspace}` under `post_login_redirect` and 303 to `/`. The SPA renders the OAuth picker; on callback, the stash is consumed and the user lands back here with a fresh session.
 3. With a session: resolve owner -> profile access check -> mint entry JWT -> 303 to devserver-proxy. This is the devserver-gate mint above; the `{workspace}` is only the redirect path, not part of the access check.
 
 The post-login redirect is validated to start with a single `/` and to contain no `:` or `//` prefix, so a hostile stash cannot point the callback at another origin.
 
-`GET /s/:owner` is the whole-devserver open: it lands the caller on the launcher served at the devserver root instead of a single workspace. Same shape as the per-workspace landing -- validate `owner`, stash + login if unauthenticated, then resolve the owner's live devserver, mint a 30s entry JWT (`drv` = that devserver id, `aud` = `{owner}.devserver.chan.app`), and 303 to the proxy root `…/?t=<jwt>`. It is restricted to the **owner**: the caller must equal `:owner`, otherwise 404 (the same shape as an unknown handle, so it does not reveal ownership). The launcher's `/api/library/*` surface is gated only at the proxy edge and carries no per-caller role on the gateway surface, so a grantee opening the root would get full library mutation; whole-devserver open is therefore owner-only, and grantees use the per-workspace landing (`/s/:owner/:workspace`).
+`GET /s/{owner}` is the whole-devserver open: it lands the caller on the launcher served at the devserver root instead of a single workspace. Same shape as the per-workspace landing -- validate `owner`, stash + login if unauthenticated, then resolve the owner's live devserver, mint a 30s entry JWT (`drv` = that devserver id, `aud` = `{owner}.devserver.chan.app`), and 303 to the proxy root `…/?t=<jwt>`. It is restricted to the **owner**: the caller must equal `{owner}`, otherwise 404 (the same shape as an unknown handle, so it does not reveal ownership). The launcher's `/api/library/*` surface is gated only at the proxy edge and carries no per-caller role on the gateway surface, so a grantee opening the root would get full library mutation; whole-devserver open is therefore owner-only, and grantees use the per-workspace landing (`/s/{owner}/{workspace}`).
 
 ### Devserver sharing grants (SPA surface)
 
 The owner manages grants from the dashboard. A grant is whole-devserver -- the sharing unit -- giving the grantee the owner's entire library. A devserver is not created or deleted from the dashboard: it appears when a `chan devserver` registers over the tunnel and goes offline when it disconnects. Routes (all session-gated; the session user is implicitly the owner):
 
-- `POST /api/devservers/:devserver_id/grants` body `{grantee_email, role}` (create / role-promote)
-- `GET  /api/devservers/:devserver_id/grants`
-- `DELETE /api/grants/:id`
+- `POST /api/devservers/{devserver_id}/grants` body `{grantee_email, role}` (create / role-promote)
+- `GET  /api/devservers/{devserver_id}/grants`
+- `DELETE /api/grants/{id}`
 - `GET  /api/devservers/owned` (devservers I own, with grant counts)
 - `GET  /api/devservers/incoming` (devservers shared with me)
 
@@ -178,7 +178,7 @@ All forward to profile-service over the service bearer. Validation re-runs in pr
 
 ### Feature flags
 
-identity reads the per-user resolved flag map from profile (`GET /v1/users/:id/flags`) at two points:
+identity reads the per-user resolved flag map from profile (`GET /v1/users/{id}/flags`) at two points:
 
 - OAuth callback (`oauth_login`): the allowlist gate described in the callback flow above. Fresh deploys ship `default_enabled = false`, so the operator must `chan-admin flag grant oauth_login <ident>` for the first user before they can sign in.
 - `/api/me` (full map): the SPA gates UI affordances on the resolved values. Today that's `share_workspaces` (hides the Workspaces tab and the share panel when off). The map is re-fetched on every `/api/me`, so a rollout takes effect on the next dashboard reload -- no SPA logout / login dance.
@@ -187,7 +187,7 @@ Profile errors on either call degrade-soft: identity falls back to an empty flag
 
 ### Claim sweep on OAuth callback
 
-After `upsert_by_identity`, identity calls `POST /v1/users/:id/grants/claim` with the user's primary email plus the freshly-observed provider email (deduped). Pending grants whose `grantee_email` matches any of those addresses are assigned to `:id` and stamped `accepted_at = now()`. Best-effort: a failure logs and continues so an unhealthy profile call does not block sign-in. Previous providers' emails are not resent -- they were swept on their own callbacks.
+After `upsert_by_identity`, identity calls `POST /v1/users/{id}/grants/claim` with the user's primary email plus the freshly-observed provider email (deduped). Pending grants whose `grantee_email` matches any of those addresses are assigned to `{id}` and stamped `accepted_at = now()`. Best-effort: a failure logs and continues so an unhealthy profile call does not block sign-in. Previous providers' emails are not resent -- they were swept on their own callbacks.
 
 ### Desktop authorize (PAT mint for chan-desktop)
 

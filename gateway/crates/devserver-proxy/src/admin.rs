@@ -4,11 +4,11 @@
 //!
 //! Routes under `/admin/v1/`:
 //!
-//!   * `GET    /tunnels`                       snapshot of every registered tunnel
-//!   * `POST   /tunnels/:user/:workspace/kill` force one tunnel offline
-//!   * `GET    /users/:user/tunnels`           per-user snapshot
-//!   * `POST   /users/:user/tunnels/kill`      bulk evict for one user
-//!   * `GET    /tunnels/watch`                 SSE stream of periodic snapshots
+//!   * `GET    /tunnels`                         snapshot of every registered tunnel
+//!   * `POST   /tunnels/{user}/{workspace}/kill` force one tunnel offline
+//!   * `GET    /users/{user}/tunnels`            per-user snapshot
+//!   * `POST   /users/{user}/tunnels/kill`       bulk evict for one user
+//!   * `GET    /tunnels/watch`                   SSE stream of periodic snapshots
 //!
 //! All gated by a single bearer token (`DEVSERVER_ADMIN_TOKEN`). The
 //! tunnel registry is in-memory and process-local, so admin reads
@@ -59,10 +59,13 @@ pub fn router(state: AppState) -> Router<AppState> {
     // network, swap in an XFF-aware governor instead.
     Router::new()
         .route("/admin/v1/tunnels", get(list_tunnels))
-        .route("/admin/v1/tunnels/:user/:workspace/kill", post(kill_tunnel))
-        .route("/admin/v1/users/:user/tunnels", get(list_user_tunnels))
         .route(
-            "/admin/v1/users/:user/tunnels/kill",
+            "/admin/v1/tunnels/{user}/{workspace}/kill",
+            post(kill_tunnel),
+        )
+        .route("/admin/v1/users/{user}/tunnels", get(list_user_tunnels))
+        .route(
+            "/admin/v1/users/{user}/tunnels/kill",
             post(kill_user_tunnels),
         )
         .route("/admin/v1/tunnels/watch", get(watch_tunnels))

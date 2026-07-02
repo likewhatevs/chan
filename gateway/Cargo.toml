@@ -65,7 +65,7 @@ gateway-common = { path = "crates/gateway-common" }
 
 anyhow = "1"
 async-trait = "0.1"
-axum = { version = "0.7", features = ["macros", "ws"] }
+axum = { version = "0.8", features = ["macros", "ws"] }
 # yamux Streams from chan-tunnel-server expose futures-io traits;
 # devserver-proxy needs the Compat shim and TokioAsyncReadCompatExt to
 # bridge them onto tokio io.
@@ -106,14 +106,21 @@ thiserror = "1"
 # hooks). Drops unused fs/process/test-util to shrink each binary.
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "sync", "io-util", "signal"] }
 # Plaintext WebSocket client used to bridge browser WS frames to
-# `chan devserver`. devserver-proxy runs the WS client handshake (`client_async`)
-# directly on a yamux substream, so the `connect` feature isn't needed.
-tokio-tungstenite = { version = "0.24", default-features = false }
+# `chan devserver`. Pinned to the same minor as axum's `ws` feature so
+# this direct dep unifies with axum's internal tungstenite instead of
+# adding another copy. Features are explicit because default-features
+# is off and compilation must not lean on axum's dep edge: `handshake`
+# for the `client_async` handshake devserver-proxy runs directly on a
+# yamux substream, `connect` for the test-side `connect_async` client.
+tokio-tungstenite = { version = "0.29", default-features = false, features = ["handshake", "connect"] }
 futures-util = { version = "0.3", default-features = false, features = ["sink"] }
 tower = "0.5"
 tower-http = { version = "0.6", features = ["trace"] }
-tower-sessions = "0.13"
-tower-sessions-sqlx-store = { version = "0.14", features = ["postgres"] }
+tower-sessions = "0.14"
+# The newest store release pairs with tower-sessions 0.14 (it requires
+# tower-sessions-core ^0.14); both pins must resolve to one
+# tower-sessions-core or PostgresStore stops satisfying SessionStore.
+tower-sessions-sqlx-store = { version = "0.15", features = ["postgres"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 url = "2"

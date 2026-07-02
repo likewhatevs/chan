@@ -90,7 +90,7 @@ The shared JWT type and signing helpers live in `gateway_common::devserver_gate`
 ## Whole-devserver open (launcher)
 
 The owner opens their whole devserver -- landing on the launcher served at the
-devserver root -- through identity's `GET /s/:owner`, which mints an entry token
+devserver root -- through identity's `GET /s/{owner}`, which mints an entry token
 the same way the per-workspace landing does. The proxy exchanges it for the
 session cookie and forwards `/` to the launcher:
 

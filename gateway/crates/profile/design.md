@@ -133,7 +133,7 @@ When the CTE returns no rows the handler runs one follow-up SELECT to distinguis
 
 ### Block fans out to devserver-proxy server-side
 
-`POST /v1/admin/users/:id/block`:
+`POST /v1/admin/users/{id}/block`:
 
 1. Set `users.blocked_at = now()` and `block_reason` in one transaction with the next two steps.
 2. Update `api_tokens` to set `revoked_at = now()` for every live PAT belonging to the user.
@@ -144,32 +144,32 @@ devserver-proxy is the authority on live registrations; profile is the authority
 
 ### Email rewrite is admin-only
 
-`PATCH /v1/users/:id` (the service-tier route) accepts only `display_name` and `avatar_url`. Email is the identity-linking key in `upsert_by_identity` branch (b): a service-bearer holder that could rewrite email could pivot account ownership to any account whose verified OAuth email matched the new value. Email mutation therefore lives behind the admin bearer on `POST /v1/admin/users/:id/email`, runs in a single transaction with an `auth_audit` row of action `email_changed` (note carries the old + new addresses), and surfaces unique-constraint conflicts as
+`PATCH /v1/users/{id}` (the service-tier route) accepts only `display_name` and `avatar_url`. Email is the identity-linking key in `upsert_by_identity` branch (b): a service-bearer holder that could rewrite email could pivot account ownership to any account whose verified OAuth email matched the new value. Email mutation therefore lives behind the admin bearer on `POST /v1/admin/users/{id}/email`, runs in a single transaction with an `auth_audit` row of action `email_changed` (note carries the old + new addresses), and surfaces unique-constraint conflicts as
 409.
 
 ### Devservers are first-class
 
 A devserver is a row in `devservers` keyed on `(owner_user_id, devserver_id)`, where `devserver_id` is the lowercase hex SHA-256 of the owner's PAT (ADR-0001: the devserver is the unit of registration, gate, and sharing). identity-service creates the row at PAT-create time (it holds the raw token to compute the id) before either grants land or `chan devserver` registers a live tunnel, so the offline state is always representable. Live tunnels (held in devserver-proxy's in-memory Registry) reference the same `(owner, devserver_id)` pair; the FK from `devserver_grants` -> `devservers` makes devserver deletion atomic (cascading every grant on it).
 
-`POST /v1/users/:owner/devservers` is idempotent: 201 on insert, 200 when the id already existed (a blank/absent label on a re-issue leaves the stored label untouched). `POST .../grants` upserts the parent `devservers` row in the same transaction (so a caller that pre-seeds a grant before the devserver registers still produces a valid graph and the FK never fires).
+`POST /v1/users/{owner}/devservers` is idempotent: 201 on insert, 200 when the id already existed (a blank/absent label on a re-issue leaves the stored label untouched). `POST .../grants` upserts the parent `devservers` row in the same transaction (so a caller that pre-seeds a grant before the devserver registers still produces a valid graph and the FK never fires).
 
 ### Per-devserver sharing grants
 
 A grant gives a collaborator the WHOLE devserver (the whole library), not a single workspace: under ADR-0001 the path `{workspace}` segment is tenant routing only and never gates. A user shares their devserver with another user by email. Grants live in `devserver_grants` keyed on `(owner_user_id, devserver_id, lower(grantee_email))`:
 
 - The owner pre-seeds grants from id.chan.app's SPA *before* (or alongside) running `chan devserver --tunnel-token <pat>`. The grant row exists independently of any live tunnel.
-- `grantee_user_id` is `NULL` until a sign-in is observed with a verified email matching `grantee_email`. Two resolution paths: (a) at grant-create time, if `users` already has a row for the email; (b) at OAuth-callback time, via `POST /v1/users/:id/grants/claim` which identity-service calls with the union of the user's verified emails.
+- `grantee_user_id` is `NULL` until a sign-in is observed with a verified email matching `grantee_email`. Two resolution paths: (a) at grant-create time, if `users` already has a row for the email; (b) at OAuth-callback time, via `POST /v1/users/{id}/grants/claim` which identity-service calls with the union of the user's verified emails.
 - `role` is one of `viewer`, `editor`. Re-adding the same email on the same `(owner, devserver)` is idempotent: the SQL is `INSERT ... ON CONFLICT DO UPDATE SET role = EXCLUDED.role`, with `grantee_user_id` and `accepted_at` preserved via `COALESCE` so a role change does not re-pend an already-claimed grant.
 
-Access decisions: identity-service calls `GET /v1/users/:owner/devservers/:devserver_id/access?as=<caller_user_id>` before minting a devserver-gate entry JWT, passing the devserver_id of the owner's live registration. The response is `{role: "owner"|"editor"|"viewer"}` on access, 404 otherwise. The 404 shape is shared with "unknown devserver": neither the access endpoint nor the share landing page leaks which devservers an owner is sharing. One `devserver_access` call is the single authorization assertion the gate needs.
+Access decisions: identity-service calls `GET /v1/users/{owner}/devservers/{devserver_id}/access?as=<caller_user_id>` before minting a devserver-gate entry JWT, passing the devserver_id of the owner's live registration. The response is `{role: "owner"|"editor"|"viewer"}` on access, 404 otherwise. The 404 shape is shared with "unknown devserver": neither the access endpoint nor the share landing page leaks which devservers an owner is sharing. One `devserver_access` call is the single authorization assertion the gate needs.
 
 devserver_id normalization: handler lowercases + trims and rejects anything that is not exactly 64 hex chars, the canonical SHA-256(PAT) shape. Email uniqueness is case-insensitive via a functional `lower(grantee_email)` index; display preserves the as-typed casing. Token rotation mints a new PAT and thus a new devserver_id, so existing grants do not survive rotation (re-share required); this is the settled trade-off in ADR-0001.
 
-Listings: `GET /v1/users/:id/grants/owned` returns `(devserver_id, label, grant_count)` per devserver the user has configured shares on; `GET /v1/users/:id/grants/incoming` returns devservers shared *with* the user (claimed grants only). FK cascades on `users(id)` drop grants when either the owner or the grantee is deleted.
+Listings: `GET /v1/users/{id}/grants/owned` returns `(devserver_id, label, grant_count)` per devserver the user has configured shares on; `GET /v1/users/{id}/grants/incoming` returns devservers shared *with* the user (claimed grants only). FK cascades on `users(id)` drop grants when either the owner or the grantee is deleted.
 
 ### Feature flags
 
-Two-tier table layout (`feature_flags` + `feature_flag_overrides`) behind admin endpoints. Resolution is `COALESCE(override.enabled, flag.default_enabled, false)` so unknown flags are closed by default. identity-service reads the resolved map for a user via `GET /v1/users/:id/flags` (service tier) to gate OAuth sign-in (`oauth_login`) and to surface UI affordances on the SPA (`share_workspaces`).
+Two-tier table layout (`feature_flags` + `feature_flag_overrides`) behind admin endpoints. Resolution is `COALESCE(override.enabled, flag.default_enabled, false)` so unknown flags are closed by default. identity-service reads the resolved map for a user via `GET /v1/users/{id}/flags` (service tier) to gate OAuth sign-in (`oauth_login`) and to surface UI affordances on the SPA (`share_workspaces`).
 
 The seeded flags ship `default_enabled = false`, so a fresh deploy refuses every sign-in until an operator grants `oauth_login` on at least one user. Override-or-default keeps the rollout knob simple: flip the default once the feature is ready for everyone; revoke the per-user override for a deny rule. Audit-style history is the `set_at` column on each override; full audit is deferred.
 

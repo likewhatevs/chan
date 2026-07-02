@@ -1557,7 +1557,7 @@ async fn owned_includes_grantless() {
 
 #[tokio::test]
 async fn grant_create_autocreates_devserver() {
-    // POST /v1/users/:o/devservers/:d/grants must work even if the
+    // POST /v1/users/{o}/devservers/{d}/grants must work even if the
     // owner has not POSTed the devserver first: the grant handler
     // upserts the devservers row in the same transaction, so a caller
     // that pre-seeds a grant before the devserver registers still

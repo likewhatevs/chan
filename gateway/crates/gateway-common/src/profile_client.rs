@@ -106,7 +106,7 @@ pub struct FeatureFlagOverride {
     pub set_at: DateTime<Utc>,
 }
 
-/// Resolved flag map for one user — what `GET /v1/users/:id/flags`
+/// Resolved flag map for one user -- what `GET /v1/users/{id}/flags`
 /// returns. A flag absent from the map means it does not exist in
 /// the registry (treat as false).
 pub type FlagMap = std::collections::BTreeMap<String, bool>;
@@ -134,7 +134,7 @@ pub struct DevserverGrant {
     pub accepted_at: Option<DateTime<Utc>>,
 }
 
-/// Reply from `GET /v1/users/:o/devservers/:d/access?as=<id>`.
+/// Reply from `GET /v1/users/{o}/devservers/{d}/access?as=<id>`.
 /// `role` is one of `owner`, `editor`, `viewer`.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct DevserverAccess {
