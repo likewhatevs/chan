@@ -28,7 +28,7 @@
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
@@ -165,6 +165,14 @@ pub struct SessionRegistry {
     /// Process-local id source for handover requests (lifetime-unique is
     /// enough; the registry is in memory).
     handover_counter: AtomicU64,
+    /// The library's aggregate change signal, installed by the host when it
+    /// mounts the tenant. A roster or leader change fires it so the window
+    /// watch feed re-publishes the per-tenant leaders map. Absent in unit tests
+    /// and before install, in which case a change is silent to the feed. This is
+    /// the leaders-map analogue of `window_presence`'s connect/disconnect nudge:
+    /// it also covers the reaper-driven leader promotion, which happens with no
+    /// presence transition to piggyback on.
+    change_notify: OnceLock<Arc<Notify>>,
 }
 
 /// The outcome of a [`reap_due`](SessionRegistry::reap_due) pass: whether the
@@ -193,6 +201,21 @@ impl SessionRegistry {
     /// drops (the only event that arms a new grace deadline).
     pub fn reaper_wake(&self) -> &Notify {
         &self.reaper_wake
+    }
+
+    /// Install the library's aggregate change signal so a roster/leader change
+    /// wakes the window watch feed. Idempotent set-once; the host calls this
+    /// once per tenant right after the builder constructs the registry.
+    pub fn install_change_notify(&self, notify: Arc<Notify>) {
+        let _ = self.change_notify.set(notify);
+    }
+
+    /// Wake the window watch feed if a change signal is installed. Fired outside
+    /// the registry lock by every mutation that moves the public snapshot.
+    fn fire_change(&self) {
+        if let Some(notify) = self.change_notify.get() {
+            notify.notify_waiters();
+        }
     }
 
     /// Register one live `/ws` socket for `window_id` and return the RAII guard
@@ -235,6 +258,9 @@ impl SessionRegistry {
                 }
             }
         };
+        if changed {
+            self.fire_change();
+        }
         JoinResult {
             guard: SessionGuard {
                 registry: Arc::clone(self),
@@ -271,47 +297,56 @@ impl SessionRegistry {
     /// when a gone participant held the leader slot. Idempotent; the reaper
     /// calls it on each wake and `next_deadline` tells it when to wake next.
     pub fn reap_due(&self, now: Instant) -> ReapOutcome {
-        let mut inner = self.lock();
-        let mut changed = false;
+        let (changed, next_deadline) = {
+            let mut inner = self.lock();
+            let mut changed = false;
 
-        // Step states and collect the windows that went gone.
-        let mut gone: Vec<String> = Vec::new();
-        for (window_id, p) in inner.participants.iter_mut() {
-            if p.sockets > 0 {
-                continue;
+            // Step states and collect the windows that went gone.
+            let mut gone: Vec<String> = Vec::new();
+            for (window_id, p) in inner.participants.iter_mut() {
+                if p.sockets > 0 {
+                    continue;
+                }
+                let next = p.computed_state(now);
+                if next != p.state {
+                    p.state = next;
+                    changed = true;
+                }
+                if next == ParticipantState::Gone {
+                    gone.push(window_id.clone());
+                }
             }
-            let next = p.computed_state(now);
-            if next != p.state {
-                p.state = next;
-                changed = true;
-            }
-            if next == ParticipantState::Gone {
-                gone.push(window_id.clone());
-            }
-        }
 
-        // Remove gone participants and reassign the leader if it left.
-        let mut leader_lost = false;
-        for window_id in &gone {
-            inner.participants.remove(window_id);
-            if inner.leader.as_deref() == Some(window_id.as_str()) {
-                inner.leader = None;
-                leader_lost = true;
+            // Remove gone participants and reassign the leader if it left.
+            let mut leader_lost = false;
+            for window_id in &gone {
+                inner.participants.remove(window_id);
+                if inner.leader.as_deref() == Some(window_id.as_str()) {
+                    inner.leader = None;
+                    leader_lost = true;
+                }
+                // A pending handover whose leader or target vanished is stale.
+                if inner
+                    .pending
+                    .as_ref()
+                    .is_some_and(|h| h.leader == *window_id || h.target == *window_id)
+                {
+                    inner.pending = None;
+                }
             }
-            // A pending handover whose leader or target vanished is stale.
-            if inner
-                .pending
-                .as_ref()
-                .is_some_and(|h| h.leader == *window_id || h.target == *window_id)
-            {
-                inner.pending = None;
+            if leader_lost {
+                Self::elect_leader(&mut inner);
             }
-        }
-        if leader_lost {
-            Self::elect_leader(&mut inner);
-        }
 
-        let next_deadline = Self::soonest_deadline(&inner, now);
+            let next_deadline = Self::soonest_deadline(&inner, now);
+            (changed, next_deadline)
+        };
+        // The reaper-driven leader promotion happens with no presence transition
+        // to piggyback on, so wake the library watch here (not only clients'
+        // /ws rosters) to refresh the leaders map.
+        if changed {
+            self.fire_change();
+        }
         ReapOutcome {
             changed,
             next_deadline,
@@ -355,19 +390,25 @@ impl SessionRegistry {
     /// Rename a participant (the `cs session self --name` target). Returns
     /// whether a participant matched (and the snapshot changed).
     pub fn rename(&self, window_id: &str, name: &str) -> bool {
-        let mut inner = self.lock();
-        match inner.participants.get_mut(window_id) {
-            Some(p) => {
-                let trimmed = name.trim();
-                p.name = if trimmed.is_empty() {
-                    None
-                } else {
-                    Some(trimmed.to_string())
-                };
-                true
+        let matched = {
+            let mut inner = self.lock();
+            match inner.participants.get_mut(window_id) {
+                Some(p) => {
+                    let trimmed = name.trim();
+                    p.name = if trimmed.is_empty() {
+                        None
+                    } else {
+                        Some(trimmed.to_string())
+                    };
+                    true
+                }
+                None => false,
             }
-            None => false,
+        };
+        if matched {
+            self.fire_change();
         }
+        matched
     }
 
     /// The current leader's window_id, if any.
@@ -472,27 +513,35 @@ impl SessionRegistry {
     /// the new leader on a leadership change (so the caller can broadcast), or
     /// `None` when the id no longer matches (already resolved / stale).
     pub fn resolve_handover(&self, request_id: &str, accept: bool) -> Option<HandoverResolved> {
-        let mut inner = self.lock();
-        let matches = inner
-            .pending
-            .as_ref()
-            .is_some_and(|h| h.request_id == request_id);
-        if !matches {
-            return None;
+        let resolved = {
+            let mut inner = self.lock();
+            let matches = inner
+                .pending
+                .as_ref()
+                .is_some_and(|h| h.request_id == request_id);
+            if !matches {
+                return None;
+            }
+            let pending = inner.pending.take().expect("matched just above");
+            if accept && inner.participants.contains_key(&pending.target) {
+                inner.leader = Some(pending.target.clone());
+                HandoverResolved {
+                    accepted: true,
+                    new_leader: Some(pending.target),
+                }
+            } else {
+                HandoverResolved {
+                    accepted: accept,
+                    new_leader: None,
+                }
+            }
+        };
+        // Only an accepted handover moves the leader, so refresh the leaders map
+        // then; a reject leaves it unchanged.
+        if resolved.new_leader.is_some() {
+            self.fire_change();
         }
-        let pending = inner.pending.take().expect("matched just above");
-        if accept && inner.participants.contains_key(&pending.target) {
-            inner.leader = Some(pending.target.clone());
-            Some(HandoverResolved {
-                accepted: true,
-                new_leader: Some(pending.target),
-            })
-        } else {
-            Some(HandoverResolved {
-                accepted: accept,
-                new_leader: None,
-            })
-        }
+        Some(resolved)
     }
 
     /// Drop the pending handover identified by `request_id` without resolving
@@ -514,24 +563,28 @@ impl SessionRegistry {
     /// are gone); `force` seizes even a live leader. The caller must be a
     /// participant. Returns whether leadership actually moved.
     pub fn takeover(&self, caller: &str, force: bool) -> Result<bool, HandoverError> {
-        let mut inner = self.lock();
-        if !inner.participants.contains_key(caller) {
-            return Err(HandoverError::NotAParticipant);
+        {
+            let mut inner = self.lock();
+            if !inner.participants.contains_key(caller) {
+                return Err(HandoverError::NotAParticipant);
+            }
+            if inner.leader.as_deref() == Some(caller) {
+                return Ok(false);
+            }
+            let leader_live = inner
+                .leader
+                .as_ref()
+                .and_then(|l| inner.participants.get(l))
+                .is_some_and(|p| p.sockets > 0);
+            if leader_live && !force {
+                return Err(HandoverError::LeaderLive);
+            }
+            inner.leader = Some(caller.to_string());
+            // A seized handover no longer applies.
+            inner.pending = None;
         }
-        if inner.leader.as_deref() == Some(caller) {
-            return Ok(false);
-        }
-        let leader_live = inner
-            .leader
-            .as_ref()
-            .and_then(|l| inner.participants.get(l))
-            .is_some_and(|p| p.sockets > 0);
-        if leader_live && !force {
-            return Err(HandoverError::LeaderLive);
-        }
-        inner.leader = Some(caller.to_string());
-        // A seized handover no longer applies.
-        inner.pending = None;
+        // Leadership moved; refresh the leaders map.
+        self.fire_change();
         Ok(true)
     }
 }
@@ -826,5 +879,38 @@ mod tests {
             reg.takeover("w-ghost", true),
             Err(HandoverError::NotAParticipant)
         );
+    }
+
+    // The reaper-driven leader promotion happens with no presence transition to
+    // piggyback on, so it must fire the installed change signal itself, or the
+    // window watch feed's leaders map would go stale until an unrelated change.
+    #[tokio::test]
+    async fn install_change_notify_fires_on_reaper_leader_promotion() {
+        let reg = Arc::new(SessionRegistry::new());
+        let notify = Arc::new(Notify::new());
+        reg.install_change_notify(notify.clone());
+
+        let t0 = Instant::now();
+        let leader = reg.join("w-a").guard; // leader, join_seq 0
+        let _b = reg.join("w-b").guard; // live follower, promotes next
+        drop(leader); // the leader's last socket drops at ~t0
+
+        // Arm the waiter AFTER the join fires so it only wakes on the reap; a
+        // yield parks it before we reap (current-thread runtime is deterministic).
+        let waiter = tokio::spawn(async move { notify.notified().await });
+        tokio::task::yield_now().await;
+
+        let later = t0 + GONE_GRACE + Duration::from_secs(1);
+        let out = reg.reap_due(later);
+        assert!(out.changed);
+        assert_eq!(
+            reg.leader().as_deref(),
+            Some("w-b"),
+            "promoted to the live follower"
+        );
+        tokio::time::timeout(Duration::from_secs(1), waiter)
+            .await
+            .expect("reaper promotion fired the change signal")
+            .expect("waiter task ok");
     }
 }

@@ -1167,6 +1167,9 @@ fn into_tenant_artifacts(a: AppArtifacts) -> chan_library::TenantArtifacts {
     // The SAME Arc the AppState holds, so the `/ws` route's transfer updates
     // and the host's close-guard query read one shared count (mirror presence).
     let window_transfers = state.window_transfers.clone();
+    // The SAME registry the `/ws` pump drives, so the host reads this tenant's
+    // leader and installs the watch-feed change signal on it (mirror presence).
+    let session_registry = state.session_registry.clone();
     let cell: Arc<dyn chan_library::WorkspaceCellHandle> = Arc::new(CellHandle(workspace_cell));
     chan_library::TenantArtifacts {
         app,
@@ -1176,6 +1179,7 @@ fn into_tenant_artifacts(a: AppArtifacts) -> chan_library::TenantArtifacts {
         prefix,
         window_presence,
         window_transfers,
+        session_registry,
         cell,
         keepalive: Box::new((
             last_activity,

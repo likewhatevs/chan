@@ -5,9 +5,9 @@
 //! mounted workspace still gets its own `AppState`, watcher, indexer,
 //! MCP bridge, control socket, terminal registry, and route prefix.
 
-use std::collections::HashMap;
 #[cfg(target_os = "linux")]
 use std::collections::HashSet;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, RwLock, Weak};
 use std::time::{Duration, Instant};
@@ -721,6 +721,12 @@ impl WorkspaceHost {
         artifacts
             .window_presence
             .install_change_notify(self.library_change_notify.clone());
+        // A leader change (election, reaper promotion, handover) shifts the
+        // watch feed's per-tenant leaders map with no registry change, so feed
+        // the tenant's session registry the same aggregate signal.
+        artifacts
+            .session_registry
+            .install_change_notify(self.library_change_notify.clone());
         let handle = ServeHandle {
             addr: config.addr,
             prefix: prefix.clone(),
@@ -854,6 +860,11 @@ impl WorkspaceHost {
         // `open_workspace`); a terminal window's `connected` is presence-driven.
         artifacts
             .window_presence
+            .install_change_notify(self.library_change_notify.clone());
+        // Same for the session registry, so a terminal-tenant leader change
+        // refreshes the watch feed's leaders map (see `open_workspace`).
+        artifacts
+            .session_registry
             .install_change_notify(self.library_change_notify.clone());
         // A standalone terminal window IS its PTY. When the shell exits and
         // no client is attached, the registry's `reap_exited` closes the session;
@@ -1254,6 +1265,46 @@ impl WorkspaceHost {
             records.extend(feed.windows());
         }
         records
+    }
+
+    /// The leader window_id of the tenant that governs an operation on `kind` /
+    /// `workspace_path` (mint, discard, visibility), or `None` when that tenant
+    /// is unmounted or currently leaderless. A workspace resolves to its mounted
+    /// tenant by canonical root; a terminal resolves to the shared terminal
+    /// tenant. Honest-client input only: the leader gate compares a CLAIMED
+    /// acting window_id against this and is not a security boundary (every window
+    /// of a tenant shares the one tenant token, and the mint route sits behind
+    /// the shared launcher bearer), so it double-enforces a UI affordance rather
+    /// than proving identity.
+    pub fn tenant_leader(&self, kind: WindowKind, workspace_path: Option<&str>) -> Option<String> {
+        let workspaces = self.workspaces.read().ok()?;
+        let runtime = match kind {
+            WindowKind::Terminal => workspaces.get(self.terminal_tenant_prefix.get()?)?,
+            WindowKind::Workspace => {
+                let target = canonical_key(Path::new(workspace_path?));
+                workspaces
+                    .values()
+                    .find(|runtime| canonical_key(&runtime.root) == target)?
+            }
+        };
+        runtime.artifacts.session_registry.leader()
+    }
+
+    /// The per-tenant leaders map the window watch feed publishes: tenant route
+    /// `prefix` -> that tenant's leader window_id, for every mounted tenant with
+    /// a live leader. Keyed by prefix (the value on each [`WindowRecord::prefix`])
+    /// so a launcher correlates `leaders[record.prefix]`; leaderless or unmounted
+    /// tenants are simply absent.
+    pub fn tenant_leaders(&self) -> BTreeMap<String, String> {
+        let mut leaders = BTreeMap::new();
+        if let Ok(workspaces) = self.workspaces.read() {
+            for (prefix, runtime) in workspaces.iter() {
+                if let Some(leader) = runtime.artifacts.session_registry.leader() {
+                    leaders.insert(prefix.clone(), leader);
+                }
+            }
+        }
+        leaders
     }
 
     /// Mint a window: persist a new registry row and return its assembled
@@ -2357,6 +2408,7 @@ mod tests {
             prefix: Arc::new(RwLock::new(String::new())),
             window_presence: Arc::new(crate::window_presence::WindowPresence::new()),
             window_transfers: Arc::new(crate::window_transfers::WindowTransfers::new()),
+            session_registry: Arc::new(crate::session_presence::SessionRegistry::new()),
             cell,
             keepalive: Box::new(()),
         }

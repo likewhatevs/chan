@@ -24,7 +24,7 @@
 //! re-rolls against the registry, so it never collides regardless of entropy
 //! width.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 
@@ -126,6 +126,13 @@ pub struct WindowRecord {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WindowSet {
     pub windows: Vec<WindowRecord>,
+    /// Per-tenant leaders for leader-gated affordances: tenant route `prefix` ->
+    /// that tenant's leader `window_id`. A launcher correlates
+    /// `leaders[record.prefix]` and checks it against its own window ids to know
+    /// where it leads. Additive: absent (omitted) when no mounted tenant has a
+    /// live leader, and a client that ignores it still reconciles windows.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub leaders: BTreeMap<String, String>,
 }
 
 /// Body of `POST /api/library/windows`, the mint request. The client supplies
@@ -745,6 +752,7 @@ mod tests {
                 control: false,
                 hidden: false,
             }],
+            leaders: BTreeMap::new(),
         };
         let v = serde_json::to_value(&set).unwrap();
         assert_eq!(v["windows"][0]["window_id"], "w-1a2b3c4d5e6f7081");
@@ -753,7 +761,24 @@ mod tests {
         assert!(v["windows"][0].get("control").is_none());
         assert!(v["windows"][0].get("hidden").is_none());
         assert_eq!(v["windows"].as_array().unwrap().len(), 1);
+        // An empty leaders map is skip-if-empty: absent on the wire.
+        assert!(v.get("leaders").is_none());
         assert_eq!(set, serde_json::from_value(v).unwrap());
+
+        // A populated leaders map serializes as tenant `prefix` -> leader
+        // `window_id`, keyed by the prefix a launcher reads off each record.
+        let mut leaders = BTreeMap::new();
+        leaders.insert(
+            "/api/notes-1a2b3c".to_string(),
+            "w-leaderwindow0001".to_string(),
+        );
+        let with_leaders = WindowSet {
+            windows: vec![],
+            leaders,
+        };
+        let v = serde_json::to_value(&with_leaders).unwrap();
+        assert_eq!(v["leaders"]["/api/notes-1a2b3c"], "w-leaderwindow0001");
+        assert_eq!(with_leaders, serde_json::from_value(v).unwrap());
     }
 
     #[test]

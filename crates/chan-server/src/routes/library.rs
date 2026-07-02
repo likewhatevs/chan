@@ -370,6 +370,9 @@ async fn watch_library_windows(mut socket: WebSocket, host: Arc<WorkspaceHost>) 
         changed.as_mut().enable();
         let set = WindowSet {
             windows: host.assemble_window_records(),
+            // Per-tenant leaders so a launcher gates leader-only affordances; the
+            // registry change bridge nudges this same feed on a leader change.
+            leaders: host.tenant_leaders(),
         };
         let frame = match serde_json::to_string(&set) {
             Ok(frame) => frame,

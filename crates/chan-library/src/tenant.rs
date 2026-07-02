@@ -21,6 +21,7 @@ use chan_workspace::{Library, Workspace};
 use tokio::sync::watch;
 
 use crate::desktop_window_ops::DesktopBridge;
+use crate::session_presence::SessionRegistry;
 use crate::terminal_sessions::Registry as TerminalRegistry;
 use crate::window_presence::WindowPresence;
 use crate::window_transfers::WindowTransfers;
@@ -150,6 +151,12 @@ pub struct TenantArtifacts {
     /// Which window ids hold a live `/ws` socket — the `connected` source for
     /// the window-record assembly.
     pub window_presence: Arc<WindowPresence>,
+    /// The tenant's session registry (leader + followers). The host reads its
+    /// `leader()` to gate leader-only mint/discard/visibility per target tenant
+    /// and to publish the per-tenant leaders map in the window watch feed; the
+    /// host also installs the aggregate change signal on it so a leader change
+    /// wakes that feed.
+    pub session_registry: Arc<SessionRegistry>,
     /// Per-window in-flight transfer count — the desktop close handler's
     /// "is a transfer running?" query (`tenant_has_active_transfer`).
     pub window_transfers: Arc<WindowTransfers>,
