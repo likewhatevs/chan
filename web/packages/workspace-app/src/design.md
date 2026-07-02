@@ -1,8 +1,9 @@
 # chan web frontend
 
 Design reference for the chan web frontend: first the two web SPAs and how each
-is served, then the color system both share. Update this file with changes to the
-frontend serving topology, palette variable model, editor theme contract, syntax
+is served, then the frontend-only demo embed, then the color system all share.
+Update this file with changes to the frontend serving topology (including the
+marketing demo embed), palette variable model, editor theme contract, syntax
 highlight palette, or kind taxonomy.
 
 ## Two web frontends
@@ -48,6 +49,55 @@ flowchart TB
     LAUNA --- DEV
     LAUNA --- LOOP
     DEV --- GW
+```
+
+## Frontend-only demo (marketing embed)
+
+Both SPAs also run with **no backend** on the public marketing site
+(`@chan/marketing`), so `chan.app` visitors get a live, interactive product tour
+instead of screenshots. This is a third serving path: not chan-server, but the
+static site embedding the *same* Svelte apps against in-memory mocks. Nothing is
+extracted or forked -- the terminal, editor, graph, and file browser stay in
+this package and are reused whole.
+
+The launcher demo came first: `@chan/launcher/demo` renders the real launcher
+`App` with `setBackend(createLauncherDemoApi())`, a backend-interface swap. The
+workspace app has no single backend interface (it hits `fetch` and WebSocket
+across ~65 endpoints and three sockets), so its demo swaps one level lower, at
+the **transport seam**: `api/transport.ts` routes every HTTP call through
+`chanFetch` and every socket through `createSocket`, both defaulting to the real
+`fetch` / `WebSocket`. A demo installs replacements before mount (`setFetchImpl`
+/ `setSocketFactory`); the in-memory mock lives in `src/demo/` (store, router,
+graph, search, fake PTY) and is seeded from `demo-workspace.json`, a build-time
+snapshot of a git repo. The default path is unchanged, so the two
+chan-server-embedded bundles above are byte-identical; only the demo installs a
+mock. `src/demo/graph.ts` reproduces chan-server's `/api/graph` node/edge id
+schemes and directory spine so the graph view cannot tell the sources apart.
+
+The workspace demo bundle (plus its multi-MB snapshot) is a **lazy chunk**: the
+landing page ships only the launcher; clicking any window tile dynamic-imports
+the workspace app and opens it in `WorkspaceDemoOverlay`. So the heavy editor /
+graph / terminal bundle never touches the marketing page load.
+
+```mermaid
+flowchart TB
+    subgraph site["marketing site -- chan.app static bundle"]
+        HOME["landing page<br/>launcher-demo.js (eager entry)"]
+        OVL["WorkspaceDemoOverlay<br/>workspace-demo.js (lazy chunk, on first tile click)"]
+    end
+    subgraph ldemo["@chan/launcher/demo"]
+        L["real launcher App<br/>setBackend(createLauncherDemoApi())"]
+    end
+    subgraph wdemo["@chan/workspace-app/demo"]
+        W["real workspace App<br/>editor · graph · terminals · file browser"]
+        SEAM["transport seam<br/>setFetchImpl(chanFetch) + setSocketFactory(createSocket)<br/>default: real fetch / WebSocket"]
+        MOCK["src/demo mock<br/>store · router · graph · search · fake PTY<br/>seeded from demo-workspace.json (git snapshot)"]
+    end
+    HOME --> L
+    L -->|onOpenWindow: any window tile| OVL
+    OVL --> W
+    W -->|every fetch + WebSocket| SEAM
+    SEAM --> MOCK
 ```
 
 ## Colors and themes

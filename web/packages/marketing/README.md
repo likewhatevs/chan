@@ -12,13 +12,16 @@ web/packages/marketing/
 +-- scripts/
 |   `-- build.mjs          static generator and validator
 +-- src/
-|   +-- install.sh         public CLI installer source
-|   +-- pages/             homepage and install page templates
+|   +-- install.sh              public CLI installer source
+|   +-- pages/                  homepage and install page templates
 |   +-- site.js
 |   +-- styles.css
+|   +-- launcher-demo.ts        eager entry: mounts the launcher demo widget
+|   +-- workspace-demo.ts       lazy loader for the workspace demo overlay
+|   +-- WorkspaceDemoOverlay.svelte  hosts @chan/workspace-app/demo
 |   `-- templates/
 |       `-- base.html
-+-- assets/                public image assets copied to dist/assets/
++-- assets/                     public image assets copied to dist/assets/
 +-- chan-favicon.png
 `-- chan-mark.png
 ```
@@ -47,6 +50,7 @@ The build/check gate:
 - fails if stale public copy claims reappear in generated output
 - dry-runs `/dl/**` release metadata generation from a local fixture
 - dry-runs collection of uploaded release assets into the metadata manifest
+- builds the embedded demos (see below) and snapshots the repo into `dist/assets/demo-workspace.json`
 - serves `dist/` on loopback and smokes `/`, `/install/`, `/install.sh`, and `/install.ps1` absence
 
 ## Preview
@@ -59,6 +63,32 @@ python3 -m http.server 8080 -d dist
 ```
 
 Then open `http://localhost:8080/`.
+
+## Embedded demos
+
+The site runs both chan SPAs frontend-only, with no backend, so the landing page
+is a live product tour. See the frontend design doc
+(`web/packages/workspace-app/src/design.md`, "Frontend-only demo") for the
+architecture; the wiring here is:
+
+- The landing page eager-loads `launcher-demo.ts`, which mounts the real
+  launcher (`@chan/launcher/demo`) as the hero widget.
+- Clicking any window tile fires the launcher demo's `onOpenWindow` hook, which
+  dynamic-imports `workspace-demo.ts` and opens the real workspace app
+  (`@chan/workspace-app/demo`) in a near-fullscreen overlay. The whole
+  workspace-app bundle is a lazy chunk, so it never loads until first click.
+
+`scripts/build.mjs` produces, under `dist/assets/`:
+
+- `launcher-demo.{js,css}` -- the eager launcher entry.
+- `workspace-demo.{js,css}` plus split vendor chunks -- the lazy workspace app.
+- `demo-workspace.json` -- an in-memory workspace snapshotted from this repo by
+  `web/packages/workspace-app/scripts/snapshot-workspace.mjs` (the demo's file
+  tree, contents, graph, and search all derive from it).
+
+The build serves the demo chunks from `base: "/assets/"` and scopes each demo
+bundle's global CSS to its own frame (`.launcher-demo-frame` /
+`.workspace-demo-frame`) so a demo can never restyle the marketing page.
 
 ## Release verification
 
