@@ -12,7 +12,7 @@ Get chan at https://chan.app
 
 Chan is free, open source software. Made with love.
 
-Loving it too? You can support the project:
+Loving it too? Buy me a coffee:
 
 ```
 █████████████████████████████████
