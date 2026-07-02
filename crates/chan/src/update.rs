@@ -188,17 +188,41 @@ fn release_from_version_override(version: &str) -> Result<ReleaseVersion> {
 }
 
 fn validate_version(version: &str) -> Result<()> {
-    let mut parts = version.split('.');
+    let (triple, pre) = match version.split_once('-') {
+        Some((triple, pre)) => (triple, Some(pre)),
+        None => (version, None),
+    };
+    let mut parts = triple.split('.');
     for name in ["major", "minor", "patch"] {
         let Some(part) = parts.next() else {
-            bail!("release version must use X.Y.Z: {version:?}");
+            bail!("release version must use X.Y.Z or X.Y.Z-pre: {version:?}");
         };
         if part.is_empty() || !part.chars().all(|c| c.is_ascii_digit()) {
             bail!("release version {name} component must be numeric: {version:?}");
         }
     }
     if parts.next().is_some() {
-        bail!("release version must use X.Y.Z: {version:?}");
+        bail!("release version must use X.Y.Z or X.Y.Z-pre: {version:?}");
+    }
+    if let Some(pre) = pre {
+        validate_prerelease(pre, version)?;
+    }
+    Ok(())
+}
+
+/// A prerelease suffix is dot-separated identifiers of ASCII
+/// alphanumerics and hyphens, none empty (the semver charset). Build
+/// metadata (`+`) is not accepted; the release pipeline never mints it.
+fn validate_prerelease(pre: &str, version: &str) -> Result<()> {
+    let valid = !pre.is_empty()
+        && pre.split('.').all(|ident| {
+            !ident.is_empty() && ident.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+        });
+    if !valid {
+        bail!(
+            "release version prerelease suffix must be dot-separated \
+             alphanumeric/hyphen identifiers: {version:?}"
+        );
     }
     Ok(())
 }
@@ -214,9 +238,110 @@ fn ensure_https_url(url: &str) -> Result<()> {
     Ok(())
 }
 
-fn parse_semver(s: &str) -> Option<(u32, u32, u32)> {
+/// A parsed `X.Y.Z` or `X.Y.Z-pre` version, ordered like semver at the
+/// triple level: the triple compares first, and a prerelease sorts
+/// BELOW its own release triple (0.60.0-rc1 < 0.60.0) and above every
+/// lower triple (0.59.1 < 0.60.0-rc1).
+///
+/// Within one triple, prereleases compare by dot-separated identifier,
+/// each identifier by its digit / non-digit runs with digit runs
+/// compared numerically ("rc2" < "rc10"). This deviates from strict
+/// semver, which compares an undotted alphanumeric identifier as plain
+/// ASCII and would sort rc10 before rc2; the release pipeline names
+/// prereleases rcN, so numeric-aware ordering is the one that ranks
+/// them correctly. A prerelease that extends another sorts after it
+/// ("rc1" < "rc1.hotfix").
+#[derive(Debug, PartialEq, Eq)]
+struct ParsedVersion {
+    triple: (u32, u32, u32),
+    /// `None` is a release, sorting above every prerelease of the same
+    /// triple. Identifiers hold their [`IdentRun`] decomposition.
+    pre: Option<Vec<Vec<IdentRun>>>,
+}
+
+impl Ord for ParsedVersion {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.triple
+            .cmp(&other.triple)
+            .then_with(|| match (&self.pre, &other.pre) {
+                (None, None) => std::cmp::Ordering::Equal,
+                (None, Some(_)) => std::cmp::Ordering::Greater,
+                (Some(_), None) => std::cmp::Ordering::Less,
+                (Some(a), Some(b)) => a.cmp(b),
+            })
+    }
+}
+
+impl PartialOrd for ParsedVersion {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+/// One maximal digit or non-digit run of a prerelease identifier.
+/// Digit runs sort below text runs (semver's numeric-below-alphanumeric
+/// rule) and hold their digits with leading zeros stripped, so numeric
+/// order is (length, then lexicographic) without any integer-width
+/// limit.
+#[derive(Debug, PartialEq, Eq)]
+enum IdentRun {
+    Num(String),
+    Text(String),
+}
+
+impl IdentRun {
+    fn num(digits: &str) -> Self {
+        let trimmed = digits.trim_start_matches('0');
+        let canonical = if trimmed.is_empty() { "0" } else { trimmed };
+        IdentRun::Num(canonical.to_string())
+    }
+}
+
+impl Ord for IdentRun {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        match (self, other) {
+            (IdentRun::Num(a), IdentRun::Num(b)) => a.len().cmp(&b.len()).then_with(|| a.cmp(b)),
+            (IdentRun::Num(_), IdentRun::Text(_)) => std::cmp::Ordering::Less,
+            (IdentRun::Text(_), IdentRun::Num(_)) => std::cmp::Ordering::Greater,
+            (IdentRun::Text(a), IdentRun::Text(b)) => a.cmp(b),
+        }
+    }
+}
+
+impl PartialOrd for IdentRun {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+fn identifier_runs(ident: &str) -> Vec<IdentRun> {
+    let mut runs = Vec::new();
+    let bytes = ident.as_bytes();
+    let mut start = 0;
+    while start < bytes.len() {
+        let digits = bytes[start].is_ascii_digit();
+        let mut end = start + 1;
+        while end < bytes.len() && bytes[end].is_ascii_digit() == digits {
+            end += 1;
+        }
+        let run = &ident[start..end];
+        runs.push(if digits {
+            IdentRun::num(run)
+        } else {
+            IdentRun::Text(run.to_string())
+        });
+        start = end;
+    }
+    runs
+}
+
+fn parse_semver(s: &str) -> Option<ParsedVersion> {
     let s = s.trim().strip_prefix('v').unwrap_or(s.trim());
-    let mut parts = s.split('.');
+    let (triple_raw, pre_raw) = match s.split_once('-') {
+        Some((triple, pre)) => (triple, Some(pre)),
+        None => (s, None),
+    };
+    let mut parts = triple_raw.split('.');
     let major: u32 = parts.next()?.parse().ok()?;
     let minor: u32 = parts.next()?.parse().ok()?;
     let patch_raw = parts.next()?;
@@ -224,11 +349,30 @@ fn parse_semver(s: &str) -> Option<(u32, u32, u32)> {
         return None;
     }
     let patch: u32 = patch_raw.parse().ok()?;
-    Some((major, minor, patch))
+    let pre = match pre_raw {
+        Some(pre) => {
+            if pre.is_empty()
+                || !pre.split('.').all(|ident| {
+                    !ident.is_empty()
+                        && ident.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+                })
+            {
+                return None;
+            }
+            Some(pre.split('.').map(identifier_runs).collect())
+        }
+        None => None,
+    };
+    Some(ParsedVersion {
+        triple: (major, minor, patch),
+        pre,
+    })
 }
 
 /// `true` iff `latest` parses strictly greater than `current`.
-/// Unparseable inputs are treated as "not newer".
+/// Unparseable inputs are treated as "not newer". Prereleases order
+/// per [`ParsedVersion`]: 0.60.0-rc1 is newer than 0.59.1 but older
+/// than 0.60.0.
 pub fn semver_newer(latest: &str, current: &str) -> bool {
     match (parse_semver(latest), parse_semver(current)) {
         (Some(l), Some(c)) => l > c,
@@ -953,6 +1097,42 @@ mod tests {
     }
 
     #[test]
+    fn test_semver_newer_orders_prereleases() {
+        // A prerelease is newer than every lower triple...
+        assert!(semver_newer("0.60.0-rc1", "0.59.1"));
+        // ...older than its own release triple...
+        assert!(semver_newer("0.60.0", "0.60.0-rc1"));
+        assert!(!semver_newer("0.60.0-rc1", "0.60.0"));
+        // ...and equal prereleases are not newer either way.
+        assert!(!semver_newer("0.60.0-rc1", "0.60.0-rc1"));
+        // Within one triple, rcN ranks numerically, including rc10 > rc2.
+        assert!(semver_newer("0.60.0-rc2", "0.60.0-rc1"));
+        assert!(semver_newer("0.60.0-rc10", "0.60.0-rc2"));
+        assert!(!semver_newer("0.60.0-rc2", "0.60.0-rc10"));
+        // An identifier that extends another sorts after it.
+        assert!(semver_newer("0.60.0-rc1.hotfix", "0.60.0-rc1"));
+        // Numeric identifiers sort below alphanumeric ones.
+        assert!(semver_newer("0.60.0-rc1", "0.60.0-1"));
+        // Garbage prerelease suffixes stay "not newer" in either slot.
+        assert!(!semver_newer("0.60.0-", "0.59.1"));
+        assert!(!semver_newer("0.60.0-rc..1", "0.59.1"));
+        assert!(!semver_newer("0.60.0", "0.60.0-rc_1"));
+    }
+
+    #[test]
+    fn test_validate_version_accepts_x_y_z_and_prerelease() {
+        assert!(validate_version("0.60.0").is_ok());
+        assert!(validate_version("0.60.0-rc1").is_ok());
+        assert!(validate_version("0.60.0-rc1.hotfix-2").is_ok());
+        assert!(validate_version("0.60").is_err());
+        assert!(validate_version("0.60.0.1").is_err());
+        assert!(validate_version("0.60.0-").is_err());
+        assert!(validate_version("0.60.0-rc..1").is_err());
+        assert!(validate_version("0.60.0-rc_1").is_err());
+        assert!(validate_version("0.60.0-rc1+build").is_err());
+    }
+
+    #[test]
     fn test_normalize_sha256() {
         assert_eq!(
             normalize_sha256(
@@ -985,7 +1165,15 @@ mod tests {
         );
         assert!(release_from_tag("0.14.0").is_err());
         assert!(release_from_tag("v0.14").is_err());
-        assert!(release_from_tag("v0.14.0-alpha").is_err());
+        // Prerelease tags are the shape the pipeline mints for an rc.
+        let rc = release_from_tag("v0.60.0-rc1").unwrap();
+        assert_eq!(
+            rc,
+            ReleaseVersion {
+                tag: "v0.60.0-rc1".into(),
+                version: "0.60.0-rc1".into(),
+            }
+        );
     }
 
     #[test]
@@ -1000,7 +1188,15 @@ mod tests {
         );
         assert!(release_from_version_override("v0.14.0").is_err());
         assert!(release_from_version_override("0.14").is_err());
-        assert!(release_from_version_override("0.14.0-alpha").is_err());
+        // `chan upgrade --version 0.60.0-rc2` must be expressible.
+        let rc = release_from_version_override("0.60.0-rc2").unwrap();
+        assert_eq!(
+            rc,
+            ReleaseVersion {
+                tag: "v0.60.0-rc2".into(),
+                version: "0.60.0-rc2".into(),
+            }
+        );
     }
 
     #[test]
