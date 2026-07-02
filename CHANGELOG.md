@@ -4,6 +4,30 @@ All notable changes to this project will be documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+Two themes: interactive Excalidraw whiteboard tabs in the workspace app, and desktop-PWA plus leader/follower session integration for the launcher and multi-window sessions.
+
+### Added
+
+- **Interactive Excalidraw whiteboard tabs.** An `.excalidraw` file opens as an editable [Excalidraw](https://excalidraw.com) board in the workspace app, alongside the markdown, JSON, and CSV renderers. Draw on the canvas and it autosaves like any file tab; Mod+E flips between the board and its raw scene JSON. Session restore reopens the board, the 409 conflict dialog and the changed-on-disk banner apply unchanged, a theme flip re-themes the live canvas, and Ctrl+D duplicates on the board instead of closing the tab. Excalidraw and its React runtime are dynamic-imported, so the board stays out of the eager editor bundle. Creating a board works too: `.excalidraw` joins the editable-text set the workspace write gate accepts.
+- **Installable launcher PWA.** The launcher serves a web app manifest at `/manifest.webmanifest` (root scope) with maskable app icons and a themed titlebar, so it installs as an app from the fixed-port devserver loopback and the https gateway origin. There is no service worker, and the workspace-app shell carries no manifest link, so an installed app captures the launcher and not any single workspace.
+- **Leader/follower session windows.** A self-managed launcher (devserver or PWA) opens its own in-app browser windows and gates window creation on per-tenant leadership: the window that leads a workspace manages that workspace's windows, and a follower launcher sees the create controls disabled. The workspace status bar shows this window's session role whenever more than one window shares a session. When the leader closes or hides a window, that window shows a "closed by the leader" or "hidden by the leader" overlay instead of sitting stale.
+- **Desktop "Open in Browser".** A Window-menu item opens the focused workspace window in the system browser through a browser-affinity window record, so chan-desktop never opens a native twin for it.
+
+### Changed
+
+- **Launcher capabilities are split by serving surface.** A `chan-launcher-surface` descriptor (desktop, devserver, or readonly) replaces the single read-only boolean and splits registry mutation, the desktop bridge, and self-managed windows, so a bridgeless local devserver is fully usable instead of forced read-only. Desktop and gateway surfaces behave exactly as before.
+- **`/ws` sends a session roster snapshot on connect.** Every socket, tagged or untagged, receives the current roster the moment it connects, fixing a reload overlap where a reconnecting window sat on an empty roster until an unrelated change. A window's session role is now correct immediately after a reload.
+- **Window mint, close, and visibility are leader-gated per tenant.** On a self-managed surface, only a tenant's leader (or a leaderless tenant) may mint, delete, or change the visibility of a window, and a mismatching claim against a live leader is refused. This is honest-client enforcement, not a security boundary: the acting window id is client-claimed behind the shared launcher bearer, so it double-enforces a UI affordance rather than establishing trust. The desktop launcher, which sends no acting id, is never blocked.
+- **Browser-minted windows stay in the browser.** Each window record carries a client origin, native or browser, and chan-desktop's watcher opens only native records, so a window minted from a browser never gets a native twin (on both the local and the devserver watcher).
+
+### Fixed
+
+- **The excalidraw fence renderer self-hosts its fonts.** The `mermaid-to-excalidraw` diagram renderer fetched its label fonts from the esm.sh CDN at render time, so diagram text degraded silently offline and on chan-desktop. The fonts now ship in the bundle and load locally, composed prefix-aware for served workspaces and desktop windows. The 12.7 MB CJK family is excluded, so CJK boards still fall back to the CDN.
+- **A follower window no longer deletes the session's layout.** On the web, a follower emptying or unloading its view no longer removes the session's persisted layout blob, which belongs to the leader. A solo web window and every desktop window still manage their own.
+- **The marketing launcher demo no longer opens the workspace overlay.** The embedded launcher mock keeps rendering, but its window tiles no longer open the non-public workspace demo overlay.
+
 ## [v0.60.0] - 2026-07-02
 
 The axum 0.8 migration release: both Cargo workspaces (the root workspace behind chan-server, chan-library, and the tunnel crates, plus the gateway services) move from axum 0.7.9 to 0.8.9, carrying tower-sessions 0.14, tokio-tungstenite 0.29, and a dead-dependency drop with them. Behavior is preserved and pinned by routing tests on both framework versions. The `v0.60.0-rc1` smoke surfaced one bug, fixed here: `chan upgrade` now understands prerelease versions.
