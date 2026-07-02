@@ -16,13 +16,13 @@ describe("server-restart auto-reload", () => {
     );
   });
 
-  test("a changed instance reloads the window; the first read only seeds", () => {
+  test("a changed instance reloads the window (unless a leader teardown overlay shows); the first read only seeds", () => {
     expect(src).toContain("const instance = (await api.health()).instance?.trim()");
     expect(src).toMatch(
       /if \(serverInstance === null\) \{ serverInstance = instance; return; \}/,
     );
     expect(src).toMatch(
-      /if \(serverInstance !== instance\) \{ window\.location\.reload\(\); \}/,
+      /if \(serverInstance !== instance\) \{.*?if \(isWindowEnded\(\)\) return; window\.location\.reload\(\);/,
     );
   });
 });
