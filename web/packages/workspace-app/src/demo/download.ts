@@ -9,8 +9,8 @@
 // (the fence keeps it monospace; a plain ASCII grid comes out 2:1 and will not
 // scan). On a light background it reads normally; a dark background inverts it,
 // which most scanners still accept. To point the QR elsewhere, replace the
-// fenced block with the output of:
-//   qrencode -t UTF8 "https://chan.app"
+// fenced block with the output of (this QR points at the donate link):
+//   qrencode -t UTF8 "https://buymeacoffee.com/fiorix"
 import chanDemoMd from "./chan-demo.md?raw";
 
 export const CHAN_DEMO_MD = chanDemoMd;
