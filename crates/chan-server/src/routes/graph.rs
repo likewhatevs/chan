@@ -10,7 +10,7 @@
 //! The graph endpoints (links / graph / backlinks) walk chan-workspace's
 //! per-file accessors and stitch them into the unified `{ nodes,
 //! edges }` shape the frontend visualization expects. `/api/graph`
-//! and `/api/backlinks/*path` also expose `?stream=1` NDJSON forms
+//! and `/api/backlinks/{*path}` also expose `?stream=1` NDJSON forms
 //! so the UI can render partial relationship data while the full
 //! graph is still being composed.
 

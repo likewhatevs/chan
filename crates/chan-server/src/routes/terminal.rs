@@ -463,7 +463,7 @@ pub struct SetBroadcastBody {
     on: bool,
 }
 
-/// `POST /api/terminals/:session/broadcast`: set a terminal's broadcast
+/// `POST /api/terminals/{session}/broadcast`: set a terminal's broadcast
 /// toggle from ANOTHER window. The broadcast state is owned by the SPA window
 /// hosting the session (its tab drives the `set-broadcast` WS frame), so this
 /// does not flip the flag directly; it routes a `terminal_broadcast`
@@ -769,7 +769,7 @@ async fn terminal_ws(mut socket: WebSocket, state: Arc<AppState>, opts: Terminal
             event = session.rx.recv() => {
                 match event {
                     Ok(SessionEvent::Output(data)) => {
-                        if socket.send(Message::Binary(data)).await.is_err() {
+                        if socket.send(Message::binary(data)).await.is_err() {
                             break;
                         }
                         state.last_activity.store(now_unix_secs(), Ordering::Relaxed);
@@ -821,7 +821,7 @@ async fn terminal_ws(mut socket: WebSocket, state: Arc<AppState>, opts: Terminal
                             Some(next) => {
                                 session = next;
                                 if socket
-                                    .send(Message::Binary(RESET_TERMINAL.to_vec()))
+                                    .send(Message::binary(RESET_TERMINAL))
                                     .await
                                     .is_err()
                                 {
@@ -883,13 +883,13 @@ async fn send_attach_prelude(
         return Err(());
     }
     for chunk in &session.replay {
-        if socket.send(Message::Binary(chunk.clone())).await.is_err() {
+        if socket.send(Message::binary(chunk.clone())).await.is_err() {
             return Err(());
         }
     }
     if session.alt_screen
         && socket
-            .send(Message::Binary(ALT_SCREEN_ATTACH_PRELUDE.to_vec()))
+            .send(Message::binary(ALT_SCREEN_ATTACH_PRELUDE))
             .await
             .is_err()
     {
@@ -904,7 +904,7 @@ async fn send_attach_prelude(
     // (the repaint then lands with the modes already set).
     if !session.mode_reassert.is_empty()
         && socket
-            .send(Message::Binary(session.mode_reassert.clone()))
+            .send(Message::binary(session.mode_reassert.clone()))
             .await
             .is_err()
     {
@@ -934,7 +934,7 @@ async fn send_attach_prelude(
 
 async fn send_frame(socket: &mut WebSocket, frame: ServerFrame) -> Result<(), axum::Error> {
     socket
-        .send(Message::Text(serde_json::to_string(&frame).unwrap_or_else(
+        .send(Message::text(serde_json::to_string(&frame).unwrap_or_else(
             |e| format!(r#"{{"type":"error","message":"serialize failed: {e}"}}"#),
         )))
         .await

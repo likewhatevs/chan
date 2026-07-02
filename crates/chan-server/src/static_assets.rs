@@ -274,7 +274,7 @@ pub fn content_type_for(path: &str) -> &'static str {
 
 /// Serve a bundled font asset under `/static/fonts/<name>`.
 /// Path traversal is impossible because the
-/// inner `name` is matched as a single segment by axum's `:name`
+/// inner `name` is matched as a single segment by axum's `{name}`
 /// pattern (no `/` allowed); we still reject anything that isn't a
 /// known embed entry rather than papering over with a generic 200.
 /// The `immutable` cache-control mirrors the SPA's hashed-asset
@@ -286,7 +286,7 @@ pub async fn serve_font(Path(name): Path<String>) -> Response {
     // fall back to a user-config-dir copy. The fallback lets the
     // Settings-driven download persist a woff2 to a
     // known location without rebuilding the binary. Path
-    // traversal stays impossible because axum's `:name` matches a
+    // traversal stays impossible because axum's `{name}` matches a
     // single segment; we additionally restrict the filesystem
     // probe to a known directory + reject any name containing a
     // `/` defensively.
@@ -480,7 +480,7 @@ mod tests {
     async fn serve_font_rejects_path_traversal_attempts() {
         // The filesystem-fallback path
         // could otherwise read arbitrary files via `..`-style names
-        // (axum's `:name` match shouldn't allow `/` but
+        // (axum's `{name}` match shouldn't allow `/` but
         // belt-and-braces). Reject `/`, `\`, and leading-dot names.
         for name in ["../etc/passwd", ".hidden", "fonts/x"] {
             let response = serve_font(Path(name.into())).await;

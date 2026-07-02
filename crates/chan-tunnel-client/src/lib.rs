@@ -424,7 +424,7 @@ async fn serve_one_substream(stream: yamux::Stream, router: axum::Router) {
     let io = TokioIo::new(stream.compat());
     // The router takes Request<axum::body::Body>; hyper hands us
     // Request<hyper::body::Incoming>. Wrap the incoming body into
-    // axum's so we can call the router. axum 0.7's serve helper
+    // axum's so we can call the router. axum's serve helper
     // does the same internally.
     let service = tower::service_fn(move |req: http::Request<hyper::body::Incoming>| {
         let router = router.clone();

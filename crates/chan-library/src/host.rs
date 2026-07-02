@@ -2169,7 +2169,7 @@ impl HostControl for WorkspaceHost {
 
 async fn host_dispatch(State(host): State<Arc<WorkspaceHost>>, req: Request<Body>) -> Response {
     // Tenant-root trailing-slash canonicalization. A tenant nests at its prefix
-    // (`Router::new().nest("/{prefix}", inner)`), and axum's nest serves
+    // (`Router::new().nest(prefix, inner)`), and axum's nest serves
     // `/{prefix}` and `/{prefix}/<rest>` but 404s the EXACT `/{prefix}/`. The
     // canonical public URL is `/{prefix}/` (the SPA's vite `base: "./"` resolves
     // its relative asset URLs against the document path, so it must end in `/`

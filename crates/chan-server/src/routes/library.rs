@@ -98,15 +98,15 @@ pub fn launcher_router(
             get(handle_watch_library_windows),
         )
         .route(
-            "/api/library/windows/:window_id",
+            "/api/library/windows/{window_id}",
             delete(handle_discard_library_window),
         )
         .route(
-            "/api/library/windows/:window_id/open",
+            "/api/library/windows/{window_id}/open",
             post(handle_open_library_window),
         )
         .route(
-            "/api/library/windows/:window_id/hide",
+            "/api/library/windows/{window_id}/hide",
             post(handle_hide_library_window),
         )
         // SET the server-persisted visibility (the durable source of
@@ -114,7 +114,7 @@ pub fn launcher_router(
         // above, which dispatch a desktop-bridge op on the NATIVE window and do
         // NOT persist.
         .route(
-            "/api/library/windows/:window_id/visibility",
+            "/api/library/windows/{window_id}/visibility",
             post(handle_set_library_window_visibility),
         )
         // Devserver connect is a desktop-bridge dispatch (like window open/hide),
@@ -122,35 +122,35 @@ pub fn launcher_router(
         // than the `LauncherState` devservers block. No `require_mutable` gate:
         // a surface with no desktop bridge answers `NO_DESKTOP`/409 on its own.
         .route(
-            "/api/library/devservers/:id/connect",
+            "/api/library/devservers/{id}/connect",
             post(handle_connect_devserver),
         )
         // The connected-devserver bridge ops mirror connect: a desktop drains
         // them, a desktop-less surface answers NO_DESKTOP/409. Only the slash-free
-        // devserver `:id` is in the path; the workspace `prefix`/`path` ride the
+        // devserver `{id}` is in the path; the workspace `prefix`/`path` ride the
         // JSON body (a structured prefix in a path segment is proxy-fragile).
         .route(
-            "/api/library/devservers/:id/disconnect",
+            "/api/library/devservers/{id}/disconnect",
             post(handle_disconnect_devserver),
         )
         .route(
-            "/api/library/devservers/:id/terminal",
+            "/api/library/devservers/{id}/terminal",
             post(handle_devserver_terminal),
         )
         .route(
-            "/api/library/devservers/:id/workspaces/open",
+            "/api/library/devservers/{id}/workspaces/open",
             post(handle_open_devserver_workspace),
         )
         .route(
-            "/api/library/devservers/:id/workspaces/on",
+            "/api/library/devservers/{id}/workspaces/on",
             post(handle_devserver_workspace_on),
         )
         .route(
-            "/api/library/devservers/:id/workspaces/off",
+            "/api/library/devservers/{id}/workspaces/off",
             post(handle_devserver_workspace_off),
         )
         .route(
-            "/api/library/devservers/:id/workspaces/forget",
+            "/api/library/devservers/{id}/workspaces/forget",
             post(handle_forget_devserver_workspace),
         )
         // Native folder picker — another desktop-bridge dispatch (the launcher's
@@ -165,13 +165,13 @@ pub fn launcher_router(
             "/api/library/workspaces",
             get(handle_list_workspaces).post(handle_add_workspace),
         )
-        .route("/api/library/workspaces/:id/on", post(handle_workspace_on))
+        .route("/api/library/workspaces/{id}/on", post(handle_workspace_on))
         .route(
-            "/api/library/workspaces/:id/off",
+            "/api/library/workspaces/{id}/off",
             post(handle_workspace_off),
         )
         .route(
-            "/api/library/workspaces/:id",
+            "/api/library/workspaces/{id}",
             delete(handle_remove_workspace),
         )
         .with_state(Arc::new(LauncherState {
@@ -210,7 +210,7 @@ pub fn launcher_router(
             get(handle_list_devservers).post(handle_add_devserver),
         )
         .route(
-            "/api/library/devservers/:id",
+            "/api/library/devservers/{id}",
             put(handle_update_devserver).delete(handle_remove_devserver),
         )
         .with_state(Arc::new(LauncherState { host, serve_addr }));
@@ -375,7 +375,7 @@ async fn watch_library_windows(mut socket: WebSocket, host: Arc<WorkspaceHost>) 
             Ok(frame) => frame,
             Err(_) => break,
         };
-        if socket.send(Message::Text(frame)).await.is_err() {
+        if socket.send(Message::text(frame)).await.is_err() {
             break; // the client is gone
         }
         tokio::select! {
@@ -1150,7 +1150,7 @@ async fn watch_local_color(mut socket: WebSocket, state: Arc<LauncherState>) {
             Ok(frame) => frame,
             Err(_) => break,
         };
-        if socket.send(Message::Text(frame)).await.is_err() {
+        if socket.send(Message::text(frame)).await.is_err() {
             break; // the client is gone
         }
         tokio::select! {

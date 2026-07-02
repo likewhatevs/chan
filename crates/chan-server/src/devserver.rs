@@ -943,7 +943,7 @@ fn build_devserver_app(state: Arc<DevserverState>, host: Arc<WorkspaceHost>) -> 
             get(handle_list).post(handle_open),
         )
         .route(
-            "/api/devserver/workspaces/*prefix",
+            "/api/devserver/workspaces/{*prefix}",
             delete(handle_forget).post(handle_set_workspace_on),
         )
         .route("/api/devserver/windows", get(handle_list_windows))
