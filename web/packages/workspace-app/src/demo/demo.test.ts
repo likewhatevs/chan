@@ -1,0 +1,359 @@
+import { describe, expect, test } from "vitest";
+import type {
+  FileResponse,
+  GraphView,
+  MoveResponse,
+  TreeEntry,
+  WorkspaceInfo,
+} from "../api/types";
+import type { MockWorkspaceData } from "./data";
+import { DemoGraph, parseMarkdown } from "./graph";
+import { createDemoFetch } from "./router";
+import { MockWorkspaceStore } from "./store";
+
+const A_MD = [
+  "# Alpha",
+  "",
+  "See [[README]] and [design](../design.md#goals) plus [[missing-note]].",
+  "Tagged #demo and #web/ui, mentions @@Alex.",
+  "",
+  "## Usage",
+  "```",
+  "#not-a-tag [[not-a-link]]",
+  "```",
+].join("\n");
+
+function fixture(): MockWorkspaceData {
+  return {
+    metadata: {
+      workspaceRoot: "demo",
+      label: "demo",
+      generatedAt: 1_700_000_000_000,
+      fileCount: 4,
+      textCount: 4,
+    },
+    files: [
+      { path: "README.md", kind: "document", size: 5, mtime: 100, content: "hello" },
+      { path: "design.md", kind: "document", size: 5, mtime: 100, content: "specs" },
+      { path: "docs/a.md", kind: "document", size: A_MD.length, mtime: 100, content: A_MD },
+      { path: "src/main.rs", kind: "text", size: 4, mtime: 100, content: "fn()" },
+    ],
+  };
+}
+
+function demoFetch(store: MockWorkspaceStore) {
+  return createDemoFetch(store, new DemoGraph(store));
+}
+
+describe("MockWorkspaceStore", () => {
+  test("lists root: directories first, then files, sorted", () => {
+    const s = new MockWorkspaceStore(fixture());
+    const names = s.list("").map((e: TreeEntry) => `${e.is_dir ? "d:" : "f:"}${e.path}`);
+    expect(names).toEqual(["d:docs", "d:src", "f:design.md", "f:README.md"]);
+  });
+
+  test("lists a subdirectory", () => {
+    const s = new MockWorkspaceStore(fixture());
+    expect(s.list("docs").map((e) => e.path)).toEqual(["docs/a.md"]);
+  });
+
+  test("reads a file and returns null for missing", () => {
+    const s = new MockWorkspaceStore(fixture());
+    expect(s.read("README.md")?.content).toBe("hello");
+    expect(s.read("nope.md")).toBeNull();
+  });
+
+  test("write is in-memory and readable back", () => {
+    const s = new MockWorkspaceStore(fixture());
+    s.write("README.md", "changed");
+    expect(s.read("README.md")?.content).toBe("changed");
+  });
+
+  test("create adds a new file that lists and reads", () => {
+    const s = new MockWorkspaceStore(fixture());
+    s.create("docs/new.md", false, "n");
+    expect(s.list("docs").map((e) => e.path).sort()).toEqual(["docs/a.md", "docs/new.md"]);
+    expect(s.read("docs/new.md")?.content).toBe("n");
+  });
+
+  test("remove drops a file", () => {
+    const s = new MockWorkspaceStore(fixture());
+    s.remove("docs/a.md");
+    expect(s.read("docs/a.md")).toBeNull();
+    expect(s.list("").some((e) => e.path === "docs")).toBe(false);
+  });
+
+  test("move renames a file and reports it", () => {
+    const s = new MockWorkspaceStore(fixture());
+    const res: MoveResponse = s.move("README.md", "READ.md");
+    expect(res.renamed).toEqual([["README.md", "READ.md"]]);
+    expect(s.read("READ.md")?.content).toBe("hello");
+    expect(s.read("README.md")).toBeNull();
+  });
+
+  test("move renames a whole directory subtree", () => {
+    const s = new MockWorkspaceStore(fixture());
+    s.move("docs", "documentation");
+    expect(s.read("documentation/a.md")?.content).toBe(A_MD);
+    expect(s.read("docs/a.md")).toBeNull();
+  });
+
+  test("session is in-memory per window", () => {
+    const s = new MockWorkspaceStore(fixture());
+    expect(s.getSession("w1")).toBeNull();
+    s.putSession("w1", { layout: 1 });
+    expect(s.getSession("w1")).toEqual({ layout: 1 });
+    s.deleteSession("w1");
+    expect(s.getSession("w1")).toBeNull();
+  });
+});
+
+describe("createDemoFetch router", () => {
+  const store = () => new MockWorkspaceStore(fixture());
+
+  test("GET /api/workspace returns WorkspaceInfo with demo preferences", async () => {
+    const f = demoFetch(store());
+    const info = (await (await f("/api/workspace")).json()) as WorkspaceInfo;
+    expect(info.root).toBe("demo");
+    expect(info.drafts_dir).toBe(".Drafts");
+    expect(info.preferences.terminal.default_term).toBe("xterm-256color");
+  });
+
+  test("GET /api/config then PATCH round-trips a preference", async () => {
+    const f = demoFetch(store());
+    const cfg = (await (await f("/api/config")).json()) as { preferences: { theme: string } };
+    const next = { ...cfg, preferences: { ...cfg.preferences, theme: "light" } };
+    const patched = (await (
+      await f("/api/config", { method: "PATCH", body: JSON.stringify(next) })
+    ).json()) as { preferences: { theme: string } };
+    expect(patched.preferences.theme).toBe("light");
+  });
+
+  test("GET /api/files lists root and ?dir lists a subdir", async () => {
+    const f = demoFetch(store());
+    const root = (await (await f("/api/files")).json()) as TreeEntry[];
+    expect(root.map((e) => e.path)).toContain("README.md");
+    const docs = (await (await f("/api/files?dir=docs")).json()) as TreeEntry[];
+    expect(docs.map((e) => e.path)).toEqual(["docs/a.md"]);
+  });
+
+  test("GET /api/files/<path> reads content; missing is 404", async () => {
+    const f = demoFetch(store());
+    const ok = await f("/api/files/README.md");
+    expect(ok.status).toBe(200);
+    expect(((await ok.json()) as FileResponse).content).toBe("hello");
+    expect((await f("/api/files/missing.md")).status).toBe(404);
+  });
+
+  test("PUT /api/files/<path> writes and DELETE removes", async () => {
+    const st = store();
+    const f = demoFetch(st);
+    await f("/api/files/README.md", { method: "PUT", body: JSON.stringify({ content: "x" }) });
+    expect(st.read("README.md")?.content).toBe("x");
+    const del = await f("/api/files/README.md", { method: "DELETE" });
+    expect(del.status).toBe(204);
+    expect(st.read("README.md")).toBeNull();
+  });
+
+  test("streaming read emits meta/chunk/done NDJSON", async () => {
+    const f = demoFetch(store());
+    const body = await (await f("/api/files/README.md?stream=1")).text();
+    const events = body.trim().split("\n").map((l) => JSON.parse(l));
+    expect(events.map((e) => e.type)).toEqual(["meta", "chunk", "done"]);
+    expect(events[1].content).toBe("hello");
+  });
+
+  test("GET /api/session is 204 until PUT, then returns the payload", async () => {
+    const f = demoFetch(store());
+    expect((await f("/api/session?w=default")).status).toBe(204);
+    await f("/api/session?w=default", { method: "PUT", body: JSON.stringify({ a: 1 }) });
+    expect(await (await f("/api/session?w=default")).json()).toEqual({ a: 1 });
+  });
+
+  test("POST /api/drafts/new creates a draft file", async () => {
+    const st = store();
+    const f = demoFetch(st);
+    const draft = (await (await f("/api/drafts/new", { method: "POST" })).json()) as {
+      path: string;
+      name: string;
+    };
+    expect(draft.path).toBe(".Drafts/untitled-1/draft.md");
+    expect(st.read(draft.path)).not.toBeNull();
+  });
+
+  test("unhandled GET path is 404", async () => {
+    const f = demoFetch(store());
+    expect((await f("/api/nope")).status).toBe(404);
+  });
+});
+
+describe("parseMarkdown", () => {
+  test("extracts wiki links, md links, tags, mentions, headings", () => {
+    const idx = parseMarkdown(A_MD);
+    expect(idx.links).toEqual([
+      { target: "README", anchor: null, wiki: true },
+      { target: "missing-note", anchor: null, wiki: true },
+      { target: "../design.md", anchor: "goals", wiki: false },
+    ]);
+    expect(idx.tags.sort()).toEqual(["demo", "web/ui"]);
+    expect(idx.mentions).toEqual(["Alex"]);
+    expect(idx.headings).toEqual([
+      { level: 1, text: "Alpha", anchor: "alpha", ord: 0 },
+      { level: 2, text: "Usage", anchor: "usage", ord: 1 },
+    ]);
+  });
+
+  test("code blocks produce no tags or links", () => {
+    const idx = parseMarkdown("```\n#tag [[link]]\n```\nand `#inline [[x]]` code");
+    expect(idx.tags).toEqual([]);
+    expect(idx.links).toEqual([]);
+  });
+});
+
+describe("DemoGraph", () => {
+  const build = () => {
+    const s = new MockWorkspaceStore(fixture());
+    return { s, g: new DemoGraph(s) };
+  };
+
+  test("view has file nodes per document plus tag/mention/ghost nodes", () => {
+    const { g } = build();
+    const view = g.view();
+    const byId = new Map(view.nodes.map((n) => [n.id, n]));
+    expect(byId.get("README.md")?.kind).toBe("file");
+    expect(byId.get("docs/a.md")?.kind).toBe("file");
+    expect(byId.get("#demo")?.kind).toBe("tag");
+    expect(byId.get("@@Alex")?.kind).toBe("mention");
+    const ghost = byId.get("docs/missing-note.md");
+    expect(ghost?.kind).toBe("file");
+    expect((ghost as { missing?: boolean }).missing).toBe(true);
+  });
+
+  test("view includes the filesystem spine: root, directories, all files", () => {
+    const { g } = build();
+    const view = g.view();
+    const byId = new Map(view.nodes.map((n) => [n.id, n]));
+    const root = byId.get("");
+    expect(root).toMatchObject({ kind: "directory", label: "/", path: "" });
+    expect(byId.get("directory:docs")?.kind).toBe("directory");
+    expect(byId.get("src/main.rs")?.kind).toBe("file");
+    const contains = view.edges.filter((e) => e.kind === "contains");
+    expect(contains).toContainEqual({ source: "", target: "directory:docs", kind: "contains" });
+    expect(contains).toContainEqual({ source: "directory:docs", target: "docs/a.md", kind: "contains" });
+    expect(contains).toContainEqual({ source: "", target: "README.md", kind: "contains" });
+  });
+
+  test("wiki basename resolution links docs/a.md to root README.md", () => {
+    const { g } = build();
+    const edges = g.view().edges.filter((e) => e.source === "docs/a.md" && e.kind === "link");
+    const targets = edges.map((e) => e.target).sort();
+    expect(targets).toEqual(["README.md", "design.md", "docs/missing-note.md"]);
+    const broken = edges.filter((e) => e.broken).map((e) => e.target);
+    expect(broken).toEqual(["docs/missing-note.md"]);
+  });
+
+  test("backlinks returns incoming raw edges with anchors", () => {
+    const { g } = build();
+    expect(g.backlinks("README.md")).toEqual([
+      { src: "docs/a.md", dst: "README.md", kind: "link", anchor: null },
+    ]);
+    expect(g.backlinks("design.md")).toEqual([
+      { src: "docs/a.md", dst: "design.md", kind: "link", anchor: "goals" },
+    ]);
+  });
+
+  test("indexFile after a write reshapes the graph", () => {
+    const { s, g } = build();
+    s.write("README.md", "now links [[design]] and #fresh");
+    g.indexFile("README.md", "now links [[design]] and #fresh");
+    const edges = g.view().edges.filter((e) => e.source === "README.md");
+    expect(edges.map((e) => `${e.kind}:${e.target}`).sort()).toEqual([
+      "link:design.md",
+      "tag:#fresh",
+    ]);
+  });
+});
+
+describe("graph endpoints", () => {
+  test("GET /api/graph returns the view; ?stream=1 frames NDJSON events", async () => {
+    const st = new MockWorkspaceStore(fixture());
+    const f = createDemoFetch(st, new DemoGraph(st));
+    const view = (await (await f("/api/graph")).json()) as GraphView;
+    expect(view.nodes.length).toBeGreaterThan(3);
+    const body = await (await f("/api/graph?stream=1")).text();
+    const events = body.trim().split("\n").map((l) => JSON.parse(l));
+    expect(events.map((e) => e.type)).toEqual(["meta", "nodes", "edges", "done"]);
+    expect(events[0]).toMatchObject({ scope: "workspace", path: "", depth: 6 });
+    expect(events[1].nodes.length).toBe(view.nodes.length);
+  });
+
+  test("backlinks stream frames meta/edge/done", async () => {
+    const st = new MockWorkspaceStore(fixture());
+    const f = createDemoFetch(st, new DemoGraph(st));
+    const body = await (await f("/api/backlinks/README.md?stream=1")).text();
+    const events = body.trim().split("\n").map((l) => JSON.parse(l));
+    expect(events.map((e) => e.type)).toEqual(["meta", "edge", "done"]);
+    expect(events[1].edge.src).toBe("docs/a.md");
+  });
+
+  test("headings endpoint serves the outline", async () => {
+    const st = new MockWorkspaceStore(fixture());
+    const f = createDemoFetch(st, new DemoGraph(st));
+    const rows = (await (await f("/api/headings/docs/a.md")).json()) as Array<{ text: string }>;
+    expect(rows.map((r) => r.text)).toEqual(["Alpha", "Usage"]);
+  });
+
+  test("resolve-link resolves wiki targets and 404s broken ones", async () => {
+    const st = new MockWorkspaceStore(fixture());
+    const f = createDemoFetch(st, new DemoGraph(st));
+    const ok = (await (await f("/api/resolve-link?target=README")).json()) as { path: string };
+    expect(ok.path).toBe("README.md");
+    expect((await f("/api/resolve-link?target=nope-note")).status).toBe(404);
+  });
+});
+
+describe("search endpoints", () => {
+  const setup = () => {
+    const st = new MockWorkspaceStore(fixture());
+    return createDemoFetch(st, new DemoGraph(st));
+  };
+
+  test("search/files ranks basename matches first", async () => {
+    const f = setup();
+    const hits = (await (await f("/api/search/files?q=read&limit=5")).json()) as Array<{
+      path: string;
+    }>;
+    expect(hits[0].path).toBe("README.md");
+  });
+
+  test("link-targets returns File and Heading rows", async () => {
+    const f = setup();
+    const rows = (await (await f("/api/link-targets?q=usage&limit=5")).json()) as Array<{
+      kind: string;
+      path: string;
+      heading?: string;
+    }>;
+    expect(rows.some((r) => r.kind === "Heading" && r.heading === "Usage")).toBe(true);
+  });
+
+  test("search/content returns hits with snippet, line, and heading", async () => {
+    const f = setup();
+    const res = (await (await f("/api/search/content?q=tagged&limit=5")).json()) as {
+      ready: boolean;
+      hits: Array<{ path: string; start_line: number; snippet: string; heading: string }>;
+    };
+    expect(res.ready).toBe(true);
+    expect(res.hits[0].path).toBe("docs/a.md");
+    expect(res.hits[0].start_line).toBe(4);
+    expect(res.hits[0].heading).toBe("Alpha");
+    expect(res.hits[0].snippet).toContain("Tagged #demo");
+  });
+
+  test("mentions serves @@ labels from the corpus", async () => {
+    const f = setup();
+    const rows = (await (await f("/api/mentions?q=al&limit=5")).json()) as Array<{
+      label: string;
+    }>;
+    expect(rows).toEqual([{ label: "@@Alex" }]);
+  });
+});
