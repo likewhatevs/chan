@@ -4,7 +4,9 @@ All notable changes to this project will be documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [v0.60.0] - 2026-07-02
+
+The axum 0.8 migration release: both Cargo workspaces (the root workspace behind chan-server, chan-library, and the tunnel crates, plus the gateway services) move from axum 0.7.9 to 0.8.9, carrying tower-sessions 0.14, tokio-tungstenite 0.29, and a dead-dependency drop with them. Behavior is preserved and pinned by routing tests on both framework versions. The `v0.60.0-rc1` smoke surfaced one bug, fixed here: `chan upgrade` now understands prerelease versions.
 
 ### Changed
 

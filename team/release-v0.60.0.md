@@ -1,6 +1,6 @@
 # v0.60.0
 
-The v0.60.0 release report, consolidated from the round's lane journals and task files as the streams landed on `main`. This is the axum 0.8 migration era: both Cargo workspaces moved from axum 0.7 to 0.8.9 in one three-lane round (a lead plus two parallel worker lanes on disjoint trees), to be cut as `v0.60.0-rc1` for a host smoke on chan-desktop and the devserver before GA. ROLLING: this report tracks the round through rc1; the GA outcome and smoke findings land here before the report is final.
+The v0.60.0 release report, consolidated from the round's lane journals and task files as the streams landed on `main`. This is the axum 0.8 migration era: both Cargo workspaces moved from axum 0.7 to 0.8.9 in one three-lane round (a lead plus two parallel worker lanes on disjoint trees), cut as `v0.60.0-rc1` for a host smoke on chan-desktop and the devserver. The smoke found one CLI bug (`chan upgrade` vs prerelease versions), fixed in-round after an adversarial verification pass caught two ordering defects in the first fix; GA `v0.60.0` is being cut with it.
 
 ## Work streams (from `dev/v0.60.0/request.md`, "Axum 0.8 bump")
 
@@ -8,7 +8,8 @@ The v0.60.0 release report, consolidated from the round's lane journals and task
 - [x] Gateway workspace on axum 0.8, coupled with tower-sessions 0.14 + tower-sessions-sqlx-store 0.15 + tokio-tungstenite 0.29, branch `axum08-gateway` (lane: Gateway)
 - [x] Integration: merge order, CHANGELOG reconcile, gateway lock prune, multi-agent seam review (lane: Lead)
 - [x] Full pre-push gate on integrated main (green at b8c1e092 after one integrated-gate catch, below)
-- [ ] `v0.60.0-rc1` cut + host smoke (rolling)
+- [x] `v0.60.0-rc1` cut + host smoke (one finding, below)
+- [x] `chan upgrade` prerelease fix, branch `upgrade-prerelease-fix` (lane: Root, from the rc smoke)
 
 ## Coordination scheme
 
@@ -50,6 +51,12 @@ The integration review ran as a 45-agent workflow: six seam lenses (residual rou
 
 The full `make pre-push` gate caught exactly one thing the own-gate model predicts it will: a cross-language source-pin test (`web/packages/workspace-app/src/terminal/protocol.test.ts` greps the chan-server terminal route's Rust source to pin the PTY-stays-binary invariant) still expected the pre-migration `Message::Binary(...)` variant syntax. The invariant holds in the migrated code; the two patterns were repinned to the constructor form (b8c1e092) and the gate is green across all seven stages: fmt, clippy, workspace tests, no-default-features build, gateway build, web-check (2152 tests), marketing-check.
 
+## The rc window: one finding, fixed in-round
+
+`v0.60.0-rc1` was tagged from the gated tree and published (prerelease-flagged release, docker `latest` withheld; `/dl` latest metadata serves whatever tag was pushed, so the rc rode the live update channel by v0.56.0-rc1 precedent). The host smoke on chan-desktop and the devservers came back clean except one finding: `chan upgrade` on a 0.59.x devserver hard-errored on the rc metadata ("release version patch component must be numeric"). The diagnosis found a worse silent half: `semver_newer` treats unparseable input as "not newer", and an rc binary cannot parse its own version, so rc installs would never have been offered the GA upgrade.
+
+The fix (Root's lane) makes `validate_version`/`parse_semver` prerelease-aware with semver ordering at the triple level and a deliberate, documented deviation inside one identifier so `rc2 < rc10` (strict semver's ASCII compare misorders pipeline-minted `rcN` names). The first fix went through a four-lens adversarial verification that executed the extracted implementation in harnesses; three lenses passed (parser edges, ordering totality over a 283-version corpus, a differential harness proving plain `X.Y.Z` caller flows bit-identical), and one found two real defects: the identifier-level numeric-below-alphanumeric rule was never applied (`0.60.0-2` sorted above `0.60.0-1a`, contradicting the code's own comment, hidden behind a test pinning only the friendly case), and leading-zero identifiers were accepted without a pinning test. Both were fixed by classifying identifiers before comparing (`Identifier::Numeric` below `Alphanumeric`, digit-run comparison retained within alphanumerics), pinned in both directions. Field impact: 0.59.x clients error on `chan upgrade` only while an rc is the latest published tag and heal at GA; the two rc1 smoke devservers need one manual GA install (the rc1 binary cannot see the GA offer); every binary from GA onward handles prerelease windows natively.
+
 ## Request-analysis corrections (for the next pre-round analysis pass)
 
 Three `dev/v0.60.0/request.md` facts were falsified during execution, all from the same pre-round analysis: axum 0.8.9's internal tokio-tungstenite is ^0.29, not 0.26 (true only through 0.8.4); the tower-sessions 0.15 pairing does not exist on crates.io; and one `Option<T>` extractor did exist in the tree. None changed the migration's shape, but all three redirected work mid-round. Verify version-pairing claims against crates.io dependency metadata at execution time, not analysis time.
@@ -61,6 +68,7 @@ What went well:
 - Two lanes on physically disjoint trees (shared checkout + scratch worktree) ran genuinely in parallel with zero staging conflicts; the shared directory never held more than one worker branch.
 - Claim discipline held end to end: every cross-lane redirect was re-verified against primary sources before acting; the lock prune was predicted package-for-package before it was executed; behavior pins ran on both framework versions.
 - Both lanes corrected their own briefs' premises (validators, route inventories, pairing) instead of following them into the weeds, and reported the deviations rather than silently absorbing them.
+- Verification that EXECUTES the code under review beat verification that reads it, twice: the rc-fix defects sat exactly where the author's reviewers had read the ordering code but not run it, and the lock-prune prediction was trusted only after the re-resolve reproduced it package for package.
 
 What slowed us down / lessons:
 
