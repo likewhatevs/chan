@@ -26,10 +26,18 @@ vi.mock("@excalidraw/excalidraw", () => ({
     appState: data.appState ?? {},
     files: data.files ?? {},
   }),
-  exportToSvg: async (opts?: { appState?: { exportWithDarkMode?: boolean } }) => {
+  exportToSvg: async (opts?: {
+    appState?: { exportWithDarkMode?: boolean; exportScale?: number };
+  }) => {
     const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
     svg.setAttribute("data-rendered", "1");
     svg.setAttribute("data-dark", opts?.appState?.exportWithDarkMode ? "1" : "0");
+    svg.setAttribute(
+      "data-scale",
+      opts?.appState?.exportScale !== undefined
+        ? String(opts.appState.exportScale)
+        : "none",
+    );
     return svg;
   },
 }));
@@ -56,6 +64,37 @@ describe("renderExcalidraw", () => {
     expect(res.ok).toBe(true);
     expect(res.svg).toContain("<svg");
     expect(res.svg).toContain('data-rendered="1"');
+  });
+
+  test("shrinks the fence diagram via exportScale but leaves a .excalidraw scene unscaled", async () => {
+    const fence = await renderExcalidraw("flowchart TD\n  A --> B", false);
+    expect(fence.ok).toBe(true);
+    // The fence path passes the mermaid-to-excalidraw shrink constant.
+    expect(fence.svg).toContain(`data-scale="${String(1 / 1.5)}"`);
+
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            path: "board.excalidraw",
+            content: JSON.stringify({
+              type: "excalidraw",
+              elements: [{ id: "a", type: "rectangle", isDeleted: false }],
+              appState: {},
+              files: {},
+            }),
+          }),
+          { status: 200 },
+        ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    // A user-authored .excalidraw scene keeps its own size (no exportScale).
+    const scene = await renderExcalidrawFile(
+      "/api/files/board.excalidraw?t=tok",
+      true,
+    );
+    expect(scene.ok).toBe(true);
+    expect(scene.svg).toContain('data-scale="none"');
   });
 
   test("degrades to the mermaid renderer when the excalidraw conversion fails", async () => {

@@ -60,9 +60,11 @@ export function openDiagramZoom(svg: string): void {
     // just its padding). Give it an intrinsic pixel width from the viewBox
     // so it renders; height auto keeps the aspect ratio and the max-w/h caps
     // fit it to the viewport. That fitted size is what the viewer measures
-    // below for its base width. An SVG that already carries pixel dimensions
-    // (excalidraw's export) has the same viewBox width; a viewBox-less SVG
-    // falls through to auto.
+    // below for its base width. An excalidraw export carries its own pixel
+    // dimensions (its width is the viewBox width times its export scale), but
+    // reading the viewBox width here opens the overlay at full size and
+    // sharpness regardless of that scale; a viewBox-less SVG falls through to
+    // auto.
     const viewBox = svgEl.getAttribute("viewBox");
     vbWidth = viewBox ? Number(viewBox.split(/[\s,]+/)[2]) : NaN;
     if (Number.isFinite(vbWidth) && vbWidth > 0) {

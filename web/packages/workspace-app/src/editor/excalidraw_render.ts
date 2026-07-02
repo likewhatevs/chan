@@ -15,6 +15,15 @@ import { type DiagramResult, parseErrorPos } from "./diagram_render";
 import { configureExcalidrawAssets } from "./excalidrawAssets";
 import { renderMermaid } from "./mermaid_render";
 
+// mermaid-to-excalidraw lays a diagram out at its own hardcoded 20px mermaid
+// font while chan's plain mermaid renderer uses the 16px default, and
+// Excalifont glyph width plus roughjs stroke slop inflate the boxes further,
+// so a fence diagram renders about 1.5x its plain-mermaid twin. Shrink the
+// exported SVG to match. exportScale touches only the SVG's pixel width and
+// height, never the viewBox, so the crisp-zoom View overlay (which pins its
+// base width off the viewBox) still opens at full size and sharpness.
+const MERMAID_EXCALIDRAW_EXPORT_SCALE = 1 / 1.5;
+
 // The two libraries load together on first render and memoize. `exportToSvg`
 // is imported for its type so the elements cast below reads off its real
 // signature rather than a hand-maintained shape.
@@ -82,7 +91,11 @@ export async function renderExcalidraw(
       // exportWithDarkMode flips excalidraw's palette so strokes and text read
       // on a dark page (light-editor renders keep the default palette).
       files: files ?? null,
-      appState: { exportBackground: false, exportWithDarkMode: dark },
+      appState: {
+        exportBackground: false,
+        exportWithDarkMode: dark,
+        exportScale: MERMAID_EXCALIDRAW_EXPORT_SCALE,
+      },
       exportPadding: 10,
     });
     return { ok: true, svg: svg.outerHTML };
