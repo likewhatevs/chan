@@ -531,6 +531,15 @@ impl WorkspaceHost {
         self.library_id.get().map(String::as_str).unwrap_or("local")
     }
 
+    /// Whether a desktop window bridge is attached (chan-desktop embeds this
+    /// host with a live `window_ops` channel). Distinguishes the desktop loopback
+    /// surface from a headless devserver loopback so the launcher meta can
+    /// advertise the right capabilities: a desktop drives native windows through
+    /// the bridge, a devserver browser manages its own.
+    pub fn has_desktop_bridge(&self) -> bool {
+        self.desktop.window_ops.is_some()
+    }
+
     /// The aggregate change signal the window-set watch feed awaits: fires on
     /// registry mint/discard, presence connect/disconnect, and tenant on/off.
     pub fn library_change_notify(&self) -> Arc<Notify> {

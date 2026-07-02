@@ -33,7 +33,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::{oneshot, Notify};
 
 use crate::devserver::bytes_eq;
-use crate::static_assets::serve_launcher;
+use crate::static_assets::{serve_launcher, LauncherSurface};
 use crate::{
     CreateWindow, DesktopWindowOp, DevserverEntry, DevserverInput, LauncherWorkspace,
     SetWorkspaceOnOutcome, WindowKind, WindowRecord, WindowSet, WorkspaceHost,
@@ -83,10 +83,18 @@ pub fn launcher_router(
     bearer: Option<&str>,
     serve_addr: Option<Arc<OnceLock<SocketAddr>>>,
 ) -> Router {
-    // Read-only when there is no serve address (the tunnel-trust devserver/gateway
-    // surface): the SPA shell is told to hide the mutation controls, and the
-    // mutation handlers answer 403. A serve address marks the loopback surface.
-    let read_only = serve_addr.is_none();
+    // The launcher surface descriptor the injected meta advertises: no serve
+    // address is the tunnel-trust read-only surface; a serve address plus a
+    // desktop bridge is the desktop loopback; a serve address without one is a
+    // local devserver loopback (browser-managed windows). The mutation handlers
+    // still gate on `serve_addr` via `require_mutable`; this only shapes the meta.
+    let surface = if serve_addr.is_none() {
+        LauncherSurface::ReadOnly
+    } else if host.has_desktop_bridge() {
+        LauncherSurface::Desktop
+    } else {
+        LauncherSurface::Devserver
+    };
     // Windows: list/mint/discard on BOTH surfaces (per-view state, low-risk).
     let windows = Router::new()
         .route(
@@ -244,7 +252,7 @@ pub fn launcher_router(
     // devserver surface rather than showing buttons that 403.
     Router::new()
         .merge(api)
-        .fallback(move |uri| serve_launcher(uri, read_only))
+        .fallback(move |uri| serve_launcher(uri, surface))
 }
 
 /// Gate `/api/library/*` on the surface's launcher token. The token is accepted

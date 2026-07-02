@@ -113,16 +113,49 @@ pub async fn serve_static(State(state): State<Arc<AppState>>, uri: axum::http::U
         .into_response()
 }
 
+/// Which launcher surface is being served. The single boot-time discriminator
+/// the launcher SPA reads to split its capabilities: whether it may mutate the
+/// registry, whether a desktop window bridge is attached, and whether it manages
+/// its own windows in the browser. Emitted as `chan-launcher-surface` by
+/// [`inject_launcher_meta`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LauncherSurface {
+    /// Desktop loopback: registry-mutable AND a native window bridge.
+    Desktop,
+    /// Local devserver loopback: registry-mutable, no bridge; the browser
+    /// manages its own windows (the PWA-leader surface).
+    Devserver,
+    /// Tunnel-trust devserver / gateway: read-only, no bridge.
+    ReadOnly,
+}
+
+impl LauncherSurface {
+    /// The `chan-launcher-surface` meta value. The value set is the wire
+    /// contract the launcher's capability split reads.
+    fn meta_value(self) -> &'static str {
+        match self {
+            LauncherSurface::Desktop => "desktop",
+            LauncherSurface::Devserver => "devserver",
+            LauncherSurface::ReadOnly => "readonly",
+        }
+    }
+
+    /// Whether workspace mutation is gated out (the tunnel-trust surface).
+    fn read_only(self) -> bool {
+        matches!(self, LauncherSurface::ReadOnly)
+    }
+}
+
 /// Single-page-app fallback for the launcher bundle, mirroring
 /// [`serve_static`] but for [`LauncherAssets`]. Stateless: the launcher
 /// always mounts at the devserver/library root `/`, so there is no
-/// per-workspace prefix to inject. When `read_only` (the tunnel-trust
-/// devserver/gateway surface, where workspace mutation is gated out), the
-/// index gets a `<meta name="chan-launcher-readonly">` hint so the SPA hides
-/// its mutation controls instead of showing buttons that 403. `/api`/`/ws`
-/// misses still 404 rather than returning the SPA shell, so the launcher's
-/// `/api/library/*` calls and the reserved namespace get JSON-style 404s.
-pub async fn serve_launcher(uri: axum::http::Uri, read_only: bool) -> Response {
+/// per-workspace prefix to inject. The index gets a
+/// `<meta name="chan-launcher-surface">` hint (plus the legacy
+/// `chan-launcher-readonly` on the read-only surface) so the SPA splits its
+/// capabilities without a probe round-trip. `/api`/`/ws` misses still 404
+/// rather than returning the SPA shell, so the launcher's `/api/library/*`
+/// calls and the reserved namespace get JSON-style 404s.
+pub async fn serve_launcher(uri: axum::http::Uri, surface: LauncherSurface) -> Response {
     let path = uri.path();
     if path.starts_with("/api") || path == "/ws" {
         return (StatusCode::NOT_FOUND, "not found").into_response();
@@ -136,7 +169,7 @@ pub async fn serve_launcher(uri: axum::http::Uri, read_only: bool) -> Response {
     };
     if let Some(file) = LauncherAssets::get(candidate) {
         let body = if is_index {
-            inject_launcher_meta(&file.data, read_only)
+            inject_launcher_meta(&file.data, surface)
         } else {
             file.data.into_owned()
         };
@@ -147,7 +180,7 @@ pub async fn serve_launcher(uri: axum::http::Uri, read_only: bool) -> Response {
     }
     // SPA fallback: client-side routes resolve to index.html.
     if let Some(file) = LauncherAssets::get("index.html") {
-        let body = inject_launcher_meta(&file.data, read_only);
+        let body = inject_launcher_meta(&file.data, surface);
         return with_static_cache_headers(
             ([(header::CONTENT_TYPE, "text/html; charset=utf-8")], body).into_response(),
             true,
@@ -218,19 +251,26 @@ pub fn inject_chan_meta(html: &[u8], prefix: &str, settings_disabled: bool) -> V
 ///     LOCAL machine card can show the host's OS icon. The value is the OS
 ///     family enum (`macos | windows | linux | other`), which carries no
 ///     HTML-attribute-special bytes.
-///   - `<meta name="chan-launcher-readonly" content="1">` only when `read_only`
-///     (the tunnel-trust devserver/gateway surface), so the SPA hides its
-///     workspace mutation controls instead of showing buttons that 403.
+///   - `<meta name="chan-launcher-surface" content="desktop|devserver|readonly">`
+///     always, the single descriptor the SPA splits its capabilities on
+///     (registry mutation, desktop bridge, self-managed windows).
+///   - `<meta name="chan-launcher-readonly" content="1">` additionally on the
+///     read-only surface, so a client that has not yet split on the descriptor
+///     still hides its mutation controls instead of showing buttons that 403.
 ///
 /// No-op when `<head>` is absent (returns the original bytes).
-fn inject_launcher_meta(html: &[u8], read_only: bool) -> Vec<u8> {
+fn inject_launcher_meta(html: &[u8], surface: LauncherSurface) -> Vec<u8> {
     let needle = b"<head>";
     let Some(pos) = html.windows(needle.len()).position(|w| w == needle) else {
         return html.to_vec();
     };
     let (os, _pretty_name) = crate::devserver::detect_os();
     let mut insert = format!("<meta name=\"chan-launcher-host-os\" content=\"{os}\">");
-    if read_only {
+    insert.push_str(&format!(
+        "<meta name=\"chan-launcher-surface\" content=\"{}\">",
+        surface.meta_value()
+    ));
+    if surface.read_only() {
         insert.push_str("<meta name=\"chan-launcher-readonly\" content=\"1\">");
     }
     let after_head = pos + needle.len();
@@ -388,6 +428,31 @@ mod tests {
         let html = b"<html></html>";
         let out = inject_chan_meta(html, "/foo", true);
         assert_eq!(out, html);
+    }
+
+    #[test]
+    fn inject_launcher_meta_advertises_the_surface_descriptor() {
+        let html = b"<head><title>x</title></head>";
+        // Desktop and devserver surfaces carry the descriptor but NOT the legacy
+        // read-only meta.
+        let desktop =
+            String::from_utf8(inject_launcher_meta(html, LauncherSurface::Desktop)).unwrap();
+        assert!(desktop.contains("<meta name=\"chan-launcher-surface\" content=\"desktop\">"));
+        assert!(!desktop.contains("chan-launcher-readonly"));
+        // The host-os meta is always present.
+        assert!(desktop.contains("chan-launcher-host-os"));
+
+        let devserver =
+            String::from_utf8(inject_launcher_meta(html, LauncherSurface::Devserver)).unwrap();
+        assert!(devserver.contains("<meta name=\"chan-launcher-surface\" content=\"devserver\">"));
+        assert!(!devserver.contains("chan-launcher-readonly"));
+
+        // The read-only surface carries the descriptor AND keeps emitting the
+        // legacy meta for a client that has not split on the descriptor yet.
+        let readonly =
+            String::from_utf8(inject_launcher_meta(html, LauncherSurface::ReadOnly)).unwrap();
+        assert!(readonly.contains("<meta name=\"chan-launcher-surface\" content=\"readonly\">"));
+        assert!(readonly.contains("<meta name=\"chan-launcher-readonly\" content=\"1\">"));
     }
 
     #[test]
