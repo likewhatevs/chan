@@ -26,7 +26,7 @@ describe("File Browser Drafts create guard", () => {
       /async createDir\(parentPath: string\): Promise<void> \{[\s\S]{1,600}validate: fileBrowserDraftsPathReason,/,
     );
     expect(store).toMatch(
-      /async createFileOrDir\(parentPath: string\): Promise<void> \{[\s\S]{1,600}validate: fileBrowserDraftsPathReason,/,
+      /async createFileOrDir\(parentPath: string\): Promise<void> \{[\s\S]{1,600}fileBrowserDraftsPathReason\(path\) \?\?/,
     );
   });
 });
