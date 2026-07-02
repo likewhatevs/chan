@@ -6,6 +6,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- **The root workspace serves on axum 0.8.** The HTTP/WebSocket framework under chan-server, chan-library, and the tunnel crates moves from axum 0.7.9 to 0.8.9; the 0.7 line no longer receives bug or security fixes. Route matching, the launcher root fallback, workspace-prefix dispatch, and wildcard captures behave exactly as before, now pinned by routing tests; WebSocket text/binary frames are bytes-backed internally, which drops a per-send allocation on two terminal control payloads. One edge sharpens: a malformed JSON body on the terminal restart route now rejects with a 4xx instead of silently restarting with defaults (no shipped caller sends one). The unused tower_governor dependency is dropped from chan-tunnel-server, clearing the last axum 0.7 subtree from the lockfile.
+
 ## [v0.59.1] - 2026-07-01
 
 A patch release clearing the v0.59.0 chan-desktop known limitation: a `mermaid-to-excalidraw` diagram that uses a `subgraph` now renders as excalidraw on desktop, not just in the browser. It also reverts the v0.59.0 launcher column alignment in favor of a left icon column, and swaps the remote window-title glyph to an up-right arrow.
