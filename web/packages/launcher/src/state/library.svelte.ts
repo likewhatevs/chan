@@ -5,7 +5,9 @@
 
 import { backend } from "../api/backend";
 import type { DevserverEntry, DevserverInput, WindowRecord, WorkspaceEntry } from "../api/library";
+import { selfManagedWindows } from "./capabilities";
 import { beginPending, clearPending, dsKey, reconcile, servedKey, wsKey } from "./pending.svelte";
+import { reconcileWindows } from "./windowManager.svelte";
 
 interface LibraryState {
   workspaces: WorkspaceEntry[];
@@ -88,6 +90,10 @@ export async function loadLibrary(): Promise<void> {
       unwatch = backend.watchWindows((set) => {
         library.windows = set.windows;
         library.leaders = set.leaders ?? {};
+        // On a self-managed surface, reconcile the window.open handle map against
+        // the feed (close handles for discarded records, flag orphans). Inert on
+        // desktop (bridge-driven, no browser-origin records) and in the demo.
+        if (selfManagedWindows) reconcileWindows(set);
         // The feed also fires on workspace mount/unmount (chan open / on / off)
         // and on a devserver connect/disconnect (its windows enter/leave + its
         // served-workspace rows merge in/out, and its `connected` flag flips),
