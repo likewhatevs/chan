@@ -17,12 +17,41 @@
 //     avoid eating real horizontal rules at line 1).
 //   - The closing fence is the next line that is exactly `---` (or `...`,
 //     a YAML stream-end marker; we accept both for parity with Pandoc).
-//   - If we never find a closing fence before EOF, we DO NOT emit a
-//     Frontmatter node - falling back to the regular HR parser is more
-//     graceful than dimming the entire document.
+//   - With no closing fence anywhere below, we emit no Frontmatter node
+//     AND consume no lines, so the opener falls back to a normal
+//     horizontal rule and every block below it still parses. Detecting
+//     the missing fence has to happen without cx.nextLine(): that
+//     advances the shared line cursor and BlockContext never rewinds it,
+//     so scanning by consuming and then giving up would collapse the
+//     rest of the document into one empty Paragraph.
 
-import type { MarkdownConfig } from "@lezer/markdown";
+import type { BlockContext, MarkdownConfig } from "@lezer/markdown";
+import type { Input } from "@lezer/common";
 import { tags } from "@lezer/highlight";
+
+// Longest frontmatter block we scan for a closing fence. A closer beyond
+// this many lines is treated as absent, capping both the pre-scan below
+// and the consume loop.
+const MAX_LINES = 10_000;
+
+// True when a line that is exactly `---` or `...` exists below the opener,
+// within MAX_LINES lines. Reads the raw input rather than walking with
+// cx.nextLine() (which BlockContext does not rewind) or peekLine() (one
+// line of lookahead only). `input` is not on BlockContext's published
+// type but is present at runtime, where it backs readLine().
+function hasFrontmatterCloser(cx: BlockContext, openEnd: number): boolean {
+  const { input } = cx as unknown as { input: Input };
+  const tail = input.read(openEnd, input.length);
+  // `tail` starts at the opener's line break, so its first split entry is
+  // the opener line's empty remainder; document line N is parts[N - 1].
+  const parts = tail.split("\n");
+  const limit = Math.min(parts.length - 1, MAX_LINES);
+  for (let i = 1; i <= limit; i++) {
+    const text = parts[i].endsWith("\r") ? parts[i].slice(0, -1) : parts[i];
+    if (text === "---" || text === "...") return true;
+  }
+  return false;
+}
 
 export const Frontmatter: MarkdownConfig = {
   defineNodes: [
@@ -47,7 +76,10 @@ export const Frontmatter: MarkdownConfig = {
         // lezer-markdown's own FencedCode / IndentedCode parsers.
         const openStart = cx.lineStart;
         const openEnd = openStart + line.text.length;
-        const MAX_LINES = 10_000;
+        // Bail before consuming anything when no closing fence exists;
+        // otherwise the consumed lines never rewind and the whole
+        // document parses as one empty Paragraph (see the header note).
+        if (!hasFrontmatterCloser(cx, openEnd)) return false;
         let consumed = 0;
         // Move past the opener row.
         if (!cx.nextLine()) return false;
@@ -66,9 +98,9 @@ export const Frontmatter: MarkdownConfig = {
             return true;
           }
           if (!cx.nextLine()) {
-            // Reached EOF without a closing fence. Not a frontmatter
-            // block - return false so the opener line gets re-parsed
-            // as a horizontal rule by the standard parsers.
+            // Defensive: hasFrontmatterCloser already proved a closer
+            // exists within MAX_LINES, so this EOF path is unreachable
+            // for well-formed input.
             return false;
           }
           consumed++;

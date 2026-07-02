@@ -10,7 +10,12 @@
 // fast in the standard Vitest pool.
 
 import { describe, expect, test } from "vitest";
-import { parser } from "@lezer/markdown";
+import { chanMarkdown } from "../markdown/grammar";
+
+// Exercise the CONFIGURED parser (Frontmatter + GFM + wikilink), not the
+// stock @lezer/markdown one: an extension can corrupt list recognition,
+// and only the project grammar surfaces that.
+const parser = chanMarkdown().language.parser;
 
 /// Walk the parse tree and check whether `nodeName` appears at
 /// the document level (depth 0 means a top-level block).

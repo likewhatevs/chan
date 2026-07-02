@@ -49,7 +49,7 @@ import {
   ViewPlugin,
   type ViewUpdate,
 } from "@codemirror/view";
-import type { SyntaxNodeRef } from "@lezer/common";
+import type { SyntaxNodeRef, Tree } from "@lezer/common";
 import { lineIntersect, selectionInRange } from "./selection";
 
 /// Context passed to each token handler.
@@ -79,12 +79,21 @@ export function decorationWalker(handlers: HandlerRegistry): Extension {
   return ViewPlugin.fromClass(
     class {
       decorations: DecorationSet;
+      // Cached syntax-tree identity. The async ParseWorker publishes a
+      // finished tree through an effects-only dispatch that sets none of
+      // docChanged/viewportChanged/selectionSet/geometryChanged, so the
+      // gate below would skip it and leave decorations stale (raw markers)
+      // until the next interaction. Recomputing when the tree instance
+      // changes mirrors @codemirror/language's TreeHighlighter.
+      tree: Tree;
 
       constructor(view: EditorView) {
+        this.tree = syntaxTree(view.state);
         this.decorations = computeDecorations(view, handlers);
       }
 
       update(u: ViewUpdate): void {
+        const tree = syntaxTree(u.state);
         // `geometryChanged` covers the tab-switch remount case: editor
         // tabs are unmounted/remounted on switch (unlike terminals), so
         // the EditorView is reconstructed and the constructor walks the
@@ -101,8 +110,10 @@ export function decorationWalker(handlers: HandlerRegistry): Extension {
           u.docChanged ||
           u.viewportChanged ||
           u.selectionSet ||
-          u.geometryChanged
+          u.geometryChanged ||
+          tree !== this.tree
         ) {
+          this.tree = tree;
           this.decorations = computeDecorations(u.view, handlers);
         }
       }
