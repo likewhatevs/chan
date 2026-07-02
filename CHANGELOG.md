@@ -4,12 +4,18 @@ All notable changes to this project will be documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [v0.60.0] - 2026-07-02
+
+The axum 0.8 migration release: both Cargo workspaces (the root workspace behind chan-server, chan-library, and the tunnel crates, plus the gateway services) move from axum 0.7.9 to 0.8.9, carrying tower-sessions 0.14, tokio-tungstenite 0.29, and a dead-dependency drop with them. Behavior is preserved and pinned by routing tests on both framework versions. The `v0.60.0-rc1` smoke surfaced one bug, fixed here: `chan upgrade` now understands prerelease versions.
 
 ### Changed
 
 - **The root workspace serves on axum 0.8.** The HTTP/WebSocket framework under chan-server, chan-library, and the tunnel crates moves from axum 0.7.9 to 0.8.9; the 0.7 line no longer receives bug or security fixes. Route matching, the launcher root fallback, workspace-prefix dispatch, and wildcard captures behave exactly as before, now pinned by routing tests; WebSocket text/binary frames are bytes-backed internally, which drops a per-send allocation on two terminal control payloads. One edge sharpens: the terminal restart route still restarts with defaults on a bodyless request, but a request that declares a Content-Type now rejects with a 4xx (415 non-JSON type, 400 malformed JSON, 422 mismatched shape) instead of silently restarting with defaults (no shipped caller sends any of those). The unused tower_governor dependency is dropped from chan-tunnel-server, clearing the last axum 0.7 subtree from the lockfile.
 - **Gateway services move to axum 0.8.** The `gateway/` workspace (identity, profile, devserver-proxy) now builds on axum 0.8, with tower-sessions 0.14, tower-sessions-sqlx-store 0.15, and tokio-tungstenite 0.29. Route templates use the axum 0.8 `{param}` syntax, and the devserver-proxy WebSocket bridge translates text frames and close reasons between axum's and tungstenite's `Utf8Bytes` wrappers. tower-sessions stops at 0.14 because no released sqlx-store pairs with 0.15; tokio-tungstenite matches axum 0.8's internal minor so the gateway's direct dep adds no second tungstenite. Session and auth behavior are unchanged.
+
+### Fixed
+
+- **`chan upgrade` understands prerelease versions.** `X.Y.Z-pre` now validates and orders correctly: a prerelease is newer than every lower release and older than its own release triple, with `rcN` ranking numerically (`rc2` before `rc10`). Previously a client hard-errored on prerelease metadata ("release version patch component must be numeric") while an rc was the latest release, and an rc install could not parse its own version, so it would never have offered the next upgrade. `chan upgrade --version X.Y.Z-pre` is accepted too.
 
 ## [v0.59.1] - 2026-07-01
 
