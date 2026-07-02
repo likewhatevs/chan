@@ -18,7 +18,7 @@ use std::sync::{Arc, RwLock, Weak};
 
 use async_trait::async_trait;
 use chan_workspace::{Library, Workspace};
-use tokio::sync::watch;
+use tokio::sync::{broadcast, watch};
 
 use crate::desktop_window_ops::DesktopBridge;
 use crate::session_presence::SessionRegistry;
@@ -157,6 +157,11 @@ pub struct TenantArtifacts {
     /// host also installs the aggregate change signal on it so a leader change
     /// wakes that feed.
     pub session_registry: Arc<SessionRegistry>,
+    /// The tenant's `/ws` broadcast channel. The host sends targeted
+    /// `window_command` teardown frames on it so a discarded / hidden window's
+    /// own socket learns its record was torn down and shows the leader-close
+    /// overlay (a native desktop window is reconciled away instead).
+    pub events_tx: broadcast::Sender<String>,
     /// Per-window in-flight transfer count — the desktop close handler's
     /// "is a transfer running?" query (`tenant_has_active_transfer`).
     pub window_transfers: Arc<WindowTransfers>,

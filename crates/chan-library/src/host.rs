@@ -1387,7 +1387,14 @@ impl WorkspaceHost {
         let registry = self
             .window_registry()
             .ok_or_else(|| Error::Config("window registry not installed".into()))?;
-        Ok(registry.set_hidden(window_id, hidden))
+        let matched = registry.set_hidden(window_id, hidden);
+        // Tell the affected window's socket it was hidden by the leader. Only on
+        // a hide: un-hiding brings the window back, so it is not a teardown.
+        // Idempotent-safe on a re-hide (a follower just re-shows the overlay).
+        if matched && hidden {
+            self.emit_window_teardown(window_id, "window_hidden");
+        }
+        Ok(matched)
     }
 
     /// Reap a control terminal: drop its registry row, forget its tenant
@@ -1476,9 +1483,32 @@ impl WorkspaceHost {
         let removed = registry.remove(window_id);
         if removed {
             self.reap_discarded_window_state(window_id);
+            // The record is gone but the window's `/ws` socket outlives it, so
+            // tell that socket its window was discarded (a browser follower shows
+            // the leader-close overlay; a native window is reconciled away).
+            self.emit_window_teardown(window_id, "window_discarded");
             self.notify_window_change();
         }
         Ok(removed)
+    }
+
+    /// Broadcast a targeted `window_command` teardown frame (see
+    /// [`window_teardown_frame`]) for `window_id`. It rides EVERY mounted
+    /// tenant's `/ws` channel; each tenant's pump forwards it only to the socket
+    /// serving `window_id` and drops it otherwise, so a browser follower hears
+    /// its teardown without the host resolving which tenant serves the window
+    /// (which matters for a discard, where the record is already gone). This is
+    /// honest-client courtesy, not enforcement: a native desktop window is torn
+    /// down by the window watcher's reconcile instead and ignores the frame.
+    fn emit_window_teardown(&self, window_id: &str, command: &'static str) {
+        let Some(frame) = window_teardown_frame(window_id, command) else {
+            return;
+        };
+        if let Ok(workspaces) = self.workspaces.read() {
+            for runtime in workspaces.values() {
+                let _ = runtime.artifacts.events_tx.send(frame.clone());
+            }
+        }
     }
 
     /// Discard every persisted window rooted at `root` — a workspace turned OFF
@@ -2287,6 +2317,30 @@ fn hosted_from_runtime(runtime: &HostedWorkspaceRuntime) -> HostedWorkspace {
     }
 }
 
+/// Serialize a server-originated window teardown notification as a
+/// `window_command` frame. It rides the same envelope as the control socket's
+/// window commands so the `/ws` pump's fixed-prefix target scan
+/// (`{"type":"window_command","window_id":"<id>",`) delivers it to the affected
+/// window's socket only. Built here in the library because the dependency flows
+/// chan-server -> chan-library, so the control socket's `WindowCommand` enum is
+/// unreachable; the byte shape is pinned by `window_teardown_frame_matches_pump_prefix`.
+/// `command` is `"window_discarded"` or `"window_hidden"`.
+fn window_teardown_frame(window_id: &str, command: &'static str) -> Option<String> {
+    #[derive(serde::Serialize)]
+    struct WindowTeardownFrame<'a> {
+        #[serde(rename = "type")]
+        frame_type: &'static str,
+        window_id: &'a str,
+        command: &'static str,
+    }
+    serde_json::to_string(&WindowTeardownFrame {
+        frame_type: "window_command",
+        window_id,
+        command,
+    })
+    .ok()
+}
+
 /// Canonical-form key for matching a caller path against a mounted
 /// runtime's root, via [`chan_workspace::paths::canonicalize_normalized`]:
 /// it strips any Windows `\\?\` verbatim prefix so a path the caller resolved
@@ -2418,9 +2472,28 @@ mod tests {
             window_presence: Arc::new(crate::window_presence::WindowPresence::new()),
             window_transfers: Arc::new(crate::window_transfers::WindowTransfers::new()),
             session_registry: Arc::new(crate::session_presence::SessionRegistry::new()),
+            events_tx: tokio::sync::broadcast::channel(16).0,
             cell,
             keepalive: Box::new(()),
         }
+    }
+
+    #[test]
+    fn window_teardown_frame_matches_pump_prefix() {
+        // The frame MUST start with the exact prefix the /ws pump scans
+        // (routes::ws::window_command_target) or it is not routed to the
+        // affected window's socket. Fields serialize in declaration order:
+        // type, window_id, command.
+        let discarded = window_teardown_frame("w-abc", "window_discarded").unwrap();
+        assert!(
+            discarded.starts_with(r#"{"type":"window_command","window_id":"w-abc","#),
+            "frame: {discarded}"
+        );
+        assert!(discarded.contains(r#""command":"window_discarded""#));
+
+        let hidden = window_teardown_frame("w-xyz", "window_hidden").unwrap();
+        assert!(hidden.starts_with(r#"{"type":"window_command","window_id":"w-xyz","#));
+        assert!(hidden.contains(r#""command":"window_hidden""#));
     }
 
     fn nest(prefix: &str, inner: Router) -> Router {

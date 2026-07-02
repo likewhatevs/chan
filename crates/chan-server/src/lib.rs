@@ -1170,6 +1170,9 @@ fn into_tenant_artifacts(a: AppArtifacts) -> chan_library::TenantArtifacts {
     // The SAME registry the `/ws` pump drives, so the host reads this tenant's
     // leader and installs the watch-feed change signal on it (mirror presence).
     let session_registry = state.session_registry.clone();
+    // The SAME broadcast channel the `/ws` pump forwards, so the host can send a
+    // targeted window_command teardown frame to a window's socket.
+    let events_tx = state.events_tx.clone();
     let cell: Arc<dyn chan_library::WorkspaceCellHandle> = Arc::new(CellHandle(workspace_cell));
     chan_library::TenantArtifacts {
         app,
@@ -1180,6 +1183,7 @@ fn into_tenant_artifacts(a: AppArtifacts) -> chan_library::TenantArtifacts {
         window_presence,
         window_transfers,
         session_registry,
+        events_tx,
         cell,
         keepalive: Box::new((
             last_activity,
