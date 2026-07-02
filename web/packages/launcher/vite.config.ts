@@ -41,10 +41,12 @@ const proxyPort = process.env.VITE_PROXY_PORT ?? "8787";
 // HTTP-client SPA (its only runtime dep is lucide-svelte); this budget FAILS the
 // build if an accidental heavy import lands -- a CodeMirror/xterm/cytoscape pull,
 // or a non-tree-shaken import from @chan/web-shared, would multiply the bundle,
-// so the gate catches it here instead of at release. Baseline is ~29.3 KiB
-// gzipped; the ceiling carries headroom for normal drift while staying far below
-// what any heavy import would produce.
-const LAUNCHER_GZIP_BUDGET_BYTES = 32 * 1024;
+// so the gate catches it here instead of at release. Baseline is ~33 KiB gzipped
+// (the client-side window manager, per-tenant leadership derivation, and window
+// URL builder that drive the installable PWA / devserver surface); the ceiling
+// carries headroom for normal drift while staying far below what any heavy import
+// would produce.
+const LAUNCHER_GZIP_BUDGET_BYTES = 34 * 1024;
 
 function launcherSizeBudget(): Plugin {
   return {
