@@ -46,7 +46,9 @@
   import { openEditDevserver, openNewDialog } from "../state/dialog.svelte";
   import { basename } from "../lib/windowLabel";
   import { buildMachineTree, type MachineNode, type WorkspaceNode } from "../lib/machineTree";
-  import { readOnly, hostOs } from "../state/capabilities";
+  import { readOnly, hasDesktopBridge, selfManagedWindows, hostOs } from "../state/capabilities";
+  import { canActOnTenant, ownsTenantLeader, tenantLeader } from "../state/leadership.svelte";
+  import { mintWindow } from "../state/windowManager.svelte";
   import { demoState, resetDemo } from "../state/demo.svelte";
   import type { DevserverEntry, WorkspaceEntry } from "../api/library";
 
@@ -84,6 +86,38 @@
     } catch (e) {
       reportError(e);
     }
+  }
+
+  // The acting leader claim for minting onto a tenant: the leader window_id when
+  // this launcher owns it, else undefined (leaderless allows; the server rejects
+  // a stale claim against a live leader).
+  function actingFor(prefix: string): string | undefined {
+    return ownsTenantLeader(prefix) ? (tenantLeader(prefix) ?? undefined) : undefined;
+  }
+
+  // New window on a workspace. A self-managed surface browser-mints it (the
+  // window manager opens it in-app, synchronously in this click gesture so the
+  // browser does not block the popup); the desktop surface keeps the native mint
+  // (the watcher opens it) and the served card keeps its devserver bridge route.
+  function newWorkspaceWindow(
+    ws: WorkspaceEntry,
+    kind: "workspace" | "served",
+    devserverId: string | null,
+  ): Promise<void> {
+    if (kind === "served") return openDevserverWorkspace(devserverId!, ws.path);
+    if (selfManagedWindows) {
+      return mintWindow("workspace", {
+        workspacePath: ws.path,
+        actingWindowId: actingFor(ws.prefix),
+      }).then(() => {});
+    }
+    return openWorkspaceWindow(ws.path);
+  }
+
+  // New local terminal: browser-mint on a self-managed surface, else native mint.
+  function newLocalTerminal(): Promise<void> {
+    if (selfManagedWindows) return mintWindow("terminal").then(() => {});
+    return openTerminal();
   }
 
   // Turning a workspace OFF can hit live terminal sessions: the server answers
@@ -232,14 +266,14 @@
         <button
           class="icon-btn"
           type="button"
-          disabled={ws.status !== "running" || spinning(ws)}
+          disabled={ws.status !== "running" ||
+            spinning(ws) ||
+            (selfManagedWindows && !canActOnTenant(ws.prefix))}
+          title={selfManagedWindows && !canActOnTenant(ws.prefix)
+            ? "The session leader manages this workspace's windows"
+            : `New window of ${displayName(ws)}`}
           aria-label={`New window of ${displayName(ws)}`}
-          onclick={() =>
-            run(
-              kind === "workspace"
-                ? openWorkspaceWindow(ws.path)
-                : openDevserverWorkspace(devserverId!, ws.path),
-            )}>
+          onclick={() => run(newWorkspaceWindow(ws, kind, devserverId))}>
           <AppWindow size={16} />
         </button>
         <button
@@ -350,7 +384,7 @@
               type="button"
               title="New terminal"
               aria-label="New local terminal"
-              onclick={() => run(openTerminal())}>
+              onclick={() => run(newLocalTerminal())}>
               <SquareTerminal size={16} />
             </button>
             <button
@@ -389,7 +423,7 @@
           </button>
         {/if}
         <div class="machine-actions">
-          {#if !readOnly && connected(ds)}
+          {#if hasDesktopBridge && connected(ds)}
             <button
               class="icon-btn"
               type="button"
@@ -399,7 +433,7 @@
               <SquareTerminal size={16} />
             </button>
           {/if}
-          {#if !readOnly}
+          {#if hasDesktopBridge}
             {#if dsSpinning(ds)}
               <button
                 class="icon-btn"
@@ -458,8 +492,9 @@
 {/if}
 
 <!-- The decoupled add-devserver entry point: a full-width dashed button below
-     the machine list (not a top-bar [+]). Hidden on the read-only surface. -->
-{#if !readOnly}
+     the machine list (not a top-bar [+]). A devserver is dialed through the
+     desktop bridge, so this is offered only where that bridge exists. -->
+{#if hasDesktopBridge}
   <button class="add-devserver" type="button" onclick={() => openNewDialog("devserver")}>
     <Plus size={16} />
     Add dev server
