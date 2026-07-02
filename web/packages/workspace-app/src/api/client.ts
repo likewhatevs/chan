@@ -52,6 +52,7 @@ import { ApiError } from "./errors";
 import {
   apiPath,
   authToken as transportAuthToken,
+  chanFetch,
   openWatch,
   request,
   requestRoot,
@@ -307,7 +308,7 @@ async function readNdjsonStream<TEvent>(
     onEvent: (event: TEvent) => void;
   },
 ): Promise<void> {
-  const res = await fetch(apiPath(path), {
+  const res = await chanFetch(apiPath(path), {
     method: "GET",
     headers: directAuthHeaders(),
     signal: opts.signal,
@@ -348,7 +349,7 @@ async function readFileStream(
   opts: FileReadStreamOptions = {},
 ): Promise<FileResponse> {
   const headers = directAuthHeaders();
-  const res = await fetch(apiPath(`/api/files/${encPath(path)}?stream=1`), {
+  const res = await chanFetch(apiPath(`/api/files/${encPath(path)}?stream=1`), {
     method: "GET",
     headers,
     signal: opts.signal,
@@ -480,7 +481,7 @@ export const api = {
     form.append("file", file);
     if (dir !== null) form.append("dir", dir);
     const headers = directAuthHeaders();
-    const res = await fetch(apiPath("/api/attachments"), { method: "POST", headers, body: form });
+    const res = await chanFetch(apiPath("/api/attachments"), { method: "POST", headers, body: form });
     if (!res.ok) {
       await responseTextError(res);
     }
@@ -511,7 +512,7 @@ export const api = {
     form.append("provider", opts.provider ?? "google");
     form.append("overwrite", opts.overwrite ? "true" : "false");
     const headers = directAuthHeaders();
-    const res = await fetch(apiPath("/api/contacts/import"), {
+    const res = await chanFetch(apiPath("/api/contacts/import"), {
       method: "POST",
       headers,
       body: form,
@@ -531,7 +532,7 @@ export const api = {
     return { ...body, warnings: body.warnings ?? [] };
   },
   metadataExport: async (): Promise<MetadataExportDownload> => {
-    const res = await fetch(apiPath("/api/metadata/export"), {
+    const res = await chanFetch(apiPath("/api/metadata/export"), {
       method: "POST",
       headers: directAuthHeaders(),
     });
@@ -555,7 +556,7 @@ export const api = {
     form.append("file", file);
     form.append("rescan", opts.rescan === false ? "false" : "true");
     form.append("force_scm", opts.forceScm ? "true" : "false");
-    const res = await fetch(apiPath("/api/metadata/import"), {
+    const res = await chanFetch(apiPath("/api/metadata/import"), {
       method: "POST",
       headers: directAuthHeaders(),
       body: form,
@@ -1098,7 +1099,7 @@ export const api = {
   /// 1 in each new window. The route returns a PLAIN-TEXT body, not JSON, so
   /// we hit fetch directly and read `.text()` rather than the JSON `req()`.
   terminalNextName: async (): Promise<string> => {
-    const res = await fetch(apiPath("/api/terminal/next-name"), {
+    const res = await chanFetch(apiPath("/api/terminal/next-name"), {
       method: "GET",
       headers: directAuthHeaders(),
     });

@@ -16,7 +16,7 @@ describe("metadata archive api client", () => {
       /metadataExport: async \(\): Promise<MetadataExportDownload> => \{/,
     );
     expect(client).toMatch(
-      /fetch\(apiPath\("\/api\/metadata\/export"\), \{[\s\S]{1,160}method: "POST"/,
+      /chanFetch\(apiPath\("\/api\/metadata\/export"\), \{[\s\S]{1,160}method: "POST"/,
     );
     expect(client).toMatch(/headers: directAuthHeaders\(\)/);
     expect(client).toMatch(
@@ -36,7 +36,7 @@ describe("metadata archive api client", () => {
     expect(client).toMatch(/form\.append\("rescan", opts\.rescan === false \? "false" : "true"\)/);
     expect(client).toMatch(/form\.append\("force_scm", opts\.forceScm \? "true" : "false"\)/);
     expect(client).toMatch(
-      /fetch\(apiPath\("\/api\/metadata\/import"\), \{[\s\S]{1,180}method: "POST"/,
+      /chanFetch\(apiPath\("\/api\/metadata\/import"\), \{[\s\S]{1,180}method: "POST"/,
     );
   });
 });

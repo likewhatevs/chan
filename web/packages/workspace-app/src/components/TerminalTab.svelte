@@ -26,6 +26,7 @@
   import { WebglAddon } from "@xterm/addon-webgl";
   import "@xterm/xterm/css/xterm.css";
   import { api, sessionWindowId, withTokenQuery } from "../api/client";
+  import { createSocket } from "../api/transport";
   import { isTauriDesktop, readClipboardText, readDroppedPaths } from "../api/desktop";
   import { isOsFileDrag, shellEscapePaths } from "../state/fileDropGuard";
   import { openExternalUrl } from "../editor/external_links";
@@ -834,7 +835,7 @@
         cwd: reattaching ? undefined : tab.cwd,
       }),
     );
-    ws = new WebSocket(`${proto}//${window.location.host}${path}`);
+    ws = createSocket(`${proto}//${window.location.host}${path}`);
     ws.binaryType = "arraybuffer";
     ws.onopen = () => {
       status = "connected";

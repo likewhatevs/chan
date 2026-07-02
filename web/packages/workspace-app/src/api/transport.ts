@@ -134,6 +134,43 @@ export function authToken(): string | null {
   return token;
 }
 
+/// Injectable HTTP + WebSocket primitives. Both default to the real browser
+/// globals, so the production path is unchanged. A frontend-only demo (the
+/// marketing-site workspace demo) installs replacements before the app mounts
+/// to serve the whole API surface from an in-memory mock with no backend.
+///
+/// The seam sits at `fetch`, not the typed api methods, on purpose: it catches
+/// the streaming NDJSON readers and multipart uploads that call `fetch`
+/// directly (bypassing `request`) as well as every `request`/`requestRoot`
+/// call, so a single override covers the entire wire surface.
+export type FetchImpl = (input: string, init?: RequestInit) => Promise<Response>;
+export type SocketFactory = (url: string) => WebSocket;
+
+let fetchImpl: FetchImpl = (input, init) => fetch(input, init);
+let socketFactory: SocketFactory = (url) => new WebSocket(url);
+
+/// Install a replacement fetch (or `null` to restore the real one).
+export function setFetchImpl(impl: FetchImpl | null): void {
+  fetchImpl = impl ?? ((input, init) => fetch(input, init));
+}
+
+/// Install a replacement WebSocket factory (or `null` to restore the real one).
+export function setSocketFactory(factory: SocketFactory | null): void {
+  socketFactory = factory ?? ((url) => new WebSocket(url));
+}
+
+/// The fetch every API call routes through: typed api methods, streaming
+/// NDJSON, and multipart uploads alike. Defaults to the global fetch.
+export function chanFetch(input: string, init?: RequestInit): Promise<Response> {
+  return fetchImpl(input, init);
+}
+
+/// The WebSocket constructor every socket routes through: the watcher, the
+/// terminal PTY, and the local-color watch. Defaults to `new WebSocket`.
+export function createSocket(url: string): WebSocket {
+  return socketFactory(url);
+}
+
 /// Issue a JSON-shaped request. Returns parsed JSON, or undefined
 /// for 204 / empty responses. Throws ApiError on non-2xx, or on
 /// the wall-clock timeout (10 s by default) so the UI never
@@ -203,7 +240,7 @@ async function requestTo<T>(
   if (sigs.length > 0) init.signal = AbortSignal.any(sigs);
 
   try {
-    const res = await fetch(url, init);
+    const res = await chanFetch(url, init);
     if (!res.ok) {
       const text = await res.text().catch(() => res.statusText);
       // Try to parse the body as JSON so structured error responses
@@ -296,7 +333,7 @@ export function openWatch(
       path = `${path}${sep}w=${encodeURIComponent(windowId)}`;
     }
     const url = `${proto}//${window.location.host}${path}`;
-    ws = new WebSocket(url);
+    ws = createSocket(url);
     ws.onopen = () => {
       backoff = 500;
       onStatus("open");
@@ -401,7 +438,7 @@ export function openLocalColorWatch(
     // on the root launcher router, so a window served under a tenant prefix must
     // reach the watch at root or it 404s. Bearer rides as `?t=` (WS can't header).
     const path = rootTokenQuery("/api/library/local-color/watch");
-    ws = new WebSocket(`${proto}//${window.location.host}${path}`);
+    ws = createSocket(`${proto}//${window.location.host}${path}`);
     ws.onopen = () => {
       backoff = 500;
     };
