@@ -36,7 +36,7 @@ use crate::routes::files::{
 };
 use crate::static_assets::content_type_for;
 
-/// Re-root a terminal-tenant `*path` (the control socket strips the leading
+/// Re-root a terminal-tenant `{*path}` (the control socket strips the leading
 /// `/` before sending it) at the filesystem root. A standalone-terminal
 /// transfer is uid-scoped, not workspace-scoped, so the path is always
 /// absolute.
@@ -157,9 +157,9 @@ pub(crate) struct TerminalDownloadQuery {
     download: Option<String>,
 }
 
-/// `GET /api/files/*path?download=1` on the terminal tenant: stream the cwd /
+/// `GET /api/files/{*path}?download=1` on the terminal tenant: stream the cwd /
 /// uid-scoped file or a tar of the directory. Mounted only on the slim terminal
-/// router, so `*path` is always a filesystem-absolute target (see
+/// router, so `{*path}` is always a filesystem-absolute target (see
 /// [`abs_from_terminal_path`]).
 pub async fn api_terminal_read_file(
     AxumPath(path): AxumPath<String>,

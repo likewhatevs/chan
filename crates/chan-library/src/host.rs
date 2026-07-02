@@ -2169,7 +2169,7 @@ impl HostControl for WorkspaceHost {
 
 async fn host_dispatch(State(host): State<Arc<WorkspaceHost>>, req: Request<Body>) -> Response {
     // Tenant-root trailing-slash canonicalization. A tenant nests at its prefix
-    // (`Router::new().nest("/{prefix}", inner)`), and axum's nest serves
+    // (`Router::new().nest(prefix, inner)`), and axum's nest serves
     // `/{prefix}` and `/{prefix}/<rest>` but 404s the EXACT `/{prefix}/`. The
     // canonical public URL is `/{prefix}/` (the SPA's vite `base: "./"` resolves
     // its relative asset URLs against the document path, so it must end in `/`
@@ -2506,6 +2506,51 @@ mod tests {
 
         // An unmounted path still 404s (no tenant owns it).
         assert_eq!(status("/nope/").await.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn host_root_fallback_covers_only_unmatched_prefixes() {
+        // The launcher root fallback answers ONLY paths no tenant prefix owns.
+        // An unknown path UNDER a mounted prefix stays with the tenant (its own
+        // SPA fallback), never the launcher: host_dispatch hands each request
+        // to exactly one router, so the launcher fallback cannot bleed into
+        // tenant misses regardless of axum's nest fallback-inheritance
+        // semantics.
+        let cfg = tempfile::tempdir().expect("config dir");
+        let root = tempfile::tempdir().expect("workspace");
+        std::fs::write(root.path().join("note.md"), "# n\n").expect("write");
+        let lib = Library::open_at(cfg.path().join("config.toml")).expect("library");
+        lib.register_workspace(root.path()).expect("register");
+        let host = Arc::new(WorkspaceHost::new(lib.clone(), fake_builder()));
+        host.open_registered_workspace(root.path(), serve_config("/blog"))
+            .await
+            .expect("open");
+        host.install_root_fallback(
+            Router::new().fallback(|| async { (StatusCode::OK, "launcher") }),
+        );
+        let app = host.router();
+
+        let body_of = |uri: &'static str| {
+            let app = app.clone();
+            async move {
+                let response = app
+                    .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), StatusCode::OK, "{uri}");
+                let bytes = to_bytes(response.into_body(), 1024 * 1024)
+                    .await
+                    .expect("read body");
+                String::from_utf8(bytes.to_vec()).expect("utf8 body")
+            }
+        };
+
+        // Unknown paths under the mounted prefix: the tenant's own fallback.
+        assert_eq!(body_of("/blog/nonexistent").await, "spa");
+        assert_eq!(body_of("/blog/api/nonexistent").await, "spa");
+        // Unknown paths outside every prefix: the installed root fallback.
+        assert_eq!(body_of("/nonexistent").await, "launcher");
+        assert_eq!(body_of("/").await, "launcher");
     }
 
     #[tokio::test]

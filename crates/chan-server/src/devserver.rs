@@ -943,7 +943,7 @@ fn build_devserver_app(state: Arc<DevserverState>, host: Arc<WorkspaceHost>) -> 
             get(handle_list).post(handle_open),
         )
         .route(
-            "/api/devserver/workspaces/*prefix",
+            "/api/devserver/workspaces/{*prefix}",
             delete(handle_forget).post(handle_set_workspace_on),
         )
         .route("/api/devserver/windows", get(handle_list_windows))
@@ -2417,6 +2417,56 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(api_miss.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn launcher_root_fallback_serves_unknown_paths() {
+        use axum::body::to_bytes;
+        use tower::ServiceExt;
+
+        let home = tempfile::tempdir().expect("home");
+        let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let state = test_state(home.path(), addr);
+        let host = state.host.clone();
+        let app = build_devserver_app(state, host);
+
+        let fetch = |uri: &'static str| {
+            let app = app.clone();
+            async move {
+                let response = app
+                    .oneshot(HttpRequest::builder().uri(uri).body(Body::empty()).unwrap())
+                    .await
+                    .unwrap();
+                let status = response.status();
+                let bytes = to_bytes(response.into_body(), 1 << 20).await.unwrap();
+                (status, String::from_utf8(bytes.to_vec()).unwrap())
+            }
+        };
+
+        // An unknown non-API path outside every tenant prefix serves exactly
+        // what the launcher root serves (the SPA shell, or the 404 naming the
+        // unbuilt bundle): serve_launcher answers both from the root fallback.
+        // The body must identify the LAUNCHER either way; equality alone would
+        // also hold for two bare host 404s with the fallback not installed.
+        let (root_status, root_body) = fetch("/").await;
+        let (unknown_status, unknown_body) = fetch("/nonexistent-page").await;
+        assert!(
+            unknown_body.contains("Chan Launcher")
+                || unknown_body.contains("launcher bundle not built"),
+            "unknown path must be answered by the launcher fallback (status {unknown_status}, body starts: {:.120})",
+            unknown_body,
+        );
+        assert_eq!(unknown_status, root_status);
+        assert_eq!(unknown_body, root_body);
+
+        // An /api miss outside every prefix stays a real 404, never SPA HTML.
+        let (api_status, api_body) = fetch("/api/nonexistent").await;
+        assert_eq!(api_status, StatusCode::NOT_FOUND);
+        assert!(
+            !api_body.contains("<html"),
+            "api miss must not serve the SPA shell (body starts: {:.120})",
+            api_body,
+        );
     }
 
     #[tokio::test]

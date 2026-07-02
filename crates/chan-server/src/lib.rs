@@ -966,14 +966,14 @@ fn terminal_router(state: Arc<AppState>) -> Router {
         // Cross-window roster seed; live updates ride the `/ws` bus.
         .route("/api/terminals/roster", get(api_terminals_roster))
         .route("/api/terminals", post(api_create_terminal))
-        .route("/api/terminals/:session", delete(api_delete_terminal))
+        .route("/api/terminals/{session}", delete(api_delete_terminal))
         .route(
-            "/api/terminals/:session/restart",
+            "/api/terminals/{session}/restart",
             post(api_restart_terminal),
         )
         // Cross-window broadcast toggle (Select All / per-row, other windows).
         .route(
-            "/api/terminals/:session/broadcast",
+            "/api/terminals/{session}/broadcast",
             post(api_set_terminal_broadcast),
         )
         // Standalone-terminal file transfer: `cs upload` / `cs download` from a
@@ -986,7 +986,7 @@ fn terminal_router(state: Arc<AppState>) -> Router {
                 .layer(DefaultBodyLimit::max(50 * 1024 * 1024)),
         )
         .route(
-            "/api/files/*path",
+            "/api/files/{*path}",
             get(crate::routes::transfer::api_terminal_read_file),
         )
         .route("/api/build-info", get(api_build_info))
@@ -1435,7 +1435,7 @@ fn router(state: Arc<AppState>) -> Router {
             post(api_session_handover_reply),
         )
         .route(
-            "/api/files/*path",
+            "/api/files/{*path}",
             get(api_read_file)
                 .put(api_write_file)
                 .delete(api_delete_file),
@@ -1461,7 +1461,7 @@ fn router(state: Arc<AppState>) -> Router {
         .route("/api/preflight/cs-link", post(api_cs_link_create))
         .route("/api/link-targets", get(api_link_targets))
         .route("/api/resolve-link", get(api_resolve_link))
-        .route("/api/headings/*path", get(api_headings))
+        .route("/api/headings/{*path}", get(api_headings))
         .route("/api/links", get(api_links))
         .route("/api/graph", get(api_graph))
         .route("/api/graph/languages", get(api_language_graph))
@@ -1471,7 +1471,7 @@ fn router(state: Arc<AppState>) -> Router {
         // queries this to surface `@@<Name>` references across the
         // broader markdown corpus (not just contacts).
         .route("/api/mentions", get(api_get_mentions))
-        .route("/api/backlinks/*path", get(api_backlinks))
+        .route("/api/backlinks/{*path}", get(api_backlinks))
         .route("/api/report/file", get(api_report_file))
         .route("/api/report/prefix", get(api_report_prefix))
         .route("/api/report/dir", get(api_report_dir))
@@ -1521,13 +1521,13 @@ fn router(state: Arc<AppState>) -> Router {
         .route("/api/terminal/next-name", get(api_terminal_next_name))
         .route("/api/terminals/roster", get(api_terminals_roster))
         .route("/api/terminals", post(api_create_terminal))
-        .route("/api/terminals/:session", delete(api_delete_terminal))
+        .route("/api/terminals/{session}", delete(api_delete_terminal))
         .route(
-            "/api/terminals/:session/restart",
+            "/api/terminals/{session}/restart",
             post(api_restart_terminal),
         )
         .route(
-            "/api/terminals/:session/broadcast",
+            "/api/terminals/{session}/broadcast",
             post(api_set_terminal_broadcast),
         )
         .route("/ws", get(ws_upgrade))
@@ -1536,8 +1536,8 @@ fn router(state: Arc<AppState>) -> Router {
         // The SPA's `@font-face` declaration points at this path; a
         // future expansion (italic / bold weights, additional faces)
         // drops more entries into `crates/chan-server/resources/fonts/`
-        // and the same `:name` segment serves them.
-        .route("/static/fonts/:name", get(serve_font));
+        // and the same `{name}` segment serves them.
+        .route("/static/fonts/{name}", get(serve_font));
     // Read-only semantic-search state. Gated on
     // `embeddings` because the SemanticState payload + the
     // `chan-workspace` resolver behind it only exist when the candle
@@ -1577,12 +1577,77 @@ mod terminal_router_tests {
 
     // Constructing the slim terminal router asserts its routes assemble without
     // an axum conflict — in particular the standalone-transfer pair
-    // (`/api/files/upload` POST + `/api/files/*path` GET) coexisting on this
+    // (`/api/files/upload` POST + `/api/files/{*path}` GET) coexisting on this
     // tenant. A conflict panics at build time, which would otherwise only
     // surface when a real standalone-terminal window opens.
     #[tokio::test]
     async fn terminal_router_assembles_with_standalone_transfer_routes() {
         let state = crate::state::test_support::make_test_state(false);
         let _router = terminal_router(state);
+    }
+
+    // The terminal tenant's transfer route re-roots its wildcard capture at
+    // the filesystem root, so `/api/files/<abs-path>` must resolve and serve
+    // the absolute target. Serving real bytes through the assembled router
+    // pins the capture shape the handler depends on.
+    #[tokio::test]
+    async fn terminal_router_serves_absolute_paths_via_wildcard_capture() {
+        use axum::body::to_bytes;
+        use tower::ServiceExt;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("probe.txt");
+        std::fs::write(&file, b"wildcard capture probe").expect("write probe");
+
+        let state = crate::state::test_support::make_test_state(false);
+        let app = terminal_router(state);
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri(format!("/api/files{}?download=1", file.display()))
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        let bytes = to_bytes(response.into_body(), 1 << 20).await.expect("body");
+        assert_eq!(&bytes[..], b"wildcard capture probe");
+    }
+}
+
+#[cfg(test)]
+mod wildcard_capture_tests {
+    use super::*;
+
+    // api_headings and api_backlinks feed their wildcard capture verbatim
+    // into graph lookups keyed by workspace-relative paths WITHOUT a leading
+    // slash; a capture that included the slash would silently return empty
+    // results instead of erroring. This reflector pins axum's side of that
+    // contract: the catch-all capture excludes the slash separating it from
+    // the route prefix.
+    #[tokio::test]
+    async fn wildcard_capture_excludes_the_leading_slash() {
+        use tower::ServiceExt;
+
+        let app: Router = Router::new().route(
+            "/api/headings/{*path}",
+            axum::routing::get(
+                |axum::extract::Path(path): axum::extract::Path<String>| async move { path },
+            ),
+        );
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/api/headings/notes/a.md")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 16)
+            .await
+            .expect("body");
+        assert_eq!(&bytes[..], b"notes/a.md");
     }
 }

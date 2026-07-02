@@ -194,7 +194,7 @@ async fn pump_loop(
             // closed sender (registry torn down) ends the stream.
             scoped = scope_rx.recv() => match scoped {
                 Some(frame) => {
-                    if socket.send(Message::Text(frame)).await.is_err() {
+                    if socket.send(Message::text(frame)).await.is_err() {
                         break;
                     }
                     last_activity.store(now_unix_secs(), Ordering::Relaxed);
@@ -214,7 +214,7 @@ async fn pump_loop(
                             continue;
                         }
                     }
-                    if socket.send(Message::Text(frame)).await.is_err() {
+                    if socket.send(Message::text(frame)).await.is_err() {
                         break;
                     }
                     last_activity.store(now_unix_secs(), Ordering::Relaxed);
