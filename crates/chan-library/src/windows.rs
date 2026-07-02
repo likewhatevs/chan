@@ -53,6 +53,29 @@ pub enum WindowKind {
     Workspace,
 }
 
+/// Which client surface minted a window. `Native` (a desktop or CLI mint) is
+/// the default; `Browser` marks a window minted from a browser tab, which
+/// chan-desktop must NOT reconcile into a native twin (its watcher skips
+/// non-native records). Client-claimed at mint (the server cannot infer the
+/// acting surface), the same honest-client trust as the acting window id.
+/// `rename_all = "lowercase"` pins the wire tags `"native"` / `"browser"`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum WindowOrigin {
+    #[default]
+    Native,
+    Browser,
+}
+
+impl WindowOrigin {
+    /// A native (desktop/CLI) mint. The reconciler shows only native records;
+    /// the serde skip predicate keeps a native row's on-disk/wire shape
+    /// unchanged.
+    pub fn is_native(&self) -> bool {
+        matches!(self, WindowOrigin::Native)
+    }
+}
+
 /// One library-owned window: the authoritative record every client reconciles
 /// to. Assembled at read time from a [`PersistedWindow`] plus live state.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -115,6 +138,12 @@ pub struct WindowRecord {
     /// treats absent as visible.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub hidden: bool,
+    /// Which client surface minted this window. `browser` marks a browser-tab
+    /// mint that chan-desktop skips (never opens a native twin); omitted from
+    /// the wire when native (the common case), and absent reads as native so
+    /// existing rows stay native.
+    #[serde(default, skip_serializing_if = "WindowOrigin::is_native")]
+    pub origin: WindowOrigin,
 }
 
 /// The window-set watch frame: a full snapshot pushed on connect and on every
@@ -145,6 +174,12 @@ pub struct CreateWindow {
     /// Required for `kind == Workspace`; omitted for a terminal window.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace_path: Option<String>,
+    /// Client-claimed affinity: `browser` when a browser tab mints the window,
+    /// so chan-desktop never opens a native twin. Absent (the desktop / CLI
+    /// mint) reads as native; honest-client input, same trust as the acting
+    /// window id.
+    #[serde(default, skip_serializing_if = "WindowOrigin::is_native")]
+    pub origin: WindowOrigin,
 }
 
 // ---------------------------------------------------------------------------
@@ -186,6 +221,12 @@ pub struct PersistedWindow {
     /// default keeps an existing/visible row's on-disk shape unchanged.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub hidden: bool,
+    /// Which client surface minted this window. Persisted so a browser-minted
+    /// window stays browser across a restart (chan-desktop keeps skipping it).
+    /// `skip_serializing_if` default keeps a native row's on-disk shape
+    /// unchanged; absent reads as native.
+    #[serde(default, skip_serializing_if = "WindowOrigin::is_native")]
+    pub origin: WindowOrigin,
 }
 
 impl PersistedWindow {
@@ -220,6 +261,7 @@ impl PersistedWindow {
             active_transfer: false,
             control: self.control,
             hidden: self.hidden,
+            origin: self.origin,
         }
     }
 }
@@ -321,10 +363,23 @@ impl WindowRegistry {
         self.lock().is_empty()
     }
 
-    /// Mint and persist a new window of `kind` (with `workspace_path` for a
-    /// workspace window). The library owns the id, the ordinal, and the title;
-    /// returns the durable row. Fires the change notification.
+    /// Mint and persist a new NATIVE window of `kind` (with `workspace_path` for
+    /// a workspace window). The library owns the id, the ordinal, and the title;
+    /// returns the durable row. Fires the change notification. The desktop and
+    /// CLI mint through here; a browser mint uses [`Self::create_with_origin`].
     pub fn create(&self, kind: WindowKind, workspace_path: Option<String>) -> PersistedWindow {
+        self.create_with_origin(kind, workspace_path, WindowOrigin::Native)
+    }
+
+    /// Mint and persist a new window with an explicit client `origin`, stamped at
+    /// creation so a browser-minted row is never briefly visible as native to the
+    /// desktop reconciler. Otherwise identical to [`Self::create`].
+    pub fn create_with_origin(
+        &self,
+        kind: WindowKind,
+        workspace_path: Option<String>,
+        origin: WindowOrigin,
+    ) -> PersistedWindow {
         let (row, snapshot) = {
             let mut windows = self.lock();
             let window_id = mint_id(&windows);
@@ -339,6 +394,7 @@ impl WindowRegistry {
                 control: false,
                 library_id: None,
                 hidden: false,
+                origin,
             };
             windows.push(row.clone());
             (row, windows.clone())
@@ -368,6 +424,8 @@ impl WindowRegistry {
             control: true,
             library_id: Some(library_id),
             hidden: false,
+            // A control terminal is a desktop-native window.
+            origin: WindowOrigin::Native,
         };
         {
             let mut windows = self.lock();
@@ -657,6 +715,7 @@ mod tests {
             active_transfer: false,
             control: false,
             hidden: false,
+            origin: WindowOrigin::Native,
         };
         let v = serde_json::to_value(&rec).unwrap();
         assert_eq!(
@@ -695,6 +754,7 @@ mod tests {
             active_transfer: false,
             control: false,
             hidden: false,
+            origin: WindowOrigin::Native,
         };
         assert_eq!(
             serde_json::to_value(&rec).unwrap(),
@@ -751,6 +811,7 @@ mod tests {
                 active_transfer: true,
                 control: false,
                 hidden: false,
+                origin: WindowOrigin::Native,
             }],
             leaders: BTreeMap::new(),
         };
@@ -795,6 +856,7 @@ mod tests {
             control: true,
             library_id: Some("lib-0f1e2d3c4b5a6978".into()),
             hidden: true,
+            origin: WindowOrigin::Native,
         };
         let rec = row.to_record(
             "lib-0f1e2d3c4b5a6978".into(),
@@ -820,6 +882,7 @@ mod tests {
         let term = CreateWindow {
             kind: WindowKind::Terminal,
             workspace_path: None,
+            origin: WindowOrigin::Native,
         };
         assert_eq!(
             serde_json::to_value(&term).unwrap(),
@@ -833,10 +896,63 @@ mod tests {
         let ws = CreateWindow {
             kind: WindowKind::Workspace,
             workspace_path: Some("/home/u/notes".into()),
+            origin: WindowOrigin::Native,
         };
         assert_eq!(
             serde_json::to_value(&ws).unwrap(),
             json!({ "kind": "workspace", "workspace_path": "/home/u/notes" })
+        );
+    }
+
+    #[test]
+    fn window_origin_browser_wire() {
+        // `native` is skip-if-default (absent on the wire); `browser` is explicit.
+        assert_eq!(
+            serde_json::to_value(WindowOrigin::Browser).unwrap(),
+            json!("browser")
+        );
+        assert_eq!(
+            serde_json::from_value::<WindowOrigin>(json!("native")).unwrap(),
+            WindowOrigin::Native
+        );
+
+        // A browser mint carries the affinity; an absent origin reads as native
+        // (so an existing client / row stays native).
+        let browser = CreateWindow {
+            kind: WindowKind::Workspace,
+            workspace_path: Some("/n".into()),
+            origin: WindowOrigin::Browser,
+        };
+        assert_eq!(
+            serde_json::to_value(&browser).unwrap(),
+            json!({ "kind": "workspace", "workspace_path": "/n", "origin": "browser" })
+        );
+        let native: CreateWindow = serde_json::from_value(json!({ "kind": "terminal" })).unwrap();
+        assert_eq!(native.origin, WindowOrigin::Native);
+
+        // A browser row surfaces `origin` on the feed and round-trips; flipping it
+        // back to native drops it off the wire.
+        let mut rec = PersistedWindow {
+            window_id: "w-b".into(),
+            kind: WindowKind::Workspace,
+            title: "🏠 /n Window 1".into(),
+            ordinal: 1,
+            workspace_path: Some("/n".into()),
+            control: false,
+            library_id: None,
+            hidden: false,
+            origin: WindowOrigin::Browser,
+        }
+        .to_record("local".into(), "/api/n-0".into(), "tok".into(), true);
+        assert_eq!(rec.origin, WindowOrigin::Browser);
+        let v = serde_json::to_value(&rec).unwrap();
+        assert_eq!(v["origin"], "browser");
+        assert_eq!(rec, serde_json::from_value(v).unwrap());
+        rec.origin = WindowOrigin::Native;
+        let v = serde_json::to_value(&rec).unwrap();
+        assert!(
+            v.get("origin").is_none(),
+            "native origin is skip-if-default"
         );
     }
 
@@ -851,6 +967,7 @@ mod tests {
             control: false,
             library_id: None,
             hidden: false,
+            origin: WindowOrigin::Native,
         };
         let v = serde_json::to_value(&p).unwrap();
         assert_eq!(
@@ -874,6 +991,7 @@ mod tests {
             control: false,
             library_id: None,
             hidden: false,
+            origin: WindowOrigin::Native,
         };
         assert_eq!(
             serde_json::to_value(&t).unwrap(),
@@ -890,6 +1008,7 @@ mod tests {
             control: true,
             library_id: Some("lib-f81913a8ca0a6ff6".into()),
             hidden: false,
+            origin: WindowOrigin::Native,
         };
         let cv = serde_json::to_value(&c).unwrap();
         assert_eq!(
@@ -915,6 +1034,7 @@ mod tests {
             control: false,
             library_id: None,
             hidden: true,
+            origin: WindowOrigin::Native,
         };
         let hv = serde_json::to_value(&h).unwrap();
         assert_eq!(hv["hidden"], true);
@@ -1176,6 +1296,7 @@ mod tests {
             control: false,
             library_id: None,
             hidden: false,
+            origin: WindowOrigin::Native,
         };
         let rec = p.to_record("local".into(), "/api/n-0".into(), String::new(), false);
         assert_eq!(rec.window_id, "w-abc");
@@ -1203,6 +1324,7 @@ mod tests {
             control: true,
             library_id: Some("lib-remote".into()),
             hidden: false,
+            origin: WindowOrigin::Native,
         };
         let crec = c.to_record("lib-remote".into(), "/control-0".into(), "tok".into(), true);
         assert!(crec.control);

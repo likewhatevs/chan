@@ -5411,6 +5411,7 @@ mod tests {
             active_transfer: false,
             control: false,
             hidden: false,
+            origin: chan_server::WindowOrigin::Native,
         }]));
         feed.register_windows("ds-1".to_string(), snapshot);
         // Cache cold during a fresh connect -> the window seeds None (blue).
@@ -5444,6 +5445,7 @@ mod tests {
             active_transfer: false,
             control: false,
             hidden: false,
+            origin: chan_server::WindowOrigin::Native,
         }]));
         feed.register_windows("ds-1".to_string(), snapshot);
 

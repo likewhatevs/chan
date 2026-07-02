@@ -599,6 +599,7 @@ mod tests {
             active_transfer: false,
             control: false,
             hidden: false,
+            origin: chan_server::WindowOrigin::Native,
         }
     }
 

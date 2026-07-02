@@ -29,7 +29,7 @@ use crate::terminal_sessions::{CloseReason, TerminalExit};
 use crate::terminal_sessions::{
     FdStoreRestoreReport, FdStoreSessionImport, FdStoreSessionSnapshot, FdStoreSkippedSession,
 };
-use crate::windows::{PersistedWindow, WindowKind, WindowRecord, WindowRegistry};
+use crate::windows::{PersistedWindow, WindowKind, WindowOrigin, WindowRecord, WindowRegistry};
 use crate::{
     allocate_workspace_prefix, sanitize_prefix, DevserverRegistry, Error, ServeConfig, ServeHandle,
     WorkspaceOverlay,
@@ -1316,21 +1316,34 @@ impl WorkspaceHost {
         leaders
     }
 
-    /// Mint a window: persist a new registry row and return its assembled
+    /// Mint a NATIVE window: persist a new registry row and return its assembled
     /// [`WindowRecord`] (the same shape the feed serves, so a `POST` handler
     /// returns it directly). The registry's create fires the watch via the
     /// bridge; this also fires it directly so the push does not hinge on the
     /// bridge task's scheduling. The tenant side ensures a serving tenant exists
-    /// for the new window.
+    /// for the new window. The desktop and CLI mint through here; the launcher's
+    /// browser mint uses [`Self::mint_window_with_origin`].
     pub fn mint_window(
         &self,
         kind: WindowKind,
         workspace_path: Option<String>,
     ) -> Result<WindowRecord, Error> {
+        self.mint_window_with_origin(kind, workspace_path, WindowOrigin::Native)
+    }
+
+    /// Mint a window with an explicit client `origin` (stamped at creation).
+    /// A `browser` origin marks a browser-tab mint that chan-desktop must not
+    /// reconcile into a native twin. Otherwise identical to [`Self::mint_window`].
+    pub fn mint_window_with_origin(
+        &self,
+        kind: WindowKind,
+        workspace_path: Option<String>,
+        origin: WindowOrigin,
+    ) -> Result<WindowRecord, Error> {
         let registry = self
             .window_registry()
             .ok_or_else(|| Error::Config("window registry not installed".into()))?;
-        let row = registry.create(kind, workspace_path);
+        let row = registry.create_with_origin(kind, workspace_path, origin);
         // A Terminal window's session lives in the shared terminal tenant and is
         // auto-opened by the watcher, so the SPA never PUTs a layout blob to
         // persist it — without a durable blob it would be orphan-reaped on the

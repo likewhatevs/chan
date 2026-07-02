@@ -3807,6 +3807,7 @@ mod tests {
             active_transfer: false,
             control,
             hidden: false,
+            origin: crate::WindowOrigin::Native,
         }
     }
 

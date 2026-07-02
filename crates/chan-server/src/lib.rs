@@ -66,7 +66,7 @@ pub use chan_library::terminal_sessions::TerminalExit;
 #[cfg(unix)]
 pub use chan_library::user_shell;
 pub use chan_library::window_titles::{SharedWindowTitles, WindowMeta, WindowTitles};
-pub use chan_library::windows::{CreateWindow, WindowKind, WindowRecord, WindowSet};
+pub use chan_library::windows::{CreateWindow, WindowKind, WindowOrigin, WindowRecord, WindowSet};
 pub(crate) use chan_library::{
     desktop_window_ops, session_presence, window_presence, window_titles, window_transfers,
 };

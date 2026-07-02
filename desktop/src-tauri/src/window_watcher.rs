@@ -65,8 +65,9 @@ pub trait NativeSurface {
     fn close(&self, label: &str);
 }
 
-/// Whether the reconcile surfaces `record` as a native window: persisted, not
-/// **server-hidden**, not **locally buried**, and backed by a **live
+/// Whether the reconcile surfaces `record` as a native window: persisted,
+/// **native-origin** (a browser-minted window is never opened as a native twin),
+/// not **server-hidden**, not **locally buried**, and backed by a **live
 /// tenant** (a non-empty `token`).
 /// `record.hidden` is the server-persisted visibility, the source of
 /// truth a connect MIRRORS, so a window hidden last session stays hidden on the
@@ -81,6 +82,7 @@ pub trait NativeSurface {
 /// snapshot entirely).
 fn should_show(record: &WindowRecord, buried: &HashSet<String>) -> bool {
     record.persisted
+        && record.origin.is_native()
         && !record.hidden
         && !buried.contains(&native_label(record))
         && !record.token.is_empty()
@@ -257,7 +259,7 @@ pub async fn watch_loop<F, S, C>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chan_server::WindowKind;
+    use chan_server::{WindowKind, WindowOrigin};
     use std::cell::RefCell;
 
     /// A test surface: a settable "currently open" set + a recording of the
@@ -308,6 +310,7 @@ mod tests {
             active_transfer: false,
             control: false,
             hidden: false,
+            origin: WindowOrigin::Native,
         }
     }
 
@@ -321,6 +324,18 @@ mod tests {
         let snap = vec![rec("local", "w-1", WindowKind::Terminal)];
         reconcile("local", &snap, &none(), &s);
         assert_eq!(*s.opened.borrow(), vec!["local::w-1"]);
+        assert!(s.closed.borrow().is_empty());
+    }
+
+    #[test]
+    fn browser_minted_window_is_never_opened_natively() {
+        // A browser-origin record must not open a native twin even though it is
+        // persisted, visible, and tokened (D4: the desktop skips non-native rows).
+        let s = FakeSurface::with(&[]);
+        let mut r = rec("local", "w-browser", WindowKind::Workspace);
+        r.origin = WindowOrigin::Browser;
+        reconcile("local", &[r], &none(), &s);
+        assert!(s.opened.borrow().is_empty(), "browser window not opened");
         assert!(s.closed.borrow().is_empty());
     }
 

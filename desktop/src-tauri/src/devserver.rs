@@ -502,6 +502,8 @@ pub async fn mint_library_window(
     let body = chan_server::CreateWindow {
         kind,
         workspace_path,
+        // The desktop mints native windows on a connected devserver.
+        origin: chan_server::WindowOrigin::Native,
     };
     let resp = http_client()?
         .post(&url)

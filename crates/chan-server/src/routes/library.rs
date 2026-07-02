@@ -424,7 +424,9 @@ async fn handle_create_library_window(
                 .into_response();
         }
     }
-    match host.mint_window(req.kind, req.workspace_path) {
+    // Stamp the client-claimed affinity at mint so chan-desktop never opens a
+    // native twin for a browser-minted window (honest-client input, D4).
+    match host.mint_window_with_origin(req.kind, req.workspace_path, req.origin) {
         Ok(record) => Json(record).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
