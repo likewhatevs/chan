@@ -6,6 +6,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- **Opening a slides file reveals the Outline.** A markdown file that declares `kind: slides` in its `chan:` frontmatter block opens with the Outline panel already showing, where the Preview and Present controls live. It fires only on a first open, so closing the Outline and reloading keeps it closed, and a plain markdown file is unaffected.
+
 ### Fixed
 
 - **Markdown lists render again below a `---` line.** A document whose first line is `---` with no closing fence no longer collapses the whole parse into one empty block, so the horizontal rule, headings, lists, and task lists below it all style correctly. Bullet (`-`, `*`, `+`), ordered, and task markers behave identically. The wysiwyg decorations also refresh the moment the background parse finishes, so a large edit or a sibling split pane no longer leaves list markers showing as raw text until the next click.

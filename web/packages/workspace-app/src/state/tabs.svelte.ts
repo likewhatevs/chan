@@ -20,6 +20,7 @@ import {
   sourceCaretForRenderedCaret,
 } from "../editor/caret_mapping";
 import { stripTrailingWhitespaceText } from "../editor/tools";
+import { parseSlidesSpec } from "../editor/slides";
 import { uiConfirm } from "./confirm.svelte";
 import { editorToolsPrefs } from "./editorTools.svelte";
 import { classifyPath, isCsv, isEditableText, isExcalidraw, isJson } from "./fileTypes";
@@ -2433,7 +2434,30 @@ export async function openInPane(
   // This is the `cs open {path}` path too (handleWindowCommand -> openInPane).
   bumpTabFocusPulse();
   await loadTabContent(paneId, newTab.id, path);
+  maybeAutoOpenSlidesOutline(paneId, newTab.id);
   restoreSavedCaretAfterLoad(paneId, newTab.id, path, opts);
+}
+
+/// A freshly opened slides file auto-opens the Outline once. Slide-ness is
+/// only knowable after the content loads (a `chan:` frontmatter block with
+/// `kind: slides`, parsed client-side), and the Outline is where the slide
+/// Preview / Present controls live, so a first open surfaces them.
+///
+/// Re-fetch the live tab by id: `loadTabContent` mutates the $state proxy
+/// stored by `p.tabs.push`, not the pre-push `newTab` reference, whose
+/// `content` is still "" after the await. This fires only on a first open
+/// through `openInPane`; session restore, reload-from-disk, duplication, and
+/// refocus of an existing tab all bypass this spot, so a user who closes the
+/// Outline (persisted as the `ol` bit) keeps it closed on the next reload.
+function maybeAutoOpenSlidesOutline(paneId: string, tabId: string): void {
+  const node = layout.nodes[paneId];
+  if (!node || node.kind !== "leaf") return;
+  const t = node.tabs.find(
+    (tab): tab is FileTab => tab.kind === "file" && tab.id === tabId,
+  );
+  if (!t || t.error || t.fileMissing || t.outlineOpen) return;
+  if (parseSlidesSpec(t.content) === null) return;
+  setTabOutlineOpen(t, true);
 }
 
 /// Once a fresh open finishes streaming, settle the caret and pull focus into

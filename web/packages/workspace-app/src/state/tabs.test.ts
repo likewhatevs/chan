@@ -524,6 +524,52 @@ describe("tab close confirmation", () => {
     });
   });
 
+  describe("slides files auto-open the Outline", () => {
+    const SLIDES = "---\nchan:\n  kind: slides\n---\n\n# Slide 1\n";
+
+    function firstFileTab(): FileTab {
+      const t = activePane().tabs[0];
+      if (t?.kind !== "file") throw new Error("expected a file tab");
+      return t;
+    }
+
+    test("a fresh slides open auto-opens the Outline", async () => {
+      vi.spyOn(api, "readStream").mockResolvedValue({
+        path: "deck.md",
+        content: SLIDES,
+        mtime: 1,
+        mtime_ns: "1",
+        writable: true,
+      });
+      const pane = resetLayout([]);
+      await openInPane(pane.id, "deck.md", {});
+      expect(firstFileTab().outlineOpen).toBe(true);
+    });
+
+    test("a plain markdown open does not auto-open the Outline", async () => {
+      vi.spyOn(api, "readStream").mockResolvedValue({
+        path: "notes.md",
+        content: "# just notes\n",
+        mtime: 1,
+        mtime_ns: "1",
+        writable: true,
+      });
+      const pane = resetLayout([]);
+      await openInPane(pane.id, "notes.md", {});
+      expect(firstFileTab().outlineOpen).toBe(false);
+    });
+
+    test("refocusing a slides tab does not re-open a closed Outline", async () => {
+      // A refocus reuses the existing tab without reloading, so the
+      // auto-open hook never runs and the user's closed state stands.
+      const pane = resetLayout([
+        fileTab({ path: "deck.md", content: SLIDES, outlineOpen: false }),
+      ]);
+      await openInPane(pane.id, "deck.md", {});
+      expect(firstFileTab().outlineOpen).toBe(false);
+    });
+  });
+
   describe("per-file caret persistence", () => {
     test("setTabCaret records the caret when the tab is not loading", () => {
       vi.mocked(recordCaret).mockClear();
@@ -1262,6 +1308,46 @@ describe("pane state", () => {
       index: 1,
       mode: "play",
     });
+  });
+
+  test("hash round-trips an open Outline via the ol bit", async () => {
+    const file = fileTab({ outlineOpen: true });
+    resetLayout([file]);
+
+    const snapshot = serializeLayout();
+    expect(JSON.stringify(snapshot)).toContain('"ol":1');
+
+    await restoreLayout(snapshot!);
+
+    const restored = activePane().tabs[0];
+    expect(restored?.kind).toBe("file");
+    if (restored?.kind !== "file") return;
+    expect(restored.outlineOpen).toBe(true);
+  });
+
+  test("a closed Outline on a slides file stays closed across a reload", async () => {
+    // Session restore never runs the auto-open hook, so a slides file whose
+    // Outline the user closed reloads with it still closed even though the
+    // content still parses as slides.
+    vi.spyOn(api, "readStream").mockResolvedValue({
+      path: "deck.md",
+      content: "---\nchan:\n  kind: slides\n---\n\n# Slide 1\n",
+      mtime: 1,
+      mtime_ns: "1",
+      writable: true,
+    });
+    const file = fileTab({ path: "deck.md", outlineOpen: false });
+    resetLayout([file]);
+
+    const snapshot = serializeLayout();
+    expect(JSON.stringify(snapshot)).not.toContain('"ol"');
+
+    await restoreLayout(snapshot!);
+
+    const restored = activePane().tabs[0];
+    expect(restored?.kind).toBe("file");
+    if (restored?.kind !== "file") return;
+    expect(restored.outlineOpen).toBe(false);
   });
 
   test("pane mode discards draft changes on cancel", () => {
