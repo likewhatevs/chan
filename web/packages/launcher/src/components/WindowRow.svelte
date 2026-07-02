@@ -1,21 +1,26 @@
 <script lang="ts">
   // One window/terminal row in the machine tree (control terminals, standalone
-  // terminals, and the windows nested in a workspace card). The mutable surface
-  // carries two icon actions: [FOCUS] (openWindow: focus a live window / un-hide
-  // a buried one) and [SHOW/HIDE] (toggleWindow: Eye when visible, EyeOff when
-  // hidden, keyed on the server-persisted `hidden`). A control terminal whose
-  // inner process exited slow-flashes its eye yellow for attention; the user
-  // acting on the window clears it. The read-only surface (gateway/devserver, no
-  // desktop bridge) renders the row static with the connection dot and no actions.
+  // terminals, and the windows nested in a workspace card). The row adapts to the
+  // surface's capabilities:
+  //   - desktop bridge: [FOCUS] (focus a live window / un-hide a buried one) and
+  //     [SHOW/HIDE] (Eye when visible, EyeOff when hidden, keyed on the
+  //     server-persisted `hidden`). A control terminal whose inner process exited
+  //     slow-flashes its eye yellow for attention; acting on the window clears it.
+  //   - self-managed (devserver/PWA): no bridge, so [OPEN] opens the window as an
+  //     in-app browser window. An orphaned window (in the feed, no live handle
+  //     here) flashes for a re-open click.
+  //   - readonly (gateway): static, connection dot only, no actions.
   //
   // `icon` adds a leading kind glyph (accent for the control terminal) and, for a
   // control terminal awaiting attention, an amber "disconnected..." pill; the
   // machine tree passes it for every row.
-  import { AppWindow, Eye, EyeOff, Focus, SquareTerminal } from "lucide-svelte";
+  import { AppWindow, ExternalLink, Eye, EyeOff, Focus, SquareTerminal } from "lucide-svelte";
   import { focusWindow, toggleWindow, reportError, clearError } from "../state/library.svelte";
   import { windowRowLabel } from "../lib/windowLabel";
   import { hasControlAttention, clearControlAttention } from "../state/controlAttention.svelte";
-  import { readOnly } from "../state/capabilities";
+  import { hasWindowAttention } from "../state/windowAttention.svelte";
+  import { hasDesktopBridge, selfManagedWindows } from "../state/capabilities";
+  import { openWindowRecord } from "../state/windowManager.svelte";
   import type { WindowRecord } from "../api/library";
 
   interface Props {
@@ -50,21 +55,7 @@
   }
 </script>
 
-{#if readOnly}
-  <!-- Read-only surface (gateway/devserver): the dot shows the connection state
-       but can't drive a native window. -->
-  <div class="row">
-    {#if icon}
-      <span class="row-glyph" class:control={w.control} aria-hidden="true">
-        {#if w.kind === "workspace"}<AppWindow size={15} />{:else}<SquareTerminal size={15} />{/if}
-      </span>
-    {/if}
-    <div class="row-main">
-      <span class="row-name">{windowRowLabel(w)}</span>
-    </div>
-    <span class="dot" class:live={w.connected} title={w.connected ? "Connected" : "Detached"}></span>
-  </div>
-{:else}
+{#if hasDesktopBridge}
   <div class="row">
     {#if icon}
       <span class="row-glyph" class:control={w.control} aria-hidden="true">
@@ -111,6 +102,45 @@
         {#if w.hidden}<EyeOff size={16} />{:else}<Eye size={16} />{/if}
       </button>
     </div>
+  </div>
+{:else if selfManagedWindows}
+  <!-- Self-managed (devserver/PWA): no desktop bridge, so [OPEN] opens the
+       window in-app as a browser window. An orphaned window (in the feed, no
+       live handle here) flashes for a re-open click. -->
+  <div class="row">
+    {#if icon}
+      <span class="row-glyph" class:control={w.control} aria-hidden="true">
+        {#if w.kind === "workspace"}<AppWindow size={15} />{:else}<SquareTerminal size={15} />{/if}
+      </span>
+    {/if}
+    <div class="row-main">
+      <span class="row-name">{windowRowLabel(w)}</span>
+    </div>
+    <div class="row-actions">
+      <button
+        class="icon-btn"
+        class:attention={hasWindowAttention(w.window_id)}
+        type="button"
+        title="Open window"
+        aria-label={hasWindowAttention(w.window_id) ? "Open window (not open here)" : "Open window"}
+        onclick={() => openWindowRecord(w)}>
+        <ExternalLink size={16} />
+      </button>
+    </div>
+  </div>
+{:else}
+  <!-- Readonly surface (gateway): the dot shows the connection state but can't
+       drive a native window. -->
+  <div class="row">
+    {#if icon}
+      <span class="row-glyph" class:control={w.control} aria-hidden="true">
+        {#if w.kind === "workspace"}<AppWindow size={15} />{:else}<SquareTerminal size={15} />{/if}
+      </span>
+    {/if}
+    <div class="row-main">
+      <span class="row-name">{windowRowLabel(w)}</span>
+    </div>
+    <span class="dot" class:live={w.connected} title={w.connected ? "Connected" : "Detached"}></span>
   </div>
 {/if}
 
