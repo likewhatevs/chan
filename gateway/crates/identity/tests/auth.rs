@@ -905,7 +905,7 @@ async fn share_landing_grantee_minted_jwt_redirect() {
 
 #[tokio::test]
 async fn share_landing_root_unauthed_redirects_to_login() {
-    // Whole-devserver open (/s/:owner, no workspace) while signed out:
+    // Whole-devserver open (/s/{owner}, no workspace) while signed out:
     // 303 to the login root, same as the per-workspace landing.
     let app = TestApp::new().await;
     let mut c = Client::new(&app);

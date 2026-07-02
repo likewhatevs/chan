@@ -31,7 +31,7 @@ const SESSION_COOKIE: &str = "id_session";
 const KEY_USER: &str = "user_id";
 const KEY_PENDING: &str = "pending_oauth";
 /// Optional post-login redirect target. Set by the share landing
-/// when an unauthenticated user lands on `/s/:owner/:workspace` so the
+/// when an unauthenticated user lands on `/s/{owner}/{workspace}` so the
 /// OAuth callback can resume the flow instead of dropping the user
 /// at the dashboard. Stored as a relative path; the callback
 /// validates the prefix before using it.
@@ -144,28 +144,28 @@ pub fn router(
 
     Router::new()
         .route("/healthz", get(healthz))
-        .route("/auth/:provider", get(auth_start))
-        .route("/auth/:provider/callback", get(auth_callback))
+        .route("/auth/{provider}", get(auth_start))
+        .route("/auth/{provider}/callback", get(auth_callback))
         .route("/api/providers", get(providers_list))
         .route("/api/me", get(me))
         .route("/api/me/username", patch(update_username))
         .route("/api/logout", post(logout))
         .route("/api/profile", axum::routing::delete(delete_profile))
         .route("/api/tokens", get(tokens_list).post(tokens_create))
-        .route("/api/tokens/:id", axum::routing::delete(tokens_revoke))
-        .route("/api/tokens/:id/audit", get(tokens_audit))
+        .route("/api/tokens/{id}", axum::routing::delete(tokens_revoke))
+        .route("/api/tokens/{id}/audit", get(tokens_audit))
         .route("/api/devservers/owned", get(devservers_owned))
         .route("/api/devservers/incoming", get(devservers_incoming))
         .route(
-            "/api/devservers/:devserver_id/grants",
+            "/api/devservers/{devserver_id}/grants",
             get(devserver_grants_list).post(devserver_grants_create),
         )
         .route(
-            "/api/grants/:id",
+            "/api/grants/{id}",
             axum::routing::delete(devserver_grants_delete),
         )
-        .route("/s/:owner", get(share_landing_root))
-        .route("/s/:owner/:workspace", get(share_landing))
+        .route("/s/{owner}", get(share_landing_root))
+        .route("/s/{owner}/{workspace}", get(share_landing))
         .route(
             "/desktop/authorize",
             get(crate::desktop_authorize::authorize),
@@ -274,7 +274,7 @@ async fn auth_callback_inner(
     // provider compare can't be used to oracle which provider the
     // session expects via response-time differences. Provider check
     // is a plain compare because the value was already trusted on
-    // /auth/:provider entry; pairing it with state validation just
+    // /auth/{provider} entry; pairing it with state validation just
     // catches a session that crossed providers mid-flow.
     if !ct_eq(&pending.state, &state_param) {
         return Err(Error::BadRequest("state mismatch".into()));
@@ -1070,7 +1070,7 @@ fn is_devserver_id_shape(s: &str) -> bool {
 // ---------------------------------------------------------------------------
 
 /// Public entry point for a copied per-tenant share link
-/// (`/s/:owner/:workspace`).
+/// (`/s/{owner}/{workspace}`).
 ///
 /// Flow:
 ///   1. If the caller has no session, stash the path and 303 to `/` so
@@ -1215,7 +1215,7 @@ async fn share_landing_root(
     // would get full library mutation (add/rm/on-off workspaces, devserver
     // CRUD). Until the proxy injects a signed caller/role header, restrict
     // whole-devserver open to the owner; grantees keep the per-workspace
-    // share landings (`/s/:owner/:workspace`). 404 (not 403) preserves the
+    // share landings (`/s/{owner}/{workspace}`). 404 (not 403) preserves the
     // handle-existence privacy parity with the resolve above.
     if uid != owner_user.id {
         return Err(Error::NotFound);

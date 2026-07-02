@@ -71,67 +71,67 @@ pub fn router(state: AppState) -> Router {
     let api = Router::new()
         .route("/v1/users", post(create_user))
         .route(
-            "/v1/users/:id",
+            "/v1/users/{id}",
             get(get_user).patch(update_user).delete(delete_user),
         )
-        .route("/v1/users/:id/username", patch(update_username))
+        .route("/v1/users/{id}/username", patch(update_username))
         .route("/v1/users/by-identity", get(get_user_by_identity))
         .route("/v1/users/by-username", get(get_user_by_username))
         .route(
             "/v1/users/upsert-by-identity",
             post(upsert_user_by_identity),
         )
-        .route("/v1/users/:id/identities", post(create_identity))
+        .route("/v1/users/{id}/identities", post(create_identity))
         .route(
-            "/v1/users/:owner_id/devservers",
+            "/v1/users/{owner_id}/devservers",
             get(list_devservers).post(create_devserver),
         )
         .route(
-            "/v1/users/:owner_id/devservers/:devserver_id",
+            "/v1/users/{owner_id}/devservers/{devserver_id}",
             axum::routing::delete(delete_devserver),
         )
         .route(
-            "/v1/users/:owner_id/devservers/:devserver_id/grants",
+            "/v1/users/{owner_id}/devservers/{devserver_id}/grants",
             get(list_devserver_grants).post(create_devserver_grant),
         )
         .route(
-            "/v1/users/:owner_id/devservers/:devserver_id/access",
+            "/v1/users/{owner_id}/devservers/{devserver_id}/access",
             get(devserver_access),
         )
         .route(
-            "/v1/users/:owner_id/grants/:id",
+            "/v1/users/{owner_id}/grants/{id}",
             axum::routing::delete(delete_devserver_grant),
         )
-        .route("/v1/users/:id/grants/owned", get(list_owned_devservers))
-        .route("/v1/users/:id/grants/incoming", get(list_incoming_shares))
-        .route("/v1/users/:id/grants/claim", post(claim_grants))
-        .route("/v1/users/:id/flags", get(get_user_flags))
+        .route("/v1/users/{id}/grants/owned", get(list_owned_devservers))
+        .route("/v1/users/{id}/grants/incoming", get(list_incoming_shares))
+        .route("/v1/users/{id}/grants/claim", post(claim_grants))
+        .route("/v1/users/{id}/flags", get(get_user_flags))
         .route("/v1/auth-audit", post(write_auth_audit))
         .route_layer(middleware::from_fn_with_state(state.clone(), auth));
 
     let admin = Router::new()
         .route("/v1/admin/users", get(admin_list_users))
-        .route("/v1/admin/users/:id/block", post(admin_block_user))
-        .route("/v1/admin/users/:id/unblock", post(admin_unblock_user))
-        .route("/v1/admin/users/:id/email", post(admin_change_email))
-        .route("/v1/admin/users/:id/auth-audit", get(admin_user_audit))
-        .route("/v1/admin/users/:id/tokens", get(admin_user_tokens))
-        .route("/v1/admin/tokens/:id/revoke", post(admin_revoke_token))
-        .route("/v1/admin/tokens/:id/audit", get(admin_token_audit))
+        .route("/v1/admin/users/{id}/block", post(admin_block_user))
+        .route("/v1/admin/users/{id}/unblock", post(admin_unblock_user))
+        .route("/v1/admin/users/{id}/email", post(admin_change_email))
+        .route("/v1/admin/users/{id}/auth-audit", get(admin_user_audit))
+        .route("/v1/admin/users/{id}/tokens", get(admin_user_tokens))
+        .route("/v1/admin/tokens/{id}/revoke", post(admin_revoke_token))
+        .route("/v1/admin/tokens/{id}/audit", get(admin_token_audit))
         .route(
             "/v1/admin/flags",
             get(admin_list_flags).post(admin_upsert_flag),
         )
         .route(
-            "/v1/admin/flags/:key",
+            "/v1/admin/flags/{key}",
             axum::routing::delete(admin_delete_flag),
         )
         .route(
-            "/v1/admin/flags/:key/overrides",
+            "/v1/admin/flags/{key}/overrides",
             get(admin_list_flag_overrides).post(admin_upsert_flag_override),
         )
         .route(
-            "/v1/admin/flags/:key/overrides/:user_id",
+            "/v1/admin/flags/{key}/overrides/{user_id}",
             axum::routing::delete(admin_delete_flag_override),
         )
         .route_layer(middleware::from_fn_with_state(state.clone(), admin_auth));
@@ -246,7 +246,7 @@ async fn get_user(State(state): State<AppState>, Path(id): Path<Uuid>) -> Result
 /// for branch (b) of `upsert_by_identity` and rewriting it would
 /// pivot account ownership to any account whose verified OAuth email
 /// matched the new value. Email mutation lives behind the admin
-/// bearer on `POST /v1/admin/users/:id/email`.
+/// bearer on `POST /v1/admin/users/{id}/email`.
 async fn update_user(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,

@@ -935,7 +935,7 @@ async fn websocket_bridges_text_frames() {
         ws.on_upgrade(|mut socket| async move {
             if let Some(Ok(axum::extract::ws::Message::Text(s))) = socket.recv().await {
                 let _ = socket
-                    .send(axum::extract::ws::Message::Text(format!("echo:{s}")))
+                    .send(axum::extract::ws::Message::Text(format!("echo:{s}").into()))
                     .await;
             }
             let _ = socket.close().await;

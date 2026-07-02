@@ -44,48 +44,48 @@ All routes Bearer-gated. The middleware accepts either the regular or admin toke
 
 Service API (`/v1/users/*`, `/v1/auth-audit`):
 
-| Method | Path                               | Purpose                       |
-|--------|------------------------------------|-------------------------------|
-| POST   | `/v1/users`                        | create user                   |
-| GET    | `/v1/users/:id`                    | fetch one user                |
-| PATCH  | `/v1/users/:id`                    | update mutable fields         |
-| DELETE | `/v1/users/:id`                    | hard delete (cascades)        |
-| PATCH  | `/v1/users/:id/username`           | rename handle (cap 4)         |
-| GET    | `/v1/users/by-identity`            | lookup by (provider, subject) |
-| GET    | `/v1/users/by-username`            | case-insensitive handle lookup |
-| POST   | `/v1/users/upsert-by-identity`     | atomic find-or-create-or-link |
-| POST   | `/v1/users/:id/identities`         | attach OAuth identity         |
-| GET    | `/v1/users/:o/devservers`              | list owner's devservers           |
-| POST   | `/v1/users/:o/devservers`              | create devserver (idempotent)     |
-| DELETE | `/v1/users/:o/devservers/:d`           | delete devserver (cascades grants)|
-| POST   | `/v1/users/:o/devservers/:d/grants`    | create / promote devserver grant  |
-| GET    | `/v1/users/:o/devservers/:d/grants`    | list grants on a devserver        |
-| GET    | `/v1/users/:o/devservers/:d/access`    | access check, `?as=<user_id>` |
-| DELETE | `/v1/users/:o/grants/:id`          | revoke a grant (owner-scoped) |
-| GET    | `/v1/users/:id/grants/owned`       | devservers this user shares       |
-| GET    | `/v1/users/:id/grants/incoming`    | devservers shared with this user  |
-| POST   | `/v1/users/:id/grants/claim`       | claim pending grants by email |
-| GET    | `/v1/users/:id/flags`              | resolved flags for one user   |
-| POST   | `/v1/auth-audit`                   | append login/logout event     |
+| Method | Path                                  | Purpose                            |
+|--------|---------------------------------------|------------------------------------|
+| POST   | `/v1/users`                           | create user                        |
+| GET    | `/v1/users/{id}`                      | fetch one user                     |
+| PATCH  | `/v1/users/{id}`                      | update mutable fields              |
+| DELETE | `/v1/users/{id}`                      | hard delete (cascades)             |
+| PATCH  | `/v1/users/{id}/username`             | rename handle (cap 4)              |
+| GET    | `/v1/users/by-identity`               | lookup by (provider, subject)      |
+| GET    | `/v1/users/by-username`               | case-insensitive handle lookup     |
+| POST   | `/v1/users/upsert-by-identity`        | atomic find-or-create-or-link      |
+| POST   | `/v1/users/{id}/identities`           | attach OAuth identity              |
+| GET    | `/v1/users/{o}/devservers`            | list owner's devservers            |
+| POST   | `/v1/users/{o}/devservers`            | create devserver (idempotent)      |
+| DELETE | `/v1/users/{o}/devservers/{d}`        | delete devserver (cascades grants) |
+| POST   | `/v1/users/{o}/devservers/{d}/grants` | create / promote devserver grant   |
+| GET    | `/v1/users/{o}/devservers/{d}/grants` | list grants on a devserver         |
+| GET    | `/v1/users/{o}/devservers/{d}/access` | access check, `?as=<user_id>`      |
+| DELETE | `/v1/users/{o}/grants/{id}`           | revoke a grant (owner-scoped)      |
+| GET    | `/v1/users/{id}/grants/owned`         | devservers this user shares        |
+| GET    | `/v1/users/{id}/grants/incoming`      | devservers shared with this user   |
+| POST   | `/v1/users/{id}/grants/claim`         | claim pending grants by email      |
+| GET    | `/v1/users/{id}/flags`                | resolved flags for one user        |
+| POST   | `/v1/auth-audit`                      | append login/logout event          |
 
 Admin API (`/v1/admin/*`):
 
-| Method | Path                                       | Purpose                     |
-|--------|--------------------------------------------|-----------------------------|
-| GET    | `/v1/admin/users`                          | list, with filters          |
-| POST   | `/v1/admin/users/:id/block`                | block + revoke PATs         |
-| POST   | `/v1/admin/users/:id/unblock`              | clear block                 |
-| POST   | `/v1/admin/users/:id/email`                | rewrite email (audited)     |
-| GET    | `/v1/admin/users/:id/auth-audit`           | per-user audit log          |
-| GET    | `/v1/admin/users/:id/tokens`               | list user's PATs            |
-| POST   | `/v1/admin/tokens/:id/revoke`              | revoke a PAT                |
-| GET    | `/v1/admin/tokens/:id/audit`               | per-token audit log         |
-| GET    | `/v1/admin/flags`                          | list flags + override count |
-| POST   | `/v1/admin/flags`                          | create / update a flag      |
-| DELETE | `/v1/admin/flags/:key`                     | drop flag (cascades overrides) |
-| GET    | `/v1/admin/flags/:key/overrides`           | per-user overrides on a flag |
-| POST   | `/v1/admin/flags/:key/overrides`           | upsert per-user override    |
-| DELETE | `/v1/admin/flags/:key/overrides/:user_id`  | clear per-user override     |
+| Method | Path                                        | Purpose                        |
+|--------|---------------------------------------------|--------------------------------|
+| GET    | `/v1/admin/users`                           | list, with filters             |
+| POST   | `/v1/admin/users/{id}/block`                | block + revoke PATs            |
+| POST   | `/v1/admin/users/{id}/unblock`              | clear block                    |
+| POST   | `/v1/admin/users/{id}/email`                | rewrite email (audited)        |
+| GET    | `/v1/admin/users/{id}/auth-audit`           | per-user audit log             |
+| GET    | `/v1/admin/users/{id}/tokens`               | list user's PATs               |
+| POST   | `/v1/admin/tokens/{id}/revoke`              | revoke a PAT                   |
+| GET    | `/v1/admin/tokens/{id}/audit`               | per-token audit log            |
+| GET    | `/v1/admin/flags`                           | list flags + override count    |
+| POST   | `/v1/admin/flags`                           | create / update a flag         |
+| DELETE | `/v1/admin/flags/{key}`                     | drop flag (cascades overrides) |
+| GET    | `/v1/admin/flags/{key}/overrides`           | per-user overrides on a flag   |
+| POST   | `/v1/admin/flags/{key}/overrides`           | upsert per-user override       |
+| DELETE | `/v1/admin/flags/{key}/overrides/{user_id}` | clear per-user override        |
 
 Plus `GET /healthz` (no auth).
 

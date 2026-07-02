@@ -94,37 +94,37 @@ Optional knobs:
 
 Public (no session required):
 
-| Method | Path                          | Purpose                       |
-|--------|-------------------------------|-------------------------------|
-| GET    | `/`                           | SPA root (index.html)         |
-| GET    | `/healthz`                    | health check                  |
-| GET    | `/auth/:provider`             | OAuth start (PKCE)            |
-| GET    | `/auth/:provider/callback`    | OAuth callback                |
+| Method | Path                        | Purpose               |
+|--------|-----------------------------|-----------------------|
+| GET    | `/`                         | SPA root (index.html) |
+| GET    | `/healthz`                  | health check          |
+| GET    | `/auth/{provider}`          | OAuth start (PKCE)    |
+| GET    | `/auth/{provider}/callback` | OAuth callback        |
 
 Session-gated SPA API (`/api/*`):
 
-| Method | Path                  | Purpose                                 |
-|--------|-----------------------|-----------------------------------------|
-| GET    | `/api/providers`      | list of enabled OAuth providers         |
-| GET    | `/api/me`             | current user                            |
-| PATCH  | `/api/me/username`    | rename handle                           |
-| POST   | `/api/logout`         | invalidate session                      |
-| DELETE | `/api/profile`        | account deletion                        |
-| GET    | `/api/tokens`         | list PATs                               |
-| POST   | `/api/tokens`         | mint a PAT (returns plaintext once)     |
-| DELETE | `/api/tokens/:id`     | revoke a PAT                            |
-| GET    | `/api/tokens/:id/audit` | per-token audit log                   |
-| GET    | `/api/devservers/owned`   | devservers the user owns (+ grant counts)   |
-| GET    | `/api/devservers/incoming`| devservers shared with the user             |
-| POST   | `/api/devservers/:d/grants`| share a devserver (whole library) by email |
-| GET    | `/api/devservers/:d/grants`| list grants on the user's devserver        |
-| DELETE | `/api/grants/:id`     | revoke a grant on the user's devserver      |
+| Method | Path                         | Purpose                                    |
+|--------|------------------------------|--------------------------------------------|
+| GET    | `/api/providers`             | list of enabled OAuth providers            |
+| GET    | `/api/me`                    | current user                               |
+| PATCH  | `/api/me/username`           | rename handle                              |
+| POST   | `/api/logout`                | invalidate session                         |
+| DELETE | `/api/profile`               | account deletion                           |
+| GET    | `/api/tokens`                | list PATs                                  |
+| POST   | `/api/tokens`                | mint a PAT (returns plaintext once)        |
+| DELETE | `/api/tokens/{id}`           | revoke a PAT                               |
+| GET    | `/api/tokens/{id}/audit`     | per-token audit log                        |
+| GET    | `/api/devservers/owned`      | devservers the user owns (+ grant counts)  |
+| GET    | `/api/devservers/incoming`   | devservers shared with the user            |
+| POST   | `/api/devservers/{d}/grants` | share a devserver (whole library) by email |
+| GET    | `/api/devservers/{d}/grants` | list grants on the user's devserver        |
+| DELETE | `/api/grants/{id}`           | revoke a grant on the user's devserver     |
 
 Public share landing (no auth at the door):
 
-| Method | Path                  | Purpose                                 |
-|--------|-----------------------|-----------------------------------------|
-| GET    | `/s/:owner/:workspace`    | per-tenant share link (OAuth-then-mint) |
+| Method | Path                     | Purpose                                 |
+|--------|--------------------------|-----------------------------------------|
+| GET    | `/s/{owner}/{workspace}` | per-tenant share link (OAuth-then-mint) |
 
 Desktop authorize (PAT mint for chan-desktop; consent is session-gated, entry bounces through sign-in when needed):
 
