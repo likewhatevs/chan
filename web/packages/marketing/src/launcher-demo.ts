@@ -5,8 +5,15 @@ import LauncherDemo from "@chan/launcher/demo";
 const target = document.getElementById("launcher-demo");
 
 if (target) {
-  // Display-only launcher mock: window tiles toggle the demo's own state but
-  // open no workspace overlay on the marketing site.
-  mount(LauncherDemo, { target });
+  mount(LauncherDemo, {
+    target,
+    props: {
+      // Any window tile opens the same frontend-only workspace demo. The
+      // overlay module (the whole workspace-app bundle) loads on first click.
+      onOpenWindow: () => {
+        void import("./workspace-demo").then((m) => m.openWorkspaceDemo());
+      },
+    },
+  });
   target.classList.add("mounted");
 }
