@@ -6,6 +6,7 @@
   import ConfirmModal from "./components/ConfirmModal.svelte";
   import ConflictModal from "./components/ConflictModal.svelte";
   import DisconnectOverlay from "./components/DisconnectOverlay.svelte";
+  import SessionEndedOverlay from "./components/SessionEndedOverlay.svelte";
   import DraftCloseModal from "./components/DraftCloseModal.svelte";
   import WorkspaceWarningsModal from "./components/WorkspaceWarningsModal.svelte";
   import TeamDialog from "./components/TeamDialog.svelte";
@@ -1426,6 +1427,9 @@
 <!-- Disconnect overlay applies in every mode: any window is just
      as broken when the watcher dies, regardless of layout. -->
 <DisconnectOverlay />
+<!-- Terminal overlay when the session leader closes/hides this window; stacks
+     above the reconnect overlay since the window is gone, not reconnecting. -->
+<SessionEndedOverlay />
 <!-- Missing-token overlay: surfaces when the user landed on the
      SPA shell without the launch token, so /api 401s and the app
      is unusable until they reopen the original URL. -->

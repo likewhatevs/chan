@@ -23,7 +23,8 @@ import {
   type WsStatus,
 } from "../api/client";
 import { showSurvey } from "./survey.svelte";
-import { applySessionRoster, showHandover, type SessionParticipant } from "./session.svelte";
+import { applySessionRoster, isFollower, showHandover, type SessionParticipant } from "./session.svelte";
+import { isWindowEnded, markWindowDiscarded, markWindowHidden } from "./windowLifecycle.svelte";
 import {
   activeLayout,
   closePane,
@@ -911,7 +912,11 @@ type WindowCommandFrame =
       request_id: string;
       // Which representation to emit: auto (image-first) | text | html | image.
       prefer: "auto" | "text" | "html" | "image";
-    };
+    }
+  // The session leader discarded / hid this window from the launcher; the
+  // server targets the affected window's own socket. No payload.
+  | { type: "window_command"; window_id: string; command: "window_discarded" }
+  | { type: "window_command"; window_id: string; command: "window_hidden" };
 
 /// A tab's display title for `cs pane`: a file tab's basename, else its
 /// explicit `title`.
@@ -1262,6 +1267,23 @@ async function raiseDesktopUploadPicker(destDir: string): Promise<void> {
 async function handleWindowCommand(raw: unknown): Promise<void> {
   const frame = raw as Partial<WindowCommandFrame> | null;
   if (!frame || frame.window_id !== sessionWindowId()) return;
+  if (frame.command === "window_discarded") {
+    // The leader discarded this window's record (gone server-side). A native
+    // desktop window is torn down by the watcher, so this overlay is web-only.
+    // Stop persisting locally (no redundant DELETE) and raise the terminal
+    // "closed by the leader" overlay; there is nothing to reconnect to.
+    if (isTauriDesktop()) return;
+    discardWindowSessionLocal();
+    markWindowDiscarded();
+    return;
+  }
+  if (frame.command === "window_hidden") {
+    // The leader hid this window (its record persists, hidden). Raise the
+    // "hidden by the leader" overlay; web-only for the same reason.
+    if (isTauriDesktop()) return;
+    markWindowHidden();
+    return;
+  }
   if (frame.command === "open_file" && typeof frame.path === "string") {
     // `cs open {path}` is an explicit CLI open: land at document top.
     await openInActivePane(frame.path, { landAtTop: true });
@@ -1491,6 +1513,9 @@ async function checkServerInstance(): Promise<void> {
       return;
     }
     if (serverInstance !== instance) {
+      // A window torn down by the leader shows a terminal overlay; reloading it
+      // would reboot the discarded window into an empty layout behind the overlay.
+      if (isWindowEnded()) return;
       window.location.reload();
     }
   } catch {
@@ -2313,6 +2338,16 @@ function isLegacyLayoutPayload(value: unknown): value is ReturnType<typeof seria
   );
 }
 
+/// On the web a definite FOLLOWER window must not fire the layout-blob DELETE:
+/// the session's persisted layout belongs to the leader, so a follower emptying
+/// or unloading its view should not remove it. Uses isFollower (a leader exists
+/// and it is not us), NOT !isLeader, so a solo or not-yet-seeded window still
+/// deletes its own blob. Desktop windows always manage their own blob, so this
+/// never suppresses on desktop.
+function followerSuppressesSessionDelete(): boolean {
+  return !isTauriDesktop() && isFollower();
+}
+
 export function scheduleSessionSave(): void {
   if (!bootstrapHydrated || sessionDiscarded) return;
   if (sessionTimer) clearTimeout(sessionTimer);
@@ -2329,8 +2364,9 @@ export function scheduleSessionSave(): void {
     if (!payload) {
       // Window emptied out (layout serialized to null): delete the blob
       // rather than writing an empty one, so this window stops appearing
-      // as `saved` in `/api/windows` / `cs window list`.
-      void api.deleteSession().catch(() => {});
+      // as `saved` in `/api/windows` / `cs window list`. A web follower skips
+      // this: the layout belongs to the leader.
+      if (!followerSuppressesSessionDelete()) void api.deleteSession().catch(() => {});
     } else {
       void api.putSession(payload).catch(() => {});
     }
@@ -2351,14 +2387,7 @@ export function scheduleSessionSave(): void {
 /// to the target window. Without this the source's synchronous DELETE can beat
 /// the target's async re-attach and kill the just-moved terminal.
 export function discardWindowSession(opts?: { reap?: boolean }): void {
-  sessionDiscarded = true;
-  if (sessionTimer) {
-    clearTimeout(sessionTimer);
-    sessionTimer = null;
-  }
-  // No Cmd+R resurrection from the sessionStorage reload snapshot either.
-  writeLayoutReloadSnapshot(null);
-  lastSessionSnapshot = "";
+  discardWindowSessionLocal();
   // sessionPath() always carries `?w=`, so `&moved=1` is always a valid append.
   const url = withTokenQuery(sessionPath()) + (opts?.reap === false ? "&moved=1" : "");
   try {
@@ -2369,6 +2398,21 @@ export function discardWindowSession(opts?: { reap?: boolean }): void {
   } catch {
     /* page is going away; nothing useful we can do */
   }
+}
+
+/// Local half of a window discard: stop this window from persisting or
+/// resurrecting its session (clear the debounce, drop the reload snapshot, set
+/// the discarded guard). No server call, so a follower whose record the leader
+/// already removed tears down cleanly without a redundant DELETE.
+export function discardWindowSessionLocal(): void {
+  sessionDiscarded = true;
+  if (sessionTimer) {
+    clearTimeout(sessionTimer);
+    sessionTimer = null;
+  }
+  // No Cmd+R resurrection from the sessionStorage reload snapshot either.
+  writeLayoutReloadSnapshot(null);
+  lastSessionSnapshot = "";
 }
 
 export function __testSetBootstrapHydrated(value: boolean): void {
@@ -2409,8 +2453,11 @@ function flushSessionSaveOnExit(): void {
   try {
     if (payload === null) {
       // Window emptied out: delete on exit so it doesn't linger as a
-      // saved window. keepalive lets the request outlive the unload.
-      fetch(url, { method: "DELETE", keepalive: true }).catch(() => {});
+      // saved window. keepalive lets the request outlive the unload. A web
+      // follower skips this: the layout belongs to the leader.
+      if (!followerSuppressesSessionDelete()) {
+        fetch(url, { method: "DELETE", keepalive: true }).catch(() => {});
+      }
     } else {
       fetch(url, {
         method: "PUT",

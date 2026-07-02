@@ -63,6 +63,14 @@ export function isLeader(): boolean {
   return sessionState.leader !== null && sessionState.leader === sessionWindowId();
 }
 
+/// Whether this window is definitively a FOLLOWER: the roster names a leader and
+/// it is not this window. Distinct from `!isLeader()`, which is ALSO true for a
+/// solo or not-yet-seeded window (leader === null) that must still act as its
+/// own owner (e.g. persist/discard its own layout blob).
+export function isFollower(): boolean {
+  return sessionState.leader !== null && sessionState.leader !== sessionWindowId();
+}
+
 /// Raise the handover prompt: the leader's window received a `handover_prompt`
 /// for an in-flight `cs session handover`. A new request replaces a showing one
 /// (the server allows only one handover in flight, so this is a refresh).
