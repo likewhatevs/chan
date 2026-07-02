@@ -12,9 +12,11 @@ import type { FetchImpl } from "../api/transport";
 import type { GlobalConfig, Preferences } from "../api/types";
 import { DEMO_PREFERENCES, demoWorkspaceInfo } from "./data";
 import type { DemoGraph } from "./graph";
+import { exportMetadata, importMetadata } from "./metadata";
 import type { MockReports } from "./report";
 import { linkTargets, mentionLabels, searchContent, searchFiles } from "./search";
 import { kindForPath, type MockWorkspaceStore } from "./store";
+import { applyUpload } from "./upload";
 
 const JSON_HEADERS = { "content-type": "application/json" } as const;
 
@@ -142,6 +144,33 @@ export function createDemoFetch(
       const moved = store.move(body.from, body.to);
       for (const [from, to] of moved.renamed) graph.renameFile(from, to);
       return json(moved);
+    }
+
+    // --- uploads + metadata (multipart / blob; land in memory) ---
+    if (path === "/api/attachments" && method === "POST") {
+      const form = init?.body instanceof FormData ? init.body : null;
+      if (!form) return notFound("no form data");
+      const { path: saved } = await applyUpload(store, graph, form, "attachments");
+      return json({ path: saved });
+    }
+    if (path === "/api/metadata/export" && method === "POST") {
+      const meta = exportMetadata(store);
+      return new Response(meta.body, {
+        status: 200,
+        headers: {
+          "content-type": "application/json",
+          "content-disposition": `attachment; filename="${meta.filename}"`,
+          "x-chan-metadata-files": String(meta.files),
+          "x-chan-metadata-bytes": String(meta.bytes),
+        },
+      });
+    }
+    if (path === "/api/metadata/import" && method === "POST") {
+      const form = init?.body instanceof FormData ? init.body : null;
+      const file = form?.get("file");
+      const rescan = form?.get("rescan") !== "false";
+      const text = file instanceof Blob ? await file.text() : "";
+      return json(importMetadata(store, graph, text, { rescan }));
     }
     if (path === "/api/fs/transfer" && method === "POST") {
       const body = parseBody(init) as { op: string; sources: string[]; dest_dir: string };

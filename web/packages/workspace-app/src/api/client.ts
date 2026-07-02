@@ -53,6 +53,7 @@ import {
   apiPath,
   authToken as transportAuthToken,
   chanFetch,
+  createXhr,
   openWatch,
   request,
   requestRoot,
@@ -664,7 +665,7 @@ export const api = {
       const form = new FormData();
       form.append("file", file);
       form.append("dir", dir);
-      const xhr = new XMLHttpRequest();
+      const xhr = createXhr();
       xhr.open("POST", apiPath("/api/files/upload"));
       for (const [name, value] of Object.entries(directAuthHeaders())) {
         xhr.setRequestHeader(name, value);
@@ -722,7 +723,7 @@ export const api = {
       const form = new FormData();
       form.append("file", file);
       form.append("path", path);
-      const xhr = new XMLHttpRequest();
+      const xhr = createXhr();
       xhr.open("POST", apiPath("/api/files/upload"));
       for (const [name, value] of Object.entries(directAuthHeaders())) {
         xhr.setRequestHeader(name, value);

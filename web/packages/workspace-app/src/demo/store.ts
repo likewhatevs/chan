@@ -127,6 +127,21 @@ export class MockWorkspaceStore {
     return { mtime, mtime_ns: mtimeNs(mtime) };
   }
 
+  /// Write an uploaded file into memory. Unlike `write`, the byte size is
+  /// explicit (media/binary carry no text content, so size can't be derived
+  /// from a string length).
+  upload(path: string, opts: { size: number; kind: MockFileEntry["kind"]; content?: string }): void {
+    const isNew = !this.#files.has(path);
+    this.#files.set(path, {
+      path,
+      kind: opts.kind,
+      size: opts.size,
+      mtime: nowSeconds(),
+      content: opts.content,
+    });
+    if (isNew) this.#reindex();
+  }
+
   create(path: string, isDir: boolean, content?: string): void {
     if (isDir) {
       // Directories are implicit in the index; seed an empty bucket so an

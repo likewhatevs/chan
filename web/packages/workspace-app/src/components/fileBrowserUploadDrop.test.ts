@@ -41,7 +41,9 @@ describe("File Browser upload via the Upload button", () => {
   });
 
   test("api client uses XHR so upload progress can feed the transfer bubble", () => {
-    expect(client).toContain("new XMLHttpRequest()");
+    // XHR is created through the transport seam (createXhr) so the demo can
+    // swap in a mock; it is still an XMLHttpRequest on the production path.
+    expect(client).toContain("createXhr()");
     expect(client).toContain("xhr.upload.onprogress");
     expect(client).toContain('/api/files/upload');
     expect(client).toContain("opts.signal?.addEventListener");

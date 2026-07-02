@@ -145,9 +145,11 @@ export function authToken(): string | null {
 /// call, so a single override covers the entire wire surface.
 export type FetchImpl = (input: string, init?: RequestInit) => Promise<Response>;
 export type SocketFactory = (url: string) => WebSocket;
+export type XhrFactory = () => XMLHttpRequest;
 
 let fetchImpl: FetchImpl = (input, init) => fetch(input, init);
 let socketFactory: SocketFactory = (url) => new WebSocket(url);
+let xhrFactory: XhrFactory = () => new XMLHttpRequest();
 
 /// Install a replacement fetch (or `null` to restore the real one).
 export function setFetchImpl(impl: FetchImpl | null): void {
@@ -157,6 +159,14 @@ export function setFetchImpl(impl: FetchImpl | null): void {
 /// Install a replacement WebSocket factory (or `null` to restore the real one).
 export function setSocketFactory(factory: SocketFactory | null): void {
   socketFactory = factory ?? ((url) => new WebSocket(url));
+}
+
+/// Install a replacement XMLHttpRequest factory (or `null` to restore the real
+/// one). The multipart upload helpers use XHR directly (for upload progress),
+/// which the fetch seam does not cover; the demo swaps in a mock XHR that
+/// writes uploads into the in-memory store.
+export function setXhrFactory(factory: XhrFactory | null): void {
+  xhrFactory = factory ?? (() => new XMLHttpRequest());
 }
 
 /// The fetch every API call routes through: typed api methods, streaming
@@ -169,6 +179,12 @@ export function chanFetch(input: string, init?: RequestInit): Promise<Response> 
 /// terminal PTY, and the local-color watch. Defaults to `new WebSocket`.
 export function createSocket(url: string): WebSocket {
   return socketFactory(url);
+}
+
+/// The XMLHttpRequest the multipart upload helpers route through. Defaults to
+/// `new XMLHttpRequest`.
+export function createXhr(): XMLHttpRequest {
+  return xhrFactory();
 }
 
 /// Issue a JSON-shaped request. Returns parsed JSON, or undefined

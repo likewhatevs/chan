@@ -11,6 +11,7 @@ import { DemoGraph, parseMarkdown } from "./graph";
 import { MockReports } from "./report";
 import { createDemoFetch } from "./router";
 import { MockWorkspaceStore } from "./store";
+import { applyUpload, createDemoUploadXhr } from "./upload";
 
 const A_MD = [
   "# Alpha",
@@ -436,6 +437,123 @@ describe("report endpoints", () => {
     expect(r.totals).toMatchObject({ files: 3, code: 110 });
     // Rust (100 code) sorts before Markdown (10 code).
     expect(r.by_language.map((l) => l.name)).toEqual(["Rust", "Markdown"]);
+  });
+});
+
+describe("uploads", () => {
+  const build = () => {
+    const s = new MockWorkspaceStore(fixture());
+    return { s, g: new DemoGraph(s, []) };
+  };
+
+  test("applyUpload writes a text file under dir and returns {path,size}", async () => {
+    const { s, g } = build();
+    const form = new FormData();
+    form.append("file", new File(["# Note\nhi"], "note.md", { type: "text/markdown" }));
+    form.append("dir", "docs");
+    const res = await applyUpload(s, g, form);
+    expect(res).toEqual({ path: "docs/note.md", size: 9 });
+    expect(s.read("docs/note.md")?.content).toContain("# Note");
+  });
+
+  test("applyUpload replace targets the explicit path", async () => {
+    const { s, g } = build();
+    const form = new FormData();
+    form.append("file", new File(["changed"], "whatever.md"));
+    form.append("path", "README.md");
+    expect((await applyUpload(s, g, form)).path).toBe("README.md");
+    expect(s.read("README.md")?.content).toBe("changed");
+  });
+
+  test("applyUpload stores an image as media with byte size, no content", async () => {
+    const { s, g } = build();
+    const form = new FormData();
+    form.append("file", new File([new Uint8Array([1, 2, 3, 4])], "pic.png", { type: "image/png" }));
+    form.append("dir", "assets");
+    const res = await applyUpload(s, g, form);
+    expect(res).toEqual({ path: "assets/pic.png", size: 4 });
+    const entry = s.get("assets/pic.png");
+    expect(entry).toMatchObject({ kind: "media", size: 4 });
+    expect(entry?.content).toBeUndefined();
+  });
+
+  test("the mock XHR drives an upload through the XHR surface", async () => {
+    const { s, g } = build();
+    const xhr = createDemoUploadXhr(s, g);
+    const form = new FormData();
+    form.append("file", new File(["hello"], "up.txt"));
+    form.append("dir", "docs");
+    xhr.open("POST", "/api/files/upload");
+    const done = new Promise<void>((resolve, reject) => {
+      xhr.onload = () => resolve();
+      xhr.onerror = () => reject(new Error(xhr.responseText));
+    });
+    xhr.send(form);
+    await done;
+    expect(xhr.status).toBe(200);
+    expect(JSON.parse(xhr.responseText)).toEqual({ path: "docs/up.txt", size: 5 });
+    expect(s.read("docs/up.txt")?.content).toBe("hello");
+  });
+
+  test("POST /api/attachments lands under attachments/ and returns the path", async () => {
+    const st = new MockWorkspaceStore(fixture());
+    const f = demoFetch(st);
+    const form = new FormData();
+    form.append("file", new File([new Uint8Array([9, 9])], "diagram.png", { type: "image/png" }));
+    const res = (await (await f("/api/attachments", { method: "POST", body: form })).json()) as {
+      path: string;
+    };
+    expect(res.path).toBe("attachments/diagram.png");
+    expect(st.list("attachments").map((e) => e.path)).toContain("attachments/diagram.png");
+  });
+});
+
+describe("metadata export / import", () => {
+  test("export carries archive headers and captures live edits", async () => {
+    const st = new MockWorkspaceStore(fixture());
+    const f = demoFetch(st);
+    await f("/api/files/README.md", { method: "PUT", body: JSON.stringify({ content: "edited" }) });
+    const res = await f("/api/metadata/export", { method: "POST" });
+    expect(res.headers.get("content-disposition")).toContain("metadata.json");
+    expect(Number(res.headers.get("x-chan-metadata-files"))).toBeGreaterThan(0);
+    const archive = JSON.parse(await res.text()) as { format: string; files: Array<{ path: string }> };
+    expect(archive.format).toBe("chan-demo-metadata");
+    expect(archive.files.find((x) => x.path === "README.md")).toBeTruthy();
+  });
+
+  test("import applies an exported archive into a fresh in-memory store", async () => {
+    const src = new MockWorkspaceStore(fixture());
+    const fsrc = demoFetch(src);
+    await fsrc("/api/files/README.md", { method: "PUT", body: JSON.stringify({ content: "edited" }) });
+    const archive = await (await fsrc("/api/metadata/export", { method: "POST" })).text();
+
+    const dst = new MockWorkspaceStore(fixture());
+    const fdst = demoFetch(dst);
+    const form = new FormData();
+    form.append("file", new File([archive], "a.json"));
+    form.append("rescan", "true");
+    const report = (await (await fdst("/api/metadata/import", { method: "POST", body: form })).json()) as {
+      files: number;
+      rescanned: boolean;
+      imported_subtrees: string[];
+      manifest: { archive_format_version: number };
+    };
+    expect(report.files).toBeGreaterThan(0);
+    expect(report.rescanned).toBe(true);
+    expect(report.imported_subtrees).toContain("README.md");
+    expect(report.manifest.archive_format_version).toBe(1);
+    expect(dst.read("README.md")?.content).toBe("edited");
+  });
+
+  test("importing a non-demo archive is a benign empty report", async () => {
+    const st = new MockWorkspaceStore(fixture());
+    const f = demoFetch(st);
+    const form = new FormData();
+    form.append("file", new File(["not an archive"], "x.txt"));
+    const report = (await (await f("/api/metadata/import", { method: "POST", body: form })).json()) as {
+      files: number;
+    };
+    expect(report.files).toBe(0);
   });
 });
 
