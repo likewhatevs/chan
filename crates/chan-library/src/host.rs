@@ -1316,6 +1316,20 @@ impl WorkspaceHost {
         leaders
     }
 
+    /// The leader window_id of the tenant that governs the EXISTING window
+    /// `window_id` (the discard / visibility gate), or `None` when the window is
+    /// unknown, its tenant is unmounted, or the tenant is leaderless. Resolves the
+    /// window's registry row to its kind + workspace path, then reuses
+    /// [`tenant_leader`](Self::tenant_leader). Same honest-client caveat.
+    pub fn window_tenant_leader(&self, window_id: &str) -> Option<String> {
+        let row = self
+            .window_registry()?
+            .snapshot()
+            .into_iter()
+            .find(|w| w.window_id == window_id)?;
+        self.tenant_leader(row.kind, row.workspace_path.as_deref())
+    }
+
     /// Mint a NATIVE window: persist a new registry row and return its assembled
     /// [`WindowRecord`] (the same shape the feed serves, so a `POST` handler
     /// returns it directly). The registry's create fires the watch via the

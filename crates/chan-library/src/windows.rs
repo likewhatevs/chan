@@ -180,6 +180,11 @@ pub struct CreateWindow {
     /// window id.
     #[serde(default, skip_serializing_if = "WindowOrigin::is_native")]
     pub origin: WindowOrigin,
+    /// The caller's claimed acting window id, checked against the target tenant's
+    /// leader for the create gate. Honest-client input, not proof of identity;
+    /// absent on a legacy / desktop-launcher caller, which the gate allows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub acting_window_id: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -883,6 +888,7 @@ mod tests {
             kind: WindowKind::Terminal,
             workspace_path: None,
             origin: WindowOrigin::Native,
+            acting_window_id: None,
         };
         assert_eq!(
             serde_json::to_value(&term).unwrap(),
@@ -897,6 +903,7 @@ mod tests {
             kind: WindowKind::Workspace,
             workspace_path: Some("/home/u/notes".into()),
             origin: WindowOrigin::Native,
+            acting_window_id: None,
         };
         assert_eq!(
             serde_json::to_value(&ws).unwrap(),
@@ -922,6 +929,7 @@ mod tests {
             kind: WindowKind::Workspace,
             workspace_path: Some("/n".into()),
             origin: WindowOrigin::Browser,
+            acting_window_id: None,
         };
         assert_eq!(
             serde_json::to_value(&browser).unwrap(),

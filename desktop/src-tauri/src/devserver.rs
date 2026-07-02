@@ -504,6 +504,9 @@ pub async fn mint_library_window(
         workspace_path,
         // The desktop mints native windows on a connected devserver.
         origin: chan_server::WindowOrigin::Native,
+        // The desktop launcher is a legacy caller (the gate allows a missing
+        // acting id); leadership is honest-client only.
+        acting_window_id: None,
     };
     let resp = http_client()?
         .post(&url)

@@ -22,7 +22,7 @@ use std::sync::{Arc, OnceLock};
 
 use axum::body::{Body, Bytes};
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::extract::{Path as AxumPath, State};
+use axum::extract::{Path as AxumPath, Query, State};
 use axum::http::{header, Request, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
@@ -404,9 +404,39 @@ async fn watch_library_windows(mut socket: WebSocket, host: Arc<WorkspaceHost>) 
     }
 }
 
-/// `POST /api/library/windows` `{kind, workspace_path?}`: mint a window. The
-/// library assigns the id and persists the record; the registry change bridge
-/// fires the watch. Returns the assembled record in the feed shape.
+/// The leader gate shared by mint / discard / visibility. Honest-client
+/// enforcement, NOT a security boundary: the acting `window_id` is a
+/// client-claimed value behind the SHARED launcher bearer (every window of a
+/// tenant presents the one tenant token), so any client that can read the roster
+/// can present the leader's id. It double-enforces a UI affordance, nothing more.
+/// 403 ONLY when a live leader governs the target AND the caller presents a
+/// DIFFERENT acting id; a leaderless target and a legacy caller (no acting id,
+/// e.g. the desktop launcher) are both allowed.
+fn leader_gate(target_leader: Option<String>, acting: Option<&str>) -> Result<(), Box<Response>> {
+    match (target_leader, acting) {
+        (Some(leader), Some(claim)) if claim != leader => Err(Box::new(
+            (
+                StatusCode::FORBIDDEN,
+                "not the session leader for this window",
+            )
+                .into_response(),
+        )),
+        _ => Ok(()),
+    }
+}
+
+/// Query params carrying the caller's acting window id for the leader gate on a
+/// bodyless route (DELETE): `?acting_window_id=<id>`.
+#[derive(Deserialize)]
+struct ActingWindow {
+    #[serde(default)]
+    acting_window_id: Option<String>,
+}
+
+/// `POST /api/library/windows` `{kind, workspace_path?, origin?, acting_window_id?}`:
+/// mint a window. The library assigns the id and persists the record; the
+/// registry change bridge fires the watch. Returns the assembled record in the
+/// feed shape. Leader-gated (honest-client, see [`leader_gate`]).
 async fn handle_create_library_window(
     State(host): State<Arc<WorkspaceHost>>,
     Json(req): Json<CreateWindow>,
@@ -424,6 +454,15 @@ async fn handle_create_library_window(
                 .into_response();
         }
     }
+    // Leader gate on the TARGET tenant of the mint (workspace path, or the shared
+    // terminal tenant for a terminal mint); leaderless establishes leadership at
+    // the later /ws connect, so it is allowed.
+    if let Err(resp) = leader_gate(
+        host.tenant_leader(req.kind, req.workspace_path.as_deref()),
+        req.acting_window_id.as_deref(),
+    ) {
+        return *resp;
+    }
     // Stamp the client-claimed affinity at mint so chan-desktop never opens a
     // native twin for a browser-minted window (honest-client input, D4).
     match host.mint_window_with_origin(req.kind, req.workspace_path, req.origin) {
@@ -432,16 +471,24 @@ async fn handle_create_library_window(
     }
 }
 
-/// `DELETE /api/library/windows/{window_id}`: discard a window by dropping its
-/// record; the change bridge fires the watch, and each client's reconcile then
-/// closes the window. `discard_window` reaps the window's own session state
-/// (its shared-terminal-tenant session, a workspace tenant's layout blob), so a
-/// single registry discard is the authoritative cleanup. 404 when no window has
-/// that id.
+/// `DELETE /api/library/windows/{window_id}?acting_window_id=<id>`: discard a
+/// window by dropping its record; the change bridge fires the watch, and each
+/// client's reconcile then closes the window. `discard_window` reaps the window's
+/// own session state (its shared-terminal-tenant session, a workspace tenant's
+/// layout blob), so a single registry discard is the authoritative cleanup.
+/// Leader-gated on the window's governing tenant (honest-client, see
+/// [`leader_gate`]). 404 when no window has that id.
 async fn handle_discard_library_window(
     State(host): State<Arc<WorkspaceHost>>,
     AxumPath(window_id): AxumPath<String>,
+    Query(q): Query<ActingWindow>,
 ) -> Response {
+    if let Err(resp) = leader_gate(
+        host.window_tenant_leader(&window_id),
+        q.acting_window_id.as_deref(),
+    ) {
+        return *resp;
+    }
     match host.discard_window(&window_id) {
         Ok(true) => StatusCode::NO_CONTENT.into_response(),
         Ok(false) => StatusCode::NOT_FOUND.into_response(),
@@ -453,19 +500,30 @@ async fn handle_discard_library_window(
 #[derive(Deserialize)]
 struct SetVisibility {
     hidden: bool,
+    /// The caller's claimed acting window id for the leader gate; absent on a
+    /// legacy / desktop-launcher caller, which the gate allows.
+    #[serde(default)]
+    acting_window_id: Option<String>,
 }
 
-/// `POST /api/library/windows/{window_id}/visibility` `{hidden}`: set the
-/// window's server-persisted visibility, the source of truth the
+/// `POST /api/library/windows/{window_id}/visibility` `{hidden, acting_window_id?}`:
+/// set the window's server-persisted visibility, the source of truth the
 /// desktop mirrors on connect. The registry change bridge fires the watch, so
-/// every client's feed reflects the new visibility. 204 on success; 404 when no
-/// window has that id. Distinct from `/open` + `/hide`, which dispatch a
+/// every client's feed reflects the new visibility. Leader-gated on the window's
+/// governing tenant (honest-client, see [`leader_gate`]). 204 on success; 404
+/// when no window has that id. Distinct from `/open` + `/hide`, which dispatch a
 /// desktop-bridge op on the native window and do not persist.
 async fn handle_set_library_window_visibility(
     State(host): State<Arc<WorkspaceHost>>,
     AxumPath(window_id): AxumPath<String>,
     Json(req): Json<SetVisibility>,
 ) -> Response {
+    if let Err(resp) = leader_gate(
+        host.window_tenant_leader(&window_id),
+        req.acting_window_id.as_deref(),
+    ) {
+        return *resp;
+    }
     match host.set_window_hidden(&window_id, req.hidden) {
         Ok(true) => StatusCode::NO_CONTENT.into_response(),
         Ok(false) => StatusCode::NOT_FOUND.into_response(),
@@ -1702,7 +1760,7 @@ mod window_op_route_tests {
     use chan_workspace::Library;
     use tower::ServiceExt;
 
-    use super::launcher_router;
+    use super::{launcher_router, leader_gate};
     use crate::{DesktopBridge, DesktopWindowOp, SetWorkspaceOnOutcome, WorkspaceHost, NO_DESKTOP};
 
     fn library() -> Library {
@@ -1744,6 +1802,56 @@ mod window_op_route_tests {
             .await
             .unwrap();
         (status, String::from_utf8_lossy(&bytes).into_owned())
+    }
+
+    #[test]
+    fn leader_gate_is_honest_client_policy() {
+        // Leaderless: allowed regardless of any claim.
+        assert!(leader_gate(None, None).is_ok());
+        assert!(leader_gate(None, Some("w-x")).is_ok());
+        // A live leader: a matching claim passes.
+        assert!(leader_gate(Some("w-leader".into()), Some("w-leader")).is_ok());
+        // A live leader: a legacy caller with NO claim passes (the desktop path).
+        assert!(leader_gate(Some("w-leader".into()), None).is_ok());
+        // A live leader plus a PRESENT, mismatching claim is the only rejection.
+        let err = leader_gate(Some("w-leader".into()), Some("w-other")).unwrap_err();
+        assert_eq!(err.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn mint_is_allowed_when_leaderless_and_for_legacy_callers() {
+        let host = Arc::new(WorkspaceHost::new(library(), crate::route_builder()));
+        let store = tempfile::tempdir().unwrap();
+        host.install_window_registry(
+            Arc::new(chan_library::windows::WindowRegistry::open(
+                store.path().join("windows.json"),
+            )),
+            "local".into(),
+        );
+        std::mem::forget(store);
+        let router = launcher_router(host, None, None);
+
+        // No tenant is mounted, so the target terminal tenant has no live leader:
+        // a mint is allowed even with a claimed acting id (leaderless establishes
+        // leadership later at the /ws connect).
+        let (status, _) = send(
+            &router,
+            "POST",
+            "/api/library/windows",
+            Some(r#"{"kind":"terminal","acting_window_id":"w-claims-lead"}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "leaderless mint with a claim");
+
+        // A legacy caller with no acting id is allowed too.
+        let (status, _) = send(
+            &router,
+            "POST",
+            "/api/library/windows",
+            Some(r#"{"kind":"terminal"}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "legacy mint");
     }
 
     #[tokio::test]
