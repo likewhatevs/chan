@@ -28,16 +28,23 @@ struct SessionRosterFrame<'a> {
     snapshot: &'a SessionSnapshot,
 }
 
-/// Serialize the registry's current snapshot and broadcast it to every `/ws`
-/// socket. A no-op if serialization fails or there are no subscribers (a
-/// dropped frame on an empty session is harmless; the next change re-sends).
-pub fn broadcast_session_roster(events_tx: &broadcast::Sender<String>, registry: &SessionRegistry) {
+/// Serialize the registry's current snapshot into one `session_roster` frame,
+/// or `None` if serialization fails. Shared by the tenant-wide broadcast and
+/// the per-socket send a fresh `/ws` connection gets before its pump starts.
+pub fn serialize_session_roster(registry: &SessionRegistry) -> Option<String> {
     let snapshot = registry.snapshot(Instant::now());
     let frame = SessionRosterFrame {
         frame_type: "session_roster",
         snapshot: &snapshot,
     };
-    if let Ok(raw) = serde_json::to_string(&frame) {
+    serde_json::to_string(&frame).ok()
+}
+
+/// Serialize the registry's current snapshot and broadcast it to every `/ws`
+/// socket. A no-op if serialization fails or there are no subscribers (a
+/// dropped frame on an empty session is harmless; the next change re-sends).
+pub fn broadcast_session_roster(events_tx: &broadcast::Sender<String>, registry: &SessionRegistry) {
+    if let Some(raw) = serialize_session_roster(registry) {
         let _ = events_tx.send(raw);
     }
 }
@@ -76,4 +83,37 @@ pub fn spawn_session_reaper(
             }
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // A fresh `/ws` socket must learn who leads/follows on connect, even on a
+    // reload where the join reports changed=false and no broadcast fires. That
+    // on-connect roster IS `serialize_session_roster`, so pin its frame shape
+    // and that it reflects the elected leader plus every live participant.
+    #[test]
+    fn serialize_session_roster_frames_the_current_snapshot() {
+        let reg = Arc::new(SessionRegistry::new());
+        // First to connect leads; a second window follows. Hold the guards so
+        // both stay Live for the snapshot.
+        let leader = reg.join("w-leader");
+        let follower = reg.join("w-follower");
+
+        let raw = serialize_session_roster(&reg).expect("serialize a roster frame");
+        let v: serde_json::Value = serde_json::from_str(&raw).expect("valid JSON");
+        assert_eq!(v["type"], "session_roster");
+        assert_eq!(v["leader"], "w-leader", "first to connect leads");
+        let ids: Vec<&str> = v["participants"]
+            .as_array()
+            .expect("participants array")
+            .iter()
+            .map(|p| p["window_id"].as_str().expect("window_id string"))
+            .collect();
+        assert!(ids.contains(&"w-leader"));
+        assert!(ids.contains(&"w-follower"));
+
+        drop((leader, follower));
+    }
 }

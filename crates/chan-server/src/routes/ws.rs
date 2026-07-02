@@ -64,7 +64,7 @@ pub async fn ws_upgrade(
     let session_registry = state.session_registry.clone();
     let session_events_tx = state.events_tx.clone();
     let window_id = q.w.map(|w| w.trim().to_string()).filter(|w| !w.is_empty());
-    ws.on_upgrade(move |socket| async move {
+    ws.on_upgrade(move |mut socket| async move {
         // RAII presence ref: held across the pump so EVERY exit path
         // (clean close, network drop, shutdown) deregisters the window.
         let _presence = window_id.as_ref().map(|id| presence.connect(id));
@@ -86,6 +86,18 @@ pub async fn ws_upgrade(
             }
             join.guard
         });
+        // Per-socket roster snapshot on connect, for tagged AND untagged sockets.
+        // The broadcast above fires only when the join MOVES the roster, so a
+        // reload (the socket-overlap window reports changed=false) would leave
+        // this fresh socket with no roster until some unrelated change -- the
+        // starvation that strands isLeader()/roster UI. Sending the current
+        // snapshot straight to this socket guarantees it a first frame, and an
+        // untagged observer (no `?w=`, no join) learns the roster the same way.
+        if let Some(frame) = crate::session_roster::serialize_session_roster(&session_registry) {
+            if socket.send(Message::text(frame)).await.is_err() {
+                return;
+            }
+        }
         ws_pump(
             socket,
             rx,
