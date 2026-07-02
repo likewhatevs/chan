@@ -7,7 +7,7 @@
 // from this list by the mock store, so this file only describes the raw data
 // plus the workspace/preferences defaults.
 
-import type { Preferences, WorkspaceInfo } from "../api/types";
+import type { Preferences, ReportFileStats, WorkspaceInfo } from "../api/types";
 
 /// One file from the snapshot. Directories are implicit: the store derives
 /// them from the file paths, so the snapshot never lists a directory.
@@ -38,6 +38,10 @@ export type MockWorkspaceData = {
     [key: string]: unknown;
   };
   files: MockFileEntry[];
+  /// chan-reports per-file stats (language, SLOC, comments, blanks,
+  /// complexity), precomputed by the snapshot script. The mock rolls these up
+  /// per language + totals + COCOMO on demand. Absent in older snapshots.
+  reports?: { files: ReportFileStats[] };
 };
 
 /// Preferences the demo boots with. Every required field is present so the

@@ -70,6 +70,131 @@ function looksBinary(buf) {
   return false;
 }
 
+// --- chan-reports (approximation of chan-report / tokei) -----------------
+//
+// The demo serves per-file SLOC/comment/blank/complexity stats plus language
+// roll-ups and COCOMO, exactly like chan-report. The real crate counts via
+// tokei; here we approximate with per-language comment syntax. Language names
+// match tokei's so the roll-up reads right. Complexity and COCOMO use
+// chan-report's exact formulas (crates/chan-report: complexity.rs, cocomo.rs).
+
+const C_LIKE = { line: ["//"], block: [["/*", "*/"]] };
+const HASH = { line: ["#"], block: [] };
+const NO_COMMENT = { line: [], block: [] };
+// ext (no dot) -> { name (tokei), line, block, markdown? }
+const REPORT_LANGS = {
+  rs: { name: "Rust", ...C_LIKE },
+  ts: { name: "TypeScript", ...C_LIKE },
+  tsx: { name: "TSX", ...C_LIKE },
+  js: { name: "JavaScript", ...C_LIKE },
+  mjs: { name: "JavaScript", ...C_LIKE },
+  cjs: { name: "JavaScript", ...C_LIKE },
+  jsx: { name: "JSX", ...C_LIKE },
+  go: { name: "Go", ...C_LIKE },
+  c: { name: "C", ...C_LIKE },
+  h: { name: "C Header", ...C_LIKE },
+  cpp: { name: "C++", ...C_LIKE },
+  hpp: { name: "C++ Header", ...C_LIKE },
+  css: { name: "CSS", line: [], block: [["/*", "*/"]] },
+  scss: { name: "Sass", ...C_LIKE },
+  svelte: { name: "Svelte", line: ["//"], block: [["/*", "*/"], ["<!--", "-->"]] },
+  html: { name: "HTML", line: [], block: [["<!--", "-->"]] },
+  json: { name: "JSON", ...NO_COMMENT },
+  toml: { name: "TOML", ...HASH },
+  yaml: { name: "YAML", ...HASH },
+  yml: { name: "YAML", ...HASH },
+  sh: { name: "Shell", ...HASH },
+  bash: { name: "BASH", ...HASH },
+  py: { name: "Python", ...HASH },
+  rb: { name: "Ruby", line: ["#"], block: [["=begin", "=end"]] },
+  sql: { name: "SQL", line: ["--"], block: [["/*", "*/"]] },
+  lua: { name: "Lua", line: ["--"], block: [["--[[", "]]"]] },
+  txt: { name: "Plain Text", ...NO_COMMENT },
+  md: { name: "Markdown", ...NO_COMMENT, markdown: true },
+  markdown: { name: "Markdown", ...NO_COMMENT, markdown: true },
+};
+const REPORT_FILENAMES = {
+  Makefile: { name: "Makefile", ...HASH },
+  makefile: { name: "Makefile", ...HASH },
+  GNUmakefile: { name: "Makefile", ...HASH },
+  Dockerfile: { name: "Dockerfile", ...HASH },
+};
+
+function detectReportLanguage(relPath) {
+  const base = relPath.slice(relPath.lastIndexOf("/") + 1);
+  if (REPORT_FILENAMES[base]) return REPORT_FILENAMES[base];
+  const dot = base.lastIndexOf(".");
+  if (dot < 0) return null;
+  return REPORT_LANGS[base.slice(dot + 1).toLowerCase()] ?? null;
+}
+
+// Line classification approximating tokei: blanks are whitespace-only lines,
+// comments are lines that are only comment (line-comment or inside a block),
+// everything else is code. A trailing code fragment after a block close is
+// left as comment (a minor divergence that keeps the scanner cheap).
+function countLines(content, lang) {
+  const stripped = content.endsWith("\n") ? content.slice(0, -1) : content;
+  if (stripped === "" && content === "") return { code: 0, comments: 0, blanks: 0 };
+  const lines = stripped.split("\n");
+  let code = 0;
+  let comments = 0;
+  let blanks = 0;
+  let blockClose = null;
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (blockClose !== null) {
+      comments++;
+      if (line.includes(blockClose)) blockClose = null;
+      continue;
+    }
+    if (line === "") {
+      blanks++;
+      continue;
+    }
+    if (lang.line.some((tok) => line.startsWith(tok))) {
+      comments++;
+      continue;
+    }
+    const open = lang.block.find(([o]) => line.startsWith(o));
+    if (open) {
+      comments++;
+      const [o, c] = open;
+      if (!line.slice(o.length).includes(c)) blockClose = c;
+      continue;
+    }
+    code++;
+  }
+  return { code, comments, blanks };
+}
+
+// chan-report/complexity.rs: count keyword occurrences. Alphabetic keywords on
+// word boundaries (word byte = [A-Za-z0-9_]); `&&`/`||` as raw substrings.
+const CX_WORDS = [
+  "if", "else", "elsif", "elif", "for", "while", "switch", "case", "match",
+  "do", "goto", "continue", "break", "try", "catch", "except", "and", "or",
+];
+const CX_WORD_RE = new RegExp(`(?<![A-Za-z0-9_])(?:${CX_WORDS.join("|")})(?![A-Za-z0-9_])`, "g");
+function complexityScore(content) {
+  let n = (content.match(CX_WORD_RE) ?? []).length;
+  for (const sym of ["&&", "||"]) n += content.split(sym).length - 1;
+  return n;
+}
+
+// One chan-report `file` row from full (uncapped) content.
+function reportRow(relPath, content, bytes, mtimeMs, lang) {
+  const { code, comments, blanks } = countLines(content, lang);
+  return {
+    path: relPath,
+    language: lang.name,
+    code,
+    comments,
+    blanks,
+    complexity: complexityScore(content),
+    bytes,
+    mtime: new Date(mtimeMs).toISOString(),
+  };
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   const repo = args.repo;
@@ -89,6 +214,7 @@ async function main() {
     .sort();
 
   const files = [];
+  const reportFiles = [];
   let bytesIncluded = 0;
   let textCount = 0;
   let truncatedCount = 0;
@@ -113,31 +239,44 @@ async function main() {
     };
 
     const base = path.basename(rel);
-    const wantContent =
+    const reportLang = text ? detectReportLanguage(rel) : null;
+    const wantStore =
       text && !NO_CONTENT_BASENAMES.has(base) && bytesIncluded < totalBudget;
 
-    if (wantContent) {
+    // Read once when either storage or the report needs the bytes. Reports are
+    // computed from FULL content (chan-report counts the whole file), even for
+    // files whose content is too big to store (e.g. package-lock.json).
+    let content = null;
+    if (text && (wantStore || reportLang)) {
       const buf = await fs.readFile(abs);
-      if (looksBinary(buf)) {
-        entry.kind = "binary";
-      } else {
-        const cap = kind === "document" ? maxMd : maxText;
-        let content = buf.toString("utf8");
-        if (content.length > cap) {
-          content = content.slice(0, cap);
-          entry.truncated = true;
-          truncatedCount++;
-        }
-        entry.content = content;
-        bytesIncluded += Buffer.byteLength(content, "utf8");
-        textCount++;
+      if (looksBinary(buf)) entry.kind = "binary";
+      else content = buf.toString("utf8");
+    }
+
+    if (reportLang && content !== null) {
+      reportFiles.push(reportRow(rel, content, stat.size, stat.mtimeMs, reportLang));
+    }
+
+    if (content !== null && wantStore) {
+      const cap = kind === "document" ? maxMd : maxText;
+      let stored = content;
+      if (stored.length > cap) {
+        stored = stored.slice(0, cap);
+        entry.truncated = true;
+        truncatedCount++;
       }
-    } else if (text) {
+      entry.content = stored;
+      bytesIncluded += Buffer.byteLength(stored, "utf8");
+      textCount++;
+    } else if (text && entry.kind !== "binary" && !wantStore) {
       skippedContentCount++;
     }
 
     files.push(entry);
   }
+
+  reportFiles.sort((a, z) => a.path.localeCompare(z.path));
+  const reportCode = reportFiles.reduce((n, r) => n + r.code, 0);
 
   const snapshot = {
     metadata: {
@@ -150,8 +289,11 @@ async function main() {
       truncatedCount,
       skippedContentCount,
       bytesIncluded,
+      reportFileCount: reportFiles.length,
+      reportCode,
     },
     files,
+    reports: { files: reportFiles },
   };
 
   const json = JSON.stringify(snapshot);
@@ -162,6 +304,7 @@ async function main() {
   process.stdout.write(
     `snapshot: ${files.length} files, ${textCount} with content ` +
       `(${truncatedCount} truncated, ${skippedContentCount} content-skipped), ` +
+      `${reportFiles.length} report rows (${reportCode.toLocaleString()} SLOC), ` +
       `asset ${mb} MB -> ${args.out}\n`,
   );
 }

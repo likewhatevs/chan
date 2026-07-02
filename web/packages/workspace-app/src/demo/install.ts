@@ -5,6 +5,7 @@
 import { setFetchImpl, setSocketFactory } from "../api/transport";
 import type { MockWorkspaceData } from "./data";
 import { DemoGraph } from "./graph";
+import { MockReports } from "./report";
 import { createDemoFetch } from "./router";
 import { demoSocketFactory } from "./socket";
 import { MockWorkspaceStore } from "./store";
@@ -12,7 +13,8 @@ import { MockWorkspaceStore } from "./store";
 export function installDemoWorkspace(data: MockWorkspaceData): MockWorkspaceStore {
   const store = new MockWorkspaceStore(data);
   const graph = new DemoGraph(store);
-  setFetchImpl(createDemoFetch(store, graph));
+  const reports = new MockReports(data.reports?.files ?? []);
+  setFetchImpl(createDemoFetch(store, graph, reports));
   setSocketFactory(demoSocketFactory);
   return store;
 }

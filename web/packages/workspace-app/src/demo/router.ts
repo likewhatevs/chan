@@ -12,6 +12,7 @@ import type { FetchImpl } from "../api/transport";
 import type { GlobalConfig, Preferences } from "../api/types";
 import { DEMO_PREFERENCES, demoWorkspaceInfo } from "./data";
 import type { DemoGraph } from "./graph";
+import type { MockReports } from "./report";
 import { linkTargets, mentionLabels, searchContent, searchFiles } from "./search";
 import { kindForPath, type MockWorkspaceStore } from "./store";
 
@@ -61,7 +62,11 @@ function warnOnce(key: string): void {
   console.warn(`[demo] unhandled ${key}`);
 }
 
-export function createDemoFetch(store: MockWorkspaceStore, graph: DemoGraph): FetchImpl {
+export function createDemoFetch(
+  store: MockWorkspaceStore,
+  graph: DemoGraph,
+  reports: MockReports,
+): FetchImpl {
   // Mutable session state the mock owns: preferences (round-tripped through
   // config), plus monotonic counters for draft and terminal naming.
   let prefs: Preferences = { ...DEMO_PREFERENCES };
@@ -267,18 +272,23 @@ export function createDemoFetch(store: MockWorkspaceStore, graph: DemoGraph): Fe
       return json({ path: resolved, kind: "file" });
     }
 
-    // --- reports: no chan-report index in the demo. The streaming variant
-    // has a first-class "missing" event; the plain fetch treats 404 as
-    // "no report for this file". Both render as absent, not as an error.
-    if (path.startsWith("/api/report/") && method === "GET") {
+    // --- chan-reports (SLOC / complexity / COCOMO from the snapshot) ---
+    if (path === "/api/report/file" && method === "GET") {
+      const rel = qs.get("path") ?? "";
+      const stats = reports.file(rel);
       if (qs.has("stream")) {
         return ndjson([
-          { type: "meta", path: qs.get("path") ?? "" },
-          { type: "missing" },
+          { type: "meta", path: rel },
+          stats ? { type: "report", stats } : { type: "missing" },
           { type: "done" },
         ]);
       }
-      return notFound("no report");
+      return stats ? json(stats) : notFound("no report");
+    }
+    // /api/report/prefix walks; /api/report/dir is the O(1) cache. Same shape
+    // here; empty path is the whole-workspace roll-up.
+    if ((path === "/api/report/prefix" || path === "/api/report/dir") && method === "GET") {
+      return json(reports.prefix(qs.get("path") ?? ""));
     }
     if (path === "/api/inspector" && method === "GET") {
       return json(store.inspector(qs.get("path") ?? ""));
@@ -330,7 +340,7 @@ export function createDemoFetch(store: MockWorkspaceStore, graph: DemoGraph): Fe
     if (path === "/api/index/excluded-dirs" && method === "GET") {
       return json({ defaults: [], workspace: [], effective: [] });
     }
-    if (path === "/api/index/reports/state" && method === "GET") return json({ enabled: false });
+    if (path === "/api/index/reports/state" && method === "GET") return json({ enabled: true });
     if (path === "/api/index/semantic/state" && method === "GET") {
       return json({
         mode: "bm25",

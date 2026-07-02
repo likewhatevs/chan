@@ -8,6 +8,7 @@ import type {
 } from "../api/types";
 import type { MockWorkspaceData } from "./data";
 import { DemoGraph, parseMarkdown } from "./graph";
+import { MockReports } from "./report";
 import { createDemoFetch } from "./router";
 import { MockWorkspaceStore } from "./store";
 
@@ -38,11 +39,18 @@ function fixture(): MockWorkspaceData {
       { path: "docs/a.md", kind: "document", size: A_MD.length, mtime: 100, content: A_MD },
       { path: "src/main.rs", kind: "text", size: 4, mtime: 100, content: "fn()" },
     ],
+    reports: {
+      files: [
+        { path: "src/main.rs", language: "Rust", code: 40, comments: 8, blanks: 6, complexity: 5, bytes: 900, mtime: null },
+        { path: "src/util.rs", language: "Rust", code: 60, comments: 2, blanks: 4, complexity: 7, bytes: 700, mtime: null },
+        { path: "docs/a.md", language: "Markdown", code: 10, comments: 0, blanks: 3, complexity: 0, bytes: 120, mtime: null },
+      ],
+    },
   };
 }
 
-function demoFetch(store: MockWorkspaceStore) {
-  return createDemoFetch(store, new DemoGraph(store));
+function demoFetch(store: MockWorkspaceStore, data?: MockWorkspaceData) {
+  return createDemoFetch(store, new DemoGraph(store), new MockReports(data?.reports?.files ?? []));
 }
 
 describe("MockWorkspaceStore", () => {
@@ -277,7 +285,7 @@ describe("DemoGraph", () => {
 describe("graph endpoints", () => {
   test("GET /api/graph returns the view; ?stream=1 frames NDJSON events", async () => {
     const st = new MockWorkspaceStore(fixture());
-    const f = createDemoFetch(st, new DemoGraph(st));
+    const f = createDemoFetch(st, new DemoGraph(st), new MockReports([]));
     const view = (await (await f("/api/graph")).json()) as GraphView;
     expect(view.nodes.length).toBeGreaterThan(3);
     const body = await (await f("/api/graph?stream=1")).text();
@@ -289,7 +297,7 @@ describe("graph endpoints", () => {
 
   test("backlinks stream frames meta/edge/done", async () => {
     const st = new MockWorkspaceStore(fixture());
-    const f = createDemoFetch(st, new DemoGraph(st));
+    const f = createDemoFetch(st, new DemoGraph(st), new MockReports([]));
     const body = await (await f("/api/backlinks/README.md?stream=1")).text();
     const events = body.trim().split("\n").map((l) => JSON.parse(l));
     expect(events.map((e) => e.type)).toEqual(["meta", "edge", "done"]);
@@ -298,14 +306,14 @@ describe("graph endpoints", () => {
 
   test("headings endpoint serves the outline", async () => {
     const st = new MockWorkspaceStore(fixture());
-    const f = createDemoFetch(st, new DemoGraph(st));
+    const f = createDemoFetch(st, new DemoGraph(st), new MockReports([]));
     const rows = (await (await f("/api/headings/docs/a.md")).json()) as Array<{ text: string }>;
     expect(rows.map((r) => r.text)).toEqual(["Alpha", "Usage"]);
   });
 
   test("resolve-link resolves wiki targets and 404s broken ones", async () => {
     const st = new MockWorkspaceStore(fixture());
-    const f = createDemoFetch(st, new DemoGraph(st));
+    const f = createDemoFetch(st, new DemoGraph(st), new MockReports([]));
     const ok = (await (await f("/api/resolve-link?target=README")).json()) as { path: string };
     expect(ok.path).toBe("README.md");
     expect((await f("/api/resolve-link?target=nope-note")).status).toBe(404);
@@ -315,7 +323,7 @@ describe("graph endpoints", () => {
 describe("search endpoints", () => {
   const setup = () => {
     const st = new MockWorkspaceStore(fixture());
-    return createDemoFetch(st, new DemoGraph(st));
+    return createDemoFetch(st, new DemoGraph(st), new MockReports([]));
   };
 
   test("search/files ranks basename matches first", async () => {
@@ -355,5 +363,81 @@ describe("search endpoints", () => {
       label: string;
     }>;
     expect(rows).toEqual([{ label: "@@Alex" }]);
+  });
+});
+
+describe("report endpoints", () => {
+  const setup = () => {
+    const d = fixture();
+    return demoFetch(new MockWorkspaceStore(d), d);
+  };
+
+  test("reports are enabled in the demo", async () => {
+    const f = setup();
+    expect(await (await f("/api/index/reports/state")).json()).toEqual({ enabled: true });
+  });
+
+  test("report/file returns per-file stats; missing file is 404", async () => {
+    const f = setup();
+    const stats = (await (await f("/api/report/file?path=src/main.rs")).json()) as {
+      language: string;
+      code: number;
+      complexity: number;
+    };
+    expect(stats).toMatchObject({ language: "Rust", code: 40, complexity: 5 });
+    expect((await f("/api/report/file?path=README.md")).status).toBe(404);
+  });
+
+  test("report/file?stream=1 frames meta/report/done; missing frames meta/missing/done", async () => {
+    const f = setup();
+    const ok = (await (await f("/api/report/file?path=src/main.rs&stream=1")).text())
+      .trim().split("\n").map((l) => JSON.parse(l));
+    expect(ok.map((e) => e.type)).toEqual(["meta", "report", "done"]);
+    expect(ok[1].stats.code).toBe(40);
+    const miss = (await (await f("/api/report/file?path=README.md&stream=1")).text())
+      .trim().split("\n").map((l) => JSON.parse(l));
+    expect(miss.map((e) => e.type)).toEqual(["meta", "missing", "done"]);
+  });
+
+  test("report/prefix rolls up a subtree by language with COCOMO", async () => {
+    const f = setup();
+    const r = (await (await f("/api/report/prefix?path=src")).json()) as {
+      totals: { files: number; code: number; complexity: number };
+      by_language: Array<{ name: string; code: number; files: number }>;
+      cocomo: { model: string; estimated_cost_usd: number };
+    };
+    expect(r.totals).toMatchObject({ files: 2, code: 100, complexity: 12 });
+    expect(r.by_language).toEqual([
+      { name: "Rust", files: 2, bytes: 1600, code: 100, comments: 10, blanks: 10, complexity: 12 },
+    ]);
+    expect(r.cocomo.model).toBe("basic-organic");
+    expect(r.cocomo.estimated_cost_usd).toBeGreaterThan(0);
+  });
+
+  test("report/dir on empty path is the whole-workspace roll-up", async () => {
+    const f = setup();
+    const r = (await (await f("/api/report/dir?path=")).json()) as {
+      totals: { files: number; code: number };
+      by_language: Array<{ name: string }>;
+    };
+    expect(r.totals).toMatchObject({ files: 3, code: 110 });
+    // Rust (100 code) sorts before Markdown (10 code).
+    expect(r.by_language.map((l) => l.name)).toEqual(["Rust", "Markdown"]);
+  });
+});
+
+describe("MockReports COCOMO", () => {
+  test("organic formula and zero case match chan-report/cocomo.rs", () => {
+    const r = new MockReports([
+      { path: "a.rs", language: "Rust", code: 32000, comments: 0, blanks: 0, complexity: 0, bytes: 0, mtime: null },
+    ]);
+    // crates/chan-report/src/cocomo.rs: 32 KSLOC organic ~= 91.34 person-months.
+    expect(r.prefix("").cocomo.effort_person_months).toBeCloseTo(91.34, 0);
+    const empty = new MockReports([]);
+    expect(empty.prefix("").cocomo).toMatchObject({
+      model: "basic-organic",
+      effort_person_months: 0,
+      estimated_cost_usd: 0,
+    });
   });
 });
