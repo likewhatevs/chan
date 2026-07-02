@@ -21,6 +21,7 @@ const checks = [
     status: 200,
     includes: 'DEFAULT_METADATA_BASE="https://chan.app/dl/cli"',
   },
+  { path: "/assets/demo-workspace.json", status: 404 },
   { path: "/install.ps1", status: 404 },
 ];
 
@@ -33,6 +34,7 @@ async function main() {
     for (const check of checks) {
       await runCheck(port, check);
     }
+    await assertWorkspaceDemoDisabled();
   } finally {
     await close(server);
   }
@@ -114,6 +116,21 @@ async function runCheck(port, check) {
     const body = await response.text();
     if (!body.includes(check.includes)) {
       throw new Error(`${check.path} did not contain ${JSON.stringify(check.includes)}`);
+    }
+  }
+}
+
+async function assertWorkspaceDemoDisabled() {
+  const assetDir = path.join(distRoot, "assets");
+  const entries = await fs.readdir(assetDir);
+  const forbidden = entries.filter((entry) => entry.startsWith("workspace-demo."));
+  if (forbidden.length) {
+    throw new Error(`workspace demo assets must stay disabled: ${forbidden.join(", ")}`);
+  }
+  const launcher = await fs.readFile(path.join(assetDir, "launcher-demo.js"), "utf8");
+  for (const marker of ["workspace-demo", "openWorkspaceDemo"]) {
+    if (launcher.includes(marker)) {
+      throw new Error(`launcher demo must not open workspace demo: found ${marker}`);
     }
   }
 }

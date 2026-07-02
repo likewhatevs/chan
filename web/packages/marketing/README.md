@@ -50,7 +50,7 @@ The build/check gate:
 - fails if stale public copy claims reappear in generated output
 - dry-runs `/dl/**` release metadata generation from a local fixture
 - dry-runs collection of uploaded release assets into the metadata manifest
-- builds the embedded demos (see below) and snapshots the repo into `dist/assets/demo-workspace.json`
+- builds the embedded launcher demo (see below)
 - serves `dist/` on loopback and smokes `/`, `/install/`, `/install.sh`, and `/install.ps1` absence
 
 ## Preview
@@ -64,31 +64,26 @@ python3 -m http.server 8080 -d dist
 
 Then open `http://localhost:8080/`.
 
-## Embedded demos
+## Embedded Demo
 
-The site runs both chan SPAs frontend-only, with no backend, so the landing page
-is a live product tour. See the frontend design doc
-(`web/packages/workspace-app/src/design.md`, "Frontend-only demo") for the
-architecture; the wiring here is:
+The site runs the launcher SPA frontend-only, with no backend, so the landing
+page can show a live launcher widget. The full workspace demo source remains in
+this package, but it is not wired into the public marketing build.
 
 - The landing page eager-loads `launcher-demo.ts`, which mounts the real
   launcher (`@chan/launcher/demo`) as the hero widget.
-- Clicking any window tile fires the launcher demo's `onOpenWindow` hook, which
-  dynamic-imports `workspace-demo.ts` and opens the real workspace app
-  (`@chan/workspace-app/demo`) in a near-fullscreen overlay. The whole
-  workspace-app bundle is a lazy chunk, so it never loads until first click.
+- The launcher widget is mounted without an `onOpenWindow` hook, so clicking a
+  window row cannot open the workspace app demo.
+- `workspace-demo.ts` and `WorkspaceDemoOverlay.svelte` are retained as dormant
+  source files for a future re-enable.
 
 `scripts/build.mjs` produces, under `dist/assets/`:
 
 - `launcher-demo.{js,css}` -- the eager launcher entry.
-- `workspace-demo.{js,css}` plus split vendor chunks -- the lazy workspace app.
-- `demo-workspace.json` -- an in-memory workspace snapshotted from this repo by
-  `web/packages/workspace-app/scripts/snapshot-workspace.mjs` (the demo's file
-  tree, contents, graph, and search all derive from it).
 
-The build serves the demo chunks from `base: "/assets/"` and scopes each demo
-bundle's global CSS to its own frame (`.launcher-demo-frame` /
-`.workspace-demo-frame`) so a demo can never restyle the marketing page.
+The build serves the demo bundle from `base: "/assets/"` and scopes the
+launcher's global CSS to `.launcher-demo-frame` so it can never restyle the
+marketing page.
 
 ## Release verification
 
