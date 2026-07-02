@@ -60,6 +60,26 @@ const ASSET_CACHE_CONTROL: HeaderValue =
     HeaderValue::from_static("public, max-age=31536000, immutable");
 const HOST_VARY: HeaderValue = HeaderValue::from_static("Host");
 
+/// The launcher PWA manifest, served at `/manifest.webmanifest`. Static: the
+/// launcher always mounts at the origin root, so `scope` and `start_url` are `/`
+/// and every workspace / terminal prefix is a sibling that opens in-app. The
+/// icons live in the launcher bundle's `public/` and ride the normal asset path.
+/// The workspace-app shell gets NO manifest link (so a single workspace can't be
+/// captured as its own app), and there is no service worker anywhere.
+const LAUNCHER_MANIFEST: &str = r##"{
+  "name": "Chan",
+  "short_name": "Chan",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#1c1c1e",
+  "theme_color": "#1c1c1e",
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}"##;
+
 /// Single-page-app fallback: any path that doesn't match an /api or
 /// /ws route, and doesn't correspond to a baked asset, returns
 /// index.html so client-side routes work. For unknown /api paths
@@ -167,6 +187,24 @@ pub async fn serve_launcher(uri: axum::http::Uri, surface: LauncherSurface) -> R
     } else {
         candidate
     };
+    // The PWA manifest is generated, not a baked asset: it needs the
+    // application/manifest+json type and must skip the immutable one-year cache
+    // (unhashed, surface-varying), so serve it with SPA_CACHE_CONTROL like the
+    // shell. Intercept before the asset lookup so it never falls through to the
+    // SPA fallback (which would answer HTML for it).
+    if candidate == "manifest.webmanifest" {
+        return with_static_cache_headers(
+            (
+                [(
+                    header::CONTENT_TYPE,
+                    content_type_for("manifest.webmanifest"),
+                )],
+                LAUNCHER_MANIFEST,
+            )
+                .into_response(),
+            true,
+        );
+    }
     if let Some(file) = LauncherAssets::get(candidate) {
         let body = if is_index {
             inject_launcher_meta(&file.data, surface)
@@ -254,6 +292,9 @@ pub fn inject_chan_meta(html: &[u8], prefix: &str, settings_disabled: bool) -> V
 ///   - `<meta name="chan-launcher-surface" content="desktop|devserver|readonly">`
 ///     always, the single descriptor the SPA splits its capabilities on
 ///     (registry mutation, desktop bridge, self-managed windows).
+///   - `<link rel="manifest" href="/manifest.webmanifest">` always, so an
+///     installable surface (devserver loopback, https gateway) can be added to
+///     the home screen / dock as a PWA.
 ///   - `<meta name="chan-launcher-readonly" content="1">` additionally on the
 ///     read-only surface, so a client that has not yet split on the descriptor
 ///     still hides its mutation controls instead of showing buttons that 403.
@@ -270,6 +311,11 @@ fn inject_launcher_meta(html: &[u8], surface: LauncherSurface) -> Vec<u8> {
         "<meta name=\"chan-launcher-surface\" content=\"{}\">",
         surface.meta_value()
     ));
+    // The PWA manifest link, on every launcher surface (the coherent install
+    // targets are the fixed-port devserver loopback and the https gateway; the
+    // ephemeral-port desktop loopback simply won't install coherently, which is
+    // harmless). Root-absolute href: the launcher is always at the origin root.
+    insert.push_str("<link rel=\"manifest\" href=\"/manifest.webmanifest\">");
     if surface.read_only() {
         insert.push_str("<meta name=\"chan-launcher-readonly\" content=\"1\">");
     }
@@ -308,6 +354,7 @@ pub fn content_type_for(path: &str) -> &'static str {
         "ttf" => "font/ttf",
         "otf" => "font/otf",
         "txt" | "md" => "text/plain; charset=utf-8",
+        "webmanifest" => "application/manifest+json",
         _ => "application/octet-stream",
     }
 }
@@ -453,6 +500,47 @@ mod tests {
             String::from_utf8(inject_launcher_meta(html, LauncherSurface::ReadOnly)).unwrap();
         assert!(readonly.contains("<meta name=\"chan-launcher-surface\" content=\"readonly\">"));
         assert!(readonly.contains("<meta name=\"chan-launcher-readonly\" content=\"1\">"));
+
+        // Every surface links the PWA manifest.
+        assert!(desktop.contains(r#"<link rel="manifest" href="/manifest.webmanifest">"#));
+        assert!(devserver.contains(r#"<link rel="manifest" href="/manifest.webmanifest">"#));
+        assert!(readonly.contains(r#"<link rel="manifest" href="/manifest.webmanifest">"#));
+    }
+
+    #[test]
+    fn content_type_for_maps_webmanifest() {
+        assert_eq!(
+            content_type_for("manifest.webmanifest"),
+            "application/manifest+json"
+        );
+    }
+
+    #[tokio::test]
+    async fn serve_launcher_serves_the_pwa_manifest() {
+        let uri: axum::http::Uri = "/manifest.webmanifest".parse().unwrap();
+        let resp = serve_launcher(uri, LauncherSurface::Devserver).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(
+            resp.headers()
+                .get(header::CONTENT_TYPE)
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "application/manifest+json"
+        );
+        // Not the immutable asset cache: the manifest is unhashed + surface-varying.
+        assert_eq!(
+            resp.headers().get(header::CACHE_CONTROL),
+            Some(&SPA_CACHE_CONTROL)
+        );
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(v["scope"], "/");
+        assert_eq!(v["start_url"], "/");
+        assert_eq!(v["icons"][0]["src"], "/icon-192.png");
+        assert_eq!(v["icons"][1]["src"], "/icon-512.png");
     }
 
     #[test]
