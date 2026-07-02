@@ -19,28 +19,39 @@ import { renderMermaid } from "./mermaid_render";
 // is imported for its type so the elements cast below reads off its real
 // signature rather than a hand-maintained shape.
 type ExcalidrawModules = {
-  parseMermaidToExcalidraw: typeof import("@excalidraw/mermaid-to-excalidraw").parseMermaidToExcalidraw;
   convertToExcalidrawElements: typeof import("@excalidraw/excalidraw").convertToExcalidrawElements;
   exportToSvg: typeof import("@excalidraw/excalidraw").exportToSvg;
+  restore: typeof import("@excalidraw/excalidraw").restore;
 };
 
-let loader: Promise<ExcalidrawModules> | null = null;
+let excalidrawLoader: Promise<ExcalidrawModules> | null = null;
+let mermaidToExcalidrawLoader:
+  | Promise<typeof import("@excalidraw/mermaid-to-excalidraw").parseMermaidToExcalidraw>
+  | null = null;
 
 async function loadExcalidraw(): Promise<ExcalidrawModules> {
-  if (!loader) {
+  if (!excalidrawLoader) {
     // Set before the import so the font registry resolves label fonts
     // from the self-hosted bundle rather than the esm.sh CDN.
     configureExcalidrawAssets();
-    loader = Promise.all([
-      import("@excalidraw/mermaid-to-excalidraw"),
-      import("@excalidraw/excalidraw"),
-    ]).then(([m2e, excalidraw]) => ({
-      parseMermaidToExcalidraw: m2e.parseMermaidToExcalidraw,
+    excalidrawLoader = import("@excalidraw/excalidraw").then((excalidraw) => ({
       convertToExcalidrawElements: excalidraw.convertToExcalidrawElements,
       exportToSvg: excalidraw.exportToSvg,
+      restore: excalidraw.restore,
     }));
   }
-  return loader;
+  return excalidrawLoader;
+}
+
+async function loadMermaidToExcalidraw(): Promise<
+  typeof import("@excalidraw/mermaid-to-excalidraw").parseMermaidToExcalidraw
+> {
+  if (!mermaidToExcalidrawLoader) {
+    mermaidToExcalidrawLoader = import("@excalidraw/mermaid-to-excalidraw").then(
+      (mod) => mod.parseMermaidToExcalidraw,
+    );
+  }
+  return mermaidToExcalidrawLoader;
 }
 
 /// Render a mermaid definition to an excalidraw SVG string. When the
@@ -57,8 +68,8 @@ export async function renderExcalidraw(
   dark: boolean,
 ): Promise<DiagramResult> {
   try {
-    const { parseMermaidToExcalidraw, convertToExcalidrawElements, exportToSvg } =
-      await loadExcalidraw();
+    const [parseMermaidToExcalidraw, { convertToExcalidrawElements, exportToSvg }] =
+      await Promise.all([loadMermaidToExcalidraw(), loadExcalidraw()]);
     const { elements: skeleton, files } = await parseMermaidToExcalidraw(source.trim());
     // convertToExcalidrawElements returns OrderedExcalidrawElement[]; exportToSvg
     // wants NonDeleted<ExcalidrawElement>[]. The freshly converted elements are
@@ -87,5 +98,77 @@ export async function renderExcalidraw(
     const error = (err as Error)?.message ?? String(err);
     const { line, col } = parseErrorPos(source, error);
     return { ok: false, error, errorLine: line, errorCol: col };
+  }
+}
+
+type ExcalidrawScene = {
+  elements?: unknown;
+  appState?: unknown;
+  files?: unknown;
+};
+
+export async function renderExcalidrawFile(
+  url: string,
+  dark: boolean,
+): Promise<DiagramResult> {
+  try {
+    const resp = await fetch(url);
+    if (!resp.ok) return { ok: false, error: `fetch ${resp.status}` };
+    const scene = parseExcalidrawFileResponse(await resp.text());
+    return renderExcalidrawScene(scene, dark);
+  } catch (err) {
+    return {
+      ok: false,
+      error: (err as Error)?.message ?? String(err),
+    };
+  }
+}
+
+function parseExcalidrawFileResponse(text: string): ExcalidrawScene {
+  const payload = JSON.parse(text) as ExcalidrawScene & { content?: unknown };
+  if (typeof payload.content === "string") {
+    return JSON.parse(payload.content) as ExcalidrawScene;
+  }
+  return payload;
+}
+
+export async function renderExcalidrawScene(
+  scene: ExcalidrawScene,
+  dark: boolean,
+): Promise<DiagramResult> {
+  try {
+    const { restore, exportToSvg } = await loadExcalidraw();
+    type RestoreInput = NonNullable<Parameters<typeof restore>[0]>;
+    const data: RestoreInput = {
+      elements: (Array.isArray(scene.elements) ? scene.elements : []) as RestoreInput["elements"],
+      appState: (
+        scene.appState && typeof scene.appState === "object" ? scene.appState : {}
+      ) as RestoreInput["appState"],
+      files: (
+        scene.files && typeof scene.files === "object" ? scene.files : {}
+      ) as RestoreInput["files"],
+    };
+    const restored = restore(data, null, null, { repairBindings: true });
+    const elements = restored.elements.filter((el) => !el.isDeleted);
+    if (elements.length === 0) {
+      return { ok: false, error: "empty Excalidraw scene" };
+    }
+    const svg = await exportToSvg({
+      elements: elements as Parameters<typeof exportToSvg>[0]["elements"],
+      files: restored.files ?? null,
+      appState: {
+        ...restored.appState,
+        exportBackground: false,
+        exportWithDarkMode: dark,
+      },
+      exportPadding: 16,
+      renderEmbeddables: true,
+    });
+    return { ok: true, svg: svg.outerHTML };
+  } catch (err) {
+    return {
+      ok: false,
+      error: (err as Error)?.message ?? String(err),
+    };
   }
 }

@@ -64,6 +64,12 @@ describe("ExcalidrawCanvas island", () => {
     unmount(comp);
     expect(unmountMock).toHaveBeenCalledTimes(1);
   });
+
+  test("the board host follows the shared page-width cap", () => {
+    expect(canvasSrc).toContain("width: min(100%, var(--chan-page-max-width, 100%))");
+    expect(canvasSrc).toContain(".excalidraw-shell");
+    expect(canvasSrc).toContain("var(--page-shade)");
+  });
 });
 
 describe("excalidraw stays out of the eager bundle", () => {

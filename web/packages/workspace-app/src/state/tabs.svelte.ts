@@ -163,6 +163,13 @@ export function makeFindState(): FindState {
   };
 }
 
+export type SlidePreviewMode = "preview" | "play";
+export type SlidePreviewTabState = {
+  open: boolean;
+  index: number;
+  mode: SlidePreviewMode;
+};
+
 /// File-content tab: holds the editable buffer for any text-class
 /// file (markdown documents, contact notes, and arbitrary source /
 /// config text like .py, .json, .yaml).
@@ -212,6 +219,9 @@ export type FileTab = {
   /// Whether the left-side outline pane is shown alongside the
   /// editor. Toggleable per tab; persisted in the URL hash.
   outlineOpen: boolean;
+  /// Per-tab slides preview state. Stored on the tab so a reload can
+  /// restore both "in preview" and the slide currently on screen.
+  slidePreview?: SlidePreviewTabState;
   /// Enclosing git repo, relative to the workspace root, for files that
   /// live inside one. Set on first load from FileResponse.repo_root;
   /// workspaces the per-file "git repo: <name>" scope option in the
@@ -2400,6 +2410,7 @@ export async function openInPane(
     fileMissing: null,
     inspectorOpen: false,
     outlineOpen: false,
+    slidePreview: { open: false, index: 0, mode: "preview" },
     repoRoot: null,
     readMode: false,
     fsWritable: true,
@@ -3030,6 +3041,9 @@ function cloneTab(src: Tab): Tab {
     fileMissing: src.fileMissing ? { ...src.fileMissing } : null,
     inspectorOpen: src.inspectorOpen,
     outlineOpen: src.outlineOpen,
+    ...(src.slidePreview
+      ? { slidePreview: { ...src.slidePreview } }
+      : {}),
     repoRoot: src.repoRoot,
     readMode: src.readMode,
     fsWritable: src.fsWritable,
@@ -3931,6 +3945,25 @@ export function setTabInspectorOpen(tab: FileTab, open: boolean): void {
 export function setTabOutlineOpen(tab: FileTab, open: boolean): void {
   tab.outlineOpen = open;
 }
+function clampSlidePreviewIndex(index: number): number {
+  if (!Number.isFinite(index)) return 0;
+  return Math.max(0, Math.floor(index));
+}
+export function ensureTabSlidePreview(tab: FileTab): SlidePreviewTabState {
+  return (tab.slidePreview ??= { open: false, index: 0, mode: "preview" });
+}
+export function setTabSlidePreviewOpen(tab: FileTab, open: boolean): void {
+  ensureTabSlidePreview(tab).open = open;
+}
+export function setTabSlidePreviewIndex(tab: FileTab, index: number): void {
+  ensureTabSlidePreview(tab).index = clampSlidePreviewIndex(index);
+}
+export function setTabSlidePreviewMode(
+  tab: FileTab,
+  mode: SlidePreviewMode,
+): void {
+  ensureTabSlidePreview(tab).mode = mode;
+}
 export function setTabStyleToolbarOpen(tab: FileTab, open: boolean): void {
   tab.styleToolbarOpen = open;
 }
@@ -4227,6 +4260,13 @@ type SerTab = {
   /// Outline pane (left-side) visibility. Default off, so we only
   /// emit `ol: 1` when the user has opted the outline in.
   ol?: 1;
+  /// Slides preview open flag. Omitted when closed.
+  spo?: 1;
+  /// Slides preview slide index. Emitted when preview is open or
+  /// the stored index is non-zero.
+  sp?: number;
+  /// Slides preview mode. Omitted for regular preview.
+  spm?: "p";
   /// Style toolbar visibility. Default is "hidden" for new tabs;
   /// we only emit `s: 1` when the user explicitly enabled it so
   /// the common case keeps the hash short. Restores without the
@@ -4599,12 +4639,20 @@ function serializeTab(
     t.caret && (t.caret.from !== 0 || t.caret.to !== 0)
       ? { c: [t.caret.from, t.caret.to] as [number, number] }
       : {};
+  const slidePreview = t.slidePreview;
   return {
     p: t.path,
     m: t.mode,
     ...active,
     ...(t.inspectorOpen ? { o: 1 as const } : {}),
     ...(t.outlineOpen ? { ol: 1 as const } : {}),
+    ...(slidePreview?.open ? { spo: 1 as const } : {}),
+    ...(slidePreview && (slidePreview.open || slidePreview.index > 0)
+      ? { sp: clampSlidePreviewIndex(slidePreview.index) }
+      : {}),
+    ...(slidePreview?.open && slidePreview.mode === "play"
+      ? { spm: "p" as const }
+      : {}),
     ...(t.styleToolbarOpen ? { s: 1 as const } : {}),
     ...(t.readMode ? { r: 1 as const } : {}),
     ...(t.syntaxHighlight ? {} : { h: 0 as const }),
@@ -4887,6 +4935,13 @@ export async function restoreLayout(
           fileMissing: null,
           inspectorOpen: !!sertab.o,
           outlineOpen: !!sertab.ol,
+          slidePreview: {
+            open: sertab.spo === 1,
+            index: clampSlidePreviewIndex(
+              typeof sertab.sp === "number" ? sertab.sp : 0,
+            ),
+            mode: sertab.spm === "p" ? "play" : "preview",
+          },
           // repoRoot is filled in by loadTabContent on first read;
           // restored sessions start with null and get the real value
           // once the file fetches.

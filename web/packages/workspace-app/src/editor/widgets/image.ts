@@ -36,10 +36,12 @@ import {
 import { syntaxTree } from "@codemirror/language";
 import { type Extension, StateField } from "@codemirror/state";
 import {
+  isExcalidrawImageSrc,
   parseImageSrc,
   resolveImageSrc,
   setImageWidth,
 } from "../extensions/image";
+import { renderExcalidrawFile } from "../excalidraw_render";
 import { detectEmbed, embedRenderFromInfo } from "../../api/embed";
 import {
   clearImageDragIndicator,
@@ -193,6 +195,14 @@ async function copyImageToClipboard(
   ]);
 }
 
+function renderExcalidrawEmbedError(body: HTMLElement, message: string): void {
+  body.classList.add("cm-md-excalidraw-embed-error");
+  body.replaceChildren();
+  const label = document.createElement("span");
+  label.textContent = `Excalidraw render failed: ${message}`;
+  body.append(label);
+}
+
 /// Line decoration applied to the line AFTER an inline-floated image.
 /// CSS clears the float there so only the SAME line as the image
 /// flows beside it; the next paragraph drops below the image. Reused
@@ -225,6 +235,9 @@ export interface ImageOptions {
   getCurrentPath: () => string | null;
   /// Optional click handler for the image action overlay (step 8).
   onImageClick?: (args: ImageClickArgs) => void;
+  /// Whether the editor surface is currently dark; used by static
+  /// Excalidraw image embeds so their exported strokes read on the page.
+  isDark?: () => boolean;
 }
 
 class ImageWidget extends WidgetType {
@@ -255,6 +268,7 @@ class ImageWidget extends WidgetType {
     /// `editable`) because `WidgetType` exposes a getter-only
     /// `editable` member - assigning to a field of that name throws.
     readonly writable: boolean,
+    readonly dark: boolean,
     readonly onClick: ((args: ImageClickArgs) => void) | undefined,
   ) {
     super();
@@ -267,7 +281,8 @@ class ImageWidget extends WidgetType {
       this.fromPath === other.fromPath &&
       this.standalone === other.standalone &&
       this.editing === other.editing &&
-      this.writable === other.writable
+      this.writable === other.writable &&
+      this.dark === other.dark
     );
   }
 
@@ -332,6 +347,62 @@ class ImageWidget extends WidgetType {
       frame.style.borderRadius = "8px";
       wrap.appendChild(frame);
       // Same payload the document-level keymap reads (Delete / select).
+      (wrap as HTMLElement & { _chanImg?: ImageActionPayload })._chanImg = {
+        src: this.src,
+        alt: this.alt,
+        fromPath: this.fromPath,
+        nodePos: this.nodePos,
+        onClick: this.onClick,
+      };
+      return wrap;
+    }
+
+    if (isExcalidrawImageSrc(this.src)) {
+      wrap.dataset.excalidraw = "true";
+      const body = document.createElement("span");
+      body.className = "cm-md-excalidraw-embed";
+      body.textContent = "rendering…";
+      if (width != null) body.style.width = `${width}px`;
+      wrap.appendChild(body);
+
+      const resolved = resolveImageSrc(this.src, this.fromPath);
+      if (!resolved) {
+        renderExcalidrawEmbedError(body, "cannot resolve Excalidraw file");
+      } else {
+        void renderExcalidrawFile(resolved, this.dark).then((res) => {
+          if (!wrap.isConnected) return;
+          if (res.ok && res.svg) {
+            body.classList.remove("cm-md-excalidraw-embed-error");
+            body.innerHTML = res.svg;
+          } else {
+            renderExcalidrawEmbedError(body, res.error ?? "render failed");
+          }
+        });
+      }
+
+      if (editable) {
+        const handle = document.createElement("span");
+        handle.className = "cm-md-image-handle";
+        handle.addEventListener("mousedown", (e) =>
+          startResize(e, wrap, body, view),
+        );
+        wrap.appendChild(handle);
+
+        const actions = document.createElement("span");
+        actions.className = "cm-md-image-actions";
+        const editBtn = document.createElement("button");
+        editBtn.type = "button";
+        editBtn.className = "cm-md-image-action";
+        editBtn.textContent = "Edit";
+        editBtn.addEventListener("mousedown", (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          placeCaretInImageUrl(view, this.nodePos);
+        });
+        actions.appendChild(editBtn);
+        wrap.appendChild(actions);
+      }
+
       (wrap as HTMLElement & { _chanImg?: ImageActionPayload })._chanImg = {
         src: this.src,
         alt: this.alt,
@@ -626,7 +697,7 @@ function ensureDeselectListener(view: EditorView): void {
     // Cmd/Ctrl+Enter - same as clicking the View button (zoom modal).
     if (hasMod && e.key === "Enter" && !e.altKey && !e.shiftKey) {
       e.preventDefault();
-      if (payload?.onClick) {
+      if (payload?.onClick && !isExcalidrawImageSrc(payload.src)) {
         payload.onClick({
           src: payload.src,
           alt: payload.alt,
@@ -646,7 +717,7 @@ function ensureDeselectListener(view: EditorView): void {
       !e.shiftKey &&
       view.state.selection.main.empty
     ) {
-      if (payload) {
+      if (payload && !isExcalidrawImageSrc(payload.src)) {
         e.preventDefault();
         void copyImageToClipboard(payload.src, payload.fromPath);
       }
@@ -703,7 +774,8 @@ export function collectDocImageSrcs(view: EditorView): string[] {
       if (!cursor.firstChild()) return;
       do {
         if (cursor.name === "URL") {
-          srcs.push(view.state.doc.sliceString(cursor.from, cursor.to));
+          const src = view.state.doc.sliceString(cursor.from, cursor.to);
+          if (!isExcalidrawImageSrc(src)) srcs.push(src);
           break;
         }
       } while (cursor.nextSibling());
@@ -760,13 +832,13 @@ function placeCaretInImageUrl(view: EditorView, hintPos: number): void {
 function startResize(
   e: MouseEvent,
   wrap: HTMLElement,
-  img: HTMLImageElement,
+  target: HTMLElement,
   view: EditorView,
 ): void {
   e.preventDefault();
   e.stopPropagation();
   const startX = e.clientX;
-  const startW = img.getBoundingClientRect().width;
+  const startW = target.getBoundingClientRect().width;
   // Drag threshold: a plain click on the handle (no movement) should
   // NOT commit a width. Without this guard, clicking the handle on
   // an image that has no explicit `#w=N` reads the rendered width
@@ -780,13 +852,13 @@ function startResize(
     if (!moved && Math.abs(dx) < DRAG_THRESHOLD_PX) return;
     moved = true;
     const newW = Math.max(MIN_IMG_WIDTH, Math.round(startW + dx));
-    img.style.width = `${newW}px`;
+    target.style.width = `${newW}px`;
   };
   const onUp = (): void => {
     document.removeEventListener("mousemove", onMove);
     document.removeEventListener("mouseup", onUp);
     if (!moved) return;
-    const finalW = Math.round(img.getBoundingClientRect().width);
+    const finalW = Math.round(target.getBoundingClientRect().width);
     commitImageWidth(view, wrap, finalW);
   };
   document.addEventListener("mousemove", onMove);
@@ -907,11 +979,13 @@ export function imageDecorations(opts: ImageOptions): Extension {
         const editableChanged =
           u.startState.facet(EditorView.editable) !==
           u.state.facet(EditorView.editable);
+        const configChanged = u.transactions.some((tr) => tr.effects.length > 0);
         if (
           u.docChanged ||
           u.viewportChanged ||
           u.selectionSet ||
-          editableChanged
+          editableChanged ||
+          configChanged
         ) {
           this.decorations = scanImagesInline(u.view, opts);
         }
@@ -930,7 +1004,9 @@ export function imageDecorations(opts: ImageOptions): Extension {
       return scanImagesBlock(state, opts);
     },
     update(value, tr): DecorationSet {
-      if (!tr.docChanged && !tr.selection) return value.map(tr.changes);
+      if (!tr.docChanged && !tr.selection && tr.effects.length === 0) {
+        return value.map(tr.changes);
+      }
       return scanImagesBlock(tr.state, opts);
     },
     provide: (f) => EditorView.decorations.from(f),
@@ -951,6 +1027,7 @@ function scanImagesInline(view: EditorView, opts: ImageOptions): DecorationSet {
   const decos: Array<{ from: number; to: number; deco: Decoration }> = [];
   const fromPath = opts.getCurrentPath();
   const editable = state.facet(EditorView.editable);
+  const dark = opts.isDark?.() ?? false;
   syntaxTree(state).iterate({
     from,
     to,
@@ -995,6 +1072,7 @@ function scanImagesInline(view: EditorView, opts: ImageOptions): DecorationSet {
         standalone,
         false,
         editable,
+        dark,
         opts.onImageClick,
       );
       decos.push({
@@ -1037,6 +1115,7 @@ function scanImagesBlock(
   const decos: Array<{ from: number; to: number; deco: Decoration }> = [];
   const fromPath = opts.getCurrentPath();
   const editable = state.facet(EditorView.editable);
+  const dark = opts.isDark?.() ?? false;
   // Doc-wide tree walk. StateFields don't see viewport, but the doc-
   // wide pass emits widgets only for selection-intersected images, so
   // the cost is bounded by selection count, not doc size.
@@ -1077,6 +1156,7 @@ function scanImagesBlock(
         standalone,
         true,
         editable,
+        dark,
         opts.onImageClick,
       );
       decos.push({

@@ -493,6 +493,7 @@
         imageDecorations({
           getCurrentPath: () => currentPath,
           onImageClick: handleImageClick,
+          isDark: () => effectiveHybridSurfaceTheme("editor") === "dark",
         }),
         imageCaretRedirect(),
         tableDecorations(),
@@ -1519,6 +1520,30 @@
   :global(.md-wysiwyg-cm6 .cm-md-image-wrap[data-broken="true"] .cm-md-image-handle) {
     display: none;
   }
+  :global(.md-wysiwyg-cm6 .cm-md-image-wrap[data-excalidraw="true"]) {
+    line-height: normal;
+  }
+  :global(.md-wysiwyg-cm6 .cm-md-excalidraw-embed) {
+    display: flex;
+    justify-content: center;
+    min-width: 120px;
+    max-width: 100%;
+    min-height: 40px;
+    padding: 8px 0;
+    color: var(--text-secondary);
+  }
+  :global(.md-wysiwyg-cm6 .cm-md-excalidraw-embed svg) {
+    max-width: 100%;
+    height: auto;
+  }
+  :global(.md-wysiwyg-cm6 .cm-md-excalidraw-embed.cm-md-excalidraw-embed-error) {
+    display: block;
+    color: var(--danger-text, #d33);
+    font-family: ui-monospace, monospace;
+    font-size: 12px;
+    white-space: pre-wrap;
+    line-height: 1.4;
+  }
   :global(.md-wysiwyg-cm6 .cm-md-image-broken) {
     display: inline-flex;
     align-items: center;
@@ -1591,6 +1616,12 @@
     width: auto !important;
     height: auto;
     object-fit: contain;
+  }
+  :global(.md-wysiwyg-cm6 .cm-md-image-wrap[data-editing="true"] .cm-md-excalidraw-embed) {
+    max-width: 160px !important;
+    max-height: 160px;
+    width: auto !important;
+    overflow: hidden;
   }
   /* Hide the resize handle on the edit-mode thumbnail - the
      thumbnail isn't the rendered version, so committing a new

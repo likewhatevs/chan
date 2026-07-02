@@ -1216,6 +1216,54 @@ describe("pane state", () => {
     expect(files[0].outlineWidth).toBe(240);
   });
 
+  test("hash round-trips slide preview state for file tabs", async () => {
+    const file = fileTab({
+      slidePreview: { open: true, index: 2, mode: "preview" },
+    });
+    resetLayout([file]);
+
+    const snapshot = serializeLayout();
+    const json = JSON.stringify(snapshot);
+    expect(json).toContain('"spo":1');
+    expect(json).toContain('"sp":2');
+    expect(json).not.toContain('"spm"');
+
+    await restoreLayout(snapshot!);
+
+    const restored = activePane().tabs[0];
+    expect(restored?.kind).toBe("file");
+    if (restored?.kind !== "file") return;
+    expect(restored.slidePreview).toEqual({
+      open: true,
+      index: 2,
+      mode: "preview",
+    });
+  });
+
+  test("hash round-trips slide play mode for file tabs", async () => {
+    const file = fileTab({
+      slidePreview: { open: true, index: 1, mode: "play" },
+    });
+    resetLayout([file]);
+
+    const snapshot = serializeLayout();
+    const json = JSON.stringify(snapshot);
+    expect(json).toContain('"spo":1');
+    expect(json).toContain('"sp":1');
+    expect(json).toContain('"spm":"p"');
+
+    await restoreLayout(snapshot!);
+
+    const restored = activePane().tabs[0];
+    expect(restored?.kind).toBe("file");
+    if (restored?.kind !== "file") return;
+    expect(restored.slidePreview).toEqual({
+      open: true,
+      index: 1,
+      mode: "play",
+    });
+  });
+
   test("pane mode discards draft changes on cancel", () => {
     const left = fileTab({ id: "left", path: "notes/left.md" });
     const right = fileTab({ id: "right", path: "notes/right.md" });

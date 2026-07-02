@@ -205,6 +205,9 @@
         // without this, the persisted layout never picks up the
         // updated offset and reloads land at doc start.
         void t.caret;
+        void t.slidePreview?.open;
+        void t.slidePreview?.index;
+        void t.slidePreview?.mode;
         if (bootstrapped && !t.loading && t.content !== t.saved) {
           scheduleAutosave(node.id, t.id);
         }

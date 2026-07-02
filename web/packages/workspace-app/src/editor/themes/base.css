@@ -87,3 +87,13 @@
   --chan-editor-list-glyph-scale: 0.5;
   --chan-editor-list-square-glyph-scale: 0.44;
 }
+
+/* Surface-scoped body themes need the editor background token to be
+   declared inside the same subtree so `var(--bg)` resolves against
+   that surface, not only against the document root. */
+:root[data-theme="dark"],
+:root [data-theme="dark"],
+:root[data-theme="light"],
+:root [data-theme="light"] {
+  --chan-editor-bg: var(--bg);
+}

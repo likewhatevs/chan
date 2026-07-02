@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
-import { describe, expect, test, vi } from "vitest";
-import { renderExcalidraw } from "./excalidraw_render";
+import { afterEach, describe, expect, test, vi } from "vitest";
+import { renderExcalidraw, renderExcalidrawFile } from "./excalidraw_render";
 
 // Mock the two heavy libraries so the render path is exercised without
 // loading React / excalidraw. parseMermaidToExcalidraw throws on sentinel
@@ -21,9 +21,15 @@ vi.mock("@excalidraw/mermaid-to-excalidraw", () => ({
 }));
 vi.mock("@excalidraw/excalidraw", () => ({
   convertToExcalidrawElements: (els: unknown[]) => els,
-  exportToSvg: async () => {
+  restore: (data: { elements?: unknown[]; appState?: object; files?: object }) => ({
+    elements: data.elements ?? [],
+    appState: data.appState ?? {},
+    files: data.files ?? {},
+  }),
+  exportToSvg: async (opts?: { appState?: { exportWithDarkMode?: boolean } }) => {
     const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
     svg.setAttribute("data-rendered", "1");
+    svg.setAttribute("data-dark", opts?.appState?.exportWithDarkMode ? "1" : "0");
     return svg;
   },
 }));
@@ -39,6 +45,10 @@ vi.mock("./mermaid_render", () => ({
     return { ok: true, svg: '<svg data-mermaid="1"></svg>' };
   },
 }));
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 describe("renderExcalidraw", () => {
   test("returns the exported SVG string on success", async () => {
@@ -64,5 +74,33 @@ describe("renderExcalidraw", () => {
     // column M" is surfaced for the failing-source accent.
     expect(res.errorLine).toBe(2);
     expect(res.errorCol).toBe(3);
+  });
+
+  test("renders a fetched .excalidraw scene as a themed SVG string", async () => {
+    const fetchMock = vi.fn(async () => {
+      return new Response(
+        JSON.stringify({
+          path: "board.excalidraw",
+          content: JSON.stringify({
+            type: "excalidraw",
+            elements: [{ id: "a", type: "rectangle", isDeleted: false }],
+            appState: {},
+            files: {},
+          }),
+        }),
+        { status: 200 },
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const res = await renderExcalidrawFile(
+      "/api/files/board.excalidraw?t=tok",
+      true,
+    );
+
+    expect(fetchMock).toHaveBeenCalledWith("/api/files/board.excalidraw?t=tok");
+    expect(res.ok).toBe(true);
+    expect(res.svg).toContain("<svg");
+    expect(res.svg).toContain('data-dark="1"');
   });
 });

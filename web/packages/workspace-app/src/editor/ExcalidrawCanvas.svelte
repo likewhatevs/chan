@@ -147,12 +147,28 @@
   });
 </script>
 
-<div class="excalidraw-host" bind:this={host} tabindex="-1"></div>
+<div class="excalidraw-shell">
+  <div class="excalidraw-host" bind:this={host} tabindex="-1"></div>
+</div>
 
 <style>
-  .excalidraw-host {
+  .excalidraw-shell {
     position: absolute;
     inset: 0;
+    background: var(--bg);
+  }
+  :global(.chan-page-capped) .excalidraw-shell {
+    background: var(--page-shade);
+  }
+  .excalidraw-host {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 50%;
+    width: min(100%, var(--chan-page-max-width, 100%));
+    transform: translateX(-50%);
+    background: var(--bg);
     outline: none;
+    overflow: hidden;
   }
 </style>

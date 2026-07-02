@@ -18,6 +18,12 @@ export function isImagePath(path: string): boolean {
   return (IMAGE_EXTS as readonly string[]).includes(ext);
 }
 
+export function isExcalidrawImageSrc(src: string): boolean {
+  const { base } = parseImageSrc(src);
+  const path = base.split("#", 1)[0]!.split("?", 1)[0]!;
+  return path.toLowerCase().endsWith(".excalidraw");
+}
+
 export type ImageAlign = "left" | "right";
 
 /// Split a markdown image src into the URL portion (used to fetch

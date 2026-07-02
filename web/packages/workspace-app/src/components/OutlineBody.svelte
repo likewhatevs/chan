@@ -21,10 +21,15 @@
   // code blocks (so `# foo` inside a ``` block doesn't pollute the
   // outline). Cheap; no debounce needed.
 
+  import { Eye, Play } from "lucide-svelte";
+  import { groupHeadingsBySlides, parseSlidesSpec } from "../editor/slides";
+
   let {
     content,
     caretLine = null,
     onSelect,
+    onPreview,
+    onPlay,
   }: {
     content: string;
     /// 0-indexed source line the caret sits on. When provided, the
@@ -33,9 +38,13 @@
     /// Null disables the marker.
     caretLine?: number | null;
     onSelect: (h: Heading) => void;
+    onPreview?: () => void;
+    onPlay?: () => void;
   } = $props();
 
   const headings = $derived(parseHeadings(content));
+  const slidesSpec = $derived(parseSlidesSpec(content));
+  const slidePages = $derived(slidesSpec ? groupHeadingsBySlides(content, headings) : []);
   const activeIndex = $derived(computeActiveIndex(headings, caretLine));
 
   function computeActiveIndex(hs: Heading[], line: number | null): number | null {
@@ -106,10 +115,62 @@
   }
 </script>
 
-{#if headings.length === 0}
+{#if slidesSpec}
+  <div class="slide-actions" aria-label="Slide actions">
+    <button
+      type="button"
+      class="slide-action"
+      title={`Preview slides (${slidesSpec.aspectRatio})`}
+      onclick={() => onPreview?.()}
+    >
+      <Eye size={14} strokeWidth={1.8} aria-hidden="true" />
+      <span>Preview</span>
+    </button>
+    <button
+      type="button"
+      class="slide-action"
+      title={`Present slides (${slidesSpec.aspectRatio})`}
+      onclick={() => onPlay?.()}
+    >
+      <Play size={14} strokeWidth={1.8} aria-hidden="true" />
+      <span>Present</span>
+    </button>
+  </div>
+{/if}
+
+{#if slidesSpec}
+  <div class="slide-outline">
+    {#each slidePages as page (page.number)}
+      <section class="slide-page" aria-label={`Slide ${page.number} outline`}>
+        <div
+          class="slide-label"
+          class:active-slide={page.headings.some((h) => h.index === activeIndex)}
+        >
+          Slide {page.number}
+        </div>
+        {#if page.headings.length === 0}
+          <div class="slide-empty">No headings</div>
+        {:else}
+          <ul class="slide-heading-list">
+            {#each page.headings as h (h.index)}
+              <li class:active={h.index === activeIndex}>
+                <button
+                  class="row"
+                  style="padding-left: {(h.depth - 1) * 14 + 14}px"
+                  title={h.text}
+                  onclick={() => onSelect(h)}
+                >{h.text}</button>
+              </li>
+            {/each}
+          </ul>
+        {/if}
+      </section>
+    {/each}
+  </div>
+{:else if headings.length === 0}
   <div class="empty">No headings yet</div>
 {:else}
-  <ul>
+  <ul class="outline-list">
     {#each headings as h (h.index)}
       <li class:active={h.index === activeIndex}>
         <button
@@ -129,6 +190,58 @@
     color: var(--text-secondary);
     font-style: italic;
   }
+  .slide-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.35rem;
+    padding: 0.45rem 0.5rem 0.2rem;
+  }
+  .slide-action {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.35rem;
+    min-width: 0;
+    height: 1.8rem;
+    padding: 0 0.5rem;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: var(--btn-bg);
+    color: var(--text);
+    font: inherit;
+    cursor: pointer;
+  }
+  .slide-action:hover {
+    background: var(--hover-bg);
+  }
+  .slide-action span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .slide-outline {
+    padding: 0.35rem 0 0.45rem;
+  }
+  .slide-page + .slide-page {
+    margin-top: 0.25rem;
+  }
+  .slide-label {
+    padding: 0.25rem 0.6rem 0.15rem;
+    color: var(--text-secondary);
+    font-size: 0.78rem;
+    font-weight: 600;
+    line-height: 1.35;
+  }
+  .slide-label.active-slide {
+    color: var(--text);
+  }
+  .slide-empty {
+    margin-left: 10px;
+    padding: 0.2rem 0.6rem 0.25rem;
+    border-left: 1px solid var(--border);
+    color: var(--text-secondary);
+    font-style: italic;
+  }
   /* Google-Docs-style outline, sitting in chan's left-side outline
      pane: every heading hangs off a single vertical guide line at
      the LEFT (toward the workspace edge), with items extending
@@ -137,11 +250,15 @@
      in left-padding; the line itself does not branch per level.
      The 10px gap between the line and the panel edge gives the
      tree breathing room from the pane chrome. */
-  ul {
+  .outline-list,
+  .slide-heading-list {
     list-style: none;
     margin: 0 0 0 10px;
     padding: 0.35rem 0;
     border-left: 1px solid var(--border);
+  }
+  .slide-heading-list {
+    padding: 0.1rem 0 0.25rem;
   }
   li { position: relative; }
   /* Active-heading marker. The 2px accent bar sits on top of the

@@ -9,7 +9,7 @@
   // the popover; lifting it out of there reduces the chrome users have
   // to twirl through and keeps formatting one mouse-move away.
 
-  import { onDestroy } from "svelte";
+  import { onDestroy, tick } from "svelte";
   import Wysiwyg from "../editor/Wysiwyg.svelte";
   import Source from "../editor/Source.svelte";
   import {
@@ -89,6 +89,9 @@
     setTabCodeBlocksCollapsed,
     setTabHighlightTrailingWhitespace,
     setTabOutlineOpen,
+    setTabSlidePreviewIndex,
+    setTabSlidePreviewMode,
+    setTabSlidePreviewOpen,
     setTabStyleToolbarOpen,
     setTabSyntaxHighlight,
     type FileTab,
@@ -99,6 +102,7 @@
     sourceCaretForRenderedCaret,
   } from "../editor/caret_mapping";
   import { stripTrailingWhitespaceText } from "../editor/tools";
+  import { parseSlidesSpec } from "../editor/slides";
 
   import {
     copyTextToClipboard,
@@ -135,6 +139,11 @@
     setPageWidth,
   } from "../state/pageWidth.svelte";
   import {
+    openSlidePreview,
+    type SlidePreviewHandle,
+    type SlidePreviewMode,
+  } from "../state/slidePreview";
+  import {
     tabMenu,
     closeTabMenu,
     openTabMenu,
@@ -164,6 +173,9 @@
   // the toolbar can call into the Wysiwyg formatting API.
   let wysiwygRef: Wysiwyg | undefined = $state();
   let sourceRef: Source | undefined = $state();
+  let slidePreviewHandle: SlidePreviewHandle | null = null;
+  const editorTheme = $derived(effectiveHybridSurfaceTheme("editor"));
+  const slidePreviewOpen = $derived(tab.slidePreview?.open === true);
 
   // Excalidraw canvas body. Kept out of the eager bundle: the wrapper is
   // dynamic-imported on first activation, then latched, so N restored
@@ -197,11 +209,22 @@
     tabFocusPulse.value;
     queueMicrotask(() => {
       if (!focused) return;
-      if (tab.mode === "wysiwyg") wysiwygRef?.focus();
-      else if (tab.mode === "canvas") canvasRef?.focusCanvas();
-      else sourceRef?.focus();
+      focusActiveEditor();
     });
   });
+
+  function focusActiveEditor(): void {
+    if (tab.mode === "wysiwyg") wysiwygRef?.focus();
+    else if (tab.mode === "canvas") canvasRef?.focusCanvas();
+    else sourceRef?.focus();
+  }
+
+  function refocusAfterSlidePreviewClose(): void {
+    void tick().then(() => {
+      if (!active || !focused) return;
+      focusActiveEditor();
+    });
+  }
 
   // Imperative caret-command channel. A kept-alive tab's editor snapshots
   // `initialCaret` once at mount and then latches, so re-opening an already-
@@ -316,7 +339,9 @@
   /// and overrides the lamp so the user can't try to write.
   /// Per-tab so multi-pane layouts can mix read/write without
   /// a global signal fighting between panes.
-  const readOnly = $derived(tab.loading || tab.readMode || !tab.fsWritable);
+  const readOnly = $derived(
+    tab.loading || tab.readMode || !tab.fsWritable || slidePreviewOpen,
+  );
   const loadingText = $derived(
     tab.loadProgress?.totalBytes
       ? `loading ${formatBytes(tab.loadProgress.loadedBytes)} / ${formatBytes(tab.loadProgress.totalBytes)}`
@@ -334,6 +359,8 @@
     for (let i = 0; i < upto.length; i++) if (upto.charCodeAt(i) === 10) n++;
     return n;
   });
+  const slidesSpec = $derived(parseSlidesSpec(tab.content));
+  const slideShortcutOS = currentOS();
 
   // Bumped on every selection / doc change in the WYSIWYG editor so
   // the StyleToolbar's active-mark / current-block derivations re-run.
@@ -346,6 +373,97 @@
     if (tab.mode === "wysiwyg") wysiwygRef?.scrollToHeading(h.index);
     else sourceRef?.scrollToLine(h.line);
   }
+
+  function previewSlides(): void {
+    setTabSlidePreviewMode(tab, "preview");
+    setTabSlidePreviewOpen(tab, true);
+    openOrUpdateSlidePreview(false, "preview");
+  }
+
+  function playSlides(): void {
+    setTabSlidePreviewMode(tab, "play");
+    setTabSlidePreviewOpen(tab, true);
+    openOrUpdateSlidePreview(false, "play");
+  }
+
+  function onSlideShortcutKeydown(e: KeyboardEvent): void {
+    if (!slidesSpec || tab.loading || e.key !== "Enter" || e.altKey) return;
+    if (!slideShortcutModifierPressed(e)) return;
+    if (shouldIgnoreSlideShortcutTarget(e.target)) return;
+
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.shiftKey) playSlides();
+    else previewSlides();
+  }
+
+  function slideShortcutModifierPressed(e: KeyboardEvent): boolean {
+    return slideShortcutOS === "mac" ? e.metaKey : e.ctrlKey;
+  }
+
+  function shouldIgnoreSlideShortcutTarget(target: EventTarget | null): boolean {
+    if (!(target instanceof Element)) return false;
+    if (target.closest(".cm-editor")) return false;
+    return target.closest("input, textarea, select, button, [role='button']") !== null;
+  }
+
+  function openOrUpdateSlidePreview(
+    fromStoredIndex: boolean,
+    mode: SlidePreviewMode = tab.slidePreview?.mode ?? "preview",
+  ): void {
+    const initialIndex = fromStoredIndex ? (tab.slidePreview?.index ?? 0) : null;
+    const updateOpts = {
+      source: tab.content,
+      fromPath: tab.path,
+      initialIndex,
+      styleSource: editorTabEl ?? null,
+      theme: editorTheme,
+      mode,
+    };
+    if (slidePreviewHandle) {
+      slidePreviewHandle.update(updateOpts);
+      return;
+    }
+    const handle = openSlidePreview({
+      ...updateOpts,
+      currentLine: caretLine,
+      onSlideChange: (index) => setTabSlidePreviewIndex(tab, index),
+      onClose: () => {
+        setTabSlidePreviewOpen(tab, false);
+        slidePreviewHandle = null;
+        refocusAfterSlidePreviewClose();
+      },
+    });
+    if (!handle) {
+      setTabSlidePreviewOpen(tab, false);
+      return;
+    }
+    slidePreviewHandle = handle;
+  }
+
+  $effect(() => {
+    const open = slidePreviewOpen;
+    const loading = tab.loading;
+    const activeTab = active;
+    const content = tab.content;
+    const path = tab.path;
+    const theme = editorTheme;
+    const index = tab.slidePreview?.index ?? 0;
+    const mode = tab.slidePreview?.mode ?? "preview";
+    const styleSource = editorTabEl ?? null;
+    if (!open || loading || !activeTab) {
+      slidePreviewHandle?.close({ notify: false });
+      slidePreviewHandle = null;
+      return;
+    }
+    void content;
+    void path;
+    void theme;
+    void index;
+    void mode;
+    void styleSource;
+    openOrUpdateSlidePreview(true, mode);
+  });
 
   // Find-on-page adapter for whichever editor is mounted. Both
   // editors expose `findAdapter` (see editor/find.ts FindAdapter)
@@ -739,6 +857,7 @@
   // moved file) does not leave the status stuck in the bar. The literal
   // must match the one set below.
   onDestroy(() => {
+    slidePreviewHandle?.close({ notify: false });
     if (ui.status === "Choose the moved file in Files to re-open this tab") {
       ui.status = null;
     }
@@ -1331,7 +1450,13 @@
         onResize={persistPaneWidths}
         onClose={() => setTabOutlineOpen(tab, false)}
       >
-        <OutlineBody content={tab.content} {caretLine} onSelect={jumpTo} />
+        <OutlineBody
+          content={tab.content}
+          {caretLine}
+          onSelect={jumpTo}
+          onPreview={previewSlides}
+          onPlay={playSlides}
+        />
       </Inspector>
     {/if}
     {#if tab.mode === "wysiwyg"}
@@ -1346,6 +1471,7 @@
         class="editor-host"
         style:--editor-top-pad={tab.styleToolbarOpen ? "2.5rem" : "0.5rem"}
         oncontextmenu={onEditorContext}
+        onkeydowncapture={onSlideShortcutKeydown}
         role="presentation"
       >
         <Wysiwyg
@@ -1458,6 +1584,7 @@
       <div
         class="editor-host"
         oncontextmenu={onEditorContext}
+        onkeydowncapture={onSlideShortcutKeydown}
         role="presentation"
       >
         <Source
