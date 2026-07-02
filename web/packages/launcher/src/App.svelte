@@ -19,11 +19,15 @@
     resolvePendingControlAttention,
   } from "./state/controlAttention.svelte";
   import { onTauriEvent } from "./api/desktop";
-  import { applyTheme } from "./state/theme.svelte";
+  import { applyTheme, reconcileLocalTheme } from "./state/theme.svelte";
   import { readOnly } from "./state/capabilities";
 
   onMount(() => {
     applyTheme();
+    // Reconcile the first-paint localStorage theme with the authoritative
+    // desktop-config value, so a cleared WebView store or a second writer can
+    // never leave the launcher and the local terminals on different themes.
+    void reconcileLocalTheme();
     loadLibrary();
     // A connected devserver's control terminal exited: the desktop emits
     // `devserver-control-closed` with its id, and the launcher flashes that

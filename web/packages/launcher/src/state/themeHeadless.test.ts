@@ -84,3 +84,58 @@ describe("launcher initial theme headless fallback", () => {
     expect(themeState.theme).toBe("light");
   });
 });
+
+describe("launcher local-theme desktop sync", () => {
+  test("toggleTheme mirrors the new choice to the desktop config", async () => {
+    vi.stubGlobal("matchMedia", matchMediaStub({ light: false })); // start dark
+    const fetchMock = vi.fn(async () => new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const { themeState, toggleTheme } = await import("./theme.svelte");
+    expect(themeState.theme).toBe("dark");
+
+    toggleTheme();
+
+    expect(themeState.theme).toBe("light");
+    // The PUT fires synchronously (fire-and-forget) with the new theme.
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/library/local-theme",
+      expect.objectContaining({ method: "PUT", body: JSON.stringify({ theme: "light" }) }),
+    );
+  });
+
+  test("toggleTheme still flips when the PUT fails (best-effort)", async () => {
+    vi.stubGlobal("matchMedia", matchMediaStub({ light: false }));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new Error("no store");
+      }),
+    );
+    const { themeState, toggleTheme } = await import("./theme.svelte");
+    toggleTheme();
+    expect(themeState.theme).toBe("light");
+  });
+
+  test("reconcileLocalTheme adopts the authoritative config value", async () => {
+    vi.stubGlobal("matchMedia", matchMediaStub({ light: false })); // boots dark
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(JSON.stringify({ theme: "light" }), { status: 200 })),
+    );
+    const { themeState, reconcileLocalTheme } = await import("./theme.svelte");
+    expect(themeState.theme).toBe("dark");
+    await reconcileLocalTheme();
+    expect(themeState.theme).toBe("light");
+  });
+
+  test("reconcileLocalTheme keeps the current theme when the config is null", async () => {
+    vi.stubGlobal("matchMedia", matchMediaStub({ light: false }));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(JSON.stringify({ theme: null }), { status: 200 })),
+    );
+    const { themeState, reconcileLocalTheme } = await import("./theme.svelte");
+    await reconcileLocalTheme();
+    expect(themeState.theme).toBe("dark");
+  });
+});

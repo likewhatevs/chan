@@ -37,6 +37,7 @@
     browserSelection,
     browserSidePanes,
     closeOverlay,
+    applyLocalTheme,
     discardWindowSession,
     workspace,
     fileOps,
@@ -114,7 +115,7 @@
   import { isTauriDesktop, reloadWindow, requestCloseWindow } from "./api/desktop";
   import { activeTransferCount } from "./state/transfers.svelte";
   import { currentOS } from "./state/shortcuts";
-  import { api, openLocalColorWatch } from "./api/client";
+  import { api, openLocalColorWatch, openLocalThemeWatch } from "./api/client";
   import {
     applyInitialPageWidth,
     watchPageWidth,
@@ -279,6 +280,10 @@
   // window in the onMount below; closed on unmount).
   let disposeLocalColorWatch: (() => void) | null = null;
   onDestroy(() => disposeLocalColorWatch?.());
+  // Only a local standalone terminal window follows the launcher's light/dark
+  // choice (workspace windows keep the config theme). Closed on unmount.
+  let disposeLocalThemeWatch: (() => void) | null = null;
+  onDestroy(() => disposeLocalThemeWatch?.());
 
   onMount(async () => {
     // Apply persisted theme + default editor theme to the document
@@ -304,6 +309,16 @@
       applyLivePaneColor(color);
       syncLiveFocusColorMenu(color, setWindowFocusColor);
     });
+    // A local standalone terminal window follows the launcher's light/dark
+    // choice: subscribe to the local-theme watch (push-on-connect seeds it,
+    // then live on each toggle), applying `null` as OS-follow. Workspace
+    // windows never subscribe; a devserver/remote terminal's host installs no
+    // theme store, so the watch just reports null and the OS query stands.
+    if (ui.terminalOnly) {
+      disposeLocalThemeWatch = openLocalThemeWatch((theme) => {
+        applyLocalTheme(theme);
+      });
+    }
     // Match the focus-colour menu's checkmark to the library colour this
     // window opened with: if `?pane=` is one of the four preset hexes, select
     // that preset so `focusColorForWindow()` agrees with the colour shown. A

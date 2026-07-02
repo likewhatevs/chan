@@ -29,12 +29,76 @@ export function applyTheme(): void {
   document.documentElement.setAttribute("data-theme", themeState.theme);
 }
 
-export function toggleTheme(): void {
-  themeState.theme = themeState.theme === "dark" ? "light" : "dark";
+function cacheTheme(theme: Theme): void {
   try {
-    localStorage.setItem(STORAGE_KEY, themeState.theme);
+    localStorage.setItem(STORAGE_KEY, theme);
   } catch {
     // Best-effort persistence; the in-memory toggle still works without it.
   }
+}
+
+// The bearer the launcher is served with (loopback `?t=<token>`), mirroring
+// library.ts. Empty means same-origin with no bearer. Guarded for non-browser
+// (test) contexts where `location` may be absent.
+function authToken(): string {
+  try {
+    return new URLSearchParams(location.search).get("t") ?? "";
+  } catch {
+    return "";
+  }
+}
+
+/// Mirror the launcher's light/dark choice to the desktop config so a local
+/// standalone terminal window follows it (`PUT /api/library/local-theme`).
+/// Best-effort and DESKTOP-only: a surface with no local-theme store (a plain
+/// browser, a headless devserver) answers 404/401, which is swallowed, so the
+/// toggle never breaks. Kept off `LibraryApi`: this is a desktop-config
+/// side-channel, not library-registry data.
+async function putLocalTheme(theme: Theme): Promise<void> {
+  const headers: Record<string, string> = { "content-type": "application/json" };
+  const token = authToken();
+  if (token) headers.authorization = `Bearer ${token}`;
+  try {
+    await fetch("/api/library/local-theme", {
+      method: "PUT",
+      headers,
+      body: JSON.stringify({ theme }),
+    });
+  } catch {
+    // Network or store-less surface: the in-memory + cached toggle still stands.
+  }
+}
+
+export function toggleTheme(): void {
+  themeState.theme = themeState.theme === "dark" ? "light" : "dark";
+  cacheTheme(themeState.theme);
   applyTheme();
+  void putLocalTheme(themeState.theme);
+}
+
+/// After first paint, reconcile the launcher's theme with the authoritative
+/// desktop-config value (`GET /api/library/local-theme`). localStorage is only
+/// a first-paint cache; a cleared WebView store or a future second writer would
+/// otherwise leave the launcher on one theme and the terminals on another. When
+/// the config holds a value, adopt it (and refresh the cache); when it is null
+/// (unset / no store / unreachable), keep the current choice, which the next
+/// toggle seeds into the config.
+export async function reconcileLocalTheme(): Promise<void> {
+  const headers: Record<string, string> = {};
+  const token = authToken();
+  if (token) headers.authorization = `Bearer ${token}`;
+  let theme: string | null = null;
+  try {
+    const res = await fetch("/api/library/local-theme", { headers });
+    if (!res.ok) return;
+    const body = (await res.json()) as { theme?: string | null };
+    theme = body?.theme ?? null;
+  } catch {
+    return;
+  }
+  if ((theme === "dark" || theme === "light") && theme !== themeState.theme) {
+    themeState.theme = theme;
+    cacheTheme(theme);
+    applyTheme();
+  }
 }

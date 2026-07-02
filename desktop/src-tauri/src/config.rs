@@ -294,6 +294,14 @@ pub struct Config {
     /// each [`Devserver`].
     #[serde(default)]
     pub local_color: Option<String>,
+    /// The launcher's light/dark choice (`"dark"` / `"light"`), or `None` to
+    /// follow the OS (the default, so shipping this changes nothing until the
+    /// user first toggles). Backs the [`LocalThemeStore`](chan_server::LocalThemeStore)
+    /// that local standalone terminal windows read + watch; the launcher's
+    /// local-theme route writes it. Remote and devserver terminals are unaffected
+    /// (their host installs no store).
+    #[serde(default)]
+    pub launcher_theme: Option<String>,
 }
 
 pub struct ConfigStore {
@@ -418,6 +426,39 @@ impl chan_server::LocalColorStore for LocalColorConfig {
         let mut store = self.store.lock().unwrap();
         let mut cfg = store.get().map_err(|e| e.to_string())?;
         cfg.local_color = color;
+        store.save(&cfg).map_err(|e| e.to_string())
+    }
+}
+
+/// chan-desktop's [`LocalThemeStore`](chan_server::LocalThemeStore): the
+/// launcher's light/dark choice persisted in the desktop config (the same
+/// shared store the local colour + devserver registry use, so every write
+/// serializes through one lock). The host reads it when minting local terminal
+/// windows; the launcher's local-theme route writes it.
+pub struct LocalThemeConfig {
+    store: Arc<Mutex<ConfigStore>>,
+}
+
+impl LocalThemeConfig {
+    pub fn new(store: Arc<Mutex<ConfigStore>>) -> Self {
+        Self { store }
+    }
+}
+
+impl chan_server::LocalThemeStore for LocalThemeConfig {
+    fn get(&self) -> Option<String> {
+        self.store
+            .lock()
+            .unwrap()
+            .get()
+            .ok()
+            .and_then(|c| c.launcher_theme)
+    }
+
+    fn set(&self, theme: Option<String>) -> Result<(), String> {
+        let mut store = self.store.lock().unwrap();
+        let mut cfg = store.get().map_err(|e| e.to_string())?;
+        cfg.launcher_theme = theme;
         store.save(&cfg).map_err(|e| e.to_string())
     }
 }

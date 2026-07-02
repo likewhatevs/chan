@@ -208,8 +208,8 @@
 <section>
   <h3>Appearance</h3>
   <p class="hint">
-    Global default for chan's chrome and editor body. Per-device only;
-    lives in browser storage. "System" follows your OS appearance
+    Global default for chan's chrome and editor body. Per-device,
+    saved in the chan config. "System" follows your OS appearance
     setting live. Override per-Hybrid in the Hybrid Editor or Hybrid
     Terminal back-side (Inherit / Light / Dark).
   </p>

@@ -505,6 +505,74 @@ export function openLocalColorWatch(
       try {
         w.close();
       } catch {
+        // close() can throw if the socket is already CLOSED, the desired end
+        // state, so swallow it.
+      }
+    }
+  };
+
+  connect();
+  return close;
+}
+
+/// Wire frame for the launcher-theme watch (`GET /api/library/local-theme/watch`):
+/// `{ theme }`, `"dark"` / `"light"` / null (follow OS), mirroring the GET/PUT
+/// `LocalTheme` shape. Pushed on connect + on each change.
+interface LocalThemeFrame {
+  theme: string | null;
+}
+
+/// Open the launcher-theme watch. A dedicated WebSocket to
+/// `/api/library/local-theme/watch` (bearer via `?t=`) that calls `onTheme` with
+/// each pushed theme (`"dark"` / `"light"` / null): push-on-connect + on change.
+/// A structural twin of `openLocalColorWatch`: same root path, backoff, and
+/// self-contained lifecycle. Only a local standalone terminal window subscribes.
+export function openLocalThemeWatch(
+  onTheme: (theme: string | null) => void,
+): () => void {
+  let closed = false;
+  let ws: WebSocket | null = null;
+  let backoff = 500;
+
+  const connect = () => {
+    if (closed) return;
+    const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+    // ROOT path (like the local-color watch): the route lives only on the root
+    // launcher router, so a window served under a tenant prefix must reach it at
+    // root. Bearer rides as `?t=` (a browser WS can't set a header).
+    const path = rootTokenQuery("/api/library/local-theme/watch");
+    ws = createSocket(`${proto}//${window.location.host}${path}`);
+    ws.onopen = () => {
+      backoff = 500;
+    };
+    ws.onmessage = (m) => {
+      try {
+        const frame = JSON.parse(m.data) as LocalThemeFrame;
+        onTheme(frame?.theme ?? null);
+      } catch {
+        // Drop malformed frames; the server controls the wire format.
+      }
+    };
+    ws.onclose = () => {
+      if (closed) return;
+      const delay = backoff;
+      backoff = Math.min(backoff * 2, 8000);
+      setTimeout(connect, delay);
+    };
+  };
+
+  const close = () => {
+    closed = true;
+    const w = ws;
+    ws = null;
+    if (w) {
+      w.onopen = null;
+      w.onclose = null;
+      w.onerror = null;
+      w.onmessage = null;
+      try {
+        w.close();
+      } catch {
         // close() can throw if the socket is already CLOSED — the desired end
         // state, so swallow it.
       }

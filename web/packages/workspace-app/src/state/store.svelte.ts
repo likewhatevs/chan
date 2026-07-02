@@ -595,6 +595,14 @@ export function setThemeChoice(choice: ThemeChoice): void {
   void persistThemeChoice(choice);
 }
 
+/** Apply the launcher's local-theme choice to a standalone terminal window.
+ *  `"dark"` / `"light"` lock that mode; `null` restores OS-follow. Reuses
+ *  `setThemeLocal` (no write-back), driven by the `local-theme` watch. Only
+ *  terminal-only windows subscribe; workspace windows keep the config theme. */
+export function applyLocalTheme(theme: string | null): void {
+  setThemeLocal(theme === "dark" || theme === "light" ? theme : "system");
+}
+
 function persistThemeChoice(choice: ThemeChoice): Promise<void> {
   // Serialized with every other config write (shared chain) so a rapid
   // theme flip can't clobber — or be clobbered by — a parallel
@@ -1612,9 +1620,11 @@ async function workspaceWithRetry(): ReturnType<typeof api.workspace> {
 /// We still restore the persisted window layout (`/api/session`, keyed by
 /// the desktop window label) so panes/tabs of terminals come back, and we
 /// still open the watcher socket (`/ws`) for the broadcast / pane bus that
-/// terminals use. Theme/preferences fall back to defaults: the slim tenant
-/// has no `/api/config`, so the only theme signal is the OS media query
-/// already wired by `watchSystemTheme()`.
+/// terminals use. A local standalone terminal follows the launcher's
+/// light/dark choice via the `local-theme` watch (App.svelte subscribes only
+/// in terminal-only windows), falling back to the OS media query wired by
+/// `watchSystemTheme()` when the launcher has set none (or on a devserver /
+/// remote terminal, whose host installs no theme store).
 async function bootstrapTerminalOnly(): Promise<void> {
   ui.terminalOnly = true;
   // Force the docked file browsers off: a user may have toggled one on,

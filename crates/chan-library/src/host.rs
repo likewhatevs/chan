@@ -194,6 +194,21 @@ pub trait LocalColorStore: Send + Sync {
     fn set(&self, color: Option<String>) -> Result<(), String>;
 }
 
+/// The local machine's launcher theme (`"dark"` / `"light"`), or `None` to
+/// follow the OS. Like [`LocalColorStore`] it belongs to the desktop's own
+/// library and is invisible from chan-library, so the desktop installs an
+/// `Arc<dyn LocalThemeStore>` and the launcher's local-theme routes read/write
+/// it through the host. A host that installs none (the headless devserver /
+/// plain `chan open`) reports `None` and ignores writes, so a devserver or
+/// remote terminal window keeps following the OS.
+pub trait LocalThemeStore: Send + Sync {
+    /// The launcher's chosen theme, or `None` to follow the OS.
+    fn get(&self) -> Option<String>;
+    /// Persist the launcher's theme; `None` clears it back to OS-follow. `Err`
+    /// only on a real persist failure.
+    fn set(&self, theme: Option<String>) -> Result<(), String>;
+}
+
 /// In-process multi-workspace host.
 ///
 /// This is intentionally a thin owner around the existing per-workspace
@@ -261,6 +276,12 @@ pub struct WorkspaceHost {
     /// Empty on the headless devserver / plain `chan open` — the local colour is
     /// then the default accent and writes are ignored.
     local_color: OnceLock<Arc<dyn LocalColorStore>>,
+    /// The local machine's launcher theme store, an analogue of
+    /// [`local_color`](Self::local_color) for the light/dark choice. Backs the
+    /// launcher's `local-theme` routes: the launcher toggle writes it, and local
+    /// standalone terminal windows read + watch it. Empty on the headless
+    /// devserver / plain `chan open`, so those keep following the OS.
+    local_theme: OnceLock<Arc<dyn LocalThemeStore>>,
     /// This library's identity: `"local"` for the baked-in local-disk library,
     /// `lib-<hex>` for a devserver. Stamped on every window record. Set with the
     /// registry; defaults to `"local"` when unset.
@@ -289,6 +310,10 @@ pub struct WorkspaceHost {
     /// `library_change_notify`) so a colour watcher never wakes on unrelated
     /// window-set churn, and window watchers never wake on a colour change.
     local_color_notify: Arc<Notify>,
+    /// Fires ONLY when the launcher theme changes, so the `local-theme/watch`
+    /// feed re-pushes `{ theme }`. Dedicated for the same reason as
+    /// [`local_color_notify`](Self::local_color_notify).
+    local_theme_notify: Arc<Notify>,
     /// The library root's fallback router, served when no tenant prefix matches
     /// a request (the launcher SPA + its `/api/library/*` surface live here).
     /// Installed once via [`install_root_fallback`](Self::install_root_fallback);
@@ -385,11 +410,13 @@ impl WorkspaceHost {
             devserver_registry: OnceLock::new(),
             devserver_feed: OnceLock::new(),
             local_color: OnceLock::new(),
+            local_theme: OnceLock::new(),
             library_id: OnceLock::new(),
             terminal_tenant_prefix: OnceLock::new(),
             control_tenants: RwLock::new(HashMap::new()),
             library_change_notify: Arc::new(Notify::new()),
             local_color_notify: Arc::new(Notify::new()),
+            local_theme_notify: Arc::new(Notify::new()),
             root_fallback: OnceLock::new(),
             mount_state: Mutex::new(HashMap::new()),
         }
@@ -498,6 +525,20 @@ impl WorkspaceHost {
         self.local_color.get()
     }
 
+    /// Install the local machine's launcher-theme store. Idempotent set-once;
+    /// chan-desktop calls this once with an impl over its config. A host that
+    /// never installs one reports OS-follow and ignores writes.
+    pub fn install_local_theme_store(&self, store: Arc<dyn LocalThemeStore>) {
+        let _ = self.local_theme.set(store);
+    }
+
+    /// The launcher-theme store, once installed. `None` on a host whose embedder
+    /// installed none (headless devserver / plain `chan open`); the theme then
+    /// follows the OS.
+    pub fn local_theme_store(&self) -> Option<&Arc<dyn LocalThemeStore>> {
+        self.local_theme.get()
+    }
+
     /// The pane-highlight colour for a window of `library_id`, resolving each
     /// chan-library's own colour behind one accessor so the desktop injects it at
     /// mint time without knowing where each colour lives. `"local"` resolves to
@@ -556,6 +597,18 @@ impl WorkspaceHost {
     /// subscriber re-reads + re-applies the new colour.
     pub fn notify_local_color_change(&self) {
         self.local_color_notify.notify_waiters();
+    }
+
+    /// The theme-change signal the `local-theme/watch` feed awaits.
+    pub fn local_theme_notify(&self) -> Arc<Notify> {
+        self.local_theme_notify.clone()
+    }
+
+    /// Fire the theme-change signal, called after the launcher-theme store is
+    /// written (`handle_set_local_theme`), so every `local-theme/watch`
+    /// subscriber re-reads + re-applies the new theme.
+    pub fn notify_local_theme_change(&self) {
+        self.local_theme_notify.notify_waiters();
     }
 
     /// Fire the aggregate library-change signal so the window-set watch feed

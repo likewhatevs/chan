@@ -67,6 +67,10 @@ const WATCH_WS_PATH: &str = "/api/library/windows/watch";
 /// rationale as [`WATCH_WS_PATH`].
 const LOCAL_COLOR_WATCH_WS_PATH: &str = "/api/library/local-color/watch";
 
+/// The local-theme watch WS path; accepts the bearer as `?t=` for the same
+/// reason as [`LOCAL_COLOR_WATCH_WS_PATH`].
+const LOCAL_THEME_WATCH_WS_PATH: &str = "/api/library/local-theme/watch";
+
 /// Build the launcher router installed as the [`WorkspaceHost`] root fallback:
 /// the static launcher SPA ([`serve_launcher`]) plus the host-backed
 /// `/api/library/*` data surface (windows today; workspaces next). One bundle,
@@ -201,6 +205,14 @@ pub fn launcher_router(
             "/api/library/local-color/watch",
             get(handle_watch_local_color),
         )
+        .route(
+            "/api/library/local-theme",
+            get(handle_get_local_theme).put(handle_set_local_theme),
+        )
+        .route(
+            "/api/library/local-theme/watch",
+            get(handle_watch_local_theme),
+        )
         .with_state(Arc::new(LauncherState {
             host: host.clone(),
             serve_addr: serve_addr.clone(),
@@ -266,7 +278,9 @@ async fn require_launcher_bearer(token: String, req: Request<Body>, next: Next) 
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix("Bearer "));
     let path = req.uri().path();
-    let query_token = (path == WATCH_WS_PATH || path == LOCAL_COLOR_WATCH_WS_PATH)
+    let query_token = (path == WATCH_WS_PATH
+        || path == LOCAL_COLOR_WATCH_WS_PATH
+        || path == LOCAL_THEME_WATCH_WS_PATH)
         .then(|| req.uri().query().and_then(query_bearer))
         .flatten();
     let expected = token.as_bytes();
@@ -305,7 +319,9 @@ async fn require_surface_bearer(
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix("Bearer "));
     let path = req.uri().path();
-    let query_token = (path == WATCH_WS_PATH || path == LOCAL_COLOR_WATCH_WS_PATH)
+    let query_token = (path == WATCH_WS_PATH
+        || path == LOCAL_COLOR_WATCH_WS_PATH
+        || path == LOCAL_THEME_WATCH_WS_PATH)
         .then(|| req.uri().query().and_then(query_bearer))
         .flatten();
     // A token is valid for this surface if it is the launcher token OR any live
@@ -1236,6 +1252,82 @@ async fn watch_local_color(mut socket: WebSocket, state: Arc<LauncherState>) {
     }
 }
 
+#[derive(Serialize, Deserialize)]
+struct LocalTheme {
+    theme: Option<String>,
+}
+
+/// `GET /api/library/local-theme`: the launcher's light/dark choice
+/// (`{ theme }`), or `{ theme: null }` on a surface with no store installed
+/// (follow the OS). Served on all surfaces, infallible. A headless devserver
+/// installs none, so a devserver or remote terminal window reads `null` here.
+async fn handle_get_local_theme(State(state): State<Arc<LauncherState>>) -> Json<LocalTheme> {
+    let theme = state.host.local_theme_store().and_then(|store| store.get());
+    Json(LocalTheme { theme })
+}
+
+/// `PUT /api/library/local-theme` `{ theme }`: set the launcher's light/dark
+/// choice (`null` clears it back to OS-follow). Surface-bearer gated like
+/// local-color, with no `require_mutable`: it writes the surface's OWN machine
+/// theme, not someone else's. 204 on success; 404 when no store is installed
+/// (so a store-less surface answers 404, never 403); 400 on a persist failure.
+async fn handle_set_local_theme(
+    State(state): State<Arc<LauncherState>>,
+    Json(body): Json<LocalTheme>,
+) -> Response {
+    let Some(store) = state.host.local_theme_store() else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    match store.set(body.theme) {
+        Ok(()) => {
+            // Broadcast so every open local standalone terminal window
+            // live-retitles, and a newly opened one reads the fresh value.
+            state.host.notify_local_theme_change();
+            StatusCode::NO_CONTENT.into_response()
+        }
+        Err(msg) => (StatusCode::BAD_REQUEST, msg).into_response(),
+    }
+}
+
+/// `GET /api/library/local-theme/watch`: a WebSocket that pushes the launcher
+/// theme (`{ theme }`) on connect and on every change, so a local standalone
+/// terminal window re-themes without polling. Bearer-gated via the `?t=` query
+/// token, like the local-colour watch.
+async fn handle_watch_local_theme(
+    State(state): State<Arc<LauncherState>>,
+    ws: WebSocketUpgrade,
+) -> Response {
+    ws.on_upgrade(move |socket| watch_local_theme(socket, state))
+}
+
+/// Push a `{ theme }` snapshot on connect and on every theme change. Mirrors
+/// [`watch_local_color`], driven by the dedicated `local_theme_notify`.
+async fn watch_local_theme(mut socket: WebSocket, state: Arc<LauncherState>) {
+    let notify = state.host.local_theme_notify();
+    let changed = notify.notified();
+    tokio::pin!(changed);
+    loop {
+        changed.as_mut().enable();
+        let theme = state.host.local_theme_store().and_then(|store| store.get());
+        let frame = match serde_json::to_string(&LocalTheme { theme }) {
+            Ok(frame) => frame,
+            Err(_) => break,
+        };
+        if socket.send(Message::text(frame)).await.is_err() {
+            break; // the client is gone
+        }
+        tokio::select! {
+            _ = changed.as_mut() => {
+                changed.set(notify.notified());
+            }
+            msg = socket.recv() => match msg {
+                None | Some(Err(_)) | Some(Ok(Message::Close(_))) => break,
+                _ => {}
+            },
+        }
+    }
+}
+
 #[cfg(test)]
 mod devserver_route_tests {
     //! The devserver route gate semantics, exercised over a fake registry: list
@@ -1255,7 +1347,7 @@ mod devserver_route_tests {
     use super::launcher_router;
     use crate::{
         DevserverEntry, DevserverInput, DevserverRegistry, DevserverStatus, LocalColorStore,
-        WorkspaceHost,
+        LocalThemeStore, WorkspaceHost,
     };
 
     /// An in-memory `DevserverRegistry` standing in for the desktop config so the
@@ -1671,6 +1763,77 @@ mod devserver_route_tests {
             "PUT",
             "/api/library/local-color",
             Some(r##"{"color":"#0af"}"##),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    /// An in-memory [`LocalThemeStore`] so the local-theme routes are exercised
+    /// without a desktop.
+    #[derive(Default)]
+    struct FakeThemeStore {
+        theme: Mutex<Option<String>>,
+    }
+
+    impl LocalThemeStore for FakeThemeStore {
+        fn get(&self) -> Option<String> {
+            self.theme.lock().unwrap().clone()
+        }
+        fn set(&self, theme: Option<String>) -> Result<(), String> {
+            *self.theme.lock().unwrap() = theme;
+            Ok(())
+        }
+    }
+
+    /// A launcher router with an optional local-theme store installed.
+    fn theme_router(store: Option<Arc<dyn LocalThemeStore>>) -> axum::Router {
+        let dir = tempfile::tempdir().unwrap();
+        let lib = Library::open_at(dir.path().join("config.toml")).unwrap();
+        std::mem::forget(dir);
+        let host = Arc::new(WorkspaceHost::new(lib, crate::route_builder()));
+        if let Some(store) = store {
+            host.install_local_theme_store(store);
+        }
+        launcher_router(host, None, None)
+    }
+
+    #[tokio::test]
+    async fn local_theme_get_default_is_null_without_store() {
+        // No store installed (headless devserver): GET reports OS-follow as null.
+        let router = theme_router(None);
+        let (status, body) = request(&router, "GET", "/api/library/local-theme", None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["theme"], serde_json::Value::Null);
+    }
+
+    #[tokio::test]
+    async fn local_theme_set_then_get_round_trips() {
+        let store = Arc::new(FakeThemeStore::default());
+        let router = theme_router(Some(store));
+        let (set_status, _) = request(
+            &router,
+            "PUT",
+            "/api/library/local-theme",
+            Some(r#"{"theme":"light"}"#),
+        )
+        .await;
+        assert_eq!(set_status, StatusCode::NO_CONTENT);
+        let (get_status, body) = request(&router, "GET", "/api/library/local-theme", None).await;
+        assert_eq!(get_status, StatusCode::OK);
+        assert_eq!(body["theme"], "light");
+    }
+
+    #[tokio::test]
+    async fn local_theme_set_404s_without_store_never_403() {
+        // The config sub-router carries no `require_mutable`, so a store-less
+        // surface answers 404 (not 403). The launcher PUT is best-effort and
+        // swallows this rather than keying on a status code.
+        let router = theme_router(None);
+        let (status, _) = request(
+            &router,
+            "PUT",
+            "/api/library/local-theme",
+            Some(r#"{"theme":"light"}"#),
         )
         .await;
         assert_eq!(status, StatusCode::NOT_FOUND);

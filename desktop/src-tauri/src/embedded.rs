@@ -99,7 +99,13 @@ impl EmbeddedServer {
         // SAME shared desktop config the devserver registry uses, so the host reads
         // the local colour when minting local windows and the launcher's
         // local-colour route writes it.
-        host.install_local_color_store(Arc::new(crate::config::LocalColorConfig::new(
+        host.install_local_color_store(Arc::new(crate::config::LocalColorConfig::new(Arc::clone(
+            &config_store,
+        ))));
+        // Install the launcher-theme store over the SAME shared config, so a
+        // local standalone terminal window reads + watches the launcher's
+        // light/dark choice and the launcher's local-theme route writes it.
+        host.install_local_theme_store(Arc::new(crate::config::LocalThemeConfig::new(
             config_store,
         )));
         // Install the launcher SPA as the loopback's root fallback so the
