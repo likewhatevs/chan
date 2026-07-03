@@ -26,6 +26,7 @@
     formatChord,
   } from "../state/shortcuts";
   import { ui, workspace } from "../state/store.svelte";
+  import DottedSurface from "./DottedSurface.svelte";
 
   // EmptyPaneWelcome does not forward `oncontextmenu` to a parent
   // handler; the welcome surface is purely the click-driven spawn
@@ -129,6 +130,7 @@
   aria-label="welcome"
   tabindex="0"
 >
+  <DottedSurface />
   <div class="welcome-mark"></div>
   {#if workspace.info}
     <div class="welcome-header" aria-label="workspace summary">
@@ -178,6 +180,9 @@
   .welcome {
     flex: 1;
     min-height: 0;
+    align-self: stretch;
+    width: 100%;
+    position: relative;
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -185,8 +190,12 @@
     gap: 1rem;
     padding: 2rem;
     outline: none;
+    overflow: hidden;
+    isolation: isolate;
   }
   .welcome-mark {
+    position: relative;
+    z-index: 1;
     width: 160px;
     height: 160px;
     background-color: var(--text-secondary);
@@ -195,6 +204,8 @@
     opacity: 0.45;
   }
   .welcome-header {
+    position: relative;
+    z-index: 1;
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -211,6 +222,8 @@
      + tile shape keep the spawn tiles visually consistent across
      the welcome surface. */
   .spawn-row {
+    position: relative;
+    z-index: 1;
     display: grid;
     grid-template-columns: repeat(5, minmax(96px, 1fr));
     gap: 8px;
@@ -254,6 +267,8 @@
     line-height: 1.2;
   }
   .spawn-sep {
+    position: relative;
+    z-index: 1;
     width: 70%;
     max-width: 320px;
     height: 1px;

@@ -68,10 +68,11 @@ export function createDemoFetch(
   store: MockWorkspaceStore,
   graph: DemoGraph,
   reports: MockReports,
+  preferenceOverrides: Partial<Preferences> = {},
 ): FetchImpl {
   // Mutable session state the mock owns: preferences (round-tripped through
   // config), plus monotonic counters for draft and terminal naming.
-  let prefs: Preferences = { ...DEMO_PREFERENCES };
+  let prefs: Preferences = { ...DEMO_PREFERENCES, ...preferenceOverrides };
   let draftSeq = 0;
   let termSeq = 0;
 
@@ -95,7 +96,7 @@ export function createDemoFetch(
 
     // --- workspace + config ---
     if (path === "/api/workspace" && method === "GET") {
-      return json(demoWorkspaceInfo(store.data));
+      return json(demoWorkspaceInfo(store.data, prefs));
     }
     if (path === "/api/config") {
       if (method === "GET") return json(config());

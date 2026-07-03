@@ -17,18 +17,21 @@
   import "./editor/themes/google_docs.css";
   import "./editor/themes/word.css";
 
-  let { data }: { data: MockWorkspaceData } = $props();
+  let {
+    data,
+    theme = "dark",
+  }: { data: MockWorkspaceData; theme?: "light" | "dark" } = $props();
 
   // Initial-value capture is the point: the snapshot is loaded once before
   // mount and never swapped at runtime.
   // svelte-ignore state_referenced_locally
-  installDemoWorkspace(data);
+  installDemoWorkspace(data, { preferences: { theme } });
 </script>
 
 <!-- The marketing build scopes the bundle's :root variable blocks to this
      frame (scopeDemoCss), keyed on data-theme like the launcher embed. The
-     demo always runs dark. -->
-<div class="workspace-demo-frame" data-theme="dark">
+     dev harness can boot either theme for visual QA. -->
+<div class="workspace-demo-frame" data-theme={theme}>
   <App />
 </div>
 

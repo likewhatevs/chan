@@ -74,13 +74,16 @@ export const DEMO_PREFERENCES: Preferences = {
 };
 
 /// Build the WorkspaceInfo the demo serves from GET /api/workspace.
-export function demoWorkspaceInfo(data: MockWorkspaceData): WorkspaceInfo {
+export function demoWorkspaceInfo(
+  data: MockWorkspaceData,
+  preferences: Preferences = DEMO_PREFERENCES,
+): WorkspaceInfo {
   return {
     root: data.metadata.workspaceRoot,
     label: data.metadata.label,
     metadata_key: "demo",
     drafts_dir: ".Drafts",
-    preferences: DEMO_PREFERENCES,
+    preferences,
     warnings: [],
   };
 }

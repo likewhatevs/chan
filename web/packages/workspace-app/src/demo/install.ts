@@ -8,6 +8,7 @@ import {
   setSocketFactory,
   setXhrFactory,
 } from "../api/transport";
+import type { Preferences } from "../api/types";
 import type { MockWorkspaceData } from "./data";
 import { demoDownload } from "./download";
 import { DemoGraph } from "./graph";
@@ -17,12 +18,15 @@ import { demoSocketFactory } from "./socket";
 import { MockWorkspaceStore } from "./store";
 import { createDemoUploadXhr } from "./upload";
 
-export function installDemoWorkspace(data: MockWorkspaceData): MockWorkspaceStore {
+export function installDemoWorkspace(
+  data: MockWorkspaceData,
+  opts: { preferences?: Partial<Preferences> } = {},
+): MockWorkspaceStore {
   const store = new MockWorkspaceStore(data);
   const reportRows = data.reports?.files ?? [];
   const graph = new DemoGraph(store, reportRows);
   const reports = new MockReports(reportRows);
-  setFetchImpl(createDemoFetch(store, graph, reports));
+  setFetchImpl(createDemoFetch(store, graph, reports, opts.preferences));
   setSocketFactory(demoSocketFactory);
   setXhrFactory(() => createDemoUploadXhr(store, graph));
   setDownloadHandler(() => demoDownload());

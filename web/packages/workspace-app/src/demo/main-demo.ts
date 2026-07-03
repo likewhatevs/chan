@@ -13,10 +13,12 @@ async function main(): Promise<void> {
   const res = await fetch("/demo-workspace.json");
   if (!res.ok) throw new Error(`failed to load demo snapshot: ${res.status}`);
   const data = (await res.json()) as MockWorkspaceData;
+  const requestedTheme = new URL(location.href).searchParams.get("theme");
+  const theme = requestedTheme === "light" ? "light" : "dark";
 
   const target = document.getElementById("app");
   if (!target) throw new Error("missing #app element");
-  mount(WorkspaceDemo, { target, props: { data } });
+  mount(WorkspaceDemo, { target, props: { data, theme } });
 }
 
 main().catch((err) => {
