@@ -184,13 +184,14 @@
   const dsSpinning = (ds: DevserverEntry): boolean =>
     ds.status === "connecting" || isPending(dsKey(ds.id));
 
-  // A disconnected devserver can still own a retained control terminal row. Keep
-  // actual rows mounted so their attention state can flash until the user acts;
-  // stale attention without a row must not hold an empty content block open.
+  // Terminated devserver connections must not keep control rows mounted. A
+  // not-responding devserver remains `connected`; a fresh dial can show the
+  // control row while `connecting`.
   function hasContent(node: MachineNode): boolean {
     return (
       node.kind === "local" ||
-      (node.devserver !== null && (connected(node.devserver) || node.control.length > 0))
+      (node.devserver !== null &&
+        (connected(node.devserver) || node.devserver.status === "connecting"))
     );
   }
 

@@ -13,7 +13,7 @@
   import { dialog } from "./state/dialog.svelte";
   import { confirm } from "./state/confirm.svelte";
   import { checksVisible } from "./state/selection.svelte";
-  import { onControlClosedEvent } from "./state/controlClosed.svelte";
+  import { onControlAttentionEvent, onControlRestoredEvent } from "./state/controlClosed.svelte";
   import {
     clearControlAttention,
     resolvePendingControlAttention,
@@ -29,16 +29,21 @@
     // never leave the launcher and the local terminals on different themes.
     void reconcileLocalTheme();
     loadLibrary();
-    // A connected devserver's control terminal exited: the desktop emits
-    // `devserver-control-closed` with its id, and the launcher flashes that
-    // control row's eye yellow for attention (the amber "disconnected" cue).
-    // No-op off-desktop (the global Tauri event bridge is absent in a browser).
-    let unlisten: (() => void) | null = null;
-    void onTauriEvent("devserver-control-closed", onControlClosedEvent).then((un) => {
-      unlisten = un;
+    // A connected devserver stopped answering while its control terminal is
+    // still alive: flash that row for attention until the desktop reports the
+    // connection responsive again. No-op off-desktop (the global Tauri event
+    // bridge is absent in a browser).
+    let unlistenAttention: (() => void) | null = null;
+    let unlistenRestored: (() => void) | null = null;
+    void onTauriEvent("devserver-control-attention", onControlAttentionEvent).then((un) => {
+      unlistenAttention = un;
+    });
+    void onTauriEvent("devserver-control-restored", onControlRestoredEvent).then((un) => {
+      unlistenRestored = un;
     });
     return () => {
-      unlisten?.();
+      unlistenAttention?.();
+      unlistenRestored?.();
     };
   });
 

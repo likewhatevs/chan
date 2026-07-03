@@ -2604,8 +2604,8 @@ mod tests {
         // verbatim (the path is the disambiguating window-switcher signal),
         // regardless of where on disk it lives.
         assert_eq!(
-            workspace_title("/Users/alex/dev/github.com/fiorix/chan"),
-            format!("{ICON_LOCAL_HOME} /Users/alex/dev/github.com/fiorix/chan"),
+            workspace_title("/home/hacker/dev/github.com/fiorix/chan"),
+            format!("{ICON_LOCAL_HOME} /home/hacker/dev/github.com/fiorix/chan"),
         );
         // Outside $HOME still gets the house glyph. Trailing slash passed through.
         assert_eq!(
@@ -3122,11 +3122,11 @@ mod tests {
         // http://127.0.0.1:<port>/`). A Tauri capability reaches remotely-loaded
         // content only when it declares `remote.urls`; default.json has none, so
         // its `core:default` (which DOES carry `core:event:default`) never reached
-        // the launcher and `onTauriEvent('devserver-control-closed', …)` was denied
+        // the launcher and `onTauriEvent('devserver-control-attention', …)` was denied
         // with `plugin:event|listen not allowed by ACL`. The dedicated
         // launcher-events capability restores the listen/unlisten grant on the
         // remote launcher windows — pin it so a capability refactor can't silently
-        // re-break the connect-script-exit survey.
+        // re-break the devserver control-attention signal.
         let windows = capability_windows(LAUNCHER_EVENTS_CAPABILITY_JSON);
         assert!(
             windows.iter().any(|w| w == "main"),

@@ -35,7 +35,7 @@ describe("hasTauriEvents", () => {
 describe("onTauriEvent", () => {
   it("returns a no-op unlisten off-desktop and never calls the handler", async () => {
     const handler = vi.fn();
-    const unlisten = await onTauriEvent("devserver-control-closed", handler);
+    const unlisten = await onTauriEvent("devserver-control-attention", handler);
     expect(typeof unlisten).toBe("function");
     expect(handler).not.toHaveBeenCalled();
     unlisten(); // must not throw
@@ -54,8 +54,8 @@ describe("onTauriEvent", () => {
     });
 
     const handler = vi.fn();
-    const unlisten = await onTauriEvent<string>("devserver-control-closed", handler);
-    expect(listen).toHaveBeenCalledWith("devserver-control-closed", expect.any(Function));
+    const unlisten = await onTauriEvent<string>("devserver-control-attention", handler);
+    expect(listen).toHaveBeenCalledWith("devserver-control-attention", expect.any(Function));
 
     captured!({ payload: "ds-1" });
     expect(handler).toHaveBeenCalledWith("ds-1");
@@ -70,7 +70,7 @@ describe("onTauriEvent", () => {
       configurable: true,
     });
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const unlisten = await onTauriEvent("devserver-control-closed", vi.fn());
+    const unlisten = await onTauriEvent("devserver-control-attention", vi.fn());
     expect(typeof unlisten).toBe("function");
     unlisten(); // must not throw
     warn.mockRestore();

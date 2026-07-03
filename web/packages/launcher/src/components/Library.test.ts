@@ -195,7 +195,22 @@ describe("Library: devserver groups", () => {
     expect(target!.textContent).toContain("Not connected");
   });
 
-  it("renders a disconnected devserver's retained control row when it needs attention", () => {
+  it("renders a connected devserver's control row when it needs attention", () => {
+    const ds = library.devservers.find((d) => d.id === "ds-1")!;
+    controlAttention.libs[ds.library_id!] = true;
+
+    mountList();
+
+    const machines = [...target!.querySelectorAll("section.machine")];
+    const prod = machines.find((m) => m.textContent?.includes("box.example.com:8787"));
+    expect(prod).toBeTruthy();
+    expect(prod!.textContent).toContain("Control terminal");
+    expect(prod!.textContent).toContain("not responding...");
+    expect(prod!.querySelector("button.icon-btn.attention")).not.toBeNull();
+    expect(byAria("Disconnect prod")).toBeTruthy();
+  });
+
+  it("does not render a disconnected devserver's stale control row even with attention", () => {
     const ds = library.devservers.find((d) => d.id === "ds-1")!;
     library.devservers = library.devservers.map(
       (d): DevserverEntry => (d.id === "ds-1" ? { ...d, status: "disconnected" } : d),
@@ -207,10 +222,25 @@ describe("Library: devserver groups", () => {
     const machines = [...target!.querySelectorAll("section.machine")];
     const prod = machines.find((m) => m.textContent?.includes("box.example.com:8787"));
     expect(prod).toBeTruthy();
+    expect(prod!.textContent).not.toContain("Control terminal");
+    expect(prod!.textContent).not.toContain("not responding...");
+    expect(prod!.textContent).toContain("Not connected");
+    expect(prod!.querySelector("button.icon-btn.attention")).toBeNull();
+  });
+
+  it("renders a connecting devserver's control row while it is dialing", () => {
+    library.devservers = library.devservers.map(
+      (d): DevserverEntry => (d.id === "ds-1" ? { ...d, status: "connecting" } : d),
+    );
+
+    mountList();
+
+    const machines = [...target!.querySelectorAll("section.machine")];
+    const prod = machines.find((m) => m.textContent?.includes("box.example.com:8787"));
+    expect(prod).toBeTruthy();
     expect(prod!.textContent).toContain("Control terminal");
-    expect(prod!.textContent).toContain("disconnected...");
-    expect(prod!.querySelector("button.icon-btn.attention")).not.toBeNull();
-    expect(byAria("Connect prod")).toBeTruthy();
+    expect(prod!.textContent).not.toContain("Not connected");
+    expect(byAria("Working on prod")).toBeTruthy();
   });
 
   it("does not retain a reaped control row from stale attention alone", () => {
@@ -227,7 +257,7 @@ describe("Library: devserver groups", () => {
     const prod = machines.find((m) => m.textContent?.includes("box.example.com:8787"));
     expect(prod).toBeTruthy();
     expect(prod!.textContent).not.toContain("Control terminal");
-    expect(prod!.textContent).not.toContain("disconnected...");
+    expect(prod!.textContent).not.toContain("not responding...");
     expect(prod!.textContent).toContain("Not connected");
     expect(prod!.querySelector("button.icon-btn.attention")).toBeNull();
   });

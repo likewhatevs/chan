@@ -842,6 +842,9 @@ fn devserver_route_prefix(slug: &str) -> String {
     }
 }
 
+const DEVSERVER_CONTROL_ATTENTION_EVENT: &str = "devserver-control-attention";
+const DEVSERVER_CONTROL_RESTORED_EVENT: &str = "devserver-control-restored";
+
 /// Poll a connected devserver's served-workspace list into the feed cache so the
 /// (sync) [`DevserverFeed::workspaces`] serves it without blocking on HTTP. Fires
 /// [`EmbeddedServer::signal_library_change`] only when the list actually changes,
@@ -853,6 +856,7 @@ fn devserver_route_prefix(slug: &str) -> String {
 /// [`window_watcher_wiring::spawn_devserver_color_watch`]. There is no
 /// `workspaces/watch` endpoint yet, so the workspace list stays polled.
 fn spawn_devserver_workspace_poll(
+    app: tauri::AppHandle,
     state: Arc<AppState>,
     id: String,
     conn: devserver::DevserverConn,
@@ -861,6 +865,7 @@ fn spawn_devserver_workspace_poll(
     const POLL: std::time::Duration = std::time::Duration::from_secs(5);
     tauri::async_runtime::spawn(async move {
         let mut last_ws: Option<Vec<devserver::DevserverWorkspaceRow>> = None;
+        let mut unreachable = false;
         loop {
             if (*cancel.borrow_and_update()).is_stopped() {
                 return;
@@ -868,6 +873,10 @@ fn spawn_devserver_workspace_poll(
             let mut changed = false;
             match devserver::fetch_workspaces(&conn).await {
                 Ok(rows) => {
+                    if unreachable && state.devservers.is_connected(&id) {
+                        let _ = app.emit(DEVSERVER_CONTROL_RESTORED_EVENT, id.clone());
+                    }
+                    unreachable = false;
                     if last_ws.as_ref() != Some(&rows) {
                         let library_id = state.devserver_feed.library_id_of(&id);
                         let mapped = rows
@@ -882,6 +891,10 @@ fn spawn_devserver_workspace_poll(
                 }
                 Err(e) => {
                     tracing::debug!(devserver = %id, error = %e, "polling devserver workspaces failed");
+                    if !unreachable && state.devservers.is_connected(&id) {
+                        let _ = app.emit(DEVSERVER_CONTROL_ATTENTION_EVENT, id.clone());
+                    }
+                    unreachable = true;
                 }
             }
             if changed {
@@ -1327,8 +1340,8 @@ fn remove_devserver_workspace_windows(app: &tauri::AppHandle, state: &AppState, 
 /// (keyed on it) stops. Closing the control-terminal WINDOW alone doesn't stop
 /// the connect script -- its `/control-N` tenant outlives the window -- so
 /// `reap_control_window` reaps both (idempotent), killing the script PTY. Used
-/// by explicit teardown and by an explicit user close of the control window;
-/// the PTY-exit path deliberately keeps the row for launcher attention.
+/// by explicit teardown, by an explicit user close of the control window, and
+/// by the PTY-exit path once the script-backed connection has ended.
 fn reap_devserver_control_terminal(app: &tauri::AppHandle, state: &AppState, id: &str) {
     let label = serve::control_terminal_label(id);
     serve::close_window_by_label(app, &label);
@@ -1344,9 +1357,9 @@ fn reap_devserver_control_terminal(app: &tauri::AppHandle, state: &AppState, id:
 
 /// Drop a devserver's live connection windows: stop its window watcher and
 /// remove its workspace tenants/standalone terminals, then drop it from the
-/// launcher feed -- but KEEP the control terminal (it sits at "process exited"
-/// so the user can re-run). The shared core of every disconnect cause; the full
-/// forget teardown adds the control-terminal reap on top. Idempotent.
+/// launcher feed. Leaves the control terminal to the caller: a live but
+/// unreachable connection may keep it for attention, while a terminated
+/// script-backed connection reaps it through full teardown. Idempotent.
 fn remove_devserver_windows(app: &tauri::AppHandle, state: &AppState, id: &str) {
     // Cancel the window watcher (it detaches its windows, not reap -- the
     // devserver keeps its set server-side).
@@ -1375,22 +1388,6 @@ fn teardown_devserver_connection(app: &tauri::AppHandle, state: &AppState, id: &
     // Reap the control terminal BEFORE remove_devserver_windows fires the
     // launcher refresh, so the refresh already reflects the reaped control row.
     reap_devserver_control_terminal(app, state, id);
-    remove_devserver_windows(app, state, id);
-}
-
-/// A devserver's control script PTY exited, or the user hit Abandon -- the
-/// connection is provably dead. Drop the conn from the shared registry the
-/// launcher reads
-/// (`GET /api/library/devservers` -> `DevserverConfigRegistry::list` ->
-/// `entry_from_devserver`'s `conns.is_connected`), which flips `connected` false
-/// UNCONDITIONALLY (covers a Dismiss / no-response SPA survey), then remove the
-/// devserver's workspace windows and stop its watcher -- but KEEP the control
-/// terminal: it sits at "process exited" so the user can Re-run, or Abandon.
-/// Re-run/Edit reconnect flips `connected:true`; Abandon is idempotent (the conn
-/// is already gone). Shared by the control-PTY-exit watcher and Abandon's direct
-/// teardown.
-fn flip_devserver_control_dead(app: &tauri::AppHandle, state: &AppState, id: &str) {
-    state.devservers.remove(id);
     remove_devserver_windows(app, state, id);
 }
 
@@ -1477,6 +1474,30 @@ async fn wait_for_devserver(host: &str, port: u16) -> Result<devserver::Devserve
     ))
 }
 
+#[derive(Debug)]
+enum ConnectDevserverError {
+    ControlTerminated(String),
+    Other(String),
+}
+
+impl ConnectDevserverError {
+    fn message(self) -> String {
+        match self {
+            Self::ControlTerminated(message) | Self::Other(message) => message,
+        }
+    }
+
+    fn control_terminated(&self) -> bool {
+        matches!(self, Self::ControlTerminated(_))
+    }
+}
+
+impl From<String> for ConnectDevserverError {
+    fn from(message: String) -> Self {
+        Self::Other(message)
+    }
+}
+
 /// Poll a control terminal's output until the connect script's devserver
 /// prints its `token=` line, or the budget runs out. The script may take a
 /// moment, or prompt for credentials in the terminal, so the wait is
@@ -1486,9 +1507,9 @@ async fn scrape_control_terminal_token(
     state: &AppState,
     control_label: &str,
     prefix: &str,
-) -> Result<String, String> {
+) -> Result<String, ConnectDevserverError> {
     let Some(embedded) = state.embedded.get() else {
-        return Err("embedded local server is unavailable".to_string());
+        return Err("embedded local server is unavailable".to_string().into());
     };
     const MAX_ATTEMPTS: usize = 40;
     const BACKOFF: std::time::Duration = std::time::Duration::from_millis(1500);
@@ -1505,9 +1526,9 @@ async fn scrape_control_terminal_token(
         // "connecting". The exit status is the tenant's, independent of the
         // control window, so this also catches the script dying in place.
         if let Some(exit) = embedded.control_terminal_exit(prefix) {
-            return Err(format!(
+            return Err(ConnectDevserverError::ControlTerminated(format!(
                 "the devserver connect script exited ({exit}) before the connection was established"
-            ));
+            )));
         }
         if let Some(token) = devserver::scrape_token(&embedded.read_control_terminal_output(prefix))
         {
@@ -1522,15 +1543,19 @@ async fn scrape_control_terminal_token(
         match app.get_webview_window(control_label) {
             Some(_) => window_seen = true,
             None if window_seen => {
-                return Err(
+                return Err(ConnectDevserverError::ControlTerminated(
                     "the control terminal was closed before the devserver connected".to_string(),
-                );
+                ));
             }
             None => {}
         }
         tokio::time::sleep(BACKOFF).await;
     }
-    Err("the devserver did not print its token in the control terminal in time".to_string())
+    Err(
+        "the devserver did not print its token in the control terminal in time"
+            .to_string()
+            .into(),
+    )
 }
 
 fn control_run_is_current(state: &AppState, id: &str, generation: u64, prefix: &str) -> bool {
@@ -1548,16 +1573,20 @@ fn ensure_control_run_live(
     id: &str,
     generation: u64,
     prefix: &str,
-) -> Result<(), String> {
+) -> Result<(), ConnectDevserverError> {
     if !control_run_is_current(state, id, generation, prefix) {
-        return Err("the devserver connect attempt was replaced".to_string());
+        return Err("the devserver connect attempt was replaced"
+            .to_string()
+            .into());
     }
     if let Some(exit) = state
         .embedded
         .get()
         .and_then(|e| e.control_terminal_exit(prefix))
     {
-        return Err(format!("the devserver connect script exited ({exit})"));
+        return Err(ConnectDevserverError::ControlTerminated(format!(
+            "the devserver connect script exited ({exit})"
+        )));
     }
     Ok(())
 }
@@ -1566,12 +1595,9 @@ fn ensure_control_run_live(
 /// is registered. The connect script returning on its own, or a ^C in the
 /// control window, means the script-backed connection is dead even if the exit
 /// happens before token scrape, while hidden, or after a successful connect. On
-/// such an exit, fire `devserver-control-closed` — but,
-/// unlike that path, WITHOUT closing the control window: the user didn't ask to
-/// close it, so it stays showing "process exited; press Ctrl+D", same as a
-/// non-control terminal. The fire is desktop-side (a poll of the tenant's exit
-/// status), independent of the control window's SPA and so robust to a
-/// buried/throttled WKWebView.
+/// such an exit, fully tear down the devserver connection, including the control
+/// window row and tenant, so no desktop window remains for a terminated
+/// devserver.
 ///
 /// Stops without firing once this watcher's control terminal is no longer the
 /// devserver's current one: a disconnect/forget removes the prefix (and reaps
@@ -1597,33 +1623,19 @@ fn spawn_control_terminal_exit_watcher(
                 .get()
                 .and_then(|e| e.control_terminal_exit(&prefix));
             if let Some(exit) = exited {
-                // The connect-script PTY is gone, but KEEP the control window row
-                // and its (now dead) tenant: the launcher slow-flashes the row's
-                // eye to request attention, and "show window" reveals the terminal
-                // sitting at "process exited". The row is reaped on the user's next
-                // action -- re-run / disconnect / abandon all teardown through
-                // `reap_control_window`, a re-Connect upserts the same stable label
-                // (`create_control` drops any prior row, so no duplicate), and quit
-                // reaps at exit. (A disconnect-driven exit already returned above,
-                // its prefix no longer current.)
-                // For a script-based devserver, the control script is the connection
-                // (for example `ssh -N` or a foreground `chan devserver`), so its PTY
-                // exiting means the session
-                // ended, FULL STOP. Disconnect ALWAYS: flip `connected:false` +
-                // and emit attention. This deliberately drops the old reachability
-                // probe that kept a "setup-style" script's devserver connected after
-                // the script exited 0 — that heuristic let a broken-pipe SSH linger
-                // as "connected" (the user's "^C and no dialog shows"). A persistent
-                // connection must now keep its script alive.
-                //
+                // For a script-based devserver, the control script is the
+                // connection (for example `ssh -N` or a foreground `chan
+                // devserver`), so its PTY exiting means the session ended. A
+                // persistent connection must keep its script alive; a
+                // non-responsive but still-running script is handled by the
+                // workspace poll attention path instead.
                 if script_based && control_run_is_current(&state, &id, generation, &prefix) {
                     tracing::info!(
                         devserver = %id,
                         exit = %exit,
-                        "control script exited; disconnecting (script == connection)"
+                        "control script exited; tearing down devserver (script == connection)"
                     );
-                    flip_devserver_control_dead(&app, &state, &id);
-                    let _ = app.emit("devserver-control-closed", id);
+                    teardown_devserver_connection(&app, &state, &id);
                 }
                 return;
             }
@@ -1668,11 +1680,29 @@ async fn connect_devserver_impl(
         embedded.signal_library_change();
     }
     let _ = app.emit(serve::SERVES_CHANGED, ());
-    let result = connect_devserver_impl_inner(app.clone(), Arc::clone(&state), id.clone()).await;
-    if result.is_err() {
-        state.devservers.remove(&id);
-        remove_devserver_windows(&app, &state, &id);
-    }
+    let result =
+        match connect_devserver_impl_inner(app.clone(), Arc::clone(&state), id.clone()).await {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                let control_terminated = e.control_terminated();
+                let message = e.message();
+                if control_terminated {
+                    teardown_devserver_connection(&app, &state, &id);
+                } else {
+                    state.devservers.remove(&id);
+                    remove_devserver_windows(&app, &state, &id);
+                    if state
+                        .control_terminal_runs
+                        .lock()
+                        .unwrap()
+                        .contains_key(&id)
+                    {
+                        let _ = app.emit(DEVSERVER_CONTROL_ATTENTION_EVENT, id.clone());
+                    }
+                }
+                Err(message)
+            }
+        };
     state.devserver_connecting.lock().unwrap().remove(&id);
     if let Some(embedded) = state.embedded() {
         embedded.signal_library_change();
@@ -1685,7 +1715,7 @@ async fn connect_devserver_impl_inner(
     app: tauri::AppHandle,
     state: Arc<AppState>,
     id: String,
-) -> Result<(), String> {
+) -> Result<(), ConnectDevserverError> {
     let (url, script, stored_token, configured_label, auto_hide_control) = {
         let cfg = state.store.lock().unwrap().get().map_err(err)?;
         let ds = cfg
@@ -1803,7 +1833,8 @@ async fn connect_devserver_impl_inner(
             "devserver speaks management protocol {} but this desktop speaks {}; update whichever is older",
             info.protocol,
             devserver::DEVSERVER_API_PROTOCOL
-        ));
+        )
+        .into());
     }
     tracing::info!(
         version = %info.devserver_version,
@@ -1909,6 +1940,7 @@ async fn connect_devserver_impl_inner(
     // subscribe to the same channel).
     state.devserver_feed.register_windows(id.clone(), snapshot);
     spawn_devserver_workspace_poll(
+        app.clone(),
         Arc::clone(&state),
         id.clone(),
         conn.clone(),
@@ -2126,6 +2158,7 @@ async fn reconnect_devserver(
                 // the cancel above.
                 state.devserver_feed.register_windows(id.clone(), snapshot);
                 spawn_devserver_workspace_poll(
+                    app.clone(),
                     Arc::clone(&state),
                     id.clone(),
                     probe.clone(),
@@ -3034,10 +3067,9 @@ fn hide_window_from_close_confirm(app: tauri::AppHandle, window: tauri::WebviewW
 /// `library_id_of` over the CONNECTED devservers -- NOT `devserver_id_for_library`,
 /// whose live-snapshot read is empty exactly when the overlay shows -- then reveal
 /// the launcher (it hides, not destroys) and tear the devserver down DIRECTLY in
-/// Rust (`flip_devserver_control_dead`: drop the conn + its workspace windows,
-/// keep the control terminal), so Abandon works even when the launcher is not
-/// listening for the event. The `devserver-abandon` event still fires so the
-/// launcher refreshes its row. Inert on a local window, or when no connected
+/// Rust, including the control terminal, so Abandon works even when the launcher
+/// is not listening for the event. The `devserver-abandon` event still fires so
+/// the launcher refreshes its row. Inert on a local window, or when no connected
 /// devserver matches (already disconnected -- its windows are already gone).
 #[tauri::command]
 fn abandon_devserver_for_window(
@@ -3059,10 +3091,9 @@ fn abandon_devserver_for_window(
     if let Some(id) = devserver_id {
         let _ = show_window(&app, "main");
         // Tear down directly in Rust so Abandon works even when the launcher is
-        // not listening for the event; keep the control terminal (showing
-        // "process exited") so the user can re-run, matching a control-death
-        // disconnect.
-        flip_devserver_control_dead(&app, &state, &id);
+        // not listening for the event; this is a terminated devserver, so the
+        // control terminal leaves with the workspace windows.
+        teardown_devserver_connection(&app, &state, &id);
         let _ = app.emit("devserver-abandon", id);
     }
     Ok(())
@@ -5419,7 +5450,7 @@ mod tests {
     }
 
     #[test]
-    fn control_window_close_reaps_without_attention_event() {
+    fn control_exit_and_window_close_reap_without_closed_event() {
         const MAIN_RS: &str = include_str!("main.rs");
         let request_close = MAIN_RS
             .split("fn request_close_window")
@@ -5438,8 +5469,23 @@ mod tests {
             .split("/// Connect to a configured devserver")
             .next()
             .expect("watcher section ends before connect implementation");
-        assert!(exit_watcher.contains("flip_devserver_control_dead"));
-        assert!(exit_watcher.contains("devserver-control-closed"));
+        assert!(exit_watcher.contains("teardown_devserver_connection"));
+        assert!(!exit_watcher.contains("devserver-control-closed"));
+    }
+
+    #[test]
+    fn workspace_poll_emits_control_attention_while_still_connected() {
+        const MAIN_RS: &str = include_str!("main.rs");
+        let poll = MAIN_RS
+            .split("fn spawn_devserver_workspace_poll")
+            .nth(1)
+            .expect("workspace poll exists")
+            .split("/// Merged workspace view")
+            .next()
+            .expect("poll section ends before merged workspace view");
+        assert!(poll.contains("DEVSERVER_CONTROL_ATTENTION_EVENT"));
+        assert!(poll.contains("DEVSERVER_CONTROL_RESTORED_EVENT"));
+        assert!(poll.contains("state.devservers.is_connected(&id)"));
     }
 
     #[test]

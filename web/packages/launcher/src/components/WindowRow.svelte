@@ -4,15 +4,16 @@
   // surface's capabilities:
   //   - desktop bridge: [FOCUS] (focus a live window / un-hide a buried one) and
   //     [SHOW/HIDE] (Eye when visible, EyeOff when hidden, keyed on the
-  //     server-persisted `hidden`). A control terminal whose inner process exited
-  //     slow-flashes its eye yellow for attention; acting on the window clears it.
+  //     server-persisted `hidden`). A control terminal whose devserver is not
+  //     responding slow-flashes its eye yellow for attention; acting on the window
+  //     clears it.
   //   - self-managed (devserver/PWA): no bridge, so [OPEN] opens the window as an
   //     in-app browser window. An orphaned window (in the feed, no live handle
   //     here) flashes for a re-open click.
   //   - readonly (gateway): static, connection dot only, no actions.
   //
   // `icon` adds a leading kind glyph (accent for the control terminal) and, for a
-  // control terminal awaiting attention, an amber "disconnected..." pill; the
+  // control terminal awaiting attention, an amber "not responding..." pill; the
   // machine tree passes it for every row.
   import { AppWindow, ExternalLink, Eye, EyeOff, Focus, SquareTerminal } from "lucide-svelte";
   import { focusWindow, toggleWindow, reportError, clearError } from "../state/library.svelte";
@@ -30,8 +31,9 @@
   }
   let { w, icon = false }: Props = $props();
 
-  // A control terminal whose inner process exited flags its devserver's library
-  // for attention; its eye slow-flashes yellow until the user acts on the window.
+  // A control terminal whose devserver is not responding flags its library for
+  // attention; its eye slow-flashes yellow until the user acts on the window or
+  // the desktop reports recovery.
   function needsAttention(rec: WindowRecord): boolean {
     return rec.control && hasControlAttention(rec.library_id);
   }
@@ -67,7 +69,7 @@
       <span class="row-name">
         {windowRowLabel(w)}
         {#if icon && needsAttention(w)}
-          <span class="disconnected">disconnected...</span>
+          <span class="attention-pill">not responding...</span>
         {/if}
       </span>
     </div>
@@ -88,7 +90,7 @@
         class:attention={needsAttention(w)}
         type="button"
         title={needsAttention(w)
-          ? "Control terminal exited -- show window"
+          ? "Control terminal needs attention"
           : w.hidden
             ? "Show window"
             : "Hide window"}
@@ -193,18 +195,18 @@
     opacity: 0.75;
   }
 
-  /* The control terminal's "disconnected..." cue: amber, flashing beside the name
-     while the devserver awaits attention (additive to the eye flash). */
-  .disconnected {
+  /* The control terminal's "not responding..." cue: amber, flashing beside the
+     name while the devserver awaits attention (additive to the eye flash). */
+  .attention-pill {
     display: inline-flex;
     align-items: center;
     font-size: 0.72rem;
     font-weight: 500;
     color: #e3b341;
-    animation: control-disconnected 1.6s ease-in-out infinite;
+    animation: control-attention-pill 1.6s ease-in-out infinite;
   }
 
-  @keyframes control-disconnected {
+  @keyframes control-attention-pill {
     0%,
     100% {
       opacity: 1;
@@ -214,9 +216,9 @@
     }
   }
 
-  /* A control terminal whose inner process exited: its eye slow-flashes yellow to
-     request attention. The pulse overrides the .on accent tint while it runs; the
-     user acting on the window clears it. */
+  /* A control terminal whose devserver is not responding: its eye slow-flashes
+     yellow to request attention. The pulse overrides the .on accent tint while it
+     runs; user action or a restored event clears it. */
   .icon-btn.attention {
     animation: control-attention 1.6s ease-in-out infinite;
   }
@@ -237,7 +239,7 @@
 
   /* Respect reduced-motion: hold a steady yellow instead of pulsing. */
   @media (prefers-reduced-motion: reduce) {
-    .disconnected {
+    .attention-pill {
       animation: none;
     }
     .icon-btn.attention {

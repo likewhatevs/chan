@@ -1112,10 +1112,8 @@ mod tests {
     /// The wire `connected` flag the launcher reads
     /// (`GET /api/library/devservers` -> `list` -> `entry_from_devserver`)
     /// derives from the shared `DevserverConns` membership, so dropping the conn
-    /// — what the desktop's `flip_devserver_control_dead` does when a control
-    /// terminal dies — flips it false while the config row stays. This is the
-    /// mechanism that guarantees the launcher never shows a dead devserver as
-    /// connected, regardless of how the SPA survey is answered.
+    /// flips it false while the config row stays. This is the mechanism that
+    /// guarantees the launcher never shows a dead devserver as connected.
     #[test]
     fn registry_list_connected_tracks_conns_membership() {
         let dir = tempfile::tempdir().unwrap();

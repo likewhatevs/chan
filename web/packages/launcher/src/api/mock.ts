@@ -33,7 +33,7 @@ let nextDs = 3;
 const workspaces: WorkspaceEntry[] = [
   {
     workspace_id: "ws-1",
-    path: "/Users/fiorix/notes",
+    path: "/home/hacker/notes",
     label: "",
     on: true,
     status: "running",
@@ -43,7 +43,7 @@ const workspaces: WorkspaceEntry[] = [
   },
   {
     workspace_id: "ws-2",
-    path: "/Users/fiorix/work/journal",
+    path: "/home/hacker/work/journal",
     label: "Journal",
     on: false,
     status: "stopped",
@@ -149,7 +149,7 @@ const windows: WindowRecord[] = [
     kind: "workspace",
     title: "🏠 notes Window 1",
     ordinal: 1,
-    workspace_path: "/Users/fiorix/notes",
+    workspace_path: "/home/hacker/notes",
     prefix: "w/notes",
     token: "tok_local_notes",
     persisted: true,

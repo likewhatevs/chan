@@ -1,6 +1,6 @@
 // Component test: the shared WindowRow. The mutable surface renders [FOCUS] +
 // [SHOW/HIDE] (Eye visible / EyeOff hidden); `icon` adds a leading kind glyph and
-// the control terminal's amber "disconnected..." pill + eye flash when its library
+// the control terminal's amber "not responding..." pill + eye flash when its library
 // needs attention. Exercises the real Svelte 5 runtime per jsdom. The read-only
 // surface (static dot, no actions) is covered in LibraryReadOnly.test.ts.
 
@@ -79,14 +79,14 @@ describe("WindowRow", () => {
     expect(el.querySelector('[aria-label="Hide window"]')).toBeNull();
   });
 
-  it("flashes the control eye and shows the disconnected pill when its library needs attention", () => {
+  it("flashes the control eye and shows the attention pill when its library needs attention", () => {
     controlAttention.libs["lib-x"] = true;
     const el = render(win({ window_id: "c", library_id: "lib-x", control: true }), { icon: true });
     const eye = el.querySelector("button.icon-btn.attention");
     expect(eye).not.toBeNull();
     expect(eye!.getAttribute("aria-label")).toContain("needs attention");
-    expect(el.querySelector(".disconnected")).not.toBeNull();
-    expect(el.textContent).toContain("disconnected...");
+    expect(el.querySelector(".attention-pill")).not.toBeNull();
+    expect(el.textContent).toContain("not responding...");
     expect(el.querySelector(".row-glyph.control")).not.toBeNull();
   });
 

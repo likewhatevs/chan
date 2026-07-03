@@ -477,9 +477,9 @@ mod tests {
 
     #[test]
     fn metadata_key_keeps_example_readable_prefix() {
-        let p = PathBuf::from("/Users/fiorix/dev/github.com/fiorix/chan");
+        let p = PathBuf::from("/home/hacker/dev/github.com/fiorix/chan");
         let key = metadata_key_for_root(&p);
-        assert!(key.starts_with("-Users-fiorix-dev-github.com-fiorix-chan-"));
+        assert!(key.starts_with("-home-hacker-dev-github.com-fiorix-chan-"));
         assert_eq!(key.rsplit_once('-').unwrap().1.len(), 8);
     }
 

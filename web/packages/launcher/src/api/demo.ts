@@ -19,8 +19,8 @@ export interface LauncherDemoApi extends LibraryApi {
 
 const LIMA_LIBRARY_ID = "lib-lima";
 const WINDOWS_LIBRARY_ID = "lib-windows";
-// The control terminal that slow-flashes for attention belongs to a disconnected
-// remote with a retained control row, matching a finished connect script.
+// The control terminal that slow-flashes for attention belongs to a connected
+// remote whose devserver stopped responding while its control script still runs.
 const ATTENTION_DEVSERVER_ID = "ds-lima";
 
 interface Seed {
@@ -69,7 +69,7 @@ function seed(): Seed {
         has_token: false,
         token: "",
         library_id: LIMA_LIBRARY_ID,
-        status: "disconnected",
+        status: "connected",
         auto_hide_control: false,
         os: "linux",
         pretty_name: "Ubuntu 24.04.1 LTS",

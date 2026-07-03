@@ -1,14 +1,14 @@
 // Devserver control terminals awaiting attention.
 //
-// When a connected devserver's CONTROL terminal's inner process exits, the
-// desktop keeps the control window row (it no longer reaps it on PTY exit) and
-// emits `devserver-control-closed`. The launcher flashes that row's eye yellow in
-// the Open-windows feed to request attention. The flash clears when the user
-// acts -- shows or focuses the window, or reconnects the devserver.
+// When a connected devserver stops answering while its CONTROL terminal is still
+// alive, the desktop emits `devserver-control-attention`. The launcher flashes
+// that row's eye yellow in the Open-windows feed to request attention. The flash
+// clears when the desktop reports the connection restored, or when the user acts
+// on the row.
 //
 // Keyed by the devserver's LIBRARY id (the id the control window record carries)
-// so the feed matches the flashing row directly. The `devserver-control-closed`
-// event carries the devserver id, resolved to its library id at mark time.
+// so the feed matches the flashing row directly. Desktop events carry the
+// devserver id, resolved to its library id at mark time.
 
 import { library } from "./library.svelte";
 
@@ -45,7 +45,7 @@ function controlLibraryId(devserverId: string): string | null {
   return direct?.library_id ?? null;
 }
 
-/** Flag a devserver's control terminal for attention (its inner process exited).
+/** Flag a devserver's control terminal for attention.
  * Resolves the devserver id to the library id the feed keys on, or queues it
  * briefly until the matching control-window row / devserver entry arrives. */
 export function markControlAttention(devserverId: string): void {
@@ -76,9 +76,17 @@ export function resolvePendingControlAttention(): void {
 }
 
 /** Clear a library's control-attention (the user showed/focused the window, or
- * the devserver reconnected). */
+ * the devserver became responsive again). */
 export function clearControlAttention(libraryId: string): void {
   if (libraryId in controlAttention.libs) delete controlAttention.libs[libraryId];
+}
+
+/** Clear attention by devserver id, resolving it to the current library id if
+ * the launcher already knows it. */
+export function clearControlAttentionForDevserver(devserverId: string): void {
+  delete controlAttention.pendingDevservers[devserverId];
+  const libraryId = controlLibraryId(devserverId);
+  if (libraryId) clearControlAttention(libraryId);
 }
 
 /** Whether the control row of this library is awaiting attention. */
