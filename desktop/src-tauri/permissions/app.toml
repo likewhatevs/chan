@@ -34,6 +34,7 @@ permissions = [
   "allow-request-close-window",
   "allow-hide-window-from-close-confirm",
   "allow-abandon-devserver-for-window",
+  "allow-reconnect-devserver-for-window",
   "allow-save-file-to-downloads",
   "allow-zoom-in",
   "allow-zoom-out",
@@ -108,6 +109,11 @@ commands.allow = ["hide_window_from_close_confirm"]
 identifier = "allow-abandon-devserver-for-window"
 description = "Enables the abandon_devserver_for_window command (disconnect overlay Abandon)."
 commands.allow = ["abandon_devserver_for_window"]
+
+[[permission]]
+identifier = "allow-reconnect-devserver-for-window"
+description = "Enables the reconnect_devserver_for_window command (disconnect overlay Reconnect)."
+commands.allow = ["reconnect_devserver_for_window"]
 
 [[permission]]
 identifier = "allow-save-file-to-downloads"

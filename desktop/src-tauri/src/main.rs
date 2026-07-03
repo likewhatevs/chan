@@ -155,6 +155,13 @@ pub struct AppState {
     /// prefix, watcher, and connect result so a stale run cannot emit against or
     /// overwrite a newer connect attempt.
     pub control_terminal_runs: Mutex<HashMap<String, ControlTerminalRun>>,
+    /// Devservers whose control script exited (or whose connect failed) while
+    /// the control terminal is still live: the connection is marked down but the
+    /// control terminal is KEPT at "process exited" so the user can read the
+    /// death reason. Reconnect is BLOCKED for these ids until the control
+    /// terminal is closed (`close_devserver_control_terminal` clears the id), so
+    /// the user has to see why it ended (or hit Reconnect, which force-closes it).
+    pub control_terminal_dead: Mutex<std::collections::HashSet<String>>,
     /// Monotonic generation source for scripted control runs.
     pub control_terminal_generation: std::sync::atomic::AtomicU64,
     /// Devservers with a connect request currently in flight. A second connect
@@ -1391,6 +1398,41 @@ fn teardown_devserver_connection(app: &tauri::AppHandle, state: &AppState, id: &
     remove_devserver_windows(app, state, id);
 }
 
+/// A script-backed devserver's control script exited (the script IS the
+/// connection), or its connect failed while the control terminal is still live.
+/// Mark the connection DOWN but KEEP the control terminal at "process exited" so
+/// the user can read the death reason, and KEEP the workspace windows open on
+/// the reconnect spinner. Reconnect stays BLOCKED (`control_terminal_dead`) until
+/// the user closes the control terminal (`close_devserver_control_terminal`
+/// clears it) or hits Reconnect (which force-closes it). This is the counterpart
+/// to `teardown_devserver_connection`, which reaps everything. Idempotent.
+fn mark_devserver_control_exited(app: &tauri::AppHandle, state: &AppState, id: &str) {
+    state.devservers.remove(id);
+    state
+        .control_terminal_dead
+        .lock()
+        .unwrap()
+        .insert(id.to_string());
+    // Retire the window watcher + workspace poll WITHOUT closing the workspace
+    // windows: their own `/ws` to the now-dead transport drops, so each shows the
+    // DisconnectOverlay reconnect spinner. Do NOT forget the feed or reap the
+    // control terminal, so the launcher keeps rendering the flashing control row
+    // (a `control:true` record under the devserver's `lib-` library) at "process
+    // exited".
+    if let Some(cancel) = state.devserver_watchers.lock().unwrap().remove(id) {
+        let _ = cancel.send(DevserverWatcherStop::RetireKeepWindows);
+    }
+    state.devserver_watcher_views.lock().unwrap().remove(id);
+    // Flash the launcher's control row. The label ("connection closed" vs "not
+    // responding") is the launcher's call, keyed on the devserver's now-`false`
+    // connected status; this event only drives the flash.
+    let _ = app.emit(DEVSERVER_CONTROL_ATTENTION_EVENT, id.to_string());
+    if let Some(embedded) = state.embedded() {
+        embedded.signal_library_change();
+    }
+    let _ = app.emit(serve::SERVES_CHANGED, ());
+}
+
 /// The user explicitly closed the control terminal window. This is different
 /// from the connect script exiting inside an otherwise open terminal: the row
 /// should leave the launcher, not linger flashing for attention.
@@ -1399,6 +1441,9 @@ fn close_devserver_control_terminal(app: &tauri::AppHandle, state: &AppState, id
     if was_connected {
         state.devservers.remove(id);
     }
+    // Closing a dead control terminal (the user read the death reason) clears the
+    // reconnect block: the devserver is now ready to connect again.
+    state.control_terminal_dead.lock().unwrap().remove(id);
     reap_devserver_control_terminal(app, state, id);
     if was_connected {
         remove_devserver_windows(app, state, id);
@@ -1628,14 +1673,17 @@ fn spawn_control_terminal_exit_watcher(
                 // devserver`), so its PTY exiting means the session ended. A
                 // persistent connection must keep its script alive; a
                 // non-responsive but still-running script is handled by the
-                // workspace poll attention path instead.
+                // workspace poll attention path instead. Mark the connection down
+                // but KEEP the control terminal at "process exited" so the user
+                // can read the death reason; reconnect stays blocked until they
+                // close it.
                 if script_based && control_run_is_current(&state, &id, generation, &prefix) {
                     tracing::info!(
                         devserver = %id,
                         exit = %exit,
-                        "control script exited; tearing down devserver (script == connection)"
+                        "control script exited; marking devserver down, keeping control terminal (script == connection)"
                     );
-                    teardown_devserver_connection(&app, &state, &id);
+                    mark_devserver_control_exited(&app, &state, &id);
                 }
                 return;
             }
@@ -1670,6 +1718,15 @@ async fn connect_devserver_impl(
     if state.devservers.is_connected(&id) {
         return Ok(());
     }
+    // A dead control terminal blocks reconnect: the user must close it (read the
+    // death reason) first, or use Reconnect (which force-closes it, clearing this
+    // before it dials).
+    if state.control_terminal_dead.lock().unwrap().contains(&id) {
+        return Err(
+            "close the control terminal to see why the connection ended, then reconnect"
+                .to_string(),
+        );
+    }
     {
         let mut connecting = state.devserver_connecting.lock().unwrap();
         if !connecting.insert(id.clone()) {
@@ -1688,17 +1745,23 @@ async fn connect_devserver_impl(
                 let message = e.message();
                 if control_terminated {
                     teardown_devserver_connection(&app, &state, &id);
+                } else if state
+                    .control_terminal_runs
+                    .lock()
+                    .unwrap()
+                    .contains_key(&id)
+                {
+                    // The connect failed but its control script is still live
+                    // (for example `ssh -N` up, but the devserver behind it is a
+                    // wrong protocol or slow to answer): keep the control terminal
+                    // so the user can read the failure, and block reconnect until
+                    // they close it, same as a control-script death.
+                    mark_devserver_control_exited(&app, &state, &id);
                 } else {
+                    // No control terminal to keep (a no-script devserver, or the
+                    // failure predates the control run): drop the conn + windows.
                     state.devservers.remove(&id);
                     remove_devserver_windows(&app, &state, &id);
-                    if state
-                        .control_terminal_runs
-                        .lock()
-                        .unwrap()
-                        .contains_key(&id)
-                    {
-                        let _ = app.emit(DEVSERVER_CONTROL_ATTENTION_EVENT, id.clone());
-                    }
                 }
                 Err(message)
             }
@@ -3099,6 +3162,39 @@ fn abandon_devserver_for_window(
     Ok(())
 }
 
+/// Reconnect the devserver backing a workspace window (the disconnect overlay's
+/// Reconnect button, desktop-only). The devserver is already DISCONNECTED with
+/// its control terminal sitting dead at "process exited", so resolve the owning
+/// devserver from the window's `<library_id>::<window_id>` label WITHOUT the
+/// connected filter Abandon uses (the cached `library_id_of` mapping survives on
+/// the kept feed). Force-close the dead control terminal (clearing the reconnect
+/// block), then run the connect flow, which re-runs the connect script. Inert on
+/// a local window or when no devserver matches the library.
+#[tauri::command]
+async fn reconnect_devserver_for_window(
+    app: tauri::AppHandle,
+    state: State<'_, Arc<AppState>>,
+    window: tauri::WebviewWindow,
+) -> Result<(), String> {
+    let devserver_id = {
+        let label = window.label();
+        let Some(library_id) = label.split("::").next().filter(|l| l.starts_with("lib-")) else {
+            return Ok(()); // a local window has no devserver to reconnect
+        };
+        let cfg = state.store.lock().unwrap().get().map_err(err)?;
+        cfg.devservers
+            .iter()
+            .find(|d| state.devserver_feed.library_id_of(&d.id).as_deref() == Some(library_id))
+            .map(|d| d.id.clone())
+    };
+    if let Some(id) = devserver_id {
+        let state_arc = Arc::clone(state.inner());
+        close_devserver_control_terminal(&app, &state_arc, &id);
+        connect_devserver_impl(app.clone(), state_arc, id).await?;
+    }
+    Ok(())
+}
+
 /// Browser-style zoom controls. Step size is
 /// 10 % per Cmd++/Cmd+- press; the clamp range matches Tauri's own
 /// `zoom_hotkeys_enabled` polyfill semantics (0.25-5.0).
@@ -3553,6 +3649,7 @@ fn main() {
         devserver_active_transfers: Mutex::new(std::collections::HashSet::new()),
         control_terminal_prefixes: Mutex::new(HashMap::new()),
         control_terminal_runs: Mutex::new(HashMap::new()),
+        control_terminal_dead: Mutex::new(std::collections::HashSet::new()),
         control_terminal_generation: std::sync::atomic::AtomicU64::new(0),
         devserver_connecting: Arc::new(Mutex::new(std::collections::HashSet::new())),
         devserver_remove_hook: Arc::new(OnceLock::new()),
@@ -3949,6 +4046,7 @@ fn main() {
             request_close_window,
             hide_window_from_close_confirm,
             abandon_devserver_for_window,
+            reconnect_devserver_for_window,
             download::save_file_to_downloads,
             // Registered on every platform; returns [] off macOS so the
             // SPA's terminal drop handler needs no platform branching.
@@ -5450,7 +5548,7 @@ mod tests {
     }
 
     #[test]
-    fn control_exit_and_window_close_reap_without_closed_event() {
+    fn control_script_exit_keeps_control_terminal_and_blocks_reconnect() {
         const MAIN_RS: &str = include_str!("main.rs");
         let request_close = MAIN_RS
             .split("fn request_close_window")
@@ -5462,6 +5560,9 @@ mod tests {
         assert!(request_close.contains("close_devserver_control_terminal"));
         assert!(!request_close.contains("devserver-control-closed"));
 
+        // On a control-script exit the watcher marks the connection down but
+        // KEEPS the control terminal (it does NOT reap/teardown), so the user can
+        // read the death reason and reconnect stays blocked until they close it.
         let exit_watcher = MAIN_RS
             .split("fn spawn_control_terminal_exit_watcher")
             .nth(1)
@@ -5469,8 +5570,59 @@ mod tests {
             .split("/// Connect to a configured devserver")
             .next()
             .expect("watcher section ends before connect implementation");
-        assert!(exit_watcher.contains("teardown_devserver_connection"));
+        assert!(exit_watcher.contains("mark_devserver_control_exited"));
+        assert!(!exit_watcher.contains("teardown_devserver_connection"));
         assert!(!exit_watcher.contains("devserver-control-closed"));
+
+        // mark_devserver_control_exited keeps the control terminal (no reap, no
+        // window teardown), retires the watcher KEEPING the workspace windows,
+        // and blocks reconnect via control_terminal_dead.
+        let mark_exited = MAIN_RS
+            .split("fn mark_devserver_control_exited")
+            .nth(1)
+            .expect("mark_devserver_control_exited exists")
+            .split("fn close_devserver_control_terminal")
+            .next()
+            .expect("mark_exited precedes close_devserver_control_terminal");
+        assert!(mark_exited.contains("control_terminal_dead"));
+        assert!(mark_exited.contains("RetireKeepWindows"));
+        assert!(!mark_exited.contains("reap_devserver_control_terminal"));
+        assert!(!mark_exited.contains("remove_devserver_windows"));
+
+        // A dead control terminal blocks reconnect; closing it clears the block.
+        let connect = MAIN_RS
+            .split("async fn connect_devserver_impl(")
+            .nth(1)
+            .expect("connect_devserver_impl exists")
+            .split("async fn connect_devserver_impl_inner")
+            .next()
+            .expect("connect_devserver_impl precedes its inner");
+        assert!(connect.contains("control_terminal_dead"));
+        let close = MAIN_RS
+            .split("fn close_devserver_control_terminal")
+            .nth(1)
+            .expect("close_devserver_control_terminal exists")
+            .split("fn persist_window_hidden")
+            .next()
+            .expect("close precedes persist_window_hidden");
+        assert!(close.contains("control_terminal_dead"));
+
+        // Reconnect force-closes the control terminal BEFORE dialing, so the
+        // control record drops from the feed and the block clears first.
+        let reconnect = MAIN_RS
+            .split("async fn reconnect_devserver_for_window")
+            .nth(1)
+            .expect("reconnect_devserver_for_window exists")
+            .split("fn ")
+            .next()
+            .expect("reconnect body");
+        let close_pos = reconnect
+            .find("close_devserver_control_terminal")
+            .expect("reconnect force-closes the control terminal");
+        let connect_pos = reconnect
+            .find("connect_devserver_impl")
+            .expect("reconnect then dials");
+        assert!(close_pos < connect_pos);
     }
 
     #[test]

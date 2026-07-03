@@ -2941,12 +2941,13 @@ mod tests {
             perms,
             vec![
                 "allow-abandon-devserver-for-window".to_string(),
+                "allow-reconnect-devserver-for-window".to_string(),
                 "allow-request-close-window".to_string(),
                 "allow-hide-window-from-close-confirm".to_string(),
             ],
-            "devserver-abandon must grant the three window-lifecycle commands \
-             (abandon, close, hide) so a tunnel devserver window's overlays are \
-             not silent no-ops: {perms:?}",
+            "devserver-abandon must grant the window-lifecycle commands \
+             (abandon, reconnect, close, hide) so a tunnel devserver window's \
+             overlays are not silent no-ops: {perms:?}",
         );
         let remote_urls = capability_remote_urls(DEVSERVER_ABANDON_CAPABILITY_JSON);
         assert_eq!(
