@@ -435,6 +435,49 @@ class BulletGlyphWidget extends WidgetType {
   }
 }
 
+/// Renders a list marker's LITERAL text (`-`, `1.`, `2)`, ...) as a replace
+/// widget instead of a `Decoration.mark` class on the source text. The visible
+/// result is identical to the raw marker, but it exists so the hyphen and
+/// ordered markers use the SAME replace-widget mechanism as the `*` / `+` glyph.
+///
+/// This is load-bearing on chan-desktop's WKWebView: a `Decoration.mark` (a
+/// class added to existing text) does not force WKWebView to repaint the line
+/// when the list decoration first applies, so typing `- ` or `1. ` left the
+/// item un-flowed (no hanging indent) until an unrelated event (scroll, click,
+/// another keystroke) forced a repaint - the "sporadic list mode" the host hit.
+/// A replace widget swaps a real DOM node in, which forces the line to
+/// re-layout and applies the hanging-indent line decoration with it, exactly as
+/// the `*` / `+` glyph already does. Blink repaints either way, so this is
+/// invisible in Chrome. The document is untouched (render-only; round-trip
+/// still writes the literal marker), and the widget carries the marker classes
+/// so the marker column geometry is unchanged.
+class LiteralMarkerWidget extends WidgetType {
+  constructor(
+    readonly text: string,
+    readonly cls: string,
+  ) {
+    super();
+  }
+
+  eq(other: LiteralMarkerWidget): boolean {
+    return this.text === other.text && this.cls === other.cls;
+  }
+
+  toDOM(): HTMLElement {
+    const span = document.createElement("span");
+    span.className = this.cls;
+    span.textContent = this.text;
+    return span;
+  }
+
+  ignoreEvent(): boolean {
+    return false;
+  }
+}
+
+const HYPHEN_CLASS = "cm-md-list-marker cm-md-ul-marker cm-md-ul-hyphen";
+const ORDERED_CLASS = "cm-md-list-marker cm-md-ol-marker";
+
 /// Nesting depth of this ListItem: the count of ancestor ListItems
 /// above it (0 = top-level). Drives the Google-Docs glyph cycle
 /// (depth % 3). Walks the syntax ancestry rather than the indent so it
@@ -487,15 +530,16 @@ function decorateListHang(
   );
 }
 
-const HYPHEN_MARK = Decoration.mark({
-  class: "cm-md-list-marker cm-md-ul-marker cm-md-ul-hyphen",
-});
-
-/// Decoration for a bullet ListItem's marker. Hyphen (`-`) keeps its
-/// literal dash in the shared marker column; `*` / `+` are REPLACED by
-/// a real-width depth-glyph widget (disc / circle / square, depth % 3).
+/// Decoration for a bullet ListItem's marker. Hyphen (`-`) renders its literal
+/// dash through a replace widget (see LiteralMarkerWidget for the WKWebView
+/// repaint rationale); `*` / `+` are REPLACED by a real-width depth-glyph widget
+/// (disc / circle / square, depth % 3).
 function bulletMarkerDecoration(markerChar: string, depth: number): Decoration {
-  if (markerChar === "-") return HYPHEN_MARK;
+  if (markerChar === "-") {
+    return Decoration.replace({
+      widget: new LiteralMarkerWidget("-", HYPHEN_CLASS),
+    });
+  }
   return Decoration.replace({ widget: new BulletGlyphWidget(depth) });
 }
 
@@ -534,10 +578,6 @@ function decorateBulletList(
   } while (cursor.nextSibling());
 }
 
-const ORDERED_MARK = Decoration.mark({
-  class: "cm-md-list-marker cm-md-ol-marker",
-});
-
 function decorateListIndents(
   ctx: TokenContext,
   list: import("@lezer/common").SyntaxNode,
@@ -551,7 +591,17 @@ function decorateListIndents(
     if (!sub.firstChild()) continue;
     do {
       if (sub.name === "ListMark") {
-        ctx.push(ORDERED_MARK, sub.from, sub.to);
+        // Render the literal ordered marker (`1.`, `2)`, ...) through a replace
+        // widget for the same WKWebView repaint reason as the hyphen (see
+        // LiteralMarkerWidget); the visible marker is unchanged.
+        const markerText = ctx.state.doc.sliceString(sub.from, sub.to);
+        ctx.push(
+          Decoration.replace({
+            widget: new LiteralMarkerWidget(markerText, ORDERED_CLASS),
+          }),
+          sub.from,
+          sub.to,
+        );
         decorateListHang(ctx, item, sub.from, sub.to);
         break;
       }
