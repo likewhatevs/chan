@@ -3538,6 +3538,12 @@ describe("graphTitle", () => {
     expect(graphTitle("semantic", "tag:foo")).toBe("tag=#foo");
   });
 
+  test("mention: scope reads as 'mention=@@<name>'", () => {
+    expect(graphTitle("semantic", "mention:@@Lead")).toBe("mention=@@Lead");
+    // Mention without the leading @@ gets one prepended (then the prefix).
+    expect(graphTitle("semantic", "mention:Lead")).toBe("mention=@@Lead");
+  });
+
   test("contact: scope reads as 'contact=<basename>'", () => {
     expect(graphTitle("semantic", "contact:alice")).toBe("contact=alice");
     // Workspace-relative contact paths peel to the file basename.

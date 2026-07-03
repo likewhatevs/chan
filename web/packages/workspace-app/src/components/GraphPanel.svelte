@@ -41,6 +41,7 @@
     indexStatus,
     openGraphForContact,
     openGraphForLanguage,
+    openGraphForMention,
     openGraphForTag,
     paneWidths,
     persistPaneWidths,
@@ -3002,10 +3003,11 @@
       {:else}
         <!-- `onSetAsScope` wires "Graph from here" to always open a NEW
              graph tab, per selection kind: file / directory via
-             `graphFromHere`; language / tag / resolved-mention via
-             `openGraphForLanguage` / `openGraphForTag` /
-             `openGraphForContact`. The breadcrumb (`rescopeFromHere`)
-             owns in-place upward navigation. -->
+             `graphFromHere`; language / tag via `openGraphForLanguage` /
+             `openGraphForTag`; a mention via `openGraphForContact` when it
+             resolves to a contact file, else `openGraphForMention` on the
+             mention meta-node. The breadcrumb (`rescopeFromHere`) owns
+             in-place upward navigation. -->
         <InspectorBody
           selection={inspectorSelection}
           onOpen={
@@ -3056,13 +3058,21 @@
                         inspectorSelection.nodeId,
                         inspectorSelection.label,
                       )
-                  : inspectorSelection?.kind === "mention" && selectedContactPath
-                    ? // The mention inspector's "Graph from here" opens a
-                      // NEW graph tab scoped to the resolved contact
-                      // (bidirectional BFS around it). An unresolved
-                      // mention (no matching file) has no from-here
-                      // target, so the button stays hidden.
-                      () => openGraphForContact(selectedContactPath!)
+                  : inspectorSelection?.kind === "mention"
+                    ? // The mention inspector's "Graph from here" always
+                      // opens a NEW graph tab. A mention that resolves to a
+                      // contact file scopes to that contact (bidirectional
+                      // BFS around it); an unresolved mention (no matching
+                      // file) scopes to the mention meta-node itself
+                      // (`mention:@@Name`), whose bidirectional BFS lens
+                      // surfaces every doc referencing the handle.
+                      selectedContactPath
+                      ? () => openGraphForContact(selectedContactPath!)
+                      : () =>
+                          openGraphForMention(
+                            inspectorSelection.nodeId,
+                            inspectorSelection.label,
+                          )
                     : undefined
           }
           documentsOverride={selectionDocumentsInScope}

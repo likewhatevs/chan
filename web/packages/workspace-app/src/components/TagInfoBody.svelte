@@ -14,7 +14,7 @@
     graphData,
     type GraphViewNode,
   } from "../state/graphData.svelte";
-  import { openGraphForTag } from "../state/store.svelte";
+  import { openGraphForMention, openGraphForTag } from "../state/store.svelte";
   import KindChip from "./KindChip.svelte";
 
   let {
@@ -36,10 +36,11 @@
     /// close themselves; absent = entries render as non-clickable.
     onNavigate?: (path: string) => void;
     /// "Set as Scope" action. For tag kind: re-scope to the tag's
-    /// neighbourhood. For mention kind: hosts that can resolve the
+    /// neighbourhood. For mention kind: hosts that resolve the
     /// mention to a contact file scope to that file (e.g. clicking
-    /// `alice` scopes the graph to `Contacts/Alice Chen.md`); when
-    /// no file resolves, the action is unavailable.
+    /// `alice` scopes the graph to `Contacts/Alice Chen.md`);
+    /// otherwise the host scopes to the mention meta-node itself
+    /// (`mention:@@Name`), so the button is available for any mention.
     onSetAsScope?: () => void;
     /// "Open" action. Set on mention/contact nodes when
     /// the host can resolve the mention to a real .md file; absent
@@ -87,9 +88,14 @@
     <KindChip
       {kind}
       block
-      onClick={kind === "tag" || kind === "mention"
+      onClick={kind === "tag"
         ? () => openGraphForTag(nodeId, label)
-        : undefined}
+        : kind === "mention"
+          ? // A mention chip lands a mention-scoped graph
+            // (`mention:@@Name`), NOT a tag scope. Routing it through
+            // `openGraphForTag` would mint a bogus `tag:@@Name`.
+            () => openGraphForMention(nodeId, label)
+          : undefined}
     />
   </header>
   <h3 class="title">{kind === "mention" ? label.replace(/^@@/, "") : label}</h3>
