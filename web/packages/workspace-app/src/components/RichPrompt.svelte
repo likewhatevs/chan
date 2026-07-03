@@ -505,7 +505,12 @@
   .rp-editor :global(.cm-content) {
     padding: 0 !important;
   }
-  .rp-editor :global(.cm-line) {
+  /* Flush-left composer lines, EXCEPT list-hang lines: the Wysiwyg hang rule
+     pairs padding-left (the marker column) with a negative text-indent, and
+     zeroing only the padding here leaves the indent winning alone, which
+     yanks the marker out of the scroller's left edge (clipped invisible) and
+     bounces the caret to column 0 the moment `1. ` / `- ` parses as a list. */
+  .rp-editor :global(.cm-line:not(.cm-md-list-hang)) {
     padding-left: 0 !important;
     padding-right: 0 !important;
   }
