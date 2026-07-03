@@ -366,14 +366,17 @@ enum Command {
         /// `--restart` when omitted.
         #[arg(long)]
         port: Option<u16>,
-        /// Service backend. `none` (the default) runs in the FOREGROUND on
-        /// `--bind`/`--port` with no supervision (Ctrl-C to stop). `chan` is
-        /// the cross-OS self-managed foreground daemon (pidfile + flock), tied
-        /// to the launching session. `systemd` (Linux) and `launchd` (macOS)
-        /// are detached background services that survive logout; each needs an
-        /// explicit action verb (`--start`/`--stop`/`--restart`/`--status`/
-        /// `--join`) rather than a bare `--service`.
-        #[arg(long, value_enum, default_value = "none")]
+        /// Service backend. `auto` (the default, and what a bare `--service`
+        /// resolves to) picks per-OS at runtime: with an action verb it
+        /// supervises under `systemd` (Linux), `launchd` (macOS), or the
+        /// self-managed `chan` daemon (Windows); with no action verb it runs in
+        /// the FOREGROUND (Ctrl-C to stop). `none` forces that unsupervised
+        /// foreground server. `chan` is the cross-OS self-managed foreground
+        /// daemon (pidfile + flock), tied to the launching session. `systemd`
+        /// (Linux) and `launchd` (macOS) are detached background services that
+        /// survive logout; each needs an explicit action verb (`--start`/
+        /// `--stop`/`--restart`/`--status`/`--join`).
+        #[arg(long, value_enum, num_args = 0..=1, default_value = "auto", default_missing_value = "auto")]
         service: ServiceKind,
         /// Start the background service (write/refresh its unit, enable it on
         /// boot, and start it), then return. systemd/launchd only. `chan` is a
@@ -853,11 +856,19 @@ pub enum Personality {
     Desktop,
 }
 
-/// Which backend backs `chan devserver --service`. `None` (the CLI value
-/// `none`, the default) is the plain FOREGROUND server with no supervision; the
-/// others each name a specific backend explicitly; there is no per-OS auto-pick.
+/// Which backend backs `chan devserver --service`. `Auto` (the CLI value
+/// `auto`, the default) resolves per-OS at runtime: with an action verb it
+/// supervises under systemd (Linux), launchd (macOS), or the self-managed `chan`
+/// daemon (Windows); with no action verb it runs the plain foreground server.
+/// `None` (`none`) forces that unsupervised foreground server, and `Chan` /
+/// `Systemd` / `Launchd` each force a specific backend explicitly.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 pub enum ServiceKind {
+    /// Per-OS auto-pick (the default). With an action verb: systemd (Linux),
+    /// launchd (macOS), the self-managed `chan` daemon (Windows). With no action
+    /// verb it runs the plain foreground server (Ctrl-C stops).
+    #[value(name = "auto")]
+    Auto,
     /// No supervision: run in the foreground on `--bind`/`--port` (Ctrl-C stops).
     #[value(name = "none")]
     None,
@@ -873,6 +884,7 @@ impl ServiceKind {
     /// The `--service=<name>` value, for error messages.
     fn cli_name(self) -> &'static str {
         match self {
+            ServiceKind::Auto => "auto",
             ServiceKind::None => "none",
             ServiceKind::Chan => "chan",
             ServiceKind::Systemd => "systemd",
@@ -953,6 +965,9 @@ fn selected_devserver_action(
 ///   `--service=systemd` is ambiguous and rejected.
 fn plan_devserver(service: ServiceKind, action: Option<DevAction>) -> Result<DevPlan, String> {
     match (service, action) {
+        (ServiceKind::Auto, _) => {
+            unreachable!("resolve_auto replaces Auto with a concrete backend before plan_devserver")
+        }
         (ServiceKind::None, None) => Ok(DevPlan::Foreground(ServiceKind::None)),
         (ServiceKind::None, Some(a)) => Err(format!(
             "--service=none runs in the foreground (Ctrl-C to stop); --{} needs a managed \
@@ -974,6 +989,67 @@ fn plan_devserver(service: ServiceKind, action: Option<DevAction>) -> Result<Dev
         (kind @ (ServiceKind::Systemd | ServiceKind::Launchd), Some(a)) => {
             Ok(DevPlan::Supervised(kind, a))
         }
+    }
+}
+
+/// Resolve `--service=auto` to a concrete backend from the runtime OS string
+/// (`std::env::consts::OS`) and whether an action verb was supplied. Pure + total
+/// so the whole matrix is unit-tested without a real OS.
+///
+/// With NO action verb the devserver always runs in the foreground, so a bare
+/// `chan devserver` works on every host: `None` (unsupervised) on Linux, macOS,
+/// and an unrecognized OS; `Chan` on Windows, which has no OS supervisor to
+/// detach under, so its cross-OS foreground daemon is the auto pick. With an
+/// action verb it selects the OS supervisor: `Systemd` on Linux, `Launchd` on
+/// macOS, `Chan` on Windows. An unrecognized OS has no manager for an action
+/// verb, so that one case errors (the message points at `--service=chan`). The
+/// OS is not threaded into `plan_devserver`, which keeps validating the resolved
+/// `(backend, action)` pair on its own matrix.
+fn resolve_auto(os: &str, has_action: bool) -> Result<ServiceKind, String> {
+    match os {
+        "windows" => Ok(ServiceKind::Chan),
+        "linux" => Ok(if has_action {
+            ServiceKind::Systemd
+        } else {
+            ServiceKind::None
+        }),
+        "macos" => Ok(if has_action {
+            ServiceKind::Launchd
+        } else {
+            ServiceKind::None
+        }),
+        other if has_action => Err(format!(
+            "could not auto-detect a service backend for this OS (\"{other}\"); \
+             use --service=chan for the portable foreground daemon"
+        )),
+        // Unknown OS, no action verb: bare foreground still works everywhere.
+        _ => Ok(ServiceKind::None),
+    }
+}
+
+/// Whether this host is actually running systemd as its init: the `/run/systemd/
+/// system` directory the manager creates. Probed only on the `--service=auto`
+/// path (see [`require_systemd_for_auto`]) so a Linux box without systemd (a
+/// container, a non-systemd distro) falls back to a clear error instead of a raw
+/// `systemctl` spawn failure. An explicit `--service=systemd` skips this.
+fn systemd_available() -> bool {
+    std::path::Path::new("/run/systemd/system").exists()
+}
+
+/// Confirm systemd backs this Linux host before `--service=auto` commits to the
+/// systemd backend it picked. `present` is the [`systemd_available`] probe,
+/// injected so the no-systemd bail is unit-tested. An explicit `--service=systemd`
+/// never reaches here and is left to surface systemctl's own error.
+fn require_systemd_for_auto(present: bool) -> Result<(), String> {
+    if present {
+        Ok(())
+    } else {
+        Err(
+            "--service auto selected systemd for this Linux host, but systemd is not \
+             available (no /run/systemd/system). Use --service=chan for the portable \
+             foreground daemon."
+                .to_string(),
+        )
     }
 }
 
@@ -2282,6 +2358,22 @@ async fn cmd_devserver(
     verbose: bool,
 ) -> Result<()> {
     let action = selected_devserver_action(start, stop, restart, status, join);
+    // Resolve `--service=auto` (the default) to a concrete backend from the
+    // runtime OS, then validate it exactly like an explicit backend. After this
+    // no `Auto` reaches `plan_devserver` or any downstream dispatch.
+    let service = if service == ServiceKind::Auto {
+        let resolved = resolve_auto(std::env::consts::OS, action.is_some())
+            .map_err(|msg| anyhow::anyhow!("chan devserver: {msg}"))?;
+        // Only the auto path probes systemd availability; an explicit
+        // `--service=systemd` is left to fail later with systemctl's own error.
+        if resolved == ServiceKind::Systemd {
+            require_systemd_for_auto(systemd_available())
+                .map_err(|msg| anyhow::anyhow!("chan devserver: {msg}"))?;
+        }
+        resolved
+    } else {
+        service
+    };
     let plan =
         plan_devserver(service, action).map_err(|msg| anyhow::anyhow!("chan devserver: {msg}"))?;
 
@@ -2423,7 +2515,7 @@ async fn run_supervised_devserver(
                 DevAction::Join => join_devserver_under_launchd(addr).await,
             }
         }
-        ServiceKind::None | ServiceKind::Chan => {
+        ServiceKind::Auto | ServiceKind::None | ServiceKind::Chan => {
             unreachable!("plan_devserver only routes systemd/launchd to Supervised")
         }
     }
@@ -2469,6 +2561,7 @@ async fn run_devserver_status(kind: ServiceKind, verbose: bool) -> Result<()> {
             }
         }
         ServiceKind::None => unreachable!("--service=none has no service to report status on"),
+        ServiceKind::Auto => unreachable!("resolve_auto replaces Auto before dispatch"),
     }
 }
 
@@ -2506,7 +2599,7 @@ fn persisted_devserver_addr(kind: ServiceKind) -> Option<SocketAddr> {
         ServiceKind::Chan => devserver_daemon::persisted_devserver_addr_chan(),
         ServiceKind::Systemd => devserver_addr_from_persisted_args(&read_systemd_unit()?),
         ServiceKind::Launchd => devserver_addr_from_persisted_args(&read_launch_agent_plist()?),
-        ServiceKind::None => None,
+        ServiceKind::None | ServiceKind::Auto => None,
     }
 }
 
@@ -5765,16 +5858,23 @@ mod tests {
         .is_err());
     }
 
-    /// `--service` parses to an enum: absent or `=none` => `None` (foreground),
-    /// and each explicit backend by name. A bare `--service` with no value is
-    /// rejected (there is no per-OS auto pick anymore).
+    /// `--service` parses to an enum: absent OR a bare `--service` (no value)
+    /// resolve to `Auto` (the per-OS default), `=auto`/`=none` and each explicit
+    /// backend parse by name. A bare `--service` immediately before an action
+    /// flag (`--service --join`) still resolves to `Auto` and parses the verb.
     #[test]
     fn devserver_service_kind_parse() {
         let kind = |args: &[&str]| match Cli::parse_from(args).command {
             Command::Devserver { service, .. } => service,
             other => panic!("expected Command::Devserver, got {other:?}"),
         };
-        assert_eq!(kind(&["chan", "devserver"]), ServiceKind::None);
+        // Absent, a bare `--service`, and `=auto` all resolve to the auto default.
+        assert_eq!(kind(&["chan", "devserver"]), ServiceKind::Auto);
+        assert_eq!(kind(&["chan", "devserver", "--service"]), ServiceKind::Auto);
+        assert_eq!(
+            kind(&["chan", "devserver", "--service", "auto"]),
+            ServiceKind::Auto
+        );
         assert_eq!(
             kind(&["chan", "devserver", "--service", "none"]),
             ServiceKind::None
@@ -5791,8 +5891,15 @@ mod tests {
             kind(&["chan", "devserver", "--service", "launchd"]),
             ServiceKind::Launchd
         );
-        // A bare --service with no value now errors.
-        assert!(Cli::try_parse_from(["chan", "devserver", "--service"]).is_err());
+        // The space form `--service --join`: `--service` takes no value (the next
+        // token is a flag), so it resolves to Auto and `--join` still parses.
+        match Cli::parse_from(["chan", "devserver", "--service", "--join"]).command {
+            Command::Devserver { service, join, .. } => {
+                assert_eq!(service, ServiceKind::Auto);
+                assert!(join);
+            }
+            other => panic!("expected Command::Devserver, got {other:?}"),
+        }
         match Cli::parse_from([
             "chan",
             "devserver",
@@ -5854,6 +5961,40 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// `--service=auto` resolves per-OS: an action verb picks the OS supervisor
+    /// (systemd/launchd/chan), no action verb runs the foreground server, an
+    /// unrecognized OS still runs bare foreground but errors on an action verb,
+    /// and the Linux systemd pick is gated on systemd actually being the init.
+    #[test]
+    fn resolve_auto_matrix() {
+        use ServiceKind::{Chan, Launchd, Systemd};
+
+        // No action verb: always foreground. `None` (unsupervised) on
+        // Linux/macOS/unknown, `Chan` (the foreground daemon) on Windows.
+        assert_eq!(resolve_auto("linux", false), Ok(ServiceKind::None));
+        assert_eq!(resolve_auto("macos", false), Ok(ServiceKind::None));
+        assert_eq!(resolve_auto("plan9", false), Ok(ServiceKind::None));
+        assert_eq!(resolve_auto("windows", false), Ok(Chan));
+
+        // An action verb selects the OS supervisor.
+        assert_eq!(resolve_auto("linux", true), Ok(Systemd));
+        assert_eq!(resolve_auto("macos", true), Ok(Launchd));
+        assert_eq!(resolve_auto("windows", true), Ok(Chan));
+
+        // An unrecognized OS has no manager for an action verb.
+        let err = resolve_auto("plan9", true).unwrap_err();
+        assert!(err.contains("could not auto-detect a service backend"));
+        assert!(err.contains("plan9"));
+        assert!(err.contains("--service=chan"));
+
+        // The Linux systemd pick is confirmed only when systemd is the init.
+        assert!(require_systemd_for_auto(true).is_ok());
+        let missing = require_systemd_for_auto(false).unwrap_err();
+        assert!(missing.contains("systemd is not available"));
+        assert!(missing.contains("/run/systemd/system"));
+        assert!(missing.contains("--service=chan"));
     }
 
     /// `selected_devserver_action` collapses the five action bools to at most one
