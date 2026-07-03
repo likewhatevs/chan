@@ -24,21 +24,32 @@
 
 .hidden-notice-mark {
   /* A CSS-masked silhouette (not an <img>) so the mark is painted in a theme
-     token and inverts with light/dark — a fixed dark PNG vanished on the dark
-     dialog. Mirrors the launcher header's `.brand .enso`. */
+     token and inverts with light/dark; a fixed dark PNG vanished on the dark
+     dialog. Mirrors the launcher header's `.brand .enso`. Tinted with the
+     triggering window's library accent when one is injected, else the text
+     token. */
   width: 56px;
   height: 56px;
-  background-color: var(--text);
+  background-color: var(--notice-accent, var(--text));
   -webkit-mask: url('chan-mark.png') center / contain no-repeat;
           mask: url('chan-mark.png') center / contain no-repeat;
 }
 
 .hidden-notice-title {
+  /* The window's own name on its own line. Glyph-heavy names (⌂ / ↗︎ prefixes,
+     "Window N" suffixes) can run long, so clamp to two lines with an ellipsis
+     rather than pushing the body or overflowing the fixed-size window. */
   margin: 0;
-  font-size: 17px;
+  font-size: 16px;
   font-weight: 600;
   color: var(--text);
   letter-spacing: -0.01em;
+  max-width: 30ch;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-word;
 }
 
 .hidden-notice-text {
@@ -47,6 +58,12 @@
   line-height: 1.5;
   color: var(--text-secondary);
   max-width: 32ch;
+}
+
+.hidden-notice-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 4px;
 }
 
 .hidden-notice-btn {
@@ -69,8 +86,8 @@
   outline-offset: 1px;
 }
 .hidden-notice-btn.primary {
-  background: var(--brand);
-  border-color: var(--brand);
+  background: var(--notice-accent, var(--brand));
+  border-color: var(--notice-accent, var(--brand));
   color: #fff;
 }
 .hidden-notice-btn.primary:hover {

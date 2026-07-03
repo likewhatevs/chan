@@ -4826,6 +4826,16 @@ fn open_about_window(app: &tauri::AppHandle) -> Result<(), String> {
         return Ok(());
     }
     let version = app.package_info().version.to_string();
+    // Inject the launcher's light/dark choice so the About window follows it
+    // instead of only the OS media query. `null` follows the OS.
+    let theme = app
+        .state::<Arc<AppState>>()
+        .embedded()
+        .and_then(|e| e.local_theme());
+    let init = format!(
+        "window.__CHAN_THEME__ = {};",
+        serde_json::to_string(&theme).unwrap_or_else(|_| "null".to_string())
+    );
     let win = WebviewWindowBuilder::new(
         app,
         "about",
@@ -4838,6 +4848,7 @@ fn open_about_window(app: &tauri::AppHandle) -> Result<(), String> {
     .inner_size(420.0, 426.0)
     .min_inner_size(420.0, 380.0)
     .resizable(false)
+    .initialization_script(&init)
     .build()
     .map_err(|e| format!("building about window: {e}"))?;
     // Off macOS the app menu renders as a per-window GTK menubar, and a

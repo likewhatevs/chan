@@ -495,6 +495,13 @@ impl EmbeddedServer {
         self.host.pane_color(library_id)
     }
 
+    /// The launcher's light/dark choice from the local theme store, or `None`
+    /// to follow the OS. Reads the same store the launcher's `local-theme`
+    /// route writes; used to theme the desktop's own notice windows.
+    pub fn local_theme(&self) -> Option<String> {
+        self.host.local_theme_store().and_then(|store| store.get())
+    }
+
     /// Mint a window into the local library registry and return its assembled
     /// record. The minted record fires the aggregate change signal, so the
     /// window watcher's feed surfaces it and opens its native window — the

@@ -1152,7 +1152,7 @@ fn build_workspace_window(app: &AppHandle, spec: WindowSpec<'_>) -> Result<(), S
                             crate::persist_window_hidden(&state, &label_for_close, true);
                             crate::rebuild_window_menu(&app_for_close);
                             if !silent_hide {
-                                show_bury_notice(&app_for_close, &title);
+                                show_bury_notice(&app_for_close, &title, &label_for_close);
                             }
                             return;
                         }
@@ -1202,7 +1202,7 @@ fn build_workspace_window(app: &AppHandle, spec: WindowSpec<'_>) -> Result<(), S
                             crate::persist_window_hidden(&state, &label_for_close, true);
                             crate::rebuild_window_menu(&app_for_close);
                             if !silent_hide {
-                                show_bury_notice(&app_for_close, &title);
+                                show_bury_notice(&app_for_close, &title, &label_for_close);
                             }
                             return;
                         }
@@ -1265,7 +1265,7 @@ fn build_workspace_window(app: &AppHandle, spec: WindowSpec<'_>) -> Result<(), S
                         crate::persist_window_hidden(&state, &label_for_close, true);
                         crate::rebuild_window_menu(&app_for_close);
                         if !silent_hide {
-                            show_bury_notice(&app_for_close, &title);
+                            show_bury_notice(&app_for_close, &title, &label_for_close);
                         }
                     }
                     // Single cleanup point for EVERY destroy path: the
@@ -1431,21 +1431,54 @@ fn workspace_window_target_url(
 /// Custom centered notice shown when the OS close (red) button buries a
 /// window: the teaching surface for the hide-not-close behaviour (smoke tests
 /// assert it appears). A small fixed-size Tauri webview window
-/// (`window-hidden.html`) centered on screen, with the app mark, "Window
-/// Hidden" title, body, and OK button all centered — not a native left-aligned
-/// alert. The launcher status-dot hide suppresses it (its `silent_hide` flag);
+/// (`window-hidden.html`) centered on screen, with the app mark, the window
+/// name on its own line, the body sentence, and an OK button all centered, not
+/// a native left-aligned alert. The launcher status-dot hide suppresses it (its
+/// `silent_hide` flag);
 /// that dot is its own explicit hide gesture and needs no teaching. A fresh
 /// `window-hidden-<seq>` label per call so rapid buries each get their own
 /// notice rather than a stale single window. Built on a later main-loop turn:
 /// the close handler that calls this is mid-event on the main thread, so the
 /// window creation is deferred just as the native notice it replaces was.
-fn show_bury_notice(app: &AppHandle, title: &str) {
-    let body = format!("\"{title}\" was hidden, not closed. Reopen it from the Window menu.");
-    // Hand the formatted body to the page as a global it reads on load, so the
+/// The triggering window's library id, for the notice accent. `local::` and a
+/// standalone `terminal-` window are the local library; a `lib-<hex>::` window
+/// belongs to that devserver. Other labels (control terminals, outbound
+/// webviews) fall back to no accent.
+fn library_id_for_label(label: &str) -> Option<String> {
+    if label.starts_with("local::") || label.starts_with("terminal-") {
+        return Some("local".to_string());
+    }
+    if label.starts_with("lib-") {
+        if let Some((prefix, _)) = label.split_once("::") {
+            return Some(prefix.to_string());
+        }
+    }
+    None
+}
+
+fn show_bury_notice(app: &AppHandle, title: &str, label: &str) {
+    // The notice follows the launcher's light/dark choice (WP3 local theme) and
+    // the triggering window's library accent: local windows and standalone
+    // terminals get the launcher colour, a devserver window its devserver's.
+    let state = app.state::<Arc<AppState>>();
+    let embedded = state.embedded();
+    let accent =
+        library_id_for_label(label).and_then(|id| embedded.and_then(|e| e.pane_color(&id)));
+    let theme = embedded.and_then(|e| e.local_theme());
+    let payload = serde_json::json!({
+        // The window's own name on its own line; the sentence sits below it.
+        "title": title,
+        "body": "This window is hidden, not closed. Reopen it from the Window menu.",
+        "theme": theme,
+        "accent": accent,
+        "buttons": [{ "label": "OK", "primary": true }],
+        "resultId": serde_json::Value::Null,
+    });
+    // Hand the payload to the page as a global it reads on load, so the
     // arbitrary window title never has to ride a query string.
     let init = format!(
-        "window.__CHAN_NOTICE_BODY__ = {};",
-        serde_json::to_string(&body).unwrap_or_else(|_| "\"\"".to_string())
+        "window.__CHAN_NOTICE__ = {};",
+        serde_json::to_string(&payload).unwrap_or_else(|_| "{}".to_string())
     );
     let app_for_build = app.clone();
     let scheduled = app.run_on_main_thread(move || {
