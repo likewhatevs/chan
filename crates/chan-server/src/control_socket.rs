@@ -1687,16 +1687,24 @@ async fn handle_survey(
             return ControlResponse::Error { message };
         }
     }
-    let close_surveys = |reason| {
-        send_survey_close_commands(&windows, &survey_id, tab_name, reason, events_tx);
-    };
     // Block until C's reply route fires the oneshot, the timeout window
     // elapses, or the sender is dropped. Mirrors the `cs pane` round-trip
     // (PANE_REPLY_TIMEOUT), but the window is the caller's `--timeout` (the
     // host needs real time to read and answer, unlike pane's instant reply).
     match tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), rx).await {
-        Ok(Ok(reply)) => {
-            close_surveys(SurveyCloseReason::AnsweredElsewhere);
+        Ok(Ok((reply, answered_by))) => {
+            // Close the STALE overlay in the other target windows, but NOT the
+            // one that answered: it already dismissed its overlay via the
+            // reply, so an `answered_elsewhere` close there only races that
+            // local clear (a spurious saved-draft dialog + composer hide).
+            send_survey_close_commands(
+                &windows,
+                answered_by.as_deref(),
+                &survey_id,
+                tab_name,
+                SurveyCloseReason::AnsweredElsewhere,
+                events_tx,
+            );
             ControlResponse::Ok {
                 message: format_survey_reply(&reply),
             }
@@ -1706,7 +1714,14 @@ async fn handle_survey(
         // register/await ever diverge.
         Ok(Err(_)) => {
             survey_bus.cancel(&survey_id);
-            close_surveys(SurveyCloseReason::Cancelled);
+            send_survey_close_commands(
+                &windows,
+                None,
+                &survey_id,
+                tab_name,
+                SurveyCloseReason::Cancelled,
+                events_tx,
+            );
             ControlResponse::Error {
                 message: "survey cancelled before a reply".into(),
             }
@@ -1716,7 +1731,14 @@ async fn handle_survey(
         // 124). A late host answer then finds the id gone and no-ops.
         Err(_elapsed) => {
             survey_bus.cancel(&survey_id);
-            close_surveys(SurveyCloseReason::TimedOut);
+            send_survey_close_commands(
+                &windows,
+                None,
+                &survey_id,
+                tab_name,
+                SurveyCloseReason::TimedOut,
+                events_tx,
+            );
             ControlResponse::Timeout {
                 message: format!("no reply within {timeout_secs}s"),
             }
@@ -1726,12 +1748,17 @@ async fn handle_survey(
 
 fn send_survey_close_commands(
     windows: &[String],
+    exclude: Option<&str>,
     survey_id: &str,
     tab_name: Option<&str>,
     reason: SurveyCloseReason,
     events_tx: &broadcast::Sender<String>,
 ) {
     for window_id in windows {
+        // Skip the answering window: it closed its own overlay via the reply.
+        if Some(window_id.as_str()) == exclude {
+            continue;
+        }
         let _ = send_window_command(
             window_id,
             WindowCommand::CloseSurvey {
@@ -4549,6 +4576,100 @@ is_lead = false
         assert!(
             closes.iter().all(|frame| frame.get("tabName").is_none()),
             "group survey close stays window-wide"
+        );
+    }
+
+    #[tokio::test]
+    async fn answered_survey_excludes_the_answering_window_from_close_fanout() {
+        // Regression (S-A): a group survey open in win-a + win-b, answered in
+        // win-a. The stale-overlay close must reach win-b ONLY. Fanning
+        // `answered_elsewhere` back to the answerer races its own reply-clear
+        // and pops a spurious saved-draft dialog + hides its composer there.
+        let (_root, registry) = empty_registry();
+        for (tab_name, window_id) in [("@@A", "win-a"), ("@@B", "win-b")] {
+            registry
+                .create(CreateOptions {
+                    size: PtySize {
+                        cols: 80,
+                        rows: 24,
+                        pixel_width: 0,
+                        pixel_height: 0,
+                    },
+                    tab_name: Some(tab_name.into()),
+                    tab_group: Some("alpha".into()),
+                    window_id: Some(window_id.into()),
+                    mcp_env: true,
+                    cwd: None,
+                    command: None,
+                    env: Default::default(),
+                })
+                .expect("spawn survey target");
+        }
+        let registry = Arc::new(registry);
+        // Anchor the frame type: unlike the direct-await tests, the join! below
+        // defers the inference that would otherwise fix it to String.
+        let events_tx: broadcast::Sender<String> = broadcast::channel(16).0;
+        let mut rx = events_tx.subscribe();
+        let survey_bus = Arc::new(crate::survey::SurveyBus::new());
+
+        // `handle_survey` blocks awaiting the reply, so answer it concurrently
+        // on the same task (no spawn, so the borrows stay simple).
+        let answer = async {
+            // Recover the server-minted id from the first open_survey frame.
+            let survey_id = loop {
+                let raw = rx.recv().await.expect("open frame");
+                let frame: serde_json::Value = serde_json::from_str(&raw).unwrap();
+                if frame["command"] == "open_survey" {
+                    break frame["survey"]["surveyId"].as_str().unwrap().to_string();
+                }
+            };
+            assert!(survey_bus.complete_survey(
+                &survey_id,
+                SurveyReply::Option {
+                    survey_id: survey_id.clone(),
+                    option_index: 0,
+                    option_label: "a".into(),
+                },
+                Some("win-a".into()),
+            ));
+        };
+        let (response, ()) = tokio::join!(
+            handle_survey(
+                SurveySpec {
+                    survey_id: String::new(),
+                    title: None,
+                    body_markdown: "pick one".into(),
+                    options: vec!["a".into()],
+                    followup: None,
+                },
+                None,
+                Some("alpha"),
+                30,
+                &events_tx,
+                &survey_bus,
+                Some(&registry),
+            ),
+            answer,
+        );
+
+        assert!(matches!(response, ControlResponse::Ok { .. }));
+        let mut closes = Vec::new();
+        while let Ok(raw) = rx.try_recv() {
+            let frame: serde_json::Value = serde_json::from_str(&raw).unwrap();
+            if frame["command"] == "close_survey" {
+                closes.push(frame);
+            }
+        }
+        assert_eq!(
+            closes.len(),
+            1,
+            "the answered close reaches only the non-answering window"
+        );
+        assert_eq!(closes[0]["window_id"], "win-b");
+        assert_eq!(closes[0]["reason"], "answered_elsewhere");
+        assert!(
+            closes.iter().all(|frame| frame["window_id"] != "win-a"),
+            "the answering window must be excluded from the close fan-out"
         );
     }
 

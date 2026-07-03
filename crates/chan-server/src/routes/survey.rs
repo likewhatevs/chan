@@ -32,6 +32,12 @@ use crate::state::AppState;
 /// from [`chan_shell::SurveyReply`]: for a followup the SPA sends the echoed
 /// context (it cannot know the minted path), and this route synthesizes the
 /// path before completing the bus oneshot.
+///
+/// `windowId` is the answering window's id (the same id the SPA matches
+/// `window_command` frames against). The server excludes that window from the
+/// stale-overlay close fan-out so a window answering its own survey does not
+/// receive an `answered_elsewhere` close racing its own local clear. Optional:
+/// a reply without it just fans the close to every target as before.
 #[derive(Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum SurveyReplyRequest {
@@ -40,6 +46,8 @@ pub enum SurveyReplyRequest {
         survey_id: String,
         option_index: u32,
         option_label: String,
+        #[serde(default)]
+        window_id: Option<String>,
     },
     /// The user hit [F]. `followup` carries the team context when the survey
     /// had it (the route creates the file); Part C made [F] standard on every
@@ -53,11 +61,28 @@ pub enum SurveyReplyRequest {
         #[serde(default)]
         title: Option<String>,
         body_markdown: String,
+        #[serde(default)]
+        window_id: Option<String>,
     },
     /// The user hit Dismiss (Part C): carries only the survey id (no option,
     /// no file), so the asking agent can tell a dismiss from an answer.
     #[serde(rename = "dismissed", rename_all = "camelCase")]
-    Dismissed { survey_id: String },
+    Dismissed {
+        survey_id: String,
+        #[serde(default)]
+        window_id: Option<String>,
+    },
+}
+
+impl SurveyReplyRequest {
+    /// The answering window's id, when the SPA reported it.
+    fn window_id(&self) -> Option<&str> {
+        match self {
+            Self::Option { window_id, .. }
+            | Self::Followup { window_id, .. }
+            | Self::Dismissed { window_id, .. } => window_id.as_deref(),
+        }
+    }
 }
 
 /// Team context for a `[F]` followup, originating with the surveying agent
@@ -78,11 +103,15 @@ pub async fn api_survey_reply(
     State(state): State<Arc<AppState>>,
     Json(req): Json<SurveyReplyRequest>,
 ) -> Response {
+    // The answering window, excluded from the stale-overlay close fan-out
+    // (read before the match consumes `req`).
+    let answered_by = req.window_id().map(str::to_string);
     let reply = match req {
         SurveyReplyRequest::Option {
             survey_id,
             option_index,
             option_label,
+            ..
         } => SurveyReply::Option {
             survey_id,
             option_index,
@@ -93,6 +122,7 @@ pub async fn api_survey_reply(
             followup: Some(followup),
             title,
             body_markdown,
+            ..
         } => {
             // Workspace I/O is blocking; create the file off the async runtime.
             let workspace = state.workspace();
@@ -127,11 +157,14 @@ pub async fn api_survey_reply(
             survey_id,
             followup_path: None,
         },
-        SurveyReplyRequest::Dismissed { survey_id } => SurveyReply::Dismissed { survey_id },
+        SurveyReplyRequest::Dismissed { survey_id, .. } => SurveyReply::Dismissed { survey_id },
     };
 
     let survey_id = reply.survey_id().to_string();
-    if state.survey_bus.complete_survey(&survey_id, reply) {
+    if state
+        .survey_bus
+        .complete_survey(&survey_id, reply, answered_by)
+    {
         Json(serde_json::json!({})).into_response()
     } else {
         err(
@@ -408,13 +441,27 @@ mod tests {
                 survey_id,
                 option_index,
                 option_label,
+                window_id,
             } => {
                 assert_eq!(survey_id, "survey-3");
                 assert_eq!(option_index, 2);
                 assert_eq!(option_label, "Yes");
+                // Absent windowId defaults to None (fan the close to all).
+                assert!(window_id.is_none());
             }
             _ => panic!("expected option variant"),
         }
+    }
+
+    #[test]
+    fn reply_request_carries_window_id() {
+        // The SPA reports the answering window so the server can exclude it
+        // from the stale-overlay close fan-out. camelCase `windowId` on the
+        // wire; a green compile alone would not catch a snake_case drift.
+        let json = r#"{"surveyId":"survey-7","kind":"option","optionIndex":0,
+            "optionLabel":"a","windowId":"win-a"}"#;
+        let req: SurveyReplyRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.window_id(), Some("win-a"));
     }
 
     #[test]
@@ -446,7 +493,7 @@ mod tests {
         let json = r#"{"surveyId":"survey-4","kind":"dismissed"}"#;
         let req: SurveyReplyRequest = serde_json::from_str(json).unwrap();
         match req {
-            SurveyReplyRequest::Dismissed { survey_id } => assert_eq!(survey_id, "survey-4"),
+            SurveyReplyRequest::Dismissed { survey_id, .. } => assert_eq!(survey_id, "survey-4"),
             _ => panic!("expected dismissed variant"),
         }
     }
@@ -463,6 +510,7 @@ mod tests {
                 followup,
                 title,
                 body_markdown,
+                ..
             } => {
                 assert_eq!(survey_id, "survey-9");
                 let followup = followup.expect("context present");

@@ -20,8 +20,16 @@ use tokio::sync::oneshot;
 /// token-bearing caller forge an answer to a survey it never saw.
 #[derive(Default)]
 pub struct SurveyBus {
-    pending: Mutex<HashMap<String, oneshot::Sender<SurveyReply>>>,
+    pending: Mutex<HashMap<String, oneshot::Sender<SurveyReplyEnvelope>>>,
 }
+
+/// What a completed survey delivers to the blocked control handler: the reply
+/// plus the id of the window that answered (when the SPA reports it), so the
+/// handler can exclude that window from the stale-overlay close fan-out. A
+/// window answering its own survey already dismissed its overlay locally, so
+/// re-closing it there only races that clear. `None` for the window id keeps
+/// the pre-report behavior (fan the close to every target).
+pub type SurveyReplyEnvelope = (SurveyReply, Option<String>);
 
 impl SurveyBus {
     pub fn new() -> Self {
@@ -32,7 +40,7 @@ impl SurveyBus {
     /// plus the receiver the control handler awaits. The handler stamps the
     /// id onto the outgoing [`chan_shell::SurveySpec`] so the SPA echoes it
     /// back in its reply.
-    pub fn register(&self) -> (String, oneshot::Receiver<SurveyReply>) {
+    pub fn register(&self) -> (String, oneshot::Receiver<SurveyReplyEnvelope>) {
         let survey_id = format!("survey-{}", crate::auth::random_token());
         let (tx, rx) = oneshot::channel();
         self.pending
@@ -53,13 +61,17 @@ impl SurveyBus {
     }
 
     /// Complete a parked survey: take its sender out of the map and fire the
-    /// oneshot. Returns `false` when no survey with that id is parked (it was
-    /// already answered, or the id is stale), which the reply route maps to a
-    /// 404. C's `POST /api/survey/reply` is the only caller, so this is dead
-    /// on D's side until that route lands (drop the allow then); the unit
-    /// tests below still exercise it.
-    #[allow(dead_code)]
-    pub fn complete_survey(&self, survey_id: &str, reply: SurveyReply) -> bool {
+    /// oneshot with the reply and `answered_by` (the answering window's id, or
+    /// `None` when the SPA does not report it). Returns `false` when no survey
+    /// with that id is parked (it was already answered, or the id is stale),
+    /// which the reply route maps to a 404. C's `POST /api/survey/reply` is the
+    /// only caller.
+    pub fn complete_survey(
+        &self,
+        survey_id: &str,
+        reply: SurveyReply,
+        answered_by: Option<String>,
+    ) -> bool {
         let sender = self
             .pending
             .lock()
@@ -69,7 +81,7 @@ impl SurveyBus {
             // `send` fails only if the receiver was dropped (the CLI
             // disconnected); the survey is gone either way, so report it
             // delivered to keep the route idempotent from C's side.
-            Some(tx) => tx.send(reply).is_ok(),
+            Some(tx) => tx.send((reply, answered_by)).is_ok(),
             None => false,
         }
     }
@@ -90,9 +102,14 @@ mod tests {
                 option_index: 1,
                 option_label: "Yes".into(),
             },
+            Some("win-a".into()),
         ));
+        // The reply and the answering window round-trip to the handler.
         match rx.await.expect("reply delivered") {
-            SurveyReply::Option { option_label, .. } => assert_eq!(option_label, "Yes"),
+            (SurveyReply::Option { option_label, .. }, answered_by) => {
+                assert_eq!(option_label, "Yes");
+                assert_eq!(answered_by.as_deref(), Some("win-a"));
+            }
             other => panic!("unexpected reply: {other:?}"),
         }
     }
@@ -106,6 +123,7 @@ mod tests {
                 survey_id: "survey-nope".into(),
                 followup_path: Some("team/followups/x.md".into()),
             },
+            None,
         ));
     }
 
@@ -131,6 +149,7 @@ mod tests {
                 option_index: 0,
                 option_label: "x".into(),
             },
+            None,
         ));
         assert!(rx.await.is_err());
     }
