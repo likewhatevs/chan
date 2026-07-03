@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [v0.63.0]
+## [v0.63.0] - 2026-07-03
 
 The Rich Prompt composer moves onto the main editor, a devserver whose control script dies keeps a readable terminal and reconnects on demand, and a prerelease tag can no longer push a release candidate onto GA installs.
 
@@ -15,13 +15,17 @@ The Rich Prompt composer moves onto the main editor, a devserver whose control s
 ### Changed
 
 - **The Rich Prompt composer is the main editor.** Cmd+Shift+P now composes in the same WYSIWYG editor as the rest of chan, so a prompt gets the full editor: inline image rendering, list and markup editing, and the editor's keymap. A pasted image renders inline while you compose and is delivered to the agent as an absolute on-disk path, so the agent reads it regardless of its working directory.
-- **A dead control script leaves a readable terminal instead of a vanished connection.** When a devserver's control script exits (the remote drops, the script returns, Ctrl+C), chan marks the connection down but keeps the control terminal open at "process exited" so you can read why it died; the launcher row flashes for attention and the workspace windows show a reconnecting overlay. The devserver stays un-reconnectable until you close that control terminal (read the reason, then Ctrl+D / Cmd+W), after which it is ready to connect again. Reconnecting never happens on its own; use the launcher's Connect or the overlay's Reconnect.
+- **A dead control script leaves a readable terminal instead of a vanished connection.** When a devserver's control script exits (the remote drops, the script returns, Ctrl+C), chan marks the connection down but keeps the control terminal open at "process exited" so you can read why it died; the devserver's launcher identity dot turns red and its control row keeps a slow-flashing eye for attention, the launcher stops offering that devserver's workspace and window rows so a click cannot land on a dead connection, and the workspace windows show a reconnecting overlay. The devserver stays un-reconnectable until you close that control terminal (read the reason, then Ctrl+D / Cmd+W), after which it is ready to connect again. Reconnecting never happens on its own; use the launcher's Connect or the overlay's Reconnect.
 - **A survey resolved in one window clears it in the others.** Answering, cancelling, or letting a survey time out now closes it in the other windows of its tab group, and an unrelated Rich Prompt composer open at the time is left untouched.
+- **Splitting a pane has a direct keyboard shortcut on the web.** Split right is Ctrl+Alt+/ and split bottom is Ctrl+Alt+? in the browser launcher (chan-desktop keeps Cmd+/ and Cmd+Shift+/), so a web session splits panes from the keyboard instead of only through Hybrid Nav.
+- **An empty pane shows a dotted backdrop.** The welcome mark and spawn buttons in an empty pane now sit over a subtle dotted surface that follows the light and dark theme, draws at a low frame rate, pauses when the window is hidden, and renders a static frame under reduced motion.
 - **A prerelease tag no longer updates the GA self-upgrade pointer.** Publishing a prerelease (a `-rc` tag) ships its build as GitHub Release assets but leaves `/dl/cli/latest.json` and the desktop-updater manifest on the current GA version, so a release candidate cannot auto-upgrade GA installs; only a GA tag moves the pointer.
 
 ### Fixed
 
 - **The launcher's Focus and show/hide act on a control terminal directly.** They resolve a control terminal's native window by its own label instead of routing through a composed id that could silently no-op, so the buttons act or report an error rather than doing nothing.
+- **List Tab and Shift-Tab step between real indent columns.** Tab on a list line nested it by a blind two spaces, which under an ordered marker landed in a dead band where the item parsed as a lazy paragraph and lost its list rendering until a second press. Tab now nests onto the previous sibling's content column and Shift-Tab pops to the nearest shallower list line, one level per press, across every marker family and multi-line selections, and one press heals a line already stuck in the dead band.
+- **A control script that dies mid-connect fails fast with its own reason.** The launcher's Connect no longer spins for the full come-up budget and then reports a misleading "did not come up in time" when the control script exits during connect; the wait aborts within one backoff of the script exiting, and the control terminal stays at "process exited" with the real reason.
 
 ## [v0.62.0] - 2026-07-03
 
