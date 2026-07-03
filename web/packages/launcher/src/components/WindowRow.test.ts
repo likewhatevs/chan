@@ -8,7 +8,21 @@ import { describe, it, expect, afterEach, vi } from "vitest";
 import { mount, unmount, flushSync } from "svelte";
 import WindowRow from "./WindowRow.svelte";
 import { controlAttention, clearAllControlAttention } from "../state/controlAttention.svelte";
-import type { WindowRecord } from "../api/library";
+import { library } from "../state/library.svelte";
+import type { DevserverEntry, WindowRecord } from "../api/library";
+
+function ds(status: DevserverEntry["status"], library_id: string): DevserverEntry {
+  return {
+    id: "d1",
+    host: "h",
+    port: 1,
+    label: "",
+    script: "",
+    has_token: false,
+    library_id,
+    status,
+  } as unknown as DevserverEntry;
+}
 
 vi.mock("../api/backend", async () => {
   const { mockApi } = await import("../api/mock");
@@ -48,6 +62,7 @@ afterEach(() => {
   target = null;
   app = null;
   clearAllControlAttention();
+  library.devservers = [];
 });
 
 describe("WindowRow", () => {
@@ -90,12 +105,15 @@ describe("WindowRow", () => {
     expect(el.querySelector(".row-glyph.control")).not.toBeNull();
   });
 
-  it("flashes a DEAD control terminal (connected===false) with 'connection closed'", () => {
-    // A control script died: the terminal is kept alive at "process exited"
-    // (connected===false). No attention EVENT fires for this (that stays for
-    // connected-not-responding); the flash is FEED-driven off `connected`.
+  it("labels the flash 'connection closed' when the owning devserver is DISCONNECTED", () => {
+    // A control script died: the devserver is disconnected but its control
+    // terminal is kept alive at "process exited". The control record's own
+    // `connected` stays true (/ws-socket presence), so the label keys on the
+    // DEVSERVER's status. The desktop emits attention for this case too.
+    library.devservers = [ds("disconnected", "lib-x")];
+    controlAttention.libs["lib-x"] = true;
     const el = render(
-      win({ window_id: "c", library_id: "lib-x", control: true, connected: false }),
+      win({ window_id: "c", library_id: "lib-x", control: true, connected: true }),
       { icon: true },
     );
     expect(el.querySelector("button.icon-btn.attention")).not.toBeNull();
@@ -103,7 +121,19 @@ describe("WindowRow", () => {
     expect(el.textContent).not.toContain("not responding...");
   });
 
-  it("does NOT flash a healthy control terminal (connected===true, no attention)", () => {
+  it("labels the flash 'not responding...' when the owning devserver is CONNECTED", () => {
+    library.devservers = [ds("connected", "lib-x")];
+    controlAttention.libs["lib-x"] = true;
+    const el = render(
+      win({ window_id: "c", library_id: "lib-x", control: true, connected: true }),
+      { icon: true },
+    );
+    expect(el.querySelector("button.icon-btn.attention")).not.toBeNull();
+    expect(el.textContent).toContain("not responding...");
+    expect(el.textContent).not.toContain("connection closed");
+  });
+
+  it("does NOT flash a healthy control terminal with no attention event", () => {
     const el = render(
       win({ window_id: "c", library_id: "lib-x", control: true, connected: true }),
       { icon: true },

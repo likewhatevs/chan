@@ -16,7 +16,7 @@
   // control terminal awaiting attention, an amber "not responding..." pill; the
   // machine tree passes it for every row.
   import { AppWindow, ExternalLink, Eye, EyeOff, Focus, SquareTerminal } from "lucide-svelte";
-  import { focusWindow, toggleWindow, reportError, clearError } from "../state/library.svelte";
+  import { focusWindow, toggleWindow, reportError, clearError, library } from "../state/library.svelte";
   import { windowRowLabel } from "../lib/windowLabel";
   import { hasControlAttention, clearControlAttention } from "../state/controlAttention.svelte";
   import { hasWindowAttention } from "../state/windowAttention.svelte";
@@ -31,22 +31,23 @@
   }
   let { w, icon = false }: Props = $props();
 
-  // A control terminal flags its row for attention in two feed-driven states,
-  // slow-flashing its eye yellow: its devserver stopped responding while the
-  // terminal is still alive (event-driven `hasControlAttention`, connected), or
-  // its script has died and the terminal sits at "process exited"
-  // (`connected === false`, feed-driven, no event). The flash clears when the
-  // user acts / the desktop reports recovery / the dead terminal is closed and
-  // its record leaves the feed.
+  // A control terminal whose devserver needs attention slow-flashes its eye
+  // yellow until the user acts on the window or the desktop reports recovery.
+  // The desktop emits `devserver-control-attention` for both a connected
+  // devserver that stopped responding AND a disconnected one whose control
+  // script died (kept open at "process exited"), so the flash is event-driven.
   function needsAttention(rec: WindowRecord): boolean {
-    return rec.control && (hasControlAttention(rec.library_id) || !rec.connected);
+    return rec.control && hasControlAttention(rec.library_id);
   }
 
-  // The attention cue: a dead control terminal ("process exited") reads
-  // "connection closed"; a still-alive-but-not-responding one reads "not
-  // responding...". Keyed on `connected` so the two feed states are distinct.
+  // The attention cue's wording keys on the owning devserver's connection
+  // STATUS (not the control record's `connected`, which tracks /ws-socket
+  // presence and stays true for a dead-but-open terminal): a DISCONNECTED
+  // devserver's control terminal died ("connection closed - open the terminal");
+  // a still-connected one is merely "not responding...".
   function attentionPill(rec: WindowRecord): string {
-    return rec.connected ? "not responding..." : "connection closed";
+    const ds = library.devservers.find((d) => d.library_id === rec.library_id);
+    return ds && ds.status !== "connected" ? "connection closed" : "not responding...";
   }
 
   // The user acting on the window (focus or show/hide) acknowledges the
