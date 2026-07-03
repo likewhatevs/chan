@@ -762,7 +762,14 @@ jobs:
 
   pages-artifact:
     name: build Pages artifact with /dl metadata
-    if: needs.context.outputs.publish == 'true'
+    # GA tags only. A Pages deploy replaces the WHOLE published site, and
+    # generate-release-metadata.mjs writes cli/desktop latest.json (the CLI
+    # self-upgrade + desktop-updater pointers) plus releases.json from the
+    # published version. A prerelease (v*-rcN, prerelease == 'true') would
+    # move those to the rc and every GA install would self-upgrade onto it, so
+    # the /dl metadata + Pages deploy stay GA-only. Mirrors the docker `latest`
+    # GA-only gate below; rc builds still ship as GitHub Release assets.
+    if: needs.context.outputs.publish == 'true' && needs.context.outputs.prerelease == 'false'
     needs:
       - context
       - publish-release
@@ -798,7 +805,9 @@ jobs:
 
   deploy-pages:
     name: deploy Pages
-    if: needs.context.outputs.publish == 'true'
+    # GA-only, matching pages-artifact: never redeploy the site for a
+    # prerelease (a full-site replace would move /dl latest.json onto the rc).
+    if: needs.context.outputs.publish == 'true' && needs.context.outputs.prerelease == 'false'
     needs:
       - context
       - pages-artifact
