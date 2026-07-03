@@ -184,14 +184,19 @@
   const dsSpinning = (ds: DevserverEntry): boolean =>
     ds.status === "connecting" || isPending(dsKey(ds.id));
 
-  // Terminated devserver connections must not keep control rows mounted. A
-  // not-responding devserver remains `connected`; a fresh dial can show the
-  // control row while `connecting`.
+  // A machine shows its content block while connected, while a fresh dial is
+  // `connecting`, or while it still owns a control terminal. The last clause keeps
+  // a disconnected devserver's DEAD "process exited" control row mounted (the
+  // script died, connection torn down, control terminal kept alive) so it can
+  // flash for attention and the user can open it to read the death reason; the row
+  // clears once the control terminal is closed and its record leaves the feed.
   function hasContent(node: MachineNode): boolean {
     return (
       node.kind === "local" ||
       (node.devserver !== null &&
-        (connected(node.devserver) || node.devserver.status === "connecting"))
+        (connected(node.devserver) ||
+          node.devserver.status === "connecting" ||
+          node.control.length > 0))
     );
   }
 

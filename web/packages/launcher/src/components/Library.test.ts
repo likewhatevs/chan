@@ -210,7 +210,12 @@ describe("Library: devserver groups", () => {
     expect(byAria("Disconnect prod")).toBeTruthy();
   });
 
-  it("does not render a disconnected devserver's stale control row even with attention", () => {
+  it("renders a disconnected devserver's DEAD control row so it can flash and be reopened", () => {
+    // A control script died: the devserver is marked disconnected but its control
+    // terminal stays ALIVE in the feed sitting at "process exited". The launcher
+    // must keep that row mounted (flashing) so the user can open it to read the
+    // death reason; the row only clears once the control terminal is closed and
+    // leaves the feed (covered by the reaped-control test below).
     const ds = library.devservers.find((d) => d.id === "ds-1")!;
     library.devservers = library.devservers.map(
       (d): DevserverEntry => (d.id === "ds-1" ? { ...d, status: "disconnected" } : d),
@@ -222,10 +227,9 @@ describe("Library: devserver groups", () => {
     const machines = [...target!.querySelectorAll("section.machine")];
     const prod = machines.find((m) => m.textContent?.includes("box.example.com:8787"));
     expect(prod).toBeTruthy();
-    expect(prod!.textContent).not.toContain("Control terminal");
-    expect(prod!.textContent).not.toContain("not responding...");
-    expect(prod!.textContent).toContain("Not connected");
-    expect(prod!.querySelector("button.icon-btn.attention")).toBeNull();
+    expect(prod!.textContent).toContain("Control terminal");
+    expect(prod!.textContent).not.toContain("Not connected");
+    expect(prod!.querySelector("button.icon-btn.attention")).not.toBeNull();
   });
 
   it("renders a connecting devserver's control row while it is dialing", () => {
