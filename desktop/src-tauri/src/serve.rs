@@ -1168,7 +1168,17 @@ fn build_workspace_window(app: &AppHandle, spec: WindowSpec<'_>) -> Result<(), S
                             return;
                         }
                         // The explicit hide gesture buries directly, no prompt.
+                        // HOLD the close first: the hide-in-place families (a
+                        // connected `control-terminal-`, a standalone `terminal-`,
+                        // an `outbound-` webview) bury via `window.hide()` and need
+                        // the webview ALIVE to reopen. An un-prevented close
+                        // proceeds to destroy it the moment this handler returns,
+                        // and the launcher eye's `/open` then 409s on a window
+                        // that no longer exists. The watcher families bury through
+                        // their view's reconcile, which closes the native window
+                        // itself, so holding the OS close is correct for them too.
                         if silent_hide {
+                            api.prevent_close();
                             bury_window_now(
                                 &app_for_close,
                                 &state,
@@ -1196,18 +1206,32 @@ fn build_workspace_window(app: &AppHandle, spec: WindowSpec<'_>) -> Result<(), S
                                 .map(|e| e.terminal_window_has_live_shells(&label_for_close))
                                 .unwrap_or(false)
                         } else if let Some(id) = label_for_close.strip_prefix("control-terminal-") {
-                            // A control terminal closed (red button) WHILE STILL
-                            // CONNECTING must NOT prompt or bury: a hidden control
-                            // window leaves the connect script running and strands
-                            // the launcher on "Connecting..." (the connect flow's
-                            // scrape loop keeps polling a window it can still see).
-                            // Destroy instead so the scrape loop sees it gone,
-                            // aborts, and surveys (abandon/edit/retry). Once
-                            // connected, the overlay is fine — the PTY is the live
-                            // connection endpoint and stays warm, hidden,
-                            // reopenable; only an actual Close (^W / script exit)
-                            // takes the connection down via request_close_window.
-                            state.devservers.is_connected(id)
+                            // A control terminal KEPT at "process exited" (its
+                            // devserver's reconnect is blocked on it): the red
+                            // button IS the explicit close that unblocks
+                            // reconnect. Run the same cleanup as Cmd+W / the SPA
+                            // Close (reaps the row + tenant, clears the block),
+                            // then let the real close proceed. Without this the
+                            // destroy leaves the block set with no terminal left
+                            // to close, and connect stays walled off.
+                            if state.control_terminal_dead.lock().unwrap().contains(id) {
+                                crate::close_devserver_control_terminal(&app_for_close, &state, id);
+                                false
+                            } else {
+                                // Closed (red button) WHILE STILL CONNECTING: must
+                                // NOT prompt or bury. A hidden control window
+                                // leaves the connect script running and strands
+                                // the launcher on "Connecting..." (the connect
+                                // flow's scrape loop keeps polling a window it can
+                                // still see). Destroy instead so the scrape loop
+                                // sees it gone, aborts, and surveys
+                                // (abandon/edit/retry). Once connected, the
+                                // overlay is fine: the PTY is the live connection
+                                // endpoint and stays warm, hidden, reopenable;
+                                // only an actual Close (^W / script exit) takes
+                                // the connection down via request_close_window.
+                                state.devservers.is_connected(id)
+                            }
                         } else {
                             !window_on_connecting_screen(&app_for_close, &label_for_close)
                         };
@@ -2875,6 +2899,15 @@ mod tests {
         assert!(arm.contains("let silent_hide = state.take_silent_hide(&label_for_close);"));
         assert!(arm.contains("if silent_hide {"));
         assert!(arm.contains("bury_window_now("));
+        // The silent-hide bury must HOLD the close before burying: the
+        // hide-in-place families (connected control-terminal-, terminal-,
+        // outbound-) bury via window.hide(), and an un-prevented close destroys
+        // the webview right after the handler returns, leaving the launcher eye
+        // pointing at a window that 409s on reopen.
+        assert!(
+            arm.contains("if silent_hide {\n                            api.prevent_close();"),
+            "the silent-hide branch must prevent_close before bury_window_now",
+        );
         // A live SPA is HELD (prevent_close) and ASKED via the confirm eval;
         // nothing buries here until the SPA calls back.
         assert!(arm.contains("api.prevent_close();"));
@@ -2885,6 +2918,11 @@ mod tests {
         assert!(arm.contains("terminal_window_has_live_shells"));
         assert!(arm.contains("strip_prefix(\"control-terminal-\")"));
         assert!(arm.contains("window_on_connecting_screen"));
+        // A kept-dead control terminal's red button routes through the same
+        // explicit-close cleanup as Cmd+W / the SPA Close, clearing the
+        // reconnect block instead of stranding it on a destroyed window.
+        assert!(arm.contains("control_terminal_dead"));
+        assert!(arm.contains("close_devserver_control_terminal"));
     }
 
     #[test]

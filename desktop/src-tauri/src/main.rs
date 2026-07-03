@@ -1392,6 +1392,12 @@ fn remove_devserver_windows(app: &tauri::AppHandle, state: &AppState, id: &str) 
 /// good. Idempotent; safe to call when the devserver is already disconnected.
 fn teardown_devserver_connection(app: &tauri::AppHandle, state: &AppState, id: &str) {
     state.devservers.remove(id);
+    // A full teardown reaps the control terminal, so the reconnect block must
+    // not outlive it: the block's invariant is that a kept "process exited"
+    // terminal exists for the user to close. A stale entry here permanently
+    // walls off connect with "close the control terminal ..." pointing at a
+    // terminal that no longer exists.
+    state.control_terminal_dead.lock().unwrap().remove(id);
     // Reap the control terminal BEFORE remove_devserver_windows fires the
     // launcher refresh, so the refresh already reflects the reaped control row.
     reap_devserver_control_terminal(app, state, id);
@@ -1640,9 +1646,9 @@ fn ensure_control_run_live(
 /// is registered. The connect script returning on its own, or a ^C in the
 /// control window, means the script-backed connection is dead even if the exit
 /// happens before token scrape, while hidden, or after a successful connect. On
-/// such an exit, fully tear down the devserver connection, including the control
-/// window row and tenant, so no desktop window remains for a terminated
-/// devserver.
+/// such an exit, mark the connection down but KEEP the control terminal at
+/// "process exited" (`mark_devserver_control_exited`), so the user can read the
+/// death reason; reconnect stays blocked until they close it.
 ///
 /// Stops without firing once this watcher's control terminal is no longer the
 /// devserver's current one: a disconnect/forget removes the prefix (and reaps
@@ -1743,7 +1749,20 @@ async fn connect_devserver_impl(
             Err(e) => {
                 let control_terminated = e.control_terminated();
                 let message = e.message();
-                if control_terminated {
+                // ControlTerminated covers two very different endings, told
+                // apart by whether the control WINDOW is still up:
+                //   - the user closed the window mid-connect: nothing to keep,
+                //     tear the attempt down (the survey offers retry/edit).
+                //   - the script exited inside a still-open terminal: keep it
+                //     at "process exited". The exit watcher usually marks this
+                //     first (its poll outruns the scrape backoff); routing the
+                //     scrape's error to teardown here reaped the terminal the
+                //     watcher just chose to keep, and left the watcher's
+                //     reconnect block pointing at nothing.
+                let control_window_live = app
+                    .get_webview_window(&serve::control_terminal_label(&id))
+                    .is_some();
+                if control_terminated && !control_window_live {
                     teardown_devserver_connection(&app, &state, &id);
                 } else if state
                     .control_terminal_runs
@@ -1751,11 +1770,12 @@ async fn connect_devserver_impl(
                     .unwrap()
                     .contains_key(&id)
                 {
-                    // The connect failed but its control script is still live
-                    // (for example `ssh -N` up, but the devserver behind it is a
-                    // wrong protocol or slow to answer): keep the control terminal
-                    // so the user can read the failure, and block reconnect until
-                    // they close it, same as a control-script death.
+                    // The control script exited inside a still-open terminal, or
+                    // the connect failed with its script still live (for example
+                    // `ssh -N` up, but the devserver behind it is a wrong
+                    // protocol or slow to answer): keep the control terminal so
+                    // the user can read the failure, and block reconnect until
+                    // they close it.
                     mark_devserver_control_exited(&app, &state, &id);
                 } else {
                     // No control terminal to keep (a no-script devserver, or the
@@ -5598,6 +5618,20 @@ mod tests {
             .next()
             .expect("connect_devserver_impl precedes its inner");
         assert!(connect.contains("control_terminal_dead"));
+        // The connect error arm keeps a still-open control terminal (the exit
+        // watcher's choice, which its ControlTerminated error races) and only
+        // tears down when the user closed the window mid-connect.
+        assert!(connect.contains("control_window_live"));
+        // A full teardown clears the reconnect block: the block must never
+        // outlive the control terminal it tells the user to close.
+        let teardown = MAIN_RS
+            .split("fn teardown_devserver_connection")
+            .nth(1)
+            .expect("teardown_devserver_connection exists")
+            .split("fn mark_devserver_control_exited")
+            .next()
+            .expect("teardown precedes mark_devserver_control_exited");
+        assert!(teardown.contains("control_terminal_dead"));
         let close = MAIN_RS
             .split("fn close_devserver_control_terminal")
             .nth(1)
