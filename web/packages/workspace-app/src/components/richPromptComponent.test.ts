@@ -37,48 +37,38 @@ describe("richPrompt state module", () => {
 });
 
 describe("RichPrompt.svelte component", () => {
-  test("lightweight CM6: markdown (no addKeymap) + history + default keymap", () => {
-    expect(richPromptSrc).toMatch(/markdown\(\{ addKeymap: false \}\)/);
-    expect(richPromptSrc).toMatch(/history\(\)/);
-    expect(richPromptSrc).toMatch(/keymap\.of\(\[\.\.\.defaultKeymap, \.\.\.historyKeymap\]\)/);
-    // Lightweight v1: no Wysiwyg widget/decoration imports; the ONE editor
-    // reuse is the image-paste extension (bubbles/image_drop), which is exactly
-    // the draft image-paste win.
-    expect(richPromptSrc).not.toMatch(/from "[^"]*(wysiwyg|widgets)/i);
+  test("uses Wysiwyg as the editor implementation", () => {
+    expect(richPromptSrc).toMatch(/import Wysiwyg from "\.\.\/editor\/Wysiwyg\.svelte"/);
+    expect(richPromptSrc).toMatch(/<Wysiwyg[\s\S]{1,500}bind:value=\{content\}/);
+    expect(richPromptSrc).toMatch(/currentPath=\{draftPath\}/);
+    // Rich Prompt delegates markdown parsing, image paste/drop, and image
+    // widgets to Wysiwyg; the bubble only supplies terminal-specific behavior.
+    expect(richPromptSrc).not.toMatch(/@codemirror\/lang-markdown/);
+    expect(richPromptSrc).not.toMatch(/from "\.\.\/editor\/bubbles\/image_drop"/);
   });
 
-  test("markdown-aware editing: Enter continues lists, Backspace dedents, Cmd+Enter submits", () => {
+  test("main-editor editing: Wysiwyg owns Enter/lists; Rich Prompt adds Mod+Enter submit", () => {
     expect(richPromptSrc).toMatch(
-      /import \{[\s\S]*?deleteMarkupBackward[\s\S]*?insertNewlineContinueMarkup[\s\S]*?\} from "@codemirror\/lang-markdown"/,
+      /extraExtensions=\{editorExtensions\}/,
     );
-    expect(richPromptSrc).toMatch(
-      /Prec\.high\(\s*keymap\.of\(\[[\s\S]*?\{ key: "Mod-Enter", run: submit \}[\s\S]*?\{ key: "Enter", run: insertNewlineContinueMarkup \}[\s\S]*?\{ key: "Backspace", run: deleteMarkupBackward \}/,
-    );
-    expect(richPromptSrc).not.toMatch(/\{ key: "Enter", run: submit \}/);
+    expect(richPromptSrc).toMatch(/\{ key: "Mod-Enter", run: submitFromView \}/);
+    expect(richPromptSrc).not.toMatch(/key: "Enter"[\s\S]{1,80}submit/);
   });
 
-  test("Drafts-backed: per-terminal draft.md + editor image paste into the draft folder", () => {
+  test("Drafts-backed: per-terminal draft.md is edited as a markdown file", () => {
     // Bound to the terminal's draft (a prop), created lazily, content loaded
-    // from + written back to draft.md; a pasted image uploads into the draft
-    // folder and is inserted as its bare absolute on-disk path (display ==
-    // wire), so imageDropHandlers runs in "absolute-path" mode with the
-    // workspace root and no `![]`/relativization (no getCurrentPath).
+    // from + written back to draft.md. Wysiwyg receives currentPath=draftPath,
+    // so pasted images upload into the draft folder as markdown embeds and
+    // render in-place.
     expect(richPromptSrc).toMatch(
-      /let \{[\s\S]{1,80}tab,[\s\S]{1,120}workspaceRoot = null,[\s\S]{1,400}tab: TerminalTab;[\s\S]{1,400}workspaceRoot\?: string \| null;[\s\S]{1,40}\} = \$props\(\)/,
+      /let \{ tab \}: \{ tab: TerminalTab \} = \$props\(\)/,
     );
-    // The CWD-relative delivery prop is gone with the submit-time transform.
+    expect(richPromptSrc).toMatch(/currentPath=\{draftPath\}/);
     expect(richPromptSrc).not.toMatch(/getTerminalCwdRel/);
-    expect(richPromptSrc).toMatch(
-      /import \{ imageDropHandlers \} from "\.\.\/editor\/bubbles\/image_drop"/,
-    );
-    expect(richPromptSrc).toMatch(
-      /imageDropHandlers\(\{[\s\S]{1,200}getUploadDir: \(\) => draftDir\(\)[\s\S]{1,160}insertMode: "absolute-path"[\s\S]{1,160}getWorkspaceRoot: \(\) => workspaceRoot/,
-    );
-    expect(richPromptSrc).not.toMatch(/getCurrentPath: \(\) => draftPath/);
     expect(richPromptSrc).toMatch(/await api\.createDraft\(\)/);
     expect(richPromptSrc).toMatch(/tab\.richPromptDraftPath = path/);
     expect(richPromptSrc).toMatch(/await api\.read\(path\)/);
-    expect(richPromptSrc).toMatch(/await api\.write\(draftPath, text\)/);
+    expect(richPromptSrc).toMatch(/await api\.write\(draftPath, content\)/);
   });
 
   test("submit routes to THIS terminal, then KEEPS the text as the greyed read-only card", () => {
@@ -86,16 +76,19 @@ describe("RichPrompt.svelte component", () => {
     // (submitAgent()) + a client message id, only beginning a pending when the
     // frame actually went out (the data-loss guard).
     expect(richPromptSrc).toMatch(/const id = crypto\.randomUUID\(\);/);
-    // Display == wire: the composer text is sent verbatim (a pasted image is
-    // already its bare absolute on-disk path), so there is NO submit-time
-    // delivery transform -- the rewrite machinery is gone.
-    expect(richPromptSrc).not.toMatch(/rewriteImagePathsForDelivery/);
-    expect(richPromptSrc).not.toMatch(/deliver_images/);
     expect(richPromptSrc).toMatch(
-      /if \(!sendPromptToTerminal\(tab\.id, text, submitAgent\(\), id\)\) return true;/,
+      /import \{ rewriteImagePathsForDelivery \} from "\.\.\/editor\/deliver_images"/,
+    );
+    // The editor backing markdown stays draft-relative for preview, while the
+    // prompt frame payload is rewritten to workspace-rooted image refs.
+    expect(richPromptSrc).toMatch(
+      /const delivered = rewriteImagePathsForDelivery\(text, draftPath\);/,
+    );
+    expect(richPromptSrc).toMatch(
+      /if \(!sendPromptToTerminal\(tab\.id, delivered, submitAgent\(\), id\)\) return true;/,
     );
     expect(richPromptSrc).toMatch(/beginPendingPrompt\(tab, id\);/);
-    const submitBody = richPromptSrc.match(/function submit\(\): boolean \{[\s\S]*?\n  \}/)?.[0];
+    const submitBody = richPromptSrc.match(/function submitFromView\(view: EditorView\): boolean \{[\s\S]*?\n  \}/)?.[0];
     expect(submitBody).toBeTruthy();
     // Submit KEEPS the text (the greyed card), so it does NOT clear the
     // composer; it guards re-submit while the card is up (no double-deliver),
@@ -112,18 +105,13 @@ describe("RichPrompt.svelte component", () => {
     const consumeBody = richPromptSrc.match(/function consumeTerminalPhase\([\s\S]*?\n  \}/)?.[0];
     expect(consumeBody).toBeTruthy();
     // Delivered: the agent consumed the message, so the card clears (text +
-    // draft) back to an empty editable composer. The clear dispatch ALSO folds in
-    // the readOnly->editable reconfigure (it must not lean on the out-of-band lock
-    // $effect to unlock), and the focus is DEFERRED to a microtask so it lands
-    // after that effect's trailing reconfigure — without both, WKWebView leaves
-    // the cleared composer un-typeable until a hide/show remount.
+    // draft) back to an empty editable composer and refocuses the Wysiwyg editor.
     const deliveredBranch = consumeBody?.match(
       /if \(phase === "delivered"\)[\s\S]*?\n    \} else \{/,
     )?.[0];
     expect(deliveredBranch).toBeTruthy();
-    expect(deliveredBranch).toContain('insert: ""');
-    expect(deliveredBranch).toContain("lockCompartment.reconfigure(lockExtensions(false))");
-    expect(deliveredBranch).toContain("queueMicrotask(() => view?.focus())");
+    expect(deliveredBranch).toContain('content = ""');
+    expect(deliveredBranch).toContain("queueMicrotask(() => editor?.focusAt(0))");
     // Rejected/failed: clearing pending below un-greys; the text stays for a
     // retry; warn honestly.
     expect(richPromptSrc).toMatch(/queue full — try again/);
@@ -140,13 +128,13 @@ describe("RichPrompt.svelte component", () => {
     // Type to move on: a user text input while pending clears the card + seeds a
     // fresh composer with what was typed.
     expect(richPromptSrc).toMatch(
-      /beforeinput: \(event, v\) => \{[\s\S]{1,400}if \(!isPending\) return false;[\s\S]{1,400}enterLocalEdit\(\);/,
+      /beforeinput: \(event, view\) => \{[\s\S]{1,400}if \(!isPending\) return false;[\s\S]{1,400}enterLocalEdit\(\);/,
     );
     expect(richPromptSrc).toMatch(/insert: seed/);
   });
 
   test("↑ edits the queued message (from the card or an empty composer); Esc drops it", () => {
-    expect(richPromptSrc).toMatch(/\{ key: "ArrowUp", run: recall \}/);
+    expect(richPromptSrc).toMatch(/\{ key: "ArrowUp", run: recallFromView \}/);
     // From the greyed card, recall un-greys (the text is already shown); from an
     // empty composer it restores the buffer. Both best-effort cancel.
     expect(richPromptSrc).toMatch(/if \(isPending\) \{[\s\S]{1,200}enterLocalEdit\(\);/);
@@ -160,14 +148,14 @@ describe("RichPrompt.svelte component", () => {
     )?.[0];
     expect(recallPending).toBeTruthy();
     expect(recallPending).toContain("lockCompartment.reconfigure(lockExtensions(false))");
-    expect(recallPending).toContain("queueMicrotask(() => view?.focus())");
-    expect(richPromptSrc).toMatch(/view\.state\.doc\.length > 0 \|\| !lastQueued\) return false/);
+    expect(recallPending).toContain("queueMicrotask(() => view.focus())");
+    expect(richPromptSrc).toMatch(/content\.length > 0 \|\| !lastQueued\) return false/);
     expect(richPromptSrc).toMatch(/const \{ id, text \} = lastQueued;/);
     expect(richPromptSrc).toMatch(/sendCancelToTerminal\(tab\.id, id\)/);
     // Esc drops the queued message (card up, or empty composer with a queued
     // one): cancel + clear, keeping the bubble open; otherwise abandon the draft.
     expect(richPromptSrc).toMatch(
-      /lastQueued && \(isPending \|\| view\.state\.doc\.length === 0\)\) \{[\s\S]{1,160}sendCancelToTerminal\(tab\.id, lastQueued\.id\)/,
+      /lastQueued && \(isPending \|\| content\.length === 0\)\) \{[\s\S]{1,160}sendCancelToTerminal\(tab\.id, lastQueued\.id\)/,
     );
     expect(richPromptSrc).toMatch(/function abandonDraft\(\): void/);
     expect(richPromptSrc).toMatch(/hideRichPromptForTab\(tab\.id\)/);
@@ -208,13 +196,9 @@ describe("RichPrompt.svelte component", () => {
     expect(richPromptSrc).toMatch(/return "gemini";/);
   });
 
-  test("Tab indents the list item (Shift+Tab outdents), never escaping to the browser", () => {
-    expect(richPromptSrc).toMatch(
-      /import \{[\s\S]{1,80}indentListItem,[\s\S]{1,40}outdentListItem,[\s\S]{1,40}\} from "\.\.\/editor\/commands\/list"/,
-    );
-    expect(richPromptSrc).toMatch(
-      /key: "Tab",[\s\S]{1,80}run: \(v\) => indentListItem\(v\) \|\| indentMore\(v\),[\s\S]{1,90}shift: \(v\) => outdentListItem\(v\) \|\| indentLess\(v\),/,
-    );
+  test("does not reimplement list editing; Wysiwyg owns the main editor keymap", () => {
+    expect(richPromptSrc).not.toMatch(/indentListItem/);
+    expect(richPromptSrc).not.toMatch(/outdentListItem/);
   });
 
   test("floating bubble with the submit-with-cmd+enter label", () => {

@@ -89,6 +89,7 @@
     initialCaret = null,
     autoFocus = true,
     placeholderText,
+    extraExtensions = [],
     onSubmit,
     onSelectionChange,
     onCaretChange,
@@ -113,6 +114,9 @@
     /// (cursor + placeholder share the same x/y). Unset = no
     /// placeholder.
     placeholderText?: string;
+    /// Host-provided CM6 extensions for editor variants that need one-off
+    /// keymaps or event handlers while still using the full WYSIWYG stack.
+    extraExtensions?: Extension[];
     onSubmit?: () => void;
     onSelectionChange?: () => void;
     onCaretChange?: (from: number, to: number) => void;
@@ -151,6 +155,7 @@
   const sync = createValueSync();
   const theme = makeThemeCompartment(effectiveHybridSurfaceTheme("editor"));
   const editableCompartment = new Compartment();
+  const extraExtensionsCompartment = new Compartment();
   const trailingWhitespace = new Compartment();
   /// Compartment for the write-side bundle (bubble listener / bubble
   /// keymap / image drop / HTML paste). Wraps these so flipping
@@ -467,6 +472,7 @@
         // first keystroke. Wired optionally because file editors
         // don't want a placeholder; only ephemeral surfaces do.
         ...(placeholderText ? [placeholder(placeholderText)] : []),
+        extraExtensionsCompartment.of(extraExtensions),
         // Replace the browser-native text selection with CM6's
         // synthetic selection layer. Browser selection rectangles
         // are rendered per fragment and don't clear when the caret
@@ -586,7 +592,8 @@
             {
               key: "Mod-Enter",
               run: () => {
-                onSubmit?.();
+                if (!onSubmit) return false;
+                onSubmit();
                 return true;
               },
             },
@@ -752,6 +759,13 @@
       effects: editableCompartment.reconfigure(
         EditorView.editable.of(!readonly),
       ),
+    });
+  });
+
+  $effect(() => {
+    if (!view) return;
+    view.dispatch({
+      effects: extraExtensionsCompartment.reconfigure(extraExtensions),
     });
   });
 

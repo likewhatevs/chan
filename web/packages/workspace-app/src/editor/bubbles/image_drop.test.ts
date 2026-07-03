@@ -187,20 +187,15 @@ describe("moveImageSource (image drag across rows)", () => {
   });
 });
 
-// `buildImageInsert` turns a server upload path into the text inserted at
-// the caret plus the caret offset within it. Two modes: the notes editor's
-// `![](rel#w=N)` embed, and the rich prompt's bare absolute on-disk path
-// (display == wire -- no `![]` wrapper whose leading `!` an agent runs as a
-// command, no `#w=` hint, no relativization).
+// `buildImageInsert` turns a server upload path into the markdown image text
+// inserted at the caret plus the caret offset within it.
 describe("buildImageInsert", () => {
   const uploaded = ".Drafts/abc/img.png";
 
-  describe("markdown mode (notes editor)", () => {
+  describe("markdown image insert", () => {
     test("off a list line: a `![](rel#w=250)` embed + trailing newline", () => {
       const { text, caret } = buildImageInsert(uploaded, {
-        insertMode: "markdown",
         currentPath: ".Drafts/abc/draft.md",
-        workspaceRoot: null,
         onListLine: false,
       });
       // Relativized against the draft dir, default 250px width, own block.
@@ -211,9 +206,7 @@ describe("buildImageInsert", () => {
 
     test("on a list line: trailing space instead of a newline", () => {
       const { text, caret } = buildImageInsert(uploaded, {
-        insertMode: "markdown",
         currentPath: ".Drafts/abc/draft.md",
-        workspaceRoot: null,
         onListLine: true,
       });
       expect(text).toBe("![](./img.png#w=250) ");
@@ -222,73 +215,11 @@ describe("buildImageInsert", () => {
 
     test("no currentPath: the upload path is used as-is, percent-encoded", () => {
       const { text } = buildImageInsert(".Drafts/abc/My Photo.png", {
-        insertMode: "markdown",
         currentPath: null,
-        workspaceRoot: null,
         onListLine: false,
       });
       // The space is percent-encoded so the ref round-trips the graph scan.
       expect(text).toBe("![](.Drafts/abc/My%20Photo.png#w=250)\n");
-    });
-  });
-
-  describe("absolute-path mode (rich prompt: display == wire)", () => {
-    test("bare absolute on-disk path + trailing space, no wrapper / hint", () => {
-      const { text, caret } = buildImageInsert(uploaded, {
-        insertMode: "absolute-path",
-        currentPath: null,
-        workspaceRoot: "/home/u/ws",
-        onListLine: false,
-      });
-      expect(text).toBe("/home/u/ws/.Drafts/abc/img.png ");
-      expect(text).not.toContain("![");
-      expect(text).not.toContain("#w=");
-      // Caret past the trailing space so the prompt text follows.
-      expect(caret).toBe(text.length);
-    });
-
-    test("a list line does NOT change the insert (always a trailing space)", () => {
-      const { text } = buildImageInsert(uploaded, {
-        insertMode: "absolute-path",
-        currentPath: null,
-        workspaceRoot: "/home/u/ws",
-        onListLine: true,
-      });
-      expect(text).toBe("/home/u/ws/.Drafts/abc/img.png ");
-    });
-
-    test("null root: falls back to the bare workspace-relative path", () => {
-      const { text } = buildImageInsert(uploaded, {
-        insertMode: "absolute-path",
-        currentPath: null,
-        workspaceRoot: null,
-        onListLine: false,
-      });
-      expect(text).toBe(".Drafts/abc/img.png ");
-      expect(text).not.toContain("![");
-    });
-
-    test("Windows root: backslashes normalized, trailing slash trimmed", () => {
-      const { text } = buildImageInsert(uploaded, {
-        insertMode: "absolute-path",
-        currentPath: null,
-        workspaceRoot: "C:\\Users\\me\\ws\\",
-        onListLine: false,
-      });
-      expect(text).toBe("C:/Users/me/ws/.Drafts/abc/img.png ");
-    });
-
-    test("the filename is NOT percent-encoded (a literal on-disk path)", () => {
-      const { text } = buildImageInsert(".Drafts/abc/My Photo.png", {
-        insertMode: "absolute-path",
-        currentPath: null,
-        workspaceRoot: "/home/u/ws",
-        onListLine: false,
-      });
-      // The agent reads the path off disk verbatim, so the space stays a
-      // space (no `%20`).
-      expect(text).toBe("/home/u/ws/.Drafts/abc/My Photo.png ");
-      expect(text).not.toContain("%20");
     });
   });
 });
