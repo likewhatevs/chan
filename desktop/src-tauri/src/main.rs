@@ -1129,6 +1129,11 @@ fn persist_workspaces(state: &AppState) {
             on: true,
         })
         .collect();
+    tracing::info!(
+        on = rows.len(),
+        paths = ?rows.iter().map(|r| r.path.as_str()).collect::<Vec<_>>(),
+        "persisting the on workspace set"
+    );
     overlay.replace(rows);
 }
 
@@ -3831,6 +3836,11 @@ fn main() {
                     .and_then(|embedded| embedded.workspace_overlay())
                     .map(|overlay| overlay.on_paths())
                     .unwrap_or_default();
+                tracing::info!(
+                    restoring = enabled.len(),
+                    paths = ?enabled,
+                    "restoring the on workspaces from the overlay"
+                );
                 for key in enabled {
                     // BOOT re-serve: RESTORE the persisted windows only — do NOT
                     // mint (mint_first_window=false). A workspace whose windows were
@@ -3956,9 +3966,12 @@ fn main() {
             }
             RunEvent::Exit => {
                 capture_launcher_geometry(_app);
-                // Persist the on-set BEFORE teardown drains it, so the
-                // next boot re-serves exactly the workspaces that were
-                // on at this clean shutdown (the §3.2 boot matrix).
+                // Snapshot the on-set BEFORE teardown. The order is load-bearing:
+                // persist_workspaces reads the LIVE mounted set, so it must run
+                // while the workspaces are still mounted; stop_all then unmounts
+                // them WITHOUT recording them off (the overlay-preserving close),
+                // so the next boot re-serves exactly this on-set (the §3.2 boot
+                // matrix).
                 persist_workspaces(&state_for_exit);
                 // Best-effort: unmount every embedded local workspace
                 // before the desktop runtime exits.

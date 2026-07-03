@@ -160,12 +160,24 @@ pub fn stop(
     Ok(outcome)
 }
 
-/// Stop every running serve. Called from the Tauri Exit hook so
-/// embedded workspace state shuts down before the desktop exits.
+/// Stop every running serve on process shutdown. Called from the Tauri Exit hook
+/// (and the panic-unwind `impl Drop for AppState`) so embedded workspace state
+/// shuts down before the desktop exits. Uses the overlay-preserving close: the
+/// on-set is snapshotted by `persist_workspaces` BEFORE this runs, so a slow
+/// per-workspace teardown racing process death must not flip a workspace off for
+/// the next boot. There is no AppHandle work here (the interactive `stop_handle`
+/// path owns the window / `SERVES_CHANGED` reconcile; on shutdown the
+/// indirection carried `app = None` anyway, so nothing is emitted).
 pub fn stop_all(state: &AppState) {
     let handles: Vec<(String, ServeHandle)> = state.serves.lock().unwrap().drain().collect();
-    for (key, _handle) in handles {
-        let _ = stop_handle(None, state, &key, true);
+    tracing::info!(
+        "shutdown: unmounting {} workspaces (overlay preserved)",
+        handles.len()
+    );
+    if let Some(embedded) = state.embedded.get() {
+        for (key, _handle) in handles {
+            let _ = embedded.close_workspace_root_for_shutdown(Path::new(&key), true);
+        }
     }
 }
 

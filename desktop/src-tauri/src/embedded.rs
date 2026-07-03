@@ -292,6 +292,19 @@ impl EmbeddedServer {
             .map_err(|e| format!("closing embedded workspace {}: {e}", root.display()))
     }
 
+    /// Shutdown-flavored close: unmount without recording the workspace off in the
+    /// on/off overlay, so the on-set snapshotted before teardown survives to the
+    /// next boot. Used only by `serve::stop_all` on process shutdown.
+    pub fn close_workspace_root_for_shutdown(
+        &self,
+        root: &Path,
+        force: bool,
+    ) -> Result<WorkspaceLifecycleOutcome, String> {
+        self.host
+            .close_workspace_for_root_preserving_overlay(root, force)
+            .map_err(|e| format!("closing embedded workspace {}: {e}", root.display()))
+    }
+
     pub fn remove_workspace_root(
         &self,
         root: &Path,

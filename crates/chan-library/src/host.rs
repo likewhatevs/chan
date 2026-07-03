@@ -1857,6 +1857,36 @@ impl WorkspaceHost {
         root: &Path,
         force: bool,
     ) -> Result<WorkspaceLifecycleOutcome, Error> {
+        self.close_workspace_for_root_impl(root, force, true)
+    }
+
+    /// Shutdown-flavored close: unmount the workspace at `root` WITHOUT recording
+    /// it off in the on/off overlay. The desired-state overlay must survive
+    /// teardown so the next boot restores the same on-set. The process-shutdown
+    /// paths (the desktop Exit handler and the panic-unwind `Drop`) snapshot the
+    /// on-set first, then close every mounted workspace this way, so a slow
+    /// per-workspace teardown racing process death can never flip a workspace off
+    /// for the next boot. Every other close is genuine user intent and records
+    /// off through [`close_workspace_for_root`](Self::close_workspace_for_root).
+    pub fn close_workspace_for_root_preserving_overlay(
+        &self,
+        root: &Path,
+        force: bool,
+    ) -> Result<WorkspaceLifecycleOutcome, Error> {
+        self.close_workspace_for_root_impl(root, force, false)
+    }
+
+    /// Shared body for the close-by-root variants. `record_off` gates the off
+    /// write to the on/off overlay: a user-intent close (`chan close`, the
+    /// launcher off-toggle, the control-socket close) records off so a devserver
+    /// restart does not bring the just-closed workspace back up; a shutdown close
+    /// preserves the overlay so the next boot restores the same on-set.
+    fn close_workspace_for_root_impl(
+        &self,
+        root: &Path,
+        force: bool,
+        record_off: bool,
+    ) -> Result<WorkspaceLifecycleOutcome, Error> {
         let target = canonical_key(root);
         let prefix = {
             let workspaces = self
@@ -1871,7 +1901,7 @@ impl WorkspaceHost {
         match prefix {
             Some(prefix) => {
                 let outcome = self.close_workspace(&prefix, force)?;
-                if outcome.completed() || outcome.not_found() {
+                if record_off && (outcome.completed() || outcome.not_found()) {
                     if let Some(overlay) = self.workspace_overlay() {
                         overlay.set(&root.to_string_lossy(), false);
                     }
@@ -1879,7 +1909,7 @@ impl WorkspaceHost {
                 Ok(outcome)
             }
             None => {
-                if self.library.workspace_paths_for(root).is_some() {
+                if record_off && self.library.workspace_paths_for(root).is_some() {
                     if let Some(overlay) = self.workspace_overlay() {
                         overlay.set(&root.to_string_lossy(), false);
                     }
@@ -3137,6 +3167,74 @@ mod tests {
             .close_workspace_for_root(other.path(), false)
             .expect("unknown root")
             .not_found());
+    }
+
+    #[tokio::test]
+    async fn shutdown_close_preserves_the_overlay_on_state() {
+        // The desktop Exit handler snapshots the on-set (persist_workspaces) and
+        // THEN tears every mounted workspace down. Teardown must not touch the
+        // overlay, or a slow close racing process death flips a just-persisted
+        // workspace off for the next boot. The shutdown close unmounts but leaves
+        // the on row intact.
+        let cfg = tempfile::tempdir().expect("config dir");
+        let root = tempfile::tempdir().expect("workspace");
+        let lib = Library::open_at(cfg.path().join("config.toml")).expect("library");
+        lib.register_workspace(root.path()).expect("register");
+        let host = Arc::new(WorkspaceHost::new(lib, fake_builder()));
+
+        // The overlay key is the as-passed root string (not canonicalized), so
+        // set and assert against the same string the close receives.
+        let key = root.path().to_string_lossy().into_owned();
+        let overlay = Arc::new(WorkspaceOverlay::open(cfg.path().join("workspaces.json")));
+        overlay.set(&key, true);
+        host.install_workspace_overlay(Arc::clone(&overlay));
+
+        host.open_registered_workspace(root.path(), serve_config("/ws"))
+            .await
+            .expect("open");
+
+        assert!(host
+            .close_workspace_for_root_preserving_overlay(root.path(), false)
+            .expect("shutdown close")
+            .completed());
+
+        // Unmounted, but the desired-state row is still on for the next boot.
+        assert!(host.mounted_prefixes().expect("prefixes").is_empty());
+        assert_eq!(overlay.on_paths(), vec![key]);
+    }
+
+    #[tokio::test]
+    async fn close_for_root_records_off_in_the_overlay() {
+        // The default close is genuine user intent (`chan close`, the launcher
+        // off-toggle, the control-socket close): it records the workspace off so a
+        // devserver restart does not bring it back up.
+        let cfg = tempfile::tempdir().expect("config dir");
+        let root = tempfile::tempdir().expect("workspace");
+        let lib = Library::open_at(cfg.path().join("config.toml")).expect("library");
+        lib.register_workspace(root.path()).expect("register");
+        let host = Arc::new(WorkspaceHost::new(lib, fake_builder()));
+
+        let key = root.path().to_string_lossy().into_owned();
+        let overlay = Arc::new(WorkspaceOverlay::open(cfg.path().join("workspaces.json")));
+        overlay.set(&key, true);
+        host.install_workspace_overlay(Arc::clone(&overlay));
+
+        host.open_registered_workspace(root.path(), serve_config("/ws"))
+            .await
+            .expect("open");
+
+        assert!(host
+            .close_workspace_for_root(root.path(), false)
+            .expect("close by root")
+            .completed());
+
+        // No longer on, and the row persists as an explicit off (remembered-off),
+        // not merely absent.
+        assert!(overlay.on_paths().is_empty());
+        assert!(overlay
+            .entries()
+            .iter()
+            .any(|row| row.path == key && !row.on));
     }
 
     #[tokio::test]
