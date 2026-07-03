@@ -105,7 +105,8 @@ body {
 
 /* Square icon button — the registry rows' per-action affordances (new window,
    on/off, new terminal, edit, connect/disconnect, forget). `.on` tints it the
-   accent (an active toggle); `.danger` reddens it on hover (a destructive op). */
+   accent (an active toggle); `.lost` follows a broken connection state; `.danger`
+   reddens it on hover (a destructive op). */
 .icon-btn {
   display: inline-flex;
   align-items: center;
@@ -137,6 +138,12 @@ body {
   border-color: var(--accent);
   color: var(--accent);
   background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.icon-btn.lost {
+  border-color: var(--danger);
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
 }
 
 .icon-btn.danger:hover:not(:disabled) {

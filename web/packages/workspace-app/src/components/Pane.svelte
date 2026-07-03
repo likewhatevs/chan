@@ -506,12 +506,6 @@
     });
   }
 
-  function doPaneModeSplit(direction: "row" | "column"): void {
-    closePaneMenus();
-    enterPaneMode();
-    paneModeSplit(direction);
-  }
-
   function openPaneContextAt(e: MouseEvent): void {
     e.preventDefault();
     setActivePane(pane.id);
@@ -533,14 +527,20 @@
       icon: ArrowRight,
       command: "app.pane.splitRight",
       chord: chordLabel("app.pane.splitRight"),
-      action: () => doPaneModeSplit("row"),
+      action: () => {
+        dispatchCommand("app.pane.splitRight");
+        closePaneHamburgerMenu();
+      },
     },
     {
       label: "Split bottom",
       icon: ArrowDown,
       command: "app.pane.splitDown",
       chord: chordLabel("app.pane.splitDown"),
-      action: () => doPaneModeSplit("column"),
+      action: () => {
+        dispatchCommand("app.pane.splitDown");
+        closePaneHamburgerMenu();
+      },
     },
     {
       label: "Next pane",

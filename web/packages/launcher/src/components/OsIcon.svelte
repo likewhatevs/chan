@@ -1,9 +1,14 @@
+<script module lang="ts">
+  export function hasOsIcon(os: string): boolean {
+    return os.trim() !== "";
+  }
+</script>
+
 <script lang="ts">
-  // The machine's OS as a small mark next to the hostname, one per family, with
-  // the human OS string as the tooltip. The marks are simple currentColor SVGs
-  // (so they inherit the row's colour) kept in this one file, so re-skinning the
-  // set is a single-file change. An unknown/empty family renders nothing rather
-  // than a misleading icon.
+  // The machine OS as a small row mark, one per family, with the human OS string
+  // as the tooltip. The marks are simple currentColor SVGs, kept in this one
+  // file so re-skinning the set is a single-file change. An unknown/empty family
+  // renders nothing rather than a misleading icon.
   interface Props {
     /** OS family from the self-report: macos | windows | linux | other. */
     os: string;
@@ -24,8 +29,13 @@
   // Collapse any non-empty value the family enum may grow to onto `other`; an
   // empty `os` (never connected, or a devserver too old to report it) shows no
   // mark.
+  const normalized = $derived(os.trim());
   const family = $derived(
-    os === "macos" || os === "windows" || os === "linux" ? os : os ? "other" : "",
+    normalized === "macos" || normalized === "windows" || normalized === "linux"
+      ? normalized
+      : normalized
+        ? "other"
+        : "",
   );
   const label = $derived(prettyName ?? (family ? LABEL[family] : ""));
 </script>

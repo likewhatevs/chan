@@ -256,7 +256,7 @@
     <label class="field">
       Connect script <span class="muted">(optional; runs in a control terminal)</span>
       <textarea
-        rows="2"
+        rows="3"
         class="mono"
         bind:value={script}
         placeholder="ssh box -L 8787:localhost:8787 chan devserver --join"

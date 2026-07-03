@@ -211,7 +211,10 @@ describe("Library: devserver groups", () => {
     expect(prod!.querySelector(".status-dot.lost")).not.toBeNull();
     expect(prod!.querySelector(".status-dot.live")).toBeNull();
     expect(prod!.querySelector("button.icon-btn.attention")).not.toBeNull();
-    expect(byAria("Disconnect prod")).toBeTruthy();
+    const disconnect = byAria("Disconnect prod");
+    expect(disconnect).toBeTruthy();
+    expect(disconnect!.classList.contains("lost")).toBe(true);
+    expect(disconnect!.classList.contains("on")).toBe(false);
   });
 
   it("renders a disconnected devserver's DEAD control row with a red dot so it can be reopened", () => {

@@ -263,21 +263,23 @@ export const SHORTCUTS: readonly Shortcut[] = [
     group: "Panes",
     escapeTerminal: true,
   },
-  // Split-active chords are native-only; web reaches them via
-  // Hybrid Nav `/` and `?`. Split-bottom is Cmd+Shift+/ rather
-  // than Cmd+\ because 1Password registers Cmd+\ as a system-wide
-  // macOS hotkey that the OS dispatches before the keystroke
-  // reaches chan's webview. The mnemonic is `/` right, `?` bottom
-  // (same physical key with/without Shift). Hybrid Nav mirrors it.
+  // Split-active chords use Ctrl+Alt on web because Ctrl+/ is claimed by
+  // terminals and editor comment-toggle. Split-bottom is Cmd+Shift+/ rather
+  // than Cmd+\ on native because 1Password registers Cmd+\ as a system-wide
+  // macOS hotkey that the OS dispatches before the keystroke reaches chan's
+  // webview. The mnemonic is `/` right, `?` bottom (same physical key with or
+  // without Shift). Hybrid Nav mirrors it.
   {
     id: "app.pane.splitRight",
     label: "Split right",
+    web: "Ctrl+Alt+/",
     native: "Mod+/",
     group: "Panes",
   },
   {
     id: "app.pane.splitDown",
     label: "Split bottom",
+    web: "Ctrl+Alt+?",
     native: "Mod+Shift+/",
     group: "Panes",
   },

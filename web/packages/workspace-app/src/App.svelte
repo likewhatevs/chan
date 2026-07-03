@@ -442,6 +442,8 @@
   ///   Cmd+. L                -> Lock screen
   ///   Alt+Shift+[ / ]        -> previous / next tab  (web fallback)
   ///   Ctrl+Alt+1..9          -> jump to tab N        (web fallback)
+  ///   Ctrl+Alt+/             -> split pane right     (web fallback)
+  ///   Ctrl+Alt+?             -> split pane bottom    (web fallback)
   ///
   /// Mac note: bare-Alt chords are off-limits for letters/digits because
   /// Option is a dead-key for special characters (Alt+G prints `c`, etc.).
@@ -902,6 +904,14 @@
         selectTabAtIndexInActivePane(Number(m[1]) - 1);
         return;
       }
+    }
+    // Web split. Native uses Cmd+/ through KEY_BRIDGE_JS. On web, Ctrl+/ is
+    // claimed by the terminal and editor comment-toggle, so this uses the
+    // Ctrl+Alt fallback family and routes through the command guards.
+    if (e.ctrlKey && e.altKey && !e.metaKey && e.code === "Slash") {
+      e.preventDefault();
+      runCommand(e.shiftKey ? "app.pane.splitDown" : "app.pane.splitRight", {});
+      return;
     }
     // Window reload. macOS: Cmd+R. Linux/Windows: Ctrl+Shift+R, so plain
     // Ctrl+R falls through to a focused terminal's shell (reverse-search) -

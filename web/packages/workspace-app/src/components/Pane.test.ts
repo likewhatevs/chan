@@ -226,8 +226,8 @@ describe("Pane right-click menus", () => {
     await tick();
 
     const chords = menuRowChords();
-    expect(chords["Split right"]).toBe("");
-    expect(chords["Split bottom"]).toBe("");
+    expect(chords["Split right"]).toBe("Ctrl+Alt+/");
+    expect(chords["Split bottom"]).toBe("Ctrl+Alt+?");
     expect(chords["Next pane"]).toBe("Alt+]");
     expect(chords["Previous pane"]).toBe("Alt+[");
   });

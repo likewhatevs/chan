@@ -81,17 +81,16 @@ describe("shortcut table", () => {
     expect(renderTable("native", "mac")).toMatch(/^Italic\s+Cmd\+I/m);
   });
 
-  // Splits are desktop-native only (web reaches them via Hybrid Nav
-  // `/` `?`). Split-bottom is Cmd+Shift+/, not Cmd+\, because
-  // 1Password registers Cmd+\ as a system-wide macOS hotkey that
-  // the OS dispatches before the keystroke reaches chan's webview.
-  test("advertises splits on native only", () => {
+  // Web uses Ctrl+Alt+/ because Ctrl+/ is claimed by terminal/editor surfaces.
+  // Native split-bottom remains Cmd+Shift+/ because 1Password registers Cmd+\
+  // as a system-wide macOS hotkey before chan's webview receives it.
+  test("advertises split chords on web and native", () => {
     const web = renderTable("web", "mac");
     const native = renderTable("native", "mac");
+    expect(web).toMatch(/^Split right\s+Ctrl\+Alt\+\//m);
+    expect(web).toMatch(/^Split bottom\s+Ctrl\+Alt\+\?/m);
     expect(native).toMatch(/^Split right\s+Cmd\+\//m);
     expect(native).toMatch(/^Split bottom\s+Cmd\+Shift\+\//m);
-    expect(web).not.toMatch(/^Split right/m);
-    expect(web).not.toMatch(/^Split bottom/m);
   });
 
   test("advertises Hybrid Nav close-all and kill-pane chords", () => {

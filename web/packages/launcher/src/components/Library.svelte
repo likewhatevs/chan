@@ -25,7 +25,7 @@
     Unplug,
   } from "lucide-svelte";
   import WindowRow from "./WindowRow.svelte";
-  import OsIcon from "./OsIcon.svelte";
+  import OsIcon, { hasOsIcon } from "./OsIcon.svelte";
   import {
     library,
     toggleWorkspace,
@@ -365,21 +365,27 @@
   </div>
 {/snippet}
 
-<!-- The devserver identity block: a left glyph column (the Globe kind mark over
-     the OS mark) beside two text rows -- name + status/token, then the address.
+<!-- The devserver identity block: a left glyph column beside two text rows:
+     name + status/token, then the address.
      On the mutable surface the whole block is the click target to open the
      edit-config form, with an inline pencil beside the address; the read-only
      surface renders it static with no edit affordance. -->
 {#snippet dsIdentity(ds: DevserverEntry, withPencil: boolean)}
   <span class="ds-name-row">
-    <span class="ds-glyph" aria-hidden="true"><Globe size={16} /></span>
+    <span class="ds-glyph">
+      {#if hasOsIcon(ds.os)}
+        <OsIcon os={ds.os} prettyName={ds.pretty_name} size={16} />
+      {:else}
+        <Globe size={16} />
+      {/if}
+    </span>
     <span class="row-name">{devserverName(ds)}</span>
     {#if connectionLost(ds)}<span class="status-dot lost" title="Connection lost"></span>
     {:else if connected(ds)}<span class="status-dot live" title="Connected"></span>{/if}
     {#if ds.has_token}<span class="chip">🔒 token</span>{/if}
   </span>
   <span class="ds-addr-row">
-    <span class="ds-glyph"><OsIcon os={ds.os} prettyName={ds.pretty_name} /></span>
+    <span class="ds-glyph"></span>
     <span class="row-sub" title={endpoint(ds)}>{endpoint(ds)}</span>
     {#if withPencil}<Pencil size={12} class="addr-pencil" />{/if}
   </span>
@@ -389,9 +395,14 @@
   <section class="machine">
     {#if node.kind === "local"}
       <div class="machine-header">
-        <span class="machine-icon" aria-hidden="true"><House size={16} /></span>
+        <span class="machine-icon">
+          {#if hasOsIcon(hostOs)}
+            <OsIcon os={hostOs} size={16} />
+          {:else}
+            <House size={16} />
+          {/if}
+        </span>
         <span class="machine-name">Local machine</span>
-        <OsIcon os={hostOs} />
         <span class="status-dot live" title="This machine"></span>
         <div class="machine-actions">
           {#if !readOnly}
@@ -462,9 +473,11 @@
               </button>
             {:else if connected(ds)}
               <button
-                class="icon-btn on"
+                class="icon-btn"
+                class:on={!connectionLost(ds)}
+                class:lost={connectionLost(ds)}
                 type="button"
-                title="Disconnect"
+                title={connectionLost(ds) ? "Disconnect lost connection" : "Disconnect"}
                 aria-label={`Disconnect ${devserverName(ds)}`}
                 onclick={() => run(disconnectDevserver(ds.id))}>
                 <Unplug size={16} />
