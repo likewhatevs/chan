@@ -6,9 +6,15 @@ import {
   showSurvey,
   surveyFor,
   surveyBusy,
+  closeSurveyFromRemote,
+  dismissSurveyDraftDialog,
   pickOption,
   requestFollowup,
   dismissSurvey,
+  showSurveyDraftDialog,
+  surveyCloseTitle,
+  surveyDraftDialogFor,
+  surveyDraftDialogs,
 } from "./survey.svelte";
 
 // The survey store holds active surveys keyed by slot (a terminal tab id, or
@@ -29,6 +35,7 @@ function spec(over: Partial<SurveySpec> = {}): SurveySpec {
 afterEach(() => {
   surveyState.byTab = {};
   surveyState.windowWide = null;
+  surveyDraftDialogs.byTab = {};
   vi.restoreAllMocks();
 });
 
@@ -115,6 +122,43 @@ describe("survey store", () => {
     // t1 cleared; t2 untouched (independence).
     expect(surveyFor("t1")).toBeNull();
     expect(surveyFor("t2")?.surveyId).toBe("survey-b");
+  });
+
+  test("remote close clears only the matching per-terminal survey by id", () => {
+    showSurvey(spec({ surveyId: "survey-a" }), "t1");
+    showSurvey(spec({ surveyId: "survey-b" }), "t2");
+    const closed = closeSurveyFromRemote("survey-a", "t1");
+    expect(closed).toBe("t1");
+    expect(surveyFor("t1")).toBeNull();
+    expect(surveyFor("t2")?.surveyId).toBe("survey-b");
+  });
+
+  test("remote close without tabName clears the window-wide group survey", () => {
+    showSurvey(spec({ surveyId: "survey-group" }), null);
+    showSurvey(spec({ surveyId: "survey-tab" }), "t1");
+    const closed = closeSurveyFromRemote("survey-group");
+    expect(closed).toBeNull();
+    expect(surveyFor(null)).toBeNull();
+    expect(surveyFor("t1")?.surveyId).toBe("survey-tab");
+  });
+
+  test("remote close ignores stale ids", () => {
+    showSurvey(spec({ surveyId: "survey-a" }), "t1");
+    expect(closeSurveyFromRemote("survey-missing", "t1")).toBeUndefined();
+    expect(surveyFor("t1")?.surveyId).toBe("survey-a");
+  });
+
+  test("saved-draft dialog state maps remote close reasons to exact titles", () => {
+    showSurveyDraftDialog("t1", "cancelled", ".Drafts/one/draft.md");
+    expect(surveyDraftDialogFor("t1")).toMatchObject({
+      reason: "cancelled",
+      draftPath: ".Drafts/one/draft.md",
+    });
+    expect(surveyCloseTitle("cancelled")).toBe("Survey cancelled");
+    expect(surveyCloseTitle("timed_out")).toBe("Survey timed out");
+    expect(surveyCloseTitle("answered_elsewhere")).toBe("Survey answered elsewhere");
+    dismissSurveyDraftDialog("t1");
+    expect(surveyDraftDialogFor("t1")).toBeNull();
   });
 
   test("BubbleOverlay binds X alongside Escape to dismiss and labels the button", async () => {

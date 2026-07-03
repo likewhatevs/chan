@@ -20,6 +20,11 @@
 // agent can tell). Both are real replies that unblock the CLI, so a stray
 // Escape/backdrop close is no longer the hang risk it was: Escape now maps to
 // the explicit Dismiss reply rather than a silent close.
+//
+// The server later pushes `close_survey` when that parked request disappears
+// externally (timeout, cancellation, or a first reply from another window).
+// The close path clears only the matching survey id so tab-targeted and group
+// surveys do not erase each other.
 
 import { api, type SurveySpec, type SurveyReplyRequest } from "../api/client";
 import { notify } from "./notify.svelte";
@@ -33,6 +38,12 @@ type SurveyEntry = { spec: SurveySpec; busy: boolean };
 /// fallback). The reply functions + BubbleOverlay take this so they act on
 /// exactly one survey.
 export type SurveySlot = string | null;
+export type SurveyCloseReason = "cancelled" | "timed_out" | "answered_elsewhere";
+export type SurveyDraftDialog = {
+  id: string;
+  reason: SurveyCloseReason;
+  draftPath: string;
+};
 
 /// Active surveys: one per terminal (keyed by tab id) plus a single window-wide
 /// fallback. Two terminals answer independently.
@@ -40,6 +51,12 @@ export const surveyState = $state<{
   byTab: Record<string, SurveyEntry>;
   windowWide: SurveyEntry | null;
 }>({ byTab: {}, windowWide: null });
+
+export const surveyDraftDialogs = $state<{
+  byTab: Record<string, SurveyDraftDialog>;
+}>({ byTab: {} });
+
+let nextDialogId = 1;
 
 function entry(slot: SurveySlot): SurveyEntry | null {
   return slot === null ? surveyState.windowWide : (surveyState.byTab[slot] ?? null);
@@ -66,6 +83,55 @@ export function surveyBusy(slot: SurveySlot): boolean {
 export function showSurvey(spec: SurveySpec, slot: SurveySlot = null): void {
   if (slot === null) surveyState.windowWide = { spec, busy: false };
   else surveyState.byTab[slot] = { spec, busy: false };
+}
+
+/// Close a survey because the server-side parked request is no longer waiting:
+/// another window answered, the timeout elapsed, or the control side cancelled.
+/// The survey id is authoritative; the preferred slot only preserves the
+/// per-terminal vs window-wide intent when multiple slots exist.
+export function closeSurveyFromRemote(
+  surveyId: string,
+  preferredSlot?: SurveySlot,
+): SurveySlot | undefined {
+  const slots: SurveySlot[] = [];
+  if (preferredSlot !== undefined) slots.push(preferredSlot);
+  for (const key of Object.keys(surveyState.byTab)) slots.push(key);
+  slots.push(null);
+  const seen = new Set<SurveySlot>();
+  for (const slot of slots) {
+    if (seen.has(slot)) continue;
+    seen.add(slot);
+    if (entry(slot)?.spec.surveyId !== surveyId) continue;
+    clear(slot);
+    return slot;
+  }
+  return undefined;
+}
+
+export function showSurveyDraftDialog(
+  tabId: string,
+  reason: SurveyCloseReason,
+  draftPath: string,
+): void {
+  surveyDraftDialogs.byTab[tabId] = {
+    id: `survey-draft-${nextDialogId++}`,
+    reason,
+    draftPath,
+  };
+}
+
+export function surveyDraftDialogFor(tabId: string): SurveyDraftDialog | null {
+  return surveyDraftDialogs.byTab[tabId] ?? null;
+}
+
+export function dismissSurveyDraftDialog(tabId: string): void {
+  delete surveyDraftDialogs.byTab[tabId];
+}
+
+export function surveyCloseTitle(reason: SurveyCloseReason): string {
+  if (reason === "timed_out") return "Survey timed out";
+  if (reason === "answered_elsewhere") return "Survey answered elsewhere";
+  return "Survey cancelled";
 }
 
 /// Reply with the option at `index` (0-based; the overlay numbers them

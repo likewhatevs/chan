@@ -124,6 +124,7 @@
   } from "../state/tabMenu.svelte";
   import RichPrompt from "./RichPrompt.svelte";
   import BubbleOverlay from "./BubbleOverlay.svelte";
+  import SurveyDraftDialog from "./SurveyDraftDialog.svelte";
   import {
     isRichPromptVisible,
     toggleRichPromptForTab,
@@ -2075,6 +2076,7 @@
   {#if active}
     <BubbleOverlay tabId={tab.id} />
   {/if}
+  <SurveyDraftDialog tabId={tab.id} {paneId} />
 </div>
 
 <style>

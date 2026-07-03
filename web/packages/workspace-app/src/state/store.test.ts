@@ -47,6 +47,13 @@ import {
   type LeafNode,
   type TerminalTab,
 } from "./tabs.svelte";
+import { richPrompt } from "./richPrompt.svelte";
+import {
+  surveyDraftDialogFor,
+  surveyDraftDialogs,
+  surveyFor,
+  surveyState,
+} from "./survey.svelte";
 import type { TreeEntry } from "../api/types";
 
 function setTerminalLayout(tab: Partial<TerminalTab> = {}): void {
@@ -103,6 +110,10 @@ afterEach(() => {
   tree.dirErrors = {};
   treeExpanded.map = { "": true };
   fbTreeInstances.byId = {};
+  richPrompt.byTab = {};
+  surveyState.byTab = {};
+  surveyState.windowWide = null;
+  surveyDraftDialogs.byTab = {};
   window.sessionStorage.clear();
   window.history.replaceState(null, "", "/");
 });
@@ -770,6 +781,134 @@ describe("window commands", () => {
     expect(clickSpy).not.toHaveBeenCalled();
     dl.mockRestore();
     clickSpy.mockRestore();
+  });
+
+  test("close_survey for a tab target closes the survey and preserves the visible Rich Prompt draft", async () => {
+    window.history.replaceState(null, "", "/?w=window-a");
+    setTerminalLayout({
+      title: "@@Target",
+      richPromptDraftPath: ".Drafts/rich-target/draft.md",
+    });
+    richPrompt.byTab["term-1"] = true;
+
+    onWatchEvent({
+      type: "window_command",
+      window_id: "window-a",
+      command: "open_survey",
+      tabName: "@@Target",
+      survey: {
+        surveyId: "survey-1",
+        title: null,
+        bodyMarkdown: "Pick one",
+        options: ["A"],
+        followup: null,
+      },
+    });
+    await Promise.resolve();
+    expect(surveyFor("term-1")?.surveyId).toBe("survey-1");
+
+    onWatchEvent({
+      type: "window_command",
+      window_id: "window-a",
+      command: "close_survey",
+      surveyId: "survey-1",
+      reason: "timed_out",
+      tabName: "@@Target",
+    });
+    await Promise.resolve();
+
+    expect(surveyFor("term-1")).toBeNull();
+    expect(richPrompt.byTab["term-1"]).toBe(false);
+    expect(surveyDraftDialogFor("term-1")).toMatchObject({
+      reason: "timed_out",
+      draftPath: ".Drafts/rich-target/draft.md",
+    });
+  });
+
+  test("close_survey without tabName closes only the window-wide group survey", async () => {
+    window.history.replaceState(null, "", "/?w=window-a");
+    setTerminalLayout({ title: "@@Target" });
+
+    onWatchEvent({
+      type: "window_command",
+      window_id: "window-a",
+      command: "open_survey",
+      survey: {
+        surveyId: "survey-group",
+        title: null,
+        bodyMarkdown: "Group pick",
+        options: ["A"],
+        followup: null,
+      },
+    });
+    onWatchEvent({
+      type: "window_command",
+      window_id: "window-a",
+      command: "open_survey",
+      tabName: "@@Target",
+      survey: {
+        surveyId: "survey-tab",
+        title: null,
+        bodyMarkdown: "Tab pick",
+        options: ["B"],
+        followup: null,
+      },
+    });
+    await Promise.resolve();
+    expect(surveyFor(null)?.surveyId).toBe("survey-group");
+    expect(surveyFor("term-1")?.surveyId).toBe("survey-tab");
+
+    onWatchEvent({
+      type: "window_command",
+      window_id: "window-a",
+      command: "close_survey",
+      surveyId: "survey-group",
+      reason: "answered_elsewhere",
+    });
+    await Promise.resolve();
+
+    expect(surveyFor(null)).toBeNull();
+    expect(surveyFor("term-1")?.surveyId).toBe("survey-tab");
+    expect(surveyDraftDialogFor("term-1")).toBeNull();
+  });
+
+  test("window-wide close_survey preserves visible Rich Prompt drafts", async () => {
+    window.history.replaceState(null, "", "/?w=window-a");
+    setTerminalLayout({
+      title: "@@GroupMember",
+      richPromptDraftPath: ".Drafts/group-draft/draft.md",
+    });
+    richPrompt.byTab["term-1"] = true;
+
+    onWatchEvent({
+      type: "window_command",
+      window_id: "window-a",
+      command: "open_survey",
+      survey: {
+        surveyId: "survey-group",
+        title: null,
+        bodyMarkdown: "Group pick",
+        options: ["A"],
+        followup: null,
+      },
+    });
+    await Promise.resolve();
+
+    onWatchEvent({
+      type: "window_command",
+      window_id: "window-a",
+      command: "close_survey",
+      surveyId: "survey-group",
+      reason: "answered_elsewhere",
+    });
+    await Promise.resolve();
+
+    expect(surveyFor(null)).toBeNull();
+    expect(richPrompt.byTab["term-1"]).toBe(false);
+    expect(surveyDraftDialogFor("term-1")).toMatchObject({
+      reason: "answered_elsewhere",
+      draftPath: ".Drafts/group-draft/draft.md",
+    });
   });
 });
 

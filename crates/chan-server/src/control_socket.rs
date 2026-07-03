@@ -112,6 +112,17 @@ enum WindowCommand {
         #[serde(rename = "tabName", skip_serializing_if = "Option::is_none")]
         tab_name: Option<String>,
     },
+    // Close a stale survey overlay after the blocked control call is no longer
+    // awaiting this window's reply. `survey_id` lets the SPA close only the
+    // matching overlay; `tabName` mirrors `OpenSurvey` so tab-targeted surveys
+    // stay per-terminal and group surveys close the window-wide slot.
+    CloseSurvey {
+        #[serde(rename = "surveyId")]
+        survey_id: String,
+        reason: SurveyCloseReason,
+        #[serde(rename = "tabName", skip_serializing_if = "Option::is_none")]
+        tab_name: Option<String>,
+    },
     // `cs pane` layout query: the server asks the window for its current
     // tab/pane layout. The SPA reads its `layout` and POSTs the snapshot to
     // `POST /api/window/reply` echoing `request_id`, which fires the parked
@@ -168,6 +179,14 @@ enum WindowCommand {
         request_id: String,
         prefer: PastePrefer,
     },
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum SurveyCloseReason {
+    Cancelled,
+    TimedOut,
+    AnsweredElsewhere,
 }
 
 /// One spawned team member in a [`WindowCommand::TeamSpawned`]: the tab name
@@ -1668,19 +1687,26 @@ async fn handle_survey(
             return ControlResponse::Error { message };
         }
     }
+    let close_surveys = |reason| {
+        send_survey_close_commands(&windows, &survey_id, tab_name, reason, events_tx);
+    };
     // Block until C's reply route fires the oneshot, the timeout window
     // elapses, or the sender is dropped. Mirrors the `cs pane` round-trip
     // (PANE_REPLY_TIMEOUT), but the window is the caller's `--timeout` (the
     // host needs real time to read and answer, unlike pane's instant reply).
     match tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), rx).await {
-        Ok(Ok(reply)) => ControlResponse::Ok {
-            message: format_survey_reply(&reply),
-        },
+        Ok(Ok(reply)) => {
+            close_surveys(SurveyCloseReason::AnsweredElsewhere);
+            ControlResponse::Ok {
+                message: format_survey_reply(&reply),
+            }
+        }
         // A receive error means the sender was dropped without a reply (server
         // shutdown); the entry is gone, but cancel defensively in case
         // register/await ever diverge.
         Ok(Err(_)) => {
             survey_bus.cancel(&survey_id);
+            close_surveys(SurveyCloseReason::Cancelled);
             ControlResponse::Error {
                 message: "survey cancelled before a reply".into(),
             }
@@ -1690,10 +1716,31 @@ async fn handle_survey(
         // 124). A late host answer then finds the id gone and no-ops.
         Err(_elapsed) => {
             survey_bus.cancel(&survey_id);
+            close_surveys(SurveyCloseReason::TimedOut);
             ControlResponse::Timeout {
                 message: format!("no reply within {timeout_secs}s"),
             }
         }
+    }
+}
+
+fn send_survey_close_commands(
+    windows: &[String],
+    survey_id: &str,
+    tab_name: Option<&str>,
+    reason: SurveyCloseReason,
+    events_tx: &broadcast::Sender<String>,
+) {
+    for window_id in windows {
+        let _ = send_window_command(
+            window_id,
+            WindowCommand::CloseSurvey {
+                survey_id: survey_id.to_string(),
+                reason,
+                tab_name: tab_name.map(str::to_string),
+            },
+            events_tx,
+        );
     }
 }
 
@@ -4410,6 +4457,98 @@ is_lead = false
         assert!(
             without_tab.get("tabName").is_none(),
             "None tab_name omits the field"
+        );
+    }
+
+    #[test]
+    fn close_survey_frame_serializes_reason_and_camel_case_fields() {
+        let with_tab = serde_json::to_value(WindowCommand::CloseSurvey {
+            survey_id: "sid-1".into(),
+            reason: SurveyCloseReason::TimedOut,
+            tab_name: Some("@@Probe".into()),
+        })
+        .expect("serialize close_survey");
+        assert_eq!(with_tab["command"], "close_survey");
+        assert_eq!(with_tab["surveyId"], "sid-1");
+        assert_eq!(with_tab["reason"], "timed_out");
+        assert_eq!(with_tab["tabName"], "@@Probe");
+        assert!(
+            with_tab.get("survey_id").is_none() && with_tab.get("tab_name").is_none(),
+            "wire fields must stay camelCase"
+        );
+
+        let without_tab = serde_json::to_value(WindowCommand::CloseSurvey {
+            survey_id: "sid-2".into(),
+            reason: SurveyCloseReason::AnsweredElsewhere,
+            tab_name: None,
+        })
+        .expect("serialize close_survey");
+        assert_eq!(without_tab["reason"], "answered_elsewhere");
+        assert!(without_tab.get("tabName").is_none());
+    }
+
+    #[tokio::test]
+    async fn group_survey_timeout_closes_each_target_window() {
+        let (_root, registry) = empty_registry();
+        for (tab_name, window_id) in [("@@A", "win-a"), ("@@B", "win-b")] {
+            registry
+                .create(CreateOptions {
+                    size: PtySize {
+                        cols: 80,
+                        rows: 24,
+                        pixel_width: 0,
+                        pixel_height: 0,
+                    },
+                    tab_name: Some(tab_name.into()),
+                    tab_group: Some("alpha".into()),
+                    window_id: Some(window_id.into()),
+                    mcp_env: true,
+                    cwd: None,
+                    command: None,
+                    env: Default::default(),
+                })
+                .expect("spawn survey target");
+        }
+        let registry = Arc::new(registry);
+        let events_tx = broadcast::channel(16).0;
+        let mut rx = events_tx.subscribe();
+        let survey_bus = Arc::new(crate::survey::SurveyBus::new());
+        let response = handle_survey(
+            SurveySpec {
+                survey_id: String::new(),
+                title: None,
+                body_markdown: "pick one".into(),
+                options: vec!["a".into()],
+                followup: None,
+            },
+            None,
+            Some("alpha"),
+            0,
+            &events_tx,
+            &survey_bus,
+            Some(&registry),
+        )
+        .await;
+
+        assert!(matches!(response, ControlResponse::Timeout { .. }));
+        let mut frames = Vec::new();
+        while let Ok(raw) = rx.try_recv() {
+            frames.push(serde_json::from_str::<serde_json::Value>(&raw).unwrap());
+        }
+        let opens = frames
+            .iter()
+            .filter(|frame| frame["command"] == "open_survey")
+            .collect::<Vec<_>>();
+        let closes = frames
+            .iter()
+            .filter(|frame| frame["command"] == "close_survey")
+            .collect::<Vec<_>>();
+        assert_eq!(opens.len(), 2, "group survey opens in each target window");
+        assert_eq!(closes.len(), 2, "timeout closes each target window");
+        assert!(closes.iter().all(|frame| frame["reason"] == "timed_out"));
+        assert!(
+            closes.iter().all(|frame| frame.get("tabName").is_none()),
+            "group survey close stays window-wide"
         );
     }
 
