@@ -48,6 +48,7 @@
   import { imageDropHandlers } from "./bubbles/image_drop";
   import { imageDragIndicator } from "./image_drag_indicator";
   import { pasteHandler } from "./paste_html";
+  import { copyHandlers, type ChanClipboardContext } from "./copy_html";
   import { openImageZoom } from "../state/imageZoom";
   import { openDiagramZoom } from "../state/diagramZoom";
   import { headingFold } from "./fold";
@@ -313,6 +314,18 @@
     return idx <= 0 ? null : p.slice(0, idx);
   }
 
+  /// Lazy context for the rich copy / paste path: the editing path, its
+  /// directory (upload target), and the workspace root (the same-workspace
+  /// short-circuit compares it against a pasted wrapper's root). Read
+  /// lazily so a tab swap picks up the new values.
+  function chanClipboardCtx(): ChanClipboardContext {
+    return {
+      getCurrentPath: () => currentPath,
+      getUploadDir: () => dirOf(currentPath),
+      getWorkspaceRoot: () => workspace.info?.root ?? null,
+    };
+  }
+
   /// Find-on-page adapter (same shape as Source.svelte and the legacy
   /// WYSIWYG; FileEditorTab passes whichever editor is mounted to
   /// FindBar).
@@ -356,10 +369,10 @@
     return view ? clip.selectionText(view) : "";
   }
   export function copySelection(): Promise<void> {
-    return view ? clip.copySelection(view) : Promise.resolve();
+    return view ? clip.copySelection(view, chanClipboardCtx()) : Promise.resolve();
   }
   export function cutSelection(): Promise<void> {
-    return view ? clip.cutSelection(view) : Promise.resolve();
+    return view ? clip.cutSelection(view, chanClipboardCtx()) : Promise.resolve();
   }
   export function pasteClipboard(): Promise<void> {
     return view ? clip.pasteClipboard(view) : Promise.resolve();
@@ -496,6 +509,10 @@
           isDark: () => effectiveHybridSurfaceTheme("editor") === "dark",
         }),
         imageCaretRedirect(),
+        // Rich copy / cut lives in the ALWAYS-ON bundle (not the write-side
+        // compartment) so a read-only doc still copies its images across
+        // windows. Text-only selections defer to CM6's default copy.
+        copyHandlers(chanClipboardCtx()),
         tableDecorations(),
         mermaidDecorations(
           () => effectiveHybridSurfaceTheme("editor") === "dark",
@@ -773,11 +790,12 @@
       // exists solely in editable mode.
       imageDragIndicator,
       // HTML-paste handler runs ahead of CM6's default plain-text
-      // paste so rich pastes get converted to markdown. Image-file
+      // paste so rich pastes get converted to markdown, and a chan-doc
+      // wrapper carries its images across windows / workspaces. Image-file
       // pastes (clipboard with image/* MIME) are owned by
       // imageDropHandlers; the paste handler skips them. Both are
       // write-side, so they're disabled together.
-      pasteHandler(),
+      pasteHandler(chanClipboardCtx()),
     ];
   }
 

@@ -6,6 +6,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Copy a doc with its images between windows.** Copying a selection that holds workspace image refs now carries the images: chan writes both the exact markdown (plain text, byte-identical to before for text-only copies) and a self-contained HTML payload with each image inlined as a data: URI. Pasting into another window or workspace recreates the files next to the destination doc with widths, alt text, and alignment preserved; a same-workspace paste into another folder rebases the refs with zero re-uploads; pasting into a plain-text target yields the raw markdown, and pasting into Google Docs or Mail carries text plus images.
+
 ### Changed
 
 - **`chan devserver --service` now defaults to `auto`, resolving the backend per-OS at runtime.** With an action verb (`--start`/`--stop`/`--restart`/`--status`/`--join`), auto supervises under systemd on Linux, launchd on macOS, and the self-managed `chan` daemon on Windows, so `chan devserver --join` picks the right manager with no `--service=` flag. With no action verb it runs the plain foreground server, so a bare `chan devserver` still works on every host, including an unrecognized OS. An action verb that cannot resolve a manager (an unrecognized OS, or a Linux box with no `/run/systemd/system`) fails with a clear message pointing at `--service=chan`, and the explicit `--service=none/chan/systemd/launchd` values behave exactly as before.

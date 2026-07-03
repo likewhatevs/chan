@@ -1,11 +1,13 @@
 // Paste handling: HTML -> markdown conversion, plus a plain-text list-dedent.
 //
-// The paste handler covers three cases: image-file pastes defer to the
-// image-drop handler; rich HTML is converted to markdown via turndown; and a
-// plain-text paste of a list item into an existing list line has its leading
-// marker stripped (dedentListPaste) so a copied "- item" merges into the
-// current bullet instead of nesting as "- - item". Everything else defers to
-// CM6's default paste.
+// The paste handler covers four cases: a chan-to-chan rich paste (a
+// wrapper carrying the exact source markdown + inlined images, written by
+// copy_html.ts) carries images across windows / workspaces; image-file
+// pastes defer to the image-drop handler; other rich HTML is converted to
+// markdown via turndown; and a plain-text paste of a list item into an
+// existing list line has its leading marker stripped (dedentListPaste) so
+// a copied "- item" merges into the current bullet instead of nesting as
+// "- - item". Everything else defers to CM6's default paste.
 //
 // When the clipboard carries an HTML representation (typical for a
 // paste from another rich-text editor, a Notion / Obsidian / Office
@@ -27,6 +29,16 @@
 import { EditorView } from "@codemirror/view";
 import type { EditorState, Extension } from "@codemirror/state";
 import { parseListPrefix } from "./commands/list";
+import {
+  findWorkspaceImageRefs,
+  type ChanClipboardContext,
+  type WorkspaceImageRef,
+} from "./copy_html";
+import { base64ToBytes } from "../api/clipboard";
+import { api } from "../api/client";
+import { invalidateImageCatalog } from "./bubbles/image";
+import { decodePercent, encodeRelPath, normalizeHref, relativizePath } from "./links";
+import { notify } from "../state/notify.svelte";
 
 // Semantic HTML tags we treat as "this paste is actually rich" and
 // worth running through turndown. Without these, a paste of bold or
@@ -37,7 +49,7 @@ import { parseListPrefix } from "./commands/list";
 const RICH_TAG_RE =
   /<(?:a|b|blockquote|br|code|dd|del|dl|dt|em|figcaption|figure|h[1-6]|hr|i|img|kbd|li|mark|ol|p|pre|s|samp|strike|strong|sub|sup|table|td|th|tr|u|ul)\b/i;
 
-export function pasteHandler(): Extension {
+export function pasteHandler(ctx?: ChanClipboardContext): Extension {
   return EditorView.domEventHandlers({
     paste(event, view) {
       const cd = event.clipboardData;
@@ -49,19 +61,36 @@ export function pasteHandler(): Extension {
         }
       }
       const html = cd.getData("text/html");
+      // Chan-to-chan rich paste: a wrapper carrying the exact source
+      // markdown + inlined images. Parse it and apply (same-workspace
+      // rebase or foreign upload). Missing / malformed attrs fall through
+      // to the turndown path below (defensive).
+      if (ctx && html && html.includes("data-chan-markdown")) {
+        const parsed = parseChanWrapper(html);
+        if (parsed) {
+          event.preventDefault();
+          void applyChanHtmlPaste(parsed, view, ctx);
+          return true;
+        }
+      }
       if (html && RICH_TAG_RE.test(html)) {
         event.preventDefault();
         // Lazy import - the converter is only fetched on first rich
         // paste. Vite emits this as its own chunk.
-        void htmlToMarkdown(html).then((md) => {
+        void (async () => {
+          let md = await htmlToMarkdown(html);
           if (!md) return;
+          // A rich paste from an external editor may inline images as
+          // base64 data: URIs; upload them so gdocs-to-chan pastes land
+          // as attachments instead of megabytes of base64 in the .md.
+          if (ctx) md = await uploadInlineDataImages(md, ctx);
           const sel = view.state.selection.main;
           const insert = dedentListPaste(view.state, sel.from, md);
           view.dispatch({
             changes: { from: sel.from, to: sel.to, insert },
             selection: { anchor: sel.from + insert.length },
           });
-        });
+        })();
         return true;
       }
       // Plain-text paste of a list item INTO a list line: strip the pasted
@@ -164,4 +193,228 @@ export async function htmlToMarkdown(html: string): Promise<string> {
     },
   });
   return td.turndown(html);
+}
+
+/// A parsed chan-doc wrapper: the exact source markdown, the origin
+/// workspace / path, and the ordinal -> `<img>` src map (data: URIs, or an
+/// absolute URL when inlining degraded).
+export interface ChanWrapperPaste {
+  markdown: string;
+  workspaceRoot: string;
+  sourcePath: string;
+  refData: Map<number, string>;
+}
+
+/// Parse a chan-doc wrapper out of pasted HTML. Returns null when the
+/// markdown attribute is missing / empty (the caller then falls through to
+/// the turndown path), so a corrupt or foreign wrapper degrades gracefully.
+/// Exported for the unit test.
+export function parseChanWrapper(html: string): ChanWrapperPaste | null {
+  let doc: Document;
+  try {
+    doc = new DOMParser().parseFromString(html, "text/html");
+  } catch {
+    return null;
+  }
+  const root = doc.querySelector("[data-chan-markdown]");
+  if (!root) return null;
+  const markdown = root.getAttribute("data-chan-markdown");
+  if (markdown == null || markdown === "") return null;
+  const refData = new Map<number, string>();
+  for (const img of Array.from(root.querySelectorAll("img[data-chan-ref]"))) {
+    const ord = Number(img.getAttribute("data-chan-ref"));
+    if (!Number.isInteger(ord)) continue;
+    const src = img.getAttribute("src");
+    if (src) refData.set(ord, src);
+  }
+  return {
+    markdown,
+    workspaceRoot: root.getAttribute("data-chan-workspace") ?? "",
+    sourcePath: root.getAttribute("data-chan-path") ?? "",
+    refData,
+  };
+}
+
+/// One in-place src rewrite: replace `[start, end)` with `text`.
+interface SrcRewrite {
+  start: number;
+  end: number;
+  text: string;
+}
+
+/// Apply src rewrites right-to-left so earlier offsets stay valid.
+function applyRewritesRTL(source: string, rewrites: SrcRewrite[]): string {
+  let out = source;
+  for (const r of [...rewrites].sort((a, b) => b.start - a.start)) {
+    out = out.slice(0, r.start) + r.text + out.slice(r.end);
+  }
+  return out;
+}
+
+/// Directory of a workspace-rooted path (POSIX, no leading slash), or ""
+/// for a file at the workspace root. Matches `normalizeHref`'s sourceDir
+/// contract.
+function dirOfPath(path: string): string {
+  const idx = path.lastIndexOf("/");
+  return idx < 0 ? "" : path.slice(0, idx);
+}
+
+/// Decode a base64 data: URI into a File. Non-base64 (`;charset` /
+/// percent) payloads decode through decodeURIComponent.
+function dataUriToFile(dataUri: string, name: string): File {
+  const comma = dataUri.indexOf(",");
+  const meta = comma < 0 ? "" : dataUri.slice(5, comma);
+  const mime = meta.split(";")[0] || "application/octet-stream";
+  const payload = comma < 0 ? "" : dataUri.slice(comma + 1);
+  const bytes = /;base64/i.test(meta)
+    ? base64ToBytes(payload)
+    : new TextEncoder().encode(decodeURIComponent(payload));
+  // Copy into a fresh ArrayBuffer: a Uint8Array may be backed by a
+  // SharedArrayBuffer, which the DOM BlobPart type rejects.
+  const buffer = new ArrayBuffer(bytes.byteLength);
+  new Uint8Array(buffer).set(bytes);
+  return new File([buffer], name, { type: mime });
+}
+
+/// A filename for an uploaded pasted image: the ref's basename, else a
+/// generic name with the data: URI's mime extension.
+function uploadNameFor(ref: WorkspaceImageRef, dataUri: string): string {
+  const base = decodePercent(ref.base).split("/").pop() ?? "";
+  if (base) return base;
+  const mime = dataUri.slice(5, dataUri.indexOf(";"));
+  const ext = mime.split("/")[1] || "png";
+  return `pasted-image.${ext}`;
+}
+
+/// Same-workspace paste: no uploads. Rebase each ref from the SOURCE
+/// document's directory to the DESTINATION document's directory, keeping
+/// the `#...` fragment verbatim. Refs that can't resolve stay verbatim.
+function rebaseSameWorkspace(
+  markdown: string,
+  refs: WorkspaceImageRef[],
+  sourcePath: string,
+  destPath: string | null,
+): string {
+  if (!sourcePath || !destPath) return markdown;
+  const sourceDir = dirOfPath(sourcePath);
+  const rewrites: SrcRewrite[] = [];
+  for (const ref of refs) {
+    const wsRooted = normalizeHref(decodePercent(ref.base), sourceDir);
+    if (!wsRooted) continue;
+    const rel = relativizePath(wsRooted, destPath);
+    rewrites.push({
+      start: ref.srcStart,
+      end: ref.srcEnd,
+      text: encodeRelPath(rel) + ref.fragment,
+    });
+  }
+  return applyRewritesRTL(markdown, rewrites);
+}
+
+/// Foreign paste: upload each ref's inlined bytes next to the destination
+/// document, then rewrite its src to the returned (relativized) path plus
+/// the ORIGINAL fragment. A per-image failure keeps the original ref.
+async function uploadForeignRefs(
+  markdown: string,
+  refs: WorkspaceImageRef[],
+  refData: Map<number, string>,
+  ctx: ChanClipboardContext,
+): Promise<string> {
+  const destPath = ctx.getCurrentPath();
+  const uploadDir = ctx.getUploadDir();
+  const rewrites: SrcRewrite[] = [];
+  let anyFailure = false;
+  for (const ref of refs) {
+    const dataSrc = refData.get(ref.ordinal);
+    if (!dataSrc || !dataSrc.startsWith("data:")) {
+      anyFailure = true;
+      continue;
+    }
+    try {
+      const file = dataUriToFile(dataSrc, uploadNameFor(ref, dataSrc));
+      const res = await api.uploadAttachment(file, uploadDir);
+      const rel = destPath ? relativizePath(res.path, destPath) : res.path;
+      rewrites.push({
+        start: ref.srcStart,
+        end: ref.srcEnd,
+        text: encodeRelPath(rel) + ref.fragment,
+      });
+    } catch (err) {
+      console.warn("chan paste: image upload failed", err);
+      anyFailure = true;
+    }
+  }
+  invalidateImageCatalog();
+  if (anyFailure) notify("Some pasted images couldn't be copied over");
+  return applyRewritesRTL(markdown, rewrites);
+}
+
+/// Apply a parsed chan-doc wrapper: same-workspace rebase (zero uploads)
+/// or foreign upload, then a single dispatch reading the live selection
+/// AFTER the awaits and the list-dedent, matching the turndown branch.
+/// Exported for the unit test.
+export async function applyChanHtmlPaste(
+  parsed: ChanWrapperPaste,
+  view: EditorView,
+  ctx: ChanClipboardContext,
+): Promise<void> {
+  const refs = findWorkspaceImageRefs(parsed.markdown);
+  const destRoot = ctx.getWorkspaceRoot();
+  const sameWorkspace =
+    parsed.workspaceRoot !== "" &&
+    destRoot !== null &&
+    parsed.workspaceRoot === destRoot;
+  const out = sameWorkspace
+    ? rebaseSameWorkspace(
+        parsed.markdown,
+        refs,
+        parsed.sourcePath,
+        ctx.getCurrentPath(),
+      )
+    : await uploadForeignRefs(parsed.markdown, refs, parsed.refData, ctx);
+  const sel = view.state.selection.main;
+  const insert = dedentListPaste(view.state, sel.from, out);
+  view.dispatch({
+    changes: { from: sel.from, to: sel.to, insert },
+    selection: { anchor: sel.from + insert.length },
+  });
+}
+
+// `![alt](data:...)` inline base64 images from an external rich paste.
+const DATA_IMAGE_RE = /!\[[^\]]*\]\((data:[^)]*)\)/g;
+
+/// Upload any `![](data:...)` images turndown produced and rewrite their
+/// srcs to the returned attachment paths, so an external paste with inline
+/// base64 lands as files instead of megabytes of base64 in the doc. A
+/// per-image failure keeps the base64 ref (today's behavior).
+async function uploadInlineDataImages(
+  md: string,
+  ctx: ChanClipboardContext,
+): Promise<string> {
+  DATA_IMAGE_RE.lastIndex = 0;
+  const matches: Array<{ start: number; end: number; src: string }> = [];
+  let m: RegExpExecArray | null;
+  while ((m = DATA_IMAGE_RE.exec(md)) !== null) {
+    const src = m[1] ?? "";
+    const srcStart = m.index + m[0].indexOf(src);
+    matches.push({ start: srcStart, end: srcStart + src.length, src });
+  }
+  if (matches.length === 0) return md;
+  const destPath = ctx.getCurrentPath();
+  const uploadDir = ctx.getUploadDir();
+  const rewrites: SrcRewrite[] = [];
+  for (const match of matches) {
+    try {
+      const mime = match.src.slice(5, match.src.indexOf(";"));
+      const ext = mime.split("/")[1] || "png";
+      const file = dataUriToFile(match.src, `pasted-image.${ext}`);
+      const res = await api.uploadAttachment(file, uploadDir);
+      const rel = destPath ? relativizePath(res.path, destPath) : res.path;
+      rewrites.push({ start: match.start, end: match.end, text: encodeRelPath(rel) });
+    } catch (err) {
+      console.warn("chan paste: inline data image upload failed", err);
+    }
+  }
+  if (rewrites.length > 0) invalidateImageCatalog();
+  return applyRewritesRTL(md, rewrites);
 }
