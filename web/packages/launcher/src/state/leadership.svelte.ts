@@ -33,3 +33,10 @@ export function canActOnTenant(prefix: string): boolean {
   const leader = library.leaders[prefix];
   return leader === undefined || hasWindowHandle(leader);
 }
+
+/** The acting window_id to claim for a leader-only op on a tenant: this
+ * launcher's leader window_id when it owns the leader, else undefined (a
+ * leaderless op is allowed; a follower's op is refused server-side). */
+export function actingFor(prefix: string): string | undefined {
+  return ownsTenantLeader(prefix) ? (tenantLeader(prefix) ?? undefined) : undefined;
+}

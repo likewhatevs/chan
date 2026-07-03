@@ -1,7 +1,8 @@
 // Self-managed surface (a bridgeless local devserver / PWA): registry mutation
 // is allowed and the launcher opens its own browser windows, but there is no
 // desktop bridge. So the local create controls show, window rows carry an OPEN
-// action (not Focus/Hide), and remote-devserver dialing (connect/disconnect,
+// action plus a bridgeless leader-gated Eye toggle (not the desktop Focus
+// bridge), and remote-devserver dialing (connect/disconnect,
 // devserver terminal, Add dev server) is hidden. New-window controls gate on
 // per-tenant leadership. Desktop parity is in Library.test.ts, readonly in
 // LibraryReadOnly.test.ts.
@@ -74,11 +75,17 @@ describe("Library self-managed surface", () => {
     ).toBe(false);
   });
 
-  it("window rows carry the OPEN action, not the desktop Focus/Hide bridge", () => {
+  it("window rows carry OPEN plus the bridgeless Eye toggle, not the desktop Focus bridge", () => {
     mountList();
     expect(target!.querySelector('[aria-label="Open window"]')).not.toBeNull();
+    // No desktop bridge: the native Focus action never shows.
     expect(target!.querySelector('[aria-label="Focus window"]')).toBeNull();
-    expect(target!.querySelector('[aria-label="Hide window"]')).toBeNull();
+    // The bridgeless SHOW/HIDE Eye toggle (the /visibility web op) IS present
+    // (visible windows show "Hide window", hidden ones "Show window").
+    const eye =
+      target!.querySelector('[aria-label="Hide window"]') ??
+      target!.querySelector('[aria-label="Show window"]');
+    expect(eye).not.toBeNull();
   });
 
   it("enables New window on a running workspace when the tenant is leaderless", () => {

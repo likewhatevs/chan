@@ -1111,6 +1111,19 @@ pub fn install_launcher_root_fallback(
     host.install_root_fallback(routes::launcher_router(host.clone(), bearer, serve_addr));
 }
 
+/// Request-extension marker inserted by the devserver's tunnel layer on every
+/// request that arrived over the gateway tunnel (not the loopback bind). The
+/// same `build_devserver_app` app serves both the local bind (a mutable
+/// `devserver` surface) and the tunnel; this marker is what keeps the tunnel
+/// READ-ONLY. It is read by the launcher-meta injector (to downgrade the
+/// surface to `readonly`) and by `require_mutable` (to 403 workspace mutation),
+/// so a credential-stripped tunnel request can never mutate the owner's
+/// registry. Server-internal (never client-settable), inserted AFTER the
+/// request enters the tunnel-only app clone, so a local loopback request never
+/// carries it. Absence therefore means "local bind".
+#[derive(Clone, Copy)]
+pub(crate) struct TunnelOrigin;
+
 #[async_trait::async_trait]
 impl chan_library::TenantBuilder for RouteLayer {
     async fn build_workspace(

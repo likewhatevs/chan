@@ -23,7 +23,7 @@ use std::sync::{Arc, OnceLock};
 use axum::body::{Body, Bytes};
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path as AxumPath, Query, State};
-use axum::http::{header, Request, StatusCode};
+use axum::http::{header, Method, Request, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post, put};
@@ -186,6 +186,7 @@ pub fn launcher_router(
             "/api/library/workspaces/{id}",
             delete(handle_remove_workspace),
         )
+        .route_layer(middleware::from_fn(require_local_mutation))
         .with_state(Arc::new(LauncherState {
             host: host.clone(),
             serve_addr: serve_addr.clone(),
@@ -233,6 +234,7 @@ pub fn launcher_router(
             "/api/library/devservers/{id}",
             put(handle_update_devserver).delete(handle_remove_devserver),
         )
+        .route_layer(middleware::from_fn(require_local_mutation))
         .with_state(Arc::new(LauncherState { host, serve_addr }));
     // The launcher-management routes (windows / workspaces / devservers) stay
     // gated on the launcher token. The local-color (`config`) routes set the
@@ -260,11 +262,23 @@ pub fn launcher_router(
     };
     let api = launcher_api.merge(config);
     // The static SPA shell is ALWAYS public (loads before it holds the token) and
-    // carries the read-only hint so the SPA hides mutation controls on the
-    // devserver surface rather than showing buttons that 403.
+    // carries the surface hint so the SPA hides mutation controls on a read-only
+    // surface rather than showing buttons that 403. A tunnel-origin request
+    // (marked by the devserver's tunnel layer) is downgraded to `readonly` even
+    // when this router's static surface is the mutable `devserver`, so the same
+    // app serves a mutable launcher on the loopback bind and a read-only one over
+    // the gateway. The `require_local_mutation` gate enforces the same split on
+    // the data routes.
     Router::new()
         .merge(api)
-        .fallback(move |uri| serve_launcher(uri, surface))
+        .fallback(move |req: Request<Body>| {
+            let effective = if req.extensions().get::<crate::TunnelOrigin>().is_some() {
+                LauncherSurface::ReadOnly
+            } else {
+                surface
+            };
+            serve_launcher(req.uri().clone(), effective)
+        })
 }
 
 /// Gate `/api/library/*` on the surface's launcher token. The token is accepted
@@ -340,6 +354,29 @@ async fn require_surface_bearer(
         )
             .into_response()
     }
+}
+
+/// Gate the registry-mutation routers (workspaces + devservers) to the LOCAL
+/// bind. The headless devserver serves ONE app on both its loopback bind (a
+/// mutable `devserver` surface) and the gateway tunnel; the tunnel strips every
+/// client credential, so a mutating request there cannot be tied to the owner.
+/// The tunnel layer marks its requests with [`crate::TunnelOrigin`]; refuse a
+/// mutation (POST / PUT / DELETE) carrying it with 403, so the read-only tunnel
+/// surface can never flip the owner's workspaces while the loopback bind stays
+/// fully mutable. GET (list) passes on both. This is the security half of the
+/// surface split; [`inject_launcher_meta`] downgrades the meta to `readonly` for
+/// the same marker so the SPA hides the controls too.
+async fn require_local_mutation(req: Request<Body>, next: Next) -> Response {
+    let is_mutation = matches!(*req.method(), Method::POST | Method::PUT | Method::DELETE);
+    if is_mutation && req.extensions().get::<crate::TunnelOrigin>().is_some() {
+        return (
+            StatusCode::FORBIDDEN,
+            "workspace mutation is not available over the tunnel; manage a devserver's \
+             workspaces from its own machine or the CLI",
+        )
+            .into_response();
+    }
+    next.run(req).await
 }
 
 /// The `t` bearer from a URL query string (`...?t=<token>`), for the watch WS

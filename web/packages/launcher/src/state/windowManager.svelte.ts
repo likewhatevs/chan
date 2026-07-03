@@ -99,6 +99,20 @@ export async function closeWindowRecord(
   clearWindowAttention(record.window_id);
 }
 
+/** Flip a window's server-persisted visibility from a self-managed launcher (the
+ * bridgeless Eye toggle): hide a visible window, un-hide a hidden one, keyed on
+ * the feed's `hidden`. `actingWindowId` claims the leader identity for the
+ * per-tenant gate (the server 403s a mismatching claim). This touches only the
+ * shared visibility state; the local browser handle is the OPEN button's job, so
+ * nothing here opens or closes it. */
+export async function toggleWindowVisibility(
+  record: WindowRecord,
+  actingWindowId?: string,
+): Promise<void> {
+  if (demoState.enabled) return;
+  await backend.setWindowVisibility(record.window_id, !(record.hidden ?? false), actingWindowId);
+}
+
 /** Reconcile the handle map against a feed snapshot. Closes handles whose record
  * left the feed (absence == discard), and flags a VISIBLE browser-origin record
  * this launcher holds no live handle for as an orphan (a reload lost the handle,

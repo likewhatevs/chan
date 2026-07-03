@@ -739,7 +739,7 @@ pub async fn run_devserver(library: Library, config: DevserverConfig) -> anyhow:
     // API still works, only the `chan open` registration path is disabled.
     let _discovery = start_discovery_listener(state.clone());
 
-    let app = build_devserver_app(state.clone(), host.clone());
+    let (app, serve_addr_cell) = build_devserver_app(state.clone(), host.clone());
 
     // Bind the local TCP listener up front (so a bind failure errors before we
     // dial the tunnel), unless the resolved config is tunnel-only. `addr` is
@@ -776,7 +776,10 @@ pub async fn run_devserver(library: Library, config: DevserverConfig) -> anyhow:
     // run loop reconnects with backoff and is cancelled by the shutdown signal.
     let tunnel_url = config.tunnel.as_ref().map(|t| t.tunnel_url.clone());
     if let Some(tunnel) = config.tunnel {
-        spawn_devserver_tunnel(tunnel, app.clone(), &signal_tx);
+        // Mark every tunnel request as tunnel-origin so the shared app's mutable
+        // launcher surface is served read-only over the gateway.
+        let tunnel_app = app.clone().layer(middleware::from_fn(mark_tunnel_origin));
+        spawn_devserver_tunnel(tunnel, tunnel_app, &signal_tx);
     }
 
     match listener {
@@ -786,6 +789,10 @@ pub async fn run_devserver(library: Library, config: DevserverConfig) -> anyhow:
             // the request on the impossible local_addr() error rather than
             // refusing to serve.
             let local_addr = listener.local_addr().unwrap_or(config.addr);
+            // Fill the launcher's serve-address cell so the local web launcher's
+            // workspace-mount path resolves tenant URLs against the bound address
+            // (the mutable devserver surface).
+            let _ = serve_addr_cell.set(local_addr);
             // Persist the bound port so a local client (the desktop) re-discovers
             // the current port from the config after the devserver restarts on a
             // new OS-assigned port, instead of dialing a stale stored URL.
@@ -928,7 +935,10 @@ fn spawn_devserver_tunnel(
 /// bearer-gated management routes, and the per-tenant fallback. Explicit
 /// `/api/devserver/*` routes match before the host's fallback, so the
 /// reserved namespace is never shadowed by a workspace prefix.
-fn build_devserver_app(state: Arc<DevserverState>, host: Arc<WorkspaceHost>) -> Router {
+fn build_devserver_app(
+    state: Arc<DevserverState>,
+    host: Arc<WorkspaceHost>,
+) -> (Router, Arc<OnceLock<SocketAddr>>) {
     let public = Router::new()
         .route("/api/devserver/info", get(handle_info))
         // The launcher root the devserver serves has no `/api/health` of its own
@@ -971,13 +981,33 @@ fn build_devserver_app(state: Arc<DevserverState>, host: Arc<WorkspaceHost>) -> 
     // gate would 401 every call. The desktop LOOPBACK passes `Some(token)`
     // instead (it has no proxy; the SPA presents the token via `?t=`).
     //
-    // `serve_addr = None`: the gateway surface serves workspaces READ-ONLY.
-    // `bearer=None` can't distinguish owner from grantee, so mutating routes
-    // (add/on/off/rm) must not be exposed over the tunnel; owners
-    // manage a headless devserver's workspaces via the bearer-gated
-    // `/api/devserver/*` API + `cs`/CLI instead.
-    crate::install_launcher_root_fallback(&host, None, None);
-    public.merge(authed).merge(host.router())
+    // `bearer = None` on BOTH origins: the tunnel strips creds (a `Some(token)`
+    // gate would 401 every tunnel call), and the loopback bind is a
+    // single-machine trust boundary like `chan open` (the open loopback URL).
+    //
+    // `serve_addr = Some(cell)` emits the MUTABLE `devserver` surface (the local
+    // web launcher gets the real Power toggle + self-managed windows) and lets
+    // the workspace-mount path read the bound address. The tunnel MUST stay
+    // read-only: the devserver's tunnel layer marks every tunnel request with
+    // `TunnelOrigin`, which `require_local_mutation` 403s and the launcher-meta
+    // fallback downgrades to `readonly`, so a credential-stripped tunnel request
+    // can never flip the owner's workspaces. The cell is filled with the bound
+    // address after the listener binds (unfilled on a tunnel-only devserver,
+    // where there is no local bind to mutate from anyway).
+    let serve_addr: Arc<OnceLock<SocketAddr>> = Arc::new(OnceLock::new());
+    crate::install_launcher_root_fallback(&host, None, Some(serve_addr.clone()));
+    let app = public.merge(authed).merge(host.router());
+    (app, serve_addr)
+}
+
+/// Middleware that stamps every request entering the tunnel-only app clone with
+/// [`crate::TunnelOrigin`], so the launcher's mutation gate + meta injector keep
+/// the tunnel read-only even though the shared app serves a mutable surface on
+/// the loopback bind. A local loopback request never passes through this layer,
+/// so it never carries the marker.
+async fn mark_tunnel_origin(mut req: HttpRequest<Body>, next: Next) -> Response {
+    req.extensions_mut().insert(crate::TunnelOrigin);
+    next.run(req).await
 }
 
 /// Bind the per-user discovery socket whose registration handler mounts the
@@ -1494,7 +1524,7 @@ mod tests {
         let state = test_state(home.path(), addr);
         let prefix = state.register_workspace(ws.path()).await.expect("mount");
         let host = state.host.clone();
-        let app = build_devserver_app(state, host);
+        let (app, _serve_addr) = build_devserver_app(state, host);
 
         // An unforced off of a workspace with no live terminals clears the
         // confirm-before-off guard (count is 0) and unmounts: 200, not 409. (The
@@ -1526,7 +1556,7 @@ mod tests {
         let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
         let state = test_state(home.path(), addr);
         let host = state.host.clone();
-        let app = build_devserver_app(state, host);
+        let (app, _serve_addr) = build_devserver_app(state, host);
 
         let resp = app
             .oneshot(
@@ -2101,7 +2131,7 @@ mod tests {
             "local".to_string(),
         );
         let host = state.host.clone();
-        let app = build_devserver_app(state, host);
+        let (app, _serve_addr) = build_devserver_app(state, host);
 
         // On the devserver (gateway surface) the feed is TUNNEL-TRUSTED: the
         // launcher bundle installs with `bearer = None`, because the gateway
@@ -2194,7 +2224,7 @@ mod tests {
         // Register + mount one workspace so it lists as on.
         let prefix = state.register_workspace(ws.path()).await.expect("mount");
         let host = state.host.clone();
-        let app = build_devserver_app(state, host);
+        let (app, _serve_addr) = build_devserver_app(state, host);
 
         // Tunnel-trust on the devserver surface: no bearer needed.
         let resp = app
@@ -2345,6 +2375,66 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn devserver_local_bind_is_mutable_but_the_tunnel_is_readonly() {
+        use axum::body::to_bytes;
+        use tower::ServiceExt;
+
+        let home = tempfile::tempdir().expect("home");
+        let ws = tempfile::tempdir().expect("workspace");
+        let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let state = test_state(home.path(), addr);
+        let host = state.host.clone();
+        let (app, serve_addr) = build_devserver_app(state, host);
+        // Simulate the post-bind fill so the loopback surface is fully mutable.
+        serve_addr.set(addr).unwrap();
+        // The tunnel clone marks every request tunnel-origin, exactly like the
+        // serve loop; this also exercises that the marker survives the host's
+        // root-fallback dispatch to require_local_mutation.
+        let tunnel = app.clone().layer(middleware::from_fn(mark_tunnel_origin));
+
+        let add_req = || {
+            let body = format!(r#"{{"path":{:?}}}"#, ws.path().to_string_lossy());
+            HttpRequest::builder()
+                .method("POST")
+                .uri("/api/library/workspaces")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(body))
+                .unwrap()
+        };
+
+        // Security: a tunnel-origin workspace mutation is refused 403 even though
+        // the shared surface is mutable.
+        let refused = tunnel.clone().oneshot(add_req()).await.unwrap();
+        assert_eq!(refused.status(), StatusCode::FORBIDDEN);
+
+        // The SAME add on the local bind is NOT blocked: it registers the folder.
+        let added = app.clone().oneshot(add_req()).await.unwrap();
+        assert_eq!(added.status(), StatusCode::OK);
+
+        // Meta: when the launcher bundle is built, the local bind advertises the
+        // mutable `devserver` surface and the tunnel the `readonly` one from the
+        // SAME app. Tolerate an unbuilt bundle (no meta) so a bare cargo test
+        // without `make web` still passes; pre-push builds it and verifies both.
+        let get_root = || HttpRequest::builder().uri("/").body(Body::empty()).unwrap();
+        let body_of = |resp: Response| async move {
+            let bytes = to_bytes(resp.into_body(), 1 << 20).await.unwrap();
+            String::from_utf8_lossy(&bytes).into_owned()
+        };
+        let local_body = body_of(app.oneshot(get_root()).await.unwrap()).await;
+        let tunnel_body = body_of(tunnel.oneshot(get_root()).await.unwrap()).await;
+        if local_body.contains("chan-launcher-surface") {
+            assert!(
+                local_body.contains(r#"content="devserver""#),
+                "local bind should advertise the devserver surface"
+            );
+            assert!(
+                tunnel_body.contains(r#"content="readonly""#),
+                "the tunnel should advertise the readonly surface"
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn launcher_mounts_at_library_root() {
         use axum::body::to_bytes;
         use tower::ServiceExt;
@@ -2353,7 +2443,7 @@ mod tests {
         let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
         let state = test_state(home.path(), addr);
         let host = state.host.clone();
-        let app = build_devserver_app(state, host);
+        let (app, _serve_addr) = build_devserver_app(state, host);
 
         // Root `/` is served by the installed launcher root fallback -- public
         // (no bearer). Without the fallback `host_dispatch` 404s the root with
@@ -2428,7 +2518,7 @@ mod tests {
         let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
         let state = test_state(home.path(), addr);
         let host = state.host.clone();
-        let app = build_devserver_app(state, host);
+        let (app, _serve_addr) = build_devserver_app(state, host);
 
         let fetch = |uri: &'static str| {
             let app = app.clone();

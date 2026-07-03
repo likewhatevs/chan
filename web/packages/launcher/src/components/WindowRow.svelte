@@ -20,7 +20,8 @@
   import { hasControlAttention, clearControlAttention } from "../state/controlAttention.svelte";
   import { hasWindowAttention } from "../state/windowAttention.svelte";
   import { hasDesktopBridge, selfManagedWindows } from "../state/capabilities";
-  import { openWindowRecord } from "../state/windowManager.svelte";
+  import { openWindowRecord, toggleWindowVisibility } from "../state/windowManager.svelte";
+  import { actingFor, canActOnTenant } from "../state/leadership.svelte";
   import type { WindowRecord } from "../api/library";
 
   interface Props {
@@ -117,6 +118,26 @@
       <span class="row-name">{windowRowLabel(w)}</span>
     </div>
     <div class="row-actions">
+      <!-- Bridgeless SHOW/HIDE: flips the shared, server-persisted visibility
+           (the `/visibility` web op), leader-gated like the create controls, so a
+           follower tab sees it disabled. Separate from OPEN, which owns this
+           launcher's local browser handle. -->
+      <button
+        class="icon-btn"
+        class:on={!w.hidden}
+        type="button"
+        disabled={!canActOnTenant(w.prefix)}
+        title={!canActOnTenant(w.prefix)
+          ? "Only the tenant leader can show or hide this window"
+          : w.hidden
+            ? "Show window"
+            : "Hide window"}
+        aria-label={w.hidden ? "Show window" : "Hide window"}
+        onclick={() => {
+          run(w, toggleWindowVisibility(w, actingFor(w.prefix)));
+        }}>
+        {#if w.hidden}<EyeOff size={16} />{:else}<Eye size={16} />{/if}
+      </button>
       <button
         class="icon-btn"
         class:attention={hasWindowAttention(w.window_id)}
@@ -140,6 +161,11 @@
     <div class="row-main">
       <span class="row-name">{windowRowLabel(w)}</span>
     </div>
+    <!-- Readonly can't drive a window, but it mirrors the EYE state: a hidden
+         window shows a static EyeOff beside the connection dot. -->
+    {#if w.hidden}
+      <span class="hidden-ind" title="Hidden" aria-label="Hidden"><EyeOff size={14} /></span>
+    {/if}
     <span class="dot" class:live={w.connected} title={w.connected ? "Connected" : "Detached"}></span>
   </div>
 {/if}
@@ -155,6 +181,16 @@
 
   .row-glyph.control {
     color: var(--accent);
+  }
+
+  /* Readonly hidden indicator: a muted, static EyeOff (no action) mirroring the
+     server-persisted hidden state beside the connection dot. */
+  .hidden-ind {
+    display: inline-flex;
+    align-items: center;
+    flex-shrink: 0;
+    color: var(--text-secondary);
+    opacity: 0.75;
   }
 
   /* The control terminal's "disconnected..." cue: amber, flashing beside the name
