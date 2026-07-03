@@ -2,15 +2,17 @@
   // Rich Prompt: a floating, inset markdown bubble over the bottom of a
   // terminal. It edits a real per-terminal draft (`draft.md`) with the same
   // WYSIWYG editor used by file tabs, so pasted images are markdown image embeds
-  // and render immediately. Mod+Enter sends the markdown backing text through
-  // the terminal prompt queue, with image refs rewritten from draft-relative to
-  // workspace-rooted paths for the receiving agent.
+  // and render immediately. Mod+Enter sends the backing text through the
+  // terminal prompt queue; each image embed is delivered as the bare absolute
+  // on-disk path the receiving target reads, while the composer keeps showing
+  // the image.
 
   import { onDestroy, onMount } from "svelte";
   import { Compartment, EditorState, Prec, type Extension } from "@codemirror/state";
   import { EditorView, keymap } from "@codemirror/view";
   import Wysiwyg from "../editor/Wysiwyg.svelte";
   import { rewriteImagePathsForDelivery } from "../editor/deliver_images";
+  import { workspace } from "../state/store.svelte";
   import { currentOS } from "../state/shortcuts";
   import { hideRichPromptForTab } from "../state/richPrompt.svelte";
   import {
@@ -233,7 +235,11 @@
     const text = view.state.doc.toString();
     if (!text.trim()) return true;
     const id = crypto.randomUUID();
-    const delivered = rewriteImagePathsForDelivery(text, draftPath);
+    const delivered = rewriteImagePathsForDelivery(
+      text,
+      draftPath,
+      workspace.info?.root ?? null,
+    );
     if (!sendPromptToTerminal(tab.id, delivered, submitAgent(), id)) return true;
     content = text;
     lastQueued = { id, text };
