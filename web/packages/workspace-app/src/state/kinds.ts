@@ -62,6 +62,44 @@ export function classifyFile(
   return classifyPath(path);
 }
 
+/// Extension buckets used by the graph canvas node fill, shared here
+/// so the inspector kind bubble can match the node it represents.
+///
+/// Two taxonomies meet at a file node: the server projects a wire
+/// `kind` (`document` | `text` | `media` | `binary` | `contact` |
+/// `pending`) keyed off content class, while the graph canvas colours
+/// by EXTENSION. Wire kind `text` spans both `.txt` (canvas orange,
+/// the doc bucket) and source / config code (canvas royalblue), so a
+/// token swap on `text` cannot match the canvas. Sharing this
+/// extension bucketer is the only match-by-construction fix.
+///
+/// Mirrors `chan_workspace::FileClass` conceptually but routes Pdf
+/// into `img` (media) and Other into `binary` so the SPA's five-bucket
+/// split matches the colour split. `contact` comes from the indexer's
+/// `node_kind: "contact"` discriminator, not the extension.
+export type FileBucket = "doc" | "img" | "contact" | "source" | "binary";
+
+const MEDIA_EXT_RE = /\.(png|jpe?g|gif|webp|svg|avif|bmp|pdf)$/i;
+const MARKDOWN_EXT_RE = /\.(md|txt)$/i;
+const SOURCE_EXT_RE =
+  /\.(rs|py|ts|tsx|js|jsx|mjs|cjs|go|c|cc|cpp|cxx|h|hh|hpp|java|kt|swift|rb|php|cs|sh|bash|zsh|fish|pl|lua|toml|yaml|yml|json|jsonc|ini|conf|cfg|env|xml|html|htm|css|scss|sass|less|vue|svelte|sql|graphql|gql|proto|elm|ex|exs|erl|hs|lhs|ml|mli|fs|fsx|clj|cljs|cljc|edn|jl|nim|d|dart|zig|odin|v|vhd|vhdl|sv|verilog|asm|s|f|f90|f95|tex|R|r)$/i;
+
+/// Classify a file path into its graph-canvas colour bucket. Media
+/// wins first (an image with contact frontmatter still reads as
+/// media), then the `contact` discriminator, then markdown (`.md` /
+/// `.txt`), then recognised source / config text, else binary.
+/// `nodeKind` is the indexer's `node_kind` hint (`"contact"` or
+/// absent). Kept byte-identical to the graph canvas's former local
+/// helper so the node fill and the inspector bubble stay in lockstep.
+export function fileBucket(path: string, nodeKind?: "contact"): FileBucket {
+  if (MEDIA_EXT_RE.test(path)) return "img";
+  if (nodeKind === "contact") return "contact";
+  if (MARKDOWN_EXT_RE.test(path)) return "doc";
+  if (SOURCE_EXT_RE.test(path)) return "source";
+  // Anything else (archives, executables, fonts, etc.) is binary.
+  return "binary";
+}
+
 /// True for file kinds the editor opens as text: markdown documents,
 /// contacts (markdown notes flagged `chan.kind: contact`), and plain
 /// source / config / shell text. Gates the inspector's Open-vs-Download
@@ -95,7 +133,7 @@ export function labelFor(kind: Kind): string {
 ///   contact/mention  -> yellow  (--warn-text)
 ///   media            -> purple  (--g-img)
 ///   tag              -> green   (--g-tag)
-///   binary           -> blue    (--g-binary)
+///   binary           -> grey    (--g-binary)
 ///   folder           -> grey    (--g-folder)
 ///   date             -> grey    (--text-secondary, low-emphasis neutral)
 /// Flows through every surface (file tree, inspector, search, graph)
@@ -122,6 +160,56 @@ export function colorVarFor(kind: Kind): string {
     case "folder":
       return "var(--g-folder)";
   }
+}
+
+/// CSS colour var for a graph-canvas file bucket. Mirrors the canvas
+/// paint switch (bucket -> theme slot) composed with `readTheme`
+/// (theme slot -> CSS var): doc -> --g-doc, source -> --g-source,
+/// img -> --g-img, binary -> --g-binary, contact -> --warn-text. This
+/// is the bubble side of the node-fill parity; `state/kinds.test.ts`
+/// asserts it stays equal to the canvas fill for every bucket.
+export function colorVarForBucket(bucket: FileBucket): string {
+  switch (bucket) {
+    case "doc":
+      return "var(--g-doc)";
+    case "source":
+      return "var(--g-source)";
+    case "img":
+      return "var(--g-img)";
+    case "binary":
+      return "var(--g-binary)";
+    case "contact":
+      return "var(--warn-text)";
+  }
+}
+
+/// Concrete file wire kinds whose chip colour follows the extension
+/// bucket. `pending` stays out: it keeps the neutral low-emphasis grey
+/// (`colorVarFor`) until a content sniff resolves it to text / binary.
+function isBucketedFileKind(kind: Kind): boolean {
+  return (
+    kind === "document" ||
+    kind === "text" ||
+    kind === "media" ||
+    kind === "binary" ||
+    kind === "contact"
+  );
+}
+
+/// Chip background colour, extension-aware for file kinds. Given a
+/// `path`, a concrete file kind routes through `fileBucket` so the
+/// inspector bubble matches the graph node fill (a blue `.rs` source
+/// node opens a blue source bubble instead of the wire kind's orange).
+/// Non-file kinds (tag, mention, folder, date, pending) and pathless
+/// callers fall back to `colorVarFor`, so every existing mount is
+/// unchanged until it opts in by passing a path.
+export function chipColorVar(kind: Kind, path?: string): string {
+  if (path !== undefined && isBucketedFileKind(kind)) {
+    return colorVarForBucket(
+      fileBucket(path, kind === "contact" ? "contact" : undefined),
+    );
+  }
+  return colorVarFor(kind);
 }
 
 /// Lucide icon component for the kind. Used by the file tree (one

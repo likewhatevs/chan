@@ -2957,6 +2957,7 @@
           <header class="head">
             <KindChip
               kind={isFsDirectory(selectedFsNode) ? "folder" : selectedFsNode.kind === "file" ? "document" : "binary"}
+              path={selectedFsNode.path}
               block
               ghost={selectedFsNode.kind === "ghost" || selectedFsNode.broken === true}
             />
@@ -2994,7 +2995,7 @@
           : ghostIndexerHint ?? "not in the current file listing (try Reload / chan index)"}
         <div class="ghost-body">
           <header class="head">
-            <KindChip kind={ghostKind} block ghost />
+            <KindChip kind={ghostKind} path={selectedNode.path} block ghost />
           </header>
           <h3 class="title" title={selectedNode.path}>{selectedNode.label}</h3>
           <div class="path mono">{selectedNode.path}</div>

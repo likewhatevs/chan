@@ -1039,7 +1039,7 @@
   {@const fileKind = classifyEntry(entry)}
   <div class="info">
     <header class="head">
-      <KindChip kind={fileKind} block onClick={onSetAsScope} />
+      <KindChip kind={fileKind} path={entry.path} block onClick={onSetAsScope} />
     </header>
     <h3 class="title" title={entry.path}>{basename(entry.path)}</h3>
     {#if specialBadges.length > 0}

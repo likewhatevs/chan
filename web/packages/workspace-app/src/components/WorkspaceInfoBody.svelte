@@ -492,7 +492,9 @@
     text-align: center;
   }
   .kind-chip.workspace {
-    background: #000;
+    /* Match the graph canvas workspace-root fill (theme.bgCard) so the
+       root chip and the root node read the same colour. */
+    background: var(--bg-card);
     color: #fff;
   }
   .title {

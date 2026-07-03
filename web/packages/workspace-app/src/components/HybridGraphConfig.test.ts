@@ -1,43 +1,58 @@
 import { describe, expect, test } from "vitest";
 import source from "./HybridGraphConfig.svelte?raw";
 import canvas from "./GraphCanvas.svelte?raw";
+import kinds from "../state/kinds.ts?raw";
 import app from "../App.svelte?raw";
 import shell from "./HybridSurfaceConfigShell.svelte?raw";
 
 // Markdown / source / binary / media colour scheme + Hybrid Graph legend grid.
 // Tests pin the wiring shape so a future refactor can't silently
 // drop the bucket split or the legend swatches.
+//
+// The bucket classifier + its extension regexes live in the shared
+// state/kinds.ts module (`fileBucket`), so the inspector kind bubble
+// can match the graph node fill. The canvas imports it back and calls
+// it in the working-set build; the pins below track both sides.
 
 describe("file-class colour scheme", () => {
-  test("classifyFile returns the 5 buckets (doc/img/contact/source/binary)", () => {
-    expect(canvas).toMatch(
-      /function classifyFile\([\s\S]*?\): "doc" \| "img" \| "contact" \| "source" \| "binary"/,
+  test("fileBucket returns the 5 buckets (doc/img/contact/source/binary)", () => {
+    expect(kinds).toMatch(
+      /export function fileBucket\([\s\S]*?\): FileBucket/,
     );
+    expect(kinds).toMatch(
+      /export type FileBucket = "doc" \| "img" \| "contact" \| "source" \| "binary"/,
+    );
+  });
+
+  test("canvas routes file nodes through the shared fileBucket", () => {
+    expect(canvas).toMatch(/import \{ fileBucket \} from "\.\.\/state\/kinds"/);
+    expect(canvas).toMatch(/fileBucket\(n\.path, n\.node_kind\)/);
   });
 
   test("markdown extension regex covers .md and .txt", () => {
-    expect(canvas).toMatch(/MARKDOWN_EXT_RE = \/\\\.\(md\|txt\)\$\/i/);
+    expect(kinds).toMatch(/MARKDOWN_EXT_RE = \/\\\.\(md\|txt\)\$\/i/);
   });
 
   test("source extension regex covers common code + config extensions", () => {
-    expect(canvas).toMatch(/SOURCE_EXT_RE\s*=\s*\n?\s*\/\\\.\(rs\|py\|ts\|tsx/);
-    expect(canvas).toMatch(/toml\|yaml\|yml\|json/);
+    expect(kinds).toMatch(/SOURCE_EXT_RE\s*=\s*\n?\s*\/\\\.\(rs\|py\|ts\|tsx/);
+    expect(kinds).toMatch(/toml\|yaml\|yml\|json/);
   });
 
   test("media extension regex covers image + pdf", () => {
-    expect(canvas).toMatch(/MEDIA_EXT_RE = \/\\\.\(png\|jpe\?g\|gif\|webp\|svg\|avif\|bmp\|pdf\)/);
+    expect(kinds).toMatch(/MEDIA_EXT_RE = \/\\\.\(png\|jpe\?g\|gif\|webp\|svg\|avif\|bmp\|pdf\)/);
   });
 
-  test("classifyFile dispatches MEDIA first, then contact, then markdown, then source, else binary", () => {
+  test("fileBucket dispatches MEDIA first, then contact, then markdown, then source, else binary", () => {
     // Order matters: image extensions on a contact-flagged file
     // should still bucket as media (existing behaviour). The
-    // function's branch order encodes this.
-    expect(canvas).toMatch(/if \(MEDIA_EXT_RE\.test\(path\)\) return "img"/);
-    expect(canvas).toMatch(
+    // function's branch order encodes this. Behaviour is unit-tested
+    // in state/kinds.test.ts; this pins the source branch order.
+    expect(kinds).toMatch(/if \(MEDIA_EXT_RE\.test\(path\)\) return "img"/);
+    expect(kinds).toMatch(
       /if \(nodeKind === "contact"\) return "contact"[\s\S]*?if \(MARKDOWN_EXT_RE\.test\(path\)\) return "doc"/,
     );
-    expect(canvas).toMatch(/if \(SOURCE_EXT_RE\.test\(path\)\) return "source"/);
-    expect(canvas).toMatch(/return "binary"/);
+    expect(kinds).toMatch(/if \(SOURCE_EXT_RE\.test\(path\)\) return "source"/);
+    expect(kinds).toMatch(/return "binary"/);
   });
 
   test("ThemeColors carries source + binary slots", () => {

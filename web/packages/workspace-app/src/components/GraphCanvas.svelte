@@ -39,6 +39,7 @@
   } from "d3-force";
   import type { GraphViewEdge, GraphViewNode } from "../api/types";
   import { draftsDir } from "../state/workspace.svelte";
+  import { fileBucket } from "../state/kinds";
   import { DEFAULT_FORCE, type GraphForce } from "../graph/force";
   import { containmentSpine, spineEdgeKey } from "../graph/containmentSpine";
 
@@ -482,33 +483,11 @@
 
   // ---- node classification + data assembly -----------------------------
 
-  /// File-class buckets: markdown / source / binary / media.
-  /// Classified client-side via extension regex. Conceptually
-  /// mirrors `chan_workspace::FileClass` (EditableText / Text / Image
-  /// / Pdf / Other) but routes Pdf into media + Other into binary so
-  /// the SPA's bucket set matches the four-way colour split.
-  ///
-  /// Media + contact stay separate: media via extension regex
-  /// (image / pdf), contact via the indexer's `node_kind: "contact"`
-  /// discriminator. Markdown is the default for `.md` / `.txt`
-  /// (the editable-text class). Source covers all other recognised
-  /// code / config text extensions. Binary captures the rest.
-  const MEDIA_EXT_RE = /\.(png|jpe?g|gif|webp|svg|avif|bmp|pdf)$/i;
-  const MARKDOWN_EXT_RE = /\.(md|txt)$/i;
-  const SOURCE_EXT_RE =
-    /\.(rs|py|ts|tsx|js|jsx|mjs|cjs|go|c|cc|cpp|cxx|h|hh|hpp|java|kt|swift|rb|php|cs|sh|bash|zsh|fish|pl|lua|toml|yaml|yml|json|jsonc|ini|conf|cfg|env|xml|html|htm|css|scss|sass|less|vue|svelte|sql|graphql|gql|proto|elm|ex|exs|erl|hs|lhs|ml|mli|fs|fsx|clj|cljs|cljc|edn|jl|nim|d|dart|zig|odin|v|vhd|vhdl|sv|verilog|asm|s|f|f90|f95|tex|R|r)$/i;
-
-  function classifyFile(
-    path: string,
-    nodeKind: "contact" | undefined,
-  ): "doc" | "img" | "contact" | "source" | "binary" {
-    if (MEDIA_EXT_RE.test(path)) return "img";
-    if (nodeKind === "contact") return "contact";
-    if (MARKDOWN_EXT_RE.test(path)) return "doc";
-    if (SOURCE_EXT_RE.test(path)) return "source";
-    // Anything else (archives, executables, fonts, etc.) is binary.
-    return "binary";
-  }
+  // File nodes bucket into markdown / source / binary / media / contact
+  // via the shared `fileBucket` (state/kinds.ts). The bubble side of the
+  // inspector reads the same classifier so the node fill and the kind
+  // chip stay in lockstep (a `.rs` source node opens a source-blue
+  // bubble, not a document-orange one).
 
   /// Backlink counts per node - used to size hubs slightly larger.
   /// Pre-counted at assembly so the paint pass doesn't walk edges
@@ -621,7 +600,7 @@
     for (const n of nodes) {
       if (!visibleNodeIds.has(n.id)) continue;
       const kind: DKind = n.kind === "file"
-        ? classifyFile(n.path, n.node_kind)
+        ? fileBucket(n.path, n.node_kind)
         : n.kind === "tag" ? "tag"
           : n.kind === "mention" ? "mention"
             : n.kind === "folder" && n.id === ""

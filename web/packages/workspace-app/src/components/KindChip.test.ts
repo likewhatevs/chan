@@ -43,6 +43,36 @@ describe("KindChip", () => {
     expect(onClick).toHaveBeenCalledTimes(1);
   });
 
+  test("a path routes file kinds through the extension bucket colour", async () => {
+    // A `.rs` file rides wire kind `text`; the graph paints it blue
+    // (source), so the bubble must be blue too, not the wire kind's
+    // orange. A `.txt` on the same wire kind stays orange.
+    const rs = render({ kind: "text", path: "src/lib.rs" });
+    await tick();
+    expect(rs.querySelector(".kind-chip")!.getAttribute("style")).toContain("var(--g-source)");
+
+    const txt = render({ kind: "text", path: "notes.txt" });
+    await tick();
+    expect(txt.querySelector(".kind-chip")!.getAttribute("style")).toContain("var(--g-doc)");
+
+    const png = render({ kind: "media", path: "pic.png" });
+    await tick();
+    expect(png.querySelector(".kind-chip")!.getAttribute("style")).toContain("var(--g-img)");
+  });
+
+  test("without a path a file kind keeps its wire-kind colour", async () => {
+    // The `text` regression: a pathless text chip stays orange (doc).
+    const target = render({ kind: "text" });
+    await tick();
+    expect(target.querySelector(".kind-chip")!.getAttribute("style")).toContain("var(--g-doc)");
+  });
+
+  test("a path never overrides a non-file kind", async () => {
+    const target = render({ kind: "tag", path: "irrelevant.rs" });
+    await tick();
+    expect(target.querySelector(".kind-chip")!.getAttribute("style")).toContain("var(--g-tag)");
+  });
+
   test("style modifiers carry through both render branches", async () => {
     const spanTarget = render({ kind: "folder", block: true, compact: true, ghost: true, dim: true });
     await tick();

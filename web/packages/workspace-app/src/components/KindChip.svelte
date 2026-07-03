@@ -13,10 +13,11 @@
   // a tabular column).
 
   import type { Kind } from "../state/kinds";
-  import { labelFor, colorVarFor } from "../state/kinds";
+  import { labelFor, chipColorVar } from "../state/kinds";
 
   let {
     kind,
+    path,
     block = false,
     compact = false,
     ghost = false,
@@ -24,6 +25,13 @@
     onClick,
   }: {
     kind: Kind;
+    /// Optional file path. When set for a concrete file kind, the chip
+    /// colour follows the graph canvas's extension bucket so the
+    /// inspector bubble matches the node fill (a `.rs` source node
+    /// opens a blue bubble, a `.txt` an orange one). Ignored for
+    /// non-file kinds and when absent. The LABEL is unaffected: the
+    /// chip still reads the wire kind's text.
+    path?: string;
     /// flex:1, used by inspector headers so the chip fills the row.
     block?: boolean;
     /// smaller font + fixed-width column. Used by the search-results
@@ -51,7 +59,7 @@
     class:compact
     class:ghost
     class:dim
-    style="background: {colorVarFor(kind)}"
+    style="background: {chipColorVar(kind, path)}"
     onclick={onClick}
   >{labelFor(kind)}</button>
 {:else}
@@ -61,7 +69,7 @@
     class:compact
     class:ghost
     class:dim
-    style="background: {colorVarFor(kind)}"
+    style="background: {chipColorVar(kind, path)}"
   >{labelFor(kind)}</span>
 {/if}
 
