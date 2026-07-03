@@ -160,64 +160,123 @@ function appendOrderedRenumber(
   }
 }
 
-const INDENT_UNIT = "  "; // 2 spaces
-
-/// Tab on a list line indents the item one level (2 spaces). When the
-/// selection covers multiple lines and any of them is a list item,
-/// indent every line in the range. Returns false when no touched
-/// line is a list item so the caret falls through to CM6's default
-/// (which inserts an indent character / focus-leaves on Tab,
-/// depending on configuration).
+/// Tab on a list line nests the item one level: the line lands exactly on the
+/// content column of the nearest list line above at the same or shallower
+/// indent (its previous sibling). When the selection covers multiple lines and
+/// any of them is a list item, every list line in the range shifts by the same
+/// delta. Returns false when no touched line is a list item so the caret falls
+/// through to CM6's default; on a list line the key is ALWAYS consumed, even
+/// when there is nothing to nest under, so Tab never dumps an indent character
+/// into a list line.
 export function indentListItem(view: EditorView): boolean {
   return shiftListLines(view, +1);
 }
 
-/// Shift-Tab outdents one level. Same line-range rule as
-/// indentListItem. Returns false when nothing changed (so the
-/// keypress can route to its default).
+/// Shift-Tab outdents one level: back to the own indent of the nearest list
+/// line above at a strictly shallower indent (the parent), or to column 0 when
+/// no parent exists. Same line-range rule as indentListItem. Always consumed
+/// on a list line (Shift-Tab must never escape the editor into surrounding
+/// chrome); a top-level item stays put, since leaving a list is
+/// Enter-on-an-empty-bullet, not outdent.
 export function outdentListItem(view: EditorView): boolean {
   const changed = shiftListLines(view, -1);
-  // Shift-Tab must never escape the editor into surrounding chrome.
-  // If there was nothing to outdent, consume it as an editor-local no-op.
   return changed || true;
 }
 
+/// Scan the list context ABOVE `lineNumber` for the first line `visit` accepts,
+/// stepping over deeper list lines (nested subtrees between this line and its
+/// sibling) and a single blank (a loose list). A non-list line or two blanks
+/// in a row end the list per CommonMark, and the scan with them.
+function scanListAbove(
+  state: EditorState,
+  lineNumber: number,
+  visit: (p: ListPrefix) => number | null,
+): number | null {
+  let blanks = 0;
+  for (let n = lineNumber - 1; n >= 1; n--) {
+    const text = state.doc.line(n).text;
+    if (text.trim() === "") {
+      blanks += 1;
+      if (blanks >= 2) return null;
+      continue;
+    }
+    blanks = 0;
+    const p = parseListPrefix(text);
+    if (!p) return null;
+    const hit = visit(p);
+    if (hit !== null) return hit;
+  }
+  return null;
+}
+
+/// One valid indent step for the list lines in the selection.
+///
+/// Fixed-width steps are WRONG here: markdown only has two valid columns next
+/// to a sibling, the sibling band (its own indent, give or take 3 spaces) and
+/// the sibling's CONTENT column (nested under it). An ordered item indented
+/// into the gap between them parses as lazy paragraph continuation of the item
+/// above (only `1.` may interrupt a paragraph), silently dropping its list
+/// rendering, which is exactly what blind 2-space steps produced under a
+/// `1. ` marker (content column 3). So:
+///   - Tab targets the reference sibling's content column
+///     (indent + marker + gap), nesting in one press.
+///   - Shift-Tab targets the parent's own indent (column 0 with no parent).
+/// The FIRST list line in the range anchors the step; every other list line
+/// shifts by the same delta (clamped to its available indent) so a selected
+/// subtree keeps its shape.
 function shiftListLines(view: EditorView, dir: 1 | -1): boolean {
-  const sel = view.state.selection.main;
-  const startLine = view.state.doc.lineAt(sel.from);
-  const endLine = view.state.doc.lineAt(sel.to);
-  // Eligibility: at least one touched line is a list item.
-  let anyList = false;
+  const { state } = view;
+  const sel = state.selection.main;
+  const startLine = state.doc.lineAt(sel.from);
+  const endLine = state.doc.lineAt(sel.to);
+  let anchor: { lineNumber: number; prefix: ListPrefix } | null = null;
   for (let n = startLine.number; n <= endLine.number; n++) {
-    if (parseListPrefix(view.state.doc.line(n).text)) {
-      anyList = true;
+    const prefix = parseListPrefix(state.doc.line(n).text);
+    if (prefix) {
+      anchor = { lineNumber: n, prefix };
       break;
     }
   }
-  if (!anyList) return false;
+  if (!anchor) return false;
+  const cur = anchor.prefix.indent.length;
+  let target: number;
+  if (dir === +1) {
+    const nest = scanListAbove(state, anchor.lineNumber, (p) =>
+      p.indent.length <= cur
+        ? p.indent.length + p.marker.length + p.markerSpace.length
+        : null,
+    );
+    // Nothing to nest under (first item of its level), or already at the
+    // reference's content column (a first child): consumed no-op.
+    if (nest === null || nest <= cur) return true;
+    target = nest;
+  } else {
+    target =
+      scanListAbove(state, anchor.lineNumber, (p) =>
+        p.indent.length < cur ? p.indent.length : null,
+      ) ?? 0;
+    if (target >= cur) return true; // already outermost
+  }
+  const delta = target - cur;
   const changes: { from: number; to: number; insert: string }[] = [];
   for (let n = startLine.number; n <= endLine.number; n++) {
-    const line = view.state.doc.line(n);
+    const line = state.doc.line(n);
     if (!parseListPrefix(line.text)) continue;
-    if (dir === +1) {
-      changes.push({ from: line.from, to: line.from, insert: INDENT_UNIT });
+    if (delta > 0) {
+      changes.push({ from: line.from, to: line.from, insert: " ".repeat(delta) });
     } else {
-      // Strip up to INDENT_UNIT.length leading space chars. Tabs
-      // count as one char each - we don't try to expand them. A
-      // top-level item (no leading indent) is already at the outermost
-      // level, so Shift-Tab is a NO-OP there: it must NOT strip the
-      // list marker. Stripping the prefix silently turned the bullet
-      // into a plain paragraph, which made cmd+shift+tab feel like it
-      // made things worse. Leaving a list is Enter-on-an-empty-bullet,
-      // not outdent.
+      // Strip up to -delta leading whitespace chars. Tabs count as one char
+      // each - we don't try to expand them.
       let strip = 0;
-      while (strip < INDENT_UNIT.length && line.text[strip] === " ") strip++;
+      while (strip < -delta && (line.text[strip] === " " || line.text[strip] === "\t")) {
+        strip++;
+      }
       if (strip > 0) {
         changes.push({ from: line.from, to: line.from + strip, insert: "" });
       }
     }
   }
-  if (changes.length === 0) return false;
+  if (changes.length === 0) return true;
   view.dispatch({ changes });
   return true;
 }

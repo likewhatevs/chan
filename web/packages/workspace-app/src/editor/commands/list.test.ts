@@ -179,10 +179,114 @@ describe("continueListOnEnter", () => {
 });
 
 describe("indentListItem / outdentListItem", () => {
-  test("Tab adds 2 spaces of indent on a list line", () => {
+  // Tab/Shift-Tab step between VALID markdown columns, not by a fixed width:
+  // an ordered item indented past its sibling band but short of the sibling's
+  // content column parses as lazy paragraph continuation (only `1.` may
+  // interrupt a paragraph) and silently loses its list rendering.
+
+  test("Tab nests a bullet under its previous sibling's content column", () => {
+    mount("- a\n- b", 7);
+    expect(indentListItem(view)).toBe(true);
+    expect(snapshot().doc).toBe("- a\n  - b");
+  });
+
+  test("Tab nests an ordered item at the sibling's content column (3, not 2)", () => {
+    mount("1. a\n2. b", 9);
+    expect(indentListItem(view)).toBe(true);
+    expect(snapshot().doc).toBe("1. a\n   2. b");
+  });
+
+  test("Tab under a wide ordered marker lands on ITS content column", () => {
+    mount("10. a\n11. b", 11);
+    expect(indentListItem(view)).toBe(true);
+    expect(snapshot().doc).toBe("10. a\n    11. b");
+  });
+
+  test("Tab nests under the sibling ACROSS a deeper subtree between them", () => {
+    // The user's repro: `3.` sits at 2 spaces, so its content column is 5.
+    // A blind +2 landed `4.` on column 4 - the dead band where it stops
+    // parsing as a list item. The nest must target column 5 in one press.
+    const doc = "1. Hello\n    2. World\n  3. three\n  4. four";
+    mount(doc, doc.length);
+    expect(indentListItem(view)).toBe(true);
+    expect(snapshot().doc).toBe("1. Hello\n    2. World\n  3. three\n     4. four");
+  });
+
+  test("Tab on the first item of a level is a consumed no-op", () => {
+    // Nothing to nest under: an indented FIRST item is at best pointless and
+    // at 4+ spaces becomes a code block. Consume the key, change nothing.
     mount("- a", 3);
     expect(indentListItem(view)).toBe(true);
-    expect(snapshot().doc).toBe("  - a");
+    expect(snapshot().doc).toBe("- a");
+  });
+
+  test("Tab on a first child (already at the parent's content column) no-ops", () => {
+    mount("1. a\n   2. b", 10);
+    expect(indentListItem(view)).toBe(true);
+    expect(snapshot().doc).toBe("1. a\n   2. b");
+  });
+
+  test("Tab nests star and plus bullets alike", () => {
+    mount("* a\n* b", 7);
+    expect(indentListItem(view)).toBe(true);
+    expect(snapshot().doc).toBe("* a\n  * b");
+    view.destroy();
+    host.remove();
+    mount("+ a\n+ b", 7);
+    expect(indentListItem(view)).toBe(true);
+    expect(snapshot().doc).toBe("+ a\n  + b");
+  });
+
+  test("Tab nests a task item under the previous task's content column", () => {
+    mount("- [ ] t1\n- [x] t2", 17);
+    expect(indentListItem(view)).toBe(true);
+    expect(snapshot().doc).toBe("- [ ] t1\n  - [x] t2");
+  });
+
+  test("Tab nests a paren-ordered item at its sibling's content column", () => {
+    mount("1) a\n2) b", 9);
+    expect(indentListItem(view)).toBe(true);
+    expect(snapshot().doc).toBe("1) a\n   2) b");
+  });
+
+  test("Tab nests across marker families (ordered under a bullet sibling)", () => {
+    mount("- a\n1. b", 8);
+    expect(indentListItem(view)).toBe(true);
+    expect(snapshot().doc).toBe("- a\n  1. b");
+  });
+
+  test("multi-level: Tab in under a nested sibling, Shift-Tab out level by level", () => {
+    mount("- a\n  - b\n  - c", 15);
+    expect(indentListItem(view)).toBe(true);
+    expect(snapshot().doc).toBe("- a\n  - b\n    - c");
+    expect(outdentListItem(view)).toBe(true);
+    expect(snapshot().doc).toBe("- a\n  - b\n  - c");
+    expect(outdentListItem(view)).toBe(true);
+    expect(snapshot().doc).toBe("- a\n  - b\n- c");
+  });
+
+  test("repeated Tab walks one level deeper per press through the prior subtree, and back", () => {
+    // Indent in and out MULTIPLE times on the same item: with a deep subtree
+    // above, every level has a reference line, so each Tab lands one level
+    // deeper and each Shift-Tab pops one level back out. The walk caps at one
+    // level below the deepest line above; markdown cannot represent a child
+    // with no parent item, so a further Tab is a consumed no-op, never an
+    // invalid dead-band indent.
+    mount("- a\n  - b\n    - c\n- d", 21);
+    expect(indentListItem(view)).toBe(true);
+    expect(snapshot().doc).toBe("- a\n  - b\n    - c\n  - d");
+    expect(indentListItem(view)).toBe(true);
+    expect(snapshot().doc).toBe("- a\n  - b\n    - c\n    - d");
+    expect(indentListItem(view)).toBe(true);
+    expect(snapshot().doc).toBe("- a\n  - b\n    - c\n      - d");
+    expect(indentListItem(view)).toBe(true);
+    expect(snapshot().doc).toBe("- a\n  - b\n    - c\n      - d");
+    expect(outdentListItem(view)).toBe(true);
+    expect(snapshot().doc).toBe("- a\n  - b\n    - c\n    - d");
+    expect(outdentListItem(view)).toBe(true);
+    expect(snapshot().doc).toBe("- a\n  - b\n    - c\n  - d");
+    expect(outdentListItem(view)).toBe(true);
+    expect(snapshot().doc).toBe("- a\n  - b\n    - c\n- d");
   });
 
   test("Tab is a no-op (returns false) on a non-list line", () => {
@@ -191,10 +295,16 @@ describe("indentListItem / outdentListItem", () => {
     expect(snapshot().doc).toBe("plain");
   });
 
-  test("Shift-Tab strips 2 spaces from an indented list line", () => {
+  test("Shift-Tab pops a nested item back to its parent's own indent", () => {
+    mount("1. a\n   2. b", 10);
+    expect(outdentListItem(view)).toBe(true);
+    expect(snapshot().doc).toBe("1. a\n2. b");
+  });
+
+  test("Shift-Tab with no shallower parent normalizes to column 0", () => {
     mount("    - a", 7);
     expect(outdentListItem(view)).toBe(true);
-    expect(snapshot().doc).toBe("  - a");
+    expect(snapshot().doc).toBe("- a");
   });
 
   test("Shift-Tab on a top-level list item is a no-op (keeps the bullet)", () => {
@@ -225,18 +335,27 @@ describe("indentListItem / outdentListItem", () => {
     expect(snapshot().doc).toBe("- a");
   });
 
-  test("Tab indents every list line in a multi-line selection", () => {
+  test("Tab shifts every list line in a multi-line selection by one delta", () => {
+    // `- b` is the anchor (first list line in range); it nests under `- a`
+    // (content column 2) and `- c` rides the same +2 so the pair keeps shape.
     mount("- a\n- b\n- c", 0);
-    view.dispatch({ selection: { anchor: 0, head: 11 } });
+    view.dispatch({ selection: { anchor: 4, head: 11 } });
     expect(indentListItem(view)).toBe(true);
-    expect(snapshot().doc).toBe("  - a\n  - b\n  - c");
+    expect(snapshot().doc).toBe("- a\n  - b\n  - c");
   });
 
   test("Tab leaves non-list lines untouched within a multi-line selection", () => {
-    mount("- a\nplain\n- c", 0);
-    view.dispatch({ selection: { anchor: 0, head: 13 } });
+    mount("- a\n- b\nplain\n- c", 0);
+    view.dispatch({ selection: { anchor: 4, head: 17 } });
     expect(indentListItem(view)).toBe(true);
-    expect(snapshot().doc).toBe("  - a\nplain\n  - c");
+    expect(snapshot().doc).toBe("- a\n  - b\nplain\n  - c");
+  });
+
+  test("a whole-list selection whose anchor cannot nest is a consumed no-op", () => {
+    mount("- a\n- b\n- c", 0);
+    view.dispatch({ selection: { anchor: 0, head: 11 } });
+    expect(indentListItem(view)).toBe(true);
+    expect(snapshot().doc).toBe("- a\n- b\n- c");
   });
 });
 

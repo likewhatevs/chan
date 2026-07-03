@@ -94,8 +94,8 @@ A whole-document **Source view** is also available -- the "Show Source Code" tog
 - Enter at end of a list line: inserts a fresh marker on the next line. Bullets reuse the line's marker char; ordered lists increment the number and keep the original `.` / `)` separator; task items always start as `- [ ] ` regardless of the source line's checked state.
 - Enter on an empty list item (just the prefix, no content): strips the prefix entirely. This is how the user exits the list.
 - Enter mid-line on a non-empty item: falls through to a literal newline. Auto-continuing mid-sentence would split a paragraph with a stray bullet.
-- Tab on a list line: indents the item by 2 spaces. Multi-line selections indent every list line in range; non-list lines in the range stay untouched.
-- Shift-Tab: outdents one level (strips up to 2 leading spaces) when the line is already indented; no-op at the top level so the default Shift-Tab behavior is preserved.
+- Tab on a list line: nests the item one level, landing exactly on the content column of the nearest list line above at the same or shallower indent (its previous sibling). Fixed-width steps are wrong here: an ordered item indented into the gap between the sibling band and the sibling's content column parses as lazy paragraph continuation and loses its list rendering. Multi-line selections shift every list line in range by the anchor line's delta (subtree shape preserved); non-list lines in the range stay untouched. On a list line the key is always consumed, even as a no-op (first item of a level has nothing to nest under).
+- Shift-Tab: outdents one level, back to the own indent of the nearest shallower list line above (the parent), or to column 0 with no parent; no-op at the top level (never strips the marker).
 
 ### Inline formatting `**bold**`, `*italic*`, `~~strike~~`
 
