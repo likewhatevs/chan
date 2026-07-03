@@ -203,6 +203,60 @@ describe("openSlidePreview", () => {
     }
   });
 
+  test("on chan-desktop play/preview drive the native window, not element fullscreen", async () => {
+    // WKWebView disables element.requestFullscreen(), so on desktop the player
+    // toggles the native window through Tauri's core:window set_fullscreen
+    // command instead. Web keeps the HTML path (covered by the test above).
+    const proto = HTMLElement.prototype as Partial<HTMLElement>;
+    const originalRequestFullscreen = proto.requestFullscreen;
+    const requestFullscreen = vi.fn(async () => {});
+    Object.defineProperty(proto, "requestFullscreen", {
+      configurable: true,
+      value: requestFullscreen,
+    });
+    const invoke = vi.fn(async () => undefined);
+    Object.defineProperty(window, "__TAURI_INTERNALS__", {
+      value: { invoke },
+      configurable: true,
+    });
+
+    try {
+      const handle = openSlidePreview({
+        source: SOURCE,
+        currentLine: 0,
+        fromPath: "slides-test.md",
+        theme: "dark",
+        mode: "play",
+      });
+
+      await vi.waitFor(() =>
+        expect(invoke).toHaveBeenCalledWith("plugin:window|set_fullscreen", {
+          value: true,
+        }),
+      );
+      expect(requestFullscreen).not.toHaveBeenCalled();
+
+      handle?.update({ mode: "preview" });
+      await vi.waitFor(() =>
+        expect(invoke).toHaveBeenLastCalledWith("plugin:window|set_fullscreen", {
+          value: false,
+        }),
+      );
+      expect(requestFullscreen).not.toHaveBeenCalled();
+    } finally {
+      delete (window as Window & { __TAURI_INTERNALS__?: unknown })
+        .__TAURI_INTERNALS__;
+      if (originalRequestFullscreen) {
+        Object.defineProperty(proto, "requestFullscreen", {
+          configurable: true,
+          value: originalRequestFullscreen,
+        });
+      } else {
+        delete proto.requestFullscreen;
+      }
+    }
+  });
+
   test("applies and updates the editor light/dark scheme", () => {
     const handle = openSlidePreview({
       source: SOURCE,

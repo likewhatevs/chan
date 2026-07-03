@@ -4,6 +4,7 @@ import {
   isTauriDesktop,
   openWebInspector,
   reloadWindow,
+  setWindowFullscreen,
   tauriInvoke,
 } from "./desktop";
 
@@ -102,6 +103,37 @@ describe("reloadWindow dispatch", () => {
     await reloadWindow();
     expect(invokeSpy).toHaveBeenCalledWith("reload_window", undefined);
     expect(reloadSpy).toHaveBeenCalledTimes(1);
+    consoleWarn.mockRestore();
+  });
+});
+
+describe("setWindowFullscreen dispatch", () => {
+  afterEach(clearTauriGlobals);
+
+  test("is a no-op on web (no Tauri runtime)", async () => {
+    // Would throw in tauriInvoke if it reached the IPC; the guard returns first.
+    await expect(setWindowFullscreen(true)).resolves.toBeUndefined();
+  });
+
+  test("invokes the core window set_fullscreen command on chan-desktop", async () => {
+    const invokeSpy = vi.fn().mockResolvedValue(undefined);
+    setTauriInternals(invokeSpy);
+    await setWindowFullscreen(true);
+    expect(invokeSpy).toHaveBeenCalledWith("plugin:window|set_fullscreen", {
+      value: true,
+    });
+    await setWindowFullscreen(false);
+    expect(invokeSpy).toHaveBeenLastCalledWith("plugin:window|set_fullscreen", {
+      value: false,
+    });
+  });
+
+  test("swallows a failed IPC so the caller never throws", async () => {
+    const invokeSpy = vi.fn().mockRejectedValue(new Error("acl denied"));
+    setTauriInternals(invokeSpy);
+    const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    await expect(setWindowFullscreen(true)).resolves.toBeUndefined();
+    expect(invokeSpy).toHaveBeenCalledTimes(1);
     consoleWarn.mockRestore();
   });
 });

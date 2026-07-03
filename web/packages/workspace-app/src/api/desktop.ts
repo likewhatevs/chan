@@ -256,6 +256,26 @@ export async function abandonDevserverForWindow(): Promise<void> {
   }
 }
 
+/// Drive the chan-desktop native window in or out of fullscreen. WKWebView
+/// on macOS disables the HTML element Fullscreen API (`element.requestFullscreen()`
+/// rejects), so the slide player's "play" mode cannot go fullscreen through the
+/// DOM there. Instead it drives the native window through Tauri's built-in
+/// `core:window` `set_fullscreen` command (the `plugin:window|set_fullscreen`
+/// channel, `value` = the desired state, no `label` so it targets the calling
+/// window). The `workspace` capability grants `core:window:allow-set-fullscreen`.
+/// No-op off-desktop: the browser slide player keeps `element.requestFullscreen()`.
+/// Best-effort: a failed IPC (e.g. a tunnel-origin devserver window whose remote
+/// ACL withholds the command) logs and leaves the window as-is, so the player
+/// still opens in-window rather than throwing into the slide keymap.
+export async function setWindowFullscreen(on: boolean): Promise<void> {
+  if (!isTauriDesktop()) return;
+  try {
+    await tauriInvoke("plugin:window|set_fullscreen", { value: on });
+  } catch (err) {
+    console.warn("setWindowFullscreen: set_fullscreen IPC failed", err);
+  }
+}
+
 /// Open the platform's web inspector. On chan-desktop calls the
 /// `open_devtools` IPC. On web returns false so the caller can
 /// surface a hint pointing the user at the browser's built-in

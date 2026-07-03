@@ -3,6 +3,7 @@
 // and Escape cleanup. The caller owns the editor read-only state via
 // the returned close handle and onClose callback.
 
+import { isTauriDesktop, setWindowFullscreen } from "../api/desktop";
 import { renderMarkdown } from "../api/markdown";
 import { type DiagramResult } from "../editor/diagram_render";
 import {
@@ -528,6 +529,14 @@ function applyChromeMode(
 }
 
 function requestSlideFullscreen(el: HTMLElement): void {
+  if (isTauriDesktop()) {
+    // chan-desktop's WKWebView disables the HTML element Fullscreen API, so
+    // "play" drives the native window fullscreen through Tauri instead. Unlike
+    // element.requestFullscreen() this needs no user activation, so every play
+    // transition (open, mode change, restore) goes fullscreen deterministically.
+    void setWindowFullscreen(true);
+    return;
+  }
   const request = el.requestFullscreen?.bind(el);
   if (!request) return;
   try {
@@ -539,6 +548,10 @@ function requestSlideFullscreen(el: HTMLElement): void {
 }
 
 function exitSlideFullscreen(el: HTMLElement): void {
+  if (isTauriDesktop()) {
+    void setWindowFullscreen(false);
+    return;
+  }
   if (document.fullscreenElement !== el) return;
   const exit = document.exitFullscreen?.bind(document);
   if (!exit) return;
