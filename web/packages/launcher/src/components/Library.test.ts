@@ -297,12 +297,51 @@ describe("Library: devserver groups", () => {
     );
     flushSync();
     expect(byAria("Working on prod")).toBeTruthy();
+    const libId = library.devservers.find((d) => d.id === "ds-1")!.library_id;
     library.devservers = library.devservers.map(
       (d): DevserverEntry => (d.id === "ds-1" ? { ...d, status: "disconnected" } : d),
     );
+    // A plain disconnect reaps the control terminal, so its control row leaves
+    // the feed; only a dead-control-terminal disconnect keeps it (which gates
+    // Connect, covered below). Drop it so this asserts the plain reconnect path.
+    library.windows = library.windows.filter((w) => !(w.control && w.library_id === libId));
     flushSync();
     expect(byAria("Working on prod")).toBeUndefined();
     expect(byAria("Connect prod")).toBeTruthy();
+  });
+
+  it("gates Connect while a disconnected devserver still owns a dead control terminal", () => {
+    mountList();
+    const libId = library.devservers.find((d) => d.id === "ds-1")!.library_id!;
+    library.devservers = library.devservers.map(
+      (d): DevserverEntry => (d.id === "ds-1" ? { ...d, status: "disconnected" } : d),
+    );
+    // Explicitly seed the dead control terminal so this is independent of the
+    // mock feed's re-seed timing: a disconnected devserver that still owns a
+    // control record (script died, terminal kept open at "process exited").
+    library.windows = [
+      ...library.windows.filter((w) => !(w.control && w.library_id === libId)),
+      {
+        window_id: `control-terminal-${libId}`,
+        library_id: libId,
+        kind: "terminal",
+        title: "Control terminal",
+        ordinal: 0,
+        workspace_path: null,
+        prefix: "",
+        token: "",
+        persisted: true,
+        connected: true,
+        control: true,
+      },
+    ];
+    flushSync();
+    // The plain "Connect" is gated: the user must close the control terminal (or
+    // use the overlay Reconnect) first, else the connect op errors.
+    expect(byAria("Connect prod")).toBeUndefined();
+    const gated = byAria("Close the control terminal to reconnect prod");
+    expect(gated).toBeTruthy();
+    expect(gated!.disabled).toBe(true);
   });
 
   it("checks the devserver row when selected", () => {

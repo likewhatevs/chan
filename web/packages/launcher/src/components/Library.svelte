@@ -460,11 +460,20 @@
                 <Unplug size={16} />
               </button>
             {:else}
+              {@const controlOpen = node.control.length > 0}
+              <!-- A disconnected devserver that still owns a control terminal (its
+                   script died, sitting at "process exited") is not ready to
+                   reconnect: the connect op errors until the control terminal is
+                   closed. Gate the button and point the user at the control row
+                   (open it to read the reason, close it) or the overlay Reconnect. -->
               <button
                 class="icon-btn"
                 type="button"
-                title="Connect"
-                aria-label={`Connect ${devserverName(ds)}`}
+                disabled={controlOpen}
+                title={controlOpen ? "Close the control terminal to reconnect" : "Connect"}
+                aria-label={controlOpen
+                  ? `Close the control terminal to reconnect ${devserverName(ds)}`
+                  : `Connect ${devserverName(ds)}`}
                 onclick={() => run(connectDevserver(ds.id))}>
                 <Plug size={16} />
               </button>
