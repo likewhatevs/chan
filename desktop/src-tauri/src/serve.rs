@@ -570,11 +570,13 @@ pub(crate) fn resolve_window_label(app: &AppHandle, id: &str) -> String {
 
 /// Pure resolution core (unit-testable without a live Tauri app): pick the
 /// native label for `id` given the candidate native labels (the caller passes the
-/// OPEN windows plus the buried list). A composite or legacy label (one containing
-/// `::`) is used verbatim; a bare `window_id` matches the `{library_id}::{id}`
-/// candidate (open or buried — a buried watched window has no live webview but its
-/// composite label is in the buried list). A bare id matching no candidate
-/// resolves to the `local::` composite as a last resort.
+/// OPEN windows plus the buried list). A composite label (one containing `::`) is
+/// used verbatim; a bare `window_id` matches the `{library_id}::{id}` candidate
+/// (open or buried — a buried watched window has no live webview but its composite
+/// label is in the buried list). A bare id in a LEGACY non-composite family
+/// (`control-terminal-`/`terminal-`/`workspace-`/`outbound-`) is its own native
+/// label and is used verbatim. Only a bare library-minted id (`w-<hex>`) matching
+/// no candidate resolves to the `local::` composite as a last resort.
 fn resolve_label_from(id: &str, candidates: &[String]) -> String {
     if id.contains("::") {
         return id.to_string();
@@ -582,6 +584,20 @@ fn resolve_label_from(id: &str, candidates: &[String]) -> String {
     let suffix = format!("::{id}");
     if let Some(label) = candidates.iter().find(|l| l.ends_with(&suffix)) {
         return label.clone();
+    }
+    // A legacy non-composite label (a control terminal, standalone terminal,
+    // saved-workspace, or outbound webview) IS its own native label: its
+    // `window_id` carries no `{library_id}::` prefix, so fabricating `local::{id}`
+    // points the open/hide op at a window that never exists and silently no-ops
+    // the launcher's Focus/eye. Use it verbatim, mirroring the live-label top
+    // check in `resolve_window_label`.
+    const VERBATIM_LABEL_PREFIXES: [&str; 4] =
+        ["control-terminal-", "terminal-", "workspace-", "outbound-"];
+    if VERBATIM_LABEL_PREFIXES
+        .iter()
+        .any(|prefix| id.starts_with(prefix))
+    {
+        return id.to_string();
     }
     format!("local::{id}")
 }
@@ -2266,6 +2282,28 @@ mod tests {
         // nothing.
         let candidates = vec!["lib-abc::w-9".to_string()];
         assert_eq!(resolve_label_from("w-1", &candidates), "local::w-1");
+        assert_eq!(resolve_label_from("w-1", &[]), "local::w-1");
+    }
+
+    #[test]
+    fn resolve_label_keeps_a_legacy_non_composite_label_verbatim() {
+        // A control terminal / standalone terminal / saved-workspace / outbound
+        // label has no `library_id::` prefix, so it IS its own native label.
+        // Fabricating `local::{id}` (the old fallback) pointed the launcher's
+        // Focus/eye op at a window that never exists and silently no-opped (the
+        // P0). These families must resolve verbatim even with no live candidate.
+        assert_eq!(
+            resolve_label_from("control-terminal-ds1", &[]),
+            "control-terminal-ds1"
+        );
+        assert_eq!(resolve_label_from("terminal-3", &[]), "terminal-3");
+        assert_eq!(
+            resolve_label_from("workspace-abc-1", &[]),
+            "workspace-abc-1"
+        );
+        assert_eq!(resolve_label_from("outbound-x", &[]), "outbound-x");
+        // A bare library-minted id is NOT a legacy family, so it still falls back
+        // to the `local::` composite (no over-broadening of the verbatim rule).
         assert_eq!(resolve_label_from("w-1", &[]), "local::w-1");
     }
 
