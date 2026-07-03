@@ -929,9 +929,16 @@ fn build_workspace_window(app: &AppHandle, spec: WindowSpec<'_>) -> Result<(), S
     // per-window state + restore survive the success navigation.
     let (webview_url, init_script) = match connecting {
         Some(display_url) => {
+            // Follow the launcher's light/dark choice (WP3 local theme); null
+            // follows the OS. The connecting screen is local desktop chrome.
+            let theme = app
+                .state::<Arc<AppState>>()
+                .embedded()
+                .and_then(|e| e.local_theme());
             let payload = serde_json::json!({
                 "url": display_url,
                 "target": parsed.as_str(),
+                "theme": theme,
             });
             let script = format!("window.__CHAN_CONNECTING__ = {payload};\n{KEY_BRIDGE_JS}");
             (WebviewUrl::App("connecting.html".into()), script)

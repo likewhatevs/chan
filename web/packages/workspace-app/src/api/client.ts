@@ -1462,7 +1462,7 @@ export interface WatchSubscription {
 /// disposer, plus typed `subscribeDir` / `unsubscribeDir` helpers.
 export function openWatchSocket(
   onEvent: (e: unknown) => void,
-  onStatus?: (s: import("./transport").WsStatus) => void,
+  onStatus?: (s: import("./transport").WsStatus, attempt: number) => void,
   onReady?: () => void,
 ): WatchSubscription {
   // Tag the socket with this window's session id so the server's

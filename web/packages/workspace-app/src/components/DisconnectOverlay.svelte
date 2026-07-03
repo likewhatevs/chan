@@ -117,6 +117,37 @@
   const subline = canAbandon
     ? "this usually clears on its own; abandon to give up on this connection"
     : "this usually clears on its own";
+
+  // Live elapsed timer + attempt counter, matching the desktop connecting
+  // screen's retry presentation. The timer runs only while the overlay is up
+  // (it resets on each disconnect); the attempt count rides `ui.wsAttempt`,
+  // surfaced by the watcher transport.
+  let elapsedMs = $state(0);
+  $effect(() => {
+    if (!visible) {
+      elapsedMs = 0;
+      return;
+    }
+    const start = Date.now();
+    elapsedMs = 0;
+    const id = setInterval(() => {
+      elapsedMs = Date.now() - start;
+    }, 1000);
+    return () => clearInterval(id);
+  });
+
+  function fmtElapsed(ms: number): string {
+    const total = Math.max(0, Math.floor(ms / 1000));
+    const m = Math.floor(total / 60);
+    const s = total % 60;
+    return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+  }
+
+  const meta = $derived(
+    ui.wsAttempt > 0
+      ? `attempt ${ui.wsAttempt} · ${fmtElapsed(elapsedMs)}`
+      : fmtElapsed(elapsedMs),
+  );
 </script>
 
 {#if visible}
@@ -133,6 +164,7 @@
     <div class="card">
       <div class="spinner" aria-hidden="true"></div>
       <div class="title">{message}</div>
+      <div class="meta" aria-live="polite">{meta}</div>
       <div class="subline">{subline}</div>
       {#if canAbandon}
         <div class="actions">
@@ -197,6 +229,13 @@
   .title {
     font-size: 16px;
     font-weight: 600;
+  }
+  /* Attempt counter + elapsed timer, mirroring the desktop connecting
+     screen's retry readout. Tabular figures so the seconds don't jitter. */
+  .meta {
+    font-size: 13px;
+    color: var(--text-secondary);
+    font-variant-numeric: tabular-nums;
   }
   .subline {
     font-size: 14px;

@@ -343,17 +343,21 @@ const REQUEST_TIMEOUT_MS = 10_000;
 /// old socket's onclose was just stomping the status afterwards.
 export function openWatch(
   onEvent: (e: unknown) => void,
-  onStatus: (s: WsStatus) => void = () => {},
+  onStatus: (s: WsStatus, attempt: number) => void = () => {},
   onOpen: () => void = () => {},
   windowId?: string,
 ): WatchSocket {
   let closed = false;
   let ws: WebSocket | null = null;
   let backoff = 500;
+  // Reconnect attempt counter: 0 on the initial connect and while open, then
+  // 1, 2, ... on each successive reconnect, so the disconnect overlay can show
+  // "attempt N" the way the desktop connecting screen does.
+  let attempt = 0;
 
   const connect = () => {
     if (closed) return;
-    onStatus("connecting");
+    onStatus("connecting", attempt);
     const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
     // withTokenQuery applies the server prefix and the ?t= token to
     // the path; the caller stitches on proto+host to produce the
@@ -371,7 +375,8 @@ export function openWatch(
     ws = createSocket(url);
     ws.onopen = () => {
       backoff = 500;
-      onStatus("open");
+      attempt = 0;
+      onStatus("open", attempt);
       // The server's scope registry is per-socket, so a fresh socket
       // starts with no subscriptions. The owner re-establishes its
       // active scopes here (the File Browser instances wire that in);
@@ -387,7 +392,8 @@ export function openWatch(
     };
     ws.onclose = () => {
       if (closed) return;
-      onStatus("reconnecting");
+      attempt += 1;
+      onStatus("reconnecting", attempt);
       const delay = backoff;
       backoff = Math.min(backoff * 2, 8000);
       setTimeout(connect, delay);

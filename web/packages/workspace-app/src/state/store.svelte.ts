@@ -199,6 +199,11 @@ export const ui = $state<{
   /// Used to nudge tabs to reload on external changes.
   lastWatch: number;
   ws: WsStatus;
+  /// Reconnect attempt count from the watcher transport: 0 while open or on
+  /// the first connect, then 1, 2, ... on each reconnect. Drives the "attempt
+  /// N" counter the DisconnectOverlay shows, matching the desktop connecting
+  /// screen.
+  wsAttempt: number;
   /// User's pick. Mirrored from the global config; written through
   /// `setThemeChoice`.
   themeChoice: ThemeChoice;
@@ -245,6 +250,7 @@ export const ui = $state<{
   statusAction: null,
   lastWatch: 0,
   ws: "connecting",
+  wsAttempt: 0,
   themeChoice: "system",
   theme: effectiveTheme("system"),
   authMissing: false,
@@ -1487,8 +1493,9 @@ function surfaceTeamSpawn(
   }
 }
 
-function onWatchStatus(status: WsStatus): void {
+function onWatchStatus(status: WsStatus, attempt: number): void {
   ui.ws = status;
+  ui.wsAttempt = attempt;
 }
 
 /// Fires on every (re)connect of the watcher socket. The server's

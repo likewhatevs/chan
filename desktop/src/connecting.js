@@ -106,14 +106,14 @@ if (!displayUrl) {
   runLoop();
 }
 
-// Mirror the launcher's chosen theme. connecting.html and index.html
-// share an origin, so localStorage.chanDesktopTheme is the same entry;
-// styles.css :root + the OS-light media query handle the follow-OS case,
-// so we only pin an explicit light/dark override here.
+// Follow the launcher's chosen theme, injected by Rust into the
+// __CHAN_CONNECTING__ global (null follows the OS). styles.css :root + the
+// OS-light media query handle the follow-OS case, so we only pin an explicit
+// light/dark override here.
 function applyTheme() {
-  const saved = localStorage.getItem('chanDesktopTheme');
-  if (saved === 'dark' || saved === 'light') {
-    document.documentElement.setAttribute('data-theme', saved);
+  const theme = injected && injected.theme;
+  if (theme === 'dark' || theme === 'light') {
+    document.documentElement.setAttribute('data-theme', theme);
   }
 }
 

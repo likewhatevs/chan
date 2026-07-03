@@ -25,4 +25,14 @@ describe("DisconnectOverlay", () => {
     expect(overlay).not.toMatch(/disconnected from the chan server/);
     expect(overlay).not.toMatch(/the server may have stopped/);
   });
+
+  // The overlay adopts the desktop connecting screen's retry readout: a live
+  // elapsed timer and an "attempt N" counter driven by the watcher transport's
+  // reconnect count (`ui.wsAttempt`), alongside the existing spinner.
+  test("shows the retry-counter presentation (attempt count + elapsed timer)", () => {
+    expect(overlay).toMatch(/ui\.wsAttempt/);
+    expect(overlay).toMatch(/function fmtElapsed/);
+    expect(overlay).toMatch(/attempt \$\{ui\.wsAttempt\}/);
+    expect(overlay).toMatch(/class="meta"/);
+  });
 });
