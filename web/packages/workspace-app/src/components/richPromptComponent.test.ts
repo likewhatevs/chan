@@ -80,9 +80,9 @@ describe("RichPrompt.svelte component", () => {
       /import \{ rewriteImagePathsForDelivery \} from "\.\.\/editor\/deliver_images"/,
     );
     // The editor backing markdown stays draft-relative for preview, while the
-    // prompt frame payload is rewritten to workspace-rooted image refs.
+    // prompt frame payload is rewritten to bare absolute on-disk image paths.
     expect(richPromptSrc).toMatch(
-      /const delivered = rewriteImagePathsForDelivery\(text, draftPath\);/,
+      /const delivered = rewriteImagePathsForDelivery\(\s*text,\s*draftPath,\s*workspace\.info\?\.root/,
     );
     expect(richPromptSrc).toMatch(
       /if \(!sendPromptToTerminal\(tab\.id, delivered, submitAgent\(\), id\)\) return true;/,
@@ -196,9 +196,13 @@ describe("RichPrompt.svelte component", () => {
     expect(richPromptSrc).toMatch(/return "gemini";/);
   });
 
-  test("does not reimplement list editing; Wysiwyg owns the main editor keymap", () => {
-    expect(richPromptSrc).not.toMatch(/indentListItem/);
-    expect(richPromptSrc).not.toMatch(/outdentListItem/);
+  test("adds only a never-escape composer Tab; Wysiwyg owns the rest of the keymap", () => {
+    // Tab in the composer indents and must never escape to the browser's focus
+    // nav, so RichPrompt binds it with an indentMore fallback. It does NOT
+    // reimplement Enter continuation or markdown backspace (Wysiwyg owns those).
+    expect(richPromptSrc).toMatch(/indentListItem\(v\) \|\| indentMore\(v\)/);
+    expect(richPromptSrc).not.toMatch(/insertNewlineContinueMarkup/);
+    expect(richPromptSrc).not.toMatch(/deleteMarkupBackward/);
   });
 
   test("floating bubble with the submit-with-cmd+enter label", () => {

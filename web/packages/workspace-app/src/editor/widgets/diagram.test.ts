@@ -202,10 +202,10 @@ describe("diagram wiring", () => {
     // Both decoration fields are registered, each reads the editor theme and
     // passes the pan/zoom opener as onView.
     expect(wysiwygSrc).toMatch(
-      /mermaidDecorations\([\s\S]{1,120}effectiveHybridSurfaceTheme\("editor"\) === "dark"/,
+      /mermaidDecorations\([\s\S]{1,120}effectiveHybridSurfaceTheme\(surface\) === "dark"/,
     );
     expect(wysiwygSrc).toMatch(
-      /excalidrawDecorations\([\s\S]{1,120}effectiveHybridSurfaceTheme\("editor"\) === "dark"/,
+      /excalidrawDecorations\([\s\S]{1,120}effectiveHybridSurfaceTheme\(surface\) === "dark"/,
     );
     expect(wysiwygSrc).toMatch(/openDiagramZoom\(svg\)/);
   });

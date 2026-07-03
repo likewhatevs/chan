@@ -41,7 +41,9 @@ describe("Track C: Hybrid surface body themes", () => {
   test("terminal and CodeMirror palettes follow surface theme resolution", () => {
     expect(terminal).toContain('effectiveHybridSurfaceTheme("terminal")');
     expect(sourceEditor).toContain('effectiveHybridSurfaceTheme("editor")');
-    expect(wysiwygEditor).toContain('effectiveHybridSurfaceTheme("editor")');
+    // Wysiwyg themes on a `surface` prop (default "editor"; the Rich Prompt
+    // composer passes "terminal") so it can match the surface it floats over.
+    expect(wysiwygEditor).toContain('effectiveHybridSurfaceTheme(surface)');
   });
 
   test("shared back-side shell owns the per-surface switch and footer OK", () => {
