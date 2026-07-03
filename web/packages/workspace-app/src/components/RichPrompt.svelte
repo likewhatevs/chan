@@ -132,6 +132,12 @@
   }
 
   function consumeTerminalPhase(phase: "delivered" | "rejected" | "failed"): void {
+    // Defer until the draft is loaded. The phase effect runs at mount before the
+    // async onMount sets `draftPath` and loads `content`; consuming then would
+    // clear `tab.pendingPrompt` while `flushWrite` no-ops (no draftPath), and the
+    // subsequent load would restore the already-delivered text into an editable
+    // composer. onMount re-runs this once loaded, when the clear actually lands.
+    if (!loaded) return;
     clearPendingTimers();
     pendingChipVisible = false;
     tab.pendingPrompt = undefined;
@@ -360,7 +366,15 @@
 
   function onKeydown(e: KeyboardEvent): void {
     if (e.key !== "Escape") return;
+    // The composer's CM6 keymap owns Escape: an open inline picker dismisses
+    // (Prec.highest bubbleKeymap), otherwise dropOrAbandonFromView drops the
+    // queued message or abandons the draft. Both preventDefault, so a press
+    // CM6 already handled is only kept out of the app-global Escape here -
+    // re-running the drop/abandon would turn one Escape into cancel AND hide.
+    // The container acts itself only when the editor was not focused and no
+    // CM6 handler ran.
     e.stopPropagation();
+    if (e.defaultPrevented) return;
     e.preventDefault();
     if (lastQueued && (isPending || content.length === 0)) {
       sendCancelToTerminal(tab.id, lastQueued.id);
