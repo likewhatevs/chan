@@ -4,6 +4,25 @@ All notable changes to this project will be documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v0.63.0]
+
+The Rich Prompt composer moves onto the main editor, a devserver whose control script dies keeps a readable terminal and reconnects on demand, and a prerelease tag can no longer push a release candidate onto GA installs.
+
+### Added
+
+- **Reconnect a stuck devserver from its workspace window.** When a devserver's control connection drops, each of its workspace windows shows a reconnecting overlay with a Reconnect button beside Abandon (chan-desktop). Reconnect closes the dead control terminal and re-runs the connection, the same flow the launcher's Connect drives; Abandon gives up on the connection.
+
+### Changed
+
+- **The Rich Prompt composer is the main editor.** Cmd+Shift+P now composes in the same WYSIWYG editor as the rest of chan, so a prompt gets the full editor: inline image rendering, list and markup editing, and the editor's keymap. A pasted image renders inline while you compose and is delivered to the agent as an absolute on-disk path, so the agent reads it regardless of its working directory.
+- **A dead control script leaves a readable terminal instead of a vanished connection.** When a devserver's control script exits (the remote drops, the script returns, Ctrl+C), chan marks the connection down but keeps the control terminal open at "process exited" so you can read why it died; the launcher row flashes for attention and the workspace windows show a reconnecting overlay. The devserver stays un-reconnectable until you close that control terminal (read the reason, then Ctrl+D / Cmd+W), after which it is ready to connect again. Reconnecting never happens on its own; use the launcher's Connect or the overlay's Reconnect.
+- **A survey resolved in one window clears it in the others.** Answering, cancelling, or letting a survey time out now closes it in the other windows of its tab group, and an unrelated Rich Prompt composer open at the time is left untouched.
+- **A prerelease tag no longer updates the GA self-upgrade pointer.** Publishing a prerelease (a `-rc` tag) ships its build as GitHub Release assets but leaves `/dl/cli/latest.json` and the desktop-updater manifest on the current GA version, so a release candidate cannot auto-upgrade GA installs; only a GA tag moves the pointer.
+
+### Fixed
+
+- **The launcher's Focus and show/hide act on a control terminal directly.** They resolve a control terminal's native window by its own label instead of routing through a composed id that could silently no-op, so the buttons act or report an error rather than doing nothing.
+
 ## [v0.62.0] - 2026-07-03
 
 Polish and cleanup: one alert surface and one connecting surface (both theme-aware), the wysiwyg list-typing regression fixed, launcher parity on web and gateway with a shared theme, and a stack of smaller refinements. No new surfaces.
