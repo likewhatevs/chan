@@ -573,6 +573,13 @@ pub struct DevserverFeed {
     /// standalone terminal on the shared `/terminal` tenant never pushes
     /// `connected:false`, so its dot hung without this).
     buried: Mutex<std::collections::HashSet<String>>,
+    /// Devserver ids whose connection is DOWN: the control script exited, or
+    /// the workspace poll finds the transport unreachable. `windows()` and
+    /// `workspaces()` serve NO rows for a down devserver, so the launcher
+    /// cannot offer open / hide / manage on workspaces it cannot reach. The
+    /// caches stay intact underneath; the rows return the moment the flag
+    /// clears (poll recovery or a fresh connect).
+    down: Mutex<std::collections::HashSet<String>>,
 }
 
 impl DevserverFeed {
@@ -619,6 +626,7 @@ impl DevserverFeed {
         self.windows.lock().unwrap().remove(id);
         self.workspaces.lock().unwrap().remove(id);
         self.colors.lock().unwrap().remove(id);
+        self.down.lock().unwrap().remove(id);
         if let Some(library_id) = self.library_ids.lock().unwrap().get(id).cloned() {
             let prefix = format!("{library_id}::");
             self.buried
@@ -674,6 +682,18 @@ impl DevserverFeed {
             return Some(lib);
         }
         self.library_ids.lock().unwrap().get(id).cloned()
+    }
+
+    /// Flip a devserver's DOWN state (connection lost / control script exited,
+    /// vs recovered / reconnected). Returns whether it changed, so the caller
+    /// fires the library-change signal only on a real flip.
+    fn set_down(&self, id: &str, down: bool) -> bool {
+        let mut set = self.down.lock().unwrap();
+        if down {
+            set.insert(id.to_string())
+        } else {
+            set.remove(id)
+        }
     }
 
     /// Mark a devserver window LOCALLY buried (or un-buried) so `windows()`
@@ -738,12 +758,17 @@ impl DevserverFeed {
 
 impl chan_server::DevserverFeedSource for DevserverFeed {
     fn windows(&self) -> Vec<chan_server::WindowRecord> {
+        // A DOWN devserver (script exited / transport unreachable) serves no
+        // window rows at all: every launcher affordance on them (open / hide /
+        // focus) needs the connection that is gone.
+        let down = self.down.lock().unwrap().clone();
         let mut records: Vec<chan_server::WindowRecord> = self
             .windows
             .lock()
             .unwrap()
-            .values()
-            .flat_map(|snapshot| snapshot.lock().unwrap().clone())
+            .iter()
+            .filter(|(id, _)| !down.contains(*id))
+            .flat_map(|(_, snapshot)| snapshot.lock().unwrap().clone())
             .collect();
         // Override `connected` for windows the desktop has LOCALLY buried so
         // the launcher dot reflects hidden immediately — the desktop's bury state
@@ -769,12 +794,16 @@ impl chan_server::DevserverFeedSource for DevserverFeed {
     }
 
     fn workspaces(&self) -> Vec<chan_server::LauncherWorkspace> {
+        // Mirror `windows()`: a DOWN devserver serves no workspace rows, so
+        // the launcher cannot offer on/off/forget on workspaces it cannot
+        // reach. The cache underneath survives for the recovery re-render.
+        let down = self.down.lock().unwrap().clone();
         self.workspaces
             .lock()
             .unwrap()
-            .values()
-            .flatten()
-            .cloned()
+            .iter()
+            .filter(|(id, _)| !down.contains(*id))
+            .flat_map(|(_, rows)| rows.clone())
             .collect()
     }
 
@@ -884,6 +913,11 @@ fn spawn_devserver_workspace_poll(
                         let _ = app.emit(DEVSERVER_CONTROL_RESTORED_EVENT, id.clone());
                     }
                     unreachable = false;
+                    // Recovery: the transport answers again, so the rows the
+                    // down flag hid come back in the same push.
+                    if state.devserver_feed.set_down(&id, false) {
+                        changed = true;
+                    }
                     if last_ws.as_ref() != Some(&rows) {
                         let library_id = state.devserver_feed.library_id_of(&id);
                         let mapped = rows
@@ -900,6 +934,14 @@ fn spawn_devserver_workspace_poll(
                     tracing::debug!(devserver = %id, error = %e, "polling devserver workspaces failed");
                     if !unreachable && state.devservers.is_connected(&id) {
                         let _ = app.emit(DEVSERVER_CONTROL_ATTENTION_EVENT, id.clone());
+                    }
+                    // The transport stopped answering: hide this devserver's
+                    // workspace + window rows from the launcher immediately so
+                    // the user cannot open / hide / manage windows against a
+                    // connection that is gone. The caches stay; the Ok arm
+                    // above restores the rows the moment the poll recovers.
+                    if state.devserver_feed.set_down(&id, true) {
+                        changed = true;
                     }
                     unreachable = true;
                 }
@@ -1436,6 +1478,12 @@ fn mark_devserver_control_exited(app: &tauri::AppHandle, state: &AppState, id: &
         let _ = cancel.send(DevserverWatcherStop::RetireKeepWindows);
     }
     state.devserver_watcher_views.lock().unwrap().remove(id);
+    // Hide the devserver's workspace + window rows from the launcher NOW: the
+    // script was the connection, so every affordance on those rows (open /
+    // hide / on / off) is a doomed click while it is down. The kept control
+    // row is an embedded registry row, not a feed row, so it still renders
+    // the death reason; the signal below pushes the trimmed feed.
+    state.devserver_feed.set_down(id, true);
     // Flash the launcher's control row. The label ("connection closed" vs "not
     // responding") is the launcher's call, keyed on the devserver's now-`false`
     // connected status; this event only drives the flash.
@@ -1512,11 +1560,25 @@ fn persist_window_hidden(state: &AppState, label: &str, hidden: bool) {
 /// The connect script may take a moment to bring the devserver up, or prompt
 /// for credentials in the control terminal, so the wait is generous; a
 /// refused connection fails fast, so most attempts cost only the backoff.
-async fn wait_for_devserver(host: &str, port: u16) -> Result<devserver::DevserverInfo, String> {
+///
+/// `abort` is checked before every attempt: for a scripted devserver the
+/// caller passes the control-run liveness probe, so the connect attempt fails
+/// within one backoff of the script dying instead of spinning out the whole
+/// budget against a transport that can never come up (the launcher's Connect
+/// button rides `devserver_connecting`, so a spun-out wait pins the spinner
+/// for the full budget). No-script connects pass a probe that never fires.
+async fn wait_for_devserver(
+    host: &str,
+    port: u16,
+    abort: impl Fn() -> Option<ConnectDevserverError>,
+) -> Result<devserver::DevserverInfo, ConnectDevserverError> {
     const MAX_ATTEMPTS: usize = 20;
     const BACKOFF: std::time::Duration = std::time::Duration::from_millis(1500);
     let mut last_err = String::new();
     for attempt in 1..=MAX_ATTEMPTS {
+        if let Some(e) = abort() {
+            return Err(e);
+        }
         match devserver::fetch_info(host, port).await {
             Ok(info) => return Ok(info),
             Err(e) => {
@@ -1527,9 +1589,7 @@ async fn wait_for_devserver(host: &str, port: u16) -> Result<devserver::Devserve
             }
         }
     }
-    Err(format!(
-        "devserver {host}:{port} did not come up in time ({last_err})"
-    ))
+    Err(format!("devserver {host}:{port} did not come up in time ({last_err})").into())
 }
 
 #[derive(Debug)]
@@ -1923,7 +1983,17 @@ async fn connect_devserver_impl_inner(
             ),
         }
     };
-    let info = wait_for_devserver(&host, port).await?;
+    // The wait aborts within one backoff of the control script dying (or the
+    // run being replaced): with the script gone the devserver can never come
+    // up, and spinning out the full budget pinned the launcher's Connect
+    // spinner for ~30s before failing with a misleading "did not come up in
+    // time" instead of the script's own death.
+    let info = wait_for_devserver(&host, port, || {
+        control.as_ref().and_then(|(ct, generation)| {
+            ensure_control_run_live(&state, &id, *generation, &ct.prefix).err()
+        })
+    })
+    .await?;
     if let Some((ct, generation)) = &control {
         ensure_control_run_live(&state, &id, *generation, &ct.prefix)?;
     }
@@ -2036,7 +2106,9 @@ async fn connect_devserver_impl_inner(
     // Feed the launcher: register this devserver's live window snapshot,
     // poll its served workspaces into the cache, and subscribe to its colour feed
     // with push-based updates. All stop when the disconnect flips `cancel` (they
-    // subscribe to the same channel).
+    // subscribe to the same channel). A fresh connect clears any down flag a
+    // previous script death / outage left, so the rows render immediately.
+    state.devserver_feed.set_down(&id, false);
     state.devserver_feed.register_windows(id.clone(), snapshot);
     spawn_devserver_workspace_poll(
         app.clone(),
@@ -2254,7 +2326,9 @@ async fn reconnect_devserver(
                     .await?;
                 // Re-point the launcher feed at the fresh snapshot + a
                 // poll + colour watch on the rotated token; the old ones stopped on
-                // the cancel above.
+                // the cancel above. The rotation proves the transport answers, so
+                // clear any down flag an outage set.
+                state.devserver_feed.set_down(&id, false);
                 state.devserver_feed.register_windows(id.clone(), snapshot);
                 spawn_devserver_workspace_poll(
                     app.clone(),
@@ -5640,6 +5714,20 @@ mod tests {
         // something to keep, and a stale mark (racing a close/reconnect that
         // reaped the run) must not strand the reconnect block on nothing.
         assert!(mark_exited.contains("control_terminal_runs"));
+        // A dead script means no transport: hide the devserver's workspace +
+        // window rows from the launcher (the kept control row is a registry
+        // row, not a feed row, so it survives to show the death reason).
+        assert!(mark_exited.contains("set_down(id, true)"));
+        // The connect wait aborts on control-script death instead of pinning
+        // the launcher's Connect spinner for the full come-up budget.
+        let wait = MAIN_RS
+            .split("async fn wait_for_devserver(")
+            .nth(1)
+            .expect("wait_for_devserver exists")
+            .split("enum ConnectDevserverError")
+            .next()
+            .expect("wait section ends before the error enum");
+        assert!(wait.contains("if let Some(e) = abort()"));
 
         // A dead control terminal blocks reconnect; closing it clears the block.
         let connect = MAIN_RS
@@ -5712,6 +5800,10 @@ mod tests {
         assert!(poll.contains("DEVSERVER_CONTROL_ATTENTION_EVENT"));
         assert!(poll.contains("DEVSERVER_CONTROL_RESTORED_EVENT"));
         assert!(poll.contains("state.devservers.is_connected(&id)"));
+        // A failed poll marks the devserver DOWN (the launcher hides its
+        // workspace + window rows immediately); a successful poll clears it.
+        assert!(poll.contains("set_down(&id, true)"));
+        assert!(poll.contains("set_down(&id, false)"));
     }
 
     #[test]
@@ -5826,6 +5918,69 @@ mod tests {
         assert_eq!(id, "ds-1");
         assert_eq!(record.token, "fresh-token");
         assert!(feed.record_for_native_label("lib-fed::w-9").is_none());
+    }
+
+    #[test]
+    fn down_devserver_serves_no_launcher_rows_until_recovery() {
+        // A DOWN devserver (control script exited, or the workspace poll finds
+        // the transport unreachable) must serve NO workspace or window rows to
+        // the launcher: every affordance on them (open / hide / on / off)
+        // needs the connection that is gone. The caches survive underneath so
+        // recovery restores the rows without a refetch, and bridge label
+        // resolution keeps working for the native windows that stay open on
+        // the reconnect overlay.
+        use chan_server::DevserverFeedSource;
+        let feed = DevserverFeed::default();
+        let snapshot = Arc::new(Mutex::new(vec![chan_server::WindowRecord {
+            window_id: "w-1".into(),
+            library_id: "lib-fed".into(),
+            kind: chan_server::WindowKind::Terminal,
+            title: "Terminal".into(),
+            ordinal: 1,
+            workspace_path: None,
+            prefix: "/terminal".into(),
+            token: "tok".into(),
+            persisted: true,
+            connected: true,
+            active_transfer: false,
+            control: false,
+            hidden: false,
+            origin: chan_server::WindowOrigin::Native,
+        }]));
+        feed.register_windows("ds-1".to_string(), snapshot);
+        feed.set_workspaces(
+            "ds-1".to_string(),
+            vec![chan_server::LauncherWorkspace {
+                workspace_id: "notes".into(),
+                path: "/remote/notes".into(),
+                label: "notes".into(),
+                on: true,
+                library_id: Some("lib-fed".into()),
+                devserver_id: Some("ds-1".into()),
+                prefix: "notes".into(),
+                status: Default::default(),
+                error: None,
+            }],
+        );
+        assert_eq!(feed.windows().len(), 1);
+        assert_eq!(feed.workspaces().len(), 1);
+        // Down hides every launcher row for the devserver...
+        assert!(feed.set_down("ds-1", true));
+        assert!(feed.windows().is_empty());
+        assert!(feed.workspaces().is_empty());
+        // ...while bridge ops still resolve the live native labels.
+        assert_eq!(feed.window_labels(), vec!["lib-fed::w-1".to_string()]);
+        // Recovery restores the cached rows in place.
+        assert!(feed.set_down("ds-1", false));
+        assert_eq!(feed.windows().len(), 1);
+        assert_eq!(feed.workspaces().len(), 1);
+        // forget (full teardown) clears the flag so a reconnect starts clean.
+        feed.set_down("ds-1", true);
+        feed.forget("ds-1");
+        assert!(
+            !feed.set_down("ds-1", false),
+            "forget must clear the down flag",
+        );
     }
 
     #[test]
