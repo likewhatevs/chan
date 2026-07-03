@@ -21,11 +21,15 @@
     /// a fresh, empty board).
     content: string;
     dark: boolean;
+    /// True only when this canvas tab is the pane's active, front-facing
+    /// tab. Drives the offscreen hide below. Defaults true so standalone
+    /// mounts (tests, any non-keep-alive host) render visible.
+    active?: boolean;
     /// The board changed. The host serializes into the tab buffer, which
     /// the existing autosave path persists.
     onSceneChange: (json: string) => void;
   };
-  let { content, dark, onSceneChange }: Props = $props();
+  let { content, dark, active = true, onSceneChange }: Props = $props();
 
   let host: HTMLDivElement | undefined = $state();
   let root: import("react-dom/client").Root | null = null;
@@ -147,7 +151,7 @@
   });
 </script>
 
-<div class="excalidraw-shell">
+<div class="excalidraw-shell" class:offscreen={!active}>
   <div class="excalidraw-host" bind:this={host} tabindex="-1"></div>
 </div>
 
@@ -159,6 +163,18 @@
   }
   :global(.chan-page-capped) .excalidraw-shell {
     background: var(--page-shade);
+  }
+  /* WKWebView leaks the composited Excalidraw zoom/undo Island (the
+     .layer-ui__wrapper__footer, a plain absolute z-index-4 layer inside
+     the React root with no portal, position:fixed, or visibility override)
+     through an ancestor's visibility:hidden under the flip-card's
+     preserve-3d 3D context, so an inactive board keeps painting its footer
+     over the active tab. Canvas tabs hold no CodeMirror or xterm, so the
+     keep-alive contract's pre-layout reason does not apply here; display:none
+     is safe and Excalidraw re-measures on unhide. Do not generalize this to
+     editor/terminal tabs. */
+  .excalidraw-shell.offscreen {
+    display: none;
   }
   .excalidraw-host {
     position: absolute;

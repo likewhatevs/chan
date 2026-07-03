@@ -1571,6 +1571,7 @@
         {#if ExcalidrawCanvas}
           <ExcalidrawCanvas
             bind:this={canvasRef}
+            {active}
             content={tab.content}
             dark={effectiveHybridSurfaceTheme("editor") === "dark"}
             onSceneChange={(json) => (tab.content = json)}

@@ -115,6 +115,15 @@ describe("Ctrl+D dispatcher (App.svelte raw-source guards)", () => {
     expect(app).toContain('if (active.kind === "terminal") return;');
   });
 
+  test("does not intercept Ctrl+D inside an Excalidraw canvas tab", () => {
+    // The board keeps Ctrl+D for its own duplicate chord; Cmd+W is the
+    // close path for canvas tabs. This early-return must survive future
+    // cleanups (it is not dead code), so pin it against the source.
+    expect(app).toContain(
+      'if (active.kind === "file" && active.mode === "canvas") return;',
+    );
+  });
+
   test("listener is registered on document capture to beat CodeMirror", () => {
     // Capture phase fires before CodeMirror's bubble-phase keymap,
     // so the close-tab path wins over the multi-cursor default.

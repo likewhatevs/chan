@@ -72,6 +72,47 @@ describe("ExcalidrawCanvas island", () => {
   });
 });
 
+describe("inactive canvas tab hides via display:none (WKWebView island leak)", () => {
+  // A GPU-composited Excalidraw island (the zoom/undo footer) leaks through
+  // an ancestor's visibility:hidden under the flip-card's preserve-3d
+  // context in WKWebView; hiding the shell with display:none stops it.
+  test("the shell gains an offscreen hook toggled off the active prop", () => {
+    expect(canvasSrc).toContain("class:offscreen={!active}");
+    expect(canvasSrc).toMatch(/\.excalidraw-shell\.offscreen \{\s*display: none;\s*\}/);
+  });
+
+  test("FileEditorTab passes active into the canvas island", () => {
+    expect(fileEditorSrc).toMatch(/<ExcalidrawCanvas[\s\S]*?\{active\}/);
+  });
+
+  test("mounting with active:false applies the offscreen class", () => {
+    const target = document.createElement("div");
+    document.body.append(target);
+    mounted.push(
+      mount(ExcalidrawCanvas, {
+        target,
+        props: { content: "", dark: false, active: false, onSceneChange: () => {} },
+      }),
+    );
+    const shell = target.querySelector(".excalidraw-shell");
+    expect(shell).not.toBeNull();
+    expect(shell?.classList.contains("offscreen")).toBe(true);
+  });
+
+  test("the active prop defaults true so a plain mount is not hidden", () => {
+    const target = document.createElement("div");
+    document.body.append(target);
+    mounted.push(
+      mount(ExcalidrawCanvas, {
+        target,
+        props: { content: "", dark: false, onSceneChange: () => {} },
+      }),
+    );
+    const shell = target.querySelector(".excalidraw-shell");
+    expect(shell?.classList.contains("offscreen")).toBe(false);
+  });
+});
+
 describe("excalidraw stays out of the eager bundle", () => {
   test("the wrapper dynamic-imports react-dom, react, and excalidraw", () => {
     expect(canvasSrc).toMatch(/import\("react-dom\/client"\)/);
