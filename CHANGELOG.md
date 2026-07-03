@@ -4,7 +4,9 @@ All notable changes to this project will be documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [v0.62.0] - 2026-07-03
+
+Polish and cleanup: one alert surface and one connecting surface (both theme-aware), the wysiwyg list-typing regression fixed, launcher parity on web and gateway with a shared theme, and a stack of smaller refinements. No new surfaces.
 
 ### Added
 
