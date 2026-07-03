@@ -16,6 +16,7 @@
   import { onControlAttentionEvent, onControlRestoredEvent } from "./state/controlClosed.svelte";
   import {
     clearControlAttention,
+    pruneControlAttention,
     resolvePendingControlAttention,
   } from "./state/controlAttention.svelte";
   import { onTauriEvent } from "./api/desktop";
@@ -62,6 +63,11 @@
       wasConnected.set(ds.id, now);
     }
     resolvePendingControlAttention();
+    // Drop flags whose control terminal has left the feed (closed / reaped /
+    // torn-down), so a dead lib does not leak a flag or stale-flash on a
+    // same-lib reconnect. Reads `library.windows`, so this pass re-runs on any
+    // feed change.
+    pruneControlAttention();
   });
 </script>
 

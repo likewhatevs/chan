@@ -94,6 +94,20 @@ export function hasControlAttention(libraryId: string): boolean {
   return controlAttention.libs[libraryId] === true;
 }
 
+/** Drop attention flags whose library no longer owns a control window in the
+ * feed. The feed is authoritative: while a control terminal is alive (a script
+ * died and it sits at "process exited") its record is present, so its flag
+ * survives and the row keeps flashing; once the terminal is closed / reaped its
+ * record leaves the feed and the flag is cleared here, so a torn-down or
+ * reconnected library does not leak a flag or resurface as a stale flash. Runs
+ * on the same reactive pass as `resolvePendingControlAttention`. */
+export function pruneControlAttention(): void {
+  const live = new Set(library.windows.filter((w) => w.control).map((w) => w.library_id));
+  for (const libraryId of Object.keys(controlAttention.libs)) {
+    if (!live.has(libraryId)) delete controlAttention.libs[libraryId];
+  }
+}
+
 /** Clear every attention flag (test reset; also a hard reset if ever needed). */
 export function clearAllControlAttention(): void {
   controlAttention.libs = {};
