@@ -276,6 +276,25 @@ export async function abandonDevserverForWindow(): Promise<void> {
   }
 }
 
+/// Reconnect the devserver backing THIS workspace window: tell the desktop to
+/// force-close the (dead) control terminal and re-run the connect flow. Called
+/// by the disconnect overlay's Reconnect button on a devserver-backed desktop
+/// window. The desktop resolves which devserver this window belongs to (from
+/// its window label). No-op off-desktop; INERT on a non-loopback devserver
+/// window (the IPC ACL is not granted there) -- both degrade to a silent
+/// best-effort no-op.
+export async function reconnectDevserverForWindow(): Promise<void> {
+  if (!isTauriDesktop()) return;
+  try {
+    await tauriInvoke("reconnect_devserver_for_window");
+  } catch (err) {
+    console.warn(
+      "reconnectDevserverForWindow: reconnect_devserver_for_window IPC failed",
+      err,
+    );
+  }
+}
+
 /// Drive the chan-desktop native window in or out of fullscreen. WKWebView
 /// on macOS disables the HTML element Fullscreen API (`element.requestFullscreen()`
 /// rejects), so the slide player's "play" mode cannot go fullscreen through the

@@ -1,24 +1,33 @@
 import { describe, expect, test } from "vitest";
 import overlay from "./DisconnectOverlay.svelte?raw";
 
-// #A2-frontend: the disconnect overlay is a reconnecting status + a single
-// Abandon action. The manual "Retry now" button is gone (the watcher loop
-// auto-reconnects, so a manual retry is redundant), and the never-emitted
-// "closed" branch is neutralized.
+// The disconnect overlay is a reconnecting status plus recovery actions on a
+// devserver-backed desktop window: a primary Reconnect (force-close the dead
+// control terminal + re-dial) and Abandon (give up). The manual "Retry now"
+// button is gone (the watcher loop auto-reconnects), the never-emitted "closed"
+// branch is neutralized, and the standing subline is removed everywhere.
 describe("DisconnectOverlay", () => {
   test("drops the manual Retry button and reconnectWatcher wiring", () => {
     expect(overlay).not.toMatch(/Retry now/);
     expect(overlay).not.toMatch(/reconnectWatcher/);
   });
 
-  test("keeps the Abandon action gated on canAbandon, via the unchanged IPC", () => {
+  test("offers Reconnect + Abandon, gated on canRecover, via the desktop IPC", () => {
     expect(overlay).toMatch(
-      /const canAbandon = isTauriDesktop\(\) && windowLibraryId\(\) !== "local"/,
+      /const canRecover = isTauriDesktop\(\) && windowLibraryId\(\) !== "local"/,
     );
-    expect(overlay).toMatch(/\{#if canAbandon\}[\s\S]{1,200}onclick=\{abandon\}/);
-    // The abandon contract with @@CLI is unchanged: the UI invokes the same
-    // desktop IPC wrapper, which calls abandon_devserver_for_window.
+    // Both recovery buttons render together under the same desktop gate.
+    expect(overlay).toMatch(
+      /\{#if canRecover\}[\s\S]{1,300}onclick=\{reconnect\}[\s\S]{1,200}onclick=\{abandon\}/,
+    );
+    // Each button invokes its own desktop IPC wrapper (best-effort).
+    expect(overlay).toMatch(/reconnectDevserverForWindow\(\)/);
     expect(overlay).toMatch(/abandonDevserverForWindow\(\)/);
+  });
+
+  test("removes the standing subline (Q7=b: everywhere)", () => {
+    expect(overlay).not.toMatch(/this usually clears on its own/);
+    expect(overlay).not.toMatch(/class="subline"/);
   });
 
   test("neutralizes the never-emitted 'closed' branch", () => {

@@ -13,15 +13,28 @@
 
   import { ui } from "../state/store.svelte";
   import { windowLibraryId } from "../api/client";
-  import { isTauriDesktop, abandonDevserverForWindow } from "../api/desktop";
+  import {
+    isTauriDesktop,
+    abandonDevserverForWindow,
+    reconnectDevserverForWindow,
+  } from "../api/desktop";
   import { onDestroy } from "svelte";
 
-  // Abandon is offered only on a devserver-backed desktop window: a stuck remote
-  // connection the user can give up on. windowLibraryId() is "local" for the
-  // local library; isTauriDesktop() gates out the plain browser (which has no IPC
-  // and whose tab the user closes themselves). Both read once -- not reactive.
-  const canAbandon = isTauriDesktop() && windowLibraryId() !== "local";
+  // Recovery actions (Reconnect / Abandon) are offered only on a devserver-backed
+  // desktop window: a stuck remote connection the user can force back or give up
+  // on. windowLibraryId() is "local" for the local library; isTauriDesktop()
+  // gates out the plain browser (which has no IPC and whose tab the user closes
+  // themselves). Both read once -- not reactive.
+  const canRecover = isTauriDesktop() && windowLibraryId() !== "local";
+  let reconnectBtn: HTMLButtonElement | null = $state(null);
   let abandonBtn: HTMLButtonElement | null = $state(null);
+
+  // Reconnect: ask the desktop to force-close the dead control terminal and
+  // re-run the connect flow. Best-effort; a failed/inert IPC just leaves the
+  // overlay (the auto-reconnect loop keeps trying underneath).
+  function reconnect(): void {
+    void reconnectDevserverForWindow();
+  }
 
   // Abandon: ask the desktop to disconnect this window's devserver. The window
   // closes async via the watcher; best-effort, so a failed/inert IPC just leaves
@@ -85,23 +98,25 @@
   /// keystrokes still flow to whatever was focused before the
   /// disconnect (typically the WYSIWYG / CodeMirror surface), so a
   /// user mid-edit could keep typing into a buffer the watcher
-  /// can't observe. Park focus on the Abandon button when it's
-  /// offered, else on the overlay itself. Paired with the keydown
-  /// trap below, Tab can't leak focus back to the background.
+  /// can't observe. Park focus on the primary Reconnect button when
+  /// it's offered (else Abandon, else the overlay). Paired with the
+  /// keydown trap below, Tab can't leak focus back to the background.
   $effect(() => {
     if (!visible) return;
     const active = document.activeElement as HTMLElement | null;
     active?.blur();
-    queueMicrotask(() => (abandonBtn ?? overlayEl)?.focus());
+    queueMicrotask(() => (reconnectBtn ?? abandonBtn ?? overlayEl)?.focus());
   });
 
   function trapTab(e: KeyboardEvent): void {
-    // Keep focus on the dialog: Tab/Shift+Tab parks on the Abandon button
-    // when it's offered and never leaks to the blocked UI behind. With no
-    // button (the overlay is status-only), focus stays on the overlay.
+    // Keep focus on the dialog: Tab/Shift+Tab cycles between the recovery
+    // buttons and never leaks to the blocked UI behind. With no buttons (the
+    // overlay is status-only), focus stays on the overlay.
     if (e.key !== "Tab") return;
     e.preventDefault();
-    abandonBtn?.focus();
+    if (!reconnectBtn && !abandonBtn) return;
+    const onReconnect = document.activeElement === reconnectBtn;
+    (onReconnect ? abandonBtn : reconnectBtn)?.focus();
   }
 
   // "closed" is never emitted by the transport (it pushes connecting /
@@ -113,10 +128,6 @@
       ? "connecting to the chan server"
       : "reconnecting to the chan server",
   );
-
-  const subline = canAbandon
-    ? "this usually clears on its own; abandon to give up on this connection"
-    : "this usually clears on its own";
 
   // Live elapsed timer + attempt counter, matching the desktop connecting
   // screen's retry presentation. The timer runs only while the overlay is up
@@ -165,9 +176,11 @@
       <div class="spinner" aria-hidden="true"></div>
       <div class="title">{message}</div>
       <div class="meta" aria-live="polite">{meta}</div>
-      <div class="subline">{subline}</div>
-      {#if canAbandon}
+      {#if canRecover}
         <div class="actions">
+          <button class="reconnect" bind:this={reconnectBtn} onclick={reconnect}>
+            Reconnect
+          </button>
           <button class="abandon" bind:this={abandonBtn} onclick={abandon}>
             Abandon
           </button>
@@ -237,15 +250,23 @@
     color: var(--text-secondary);
     font-variant-numeric: tabular-nums;
   }
-  .subline {
-    font-size: 14px;
-    color: var(--text-secondary);
-    line-height: 1.4;
-  }
   .actions {
     display: flex;
     gap: 10px;
     justify-content: center;
+  }
+  /* Reconnect is the primary recovery action: a filled accent button. */
+  .reconnect {
+    background: var(--accent, var(--link));
+    color: var(--bg);
+    border: 1px solid var(--accent, var(--link));
+    border-radius: 4px;
+    padding: 6px 14px;
+    font: inherit;
+    cursor: pointer;
+  }
+  .reconnect:hover {
+    filter: brightness(1.08);
   }
   /* Abandon is the destructive escape hatch: muted until hover, then danger. */
   .abandon {
