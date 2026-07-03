@@ -1413,6 +1413,13 @@ fn teardown_devserver_connection(app: &tauri::AppHandle, state: &AppState, id: &
 /// clears it) or hits Reconnect (which force-closes it). This is the counterpart
 /// to `teardown_devserver_connection`, which reaps everything. Idempotent.
 fn mark_devserver_control_exited(app: &tauri::AppHandle, state: &AppState, id: &str) {
+    // Keeping requires something to keep: with no current control run (a
+    // concurrent close or reconnect reaped it between the caller's currency
+    // check and this call) there is no terminal to hold at "process exited",
+    // and marking anyway would strand the reconnect block on nothing.
+    if !state.control_terminal_runs.lock().unwrap().contains_key(id) {
+        return;
+    }
     state.devservers.remove(id);
     state
         .control_terminal_dead
@@ -1726,12 +1733,21 @@ async fn connect_devserver_impl(
     }
     // A dead control terminal blocks reconnect: the user must close it (read the
     // death reason) first, or use Reconnect (which force-closes it, clearing this
-    // before it dials).
+    // before it dials). The block is only honored while its terminal actually
+    // exists: a stale entry whose window is gone (any residual race that strands
+    // the flag) self-heals here instead of walling off connect with an
+    // instruction the user cannot follow.
     if state.control_terminal_dead.lock().unwrap().contains(&id) {
-        return Err(
-            "close the control terminal to see why the connection ended, then reconnect"
-                .to_string(),
-        );
+        if app
+            .get_webview_window(&serve::control_terminal_label(&id))
+            .is_some()
+        {
+            return Err(
+                "close the control terminal to see why the connection ended, then reconnect"
+                    .to_string(),
+            );
+        }
+        state.control_terminal_dead.lock().unwrap().remove(&id);
     }
     {
         let mut connecting = state.devserver_connecting.lock().unwrap();
@@ -3209,7 +3225,19 @@ async fn reconnect_devserver_for_window(
     };
     if let Some(id) = devserver_id {
         let state_arc = Arc::clone(state.inner());
-        close_devserver_control_terminal(&app, &state_arc, &id);
+        // Force-close only a KEPT-DEAD control terminal (clearing the reconnect
+        // block). A live control run is left alone: the connect flow reaps and
+        // respawns it itself when a script is configured, and a second Reconnect
+        // racing the first must not tear down the run the first one just
+        // started.
+        if state_arc
+            .control_terminal_dead
+            .lock()
+            .unwrap()
+            .contains(&id)
+        {
+            close_devserver_control_terminal(&app, &state_arc, &id);
+        }
         connect_devserver_impl(app.clone(), state_arc, id).await?;
     }
     Ok(())
@@ -5608,6 +5636,10 @@ mod tests {
         assert!(mark_exited.contains("RetireKeepWindows"));
         assert!(!mark_exited.contains("reap_devserver_control_terminal"));
         assert!(!mark_exited.contains("remove_devserver_windows"));
+        // Marking bails when no current control run exists: keeping requires
+        // something to keep, and a stale mark (racing a close/reconnect that
+        // reaped the run) must not strand the reconnect block on nothing.
+        assert!(mark_exited.contains("control_terminal_runs"));
 
         // A dead control terminal blocks reconnect; closing it clears the block.
         let connect = MAIN_RS
@@ -5618,6 +5650,10 @@ mod tests {
             .next()
             .expect("connect_devserver_impl precedes its inner");
         assert!(connect.contains("control_terminal_dead"));
+        // The block is only honored while its terminal exists; a stranded flag
+        // (window gone) self-heals at the connect chokepoint instead of walling
+        // off connect with an instruction the user cannot follow.
+        assert!(connect.contains("control_terminal_dead.lock().unwrap().remove(&id)"));
         // The connect error arm keeps a still-open control terminal (the exit
         // watcher's choice, which its ControlTerminated error races) and only
         // tears down when the user closed the window mid-connect.
@@ -5641,8 +5677,11 @@ mod tests {
             .expect("close precedes persist_window_hidden");
         assert!(close.contains("control_terminal_dead"));
 
-        // Reconnect force-closes the control terminal BEFORE dialing, so the
-        // control record drops from the feed and the block clears first.
+        // Reconnect force-closes a KEPT-DEAD control terminal BEFORE dialing,
+        // so the control record drops from the feed and the block clears first.
+        // The close is gated on the dead flag: a live control run is left for
+        // the connect flow to reap/respawn, so two racing Reconnects cannot
+        // tear down the run the first one just started.
         let reconnect = MAIN_RS
             .split("async fn reconnect_devserver_for_window")
             .nth(1)
@@ -5650,6 +5689,7 @@ mod tests {
             .split("fn ")
             .next()
             .expect("reconnect body");
+        assert!(reconnect.contains("control_terminal_dead"));
         let close_pos = reconnect
             .find("close_devserver_control_terminal")
             .expect("reconnect force-closes the control terminal");
