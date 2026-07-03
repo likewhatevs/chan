@@ -3006,10 +3006,26 @@ fn request_close_window(app: tauri::AppHandle, window: tauri::WebviewWindow) -> 
     }
     // `destroy()`, not `close()`: this is the SPA's DELIBERATE close-cascade
     // (last tab, then last pane, just closed — the window is empty). `close()`
-    // would fire `CloseRequested`, where the bury-on-close handler hides SPA
-    // windows instead of closing them; an empty window is worthless buried.
+    // would fire `CloseRequested`, where the close-on-red-dot handler prompts
+    // instead of closing SPA windows; an empty window is worthless buried.
     // Destroy skips the request phase and goes straight to `Destroyed` cleanup.
     window.destroy().map_err(err)
+}
+
+/// SPA callback for the close-confirm overlay's HIDE choice: bury THIS window
+/// (hide it, keep its sessions warm and its record reopenable) instead of
+/// destroying it. The red-dot `CloseRequested` handler already `prevent_close`d
+/// and evaled `app.window.confirmClose` into the webview; this is the "Hide"
+/// answer. Mirrors the launcher status-dot hide, minus the (now removed) teaching
+/// notice. "Close" is the sibling answer and rides `request_close_window`
+/// (discard + destroy). The window label alone reaches the bury; its LRU restore
+/// key is recovered from the label via `serve::restore_key_for_label`.
+#[tauri::command]
+fn hide_window_from_close_confirm(app: tauri::AppHandle, window: tauri::WebviewWindow) {
+    let state = app.state::<Arc<AppState>>();
+    let label = window.label().to_string();
+    let key = serve::restore_key_for_label(&state, &label);
+    serve::bury_window_now(&app, &state, &label, &key);
 }
 
 /// Abandon the devserver backing a workspace window (the disconnect overlay's
@@ -3900,6 +3916,7 @@ fn main() {
             reload_window,
             open_devtools,
             request_close_window,
+            hide_window_from_close_confirm,
             abandon_devserver_for_window,
             download::save_file_to_downloads,
             // Registered on every platform; returns [] off macOS so the

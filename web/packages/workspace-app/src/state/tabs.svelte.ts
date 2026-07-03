@@ -1840,6 +1840,17 @@ export function findTerminalBySession(sessionId: string): TerminalTab | null {
   return null;
 }
 
+/// True when this window holds at least one tab of any kind. A window with no
+/// tabs is a single empty leaf (the `serializeLayout` null case) or an all-empty
+/// split; both serialize to nothing worth recording. The desktop red-dot close
+/// uses this to close an empty window straight away (never recording it) versus
+/// prompting Hide / Close / Cancel for a window with real tabs.
+export function hasAnyTab(): boolean {
+  return Object.values(layout.nodes).some(
+    (node) => node.kind === "leaf" && node.tabs.length > 0,
+  );
+}
+
 export function hasGraphTab(): boolean {
   return Object.values(layout.nodes).some(
     (node) => node.kind === "leaf" && node.tabs.some((tab) => tab.kind === "graph"),

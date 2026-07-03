@@ -32,6 +32,7 @@ permissions = [
   "allow-reload-window",
   "allow-open-devtools",
   "allow-request-close-window",
+  "allow-hide-window-from-close-confirm",
   "allow-abandon-devserver-for-window",
   "allow-save-file-to-downloads",
   "allow-zoom-in",
@@ -97,6 +98,11 @@ commands.allow = ["open_devtools"]
 identifier = "allow-request-close-window"
 description = "Enables the request_close_window command."
 commands.allow = ["request_close_window"]
+
+[[permission]]
+identifier = "allow-hide-window-from-close-confirm"
+description = "Enables the hide_window_from_close_confirm command (close-confirm overlay Hide)."
+commands.allow = ["hide_window_from_close_confirm"]
 
 [[permission]]
 identifier = "allow-abandon-devserver-for-window"

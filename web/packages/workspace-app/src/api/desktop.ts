@@ -237,6 +237,26 @@ export async function requestCloseWindow(): Promise<void> {
   }
 }
 
+/// Bury (hide, don't destroy) THIS workspace window: the Hide answer to the
+/// desktop close-confirm overlay. The OS red-dot already fired and the host
+/// prevented the close and asked the SPA; picking Hide invokes the
+/// `hide_window_from_close_confirm` command, which buries the window (its
+/// sessions stay warm, reopenable from the Window menu) instead of destroying
+/// it. No-op off-desktop (the overlay is desktop-only by construction). INERT if
+/// the ACL withholds the command (best-effort: a failed IPC logs and leaves the
+/// window as-is rather than throwing into the overlay).
+export async function hideWindowFromCloseConfirm(): Promise<void> {
+  if (!isTauriDesktop()) return;
+  try {
+    await tauriInvoke("hide_window_from_close_confirm");
+  } catch (err) {
+    console.warn(
+      "hideWindowFromCloseConfirm: hide_window_from_close_confirm IPC failed",
+      err,
+    );
+  }
+}
+
 /// Abandon the devserver backing THIS workspace window: tell the desktop to
 /// disconnect it. Called by the disconnect overlay's Abandon button on a
 /// devserver-backed desktop window whose watcher channel has dropped. The desktop

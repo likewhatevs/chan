@@ -7,6 +7,8 @@
   import ConflictModal from "./components/ConflictModal.svelte";
   import DisconnectOverlay from "./components/DisconnectOverlay.svelte";
   import SessionEndedOverlay from "./components/SessionEndedOverlay.svelte";
+  import CloseConfirmOverlay from "./components/CloseConfirmOverlay.svelte";
+  import { uiCloseConfirm } from "./state/closeConfirm.svelte";
   import DraftCloseModal from "./components/DraftCloseModal.svelte";
   import WorkspaceWarningsModal from "./components/WorkspaceWarningsModal.svelte";
   import TeamDialog from "./components/TeamDialog.svelte";
@@ -68,6 +70,7 @@
     activePane,
     activeTerminalTab,
     allTerminalTabs,
+    hasAnyTab,
     closeFind,
     closePane,
     closeTab,
@@ -1133,6 +1136,7 @@
     "app.tab.jump",
     "app.tab.close",
     "app.window.close",
+    "app.window.confirmClose",
     "app.find.open",
     "app.find.next",
     "app.find.prev",
@@ -1254,6 +1258,20 @@
       case "app.window.close":
         discardWindowSession();
         if (isTauriDesktop()) void requestCloseWindow();
+        return;
+      // The desktop OS red-dot on a LIVE window. The host prevented the close
+      // and asked us. Two fast paths close straight away (no prompt): while the
+      // reconnect overlay is up (ui.disconnectBlocking) there is nothing to keep
+      // interacting with, and an empty window (no tabs) must never be recorded —
+      // the discard cascade removes its row and DELETEs its session blob. Any
+      // other window prompts Hide / Close / Cancel; the overlay owns the outcome.
+      case "app.window.confirmClose":
+        if (ui.disconnectBlocking || !hasAnyTab()) {
+          discardWindowSession({ reap: true });
+          if (isTauriDesktop()) void requestCloseWindow();
+          return;
+        }
+        void uiCloseConfirm();
         return;
       // `app.save` is intentionally absent: autosave covers the write path.
       case "app.file.new":
@@ -1448,6 +1466,9 @@
 <!-- Terminal overlay when the session leader closes/hides this window; stacks
      above the reconnect overlay since the window is gone, not reconnecting. -->
 <SessionEndedOverlay />
+<!-- Desktop red-dot close prompt (Hide / Close / Cancel); stacks above the
+     reconnect and session-ended overlays. Desktop-only by construction. -->
+<CloseConfirmOverlay />
 <!-- Missing-token overlay: surfaces when the user landed on the
      SPA shell without the launch token, so /api 401s and the app
      is unusable until they reopen the original URL. -->
