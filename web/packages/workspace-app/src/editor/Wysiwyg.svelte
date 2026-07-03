@@ -90,6 +90,7 @@
     autoFocus = true,
     placeholderText,
     extraExtensions = [],
+    surface = "editor",
     onSubmit,
     onSelectionChange,
     onCaretChange,
@@ -117,6 +118,11 @@
     /// Host-provided CM6 extensions for editor variants that need one-off
     /// keymaps or event handlers while still using the full WYSIWYG stack.
     extraExtensions?: Extension[];
+    /// Hybrid-theme surface this editor's syntax highlight + image/diagram
+    /// dark-mode follow. File tabs are the "editor" surface; the Rich Prompt
+    /// composer floats over a terminal and passes "terminal" so it matches the
+    /// surface beneath it in a split light/dark hybrid theme.
+    surface?: "editor" | "terminal";
     onSubmit?: () => void;
     onSelectionChange?: () => void;
     onCaretChange?: (from: number, to: number) => void;
@@ -153,7 +159,7 @@
   let host: HTMLDivElement | undefined;
   let view: EditorView | undefined;
   const sync = createValueSync();
-  const theme = makeThemeCompartment(effectiveHybridSurfaceTheme("editor"));
+  const theme = makeThemeCompartment(effectiveHybridSurfaceTheme(surface));
   const editableCompartment = new Compartment();
   const extraExtensionsCompartment = new Compartment();
   const trailingWhitespace = new Compartment();
@@ -512,7 +518,7 @@
         imageDecorations({
           getCurrentPath: () => currentPath,
           onImageClick: handleImageClick,
-          isDark: () => effectiveHybridSurfaceTheme("editor") === "dark",
+          isDark: () => effectiveHybridSurfaceTheme(surface) === "dark",
         }),
         imageCaretRedirect(),
         // Rich copy / cut lives in the ALWAYS-ON bundle (not the write-side
@@ -521,11 +527,11 @@
         copyHandlers(chanClipboardCtx()),
         tableDecorations(),
         mermaidDecorations(
-          () => effectiveHybridSurfaceTheme("editor") === "dark",
+          () => effectiveHybridSurfaceTheme(surface) === "dark",
           (svg) => openDiagramZoom(svg),
         ),
         excalidrawDecorations(
-          () => effectiveHybridSurfaceTheme("editor") === "dark",
+          () => effectiveHybridSurfaceTheme(surface) === "dark",
           (svg) => openDiagramZoom(svg),
         ),
         // Inline edit bubbles + paste/drop handlers go through the
@@ -744,7 +750,7 @@
 
   $effect(() => {
     if (!view) return;
-    theme.reconfigure(view, effectiveHybridSurfaceTheme("editor"));
+    theme.reconfigure(view, effectiveHybridSurfaceTheme(surface));
   });
 
   $effect(() => {

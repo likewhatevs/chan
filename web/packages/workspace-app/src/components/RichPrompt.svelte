@@ -435,6 +435,7 @@
         currentPath={draftPath}
         autoFocus={true}
         extraExtensions={editorExtensions}
+        surface="terminal"
         placeholderText=""
       />
     {/if}
