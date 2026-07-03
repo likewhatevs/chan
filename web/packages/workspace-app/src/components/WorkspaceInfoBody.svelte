@@ -106,7 +106,7 @@
   const downloadTitle =
     "Download this directory as a tar archive. You can also drag rows out of the File Browser where supported.";
 
-  /// "File Browser" primary action for the workspace root. Mirrors
+  /// "Open" primary action for the workspace root. Mirrors
   /// FileInfoBody's openDirInBrowser: prefer the host's onReveal (the graph
   /// switches to a File Browser tab at the root) and otherwise reveal the
   /// root in the current browser (the File Browser tab leaves onReveal unset
@@ -119,31 +119,33 @@
     revealPathInBrowser("", { enter: true, inspectorOpen: true });
   }
 
-  /// "Terminal from here": a terminal rooted at the workspace root.
+  /// "New terminal here": a terminal rooted at the workspace root.
   function newTerminalHere(): void {
     openTerminalInActivePane(terminalFromHereTarget("", true));
   }
 
-  /// Split-action model for the inspector variant: a "File Browser" primary
-  /// plus the Upload / Download / Terminal / Graph dropdown.
+  /// Split-action model for the inspector variant: an "Open" primary
+  /// plus the Upload / Download / Terminal / Graph dropdown. The labels
+  /// match the directory inspector (FileInfoBody's is_dir branch) so the
+  /// root and a directory read identically.
   const actionModel = $derived.by<{
     main: InspectorAction;
     secondary: InspectorAction[];
   }>(() => {
     const secondary: InspectorAction[] = [
-      { label: "Upload", onClick: triggerUpload, title: uploadTitle },
+      { label: "Upload file here", onClick: triggerUpload, title: uploadTitle },
       {
-        label: "Download",
+        label: "Download tarball",
         onClick: downloadSelection,
         title: downloadTitle,
       },
-      { label: "Terminal from here", onClick: newTerminalHere },
+      { label: "New terminal here", onClick: newTerminalHere },
     ];
     if (onSetAsScope) {
       secondary.push({ label: "Graph from here", onClick: onSetAsScope });
     }
     return {
-      main: { label: "File Browser", onClick: openRootInBrowser },
+      main: { label: "Open", onClick: openRootInBrowser },
       secondary,
     };
   });
@@ -333,8 +335,8 @@
 
   {#if variant === "inspector"}
     <!-- Workspace-root action row, mirroring FileInfoBody's is_dir branch on
-         the workspace ROOT (relative path ""). A "File Browser" primary
-         action plus a dropdown: Upload / Download / Terminal from here /
+         the workspace ROOT (relative path ""). An "Open" primary action plus
+         a dropdown: Upload file here / Download tarball / New terminal here /
          Graph from here. "Graph from here" is gated on the host callback. -->
     <div class="actions-section">
       <InspectorActionPill

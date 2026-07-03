@@ -28,41 +28,44 @@ describe("WorkspaceInfoBody variant split + directory action row", () => {
     expect(workspaceInfo).toMatch(/\{#if variant === "inspector"\}/);
   });
 
-  test("the action row is a File Browser pill + secondary dropdown", () => {
-    // The row renders the shared split-action pill: a "File Browser"
-    // primary action plus the secondary dropdown built from actionModel.
+  test("the action row is an Open pill + secondary dropdown", () => {
+    // The row renders the shared split-action pill: an "Open" primary
+    // action plus the secondary dropdown built from actionModel. The
+    // labels match the directory inspector (FileInfoBody's is_dir branch).
     expect(workspaceInfo).toMatch(
       /<InspectorActionPill[\s\S]*?main=\{actionModel\.main\}[\s\S]*?secondary=\{actionModel\.secondary\}/,
     );
     expect(workspaceInfo).toMatch(
-      /main: \{ label: "File Browser", onClick: openRootInBrowser \}/,
+      /main: \{ label: "Open", onClick: openRootInBrowser \}/,
     );
   });
 
-  test("the dropdown offers Upload + Download (download disabled while busy)", () => {
+  test("the dropdown offers Upload file here + Download tarball (download disabled while busy)", () => {
     // Upload triggers the hidden picker; onUploadPicked uploads to the
     // workspace root (relative path ""). Download targets the root as a
     // directory (is_dir = true) and disables while a transfer is busy.
-    expect(workspaceInfo).toMatch(/label: "Upload", onClick: triggerUpload/);
+    expect(workspaceInfo).toMatch(
+      /label: "Upload file here", onClick: triggerUpload/,
+    );
     expect(workspaceInfo).toMatch(/fileOps\.uploadFilesTo\("", files\)/);
     expect(workspaceInfo).toMatch(
-      /label: "Download",\s*onClick: downloadSelection/,
+      /label: "Download tarball",\s*onClick: downloadSelection/,
     );
     expect(workspaceInfo).toMatch(
       /fileOps\.downloadPathWithProgress\("", true\)/,
     );
   });
 
-  test("the dropdown offers Terminal from here, rooted at the workspace root", () => {
+  test("the dropdown offers New terminal here, rooted at the workspace root", () => {
     // Mirrors FileInfoBody's directory "New terminal here": a terminal
     // rooted at the workspace root (relative path "").
     expect(workspaceInfo).toMatch(
-      /label: "Terminal from here", onClick: newTerminalHere/,
+      /label: "New terminal here", onClick: newTerminalHere/,
     );
     expect(workspaceInfo).toMatch(/terminalFromHereTarget\("", true\)/);
   });
 
-  test("File Browser primary prefers onReveal, else reveals the root", () => {
+  test("Open primary prefers onReveal, else reveals the root", () => {
     // openRootInBrowser mirrors FileInfoBody.openDirInBrowser: call the
     // host's onReveal when present, otherwise reveal the root ("") in the
     // current browser.
