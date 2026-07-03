@@ -36,7 +36,7 @@
 // per CM6 convention - cost stays proportional to visible content,
 // not document size.
 
-import { syntaxTree } from "@codemirror/language";
+import { ensureSyntaxTree, syntaxTree } from "@codemirror/language";
 import {
   type Extension,
   type EditorSelection,
@@ -124,6 +124,12 @@ export function decorationWalker(handlers: HandlerRegistry): Extension {
   );
 }
 
+/// Time budget for forcing the parse through the viewport before a walk. The
+/// walk is viewport-bounded so the parse rarely needs forcing; the cap keeps a
+/// pathological huge-document edit from blocking the render (it falls back to
+/// the lazy tree and the next recompute catches up).
+const PARSE_BUDGET_MS = 100;
+
 function computeDecorations(
   view: EditorView,
   handlers: HandlerRegistry,
@@ -138,7 +144,18 @@ function computeDecorations(
   // decorations (zero-width replace hides marker chars). The handler
   // is responsible for getting these right; we just push.
   const { from, to } = view.viewport;
-  syntaxTree(state).iterate({
+  // Read a tree parsed THROUGH the viewport, not the lazy default. The walker
+  // renders exactly what the tree says, and `syntaxTree(state)` is lazy and
+  // viewport-budgeted: right after an edit it can return a tree whose just-
+  // edited block has not been re-parsed yet, so a `- foo` promoted from a
+  // paragraph (or a marker inserted at a line start) still parses as a
+  // Paragraph and the walker renders a raw marker, persisting until an
+  // unrelated recompute forces the block current. `ensureSyntaxTree` forces
+  // the parse for the visible range under a small budget (falling back to the
+  // lazy tree if it cannot finish, preserving responsiveness on huge docs),
+  // so a freshly edited list block decorates immediately.
+  const tree = ensureSyntaxTree(state, to, PARSE_BUDGET_MS) ?? syntaxTree(state);
+  tree.iterate({
     from,
     to,
     enter(node) {
