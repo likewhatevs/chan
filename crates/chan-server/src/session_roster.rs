@@ -96,15 +96,15 @@ mod tests {
     #[test]
     fn serialize_session_roster_frames_the_current_snapshot() {
         let reg = Arc::new(SessionRegistry::new());
-        // First to connect leads; a second window follows. Hold the guards so
-        // both stay Live for the snapshot.
-        let leader = reg.join("w-leader");
-        let follower = reg.join("w-follower");
+        // A local window owns the designated slot; a remote window follows. Hold
+        // the guards so both stay Live for the snapshot.
+        let leader = reg.join("w-leader", true);
+        let follower = reg.join("w-follower", false);
 
         let raw = serialize_session_roster(&reg).expect("serialize a roster frame");
         let v: serde_json::Value = serde_json::from_str(&raw).expect("valid JSON");
         assert_eq!(v["type"], "session_roster");
-        assert_eq!(v["leader"], "w-leader", "first to connect leads");
+        assert_eq!(v["leader"], "w-leader", "the local window owns the slot");
         let ids: Vec<&str> = v["participants"]
             .as_array()
             .expect("participants array")

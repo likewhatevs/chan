@@ -3148,8 +3148,8 @@ mod tests {
     #[test]
     fn session_list_emits_participant_rows() {
         let registry = Arc::new(SessionRegistry::new());
-        let _leader = registry.join("w-a").guard;
-        let _follower = registry.join("w-b").guard;
+        let _leader = registry.join("w-a", true).guard;
+        let _follower = registry.join("w-b", false).guard;
         let ControlResponse::Ok { message } = handle_session_list(&registry) else {
             panic!("expected Ok rows");
         };

@@ -53,8 +53,16 @@ fn window_command_target(frame: &str) -> Option<&str> {
 pub async fn ws_upgrade(
     State(state): State<Arc<AppState>>,
     Query(q): Query<WsQuery>,
+    // A `/ws` that arrived over the devserver's gateway tunnel carries the
+    // `TunnelOrigin` request-extension marker; the loopback bind (and an
+    // `ssh -L` forward to it) never does, nor does the desktop embedded server.
+    // The `Option` extractor yields `None` on absence rather than 500ing, so
+    // absence means a local-origin socket. This is the session-role seam: a
+    // local socket reads Leader, a tunnel socket reads Follower.
+    origin: Option<axum::Extension<crate::TunnelOrigin>>,
     ws: WebSocketUpgrade,
 ) -> Response {
+    let local = origin.is_none();
     let rx = state.events_tx.subscribe();
     let last_activity = state.last_activity.clone();
     let shutdown_rx = state.shutdown_rx.clone();
@@ -77,7 +85,7 @@ pub async fn ws_upgrade(
         // guard's Drop arms the grace clock when the last socket drops. A join
         // that moves the roster (a new or revived participant) rebroadcasts.
         let _session = window_id.as_ref().map(|id| {
-            let join = session_registry.join(id);
+            let join = session_registry.join(id, local);
             if join.changed {
                 crate::session_roster::broadcast_session_roster(
                     &session_events_tx,

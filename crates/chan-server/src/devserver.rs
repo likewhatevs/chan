@@ -2434,6 +2434,48 @@ mod tests {
         }
     }
 
+    // The session-role seam WP18 keys on: a request entering the tunnel clone
+    // carries `TunnelOrigin` (a Follower origin, `local == false`), while a
+    // loopback request never does (a Leader origin, `local == true`).
+    // `ws_upgrade` reads the same `Option<Extension<TunnelOrigin>>` extractor and
+    // computes `let local = origin.is_none();`. A full `/ws` upgrade over a live
+    // tunnel is a host-smoke item; this pins the marker->local mapping the role
+    // derivation depends on at the route level, headless.
+    #[tokio::test]
+    async fn tunnel_origin_marks_ws_remote_loopback_local() {
+        use axum::body::to_bytes;
+        use axum::routing::get;
+        use axum::Extension;
+        use tower::ServiceExt;
+
+        // Mirrors `ws_upgrade`'s origin read: local iff the marker is absent.
+        async fn probe(origin: Option<Extension<crate::TunnelOrigin>>) -> String {
+            (origin.is_none()).to_string()
+        }
+
+        let app = axum::Router::new().route("/ws", get(probe));
+        let tunnel = app.clone().layer(middleware::from_fn(mark_tunnel_origin));
+
+        let req = || {
+            HttpRequest::builder()
+                .uri("/ws")
+                .body(Body::empty())
+                .unwrap()
+        };
+        let body_of = |resp: Response| async move {
+            let bytes = to_bytes(resp.into_body(), 1 << 20).await.unwrap();
+            String::from_utf8_lossy(&bytes).into_owned()
+        };
+
+        // A tunnel request carries the marker: remote origin, so `local == false`.
+        let tunnel_body = body_of(tunnel.oneshot(req()).await.unwrap()).await;
+        assert_eq!(tunnel_body, "false", "a tunnel /ws is remote (Follower)");
+
+        // A loopback request never carries it: local origin, so `local == true`.
+        let local_body = body_of(app.oneshot(req()).await.unwrap()).await;
+        assert_eq!(local_body, "true", "a loopback /ws is local (Leader)");
+    }
+
     #[tokio::test]
     async fn launcher_mounts_at_library_root() {
         use axum::body::to_bytes;

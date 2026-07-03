@@ -58,17 +58,21 @@ export function selfParticipant(): SessionParticipant | null {
   return sessionState.participants.find((p) => p.window_id === me) ?? null;
 }
 
-/// Whether this window currently leads the session.
+/// Whether this window reads as a session LEADER. Role is ORIGIN-derived on the
+/// server (a local-origin `/ws` reads leader, a tunnel `/ws` follower), so this
+/// reads the self participant's role rather than comparing the single owner
+/// slot. A window with no self participant (untagged / not-yet-seeded) is
+/// NEITHER leader nor follower.
 export function isLeader(): boolean {
-  return sessionState.leader !== null && sessionState.leader === sessionWindowId();
+  return selfParticipant()?.role === "leader";
 }
 
-/// Whether this window is definitively a FOLLOWER: the roster names a leader and
-/// it is not this window. Distinct from `!isLeader()`, which is ALSO true for a
-/// solo or not-yet-seeded window (leader === null) that must still act as its
-/// own owner (e.g. persist/discard its own layout blob).
+/// Whether this window is definitively a FOLLOWER: its own origin-derived role
+/// is follower (a tunnel/gateway session). Distinct from `!isLeader()`, which is
+/// ALSO true for a solo or not-yet-seeded window with no self participant that
+/// must still act as its own owner (e.g. persist/discard its own layout blob).
 export function isFollower(): boolean {
-  return sessionState.leader !== null && sessionState.leader !== sessionWindowId();
+  return selfParticipant()?.role === "follower";
 }
 
 /// Raise the handover prompt: the leader's window received a `handover_prompt`

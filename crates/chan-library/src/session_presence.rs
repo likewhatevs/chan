@@ -5,11 +5,15 @@
 //! connected somewhere" with a bare `window_id -> socket count` refcount and
 //! stays underneath unchanged (the `GET /api/windows` connected flag reads it).
 //! This registry layers the COLLABORATION model on top: a per-tenant set of
-//! participants keyed by the same `?w=<window_id>`, each with a role
-//! (leader/follower), a lifecycle state, an optional display name, and a join
-//! order. The first participant to connect is the leader; when the leader's
-//! last socket drops and stays gone past the grace, the longest-connected live
-//! participant is auto-promoted.
+//! participants keyed by the same `?w=<window_id>`, each with an origin-derived
+//! role (a local-origin socket reads Leader, a tunnel socket reads Follower), a
+//! lifecycle state, an optional display name, and a join order. A single
+//! DESIGNATED-OWNER slot (the `leader` field) is elected local-first: the
+//! lowest-join-order live LOCAL participant, falling back to the lowest-join
+//! live remote only when no local is present. That slot drives handover
+//! routing, the launcher gate, and the aggregate leaders map; when its holder's
+//! last socket drops and stays gone past the grace, the slot is re-elected the
+//! same way.
 //!
 //! Identity is the `window_id`, not the socket: a reload drops and reopens the
 //! SAME `?w=` within the grace, so it must read as "still live, same
@@ -63,7 +67,12 @@ pub enum ParticipantState {
     Gone,
 }
 
-/// A participant's role in the session, derived from the elected leader.
+/// A participant's DISPLAY role, derived from the socket's ORIGIN: a
+/// local-origin `/ws` (the loopback bind or an `ssh -L` forward to it) reads
+/// `Leader`, a tunnel `/ws` reads `Follower`. This is separate from the single
+/// designated-owner slot ([`Inner::leader`]) that handover routing and the
+/// launcher gate consume; a remote holding the fallback owner slot still reads
+/// `Follower` here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Role {
@@ -110,6 +119,11 @@ pub struct PendingHandover {
 
 struct Participant {
     name: Option<String>,
+    /// Whether this window's `/ws` arrived local-origin (no `TunnelOrigin`: the
+    /// loopback bind or an `ssh -L` forward to it). Fixed at first insert; a
+    /// reload overlap keeps the original, mirroring `disconnected_at`. Drives
+    /// the display role and biases the designated-owner election local-first.
+    local: bool,
     /// Live `/ws` socket count for this window (reload overlap can exceed 1).
     sockets: usize,
     /// Monotonic join order; the lowest among live participants wins an
@@ -219,11 +233,14 @@ impl SessionRegistry {
     }
 
     /// Register one live `/ws` socket for `window_id` and return the RAII guard
-    /// that releases it. The first participant ever becomes leader; a socket
-    /// arriving for a participant in its grace window re-lives it (a reload).
-    /// `changed` reports whether the public snapshot moved (a new participant, a
-    /// revived one, or a freshly elected leader) so the caller can broadcast.
-    pub fn join(self: &Arc<Self>, window_id: &str) -> JoinResult {
+    /// that releases it. `local` marks a local-origin socket (see [`Role`]); it
+    /// is stored on first insert and fixes this window's display role and its
+    /// weight in the designated-owner election. A socket arriving for a
+    /// participant in its grace window re-lives it (a reload) and keeps the
+    /// ORIGINAL `local`. `changed` reports whether the public snapshot moved (a
+    /// new participant, a revived one, or a re-elected owner) so the caller can
+    /// broadcast.
+    pub fn join(self: &Arc<Self>, window_id: &str, local: bool) -> JoinResult {
         let changed = {
             let mut inner = self.lock();
             match inner.participants.get_mut(window_id) {
@@ -245,14 +262,26 @@ impl SessionRegistry {
                         window_id.to_string(),
                         Participant {
                             name: None,
+                            local,
                             sockets: 1,
                             join_seq: seq,
                             state: ParticipantState::Live,
                             disconnected_at: None,
                         },
                     );
-                    if inner.leader.is_none() {
-                        inner.leader = Some(window_id.to_string());
+                    // Elect the designated owner local-first. Re-elect when the
+                    // slot is empty, or when a remote fallback holds it and this
+                    // new participant is local: a real local window reclaims
+                    // ownership from a remote that only held the slot because no
+                    // local was present. A live LOCAL owner is left untouched, so
+                    // an explicit takeover/handover among local windows stands.
+                    let owner_is_local = inner
+                        .leader
+                        .as_ref()
+                        .and_then(|id| inner.participants.get(id))
+                        .is_some_and(|p| p.local);
+                    if inner.leader.is_none() || (local && !owner_is_local) {
+                        Self::elect_leader(&mut inner);
                     }
                     true
                 }
@@ -375,16 +404,25 @@ impl SessionRegistry {
             .min()
     }
 
-    /// Pick the lowest-`join_seq` live participant as leader (the
-    /// longest-connected). Leaves the slot vacant when none is live.
+    /// The designated owner under the local-first rule: the lowest-`join_seq`
+    /// live LOCAL participant, or the lowest-`join_seq` live remote when no local
+    /// is live. `None` when nobody is live. Origin biases the choice; join order
+    /// only breaks ties within the winning locality.
+    fn best_owner(participants: &HashMap<String, Participant>) -> Option<String> {
+        let lowest_of = |local: bool| {
+            participants
+                .iter()
+                .filter(|(_, p)| p.sockets > 0 && p.local == local)
+                .min_by_key(|(_, p)| p.join_seq)
+                .map(|(id, _)| id.clone())
+        };
+        lowest_of(true).or_else(|| lowest_of(false))
+    }
+
+    /// Re-elect the designated owner local-first (see [`Self::best_owner`]).
+    /// Leaves the slot vacant when none is live.
     fn elect_leader(inner: &mut Inner) {
-        let next = inner
-            .participants
-            .iter()
-            .filter(|(_, p)| p.sockets > 0)
-            .min_by_key(|(_, p)| p.join_seq)
-            .map(|(id, _)| id.clone());
-        inner.leader = next;
+        inner.leader = Self::best_owner(&inner.participants);
     }
 
     /// Rename a participant (the `cs session self --name` target). Returns
@@ -425,7 +463,11 @@ impl SessionRegistry {
             .participants
             .iter()
             .map(|(window_id, p)| {
-                let role = if Some(window_id.as_str()) == leader.as_deref() {
+                // Display role is origin-derived, independent of the single
+                // designated-owner slot: a local window reads Leader, a tunnel
+                // window reads Follower, even the remote holding the fallback
+                // owner slot.
+                let role = if p.local {
                     Role::Leader
                 } else {
                     Role::Follower
@@ -659,36 +701,96 @@ mod tests {
     }
 
     #[test]
-    fn first_participant_is_leader_others_follow() {
+    fn local_owns_the_slot_and_remote_follows() {
         let reg = Arc::new(SessionRegistry::new());
-        let a = reg.join("w-a");
+        let a = reg.join("w-a", true); // local origin
         assert!(a.changed);
         assert_eq!(reg.leader().as_deref(), Some("w-a"));
 
-        let b = reg.join("w-b");
+        let b = reg.join("w-b", false); // tunnel origin
         assert!(b.changed);
-        // The leader does not change just because a follower joins.
+        // A remote joining does not move the designated-owner slot off the local.
         assert_eq!(reg.leader().as_deref(), Some("w-a"));
 
         let now = Instant::now();
         let snap = reg.snapshot(now);
         assert_eq!(snap.participants.len(), 2);
         assert_eq!(snap.participants[0].window_id, "w-a");
+        // Role is origin-derived: the local reads Leader, the remote Follower.
         assert_eq!(snap.participants[0].role, Role::Leader);
         assert_eq!(snap.participants[1].role, Role::Follower);
     }
 
     #[test]
+    fn role_is_origin_derived_regardless_of_join_order() {
+        // A remote joins FIRST, a local second: role tracks ORIGIN, not join
+        // order, so the later local still reads Leader and the earlier remote
+        // Follower.
+        let reg = Arc::new(SessionRegistry::new());
+        let _remote = reg.join("w-remote", false).guard;
+        let _local = reg.join("w-local", true).guard;
+        let snap = reg.snapshot(Instant::now());
+        let role_of = |id: &str| {
+            snap.participants
+                .iter()
+                .find(|p| p.window_id == id)
+                .map(|p| p.role)
+        };
+        assert_eq!(role_of("w-remote"), Some(Role::Follower));
+        assert_eq!(role_of("w-local"), Some(Role::Leader));
+    }
+
+    #[test]
+    fn local_is_elected_owner_over_an_earlier_join_remote() {
+        // A remote connects first and holds the fallback owner slot; when a
+        // local window joins it RECLAIMS the slot even though it joined later.
+        let reg = Arc::new(SessionRegistry::new());
+        let _remote = reg.join("w-remote", false).guard;
+        assert_eq!(reg.leader().as_deref(), Some("w-remote"));
+        let _local = reg.join("w-local", true).guard;
+        assert_eq!(reg.leader().as_deref(), Some("w-local"));
+    }
+
+    #[test]
+    fn remote_only_session_falls_back_to_the_first_remote() {
+        // No local present: the lowest-join remote is the fallback owner so a
+        // real remote-only devserver still has a working owner and handover
+        // target -- but every remote still reads Follower for display.
+        let reg = Arc::new(SessionRegistry::new());
+        let _r1 = reg.join("w-r1", false).guard;
+        let _r2 = reg.join("w-r2", false).guard;
+        assert_eq!(reg.leader().as_deref(), Some("w-r1"));
+        let snap = reg.snapshot(Instant::now());
+        assert!(
+            snap.participants.iter().all(|p| p.role == Role::Follower),
+            "a remote fallback owner still displays as Follower"
+        );
+    }
+
+    #[test]
     fn reload_overlap_keeps_the_participant_live() {
         let reg = Arc::new(SessionRegistry::new());
-        let g1 = reg.join("w-a").guard;
-        // A second socket for the same window (the reload overlap) reports no
-        // snapshot change and keeps it live after the first guard drops.
-        let g2 = reg.join("w-a");
+        let g1 = reg.join("w-a", true).guard; // local origin
+                                              // A second socket for the same window (the reload overlap) reports no
+                                              // snapshot change and keeps it live after the first guard drops. Even
+                                              // when the reconnect is marked remote it keeps the ORIGINAL local flag,
+                                              // so the role stays Leader (mirrors how it keeps disconnected_at = None).
+        let g2 = reg.join("w-a", false);
         assert!(!g2.changed);
         drop(g1);
         let now = Instant::now();
         assert_eq!(status_of(&reg, now, "w-a"), Some(ParticipantState::Live));
+        let role = reg
+            .snapshot(now)
+            .participants
+            .into_iter()
+            .find(|p| p.window_id == "w-a")
+            .map(|p| p.role);
+        assert_eq!(
+            role,
+            Some(Role::Leader),
+            "reload keeps the original local flag"
+        );
         drop(g2.guard);
     }
 
@@ -696,8 +798,8 @@ mod tests {
     fn lifecycle_steps_disconnecting_then_disconnected_then_gone() {
         let reg = Arc::new(SessionRegistry::new());
         let t0 = Instant::now();
-        let guard = reg.join("w-a").guard;
-        let _follower = reg.join("w-b").guard; // keep the session non-empty
+        let guard = reg.join("w-a", true).guard;
+        let _follower = reg.join("w-b", true).guard; // keep the session non-empty
         drop(guard); // last socket of w-a drops at ~t0
 
         // Immediately: Disconnecting.
@@ -724,9 +826,9 @@ mod tests {
     fn leader_gone_auto_promotes_longest_connected_live() {
         let reg = Arc::new(SessionRegistry::new());
         let t0 = Instant::now();
-        let leader = reg.join("w-a").guard;
-        let _b = reg.join("w-b").guard; // join_seq 1, live
-        let _c = reg.join("w-c").guard; // join_seq 2, live
+        let leader = reg.join("w-a", true).guard;
+        let _b = reg.join("w-b", true).guard; // join_seq 1, live
+        let _c = reg.join("w-c", true).guard; // join_seq 2, live
         assert_eq!(reg.leader().as_deref(), Some("w-a"));
 
         drop(leader);
@@ -741,7 +843,7 @@ mod tests {
     fn leader_vacant_when_no_live_participant_remains() {
         let reg = Arc::new(SessionRegistry::new());
         let t0 = Instant::now();
-        let only = reg.join("w-a").guard;
+        let only = reg.join("w-a", true).guard;
         drop(only);
         let later = t0 + GONE_GRACE + Duration::from_secs(1);
         reg.reap_due(later);
@@ -752,8 +854,8 @@ mod tests {
     fn next_deadline_tracks_the_soonest_transition() {
         let reg = Arc::new(SessionRegistry::new());
         let t0 = Instant::now();
-        let g = reg.join("w-a").guard;
-        let _keep = reg.join("w-b").guard;
+        let g = reg.join("w-a", true).guard;
+        let _keep = reg.join("w-b", true).guard;
         drop(g);
         // Before the reload grace, the next transition is the reload threshold.
         let out = reg.reap_due(t0);
@@ -764,7 +866,7 @@ mod tests {
     #[test]
     fn rename_sets_and_clears_the_display_name() {
         let reg = Arc::new(SessionRegistry::new());
-        let _g = reg.join("w-a").guard;
+        let _g = reg.join("w-a", true).guard;
         assert!(reg.rename("w-a", "  Alex  "));
         let now = Instant::now();
         assert_eq!(
@@ -781,8 +883,8 @@ mod tests {
     #[test]
     fn handover_request_then_accept_moves_leadership() {
         let reg = Arc::new(SessionRegistry::new());
-        let _leader = reg.join("w-a").guard;
-        let _follower = reg.join("w-b").guard;
+        let _leader = reg.join("w-a", true).guard;
+        let _follower = reg.join("w-b", true).guard;
         let id = reg.mint_handover_id();
         // w-b asks to become leader; the prompt goes to the live leader w-a.
         let recipient = reg
@@ -805,8 +907,8 @@ mod tests {
     #[test]
     fn handover_reject_keeps_leadership_and_clears_pending() {
         let reg = Arc::new(SessionRegistry::new());
-        let _leader = reg.join("w-a").guard;
-        let _follower = reg.join("w-b").guard;
+        let _leader = reg.join("w-a", true).guard;
+        let _follower = reg.join("w-b", true).guard;
         let id = reg.mint_handover_id();
         reg.request_handover(&id, "w-b", None).expect("parked");
         let resolved = reg.resolve_handover(&id, false).expect("resolved");
@@ -818,9 +920,9 @@ mod tests {
     #[test]
     fn handover_rejects_second_request_while_pending() {
         let reg = Arc::new(SessionRegistry::new());
-        let _leader = reg.join("w-a").guard;
-        let _b = reg.join("w-b").guard;
-        let _c = reg.join("w-c").guard;
+        let _leader = reg.join("w-a", true).guard;
+        let _b = reg.join("w-b", true).guard;
+        let _c = reg.join("w-c", true).guard;
         let id = reg.mint_handover_id();
         reg.request_handover(&id, "w-b", None).expect("parked");
         let id2 = reg.mint_handover_id();
@@ -834,8 +936,8 @@ mod tests {
     fn handover_to_a_non_live_leader_is_refused() {
         let reg = Arc::new(SessionRegistry::new());
         let t0 = Instant::now();
-        let leader = reg.join("w-a").guard;
-        let _b = reg.join("w-b").guard;
+        let leader = reg.join("w-a", true).guard;
+        let _b = reg.join("w-b", true).guard;
         drop(leader);
         reg.reap_due(t0 + RELOAD_GRACE + Duration::from_secs(1)); // leader Disconnected
         let id = reg.mint_handover_id();
@@ -849,8 +951,8 @@ mod tests {
     fn plain_takeover_only_when_leader_not_live() {
         let reg = Arc::new(SessionRegistry::new());
         let t0 = Instant::now();
-        let leader = reg.join("w-a").guard;
-        let _b = reg.join("w-b").guard;
+        let leader = reg.join("w-a", true).guard;
+        let _b = reg.join("w-b", true).guard;
         // Live leader: plain takeover refused.
         assert_eq!(reg.takeover("w-b", false), Err(HandoverError::LeaderLive));
         // Leader drops and ages out of live: plain takeover succeeds.
@@ -863,8 +965,8 @@ mod tests {
     #[test]
     fn force_takeover_seizes_a_live_leader() {
         let reg = Arc::new(SessionRegistry::new());
-        let _leader = reg.join("w-a").guard;
-        let _b = reg.join("w-b").guard;
+        let _leader = reg.join("w-a", true).guard;
+        let _b = reg.join("w-b", true).guard;
         assert_eq!(reg.takeover("w-b", true), Ok(true));
         assert_eq!(reg.leader().as_deref(), Some("w-b"));
         // Taking over when you already lead is a no-op, not an error.
@@ -874,7 +976,7 @@ mod tests {
     #[test]
     fn takeover_by_non_participant_errors() {
         let reg = Arc::new(SessionRegistry::new());
-        let _leader = reg.join("w-a").guard;
+        let _leader = reg.join("w-a", true).guard;
         assert_eq!(
             reg.takeover("w-ghost", true),
             Err(HandoverError::NotAParticipant)
@@ -891,8 +993,8 @@ mod tests {
         reg.install_change_notify(notify.clone());
 
         let t0 = Instant::now();
-        let leader = reg.join("w-a").guard; // leader, join_seq 0
-        let _b = reg.join("w-b").guard; // live follower, promotes next
+        let leader = reg.join("w-a", true).guard; // leader, join_seq 0
+        let _b = reg.join("w-b", true).guard; // live follower, promotes next
         drop(leader); // the leader's last socket drops at ~t0
 
         // Arm the waiter AFTER the join fires so it only wakes on the reap; a

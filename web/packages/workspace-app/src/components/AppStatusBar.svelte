@@ -33,7 +33,7 @@
   } from "../state/store.svelte";
   import { transfers, toggleTransfers } from "../state/transfers.svelte";
   import { openIndexingDashboard, paneMode } from "../state/tabs.svelte";
-  import { isLeader, sessionState } from "../state/session.svelte";
+  import { selfParticipant, sessionState } from "../state/session.svelte";
 
   let collapsed = $state(false);
 
@@ -70,11 +70,16 @@
     statusVisible && !statusActionVisible && ui.statusKind === "persistent",
   );
   const paneModeVisible = $derived(paneMode.active);
-  // Session role: shown only in a multi-window session (>1 participant) so a
-  // solo window stays quiet, matching the bar's hide model. Leadership is
-  // driven by the /ws roster (cs session list/handover).
-  const roleVisible = $derived(sessionState.participants.length > 1);
-  const role = $derived(isLeader() ? "leader" : "follower");
+  // Session role: shown only when the roster is genuinely SPLIT by origin --
+  // at least one local Leader AND at least one remote Follower. A sole-user
+  // all-local roster (his standalone terminals, his workspace windows) stays
+  // quiet; the badge appears only once a real remote (a gateway browser) joins.
+  // Role is origin-derived on the server and read off the /ws roster.
+  const roleVisible = $derived(
+    sessionState.participants.some((p) => p.role === "leader") &&
+      sessionState.participants.some((p) => p.role === "follower"),
+  );
+  const role = $derived(selfParticipant()?.role ?? "follower");
   const anyVisible = $derived(
     indexVisible ||
       importVisible ||
