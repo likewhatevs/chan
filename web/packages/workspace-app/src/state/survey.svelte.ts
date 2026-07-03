@@ -26,7 +26,12 @@
 // The close path clears only the matching survey id so tab-targeted and group
 // surveys do not erase each other.
 
-import { api, type SurveySpec, type SurveyReplyRequest } from "../api/client";
+import {
+  api,
+  sessionWindowId,
+  type SurveySpec,
+  type SurveyReplyRequest,
+} from "../api/client";
 import { notify } from "./notify.svelte";
 
 /// One in-flight survey + its reply guard. `busy` gates the reply buttons so a
@@ -39,11 +44,6 @@ type SurveyEntry = { spec: SurveySpec; busy: boolean };
 /// exactly one survey.
 export type SurveySlot = string | null;
 export type SurveyCloseReason = "cancelled" | "timed_out" | "answered_elsewhere";
-export type SurveyDraftDialog = {
-  id: string;
-  reason: SurveyCloseReason;
-  draftPath: string;
-};
 
 /// Active surveys: one per terminal (keyed by tab id) plus a single window-wide
 /// fallback. Two terminals answer independently.
@@ -51,12 +51,6 @@ export const surveyState = $state<{
   byTab: Record<string, SurveyEntry>;
   windowWide: SurveyEntry | null;
 }>({ byTab: {}, windowWide: null });
-
-export const surveyDraftDialogs = $state<{
-  byTab: Record<string, SurveyDraftDialog>;
-}>({ byTab: {} });
-
-let nextDialogId = 1;
 
 function entry(slot: SurveySlot): SurveyEntry | null {
   return slot === null ? surveyState.windowWide : (surveyState.byTab[slot] ?? null);
@@ -101,37 +95,19 @@ export function closeSurveyFromRemote(
   for (const slot of slots) {
     if (seen.has(slot)) continue;
     seen.add(slot);
-    if (entry(slot)?.spec.surveyId !== surveyId) continue;
+    const e = entry(slot);
+    if (e?.spec.surveyId !== surveyId) continue;
+    // Belt: a reply from THIS window is in flight (busy). The local clear on
+    // reply success will win, so ignore a late close for this survey (e.g. an
+    // `answered_elsewhere` that the server fanned back to the answerer before
+    // the reply POST resolved) rather than pop a spurious saved-draft dialog.
+    // The server-side exclude (windowId on the reply) is the primary guard;
+    // this covers the case where windowId is absent.
+    if (e.busy) return undefined;
     clear(slot);
     return slot;
   }
   return undefined;
-}
-
-export function showSurveyDraftDialog(
-  tabId: string,
-  reason: SurveyCloseReason,
-  draftPath: string,
-): void {
-  surveyDraftDialogs.byTab[tabId] = {
-    id: `survey-draft-${nextDialogId++}`,
-    reason,
-    draftPath,
-  };
-}
-
-export function surveyDraftDialogFor(tabId: string): SurveyDraftDialog | null {
-  return surveyDraftDialogs.byTab[tabId] ?? null;
-}
-
-export function dismissSurveyDraftDialog(tabId: string): void {
-  delete surveyDraftDialogs.byTab[tabId];
-}
-
-export function surveyCloseTitle(reason: SurveyCloseReason): string {
-  if (reason === "timed_out") return "Survey timed out";
-  if (reason === "answered_elsewhere") return "Survey answered elsewhere";
-  return "Survey cancelled";
 }
 
 /// Reply with the option at `index` (0-based; the overlay numbers them
@@ -148,6 +124,7 @@ export async function pickOption(slot: SurveySlot, index: number): Promise<void>
     kind: "option",
     optionIndex: index,
     optionLabel: label,
+    windowId: sessionWindowId(),
   };
   try {
     await api.surveyReply(reply);
@@ -174,6 +151,7 @@ export async function requestFollowup(slot: SurveySlot): Promise<void> {
     followup: e.spec.followup ?? null,
     title: e.spec.title ?? null,
     bodyMarkdown: e.spec.bodyMarkdown,
+    windowId: sessionWindowId(),
   };
   try {
     await api.surveyReply(reply);
@@ -195,6 +173,7 @@ export async function dismissSurvey(slot: SurveySlot): Promise<void> {
   const reply: SurveyReplyRequest = {
     surveyId: e.spec.surveyId,
     kind: "dismissed",
+    windowId: sessionWindowId(),
   };
   try {
     await api.surveyReply(reply);

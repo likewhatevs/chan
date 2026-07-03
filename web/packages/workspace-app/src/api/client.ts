@@ -1383,16 +1383,26 @@ export interface SurveyFollowupContext {
 /// from an answer. `followup` now allows a null context: F is standard on every
 /// survey, so when a survey carried no followup context the SPA sends
 /// `followup: null` and the route treats it as a plain deferral (no file).
+/// `windowId` (the answering window's own session id) lets the server exclude
+/// this window from the `close_survey` fan-out, so the window that just replied
+/// does not race a `answered_elsewhere` close against its own local clear.
 export type SurveyReplyRequest =
-  | { surveyId: string; kind: "option"; optionIndex: number; optionLabel: string }
+  | {
+      surveyId: string;
+      kind: "option";
+      optionIndex: number;
+      optionLabel: string;
+      windowId?: string;
+    }
   | {
       surveyId: string;
       kind: "followup";
       followup: SurveyFollowupContext | null;
       title?: string | null;
       bodyMarkdown: string;
+      windowId?: string;
     }
-  | { surveyId: string; kind: "dismissed" };
+  | { surveyId: string; kind: "dismissed"; windowId?: string };
 
 /// Body of `POST /api/window/reply` (the `cs pane` reply). camelCase to match
 /// the server's `WindowReplyRequest`. `payload` is opaque to the server (the

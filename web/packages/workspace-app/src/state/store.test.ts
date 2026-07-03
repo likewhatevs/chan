@@ -49,8 +49,6 @@ import {
 } from "./tabs.svelte";
 import { richPrompt } from "./richPrompt.svelte";
 import {
-  surveyDraftDialogFor,
-  surveyDraftDialogs,
   surveyFor,
   surveyState,
 } from "./survey.svelte";
@@ -113,7 +111,6 @@ afterEach(() => {
   richPrompt.byTab = {};
   surveyState.byTab = {};
   surveyState.windowWide = null;
-  surveyDraftDialogs.byTab = {};
   window.sessionStorage.clear();
   window.history.replaceState(null, "", "/");
 });
@@ -783,7 +780,7 @@ describe("window commands", () => {
     clickSpy.mockRestore();
   });
 
-  test("close_survey for a tab target closes the survey and preserves the visible Rich Prompt draft", async () => {
+  test("close_survey for a tab target closes the survey and leaves the composer visible", async () => {
     window.history.replaceState(null, "", "/?w=window-a");
     setTerminalLayout({
       title: "@@Target",
@@ -818,11 +815,8 @@ describe("window commands", () => {
     await Promise.resolve();
 
     expect(surveyFor("term-1")).toBeNull();
-    expect(richPrompt.byTab["term-1"]).toBe(false);
-    expect(surveyDraftDialogFor("term-1")).toMatchObject({
-      reason: "timed_out",
-      draftPath: ".Drafts/rich-target/draft.md",
-    });
+    // The Rich Prompt composer is independent of the survey, so it stays open.
+    expect(richPrompt.byTab["term-1"]).toBe(true);
   });
 
   test("close_survey without tabName closes only the window-wide group survey", async () => {
@@ -869,15 +863,15 @@ describe("window commands", () => {
 
     expect(surveyFor(null)).toBeNull();
     expect(surveyFor("term-1")?.surveyId).toBe("survey-tab");
-    expect(surveyDraftDialogFor("term-1")).toBeNull();
   });
 
-  test("window-wide close_survey preserves visible Rich Prompt drafts", async () => {
+  test("a group close_survey does NOT force-hide independent composers", async () => {
     window.history.replaceState(null, "", "/?w=window-a");
     setTerminalLayout({
       title: "@@GroupMember",
       richPromptDraftPath: ".Drafts/group-draft/draft.md",
     });
+    // An independent Rich Prompt composer is open, unrelated to any survey.
     richPrompt.byTab["term-1"] = true;
 
     onWatchEvent({
@@ -903,12 +897,10 @@ describe("window commands", () => {
     });
     await Promise.resolve();
 
+    // The survey overlay closes, but the composer is not the survey's reply
+    // surface, so it is left open (no over-reach, no saved-draft dialog).
     expect(surveyFor(null)).toBeNull();
-    expect(richPrompt.byTab["term-1"]).toBe(false);
-    expect(surveyDraftDialogFor("term-1")).toMatchObject({
-      reason: "answered_elsewhere",
-      draftPath: ".Drafts/group-draft/draft.md",
-    });
+    expect(richPrompt.byTab["term-1"]).toBe(true);
   });
 });
 

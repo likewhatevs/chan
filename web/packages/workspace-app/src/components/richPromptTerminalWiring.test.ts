@@ -1,7 +1,6 @@
 import { describe, expect, test } from "vitest";
 import terminal from "./TerminalTab.svelte?raw";
 import pane from "./Pane.svelte?raw";
-import surveyDraftDialog from "./SurveyDraftDialog.svelte?raw";
 
 // Rich Prompt - the terminal wiring: TerminalTab registers the prompt
 // sink (WS `prompt` frame, NOT raw input), mounts the bubble over the active
@@ -79,19 +78,6 @@ describe("TerminalTab Rich Prompt wiring", () => {
     expect(terminal).toMatch(
       /\{#if active && isRichPromptVisible\(tab\.id\)\}[\s\S]{1,120}<RichPrompt \{tab\} \/>/,
     );
-  });
-
-  test("mounts the saved-draft dialog per terminal and opens in the same pane", () => {
-    expect(terminal).toMatch(/import SurveyDraftDialog from "\.\/SurveyDraftDialog\.svelte"/);
-    expect(terminal).toMatch(/<SurveyDraftDialog tabId=\{tab\.id\} \{paneId\} \/>/);
-    expect(surveyDraftDialog).toMatch(/surveyCloseTitle\(dialog\.reason\)/);
-    expect(surveyDraftDialog).toContain('role="dialog"');
-    expect(surveyDraftDialog).toContain("Open");
-    expect(surveyDraftDialog).toContain("Dismiss");
-    expect(surveyDraftDialog).toMatch(
-      /openInPane\(paneId, path, \{ landAtTop: true \}\)/,
-    );
-    expect(surveyDraftDialog).toMatch(/<code>\{dialog\.draftPath\}<\/code>/);
   });
 
   test("discards the per-terminal Rich Prompt draft folder on terminal close", () => {

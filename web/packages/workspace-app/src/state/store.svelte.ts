@@ -25,7 +25,6 @@ import {
 import {
   closeSurveyFromRemote,
   showSurvey,
-  showSurveyDraftDialog,
   type SurveyCloseReason,
 } from "./survey.svelte";
 import { applySessionRoster, isFollower, showHandover, type SessionParticipant } from "./session.svelte";
@@ -59,7 +58,6 @@ import {
   type SplitNode,
   type Tab,
 } from "./tabs.svelte";
-import { hideRichPromptForTab, isRichPromptVisible } from "./richPrompt.svelte";
 import { isEditableText } from "./fileTypes";
 import {
   activeTransferCount,
@@ -1262,15 +1260,6 @@ function isSurveyCloseReason(value: unknown): value is SurveyCloseReason {
   );
 }
 
-function preserveVisibleRichPromptDraft(tabId: string, reason: SurveyCloseReason): void {
-  if (!isRichPromptVisible(tabId)) return;
-  const terminal = allTerminalTabs().find((tab) => tab.id === tabId);
-  if (terminal?.richPromptDraftPath) {
-    showSurveyDraftDialog(tabId, reason, terminal.richPromptDraftPath);
-  }
-  hideRichPromptForTab(tabId);
-}
-
 /// Raise a file picker and upload the chosen files into `destDir`, the
 /// programmatic twin of the Inspector pill's hidden `<input type=file>`: a `cs
 /// upload` has no DOM input to click, so synthesize one and hand the picked
@@ -1440,19 +1429,12 @@ async function handleWindowCommand(raw: unknown): Promise<void> {
   ) {
     // The server-side survey request is gone: another window answered first,
     // the timeout elapsed, or the control side cancelled. Close only the
-    // matching survey id. A tabName keeps tab-targeted surveys per-terminal;
-    // group surveys omit it and close the window-wide slot in each targeted
-    // window.
+    // matching survey overlay. A tabName keeps tab-targeted surveys per-terminal;
+    // group surveys omit it and close the window-wide slot. A visible Rich
+    // Prompt composer is an independent overlay, not the survey's reply surface,
+    // so it is left untouched.
     const slotHint = frame.tabName ? terminalSlotForName(frame.tabName) : undefined;
-    const slot = closeSurveyFromRemote(frame.surveyId, slotHint ?? undefined);
-    if (slot === undefined) return;
-    if (typeof slot === "string") {
-      preserveVisibleRichPromptDraft(slot, frame.reason);
-    } else {
-      for (const terminal of allTerminalTabs()) {
-        preserveVisibleRichPromptDraft(terminal.id, frame.reason);
-      }
-    }
+    closeSurveyFromRemote(frame.surveyId, slotHint ?? undefined);
     return;
   }
   if (
