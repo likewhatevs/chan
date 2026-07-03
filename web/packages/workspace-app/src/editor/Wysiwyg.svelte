@@ -159,6 +159,9 @@
   let host: HTMLDivElement | undefined;
   let view: EditorView | undefined;
   const sync = createValueSync();
+  // Seed the theme with the surface's current light/dark; the $effect below
+  // keeps it in sync on theme flips, and `surface` itself is fixed per mount.
+  // svelte-ignore state_referenced_locally
   const theme = makeThemeCompartment(effectiveHybridSurfaceTheme(surface));
   const editableCompartment = new Compartment();
   const extraExtensionsCompartment = new Compartment();

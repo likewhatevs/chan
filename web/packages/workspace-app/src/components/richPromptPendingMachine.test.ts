@@ -9,11 +9,11 @@ import { mount, tick, unmount } from "svelte";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { EditorView } from "@codemirror/view";
 
-const writeSpy = vi.fn(async () => ({}) as unknown);
+const writeSpy = vi.fn(async (_p: string, _c: string) => ({}) as unknown);
 const readMock = vi.fn(async (_p: string) => ({ content: "" }) as unknown);
 const createDraftMock = vi.fn(async () => ({ path: ".Drafts/t/draft.md" }));
-const sendPromptSpy = vi.fn(() => true);
-const sendCancelSpy = vi.fn();
+const sendPromptSpy = vi.fn((..._a: unknown[]) => true);
+const sendCancelSpy = vi.fn((..._a: unknown[]) => {});
 
 vi.mock("../api/client", async (orig) => {
   const actual = (await orig()) as Record<string, unknown>;

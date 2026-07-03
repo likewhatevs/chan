@@ -13,9 +13,11 @@ afterEach(() => {
   for (const c of mounted.splice(0)) unmount(c);
 });
 
-async function mountWysiwyg(
-  props: Record<string, unknown>,
-): Promise<{ content: HTMLElement; view: EditorView }> {
+async function mountWysiwyg(props: {
+  value: string;
+  currentPath?: string | null;
+  onSubmit?: () => void;
+}): Promise<{ content: HTMLElement; view: EditorView }> {
   const target = document.createElement("div");
   document.body.appendChild(target);
   mounted.push(mount(Wysiwyg, { target, props }) as Record<string, unknown>);
