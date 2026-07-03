@@ -1,10 +1,10 @@
 // Devserver control terminals awaiting attention.
 //
 // When a connected devserver stops answering while its CONTROL terminal is still
-// alive, the desktop emits `devserver-control-attention`. The launcher flashes
-// that row's eye yellow in the Open-windows feed to request attention. The flash
-// clears when the desktop reports the connection restored, or when the user acts
-// on the row.
+// alive, the desktop emits `devserver-control-attention`. The launcher turns the
+// devserver identity row's status dot RED (the same dot that shows green while
+// connected) and slow-flashes the control row's eye. Both clear when the desktop
+// reports the connection restored, or when the user acts on the control row.
 //
 // Keyed by the devserver's LIBRARY id (the id the control window record carries)
 // so the feed matches the flashing row directly. Desktop events carry the
@@ -97,10 +97,11 @@ export function hasControlAttention(libraryId: string): boolean {
 /** Drop attention flags whose library no longer owns a control window in the
  * feed. The feed is authoritative: while a control terminal is alive (a script
  * died and it sits at "process exited") its record is present, so its flag
- * survives and the row keeps flashing; once the terminal is closed / reaped its
- * record leaves the feed and the flag is cleared here, so a torn-down or
- * reconnected library does not leak a flag or resurface as a stale flash. Runs
- * on the same reactive pass as `resolvePendingControlAttention`. */
+ * survives (the identity dot stays red, the eye keeps flashing); once the
+ * terminal is closed / reaped its record leaves the feed and the flag is
+ * cleared here, so a torn-down or reconnected library does not leak a flag or
+ * resurface a stale cue. Runs on the same reactive pass as
+ * `resolvePendingControlAttention`. */
 export function pruneControlAttention(): void {
   const live = new Set(library.windows.filter((w) => w.control).map((w) => w.library_id));
   for (const libraryId of Object.keys(controlAttention.libs)) {

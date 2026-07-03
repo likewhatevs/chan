@@ -2,7 +2,8 @@
 //
 // A connected devserver can become temporarily unreachable while its CONTROL
 // terminal is still alive. The desktop emits attention/restored events carrying
-// the devserver id; the launcher flashes or clears the control row's eye.
+// the devserver id; the launcher turns the devserver identity row's
+// status dot red (and flashes the control row's eye), or restores them.
 // Desktop-only: the driving event never fires in a plain browser.
 
 import {

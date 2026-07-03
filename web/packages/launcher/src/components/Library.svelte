@@ -43,6 +43,7 @@
   import { requestConfirm } from "../state/confirm.svelte";
   import { checksVisible, isSelected, toggleSelected } from "../state/selection.svelte";
   import { isPending, servedKey, wsKey, dsKey } from "../state/pending.svelte";
+  import { hasControlAttention } from "../state/controlAttention.svelte";
   import { openEditDevserver, openNewDialog } from "../state/dialog.svelte";
   import { basename } from "../lib/windowLabel";
   import { buildMachineTree, type MachineNode, type WorkspaceNode } from "../lib/machineTree";
@@ -179,6 +180,14 @@
   }
 
   const connected = (ds: DevserverEntry): boolean => ds.status === "connected";
+  // The devserver's connection dropped out from under it: the control script
+  // exited, or a connected transport stopped answering. The identity row's
+  // status dot turns RED (same dot, same spot as the green connected one)
+  // in place of a textual "connection lost" cue; the control row's eye flash
+  // rides the same attention state. Both clear on recovery, reconnect, the
+  // user acting on the control row, or the row leaving the feed.
+  const connectionLost = (ds: DevserverEntry): boolean =>
+    ds.library_id !== null && ds.library_id !== undefined && hasControlAttention(ds.library_id);
   // Devserver spinner = backend reports the dial in flight (`connecting`) OR the
   // optimistic bridge is open. A dropped tunnel lands `disconnected` + clears it.
   const dsSpinning = (ds: DevserverEntry): boolean =>
@@ -365,7 +374,8 @@
   <span class="ds-name-row">
     <span class="ds-glyph" aria-hidden="true"><Globe size={16} /></span>
     <span class="row-name">{devserverName(ds)}</span>
-    {#if connected(ds)}<span class="status-dot live" title="Connected"></span>{/if}
+    {#if connectionLost(ds)}<span class="status-dot lost" title="Connection lost"></span>
+    {:else if connected(ds)}<span class="status-dot live" title="Connected"></span>{/if}
     {#if ds.has_token}<span class="chip">🔒 token</span>{/if}
   </span>
   <span class="ds-addr-row">
@@ -579,6 +589,14 @@
     background: var(--accent);
     opacity: 1;
     box-shadow: 0 0 6px color-mix(in srgb, var(--accent) 70%, transparent);
+  }
+
+  /* Same dot, connection lost: the script died or the transport stopped
+     answering. Steady red, no flashing. */
+  .status-dot.lost {
+    background: var(--danger);
+    opacity: 1;
+    box-shadow: 0 0 6px color-mix(in srgb, var(--danger) 70%, transparent);
   }
 
   /* The devserver identity block (name row over address row). On the mutable

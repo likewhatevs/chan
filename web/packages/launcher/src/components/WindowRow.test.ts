@@ -94,22 +94,24 @@ describe("WindowRow", () => {
     expect(el.querySelector('[aria-label="Hide window"]')).toBeNull();
   });
 
-  it("flashes the control eye and shows the attention pill when its library needs attention", () => {
+  it("flashes the control eye, with no text pill, when its library needs attention", () => {
     controlAttention.libs["lib-x"] = true;
     const el = render(win({ window_id: "c", library_id: "lib-x", control: true }), { icon: true });
     const eye = el.querySelector("button.icon-btn.attention");
     expect(eye).not.toBeNull();
     expect(eye!.getAttribute("aria-label")).toContain("needs attention");
-    expect(el.querySelector(".attention-pill")).not.toBeNull();
-    expect(el.textContent).toContain("not responding...");
+    // The textual "connection lost" cue is the devserver identity row's status
+    // dot turned red (Library.svelte), not a pill on this row.
+    expect(el.textContent).not.toContain("not responding...");
+    expect(el.textContent).not.toContain("connection closed");
     expect(el.querySelector(".row-glyph.control")).not.toBeNull();
   });
 
-  it("labels the flash 'connection closed' when the owning devserver is DISCONNECTED", () => {
+  it("flashes the eye when the owning devserver is DISCONNECTED (script died)", () => {
     // A control script died: the devserver is disconnected but its control
     // terminal is kept alive at "process exited". The control record's own
-    // `connected` stays true (/ws-socket presence), so the label keys on the
-    // DEVSERVER's status. The desktop emits attention for this case too.
+    // `connected` stays true (/ws-socket presence); the desktop emits attention
+    // for this case too, so the eye flash keys on the attention state alone.
     library.devservers = [ds("disconnected", "lib-x")];
     controlAttention.libs["lib-x"] = true;
     const el = render(
@@ -117,11 +119,9 @@ describe("WindowRow", () => {
       { icon: true },
     );
     expect(el.querySelector("button.icon-btn.attention")).not.toBeNull();
-    expect(el.textContent).toContain("connection closed");
-    expect(el.textContent).not.toContain("not responding...");
   });
 
-  it("labels the flash 'not responding...' when the owning devserver is CONNECTED", () => {
+  it("flashes the eye when the owning devserver is CONNECTED but not responding", () => {
     library.devservers = [ds("connected", "lib-x")];
     controlAttention.libs["lib-x"] = true;
     const el = render(
@@ -129,8 +129,6 @@ describe("WindowRow", () => {
       { icon: true },
     );
     expect(el.querySelector("button.icon-btn.attention")).not.toBeNull();
-    expect(el.textContent).toContain("not responding...");
-    expect(el.textContent).not.toContain("connection closed");
   });
 
   it("does NOT flash a healthy control terminal with no attention event", () => {
@@ -139,7 +137,6 @@ describe("WindowRow", () => {
       { icon: true },
     );
     expect(el.querySelector("button.icon-btn.attention")).toBeNull();
-    expect(el.querySelector(".attention-pill")).toBeNull();
   });
 
   it("keeps control attention when focus fails", async () => {

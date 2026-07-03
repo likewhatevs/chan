@@ -12,11 +12,12 @@
   //     here) flashes for a re-open click.
   //   - readonly (gateway): static, connection dot only, no actions.
   //
-  // `icon` adds a leading kind glyph (accent for the control terminal) and, for a
-  // control terminal awaiting attention, an amber "not responding..." pill; the
-  // machine tree passes it for every row.
+  // `icon` adds a leading kind glyph (accent for the control terminal); the
+  // machine tree passes it for every row. The textual "connection lost" cue is
+  // the devserver identity row's status dot turned red (Library.svelte), not a
+  // pill on this row.
   import { AppWindow, ExternalLink, Eye, EyeOff, Focus, SquareTerminal } from "lucide-svelte";
-  import { focusWindow, toggleWindow, reportError, clearError, library } from "../state/library.svelte";
+  import { focusWindow, toggleWindow, reportError, clearError } from "../state/library.svelte";
   import { windowRowLabel } from "../lib/windowLabel";
   import { hasControlAttention, clearControlAttention } from "../state/controlAttention.svelte";
   import { hasWindowAttention } from "../state/windowAttention.svelte";
@@ -38,16 +39,6 @@
   // script died (kept open at "process exited"), so the flash is event-driven.
   function needsAttention(rec: WindowRecord): boolean {
     return rec.control && hasControlAttention(rec.library_id);
-  }
-
-  // The attention cue's wording keys on the owning devserver's connection
-  // STATUS (not the control record's `connected`, which tracks /ws-socket
-  // presence and stays true for a dead-but-open terminal): a DISCONNECTED
-  // devserver's control terminal died ("connection closed - open the terminal");
-  // a still-connected one is merely "not responding...".
-  function attentionPill(rec: WindowRecord): string {
-    const ds = library.devservers.find((d) => d.library_id === rec.library_id);
-    return ds && ds.status !== "connected" ? "connection closed" : "not responding...";
   }
 
   // The user acting on the window (focus or show/hide) acknowledges the
@@ -78,12 +69,7 @@
       </span>
     {/if}
     <div class="row-main">
-      <span class="row-name">
-        {windowRowLabel(w)}
-        {#if icon && needsAttention(w)}
-          <span class="attention-pill">{attentionPill(w)}</span>
-        {/if}
-      </span>
+      <span class="row-name">{windowRowLabel(w)}</span>
     </div>
     <div class="row-actions">
       <button
@@ -207,27 +193,6 @@
     opacity: 0.75;
   }
 
-  /* The control terminal's "not responding..." cue: amber, flashing beside the
-     name while the devserver awaits attention (additive to the eye flash). */
-  .attention-pill {
-    display: inline-flex;
-    align-items: center;
-    font-size: 0.72rem;
-    font-weight: 500;
-    color: #e3b341;
-    animation: control-attention-pill 1.6s ease-in-out infinite;
-  }
-
-  @keyframes control-attention-pill {
-    0%,
-    100% {
-      opacity: 1;
-    }
-    50% {
-      opacity: 0.35;
-    }
-  }
-
   /* A control terminal whose devserver is not responding: its eye slow-flashes
      yellow to request attention. The pulse overrides the .on accent tint while it
      runs; user action or a restored event clears it. */
@@ -251,9 +216,6 @@
 
   /* Respect reduced-motion: hold a steady yellow instead of pulsing. */
   @media (prefers-reduced-motion: reduce) {
-    .attention-pill {
-      animation: none;
-    }
     .icon-btn.attention {
       animation: none;
       border-color: #e3b341;
