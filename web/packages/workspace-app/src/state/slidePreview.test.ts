@@ -268,14 +268,15 @@ describe("openSlidePreview", () => {
 
     const page = document.querySelector(".md-slide-preview-page") as HTMLElement;
     expect(backdrop()?.dataset.theme).toBe("dark");
-    expect(backdrop()?.style.background).toContain("rgba(0, 0, 0, 0.92)");
+    // Opaque backdrop (no editor bleed-through / two-tone seam).
+    expect(backdrop()?.style.background).toContain("rgb(0, 0, 0)");
+    expect(backdrop()?.style.background).not.toContain("rgba");
     expect(page.style.colorScheme).toBe("dark");
 
     handle?.update({ theme: "light" });
     expect(backdrop()?.dataset.theme).toBe("light");
-    expect(backdrop()?.style.background).toContain(
-      "rgba(238, 241, 245, 0.94)",
-    );
+    expect(backdrop()?.style.background).toContain("rgb(238, 241, 245)");
+    expect(backdrop()?.style.background).not.toContain("rgba");
     expect(page.style.colorScheme).toBe("light");
   });
 

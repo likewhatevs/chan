@@ -618,8 +618,11 @@ function cssNumber(value: number): string {
 }
 
 function backdropStyle(theme: SlidePreviewTheme): string {
-  const bg =
-    theme === "dark" ? "rgba(0,0,0,0.92)" : "rgba(238,241,245,0.94)";
+  // Fully opaque: a translucent backdrop let the editor's own layered
+  // backgrounds (the dark tab bar over the light content, the outline/pane
+  // divider) bleed through at different shades, so the presenter surface showed
+  // a two-tone horizontal/vertical seam. A solid fill reads as one clean stage.
+  const bg = theme === "dark" ? "rgb(0,0,0)" : "rgb(238,241,245)";
   return (
     "position:fixed;inset:0;z-index:40000;" +
     `background:${bg};display:flex;align-items:center;` +
