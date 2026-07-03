@@ -90,6 +90,28 @@ describe("WindowRow", () => {
     expect(el.querySelector(".row-glyph.control")).not.toBeNull();
   });
 
+  it("flashes a DEAD control terminal (connected===false) with 'connection closed'", () => {
+    // A control script died: the terminal is kept alive at "process exited"
+    // (connected===false). No attention EVENT fires for this (that stays for
+    // connected-not-responding); the flash is FEED-driven off `connected`.
+    const el = render(
+      win({ window_id: "c", library_id: "lib-x", control: true, connected: false }),
+      { icon: true },
+    );
+    expect(el.querySelector("button.icon-btn.attention")).not.toBeNull();
+    expect(el.textContent).toContain("connection closed");
+    expect(el.textContent).not.toContain("not responding...");
+  });
+
+  it("does NOT flash a healthy control terminal (connected===true, no attention)", () => {
+    const el = render(
+      win({ window_id: "c", library_id: "lib-x", control: true, connected: true }),
+      { icon: true },
+    );
+    expect(el.querySelector("button.icon-btn.attention")).toBeNull();
+    expect(el.querySelector(".attention-pill")).toBeNull();
+  });
+
   it("keeps control attention when focus fails", async () => {
     const { backend } = await import("../api/backend");
     const open = vi.spyOn(backend, "openWindow").mockRejectedValueOnce(new Error("stale window"));

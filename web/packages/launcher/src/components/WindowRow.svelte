@@ -31,11 +31,22 @@
   }
   let { w, icon = false }: Props = $props();
 
-  // A control terminal whose devserver is not responding flags its library for
-  // attention; its eye slow-flashes yellow until the user acts on the window or
-  // the desktop reports recovery.
+  // A control terminal flags its row for attention in two feed-driven states,
+  // slow-flashing its eye yellow: its devserver stopped responding while the
+  // terminal is still alive (event-driven `hasControlAttention`, connected), or
+  // its script has died and the terminal sits at "process exited"
+  // (`connected === false`, feed-driven, no event). The flash clears when the
+  // user acts / the desktop reports recovery / the dead terminal is closed and
+  // its record leaves the feed.
   function needsAttention(rec: WindowRecord): boolean {
-    return rec.control && hasControlAttention(rec.library_id);
+    return rec.control && (hasControlAttention(rec.library_id) || !rec.connected);
+  }
+
+  // The attention cue: a dead control terminal ("process exited") reads
+  // "connection closed"; a still-alive-but-not-responding one reads "not
+  // responding...". Keyed on `connected` so the two feed states are distinct.
+  function attentionPill(rec: WindowRecord): string {
+    return rec.connected ? "not responding..." : "connection closed";
   }
 
   // The user acting on the window (focus or show/hide) acknowledges the
@@ -69,7 +80,7 @@
       <span class="row-name">
         {windowRowLabel(w)}
         {#if icon && needsAttention(w)}
-          <span class="attention-pill">not responding...</span>
+          <span class="attention-pill">{attentionPill(w)}</span>
         {/if}
       </span>
     </div>
