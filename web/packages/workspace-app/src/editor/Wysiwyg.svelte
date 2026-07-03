@@ -589,11 +589,16 @@
             // content, opener inside a list, etc.).
             { key: "Mod-Enter", run: (view) => fmt.exitFenceAnywhere(view) },
             { key: "Mod-Enter", run: (view) => fmt.escapeFenceAtDocEnd(view) },
+            // Submit when a host wires onSubmit; otherwise CONSUME the chord as
+            // a no-op (return true) so it never falls through to CM6's default
+            // Mod-Enter (insertBlankLine) in a plain file editor. RichPrompt
+            // supplies its own higher-precedence submit, so this entry only
+            // guards the no-onSubmit file-editor case. The date-pill and fence
+            // Mod-Enter entries above are tried first and still win.
             {
               key: "Mod-Enter",
               run: () => {
-                if (!onSubmit) return false;
-                onSubmit();
+                onSubmit?.();
                 return true;
               },
             },
