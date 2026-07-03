@@ -24,6 +24,11 @@ export const confirmState = $state<ConfirmState>({
   resolve: null,
 });
 
+// The element that held DOM focus before the modal opened. The modal
+// parks focus on its OK button, so restoring this on dismissal returns
+// the caret to the invoking surface (terminal, editor) with no click.
+let previouslyFocused: HTMLElement | null = null;
+
 /// Show a confirm dialog. Resolves true on OK, false on Cancel / Esc /
 /// outside-click. Pass `destructive: true` to style the OK button as a
 /// warning so overwrite / delete reads correctly.
@@ -34,6 +39,15 @@ export function uiConfirm(opts: {
   cancelLabel?: string;
   destructive?: boolean;
 }): Promise<boolean> {
+  // Capture the pre-modal focus target before the modal steals focus.
+  // The `!open` guard makes a stacked confirm keep the ORIGINAL target:
+  // the stacked open drops the prior confirm inline below (bypassing
+  // resolveConfirm), so this capture must not overwrite the first one.
+  if (!confirmState.open) {
+    const active = document.activeElement;
+    previouslyFocused =
+      active instanceof HTMLElement && active !== document.body ? active : null;
+  }
   return new Promise((resolve) => {
     // If a confirm is already open, drop the previous one as cancelled.
     confirmState.resolve?.(false);
@@ -52,5 +66,13 @@ export function resolveConfirm(value: boolean): void {
   const r = confirmState.resolve;
   confirmState.resolve = null;
   confirmState.open = false;
+  // Restore focus to the pre-modal target before resolving, so any focus
+  // work the awaiting caller runs (next-tab focus, restart rebuild) lands
+  // after and wins. The isConnected guard skips targets the accept path
+  // unmounts (tab close, terminal restart), which degrade to today's
+  // behavior of focus falling to the body.
+  const el = previouslyFocused;
+  previouslyFocused = null;
+  if (el?.isConnected) el.focus({ preventScroll: true });
   r?.(value);
 }
