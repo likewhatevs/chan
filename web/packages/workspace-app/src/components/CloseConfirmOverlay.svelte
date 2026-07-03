@@ -96,7 +96,7 @@
     <div class="card">
       <div class="title">close this window?</div>
       <div class="subline">
-        hide it to keep its tabs and terminals warm, or close it to discard them
+        Hide it to keep its tabs and terminals warm, or close to discard
       </div>
       <div class="actions">
         <button class="hide" bind:this={hideBtn} onclick={hide}> Hide </button>
