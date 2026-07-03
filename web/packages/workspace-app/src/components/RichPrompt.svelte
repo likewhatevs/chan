@@ -10,7 +10,9 @@
   import { onDestroy, onMount } from "svelte";
   import { Compartment, EditorState, Prec, type Extension } from "@codemirror/state";
   import { EditorView, keymap } from "@codemirror/view";
+  import { indentLess, indentMore } from "@codemirror/commands";
   import Wysiwyg from "../editor/Wysiwyg.svelte";
+  import { indentListItem, outdentListItem } from "../editor/commands/list";
   import { rewriteImagePathsForDelivery } from "../editor/deliver_images";
   import { workspace } from "../state/store.svelte";
   import { currentOS } from "../state/shortcuts";
@@ -98,6 +100,15 @@
           { key: "Mod-Enter", run: submitFromView },
           { key: "ArrowUp", run: recallFromView },
           { key: "Escape", run: dropOrAbandonFromView },
+          // Tab indents (list item, else plain indent) and NEVER escapes to
+          // the browser's focus nav: the composer is a chat box, not a
+          // document, so Tab must stay inside it. indentMore/indentLess are
+          // the fallback that make Tab/Shift-Tab always consume off-list.
+          {
+            key: "Tab",
+            run: (v) => indentListItem(v) || indentMore(v),
+            shift: (v) => outdentListItem(v) || indentLess(v),
+          },
         ]),
       ),
     ];
