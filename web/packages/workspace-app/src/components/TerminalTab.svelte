@@ -1480,6 +1480,15 @@
     void fileOps.createFile(cwd);
   }
 
+  /// New file OR directory at the terminal's CWD, the unified path prompt
+  /// the file browser uses. The launcher's "New file or directory ($CWD)"
+  /// command reaches this through the chan:command listener below.
+  function openNewFsEntry(): void {
+    const cwd = terminalCwdRel();
+    if (cwd === null) return terminalCwdUnavailable();
+    void fileOps.createFileOrDir(cwd);
+  }
+
   /// From-$CWD spawn entries on the terminal right-click menu. Each
   /// routes through the same `chan:command` event the keymap layer
   /// uses, so the menu click + the chord both arrive at `runCommand`
@@ -1557,6 +1566,23 @@
     await navigator.clipboard?.writeText(cwd);
     term?.focus();
   }
+
+  // The command launcher runs at the app root, but a terminal's live $CWD
+  // and session lifecycle live in this component, so the launcher's
+  // live-PTY terminal actions arrive as chan:command events the focused
+  // terminal handles. Only the active tab of the focused pane responds, so
+  // the launcher's active-surface gate and the acting terminal agree.
+  $effect(() => {
+    const onLauncherCommand = (e: Event) => {
+      if (!active || !focused) return;
+      const name = (e as CustomEvent).detail?.name;
+      if (name === "app.terminal.restart") void restart();
+      else if (name === "app.terminal.copyCwd") void copyTerminalCwd();
+      else if (name === "app.terminal.newFsEntry") openNewFsEntry();
+    };
+    window.addEventListener("chan:command", onLauncherCommand);
+    return () => window.removeEventListener("chan:command", onLauncherCommand);
+  });
 
   // The Team Work bubble composer is gone. Team Work is the Cmd+P dialog +
   // orchestrator spawn/load; the lead is a NORMAL terminal whose identity
