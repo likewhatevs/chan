@@ -10,6 +10,7 @@ import { availableCommands, type CommandContext } from "../commands";
 import "./editor";
 import "./graph";
 import "./dashboard";
+import "./diagram";
 
 function ctx(partial: Partial<CommandContext>): CommandContext {
   return {
@@ -80,6 +81,16 @@ describe("dashboard surface commands", () => {
       expect(onDash.has(id)).toBe(true);
     }
     expect(idsIn(ctx({ activeSurface: "file" })).has("app.dashboard.nextSlide")).toBe(false);
+  });
+});
+
+describe("new diagram command", () => {
+  it("follows the workspace gate, independent of the active surface", () => {
+    expect(idsIn(ctx({ activeSurface: "file" })).has("app.diagram.new")).toBe(true);
+    expect(idsIn(ctx({ activeSurface: null })).has("app.diagram.new")).toBe(true);
+    expect(
+      idsIn(ctx({ terminalOnly: true, activeSurface: "terminal" })).has("app.diagram.new"),
+    ).toBe(false);
   });
 });
 

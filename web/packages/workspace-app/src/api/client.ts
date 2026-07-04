@@ -772,6 +772,11 @@ export const api = {
   /// the existing /api/files/* GET path.
   createDraft: () =>
     req<{ path: string; name: string }>("POST", "/api/drafts/new"),
+  /// Create a new diagram draft with a seeded `<name>.excalidraw` scene
+  /// via /api/diagrams/new. Same response shape as createDraft; the SPA
+  /// opens the returned path in canvas mode via isExcalidraw.
+  createDiagram: () =>
+    req<{ path: string; name: string }>("POST", "/api/diagrams/new"),
   inspectDraft: (path: string) =>
     req<DraftInspectResponse>("POST", "/api/drafts/inspect", { path }),
   discardDraft: (path: string) =>

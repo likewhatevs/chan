@@ -2137,8 +2137,18 @@ function isDraftTab(t: Tab): t is FileTab {
   return t.kind === "file" && isDraftPath(t.path);
 }
 
-function draftDefaultTarget(info: { name: string; has_attachments: boolean }): string {
-  return info.has_attachments ? info.name : `${info.name}.md`;
+function draftDefaultTarget(
+  info: { name: string; has_attachments: boolean },
+  sourcePath: string,
+): string {
+  if (info.has_attachments) return info.name;
+  // Keep the draft's own extension so a diagram promotes to
+  // `<name>.excalidraw`, not a mis-extensioned `.md` holding scene JSON.
+  // Default to `.md` when the primary file carries no extension.
+  const dot = sourcePath.lastIndexOf(".");
+  const slash = sourcePath.lastIndexOf("/");
+  const ext = dot > slash ? sourcePath.slice(dot) : ".md";
+  return `${info.name}${ext}`;
 }
 
 function promotedEditorPath(promoted: DraftPromoteResponse): string {
@@ -2762,6 +2772,16 @@ export function removeExplicitlyClosedTerminalTab(tabId: string): void {
 /// path skips the "Close Draft" modal for pristine drafts.
 const NEW_DRAFT_SEED = "# Draft\n";
 
+/// Server-side seed for a brand-new diagram (see
+/// `crates/chan-server/src/routes/drafts.rs::NEW_DIAGRAM_CONTENT`). A
+/// diagram whose buffer still matches this and is clean has not been
+/// drawn on; discard it on close like a pristine markdown draft. Fires
+/// only when the canvas leaves the buffer byte-identical to the seed on
+/// mount; if it re-serializes to an equivalent-but-different form the
+/// check simply does not match and the normal close path runs.
+const NEW_DIAGRAM_SEED =
+  '{"type":"excalidraw","version":2,"source":"chan","elements":[],"appState":{},"files":{}}';
+
 async function handleDraftTabClose(tab: FileTab): Promise<boolean> {
   // A draft whose backing file vanished (the user moved or deleted it
   // on disk) has nothing to inspect, save, or discard. Close it like
@@ -2770,7 +2790,9 @@ async function handleDraftTabClose(tab: FileTab): Promise<boolean> {
   if (tab.fileMissing) return true;
   try {
     const contentIsEmpty = tab.content.trim().length === 0;
-    const isPristineSeed = !isDirty(tab) && tab.content === NEW_DRAFT_SEED;
+    const isPristineSeed =
+      !isDirty(tab) &&
+      (tab.content === NEW_DRAFT_SEED || tab.content === NEW_DIAGRAM_SEED);
     if (!contentIsEmpty && isDirty(tab)) {
       await performSave(tab);
       if (isDirty(tab)) return false;
@@ -2784,7 +2806,7 @@ async function handleDraftTabClose(tab: FileTab): Promise<boolean> {
     const decision = await uiDraftClose({
       path: tab.path,
       name: info.name,
-      target: draftDefaultTarget(info),
+      target: draftDefaultTarget(info, tab.path),
       targetKind: info.has_attachments ? "folder" : "file",
       hasAttachments: info.has_attachments,
     });
@@ -2877,7 +2899,7 @@ export async function saveDraftTabToWorkspace(tab: FileTab): Promise<boolean> {
         })
       : await uiPathPrompt({
           title: "save draft to workspace (.md added if no extension)",
-          defaultValue: draftDefaultTarget(info),
+          defaultValue: draftDefaultTarget(info, tab.path),
           kind: "file",
           mode: "create",
           // Same editable-text gate as `fileOps.createFile`: reject
