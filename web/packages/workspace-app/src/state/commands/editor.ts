@@ -16,8 +16,10 @@ import {
   fileOps,
   openFsGraphForFile,
   revealPathInBrowser,
+  searchPanel,
   setHybridSurfaceTheme,
 } from "../store.svelte";
+import { editorCommandsFor } from "../mountedEditors";
 import {
   activeFileTab,
   openTerminalInActivePane,
@@ -120,6 +122,16 @@ registerCommands([
     run: onFile((tab) => setTabStyleToolbarOpen(tab, !tab.styleToolbarOpen)),
   },
   {
+    id: "app.editor.toggleCollapse",
+    title: "Toggle collapse code blocks",
+    category: "Editor",
+    keywords: ["fold", "code", "collapse", "expand", "blocks"],
+    available: (ctx) => onSurface(ctx, "file"),
+    // The editor view owns fold ranges, so reach it through the mounted
+    // editor registry. A no-op on files without foldable code blocks.
+    run: onFile((tab) => editorCommandsFor(tab.id)?.toggleCodeBlocks()),
+  },
+  {
     id: "app.editor.copyPath",
     title: "Copy path to file",
     category: "Editor",
@@ -171,6 +183,22 @@ registerCommands([
     available: (ctx) => onSurface(ctx, "file"),
     run: onFile((tab) => {
       revealPathInBrowser(tab.path, { inspectorOpen: true });
+    }),
+  },
+  {
+    id: "app.editor.searchSelection",
+    title: "Search selection",
+    category: "Editor",
+    keywords: ["search", "find", "selection"],
+    available: (ctx) => onSurface(ctx, "file"),
+    // The selection lives in the editor view's state, so it survives the
+    // launcher taking focus; seed the search overlay with it, capped at
+    // 100 words. With no selection this opens plain search.
+    run: onFile((tab) => {
+      const selection = editorCommandsFor(tab.id)?.selectionText() ?? "";
+      const words = selection.trim().split(/\s+/).filter(Boolean);
+      if (words.length > 0) searchPanel.query = words.slice(0, 100).join(" ");
+      searchPanel.open = true;
     }),
   },
   {

@@ -132,6 +132,10 @@
   import { terminalFromHereTarget } from "../terminal/fromHere";
   import { csvDelimiter, isCsv, isExcalidraw, isJson } from "../state/fileTypes";
   import {
+    registerEditorCommands,
+    unregisterEditorCommands,
+  } from "../state/mountedEditors";
+  import {
     PAGE_WIDTH_MAX_PCT,
     PAGE_WIDTH_MIN_PCT,
     PAGE_WIDTH_STEP_PCT,
@@ -742,6 +746,18 @@
     return activeEditorRef()?.selectionText() ?? "";
   });
   const bodyHasSelection = $derived(bodySelectionText.trim().length > 0);
+
+  // Expose this editor's imperative surface (code-block fold, live
+  // selection) to the command catalog, keyed by tab id. Every mounted
+  // file tab registers; the catalog reaches the focused one through
+  // activeFileTab().id. Cleared on destroy.
+  $effect(() => {
+    registerEditorCommands(tab.id, {
+      toggleCodeBlocks: () => doToggleCodeBlocks(),
+      selectionText: () => activeEditorRef()?.selectionText() ?? "",
+    });
+    return () => unregisterEditorCommands(tab.id);
+  });
 
   function doCopySelection(): void {
     closeTabMenu();

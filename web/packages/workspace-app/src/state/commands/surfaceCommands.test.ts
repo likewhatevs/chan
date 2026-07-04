@@ -37,6 +37,8 @@ describe("editor surface commands", () => {
       "app.file.rename",
       "app.editor.stripTrailingWs",
       "app.editor.pageWidth.reset",
+      "app.editor.toggleCollapse",
+      "app.editor.searchSelection",
     ]) {
       expect(onFile.has(id)).toBe(true);
     }
