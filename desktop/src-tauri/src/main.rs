@@ -9,8 +9,6 @@ mod dropped_paths;
 mod embedded;
 mod linux_gui_stack;
 mod native_dialog;
-#[cfg(target_os = "macos")]
-mod pdf;
 mod registry;
 mod serve;
 mod upload;
@@ -4182,12 +4180,6 @@ fn main() {
             // untrusted remote-served webview can't pop a native picker over
             // the user's disk.
             upload::pick_upload_files,
-            // Native vector PDF export. macOS-only: WKWebView's `createPDF`
-            // has no Linux/Windows equivalent wired, and the SPA hides the
-            // "Export to PDF" button off-macOS so this is never invoked
-            // there.
-            #[cfg(target_os = "macos")]
-            pdf::export_pdf_macos,
             zoom_in,
             zoom_out,
             zoom_reset,
