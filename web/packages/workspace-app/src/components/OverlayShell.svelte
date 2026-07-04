@@ -39,6 +39,7 @@
     onClose,
     onBackdropContextMenu,
     width,
+    align = "stretch",
     children,
   }: {
     id: OverlayId;
@@ -46,6 +47,10 @@
     onClose: () => void;
     onBackdropContextMenu?: (e: MouseEvent) => void;
     width?: string;
+    // Vertical anchoring. "stretch" fills the viewport height (the
+    // full-height overlays). "top" pins an auto-height panel near the
+    // top, for a Spotlight-style bubble that grows with its content.
+    align?: "stretch" | "top";
     children: Snippet;
   } = $props();
 
@@ -82,6 +87,7 @@
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div
     class="overlay"
+    class:top={align === "top"}
     style="z-index: {zIndex};"
     onclick={onClose}
     oncontextmenu={onContextMenu}
@@ -134,6 +140,13 @@
        have `cursor: pointer` declared. Without this the scrim taps
        silently no-op and overlays look stuck. */
     cursor: pointer;
+  }
+  /* Top-anchored variant: the panel takes its content height and pins
+     near the top (below the notch on iOS, a comfortable drop on
+     desktop). Used by the Spotlight-style command launcher. */
+  .overlay.top {
+    align-items: flex-start;
+    padding-top: max(env(safe-area-inset-top, 0px), 10vh);
   }
   .panel {
     background: var(--bg-elev);
