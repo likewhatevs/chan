@@ -41,7 +41,7 @@ const MIN_RESOLVED_PX = 240;
 /// document-style page look the rest of the editor was already
 /// hinting at via --page-shade. A stored per-library ratio overrides
 /// this on hydrate.
-const DEFAULT_RATIO = 0.8;
+export const DEFAULT_RATIO = 0.8;
 
 export const pageWidth = $state<{ ratio: number }>({ ratio: DEFAULT_RATIO });
 
