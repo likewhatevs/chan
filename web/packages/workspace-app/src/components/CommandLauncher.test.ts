@@ -13,7 +13,6 @@ import { registerCommands } from "../state/commands";
 
 // jsdom does not implement scrollIntoView; the launcher calls it on the
 // highlighted row.
-// @ts-expect-error test stub
 Element.prototype.scrollIntoView = vi.fn();
 
 const runSearch = vi.fn();
