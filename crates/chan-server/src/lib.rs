@@ -93,8 +93,8 @@ use crate::terminal_sessions::{
 use auth::{auth_middleware, load_or_create_token, random_token};
 use bus::{make_progress_broadcast, make_watch_bridge};
 use routes::{
-    api_backlinks, api_build_info, api_cloud_workspaces, api_create_draft, api_create_file,
-    api_create_terminal, api_cs_link_create, api_delete_file, api_delete_session,
+    api_backlinks, api_build_info, api_cloud_workspaces, api_create_diagram, api_create_draft,
+    api_create_file, api_create_terminal, api_cs_link_create, api_delete_file, api_delete_session,
     api_delete_terminal, api_discard_draft, api_excluded_dirs_get, api_excluded_dirs_put,
     api_fonts_source_code_pro_download, api_fs_graph, api_fs_transfer, api_get_config,
     api_get_contacts, api_get_mentions, api_get_server_config, api_get_session, api_get_workspace,
@@ -1427,6 +1427,7 @@ fn router(state: Arc<AppState>) -> Router {
         // SPA Cmd+N chord routes here; the response path opens via the
         // existing /api/files/<path> GET path like any other file.
         .route("/api/drafts/new", post(api_create_draft))
+        .route("/api/diagrams/new", post(api_create_diagram))
         .route("/api/drafts/inspect", post(api_inspect_draft))
         .route("/api/drafts/discard", post(api_discard_draft))
         .route("/api/drafts/promote", post(api_promote_draft))

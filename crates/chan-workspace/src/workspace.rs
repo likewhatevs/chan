@@ -1364,9 +1364,10 @@ impl Workspace {
     }
 
     /// Promote a draft into the workspace root with no-clobber
-    /// semantics. Single-file drafts move `draft.md` to
-    /// `target_rel`; directory drafts move or merge the whole draft
-    /// directory into the target directory.
+    /// semantics. Single-file drafts move their primary file (a note's
+    /// `draft.md` or a diagram's `<name>.excalidraw`) to `target_rel`;
+    /// directory drafts move or merge the whole draft directory into the
+    /// target directory.
     pub fn promote_draft(
         &self,
         name: &str,

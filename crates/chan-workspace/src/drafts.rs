@@ -1,9 +1,10 @@
 //! Cmd+N drafts. In-progress drafts live in-tree under a
 //! configurable in-root directory (default `.Drafts`, set globally as
 //! `drafts_dir` in `~/.chan/config.toml`). Each draft is a DIRECTORY
-//! (e.g. `.Drafts/untitled-1/draft.md`) so the user can paste images
-//! and drop config files alongside the markdown. The Cmd+N flow names
-//! new drafts `untitled-N`, but the lister and `create_dir` accept any
+//! (e.g. `.Drafts/untitled-1/draft.md`, or a diagram's
+//! `.Drafts/untitled-1/untitled-1.excalidraw`) so the user can paste
+//! images and drop files alongside the primary file. New drafts are
+//! named `untitled-N`, but the lister and `create_dir` accept any
 //! leaf name; nothing here assumes the `untitled-` prefix.
 //!
 //! Drafts are real files inside the workspace root, so they sit in
@@ -72,6 +73,10 @@ pub struct DraftIssue {
 struct DraftScan {
     inspection: DraftInspection,
     src: PathBuf,
+    /// The root-level file the draft tab opens: a note's `draft.md` or
+    /// a diagram's `<name>.excalidraw`. `promote_single_file` moves this
+    /// leaf when the draft has no attachments.
+    primary: PathBuf,
     entries: Vec<DraftEntry>,
 }
 
@@ -287,15 +292,11 @@ fn scan_draft(drafts_dir: &Path, name: &str) -> Result<DraftScan> {
 
     let mut acc = DraftScanAccum::default();
     scan_entries(name, &src, Path::new(""), &mut acc)?;
-    if !acc.has_draft_md {
-        return Err(broken(name, "missing draft.md"));
-    }
-    let has_attachments = !(acc.file_count == 1
-        && acc.dir_count == 0
-        && acc
-            .entries
-            .iter()
-            .any(|entry| !entry.is_dir && entry.rel == Path::new("draft.md")));
+    let primary = pick_primary(&acc).ok_or_else(|| broken(name, "draft has no primary file"))?;
+    // A single root-level file with no subdirectories is a single-file
+    // draft (a note's draft.md or a diagram's <name>.excalidraw);
+    // anything more carries attachments and promotes as a directory.
+    let has_attachments = !(acc.file_count == 1 && acc.dir_count == 0);
     Ok(DraftScan {
         inspection: DraftInspection {
             name: name.to_string(),
@@ -305,19 +306,43 @@ fn scan_draft(drafts_dir: &Path, name: &str) -> Result<DraftScan> {
             has_attachments,
         },
         src,
+        primary,
         entries: acc.entries,
     })
 }
 
-/// Accumulator for the recursive draft-tree walk; the counters and
-/// flag mirror what `scan_draft` folds into `DraftInspection`.
+/// The draft's primary file: the root-level file the tab opens. Prefers
+/// `draft.md` so a note with attachments keeps its markdown as the
+/// primary; otherwise the sole root-level file (a diagram draft's
+/// `<name>.excalidraw`). None when the draft has no root-level file, or
+/// more than one and none is `draft.md`.
+fn pick_primary(acc: &DraftScanAccum) -> Option<PathBuf> {
+    let root_files: Vec<&PathBuf> = acc
+        .entries
+        .iter()
+        .filter(|entry| !entry.is_dir && entry.rel.parent() == Some(Path::new("")))
+        .map(|entry| &entry.rel)
+        .collect();
+    if root_files
+        .iter()
+        .any(|rel| rel.as_path() == Path::new("draft.md"))
+    {
+        return Some(PathBuf::from("draft.md"));
+    }
+    match root_files.as_slice() {
+        [only] => Some((*only).clone()),
+        _ => None,
+    }
+}
+
+/// Accumulator for the recursive draft-tree walk; the counters mirror
+/// what `scan_draft` folds into `DraftInspection`.
 #[derive(Default)]
 struct DraftScanAccum {
     entries: Vec<DraftEntry>,
     file_count: usize,
     dir_count: usize,
     total_size: u64,
-    has_draft_md: bool,
 }
 
 fn scan_entries(name: &str, root: &Path, rel_dir: &Path, acc: &mut DraftScanAccum) -> Result<()> {
@@ -348,9 +373,6 @@ fn scan_entries(name: &str, root: &Path, rel_dir: &Path, acc: &mut DraftScanAccu
         } else if ft.is_file() {
             acc.file_count += 1;
             acc.total_size = acc.total_size.saturating_add(meta.len());
-            if rel == Path::new("draft.md") {
-                acc.has_draft_md = true;
-            }
             acc.entries.push(DraftEntry { rel, is_dir: false });
         } else {
             return Err(broken(
@@ -370,7 +392,7 @@ fn promote_single_file(
     let parent = target_abs.parent().ok_or(ChanError::PathEmpty)?;
     ensure_existing_dir(parent, "target parent")?;
     ensure_absent(target_abs, target_rel)?;
-    let src_file = scan.src.join("draft.md");
+    let src_file = scan.src.join(&scan.primary);
     copy_file_atomic(&src_file, target_abs)?;
     fs::remove_dir_all(&scan.src).map_err(|e| {
         broken(
@@ -684,12 +706,15 @@ mod tests {
     }
 
     #[test]
-    fn preflight_reports_missing_draft_file() {
+    fn preflight_reports_draft_with_no_primary_file() {
         let td = TempDir::new().unwrap();
         let root = td.path().join("drafts");
         ensure_root(&root).unwrap();
         let draft = create_dir(&root, "untitled-1").unwrap();
-        fs::write(draft.abs.join("note.md"), "not the main draft").unwrap();
+        // A subdirectory with no root-level file: nothing for the tab
+        // to open, so preflight flags it broken.
+        fs::create_dir_all(draft.abs.join("media")).unwrap();
+        fs::write(draft.abs.join("media/pasted.png"), [1, 2, 3]).unwrap();
 
         let issues = preflight(&root).unwrap();
 
@@ -697,7 +722,7 @@ mod tests {
             issues,
             vec![DraftIssue {
                 name: "untitled-1".to_string(),
-                message: "missing draft.md".to_string(),
+                message: "draft has no primary file".to_string(),
             }]
         );
     }
@@ -754,7 +779,7 @@ mod tests {
     }
 
     #[test]
-    fn inspect_marks_missing_draft_md_broken() {
+    fn inspect_marks_empty_draft_broken() {
         let td = TempDir::new().unwrap();
         let root = td.path().join("drafts");
         ensure_root(&root).unwrap();
@@ -763,6 +788,56 @@ mod tests {
             inspect(&root, "untitled-1"),
             Err(ChanError::DraftBroken { .. })
         ));
+    }
+
+    #[test]
+    fn inspect_treats_a_single_non_markdown_file_as_a_single_file_draft() {
+        let td = TempDir::new().unwrap();
+        let root = td.path().join("drafts");
+        ensure_root(&root).unwrap();
+        let draft = create_dir(&root, "untitled-1").unwrap();
+        fs::write(
+            draft.abs.join("untitled-1.excalidraw"),
+            br#"{"type":"excalidraw","elements":[]}"#,
+        )
+        .unwrap();
+
+        let info = inspect(&root, "untitled-1").unwrap();
+
+        assert_eq!(info.file_count, 1);
+        assert!(!info.has_attachments);
+    }
+
+    #[test]
+    fn promote_single_file_moves_a_diagram_leaf_to_target() {
+        let td = TempDir::new().unwrap();
+        let drafts_root = td.path().join("drafts");
+        let workspace_root = td.path().join("workspace");
+        ensure_root(&drafts_root).unwrap();
+        fs::create_dir_all(workspace_root.join("notes")).unwrap();
+        let draft = create_dir(&drafts_root, "untitled-1").unwrap();
+        fs::write(
+            draft.abs.join("untitled-1.excalidraw"),
+            br#"{"type":"excalidraw","elements":[]}"#,
+        )
+        .unwrap();
+        let workspace_root_canon = workspace_root.canonicalize().unwrap();
+
+        let report = promote(
+            &drafts_root,
+            &workspace_root,
+            &workspace_root_canon,
+            "untitled-1",
+            "notes/diagram.excalidraw",
+        )
+        .unwrap();
+
+        assert_eq!(report.mode, DraftPromoteMode::File);
+        assert!(!drafts_root.join("untitled-1").exists());
+        assert_eq!(
+            fs::read_to_string(workspace_root.join("notes/diagram.excalidraw")).unwrap(),
+            r#"{"type":"excalidraw","elements":[]}"#
+        );
     }
 
     #[test]

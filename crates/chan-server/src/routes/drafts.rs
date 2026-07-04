@@ -24,6 +24,14 @@ use crate::state::AppState;
 
 const NEW_DRAFT_CONTENT: &str = "# Draft\n";
 
+/// Seed for a brand-new diagram: a valid, non-empty Excalidraw scene so
+/// the board opens cleanly and is not treated as an empty file that
+/// auto-discards on close. `ExcalidrawCanvas` parses it as an empty
+/// board. The frontend mirrors this exact string as its diagram seed so
+/// a never-drawn board still discards silently on close.
+const NEW_DIAGRAM_CONTENT: &str =
+    r#"{"type":"excalidraw","version":2,"source":"chan","elements":[],"appState":{},"files":{}}"#;
+
 /// Extract the draft leaf name from a draft public path.
 ///
 /// A draft path is `<drafts_dir>/<name>/...`, so strip the configured
@@ -124,6 +132,54 @@ pub async fn api_create_draft(State(state): State<Arc<AppState>>) -> Response {
 
     let path = format!("{dir}/{name}/draft.md");
     Json(DraftCreateResponse { path, name }).into_response()
+}
+
+/// Create a fresh draft directory + a seeded `<name>.excalidraw` board
+/// inside, mirroring `api_create_draft`. The diagram is a real draft
+/// (promotable + discardable) whose primary file is the Excalidraw
+/// scene rather than `draft.md`.
+pub async fn api_create_diagram(State(state): State<Arc<AppState>>) -> Response {
+    let workspace = state.workspace().clone();
+    // Note the diagram path inside the blocking task, before it returns
+    // to the await, so the watcher's Created event for our own write is
+    // suppressed without the post-await race (see files.rs::api_write_file).
+    let self_writes = Arc::clone(&state.self_writes);
+    let result = tokio::task::spawn_blocking(move || {
+        let (name, path) = create_diagram_sync(&workspace)?;
+        self_writes.note(&path);
+        Ok::<_, chan_workspace::ChanError>((name, path))
+    })
+    .await;
+
+    let (name, path) = match result {
+        Ok(Ok(pair)) => pair,
+        Ok(Err(e)) => return err_from(&e),
+        Err(join) => return err(StatusCode::INTERNAL_SERVER_ERROR, join.to_string()),
+    };
+
+    Json(DraftCreateResponse { path, name }).into_response()
+}
+
+fn create_diagram_sync(
+    workspace: &chan_workspace::Workspace,
+) -> Result<(String, String), chan_workspace::ChanError> {
+    for _ in 0..2 {
+        let name = workspace.next_untitled_draft_name()?;
+        match workspace.create_draft_dir(&name) {
+            Ok(_) => {
+                let path = format!("{}/{name}/{name}.excalidraw", workspace.drafts_dir_name());
+                workspace.write_text(&path, NEW_DIAGRAM_CONTENT)?;
+                return Ok((name, path));
+            }
+            Err(chan_workspace::ChanError::Io(msg)) if msg.contains("already exists") => {
+                continue;
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    Err(chan_workspace::ChanError::Io(
+        "race condition picking next untitled diagram name (retried 2x)".to_string(),
+    ))
 }
 
 fn create_draft_sync(
@@ -274,6 +330,42 @@ mod tests {
 
         assert_eq!(name, "untitled");
         assert_eq!(workspace.read_text(&path).unwrap(), NEW_DRAFT_CONTENT);
+    }
+
+    #[test]
+    fn create_diagram_sync_seeds_a_valid_board_that_inspects_and_promotes() {
+        let (_cfg, root, workspace) = make_workspace();
+
+        let (name, path) = create_diagram_sync(&workspace).unwrap();
+
+        assert_eq!(name, "untitled");
+        assert_eq!(path, ".Drafts/untitled/untitled.excalidraw");
+
+        // The seed is non-empty valid JSON and classifies as editable
+        // text, so the editor opens it as a board.
+        let content = workspace.read_text(&path).unwrap();
+        assert_eq!(content, NEW_DIAGRAM_CONTENT);
+        assert!(!content.is_empty());
+        let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
+        assert_eq!(parsed["type"], "excalidraw");
+        assert_eq!(
+            chan_workspace::fs_ops::classify(&path),
+            chan_workspace::FileClass::Text
+        );
+
+        // It is a real single-file draft: inspects cleanly (no
+        // "missing draft.md" broken) and promotes to an .excalidraw file.
+        let info = workspace.inspect_draft(&name).unwrap();
+        assert!(!info.has_attachments);
+        std::fs::create_dir_all(root.path().join("boards")).unwrap();
+        let promoted = workspace
+            .promote_draft(&name, "boards/diagram.excalidraw")
+            .unwrap();
+        assert_eq!(promoted.target_path, "boards/diagram.excalidraw");
+        assert_eq!(
+            std::fs::read_to_string(root.path().join("boards/diagram.excalidraw")).unwrap(),
+            NEW_DIAGRAM_CONTENT
+        );
     }
 
     #[test]

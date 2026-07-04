@@ -194,13 +194,16 @@ mod tests {
         lib.register_workspace(root.path()).unwrap();
         let workspace = lib.open_workspace(root.path()).unwrap();
         let draft = workspace.create_draft_dir("untitled-1").unwrap();
-        std::fs::write(draft.abs.join("note.md"), "not draft.md").unwrap();
+        // A subdirectory with no root-level file: nothing for the tab to
+        // open, so the draft is broken.
+        std::fs::create_dir_all(draft.abs.join("media")).unwrap();
+        std::fs::write(draft.abs.join("media/pasted.png"), [1, 2, 3]).unwrap();
 
         let warnings = workspace_warnings(&workspace);
 
         assert_eq!(warnings.len(), 1);
         assert_eq!(warnings[0].kind, "broken_draft");
         assert_eq!(warnings[0].path, ".Drafts/untitled-1");
-        assert_eq!(warnings[0].message, "missing draft.md");
+        assert_eq!(warnings[0].message, "draft has no primary file");
     }
 }
