@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Added
+
+- **A Cmd+K command launcher.** A Spotlight-style palette (Cmd+K, Ctrl+K on Linux / Windows) lists every UI action grouped by category, filtered to what the current window and active tab can do, with each command's current chord shown beside it. Type to fuzzy-match over title and keywords, arrow to move, Enter to run, Esc to close; it opens from a focused terminal too. Chords are read-only for now.
+- **New diagram.** Creates a seeded Excalidraw board the way New draft creates a note: a draft directory holding a `<name>.excalidraw` you can draw on, promote to a location on close, or discard. Reachable from the command launcher.
+
+### Removed
+
+- **Export to PDF, everywhere.** The Inspector "Export to PDF" action and its print engine are gone on both web and desktop. On chan-desktop the native macOS export could hang the shell indefinitely, and the feature was inconsistent across web, macOS, and other desktop OSes. The PDF viewer is a separate feature and stays: opening a `.pdf` still works.
+
 ## [v0.63.0] - 2026-07-03
 
 The Rich Prompt composer moves onto the main editor, a devserver whose control script dies keeps a readable terminal and reconnects on demand, and a prerelease tag can no longer push a release candidate onto GA installs.
