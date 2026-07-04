@@ -1157,6 +1157,22 @@ export function activeTerminalTab(): TerminalTab | null {
   return t;
 }
 
+export function activeGraphTab(): GraphTab | null {
+  const p = activePane();
+  if (!p.activeTabId) return null;
+  const t = p.tabs.find((tab) => tab.id === p.activeTabId);
+  if (!t || t.kind !== "graph") return null;
+  return t;
+}
+
+export function activeDashboardTab(): DashboardTab | null {
+  const p = activePane();
+  if (!p.activeTabId) return null;
+  const t = p.tabs.find((tab) => tab.id === p.activeTabId);
+  if (!t || t.kind !== "dashboard") return null;
+  return t;
+}
+
 /// Toggle broadcast SELECT-ALL / DESELECT-ALL for the active terminal.
 /// Chord-driven (Cmd+Shift+I) equivalent of the per-tab "Select All" /
 /// "Deselect All" button. No-op when the active tab isn't a terminal.
