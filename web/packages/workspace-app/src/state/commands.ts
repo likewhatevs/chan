@@ -1,0 +1,176 @@
+// The command catalog: every launcher-invokable action as data. Each
+// entry pairs a stable id with a title, a category for grouping, an
+// availability predicate, and a run() thunk. Chorded commands reuse
+// their SHORTCUTS id so the launcher can show the current chord via
+// chordFor(id) and route run() back through the same dispatch the chord
+// fires; chordless commands live only here and call their action
+// directly. Categories match the groups the launcher renders.
+//
+// Entries register through registerCommands from per-category modules in
+// state/commands/, each imported for its side effect by
+// state/commands/install. Keeping one module per surface lets the
+// command lanes own disjoint files; the launcher reads the merged,
+// context-filtered list. This catalog is also the single command source
+// the pane hamburger and right-click menus can consume.
+
+import { ui } from "./store.svelte";
+import { activePane } from "./tabs.svelte";
+import { windowModeAllowsCommand } from "./windowMode";
+
+export type CommandCategory =
+  | "Global"
+  | "Workspace"
+  | "Search"
+  | "Tabs"
+  | "Panes"
+  | "Editor"
+  | "Terminal"
+  | "Dashboard"
+  | "Graph";
+
+/// Render order for the launcher's category groups. Matches the
+/// brainstorm's grouping.
+export const COMMAND_CATEGORY_ORDER: readonly CommandCategory[] = [
+  "Global",
+  "Workspace",
+  "Search",
+  "Tabs",
+  "Panes",
+  "Editor",
+  "Terminal",
+  "Dashboard",
+  "Graph",
+];
+
+/// The active surface is the kind of the focused pane's active tab, or
+/// null when the pane is empty. Surface commands (Editor / Terminal /
+/// Graph / Dashboard) key their availability off this. The literals
+/// mirror the Tab union's `kind` discriminants.
+export type CommandSurface =
+  | "file"
+  | "terminal"
+  | "graph"
+  | "browser"
+  | "dashboard";
+
+/// The runtime context an availability predicate sees: the window-mode
+/// gates (from the `?kind=` URL) plus the active surface.
+export type CommandContext = {
+  terminalOnly: boolean;
+  terminalControl: boolean;
+  activeSurface: CommandSurface | null;
+};
+
+export type Command = {
+  /// Stable id. Chorded commands reuse their SHORTCUTS id so chordFor(id)
+  /// resolves the current chord; chordless commands pick a unique id in
+  /// the same `app.*` namespace.
+  id: string;
+  title: string;
+  category: CommandCategory;
+  /// Extra terms the type-ahead matches beyond the title (synonyms, the
+  /// surface name, related verbs).
+  keywords?: readonly string[];
+  /// lucide icon name, optional; the launcher falls back to a generic
+  /// glyph when absent.
+  icon?: string;
+  /// Whether the command shows in the given context. Unavailable
+  /// commands are hidden (not shown-disabled) for a clean Spotlight feel.
+  available: (ctx: CommandContext) => boolean;
+  /// Perform the action. Reuse-existing commands dispatch their id
+  /// through the chan:command bridge; chordless commands call their
+  /// action directly.
+  run: () => void;
+};
+
+// ---- registry ----------------------------------------------------------
+
+const registry: Command[] = [];
+
+/// Register a batch of commands. Called at module load from each
+/// per-category module (imported for its side effect by
+/// state/commands/install).
+export function registerCommands(cmds: readonly Command[]): void {
+  registry.push(...cmds);
+}
+
+/// All registered commands, de-duplicated by (id, category, title) so a
+/// module re-evaluated under dev hot-reload can't stack duplicates.
+/// Later registrations win, keeping the freshest run() closure.
+export function allCommands(): Command[] {
+  const byKey = new Map<string, Command>();
+  for (const c of registry) {
+    byKey.set(`${c.id}|${c.category}|${c.title}`, c);
+  }
+  return [...byKey.values()];
+}
+
+/// Commands visible in `ctx`. The launcher groups the result by category
+/// (COMMAND_CATEGORY_ORDER) for display.
+export function availableCommands(ctx: CommandContext): Command[] {
+  return allCommands().filter((c) => c.available(ctx));
+}
+
+// ---- context -----------------------------------------------------------
+
+function activeSurface(): CommandSurface | null {
+  try {
+    const pane = activePane();
+    if (!pane.activeTabId) return null;
+    const tab = pane.tabs.find((t) => t.id === pane.activeTabId);
+    return tab ? tab.kind : null;
+  } catch {
+    // activePane throws when the active node is not a leaf (mid-layout
+    // transition); treat that as no active surface.
+    return null;
+  }
+}
+
+/// Snapshot the current command context. Reads the reactive `ui` flags
+/// and the active tab, so calling this inside a $derived tracks changes.
+export function commandContext(): CommandContext {
+  return {
+    terminalOnly: ui.terminalOnly,
+    terminalControl: ui.terminalControl,
+    activeSurface: activeSurface(),
+  };
+}
+
+// ---- availability helpers ----------------------------------------------
+//
+// Shared predicates so every category module gates the same way instead
+// of re-deriving the rules. Compose them inside a command's `available`.
+
+/// Mirror runCommand's window-mode guard for a command that routes
+/// through a runCommand id. Use for reuse-existing (chorded) commands.
+export function allowedInWindow(id: string, ctx: CommandContext): boolean {
+  return windowModeAllowsCommand(id, ctx);
+}
+
+/// Visible only in a workspace window (never a standalone terminal).
+export function workspaceOnly(ctx: CommandContext): boolean {
+  return !ctx.terminalOnly;
+}
+
+/// Visible only when `surface` is the active tab's kind.
+export function onSurface(
+  ctx: CommandContext,
+  surface: CommandSurface,
+): boolean {
+  return ctx.activeSurface === surface;
+}
+
+// ---- dispatch ----------------------------------------------------------
+
+/// Fire a `chan:command` event so a catalog entry routes through the
+/// same App.svelte dispatch a chord or the native host bridge fires.
+/// Reuse-existing commands run() through this; runCommand re-applies the
+/// window-mode guard, so a dispatch in a disallowed window is a no-op.
+export function dispatchChanCommand(
+  id: string,
+  detail: Record<string, unknown> = {},
+): void {
+  window.dispatchEvent(
+    new CustomEvent("chan:command", { detail: { name: id, ...detail } }),
+  );
+}

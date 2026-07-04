@@ -2635,6 +2635,42 @@ export const searchPanel = $state<{
   query: "",
 });
 
+// ---- command launcher overlay ------------------------------------------
+//
+// The Spotlight-style command palette (Cmd+K). Its `.open` flag is the
+// single source of truth for "is it on screen", so the shared overlay
+// stack in App.svelte tracks it exactly like searchPanel. `query` is
+// the live type-ahead string; it lives here rather than in the
+// component so open always starts from a known-blank state and the
+// overlay can be re-mounted without losing the reset.
+export const launcherPanel = $state<{
+  open: boolean;
+  query: string;
+}>({
+  open: false,
+  query: "",
+});
+
+/// Open the launcher, clearing the query so each invocation starts
+/// blank (the Spotlight convention). Idempotent when already open.
+export function openCommandLauncher(): void {
+  launcherPanel.query = "";
+  launcherPanel.open = true;
+}
+
+/// Close the launcher. Same effect as `closeOverlay("launcher")`, so a
+/// direct close and the Escape/stack route agree.
+export function closeCommandLauncher(): void {
+  launcherPanel.open = false;
+}
+
+/// Toggle the launcher. Bound to `app.launcher.toggle` (Cmd+K); a
+/// second press closes it, matching the search chord's toggle feel.
+export function toggleCommandLauncher(): void {
+  if (launcherPanel.open) closeCommandLauncher();
+  else openCommandLauncher();
+}
+
 // ---- graph overlay -----------------------------------------------------
 //
 // Open + scope picker state, plus a `depth` knob for how far the
@@ -3085,7 +3121,7 @@ function resolveGraphSpawnContext(scopeId: string): SpawnContext {
 // the topmost overlay is visually accessible, the scrim target is
 // naturally the same as the stack top.
 
-export type OverlayId = "search";
+export type OverlayId = "search" | "launcher";
 
 export const overlayStack = $state<{ ids: OverlayId[] }>({ ids: [] });
 
@@ -3111,6 +3147,9 @@ export function closeOverlay(id: OverlayId): void {
     case "search":
       searchPanel.open = false;
       return;
+    case "launcher":
+      launcherPanel.open = false;
+      return;
   }
 }
 
@@ -3123,6 +3162,7 @@ export function closeOverlay(id: OverlayId): void {
 export function syncOverlayStack(): void {
   const open = new Set<OverlayId>();
   if (searchPanel.open) open.add("search");
+  if (launcherPanel.open) open.add("launcher");
   // Drop closed entries while preserving the existing relative
   // order of those that remain.
   const kept = overlayStack.ids.filter((id) => open.has(id));
