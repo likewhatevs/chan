@@ -106,18 +106,6 @@ describe("shared actions section under the filename", () => {
     );
   });
 
-  test("Export to PDF is a markdown-only dropdown action via the print helper", () => {
-    // Gated on markdown files; the selection isn't necessarily open in an
-    // editor, so the handler fetches the file content and prints it.
-    // showExportPdf hides it on non-macOS desktop (no native PDF path).
-    expect(fileInfo).toMatch(
-      /markdown && showExportPdf[\s\S]{1,120}label: "Export to PDF", onClick: \(\) => void doExportPdf\(\)/,
-    );
-    expect(fileInfo).toMatch(
-      /async function doExportPdf\(\): Promise<void> \{[\s\S]*?printMarkdownDocument\(\{[\s\S]*?markdown: file\.content/,
-    );
-  });
-
   test("dir branch renders actions BEFORE the dir stats meta-grid", () => {
     // The dir branch order is: ... badges -> {@render actionsSection()}
     // -> {#if dirStats} meta-grid. The actions must precede the stats.

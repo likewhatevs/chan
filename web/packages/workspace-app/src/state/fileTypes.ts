@@ -289,9 +289,8 @@ export function isPdf(path: string): boolean {
   return extOf(path) === "pdf";
 }
 
-/// True for markdown-class files (.md / .txt). These are the files the
-/// "Export to PDF" action can render through the print helper, so the
-/// inspector gates that action on this predicate.
+/// True for markdown-class files (.md / .txt): the note-shaped text
+/// files chan treats as prose documents rather than code or data.
 export function isMarkdown(path: string): boolean {
   return MARKDOWN_EXTENSIONS.has(extOf(path) ?? "");
 }

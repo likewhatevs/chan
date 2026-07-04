@@ -34,40 +34,6 @@ export function isTauriDesktop(): boolean {
   return Boolean(w.__TAURI__ || w.__TAURI_INTERNALS__);
 }
 
-/// Host OS of the chan-desktop shell, resolved once and cached.
-///
-/// `null` means "not yet resolved" or "not on desktop". We ask the
-/// Rust side (`platform_os`, which returns `std::env::consts::OS`)
-/// rather than sniffing `navigator.userAgent`: the compiled-in
-/// target triple is exact, whereas a webview UA string can be
-/// patched or spoofed and is awkward to map to a clean OS token.
-/// Resolved values: "macos" | "linux" | "windows" | other.
-let cachedDesktopOs: string | null = null;
-
-/// Resolve (and cache) the desktop host OS. Returns `null` on web
-/// (no Tauri) or if the IPC fails. Callers that need the value at
-/// mount time should `await` this once and store the result; the
-/// cache makes repeat calls cheap.
-export async function desktopOs(): Promise<string | null> {
-  if (!isTauriDesktop()) return null;
-  if (cachedDesktopOs) return cachedDesktopOs;
-  try {
-    const os = await tauriInvoke<string>("platform_os");
-    cachedDesktopOs = os;
-    return os;
-  } catch (err) {
-    console.warn("desktopOs: platform_os IPC failed", err);
-    return null;
-  }
-}
-
-/// True only inside chan-desktop running on macOS. The native PDF
-/// export path (WKWebView `createPDF`) exists only on macOS; web
-/// keeps `window.print()` and other desktop OSes hide the button.
-export async function isMacDesktop(): Promise<boolean> {
-  return (await desktopOs()) === "macos";
-}
-
 /// Thin wrapper over Tauri's invoke. Resolves whichever invoke
 /// shape the running Tauri version exposes. Throws when called
 /// outside a Tauri webview so callers can branch on

@@ -104,14 +104,6 @@ describe("Find / Copy paths", () => {
     );
   });
 
-  test("Export to PDF is NOT in the editor menu (lives in the Inspector)", () => {
-    // Export to PDF lives in the file Inspector (FileInfoBody), shown
-    // for markdown files, not in the editor right-click menu. The
-    // editor does not reference the print helper.
-    expect(editor).not.toContain("Export to PDF");
-    expect(editor).not.toContain("printMarkdownDocument");
-  });
-
   test("Copy path to file + Copy path to $CWD entries", () => {
     expect(editor).toMatch(
       /<span class="mbtn-label">Copy path to file<\/span>/,
