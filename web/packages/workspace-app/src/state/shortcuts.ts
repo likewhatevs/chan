@@ -92,6 +92,18 @@ export const SHORTCUTS: readonly Shortcut[] = [
     group: "App",
     escapeTerminal: true,
   },
+  // Command launcher (Cmd+K): a Spotlight-style palette listing every
+  // action available in the current window and active surface.
+  // escapeTerminal so it opens from a focused terminal like the other
+  // App chords.
+  {
+    id: "app.launcher.toggle",
+    label: "Command launcher",
+    web: "Mod+K",
+    native: "Mod+K",
+    group: "App",
+    escapeTerminal: true,
+  },
   // Team Work chord: Mod+P native / Cmd+Alt+P web-Mac so the
   // spawn-chord family (Cmd+T/O/P, Cmd+Shift+M) reads uniformly.
   // Hybrid Nav `p` covers Win/Linux web where Cmd+P is the
