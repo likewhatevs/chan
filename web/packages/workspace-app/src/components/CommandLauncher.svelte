@@ -317,7 +317,7 @@
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div class="launcher" class:has-results={hasQuery} onkeydown={onKeydown}>
     <div class="search-row">
-      <SearchIcon size={28} strokeWidth={1.45} aria-hidden="true" />
+      <ChevronRight size={28} strokeWidth={1.45} aria-hidden="true" />
       <input
         class="search"
         bind:this={inputEl}
@@ -328,8 +328,8 @@
         aria-controls={LIST_ID}
         aria-activedescendant={flat.length ? optionId(highlight) : undefined}
         aria-autocomplete="list"
-        aria-label="Search commands"
-        placeholder="Search"
+        aria-label="Command"
+        placeholder="Command"
         autocomplete="off"
         autocorrect="off"
         autocapitalize="off"
