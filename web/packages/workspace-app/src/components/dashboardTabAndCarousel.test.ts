@@ -406,33 +406,27 @@ describe("Dashboard back-of-card is per-slot (DashboardSlotBack)", () => {
   });
 });
 
-describe("EmptyPaneWelcome static spawn surface", () => {
-  test("EmptyPaneWelcome.svelte renders the 5-tile spawn grid + Dashboard tile", async () => {
+describe("EmptyPaneWelcome empty-pane surface", () => {
+  test("EmptyPaneWelcome.svelte shows the workspace path + waves and auto-opens the launcher", async () => {
     const welcome = (await import("./EmptyPaneWelcome.svelte?raw"))
       .default as string;
+    // The surface is the mark, the absolute workspace path, and the
+    // dotted wave field; it carries no spawn buttons of its own.
+    expect(welcome).toMatch(/<div class="welcome-mark"><\/div>/);
+    expect(welcome).toMatch(/<DottedSurface \/>/);
     expect(welcome).toMatch(
-      /const FULL_SPAWN_ENTRIES: SpawnRow\[\] = \[[\s\S]{1,200}label: "New Draft",[\s\S]{1,1000}label: "Terminal",[\s\S]{1,800}label: "File Browser",[\s\S]{1,800}label: "Team Work",[\s\S]{1,800}label: "Graph",/,
+      /class="welcome-name" title=\{workspace\.info\.root\}[\s\S]{1,120}\{workspace\.info\.root\}/,
     );
-    // Secondary tile row: Search + Dashboard, both with chord hints
-    // via chordLabel(row.chordId), in a 2-column grid.
+    // The command launcher auto-opens when the surface appears.
     expect(welcome).toMatch(
-      /const FULL_SECONDARY_ENTRIES: SpawnRow\[\] = \[[\s\S]{1,800}label: "Search",[\s\S]{1,200}command: "app\.search\.toggle",[\s\S]{1,800}label: "Dashboard",[\s\S]{1,200}command: "app\.dashboard\.open",/,
+      /onMount\(\(\) => \{[\s\S]{0,80}openCommandLauncher\(\);/,
     );
-    expect(welcome).toMatch(
-      /import \{[\s\S]{1,200}\bSearch\b[\s\S]{1,200}\} from "lucide-svelte"/,
-    );
-    expect(welcome).toMatch(
-      /spawn-row spawn-row-secondary[\s\S]{1,1000}<span class="spawn-chord">\{chordLabel\(row\.chordId\)\}<\/span>/,
-    );
-    expect(welcome).not.toMatch(/<span class="spawn-chord"><\/span>/);
-    expect(welcome).toMatch(
-      /\.spawn-row-secondary \{[\s\S]{1,400}grid-template-columns: repeat\(2,/,
-    );
-    // No "scope for Graph" hint in the welcome surface.
+    // No spawn grid, secondary band, chord hints, or graph-scope hint.
+    expect(welcome).not.toMatch(/spawn-row/);
+    expect(welcome).not.toMatch(/SpawnRow/);
+    expect(welcome).not.toMatch(/spawn-chord/);
+    expect(welcome).not.toMatch(/chordLabel/);
     expect(welcome).not.toMatch(/class="welcome-hint"/);
-    expect(welcome).not.toMatch(/Each pane's visible tab is part of the scope/);
-    // No `<p>` paragraph rendering the hint in the markup.
-    expect(welcome).not.toMatch(/<p[\s\S]{0,200}scope[\s\S]{0,40}for Graph/);
   });
 
   test("Pane.svelte mounts EmptyPaneWelcome (not EmptyPaneCarousel) on lone-pane empty case", async () => {
