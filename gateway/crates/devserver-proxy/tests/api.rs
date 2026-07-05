@@ -178,7 +178,7 @@ impl TestApp {
         // devserver_id, so the stub returns it; the registry's second key
         // is this value (Hello.workspace is not the identity source).
         self.stub.add(token, uid, username, devserver_id);
-        spawn_tunnel_client(self.tunnel_addr, &token, devserver_id, router).await;
+        spawn_tunnel_client(self.tunnel_addr, token, devserver_id, router).await;
         for _ in 0..50 {
             if self.registry.get(username, devserver_id).is_some() {
                 return;
