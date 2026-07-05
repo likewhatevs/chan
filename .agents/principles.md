@@ -12,7 +12,7 @@ No Node.js, no Python, no native daemons at runtime. The frontend embeds at buil
 
 The HTTP server binds `127.0.0.1` by default. Auth is a per-launch bearer token printed once on stderr and appended to the launch URL. No TLS at the local hop.
 
-Tunnel mode (`chan devserver --tunnel-token ...`, or `CHAN_TUNNEL_TOKEN` env var) replaces the local listener with a `chan-tunnel-client` dial to `workspace.chan.app/v1/tunnel`. The workspace is then published at `{user}.workspace.chan.app/{workspace}/*` over yamux substreams. The single-user, single-machine assumption still holds: one chan devserver process owns the workspace's writes; the tunnel just relocates the inbound transport. The bearer-token gate is auto-disabled in tunnel mode (the gateway in front of workspace.chan.app is the trust boundary; default behavior 404s anonymous visitors, opt out with `--tunnel-public`). Wire protocol lives in `crates/chan-tunnel-proto`.
+Tunnel mode (`chan devserver --tunnel-token ...`, or `CHAN_TUNNEL_TOKEN` env var) keeps the local management listener and also dials `devserver.chan.app/v1/tunnel` through `chan-tunnel-client`. The devserver is then published at `{user}.devserver.chan.app/{workspace}/*` over yamux substreams. The single-user, single-machine assumption still holds: one chan devserver process owns the workspace's writes; the tunnel just relocates the inbound transport. Local management remains bearer-gated. Tunnel-origin requests bypass local bearer auth only after devserver-proxy authenticates the browser at the gateway edge and forwards the request over the authenticated tunnel with a signed caller assertion. Wire protocol lives in `crates/chan-tunnel-proto`.
 
 ## App-level vs core
 

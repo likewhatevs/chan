@@ -4,7 +4,7 @@ Public-facing service at devserver.chan.app (apex) and `*.devserver.chan.app` (w
 
 ## Role in the system
 
-devserver-proxy is the surface where a workspace is served in the browser. It does NOT read identity's `id_session` cookie. Entry is gated by the devserver-gate handoff: identity mints a short-lived entry JWT and 303s the browser to `{user}.devserver.<domain>/{workspace}/?t=<jwt>`; devserver-proxy verifies it (signature + `aud` = inbound host + `drv`), mints its own host-only, path-scoped `devserver_gate` cookie, and forwards authenticated traffic to the right `chan devserver` peer through a yamux substream owned by an active tunnel. The `aud`-equals-inbound-host check is what enforces tenant isolation.
+devserver-proxy is the surface where a devserver is served in the browser. It does NOT read identity's `id_session` cookie. Entry is gated by the devserver-gate handoff: identity mints a short-lived entry JWT and 303s the browser to `{user}.devserver.<domain>/{workspace}/?t=<jwt>` (or the devserver root for owner launcher opens); devserver-proxy verifies it (signature + `aud` = inbound host + `drv`), mints its own host-only `Path=/` `devserver_gate` cookie, and forwards authenticated traffic to the right `chan devserver` peer through a yamux substream owned by an active tunnel. The `aud`-equals-inbound-host check is what enforces user-to-user isolation.
 
 ## Build
 

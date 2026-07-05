@@ -8,7 +8,7 @@ It mirrors the production definitions in the sibling `chan-prod-setup` repo. Per
 
 ## Why the all-container, prod-like stack
 
-The gateway's cross-tenant isolation is carried by two host-scoped cookies: `id_session` (host-only on `id.<domain>`) and `devserver_gate` (host-only and path-scoped on `{user}.devserver.<domain>/{workspace}/`). No `.<domain>`-wide cookie exists, so a browser never auto-attaches an identity session to a fetch on another tenant's subdomain. That design, plus the reverse-proxy header hygiene (hop-by-hop stripping, dropped inbound Host/Cookie/Authorization, recomputed `X-Forwarded-*`), only fully exercises behind a real TLS terminator with real subdomains. Running the same containers and the same nginx as prod is how you exercise it.
+The gateway's cross-tenant isolation is carried by two host-scoped cookies: `id_session` (host-only on `id.<domain>`) and `devserver_gate` (host-only on `{user}.devserver.<domain>`, scoped `Path=/` for the whole devserver). No `.<domain>`-wide cookie exists, so a browser never auto-attaches an identity session to a fetch on another tenant's subdomain. The whole-host devserver cookie is safe because the grant is whole-devserver; user-to-user isolation rides the host-only cookie plus the `aud` claim. That design, plus the reverse-proxy header hygiene (hop-by-hop stripping, dropped inbound Host/Cookie/Authorization, recomputed `X-Forwarded-*`), only fully exercises behind a real TLS terminator with real subdomains. Running the same containers and the same nginx as prod is how you exercise it.
 
 ## Topology
 

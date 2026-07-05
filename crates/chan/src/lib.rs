@@ -1596,8 +1596,9 @@ async fn unserve_running(
     // closes) but never updates the desktop's runtime map, so the launcher shows
     // the workspace stale-on and a restart resurrects it. The well-known handoff
     // socket sidesteps that and the pid-discovery miss (a GUI desktop whose
-    // TMPDIR differs from the terminal's). Gated like the open handoff: only the
-    // Desktop personality or the forced shim hands off, never a plain standalone
+    // runtime socket directory differs from the terminal's). Gated like the
+    // open handoff: only the Desktop personality or the forced shim hands off,
+    // never a plain standalone
     // binary; `CHAN_NO_DESKTOP_HANDOFF` opts out. Any non-`HandedOff` outcome
     // (no desktop, skew, error) drops through to the control-socket path below.
     let want_desktop_handoff = (personality == Personality::Desktop
@@ -1662,19 +1663,62 @@ async fn unserve_running(
 /// one; a multi-tenant devserver has one per tenant under the same pid.
 /// Either way every socket routes the `Close { path }` verb to the server,
 /// which acts by path -- so the first match is sufficient and we must NOT
-/// broadcast (once the first tenant unmounts, the rest 404). On unix the
-/// socket is a `.sock` file in `$TMPDIR`; on Windows it is a named pipe under
-/// the `\\.\pipe\` namespace.
+/// broadcast (once the first tenant unmounts, the rest 404). On Unix the
+/// socket is a `.sock` file in `$XDG_RUNTIME_DIR` when present and `/tmp`
+/// otherwise; on Windows it is a named pipe under the `\\.\pipe\` namespace.
 #[cfg(unix)]
 fn control_socket_for_pid(pid: u32) -> Option<PathBuf> {
-    control_socket_for_pid_in(&std::env::temp_dir(), pid, true)
+    control_socket_for_pid_in_dirs(unix_control_socket_dirs(), pid, true)
+}
+
+#[cfg(unix)]
+fn unix_control_socket_dirs() -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    if let Some(dir) = std::env::var_os("XDG_RUNTIME_DIR")
+        .filter(|dir| !dir.is_empty())
+        .map(PathBuf::from)
+    {
+        push_unique_path(&mut dirs, dir);
+    }
+    push_unique_path(&mut dirs, PathBuf::from("/tmp"));
+    push_unique_path(&mut dirs, std::env::temp_dir());
+    dirs
 }
 
 #[cfg(windows)]
 fn control_socket_for_pid(pid: u32) -> Option<PathBuf> {
     // Windows control sockets are named pipes under the `\\.\pipe\`
     // namespace, which is directory-enumerable; the names carry the pid.
-    control_socket_for_pid_in(std::path::Path::new(r"\\.\pipe\"), pid, false)
+    control_socket_for_pid_in_dirs([std::path::Path::new(r"\\.\pipe\")], pid, false)
+}
+
+fn control_socket_for_pid_in_dirs<I, P>(
+    dirs: I,
+    pid: u32,
+    require_sock_ext: bool,
+) -> Option<PathBuf>
+where
+    I: IntoIterator<Item = P>,
+    P: AsRef<Path>,
+{
+    let mut seen = Vec::new();
+    for dir in dirs {
+        let dir = dir.as_ref();
+        if seen.iter().any(|seen| seen == dir) {
+            continue;
+        }
+        seen.push(dir.to_path_buf());
+        if let Some(socket) = control_socket_for_pid_in(dir, pid, require_sock_ext) {
+            return Some(socket);
+        }
+    }
+    None
+}
+
+fn push_unique_path(paths: &mut Vec<PathBuf>, path: PathBuf) {
+    if !paths.iter().any(|existing| existing == &path) {
+        paths.push(path);
+    }
 }
 
 fn control_socket_for_pid_in(dir: &Path, pid: u32, require_sock_ext: bool) -> Option<PathBuf> {
@@ -5596,6 +5640,18 @@ mod tests {
         std::fs::write(&want, b"").unwrap();
         assert_eq!(
             control_socket_for_pid_in(dir.path(), 4242, true),
+            Some(want)
+        );
+    }
+
+    #[test]
+    fn control_socket_for_pid_searches_candidate_dirs() {
+        let first = tempfile::TempDir::new().unwrap();
+        let second = tempfile::TempDir::new().unwrap();
+        let want = second.path().join("chan-control-4242-ef01.sock");
+        std::fs::write(&want, b"").unwrap();
+        assert_eq!(
+            control_socket_for_pid_in_dirs([first.path(), second.path()], 4242, true),
             Some(want)
         );
     }

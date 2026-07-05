@@ -2,16 +2,18 @@
 //! process holds a
 //! workspace's writer flock and its per-pid control socket; `chan close
 //! <path>` discovers that process from the on-disk `writer.lock` record
-//! (`{pid, …}`) → its control socket (`$TMPDIR/chan-control-<pid>-*.sock`),
+//! (`{pid, …}`) -> its control socket
+//! (`$XDG_RUNTIME_DIR/chan-control-<pid>-*.sock`),
 //! sends the `Close` verb, and the serve process exits + releases the flock.
 //!
 //! Requirement under test: on a workspace that is being served, calling
 //! `close` sends the signal that tears down the serving process.
 //!
 //! Isolation: a throwaway `HOME` redirects the whole `~/.chan` library, and a
-//! shared socket dir is set as BOTH `TMPDIR` and `XDG_RUNTIME_DIR` on the serve
-//! child AND the close invocation — the per-pid control-socket discovery only
-//! resolves when both processes agree on where the socket lives.
+//! shared socket dir is set as `XDG_RUNTIME_DIR` on the serve child and the
+//! close invocation, with `TMPDIR` matching for older binaries. The per-pid
+//! control-socket discovery only resolves when both processes agree on where
+//! the socket lives.
 //! `--standalone` and `CHAN_NO_DESKTOP_HANDOFF` keep the serve from handing off
 //! to a running chan-desktop. Unix-only: the control socket is a Unix socket and
 //! the discovery glob is unix-first (Windows named pipes aren't enumerable here).
@@ -35,8 +37,8 @@ const READY_BUDGET: Duration = Duration::from_secs(30);
 const EXIT_BUDGET: Duration = Duration::from_secs(15);
 
 /// Throwaway `HOME` (the whole `~/.chan` library) + a shared socket dir set as
-/// both `TMPDIR` (where the per-pid control socket lives) and `XDG_RUNTIME_DIR`,
-/// so the serve and close processes agree on the control-socket location.
+/// `XDG_RUNTIME_DIR` (where the per-pid control socket lives) and `TMPDIR`, so
+/// the serve and close processes agree on the control-socket location.
 /// Dropping it removes everything.
 struct Sandbox {
     home: TempDir,

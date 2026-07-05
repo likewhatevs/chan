@@ -70,7 +70,7 @@ Public-facing service for the chan-gateway suite. Apex
 devserver.chan.app carries the tunnel registration endpoint plus the
 admin tree; wildcard *.devserver.chan.app reverse-proxies tenant
 content into registered chan-serve peers, gated by a host-only,
-path-scoped JWT cookie minted by devserver-proxy on first entry. No
+Path=/ JWT cookie minted by devserver-proxy on first entry. No
 SPA in this binary; the dashboard lives at id.chan.app."""
 section = "net"
 priority = "optional"

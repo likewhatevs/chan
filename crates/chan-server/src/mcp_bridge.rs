@@ -33,7 +33,8 @@ use tokio::task::JoinHandle;
 
 use crate::control_socket::transport;
 
-/// Pick a unique IPC endpoint path: `/tmp/chan-mcp-<pid>-<hex>.sock` on unix,
+/// Pick a unique IPC endpoint path: `$XDG_RUNTIME_DIR/chan-mcp-<pid>-<hex>.sock`
+/// on Unix when available, `/tmp/chan-mcp-<pid>-<hex>.sock` otherwise, and
 /// `\\.\pipe\chan-mcp-<pid>-<hex>` on Windows.
 pub fn pick_socket_path() -> PathBuf {
     pick_named_socket_path("mcp")
@@ -46,15 +47,28 @@ fn random_suffix() -> String {
 }
 
 /// macOS caps `sun_path` at 104 bytes, so the suffix is short and the
-/// directory short; `/tmp/chan-<name>-<pid>-<8 hex>.sock` fits well within
-/// that. On Windows a named pipe is `\\.\pipe\chan-<name>-<pid>-<8 hex>`.
+/// no-XDG fallback stays in short `/tmp`; `/tmp/chan-<name>-<pid>-<8 hex>.sock`
+/// fits well within that. On Windows a named pipe is
+/// `\\.\pipe\chan-<name>-<pid>-<8 hex>`.
 #[cfg(unix)]
 pub(crate) fn pick_named_socket_path(name: &str) -> PathBuf {
-    std::env::temp_dir().join(format!(
+    unix_socket_dir().join(format!(
         "chan-{name}-{}-{}.sock",
         std::process::id(),
         random_suffix()
     ))
+}
+
+#[cfg(unix)]
+fn xdg_runtime_dir() -> Option<PathBuf> {
+    std::env::var_os("XDG_RUNTIME_DIR")
+        .filter(|dir| !dir.is_empty())
+        .map(PathBuf::from)
+}
+
+#[cfg(unix)]
+fn unix_socket_dir() -> PathBuf {
+    xdg_runtime_dir().unwrap_or_else(|| PathBuf::from("/tmp"))
 }
 
 #[cfg(windows)]
@@ -93,7 +107,7 @@ pub async fn run_stdio_proxy(socket: PathBuf) -> std::io::Result<()> {
 /// named pipes are not filesystem nodes, so Windows just connects.
 #[cfg(unix)]
 async fn connect_mcp(socket: &Path) -> std::io::Result<transport::Client> {
-    connect_mcp_in(socket, &std::env::temp_dir()).await
+    connect_mcp_in(socket, mcp_socket_fallback_dirs(socket)).await
 }
 
 #[cfg(not(unix))]
@@ -102,11 +116,15 @@ async fn connect_mcp(socket: &Path) -> std::io::Result<transport::Client> {
 }
 
 #[cfg(unix)]
-async fn connect_mcp_in(socket: &Path, fallback_dir: &Path) -> std::io::Result<transport::Client> {
+async fn connect_mcp_in<I, P>(socket: &Path, fallback_dirs: I) -> std::io::Result<transport::Client>
+where
+    I: IntoIterator<Item = P>,
+    P: AsRef<Path>,
+{
     match transport::connect(socket).await {
         Ok(client) => Ok(client),
         Err(primary) if should_try_mcp_socket_fallback(&primary) => {
-            for candidate in mcp_socket_fallback_candidates_in(fallback_dir, socket) {
+            for candidate in mcp_socket_fallback_candidates_in(fallback_dirs, socket) {
                 if let Ok(client) = transport::connect(&candidate).await {
                     tracing::warn!(
                         configured = %socket.display(),
@@ -123,6 +141,24 @@ async fn connect_mcp_in(socket: &Path, fallback_dir: &Path) -> std::io::Result<t
 }
 
 #[cfg(unix)]
+fn mcp_socket_fallback_dirs(socket: &Path) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    if let Some(parent) = socket.parent().filter(|dir| !dir.as_os_str().is_empty()) {
+        push_unique_path(&mut dirs, parent.to_path_buf());
+    }
+    push_unique_path(&mut dirs, unix_socket_dir());
+    push_unique_path(&mut dirs, PathBuf::from("/tmp"));
+    dirs
+}
+
+#[cfg(unix)]
+fn push_unique_path(paths: &mut Vec<PathBuf>, path: PathBuf) {
+    if !paths.iter().any(|existing| existing == &path) {
+        paths.push(path);
+    }
+}
+
+#[cfg(unix)]
 fn should_try_mcp_socket_fallback(err: &std::io::Error) -> bool {
     matches!(
         err.kind(),
@@ -131,31 +167,45 @@ fn should_try_mcp_socket_fallback(err: &std::io::Error) -> bool {
 }
 
 #[cfg(unix)]
-fn mcp_socket_fallback_candidates_in(dir: &Path, preferred: &Path) -> Vec<PathBuf> {
-    let read_dir = match std::fs::read_dir(dir) {
-        Ok(read_dir) => read_dir,
-        Err(_) => return Vec::new(),
-    };
-    let mut candidates: Vec<(std::time::SystemTime, PathBuf)> = read_dir
-        .filter_map(|entry| entry.ok())
-        .filter_map(|entry| {
-            let path = entry.path();
-            if path == preferred {
-                return None;
-            }
-            let name = path.file_name()?.to_str()?;
-            if !name.starts_with("chan-mcp-") || !name.ends_with(".sock") {
-                return None;
-            }
-            let modified = entry
-                .metadata()
-                .and_then(|metadata| metadata.modified())
-                .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
-            Some((modified, path))
-        })
-        .collect();
-    candidates.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
-    candidates.into_iter().map(|(_, path)| path).collect()
+fn mcp_socket_fallback_candidates_in<I, P>(dirs: I, preferred: &Path) -> Vec<PathBuf>
+where
+    I: IntoIterator<Item = P>,
+    P: AsRef<Path>,
+{
+    let mut out = Vec::new();
+    let mut seen_dirs = Vec::new();
+    for dir in dirs {
+        let dir = dir.as_ref();
+        if seen_dirs.iter().any(|seen| seen == dir) {
+            continue;
+        }
+        seen_dirs.push(dir.to_path_buf());
+        let read_dir = match std::fs::read_dir(dir) {
+            Ok(read_dir) => read_dir,
+            Err(_) => continue,
+        };
+        let mut candidates: Vec<(std::time::SystemTime, PathBuf)> = read_dir
+            .filter_map(|entry| entry.ok())
+            .filter_map(|entry| {
+                let path = entry.path();
+                if path == preferred {
+                    return None;
+                }
+                let name = path.file_name()?.to_str()?;
+                if !name.starts_with("chan-mcp-") || !name.ends_with(".sock") {
+                    return None;
+                }
+                let modified = entry
+                    .metadata()
+                    .and_then(|metadata| metadata.modified())
+                    .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+                Some((modified, path))
+            })
+            .collect();
+        candidates.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+        out.extend(candidates.into_iter().map(|(_, path)| path));
+    }
+    out
 }
 
 /// Bridge handle returned from `start`. Drop = abort the accept loop
@@ -244,8 +294,20 @@ mod tests {
             let _ = listener.accept().await.unwrap();
         });
 
-        let client = connect_mcp_in(&preferred, dir.path()).await.unwrap();
+        let client = connect_mcp_in(&preferred, [dir.path()]).await.unwrap();
         drop(client);
         accept.await.unwrap();
+    }
+
+    #[test]
+    fn fallback_dirs_cover_configured_runtime_and_tmp_once() {
+        let configured = Path::new("/configured/chan-mcp-old.sock");
+        let dirs = mcp_socket_fallback_dirs(configured);
+        assert!(dirs.contains(&PathBuf::from("/configured")));
+        assert!(dirs.contains(&PathBuf::from("/tmp")));
+        let mut unique = dirs.clone();
+        unique.sort();
+        unique.dedup();
+        assert_eq!(dirs.len(), unique.len());
     }
 }

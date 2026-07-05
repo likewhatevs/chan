@@ -624,6 +624,7 @@ async fn serve_connection(conn: transport::Conn, ctx: ControlSocketCtx) {
 pub(crate) mod transport {
     #[cfg(unix)]
     mod imp {
+        use std::os::unix::fs::PermissionsExt;
         use std::path::Path;
 
         use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
@@ -640,7 +641,9 @@ pub(crate) mod transport {
         /// crashed prior server can leave the path occupied).
         pub fn bind(path: &Path) -> std::io::Result<Listener> {
             let _ = std::fs::remove_file(path);
-            Ok(Listener(UnixListener::bind(path)?))
+            let listener = UnixListener::bind(path)?;
+            let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+            Ok(Listener(listener))
         }
 
         /// Connect to a bound transport as a client.
@@ -3094,7 +3097,18 @@ fn parent_rel(rel: &str) -> String {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
     use serde_json::Value;
+
+    #[tokio::test]
+    async fn unix_transport_bind_sets_socket_mode_0600() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("chan-control-mode.sock");
+        let _listener = transport::bind(&path).unwrap();
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+    }
 
     #[test]
     fn looks_like_html_matches_documents_not_fragments() {

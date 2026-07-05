@@ -8,7 +8,7 @@
 //! * `typ: "entry"` (issued by identity, lives in `?t=` URL param,
 //!   30s exp). After successful verification devserver-proxy mints a
 //!   session token of the same envelope but with `typ: "session"`,
-//!   sets it as a `Path=/<workspace>/` host-only cookie, and 303s to the
+//!   sets it as a host-only `Path=/` cookie, and 303s to the
 //!   clean URL.
 //! * `typ: "session"` (issued and verified by devserver-proxy, lives in
 //!   the `devserver_gate` cookie, 24h exp).

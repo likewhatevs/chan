@@ -10,7 +10,7 @@
 //!     A single router dispatches on the `Host` header. devserver-proxy
 //!     reads no session cookie. The proxy gate uses a devserver-gate JWT
 //!     (HS256, secret shared with identity-service) carried in the
-//!     entry URL or in a host-only, path-scoped `devserver_gate` cookie.
+//!     entry URL or in a host-only `Path=/` `devserver_gate` cookie.
 //!
 //!   * `tunnel_bind_addr` (devserver.chan.app apex, behind nginx
 //!     `grpc_pass` on `/v1/tunnel`): h2c handshake for chan-tunnel

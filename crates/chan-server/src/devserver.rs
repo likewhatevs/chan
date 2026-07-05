@@ -2599,6 +2599,7 @@ mod tests {
         let home = tempfile::tempdir().expect("home");
         let ws = tempfile::tempdir().expect("workspace");
         let owner_ws = tempfile::tempdir().expect("owner workspace");
+        let non_owner_ws = tempfile::tempdir().expect("non-owner workspace");
         let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
         let state = test_state(home.path(), addr);
         let host = state.host.clone();
@@ -2639,11 +2640,30 @@ mod tests {
                 .body(Body::from(body))
                 .unwrap()
         };
+        let non_owner_add_req = || {
+            let body = format!(r#"{{"path":{:?}}}"#, non_owner_ws.path().to_string_lossy());
+            HttpRequest::builder()
+                .method("POST")
+                .uri("/api/library/workspaces")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header("x-forwarded-host", "owner.dev")
+                .header(
+                    chan_tunnel_proto::gateway_assertion::HEADER_NAME,
+                    test_gateway_assertion(&assertion, "owner.dev", "editor"),
+                )
+                .body(Body::from(body))
+                .unwrap()
+        };
 
         // Security: a tunnel-origin workspace mutation is refused 403 even though
         // the shared surface is mutable when there is no owner assertion.
         let refused = tunnel.clone().oneshot(add_req(false)).await.unwrap();
         assert_eq!(refused.status(), StatusCode::FORBIDDEN);
+
+        // A valid non-owner gateway assertion may read the launcher but still
+        // cannot mutate `/api/library/*`.
+        let non_owner_refused = tunnel.clone().oneshot(non_owner_add_req()).await.unwrap();
+        assert_eq!(non_owner_refused.status(), StatusCode::FORBIDDEN);
 
         // The gateway owner assertion unlocks the full launcher over the tunnel.
         let owner_added = tunnel.clone().oneshot(owner_add_req()).await.unwrap();

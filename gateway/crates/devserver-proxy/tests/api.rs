@@ -162,10 +162,22 @@ impl TestApp {
 
     async fn register_tunnel(&self, username: &str, devserver_id: &str, uid: Uuid, router: Router) {
         let token = format!("tok-{}", Uuid::new_v4().simple());
+        self.register_tunnel_with_token(&token, username, devserver_id, uid, router)
+            .await;
+    }
+
+    async fn register_tunnel_with_token(
+        &self,
+        token: &str,
+        username: &str,
+        devserver_id: &str,
+        uid: Uuid,
+        router: Router,
+    ) {
         // The tunnel-server keys the registration on the token-resolved
         // devserver_id, so the stub returns it; the registry's second key
         // is this value (Hello.workspace is not the identity source).
-        self.stub.add(&token, uid, username, devserver_id);
+        self.stub.add(token, uid, username, devserver_id);
         spawn_tunnel_client(self.tunnel_addr, &token, devserver_id, router).await;
         for _ in 0..50 {
             if self.registry.get(username, devserver_id).is_some() {
@@ -287,12 +299,22 @@ async fn send_admin(
 /// build URLs and cookies the proxy gate will accept (or to forge
 /// near-misses for the negative cases).
 fn mint(typ: devserver_gate::TokenType, sub: Uuid, drv: &str, aud: &str) -> String {
+    mint_role(typ, sub, "owner", drv, aud)
+}
+
+fn mint_role(
+    typ: devserver_gate::TokenType,
+    sub: Uuid,
+    role: &str,
+    drv: &str,
+    aud: &str,
+) -> String {
     match typ {
         devserver_gate::TokenType::Entry => {
-            devserver_gate::encode_entry(DEVSERVER_GATE_SECRET, sub, "owner", drv, aud).unwrap()
+            devserver_gate::encode_entry(DEVSERVER_GATE_SECRET, sub, role, drv, aud).unwrap()
         }
         devserver_gate::TokenType::Session => {
-            devserver_gate::encode_session(DEVSERVER_GATE_SECRET, sub, "owner", drv, aud).unwrap()
+            devserver_gate::encode_session(DEVSERVER_GATE_SECRET, sub, role, drv, aud).unwrap()
         }
     }
 }
@@ -306,6 +328,17 @@ fn host_for(user: &str) -> String {
 /// the gate now that there is no un-gated public path.
 fn session_cookie(sub: Uuid, workspace: &str, host: &str) -> String {
     let session = mint(devserver_gate::TokenType::Session, sub, workspace, host);
+    format!("devserver_gate={session}")
+}
+
+fn session_cookie_role(sub: Uuid, role: &str, workspace: &str, host: &str) -> String {
+    let session = mint_role(
+        devserver_gate::TokenType::Session,
+        sub,
+        role,
+        workspace,
+        host,
+    );
     format!("devserver_gate={session}")
 }
 
@@ -1010,6 +1043,53 @@ async fn authorization_header_stripped_from_upstream() {
         headers.get(header::AUTHORIZATION).is_none(),
         "Authorization header must be stripped before reaching upstream"
     );
+    app.cleanup().await;
+}
+
+#[tokio::test]
+async fn gateway_assertion_matches_authenticated_session() {
+    let app = TestApp::new().await;
+    let owner = Uuid::new_v4();
+    let caller = Uuid::new_v4();
+    let devserver_id = "blog";
+    let tunnel_token = "tok-gateway-assertion";
+    let captured = Captured::default();
+    app.register_tunnel_with_token(
+        tunnel_token,
+        "alice",
+        devserver_id,
+        owner,
+        capturing_router(captured.clone()),
+    )
+    .await;
+
+    let host = host_for("alice");
+    let proxy_addr = serve_router_real(app.router.clone()).await;
+    let res = reqwest::Client::new()
+        .get(format!("http://{proxy_addr}/blog/assertion"))
+        .header(header::HOST, &host)
+        .header(
+            header::COOKIE,
+            session_cookie_role(caller, "editor", devserver_id, &host),
+        )
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    let headers = captured.requests.lock().unwrap()[0].headers.clone();
+    let assertion = headers
+        .get(chan_tunnel_proto::gateway_assertion::HEADER_NAME)
+        .expect("gateway assertion header")
+        .to_str()
+        .unwrap();
+    let key = chan_tunnel_proto::gateway_assertion::derive_assertion_key(tunnel_token);
+    let claims = chan_tunnel_proto::gateway_assertion::verify(&key, assertion, &host, devserver_id)
+        .expect("assertion verifies with tunnel token derived key");
+    assert_eq!(claims.sub, caller.to_string());
+    assert_eq!(claims.role, "editor");
+    assert_eq!(claims.aud, host);
+    assert_eq!(claims.drv, devserver_id);
     app.cleanup().await;
 }
 
