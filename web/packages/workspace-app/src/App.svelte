@@ -124,7 +124,9 @@
   import { pruneTerminalSnapshots } from "./terminal/snapshotCache";
   import { isTauriDesktop, reloadWindow, requestCloseWindow } from "./api/desktop";
   import { activeTransferCount } from "./state/transfers.svelte";
-  import { currentOS } from "./state/shortcuts";
+  import { chordFromEvent, currentOS } from "./state/shortcuts";
+  import { allCommands, commandContext } from "./state/commands";
+  import { commandIdForChord } from "./state/keymapOverrides.svelte";
   import { api, openLocalColorWatch, openLocalThemeWatch } from "./api/client";
   import {
     applyInitialPageWidth,
@@ -511,6 +513,25 @@
       e.stopPropagation();
       handlePaneModeKey(e);
       return;
+    }
+    // A user-assigned override chord fires its command ahead of the
+    // built-in chords below. Only overrides match here (commandIdForChord
+    // skips a chord equal to the command's own built-in, so the default
+    // branch and this path never double-fire), and cmd.available re-applies
+    // the same window-mode + surface gate the launcher shows.
+    {
+      const overrideChord = chordFromEvent(e);
+      const overrideId = overrideChord
+        ? commandIdForChord(overrideChord)
+        : undefined;
+      if (overrideId) {
+        const cmd = allCommands().find((c) => c.id === overrideId);
+        if (cmd && cmd.available(commandContext())) {
+          e.preventDefault();
+          cmd.run();
+          return;
+        }
+      }
     }
     const commandLauncherChord =
       isTauriDesktop() && currentOS() === "mac"
