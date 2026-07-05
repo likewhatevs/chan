@@ -135,6 +135,31 @@ describe("buildMachineTree", () => {
     expect(tree.machines[0]!.looseWindows.length).toBe(0);
   });
 
+  it("uses a local workspace row's library id for the local machine", () => {
+    const windows = [win({ window_id: "term", library_id: "lib-local-devserver", ordinal: 1 })];
+    const workspaces = [
+      ws({
+        workspace_id: "ws-notes",
+        path: "/p/notes",
+        library_id: "lib-local-devserver",
+      }),
+    ];
+    const tree = buildMachineTree([], workspaces, windows);
+    const local = tree.machines[0]!;
+    expect(local.libraryId).toBe("lib-local-devserver");
+    expect(local.terminals.map((w) => w.window_id)).toEqual(["term"]);
+    expect(tree.orphans).toEqual([]);
+  });
+
+  it("treats the sole library on a devserver first boot as local", () => {
+    const windows = [win({ window_id: "boot-term", library_id: "lib-boot", ordinal: 1 })];
+    const tree = buildMachineTree([], [], windows);
+    const local = tree.machines[0]!;
+    expect(local.libraryId).toBe("lib-boot");
+    expect(local.terminals.map((w) => w.window_id)).toEqual(["boot-term"]);
+    expect(tree.orphans).toEqual([]);
+  });
+
   it("falls back loose workspace windows whose path matches no card", () => {
     const windows = [
       win({

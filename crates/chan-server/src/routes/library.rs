@@ -78,8 +78,8 @@ const LOCAL_THEME_WATCH_WS_PATH: &str = "/api/library/local-theme/watch";
 ///
 /// `bearer` is the per-surface launcher token: `Some` gates `/api/library/*` on
 /// `Authorization: Bearer <token>` (the watch WS additionally accepts
-/// `?t=<token>`); `None` leaves the data surface public (tests / a
-/// localhost-trust install). The static SPA shell is ALWAYS public so it can
+/// `?t=<token>`); `None` leaves the data surface public (tests / the
+/// tunnel-trust install). The static SPA shell is ALWAYS public so it can
 /// load before it holds the token — the SPA then reads `?t=` from its URL and
 /// presents it on every data call.
 pub fn launcher_router(
@@ -281,11 +281,17 @@ pub fn launcher_router(
         })
 }
 
-/// Gate `/api/library/*` on the surface's launcher token. The token is accepted
+/// Gate `/api/library/*` on the surface's launcher token. Tunnel-origin
+/// requests already passed the gateway's `devserver_gate` check and arrive with
+/// client credentials stripped, so they bypass this local bearer and stay
+/// read-only through [`require_local_mutation`]. Other requests accept the token
 /// in the `Authorization: Bearer` header on every route, and additionally as the
-/// `?t=` query param on the watch WebSocket only (a browser WS can't header).
-/// The comparison is constant-time so a wrong token leaks no position info.
+/// `?t=` query param on watch WebSockets (a browser WS can't header). The
+/// comparison is constant-time so a wrong token leaks no position info.
 async fn require_launcher_bearer(token: String, req: Request<Body>, next: Next) -> Response {
+    if req.extensions().get::<crate::TunnelOrigin>().is_some() {
+        return next.run(req).await;
+    }
     let header_token = req
         .headers()
         .get(header::AUTHORIZATION)
@@ -318,15 +324,20 @@ async fn require_launcher_bearer(token: String, req: Request<Body>, next: Next) 
 /// focus-border menu — and a window is served with its per-TENANT token, not the
 /// launcher token (`desktop/serve.rs` `?t={record.token}`). A launcher-only gate
 /// therefore hard-401s every real window's GET/PUT/watch, so the colour never
-/// persists and a fresh window seeds blue. Accepts the same `Bearer` header
-/// and watch-WS `?t=` forms; comparisons are constant-time. A shared chan-server
-/// route, so this admits BOTH local and devserver windows in one place.
+/// persists and a fresh window seeds blue. Tunnel-origin requests already
+/// passed the gateway auth boundary and carry no client credentials, so they are
+/// admitted here too. Accepts the same `Bearer` header and watch-WS `?t=` forms;
+/// comparisons are constant-time. A shared chan-server route, so this admits
+/// BOTH local and devserver windows in one place.
 async fn require_surface_bearer(
     launcher_token: String,
     host: Arc<WorkspaceHost>,
     req: Request<Body>,
     next: Next,
 ) -> Response {
+    if req.extensions().get::<crate::TunnelOrigin>().is_some() {
+        return next.run(req).await;
+    }
     let header_token = req
         .headers()
         .get(header::AUTHORIZATION)
@@ -856,6 +867,7 @@ async fn dispatch_window_op(
 /// id for a stable list.
 async fn handle_list_workspaces(State(state): State<Arc<LauncherState>>) -> Response {
     let host = &state.host;
+    let local_library_id = host.library_id().to_string();
     let mut rows: Vec<LauncherWorkspace> = host
         .library()
         .list_workspaces()
@@ -879,8 +891,10 @@ async fn handle_list_workspaces(State(state): State<Arc<LauncherState>>) -> Resp
                 status,
                 error,
                 // Local rows: no devserver, prefix == workspace_id (the slash-free
-                // slug); on/off/remove route by workspace_id (the round-1 path).
-                library_id: None,
+                // slug); on/off/remove route by workspace_id. Carry this host's
+                // library id so the launcher groups a headless devserver's own
+                // windows (`lib-<hex>`) under Local machine, not the orphan bucket.
+                library_id: Some(local_library_id.clone()),
                 devserver_id: None,
                 prefix: workspace_id.clone(),
                 workspace_id,
@@ -1021,7 +1035,7 @@ async fn handle_add_workspace(
                 status: WorkspaceStatus::Running,
                 error: None,
                 // A freshly added workspace is always local (no devserver).
-                library_id: None,
+                library_id: Some(state.host.library_id().to_string()),
                 devserver_id: None,
                 prefix: workspace_id.clone(),
                 workspace_id,
@@ -1556,12 +1570,16 @@ mod devserver_route_tests {
         lib.register_workspace(root.path()).unwrap();
         let host = Arc::new(WorkspaceHost::new(lib.clone(), crate::route_builder()));
         let _foreign = hold_foreign_lock(&lib, root.path());
-        let router = launcher_router(host, None, None);
+        let router = launcher_router(host.clone(), None, None);
 
         let (status, body) = request(&router, "GET", "/api/library/workspaces", None).await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body[0]["status"], "locked");
         assert_eq!(body[0]["on"], false);
+        assert_eq!(
+            body[0]["library_id"],
+            serde_json::json!(host.library_id().to_string())
+        );
     }
 
     #[tokio::test]

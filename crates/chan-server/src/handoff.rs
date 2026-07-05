@@ -20,12 +20,12 @@
 //! the workspace. The CLI must therefore consult this module BEFORE it
 //! calls `open_workspace`, so it never double-opens.
 //!
-//! The bearer token never travels over argv/env/logs: by design
-//! the desktop spawns its OWN native window
-//! against its OWN embedded server, so no token crosses this socket
-//! at all. The protocol still carries a version field so a
-//! desktop-vs-CLI skew falls back to standalone rather than doing
-//! silent cross-version IPC.
+//! Workspace handoff never carries a bearer token: by design the desktop spawns
+//! its OWN native window against its OWN embedded server. Devserver registration
+//! may carry a write-only bearer inside the URL as `?t=...`, matching the
+//! launcher dialog and the devserver's printed URL. The protocol still carries a
+//! version field so a desktop-vs-CLI skew falls back to standalone rather than
+//! doing silent cross-version IPC.
 //!
 //! Reuses the control_socket.rs shape: line-delimited JSON request +
 //! response and a Drop guard for teardown (unix unlinks the socket file;
@@ -101,10 +101,9 @@ pub enum Request {
     /// handoff. The desktop writes the `{url, name, script}` entry into the same
     /// config its launcher devserver registry reads; the launcher's Connect
     /// button drives the dial (the CLI does not auto-connect). The CLI sends
-    /// this from its `open` command; the desktop's
-    /// listener handles it. The bearer token is NOT carried here (same as the workspace
-    /// handoff — the desktop owns credentials), so a tokened devserver is set up
-    /// from the launcher dialog, not the CLI handoff.
+    /// this from its `open` command; the desktop's listener handles it. A bearer
+    /// may ride inside the URL as `?t=...`; the desktop extracts it into the
+    /// write-only devserver registry token.
     OpenDevserver {
         protocol: u32,
         cli_version: String,
@@ -899,8 +898,8 @@ fn map_close_response(line: &str) -> Outcome {
 /// any other reply / connect failure / stale socket / malformed line ->
 /// `NoDesktop` (the caller surfaces "no desktop to register the devserver
 /// into"). Mirrors `try_handoff`'s framing + timeouts. `name` / `script` ride
-/// along as the optional launcher label + connect script; the bearer token
-/// never travels this socket (the desktop owns credentials).
+/// along as the optional launcher label + connect script; a bearer may ride in
+/// the URL as `?t=...`.
 #[cfg(unix)]
 pub async fn try_open_devserver(url: &str, name: Option<&str>, script: Option<&str>) -> Outcome {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};

@@ -131,6 +131,11 @@ impl Library {
         Arc::clone(&self.inner.walk_filter.lock().unwrap())
     }
 
+    /// Path backing this library's registry config.
+    pub fn config_path(&self) -> PathBuf {
+        self.inner.config_path.clone()
+    }
+
     /// Validated in-root drafts directory name from the registry
     /// (`drafts_dir` in `~/.chan/config.toml`). Global and hand-edited,
     /// NOT UI-configurable, so there is no setter. An invalid configured
@@ -157,6 +162,20 @@ impl Library {
     /// Snapshot of all registered workspaces, most-recent first.
     pub fn list_workspaces(&self) -> Vec<KnownWorkspace> {
         self.inner.registry.lock().unwrap().workspaces.clone()
+    }
+
+    /// Reload the registry config from disk.
+    ///
+    /// `Library` keeps the registry in memory for cheap list/open calls. Long-lived
+    /// embedders such as chan-desktop call this from their `config.toml` watcher
+    /// after another process (`chan devserver`, `chan workspace add`, etc.) mutates
+    /// the shared registry.
+    pub fn reload_registry(&self) -> Result<()> {
+        let registry = Registry::load_from(&self.inner.config_path)?;
+        let walk_filter = Arc::new(WalkFilter::new(registry.index_excluded_dirs.clone()));
+        *self.inner.registry.lock().unwrap() = registry;
+        *self.inner.walk_filter.lock().unwrap() = walk_filter;
+        Ok(())
     }
 
     /// Add a workspace to the registry. Idempotent: re-registering an
@@ -621,6 +640,52 @@ mod tests {
             .unwrap()
             .root
             .is_dir());
+    }
+
+    #[test]
+    fn reload_registry_picks_up_external_workspace_add() {
+        let cfg = TempDir::new().unwrap();
+        let config_path = cfg.path().join("config.toml");
+        let workspace = TempDir::new().unwrap();
+        let lib = Library::open_at(config_path.clone()).unwrap();
+        let other = Library::open_at(config_path).unwrap();
+
+        other.register_workspace(workspace.path()).unwrap();
+        assert!(lib.list_workspaces().is_empty());
+
+        lib.reload_registry().unwrap();
+        let workspaces = lib.list_workspaces();
+        assert_eq!(workspaces.len(), 1);
+        assert_eq!(
+            workspaces[0].root_path,
+            workspace.path().canonicalize().unwrap()
+        );
+    }
+
+    #[test]
+    fn reload_registry_refreshes_config_derived_fields() {
+        let cfg = TempDir::new().unwrap();
+        let config_path = cfg.path().join("config.toml");
+        std::fs::write(
+            &config_path,
+            "index_excluded_dirs = [\"node_modules\"]\ndrafts_dir = \"Drafts\"\nworkspaces = []\n",
+        )
+        .unwrap();
+        let lib = Library::open_at(config_path.clone()).unwrap();
+        assert!(lib.walk_filter().is_excluded("node_modules"));
+        assert!(!lib.walk_filter().is_excluded("dist"));
+        assert_eq!(lib.drafts_dir(), "Drafts");
+
+        std::fs::write(
+            &config_path,
+            "index_excluded_dirs = [\"dist\"]\ndrafts_dir = \"Scratch\"\nworkspaces = []\n",
+        )
+        .unwrap();
+        lib.reload_registry().unwrap();
+
+        assert!(!lib.walk_filter().is_excluded("node_modules"));
+        assert!(lib.walk_filter().is_excluded("dist"));
+        assert_eq!(lib.drafts_dir(), "Scratch");
     }
 
     #[test]

@@ -117,8 +117,9 @@ export interface WorkspaceEntry {
   status: WorkspaceStatus;
   /** Short human reason, present only when `status === "error"`. */
   error?: string;
-  /** The library serving this row: null/"local" for local rows; the remote
-   * library id for a devserver-served row. */
+  /** The library serving this row: host-local id for local rows (`local` in the
+   * desktop app, `lib-*` in the standalone devserver); the remote library id for
+   * a devserver-served row. Older local rows may omit it. */
   library_id: string | null;
   /** The devserver serving this row: null for a local row; the devserver
    * registry id for a remote row (the row's group key + route target). */

@@ -26,10 +26,10 @@ function settle(): Promise<void> {
   return new Promise((r) => setTimeout(r, 0));
 }
 
-// The polymorphic Address field is the only one whose placeholder mentions a
-// token; Name and the Connect script never do.
+// The polymorphic Address field is the only one whose placeholder shows the
+// devserver bearer query.
 function addressInput(el: HTMLElement): HTMLInputElement {
-  return el.querySelector('input[placeholder*="token"]') as HTMLInputElement;
+  return el.querySelector('input[placeholder*="?t="]') as HTMLInputElement;
 }
 
 function setInput(input: HTMLInputElement, value: string): void {
@@ -120,7 +120,7 @@ describe("New workspace dialog -- devserver", () => {
   it("parses a full http(s) URL and pulls host + port + token out of it", async () => {
     openNewDialog("devserver");
     const el = render();
-    setInput(addressInput(el), "https://proxy.example.com:9443?token=sekret");
+    setInput(addressInput(el), "https://proxy.example.com:9443?t=sekret");
     flushSync();
     btn(el, "Add dev server").click();
     await settle();
@@ -132,6 +132,19 @@ describe("New workspace dialog -- devserver", () => {
     expect(added).toBeTruthy();
     // The token rode in the URL query -- the mock reports one is stored.
     expect(added!.has_token).toBe(true);
+  });
+
+  it("does not treat token= as the devserver bearer query", async () => {
+    openNewDialog("devserver");
+    const el = render();
+    setInput(addressInput(el), "https://old.example.com:9443?token=sekret");
+    flushSync();
+    btn(el, "Add dev server").click();
+    await settle();
+    flushSync();
+    const added = library.devservers.find((d) => d.host === "old.example.com" && d.port === 9443);
+    expect(added).toBeTruthy();
+    expect(added!.has_token).toBe(false);
   });
 
   it("rejects an empty or unparseable address", () => {

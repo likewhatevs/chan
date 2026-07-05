@@ -25,6 +25,7 @@
 //! re-associates inherited PTY masters with freshly built session objects.
 
 use std::collections::{HashMap, HashSet};
+use std::ffi::OsStr;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU16, Ordering};
@@ -666,6 +667,16 @@ pub async fn run_devserver(library: Library, config: DevserverConfig) -> anyhow:
         .context("resolving devserver local-color path")?
         .with_file_name("color.json");
     host.install_local_color_store(Arc::new(FileLocalColor::open(color_store)));
+    match start_registry_reload_watcher(host.clone(), host.library().config_path()) {
+        Ok(watcher) => {
+            // Process-lifetime watcher. Keeping it out of the async frame avoids
+            // imposing its Send/Sync shape on the devserver future.
+            Box::leak(Box::new(watcher));
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "devserver registry reload watcher disabled");
+        }
+    }
     let state = Arc::new(DevserverState {
         host: host.clone(),
         addr: config.addr,
@@ -800,7 +811,7 @@ pub async fn run_devserver(library: Library, config: DevserverConfig) -> anyhow:
             // new OS-assigned port, instead of dialing a stale stored URL.
             state.bound_port.store(local_addr.port(), Ordering::Relaxed);
             state.persist_state();
-            println!("chan devserver: listening on http://{local_addr}");
+            println!("chan devserver: listening on http://{local_addr}/?t={token}");
             // Machine-readable token contract: the desktop control terminal
             // scrapes this exact marker from the connect-script output on every
             // connect and reconnect, as the source of truth for the bearer
@@ -835,6 +846,41 @@ pub async fn run_devserver(library: Library, config: DevserverConfig) -> anyhow:
         }
     }
     Ok(())
+}
+
+fn start_registry_reload_watcher(
+    host: Arc<WorkspaceHost>,
+    registry_path: PathBuf,
+) -> notify::Result<notify::RecommendedWatcher> {
+    let dir = registry_path
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| Path::new(".").to_path_buf());
+    let registry_name = registry_path
+        .file_name()
+        .map(OsStr::to_os_string)
+        .unwrap_or_else(|| registry_path.as_os_str().to_os_string());
+    let _ = std::fs::create_dir_all(&dir);
+
+    let mut watcher =
+        notify::recommended_watcher(move |res: notify::Result<notify::Event>| match res {
+            Ok(event) => {
+                if event
+                    .paths
+                    .iter()
+                    .any(|path| path.file_name() == Some(registry_name.as_os_str()))
+                {
+                    if let Err(e) = host.library().reload_registry() {
+                        tracing::warn!(error = %e, "reloading workspace registry failed");
+                        return;
+                    }
+                    host.signal_library_change();
+                }
+            }
+            Err(e) => tracing::warn!(error = %e, "workspace registry watch error"),
+        })?;
+    notify::Watcher::watch(&mut watcher, &dir, notify::RecursiveMode::NonRecursive)?;
+    Ok(watcher)
 }
 
 /// Fixed registration name sent in the tunnel `Hello` frame. The gateway
@@ -967,7 +1013,7 @@ fn build_devserver_app(
             state.clone(),
             require_bearer,
         ))
-        .with_state(state);
+        .with_state(state.clone());
     // Serve the web-launcher SPA at the library root `/` plus the `/api/library/*`
     // data surface (windows; workspaces next) as the host's root fallback --
     // without it the root 404s, since `host_dispatch` only matches
@@ -975,17 +1021,10 @@ fn build_devserver_app(
     // in `authed` above; they now live in the shared launcher bundle so the
     // desktop loopback gets them too (the loopback never built this router).
     //
-    // `bearer = None` (TUNNEL-TRUST) on the gateway surface: the devserver has
-    // no inbound ports, and the gateway proxy is the sole auth boundary -- it
-    // validates the `devserver_gate` at its edge and STRIPS every client
-    // credential (`?t=`, Cookie, Authorization) before forwarding, so a
-    // launcher XHR reaches `/api/library/*` with zero creds. A `Some(token)`
-    // gate would 401 every call. The desktop LOOPBACK passes `Some(token)`
-    // instead (it has no proxy; the SPA presents the token via `?t=`).
-    //
-    // `bearer = None` on BOTH origins: the tunnel strips creds (a `Some(token)`
-    // gate would 401 every tunnel call), and the loopback bind is a
-    // single-machine trust boundary like `chan open` (the open loopback URL).
+    // Gate the loopback launcher API with the same persisted devserver bearer as
+    // `/api/devserver/*`. The static SPA shell remains public so it can load
+    // first, then the printed `/?t=<token>` URL lets it present the bearer on
+    // `/api/library/*`.
     //
     // `serve_addr = Some(cell)` emits the MUTABLE `devserver` surface (the local
     // web launcher gets the real Power toggle + self-managed windows) and lets
@@ -997,7 +1036,7 @@ fn build_devserver_app(
     // address after the listener binds (unfilled on a tunnel-only devserver,
     // where there is no local bind to mutate from anyway).
     let serve_addr: Arc<OnceLock<SocketAddr>> = Arc::new(OnceLock::new());
-    crate::install_launcher_root_fallback(&host, None, Some(serve_addr.clone()));
+    crate::install_launcher_root_fallback(&host, Some(&state.token), Some(serve_addr.clone()));
     let app = public.merge(authed).merge(host.router());
     (app, serve_addr)
 }
@@ -2176,16 +2215,26 @@ mod tests {
         let host = state.host.clone();
         let (app, _serve_addr) = build_devserver_app(state, host);
 
-        // On the devserver (gateway surface) the feed is TUNNEL-TRUSTED: the
-        // launcher bundle installs with `bearer = None`, because the gateway
-        // proxy strips every client credential and is the sole auth boundary. So
-        // the feed serves WITHOUT a bearer (the loopback's `?t=` gate is covered
-        // by `launcher_router_bearer_gates_data_routes`).
+        // The raw/local devserver bind gates the launcher API with the persisted
+        // devserver token.
+        let unauth = app
+            .clone()
+            .oneshot(
+                HttpRequest::builder()
+                    .uri("/api/library/windows")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(unauth.status(), StatusCode::UNAUTHORIZED);
+
         let listed = app
             .clone()
             .oneshot(
                 HttpRequest::builder()
                     .uri("/api/library/windows")
+                    .header(header::AUTHORIZATION, "Bearer test-token")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -2199,7 +2248,7 @@ mod tests {
             .clone()
             .oneshot(
                 HttpRequest::builder()
-                    .uri("/api/library/windows/watch")
+                    .uri("/api/library/windows/watch?t=test-token")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -2215,6 +2264,7 @@ mod tests {
                 HttpRequest::builder()
                     .method("POST")
                     .uri("/api/library/windows")
+                    .header(header::AUTHORIZATION, "Bearer test-token")
                     .header(header::CONTENT_TYPE, "application/json")
                     .body(Body::from(r#"{"kind":"terminal"}"#))
                     .unwrap(),
@@ -2236,6 +2286,7 @@ mod tests {
                 HttpRequest::builder()
                     .method("DELETE")
                     .uri(format!("/api/library/windows/{window_id}"))
+                    .header(header::AUTHORIZATION, "Bearer test-token")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -2247,6 +2298,7 @@ mod tests {
                 HttpRequest::builder()
                     .method("DELETE")
                     .uri("/api/library/windows/w-nope")
+                    .header(header::AUTHORIZATION, "Bearer test-token")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -2269,11 +2321,23 @@ mod tests {
         let host = state.host.clone();
         let (app, _serve_addr) = build_devserver_app(state, host);
 
-        // Tunnel-trust on the devserver surface: no bearer needed.
+        let unauth = app
+            .clone()
+            .oneshot(
+                HttpRequest::builder()
+                    .uri("/api/library/workspaces")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(unauth.status(), StatusCode::UNAUTHORIZED);
+
         let resp = app
             .oneshot(
                 HttpRequest::builder()
                     .uri("/api/library/workspaces")
+                    .header(header::AUTHORIZATION, "Bearer test-token")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -2304,6 +2368,7 @@ mod tests {
             .oneshot(
                 HttpRequest::builder()
                     .uri("/api/library/workspaces")
+                    .header(header::AUTHORIZATION, "Bearer test-token")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -2435,23 +2500,28 @@ mod tests {
         // root-fallback dispatch to require_local_mutation.
         let tunnel = app.clone().layer(middleware::from_fn(mark_tunnel_origin));
 
-        let add_req = || {
+        let add_req = |auth: bool| {
             let body = format!(r#"{{"path":{:?}}}"#, ws.path().to_string_lossy());
-            HttpRequest::builder()
+            let mut req = HttpRequest::builder()
                 .method("POST")
                 .uri("/api/library/workspaces")
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(body))
-                .unwrap()
+                .header(header::CONTENT_TYPE, "application/json");
+            if auth {
+                req = req.header(header::AUTHORIZATION, "Bearer test-token");
+            }
+            req.body(Body::from(body)).unwrap()
         };
 
         // Security: a tunnel-origin workspace mutation is refused 403 even though
         // the shared surface is mutable.
-        let refused = tunnel.clone().oneshot(add_req()).await.unwrap();
+        let refused = tunnel.clone().oneshot(add_req(false)).await.unwrap();
         assert_eq!(refused.status(), StatusCode::FORBIDDEN);
 
+        let unauth = app.clone().oneshot(add_req(false)).await.unwrap();
+        assert_eq!(unauth.status(), StatusCode::UNAUTHORIZED);
+
         // The SAME add on the local bind is NOT blocked: it registers the folder.
-        let added = app.clone().oneshot(add_req()).await.unwrap();
+        let added = app.clone().oneshot(add_req(true)).await.unwrap();
         assert_eq!(added.status(), StatusCode::OK);
 
         // Meta: when the launcher bundle is built, the local bind advertises the
@@ -2586,6 +2656,7 @@ mod tests {
             .oneshot(
                 HttpRequest::builder()
                     .uri("/api/library/not-a-route")
+                    .header(header::AUTHORIZATION, "Bearer test-token")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -2650,9 +2721,9 @@ mod tests {
 
         // The LOOPBACK surface installs the launcher bundle with `Some(token)`
         // (the desktop per-window token). Drive `launcher_router` directly with a
-        // token to pin the bearer semantics: header for every route, `?t=` for the
-        // watch WS only. (The devserver/gateway surface uses `None` -- tunnel-trust
-        // -- verified in `library_windows_feed_lists_mints_and_discards`.)
+        // token to pin the bearer semantics: header for every raw/local route,
+        // `?t=` for the watch WS only, with a tunnel-origin bypass because the
+        // gateway strips client credentials after its own auth check.
         let home = tempfile::tempdir().expect("home");
         let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
         let state = test_state(home.path(), addr);
@@ -2717,6 +2788,7 @@ mod tests {
 
         // A wrong `?t=` on the watch route is still rejected.
         let watch_bad = app
+            .clone()
             .oneshot(
                 HttpRequest::builder()
                     .uri("/api/library/windows/watch?t=nope")
@@ -2726,6 +2798,18 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(watch_bad.status(), StatusCode::UNAUTHORIZED);
+
+        let tunnel = app.layer(middleware::from_fn(mark_tunnel_origin));
+        let tunnel_read = tunnel
+            .oneshot(
+                HttpRequest::builder()
+                    .uri("/api/library/windows")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(tunnel_read.status(), StatusCode::OK);
     }
 
     #[tokio::test]

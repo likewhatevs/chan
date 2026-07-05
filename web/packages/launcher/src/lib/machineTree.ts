@@ -5,7 +5,7 @@
 // state -- all inputs are passed in, so it is exhaustively unit-testable.
 //
 // Join keys (mirroring the wire):
-//   machine -> windows:    WindowRecord.library_id  ("local" | DevserverEntry.library_id)
+//   machine -> windows:    WindowRecord.library_id  (local library id | DevserverEntry.library_id)
 //   machine -> workspaces: WorkspaceEntry.devserver_id  (null for local)
 //   workspace -> windows:  same library_id AND workspace_path === WorkspaceEntry.path
 //
@@ -60,7 +60,7 @@ export interface MachineNode {
   kind: "local" | "devserver";
   /** The devserver entry for a remote machine; null for LOCAL. */
   devserver: DevserverEntry | null;
-  /** "local", or the devserver's library_id (null before its first connect). */
+  /** Host-local library id, or the devserver's library_id (null before first connect). */
   libraryId: string | null;
   control: WindowRecord[];
   terminals: WindowRecord[];
@@ -122,15 +122,24 @@ export function buildMachineTree(
   }
 
   const machines: MachineNode[] = [];
-  const claimed = new Set<string>([LOCAL_LIBRARY_ID]);
+  const localWorkspaces = workspaces.filter((w) => w.devserver_id === null);
+  const localLibraryId =
+    localWorkspaces.find((w) => w.library_id !== null)?.library_id ??
+    // Headless-devserver first boot can have a persisted terminal before any
+    // workspace rows exist. With no devserver registry on that surface, the
+    // only window library is the host-local library.
+    (devservers.length === 0 && windowsByLibrary.size === 1
+      ? [...windowsByLibrary.keys()][0]
+      : LOCAL_LIBRARY_ID);
+  const claimed = new Set<string>([localLibraryId]);
 
   machines.push(
     machineNode(
       "local",
       null,
-      LOCAL_LIBRARY_ID,
+      localLibraryId,
       windowsByLibrary,
-      workspaces.filter((w) => w.devserver_id === null),
+      localWorkspaces,
     ),
   );
 

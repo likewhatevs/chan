@@ -498,6 +498,16 @@ impl EmbeddedServer {
         self.host.signal_library_change();
     }
 
+    /// Reload the local workspace registry snapshot from `~/.chan/config.toml`.
+    ///
+    /// The embedded server holds a long-lived [`chan_workspace::Library`]. When
+    /// another process updates the shared registry, the desktop watcher calls this
+    /// before waking launcher clients so `/api/library/workspaces` serves the fresh
+    /// rows.
+    pub fn reload_library_registry(&self) -> chan_workspace::Result<()> {
+        self.host.library().reload_registry()
+    }
+
     /// The pane-highlight colour for a window of `library_id`: the host
     /// resolves the two sources behind one call — local (the installed
     /// [`LocalColorStore`](chan_server::LocalColorStore)) vs a devserver

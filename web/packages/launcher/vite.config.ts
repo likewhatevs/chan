@@ -46,7 +46,7 @@ const proxyPort = process.env.VITE_PROXY_PORT ?? "8787";
 // URL builder that drive the installable PWA / devserver surface); the ceiling
 // carries headroom for normal drift while staying far below what any heavy import
 // would produce.
-const LAUNCHER_GZIP_BUDGET_BYTES = 34 * 1024;
+const LAUNCHER_GZIP_BUDGET_BYTES = 35 * 1024;
 
 function launcherSizeBudget(): Plugin {
   return {

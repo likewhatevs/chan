@@ -105,8 +105,9 @@ body {
 
 /* Square icon button — the registry rows' per-action affordances (new window,
    on/off, new terminal, edit, connect/disconnect, forget). `.on` tints it the
-   accent (an active toggle); `.lost` follows a broken connection state; `.danger`
-   reddens it on hover (a destructive op). */
+   accent (an active toggle); `.locked` flashes yellow for a foreign lock;
+   `.lost` follows a broken connection state; `.danger` reddens it on hover
+   (a destructive op). */
 .icon-btn {
   display: inline-flex;
   align-items: center;
@@ -146,9 +147,30 @@ body {
   background: color-mix(in srgb, var(--danger) 12%, transparent);
 }
 
+.icon-btn.locked {
+  opacity: 1;
+  cursor: default;
+  animation: lock-attention 1.6s ease-in-out infinite;
+}
+
 .icon-btn.danger:hover:not(:disabled) {
   border-color: var(--danger);
   color: var(--danger);
+}
+
+@keyframes lock-attention {
+  0%,
+  100% {
+    border-color: var(--btn-border);
+    color: var(--text-secondary);
+    background: var(--btn-bg);
+  }
+
+  50% {
+    border-color: #e3b341;
+    color: #e3b341;
+    background: color-mix(in srgb, #e3b341 18%, transparent);
+  }
 }
 
 /* Reduced-motion: keep the border/colour hover cue. */
@@ -165,6 +187,13 @@ body {
     transition:
       border-color 160ms ease,
       color 160ms ease;
+  }
+
+  .icon-btn.locked {
+    animation: none;
+    border-color: #e3b341;
+    color: #e3b341;
+    background: color-mix(in srgb, #e3b341 18%, transparent);
   }
 }
 

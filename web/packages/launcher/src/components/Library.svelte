@@ -17,6 +17,7 @@
     Globe,
     House,
     LoaderCircle,
+    Lock,
     Pencil,
     Plug,
     Plus,
@@ -300,6 +301,7 @@
         <button
           class="icon-btn"
           class:on={ws.on}
+          class:locked={locked(ws)}
           type="button"
           disabled={spinning(ws) || locked(ws)}
           title={locked(ws)
@@ -320,6 +322,8 @@
               : toggleRemoteWorkspace(devserverId!, ws.prefix, !ws.on)}>
           {#if spinning(ws)}
             <LoaderCircle class="spin" size={16} />
+          {:else if locked(ws)}
+            <Lock size={16} />
           {:else}
             <Power size={16} />
           {/if}

@@ -153,6 +153,8 @@ describe("Library: Local group", () => {
     const toggle = byAria("notes is open in another Chan process")!;
     expect(toggle).toBeTruthy();
     expect(toggle.disabled).toBe(true);
+    expect(toggle.classList.contains("locked")).toBe(true);
+    expect(toggle.querySelector("svg")).toBeTruthy();
     expect(toggle.title).toBe("Workspace is open in another Chan process");
     expect(byAria("New window of notes")!.disabled).toBe(true);
   });

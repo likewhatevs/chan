@@ -119,9 +119,10 @@ pub struct LauncherWorkspace {
     pub label: String,
     /// Currently mounted/served.
     pub on: bool,
-    /// Owning library identity: `None` (treated as local) for the host's own
-    /// rows; the remote `lib-<hex>` for a devserver row. The SPA groups remote
-    /// rows under their devserver by this + `devserver_id`.
+    /// Owning library identity: the host's own id (`"local"` for desktop, or a
+    /// stable `lib-<hex>` for a headless devserver) for local rows; the remote
+    /// `lib-<hex>` for a devserver row. Older local rows may omit it; the SPA
+    /// treats absence as the legacy `"local"` id.
     #[serde(default)]
     pub library_id: Option<String>,
     /// `Some(devserver id)` for a row merged in from a connected devserver;

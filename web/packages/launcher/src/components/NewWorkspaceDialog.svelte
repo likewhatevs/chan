@@ -7,12 +7,12 @@
   // seed from the edit target and need no manual reset.
   //
   // The devserver Address is one field accepting EITHER a bare `host:port` (the
-  // local ssh-forward case) OR a full `http(s)://host:port?token=…` URL (the
+  // local ssh-forward case) OR a full `http(s)://host:port?t=…` URL (the
   // gateway/devserver-proxy case carrying a fixed token; port optional). It is
   // parsed client-side into the host/port/token the bridge already stores -- no
   // wire change, no separate Token field. The token rides write-only: an edit
   // that leaves the Address as `host:port` keeps the stored token. On edit, a
-  // full URL with an empty `?token=` explicitly clears it.
+  // full URL with an empty `?t=` explicitly clears it.
   import Modal from "./Modal.svelte";
   import { SquareTerminal } from "lucide-svelte";
   import { closeDialog, dialog } from "../state/dialog.svelte";
@@ -113,8 +113,8 @@
 
   // Parse the polymorphic Address into host/port/token, mirroring what
   // `chan open <url>` accepts so the form and the CLI stay consistent:
-  //   - `http(s)://host:port?token=…`  → host + port (defaulted by scheme when
-  //     absent) + the `token` query param (`?token=` clears on edit);
+  //   - `http(s)://host:port?t=…`      → host + port (defaulted by scheme when
+  //     absent) + the `t` query param (`?t=` clears on edit);
   //   - bare `host:port`               → host + port, no token.
   // Returns null only for blank input; an invalid port surfaces as `port: null`
   // for the caller to reject with a single message.
@@ -126,7 +126,7 @@
         const u = new URL(s);
         const host = u.hostname;
         const port = u.port ? Number(u.port) : u.protocol === "https:" ? 443 : 80;
-        const token = u.searchParams.get("token");
+        const token = u.searchParams.get("t");
         return {
           host,
           port: Number.isInteger(port) ? port : null,
@@ -158,7 +158,7 @@
   async function submitDevserver(): Promise<void> {
     const parsed = parseAddress(address);
     if (!parsed || !parsed.host || !validPort(parsed.port)) {
-      error = "Enter an address like 127.0.0.1:8787 or https://host:port?token=…";
+      error = "Enter an address like 127.0.0.1:8787 or https://host:port?t=…";
       return;
     }
     submitting = true;
@@ -170,8 +170,8 @@
           label: name.trim() || undefined,
           script: script.trim() || undefined,
           // Write-only: an edit that leaves the Address as host:port carries no
-          // token, so the stored one is kept; a full URL with ?token replaces it,
-          // and an empty ?token= clears it.
+          // token, so the stored one is kept; a full URL with ?t replaces it,
+          // and an empty ?t= clears it.
           token: parsed.token || undefined,
           clear_token: parsed.token === "" || undefined,
           auto_hide_control: autoHideControl,
@@ -247,7 +247,7 @@
         type="text"
         class="mono"
         bind:value={address}
-        placeholder="127.0.0.1:8787 or https://host:port?token=…"
+        placeholder="127.0.0.1:8787 or https://host:port?t=…"
         autocomplete="off"
         spellcheck="false"
         disabled={readOnlyEdit}

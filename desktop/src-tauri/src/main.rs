@@ -1331,6 +1331,14 @@ fn normalize_outbound_label(raw: &str) -> Result<String, String> {
     Ok(label)
 }
 
+fn devserver_url_token(raw: &str) -> Option<String> {
+    let parsed = url::Url::parse(raw).ok()?;
+    parsed
+        .query_pairs()
+        .find_map(|(key, value)| (key == "t").then(|| value.trim().to_string()))
+        .filter(|token| !token.is_empty())
+}
+
 fn outbound_label(outbound: &OutboundWorkspace) -> Option<String> {
     let label = outbound.label.trim();
     if label.is_empty() {
@@ -2479,9 +2487,9 @@ fn open_local_workspace(state: State<Arc<AppState>>, path: String) -> Result<(),
 /// Writes the `{url, name, script}` entry through the same
 /// [`DevserverConfigRegistry`](config::DevserverConfigRegistry) the launcher's
 /// `/api/library/devservers` routes use (the shared config handle), so the new
-/// row shows up in the launcher. The handoff carries no token (the desktop owns
-/// credentials — a tokened devserver is set up from the launcher dialog), so
-/// this registers it untokened; the user connects it from its launcher row.
+/// row shows up in the launcher. A `?t=` URL carries the write-only devserver
+/// bearer; otherwise the user can provide a connect script that prints
+/// `CHAN_DEVSERVER_TOKEN=...` and connect it from the launcher row.
 #[cfg(any(unix, windows))]
 fn register_devserver_from_handoff(
     state: &Arc<AppState>,
@@ -2493,6 +2501,7 @@ fn register_devserver_from_handoff(
     // The handoff carries a URL; the registry's `add` now takes host+port (the
     // devserver model switched back to Host+Port), so parse it apart here.
     let (host, port) = devserver::parse_devserver_url(&url)?;
+    let token = devserver_url_token(&url);
     let registry = config::DevserverConfigRegistry::new(
         Arc::clone(&state.store),
         Arc::clone(&state.devserver_remove_hook),
@@ -2505,7 +2514,7 @@ fn register_devserver_from_handoff(
         port,
         label: name,
         script,
-        token: None,
+        token,
         clear_token: false,
         auto_hide_control: false,
     })?;
@@ -5986,6 +5995,18 @@ mod tests {
     fn normalize_outbound_url_rejects_non_http() {
         let err = normalize_outbound_url("file:///tmp/foo").expect_err("rejected");
         assert!(err.contains("http:// or https://"));
+    }
+
+    #[test]
+    fn devserver_url_token_reads_t_only() {
+        assert_eq!(
+            devserver_url_token("http://127.0.0.1:8787/?t=tok_abc").as_deref(),
+            Some("tok_abc")
+        );
+        assert_eq!(
+            devserver_url_token("http://127.0.0.1:8787/?token=tok_abc"),
+            None
+        );
     }
 
     #[test]

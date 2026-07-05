@@ -23,7 +23,7 @@ use std::time::Duration;
 
 use notify::{RecursiveMode, Watcher};
 use notify_debouncer_mini::{new_debouncer, DebounceEventResult, Debouncer};
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 
 /// Event name pushed to all webviews when the registry changes.
 /// Frontends should re-fetch the merged workspace list in response.
@@ -64,6 +64,7 @@ pub fn spawn(app: AppHandle, registry_path: &Path) -> notify::Result<Debouncer<i
         move |res: DebounceEventResult| match res {
             Ok(events) => {
                 if registry_event_present(&events, &registry_name) {
+                    refresh_embedded_library(&app);
                     if let Err(e) = app.emit(REGISTRY_CHANGED, ()) {
                         tracing::warn!(event = REGISTRY_CHANGED, error = %e, "registry event emit failed");
                     }
@@ -77,6 +78,18 @@ pub fn spawn(app: AppHandle, registry_path: &Path) -> notify::Result<Debouncer<i
         .watcher()
         .watch(&dir, RecursiveMode::NonRecursive)?;
     Ok(debouncer)
+}
+
+fn refresh_embedded_library(app: &AppHandle) {
+    let state = app.state::<std::sync::Arc<crate::AppState>>();
+    let Some(embedded) = state.embedded() else {
+        return;
+    };
+    if let Err(e) = embedded.reload_library_registry() {
+        tracing::warn!(error = %e, "reloading workspace registry failed");
+        return;
+    }
+    embedded.signal_library_change();
 }
 
 /// True when any debounced event touched the registry file itself.
