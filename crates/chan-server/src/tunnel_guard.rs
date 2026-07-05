@@ -1,12 +1,14 @@
-//! Route-scoped middleware enforcing the server-side half of the
-//! tunnel-mode lockdown.
+//! Route-scoped middleware enforcing the kiosk settings lockdown.
 //!
 //!   - `settings_guard` returns 403 when `AppState::settings_disabled`
-//!     is true (any tunnel run, hosted or public). Applied to the
-//!     settings-write routes (workspace rename, prefs / server-config
-//!     PATCH, storage reset, index rebuild).
+//!     is true, i.e. on a `--no-settings` serve (kiosk / shared
+//!     workstation). Applied to the settings-write routes (workspace
+//!     rename, prefs / server-config PATCH, storage reset, index
+//!     rebuild). A devserver tenant runs settings-enabled and
+//!     authenticates the owner through the gateway, so remote config
+//!     edits from chan-launcher are not blocked here.
 //!
-//! Both run as middleware on a sub-router rather than as per-handler
+//! It runs as middleware on a sub-router rather than as per-handler
 //! guards: that way the refusal lands before axum's `Json<...>` /
 //! `Query<...>` extractors, so a malformed body cannot leak the
 //! request schema via a 422, and any future write route added to

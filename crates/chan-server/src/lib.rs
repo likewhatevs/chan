@@ -1367,11 +1367,11 @@ pub async fn serve(
 fn router(state: Arc<AppState>) -> Router {
     // ---- Settings-write gate ----------------------------------------
     //
-    // Refused with 403 by `tunnel_guard::settings_guard` on any
-    // tunnel run (hosted OR public). Reads of the same areas stay
-    // open via the main router below; the SPA can still populate
-    // values in view mode. The middleware runs as a route_layer on
-    // this sub-router so it fires before the JSON / query extractors
+    // Refused with 403 by `tunnel_guard::settings_guard` on a
+    // `--no-settings` serve (kiosk / shared workstation). Reads of the
+    // same areas stay open via the main router below; the SPA can still
+    // populate values in view mode. The middleware runs as a route_layer
+    // on this sub-router so it fires before the JSON / query extractors
     // and a malformed body cannot leak the request schema via 422.
     let settings_writes = Router::new()
         .route("/api/workspace", patch(api_patch_workspace))

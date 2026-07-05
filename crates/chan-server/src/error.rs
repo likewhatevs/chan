@@ -23,17 +23,16 @@ pub fn err(status: StatusCode, msg: String) -> Response {
 }
 
 /// Refusal returned by `tunnel_guard::settings_guard` when the
-/// server was started with `settings_disabled = true`
-/// (`--tunnel-public` runs, or any future caller that opts in).
-/// 403 because the request is well-formed; the host policy just
-/// forbids the operation. Single source of truth for the error
-/// body so SPA error toasts stay consistent.
+/// server was started with `settings_disabled = true`, i.e. a
+/// `--no-settings` serve (kiosk / shared workstation). 403 because
+/// the request is well-formed; the host policy just forbids the
+/// operation. Single source of truth for the error body so SPA
+/// error toasts stay consistent.
 pub fn err_settings_locked() -> Response {
     err(
         StatusCode::FORBIDDEN,
-        "settings are disabled while this workspace is shared publicly; \
-         configuration changes are only allowed on a local (loopback) \
-         serve or an OAuth-gated tunnel"
+        "settings are disabled on this server (started with \
+         --no-settings); configuration changes are not permitted here"
             .into(),
     )
 }

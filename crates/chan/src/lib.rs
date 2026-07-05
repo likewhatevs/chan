@@ -301,11 +301,9 @@ enum Command {
         /// Lock down the Settings panel: the SPA greys the cog and
         /// the server refuses every settings-write route with 403
         /// (PATCH /api/workspace, /api/config, /api/server/config,
-        /// POST /api/storage/reset, POST /api/index/rebuild).
-        /// Tunnel mode already implies
-        /// this; the flag lets a local serve opt in for kiosk-style
-        /// deployments (shared workstation, demo box) where the
-        /// workspace owner is not the operator at the keyboard.
+        /// POST /api/storage/reset, POST /api/index/rebuild). For
+        /// kiosk-style deployments (shared workstation, demo box) where
+        /// the workspace owner is not the operator at the keyboard.
         #[arg(long)]
         no_settings: bool,
         /// Force a standalone server: bind this workspace directly and skip
@@ -2292,12 +2290,9 @@ async fn cmd_serve(args: ServeArgs, personality: Personality) -> Result<()> {
         open_browser: !no_browser,
         search_aggression,
         verbose,
-        // Local serve trusts the operator by default; --no-settings
-        // opts into the same UI grey + server 403 that --tunnel-public
-        // forces, for kiosk / shared-workstation deployments. The
-        // public-tunnel redactions on GETs are kept tunnel-only:
-        // a local operator on the same machine has nothing to hide
-        // from themselves.
+        // Local serve trusts the operator by default; --no-settings opts
+        // into the UI grey + server 403 for kiosk / shared-workstation
+        // deployments where the operator is not the workspace owner.
         settings_disabled: no_settings,
     };
     // A standalone `chan open` defaults to `DEFAULT_PORT` (8787) -- the SAME
