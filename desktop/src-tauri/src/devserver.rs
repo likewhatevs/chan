@@ -686,7 +686,7 @@ pub fn assemble_tenant_url_from_base(
     prefix: &str,
     token: &str,
 ) -> Result<String, String> {
-    let mut url = url::Url::parse(&base).map_err(|e| format!("bad devserver base {base}: {e}"))?;
+    let mut url = url::Url::parse(base).map_err(|e| format!("bad devserver base {base}: {e}"))?;
     let path = format!("{}/index.html", prefix.trim_end_matches('/'));
     url.set_path(&path);
     url.query_pairs_mut().append_pair("t", token);
