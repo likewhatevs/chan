@@ -35,12 +35,7 @@
     Search as SearchIcon,
     X,
   } from "lucide-svelte";
-  import {
-    SHORTCUTS,
-    currentOS,
-    currentPlatform,
-    formatChord,
-  } from "../state/shortcuts";
+  import { chordFor, currentOS } from "../state/shortcuts";
   import FindBar from "./FindBar.svelte";
   import Inspector from "./Inspector.svelte";
   import OutlineBody, { type Heading } from "./OutlineBody.svelte";
@@ -799,19 +794,11 @@
     openTerminalInPane(layout.activePaneId, terminalFromHereTarget(tab.path, false));
   }
 
-  /// Chord lookup mirrors the empty-pane menu in Pane.svelte: SHORTCUTS
-  /// is keyed by command id; render the platform-specific chord and
-  /// format it for the current OS. Rows without a registered chord
-  /// render an empty cell so the right column stays aligned.
-  const menuPlatform = currentPlatform();
-  const menuOs = currentOS();
+  /// Chord lookup for the editor menu rows, override-aware (user
+  /// assignment first, then the built-in). Rows without a chord render an
+  /// empty cell so the right column stays aligned.
   function chordLabel(id: string | undefined): string {
-    if (!id) return "";
-    const s = SHORTCUTS.find((x) => x.id === id);
-    if (!s) return "";
-    const chord = s[menuPlatform];
-    if (!chord) return "";
-    return formatChord(chord, menuOs);
+    return id ? (chordFor(id) ?? "") : "";
   }
 </script>
 

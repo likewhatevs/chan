@@ -86,13 +86,7 @@
     terminalBroadcastReachCount,
   } from "../state/tabs.svelte";
   import type { BrowserLabelCtx } from "../state/tabs.svelte";
-  import {
-    SHORTCUTS,
-    currentOS,
-    currentPlatform,
-    formatChord,
-    osChord,
-  } from "../state/shortcuts";
+  import { chordFor } from "../state/shortcuts";
   import { openTabMenu, tabMenu } from "../state/tabMenu.svelte";
   import {
     api,
@@ -144,20 +138,12 @@
     ),
   );
 
-  /// Platform + OS settle once at module init: the chord set (web
-  /// vs native) and Mod label (Cmd vs Ctrl) don't change at runtime.
-  /// Used by the pane chrome menus and the shortcut table.
-  const platform = currentPlatform();
-  const os = currentOS();
   const paneFocusColors: FocusColor[] = ["blue", "orange", "green", "pink"];
 
+  /// Resolve a command's chord for the pane chrome menus, override-aware
+  /// (user assignment first, then the built-in), empty when unbound.
   function chordLabel(id: string | undefined): string {
-    if (!id) return "";
-    const s = SHORTCUTS.find((x) => x.id === id);
-    if (!s) return "";
-    const chord = osChord(s, platform, os);
-    if (!chord) return "";
-    return formatChord(chord, os);
+    return id ? (chordFor(id) ?? "") : "";
   }
 
   /// Empty panes have no right-click context menu. The command

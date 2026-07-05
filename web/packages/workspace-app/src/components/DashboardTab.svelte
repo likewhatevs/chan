@@ -17,12 +17,7 @@
 
   import { Check, RefreshCw, Settings2 } from "lucide-svelte";
   import { reloadWindow } from "../api/desktop";
-  import {
-    SHORTCUTS,
-    currentOS,
-    currentPlatform,
-    formatChord,
-  } from "../state/shortcuts";
+  import { chordFor } from "../state/shortcuts";
   import {
     scheduleSessionSave,
     surfaceThemeOverride,
@@ -63,17 +58,11 @@
   let menu: HamburgerMenu | undefined = $state();
   let menuOpen = $state(false);
 
-  // Chord lookup so the Reload row in the right-click menu renders
-  // its Cmd+R hint alongside the row label, matching the pane
-  // top-bar pattern in Pane.svelte.
-  const platform = currentPlatform();
-  const os = currentOS();
+  // Chord lookup so the Reload row in the right-click menu renders its
+  // Cmd+R hint alongside the row label, matching the pane top-bar pattern
+  // in Pane.svelte. Override-aware (user assignment first, then built-in).
   function chordLabel(id: string): string {
-    const s = SHORTCUTS.find((x) => x.id === id);
-    if (!s) return "";
-    const chord = s[platform];
-    if (!chord) return "";
-    return formatChord(chord, os);
+    return chordFor(id) ?? "";
   }
 
   function onContextMenu(e: MouseEvent): void {
