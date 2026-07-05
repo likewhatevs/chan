@@ -1,9 +1,11 @@
-// Net-new Global commands: theme (system / light / dark) and the
-// screen-lock family (enable / disable / test / set pin / theme). The
-// reuse-existing Global entries live in core.ts; these need a new action
-// or an in-app prompt. Theme and screen lock are machine-global, so they
-// stay available in every window. Register with registerCommands. See
-// state/commands.ts for the Command shape and helpers.
+// Net-new Global commands: theme (system / light / dark), the screen-lock
+// family (enable / disable / test / set pin / theme), and the window
+// controls (Reload, Open Inspector) that mirror the WebView native menu.
+// The reuse-existing Global entries live in core.ts; these need a new
+// action or an in-app prompt. Theme, screen lock, and Reload are
+// machine-global; Open Inspector is desktop-only. Register with
+// registerCommands. See state/commands.ts for the Command shape and
+// helpers.
 
 import { registerCommands } from "../commands";
 import {
@@ -15,6 +17,11 @@ import {
 import { loadScreensaverState, lockNow } from "../screensaver.svelte";
 import { hashPin } from "../screensaver";
 import { api } from "../../api/client";
+import {
+  isTauriDesktop,
+  openWebInspector,
+  reloadWindow,
+} from "../../api/desktop";
 
 /// Run a config write and report the outcome as a transient pill, so a
 /// launcher command that mutates state still gives feedback without an
@@ -151,5 +158,26 @@ registerCommands([
         "Screen lock theme: matrix",
         "Screen lock update failed",
       ),
+  },
+  {
+    // Shares the SHORTCUTS id so the launcher row renders its chord read
+    // only. reloadWindow works on web (location.reload) and desktop (IPC).
+    id: "app.window.reload",
+    title: "Reload",
+    category: "Global",
+    keywords: ["reload", "refresh", "window"],
+    available: () => true,
+    run: () => void reloadWindow(),
+  },
+  {
+    // Desktop-only: on web the browser owns DevTools and openWebInspector
+    // no-ops, so it is not offered there. Cmd+Opt+I is a Tauri-native chord
+    // that bypasses the SPA, so this launcher entry stays chordless.
+    id: "app.window.devtools",
+    title: "Open Inspector",
+    category: "Global",
+    keywords: ["devtools", "inspector", "console", "javascript", "debug"],
+    available: () => isTauriDesktop(),
+    run: () => void openWebInspector(),
   },
 ]);
