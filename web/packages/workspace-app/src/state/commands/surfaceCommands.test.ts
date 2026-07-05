@@ -12,6 +12,7 @@ import "./browser";
 import "./graph";
 import "./dashboard";
 import "./diagram";
+import "./terminal";
 
 function ctx(partial: Partial<CommandContext>): CommandContext {
   return {
@@ -38,7 +39,6 @@ describe("editor surface commands", () => {
       "app.file.duplicate",
       "app.file.rename",
       "app.editor.stripTrailingWs",
-      "app.editor.pageWidth.reset",
       "app.editor.toggleCollapse",
       "app.editor.searchSelection",
     ]) {
@@ -90,6 +90,27 @@ describe("file browser surface commands", () => {
   });
 });
 
+describe("terminal surface commands", () => {
+  it("appear only on a workspace terminal surface", () => {
+    const onTerminal = idsIn(ctx({ activeSurface: "terminal" }));
+    for (const id of [
+      "app.terminal.broadcastToggle",
+      "app.terminal.copyCwd",
+      "terminal.richPrompt",
+    ]) {
+      expect(onTerminal.has(id)).toBe(true);
+    }
+    expect(idsIn(ctx({ activeSurface: "file" })).has("terminal.richPrompt")).toBe(
+      false,
+    );
+    expect(
+      idsIn(ctx({ terminalOnly: true, activeSurface: "terminal" })).has(
+        "terminal.richPrompt",
+      ),
+    ).toBe(false);
+  });
+});
+
 describe("dashboard surface commands", () => {
   it("appear only on a dashboard surface", () => {
     const onDash = idsIn(ctx({ activeSurface: "dashboard" }));
@@ -122,6 +143,7 @@ describe("surface commands in a standalone terminal window", () => {
       "app.browser.newGraph",
       "app.graph.copyLink",
       "app.dashboard.nextSlide",
+      "terminal.richPrompt",
     ]) {
       expect(inTerminal.has(id)).toBe(false);
     }

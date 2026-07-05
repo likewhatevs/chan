@@ -1741,8 +1741,8 @@
     opacity: 0;
     pointer-events: none;
   }
-  /* "From selection" section label. Subdued style mirroring
-     TerminalTab's `.from-cwd-label`. */
+  /* "From selection" section label. Subdued style for a non-actionable
+     menu grouping heading. */
   .from-selection-label {
     padding: 4px 8px 2px;
     color: var(--text-secondary);

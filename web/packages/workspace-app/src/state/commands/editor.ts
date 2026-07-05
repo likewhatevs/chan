@@ -29,12 +29,6 @@ import {
   setTabStyleToolbarOpen,
   type FileTab,
 } from "../tabs.svelte";
-import {
-  DEFAULT_RATIO,
-  PAGE_WIDTH_STEP_PCT,
-  pageWidth,
-  setPageWidth,
-} from "../pageWidth.svelte";
 import { notify } from "../notify.svelte";
 import { terminalFromHereTarget } from "../../terminal/fromHere";
 import { stripTrailingWhitespaceText } from "../../editor/tools";
@@ -50,13 +44,11 @@ function onFile(fn: (tab: FileTab) => void): () => void {
 }
 
 /// Parent directory of a workspace-relative path (empty at the root),
-/// matching the editor tab menu's "Copy path to $CWD".
+/// used by the editor command launcher's "Copy path to parent directory".
 function parentDir(path: string): string {
   const slash = path.lastIndexOf("/");
   return slash <= 0 ? "" : path.slice(0, slash);
 }
-
-const STEP = PAGE_WIDTH_STEP_PCT / 100;
 
 registerCommands([
   {
@@ -236,29 +228,5 @@ registerCommands([
     keywords: ["inspector", "details", "info", "metadata"],
     available: (ctx) => onSurface(ctx, "file"),
     run: onFile((tab) => setTabInspectorOpen(tab, !tab.inspectorOpen)),
-  },
-  {
-    id: "app.editor.pageWidth.narrower",
-    title: "Page width: narrower",
-    category: "Editor",
-    keywords: ["width", "reading", "column", "narrow"],
-    available: (ctx) => onSurface(ctx, "file"),
-    run: () => setPageWidth(pageWidth.ratio - STEP),
-  },
-  {
-    id: "app.editor.pageWidth.wider",
-    title: "Page width: wider",
-    category: "Editor",
-    keywords: ["width", "reading", "column", "wide"],
-    available: (ctx) => onSurface(ctx, "file"),
-    run: () => setPageWidth(pageWidth.ratio + STEP),
-  },
-  {
-    id: "app.editor.pageWidth.reset",
-    title: "Page width: reset",
-    category: "Editor",
-    keywords: ["width", "reading", "column", "default", "reset"],
-    available: (ctx) => onSurface(ctx, "file"),
-    run: () => setPageWidth(DEFAULT_RATIO),
   },
 ]);

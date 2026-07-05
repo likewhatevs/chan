@@ -168,14 +168,14 @@ describe("no inline close affordance on first-class surfaces", () => {
 
   test("GraphPanel renders a tab-menu-bubble with mbtn rows + vertical filter rows", () => {
     // The bubble uses standard hamburger-menu row shape (.mbtn) with
-    // vertical filter rows (Depth + Reload + per-filter + footer rows).
-    // Reload is back as of round 2 (keep-alive manual refetch).
+    // vertical filter rows (scope + Depth + per-filter rows) and a
+    // Close footer.
     expect(graph).toMatch(/\{#if tab && tabMenuOpen\}[\s\S]*?class="tab-menu-bubble"/);
     expect(graph).toMatch(
       /class="tab-menu-bubble"[\s\S]*?class="mbtn depth-row"/,
     );
     expect(graph).toMatch(
-      /class="tab-menu-bubble"[\s\S]*?onclick=\{reloadGraph\}/,
+      /class="tab-menu-bubble"[\s\S]*?class="mbtn graph-scope-row"/,
     );
     expect(graph).toMatch(
       /class="tab-menu-bubble"[\s\S]*?class="mbtn filter-row"[\s\S]*?show\[kind\] = !show\[kind\]/,
@@ -191,10 +191,13 @@ describe("no inline close affordance on first-class surfaces", () => {
     expect(graph).not.toMatch(
       /class="tab-menu-bubble"[\s\S]*?onclick=\{doOpenSettings\}/,
     );
-    expect(graph).toMatch(
+    expect(graph).not.toMatch(
+      /class="tab-menu-bubble"[\s\S]*?onclick=\{reloadGraph\}[\s\S]*?<span class="mbtn-label">Reload<\/span>/,
+    );
+    expect(graph).not.toMatch(
       /class="tab-menu-bubble"[\s\S]*?onclick=\{flipToSettings\}[\s\S]*?<span class="mbtn-label">Settings<\/span>/,
     );
-    expect(graph).toMatch(
+    expect(graph).not.toMatch(
       /class="tab-menu-bubble"[\s\S]*?onclick=\{doReopenClosedTab\}[\s\S]*?<span class="mbtn-label">Reopen Closed Tab<\/span>/,
     );
     expect(graph).toMatch(

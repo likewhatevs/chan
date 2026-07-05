@@ -797,7 +797,7 @@
     // Ctrl+Shift+P in the desktop webview (free), Alt+Shift+P on web
     // (Ctrl+Shift+P is the browser's private-window chord). Keep this in sync
     // with `osChord`'s RICH_PROMPT_ID branch. Also reachable via the terminal
-    // right-click "Show/Hide Rich Prompt" entry, whose label reads the store.
+    // right-click row and command launcher entry, whose labels read the store.
     if (e.code === "KeyP") {
       const richPromptChord = isTauriDesktop()
         ? currentOS() === "mac"
@@ -1185,8 +1185,14 @@
       case "app.terminal.broadcastToggle":
         toggleActiveTerminalBroadcastSelectAll();
         return;
-      // Route through createDraftAndOpen so the hamburger menu, Cmd+N chord,
-      // and desktop native menu all converge on a single handler.
+      case "terminal.richPrompt": {
+        const term = activeTerminalTab();
+        if (term) toggleRichPromptForTab(term.id);
+        return;
+      }
+      // Route through createDraftAndOpen so the command launcher,
+      // welcome grid, Cmd+N chord, and desktop native menu all converge
+      // on a single handler.
       case "app.draft.new":
         void createDraftAndOpen();
         return;
@@ -1196,8 +1202,8 @@
       case "app.screensaver.lock":
         lockNow();
         return;
-      // Open Dashboard in the active pane. Same command from the pane
-      // hamburger, empty-pane right-click menu, and carousel slide-1 button.
+      // Open Dashboard in the active pane. Same command from the command
+      // launcher, welcome grid, and carousel slide-1 button.
       case "app.dashboard.open":
         openDashboardInActivePane();
         return;

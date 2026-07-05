@@ -504,9 +504,9 @@
     onFlip?.();
   }
 
-  /// Reopen Closed Tab, parity with the terminal + editor menus.
-  /// Available regardless of variant since the closed-tab stack is
-  /// window-global; the entry disables when the stack is empty.
+  /// Reopen Closed Tab for the File Browser menu. Available regardless
+  /// of variant since the closed-tab stack is window-global; the entry
+  /// disables when the stack is empty.
   function doReopenClosedTab(): void {
     menu?.close();
     reopenClosedTab();
@@ -691,9 +691,8 @@
   <!-- File Browser menu.
        Header: path-derived workspace label + full-path row (workspace icon,
        grey, fade-on-overflow, click -> workspace inspector). Body:
-       dock toggles, expand/collapse +
-       reload, import contacts. Foot: Settings (flipHybrid)
-       + Reopen Closed Tab + Close.
+       dock toggles, expand/collapse, import contacts. Foot: Settings
+       (flipHybrid) + Reopen Closed Tab + Close.
        Selection menu (rename/delete/etc.) lives on FileTree's
        row right-click; this menu is the FB tab right-click +
        hamburger. New file / New directory entries moved to the

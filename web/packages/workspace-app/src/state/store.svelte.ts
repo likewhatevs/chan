@@ -233,9 +233,9 @@ export const ui = $state<{
   /// file-browser / dashboard surfaces, no rich prompt, no team work.
   /// Set once at bootstrap and never flipped. Surfaces gate their
   /// workspace-only affordances off this flag (Hybrid staging spawns,
-  /// rich prompt, team work, the terminal context menu's New File /
-  /// New File Browser / New Graph / Set MCP env entries). In this mode
-  /// `app.terminal.toggle` (Cmd+T) adds a terminal tab to the focused pane.
+  /// rich prompt, team work, and commands that open workspace-backed
+  /// surfaces). In this mode `app.terminal.toggle` (Cmd+T) adds a
+  /// terminal tab to the focused pane.
   terminalOnly: boolean;
   /// Terminal-only windows close when their last terminal tab is closed (they
   /// never sit empty). Set true by `bootstrapTerminalOnly` AFTER the first
@@ -3000,8 +3000,8 @@ export function openGraphForLanguage(language: string): void {
 }
 
 /** "Copy link to graph": open a graph tab from a
- *  `chan://graph?...` link (produced by the graph tab menu's "Copy link
- *  to graph"). Returns true when the link parsed and a tab was opened so
+ *  `chan://graph?...` link (produced by the graph command). Returns true
+ *  when the link parsed and a tab was opened so
  *  the editor's link-click handler can fall through to normal handling
  *  on a non-graph href. The serialized selection rides in as
  *  `pendingSelectId` so the re-opened graph lands on the same node. */

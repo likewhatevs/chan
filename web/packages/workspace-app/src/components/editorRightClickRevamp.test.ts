@@ -1,11 +1,10 @@
 import { describe, expect, test } from "vitest";
 import editor from "./FileEditorTab.svelte?raw";
 
-// FileEditorTab right-click menu. Pins: menu-top editable Name input;
-// Show Source Code + Collapse Code Blocks; Find / Copy paths; From-$CWD
-// spawn band (Duplicate, New File, New Terminal, New File Browser, New
-// Graph); Settings (flipHybrid) + Reopen + Close foot. Reload + Open
-// Inspector dropped (see tabMenuReloadInspector.test.ts).
+// FileEditorTab right-click menu. Pins: menu-top editable Name input,
+// page-width slider, and Close. Editor actions that overlapped with
+// the command launcher are intentionally not duplicated in the tab menu;
+// body-context actions stay selection/link-aware.
 
 describe("menu-top Name input", () => {
   test("name-row + name-input + name-label rendered inside the action-list", () => {
@@ -35,63 +34,21 @@ describe("menu-top Name input", () => {
   });
 });
 
-describe("Show Source Code + Collapse Code Blocks", () => {
-  test("Show Source Code toggle present (via doToggleMode); label switches based on mode", () => {
+describe("tab-menu foot", () => {
+  test("Page width is followed by a separator and Close", () => {
     expect(editor).toMatch(
-      /onclick=\{doToggleMode\}[\s\S]{1,800}\{inSource \? renderedLabel : "Show Source Code"\}/,
+      /<div class="page-width-row">[\s\S]{1,900}<\/div>\s*<div class="msep" role="separator"><\/div>\s*<button class="mbtn" onclick=\{doCloseTab\}>[\s\S]{1,300}<span class="mbtn-label">Close<\/span>/,
     );
   });
 
-  test("Collapse Code Blocks label uses title-case + gated on markdownToolsEnabled", () => {
+  test("Close shows the close-tab chord", () => {
     expect(editor).toMatch(
-      /\{#if markdownToolsEnabled\}[\s\S]{1,800}\{tab\.codeBlocksCollapsed \? "Expand Code Blocks" : "Collapse Code Blocks"\}/,
-    );
-  });
-});
-
-describe("From-$CWD spawn band", () => {
-  test("from-cwd-label rendered above the spawn buttons", () => {
-    expect(editor).toMatch(/class="from-cwd-label">From \$CWD/);
-  });
-
-  test("doNewTerminal / doNewFileBrowser / doNewGraph helpers exist + dispatch chan:command", () => {
-    expect(editor).toMatch(
-      /function doNewTerminal\(\): void \{[\s\S]{1,200}dispatchChanCommand\("app\.terminal\.toggle"\)/,
-    );
-    expect(editor).toMatch(
-      /function doNewFileBrowser\(\): void \{[\s\S]{1,200}dispatchChanCommand\("app\.files\.toggle"\)/,
-    );
-    expect(editor).toMatch(
-      /function doNewGraph\(\): void \{[\s\S]{1,200}dispatchChanCommand\("app\.graph\.toggle"\)/,
-    );
-  });
-
-  test("dispatchChanCommand fires the canonical chan:command event", () => {
-    expect(editor).toMatch(
-      /function dispatchChanCommand\(id: string\): void \{[\s\S]{1,400}new CustomEvent\("chan:command", \{ detail: \{ name: id \} \}\)/,
-    );
-  });
-
-  test("Duplicate / New File / New Terminal / New File Browser / New Graph buttons rendered", () => {
-    expect(editor).toMatch(
-      /onclick=\{doDuplicate\}[\s\S]{1,400}<span class="mbtn-label">Duplicate File<\/span>/,
-    );
-    expect(editor).toMatch(
-      /onclick=\{doNewFile\}[\s\S]{1,400}<span class="mbtn-label">New File<\/span>/,
-    );
-    expect(editor).toMatch(
-      /onclick=\{doNewTerminal\}[\s\S]{1,400}<span class="mbtn-label">New Terminal<\/span>/,
-    );
-    expect(editor).toMatch(
-      /onclick=\{doNewFileBrowser\}[\s\S]{1,400}<span class="mbtn-label">New File Browser<\/span>/,
-    );
-    expect(editor).toMatch(
-      /onclick=\{doNewGraph\}[\s\S]{1,400}<span class="mbtn-label">New Graph<\/span>/,
+      /<span class="mbtn-label">Close<\/span>\s*<span class="mbtn-chord">\{chordLabel\("app\.tab\.close"\)\}<\/span>/,
     );
   });
 });
 
-describe("Find / Copy paths", () => {
+describe("body menu Find", () => {
   test("doFind opens the per-tab find bar via openFind(tab.id)", () => {
     expect(editor).toMatch(
       /function doFind\(\): void \{[\s\S]{1,200}closeTabMenu\(\);[\s\S]{1,200}openFind\(tab\.id\)/,
@@ -101,53 +58,6 @@ describe("Find / Copy paths", () => {
   test("Find button rendered with chord hint", () => {
     expect(editor).toMatch(
       /onclick=\{doFind\}[\s\S]{1,400}<span class="mbtn-label">Find<\/span>/,
-    );
-  });
-
-  test("Copy path to file + Copy path to $CWD entries", () => {
-    expect(editor).toMatch(
-      /<span class="mbtn-label">Copy path to file<\/span>/,
-    );
-    expect(editor).toMatch(
-      /<span class="mbtn-label">Copy path to \$CWD<\/span>/,
-    );
-  });
-
-  test("doCopyCwdPath helper writes the parent-dir path to clipboard", () => {
-    // Routes through copyTextToClipboard so the editor, inspector COPY,
-    // and warnings dialog all share one writeText + fallback path.
-    expect(editor).toMatch(
-      /async function doCopyCwdPath\(\): Promise<void> \{[\s\S]{1,400}lastIndexOf\("\/"\)[\s\S]{1,400}copyTextToClipboard\(cwd/,
-    );
-  });
-});
-
-describe("Settings (flipHybrid) + Reopen + Close foot", () => {
-  test("flipToSettings calls flipHybrid via paneIdForTab", () => {
-    expect(editor).toMatch(
-      /function flipToSettings\(\): void \{[\s\S]{1,400}const paneId = paneIdForTab\(\);[\s\S]{1,200}if \(paneId\) flipHybrid\(paneId\)/,
-    );
-  });
-
-  test("Settings button wired to flipToSettings (not the legacy doOpenSettings)", () => {
-    expect(editor).toMatch(
-      /onclick=\{flipToSettings\}[\s\S]{1,400}<span class="mbtn-label">Settings<\/span>/,
-    );
-    expect(editor).not.toMatch(/onclick=\{doOpenSettings\}/);
-  });
-
-  test("Settings entry shows the app.settings.toggle chord hint", () => {
-    expect(editor).toMatch(
-      /<span class="mbtn-label">Settings<\/span>\s*<span class="mbtn-chord">\{chordLabel\("app\.settings\.toggle"\)\}<\/span>/,
-    );
-    expect(editor).not.toMatch(
-      /<span class="mbtn-label">Settings<\/span>\s*<span class="mbtn-chord"><\/span>/,
-    );
-  });
-
-  test("Reopen Closed Tab + Close buttons land in the foot block in order", () => {
-    expect(editor).toMatch(
-      /<span class="mbtn-label">Settings<\/span>[\s\S]{1,1000}<div class="msep" role="separator"><\/div>[\s\S]{1,2000}<span class="mbtn-label">Reopen Closed Tab<\/span>[\s\S]{1,1000}<span class="mbtn-label">Close<\/span>/,
     );
   });
 });
@@ -171,21 +81,35 @@ describe("dropped entries", () => {
   test("\"Copy File Path\" is gone (replaced by \"Copy path to file\")", () => {
     expect(editor).not.toMatch(/<span class="mbtn-label">Copy File Path<\/span>/);
   });
+
+  test("launcher-overlap rows are gone from the tab menu", () => {
+    for (const label of [
+      "Show Source Code",
+      "Collapse Code Blocks",
+      "Expand Code Blocks",
+      "Search",
+      "Copy path to file",
+      "Copy path to $CWD",
+      "Reload from Disk",
+      "Duplicate File",
+      "New File",
+      "New Terminal",
+      "New File Browser",
+      "New Graph",
+      "Settings",
+      "Reopen Closed Tab",
+    ]) {
+      expect(editor).not.toContain(`<span class="mbtn-label">${label}</span>`);
+    }
+    expect(editor).not.toContain("from-cwd-label");
+  });
 });
 
 describe("imports", () => {
-  test("flipHybrid + openFind imported from tabs.svelte", () => {
-    expect(editor).toMatch(
-      /import \{[\s\S]{1,2000}flipHybrid,[\s\S]{1,800}\} from "\.\.\/state\/tabs\.svelte";/,
-    );
+  test("openFind imported from tabs.svelte", () => {
     expect(editor).toMatch(
       /import \{[\s\S]{1,2000}openFind,[\s\S]{1,800}\} from "\.\.\/state\/tabs\.svelte";/,
     );
-  });
-
-  test("Settings2 + Terminal as TerminalIcon imported from lucide", () => {
-    expect(editor).toMatch(/Settings2,/);
-    expect(editor).toMatch(/Terminal as TerminalIcon,/);
   });
 });
 

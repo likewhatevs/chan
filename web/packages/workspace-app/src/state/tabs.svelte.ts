@@ -3962,14 +3962,13 @@ export function setMode(tab: Tab, mode: Mode): void {
 /// HAVE a rendered surface: plain text (.rs/.py/.toml/Makefile) has only source
 /// mode, so the Mod+E chord is a NO-OP there instead of forcing an invalid
 /// wysiwyg render. `defaultModeForPath` yields the rendered mode for renderable
-/// files and "source" for source-only ones — the same split FileEditorTab's
-/// in-menu "Show Source Code" toggle uses (`hasRenderedMode` /
-/// `renderedModeForTab`). Routed via the Mod+E chord; the right-click "Show
-/// Source Code" entry runs FileEditorTab's `doToggleMode`. Both paths remap the
-/// caret across the markdown source<->wysiwyg boundary (an image collapses to a
-/// single rendered position, so the offset shifts) before flipping, so the
-/// caret lands on the same logical spot. No-op when the active tab isn't a file
-/// tab.
+/// files and "source" for source-only ones — the same split FileEditorTab uses
+/// for rendered/source mode controls (`hasRenderedMode` / `renderedModeForTab`).
+/// Routed via the Mod+E chord and command launcher. Component-local mode buttons
+/// call FileEditorTab's `doToggleMode`; both paths remap the caret across the
+/// markdown source<->wysiwyg boundary (an image collapses to a single rendered
+/// position, so the offset shifts) before flipping, so the caret lands on the
+/// same logical spot. No-op when the active tab isn't a file tab.
 export function toggleActiveFileTabMode(): void {
   const node = layout.nodes[layout.activePaneId];
   if (!node || node.kind !== "leaf") return;
@@ -4550,7 +4549,7 @@ function restoreGraphMode(mode: SerTab["gm"]): GraphTab["mode"] {
   return "semantic";
 }
 
-/// "Copy link to graph": a graph tab serializes to a
+/// "Copy link to graph": the launcher serializes a graph tab to a
 /// `chan://graph?...` URL that reproduces the view when opened from a
 /// markdown file. A custom-scheme URL survives a paste into markdown
 /// intact and is trivial to detect on a link click. Round-trips

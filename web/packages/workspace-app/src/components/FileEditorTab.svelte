@@ -1,13 +1,7 @@
 <script lang="ts">
-  // Body of a file tab. The previous top "tab-bar" (Aa, page-width,
-  // formatting group, reveal-in-browser, mode toggle, outline toggle)
-  // is split across two surfaces: a per-tab popover anchored to the
-  // tab title click (page width + duplicate / reveal / mode / outline /
-  // show-style-toolbar actions), plus a floating style toolbar pinned
-  // to the top-left of the editor canvas (block kind + B/I/S/code/link/
-  // lists/HR/image). The bubble's formatting row used to sit inside
-  // the popover; lifting it out of there reduces the chrome users have
-  // to twirl through and keeps formatting one mouse-move away.
+  // Body of a file tab. Editor formatting lives in the floating style
+  // toolbar; the tab menu is intentionally small chrome: name, page
+  // width, close.
 
   import { onDestroy, tick } from "svelte";
   import Wysiwyg from "../editor/Wysiwyg.svelte";
@@ -28,34 +22,17 @@
     type InternalLinkHit,
   } from "../editor/link_preview";
   import {
-    ArrowLeft,
-    ArrowRight,
-    Braces,
     Clipboard,
     ClipboardPaste,
-    Code2,
     Copy,
-    Eraser,
     ExternalLink,
     Eye,
-    FilePlus,
     Folder,
-    History,
-    Highlighter,
     Link as LinkIcon,
-    Network,
     Pencil,
-    Pilcrow,
-    RotateCw,
     Save,
     Scissors,
     Search as SearchIcon,
-    Settings2,
-    Shapes,
-    Square,
-    Table2,
-    Terminal as TerminalIcon,
-    Type,
     X,
   } from "lucide-svelte";
   import {
@@ -75,25 +52,19 @@
     layout,
     attemptInPlaceReopen,
     beginMissingFileReopen,
-    canReopenClosedTab,
     closeTab,
     dismissExternalChange,
-    flipHybrid,
     openFind,
-    reopenClosedTab,
     reloadTabFromDisk,
     setMode,
     clearTabCaretCommand,
     setTabCaret,
     setTabInspectorOpen,
     setTabCodeBlocksCollapsed,
-    setTabHighlightTrailingWhitespace,
     setTabOutlineOpen,
     setTabSlidePreviewIndex,
     setTabSlidePreviewMode,
     setTabSlidePreviewOpen,
-    setTabStyleToolbarOpen,
-    setTabSyntaxHighlight,
     type FileTab,
   } from "../state/tabs.svelte";
   import WikiStatusBar from "./WikiStatusBar.svelte";
@@ -101,7 +72,6 @@
     renderedCaretForSourceCaret,
     sourceCaretForRenderedCaret,
   } from "../editor/caret_mapping";
-  import { stripTrailingWhitespaceText } from "../editor/tools";
   import { parseSlidesSpec } from "../editor/slides";
 
   import {
@@ -153,8 +123,8 @@
     openTabMenu,
   } from "../state/tabMenu.svelte";
   // The Editor right-click menu carries no Reload / Open Inspector
-  // entries; Cmd+R + the pane hamburger are the canonical surfaces
-  // for those.
+  // entries; Cmd+R handles reload, and the pane chrome context menu
+  // carries reload + inspector.
 
   // Keep-alive: Pane.svelte keeps every file tab mounted (terminal
   // precedent) and flips `active` — true only when this tab is the
@@ -537,16 +507,6 @@
     setPageWidth(pct / 100);
   }
 
-  function doNewFile(): void {
-    closeTabMenu();
-    void fileOps.createFile(parentPath(tab.path));
-  }
-
-  function doReopenClosedTab(): void {
-    closeTabMenu();
-    reopenClosedTab();
-  }
-
   function paneIdForTab(): string | null {
     for (const [paneId, node] of Object.entries(layout.nodes)) {
       if (node.kind === "leaf" && node.tabs.some((candidate) => candidate.id === tab.id)) {
@@ -565,20 +525,6 @@
   function parentPath(path: string): string {
     const slash = path.lastIndexOf("/");
     return slash < 0 ? "" : path.slice(0, slash);
-  }
-
-  async function doCopyPath(): Promise<void> {
-    closeTabMenu();
-    await copyTextToClipboard(tab.path, {
-      // Success toast auto-dismisses (3s).
-      onSuccess: () => setTransientStatus("Copied file path"),
-      onError: (msg) => (ui.status = `copy failed: ${msg}`),
-    });
-  }
-
-  function doDuplicate(): void {
-    closeTabMenu();
-    void fileOps.duplicateFile(tab.path);
   }
 
   /// In-menu inline rename (an editable Name input in the
@@ -663,17 +609,7 @@
     return `${(n / (1024 * 1024)).toFixed(1)} MB`;
   }
 
-  function doToggleSyntaxHighlight(): void {
-    setTabSyntaxHighlight(tab, !tab.syntaxHighlight);
-    closeTabMenu();
-  }
-
   const markdownToolsEnabled = $derived(tab.fileKind !== "text");
-
-  function doToggleTrailingWhitespace(): void {
-    setTabHighlightTrailingWhitespace(tab, !tab.highlightTrailingWhitespace);
-    closeTabMenu();
-  }
 
   function doToggleCodeBlocks(): void {
     if (!markdownToolsEnabled) return;
@@ -685,24 +621,7 @@
     closeTabMenu();
   }
 
-  function doRemoveTrailingWhitespace(): void {
-    const changed =
-      tab.mode === "wysiwyg"
-        ? wysiwygRef?.removeTrailingWhitespaceInEditor()
-        : sourceRef?.removeTrailingWhitespaceInEditor();
-    if (!changed) {
-      const stripped = stripTrailingWhitespaceText(tab.content);
-      if (stripped !== tab.content) tab.content = stripped;
-    }
-    closeTabMenu();
-  }
-
   // ---- right-click context menu --------------------------------------
-  // Re-uses the existing tab menu bubble (the same one that opens
-  // from the tab dot). The bubble carries Duplicate / Rename /
-  // mode-toggle / outline / style-toolbar plus our three new
-  // actions (Reload / Search / Graph from here). Anchored at
-  // the click coords by synthesizing a zero-size rect.
 
   // Link state for the body menu, captured at right-click time BEFORE
   // the menu portal covers the click point. `bodyLinkUrl` = the external
@@ -806,49 +725,6 @@
     await reloadTabFromDisk(tab.id);
   }
 
-  /// Settings is a per-tab back-side flip (a toggle that flips the
-  /// editor to show settings), matching the FBSurface + TerminalTab
-  /// menus.
-  function flipToSettings(): void {
-    closeTabMenu();
-    const paneId = paneIdForTab();
-    if (paneId) flipHybrid(paneId);
-  }
-
-  /// "From $CWD" spawn entries. Each closes the menu + fires the
-  /// canonical `chan:command` event so the chord layer + the
-  /// empty-pane carousel + this menu converge on one handler.
-  function dispatchChanCommand(id: string): void {
-    window.dispatchEvent(
-      new CustomEvent("chan:command", { detail: { name: id } }),
-    );
-  }
-  function doNewTerminal(): void {
-    closeTabMenu();
-    dispatchChanCommand("app.terminal.toggle");
-  }
-  function doNewFileBrowser(): void {
-    closeTabMenu();
-    dispatchChanCommand("app.files.toggle");
-  }
-  function doNewGraph(): void {
-    closeTabMenu();
-    dispatchChanCommand("app.graph.toggle");
-  }
-
-  /// "Copy path to $CWD": the editor menu exposes both the file path
-  /// and the parent-directory path. Parent dir is `tab.path` up to
-  /// the last `/`; for root-level files the CWD is the workspace
-  /// root.
-  async function doCopyCwdPath(): Promise<void> {
-    closeTabMenu();
-    const slash = tab.path.lastIndexOf("/");
-    const cwd = slash > 0 ? tab.path.slice(0, slash) : "";
-    await copyTextToClipboard(cwd, {
-      onError: (msg) => (ui.status = `copy failed: ${msg}`),
-    });
-  }
-
   /// Find opens the per-tab find bar via the `openFind(tabId)`
   /// helper that the `app.find.open` chord also routes to.
   function doFind(): void {
@@ -916,21 +792,6 @@
   function doTerminalFromHere(): void {
     closeTabMenu();
     openTerminalInPane(layout.activePaneId, terminalFromHereTarget(tab.path, false));
-  }
-
-  function doToggleOutline(): void {
-    setTabOutlineOpen(tab, !tab.outlineOpen);
-    closeTabMenu();
-  }
-
-  function doToggleDetails(): void {
-    setTabInspectorOpen(tab, !tab.inspectorOpen);
-    closeTabMenu();
-  }
-
-  function doToggleStyleToolbar(): void {
-    setTabStyleToolbarOpen(tab, !tab.styleToolbarOpen);
-    closeTabMenu();
   }
 
   /// Chord lookup mirrors the empty-pane menu in Pane.svelte: SHORTCUTS
@@ -1026,13 +887,9 @@
       use:clampMenu={menuPos}
       onmousedown={(e) => e.stopPropagation()}
     >
-      <!-- Editor right-click menu. Header: editable Name input.
-           Body: Show Source Code + Collapse Code Blocks band, then a
-           View-toggles band (side-panel toggles + cleanup
-           utilities), find/copy band, From-$CWD spawn band. Foot:
-           Settings (flipHybrid) + Reopen Closed Tab + Close. No
-           Reload Window / Open Inspector entries; Cmd+R + pane
-           hamburger cover them. -->
+      <!-- Editor tab menu: editable name, page width, and close.
+           Editing and navigation actions live in the command launcher
+           or body-context menu. -->
       {#if tabMenu.source === "body"}
         <!-- Body-context menu (right-click in the editor body): a
              tight, selection-aware set. Cut/Copy gate on a selection;
@@ -1168,228 +1025,7 @@
           />
           <span class="page-width-value">{Math.round(pageWidth.ratio * 100)}%</span>
         </div>
-        <!-- Show Source Code: the menu's primary toggle. Hidden for
-             plain text tabs that have no structured renderer. -->
-        {#if hasRenderedMode}
-          {@const inSource = tab.mode === "source"}
-          {@const renderedLabel =
-            renderedModeForTab === "pretty"
-              ? "Show Pretty Tree"
-              : renderedModeForTab === "table"
-                ? "Show Table"
-                : renderedModeForTab === "canvas"
-                  ? "Show Whiteboard"
-                  : "Show Rendered"}
-          <button class="mbtn" onclick={doToggleMode}>
-            <span class="mbtn-icon">
-              {#if inSource && renderedModeForTab === "pretty"}
-                <Braces size={16} strokeWidth={1.75} aria-hidden="true" />
-              {:else if inSource && renderedModeForTab === "table"}
-                <Table2 size={16} strokeWidth={1.75} aria-hidden="true" />
-              {:else if inSource && renderedModeForTab === "canvas"}
-                <Shapes size={16} strokeWidth={1.75} aria-hidden="true" />
-              {:else if inSource}
-                <Pilcrow size={16} strokeWidth={1.75} aria-hidden="true" />
-              {:else}
-                <Code2 size={16} strokeWidth={1.75} aria-hidden="true" />
-              {/if}
-            </span>
-            <span class="mbtn-label">
-              {inSource ? renderedLabel : "Show Source Code"}
-            </span>
-            <span class="mbtn-chord">{chordLabel("app.editor.toggleMode")}</span>
-          </button>
-        {/if}
-        {#if markdownToolsEnabled}
-          <button
-            class="mbtn"
-            onclick={doToggleCodeBlocks}
-            class:on={tab.codeBlocksCollapsed}
-          >
-            <span class="mbtn-icon">
-              <Code2 size={16} strokeWidth={1.75} aria-hidden="true" />
-            </span>
-            <span class="mbtn-label">
-              {tab.codeBlocksCollapsed ? "Expand Code Blocks" : "Collapse Code Blocks"}
-            </span>
-            <span class="mbtn-chord"></span>
-          </button>
-        {/if}
-        <!-- View toggles + cleanup utilities band: Outline /
-             Details / Style Toolbar / Syntax Highlight / Trailing
-             Whitespace toggles + the destructive Remove-TW button.
-             This menu is the only surface for these features (no
-             chord alternative). -->
         <div class="msep" role="separator"></div>
-        <!-- Outline parses the buffer as markdown headings; an excalidraw
-             scene is JSON, so the row is hidden for those tabs. -->
-        {#if !isExcalidraw(tab.path)}
-          <button class="mbtn" onclick={doToggleOutline} class:on={tab.outlineOpen}>
-            <span class="mbtn-icon">
-              {#if tab.outlineOpen}
-                <ArrowLeft size={16} strokeWidth={1.75} aria-hidden="true" />
-              {:else}
-                <ArrowRight size={16} strokeWidth={1.75} aria-hidden="true" />
-              {/if}
-            </span>
-            <span class="mbtn-label">
-              {tab.outlineOpen ? "Hide Outline" : "Show Outline"}
-            </span>
-            <span class="mbtn-chord"></span>
-          </button>
-        {/if}
-        <button class="mbtn" onclick={doToggleDetails} class:on={tab.inspectorOpen}>
-          <span class="mbtn-icon">
-            {#if tab.inspectorOpen}
-              <ArrowRight size={16} strokeWidth={1.75} aria-hidden="true" />
-            {:else}
-              <ArrowLeft size={16} strokeWidth={1.75} aria-hidden="true" />
-            {/if}
-          </span>
-          <span class="mbtn-label">
-            {tab.inspectorOpen ? "Hide Details" : "Show Details"}
-          </span>
-          <span class="mbtn-chord"></span>
-        </button>
-        <button
-          class="mbtn"
-          onclick={doToggleStyleToolbar}
-          class:on={tab.styleToolbarOpen}
-        >
-          <span class="mbtn-icon">
-            <Type size={16} strokeWidth={1.75} aria-hidden="true" />
-          </span>
-          <span class="mbtn-label">
-            {tab.styleToolbarOpen ? "Hide Style Toolbar" : "Show Style Toolbar"}
-          </span>
-          <span class="mbtn-chord"></span>
-        </button>
-        {#if tab.mode === "source"}
-          <button
-            class="mbtn"
-            onclick={doToggleSyntaxHighlight}
-            class:on={tab.syntaxHighlight}
-          >
-            <span class="mbtn-icon">
-              <Highlighter size={16} strokeWidth={1.75} aria-hidden="true" />
-            </span>
-            <span class="mbtn-label">
-              {tab.syntaxHighlight ? "Disable Syntax Highlight" : "Enable Syntax Highlight"}
-            </span>
-            <span class="mbtn-chord"></span>
-          </button>
-        {/if}
-        <button
-          class="mbtn"
-          onclick={doToggleTrailingWhitespace}
-          class:on={tab.highlightTrailingWhitespace}
-        >
-          <span class="mbtn-icon">
-            <Highlighter size={16} strokeWidth={1.75} aria-hidden="true" />
-          </span>
-          <span class="mbtn-label">Highlight trailing whitespace</span>
-          <span class="mbtn-chord"></span>
-        </button>
-        <button class="mbtn" onclick={doRemoveTrailingWhitespace}>
-          <span class="mbtn-icon">
-            <Eraser size={16} strokeWidth={1.75} aria-hidden="true" />
-          </span>
-          <span class="mbtn-label">Remove trailing whitespace</span>
-          <span class="mbtn-chord"></span>
-        </button>
-        <div class="msep" role="separator"></div>
-        <!-- Find lives on the body-context menu; the tab menu keeps
-             a plain workspace Search. -->
-        <button class="mbtn" onclick={doOpenSearch}>
-          <span class="mbtn-icon">
-            <SearchIcon size={16} strokeWidth={1.75} aria-hidden="true" />
-          </span>
-          <span class="mbtn-label">Search</span>
-          <span class="mbtn-chord">{chordLabel("app.search.toggle")}</span>
-        </button>
-        <button class="mbtn" onclick={doCopyPath}>
-          <span class="mbtn-icon">
-            <Copy size={16} strokeWidth={1.75} aria-hidden="true" />
-          </span>
-          <span class="mbtn-label">Copy path to file</span>
-          <span class="mbtn-chord"></span>
-        </button>
-        <button class="mbtn" onclick={doCopyCwdPath}>
-          <span class="mbtn-icon">
-            <Copy size={16} strokeWidth={1.75} aria-hidden="true" />
-          </span>
-          <span class="mbtn-label">Copy path to $CWD</span>
-          <span class="mbtn-chord"></span>
-        </button>
-        <button class="mbtn" onclick={doReload}>
-          <span class="mbtn-icon">
-            <RotateCw size={16} strokeWidth={1.75} aria-hidden="true" />
-          </span>
-          <span class="mbtn-label">Reload from Disk</span>
-          <span class="mbtn-chord"></span>
-        </button>
-        <!-- PDF export lives in the file Inspector (FileInfoBody),
-             shown for markdown files, not in this menu. -->
-        <div class="msep" role="separator"></div>
-        <!-- From-$CWD spawn band, matching the Terminal tab: New
-             File uses the existing dialog; New Terminal / New File
-             Browser / New Graph fire chan:command events. -->
-        <div class="from-cwd-label">From $CWD</div>
-        <button class="mbtn" onclick={doDuplicate}>
-          <span class="mbtn-icon">
-            <Copy size={16} strokeWidth={1.75} aria-hidden="true" />
-          </span>
-          <span class="mbtn-label">Duplicate File</span>
-          <span class="mbtn-chord"></span>
-        </button>
-        <button class="mbtn" onclick={doNewFile}>
-          <span class="mbtn-icon">
-            <FilePlus size={16} strokeWidth={1.75} aria-hidden="true" />
-          </span>
-          <span class="mbtn-label">New File</span>
-          <span class="mbtn-chord">{chordLabel("app.file.new")}</span>
-        </button>
-        <button class="mbtn" onclick={doNewTerminal}>
-          <span class="mbtn-icon">
-            <TerminalIcon size={16} strokeWidth={1.75} aria-hidden="true" />
-          </span>
-          <span class="mbtn-label">New Terminal</span>
-          <span class="mbtn-chord">{chordLabel("app.terminal.toggle")}</span>
-        </button>
-        <button class="mbtn" onclick={doNewFileBrowser}>
-          <span class="mbtn-icon">
-            <Folder size={16} strokeWidth={1.75} aria-hidden="true" />
-          </span>
-          <span class="mbtn-label">New File Browser</span>
-          <span class="mbtn-chord">{chordLabel("app.files.toggle")}</span>
-        </button>
-        <button class="mbtn" onclick={doNewGraph}>
-          <span class="mbtn-icon">
-            <Network size={16} strokeWidth={1.75} aria-hidden="true" />
-          </span>
-          <span class="mbtn-label">New Graph</span>
-          <span class="mbtn-chord">{chordLabel("app.graph.toggle")}</span>
-        </button>
-        <div class="msep" role="separator"></div>
-        <button class="mbtn" onclick={flipToSettings}>
-          <span class="mbtn-icon">
-            <Settings2 size={16} strokeWidth={1.75} aria-hidden="true" />
-          </span>
-          <span class="mbtn-label">Settings</span>
-          <span class="mbtn-chord">{chordLabel("app.settings.toggle")}</span>
-        </button>
-        <div class="msep" role="separator"></div>
-        <button
-          class="mbtn"
-          disabled={!canReopenClosedTab()}
-          onclick={doReopenClosedTab}
-        >
-          <span class="mbtn-icon">
-            <History size={16} strokeWidth={1.75} aria-hidden="true" />
-          </span>
-          <span class="mbtn-label">Reopen Closed Tab</span>
-          <span class="mbtn-chord">{chordLabel("app.tab.reopenClosed")}</span>
-        </button>
         <button class="mbtn" onclick={doCloseTab}>
           <span class="mbtn-icon">
             <X size={16} strokeWidth={1.75} aria-hidden="true" />
@@ -1849,7 +1485,6 @@
     background: var(--hover-bg);
     transform: scale(1.02);
   }
-  .mbtn.on { color: var(--text); background: var(--hover-bg); }
   @media (prefers-reduced-motion: reduce) {
     .mbtn {
       transition: background 80ms ease, color 80ms ease;
@@ -1868,9 +1503,8 @@
     justify-content: center;
   }
   .mbtn-label { flex: 1; }
-  /* Chord column on the right edge. Matches the empty-pane menu's
-     `.empty-pane-menu-chord` so the file-tab bubble and the
-     empty-pane right-click menu read as one family. Empty cells
+  /* Chord column on the right edge. Matches the tab-menu family so
+     editor, terminal, and graph bubbles read consistently. Empty cells
      still occupy the slot so the column stays aligned even on
      rows that don't have a registered shortcut. */
   .mbtn-chord {
@@ -1879,9 +1513,8 @@
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
     font-size: 11.5px;
   }
-  /* Group separator inside the action list. Same shape as the
-     hamburger menu's `li.sep` so the overlay menus and the file
-     tab menu read alike. */
+  /* Group separator inside the action list. Same shape as the other
+     tab menus so the overlay menus and file tab menu read alike. */
   .msep {
     height: 1px;
     background: var(--separator, var(--border));
@@ -1949,15 +1582,6 @@
   .name-input:focus {
     outline: none;
     border-color: var(--accent);
-  }
-  /* "From $CWD" section label. Mirrors TerminalTab's
-     `.from-cwd-label` styling. */
-  .from-cwd-label {
-    padding: 4px 8px 2px;
-    color: var(--text-secondary);
-    font-size: 11px;
-    text-transform: lowercase;
-    letter-spacing: 0.02em;
   }
   .placeholder {
     flex: 1;

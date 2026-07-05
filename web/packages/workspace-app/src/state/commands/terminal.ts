@@ -2,11 +2,10 @@
 // surface, excluding the control-terminal singleton whose chrome and
 // lifecycle belong to the connect flow. Theme, group broadcast, and set
 // name / group act on the active terminal tab directly; the live-PTY
-// actions (restart, copy $CWD, new file or directory) dispatch a
-// chan:command the active TerminalTab handles, since the live CWD and the
-// session lifecycle live in that component. Register with
-// registerCommands. See state/commands.ts for the Command shape and
-// helpers.
+// actions dispatch a chan:command that the owning app/TerminalTab path
+// handles, since live CWD, session lifecycle, and Rich Prompt visibility
+// live outside this catalog. Register with registerCommands. See
+// state/commands.ts for the Command shape and helpers.
 
 import {
   registerCommands,
@@ -24,6 +23,10 @@ import {
 
 function onTerminal(ctx: CommandContext): boolean {
   return onSurface(ctx, "terminal") && !ctx.terminalControl;
+}
+
+function onWorkspaceTerminal(ctx: CommandContext): boolean {
+  return onTerminal(ctx) && !ctx.terminalOnly;
 }
 
 async function renameActiveTerminal(): Promise<void> {
@@ -84,6 +87,14 @@ registerCommands([
     keywords: ["group", "broadcast"],
     available: onTerminal,
     run: () => void setActiveTerminalGroup(),
+  },
+  {
+    id: "terminal.richPrompt",
+    title: "Show/Hide Rich Prompt",
+    category: "Terminal",
+    keywords: ["rich prompt", "prompt", "composer"],
+    available: onWorkspaceTerminal,
+    run: () => dispatchChanCommand("terminal.richPrompt"),
   },
   {
     id: "app.terminal.restart",

@@ -3,15 +3,14 @@ import terminal from "./TerminalTab.svelte?raw";
 
 // TerminalTab right-click menu shape. Tests pin the structure;
 // behavioral coverage (Mod+L equivalents, the broadcast checkbox
-// flow) belongs in TerminalTab.test.ts. The menu has:
+// flow) belongs in TerminalTab.test.ts. The tab menu has:
 //
 // * Status row "connected: <detail>" (colon, not em dash).
-// * MCP env vars + Restart above the find/copy band.
-// * Find / Copy / Paste / Copy path to $CWD / Copy Scrollback.
-// * "From $CWD" section: New File / New Terminal / New File
-//   Browser / New Graph (with chord hints).
-// * Settings (flipHybrid) + Reopen Closed Tab + Close anchor
-//   the foot.
+// * Name, Group, status, and broadcast controls.
+// * Close after a separator.
+//
+// The body menu carries Find / Copy / Paste / Copy Scrollback, while
+// command-discovery rows live in the command launcher.
 // * No Reload Window / Open Inspector entries.
 // * MCP info-button opens a modal dialog.
 
@@ -31,69 +30,22 @@ describe("status row colon", () => {
   });
 });
 
-describe("From-$CWD spawn band", () => {
-  test("From-$CWD label is present", () => {
-    expect(terminal).toMatch(/class="from-cwd-label">From \$CWD/);
+describe("removed tab-menu command-discovery rows", () => {
+  test("From-$CWD spawn band is gone", () => {
+    expect(terminal).not.toMatch(/class="from-cwd-label">From \$CWD/);
+    expect(terminal).not.toMatch(/function openNewTerminal\(\): void \{/);
+    expect(terminal).not.toMatch(/function openNewFileBrowser\(\): void \{/);
+    expect(terminal).not.toMatch(/function openNewGraph\(\): void \{/);
+    expect(terminal).not.toMatch(/<span class="mbtn-label">New File<\/span>/);
+    expect(terminal).not.toMatch(/<span class="mbtn-label">New Terminal<\/span>/);
+    expect(terminal).not.toMatch(/<span class="mbtn-label">New File Browser<\/span>/);
+    expect(terminal).not.toMatch(/<span class="mbtn-label">New Graph<\/span>/);
   });
 
-  test("openNewTerminal / openNewFileBrowser / openNewGraph helpers exported", () => {
-    expect(terminal).toMatch(/function openNewTerminal\(\): void \{/);
-    expect(terminal).toMatch(/function openNewFileBrowser\(\): void \{/);
-    expect(terminal).toMatch(/function openNewGraph\(\): void \{/);
-  });
-
-  test("each From-$CWD helper closes the menu + dispatches the matching chan:command", () => {
-    expect(terminal).toMatch(
-      /function openNewTerminal\(\): void \{[\s\S]{1,200}closeTabMenu\(\);[\s\S]{1,200}dispatchChanCommand\("app\.terminal\.toggle"\);/,
-    );
-    expect(terminal).toMatch(
-      /function openNewFileBrowser\(\): void \{[\s\S]{1,200}closeTabMenu\(\);[\s\S]{1,200}dispatchChanCommand\("app\.files\.toggle"\);/,
-    );
-    expect(terminal).toMatch(
-      /function openNewGraph\(\): void \{[\s\S]{1,200}closeTabMenu\(\);[\s\S]{1,200}dispatchChanCommand\("app\.graph\.toggle"\);/,
-    );
-  });
-
-  test("dispatchChanCommand fires the canonical chan:command event", () => {
-    expect(terminal).toMatch(
-      /function dispatchChanCommand\(id: string\): void \{[\s\S]{1,400}new CustomEvent\("chan:command", \{ detail: \{ name: id \} \}\)/,
-    );
-  });
-
-  test("New File / New Terminal / New File Browser / New Graph buttons wired", () => {
-    expect(terminal).toMatch(
-      /onclick=\{openNewTerminal\}[\s\S]{1,400}<span class="mbtn-label">New Terminal<\/span>/,
-    );
-    expect(terminal).toMatch(
-      /onclick=\{openNewFileBrowser\}[\s\S]{1,400}<span class="mbtn-label">New File Browser<\/span>/,
-    );
-    expect(terminal).toMatch(
-      /onclick=\{openNewGraph\}[\s\S]{1,400}<span class="mbtn-label">New Graph<\/span>/,
-    );
-  });
-
-  test("Copy path label uses the dollar form (\"Copy path to $CWD\")", () => {
-    expect(terminal).toMatch(
-      /<span class="mbtn-label">Copy path to \$CWD<\/span>/,
-    );
-  });
-});
-
-describe("header: Restart above the find/copy band", () => {
-  test("Restart entry exists with destructive class", () => {
-    expect(terminal).toMatch(
-      /<button class="mbtn destructive" onclick=\{\(\) => void restart\(\)\}>[\s\S]{1,400}<span class="mbtn-label">Restart<\/span>/,
-    );
-  });
-
-  test("Restart sits directly above the first separator + Copy path to $CWD", () => {
-    // There is no per-terminal "Set MCP env vars" row (the toggle
-    // lives in the global Terminal Settings panel). Restart → SEP →
-    // Copy path to $CWD is the top of the TAB menu (Find / Copy /
-    // Paste / Copy Scrollback live in the body-context menu).
-    expect(terminal).toMatch(
-      /<span class="mbtn-label">Restart<\/span>[\s\S]{1,400}<div class="msep" role="separator"><\/div>[\s\S]{1,800}<span class="mbtn-label">Copy path to \$CWD<\/span>/,
-    );
+  test("Restart and Copy path to $CWD tab-menu rows are gone", () => {
+    expect(terminal).not.toMatch(/<span class="mbtn-label">Restart<\/span>/);
+    expect(terminal).not.toMatch(/<span class="mbtn-label">Start New Session<\/span>/);
+    expect(terminal).not.toMatch(/<span class="mbtn-label">Copy path to \$CWD<\/span>/);
   });
 
   test("no per-terminal MCP env toggle remains in the menu", () => {
@@ -119,28 +71,7 @@ describe("terminal body-context vs tab-context split", () => {
   });
 });
 
-describe("Settings + Reopen + Close anchor the foot", () => {
-  test("Settings entry routes to flipToSettings", () => {
-    expect(terminal).toMatch(
-      /onclick=\{flipToSettings\}[\s\S]{1,400}<span class="mbtn-label">Settings<\/span>/,
-    );
-  });
-
-  test("Settings entry shows the app.settings.toggle chord hint", () => {
-    expect(terminal).toMatch(
-      /<span class="mbtn-label">Settings<\/span>\s*<span class="mbtn-chord">\{chordFor\("app\.settings\.toggle"\) \?\? ""\}<\/span>/,
-    );
-    expect(terminal).not.toMatch(
-      /<span class="mbtn-label">Settings<\/span>\s*<span class="mbtn-chord"><\/span>/,
-    );
-  });
-
-  test("flipToSettings calls flipHybrid(paneId)", () => {
-    expect(terminal).toMatch(
-      /function flipToSettings\(\): void \{[\s\S]{1,200}closeTabMenu\(\);[\s\S]{1,200}flipHybrid\(paneId\);/,
-    );
-  });
-
+describe("Close anchors the foot", () => {
   test("Close menu entry wired to closeFromMenu", () => {
     expect(terminal).toMatch(
       /onclick=\{closeFromMenu\}[\s\S]{1,400}<span class="mbtn-label">Close<\/span>/,
@@ -153,17 +84,16 @@ describe("Settings + Reopen + Close anchor the foot", () => {
     );
   });
 
-  test("Reopen Closed Tab + Close land in the foot block in order", () => {
+  test("broadcast section is followed by separator + Close", () => {
     expect(terminal).toMatch(
-      /<span class="mbtn-label">Settings<\/span>[\s\S]{1,800}<div class="msep" role="separator"><\/div>[\s\S]{1,2000}<span class="mbtn-label">Reopen Closed Tab<\/span>[\s\S]{1,1000}<span class="mbtn-label">Close<\/span>/,
+      /\{#if crossWindowMembers\.length > 0\}[\s\S]{1,2000}\{\/if\}\s*<div class="msep" role="separator"><\/div>\s*<button class="mbtn" onclick=\{closeFromMenu\}>/,
     );
   });
-});
 
-describe("flipHybrid imported from tabs.svelte", () => {
-  test("flipHybrid imported from ../state/tabs.svelte", () => {
-    expect(terminal).toMatch(
-      /import \{[\s\S]{1,4000}flipHybrid,[\s\S]{1,2000}\} from "\.\.\/state\/tabs\.svelte";/,
-    );
+  test("Settings and Reopen rows are gone", () => {
+    expect(terminal).not.toMatch(/onclick=\{flipToSettings\}/);
+    expect(terminal).not.toMatch(/<span class="mbtn-label">Settings<\/span>/);
+    expect(terminal).not.toMatch(/onclick=\{doReopenClosedTab\}/);
+    expect(terminal).not.toMatch(/<span class="mbtn-label">Reopen Closed Tab<\/span>/);
   });
 });

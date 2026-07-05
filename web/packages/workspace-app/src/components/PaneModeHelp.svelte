@@ -157,8 +157,7 @@
     },
   ];
 
-  // Terminal-only windows get the terminal-relevant subset (same
-  // filter shape as Pane.svelte's spawnActions). Pure derived - no
+  // Terminal-only windows get the terminal-relevant subset. Pure derived - no
   // $state mutation - and empty groups drop out entirely (Dock).
   const groups = $derived(
     ui.terminalOnly

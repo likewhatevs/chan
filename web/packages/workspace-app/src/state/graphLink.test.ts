@@ -1,4 +1,4 @@
-// "Copy link to graph": the graph tab menu serializes a tab to
+// "Copy link to graph": the graph command serializes a tab to
 // a `chan://graph?...` link that, pasted into a markdown file, reopens
 // the same view on click. Lock the serialize <-> parse round-trip so the
 // scope / depth / mode / filters / selection survive intact.

@@ -22,8 +22,9 @@ function stripCommentsAndCss(src: string): string {
 }
 
 describe("Hybrid Nav user-facing copy", () => {
-  test("Pane.svelte hamburger entry reads Enter Hybrid Nav", () => {
-    expect(pane).toContain(">Enter Hybrid Nav<");
+  test("Pane.svelte hamburger no longer duplicates Enter Hybrid Nav", () => {
+    expect(pane).not.toContain(">Enter Hybrid Nav<");
+    expect(pane).toContain(">Commands<");
   });
 
   test("Pane.svelte Hybrid Nav preview aria-label uses the new copy", () => {

@@ -2,38 +2,25 @@ import { describe, expect, test } from "vitest";
 import pane from "./Pane.svelte?raw";
 import app from "../App.svelte?raw";
 
-// New Draft is the first spawn entry in the Hybrid hamburger, the
-// empty-pane right-click menu, and the carousel, backed by one shared
-// `spawnActions` list.
+// Spawn actions now live in the command launcher. The pane hamburger
+// stays small: Commands, separator, focus border colour.
 
-describe("spawnActions includes New Draft first", () => {
-  test("`New Draft` entry sits at slot 0 of spawnActions", () => {
-    // The full (workspace-mode) spawn list lives in FULL_SPAWN_ACTIONS;
-    // `spawnActions` is derived from it (and collapses to just Terminal in
-    // a terminal-only window).
-    expect(pane).toMatch(
-      /const FULL_SPAWN_ACTIONS: EmptyMenuRow\[\] = \[[\s\S]*?label: "New Draft",[\s\S]*?icon: FilePlus,[\s\S]*?command: "app\.draft\.new",[\s\S]*?chordId: "app\.draft\.new",/,
-    );
+describe("pane hamburger no longer owns spawnActions", () => {
+  test("spawnActions data and New Draft row are absent from Pane.svelte", () => {
+    expect(pane).not.toContain("FULL_SPAWN_ACTIONS");
+    expect(pane).not.toContain("spawnActions");
+    expect(pane).not.toMatch(/<span class="menu-row-label">New Draft<\/span>/);
   });
 
-  test("FilePlus icon imported alongside the other spawn-surface icons", () => {
-    expect(pane).toMatch(
+  test("FilePlus icon is not imported by the pane hamburger", () => {
+    expect(pane).not.toMatch(
       /import \{[\s\S]*?\bFilePlus,[\s\S]*?\} from "lucide-svelte";/,
     );
   });
 
-  test("source comment cites the three shared spawn surfaces", () => {
+  test("source comment points spawn discovery at the launcher", () => {
     expect(pane).toMatch(
-      /empty-pane right-click menu[\s\S]*?pane hamburger[\s\S]*?empty-pane carousel/i,
-    );
-    expect(pane).toMatch(/single `spawnActions` list backs[\s\S]{1,20}all three surfaces/i);
-  });
-
-  test("the existing 4 spawn entries are preserved in order (Terminal/FB/Team Work/Graph)", () => {
-    // The Team Work entry is labelled "Team Work" with chord id
-    // app.terminal.teamWork.
-    expect(pane).toMatch(
-      /label: "Terminal",[\s\S]*?label: "File Browser",[\s\S]*?label: "Team Work",[\s\S]*?label: "Graph",/,
+      /launcher is the discovery surface for spawn actions/i,
     );
   });
 });

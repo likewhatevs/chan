@@ -4,17 +4,10 @@
     Check,
     Clipboard,
     ClipboardPaste,
-    FilePlus,
-    Folder,
-    History,
     MessageSquare,
-    Network,
     Pencil,
     Radio,
-    RotateCcw,
     Search,
-    Settings2,
-    Terminal as TerminalIcon,
     Users,
     X,
   } from "lucide-svelte";
@@ -35,12 +28,10 @@
     allTerminalTabs,
     applyGlobalTerminalName,
     broadcastTerminalInput,
-    canReopenClosedTab,
     crossWindowBroadcastMembers,
     closeTab,
     clearTerminalSession,
     ensureTerminalKeyboardProtocol,
-    flipHybrid,
     dismissTerminalEnvNamePrompt,
     isTerminalMoving,
     markTerminalEnvNameRestarted,
@@ -50,7 +41,6 @@
     registerTerminalPromptSink,
     removeExplicitlyClosedTerminalTab,
     renameTerminalTab,
-    reopenClosedTab,
     reproveRestoredPrompt,
     resolvePromptCancelled,
     setTerminalBroadcastEnabled,
@@ -74,7 +64,6 @@
     workspace,
     effectiveHybridSurfaceTheme,
     fileOps,
-    openFsGraphForDirectory,
     scheduleSessionSave,
     surfaceThemeOverride,
     ui,
@@ -1473,13 +1462,6 @@
     void tick().then(() => searchInput?.focus());
   }
 
-  function openNewFile(): void {
-    const cwd = terminalCwdRel();
-    if (cwd === null) return terminalCwdUnavailable();
-    closeTabMenu();
-    void fileOps.createFile(cwd);
-  }
-
   /// New file OR directory at the terminal's CWD, the unified path prompt
   /// the file browser uses. The launcher's "New file or directory ($CWD)"
   /// command reaches this through the chan:command listener below.
@@ -1489,50 +1471,12 @@
     void fileOps.createFileOrDir(cwd);
   }
 
-  /// From-$CWD spawn entries on the terminal right-click menu. Each
-  /// routes through the same `chan:command` event the keymap layer
-  /// uses, so the menu click + the chord both arrive at `runCommand`
-  /// in App.svelte. Toggle commands open the surface in a fresh
-  /// pane / tab; the originating terminal's $CWD context isn't passed
-  /// through (terminal spawn already inherits the terminal's CWD via
-  /// the broker, but the FB / Graph toggles open at the workspace
-  /// root, matching the empty-pane spawn-grid behavior).
-  function dispatchChanCommand(id: string): void {
-    window.dispatchEvent(
-      new CustomEvent("chan:command", { detail: { name: id } }),
-    );
-  }
-  function openNewTerminal(): void {
-    closeTabMenu();
-    dispatchChanCommand("app.terminal.toggle");
-  }
-  function openNewFileBrowser(): void {
-    closeTabMenu();
-    dispatchChanCommand("app.files.toggle");
-  }
-  function openNewGraph(): void {
-    closeTabMenu();
-    dispatchChanCommand("app.graph.toggle");
-  }
-
-  /// Settings (toggle) flips to the hybrid back-side config view
-  /// (HybridTerminalConfig). Mirrors the pane hamburger's Flip entry.
-  function flipToSettings(): void {
-    closeTabMenu();
-    flipHybrid(paneId);
-  }
-
   /// Close, an explicit menu entry. `force: true` matches the chord
   /// path (`closeExitedTabFromKey`); the dirty-prompt path lives on
   /// the file editor, not here.
   function closeFromMenu(): void {
     closeTabMenu();
     void closeTab(paneId, tab.id);
-  }
-
-  function doReopenClosedTab(): void {
-    closeTabMenu();
-    reopenClosedTab();
   }
 
   function requestTerminalCwd(): void {
@@ -1867,14 +1811,8 @@
           <button type="button" onclick={() => dismissTerminalEnvNamePrompt(tab)}>Later</button>
         </div>
       {/if}
-      <!-- Terminal right-click menu. Header (Name → SEP → status
-           colon → MCP-env + Restart) lands ahead of the find/copy
-           band; the "From $CWD" section gathers New File / New
-           Terminal / New File Browser / New Graph; the broadcast
-           section carries the Terminals dropdown; Settings
-           (flipHybrid) + Reopen + Close anchor the foot. No `Reload
-           Window` / `Open Inspector` entries; Cmd+R and the pane
-           hamburger surface them. -->
+      <!-- Terminal tab menu. Header rows stay above the broadcast
+           controls; command-discovery actions live in the launcher. -->
       <div class="action-list">
         <!-- Per-tab broadcast selector, at the top of the menu right
              after the Group row. There is no umbrella "Broadcast
@@ -1957,94 +1895,6 @@
           {/each}
         {/if}
         <div class="msep" role="separator"></div>
-        {#if sessionClosedReason}
-          <button class="mbtn" onclick={() => void restart()}>
-            <span class="mbtn-icon">
-              <RotateCcw size={16} strokeWidth={1.75} aria-hidden="true" />
-            </span>
-            <span class="mbtn-label">Start New Session</span>
-            <span class="mbtn-chord"></span>
-          </button>
-        {/if}
-        <button class="mbtn destructive" onclick={() => void restart()}>
-          <span class="mbtn-icon">
-            <RotateCcw size={16} strokeWidth={1.75} aria-hidden="true" />
-          </span>
-          <span class="mbtn-label">Restart</span>
-          <span class="mbtn-chord"></span>
-        </button>
-        <!-- Find / Copy / Paste / Copy Scrollback live on the
-             body-context menu; the tab menu keeps Copy path. -->
-        <div class="msep" role="separator"></div>
-        <button class="mbtn" onclick={copyTerminalCwd}>
-          <span class="mbtn-icon">
-            <Clipboard size={16} strokeWidth={1.75} aria-hidden="true" />
-          </span>
-          <span class="mbtn-label">Copy path to $CWD</span>
-          <span class="mbtn-chord"></span>
-        </button>
-        <div class="msep" role="separator"></div>
-        <!-- "From $CWD" spawn band. New File uses `openNewFile`
-             which seeds the dialog with `$CWD/untitled.md`. New
-             Terminal / FB / Graph fire the same `chan:command` events
-             the chord-routing layer + the empty-pane carousel use, so
-             handlers stay singular. -->
-        <!-- "From $CWD" band: in a terminal-only window the workspace
-             spawn targets (New File / New File Browser / New Graph) have
-             no surface to open, so only New Terminal survives. -->
-        <div class="from-cwd-label">From $CWD</div>
-        {#if !ui.terminalOnly}
-          <button class="mbtn" onclick={openNewFile}>
-            <span class="mbtn-icon">
-              <FilePlus size={16} strokeWidth={1.75} aria-hidden="true" />
-            </span>
-            <span class="mbtn-label">New File</span>
-            <span class="mbtn-chord">{chordFor("app.file.new") ?? ""}</span>
-          </button>
-        {/if}
-        <button class="mbtn" onclick={openNewTerminal}>
-          <span class="mbtn-icon">
-            <TerminalIcon size={16} strokeWidth={1.75} aria-hidden="true" />
-          </span>
-          <span class="mbtn-label">New Terminal</span>
-          <span class="mbtn-chord">{chordFor("app.terminal.toggle") ?? ""}</span>
-        </button>
-        {#if !ui.terminalOnly}
-          <button class="mbtn" onclick={openNewFileBrowser}>
-            <span class="mbtn-icon">
-              <Folder size={16} strokeWidth={1.75} aria-hidden="true" />
-            </span>
-            <span class="mbtn-label">New File Browser</span>
-            <span class="mbtn-chord">{chordFor("app.files.toggle") ?? ""}</span>
-          </button>
-          <button class="mbtn" onclick={openNewGraph}>
-            <span class="mbtn-icon">
-              <Network size={16} strokeWidth={1.75} aria-hidden="true" />
-            </span>
-            <span class="mbtn-label">New Graph</span>
-            <span class="mbtn-chord">{chordFor("app.graph.toggle") ?? ""}</span>
-          </button>
-        {/if}
-        <div class="msep" role="separator"></div>
-        <button class="mbtn" onclick={flipToSettings}>
-          <span class="mbtn-icon">
-            <Settings2 size={16} strokeWidth={1.75} aria-hidden="true" />
-          </span>
-          <span class="mbtn-label">Settings</span>
-          <span class="mbtn-chord">{chordFor("app.settings.toggle") ?? ""}</span>
-        </button>
-        <div class="msep" role="separator"></div>
-        <button
-          class="mbtn"
-          disabled={!canReopenClosedTab()}
-          onclick={doReopenClosedTab}
-        >
-          <span class="mbtn-icon">
-            <History size={16} strokeWidth={1.75} aria-hidden="true" />
-          </span>
-          <span class="mbtn-label">Reopen Closed Tab</span>
-          <span class="mbtn-chord">{chordFor("app.tab.reopenClosed") ?? ""}</span>
-        </button>
         <button class="mbtn" onclick={closeFromMenu}>
           <span class="mbtn-icon">
             <X size={16} strokeWidth={1.75} aria-hidden="true" />
@@ -2319,21 +2169,6 @@
     .mbtn:hover {
       transform: none;
     }
-  }
-  /* Destructive hint for Restart. Color-only; no background change
-     so the hover affordance still reads. */
-  .mbtn.destructive {
-    color: var(--danger-text, #d33);
-  }
-  /* "From $CWD" section label. Subdued style matching the
-     .terminal-status row's secondary text; telegraphs section
-     grouping, not actionable. */
-  .from-cwd-label {
-    padding: 4px 8px 2px;
-    color: var(--text-secondary);
-    font-size: 11px;
-    text-transform: lowercase;
-    letter-spacing: 0.02em;
   }
   .mbtn-icon {
     width: 18px;

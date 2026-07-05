@@ -13,8 +13,7 @@ import inspector from "./InspectorBody.svelte?raw";
 
 // Dashboard tab kind and carousel coverage. Pins the tab type and
 // helpers, the Pane.svelte render branch, the carousel slide set,
-// and the surface unification across the pane hamburger, empty-pane
-// right-click, and carousel.
+// and command routing from the launcher/welcome surfaces.
 
 describe("DashboardTab type + helpers", () => {
   test("Tab union includes DashboardTab", () => {
@@ -90,20 +89,17 @@ describe("Pane.svelte render branch + import", () => {
   });
 });
 
-describe("Dashboard command + spawnActions wiring", () => {
+describe("Dashboard command wiring", () => {
   test("app.dashboard.open command routed to openDashboardInActivePane", () => {
     expect(app).toMatch(
       /case "app\.dashboard\.open":[\s\S]{1,400}openDashboardInActivePane\(\);/,
     );
   });
 
-  test("spawnActions carries the Dashboard entry after Graph + Search", () => {
-    // One spawnActions list backs both the pane hamburger and the
-    // empty-pane right-click menu: ..., Graph, Search, Dashboard.
-    expect(pane).toMatch(
-      /const FULL_SPAWN_ACTIONS:[\s\S]{1,2000}label: "Graph",[\s\S]{1,400}command: "app\.graph\.toggle",[\s\S]{1,400}label: "Search",[\s\S]{1,400}command: "app\.search\.toggle",[\s\S]{1,400}label: "Dashboard",[\s\S]{1,400}command: "app\.dashboard\.open",/,
-    );
-    expect(pane).not.toMatch(/const emptyPaneExtraActions:/);
+  test("Dashboard is no longer duplicated through pane spawnActions", () => {
+    expect(pane).not.toMatch(/const FULL_SPAWN_ACTIONS:/);
+    expect(pane).not.toMatch(/spawnActions/);
+    expect(pane).not.toMatch(/command: "app\.dashboard\.open"/);
   });
 });
 

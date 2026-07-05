@@ -4,10 +4,9 @@
   // rotation, no slides, no play/pause; the rotating carousel lives
   // in the Dashboard tab).
   //
-  // Spawn rows mirror `Pane.svelte::spawnActions` so the user
-  // sees the same set + ordering whether they enter from the
-  // welcome, the pane hamburger, or the empty-pane right-click
-  // menu. Clicks dispatch the same `chan:command` event the
+  // Spawn rows mirror the command launcher's top-level surface
+  // entries so the welcome grid and launcher stay in the same
+  // order. Clicks dispatch the same `chan:command` event the
   // chord layer fires.
 
   import {
@@ -30,7 +29,7 @@
 
   // EmptyPaneWelcome does not forward `oncontextmenu` to a parent
   // handler; the welcome surface is purely the click-driven spawn
-  // grid + the pane hamburger (⋮) covers menu-style access.
+  // grid. Menu-style access lives in the command launcher.
 
   const platform = currentPlatform();
   const os = currentOS();
@@ -85,9 +84,9 @@
     },
   ];
   const FULL_SECONDARY_ENTRIES: SpawnRow[] = [
-    // The secondary row carries every chord-bound spawn entry a pane
-    // offers (Search + Dashboard) so the welcome surface matches the
-    // right-click menu and the pane hamburger.
+    // The secondary row carries every chord-bound spawn entry the
+    // welcome grid offers (Search + Dashboard) so it matches the
+    // command launcher.
     {
       label: "Search",
       icon: Search,

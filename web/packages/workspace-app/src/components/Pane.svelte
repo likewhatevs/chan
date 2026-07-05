@@ -5,7 +5,6 @@
     activeLayout,
     bumpTabFocusPulse,
     closeTab,
-    enterPaneMode,
     enterPaneModeTransaction,
     flipHybrid,
     focusColorForWindow,
@@ -38,22 +37,15 @@
   } from "../state/tabs.svelte";
 
   import {
-    ArrowDown,
-    ArrowLeft,
-    ArrowRight,
-    BarChart2,
     Bug,
     Check,
-    FilePlus,
     FileText,
     Folder,
-    LayoutGrid,
-    MessageSquare,
+    Command as CommandIcon,
     Network,
     Palette,
     Radio,
     RefreshCw,
-    Search,
     Shapes,
     Terminal,
     User,
@@ -152,94 +144,11 @@
 
   /// Platform + OS settle once at module init: the chord set (web
   /// vs native) and Mod label (Cmd vs Ctrl) don't change at runtime.
-  /// Used by the welcome-menu chord column below; the carousel
-  /// owns its own copy + the shortcut table.
+  /// Used by the pane chrome menus and the shortcut table.
   const platform = currentPlatform();
   const os = currentOS();
   const paneFocusColors: FocusColor[] = ["blue", "orange", "green", "pink"];
 
-  /// Empty-pane right-click menu, arranged into the canonical
-  /// sections shared by every chan menu: content actions, then
-  /// navigation, then pane controls. No Settings footer entry: Cmd+,
-  /// flips the focused Hybrid surface (Dashboard hosts the Appearance
-  /// / Screen Lock / Screensaver / Metadata controls on its
-  /// back-of-card). Each row carries an icon and (optionally) the
-  /// keyboard chord for the same action, since the empty pane is also
-  /// the discovery surface for shortcuts.
-  /// `chordId` is a SHORTCUTS registry id; rows whose chord isn't
-  /// registered on the current platform render with a blank chord
-  /// column rather than disappearing.
-  type EmptyMenuRow = {
-    label: string;
-    // Lucide icons accept `size` + `strokeWidth` at the call site below.
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    icon: any;
-    command: string;
-    chordId?: string;
-  };
-  type PaneMenuRow = EmptyMenuRow & {
-    chord: string;
-    action: () => void;
-  };
-  // Unified spawn entries. Same items + ordering across the
-  // empty-pane right-click menu, the pane hamburger menu, and the
-  // empty-pane carousel slide 1. A single `spawnActions` list backs
-  // all three surfaces so they stay in lockstep (same 7 entries in
-  // the same order). New Draft is the first entry (Cmd+N opens a
-  // fresh `<draftsDir>/untitled-N/draft.md`).
-  const FULL_SPAWN_ACTIONS: EmptyMenuRow[] = [
-    {
-      label: "New Draft",
-      icon: FilePlus,
-      command: "app.draft.new",
-      chordId: "app.draft.new",
-    },
-    {
-      label: "Terminal",
-      icon: Terminal,
-      command: "app.terminal.toggle",
-      chordId: "app.terminal.toggle",
-    },
-    {
-      label: "File Browser",
-      icon: Folder,
-      command: "app.files.toggle",
-      chordId: "app.files.toggle",
-    },
-    {
-      // Label "Team Work"; chord id is app.terminal.teamWork.
-      label: "Team Work",
-      icon: MessageSquare,
-      command: "app.terminal.teamWork",
-      chordId: "app.terminal.teamWork",
-    },
-    {
-      label: "Graph",
-      icon: Network,
-      command: "app.graph.toggle",
-      chordId: "app.graph.toggle",
-    },
-    {
-      label: "Search",
-      icon: Search,
-      command: "app.search.toggle",
-      chordId: "app.search.toggle",
-    },
-    {
-      label: "Dashboard",
-      icon: BarChart2,
-      command: "app.dashboard.open",
-      chordId: "app.dashboard.open",
-    },
-  ];
-  // Terminal-only windows collapse the spawn menu to just Terminal: the
-  // other surfaces (drafts / file browser / team work / graph / search /
-  // dashboard) need a workspace, which a `?kind=terminal` window lacks.
-  const spawnActions = $derived(
-    ui.terminalOnly
-      ? FULL_SPAWN_ACTIONS.filter((r) => r.command === "app.terminal.toggle")
-      : FULL_SPAWN_ACTIONS,
-  );
   function chordLabel(id: string | undefined): string {
     if (!id) return "";
     const s = SHORTCUTS.find((x) => x.id === id);
@@ -249,12 +158,9 @@
     return formatChord(chord, os);
   }
 
-  /// Empty panes have no right-click context menu. The pane
-  /// hamburger (⋮) lists every spawn entry, so a duplicate
-  /// right-click affordance would be redundant and risk diverging
-  /// from the hamburger ordering. Right-clicking an empty pane is a
-  /// no-op (the browser default action is suppressed by parent
-  /// surfaces, not by the pane).
+  /// Empty panes have no right-click context menu. The command
+  /// launcher is the discovery surface for spawn actions; the pane
+  /// hamburger only keeps pane-local chrome controls.
 
   /// Pane chrome menu: the ⋮ in the tab strip that replaces the
   /// per-button split / close controls.
@@ -295,11 +201,6 @@
     applyPageWidthToElement(editorWrapEl, editorWrapWidth, pageWidth.ratio);
   });
   onDestroy(() => resizeObs?.disconnect());
-
-  function onEnterPaneMode(): void {
-    closePaneMenus();
-    enterPaneMode();
-  }
 
   /// Transaction-mode (mouse-driven NAV) handlers.
   ///
@@ -521,70 +422,6 @@
       new CustomEvent("chan:command", { detail: { name: id } }),
     );
   }
-  const paneNavigationActions: PaneMenuRow[] = [
-    {
-      label: "Split right",
-      icon: ArrowRight,
-      command: "app.pane.splitRight",
-      chord: chordLabel("app.pane.splitRight"),
-      action: () => {
-        dispatchCommand("app.pane.splitRight");
-        closePaneHamburgerMenu();
-      },
-    },
-    {
-      label: "Split bottom",
-      icon: ArrowDown,
-      command: "app.pane.splitDown",
-      chord: chordLabel("app.pane.splitDown"),
-      action: () => {
-        dispatchCommand("app.pane.splitDown");
-        closePaneHamburgerMenu();
-      },
-    },
-    {
-      label: "Next pane",
-      icon: ArrowRight,
-      command: "app.pane.next",
-      chord: chordLabel("app.pane.next"),
-      action: () => {
-        dispatchCommand("app.pane.next");
-        closePaneHamburgerMenu();
-      },
-    },
-    {
-      label: "Previous pane",
-      icon: ArrowLeft,
-      command: "app.pane.prev",
-      chord: chordLabel("app.pane.prev"),
-      action: () => {
-        dispatchCommand("app.pane.prev");
-        closePaneHamburgerMenu();
-      },
-    },
-  ];
-  const paneCloseActions: PaneMenuRow[] = [
-    {
-      label: "Close all tabs",
-      icon: X,
-      command: "app.pane.closeTabs",
-      chord: chordLabel("app.pane.closeTabs"),
-      action: () => {
-        dispatchCommand("app.pane.closeTabs");
-        closePaneHamburgerMenu();
-      },
-    },
-    {
-      label: "Kill pane",
-      icon: LayoutGrid,
-      command: "app.pane.kill",
-      chord: chordLabel("app.pane.kill"),
-      action: () => {
-        dispatchCommand("app.pane.kill");
-        closePaneHamburgerMenu();
-      },
-    },
-  ];
   // Single-pane layouts hide the focus highlight: it's only useful
   // when there's more than one pane to disambiguate. Re-derives on
   // every layout mutation so the highlight reappears the moment a
@@ -1347,67 +1184,22 @@
       ondblclick={onDeadZoneDblClick}
     ></div>
     <div class="actions">
-      <!-- Pane-only controls live inside a single hamburger menu
-           to match the file browser / search / graph overlays. The
-           split rows route through pane mode so the visible result is
-           consistent with the keyboard path. -->
+      <!-- Pane chrome menu: command launcher, then pane-local focus
+           border colour. Surface actions live in the launcher. -->
       <HamburgerMenu
         bind:this={paneMenu}
         bind:open={paneMenuOpen}
         width={250}
-        height={420}
+        height={210}
         onBeforeOpen={closePaneContextMenus}
       >
-        <!-- First-class spawn entries unified across the pane
-             hamburger, empty-pane right-click,
-             and the empty-pane carousel slide 1. Click any row
-             to spawn the matching surface in the active pane;
-             chord hints reflect the canonical chord for each
-             action (Cmd+T / Cmd+O / Cmd+P / Cmd+Shift+M). The
-             dispatchCommand call routes through the same
-             context-aware helper the chord layer uses, so the
-             new surface lands on the focused tab's context
-             (parent dir of a focused doc, cwd of a focused
-             terminal, etc.). -->
-        {#each spawnActions as row (row.command)}
-          {@const Icon = row.icon}
-          <li>
-            <button role="menuitem" onclick={() => { dispatchCommand(row.command); closePaneHamburgerMenu(); }}>
-              <Icon size={16} strokeWidth={1.75} aria-hidden="true" />
-              <span class="menu-row-label">{row.label}</span>
-              <span class="menu-row-chord">{chordLabel(row.chordId)}</span>
-            </button>
-          </li>
-        {/each}
-        <li class="sep" role="separator"></li>
         <li>
-          <button role="menuitem" onclick={onEnterPaneMode}>
-            <LayoutGrid size={16} strokeWidth={1.75} aria-hidden="true" />
-            <span class="menu-row-label">Enter Hybrid Nav</span>
-            <span class="menu-row-chord">{chordLabel("app.pane.mode")}</span>
+          <button role="menuitem" onclick={() => { dispatchCommand("app.launcher.toggle"); closePaneHamburgerMenu(); }}>
+            <CommandIcon size={16} strokeWidth={1.75} aria-hidden="true" />
+            <span class="menu-row-label">Commands</span>
+            <span class="menu-row-chord">{chordLabel("app.launcher.toggle")}</span>
           </button>
         </li>
-        {#each paneNavigationActions as row (row.command)}
-          {@const Icon = row.icon}
-          <li>
-            <button role="menuitem" onclick={row.action}>
-              <Icon size={16} strokeWidth={1.75} aria-hidden="true" />
-              <span class="menu-row-label">{row.label}</span>
-              <span class="menu-row-chord">{row.chord}</span>
-            </button>
-          </li>
-        {/each}
-        <li class="sep" role="separator"></li>
-        {#each paneCloseActions as row (row.command)}
-          {@const Icon = row.icon}
-          <li>
-            <button role="menuitem" onclick={row.action}>
-              <Icon size={16} strokeWidth={1.75} aria-hidden="true" />
-              <span class="menu-row-label">{row.label}</span>
-              <span class="menu-row-chord">{row.chord}</span>
-            </button>
-          </li>
-        {/each}
         <li class="sep" role="separator"></li>
         <li class="menu-label">
           <Palette size={16} strokeWidth={1.75} aria-hidden="true" />
@@ -1518,8 +1310,9 @@
                  metadata / Indexing graph) lives inside the Dashboard
                  tab. Multi-pane empty panes keep the minimal chrome
                  (just the chan mark). Empty panes have no right-click
-                 menu; the pane hamburger (⋮) carries every spawn entry,
-                 so right-clicking an empty pane is a no-op.
+                 menu; spawn actions live in the welcome grid and
+                 command launcher, so right-clicking an empty pane is
+                 a no-op.
 
                  Terminal-only windows skip the welcome entirely: they always
                  hold at least one terminal (boot opens one, close-on-last-tab
@@ -1593,7 +1386,6 @@
             onClose={() => {
               void closeTab(pane.id, t.id);
             }}
-            onFlip={() => flipHybrid(pane.id)}
           />
         {/each}
         <!--

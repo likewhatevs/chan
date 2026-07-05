@@ -144,7 +144,7 @@ describe("Pane terminal tab activity marker", () => {
 });
 
 describe("Pane right-click menus", () => {
-  test("hamburger follows roadmap spawn, navigation, and focus colour order", async () => {
+  test("hamburger exposes Commands and focus colour order", async () => {
     const pane: LeafNode = {
       kind: "leaf",
       id: "pane-menu",
@@ -159,23 +159,8 @@ describe("Pane right-click menus", () => {
     expect(document.body.querySelector(".menu-label span")?.textContent?.trim()).toBe(
       "Focus border colour",
     );
-    // Search + Dashboard join the pane hamburger after Graph so
-    // all three spawn surfaces offer the same 7-entry set.
     expect(menuLabels()).toEqual([
-      "New Draft",
-      "Terminal",
-      "File Browser",
-      "Team Work",
-      "Graph",
-      "Search",
-      "Dashboard",
-      "Enter Hybrid Nav",
-      "Split right",
-      "Split bottom",
-      "Next pane",
-      "Previous pane",
-      "Close all tabs",
-      "Kill pane",
+      "Commands",
       "blue",
       "orange",
       "green",
@@ -190,7 +175,7 @@ describe("Pane right-click menus", () => {
     expect(target.querySelector(".pane")?.getAttribute("data-focus-color")).toBe("orange");
   });
 
-  test("pane hamburger keeps roadmap actions without the old close-pane row", async () => {
+  test("pane hamburger leaves surface and pane actions to the launcher", async () => {
     const pane: LeafNode = {
       kind: "leaf",
       id: "pane-trim",
@@ -203,17 +188,30 @@ describe("Pane right-click menus", () => {
     await tick();
 
     const labels = menuLabels();
-    expect(labels).toContain("Next pane");
-    expect(labels).toContain("Previous pane");
-    expect(labels).toContain("Split right");
-    expect(labels).toContain("Split bottom");
-    expect(labels).toContain("Close all tabs");
-    expect(labels).toContain("Kill pane");
-    expect(labels).not.toContain("Flip Hybrid");
-    expect(labels).not.toContain("Close pane");
+    expect(labels).toEqual(["Commands", "blue", "orange", "green", "pink"]);
+    for (const label of [
+      "New Draft",
+      "Terminal",
+      "File Browser",
+      "Team Work",
+      "Graph",
+      "Search",
+      "Dashboard",
+      "Enter Hybrid Nav",
+      "Split right",
+      "Split bottom",
+      "Next pane",
+      "Previous pane",
+      "Close all tabs",
+      "Kill pane",
+      "Flip Hybrid",
+      "Close pane",
+    ]) {
+      expect(labels).not.toContain(label);
+    }
   });
 
-  test("pane hamburger shows only web-wired pane navigation chords", async () => {
+  test("pane hamburger shows the launcher chord", async () => {
     const pane: LeafNode = {
       kind: "leaf",
       id: "pane-web-chords",
@@ -226,37 +224,18 @@ describe("Pane right-click menus", () => {
     await tick();
 
     const chords = menuRowChords();
-    expect(chords["Split right"]).toBe("Ctrl+Alt+/");
-    expect(chords["Split bottom"]).toBe("Ctrl+Alt+?");
-    expect(chords["Next pane"]).toBe("Alt+]");
-    expect(chords["Previous pane"]).toBe("Alt+[");
+    expect(chords["Commands"]).toBe("Ctrl+Alt+K");
   });
 
-  test("pane hamburger uses registry chord labels for pane navigation", () => {
+  test("pane hamburger uses the launcher registry chord label", () => {
     expect(paneSource).toMatch(
-      /label: "Split right"[\s\S]*?command: "app\.pane\.splitRight"[\s\S]*?chord: chordLabel\("app\.pane\.splitRight"\)/,
-    );
-    expect(paneSource).toMatch(
-      /label: "Split bottom"[\s\S]*?command: "app\.pane\.splitDown"[\s\S]*?chord: chordLabel\("app\.pane\.splitDown"\)/,
-    );
-    expect(paneSource).toMatch(
-      /label: "Next pane"[\s\S]*?command: "app\.pane\.next"[\s\S]*?chord: chordLabel\("app\.pane\.next"\)/,
-    );
-    expect(paneSource).toMatch(
-      /label: "Previous pane"[\s\S]*?command: "app\.pane\.prev"[\s\S]*?chord: chordLabel\("app\.pane\.prev"\)/,
-    );
-    expect(paneSource).toMatch(
-      /label: "Close all tabs"[\s\S]*?command: "app\.pane\.closeTabs"[\s\S]*?chord: chordLabel\("app\.pane\.closeTabs"\)/,
-    );
-    expect(paneSource).toMatch(
-      /label: "Kill pane"[\s\S]*?command: "app\.pane\.kill"[\s\S]*?chord: chordLabel\("app\.pane\.kill"\)/,
+      /dispatchCommand\("app\.launcher\.toggle"\)[\s\S]{1,300}<span class="menu-row-label">Commands<\/span>[\s\S]{1,200}chordLabel\("app\.launcher\.toggle"\)/,
     );
   });
 
   test("empty pane right-click opens NO menu (empty-pane-menu)", async () => {
-    // The pane hamburger (⋮) carries every spawn entry; the right-click
-    // surface would be a duplicate, so it is removed.
-    // Right-clicking an empty pane is a no-op.
+    // The command launcher carries spawn actions; right-clicking an
+    // empty pane is a no-op.
     const pane: LeafNode = {
       kind: "leaf",
       id: "pane-empty",

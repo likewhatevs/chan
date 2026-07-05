@@ -5,8 +5,9 @@ import tabs from "../state/tabs.svelte.ts?raw";
 import editor from "./FileEditorTab.svelte?raw";
 
 // Mod+E "Show Source Code" chord. Pins: registry entry, keymap handler
-// in App.svelte, runCommand branch, toggleActiveFileTabMode helper (mode
-// gate + caret remap), and the chord-hint surface in the editor menu.
+// in App.svelte, runCommand branch, and toggleActiveFileTabMode helper
+// (mode gate + caret remap). The editor tab menu no longer duplicates
+// this command-launcher action.
 
 describe("shortcut registry entry", () => {
   test("app.editor.toggleMode entry exists with Mod+E (web + native)", () => {
@@ -74,10 +75,9 @@ describe("store-side helper", () => {
   });
 });
 
-describe("chord hint in the editor menu", () => {
-  test("Show Source Code button surfaces the Mod+E chord via chordLabel", () => {
-    expect(editor).toMatch(
-      /\{inSource \? renderedLabel : "Show Source Code"\}[\s\S]{1,400}<span class="mbtn-chord">\{chordLabel\("app\.editor\.toggleMode"\)\}<\/span>/,
-    );
+describe("editor tab menu", () => {
+  test("Show Source Code row is not duplicated in the tab menu", () => {
+    expect(editor).not.toContain('<span class="mbtn-label">Show Source Code</span>');
+    expect(editor).not.toContain('chordLabel("app.editor.toggleMode")');
   });
 });

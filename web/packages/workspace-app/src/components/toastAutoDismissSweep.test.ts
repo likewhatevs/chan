@@ -1,14 +1,19 @@
 import { describe, expect, test } from "vitest";
 import fileEditor from "./FileEditorTab.svelte?raw";
 import terminal from "./TerminalTab.svelte?raw";
+import editorCommands from "../state/commands/editor.ts?raw";
+import store from "../state/store.svelte.ts?raw";
 
 // Success-path status messages use auto-dismissing `setTransientStatus()`
 // across surfaces. Error paths and directive surfaces stay persistent.
 
 describe("confirmed same-shape success swaps", () => {
-  test("FileEditorTab `Copied file path` uses setTransientStatus", () => {
-    expect(fileEditor).toMatch(
-      /setTransientStatus\("Copied file path"\)/,
+  test("editor copy-path command reaches transient notify path", () => {
+    expect(editorCommands).toMatch(
+      /id: "app\.editor\.copyPath"[\s\S]{1,500}onSuccess: \(\) => notify\("Copied file path"\)/,
+    );
+    expect(store).toMatch(
+      /setNotifyHandler\(\(msg\) => \{[\s\S]{1,120}setTransientStatus\(msg\);/,
     );
   });
 });

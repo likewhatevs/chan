@@ -25,15 +25,11 @@
     LanguageGraphResponse,
   } from "../api/types";
   import {
-    canReopenClosedTab,
-    graphLinkFor,
     openBrowserInActivePane,
     openGraphInActivePane,
     openInActivePane,
-    reopenClosedTab,
     type GraphTab,
   } from "../state/tabs.svelte";
-  import { notify } from "../state/notify.svelte";
   import {
     browserSelection,
     fbSelectSingle,
@@ -70,10 +66,6 @@
     Folder,
     HardDrive,
     Hash,
-    History,
-    Link,
-    RotateCw,
-    Settings2,
     X,
   } from "lucide-svelte";
   import WorkspaceInfoBody from "./WorkspaceInfoBody.svelte";
@@ -95,12 +87,10 @@
     tab,
     active = false,
     onClose,
-    onFlip,
   }: {
     tab: GraphTab;
     active?: boolean;
     onClose?: () => void;
-    onFlip?: () => void;
   } = $props();
 
   // The graph is always a first-class TAB (Pane mounts GraphPanel only
@@ -861,14 +851,10 @@
     return "binary";
   }
 
-  /// Manual "Reload" (re-added to the tab menu in round 2). With
-  /// keep-alive the graph no longer reloads on tab activation and the
-  /// file-watcher only refreshes a VISIBLE in-scope graph, so this is
-  /// the explicit "refetch now" — forces a fresh /api/graph fetch and,
-  /// at workspace scope, re-runs the depth probe. Sync lastLoadedKey +
-  /// clear graphDirty so the load effect doesn't treat this fresh data
-  /// as stale on its next re-fire. (Restores the body removed in
-  /// ae22d5a1, plus the closeTabMenu + keep-alive bookkeeping.)
+  /// Watcher-triggered reload for visible graphs. With keep-alive the
+  /// graph no longer reloads on tab activation; this forces a fresh
+  /// /api/graph fetch when an in-scope edit arrives and keeps the
+  /// depth probe aligned at workspace scope.
   async function reloadGraph(): Promise<void> {
     closeTabMenu();
     if (currentScope?.kind === "workspace") {
@@ -878,32 +864,6 @@
     lastLoadedKey = loadKey;
     graphDirty = false;
     await load();
-  }
-
-  /// "Copy link to graph" (in the tab menu):
-  /// serialize this tab to a `chan://graph?...` link and put it on the
-  /// clipboard. Pasted into a markdown file, the link reopens this graph
-  /// (scope / depth / mode / filters / selection) on click.
-  async function copyGraphLink(): Promise<void> {
-    closeTabMenu();
-    if (!tab) return;
-    const link = graphLinkFor(tab);
-    try {
-      await navigator.clipboard.writeText(link);
-      notify("Graph link copied");
-    } catch {
-      notify("Couldn't copy graph link to clipboard");
-    }
-  }
-
-  function flipToSettings(): void {
-    closeTabMenu();
-    onFlip?.();
-  }
-
-  function doReopenClosedTab(): void {
-    closeTabMenu();
-    reopenClosedTab();
   }
 
   function closeFromMenu(): void {
@@ -2755,23 +2715,6 @@
           {/if}
         </span>
       </div>
-      <div class="msep" role="separator"></div>
-      <button class="mbtn" onclick={reloadGraph}>
-        <span class="mbtn-icon" aria-hidden="true">
-          <RotateCw size={16} strokeWidth={1.75} />
-        </span>
-        <span class="mbtn-label">Reload</span>
-        <span class="mbtn-chord"></span>
-      </button>
-      <div class="msep" role="separator"></div>
-      <button class="mbtn" onclick={copyGraphLink}>
-        <span class="mbtn-icon" aria-hidden="true">
-          <Link size={16} strokeWidth={1.75} />
-        </span>
-        <span class="mbtn-label">Copy link to graph</span>
-        <span class="mbtn-chord"></span>
-      </button>
-      <div class="msep" role="separator"></div>
       {#each ["tag", "mention", "language", "img", "folder", "markdown", "source"] as const as kind (kind)}
         {@const workspaceLike =
           currentScope?.kind === "workspace"}
@@ -2811,25 +2754,6 @@
         {/if}
       {/each}
       <div class="msep" role="separator"></div>
-      <button class="mbtn" onclick={flipToSettings}>
-        <span class="mbtn-icon">
-          <Settings2 size={16} strokeWidth={1.75} aria-hidden="true" />
-        </span>
-        <span class="mbtn-label">Settings</span>
-        <span class="mbtn-chord"></span>
-      </button>
-      <div class="msep" role="separator"></div>
-      <button
-        class="mbtn"
-        disabled={!canReopenClosedTab()}
-        onclick={doReopenClosedTab}
-      >
-        <span class="mbtn-icon">
-          <History size={16} strokeWidth={1.75} aria-hidden="true" />
-        </span>
-        <span class="mbtn-label">Reopen Closed Tab</span>
-        <span class="mbtn-chord">{chordFor("app.tab.reopenClosed") ?? ""}</span>
-      </button>
       <button class="mbtn" onclick={closeFromMenu}>
         <span class="mbtn-icon">
           <X size={16} strokeWidth={1.75} aria-hidden="true" />

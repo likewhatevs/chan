@@ -187,11 +187,8 @@ describe("TerminalTab activity frames", () => {
 
 describe("TerminalTab menu", () => {
   test(
-    "kebab menu renders the From-$CWD spawn band including New Terminal",
+    "kebab menu keeps broadcast controls and Close only at the foot",
     async () => {
-      // The "From $CWD" section contains New File / New Terminal /
-      // New File Browser / New Graph. New Terminal is a CWD-rooted
-      // affordance distinct from the top-level spawn surface.
       const tab = terminalTab({ terminalSessionId: "term-session-1" });
       const { target } = await renderTerminal(tab, true);
 
@@ -204,13 +201,20 @@ describe("TerminalTab menu", () => {
       );
       // Sanity check: the menu actually rendered.
       expect(labels.length).toBeGreaterThan(0);
-      // From-$CWD band - full set.
-      expect(labels).toContain("New File");
-      expect(labels).toContain("New Terminal");
-      expect(labels).toContain("New File Browser");
-      expect(labels).toContain("New Graph");
-      // Restart sits next to MCP env in the menu.
-      expect(labels).toContain("Restart");
+      expect(labels).toContain("Close");
+      for (const label of [
+        "New File",
+        "New Terminal",
+        "New File Browser",
+        "New Graph",
+        "Restart",
+        "Start New Session",
+        "Copy path to $CWD",
+        "Settings",
+        "Reopen Closed Tab",
+      ]) {
+        expect(labels).not.toContain(label);
+      }
     },
   );
 

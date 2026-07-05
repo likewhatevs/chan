@@ -1,4 +1,6 @@
 import { describe, expect, test } from "vitest";
+import app from "../App.svelte?raw";
+import terminalCommands from "../state/commands/terminal.ts?raw";
 import terminal from "./TerminalTab.svelte?raw";
 import pane from "./Pane.svelte?raw";
 
@@ -94,6 +96,15 @@ describe("TerminalTab Rich Prompt wiring", () => {
     );
     expect(terminal).toMatch(
       /const richPromptChord = chordFor\("terminal\.richPrompt"\) \?\? ""/,
+    );
+  });
+
+  test("command launcher exposes the same Rich Prompt toggle", () => {
+    expect(terminalCommands).toMatch(
+      /id: "terminal\.richPrompt",[\s\S]{1,220}title: "Show\/Hide Rich Prompt",[\s\S]{1,120}category: "Terminal",[\s\S]{1,160}available: onWorkspaceTerminal,[\s\S]{1,120}dispatchChanCommand\("terminal\.richPrompt"\)/,
+    );
+    expect(app).toMatch(
+      /case "terminal\.richPrompt": \{[\s\S]{1,160}const term = activeTerminalTab\(\);[\s\S]{1,120}if \(term\) toggleRichPromptForTab\(term\.id\);/,
     );
   });
 });

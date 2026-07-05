@@ -11,7 +11,7 @@
 // state/commands/install. Keeping one module per surface lets the
 // command lanes own disjoint files; the launcher reads the merged,
 // context-filtered list. This catalog is also the single command source
-// the pane hamburger and right-click menus can consume.
+// the launcher and command-forwarding surfaces consume.
 
 import { ui } from "./store.svelte";
 import { activePane } from "./tabs.svelte";

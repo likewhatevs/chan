@@ -3,8 +3,9 @@ import fileEditorSource from "./FileEditorTab.svelte?raw";
 import terminalSource from "./TerminalTab.svelte?raw";
 
 // Reload + Open Inspector tail entries were dropped from the file editor
-// and terminal tab menus. Cmd+R + the pane hamburger still surface
-// window-level reload + devtools. These pins flip from REQUIRE to FORBID.
+// and terminal tab menus. Cmd+R handles window reload, and the pane
+// chrome context menu still surfaces reload + devtools. These pins flip
+// from REQUIRE to FORBID.
 describe("file-editor tab right-click: Reload + Open Inspector dropped", () => {
   test("no Reload entry in the editor menu", () => {
     expect(fileEditorSource).not.toMatch(

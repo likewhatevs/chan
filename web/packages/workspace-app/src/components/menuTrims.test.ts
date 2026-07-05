@@ -11,7 +11,7 @@ import graph from "./GraphPanel.svelte?raw";
 // in per-tab menus. Show/Hide Details is redundant once row-clicks
 // auto-open the inspector in tab + overlay variants.
 
-describe("TerminalTab right-click: Search still gone; Settings comes back as flip", () => {
+describe("TerminalTab right-click: launcher-overlap rows stay gone", () => {
   test("no Search menu entry (global shortcut / Hybrid Nav f is the global surface)", () => {
     expect(terminal).not.toContain('onclick={openSearch}');
     expect(terminal).not.toMatch(/<span class="mbtn-label">Search<\/span>/);
@@ -24,12 +24,9 @@ describe("TerminalTab right-click: Search still gone; Settings comes back as fli
     expect(terminal).not.toContain("onclick={openSettingsFromMenu}");
   });
 
-  test("Settings (flip) entry is present and routes to flipToSettings", () => {
-    // A Settings entry flips the tab to its back-side config view
-    // (HybridTerminalConfig). This is a per-tab flip, not a global
-    // shortcut duplicate; the no-global-duplicate rule is preserved.
-    expect(terminal).toContain("onclick={flipToSettings}");
-    expect(terminal).toMatch(/<span class="mbtn-label">Settings<\/span>/);
+  test("no Settings flip entry", () => {
+    expect(terminal).not.toContain("onclick={flipToSettings}");
+    expect(terminal).not.toMatch(/<span class="mbtn-label">Settings<\/span>/);
   });
 
   test("Find row stays (unrelated; lives behind a different chord)", () => {
@@ -92,7 +89,7 @@ describe("FB dock menu drops the Open overlay entry", () => {
   });
 });
 
-describe("GraphPanel drops inspector/global Settings and keeps flip footer", () => {
+describe("GraphPanel keeps workspace, depth, filters, and close", () => {
   test("bubble does not invoke toggleInspector", () => {
     expect(graph).not.toMatch(
       /class="tab-menu-bubble"[\s\S]*?onclick=\{toggleInspector\}/,
@@ -110,28 +107,31 @@ describe("GraphPanel drops inspector/global Settings and keeps flip footer", () 
     expect(graph).not.toContain('onclick={doOpenSettings}');
   });
 
-  test("Depth slider + Reload + Copy-link + footer stay", () => {
+  test("Depth slider + filters + close stay", () => {
     expect(graph).toContain('class="mbtn depth-row"');
-    // Round 2: the Reload row is BACK (manual refetch on top of
-    // keep-alive + the visible-graph file watcher), sitting between
-    // Depth and "Copy link to graph".
-    expect(graph).toContain('onclick={reloadGraph}');
-    expect(graph).toContain('<span class="mbtn-label">Reload</span>');
-    expect(graph).toContain('onclick={copyGraphLink}');
-    expect(graph).toContain('<span class="mbtn-label">Copy link to graph</span>');
-    expect(graph).toContain('onclick={flipToSettings}');
-    expect(graph).toContain('onclick={doReopenClosedTab}');
+    expect(graph).toContain('class="mbtn graph-scope-row"');
+    expect(graph).toContain('class="mbtn filter-row"');
     expect(graph).toContain('onclick={closeFromMenu}');
   });
 
-  test("menu order is Depth -> Reload -> Copy link to graph", () => {
+  test("reload, copy-link, Settings, and Reopen rows are gone", () => {
+    expect(graph).not.toContain('<span class="mbtn-label">Reload</span>');
+    expect(graph).not.toContain('onclick={copyGraphLink}');
+    expect(graph).not.toContain('<span class="mbtn-label">Copy link to graph</span>');
+    expect(graph).not.toContain('onclick={flipToSettings}');
+    expect(graph).not.toContain('<span class="mbtn-label">Settings</span>');
+    expect(graph).not.toContain('onclick={doReopenClosedTab}');
+    expect(graph).not.toContain('<span class="mbtn-label">Reopen Closed Tab</span>');
+  });
+
+  test("menu order is Depth -> filters -> Close", () => {
     // Anchor on the three handlers' source positions so a future
     // reshuffle that breaks the intended reading order fails loudly.
     const depth = graph.indexOf('class="mbtn depth-row"');
-    const reload = graph.indexOf("onclick={reloadGraph}");
-    const copyLink = graph.indexOf("onclick={copyGraphLink}");
+    const filter = graph.indexOf('class="mbtn filter-row"');
+    const close = graph.indexOf("onclick={closeFromMenu}");
     expect(depth).toBeGreaterThan(-1);
-    expect(reload).toBeGreaterThan(depth);
-    expect(copyLink).toBeGreaterThan(reload);
+    expect(filter).toBeGreaterThan(depth);
+    expect(close).toBeGreaterThan(filter);
   });
 });
