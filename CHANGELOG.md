@@ -4,7 +4,9 @@ All notable changes to this project will be documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [v0.64.0] - 2026-07-05
+
+A Cmd+K command launcher lists, filters, and runs every UI action; New diagram seeds an Excalidraw board like a draft; the tab right-click menus shed everything the launcher now owns; and the Inspector's hanging Export-to-PDF is gone.
 
 ### Added
 
