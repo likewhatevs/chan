@@ -17,6 +17,7 @@ path = "src/lib.rs"
 
 [dependencies]
 chan-tunnel-server = { workspace = true }
+chan-tunnel-proto = { workspace = true }
 gateway-common = { workspace = true }
 
 anyhow = { workspace = true }
@@ -32,6 +33,7 @@ hyper-util = { workspace = true }
 # devserver-gate HS256 verify (entry tokens from identity) and mint
 # (session cookies). Shared envelope lives in gateway_common::devserver_gate.
 jsonwebtoken = { workspace = true }
+rand = { workspace = true }
 tokio-tungstenite = { workspace = true }
 tokio-util = { workspace = true }
 # reqwest is the transport for the profile-service client only; the

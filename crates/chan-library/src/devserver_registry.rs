@@ -50,6 +50,10 @@ pub enum DevserverStatus {
 pub struct DevserverEntry {
     /// Stable registry id used for row actions and the connection-state map.
     pub id: String,
+    /// Full configured endpoint URL, including scheme. Raw local devservers use
+    /// `http://host:port`; gateway devservers use the public identity origin.
+    #[serde(default)]
+    pub url: String,
     /// The devserver host the desktop dials: hostname or IP, no scheme or port
     /// (`box.example.com`). The desktop forms the dial / tenant URL from `host` +
     /// `port` (`http://{host}:{port}{prefix}...`).
@@ -105,6 +109,10 @@ pub struct DevserverEntry {
 /// chan-library, not via this dialog.)
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct DevserverInput {
+    /// Full endpoint URL. When empty, consumers may derive it from `host` +
+    /// `port` for the raw local-devserver path.
+    #[serde(default)]
+    pub url: Option<String>,
     /// The devserver host (hostname or IP, no scheme or port). Required; the
     /// registry validates it is non-empty.
     pub host: String,

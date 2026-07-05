@@ -56,6 +56,7 @@ const workspaces: WorkspaceEntry[] = [
 const devservers: MockDevserver[] = [
   {
     id: "ds-1",
+    url: "http://box.example.com:8787",
     host: "box.example.com",
     port: 8787,
     label: "prod",
@@ -226,6 +227,7 @@ function publicDevserver(ds: MockDevserver): DevserverEntry {
   // Never echo the token; report only whether one is stored (write-only wire).
   return {
     id: ds.id,
+    url: ds.url,
     host: ds.host,
     port: ds.port,
     label: ds.label,
@@ -321,6 +323,7 @@ export const mockApi: LibraryApi = {
   addDevserver: (input) => {
     const ds: MockDevserver = {
       id: `ds-${nextDs++}`,
+      url: input.url ?? `http://${input.host}:${input.port}`,
       host: input.host,
       port: input.port,
       label: input.label ?? "",

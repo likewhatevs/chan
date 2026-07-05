@@ -90,6 +90,9 @@ impl Validator for IdentityValidator {
                     username: body.username,
                     devserver_id: body.devserver_id,
                     scopes: body.scopes,
+                    gateway_assertion_key: Some(
+                        chan_tunnel_proto::gateway_assertion::derive_assertion_key(token),
+                    ),
                 })
             }
             StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => Err(ServerError::InvalidToken),

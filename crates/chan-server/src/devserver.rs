@@ -789,9 +789,19 @@ pub async fn run_devserver(library: Library, config: DevserverConfig) -> anyhow:
     // run loop reconnects with backoff and is cancelled by the shutdown signal.
     let tunnel_url = config.tunnel.as_ref().map(|t| t.tunnel_url.clone());
     if let Some(tunnel) = config.tunnel {
-        // Mark every tunnel request as tunnel-origin so the shared app's mutable
-        // launcher surface is served read-only over the gateway.
-        let tunnel_app = app.clone().layer(middleware::from_fn(mark_tunnel_origin));
+        let assertion = TunnelAssertion {
+            key: chan_tunnel_proto::gateway_assertion::derive_assertion_key(&tunnel.token),
+            devserver_id: chan_tunnel_proto::gateway_assertion::devserver_id_from_token(
+                &tunnel.token,
+            ),
+        };
+        // Mark every tunnel request as tunnel-origin. A verified owner assertion
+        // unlocks the full launcher; missing or non-owner assertions stay
+        // read-only.
+        let tunnel_app = app.clone().layer(middleware::from_fn_with_state(
+            assertion,
+            mark_tunnel_origin,
+        ));
         spawn_devserver_tunnel(tunnel, tunnel_app, &signal_tx);
     }
 
@@ -1042,12 +1052,61 @@ fn build_devserver_app(
 }
 
 /// Middleware that stamps every request entering the tunnel-only app clone with
-/// [`crate::TunnelOrigin`], so the launcher's mutation gate + meta injector keep
-/// the tunnel read-only even though the shared app serves a mutable surface on
-/// the loopback bind. A local loopback request never passes through this layer,
-/// so it never carries the marker.
-async fn mark_tunnel_origin(mut req: HttpRequest<Body>, next: Next) -> Response {
-    req.extensions_mut().insert(crate::TunnelOrigin);
+/// [`crate::TunnelOrigin`]. A verified owner assertion lets the public gateway
+/// use the same launcher surface as loopback; missing or non-owner assertions
+/// stay read-only. A local loopback request never passes through this layer, so
+/// it never carries the marker.
+#[derive(Clone)]
+struct TunnelAssertion {
+    key: chan_tunnel_proto::gateway_assertion::AssertionKey,
+    devserver_id: String,
+}
+
+async fn mark_tunnel_origin(
+    State(assertion): State<TunnelAssertion>,
+    mut req: HttpRequest<Body>,
+    next: Next,
+) -> Response {
+    let caller = req
+        .headers()
+        .get(chan_tunnel_proto::gateway_assertion::HEADER_NAME)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|token| {
+            let aud = req
+                .headers()
+                .get("x-forwarded-host")
+                .or_else(|| req.headers().get(header::HOST))
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or_default()
+                .to_string();
+            let aud = chan_tunnel_proto::gateway_assertion::canonical_audience(&aud);
+            match chan_tunnel_proto::gateway_assertion::verify(
+                &assertion.key,
+                token,
+                &aud,
+                &assertion.devserver_id,
+            ) {
+                Ok(claims) => {
+                    tracing::debug!(
+                        role = %claims.role,
+                        owner = claims.is_owner(),
+                        aud = %claims.aud,
+                        "gateway assertion accepted",
+                    );
+                    Some(claims)
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        error = ?e,
+                        aud = %aud,
+                        devserver_id = %assertion.devserver_id,
+                        "gateway assertion verification failed",
+                    );
+                    None
+                }
+            }
+        });
+    req.extensions_mut().insert(crate::TunnelOrigin { caller });
     next.run(req).await
 }
 
@@ -1669,6 +1728,24 @@ mod tests {
             store: DevserverStore::at(home.join("devserver").join("config.json")),
             bound_port: AtomicU16::new(0),
         })
+    }
+
+    fn test_tunnel_assertion() -> TunnelAssertion {
+        let token = "chan_pat_test";
+        TunnelAssertion {
+            key: chan_tunnel_proto::gateway_assertion::derive_assertion_key(token),
+            devserver_id: chan_tunnel_proto::gateway_assertion::devserver_id_from_token(token),
+        }
+    }
+
+    fn test_gateway_assertion(assertion: &TunnelAssertion, aud: &str, role: &str) -> String {
+        let claims = chan_tunnel_proto::gateway_assertion::claims(
+            "11111111-1111-4111-8111-111111111111",
+            role,
+            aud,
+            &assertion.devserver_id,
+        );
+        chan_tunnel_proto::gateway_assertion::sign(&assertion.key, &claims).unwrap()
     }
 
     #[cfg(unix)]
@@ -2489,6 +2566,7 @@ mod tests {
 
         let home = tempfile::tempdir().expect("home");
         let ws = tempfile::tempdir().expect("workspace");
+        let owner_ws = tempfile::tempdir().expect("owner workspace");
         let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
         let state = test_state(home.path(), addr);
         let host = state.host.clone();
@@ -2498,7 +2576,11 @@ mod tests {
         // The tunnel clone marks every request tunnel-origin, exactly like the
         // serve loop; this also exercises that the marker survives the host's
         // root-fallback dispatch to require_local_mutation.
-        let tunnel = app.clone().layer(middleware::from_fn(mark_tunnel_origin));
+        let assertion = test_tunnel_assertion();
+        let tunnel = app.clone().layer(middleware::from_fn_with_state(
+            assertion.clone(),
+            mark_tunnel_origin,
+        ));
 
         let add_req = |auth: bool| {
             let body = format!(r#"{{"path":{:?}}}"#, ws.path().to_string_lossy());
@@ -2511,11 +2593,29 @@ mod tests {
             }
             req.body(Body::from(body)).unwrap()
         };
+        let owner_add_req = || {
+            let body = format!(r#"{{"path":{:?}}}"#, owner_ws.path().to_string_lossy());
+            HttpRequest::builder()
+                .method("POST")
+                .uri("/api/library/workspaces")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header("x-forwarded-host", "owner.dev")
+                .header(
+                    chan_tunnel_proto::gateway_assertion::HEADER_NAME,
+                    test_gateway_assertion(&assertion, "owner.dev", "owner"),
+                )
+                .body(Body::from(body))
+                .unwrap()
+        };
 
         // Security: a tunnel-origin workspace mutation is refused 403 even though
-        // the shared surface is mutable.
+        // the shared surface is mutable when there is no owner assertion.
         let refused = tunnel.clone().oneshot(add_req(false)).await.unwrap();
         assert_eq!(refused.status(), StatusCode::FORBIDDEN);
+
+        // The gateway owner assertion unlocks the full launcher over the tunnel.
+        let owner_added = tunnel.clone().oneshot(owner_add_req()).await.unwrap();
+        assert_eq!(owner_added.status(), StatusCode::OK);
 
         let unauth = app.clone().oneshot(add_req(false)).await.unwrap();
         assert_eq!(unauth.status(), StatusCode::UNAUTHORIZED);
@@ -2529,12 +2629,24 @@ mod tests {
         // SAME app. Tolerate an unbuilt bundle (no meta) so a bare cargo test
         // without `make web` still passes; pre-push builds it and verifies both.
         let get_root = || HttpRequest::builder().uri("/").body(Body::empty()).unwrap();
+        let get_owner_root = || {
+            HttpRequest::builder()
+                .uri("/")
+                .header("x-forwarded-host", "owner.dev")
+                .header(
+                    chan_tunnel_proto::gateway_assertion::HEADER_NAME,
+                    test_gateway_assertion(&assertion, "owner.dev", "owner"),
+                )
+                .body(Body::empty())
+                .unwrap()
+        };
         let body_of = |resp: Response| async move {
             let bytes = to_bytes(resp.into_body(), 1 << 20).await.unwrap();
             String::from_utf8_lossy(&bytes).into_owned()
         };
         let local_body = body_of(app.oneshot(get_root()).await.unwrap()).await;
-        let tunnel_body = body_of(tunnel.oneshot(get_root()).await.unwrap()).await;
+        let tunnel_body = body_of(tunnel.clone().oneshot(get_root()).await.unwrap()).await;
+        let owner_tunnel_body = body_of(tunnel.oneshot(get_owner_root()).await.unwrap()).await;
         if local_body.contains("chan-launcher-surface") {
             assert!(
                 local_body.contains(r#"content="devserver""#),
@@ -2543,6 +2655,10 @@ mod tests {
             assert!(
                 tunnel_body.contains(r#"content="readonly""#),
                 "the tunnel should advertise the readonly surface"
+            );
+            assert!(
+                owner_tunnel_body.contains(r#"content="devserver""#),
+                "the owner tunnel should advertise the full devserver surface"
             );
         }
     }
@@ -2567,7 +2683,10 @@ mod tests {
         }
 
         let app = axum::Router::new().route("/ws", get(probe));
-        let tunnel = app.clone().layer(middleware::from_fn(mark_tunnel_origin));
+        let tunnel = app.clone().layer(middleware::from_fn_with_state(
+            test_tunnel_assertion(),
+            mark_tunnel_origin,
+        ));
 
         let req = || {
             HttpRequest::builder()
@@ -2799,7 +2918,10 @@ mod tests {
             .unwrap();
         assert_eq!(watch_bad.status(), StatusCode::UNAUTHORIZED);
 
-        let tunnel = app.layer(middleware::from_fn(mark_tunnel_origin));
+        let tunnel = app.layer(middleware::from_fn_with_state(
+            test_tunnel_assertion(),
+            mark_tunnel_origin,
+        ));
         let tunnel_read = tunnel
             .oneshot(
                 HttpRequest::builder()

@@ -144,6 +144,7 @@ pub fn router(
 
     Router::new()
         .route("/healthz", get(healthz))
+        .route("/.well-known/chan-gateway", get(gateway_discovery))
         .route("/auth/{provider}", get(auth_start))
         .route("/auth/{provider}/callback", get(auth_callback))
         .route("/api/providers", get(providers_list))
@@ -178,6 +179,7 @@ pub fn router(
             "/desktop/authorize/confirm",
             post(crate::desktop_authorize::confirm),
         )
+        .route("/desktop/v1/devserver/entry", post(desktop_devserver_entry))
         .merge(internal)
         .fallback(static_files::handler)
         .with_state(state)
@@ -187,6 +189,51 @@ pub fn router(
 
 async fn healthz() -> &'static str {
     "ok"
+}
+
+#[derive(Debug, Serialize)]
+struct GatewayDiscovery {
+    kind: &'static str,
+    api_version: u32,
+    identity_origin: String,
+    desktop_authorize_url: String,
+    desktop_entry_url: String,
+    devserver_proxy_origin: String,
+    tunnel_url: String,
+}
+
+async fn gateway_discovery(State(state): State<AppState>) -> Result<Json<GatewayDiscovery>> {
+    let identity_origin = state.cfg.base_url.origin().ascii_serialization();
+    let devserver_apex = state
+        .cfg
+        .devserver_wildcard_suffix
+        .strip_prefix('.')
+        .unwrap_or(&state.cfg.devserver_wildcard_suffix);
+    let devserver_proxy_origin = format!(
+        "{scheme}://{host}{port}",
+        scheme = state.cfg.workspace_public_scheme,
+        host = devserver_apex,
+        port = state.cfg.workspace_public_port,
+    );
+    Ok(Json(GatewayDiscovery {
+        kind: "chan-gateway",
+        api_version: 1,
+        identity_origin,
+        desktop_authorize_url: state
+            .cfg
+            .base_url
+            .join("/desktop/authorize")
+            .map_err(|e| Error::Anyhow(anyhow::anyhow!("discovery authorize url: {e}")))?
+            .to_string(),
+        desktop_entry_url: state
+            .cfg
+            .base_url
+            .join("/desktop/v1/devserver/entry")
+            .map_err(|e| Error::Anyhow(anyhow::anyhow!("discovery entry url: {e}")))?
+            .to_string(),
+        devserver_proxy_origin: devserver_proxy_origin.clone(),
+        tunnel_url: format!("{devserver_proxy_origin}{}", chan_tunnel_proto::TUNNEL_PATH),
+    }))
 }
 
 async fn auth_start(
@@ -457,7 +504,7 @@ async fn auth_callback_inner(
 
     // Desktop bounce: if /desktop/authorize stashed params before
     // sending the user through OAuth, hand the user to the consent
-    // page. We do NOT mint here — that needs the user's explicit
+    // page. We do NOT mint here; that needs the user's explicit
     // click on the consent form. peek (not take) so the stash
     // survives across reloads of the consent page.
     if crate::desktop_authorize::peek_pending(&session)
@@ -1006,7 +1053,7 @@ async fn devserver_grants_delete(
     let user = current_active_user(&state, &session).await?;
     // Pass the session user as owner_id; profile's DELETE filters on
     // `id = $1 AND owner_user_id = $2`, so a bug here cannot let
-    // user A revoke user B's grant — 404 from profile instead.
+    // user A revoke user B's grant; 404 from profile instead.
     state
         .cfg
         .profile_client
@@ -1083,10 +1130,7 @@ fn is_devserver_id_shape(s: &str) -> bool {
 ///      A grant gives the WHOLE devserver.
 ///   3. On access, mint an entry JWT (drv = the devserver_id) against the
 ///      owner's `{owner}.devserver.chan.app` host and 303 to the proxy so
-///      it sets its `devserver_gate` cookie and serves `/{workspace}/`.
-///
-/// Whole-devserver opening (a launcher at the devserver root) is the next
-/// phase; this round ships the per-tenant link + email grants only.
+///      it sets its gate cookies and serves `/{workspace}/`.
 async fn share_landing(
     State(state): State<AppState>,
     session: Session,
@@ -1130,10 +1174,18 @@ async fn share_landing(
             Error::Anyhow(anyhow::anyhow!("workspace admin client not configured"))
         })?;
     let live = client.list_user_tunnels(&owner_user.username).await?;
-    let devserver_id = live
-        .first()
-        .map(|t| t.devserver_id.clone())
-        .ok_or(Error::NotFound)?;
+    let devserver_id = match live.first().map(|t| t.devserver_id.clone()) {
+        Some(id) => id,
+        None => {
+            tracing::info!(
+                owner = %owner_user.username,
+                workspace = %workspace,
+                caller = %uid,
+                "share landing: no live tunnel",
+            );
+            return Err(Error::NotFound);
+        }
+    };
 
     let access = state
         .cfg
@@ -1143,11 +1195,16 @@ async fn share_landing(
         .ok_or(Error::NotFound)?;
 
     let host = state.cfg.devserver_host_for(&owner_user.username);
+    let aud = chan_tunnel_proto::gateway_assertion::canonical_audience(&format!(
+        "{host}{}",
+        state.cfg.workspace_public_port
+    ));
     let token = gateway_common::devserver_gate::encode_entry(
         state.cfg.workspace_gate_secret.as_bytes(),
         uid,
+        &access.role,
         &devserver_id,
-        &host,
+        &aud,
     )
     .map_err(|e| Error::Anyhow(anyhow::anyhow!("mint entry token: {e}")))?;
 
@@ -1169,12 +1226,11 @@ async fn share_landing(
 
 /// Whole-devserver open: land the caller on the launcher served at the
 /// devserver ROOT. Same flow as `share_landing` minus the `/{workspace}`
-/// segment — resolve the owner's one live devserver, check access (owner
+/// segment: resolve the owner's one live devserver, check access (owner
 /// or grantee), mint an entry JWT (`drv` = that devserver_id) against
 /// `{owner}.devserver.chan.app`, and 303 to the proxy ROOT `…/?t={token}`
-/// so the proxy sets its `devserver_gate` cookie and forwards `/` to the
-/// launcher. This is the deferred whole-devserver open; the per-workspace
-/// `share_landing` above is the same shape with a tenant path.
+/// so the proxy sets its gate cookies and forwards `/` to the launcher. The
+/// per-workspace `share_landing` above is the same shape with a tenant path.
 async fn share_landing_root(
     State(state): State<AppState>,
     session: Session,
@@ -1209,14 +1265,8 @@ async fn share_landing_root(
         .await?
         .ok_or(Error::NotFound)?;
 
-    // OWNER-ONLY (this round). On the gateway surface the launcher's
-    // `/api/library/*` runs `bearer=None` (tunnel-trust: the proxy gates the
-    // edge but forwards no role), so a GRANTEE who reached the launcher root
-    // would get full library mutation (add/rm/on-off workspaces, devserver
-    // CRUD). Until the proxy injects a signed caller/role header, restrict
-    // whole-devserver open to the owner; grantees keep the per-workspace
-    // share landings (`/s/{owner}/{workspace}`). 404 (not 403) preserves the
-    // handle-existence privacy parity with the resolve above.
+    // Whole-devserver launcher mutation is owner-only. Grantees keep the
+    // per-workspace share landings (`/s/{owner}/{workspace}`).
     if uid != owner_user.id {
         return Err(Error::NotFound);
     }
@@ -1228,10 +1278,17 @@ async fn share_landing_root(
             Error::Anyhow(anyhow::anyhow!("workspace admin client not configured"))
         })?;
     let live = client.list_user_tunnels(&owner_user.username).await?;
-    let devserver_id = live
-        .first()
-        .map(|t| t.devserver_id.clone())
-        .ok_or(Error::NotFound)?;
+    let devserver_id = match live.first().map(|t| t.devserver_id.clone()) {
+        Some(id) => id,
+        None => {
+            tracing::info!(
+                owner = %owner_user.username,
+                caller = %uid,
+                "whole-devserver landing: no live tunnel",
+            );
+            return Err(Error::NotFound);
+        }
+    };
 
     let access = state
         .cfg
@@ -1241,11 +1298,16 @@ async fn share_landing_root(
         .ok_or(Error::NotFound)?;
 
     let host = state.cfg.devserver_host_for(&owner_user.username);
+    let aud = chan_tunnel_proto::gateway_assertion::canonical_audience(&format!(
+        "{host}{}",
+        state.cfg.workspace_public_port
+    ));
     let token = gateway_common::devserver_gate::encode_entry(
         state.cfg.workspace_gate_secret.as_bytes(),
         uid,
+        &access.role,
         &devserver_id,
-        &host,
+        &aud,
     )
     .map_err(|e| Error::Anyhow(anyhow::anyhow!("mint entry token: {e}")))?;
 
@@ -1262,6 +1324,126 @@ async fn share_landing_root(
         port = state.cfg.workspace_public_port,
     );
     Ok(Redirect::to(&url))
+}
+
+const DESKTOP_CONNECT_SCOPE: &str = "desktop.connect";
+
+#[derive(Debug, Deserialize)]
+struct DesktopEntryBody {
+    #[serde(default)]
+    path: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct DesktopEntryResponse {
+    username: String,
+    devserver_id: String,
+    proxy_origin: String,
+    entry_url: String,
+    expires_at: DateTime<Utc>,
+}
+
+async fn desktop_devserver_entry(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<DesktopEntryBody>,
+) -> Result<Json<DesktopEntryResponse>> {
+    let token = bearer_token(&headers).ok_or(Error::Unauthorized)?;
+    let validated = state
+        .api_tokens
+        .validate(token, &request_meta(&headers))
+        .await?;
+    if !validated
+        .scopes
+        .iter()
+        .any(|scope| scope == DESKTOP_CONNECT_SCOPE)
+    {
+        tracing::warn!(
+            user = %validated.username,
+            "desktop entry denied: missing desktop.connect scope",
+        );
+        return Err(Error::Unauthorized);
+    }
+
+    let client =
+        state.cfg.workspace_admin.as_ref().ok_or_else(|| {
+            Error::Anyhow(anyhow::anyhow!("workspace admin client not configured"))
+        })?;
+    let live = client.list_user_tunnels(&validated.username).await?;
+    let devserver_id = match live.first().map(|t| t.devserver_id.clone()) {
+        Some(id) => id,
+        None => {
+            tracing::info!(
+                user = %validated.username,
+                "desktop entry: no live tunnel",
+            );
+            return Err(Error::NotFound);
+        }
+    };
+
+    let access = state
+        .cfg
+        .profile_client
+        .devserver_access(validated.user_id, &devserver_id, validated.user_id)
+        .await?
+        .ok_or(Error::NotFound)?;
+
+    let path = validate_desktop_entry_path(body.path.as_deref())?;
+    let host = state.cfg.devserver_host_for(&validated.username);
+    let aud = chan_tunnel_proto::gateway_assertion::canonical_audience(&format!(
+        "{host}{}",
+        state.cfg.workspace_public_port
+    ));
+    let entry_token = gateway_common::devserver_gate::encode_entry(
+        state.cfg.workspace_gate_secret.as_bytes(),
+        validated.user_id,
+        &access.role,
+        &devserver_id,
+        &aud,
+    )
+    .map_err(|e| Error::Anyhow(anyhow::anyhow!("mint desktop entry token: {e}")))?;
+    let proxy_origin = format!(
+        "{scheme}://{host}{port}",
+        scheme = state.cfg.workspace_public_scheme,
+        port = state.cfg.workspace_public_port,
+    );
+    let sep = if path.contains('?') { '&' } else { '?' };
+    let entry_url = format!("{proxy_origin}{path}{sep}t={entry_token}");
+    tracing::info!(
+        user = %validated.username,
+        devserver_id = %devserver_id,
+        path = %path,
+        role = %access.role,
+        "desktop entry: minted entry URL",
+    );
+    Ok(Json(DesktopEntryResponse {
+        username: validated.username,
+        devserver_id,
+        proxy_origin,
+        entry_url,
+        expires_at: Utc::now() + chrono::Duration::seconds(30),
+    }))
+}
+
+fn bearer_token(headers: &HeaderMap) -> Option<&str> {
+    headers
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+}
+
+fn validate_desktop_entry_path(path: Option<&str>) -> Result<String> {
+    let path = path.unwrap_or("/").trim();
+    if path.is_empty()
+        || !path.starts_with('/')
+        || path.starts_with("//")
+        || path.contains("://")
+        || path.contains('\r')
+        || path.contains('\n')
+    {
+        return Err(Error::BadRequest("invalid entry path".into()));
+    }
+    Ok(path.to_string())
 }
 
 async fn internal_auth(

@@ -46,7 +46,7 @@
   // Devserver form, seeded from the edit target. Address shows the stored
   // `host:port` (the token is write-only and never echoed); Name + Connect
   // script + Auto-hide seed from the entry.
-  let address = $state(editing ? `${editing.host}:${editing.port}` : "");
+  let address = $state(editing ? editing.url || `${editing.host}:${editing.port}` : "");
   let name = $state(editing?.label ?? "");
   let script = $state(editing?.script ?? "");
   // Auto-hide the connect control terminal once the devserver connects.
@@ -106,6 +106,7 @@
   }
 
   interface ParsedAddress {
+    url: string;
     host: string;
     port: number | null;
     token?: string;
@@ -127,18 +128,21 @@
         const host = u.hostname;
         const port = u.port ? Number(u.port) : u.protocol === "https:" ? 443 : 80;
         const token = u.searchParams.get("t");
+        u.searchParams.delete("t");
+        u.hash = "";
         return {
+          url: u.toString(),
           host,
           port: Number.isInteger(port) ? port : null,
           token: token ?? undefined,
         };
       } catch {
-        return { host: "", port: null };
+        return { url: "", host: "", port: null };
       }
     }
     const idx = s.lastIndexOf(":");
     if (idx <= 0 || idx === s.length - 1) {
-      return { host: s, port: null };
+      return { url: "", host: s, port: null };
     }
     const host = s.slice(0, idx).trim();
     const port = Number(s.slice(idx + 1).trim());
@@ -146,9 +150,13 @@
     // double colon / scheme fragment. A bracketed [::1] IPv6 literal ends in "]",
     // not ":", so it survives.
     if (!host || /\s/.test(host) || host.endsWith(":")) {
-      return { host: "", port: null };
+      return { url: "", host: "", port: null };
     }
-    return { host, port: Number.isInteger(port) ? port : null };
+    return {
+      url: Number.isInteger(port) ? `http://${host}:${port}` : "",
+      host,
+      port: Number.isInteger(port) ? port : null,
+    };
   }
 
   function validPort(p: number | null): p is number {
@@ -165,6 +173,7 @@
     try {
       await saveDevserver(
         {
+          url: parsed.url,
           host: parsed.host,
           port: parsed.port,
           label: name.trim() || undefined,

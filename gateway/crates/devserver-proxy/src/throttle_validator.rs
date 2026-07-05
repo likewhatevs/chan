@@ -90,6 +90,7 @@ mod tests {
                 username: "u".into(),
                 devserver_id: "ds-test".into(),
                 scopes: vec!["tunnel".into()],
+                gateway_assertion_key: None,
             })
         }
     }

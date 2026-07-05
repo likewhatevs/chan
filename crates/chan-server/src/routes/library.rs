@@ -168,6 +168,7 @@ pub fn launcher_router(
         // Native folder picker — another desktop-bridge dispatch (the launcher's
         // New-Workspace "Browse…"), so it sits with the other bridge ops.
         .route("/api/library/fs/pick-folder", post(handle_pick_folder))
+        .route_layer(middleware::from_fn(require_local_mutation))
         .with_state(host.clone());
     // Workspaces: list always; the mutation routes are always present but
     // refuse with 403 on the read-only surface (gated by `serve_addr` inside the
@@ -214,6 +215,7 @@ pub fn launcher_router(
             "/api/library/local-theme/watch",
             get(handle_watch_local_theme),
         )
+        .route_layer(middleware::from_fn(require_local_mutation))
         .with_state(Arc::new(LauncherState {
             host: host.clone(),
             serve_addr: serve_addr.clone(),
@@ -263,16 +265,16 @@ pub fn launcher_router(
     let api = launcher_api.merge(config);
     // The static SPA shell is ALWAYS public (loads before it holds the token) and
     // carries the surface hint so the SPA hides mutation controls on a read-only
-    // surface rather than showing buttons that 403. A tunnel-origin request
-    // (marked by the devserver's tunnel layer) is downgraded to `readonly` even
-    // when this router's static surface is the mutable `devserver`, so the same
-    // app serves a mutable launcher on the loopback bind and a read-only one over
-    // the gateway. The `require_local_mutation` gate enforces the same split on
-    // the data routes.
+    // surface rather than showing buttons that 403. A tunnel-origin owner keeps
+    // the router's native surface (the full devserver launcher); a tunnel-origin
+    // non-owner is downgraded to `readonly`. The `require_local_mutation` gate
+    // enforces the same role split on the data routes.
     Router::new()
         .merge(api)
         .fallback(move |req: Request<Body>| {
-            let effective = if req.extensions().get::<crate::TunnelOrigin>().is_some() {
+            let effective = if tunnel_owner(&req) {
+                surface
+            } else if req.extensions().get::<crate::TunnelOrigin>().is_some() {
                 LauncherSurface::ReadOnly
             } else {
                 surface
@@ -283,11 +285,12 @@ pub fn launcher_router(
 
 /// Gate `/api/library/*` on the surface's launcher token. Tunnel-origin
 /// requests already passed the gateway's `devserver_gate` check and arrive with
-/// client credentials stripped, so they bypass this local bearer and stay
-/// read-only through [`require_local_mutation`]. Other requests accept the token
-/// in the `Authorization: Bearer` header on every route, and additionally as the
-/// `?t=` query param on watch WebSockets (a browser WS can't header). The
-/// comparison is constant-time so a wrong token leaks no position info.
+/// client credentials stripped, so they bypass this local bearer; owner vs
+/// non-owner mutation is enforced separately by [`require_local_mutation`].
+/// Other requests accept the token in the `Authorization: Bearer` header on
+/// every route, and additionally as the `?t=` query param on watch WebSockets
+/// (a browser WS can't header). The comparison is constant-time so a wrong token
+/// leaks no position info.
 async fn require_launcher_bearer(token: String, req: Request<Body>, next: Next) -> Response {
     if req.extensions().get::<crate::TunnelOrigin>().is_some() {
         return next.run(req).await;
@@ -367,27 +370,33 @@ async fn require_surface_bearer(
     }
 }
 
-/// Gate the registry-mutation routers (workspaces + devservers) to the LOCAL
-/// bind. The headless devserver serves ONE app on both its loopback bind (a
-/// mutable `devserver` surface) and the gateway tunnel; the tunnel strips every
-/// client credential, so a mutating request there cannot be tied to the owner.
-/// The tunnel layer marks its requests with [`crate::TunnelOrigin`]; refuse a
-/// mutation (POST / PUT / DELETE) carrying it with 403, so the read-only tunnel
-/// surface can never flip the owner's workspaces while the loopback bind stays
-/// fully mutable. GET (list) passes on both. This is the security half of the
-/// surface split; [`inject_launcher_meta`] downgrades the meta to `readonly` for
-/// the same marker so the SPA hides the controls too.
+/// Gate tunnel-origin mutations by the gateway caller role. The headless
+/// devserver serves ONE app on both its loopback bind (a mutable `devserver`
+/// surface) and the gateway tunnel. The proxy strips client credentials and
+/// forwards a verified gateway assertion; owner assertions get the full launcher,
+/// while missing/non-owner assertions may read but not mutate. Non-tunnel
+/// requests keep the existing local bearer/bridge behavior.
 async fn require_local_mutation(req: Request<Body>, next: Next) -> Response {
     let is_mutation = matches!(*req.method(), Method::POST | Method::PUT | Method::DELETE);
-    if is_mutation && req.extensions().get::<crate::TunnelOrigin>().is_some() {
+    if is_mutation
+        && req
+            .extensions()
+            .get::<crate::TunnelOrigin>()
+            .is_some_and(|origin| !origin.owner())
+    {
         return (
             StatusCode::FORBIDDEN,
-            "workspace mutation is not available over the tunnel; manage a devserver's \
-             workspaces from its own machine or the CLI",
+            "launcher mutation is not available for this gateway role",
         )
             .into_response();
     }
     next.run(req).await
+}
+
+fn tunnel_owner(req: &Request<Body>) -> bool {
+    req.extensions()
+        .get::<crate::TunnelOrigin>()
+        .is_some_and(crate::TunnelOrigin::owner)
 }
 
 /// The `t` bearer from a URL query string (`...?t=<token>`), for the watch WS
@@ -1420,6 +1429,7 @@ mod devserver_route_tests {
             FakeRegistry {
                 rows: Mutex::new(vec![DevserverEntry {
                     id: "ds1".into(),
+                    url: "http://box.example.com:8787".into(),
                     host: "box.example.com".into(),
                     port: 8787,
                     label: "box".into(),
@@ -1445,6 +1455,10 @@ mod devserver_route_tests {
             }
             let entry = DevserverEntry {
                 id: "ds-new".into(),
+                url: input
+                    .url
+                    .clone()
+                    .unwrap_or_else(|| format!("http://{}:{}", input.host, input.port)),
                 host: input.host,
                 port: input.port,
                 label: input.label.unwrap_or_default(),
@@ -1470,6 +1484,10 @@ mod devserver_route_tests {
             };
             row.host = input.host;
             row.port = input.port;
+            row.url = input
+                .url
+                .clone()
+                .unwrap_or_else(|| format!("http://{}:{}", row.host, row.port));
             row.auto_hide_control = input.auto_hide_control;
             if let Some(label) = input.label {
                 row.label = label;

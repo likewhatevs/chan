@@ -64,8 +64,7 @@ enum WindowOpener {
         addr: SocketAddr,
     },
     Remote {
-        host: String,
-        port: u16,
+        base_origin: String,
         /// Devserver display name for the window title (see `DevserverConn.name`).
         devserver_name: String,
     },
@@ -76,10 +75,9 @@ impl WindowOpener {
         match self {
             WindowOpener::Local { addr } => serve::open_watched_local_window(app, *addr, record),
             WindowOpener::Remote {
-                host,
-                port,
+                base_origin,
                 devserver_name,
-            } => serve::open_watched_remote_window(app, host, *port, devserver_name, record),
+            } => serve::open_watched_remote_window(app, base_origin, devserver_name, record),
         }
     }
 
@@ -90,8 +88,8 @@ impl WindowOpener {
     fn retarget(&self, app: &AppHandle, record: &WindowRecord) -> Result<bool, String> {
         match self {
             WindowOpener::Local { .. } => Ok(false),
-            WindowOpener::Remote { host, port, .. } => {
-                serve::retarget_watched_remote_window(app, host, *port, record)
+            WindowOpener::Remote { base_origin, .. } => {
+                serve::retarget_watched_remote_window(app, base_origin, record)
             }
         }
     }
@@ -310,11 +308,56 @@ impl WindowFeed for DevserverWindowFeed {
     }
 }
 
-/// The devserver window-feed WS URL. The devserver HTTP base is `http://`
-/// (`devserver::base_origin`), so the WS scheme mirrors it (`ws://`; a future
-/// `https://` base would yield `wss://`, which rustls covers).
+/// The raw devserver window-feed WS URL. Gateway-backed devservers use the
+/// gateway proxy origin instead.
 fn watch_ws_url(host: &str, port: u16) -> String {
     format!("ws://{host}:{port}/api/library/windows/watch")
+}
+
+type GatewayWs =
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+
+async fn gateway_ws_request(
+    conn: &DevserverConn,
+    path: &str,
+) -> Result<tokio_tungstenite::tungstenite::handshake::client::Request, String> {
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+    let url = crate::devserver::gateway_ws_url(conn, path)?;
+    let mut request = url
+        .into_client_request()
+        .map_err(|e| format!("bad gateway watch url: {e}"))?;
+    request.headers_mut().insert(
+        "Cookie",
+        crate::devserver::gateway_cookie_header(conn)
+            .await?
+            .parse()
+            .map_err(|e| format!("bad gateway cookie header: {e}"))?,
+    );
+    Ok(request)
+}
+
+fn ws_auth_shaped(e: &tokio_tungstenite::tungstenite::Error) -> bool {
+    matches!(
+        e,
+        tokio_tungstenite::tungstenite::Error::Http(resp)
+            if matches!(resp.status().as_u16(), 401 | 404)
+    )
+}
+
+async fn connect_gateway_ws(conn: &DevserverConn, path: &str) -> Result<GatewayWs, String> {
+    let request = gateway_ws_request(conn, path).await?;
+    match tokio_tungstenite::connect_async(request).await {
+        Ok((ws, _)) => Ok(ws),
+        Err(e) if ws_auth_shaped(&e) => {
+            crate::devserver::refresh_gateway_session(conn).await?;
+            let request = gateway_ws_request(conn, path).await?;
+            tokio_tungstenite::connect_async(request)
+                .await
+                .map(|(ws, _)| ws)
+                .map_err(|e| format!("connect gateway watch after refresh: {e}"))
+        }
+        Err(e) => Err(format!("connect gateway watch: {e}")),
+    }
 }
 
 /// Stream a devserver's window-set feed into `snapshot` + wake `change` on every
@@ -356,9 +399,9 @@ async fn run_devserver_window_feed(
     }
 }
 
-/// One connection's lifetime: open the `/watch` WS (bearer in the Authorization
-/// header — the desktop uses the header, not the `?t=` query a browser needs),
-/// then push every `WindowSet` text frame into `snapshot` + wake `change`.
+/// One connection's lifetime: open the `/watch` WS, then push every `WindowSet`
+/// text frame into `snapshot` + wake `change`. Raw tunnel devservers auth with a
+/// bearer header; gateway devservers auth with the devserver-gate cookie.
 async fn stream_window_feed(
     conn: &DevserverConn,
     snapshot: &Arc<Mutex<Vec<WindowRecord>>>,
@@ -368,36 +411,43 @@ async fn stream_window_feed(
     use futures::StreamExt;
     use tokio_tungstenite::tungstenite::client::IntoClientRequest;
     use tokio_tungstenite::tungstenite::Message;
-    let mut request = watch_ws_url(&conn.host, conn.port)
-        .into_client_request()
-        .map_err(|e| format!("bad watch url: {e}"))?;
-    request.headers_mut().insert(
-        "Authorization",
-        format!("Bearer {}", conn.token)
-            .parse()
-            .map_err(|e| format!("bad bearer header: {e}"))?,
-    );
-    let (mut ws, _) = tokio_tungstenite::connect_async(request)
-        .await
-        .map_err(|e| format!("connect /watch: {e}"))?;
+    let mut ws = if conn.gateway.is_some() {
+        connect_gateway_ws(conn, "/api/library/windows/watch").await?
+    } else {
+        let url = watch_ws_url(&conn.host, conn.port);
+        let mut request = url
+            .into_client_request()
+            .map_err(|e| format!("bad watch url: {e}"))?;
+        request.headers_mut().insert(
+            "Authorization",
+            format!("Bearer {}", conn.token)
+                .parse()
+                .map_err(|e| format!("bad bearer header: {e}"))?,
+        );
+        tokio_tungstenite::connect_async(request)
+            .await
+            .map(|(ws, _)| ws)
+            .map_err(|e| format!("connect /watch: {e}"))?
+    };
     while let Some(message) = ws.next().await {
         if let Message::Text(text) = message.map_err(|e| format!("watch stream: {e}"))? {
             if let Ok(set) = serde_json::from_str::<WindowSet>(&text) {
+                let mut windows = set.windows;
+                crate::devserver::rewrite_gateway_window_tokens(conn, &mut windows).await?;
                 // Refresh this library's active-transfer cache so the desktop
                 // close guard can see a remote window's in-flight transfer (the
                 // desktop sees no remote `/ws`; the feed bit is its only signal).
                 // The library_id is constant per devserver; an empty snapshot
                 // carries none, but then there are no windows to guard either.
-                if let Some(library_id) = set.windows.first().map(|r| r.library_id.clone()) {
-                    let active: Vec<String> = set
-                        .windows
+                if let Some(library_id) = windows.first().map(|r| r.library_id.clone()) {
+                    let active: Vec<String> = windows
                         .iter()
                         .filter(|r| r.active_transfer)
                         .map(native_label)
                         .collect();
                     state.refresh_devserver_active_transfers(&library_id, &active);
                 }
-                *snapshot.lock().unwrap() = set.windows;
+                *snapshot.lock().unwrap() = windows;
                 // Re-push the launcher feed: a devserver window change
                 // shifts the merged launcher window set, so signal the embedded
                 // host to re-assemble + re-push. The devserver only pushes on a
@@ -460,10 +510,10 @@ struct LocalColorFrame {
     color: Option<String>,
 }
 
-/// One connection's lifetime on the devserver colour watch: open the WS (bearer
-/// in the Authorization header, like the window feed), then push every `{ color }`
-/// frame into the per-devserver colour cache, re-pushing the launcher feed only on
-/// a real change.
+/// One connection's lifetime on the devserver colour watch: raw devservers auth
+/// with bearer; gateway devservers auth with the devserver-gate cookie. Each
+/// `{ color }` frame refreshes the per-devserver colour cache, re-pushing the
+/// launcher feed only on a real change.
 async fn stream_color_feed(
     state: &Arc<AppState>,
     id: &str,
@@ -472,22 +522,27 @@ async fn stream_color_feed(
     use futures::StreamExt;
     use tokio_tungstenite::tungstenite::client::IntoClientRequest;
     use tokio_tungstenite::tungstenite::Message;
-    let url = format!(
-        "ws://{}:{}/api/library/local-color/watch",
-        conn.host, conn.port
-    );
-    let mut request = url
-        .into_client_request()
-        .map_err(|e| format!("bad colour watch url: {e}"))?;
-    request.headers_mut().insert(
-        "Authorization",
-        format!("Bearer {}", conn.token)
-            .parse()
-            .map_err(|e| format!("bad bearer header: {e}"))?,
-    );
-    let (mut ws, _) = tokio_tungstenite::connect_async(request)
-        .await
-        .map_err(|e| format!("connect colour watch: {e}"))?;
+    let mut ws = if conn.gateway.is_some() {
+        connect_gateway_ws(conn, "/api/library/local-color/watch").await?
+    } else {
+        let url = format!(
+            "ws://{}:{}/api/library/local-color/watch",
+            conn.host, conn.port
+        );
+        let mut request = url
+            .into_client_request()
+            .map_err(|e| format!("bad colour watch url: {e}"))?;
+        request.headers_mut().insert(
+            "Authorization",
+            format!("Bearer {}", conn.token)
+                .parse()
+                .map_err(|e| format!("bad bearer header: {e}"))?,
+        );
+        tokio_tungstenite::connect_async(request)
+            .await
+            .map(|(ws, _)| ws)
+            .map_err(|e| format!("connect colour watch: {e}"))?
+    };
     while let Some(message) = ws.next().await {
         if let Message::Text(text) = message.map_err(|e| format!("colour watch stream: {e}"))? {
             if let Ok(frame) = serde_json::from_str::<LocalColorFrame>(&text) {
@@ -533,8 +588,7 @@ pub(crate) async fn spawn_devserver_window_watcher(
     let snapshot_handle = Arc::clone(&snapshot);
     let change = Arc::new(Notify::new());
     let (cancel_tx, cancel_rx) = watch::channel(DevserverWatcherStop::Running);
-    let host = conn.host.clone();
-    let port = conn.port;
+    let base_origin = crate::devserver::conn_base_origin(&conn);
     let devserver_name = conn.name.clone();
     // Shared state so the feed task can refresh the active-transfer cache the
     // close guard reads for this devserver's windows.
@@ -551,8 +605,7 @@ pub(crate) async fn spawn_devserver_window_watcher(
     let surface = TauriNativeSurface {
         app,
         opener: WindowOpener::Remote {
-            host,
-            port,
+            base_origin,
             devserver_name,
         },
         in_flight: Arc::new(Mutex::new(HashSet::new())),

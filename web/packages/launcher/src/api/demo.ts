@@ -62,6 +62,7 @@ function seed(): Seed {
     devservers: [
       {
         id: ATTENTION_DEVSERVER_ID,
+        url: "http://127.0.0.1:9001",
         host: "127.0.0.1",
         port: 9001,
         label: "lima-vm",
@@ -76,6 +77,7 @@ function seed(): Seed {
       },
       {
         id: "ds-windows",
+        url: "http://127.0.0.1:9002",
         host: "127.0.0.1",
         port: 9002,
         label: "windows-tunnel",
@@ -90,6 +92,7 @@ function seed(): Seed {
       },
       {
         id: "ds-linux",
+        url: "http://127.0.0.1:9003",
         host: "127.0.0.1",
         port: 9003,
         label: "linux-tunnel",
@@ -311,6 +314,7 @@ export function createLauncherDemoApi(opts: LauncherDemoOptions = {}): LauncherD
     addDevserver: (input: DevserverInput) => {
       const ds: DemoDevserver = {
         id: `ds-demo-${nextDs++}`,
+        url: input.url ?? `http://${input.host}:${input.port}`,
         host: input.host,
         port: input.port,
         label: input.label ?? "",

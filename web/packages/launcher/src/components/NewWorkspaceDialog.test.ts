@@ -178,6 +178,7 @@ describe("New workspace dialog -- edit", () => {
   it("prefills the Address as host:port without echoing the token", () => {
     const ds: DevserverEntry = {
       id: "ds-edit",
+      url: "http://edit.example:8123",
       host: "edit.example",
       port: 8123,
       label: "staging",
@@ -192,8 +193,8 @@ describe("New workspace dialog -- edit", () => {
     openEditDevserver(ds);
     const el = render();
     expect(el.textContent).toContain("Save changes");
-    // The Address seeds from host:port; the stored token is never echoed into it.
-    expect(addressInput(el).value).toBe("edit.example:8123");
+    // The Address seeds from the stored URL; the stored token is never echoed into it.
+    expect(addressInput(el).value).toBe("http://edit.example:8123");
     // The Name seeds from the label.
     const nameInput = el.querySelector('input[placeholder*="dev2"]') as HTMLInputElement;
     expect(nameInput.value).toBe("staging");
@@ -204,6 +205,7 @@ describe("New workspace dialog -- edit", () => {
   it("opens read-only (OK, no Save, disabled inputs) for a connected devserver", () => {
     const ds: DevserverEntry = {
       id: "ds-live",
+      url: "http://live.example:8200",
       host: "live.example",
       port: 8200,
       label: "live",

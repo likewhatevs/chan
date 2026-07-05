@@ -65,7 +65,7 @@
     return ds.label || `${ds.host}:${ds.port}`;
   }
   function endpoint(ds: DevserverEntry): string {
-    return `${ds.host}:${ds.port}`;
+    return ds.url || `${ds.host}:${ds.port}`;
   }
 
   // Per-workspace card expand state, keyed by the stable workspace_id so it

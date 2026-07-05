@@ -133,13 +133,13 @@ sequenceDiagram
         ID-->>Browser: 303 to owner.devserver.chan.app/workspace/?t=JWT
         Browser->>Proxy: GET /workspace/?t=JWT
         Note over Proxy: verify HS256 exp aud drv typ=entry
-        Proxy-->>Browser: 303 clean URL, Set-Cookie devserver_gate 24h session JWT
+        Proxy-->>Browser: 303 clean URL, Set-Cookie devserver_gate + devserver_csrf
         Browser->>Proxy: GET /workspace/ with devserver_gate cookie
         Proxy-->>Browser: cookie verified, proxied to live devserver
     end
 ```
 
-*Share-landing handoff: resolve owner and live devserver, run the profile access check, mint a 30s entry JWT, then devserver-proxy verifies it and sets the `devserver_gate` cookie.*
+*Share-landing handoff: resolve owner and live devserver, run the profile access check, mint a 30s entry JWT, then devserver-proxy verifies it and sets the gate cookies.*
 
 The share-landing handlers (below) mint the entry token; there is no standalone open endpoint. The mint is keyed on the owner's single devserver:
 
@@ -147,10 +147,10 @@ The share-landing handlers (below) mint the entry token; there is no standalone 
 2. Resolve the owner handle to a user record via profile `GET /v1/users/by-username`. Unknown handle returns 404 (same shape as no-access).
 3. Resolve the owner's live devserver id from devserver-proxy (`list_user_tunnels`); no live devserver returns 404.
 4. Call profile `GET /v1/users/{owner_id}/devservers/{devserver_id}/access?as={session.user_id}`. Owner returns `owner`, an accepted grantee returns `viewer`/`editor`, anything else 404. A grant is whole-devserver, so the `{workspace}` segment never enters the access check.
-5. Mint a 30s `entry` JWT (HS256, `DEVSERVER_GATE_SECRET`) with `{sub: session.user_id, drv: <devserver_id>, aud: "{owner}.devserver.chan.app", ...}`. `sub` is the *caller's* id, not the owner's, so the devserver_gate cookie minted on the next leg carries the right identity for upstream collab attribution.
+5. Mint a 30s `entry` JWT (HS256, `DEVSERVER_GATE_SECRET`) with `{sub: session.user_id, drv: <devserver_id>, aud: "{owner}.devserver.chan.app", ...}`. The `aud` is canonicalized as a lowercase host with default ports stripped; local/dev non-default ports remain. `sub` is the *caller's* id, not the owner's, so the devserver_gate cookie minted on the next leg carries the right identity for upstream collab attribution.
 6. 303 to `https://{owner}.devserver.chan.app/{workspace}/?t=<jwt>` (per-workspace) or `https://{owner}.devserver.chan.app/?t=<jwt>` (whole-devserver root).
 
-devserver-proxy verifies the JWT, mints its own 24h session-shape JWT, sets it as a host-only `devserver_gate` cookie, and 303s to the clean URL. The shared JWT type lives in `gateway_common::devserver_gate`.
+devserver-proxy verifies the JWT, mints its own 24h session-shape JWT, sets it as a host-only `devserver_gate` cookie, sets a readable host-only `devserver_csrf` cookie for unsafe writes, and 303s to the clean URL. The shared JWT type lives in `gateway_common::devserver_gate`.
 
 ### Share landing
 

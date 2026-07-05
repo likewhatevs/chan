@@ -470,14 +470,21 @@ impl chan_server::LocalThemeStore for LocalThemeConfig {
 /// (the wire model since the devserver form switched back to Host+Port, smoke
 /// #3). The desktop persists the URL (the dial path, dedup, and window-restore
 /// key are URL-based); `entry_from_devserver` re-exposes host+port on the wire.
-fn devserver_url(host: &str, port: u16) -> Result<String, String> {
-    let host = host.trim();
+fn devserver_url(input: &DevserverInput) -> Result<String, String> {
+    if let Some(url) = input
+        .url
+        .as_deref()
+        .map(str::trim)
+        .filter(|u| !u.is_empty())
+    {
+        return crate::devserver::normalize_devserver_url(url);
+    }
+    let host = input.host.trim();
     if host.is_empty() {
         return Err("devserver host is required".to_string());
     }
-    let url = format!("http://{host}:{port}");
-    crate::devserver::parse_devserver_url(&url)?;
-    Ok(url)
+    let url = format!("http://{host}:{}", input.port);
+    crate::devserver::normalize_devserver_url(&url)
 }
 
 fn entry_from_devserver(
@@ -496,6 +503,7 @@ fn entry_from_devserver(
     let (os, pretty_name) = feed.os_of(&d.id).unwrap_or_default();
     DevserverEntry {
         id: d.id.clone(),
+        url: d.url.clone(),
         host,
         port,
         label: d.label.clone(),
@@ -543,7 +551,7 @@ impl DevserverRegistry for DevserverConfigRegistry {
     }
 
     fn add(&self, input: DevserverInput) -> Result<DevserverEntry, String> {
-        let url = devserver_url(&input.host, input.port)?;
+        let url = devserver_url(&input)?;
         let token = input.token.unwrap_or_default().trim().to_string();
         let mut store = self.store.lock().unwrap();
         let mut cfg = store.get().map_err(|e| e.to_string())?;
@@ -567,7 +575,7 @@ impl DevserverRegistry for DevserverConfigRegistry {
     }
 
     fn update(&self, id: &str, input: DevserverInput) -> Result<Option<DevserverEntry>, String> {
-        let url = devserver_url(&input.host, input.port)?;
+        let url = devserver_url(&input)?;
         let mut store = self.store.lock().unwrap();
         let mut cfg = store.get().map_err(|e| e.to_string())?;
         let Some(ds) = cfg.devservers.iter_mut().find(|d| d.id == id) else {
@@ -1087,6 +1095,7 @@ mod tests {
         );
         let added = reg
             .add(DevserverInput {
+                url: None,
                 host: "box.example.com".into(),
                 port: 8787,
                 label: Some("lab".into()),
@@ -1149,6 +1158,7 @@ mod tests {
                 port: 8787,
                 token: "tok".into(),
                 name: "box".into(),
+                gateway: None,
             },
         );
         assert_eq!(reg.list()[0].status, DevserverStatus::Connected);

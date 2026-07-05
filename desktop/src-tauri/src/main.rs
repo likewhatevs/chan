@@ -1876,6 +1876,121 @@ async fn connect_devserver_impl(
     result
 }
 
+fn origin_host_port(origin: &str) -> Result<(String, u16), ConnectDevserverError> {
+    let parsed =
+        url::Url::parse(origin).map_err(|e| format!("invalid gateway proxy origin: {e}"))?;
+    let host = parsed
+        .host_str()
+        .filter(|h| !h.is_empty())
+        .ok_or_else(|| "gateway proxy origin has no host".to_string())?
+        .to_string();
+    let port = parsed
+        .port_or_known_default()
+        .ok_or_else(|| "gateway proxy origin has no port and an unknown scheme".to_string())?;
+    Ok((host, port))
+}
+
+fn gateway_display_name(configured_label: &str, gateway_url: &str, proxy_origin: &str) -> String {
+    if !configured_label.is_empty() {
+        return configured_label.to_string();
+    }
+    url::Url::parse(gateway_url)
+        .ok()
+        .and_then(|u| u.host_str().map(str::to_string))
+        .or_else(|| {
+            url::Url::parse(proxy_origin)
+                .ok()
+                .and_then(|u| u.host_str().map(str::to_string))
+        })
+        .unwrap_or_else(|| gateway_url.to_string())
+}
+
+async fn connect_gateway_devserver(
+    app: tauri::AppHandle,
+    state: Arc<AppState>,
+    id: String,
+    url: String,
+    configured_label: String,
+    discovery: devserver::GatewayDiscovery,
+) -> Result<(), ConnectDevserverError> {
+    let Some(pat) = auth::load_gateway_pat(&discovery.identity_origin)? else {
+        auth::open_gateway_signin(
+            &app,
+            &discovery.identity_origin,
+            &discovery.desktop_authorize_url,
+            &id,
+        )?;
+        return Ok(());
+    };
+    let gateway = devserver::gateway_conn(&discovery, pat.secret).await?;
+    let (host, port) = origin_host_port(&gateway.proxy_origin)?;
+    let name = gateway_display_name(&configured_label, &url, &gateway.proxy_origin);
+    let conn = devserver::DevserverConn {
+        host,
+        port,
+        token: String::new(),
+        name,
+        gateway: Some(gateway),
+    };
+
+    let rows = devserver::fetch_workspaces(&conn)
+        .await
+        .map_err(|e| format!("authenticating gateway devserver proxy: {e}"))?;
+    state.devservers.set(id.clone(), conn.clone());
+
+    match devserver::fetch_local_color(&conn).await {
+        Ok(color) => {
+            state.devserver_feed.set_color(id.clone(), color);
+        }
+        Err(e) => {
+            tracing::debug!(
+                devserver = %id,
+                error = %e,
+                "eager gateway pane-colour seed failed; the colour watch will fill it",
+            );
+        }
+    }
+
+    let (cancel, snapshot, view) =
+        window_watcher_wiring::spawn_devserver_window_watcher(app.clone(), conn.clone()).await?;
+    state.devserver_feed.set_down(&id, false);
+    state.devserver_feed.register_windows(id.clone(), snapshot);
+    let library_id = state.devserver_feed.library_id_of(&id);
+    let mapped = rows
+        .into_iter()
+        .map(|r| to_launcher_workspace(&id, library_id.clone(), r))
+        .collect();
+    state.devserver_feed.set_workspaces(id.clone(), mapped);
+    spawn_devserver_workspace_poll(
+        app.clone(),
+        Arc::clone(&state),
+        id.clone(),
+        conn.clone(),
+        cancel.subscribe(),
+    );
+    window_watcher_wiring::spawn_devserver_color_watch(
+        Arc::clone(&state),
+        id.clone(),
+        conn,
+        cancel.subscribe(),
+    );
+    state
+        .devserver_watcher_views
+        .lock()
+        .unwrap()
+        .insert(id.clone(), view);
+    state
+        .devserver_watchers
+        .lock()
+        .unwrap()
+        .insert(id.clone(), cancel);
+    if let Some(embedded) = state.embedded() {
+        embedded.signal_library_change();
+    }
+    let _ = app.emit(serve::SERVES_CHANGED, ());
+    Ok(())
+}
+
 async fn connect_devserver_impl_inner(
     app: tauri::AppHandle,
     state: Arc<AppState>,
@@ -1896,6 +2011,19 @@ async fn connect_devserver_impl_inner(
             ds.auto_hide_control,
         )
     };
+    match devserver::discover_gateway(&url).await {
+        Ok(discovery) => {
+            return connect_gateway_devserver(app, state, id, url, configured_label, discovery)
+                .await;
+        }
+        Err(e) => {
+            tracing::debug!(
+                url = %url,
+                error = %e,
+                "gateway discovery unavailable; falling back to raw devserver",
+            );
+        }
+    }
     // Parse the stored URL into the (host, port) the raw-tunnel dial uses
     // (the port defaults from the scheme when omitted).
     let (host, port) = devserver::parse_devserver_url(&url)?;
@@ -2028,6 +2156,7 @@ async fn connect_devserver_impl_inner(
         port,
         token,
         name,
+        gateway: None,
     };
     devserver::fetch_workspaces(&conn)
         .await
@@ -2288,6 +2417,14 @@ async fn reconnect_devserver(
     let Some(conn) = state.devservers.get(&id) else {
         return Ok(false);
     };
+    if conn.gateway.is_some() {
+        if devserver::fetch_workspaces(&conn).await.is_ok() {
+            state.devserver_feed.set_down(&id, false);
+            let _ = app.emit(serve::SERVES_CHANGED, ());
+            return Ok(true);
+        }
+        return Ok(false);
+    }
     // Try the current token first (a transient network blip keeps it valid),
     // then the local devserver's config token (a local restart rotates it). A
     // remote devserver's token is not in the local config, so it stays
@@ -2510,6 +2647,7 @@ fn register_devserver_from_handoff(
         Arc::clone(&state.devserver_feed),
     );
     registry.add(DevserverInput {
+        url: Some(url),
         host,
         port,
         label: name,
@@ -3130,10 +3268,11 @@ fn reload_devserver_window_from_feed(
     let Some(conn) = state.devservers.get(&devserver_id) else {
         return Ok(false);
     };
-    if serve::retarget_watched_remote_window(app, &conn.host, conn.port, &record)? {
+    let base_origin = devserver::conn_base_origin(&conn);
+    if serve::retarget_watched_remote_window(app, &base_origin, &record)? {
         return Ok(true);
     }
-    serve::open_watched_remote_window(app, &conn.host, conn.port, &conn.name, &record)?;
+    serve::open_watched_remote_window(app, &base_origin, &conn.name, &record)?;
     Ok(true)
 }
 
@@ -3884,14 +4023,33 @@ fn main() {
             // chan-desktop" before or after the app was running.
             use tauri_plugin_deep_link::DeepLinkExt;
             let app_for_links = app.handle().clone();
+            let state_for_links = Arc::clone(&state_for_setup);
             app.deep_link().on_open_url(move |event| {
                 for url in event.urls() {
-                    auth::handle_callback(&app_for_links, url.as_str());
+                    if let Some(id) = auth::handle_callback(&app_for_links, url.as_str()) {
+                        let app = app_for_links.clone();
+                        let state = Arc::clone(&state_for_links);
+                        tauri::async_runtime::spawn(async move {
+                            if let Err(e) = connect_devserver_impl(app.clone(), state, id).await {
+                                let _ = app.emit(auth::AUTH_ERROR, e);
+                            }
+                        });
+                    }
                 }
             });
             if let Ok(Some(urls)) = app.deep_link().get_current() {
                 for url in urls {
-                    auth::handle_callback(app.handle(), url.as_str());
+                    if let Some(id) = auth::handle_callback(app.handle(), url.as_str()) {
+                        let app_handle = app.handle().clone();
+                        let state = Arc::clone(&state_for_setup);
+                        tauri::async_runtime::spawn(async move {
+                            if let Err(e) =
+                                connect_devserver_impl(app_handle.clone(), state, id).await
+                            {
+                                let _ = app_handle.emit(auth::AUTH_ERROR, e);
+                            }
+                        });
+                    }
                 }
             }
 

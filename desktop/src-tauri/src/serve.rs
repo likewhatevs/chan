@@ -334,13 +334,16 @@ pub(crate) fn open_watched_local_window(
 /// library owns persistence (the layout blob is keyed by `window_id`).
 pub(crate) fn open_watched_remote_window(
     app: &AppHandle,
-    host: &str,
-    port: u16,
+    base_origin: &str,
     devserver_name: &str,
     record: &WindowRecord,
 ) -> Result<(), String> {
     let label = crate::window_watcher::native_label(record);
-    let url = crate::devserver::assemble_tenant_url(host, port, &record.prefix, &record.token)?;
+    let url = crate::devserver::assemble_tenant_url_from_base(
+        base_origin,
+        &record.prefix,
+        &record.token,
+    )?;
     let title = devserver_window_title(devserver_name, record);
     let kind = match record.kind {
         WindowKind::Terminal => Some("terminal"),
@@ -370,15 +373,18 @@ pub(crate) fn open_watched_remote_window(
 /// the webview and rebuilding it under the same label.
 pub(crate) fn retarget_watched_remote_window(
     app: &AppHandle,
-    host: &str,
-    port: u16,
+    base_origin: &str,
     record: &WindowRecord,
 ) -> Result<bool, String> {
     let label = crate::window_watcher::native_label(record);
     let Some(window) = app.get_webview_window(&label) else {
         return Ok(false);
     };
-    let url = crate::devserver::assemble_tenant_url(host, port, &record.prefix, &record.token)?;
+    let url = crate::devserver::assemble_tenant_url_from_base(
+        base_origin,
+        &record.prefix,
+        &record.token,
+    )?;
     let kind = match record.kind {
         WindowKind::Terminal => Some("terminal"),
         WindowKind::Workspace => None,

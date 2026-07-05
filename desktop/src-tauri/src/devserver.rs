@@ -16,10 +16,10 @@
 //! port and avoids the devserver needing to know how it is reached.
 
 use std::collections::HashMap;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// Per-request cap so an unreachable devserver cannot hang the launcher's
 /// workspace poll, matching `probe_url`'s connect timeout.
@@ -45,6 +45,39 @@ pub struct DevserverConn {
     /// dialed host). Resolved once at connect and carried on the conn so a
     /// reconnect (which clones the conn) reuses it without re-probing.
     pub name: String,
+    pub gateway: Option<GatewayConn>,
+}
+
+#[derive(Debug, Clone)]
+pub struct GatewayConn {
+    pub identity_origin: String,
+    pub desktop_entry_url: String,
+    pub proxy_origin: String,
+    pub pat: String,
+    session: Arc<Mutex<Option<GatewaySession>>>,
+}
+
+impl GatewayConn {
+    pub fn new(
+        identity_origin: String,
+        desktop_entry_url: String,
+        proxy_origin: String,
+        pat: String,
+    ) -> Self {
+        Self {
+            identity_origin,
+            desktop_entry_url,
+            proxy_origin,
+            pat,
+            session: Arc::new(Mutex::new(None)),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct GatewaySession {
+    cookie_header: String,
+    csrf: String,
 }
 
 /// In-memory map of connected devservers keyed by `Devserver.id`. A
@@ -197,21 +230,38 @@ fn http_client() -> Result<reqwest::Client, String> {
         .clone()
 }
 
-/// The management-API origin the desktop dials. Raw HTTP over the tunnel today
-/// (the common `ssh -L` loopback case). FOLLOW-UP: a proxied-HTTPS dial (with
-/// OAuth) will branch on the stored URL's scheme -- [`parse_devserver_url`] keeps
-/// the host/port; the scheme-aware branch is deferred (OAuth not built yet).
-fn base_origin(host: &str, port: u16) -> String {
+fn http_client_no_redirect() -> Result<reqwest::Client, String> {
+    static CLIENT: OnceLock<Result<reqwest::Client, String>> = OnceLock::new();
+    CLIENT
+        .get_or_init(|| {
+            reqwest::Client::builder()
+                .timeout(Duration::from_secs(HTTP_TIMEOUT_SECS))
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .map_err(|e| format!("building devserver no-redirect http client: {e}"))
+        })
+        .clone()
+}
+
+/// The raw management-API origin the desktop dials for direct loopback
+/// devservers. Gateway-backed devservers use the discovered proxy origin.
+pub fn base_origin(host: &str, port: u16) -> String {
     format!("http://{host}:{port}")
+}
+
+pub fn conn_base_origin(conn: &DevserverConn) -> String {
+    conn.gateway
+        .as_ref()
+        .map(|gw| gw.proxy_origin.clone())
+        .unwrap_or_else(|| base_origin(&conn.host, conn.port))
 }
 
 /// Parse a stored devserver URL into the `(host, port)` the raw-tunnel dial
 /// uses. The port defaults from the scheme when the URL omits it (`https`→443,
 /// `http`→80), so `https://x.devserver.chan.app` resolves without an explicit
 /// port. Bare `host:port` (no scheme) is rejected -- the launcher requires a
-/// `scheme://host` URL. The scheme is preserved in the stored URL for the
-/// deferred proxied-HTTPS+OAuth dial branch (see [`base_origin`]); this only
-/// extracts what the current raw-tunnel dial needs.
+/// `scheme://host` URL. Gateway discovery uses the original URL before this
+/// raw-origin fallback is used.
 pub fn parse_devserver_url(url: &str) -> Result<(String, u16), String> {
     let parsed =
         url::Url::parse(url.trim()).map_err(|e| format!("invalid devserver URL {url:?}: {e}"))?;
@@ -226,6 +276,397 @@ pub fn parse_devserver_url(url: &str) -> Result<(String, u16), String> {
     Ok((host, port))
 }
 
+pub fn normalize_devserver_url(url: &str) -> Result<String, String> {
+    let s = url.trim();
+    let normalized = if s.starts_with("http://") || s.starts_with("https://") {
+        s.to_string()
+    } else {
+        format!("http://{s}")
+    };
+    let parsed =
+        url::Url::parse(&normalized).map_err(|e| format!("invalid devserver URL {url:?}: {e}"))?;
+    let host = parsed
+        .host_str()
+        .filter(|h| !h.is_empty())
+        .ok_or_else(|| format!("devserver URL {url:?} has no host"))?
+        .to_string();
+    let port = parsed
+        .port_or_known_default()
+        .ok_or_else(|| format!("devserver URL {url:?} has no port and an unknown scheme"))?;
+    let mut out = parsed;
+    out.set_host(Some(&host))
+        .map_err(|_| format!("invalid devserver host {host:?}"))?;
+    if out.port_or_known_default() == Some(port) {
+        Ok(out.to_string())
+    } else {
+        Err(format!("invalid devserver URL {url:?}"))
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct GatewayDiscovery {
+    pub kind: String,
+    pub api_version: u32,
+    pub identity_origin: String,
+    pub desktop_authorize_url: String,
+    pub desktop_entry_url: String,
+    pub devserver_proxy_origin: String,
+}
+
+fn origin_of(raw: &str) -> Result<String, String> {
+    let parsed = url::Url::parse(raw).map_err(|e| format!("invalid URL {raw:?}: {e}"))?;
+    if parsed.host_str().is_none() {
+        return Err(format!("URL {raw:?} has no host"));
+    }
+    Ok(parsed.origin().ascii_serialization())
+}
+
+fn is_loopback_gateway_host(host: &str) -> bool {
+    let h = host
+        .trim_matches(|c| c == '[' || c == ']')
+        .to_ascii_lowercase();
+    h == "localhost"
+        || h == "::1"
+        || h.starts_with("127.")
+        || h == "localtest.me"
+        || h.ends_with(".localtest.me")
+}
+
+fn require_https_unless_loopback(raw: &str) -> Result<(), String> {
+    let parsed = url::Url::parse(raw).map_err(|e| format!("invalid URL {raw:?}: {e}"))?;
+    match parsed.scheme() {
+        "https" => Ok(()),
+        "http" if parsed.host_str().is_some_and(is_loopback_gateway_host) => Ok(()),
+        "http" => Err(format!(
+            "gateway URL {raw:?} must use https outside loopback dev"
+        )),
+        other => Err(format!(
+            "gateway URL {raw:?} has unsupported scheme {other:?}"
+        )),
+    }
+}
+
+fn validate_gateway_discovery(
+    configured_url: &str,
+    d: GatewayDiscovery,
+) -> Result<GatewayDiscovery, String> {
+    if d.kind != "chan-gateway" || d.api_version != 1 {
+        return Err("server is not a supported chan-gateway".to_string());
+    }
+
+    let configured_origin = origin_of(configured_url)?;
+    let identity_origin = origin_of(&d.identity_origin)?;
+    let authorize_origin = origin_of(&d.desktop_authorize_url)?;
+    let entry_origin = origin_of(&d.desktop_entry_url)?;
+    if identity_origin != configured_origin
+        || authorize_origin != configured_origin
+        || entry_origin != configured_origin
+    {
+        return Err("chan-gateway discovery is cross-origin".to_string());
+    }
+
+    for raw in [
+        configured_url,
+        &d.identity_origin,
+        &d.desktop_authorize_url,
+        &d.desktop_entry_url,
+        &d.devserver_proxy_origin,
+    ] {
+        require_https_unless_loopback(raw)?;
+    }
+
+    Ok(d)
+}
+
+pub async fn discover_gateway(url: &str) -> Result<GatewayDiscovery, String> {
+    let normalized = normalize_devserver_url(url)?;
+    let mut u = url::Url::parse(&normalized).map_err(|e| format!("bad gateway URL: {e}"))?;
+    u.set_path("/.well-known/chan-gateway");
+    u.set_query(None);
+    u.set_fragment(None);
+    let resp = http_client_no_redirect()?
+        .get(u)
+        .send()
+        .await
+        .map_err(|e| format!("checking chan-gateway discovery: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("gateway discovery returned HTTP {}", resp.status()));
+    }
+    let d = resp
+        .json::<GatewayDiscovery>()
+        .await
+        .map_err(|e| format!("decoding gateway discovery: {e}"))?;
+    validate_gateway_discovery(&normalized, d)
+}
+
+#[derive(Serialize)]
+struct GatewayEntryRequest<'a> {
+    path: &'a str,
+}
+
+#[derive(Deserialize)]
+struct GatewayEntryResponse {
+    proxy_origin: String,
+    entry_url: String,
+}
+
+async fn gateway_entry(gw: &GatewayConn, path: &str) -> Result<GatewayEntryResponse, String> {
+    let resp = http_client()?
+        .post(&gw.desktop_entry_url)
+        .bearer_auth(&gw.pat)
+        .json(&GatewayEntryRequest { path })
+        .send()
+        .await
+        .map_err(|e| format!("minting gateway entry URL: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("gateway entry returned HTTP {}", resp.status()));
+    }
+    resp.json::<GatewayEntryResponse>()
+        .await
+        .map_err(|e| format!("decoding gateway entry: {e}"))
+}
+
+pub async fn gateway_conn(
+    discovery: &GatewayDiscovery,
+    pat: String,
+) -> Result<GatewayConn, String> {
+    let probe = GatewayConn::new(
+        discovery.identity_origin.clone(),
+        discovery.desktop_entry_url.clone(),
+        discovery.devserver_proxy_origin.clone(),
+        pat,
+    );
+    let entry = gateway_entry(&probe, "/").await?;
+    let proxy_origin = if entry.proxy_origin.trim().is_empty() {
+        discovery.devserver_proxy_origin.clone()
+    } else {
+        entry.proxy_origin
+    };
+    let gw = GatewayConn::new(
+        discovery.identity_origin.clone(),
+        discovery.desktop_entry_url.clone(),
+        proxy_origin,
+        probe.pat,
+    );
+    establish_gateway_session_from_entry(&gw, &entry.entry_url).await?;
+    Ok(gw)
+}
+
+fn extract_cookie_value(
+    set_cookie: &reqwest::header::HeaderMap,
+    cookie_name: &str,
+) -> Option<String> {
+    for value in set_cookie.get_all(reqwest::header::SET_COOKIE) {
+        let Ok(raw) = value.to_str() else { continue };
+        let first = raw.split(';').next().unwrap_or("");
+        let Some((name, value)) = first.split_once('=') else {
+            continue;
+        };
+        if name == cookie_name && !value.is_empty() {
+            return Some(value.to_string());
+        }
+    }
+    None
+}
+
+async fn establish_gateway_session_from_entry(
+    gw: &GatewayConn,
+    entry_url: &str,
+) -> Result<GatewaySession, String> {
+    let resp = http_client_no_redirect()?
+        .get(entry_url)
+        .send()
+        .await
+        .map_err(|e| format!("opening gateway entry URL: {e}"))?;
+    let gate = extract_cookie_value(resp.headers(), "devserver_gate")
+        .ok_or_else(|| "gateway did not return a devserver session cookie".to_string())?;
+    let csrf = extract_cookie_value(resp.headers(), "devserver_csrf")
+        .ok_or_else(|| "gateway did not return a CSRF cookie".to_string())?;
+    let session = GatewaySession {
+        cookie_header: format!("devserver_gate={gate}; devserver_csrf={csrf}"),
+        csrf,
+    };
+    *gw.session.lock().unwrap() = Some(session.clone());
+    Ok(session)
+}
+
+async fn refresh_gateway_session_inner(gw: &GatewayConn) -> Result<GatewaySession, String> {
+    let entry = gateway_entry(gw, "/").await?;
+    establish_gateway_session_from_entry(gw, &entry.entry_url).await
+}
+
+async fn gateway_session(gw: &GatewayConn) -> Result<GatewaySession, String> {
+    if let Some(session) = gw.session.lock().unwrap().clone() {
+        return Ok(session);
+    }
+    refresh_gateway_session_inner(gw).await
+}
+
+pub(crate) async fn gateway_cookie_header(conn: &DevserverConn) -> Result<String, String> {
+    let gw = conn
+        .gateway
+        .as_ref()
+        .ok_or_else(|| "not a gateway connection".to_string())?;
+    gateway_session(gw).await.map(|s| s.cookie_header)
+}
+
+pub(crate) async fn refresh_gateway_session(conn: &DevserverConn) -> Result<(), String> {
+    let gw = conn
+        .gateway
+        .as_ref()
+        .ok_or_else(|| "not a gateway connection".to_string())?;
+    refresh_gateway_session_inner(gw).await.map(|_| ())
+}
+
+fn gateway_url(gw: &GatewayConn, path: &str) -> String {
+    format!("{}{}", gw.proxy_origin.trim_end_matches('/'), path)
+}
+
+pub(crate) fn gateway_ws_url(conn: &DevserverConn, path: &str) -> Result<String, String> {
+    let gw = conn
+        .gateway
+        .as_ref()
+        .ok_or_else(|| "not a gateway connection".to_string())?;
+    let mut url =
+        url::Url::parse(&gw.proxy_origin).map_err(|e| format!("bad gateway proxy origin: {e}"))?;
+    let scheme = match url.scheme() {
+        "https" => "wss",
+        "http" => "ws",
+        other => return Err(format!("unsupported gateway proxy scheme {other:?}")),
+    };
+    url.set_scheme(scheme)
+        .map_err(|_| format!("unsupported gateway proxy scheme {scheme:?}"))?;
+    url.set_path(path);
+    url.set_query(None);
+    url.set_fragment(None);
+    Ok(url.to_string())
+}
+
+async fn gateway_get(conn: &DevserverConn, path: &str) -> Result<reqwest::Response, String> {
+    let gw = conn
+        .gateway
+        .as_ref()
+        .ok_or_else(|| "not a gateway connection".to_string())?;
+    gateway_request(gw, reqwest::Method::GET, path).await
+}
+
+fn gateway_auth_shaped(status: reqwest::StatusCode) -> bool {
+    status == reqwest::StatusCode::NOT_FOUND || status == reqwest::StatusCode::UNAUTHORIZED
+}
+
+fn apply_gateway_session(
+    builder: reqwest::RequestBuilder,
+    method: &reqwest::Method,
+    session: &GatewaySession,
+) -> reqwest::RequestBuilder {
+    let builder = builder.header(reqwest::header::COOKIE, session.cookie_header.clone());
+    if method == reqwest::Method::POST
+        || method == reqwest::Method::PUT
+        || method == reqwest::Method::PATCH
+        || method == reqwest::Method::DELETE
+    {
+        builder.header("X-Chan-CSRF", session.csrf.clone())
+    } else {
+        builder
+    }
+}
+
+async fn gateway_request(
+    gw: &GatewayConn,
+    method: reqwest::Method,
+    path: &str,
+) -> Result<reqwest::Response, String> {
+    let session = gateway_session(gw).await?;
+    let resp = apply_gateway_session(
+        http_client()?.request(method.clone(), gateway_url(gw, path)),
+        &method,
+        &session,
+    )
+    .send()
+    .await
+    .map_err(|e| format!("gateway {} {path}: {e}", method.as_str()))?;
+    if !gateway_auth_shaped(resp.status()) {
+        return Ok(resp);
+    }
+    let session = refresh_gateway_session_inner(gw).await?;
+    apply_gateway_session(
+        http_client()?.request(method.clone(), gateway_url(gw, path)),
+        &method,
+        &session,
+    )
+    .send()
+    .await
+    .map_err(|e| format!("gateway {} {path}: {e}", method.as_str()))
+}
+
+async fn gateway_request_json<T: Serialize + ?Sized>(
+    gw: &GatewayConn,
+    method: reqwest::Method,
+    path: &str,
+    body: &T,
+) -> Result<reqwest::Response, String> {
+    let session = gateway_session(gw).await?;
+    let resp = apply_gateway_session(
+        http_client()?
+            .request(method.clone(), gateway_url(gw, path))
+            .json(body),
+        &method,
+        &session,
+    )
+    .send()
+    .await
+    .map_err(|e| format!("gateway {} {path}: {e}", method.as_str()))?;
+    if !gateway_auth_shaped(resp.status()) {
+        return Ok(resp);
+    }
+    let session = refresh_gateway_session_inner(gw).await?;
+    apply_gateway_session(
+        http_client()?
+            .request(method.clone(), gateway_url(gw, path))
+            .json(body),
+        &method,
+        &session,
+    )
+    .send()
+    .await
+    .map_err(|e| format!("gateway {} {path}: {e}", method.as_str()))
+}
+
+pub async fn gateway_entry_url(conn: &DevserverConn, path: &str) -> Result<String, String> {
+    let gw = conn
+        .gateway
+        .as_ref()
+        .ok_or_else(|| "not a gateway connection".to_string())?;
+    gateway_entry(gw, path).await.map(|r| r.entry_url)
+}
+
+fn gateway_entry_token(entry_url: &str) -> Result<Option<String>, String> {
+    let parsed =
+        url::Url::parse(entry_url).map_err(|e| format!("bad gateway window entry URL: {e}"))?;
+    Ok(parsed
+        .query_pairs()
+        .find_map(|(k, v)| (k == "t").then(|| v.into_owned())))
+}
+
+pub async fn rewrite_gateway_window_tokens(
+    conn: &DevserverConn,
+    rows: &mut [chan_server::WindowRecord],
+) -> Result<(), String> {
+    if conn.gateway.is_none() {
+        return Ok(());
+    }
+    for row in rows {
+        if row.prefix.is_empty() {
+            continue;
+        }
+        let entry_url = gateway_entry_url(conn, &format!("/{}/index.html", row.prefix)).await?;
+        if let Some(token) = gateway_entry_token(&entry_url)? {
+            row.token = token;
+        }
+    }
+    Ok(())
+}
+
 /// Assemble the tenant URL the desktop opens for a devserver tenant:
 /// `http://{host}:{port}{prefix}/index.html?t={token}`. `prefix` is an
 /// absolute route path such as `/api/notes-1a2b3c`. Routing through
@@ -237,6 +678,14 @@ pub fn assemble_tenant_url(
     token: &str,
 ) -> Result<String, String> {
     let base = base_origin(host, port);
+    assemble_tenant_url_from_base(&base, prefix, token)
+}
+
+pub fn assemble_tenant_url_from_base(
+    base: &str,
+    prefix: &str,
+    token: &str,
+) -> Result<String, String> {
     let mut url = url::Url::parse(&base).map_err(|e| format!("bad devserver base {base}: {e}"))?;
     let path = format!("{}/index.html", prefix.trim_end_matches('/'));
     url.set_path(&path);
@@ -340,6 +789,24 @@ pub async fn fetch_info(host: &str, port: u16) -> Result<DevserverInfo, String> 
 /// `GET /api/devserver/workspaces`: the live workspace list, each entry's
 /// tenant URL already assembled.
 pub async fn fetch_workspaces(conn: &DevserverConn) -> Result<Vec<DevserverWorkspaceRow>, String> {
+    if conn.gateway.is_some() {
+        let resp = gateway_get(conn, "/api/library/workspaces").await?;
+        if !resp.status().is_success() {
+            return Err(format!(
+                "gateway workspaces returned HTTP {}",
+                resp.status()
+            ));
+        }
+        let entries = resp
+            .json::<Vec<chan_server::LauncherWorkspace>>()
+            .await
+            .map_err(|e| format!("decoding gateway workspaces: {e}"))?;
+        let mut rows = Vec::with_capacity(entries.len());
+        for entry in entries {
+            rows.push(row_from_launcher(conn, entry).await?);
+        }
+        return Ok(rows);
+    }
     let url = format!(
         "{}/api/devserver/workspaces",
         base_origin(&conn.host, conn.port)
@@ -379,6 +846,17 @@ struct LocalColorResponse {
 /// instead of flashing blue until the async colour watch pushes. The
 /// colour watch (`stream_color_feed`) keeps it live thereafter.
 pub async fn fetch_local_color(conn: &DevserverConn) -> Result<Option<String>, String> {
+    if conn.gateway.is_some() {
+        let resp = gateway_get(conn, "/api/library/local-color").await?;
+        if !resp.status().is_success() {
+            return Err(format!("gateway colour returned HTTP {}", resp.status()));
+        }
+        return resp
+            .json::<LocalColorResponse>()
+            .await
+            .map(|r| r.color)
+            .map_err(|e| format!("decoding gateway colour: {e}"));
+    }
     let url = format!(
         "{}/api/library/local-color",
         base_origin(&conn.host, conn.port)
@@ -422,6 +900,34 @@ fn row_from_entry(
     })
 }
 
+async fn row_from_launcher(
+    conn: &DevserverConn,
+    e: chan_server::LauncherWorkspace,
+) -> Result<DevserverWorkspaceRow, String> {
+    let prefix = if e.prefix.is_empty() {
+        e.workspace_id.clone()
+    } else {
+        e.prefix.clone()
+    };
+    let url = if e.on {
+        format!(
+            "{}/{prefix}/index.html",
+            conn_base_origin(conn).trim_end_matches('/')
+        )
+    } else {
+        String::new()
+    };
+    Ok(DevserverWorkspaceRow {
+        prefix: format!("/{prefix}"),
+        path: e.path,
+        label: e.label,
+        on: e.on,
+        status: e.status,
+        error: e.error,
+        url,
+    })
+}
+
 /// One row of `GET /api/devserver/windows`: a
 /// PERSISTED workspace window the desktop enumerates to offer CLOSED-but-
 /// persisted windows for reopen in the Window menu. Deserialized 1:1 from the
@@ -447,6 +953,9 @@ pub struct DevserverWindowRow {
 pub async fn fetch_devserver_windows(
     conn: &DevserverConn,
 ) -> Result<Vec<DevserverWindowRow>, String> {
+    if conn.gateway.is_some() {
+        return Ok(Vec::new());
+    }
     let url = format!(
         "{}/api/devserver/windows",
         base_origin(&conn.host, conn.port)
@@ -473,6 +982,21 @@ pub async fn fetch_devserver_windows(
 pub async fn fetch_library_windows(
     conn: &DevserverConn,
 ) -> Result<Vec<chan_server::WindowRecord>, String> {
+    if conn.gateway.is_some() {
+        let resp = gateway_get(conn, "/api/library/windows").await?;
+        if !resp.status().is_success() {
+            return Err(format!(
+                "gateway library windows returned HTTP {}",
+                resp.status()
+            ));
+        }
+        let mut rows = resp
+            .json::<Vec<chan_server::WindowRecord>>()
+            .await
+            .map_err(|e| format!("decoding gateway library windows: {e}"))?;
+        rewrite_gateway_window_tokens(conn, &mut rows).await?;
+        return Ok(rows);
+    }
     let url = format!("{}/api/library/windows", base_origin(&conn.host, conn.port));
     let resp = http_client()?
         .get(&url)
@@ -498,6 +1022,26 @@ pub async fn mint_library_window(
     kind: chan_server::WindowKind,
     workspace_path: Option<String>,
 ) -> Result<chan_server::WindowRecord, String> {
+    if let Some(gw) = &conn.gateway {
+        let body = chan_server::CreateWindow {
+            kind,
+            workspace_path,
+            origin: chan_server::WindowOrigin::Native,
+            acting_window_id: None,
+        };
+        let resp =
+            gateway_request_json(gw, reqwest::Method::POST, "/api/library/windows", &body).await?;
+        if !resp.status().is_success() {
+            return Err(format!(
+                "gateway library window mint returned HTTP {}",
+                resp.status()
+            ));
+        }
+        return resp
+            .json::<chan_server::WindowRecord>()
+            .await
+            .map_err(|e| format!("decoding minted gateway window: {e}"));
+    }
     let url = format!("{}/api/library/windows", base_origin(&conn.host, conn.port));
     let body = chan_server::CreateWindow {
         kind,
@@ -533,6 +1077,21 @@ pub async fn mint_library_window(
 /// closed devserver window must DELETE its record, else it survives server-side
 /// and reopens (empty) on restart. A 404 (already gone) is success.
 pub async fn discard_library_window(conn: &DevserverConn, window_id: &str) -> Result<(), String> {
+    if let Some(gw) = &conn.gateway {
+        let resp = gateway_request(
+            gw,
+            reqwest::Method::DELETE,
+            &format!("/api/library/windows/{window_id}"),
+        )
+        .await?;
+        if !resp.status().is_success() && resp.status() != reqwest::StatusCode::NOT_FOUND {
+            return Err(format!(
+                "gateway library window discard returned HTTP {}",
+                resp.status()
+            ));
+        }
+        return Ok(());
+    }
     let url = format!(
         "{}/api/library/windows/{}",
         base_origin(&conn.host, conn.port),
@@ -575,6 +1134,23 @@ pub async fn forget_workspace(
     prefix: &str,
     force: bool,
 ) -> Result<(), SetWorkspaceOnError> {
+    if let Some(gw) = &conn.gateway {
+        let clean = prefix.trim_start_matches('/');
+        let mut path = format!("/api/library/workspaces/{clean}");
+        if force {
+            path.push_str("?force=true");
+        }
+        let resp = gateway_request(gw, reqwest::Method::DELETE, &path)
+            .await
+            .map_err(SetWorkspaceOnError::other)?;
+        if !resp.status().is_success() {
+            return Err(SetWorkspaceOnError::other(format!(
+                "gateway workspace delete returned HTTP {}",
+                resp.status()
+            )));
+        }
+        return Ok(());
+    }
     let url = workspace_delete_url(&conn.host, conn.port, prefix, force);
     let resp = http_client()
         .map_err(SetWorkspaceOnError::other)?
@@ -610,6 +1186,22 @@ pub async fn set_window_visibility(
     window_id: &str,
     hidden: bool,
 ) -> Result<(), String> {
+    if let Some(gw) = &conn.gateway {
+        let resp = gateway_request_json(
+            gw,
+            reqwest::Method::POST,
+            &format!("/api/library/windows/{window_id}/visibility"),
+            &serde_json::json!({ "hidden": hidden }),
+        )
+        .await?;
+        if !resp.status().is_success() {
+            return Err(format!(
+                "gateway window visibility returned HTTP {}",
+                resp.status()
+            ));
+        }
+        return Ok(());
+    }
     let url = format!(
         "{}/api/library/windows/{}/visibility",
         base_origin(&conn.host, conn.port),
@@ -654,6 +1246,32 @@ pub async fn set_workspace_on(
     on: bool,
     force: bool,
 ) -> Result<(), SetWorkspaceOnError> {
+    if let Some(gw) = &conn.gateway {
+        let clean = prefix.trim_start_matches('/');
+        let resp = gateway_request_json(
+            gw,
+            reqwest::Method::POST,
+            &format!("/api/library/workspaces/{clean}/on"),
+            &SetWorkspaceOnRequest { on, force },
+        )
+        .await
+        .map_err(SetWorkspaceOnError::other)?;
+        if resp.status() == reqwest::StatusCode::CONFLICT {
+            let active_terminals = resp
+                .json::<ActiveTerminalsRejection>()
+                .await
+                .map(|r| r.active_terminals)
+                .unwrap_or(0);
+            return Err(SetWorkspaceOnError::ActiveTerminals { active_terminals });
+        }
+        if !resp.status().is_success() {
+            return Err(SetWorkspaceOnError::other(format!(
+                "gateway workspace on/off returned HTTP {}",
+                resp.status()
+            )));
+        }
+        return Ok(());
+    }
     let url = workspace_on_url(&conn.host, conn.port, prefix);
     let resp = http_client()
         .map_err(SetWorkspaceOnError::other)?
@@ -713,6 +1331,65 @@ mod tests {
         assert!(parse_devserver_url("127.0.0.1:8787").is_err());
         assert!(parse_devserver_url("not a url").is_err());
         assert!(parse_devserver_url("").is_err());
+    }
+
+    fn valid_gateway_discovery() -> GatewayDiscovery {
+        GatewayDiscovery {
+            kind: "chan-gateway".into(),
+            api_version: 1,
+            identity_origin: "https://id.chan.app".into(),
+            desktop_authorize_url: "https://id.chan.app/desktop/authorize".into(),
+            desktop_entry_url: "https://id.chan.app/desktop/v1/devserver/entry".into(),
+            devserver_proxy_origin: "https://alice.devserver.chan.app".into(),
+        }
+    }
+
+    #[test]
+    fn gateway_discovery_accepts_same_origin_https() {
+        let d = validate_gateway_discovery("https://id.chan.app", valid_gateway_discovery())
+            .expect("valid gateway discovery");
+        assert_eq!(d.identity_origin, "https://id.chan.app");
+    }
+
+    #[test]
+    fn gateway_discovery_rejects_cross_origin_identity() {
+        let mut d = valid_gateway_discovery();
+        d.identity_origin = "https://evil.example".into();
+        let err = validate_gateway_discovery("https://id.chan.app", d).unwrap_err();
+        assert!(err.contains("cross-origin"), "{err}");
+    }
+
+    #[test]
+    fn gateway_discovery_rejects_cross_origin_entry_url() {
+        let mut d = valid_gateway_discovery();
+        d.desktop_entry_url = "https://evil.example/desktop/v1/devserver/entry".into();
+        let err = validate_gateway_discovery("https://id.chan.app", d).unwrap_err();
+        assert!(err.contains("cross-origin"), "{err}");
+    }
+
+    #[test]
+    fn gateway_discovery_rejects_http_for_non_loopback() {
+        let mut d = valid_gateway_discovery();
+        d.identity_origin = "http://id.chan.app".into();
+        d.desktop_authorize_url = "http://id.chan.app/desktop/authorize".into();
+        d.desktop_entry_url = "http://id.chan.app/desktop/v1/devserver/entry".into();
+        d.devserver_proxy_origin = "http://alice.devserver.chan.app".into();
+        let err = validate_gateway_discovery("http://id.chan.app", d).unwrap_err();
+        assert!(err.contains("must use https"), "{err}");
+    }
+
+    #[test]
+    fn gateway_discovery_allows_http_loopback_dev() {
+        let d = GatewayDiscovery {
+            kind: "chan-gateway".into(),
+            api_version: 1,
+            identity_origin: "http://localhost:7000".into(),
+            desktop_authorize_url: "http://localhost:7000/desktop/authorize".into(),
+            desktop_entry_url: "http://localhost:7000/desktop/v1/devserver/entry".into(),
+            devserver_proxy_origin: "http://127.0.0.1:7002".into(),
+        };
+        validate_gateway_discovery("http://localhost:7000", d)
+            .expect("loopback http is explicit dev use");
     }
 
     #[test]
@@ -831,6 +1508,7 @@ mod tests {
             port: 8787,
             token: "dt".into(),
             name: "box".into(),
+            gateway: None,
         };
         // Off (registered-but-unmounted): token:"" ⇒ empty URL.
         let off = WorkspaceEntry {
@@ -861,6 +1539,39 @@ mod tests {
             row.url,
             "http://127.0.0.1:8787/api/notes-1a2b3c/index.html?t=tok_live"
         );
+    }
+
+    #[tokio::test]
+    async fn gateway_workspace_poll_row_does_not_mint_entry_url() {
+        let conn = DevserverConn {
+            host: "alice.devserver.chan.app".into(),
+            port: 443,
+            token: String::new(),
+            name: "alice".into(),
+            gateway: Some(GatewayConn::new(
+                "https://id.chan.app".into(),
+                "http://127.0.0.1:9/desktop/v1/devserver/entry".into(),
+                "https://alice.devserver.chan.app".into(),
+                "pat".into(),
+            )),
+        };
+        let row = row_from_launcher(
+            &conn,
+            chan_server::LauncherWorkspace {
+                workspace_id: "notes".into(),
+                path: "/repo/notes".into(),
+                status: chan_server::WorkspaceStatus::Running,
+                error: None,
+                label: "notes".into(),
+                on: true,
+                library_id: Some("lib-1".into()),
+                devserver_id: Some("ds-1".into()),
+                prefix: "notes".into(),
+            },
+        )
+        .await
+        .expect("row conversion should not call desktop_entry_url");
+        assert_eq!(row.url, "https://alice.devserver.chan.app/notes/index.html");
     }
 
     #[test]
@@ -941,6 +1652,7 @@ mod tests {
                 port: 8787,
                 token: "tok".into(),
                 name: "box".into(),
+                gateway: None,
             },
         );
         assert!(conns.is_connected("ds1"));

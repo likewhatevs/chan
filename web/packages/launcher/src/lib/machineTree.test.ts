@@ -38,6 +38,7 @@ function ws(over: Partial<WorkspaceEntry> & Pick<WorkspaceEntry, "workspace_id" 
 
 function ds(over: Partial<DevserverEntry> & Pick<DevserverEntry, "id">): DevserverEntry {
   return {
+    url: "http://host:8000",
     host: "host",
     port: 8000,
     label: "",

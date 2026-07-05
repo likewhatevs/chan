@@ -85,6 +85,9 @@ impl Validator for StubValidator {
                 username: username.clone(),
                 devserver_id: devserver_id.clone(),
                 scopes: scopes.clone(),
+                gateway_assertion_key: Some(
+                    chan_tunnel_proto::gateway_assertion::derive_assertion_key(token),
+                ),
             }),
             None => Err(ServerError::InvalidToken),
         }
@@ -286,10 +289,10 @@ async fn send_admin(
 fn mint(typ: devserver_gate::TokenType, sub: Uuid, drv: &str, aud: &str) -> String {
     match typ {
         devserver_gate::TokenType::Entry => {
-            devserver_gate::encode_entry(DEVSERVER_GATE_SECRET, sub, drv, aud).unwrap()
+            devserver_gate::encode_entry(DEVSERVER_GATE_SECRET, sub, "owner", drv, aud).unwrap()
         }
         devserver_gate::TokenType::Session => {
-            devserver_gate::encode_session(DEVSERVER_GATE_SECRET, sub, drv, aud).unwrap()
+            devserver_gate::encode_session(DEVSERVER_GATE_SECRET, sub, "owner", drv, aud).unwrap()
         }
     }
 }
@@ -304,6 +307,13 @@ fn host_for(user: &str) -> String {
 fn session_cookie(sub: Uuid, workspace: &str, host: &str) -> String {
     let session = mint(devserver_gate::TokenType::Session, sub, workspace, host);
     format!("devserver_gate={session}")
+}
+
+fn session_and_csrf_cookie(sub: Uuid, workspace: &str, host: &str, csrf: &str) -> String {
+    format!(
+        "{}; devserver_csrf={csrf}",
+        session_cookie(sub, workspace, host)
+    )
 }
 
 // ---------------------------------------------------------------
@@ -440,6 +450,17 @@ async fn entry_token_mints_session_cookie() {
     assert!(set.contains("HttpOnly"));
     assert!(set.contains("Secure"));
     assert!(set.contains("SameSite=Lax"));
+    let set_cookies: Vec<&str> = hdrs
+        .get_all(header::SET_COOKIE)
+        .iter()
+        .map(|v| v.to_str().unwrap())
+        .collect();
+    assert!(
+        set_cookies.iter().any(|v| v.starts_with("devserver_csrf=")
+            && v.contains("Path=/")
+            && !v.contains("HttpOnly")),
+        "csrf cookie missing from {set_cookies:?}",
+    );
     app.cleanup().await;
 }
 
@@ -652,9 +673,14 @@ async fn entry_token_with_bad_signature_is_404() {
         .await;
     let host = host_for("alice");
     // Token minted with a different secret; same claim envelope.
-    let bad =
-        devserver_gate::encode_entry(b"some-other-secret-32-bytes-foobaa", uid, "blog", &host)
-            .unwrap();
+    let bad = devserver_gate::encode_entry(
+        b"some-other-secret-32-bytes-foobaa",
+        uid,
+        "owner",
+        "blog",
+        &host,
+    )
+    .unwrap();
     let (s, _, _) = send_host(
         &app.router,
         Method::GET,
@@ -731,6 +757,74 @@ async fn management_api_is_404_on_public_wildcard() {
     )
     .await;
     assert_eq!(s, StatusCode::NOT_FOUND);
+    app.cleanup().await;
+}
+
+#[tokio::test]
+async fn unsafe_methods_require_matching_csrf_header() {
+    let app = TestApp::new().await;
+    let uid = Uuid::new_v4();
+    let captured = Captured::default();
+    app.register_tunnel("alice", "blog", uid, capturing_router(captured.clone()))
+        .await;
+
+    let host = host_for("alice");
+    let proxy_addr = serve_router_real(app.router.clone()).await;
+    let client = reqwest::Client::new();
+    for method in [Method::POST, Method::PUT, Method::DELETE] {
+        let res = client
+            .request(method.clone(), format!("http://{proxy_addr}/blog/mutate"))
+            .header(header::HOST, &host)
+            .header(header::COOKIE, session_cookie(uid, "blog", &host))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::FORBIDDEN, "{method}");
+
+        let csrf = "csrf-test-token";
+        let res = client
+            .request(method.clone(), format!("http://{proxy_addr}/blog/mutate"))
+            .header(header::HOST, &host)
+            .header(
+                header::COOKIE,
+                session_and_csrf_cookie(uid, "blog", &host, csrf),
+            )
+            .header("x-chan-csrf", csrf)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK, "{method}");
+    }
+
+    assert_eq!(captured.requests.lock().unwrap().len(), 3);
+    app.cleanup().await;
+}
+
+#[tokio::test]
+async fn csrf_header_is_stripped_from_upstream() {
+    let app = TestApp::new().await;
+    let uid = Uuid::new_v4();
+    let captured = Captured::default();
+    app.register_tunnel("alice", "blog", uid, capturing_router(captured.clone()))
+        .await;
+
+    let host = host_for("alice");
+    let csrf = "csrf-test-token";
+    let proxy_addr = serve_router_real(app.router.clone()).await;
+    reqwest::Client::new()
+        .post(format!("http://{proxy_addr}/blog/mutate"))
+        .header(header::HOST, &host)
+        .header(
+            header::COOKIE,
+            session_and_csrf_cookie(uid, "blog", &host, csrf),
+        )
+        .header("x-chan-csrf", csrf)
+        .send()
+        .await
+        .unwrap();
+
+    let headers = captured.requests.lock().unwrap()[0].headers.clone();
+    assert!(headers.get("x-chan-csrf").is_none());
     app.cleanup().await;
 }
 

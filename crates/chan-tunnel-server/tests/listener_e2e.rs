@@ -52,6 +52,7 @@ impl Validator for StubValidator {
                 username: self.username.clone(),
                 devserver_id: devserver_id.clone(),
                 scopes: self.scopes.clone(),
+                gateway_assertion_key: None,
             }),
             None => Err(ServerError::InvalidToken),
         }

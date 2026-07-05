@@ -6,7 +6,7 @@
 
 1. Accepts the tunnel registration handshake.
 2. Reverse-proxies HTTP and WebSocket traffic into the registered workspace.
-3. Gates workspaces behind a token minted by identity-service. devserver-proxy holds no session cookie of its own beyond a short-lived, per-workspace gate cookie scoped to one path.
+3. Gates devservers behind a token minted by identity-service. devserver-proxy writes a host-only gate cookie plus a host-only readable CSRF cookie for unsafe browser writes.
 4. Supports admin operations (snapshot, evict, per-user list and bulk evict).
 
 The workspace list, sign-in surface and every piece of user-facing UI live in identity-service. devserver-proxy has no SPA and no public `/api/*` of its own.
@@ -32,7 +32,7 @@ Two public hostnames pointed at the same process:
     and forwarded to the devserver root, where the launcher SPA is served.
   - `/api/devserver/*` -- 404 (the devserver's local-only management API is
     never proxied; the gateway carries tenant content only).
-  - `/{workspace}/?t=<jwt>` -- entry: validate the entry token, set the `devserver_gate` cookie, 303 to the clean URL.
+  - `/{workspace}/?t=<jwt>` -- entry: validate the entry token, set the `devserver_gate` and `devserver_csrf` cookies, 303 to the clean URL.
   - `/{workspace}/...` -- gate on the user's live devserver (drv + aud), then
     forward the FULL path unchanged into the tunnel. Anything else -- 404.
 
@@ -56,7 +56,7 @@ flowchart TD
     Live -->|"yes"| Mgmt{"/api/devserver/* path?"}
     Mgmt -->|"yes"| NFgate
     Mgmt -->|"no"| Tparam{"?t= entry token?"}
-    Tparam -->|"present, valid (aud + drv)"| Mint["mint session cookie, 303 clean URL"]
+    Tparam -->|"present, valid (aud + drv)"| Mint["mint gate + CSRF cookies, 303 clean URL"]
     Tparam -->|"present, invalid"| NFgate
     Tparam -->|"absent"| Cookie{"valid devserver_gate cookie?"}
     Cookie -->|"yes"| Pass["strip creds, forward full path into tunnel"]
@@ -82,17 +82,20 @@ The gate is per-DEVSERVER: there is one devserver per user, one host (`{user}.de
 - **Entry token**: 30s exp, carried in `?t=` on the first hit. Issued by identity after a `devserver_access(owner, devserver, caller)` check. Claims: `{iss: "id.chan.app", sub: user_id, drv: <devserver id>, aud: "<host>", typ: "entry", iat, exp}`.
 
 - **Session cookie**: 24h hard exp, written as `Set-Cookie: devserver_gate=<jwt>; HttpOnly; Secure; SameSite=Lax; Path=/`. Minted by devserver-proxy on entry-token validation. Same claim envelope, `typ: "session"`. Stateless: no server-side store.
+- **CSRF cookie**: random 32-byte hex value, written beside the session as `Set-Cookie: devserver_csrf=<hex>; Secure; SameSite=Lax; Path=/`. It is intentionally readable by same-origin launcher JS and is not a credential by itself.
 
 `Path=/` (whole host) is safe because the grant is whole-devserver: every path on `{user}.devserver.chan.app` is content the cookie-holder is already authorized to reach, so there is no non-granted sub-tenant to isolate. The remaining isolation axis is user-to-user, carried by the host-only cookie + the `aud` claim: `alice.devserver.chan.app` and `bob.devserver.chan.app` are distinct origins, and a token's `aud` binds it to one host.
 
 The shared JWT type and signing helpers live in `gateway_common::devserver_gate`.
+
+Unsafe HTTP methods (`POST`, `PUT`, `PATCH`, `DELETE`) require `X-Chan-CSRF` to match the `devserver_csrf` cookie with a timing-safe compare before the request is forwarded. Safe reads and WebSocket upgrades do not require the header. The proxy strips both `Cookie` and `X-Chan-CSRF` before the tunnel hop, so the local devserver never sees gateway cookies or CSRF material.
 
 ## Whole-devserver open (launcher)
 
 The owner opens their whole devserver -- landing on the launcher served at the
 devserver root -- through identity's `GET /s/{owner}`, which mints an entry token
 the same way the per-workspace landing does. The proxy exchanges it for the
-session cookie and forwards `/` to the launcher:
+gate cookies and forwards `/` to the launcher:
 
 ```mermaid
 sequenceDiagram
@@ -106,13 +109,15 @@ sequenceDiagram
     ID-->>B: 303 {owner}.devserver.chan.app/?t={entry_jwt}
     B->>PX: GET /?t={entry_jwt}
     Note over PX: gate: decode the entry JWT (aud + drv)
-    PX-->>B: Set-Cookie devserver_gate (Path=/), 303 /  (strip ?t=)
+    PX-->>B: Set-Cookie devserver_gate + devserver_csrf (Path=/), 303 /  (strip ?t=)
     B->>PX: GET /  (devserver_gate cookie)
-    Note over PX: gate passes, strip Cookie/Authorization,<br/>forward / unchanged
+    Note over PX: gate passes, strip Cookie/Authorization/X-Chan-CSRF,<br/>forward / unchanged
     PX->>DS: GET /  (over the tunnel, no client creds)
     DS-->>B: launcher SPA
     B->>PX: GET /api/library/...  (cookie)
     PX->>DS: GET /api/library/...  (gated, tunnel-trust)
+    B->>PX: POST /api/library/...  (cookie + X-Chan-CSRF)
+    PX->>DS: POST /api/library/...  (gated, tunnel-trust)
     DS-->>B: data
 ```
 
@@ -128,13 +133,13 @@ Auth gate for `*.devserver.chan.app/{workspace}/...`, in order:
 
 1. No live devserver registration for `{user}` -> 404.
 2. `/api/devserver/*` (the local-only management API) -> 404.
-3. Request carries `?t=<jwt>` -> verify signature + exp + aud + drv (= the live devserver id) match. On success: mint a session JWT, write `devserver_gate` cookie scoped to `Path=/`, 303 to the clean URL.
+3. Request carries `?t=<jwt>` -> verify signature + exp + aud + drv (= the live devserver id) match. On success: mint a session JWT, write `devserver_gate` and `devserver_csrf` cookies scoped to `Path=/`, 303 to the clean URL.
 4. Request carries `devserver_gate` cookie -> verify signature + exp + aud + drv against the user's live devserver. Pass through.
 5. Anything else (no cookie, expired cookie, bad signature, wrong devserver) -> 404.
 
-The gate always runs: every devserver is authenticated, there is no un-gated pass-through. On pass, the FULL inbound path (only `?t=` stripped) is forwarded into the tunnel; the devserver routes the `{workspace}` tenant internally.
+The gate always runs: every devserver is authenticated, there is no un-gated pass-through. On pass, unsafe HTTP methods must also carry `X-Chan-CSRF` matching the readable host-only `devserver_csrf` cookie. On pass, the FULL inbound path (only `?t=` stripped) is forwarded into the tunnel; the devserver routes the `{workspace}` tenant internally.
 
-The wildcard root `/` follows the same gate. An unauthenticated `/` (no `?t=`, no `devserver_gate` cookie) 302s to the dashboard, but a `/` carrying a credential falls through to the gate and is forwarded to the devserver root, where the launcher SPA is served (`proxy::handle` is segment-preserving, so `/` forwards unchanged). The launcher's same-origin `/api/library/*` calls ride the same cookie gate. Note the proxy strips every inbound client credential before forwarding -- `?t=`, `Cookie`, and `Authorization` -- so the devserver authenticates a proxied request by trusting the gated tunnel, not a forwarded bearer; the gate at the proxy edge is the sole authorization for tenant content.
+The wildcard root `/` follows the same gate. An unauthenticated `/` (no `?t=`, no `devserver_gate` cookie) 302s to the dashboard, but a `/` carrying a credential falls through to the gate and is forwarded to the devserver root, where the launcher SPA is served (`proxy::handle` is segment-preserving, so `/` forwards unchanged). The launcher's same-origin `/api/library/*` calls ride the same cookie gate; unsafe writes also mirror `devserver_csrf` in `X-Chan-CSRF`. Note the proxy strips every inbound client credential before forwarding -- `?t=`, `Cookie`, `Authorization`, and `X-Chan-CSRF` -- so the devserver authenticates a proxied request by trusting the gated tunnel, not a forwarded bearer; the gate at the proxy edge is the sole authorization for tenant content.
 
 The 404 path checks `Accept: text/html`; browsers get the styled "workspace not found" page, everything else gets the JSON `{"error":"not found"}` shape. Owners returning after the 24h cookie expires bounce through `id.chan.app/workspaces`; a bookmark to a devserver URL is not a session.
 
@@ -142,7 +147,7 @@ The 404 path checks `Accept: text/html`; browsers get the styled "workspace not 
 
 `HOP_BY_HOP_NAMES` lists the RFC 7230 6.1 hop-by-hop headers: `Connection`, `Keep-Alive`, `Proxy-Authenticate`, `Proxy-Authorization`, `TE`, `Trailer`, `Transfer-Encoding`, `Upgrade`. In addition, `connection_listed_headers` parses the inbound `Connection` value and strips every header it names (also RFC 7230 6.1). Applied on both legs.
 
-Inbound `Host`, `Cookie`, and `Authorization` are dropped. `X-Forwarded-For` is recomputed as `<existing chain>, <peer ip>`. `X-Forwarded-Proto` is set from `FORWARDED_PROTO` (default `https`, configured to match the terminator that fronts this listener). `X-Forwarded-Host` is set from the inbound `Host` header devserver-proxy itself routed on. Inbound `X-Forwarded-{Host,Proto}` are NOT trusted: they are client-controllable and an upstream that builds absolute URLs from XFH/XFProto would otherwise be steerable from outside.
+Inbound `Host`, `Cookie`, `Authorization`, and `X-Chan-CSRF` are dropped. `X-Forwarded-For` is recomputed as `<existing chain>, <peer ip>`. `X-Forwarded-Proto` is set from `FORWARDED_PROTO` (default `https`, configured to match the terminator that fronts this listener). `X-Forwarded-Host` is set from the inbound `Host` header devserver-proxy itself routed on. Inbound `X-Forwarded-{Host,Proto}` are NOT trusted: they are client-controllable and an upstream that builds absolute URLs from XFH/XFProto would otherwise be steerable from outside.
 
 The `dispatch` handler likewise reads the raw `Host` header directly rather than going through axum's `Host` extractor, which consults `Forwarded` and `X-Forwarded-Host` before `Host` and would let a hostile client route into a different tenant's wildcard surface by spoofing those headers.
 
@@ -179,8 +184,12 @@ devserver-proxy reads nothing from `tower_sessions`. The browser never sends an 
 This is load-bearing for cross-tenant isolation:
 
 - Malicious tenant content at `evil.devserver.chan.app` can run JS, but the only cookies it can access are its own host-only ones. The browser will not auto-attach an id.chan.app cookie to a fetch on `evil.devserver.chan.app`.
-- The `devserver_gate` cookie is host-only and whole-host (`Path=/`). That is safe because a grant is whole-devserver: there is no non-granted sub-tenant on the same host to isolate from.
+- The `devserver_gate` and `devserver_csrf` cookies are host-only and whole-host (`Path=/`). The gate cookie is safe because a grant is whole-devserver: there is no non-granted sub-tenant on the same host to isolate from. The CSRF cookie is readable but cannot authorize a request without the HttpOnly gate cookie.
 - Cross-user attacks are blocked by browser origin separation; each user has their own subdomain.
+
+### CSRF for unsafe writes
+
+`SameSite=Lax` is site-based, not origin-based. Sibling `*.devserver.chan.app` origins therefore need a second check before browser-cookie-backed writes are accepted. devserver-proxy uses the double-submit shape: the entry exchange mints a readable host-only `devserver_csrf` cookie, the launcher and desktop client copy it into `X-Chan-CSRF` for unsafe HTTP methods, and the proxy requires an exact timing-safe match. The header is stripped before forwarding so local devserver routes do not gain a second auth surface.
 
 ### JWT, HS256, two-token
 
@@ -196,7 +205,7 @@ The tunnel validator returns `(user_id, username)`. `CapturingValidator` records
 
 The auth assertion on the wildcard path is the entry JWT, not "sub matches owner". identity-service calls `profile.devserver_access(owner, devserver, caller)` before minting any entry token, so a valid signature plus the right `aud` (= the inbound host, which is `{owner}.devserver.chan.app`) plus the right `drv` (= the live devserver id) proves the caller was authorized at mint time. identity owns the access-control policy; devserver-proxy verifies the signed assertion. The session cookie minted on entry-token validation carries the entry's `sub` unchanged so the upstream attribution chain knows whether the request belongs to the owner or a grantee.
 
-User-to-user isolation is enforced by `aud`. A token minted for one subdomain (`alice.devserver.chan.app`) cannot be replayed on another (`bob.devserver.chan.app`) because `decode` rejects on `aud` mismatch. The `drv` claim binds the token to one devserver: a cookie minted for a rotated/old devserver id no longer matches the user's live registration and 404s (re-share required after rotation). There is no separate "this user is the owner" check, and intentionally so: requiring it would prevent accepted grantees from reaching the devserver they have been granted.
+User-to-user isolation is enforced by `aud`. A token minted for one subdomain (`alice.devserver.chan.app`) cannot be replayed on another (`bob.devserver.chan.app`) because `decode` rejects on `aud` mismatch. The canonical audience is the lowercase host with default ports stripped; explicit non-default ports remain for local/dev deployments. The `drv` claim binds the token to one devserver: a cookie minted for a rotated/old devserver id no longer matches the user's live registration and 404s (re-share required after rotation). There is no separate "this user is the owner" check, and intentionally so: requiring it would prevent accepted grantees from reaching the devserver they have been granted.
 
 ### Tunnel handshake throttles by token fingerprint
 
@@ -218,8 +227,9 @@ The apex, wildcard, and the dashboard redirect's id host all derive from one bas
 
 - Every registered tunnel has a known `owner_id`.
 - Tunnel registrations are ephemeral; they vanish when the peer disconnects or via admin evict.
-- The proxy path reads no `tower_sessions` cookie. The only cookie it reads or writes is the host-only, whole-host (`Path=/`) `devserver_gate`.
+- The proxy path reads no `tower_sessions` cookie. The only cookies it reads or writes are the host-only, whole-host (`Path=/`) `devserver_gate` and `devserver_csrf`.
 - Bearer comparisons run at constant time.
+- Unsafe HTTP methods require `X-Chan-CSRF` to match `devserver_csrf` before forwarding.
 - Hop-by-hop headers are stripped on both legs of every request, including every header named by the inbound `Connection` value.
 - Reverse-proxy paths forward the full inbound path to the tunnel unchanged (only the `?t=` entry token is stripped); the `{workspace}` segment is preserved.
 - `/api/devserver/*` is never proxied on the public wildcard; the gateway carries tenant content only.

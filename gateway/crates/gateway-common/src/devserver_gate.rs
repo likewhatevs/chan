@@ -17,7 +17,7 @@
 //! once and dispatch on `typ`. `aud` binds the token to the wildcard
 //! host (`alice.devserver.chan.app`) so a token minted for one user is
 //! not accepted on another user's subdomain. `drv` binds it to one
-//! workspace slug for the same reason.
+//! live devserver registration for the same reason.
 //!
 //! Why HS256 (symmetric): both services run in the same trust zone
 //! and share the same secret already (`DEVSERVER_GATE_SECRET`, a
@@ -43,7 +43,11 @@ pub struct Claims {
     pub iss: String,
     /// `users.id` of the workspace owner.
     pub sub: Uuid,
-    /// Workspace slug.
+    /// Access role resolved by profile-service: `owner`, `editor`, or
+    /// `viewer`.
+    #[serde(default = "default_role")]
+    pub role: String,
+    /// Devserver id resolved from the live tunnel registration.
     pub drv: String,
     /// Wildcard host the token is bound to (e.g. `alice.devserver.chan.app`).
     pub aud: String,
@@ -51,6 +55,10 @@ pub struct Claims {
     pub typ: String,
     pub iat: i64,
     pub exp: i64,
+}
+
+fn default_role() -> String {
+    "viewer".to_string()
 }
 
 /// Discriminator for the verify call site so we can hard-require the
@@ -91,7 +99,7 @@ pub enum DevserverGateError {
     WrongAudience,
 
     /// `drv` claim does not match the requested workspace slug.
-    #[error("devserver-gate token workspace mismatch")]
+    #[error("devserver-gate token devserver mismatch")]
     WrongWorkspace,
 
     /// `typ` claim does not match the verify-call's expectation.
@@ -108,10 +116,17 @@ pub enum DevserverGateError {
 pub type DevserverGateResult<T> = Result<T, DevserverGateError>;
 
 /// Mint an entry token (30s exp).
-pub fn encode_entry(secret: &[u8], sub: Uuid, drv: &str, aud: &str) -> DevserverGateResult<String> {
+pub fn encode_entry(
+    secret: &[u8],
+    sub: Uuid,
+    role: &str,
+    drv: &str,
+    aud: &str,
+) -> DevserverGateResult<String> {
     encode(
         secret,
         sub,
+        role,
         drv,
         aud,
         TokenType::Entry,
@@ -123,12 +138,14 @@ pub fn encode_entry(secret: &[u8], sub: Uuid, drv: &str, aud: &str) -> Devserver
 pub fn encode_session(
     secret: &[u8],
     sub: Uuid,
+    role: &str,
     drv: &str,
     aud: &str,
 ) -> DevserverGateResult<String> {
     encode(
         secret,
         sub,
+        role,
         drv,
         aud,
         TokenType::Session,
@@ -139,6 +156,7 @@ pub fn encode_session(
 fn encode(
     secret: &[u8],
     sub: Uuid,
+    role: &str,
     drv: &str,
     aud: &str,
     typ: TokenType,
@@ -151,6 +169,7 @@ fn encode(
             TokenType::Session => "devserver.chan.app".to_string(),
         },
         sub,
+        role: role.to_string(),
         drv: drv.to_string(),
         aud: aud.to_string(),
         typ: typ.as_str().to_string(),
@@ -230,7 +249,14 @@ mod tests {
 
     #[test]
     fn entry_roundtrip_ok() {
-        let t = encode_entry(SECRET, sample_uuid(), "blog", "alice.devserver.chan.app").unwrap();
+        let t = encode_entry(
+            SECRET,
+            sample_uuid(),
+            "owner",
+            "blog",
+            "alice.devserver.chan.app",
+        )
+        .unwrap();
         let c = decode(
             SECRET,
             &t,
@@ -244,11 +270,19 @@ mod tests {
         assert_eq!(c.aud, "alice.devserver.chan.app");
         assert_eq!(c.typ, "entry");
         assert_eq!(c.iss, "id.chan.app");
+        assert_eq!(c.role, "owner");
     }
 
     #[test]
     fn session_roundtrip_ok() {
-        let t = encode_session(SECRET, sample_uuid(), "blog", "alice.devserver.chan.app").unwrap();
+        let t = encode_session(
+            SECRET,
+            sample_uuid(),
+            "editor",
+            "blog",
+            "alice.devserver.chan.app",
+        )
+        .unwrap();
         let c = decode(
             SECRET,
             &t,
@@ -259,6 +293,7 @@ mod tests {
         .unwrap();
         assert_eq!(c.iss, "devserver.chan.app");
         assert_eq!(c.typ, "session");
+        assert_eq!(c.role, "editor");
     }
 
     #[test]
@@ -266,8 +301,14 @@ mod tests {
         // An entry token must not be accepted in the session slot.
         // Defensive: even if someone exfiltrates an entry token, it
         // can only ride the URL leg, not the cookie leg.
-        let entry =
-            encode_entry(SECRET, sample_uuid(), "blog", "alice.devserver.chan.app").unwrap();
+        let entry = encode_entry(
+            SECRET,
+            sample_uuid(),
+            "owner",
+            "blog",
+            "alice.devserver.chan.app",
+        )
+        .unwrap();
         let err = decode(
             SECRET,
             &entry,
@@ -281,7 +322,14 @@ mod tests {
 
     #[test]
     fn aud_mismatch_rejected() {
-        let t = encode_entry(SECRET, sample_uuid(), "blog", "alice.devserver.chan.app").unwrap();
+        let t = encode_entry(
+            SECRET,
+            sample_uuid(),
+            "owner",
+            "blog",
+            "alice.devserver.chan.app",
+        )
+        .unwrap();
         let err = decode(
             SECRET,
             &t,
@@ -298,7 +346,14 @@ mod tests {
         // Critical isolation property: a token minted for alice/blog
         // must not be accepted on alice/journal even on the same
         // subdomain.
-        let t = encode_session(SECRET, sample_uuid(), "blog", "alice.devserver.chan.app").unwrap();
+        let t = encode_session(
+            SECRET,
+            sample_uuid(),
+            "owner",
+            "blog",
+            "alice.devserver.chan.app",
+        )
+        .unwrap();
         let err = decode(
             SECRET,
             &t,
@@ -312,7 +367,14 @@ mod tests {
 
     #[test]
     fn wrong_secret_rejected() {
-        let t = encode_entry(SECRET, sample_uuid(), "blog", "alice.devserver.chan.app").unwrap();
+        let t = encode_entry(
+            SECRET,
+            sample_uuid(),
+            "owner",
+            "blog",
+            "alice.devserver.chan.app",
+        )
+        .unwrap();
         let err = decode(
             b"different-secret-32-bytes-long-ab",
             &t,

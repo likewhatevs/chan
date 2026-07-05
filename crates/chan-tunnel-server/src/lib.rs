@@ -117,6 +117,9 @@ pub struct Validated {
     /// Token-resolved devserver identity; the registry's second key.
     pub devserver_id: String,
     pub scopes: Vec<String>,
+    /// Per-tunnel key used by devserver-proxy to sign caller assertions
+    /// for requests forwarded through this registration.
+    pub gateway_assertion_key: Option<chan_tunnel_proto::gateway_assertion::AssertionKey>,
 }
 
 /// Token validation hook. Implemented by the consumer (e.g. an

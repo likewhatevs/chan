@@ -35,6 +35,7 @@ afterEach(() => {
 
 function devserver(over: Partial<DevserverEntry> & Pick<DevserverEntry, "id">): DevserverEntry {
   return {
+    url: "http://host:8787",
     host: "host",
     port: 8787,
     label: "",

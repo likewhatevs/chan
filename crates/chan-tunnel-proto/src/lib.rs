@@ -13,6 +13,7 @@
 
 mod control;
 mod frame;
+pub mod gateway_assertion;
 mod h2_duplex;
 mod io;
 mod workspace_name;

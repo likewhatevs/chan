@@ -16,6 +16,7 @@ name = "identity"
 path = "src/lib.rs"
 
 [dependencies]
+chan-tunnel-proto = { workspace = true }
 gateway-common = { workspace = true }
 
 anyhow = { workspace = true }

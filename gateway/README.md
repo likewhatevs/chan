@@ -100,7 +100,7 @@ export DEVSERVER_GATE_SECRET=dev-devserver-gate-secret
 cargo run -p devserver-proxy
 ```
 
-devserver-proxy holds no database and no session cookie of its own; a workspace is reached by following the "open workspace" link from the id.chan.app dashboard, which carries the entry token. For the full local stack use `../packaging/gateway/scripts/dev/setup.sh` + `../packaging/gateway/scripts/dev/run.sh`.
+devserver-proxy holds no database and reads no identity session. A devserver is reached by following the "open workspace" link from the id.chan.app dashboard, which carries the entry token; the proxy exchanges it for `devserver_gate` plus `devserver_csrf` host-only cookies. For the full local stack use `../packaging/gateway/scripts/dev/setup.sh` + `../packaging/gateway/scripts/dev/run.sh`.
 
 For frontend iteration without re-embedding:
 

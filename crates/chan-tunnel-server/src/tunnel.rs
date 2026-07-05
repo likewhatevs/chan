@@ -284,6 +284,7 @@ async fn handle_tunnel_conn(
         user.clone(),
         devserver.clone(),
         Some(peer),
+        validated.gateway_assertion_key,
         max_workspaces_per_user,
     ) {
         Ok(triple) => triple,

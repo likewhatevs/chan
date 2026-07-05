@@ -48,6 +48,7 @@ const KEYCHAIN_ACCOUNT: &str = "id.chan.app";
 const AUTHORIZE_URL: &str = "https://id.chan.app/desktop/authorize";
 const REDIRECT_URI: &str = "chan://auth/callback";
 const SCOPES: &str = "tunnel";
+const DESKTOP_CONNECT_SCOPES: &str = "desktop.connect";
 const EXPIRES_IN_SECONDS: u64 = 30 * 24 * 60 * 60;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -72,8 +73,12 @@ pub struct AuthStatus {
     pub expires_at: Option<String>,
 }
 
+fn entry_for(account: &str) -> Result<Entry, String> {
+    Entry::new(KEYCHAIN_SERVICE, account).map_err(|e| format!("keychain entry: {e}"))
+}
+
 fn entry() -> Result<Entry, String> {
-    Entry::new(KEYCHAIN_SERVICE, KEYCHAIN_ACCOUNT).map_err(|e| format!("keychain entry: {e}"))
+    entry_for(KEYCHAIN_ACCOUNT)
 }
 
 fn load() -> Result<Option<StoredPat>, String> {
@@ -86,9 +91,9 @@ fn load() -> Result<Option<StoredPat>, String> {
     }
 }
 
-fn store(pat: &StoredPat) -> Result<(), String> {
+fn store_for(account: &str, pat: &StoredPat) -> Result<(), String> {
     let json = serde_json::to_string(pat).map_err(|e| format!("encoding PAT: {e}"))?;
-    entry()?
+    entry_for(account)?
         .set_password(&json)
         .map_err(|e| format!("writing keychain: {e}"))
 }
@@ -116,8 +121,15 @@ pub fn hostname() -> String {
 /// `open_signin` while one is pending simply overwrites: the user
 /// re-clicked, the prior browser tab is now stale, and only the
 /// latest nonce will pass the callback check.
-fn pending_state() -> &'static Mutex<Option<String>> {
-    static PENDING: OnceLock<Mutex<Option<String>>> = OnceLock::new();
+#[derive(Debug, Clone)]
+struct PendingAuth {
+    state: String,
+    account: String,
+    resume_devserver_id: Option<String>,
+}
+
+fn pending_state() -> &'static Mutex<Option<PendingAuth>> {
+    static PENDING: OnceLock<Mutex<Option<PendingAuth>>> = OnceLock::new();
     PENDING.get_or_init(|| Mutex::new(None))
 }
 
@@ -157,7 +169,11 @@ pub fn open_signin(app: AppHandle) -> Result<(), String> {
         return Ok(());
     }
     let state = new_state()?;
-    *pending_state().lock().unwrap() = Some(state.clone());
+    *pending_state().lock().unwrap() = Some(PendingAuth {
+        state: state.clone(),
+        account: KEYCHAIN_ACCOUNT.to_string(),
+        resume_devserver_id: None,
+    });
 
     let label = format!("chan-desktop @ {}", hostname());
     let url = url::Url::parse_with_params(
@@ -177,16 +193,65 @@ pub fn open_signin(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-/// Handle a `chan://auth/callback#...` URL delivered by the deep-link
-/// plugin. Validates state, persists the PAT, and emits AUTH_CHANGED
-/// on success or AUTH_ERROR on any failure.
-pub fn handle_callback(app: &AppHandle, raw: &str) {
-    if let Err(msg) = do_handle_callback(app, raw) {
-        let _ = app.emit(AUTH_ERROR, &msg);
+pub fn gateway_account(identity_origin: &str) -> String {
+    format!("gateway:{identity_origin}")
+}
+
+pub fn load_gateway_pat(identity_origin: &str) -> Result<Option<StoredPat>, String> {
+    let account = gateway_account(identity_origin);
+    match entry_for(&account)?.get_password() {
+        Ok(s) => serde_json::from_str(&s)
+            .map(Some)
+            .map_err(|e| format!("decoding stored gateway PAT: {e}")),
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(e) => Err(format!("reading gateway keychain: {e}")),
     }
 }
 
-fn do_handle_callback(app: &AppHandle, raw: &str) -> Result<(), String> {
+pub fn open_gateway_signin(
+    app: &AppHandle,
+    identity_origin: &str,
+    authorize_url: &str,
+    devserver_id: &str,
+) -> Result<(), String> {
+    let state = new_state()?;
+    *pending_state().lock().unwrap() = Some(PendingAuth {
+        state: state.clone(),
+        account: gateway_account(identity_origin),
+        resume_devserver_id: Some(devserver_id.to_string()),
+    });
+    let label = format!("chan-desktop @ {}", hostname());
+    let url = url::Url::parse_with_params(
+        authorize_url,
+        &[
+            ("redirect_uri", REDIRECT_URI.to_string()),
+            ("state", state),
+            ("label", label),
+            ("scopes", DESKTOP_CONNECT_SCOPES.to_string()),
+            ("expires_in", EXPIRES_IN_SECONDS.to_string()),
+        ],
+    )
+    .map_err(|e| format!("building gateway authorize URL: {e}"))?;
+    app.opener()
+        .open_url(url.to_string(), None::<&str>)
+        .map_err(|e| format!("opening browser: {e}"))?;
+    Ok(())
+}
+
+/// Handle a `chan://auth/callback#...` URL delivered by the deep-link
+/// plugin. Validates state, persists the PAT, and emits AUTH_CHANGED
+/// on success or AUTH_ERROR on any failure.
+pub fn handle_callback(app: &AppHandle, raw: &str) -> Option<String> {
+    match do_handle_callback(app, raw) {
+        Ok(resume) => resume,
+        Err(msg) => {
+            let _ = app.emit(AUTH_ERROR, &msg);
+            None
+        }
+    }
+}
+
+fn do_handle_callback(app: &AppHandle, raw: &str) -> Result<Option<String>, String> {
     let url = Url::parse(raw).map_err(|e| format!("malformed callback URL: {e}"))?;
     // Only accept our exact path. Anything else is a confused redirect
     // or a maliciously crafted chan:// URL.
@@ -209,11 +274,11 @@ fn do_handle_callback(app: &AppHandle, raw: &str) -> Result<(), String> {
     }
 
     let got_state = params.get("state").cloned().unwrap_or_default();
-    match expected {
-        Some(s) if s == got_state => {}
+    let pending = match expected {
+        Some(p) if p.state == got_state => p,
         Some(_) => return Err("sign-in state mismatch (stale browser tab?)".into()),
         None => return Err("no sign-in in progress".into()),
-    }
+    };
 
     let id = params.get("id").cloned().unwrap_or_default();
     let secret = params.get("secret").cloned().unwrap_or_default();
@@ -232,7 +297,7 @@ fn do_handle_callback(app: &AppHandle, raw: &str) -> Result<(), String> {
         label: label.clone(),
         expires_at: expires_at.clone(),
     };
-    store(&pat)?;
+    store_for(&pending.account, &pat)?;
     let status = AuthStatus {
         is_signed_in: true,
         label: Some(label),
@@ -243,7 +308,7 @@ fn do_handle_callback(app: &AppHandle, raw: &str) -> Result<(), String> {
         },
     };
     let _ = app.emit(AUTH_CHANGED, &status);
-    Ok(())
+    Ok(pending.resume_devserver_id)
 }
 
 /// Local sign-out. Clears the keychain entry. Server-side revoke is

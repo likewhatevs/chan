@@ -44,8 +44,8 @@ export interface WindowRecord {
   control: boolean;
   /**
    * Server-persisted visibility. The window is buried/hidden on the
-   * desktop, vs shown. Skip-if-default on the wire — OMITTED for visible windows
-   * — so the field is OPTIONAL here and ABSENT reads as visible. The launcher is
+   * desktop, vs shown. Skip-if-default on the wire; OMITTED for visible windows
+   * means the field is OPTIONAL here and ABSENT reads as visible. The launcher is
    * a passive consumer: the desktop persists this at the bury/unbury chokepoint
    * and it rides the existing `/api/library/windows` feed.
    */
@@ -152,6 +152,8 @@ export type DevserverStatus = "disconnected" | "connecting" | "connected";
 export interface DevserverEntry {
   /** Stable registry id used for row actions and the connection-state map. */
   id: string;
+  /** Full configured endpoint URL, including scheme. */
+  url: string;
   /**
    * The devserver host the desktop dials: hostname or IP, no scheme or port
    * (`box.example.com`). The desktop forms the dial / tenant URL from `host` +
@@ -200,6 +202,8 @@ export interface DevserverEntry {
 
 /** Write payload for add/edit devserver. `token` absent on edit leaves it unchanged. */
 export interface DevserverInput {
+  /** Full endpoint URL; preferred for new clients. */
+  url?: string;
   /** The devserver host (hostname or IP, no scheme or port). Required, non-empty. */
   host: string;
   /** The devserver port. Required. */
@@ -281,7 +285,7 @@ export interface LibraryApi {
   /** Open (focus a live window / un-hide a buried one) via the desktop window
    * bridge. Rejects on a surface with no desktop attached. */
   openWindow(id: string): Promise<void>;
-  /** Hide (bury) a window via the desktop window bridge — notification-free,
+  /** Hide (bury) a window via the desktop window bridge, notification-free,
    * unlike the OS close button. Rejects with no desktop attached. */
   hideWindow(id: string): Promise<void>;
   /** Discard (unpersist + reap) a window record: the web-op close, distinct from
@@ -310,7 +314,7 @@ export class ApiError extends Error {
  * The live-terminal count carried by an unforced devserver-workspace off that
  * was refused because the workspace still has live terminal sessions. Returns
  * `active_terminals` when `e` is an `ApiError` whose 409 body parses to
- * `{error:"live_terminals", active_terminals:N}`, else null — so the launcher
+ * `{error:"live_terminals", active_terminals:N}`, else null, so the launcher
  * can confirm-and-retry only that case and let a plain `NO_DESKTOP` 409 (whose
  * body is not that JSON) fall through to the generic error banner.
  */
@@ -335,10 +339,32 @@ function authToken(): string {
   return new URLSearchParams(location.search).get("t") ?? "";
 }
 
+function cookieValue(name: string): string {
+  if (typeof document === "undefined") return "";
+  const prefix = `${name}=`;
+  for (const part of document.cookie.split(";")) {
+    const s = part.trim();
+    if (s.startsWith(prefix)) {
+      try {
+        return decodeURIComponent(s.slice(prefix.length));
+      } catch {
+        return "";
+      }
+    }
+  }
+  return "";
+}
+
+function isUnsafeMethod(method: string): boolean {
+  return method === "POST" || method === "PUT" || method === "PATCH" || method === "DELETE";
+}
+
 async function req<T>(method: string, path: string, body?: unknown): Promise<T> {
   const headers: Record<string, string> = {};
   const token = authToken();
   if (token) headers.authorization = `Bearer ${token}`;
+  const csrf = isUnsafeMethod(method) ? cookieValue("devserver_csrf") : "";
+  if (csrf) headers["x-chan-csrf"] = csrf;
   if (body !== undefined) headers["content-type"] = "application/json";
   const res = await fetch(path, {
     method,

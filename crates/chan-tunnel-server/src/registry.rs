@@ -18,6 +18,7 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
+use chan_tunnel_proto::gateway_assertion::AssertionKey;
 use chrono::{DateTime, Utc};
 use parking_lot::Mutex;
 use tokio::sync::{mpsc, oneshot};
@@ -82,6 +83,9 @@ pub struct TunnelHandle {
     /// Wall-clock time at which the tunnel was registered. Used by
     /// admin tools to render uptime; not load-bearing for routing.
     pub connected_at: DateTime<Utc>,
+    /// Shared only between the tunnel client and gateway proxy for this
+    /// registration. Not surfaced in admin views.
+    pub gateway_assertion_key: Option<AssertionKey>,
 }
 
 impl TunnelHandle {
@@ -135,6 +139,7 @@ impl Registry {
         user: Arc<str>,
         workspace: Arc<str>,
         peer_addr: Option<SocketAddr>,
+        gateway_assertion_key: Option<AssertionKey>,
         max_workspaces_per_user: usize,
     ) -> Result<
         (
@@ -152,6 +157,7 @@ impl Registry {
             workspace: workspace.clone(),
             peer_addr,
             connected_at: Utc::now(),
+            gateway_assertion_key,
         };
         let entry = Entry {
             handle: handle.clone(),
@@ -304,7 +310,7 @@ mod tests {
         let workspace: Arc<str> = Arc::from("notes");
 
         let (_h1, _rx1, mut shutdown1) = reg
-            .register_with_cap(user.clone(), workspace.clone(), None, 0)
+            .register_with_cap(user.clone(), workspace.clone(), None, None, 0)
             .unwrap();
         // Before the collision, the receiver has no value and the
         // sender is still alive: try_recv must report Empty.
@@ -314,7 +320,7 @@ mod tests {
         // shutdown sender is dropped with it, so the receiver wakes
         // with Closed.
         let (_h2, _rx2, _shutdown2) = reg
-            .register_with_cap(user.clone(), workspace.clone(), None, 0)
+            .register_with_cap(user.clone(), workspace.clone(), None, None, 0)
             .unwrap();
         match shutdown1.try_recv() {
             Err(TryRecvError::Closed) => {}
@@ -329,7 +335,7 @@ mod tests {
     async fn evict_drops_empty_user_bucket() {
         let reg = Registry::new();
         let _h = reg
-            .register_with_cap(Arc::from("alice"), Arc::from("notes"), None, 0)
+            .register_with_cap(Arc::from("alice"), Arc::from("notes"), None, None, 0)
             .unwrap();
         assert!(reg.evict("alice", "notes"));
         // After the last workspace is removed, the user bucket is
@@ -344,7 +350,7 @@ mod tests {
     async fn lookup_returns_current_handle() {
         let reg = Registry::new();
         let (_h, _rx, _sd) = reg
-            .register_with_cap(Arc::from("alice"), Arc::from("notes"), None, 0)
+            .register_with_cap(Arc::from("alice"), Arc::from("notes"), None, None, 0)
             .unwrap();
         assert!(reg.get("alice", "notes").is_some());
         assert!(reg.get("alice", "other").is_none());
@@ -355,24 +361,24 @@ mod tests {
     async fn register_with_cap_enforces_per_user_limit() {
         let reg = Registry::new();
         let _a = reg
-            .register_with_cap(Arc::from("alice"), Arc::from("d1"), None, 2)
+            .register_with_cap(Arc::from("alice"), Arc::from("d1"), None, None, 2)
             .unwrap();
         let _b = reg
-            .register_with_cap(Arc::from("alice"), Arc::from("d2"), None, 2)
+            .register_with_cap(Arc::from("alice"), Arc::from("d2"), None, None, 2)
             .unwrap();
         let err = reg
-            .register_with_cap(Arc::from("alice"), Arc::from("d3"), None, 2)
+            .register_with_cap(Arc::from("alice"), Arc::from("d3"), None, None, 2)
             .err()
             .expect("third workspace should be capped");
         assert_eq!(err.user, "alice");
         assert_eq!(err.max, 2);
         // Reconnect of an existing workspace bypasses the cap.
         let _a2 = reg
-            .register_with_cap(Arc::from("alice"), Arc::from("d1"), None, 2)
+            .register_with_cap(Arc::from("alice"), Arc::from("d1"), None, None, 2)
             .unwrap();
         // Other user is unaffected.
         let _bob = reg
-            .register_with_cap(Arc::from("bob"), Arc::from("d1"), None, 2)
+            .register_with_cap(Arc::from("bob"), Arc::from("d1"), None, None, 2)
             .unwrap();
     }
 
@@ -381,7 +387,13 @@ mod tests {
         let reg = Registry::new();
         for i in 0..5 {
             let _ = reg
-                .register_with_cap(Arc::from("alice"), Arc::from(format!("d{i}")), None, 0)
+                .register_with_cap(
+                    Arc::from("alice"),
+                    Arc::from(format!("d{i}")),
+                    None,
+                    None,
+                    0,
+                )
                 .unwrap();
         }
     }
@@ -390,13 +402,13 @@ mod tests {
     async fn list_workspaces_for_returns_sorted_names_per_user() {
         let reg = Registry::new();
         let (_h1, _rx1, _sd1) = reg
-            .register_with_cap(Arc::from("alice"), Arc::from("notes"), None, 0)
+            .register_with_cap(Arc::from("alice"), Arc::from("notes"), None, None, 0)
             .unwrap();
         let (_h2, _rx2, _sd2) = reg
-            .register_with_cap(Arc::from("alice"), Arc::from("ideas"), None, 0)
+            .register_with_cap(Arc::from("alice"), Arc::from("ideas"), None, None, 0)
             .unwrap();
         let (_h3, _rx3, _sd3) = reg
-            .register_with_cap(Arc::from("bob"), Arc::from("notes"), None, 0)
+            .register_with_cap(Arc::from("bob"), Arc::from("notes"), None, None, 0)
             .unwrap();
 
         let alice: Vec<String> = reg

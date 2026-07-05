@@ -1113,17 +1113,21 @@ pub fn install_launcher_root_fallback(
 }
 
 /// Request-extension marker inserted by the devserver's tunnel layer on every
-/// request that arrived over the gateway tunnel (not the loopback bind). The
-/// same `build_devserver_app` app serves both the local bind (a mutable
-/// `devserver` surface) and the tunnel; this marker is what keeps the tunnel
-/// READ-ONLY. It is read by the launcher-meta injector (to downgrade the
-/// surface to `readonly`) and by `require_mutable` (to 403 workspace mutation),
-/// so a credential-stripped tunnel request can never mutate the owner's
-/// registry. Server-internal (never client-settable), inserted AFTER the
-/// request enters the tunnel-only app clone, so a local loopback request never
-/// carries it. Absence therefore means "local bind".
-#[derive(Clone, Copy)]
-pub(crate) struct TunnelOrigin;
+/// request that arrived over the gateway tunnel (not the loopback bind).
+/// Verified gateway caller claims are present only when devserver-proxy signed
+/// the request with this tunnel's assertion key.
+#[derive(Clone)]
+pub(crate) struct TunnelOrigin {
+    pub caller: Option<chan_tunnel_proto::gateway_assertion::Claims>,
+}
+
+impl TunnelOrigin {
+    pub fn owner(&self) -> bool {
+        self.caller
+            .as_ref()
+            .is_some_and(chan_tunnel_proto::gateway_assertion::Claims::is_owner)
+    }
+}
 
 #[async_trait::async_trait]
 impl chan_library::TenantBuilder for RouteLayer {

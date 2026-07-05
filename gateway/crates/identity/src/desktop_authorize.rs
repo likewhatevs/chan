@@ -92,11 +92,9 @@ const MAX_STATE_LEN: usize = 512;
 
 /// Scope allowlist for the desktop flow. Stricter than the shape
 /// check `ApiTokenService::create` runs: scopes here must be one of
-/// the chan-tunnel-server vocabulary entries, so a desktop build
-/// cannot mint a token carrying a typo'd or future-only scope.
-/// `tunnel` is the only live scope (the public-readable path is gone;
-/// every devserver is authenticated).
-const ALLOWED_SCOPES: &[&str] = &["tunnel"];
+/// the desktop/tunnel vocabulary entries, so a desktop build cannot
+/// mint a token carrying a typo'd or future-only scope.
+const ALLOWED_SCOPES: &[&str] = &["tunnel", "desktop.connect"];
 
 /// Default when the client omits `scopes`. Matches the SPA / general
 /// PAT default so silence means "private tunnel only".
