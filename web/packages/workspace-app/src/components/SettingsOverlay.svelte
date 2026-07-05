@@ -218,16 +218,25 @@
           </div>
         {:else if !editing}
           <div class="state"><p>Loading settings...</p></div>
-        {:else if activeSection === "appearance"}
-          <AppearanceSection prefs={editing} {commit} />
-        {:else if activeSection === "editor"}
-          <EditorSection prefs={editing} {commit} />
-        {:else if activeSection === "terminal"}
-          <TerminalSection prefs={editing} {commit} />
-        {:else if activeSection === "files"}
-          <FilesSearchSection prefs={editing} {commit} />
         {:else if activeSection === "shortcuts"}
-          <KeymapSettings />
+          <!-- KeymapSettings owns its own filter + scrolling grid; it
+               needs a sized flex-column container so its internal scroll
+               is bounded to the overlay height. -->
+          <div class="keymap-mount">
+            <KeymapSettings />
+          </div>
+        {:else}
+          <div class="section-scroll">
+            {#if activeSection === "appearance"}
+              <AppearanceSection prefs={editing} {commit} />
+            {:else if activeSection === "editor"}
+              <EditorSection prefs={editing} {commit} />
+            {:else if activeSection === "terminal"}
+              <TerminalSection prefs={editing} {commit} />
+            {:else if activeSection === "files"}
+              <FilesSearchSection prefs={editing} {commit} />
+            {/if}
+          </div>
         {/if}
       </div>
     </div>
@@ -311,15 +320,31 @@
   .content {
     flex: 1;
     min-width: 0;
-    padding: 8px 24px 24px;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
+  /* Form sections scroll as a whole. */
+  .section-scroll {
+    flex: 1;
+    min-height: 0;
     overflow-y: auto;
+    padding: 8px 24px 24px;
+  }
+  /* KeymapSettings owns its own filter row and scrolling grid, so it
+     gets a bounded flex-column box instead of the section scroll. */
+  .keymap-mount {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
   }
   .state {
     display: flex;
     flex-direction: column;
     align-items: flex-start;
     gap: 12px;
-    padding: 24px 0;
+    padding: 24px;
     color: var(--text-secondary);
   }
   .err {
