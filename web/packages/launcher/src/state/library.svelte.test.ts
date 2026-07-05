@@ -2,7 +2,7 @@
 // assert deltas rather than absolute counts, since the mock state is a shared
 // module-level singleton mutated across cases.
 
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import {
   addLocalWorkspace,
   connectDevserver,
@@ -13,6 +13,7 @@ import {
   removeDevserver,
   removeWorkspace,
   saveDevserver,
+  stopWatching,
   toggleWorkspace,
 } from "./library.svelte";
 
@@ -27,6 +28,11 @@ vi.mock("../api/backend", async () => {
 
 beforeEach(async () => {
   await loadLibrary();
+});
+
+afterEach(() => {
+  stopWatching();
+  vi.useRealTimers();
 });
 
 describe("loadLibrary", () => {
@@ -163,5 +169,22 @@ describe("resync on regaining visibility/focus", () => {
     expect(ds).toHaveBeenCalled();
     ws.mockRestore();
     ds.mockRestore();
+  });
+
+  it("polls workspaces while visible and stops after teardown", async () => {
+    vi.useFakeTimers();
+    stopWatching();
+    await loadLibrary();
+    const { backend } = await import("../api/backend");
+    const ws = vi.spyOn(backend, "listWorkspaces");
+
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(ws).toHaveBeenCalled();
+    const calls = ws.mock.calls.length;
+
+    stopWatching();
+    await vi.advanceTimersByTimeAsync(4000);
+    expect(ws.mock.calls.length).toBe(calls);
+    ws.mockRestore();
   });
 });

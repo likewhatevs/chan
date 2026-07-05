@@ -13,6 +13,7 @@ import {
   connectDevserver,
   disconnectDevserver,
   forgetDevserverWorkspace,
+  library,
   removeDevserver,
   removeWorkspace,
   setDevserverWorkspaceOn,
@@ -137,6 +138,37 @@ async function runBulk(
   return failures;
 }
 
+function lockedWorkspace(item: SelItem): boolean {
+  if (item.kind === "workspace") {
+    return (
+      library.workspaces.find((w) => w.devserver_id === null && w.workspace_id === item.id)
+        ?.status === "locked"
+    );
+  }
+  if (item.kind === "served") {
+    return (
+      library.workspaces.find(
+        (w) => w.devserver_id === item.devserverId && w.prefix === item.id,
+      )?.status === "locked"
+    );
+  }
+  return false;
+}
+
+function bulkNote(
+  verb: string,
+  total: number,
+  failures: SelItem[],
+  skipped: SelItem[],
+): string | null {
+  const parts: string[] = [];
+  if (failures.length > 0) parts.push(`${failures.length} of ${total} failed to ${verb}`);
+  if (skipped.length > 0) {
+    parts.push(`${skipped.length} locked workspace${skipped.length === 1 ? "" : "s"} skipped`);
+  }
+  return parts.length > 0 ? parts.join("; ") : null;
+}
+
 /** Bulk turn on/off across every selected kind: a local workspace toggles its
  * tenant, a served workspace toggles on its owning devserver, a devserver
  * connects/disconnects. Bulk-off stays a fail-safe — an unforced off that 409s
@@ -149,15 +181,16 @@ export async function bulkSetOnAll(on: boolean): Promise<void> {
   if (items.length === 0) return;
   selection.busy = true;
   selection.note = null;
-  const failures = await runBulk(items, (item) => {
+  const skipped = items.filter(lockedWorkspace);
+  const active = items.filter((item) => !lockedWorkspace(item));
+  const failures = await runBulk(active, (item) => {
     if (item.kind === "workspace") return toggleWorkspace(item.id, on);
     if (item.kind === "served") return setDevserverWorkspaceOn(item.devserverId!, item.id, on);
     return on ? connectDevserver(item.id) : disconnectDevserver(item.id);
   });
   selection.busy = false;
   const verb = on ? "turn on" : "turn off";
-  selection.note =
-    failures.length > 0 ? `${failures.length} of ${items.length} failed to ${verb}` : null;
+  selection.note = bulkNote(verb, items.length, failures, skipped);
 }
 
 export function requestBulkDelete(): void {
@@ -188,13 +221,18 @@ export async function confirmBulkDelete(): Promise<void> {
   }
   selection.busy = true;
   selection.note = null;
+  const skipped = selection.selected.filter(lockedWorkspace);
   const failures: SelItem[] = [];
-  failures.push(...(await runBulk(locals, (s) => removeWorkspace(s.id))));
-  failures.push(...(await runBulk(served, (s) => forgetDevserverWorkspace(s.devserverId!, s.id))));
+  failures.push(...(await runBulk(locals.filter((s) => !lockedWorkspace(s)), (s) => removeWorkspace(s.id))));
+  failures.push(
+    ...(await runBulk(served.filter((s) => !lockedWorkspace(s)), (s) =>
+      forgetDevserverWorkspace(s.devserverId!, s.id),
+    )),
+  );
   failures.push(...(await runBulk(devservers, (s) => removeDevserver(s.id))));
   selection.busy = false;
   selection.confirmingDelete = false;
-  // Keep only the failures selected (succeeded rows drop); surface the count.
-  selection.selected = failures;
-  selection.note = failures.length > 0 ? `${failures.length} of ${total} failed to remove` : null;
+  // Keep only the failures/skips selected (succeeded rows drop); surface the count.
+  selection.selected = [...failures, ...skipped];
+  selection.note = bulkNote("remove", total, failures, skipped);
 }

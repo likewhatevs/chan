@@ -78,6 +78,9 @@ pub enum WorkspaceStatus {
     Starting,
     /// Mounted and serving. The launcher shows ON, solid.
     Running,
+    /// Held by another live or indeterminate Chan writer. The launcher shows a
+    /// disabled locked control and leaves `on` false for this process.
+    Locked,
     /// Unmount requested / in flight. The launcher shows a spinner and locks
     /// power/remove controls until the close settles.
     Closing,
@@ -139,8 +142,8 @@ pub struct LauncherWorkspace {
     /// a row without the field reads `stopped`.
     #[serde(default)]
     pub status: WorkspaceStatus,
-    /// Short human reason, present only when `status == error` (a foreign lock,
-    /// an open failure). Omitted otherwise.
+    /// Short human reason, present only when `status == error` (an open
+    /// failure). Omitted otherwise.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
@@ -2168,8 +2171,9 @@ impl WorkspaceHost {
 
     /// The launcher row's live `(status, error)` for a workspace root. `running`
     /// when mounted unless a teardown state is active; else the transient
-    /// overlay's `starting`/`error`; else `stopped`. The launcher drives its
-    /// spinner and toggle-disable off this, not an optimistic timer.
+    /// overlay's `starting`/`error`; else a foreign writer lock reports
+    /// `locked`; else `stopped`. The launcher drives its spinner and
+    /// toggle-disable off this, not an optimistic timer.
     pub fn workspace_status(&self, root: &Path) -> (WorkspaceStatus, Option<String>) {
         let key = canonical_key(root);
         let state = self
@@ -2189,10 +2193,18 @@ impl WorkspaceHost {
         match state {
             Some(MountState::Starting) => (WorkspaceStatus::Starting, None),
             Some(MountState::Error(reason)) => (WorkspaceStatus::Error, Some(reason)),
-            Some(MountState::Closing) | Some(MountState::Removing) | None => {
+            Some(MountState::Closing) | Some(MountState::Removing) => {
                 (WorkspaceStatus::Stopped, None)
             }
+            None if self.root_has_foreign_lock(root) => (WorkspaceStatus::Locked, None),
+            None => (WorkspaceStatus::Stopped, None),
         }
+    }
+
+    fn root_has_foreign_lock(&self, root: &Path) -> bool {
+        self.library.workspace_paths_for(root).is_some_and(|paths| {
+            chan_workspace::lock::is_locked_by_foreign_holder(&paths.lock, root)
+        })
     }
 
     /// Drop a workspace root's transient lifecycle overlay and fire the watch
@@ -2275,12 +2287,13 @@ impl WorkspaceHost {
     /// (the `workspaces` map now reports `running`); leave `starting` on our own
     /// in-flight contention (`WorkspaceAlreadyOpen` — a concurrent task of THIS
     /// process is mounting the same root and will settle it, so it is not a
-    /// failure); record `error` for a real failure (a foreign lock, an open
-    /// error).
+    /// failure); clear to the live lock probe on a foreign writer lock; record
+    /// `error` for a real open failure.
     fn settle_mount(&self, root: &Path, result: &Result<HostedWorkspace, Error>) {
         match result {
             Ok(_) => self.clear_mount_state(root),
             Err(Error::Core(ChanError::WorkspaceAlreadyOpen)) => {}
+            Err(Error::Core(ChanError::WorkspaceLocked)) => self.clear_workspace_lifecycle(root),
             Err(e) => self.mark_mount_error(root, e.to_string()),
         }
     }
@@ -2558,6 +2571,27 @@ mod tests {
 
     fn fake_builder() -> Arc<dyn TenantBuilder> {
         Arc::new(FakeBuilder)
+    }
+
+    #[cfg(unix)]
+    fn hold_foreign_lock(lib: &Library, root: &Path) -> chan_workspace::lock::WorkspaceLock {
+        let paths = lib.workspace_paths_for(root).expect("workspace paths");
+        let lock = chan_workspace::lock::WorkspaceLock::acquire(&paths.lock, root).expect("lock");
+        let record = chan_workspace::lock::LockRecord {
+            pid: 1,
+            path: root
+                .canonicalize()
+                .unwrap_or_else(|_| root.to_path_buf())
+                .to_string_lossy()
+                .into_owned(),
+            started_at: "2000-01-01T00:00:00Z".to_string(),
+        };
+        std::fs::write(
+            paths.lock.join("writer.lock"),
+            serde_json::to_vec(&record).expect("record json"),
+        )
+        .expect("write foreign lock record");
+        lock
     }
 
     fn fake_registry() -> Arc<crate::terminal_sessions::Registry> {
@@ -2910,6 +2944,18 @@ mod tests {
         );
     }
 
+    #[test]
+    fn workspace_status_locked_wire_tag_is_pinned() {
+        assert_eq!(
+            serde_json::to_string(&WorkspaceStatus::Locked).expect("serialize"),
+            r#""locked""#
+        );
+        assert_eq!(
+            serde_json::from_str::<WorkspaceStatus>(r#""locked""#).expect("deserialize"),
+            WorkspaceStatus::Locked
+        );
+    }
+
     #[tokio::test]
     async fn host_workspace_status_surfaces_starting_and_error() {
         // The transient overlay drives `starting` (mount in flight) and `error`
@@ -2927,10 +2973,10 @@ mod tests {
             (WorkspaceStatus::Starting, None)
         );
 
-        host.mark_mount_error(root.path(), "foreign lock".into());
+        host.mark_mount_error(root.path(), "open failed".into());
         assert_eq!(
             host.workspace_status(root.path()),
-            (WorkspaceStatus::Error, Some("foreign lock".to_string()))
+            (WorkspaceStatus::Error, Some("open failed".to_string()))
         );
 
         host.clear_workspace_lifecycle(root.path());
@@ -2982,6 +3028,55 @@ mod tests {
         assert_eq!(
             host.workspace_status(root.path()),
             (WorkspaceStatus::Running, None)
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn host_workspace_status_reports_foreign_lock_until_release() {
+        let cfg = tempfile::tempdir().expect("config dir");
+        let root = tempfile::tempdir().expect("workspace");
+        let lib = Library::open_at(cfg.path().join("config.toml")).expect("library");
+        lib.register_workspace(root.path()).expect("register");
+        let host = Arc::new(WorkspaceHost::new(lib.clone(), fake_builder()));
+
+        let foreign = hold_foreign_lock(&lib, root.path());
+        assert_eq!(
+            host.workspace_status(root.path()),
+            (WorkspaceStatus::Locked, None)
+        );
+
+        drop(foreign);
+        assert_eq!(
+            host.workspace_status(root.path()),
+            (WorkspaceStatus::Stopped, None)
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn workspace_locked_mount_clears_starting_overlay() {
+        let cfg = tempfile::tempdir().expect("config dir");
+        let root = tempfile::tempdir().expect("workspace");
+        let lib = Library::open_at(cfg.path().join("config.toml")).expect("library");
+        lib.register_workspace(root.path()).expect("register");
+        let host = Arc::new(WorkspaceHost::new(lib.clone(), fake_builder()));
+
+        let foreign = hold_foreign_lock(&lib, root.path());
+        let err = host
+            .open_registered_workspace(root.path(), serve_config("/workspace"))
+            .await
+            .expect_err("foreign lock");
+        assert!(matches!(err, Error::Core(ChanError::WorkspaceLocked)));
+        assert_eq!(
+            host.workspace_status(root.path()),
+            (WorkspaceStatus::Locked, None)
+        );
+
+        drop(foreign);
+        assert_eq!(
+            host.workspace_status(root.path()),
+            (WorkspaceStatus::Stopped, None)
         );
     }
 

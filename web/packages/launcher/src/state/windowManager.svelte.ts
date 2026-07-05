@@ -8,8 +8,10 @@
 // via the widened createWindow with origin:"browser" (so the desktop watcher
 // never grows a native twin), and on the feed's absence-only discard closes the
 // matching handle. A reload wipes the in-memory handle map, so the reconciler
-// re-flags visible browser-origin records it holds no handle for (via
-// windowAttention) so their rows flash for a re-open click.
+// re-flags visible CONNECTED browser-origin records it holds no handle for (via
+// windowAttention) so their rows flash for a re-open click. Disconnected
+// browser-origin rows are stale browser tabs; the launcher discards them instead
+// of keeping a permanent "open elsewhere" affordance.
 //
 // Inert under demoState.enabled: a marketing embed never spawns windows.
 
@@ -25,17 +27,39 @@ const handles = new Map<string, Window>();
 // window_ids from the last feed push, so the reconciler detects removals (the
 // feed signals a discard by ABSENCE, never a tombstone).
 let prevIds = new Set<string>();
+// Disconnected browser-origin rows may be a transient /ws reconnect, so rows
+// without a local closed handle get a short cancellation window before cleanup.
+const DISCONNECTED_BROWSER_WINDOW_DISCARD_MS = 2500;
+const pendingDiscards = new Set<string>();
 
 function servingOrigin(): string {
   return typeof location === "undefined" ? "" : location.origin;
 }
 
-// The live handle for a window, dropping a stale one the user closed by hand.
-function liveHandle(id: string): Window | null {
+function discardBrowserWindow(id: string): void {
+  pendingDiscards.delete(id);
+  handles.get(id)?.close();
+  handles.delete(id);
+  clearWindowAttention(id);
+  void backend.discardWindow(id).catch(() => {});
+}
+
+function scheduleBrowserWindowDiscard(id: string): void {
+  if (pendingDiscards.has(id)) return;
+  pendingDiscards.add(id);
+  clearWindowAttention(id);
+  const timer = setTimeout(() => {
+    if (pendingDiscards.has(id)) discardBrowserWindow(id);
+  }, DISCONNECTED_BROWSER_WINDOW_DISCARD_MS);
+  (timer as { unref?: () => void }).unref?.();
+}
+
+function handleState(id: string): "live" | "closed" | "none" {
   const h = handles.get(id);
-  if (h && !h.closed) return h;
-  if (h) handles.delete(id);
-  return null;
+  if (!h) return "none";
+  if (!h.closed) return "live";
+  handles.delete(id);
+  return "closed";
 }
 
 /** Mint a browser window of the local library and open it in-app. Call this
@@ -60,8 +84,9 @@ export async function mintWindow(
       blank.location.href = windowUrl(rec, servingOrigin());
       handles.set(rec.window_id, blank);
     }
-    // A blocked popup leaves no handle; the reconciler flags rec once it lands in
-    // the feed so its row flashes for a click-to-open.
+    // A blocked popup leaves no handle; if the record never gets a /ws presence
+    // the reconciler treats it like any other stale browser row and discards it.
+    pendingDiscards.delete(rec.window_id);
     clearWindowAttention(rec.window_id);
     return rec;
   } catch (e) {
@@ -78,6 +103,7 @@ export function openWindowRecord(record: WindowRecord): Window | null {
   const h = window.open(windowUrl(record, servingOrigin()), record.window_id);
   if (h) {
     handles.set(record.window_id, h);
+    pendingDiscards.delete(record.window_id);
     clearWindowAttention(record.window_id);
     h.focus?.();
   }
@@ -96,6 +122,7 @@ export async function closeWindowRecord(
   else await backend.discardWindow(record.window_id, opts.actingWindowId);
   handles.get(record.window_id)?.close();
   handles.delete(record.window_id);
+  pendingDiscards.delete(record.window_id);
   clearWindowAttention(record.window_id);
 }
 
@@ -125,15 +152,24 @@ export function reconcileWindows(set: WindowSet): void {
     if (!currentIds.has(id)) {
       handles.get(id)?.close();
       handles.delete(id);
+      pendingDiscards.delete(id);
       clearWindowAttention(id);
     }
   }
   for (const w of set.windows) {
-    if (liveHandle(w.window_id)) {
+    const state = handleState(w.window_id);
+    if (state === "live") {
+      pendingDiscards.delete(w.window_id);
       clearWindowAttention(w.window_id);
+    } else if (w.origin === "browser" && state === "closed") {
+      discardBrowserWindow(w.window_id);
+    } else if (w.origin === "browser" && !w.connected) {
+      scheduleBrowserWindowDiscard(w.window_id);
     } else if (w.origin === "browser" && !w.hidden) {
+      pendingDiscards.delete(w.window_id);
       markWindowAttention(w.window_id);
     } else {
+      pendingDiscards.delete(w.window_id);
       clearWindowAttention(w.window_id);
     }
   }
@@ -143,11 +179,12 @@ export function reconcileWindows(set: WindowSet): void {
 /** Whether this launcher holds a live handle for a window (its row is "open"
  * here, not an orphan). */
 export function hasWindowHandle(id: string): boolean {
-  return liveHandle(id) !== null;
+  return handleState(id) === "live";
 }
 
 /** Test/reset hook: drop all handles and the diff snapshot. */
 export function resetWindowManager(): void {
   handles.clear();
   prevIds = new Set();
+  pendingDiscards.clear();
 }

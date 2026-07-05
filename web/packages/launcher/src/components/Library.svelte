@@ -179,6 +179,10 @@
     );
   }
 
+  function locked(ws: WorkspaceEntry): boolean {
+    return ws.status === "locked";
+  }
+
   const connected = (ds: DevserverEntry): boolean => ds.status === "connected";
   // The devserver's connection dropped out from under it: the control script
   // exited, or a connected transport stopped answering. The identity row's
@@ -276,7 +280,9 @@
         </button>
       {/if}
       {#if readOnly}
-        <span class="pill" class:on={ws.on} aria-disabled="true">{ws.on ? "On" : "Off"}</span>
+        <span class="pill" class:on={ws.on} aria-disabled="true">
+          {locked(ws) ? "Locked" : ws.on ? "On" : "Off"}
+        </span>
       {:else}
         <button
           class="icon-btn"
@@ -295,11 +301,19 @@
           class="icon-btn"
           class:on={ws.on}
           type="button"
-          disabled={spinning(ws)}
-          title={spinning(ws) ? "Working…" : ws.on ? "Turn off" : "Turn on"}
-          aria-label={spinning(ws)
-            ? `Working on ${displayName(ws)}`
-            : `${ws.on ? "Turn off" : "Turn on"} ${displayName(ws)}`}
+          disabled={spinning(ws) || locked(ws)}
+          title={locked(ws)
+            ? "Workspace is open in another Chan process"
+            : spinning(ws)
+              ? "Working…"
+              : ws.on
+                ? "Turn off"
+                : "Turn on"}
+          aria-label={locked(ws)
+            ? `${displayName(ws)} is open in another Chan process`
+            : spinning(ws)
+              ? `Working on ${displayName(ws)}`
+              : `${ws.on ? "Turn off" : "Turn on"} ${displayName(ws)}`}
           onclick={() =>
             kind === "workspace"
               ? toggleLocalWorkspace(ws.workspace_id, !ws.on)

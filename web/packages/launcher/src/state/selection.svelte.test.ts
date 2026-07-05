@@ -4,7 +4,7 @@
 // argument), and bulk remove runs an ordered cross-kind delete. Each case adds
 // its own rows so it is robust to the shared module-level mock state.
 
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import {
   selection,
   isSelected,
@@ -25,6 +25,7 @@ import {
   library,
   loadLibrary,
   saveDevserver,
+  stopWatching,
 } from "./library.svelte";
 
 // Pin the in-memory mock as the backend so these tests drive the registries with
@@ -45,6 +46,10 @@ function settle(): Promise<void> {
 beforeEach(async () => {
   clearSelection();
   await loadLibrary();
+});
+
+afterEach(() => {
+  stopWatching();
 });
 
 describe("workspace multi-select", () => {
@@ -71,6 +76,22 @@ describe("workspace multi-select", () => {
     expect(library.workspaces.find((w) => w.workspace_id === b.workspace_id)?.on).toBe(false);
   });
 
+  it("bulk turn on skips locked workspaces", async () => {
+    await addLocalWorkspace("/tmp/sel-locked");
+    const locked = library.workspaces.find((w) => w.path === "/tmp/sel-locked")!;
+    library.workspaces = library.workspaces.map((w) =>
+      w.workspace_id === locked.workspace_id ? { ...w, on: false, status: "locked" } : w,
+    );
+    toggleSelected("workspace", locked.workspace_id);
+
+    await bulkSetOnAll(true);
+
+    const row = library.workspaces.find((w) => w.workspace_id === locked.workspace_id)!;
+    expect(row.status).toBe("locked");
+    expect(row.on).toBe(false);
+    expect(selection.note).toBe("1 locked workspace skipped");
+  });
+
   it("remove is gated behind a confirm; cancel leaves the row", async () => {
     await addLocalWorkspace("/tmp/sel-keep");
     const id = library.workspaces.find((w) => w.path === "/tmp/sel-keep")!.workspace_id;
@@ -93,6 +114,22 @@ describe("workspace multi-select", () => {
     expect(library.workspaces.length).toBe(before - 1);
     expect(selectedCount()).toBe(0);
     expect(selection.confirmingDelete).toBe(false);
+  });
+
+  it("confirmed bulk remove skips locked workspaces and keeps them selected", async () => {
+    await addLocalWorkspace("/tmp/sel-locked-rm");
+    const locked = library.workspaces.find((w) => w.path === "/tmp/sel-locked-rm")!;
+    library.workspaces = library.workspaces.map((w) =>
+      w.workspace_id === locked.workspace_id ? { ...w, on: false, status: "locked" } : w,
+    );
+    toggleSelected("workspace", locked.workspace_id);
+    requestBulkDelete();
+
+    await confirmBulkDelete();
+
+    expect(library.workspaces.some((w) => w.workspace_id === locked.workspace_id)).toBe(true);
+    expect(isSelected("workspace", locked.workspace_id)).toBe(true);
+    expect(selection.note).toBe("1 locked workspace skipped");
   });
 });
 

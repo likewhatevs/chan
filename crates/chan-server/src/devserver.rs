@@ -520,13 +520,14 @@ impl DevserverState {
             if let Some(entry) = by_root.get(&ws.root_path) {
                 entries.push(entry.clone());
             } else if let Ok(prefix) = allocate_workspace_prefix(&ws.root_path) {
+                let (status, error) = self.host.workspace_status(&ws.root_path);
                 entries.push(WorkspaceEntry {
                     prefix,
                     path: ws.root_path.to_string_lossy().into_owned(),
                     label: workspace_label(&ws.root_path),
                     on: false,
-                    status: WorkspaceStatus::Stopped,
-                    error: None,
+                    status,
+                    error,
                     token: String::new(),
                 });
             }
@@ -562,13 +563,14 @@ impl DevserverState {
     /// (stable prefix, no token), for idempotent off-toggles and reporting.
     fn library_off_entry(&self, prefix: &str) -> Option<WorkspaceEntry> {
         let root = self.library_root_for_prefix(prefix)?;
+        let (status, error) = self.host.workspace_status(&root);
         Some(WorkspaceEntry {
             prefix: prefix.to_string(),
             path: root.to_string_lossy().into_owned(),
             label: workspace_label(&root),
             on: false,
-            status: WorkspaceStatus::Stopped,
-            error: None,
+            status,
+            error,
             token: String::new(),
         })
     }
@@ -1630,6 +1632,27 @@ mod tests {
         })
     }
 
+    #[cfg(unix)]
+    fn hold_foreign_lock(lib: &Library, root: &Path) -> chan_workspace::lock::WorkspaceLock {
+        let paths = lib.workspace_paths_for(root).expect("workspace paths");
+        let lock = chan_workspace::lock::WorkspaceLock::acquire(&paths.lock, root).expect("lock");
+        let record = chan_workspace::lock::LockRecord {
+            pid: 1,
+            path: root
+                .canonicalize()
+                .unwrap_or_else(|_| root.to_path_buf())
+                .to_string_lossy()
+                .into_owned(),
+            started_at: "2000-01-01T00:00:00Z".to_string(),
+        };
+        std::fs::write(
+            paths.lock.join("writer.lock"),
+            serde_json::to_vec(&record).expect("record json"),
+        )
+        .expect("write foreign lock record");
+        lock
+    }
+
     #[tokio::test]
     async fn shared_terminal_tenant_makes_terminal_windows_resolve() {
         // The real devserver open path: mount the shared terminal tenant, then
@@ -1832,6 +1855,26 @@ mod tests {
                 .await
                 .expect("no error")
         ));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn workspace_entries_report_foreign_locked_library_rows() {
+        let home = tempfile::tempdir().expect("home");
+        let ws = tempfile::tempdir().expect("workspace");
+        let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let state = test_state(home.path(), addr);
+        state.host.library().register_workspace(ws.path()).unwrap();
+        let _foreign = hold_foreign_lock(state.host.library(), ws.path());
+
+        let row = state
+            .workspace_entries()
+            .into_iter()
+            .find(|row| row.path == ws.path().canonicalize().unwrap().to_string_lossy())
+            .expect("workspace row");
+        assert!(!row.on);
+        assert_eq!(row.status, WorkspaceStatus::Locked);
+        assert!(row.token.is_empty());
     }
 
     #[tokio::test]

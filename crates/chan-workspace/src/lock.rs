@@ -186,6 +186,36 @@ pub fn is_free(lock_dir: &Path) -> bool {
     }
 }
 
+/// Probe whether `lock_dir` is held by a live or indeterminate foreign writer.
+///
+/// This is a read-side status check for launchers and menus, not an acquire
+/// path. It mirrors the conservative side of [`WorkspaceLock::acquire`]: a free
+/// lock, this process's own holder, or a provably-dead holder stays actionable;
+/// a live, unknown, torn, or path-mismatched holder reports foreign-locked.
+pub fn is_locked_by_foreign_holder(lock_dir: &Path, workspace_root: &Path) -> bool {
+    let path = lock_dir.join("writer.lock");
+    let Ok(file) = open_lock_file(&path) else {
+        return true;
+    };
+    match FileExt::try_lock_exclusive(&file) {
+        Ok(()) => false,
+        Err(e) if is_contended(&e) => {
+            let Some(record) = read_record_at(&path) else {
+                return true;
+            };
+            let our_path = canonical_string(workspace_root);
+            if record.path == our_path && record.pid == std::process::id() {
+                return false;
+            }
+            if record.path == our_path && process_alive(record.pid) == ProcessLiveness::Dead {
+                return false;
+            }
+            true
+        }
+        Err(_) => true,
+    }
+}
+
 pub(crate) fn open_lock_file(path: &Path) -> Result<File> {
     let mut opts = OpenOptions::new();
     opts.create(true).read(true).write(true).truncate(false);
@@ -383,6 +413,17 @@ mod tests {
         assert!(is_free(tmp.path())); // released after drop
     }
 
+    #[test]
+    fn foreign_lock_probe_treats_free_and_own_locks_as_actionable() {
+        let tmp = TempDir::new().unwrap();
+        assert!(!is_locked_by_foreign_holder(tmp.path(), &root(&tmp)));
+
+        let held = WorkspaceLock::acquire(tmp.path(), &root(&tmp)).unwrap();
+        assert!(!is_locked_by_foreign_holder(tmp.path(), &root(&tmp)));
+        drop(held);
+        assert!(!is_locked_by_foreign_holder(tmp.path(), &root(&tmp)));
+    }
+
     // Un-gated from the old `#[cfg(unix)]`: `is_contended` now maps the
     // Windows LockFileEx error (ERROR_LOCK_VIOLATION) to contention too,
     // so the contract is symmetric. CI runs tests on unix today; the
@@ -444,6 +485,24 @@ mod tests {
         .unwrap();
         let again = WorkspaceLock::acquire(tmp.path(), &root(&tmp));
         assert!(matches!(again, Err(ChanError::WorkspaceLocked)));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn foreign_lock_probe_reports_live_foreign_holder() {
+        let tmp = TempDir::new().unwrap();
+        let _held = WorkspaceLock::acquire(tmp.path(), &root(&tmp)).unwrap();
+        let foreign = LockRecord {
+            pid: 1,
+            path: canonical_string(&root(&tmp)),
+            started_at: "2000-01-01T00:00:00Z".to_string(),
+        };
+        fs::write(
+            tmp.path().join("writer.lock"),
+            serde_json::to_vec(&foreign).unwrap(),
+        )
+        .unwrap();
+        assert!(is_locked_by_foreign_holder(tmp.path(), &root(&tmp)));
     }
 
     #[test]

@@ -508,6 +508,7 @@ filesystem entry or graph state.
 Two distinct concurrency primitives:
 
   - `WorkspaceLock` (cross-process): held for the lifetime of `Workspace`. A second process opening the same workspace errors immediately with `ChanError::WorkspaceLocked`; we do NOT block. Callers handle the error explicitly (CLI prints a message and exits; desktop app falls back to opening another workspace).
+  - `lock::is_locked_by_foreign_holder` is the non-blocking read-side probe for UI status. It does not acquire for ownership and does not steal; it reports foreign-locked only when the writer lock is contended by a live, indeterminate, torn-record, or path-mismatched holder. Free locks, this process's own holder, and provably dead holders stay actionable.
   - `Mutex<Registry>`, `Mutex<Connection>` (graph writer), and the r2d2 pool (graph readers): intra-process. Cheap.
 
 Reading does not take the cross-process lock. tantivy is multi-reader-safe by design; sqlite WAL mode plus the r2d2 reader pool lets concurrent readers proceed alongside the writer.

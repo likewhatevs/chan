@@ -10,7 +10,7 @@ import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import { mount, unmount, flushSync } from "svelte";
 import Library from "./Library.svelte";
 import ConfirmDialog from "./ConfirmDialog.svelte";
-import { library, loadLibrary, saveDevserver } from "../state/library.svelte";
+import { library, loadLibrary, saveDevserver, stopWatching } from "../state/library.svelte";
 import { isSelected, toggleSelected, clearSelection, setSelectMode } from "../state/selection.svelte";
 import { beginPending, clearAllPending, dsKey, isPending, wsKey } from "../state/pending.svelte";
 import { confirm, requestConfirm, resolveConfirm, cancelConfirm } from "../state/confirm.svelte";
@@ -60,6 +60,7 @@ beforeEach(async () => {
 
 afterEach(() => {
   if (app) unmount(app);
+  stopWatching();
   target?.remove();
   target = null;
   app = null;
@@ -116,7 +117,7 @@ describe("Library: Local group", () => {
     mountList();
     const id = library.workspaces.find((w) => w.devserver_id === null)!.workspace_id;
     expect(byAria("New window of notes")!.disabled).toBe(false);
-    for (const status of ["stopped", "starting", "closing", "removing", "error"] as const) {
+    for (const status of ["stopped", "starting", "locked", "closing", "removing", "error"] as const) {
       library.workspaces = library.workspaces.map(
         (w): WorkspaceEntry => (w.workspace_id === id ? { ...w, on: true, status } : w),
       );
@@ -130,15 +131,30 @@ describe("Library: Local group", () => {
     const id = library.workspaces.find((w) => w.devserver_id === null)!.workspace_id;
     library.workspaces = library.workspaces.map(
       (w): WorkspaceEntry =>
-        w.workspace_id === id ? { ...w, status: "error", error: "foreign lock held" } : w,
+        w.workspace_id === id ? { ...w, status: "error", error: "open failed" } : w,
     );
     flushSync();
-    expect(target!.querySelector('.row-error[title="foreign lock held"]')).toBeTruthy();
+    expect(target!.querySelector('.row-error[title="open failed"]')).toBeTruthy();
     const toggle = target!.querySelector(
       'button[aria-label^="Turn off"], button[aria-label^="Turn on"]',
     ) as HTMLButtonElement;
     expect(toggle).toBeTruthy();
     expect(toggle.disabled).toBe(false);
+  });
+
+  it("renders status:locked with a disabled lock control", () => {
+    mountList();
+    const id = library.workspaces.find((w) => w.devserver_id === null)!.workspace_id;
+    library.workspaces = library.workspaces.map(
+      (w): WorkspaceEntry =>
+        w.workspace_id === id ? { ...w, on: false, status: "locked" } : w,
+    );
+    flushSync();
+    const toggle = byAria("notes is open in another Chan process")!;
+    expect(toggle).toBeTruthy();
+    expect(toggle.disabled).toBe(true);
+    expect(toggle.title).toBe("Workspace is open in another Chan process");
+    expect(byAria("New window of notes")!.disabled).toBe(true);
   });
 
   it("checks the row when a local workspace is selected", () => {

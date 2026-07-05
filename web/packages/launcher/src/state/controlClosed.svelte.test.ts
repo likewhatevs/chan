@@ -3,13 +3,13 @@
 // wire shapes) and dispatch against the in-memory mock (seeded devserver `ds-1`,
 // "prod", connected, library DS_LIBRARY_ID).
 
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import {
   controlEventId,
   onControlAttentionEvent,
   onControlRestoredEvent,
 } from "./controlClosed.svelte";
-import { library, loadLibrary } from "./library.svelte";
+import { library, loadLibrary, stopWatching } from "./library.svelte";
 import {
   hasControlAttention,
   clearAllControlAttention,
@@ -27,6 +27,10 @@ beforeEach(async () => {
   // Seeds the devserver registry incl. ds-1, so markControlAttention can resolve
   // the devserver id to its library id.
   await loadLibrary();
+});
+
+afterEach(() => {
+  stopWatching();
 });
 
 function devserver(over: Partial<DevserverEntry> & Pick<DevserverEntry, "id">): DevserverEntry {

@@ -176,6 +176,20 @@ Expect the locked `CHAN_DEVSERVER_TOKEN=<token>` marker on **stdout** (the contr
 
 The macOS counterpart, `--service=launchd`, runs **natively** on your Mac -- no container needed. `chan devserver --service=launchd --join` writes `~/Library/LaunchAgents/app.chan.devserver.plist`, bootstraps it into your `gui/$(id -u)` session, and emits the same `CHAN_DEVSERVER_TOKEN=` marker on stdout; inspect it with `launchctl print gui/$(id -u)/app.chan.devserver` and tear it down with `chan devserver --service=launchd --stop` (which boots it out and disables it). Like `--service=systemd`, it is not reachable from CI (the runner has no GUI launchd domain), so exercise it locally.
 
+### Running a local devserver beside chan-desktop
+
+A foreground devserver started on the same machine with the default environment shares `~/.chan` with chan-desktop. That means both processes read the same workspace registry and contend on the same per-workspace writer locks. If chan-desktop is already serving a workspace, the devserver's launcher should show that workspace as locked, not off; turning it on from the devserver would be a second writer and is refused until the desktop turns that workspace off.
+
+Use a separate `CHAN_HOME` when you want the devserver to have an independent library for PWA or launcher testing:
+
+```sh
+rm -rf /tmp/chan-devserver-home && mkdir -p /tmp/chan-devserver-home
+CHAN_HOME=/tmp/chan-devserver-home \
+  ./target/debug/chan devserver --service=none --bind 127.0.0.1 --port 8787
+```
+
+`CHAN_HOME` replaces `~/.chan` for that process: registry, devserver config, per-workspace metadata, locks, tokens, and `CHAN_HOME/.local/bin/{chan,cs}` shims. The override also propagates into the systemd and launchd devserver service definitions when those backends are started from an environment carrying `CHAN_HOME`.
+
 ## Smoke-testing chan-desktop in isolation
 
 The built macOS `.app` (`make chan-desktop` produces `target/release/bundle/macos/Chan.app`) reads and writes your **real** `~/.chan` library and, on a plain launch, hands off to your **real** running chan-desktop. To exercise a dev build without disturbing either, run it from a terminal with a throwaway `HOME` and `XDG_RUNTIME_DIR`:
@@ -188,7 +202,7 @@ HOME=/tmp/chan-smoke XDG_RUNTIME_DIR=/tmp/chan-smoke-xdg \
 
 Why each piece matters:
 
-- **`HOME=throwaway` redirects the whole library.** chan resolves `~/.chan` from `$HOME` -- config, state, and cache all live under `$HOME/.chan`, and there is no `CHAN_HOME` override -- so a smoke instance under a throwaway `HOME` never touches your real workspaces, window registry, or settings.
+- **`HOME=throwaway` redirects the whole library when `CHAN_HOME` is unset.** chan resolves `~/.chan` from `$HOME` -- config, state, cache, workspace registry, and window state all live under `$HOME/.chan` -- so a smoke instance under a throwaway `HOME` never touches your real workspaces, window registry, or settings. `CHAN_HOME=throwaway` is the narrower override when you want only chan's home redirected without changing the process home.
 - **`XDG_RUNTIME_DIR=throwaway` redirects the discovery socket.** A plain launch hands off to an already-running chan-desktop through a per-user discovery socket: `$XDG_RUNTIME_DIR/chan-desktop.sock` when that variable is set, otherwise `$TMPDIR/chan-desktop-<uid>.sock` on macOS (which has no `XDG_RUNTIME_DIR` by default). Pointing `XDG_RUNTIME_DIR` at a throwaway dir moves the socket there, so the smoke instance neither hands off to nor collides with your real desktop.
 - **Start it from a terminal, not a Finder/Dock double-click.** A GUI launch ignores your shell environment, so the `HOME`/`XDG_RUNTIME_DIR` overrides only take effect when the binary is started from a shell.
 

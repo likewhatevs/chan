@@ -8,8 +8,8 @@
   //     responding slow-flashes its eye yellow for attention; acting on the window
   //     clears it.
   //   - self-managed (devserver/PWA): no bridge, so [OPEN] opens the window as an
-  //     in-app browser window. An orphaned window (in the feed, no live handle
-  //     here) flashes for a re-open click.
+  //     in-app browser window. A connected browser window with no live handle
+  //     here flashes for a re-open click.
   //   - readonly (gateway): static, connection dot only, no actions.
   //
   // `icon` adds a leading kind glyph (accent for the control terminal); the
@@ -106,8 +106,8 @@
   </div>
 {:else if selfManagedWindows}
   <!-- Self-managed (devserver/PWA): no desktop bridge, so [OPEN] opens the
-       window in-app as a browser window. An orphaned window (in the feed, no
-       live handle here) flashes for a re-open click. -->
+       window in-app as a browser window. A connected browser window with no
+       live handle here flashes for a re-open click. -->
   <div class="row">
     {#if icon}
       <span class="row-glyph" class:control={w.control} aria-hidden="true">

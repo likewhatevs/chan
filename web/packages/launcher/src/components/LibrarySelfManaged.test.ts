@@ -10,7 +10,7 @@
 import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import { mount, unmount } from "svelte";
 import Library from "./Library.svelte";
-import { library, loadLibrary } from "../state/library.svelte";
+import { library, loadLibrary, stopWatching } from "../state/library.svelte";
 
 // Force the self-managed (devserver) surface: mutate the registry + self-manage
 // windows, but no desktop bridge.
@@ -54,6 +54,7 @@ beforeEach(async () => {
 
 afterEach(() => {
   if (app) unmount(app);
+  stopWatching();
   target?.remove();
   target = null;
   app = null;

@@ -10,7 +10,7 @@
 import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import { mount, unmount } from "svelte";
 import Library from "./Library.svelte";
-import { loadLibrary } from "../state/library.svelte";
+import { loadLibrary, stopWatching } from "../state/library.svelte";
 
 // Force the read-only surface for the whole file (hoisted before the imports):
 // no registry mutation, no desktop bridge, not self-managed.
@@ -50,6 +50,7 @@ beforeEach(async () => {
 
 afterEach(() => {
   if (app) unmount(app);
+  stopWatching();
   target?.remove();
   target = null;
   app = null;

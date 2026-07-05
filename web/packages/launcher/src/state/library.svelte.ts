@@ -32,6 +32,8 @@ export const library = $state<LibraryState>({
 
 let unwatch: (() => void) | null = null;
 let removeVisibilityResync: (() => void) | null = null;
+let workspacePoll: ReturnType<typeof setInterval> | null = null;
+const WORKSPACE_POLL_MS = 2000;
 
 function errorText(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
@@ -109,6 +111,7 @@ export async function loadLibrary(): Promise<void> {
       // connection must not break loading the registries.
     }
     installVisibilityResync();
+    startWorkspacePolling();
   }
 }
 
@@ -117,6 +120,7 @@ export function stopWatching(): void {
   unwatch = null;
   removeVisibilityResync?.();
   removeVisibilityResync = null;
+  stopWorkspacePolling();
 }
 
 /** Re-read the authoritative registries (best-effort, coalesced). The launcher
@@ -143,6 +147,20 @@ function installVisibilityResync(): void {
     document.removeEventListener("visibilitychange", onVisible);
     window.removeEventListener("focus", resync);
   };
+}
+
+function startWorkspacePolling(): void {
+  if (workspacePoll !== null || typeof document === "undefined") return;
+  workspacePoll = setInterval(() => {
+    if (document.visibilityState === "visible") void refreshWorkspacesLive();
+  }, WORKSPACE_POLL_MS);
+  (workspacePoll as { unref?: () => void }).unref?.();
+}
+
+function stopWorkspacePolling(): void {
+  if (workspacePoll === null) return;
+  clearInterval(workspacePoll);
+  workspacePoll = null;
 }
 
 async function refreshWorkspaces(): Promise<void> {

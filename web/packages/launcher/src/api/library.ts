@@ -81,11 +81,19 @@ export interface WindowSet {
  * - `stopped`  not mounted (desired off, or never started)
  * - `starting` mount requested / in flight (the spinner state)
  * - `running`  mounted and serving
+ * - `locked`   mounted by another live/unknown Chan process; not actionable here
  * - `closing`  unmount requested / in flight (spinner + locked controls)
  * - `removing` remove requested / in flight (spinner + locked controls)
- * - `error`    mount failed (foreign lock, open error); see `WorkspaceEntry.error`
+ * - `error`    mount failed (open error); see `WorkspaceEntry.error`
  */
-export type WorkspaceStatus = "stopped" | "starting" | "running" | "closing" | "removing" | "error";
+export type WorkspaceStatus =
+  | "stopped"
+  | "starting"
+  | "running"
+  | "locked"
+  | "closing"
+  | "removing"
+  | "error";
 
 /**
  * A workspace row in the launcher's workspace feed. Local rows are folders in
@@ -103,8 +111,9 @@ export interface WorkspaceEntry {
   label: string;
   /** Persisted DESIRED state: tenant should be served (on) vs registered-but-off. */
   on: boolean;
-  /** Live mount lifecycle. The spinner shows while transitional; `error` renders a
-   * row error affordance carrying `error`. Drives the UI in place of `on`. */
+  /** Live mount lifecycle. The spinner shows while transitional; `locked` disables
+   * local control; `error` renders a row error affordance carrying `error`.
+   * Drives the UI in place of `on`. */
   status: WorkspaceStatus;
   /** Short human reason, present only when `status === "error"`. */
   error?: string;

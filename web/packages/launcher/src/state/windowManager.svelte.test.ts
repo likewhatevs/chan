@@ -1,9 +1,10 @@
 // The client-side window manager: mint (open-blank-then-navigate + 409 close),
-// re-open, leader-side close/hide, and the absence-only feed reconciler that
-// flags orphaned browser windows. backend is mocked; window.open is spied so we
-// can inspect the spawned handle and its navigation.
+// re-open, leader-side close/hide, and the feed reconciler that flags connected
+// browser windows opened elsewhere while discarding stale disconnected browser
+// rows. backend is mocked; window.open is spied so we can inspect the spawned
+// handle and its navigation.
 
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import type { WindowRecord, WindowSet } from "../api/library";
 
 const { createWindow, discardWindow, setWindowVisibility } = vi.hoisted(() => ({
@@ -81,6 +82,10 @@ beforeEach(() => {
   });
 });
 
+afterEach(() => {
+  vi.useRealTimers();
+});
+
 describe("mintWindow", () => {
   it("opens a blank window, mints with origin:browser + acting id, then navigates it", async () => {
     createWindow.mockResolvedValue(record({ window_id: "w-new", prefix: "proj-1", token: "tok9" }));
@@ -152,7 +157,7 @@ describe("closeWindowRecord", () => {
 });
 
 describe("reconcileWindows", () => {
-  it("flags a visible browser-origin record with no handle as an orphan", () => {
+  it("flags a connected visible browser-origin record with no handle as an orphan", () => {
     reconcileWindows(set([record({ window_id: "w-a", origin: "browser" })]));
     expect(hasWindowAttention("w-a")).toBe(true);
   });
@@ -177,6 +182,46 @@ describe("reconcileWindows", () => {
     openWindowRecord(rec);
     reconcileWindows(set([rec]));
     expect(hasWindowAttention("w-b")).toBe(false);
+  });
+
+  it("discards a browser-origin record whose local browser handle was closed", () => {
+    const rec = record({ window_id: "w-local-closed", origin: "browser" });
+    openWindowRecord(rec);
+    const handle = opened.at(-1)!.win;
+    handle.closed = true;
+
+    reconcileWindows(set([rec]));
+
+    expect(discardWindow).toHaveBeenCalledWith("w-local-closed");
+    expect(hasWindowHandle("w-local-closed")).toBe(false);
+    expect(hasWindowAttention("w-local-closed")).toBe(false);
+  });
+
+  it("schedules cleanup for a disconnected browser-origin record with no handle", async () => {
+    vi.useFakeTimers();
+    const rec = record({ window_id: "w-stale", origin: "browser", connected: false });
+
+    reconcileWindows(set([rec]));
+
+    expect(hasWindowAttention("w-stale")).toBe(false);
+    expect(discardWindow).not.toHaveBeenCalled();
+
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(discardWindow).toHaveBeenCalledWith("w-stale");
+    expect(hasWindowAttention("w-stale")).toBe(false);
+  });
+
+  it("cancels stale cleanup when a browser-origin record reconnects", async () => {
+    vi.useFakeTimers();
+    const rec = record({ window_id: "w-reconnect", origin: "browser", connected: false });
+    reconcileWindows(set([rec]));
+    reconcileWindows(set([{ ...rec, connected: true }]));
+
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(discardWindow).not.toHaveBeenCalled();
+    expect(hasWindowAttention("w-reconnect")).toBe(true);
   });
 
   it("closes the handle and clears attention when a record leaves the feed", () => {

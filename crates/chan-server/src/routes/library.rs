@@ -1054,6 +1054,11 @@ async fn handle_workspace_on(
             set_overlay(&state.host, &root, true);
             StatusCode::NO_CONTENT.into_response()
         }
+        Err(crate::Error::Core(chan_workspace::ChanError::WorkspaceLocked)) => (
+            StatusCode::CONFLICT,
+            "workspace is open in another Chan process",
+        )
+            .into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
 }
@@ -1516,6 +1521,47 @@ mod devserver_route_tests {
             .unwrap();
         let json = serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
         (status, json)
+    }
+
+    #[cfg(unix)]
+    fn hold_foreign_lock(
+        lib: &Library,
+        root: &std::path::Path,
+    ) -> chan_workspace::lock::WorkspaceLock {
+        let paths = lib.workspace_paths_for(root).expect("workspace paths");
+        let lock = chan_workspace::lock::WorkspaceLock::acquire(&paths.lock, root).expect("lock");
+        let record = chan_workspace::lock::LockRecord {
+            pid: 1,
+            path: root
+                .canonicalize()
+                .unwrap_or_else(|_| root.to_path_buf())
+                .to_string_lossy()
+                .into_owned(),
+            started_at: "2000-01-01T00:00:00Z".to_string(),
+        };
+        std::fs::write(
+            paths.lock.join("writer.lock"),
+            serde_json::to_vec(&record).expect("record json"),
+        )
+        .expect("write foreign lock record");
+        lock
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn workspace_list_reports_foreign_locked_rows() {
+        let cfg = tempfile::tempdir().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_workspace(root.path()).unwrap();
+        let host = Arc::new(WorkspaceHost::new(lib.clone(), crate::route_builder()));
+        let _foreign = hold_foreign_lock(&lib, root.path());
+        let router = launcher_router(host, None, None);
+
+        let (status, body) = request(&router, "GET", "/api/library/workspaces", None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body[0]["status"], "locked");
+        assert_eq!(body[0]["on"], false);
     }
 
     #[tokio::test]
