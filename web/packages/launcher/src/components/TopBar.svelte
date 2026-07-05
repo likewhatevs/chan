@@ -1,5 +1,5 @@
 <script lang="ts">
-  // The launcher's top bar: the "Library" title with its subtitle, a Gmail-style
+  // The launcher's top bar: the "Computers" title with its subtitle, a Gmail-style
   // Select-mode toggle, and the theme toggle. The add-workspace and add-devserver
   // entry points live in the library tree (the LOCAL header's [new workspace] and
   // the bottom "Add dev server" dashed button), and open-terminal lives in each
@@ -12,7 +12,7 @@
 
 <header class="topbar">
   <div class="title">
-    <h1 class="brand">Library</h1>
+    <h1 class="brand">Computers</h1>
     <p class="subtitle">This machine &amp; dev servers</p>
   </div>
   <div class="actions">

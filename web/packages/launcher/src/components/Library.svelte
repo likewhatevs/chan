@@ -420,7 +420,7 @@
             <House size={16} />
           {/if}
         </span>
-        <span class="machine-name">Local machine</span>
+        <span class="machine-name">This machine</span>
         <span class="status-dot live" title="This machine"></span>
         <div class="machine-actions">
           {#if !readOnly}

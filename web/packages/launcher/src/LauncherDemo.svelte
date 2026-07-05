@@ -75,7 +75,7 @@
   }
 
   /* Match the desktop launcher: the content column shares the top bar's 1.25rem
-     side padding, so each machine card's edge aligns under the "Library" title
+     side padding, so each machine card's edge aligns under the "Computers" title
      and the card internals (icon indent, gaps) fall back to the shipped launcher
      CSS instead of the embed-only nudges. Only the vertical padding is tightened
      for the shorter widget frame. */

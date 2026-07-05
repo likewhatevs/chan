@@ -463,7 +463,7 @@ describe("Library: workspace OFF confirm-and-retry", () => {
 describe("Library: nested machine tree", () => {
   it("renders the LOCAL machine block with Terminals + Workspaces sections", () => {
     mountList();
-    expect(target!.textContent).toContain("Local machine");
+    expect(target!.textContent).toContain("This machine");
     expect(target!.textContent).toContain("Terminals");
     expect(target!.textContent).toContain("Workspaces");
     // The local standalone terminal renders as a window row with a focus action.
