@@ -14,6 +14,7 @@ import {
   hydrateOverrides,
   overrideChordFor,
   overrideChordForSlot,
+  registerOverridePersist,
   type OverrideSlot,
 } from "../state/keymapOverrides.svelte";
 
@@ -52,6 +53,10 @@ function key(target: HTMLElement, init: KeyboardEventInit): void {
 describe("CommandChordAssign", () => {
   beforeEach(() => {
     vi.stubGlobal("navigator", { userAgent: "Mac OS X" });
+    // These tests exercise the assign UI, not persistence; disable the
+    // config-write persist (store.svelte registers the real one on import)
+    // so an assign does not fire an unmocked /api/config PATCH.
+    registerOverridePersist(null);
   });
   afterEach(() => {
     for (const c of mounted.splice(0)) unmount(c);
