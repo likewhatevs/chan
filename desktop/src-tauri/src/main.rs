@@ -4479,16 +4479,22 @@ fn install_app_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
     // so the browser tab holds its own window_id, then opens the composed URL.
     let open_in_browser =
         MenuItemBuilder::with_id("app-open-in-browser", "Open in Browser").build(app)?;
-    // File ▸ New Terminal. Cmd+T, ALWAYS enabled on both
-    // platforms (no dynamic enable/disable: a disabled menu item still
-    // swallows the accelerator on macOS, so a launcher-focused Cmd+T would
-    // dead-end). The single handler routes by the FOCUSED window's kind: a
-    // launcher (main / main-*) opens a new standalone terminal window; any
-    // embedded SPA window (workspace-* / outbound-* / terminal-*)
-    // gets `app.terminal.toggle` dispatched, which the SPA interprets per
-    // its mode (workspace: toggle a pane terminal; terminal: add a tab).
+    // File ▸ New Terminal. Cmd+T on macOS, Ctrl+Shift+T off-mac (matching the
+    // registry New-terminal chord, where plain Ctrl+T stays a terminal chord).
+    // ALWAYS enabled on both platforms (no dynamic enable/disable: a disabled
+    // menu item still swallows the accelerator on macOS, so a launcher-focused
+    // chord would dead-end). The single handler routes by the FOCUSED window's
+    // kind: a launcher (main / main-*) opens a new standalone terminal window;
+    // any embedded SPA window (workspace-* / outbound-* / terminal-*) gets
+    // `app.terminal.toggle` dispatched, which the SPA interprets per its mode
+    // (workspace: toggle a pane terminal; terminal: add a tab).
+    let new_terminal_accel = if cfg!(target_os = "macos") {
+        "CmdOrCtrl+T"
+    } else {
+        "CmdOrCtrl+Shift+T"
+    };
     let new_terminal = MenuItemBuilder::with_id("app-new-terminal", "New Terminal")
-        .accelerator("CmdOrCtrl+T")
+        .accelerator(new_terminal_accel)
         .build(app)?;
     // macOS: inject the window-nav items into the system menubar's Window
     // submenu. The App menu already owns About <app> and Quit, so File ▸
@@ -5714,19 +5720,19 @@ fn handle_new_terminal(app: &tauri::AppHandle) {
     }
 }
 
-/// Route File ▸ Close Window (Cmd+W) by the focused window's
-/// kind, mirroring `handle_new_terminal`.
+/// Route File ▸ Close Window by the focused window's kind, mirroring
+/// `handle_new_terminal`. macOS binds Cmd+W; Linux/Windows bind Ctrl+Shift+W
+/// (plain Ctrl+W stays a terminal readline chord there).
 ///
-/// - A focused workspace webview (workspace-* / outbound-* /
-///   terminal-*) gets `app.tab.close` dispatched — the same CustomEvent the
-///   KEY_BRIDGE_JS KeyW case fires — so Cmd+W closes the active tab, not the
-///   window.
+/// - A focused workspace webview (workspace-* / outbound-* / terminal-*):
+///   on macOS the menu shares Cmd+W with tab-close, so it dispatches
+///   `app.tab.close` (the active tab, not the window). Off-mac the chord is
+///   the registry's window-close (tab-close is Ctrl+D there, on the SPA), so
+///   it dispatches `app.window.close`, the same CustomEvent the KEY_BRIDGE_JS
+///   KeyW case fires.
 /// - Any other focused window (the launcher `main` / `main-*`, the About
 ///   window) is closed natively. The launcher's `CloseRequested` handler
 ///   intercepts that to hide rather than destroy it, keeping reopen instant.
-///
-/// Cross-platform: macOS binds Cmd+W; Linux/Windows bind Ctrl+Shift+W
-/// (plain Ctrl+W stays a terminal readline chord there).
 fn handle_close_window(app: &tauri::AppHandle) {
     let Some(window) = app
         .webview_windows()
@@ -5735,23 +5741,29 @@ fn handle_close_window(app: &tauri::AppHandle) {
     else {
         return;
     };
-    // A control terminal's Cmd+W must be a real control-window close, not a tab
-    // close or a bury. Route it through `request_close_window`, which reaps the
-    // control row/tenant and disconnects only if that control terminal still owns
-    // a live devserver connection.
+    // A control terminal's close chord must be a real control-window close, not
+    // a tab close or a bury. Route it through `request_close_window`, which
+    // reaps the control row/tenant and disconnects only if that control terminal
+    // still owns a live devserver connection.
     if window.label().starts_with("control-terminal-") {
         let _ = request_close_window(app.clone(), window);
         return;
     }
     if serve::is_workspace_webview_label(window.label()) {
         // A window still on the connecting/retry screen has no tabs to
-        // close and nothing to bury: Cmd+W means cancel — destroy for
-        // real (destroy skips the bury-on-close handler).
+        // close and nothing to bury: the close chord means cancel, so destroy
+        // for real (destroy skips the bury-on-close handler).
         if serve::window_on_connecting_screen(app, window.label()) {
             let _ = window.destroy();
             return;
         }
-        dispatch_to_focused_workspace(app, "app.tab.close");
+        // macOS Cmd+W is tab-close; off-mac Ctrl+Shift+W is window-close (its
+        // tab-close is Ctrl+D, dispatched from the SPA).
+        if cfg!(target_os = "macos") {
+            dispatch_to_focused_workspace(app, "app.tab.close");
+        } else {
+            dispatch_to_focused_workspace(app, "app.window.close");
+        }
     } else {
         let _ = window.close();
     }
