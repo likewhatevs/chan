@@ -4,7 +4,7 @@
   // type-ahead filtered list of every command available in the current window
   // and active surface. Keyboard-first: the input holds focus, arrows move a
   // highlight, Enter runs, Esc dismisses through the shared overlay stack.
-  // Chorded commands show their current chord read-only.
+  // Each row shows its resolved chord and doubles as an assign affordance.
   //
   // Focus discipline OverlayShell lacks: focus the input on open, trap
   // Tab inside the panel, and restore focus to the previously-focused
@@ -26,6 +26,7 @@
     Terminal,
   } from "lucide-svelte";
   import OverlayShell from "./OverlayShell.svelte";
+  import CommandChordAssign from "./CommandChordAssign.svelte";
   import { launcherPanel, closeCommandLauncher } from "../state/store.svelte";
   import {
     availableCommands,
@@ -34,7 +35,6 @@
     type CommandCategory,
     type CommandSurface,
   } from "../state/commands";
-  import { chordFor } from "../state/shortcuts";
   // Load the per-category registrations (side effect) so the catalog is
   // populated before the first read.
   import "../state/commands/install";
@@ -321,7 +321,6 @@
             <div class="group" role="group" aria-label={group.category}>
               <div class="group-label">{group.category}</div>
               {#each group.rows as row (row.cmd.id + "␟" + row.cmd.title)}
-                {@const chord = chordFor(row.cmd.id)}
                 {@const Icon = iconFor(row.cmd)}
                 <!-- svelte-ignore a11y_click_events_have_key_events -->
                 <div
@@ -341,7 +340,10 @@
                     <span class="title">{row.cmd.title}</span>
                     <span class="description">{row.cmd.category}</span>
                   </span>
-                  {#if chord}<span class="chord">{chord}</span>{/if}
+                  <CommandChordAssign
+                    cmd={row.cmd}
+                    onCaptureEnd={() => inputEl?.focus()}
+                  />
                   <span class="chevron">
                     <ChevronRight size={20} strokeWidth={1.8} aria-hidden="true" />
                   </span>
@@ -474,21 +476,6 @@
     color: var(--text-secondary);
     font-size: 12px;
   }
-  .chord {
-    flex: 0 0 auto;
-    padding: 1px 7px;
-    border: 1px solid var(--border);
-    border-radius: 5px;
-    background: var(--code-bg);
-    color: var(--text-secondary);
-    font-size: 11px;
-    white-space: nowrap;
-  }
-  .row.active .chord {
-    border-color: color-mix(in srgb, var(--text) 28%, transparent);
-    background: color-mix(in srgb, var(--bg) 75%, transparent);
-    color: var(--text-secondary);
-  }
   .chevron {
     flex: 0 0 auto;
     display: inline-flex;
@@ -527,9 +514,6 @@
       font-size: 21px;
     }
     .description {
-      display: none;
-    }
-    .chord {
       display: none;
     }
   }

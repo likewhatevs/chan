@@ -604,16 +604,44 @@ export function currentOS(): OS {
   return "linux";
 }
 
-/// Return the formatted chord for a shortcut id on the current
-/// platform + OS, or `null` if the shortcut isn't wired (the chord
-/// for the resolved platform is undefined). Tooltips and button
-/// labels use this to stay in sync with the keymap layer without
-/// duplicating chord strings inline.
+/// Runtime hook the persisted keymap-override layer installs so
+/// `chordFor` resolves a user-assigned chord before the built-in
+/// `SHORTCUTS`. Returns the raw override chord (registry grammar, e.g.
+/// `"Mod+J"`) for `id` on the given platform + OS, or a nullish value
+/// when the command has no override there.
+///
+/// Injected rather than statically imported so this module stays free
+/// of the reactive override store: `scripts/shortcuts-table.mjs`
+/// compiles `shortcuts.ts` in isolation, and `renderTable` must resolve
+/// only the built-in chords. With no resolver registered (the generator
+/// and the unit tests) every override lookup is inert, so `chordFor`
+/// behaves exactly as it does over the bare registry.
+export type OverrideResolver = (
+  id: string,
+  platform: Platform,
+  os: OS,
+) => Chord | null | undefined;
+
+let overrideResolver: OverrideResolver | null = null;
+
+export function registerOverrideResolver(fn: OverrideResolver | null): void {
+  overrideResolver = fn;
+}
+
+/// Return the formatted chord for a command id on the current platform
+/// + OS: the user-assigned override if one exists, otherwise the
+/// built-in chord, or `null` when neither is wired. Chordless commands
+/// (no `SHORTCUTS` entry) resolve to their override when assigned.
+/// Tooltips, menu rows, and the launcher use this to stay in sync with
+/// the keymap layer without duplicating chord strings inline.
 export function chordFor(id: string): string | null {
+  const os = currentOS();
+  const platform = currentPlatform();
+  const override = overrideResolver?.(id, platform, os);
+  if (override) return formatChord(override, os);
   const s = SHORTCUTS.find((x) => x.id === id);
   if (!s) return null;
-  const os = currentOS();
-  const chord = osChord(s, currentPlatform(), os);
+  const chord = osChord(s, platform, os);
   if (!chord) return null;
   return formatChord(chord, os);
 }
@@ -723,6 +751,16 @@ function sameChord(a: Set<string>, b: Set<string>): boolean {
   if (a.size !== b.size) return false;
   for (const t of a) if (!b.has(t)) return false;
   return true;
+}
+
+/// Whether two chord strings denote the same keystroke on the current
+/// OS, tolerant of the `Mod` / `Cmd` / `Ctrl` aliases (on mac `Mod` and
+/// `Cmd` are one key; off mac `Mod` and `Ctrl` are one key). The keymap
+/// override layer uses this to compare a captured chord against the
+/// resolved keymap for conflict detection and reverse dispatch, so a
+/// stored `Mod+J` matches a built-in `Cmd+J` on macOS.
+export function chordsEqual(a: Chord, b: Chord): boolean {
+  return sameChord(canonicalChordTokens(a), canonicalChordTokens(b));
 }
 
 /// Tauri injects `window.__TAURI_INTERNALS__` (newer versions) or

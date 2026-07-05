@@ -202,9 +202,13 @@ describe("command launcher overlay", () => {
     const searchRow = [...target.querySelectorAll(".row")].find(
       (r) => r.querySelector(".title")?.textContent === "Search",
     ) as HTMLElement;
-    const chord = searchRow.querySelector(".chord");
+    // The chord renders inside the assign affordance; a chorded command shows
+    // its resolved chord (not the "Assign" prompt).
+    const chord = searchRow.querySelector(".chord-btn");
     expect(chord).not.toBeNull();
-    expect(chord?.textContent?.length).toBeGreaterThan(0);
+    const text = chord?.textContent?.trim() ?? "";
+    expect(text.length).toBeGreaterThan(0);
+    expect(text).not.toBe("Assign");
   });
 
   test("type-ahead filters the list", async () => {
