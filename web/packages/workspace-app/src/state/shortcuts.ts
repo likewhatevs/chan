@@ -5,7 +5,7 @@
 //   2. chan-desktop's KEY_BRIDGE_JS (native keymap; rebroadcasts as
 //      `chan:command` events that chan handles).
 //   3. The empty-pane background table.
-//   4. crates/chan/src/main.rs SERVE_LONG_ABOUT (the `chan open
+//   4. crates/chan/src/lib.rs SERVE_LONG_ABOUT (the `chan open
 //      --help` text). Resync via `node web/packages/workspace-app/scripts/shortcuts-table.mjs`.
 //
 // Chord grammar: a `+`-separated list of modifier tokens followed by

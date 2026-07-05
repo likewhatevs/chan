@@ -20,11 +20,17 @@ import { fileURLToPath } from "node:url";
 import { execSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const tsPath = join(here, "..", "src", "state", "shortcuts.ts");
 const webDir = join(here, "..");
+// Resolve tsc by module path rather than a package-local `.bin` symlink:
+// npm-workspaces hoists `typescript` to the web-root `node_modules`, so a
+// relative `node_modules/.bin/tsc` from this package does not exist.
+const require = createRequire(import.meta.url);
+const tscBin = require.resolve("typescript/bin/tsc");
 
 // Compile shortcuts.ts to a temp .mjs and import. Keeps shortcuts.ts
 // as the only place chord data lives - no parallel JS shadow file
@@ -34,7 +40,7 @@ try {
   const inFile = join(work, "shortcuts.ts");
   writeFileSync(inFile, readFileSync(tsPath, "utf8"));
   execSync(
-    `node_modules/.bin/tsc --target es2022 --module es2022 --moduleResolution bundler --strict --outDir ${JSON.stringify(work)} ${JSON.stringify(inFile)}`,
+    `node ${JSON.stringify(tscBin)} --target es2022 --module es2022 --moduleResolution bundler --strict --outDir ${JSON.stringify(work)} ${JSON.stringify(inFile)}`,
     { cwd: webDir, stdio: ["ignore", "ignore", "inherit"] },
   );
   const outFile = join(work, "shortcuts.js");
