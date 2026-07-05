@@ -156,11 +156,14 @@
   .overlay.center {
     align-items: center;
   }
+  /* Dim the workspace behind the launcher and top-anchored overlays
+     with a plain dark scrim, not a backdrop blur, so what is behind
+     the panel stays readable. The value sits just under the
+     full-cover overlays' scrim because the launcher's small capsule
+     leaves this scrim visible across the whole viewport. */
   .overlay.top,
   .overlay.center {
-    background: color-mix(in srgb, var(--bg) 5%, transparent);
-    -webkit-backdrop-filter: blur(10px) saturate(1.08);
-    backdrop-filter: blur(10px) saturate(1.08);
+    background: rgba(0, 0, 0, 0.4);
   }
   .panel {
     background: var(--bg-elev);
