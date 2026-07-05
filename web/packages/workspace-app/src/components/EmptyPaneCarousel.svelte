@@ -11,17 +11,18 @@
   // right-click handler through the carousel, so right-clicks fall
   // through to the tab strip's own context menu.
   //
-  // Slide 0 is an About widget (version, attributions, donation QR,
-  // project links). Slide 1 mounts `WorkspaceInfoBody` so the
-  // workspace-root inspector lives alongside the file-browser
-  // inspector surface.
+  // Slide 0 mounts `WorkspaceInfoBody` so the workspace-root
+  // inspector lives alongside the file-browser inspector surface.
   //
-  // Slide 2 is a read-only mount of `GraphCanvas`, the same
+  // Slide 1 is a read-only mount of `GraphCanvas`, the same
   // renderer the main Graph tab uses, fed a synthesized
   // directory-only spine + per-directory `indexState` for the
   // green/grey/pulsing-orange palette. No depth slider, inspector,
   // filter chips or scope picker: this surface is purely a status
   // read-out.
+  //
+  // Slide 2 is an About widget (version, attributions, donation QR,
+  // project links).
 
   import { onDestroy, onMount } from "svelte";
   import { api } from "../api/client";
@@ -808,7 +809,7 @@
     color: var(--text-secondary);
     opacity: 0.7;
   }
-  /* --- Slide 0 (About) --- */
+  /* --- Slide 2 (About) --- */
   .slide-about {
     align-items: stretch;
     gap: 0.9rem;
@@ -914,7 +915,7 @@
     color: var(--text);
     margin: 0;
   }
-  /* --- Slide 1 (Workspace info) --- */
+  /* --- Slide 0 (Workspace info) --- */
   .slide-workspace {
     align-items: stretch;
     padding: 0;
@@ -930,7 +931,7 @@
     min-height: 0;
     width: 100%;
   }
-  /* --- Slide 2 (Indexing graph) --- */
+  /* --- Slide 1 (Indexing graph) --- */
   /* `slide` defaults to `align-items: center` which would collapse
      the canvas host to its intrinsic width. The indexing slide
      wants the spine to occupy the full slide width, so we stretch

@@ -118,10 +118,16 @@ describe("dashboard surface commands", () => {
       "app.dashboard.surfaceTheme.dark",
       "app.dashboard.nextSlide",
       "app.dashboard.prevSlide",
+      "app.dashboard.slide.workspace",
+      "app.dashboard.slide.indexing",
+      "app.dashboard.slide.about",
     ]) {
       expect(onDash.has(id)).toBe(true);
     }
     expect(idsIn(ctx({ activeSurface: "file" })).has("app.dashboard.nextSlide")).toBe(false);
+    expect(
+      idsIn(ctx({ activeSurface: "file" })).has("app.dashboard.slide.about"),
+    ).toBe(false);
   });
 });
 
@@ -143,6 +149,7 @@ describe("surface commands in a standalone terminal window", () => {
       "app.browser.newGraph",
       "app.graph.copyLink",
       "app.dashboard.nextSlide",
+      "app.dashboard.slide.about",
       "terminal.richPrompt",
     ]) {
       expect(inTerminal.has(id)).toBe(false);
