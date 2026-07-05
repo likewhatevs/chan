@@ -1,8 +1,8 @@
 name: CI
 
-# Phase 11 CI calls the same Make targets developers use locally.
-# Linux runs the full gate first; macOS runs only after Linux passes
-# and stays focused on Rust clippy/tests for OS-specific coverage.
+# CI calls the same Make targets developers use locally.
+# Linux and macOS gates run in parallel: Linux runs the full gate,
+# macOS stays focused on Rust clippy/tests for OS-specific coverage.
 
 on:
   push:
@@ -57,7 +57,6 @@ jobs:
 
   macos:
     name: make ci-macos
-    needs: linux
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v6
