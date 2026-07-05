@@ -8,8 +8,17 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
-- **A Cmd+K command launcher.** A Spotlight-style palette (Cmd+K, Ctrl+K on Linux / Windows) lists every UI action grouped by category, filtered to what the current window and active tab can do, with each command's current chord shown beside it. Type to fuzzy-match over title and keywords, arrow to move, Enter to run, Esc to close; it opens from a focused terminal too. Chords are read-only for now.
+- **A Cmd+K command launcher.** A Spotlight-style palette (Cmd+K on macOS; Ctrl+Alt+K on the web and Linux / Windows, so a focused terminal keeps plain Ctrl+K) lists every UI action grouped by category, filtered to what the current window and active tab can do, with each command's current chord shown beside it. Sections and rows sort alphabetically with the active tab's surface pinned first. Type to fuzzy-match over title and keywords, arrow to move, Enter to run, Esc to close; it opens from a focused terminal too. Chords are read-only for now.
 - **New diagram.** Creates a seeded Excalidraw board the way New draft creates a note: a draft directory holding a `<name>.excalidraw` you can draw on, promote to a location on close, or discard. Reachable from the command launcher.
+
+### Changed
+
+- **Tab right-click menus keep only what belongs beside the surface.** The terminal, editor, graph, and file browser tab menus now show their surface controls (group broadcast, page width, graph depth and filters, the file browser dock toggles) plus Close; every other action they used to list is reachable from the command launcher instead.
+- **The launcher titles the machine list "Computers" and the local block "This machine."** The top bar reads "Computers" over "This machine & dev servers", and the local machine block header reads "This machine".
+
+### Fixed
+
+- **A workspace held open by another machine shows as locked in the launcher.** The launcher probes the workspace writer lock and, when a live foreign holder has it (another machine, or another process on the same one), shows a lock icon with the toggle disabled and the reason on hover instead of offering a control that can only fail. Its library view stays in sync with live devserver state.
 
 ### Removed
 
