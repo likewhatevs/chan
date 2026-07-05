@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
 import app from "../App.svelte?raw";
+import { TERMINAL_ONLY_COMMANDS } from "../state/windowMode";
 
 // WP17 App-level wiring: the `app.window.confirmClose` command (evaled by the
 // desktop host on an OS red-dot) closes straight away while reconnecting or when
@@ -10,8 +11,9 @@ describe("app.window.confirmClose dispatch", () => {
     expect(app).toContain('import CloseConfirmOverlay from "./components/CloseConfirmOverlay.svelte";');
     expect(app).toContain("<CloseConfirmOverlay />");
     // A standalone/control terminal window is terminal-only, so confirmClose
-    // must survive the terminal-only command filter.
-    expect(app).toContain('"app.window.confirmClose",');
+    // must survive the terminal-only command filter, whose allowlist lives in
+    // state/windowMode.ts (App.svelte's runCommand consults it).
+    expect(TERMINAL_ONLY_COMMANDS.has("app.window.confirmClose")).toBe(true);
   });
 
   test("closes now while reconnecting or when the window has no tabs", () => {
