@@ -152,7 +152,7 @@ describe("command launcher overlay", () => {
     );
   });
 
-  test("launcher backdrop is 80% transparent while launcher chrome stays opaque", () => {
+  test("launcher backdrop is 90% transparent while launcher chrome stays opaque", () => {
     expect(launcherRaw).toMatch(
       /\.search-row \{[\s\S]{1,240}background: color-mix\(in srgb, var\(--bg-elev\) 86%, transparent\);/,
     );
@@ -160,7 +160,7 @@ describe("command launcher overlay", () => {
       /\.results \{[\s\S]{1,240}background: color-mix\(in srgb, var\(--bg-card\) 82%, var\(--bg-elev\) 18%\);/,
     );
     expect(overlayShellRaw).toMatch(
-      /\.overlay\.top,[\s\S]{1,80}\.overlay\.center \{[\s\S]{1,160}background: color-mix\(in srgb, var\(--bg\) 20%, transparent\);[\s\S]{1,160}backdrop-filter: blur\(10px\) saturate\(1\.08\);/,
+      /\.overlay\.top,[\s\S]{1,80}\.overlay\.center \{[\s\S]{1,160}background: color-mix\(in srgb, var\(--bg\) 10%, transparent\);[\s\S]{1,160}backdrop-filter: blur\(10px\) saturate\(1\.08\);/,
     );
     expect(overlayShellRaw).toMatch(
       /\.overlay\.top \.panel,[\s\S]{1,80}\.overlay\.center \.panel \{[\s\S]{1,320}background: color-mix\(in srgb, var\(--bg-elev\) 82%, transparent\);[\s\S]{1,240}backdrop-filter: blur\(24px\) saturate\(1\.12\);/,
