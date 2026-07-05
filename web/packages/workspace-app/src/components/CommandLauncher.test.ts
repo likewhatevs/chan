@@ -75,6 +75,11 @@ async function flush(): Promise<void> {
   await tick();
 }
 
+async function typeLauncherQuery(query = "r"): Promise<void> {
+  launcherPanel.query = query;
+  await tick();
+}
+
 function openLauncher(): HTMLElement {
   const target = document.createElement("div");
   document.body.append(target);
@@ -153,12 +158,17 @@ describe("command launcher overlay", () => {
     expect(target.querySelector(".launcher")).toBeNull();
   });
 
-  test("opens focused and lists only available commands", async () => {
+  test("opens focused with only the search box, then lists available commands", async () => {
     const target = openLauncher();
     await flush();
     const input = target.querySelector("input.search") as HTMLInputElement;
     expect(input).not.toBeNull();
     expect(document.activeElement).toBe(input);
+    expect(input.getAttribute("aria-expanded")).toBe("false");
+    expect(rowTitles(target)).toEqual([]);
+
+    await typeLauncherQuery();
+    expect(input.getAttribute("aria-expanded")).toBe("true");
     const titles = rowTitles(target);
     expect(titles).toContain("Search");
     expect(titles).toContain("New file");
@@ -169,6 +179,7 @@ describe("command launcher overlay", () => {
   test("sorts sections and rows alphabetically", async () => {
     const target = openLauncher();
     await flush();
+    await typeLauncherQuery();
     expect(groupLabels(target)).toEqual(["Editor", "File Browser", "Global"]);
     expect(rowTitlesInGroup(target, "File Browser")).toEqual([
       "Alpha browser",
@@ -180,12 +191,14 @@ describe("command launcher overlay", () => {
     setActiveBrowserTab();
     const target = openLauncher();
     await flush();
+    await typeLauncherQuery();
     expect(groupLabels(target)).toEqual(["File Browser", "Editor", "Global"]);
   });
 
   test("shows the current chord next to a chorded command", async () => {
     const target = openLauncher();
     await flush();
+    await typeLauncherQuery("search");
     const searchRow = [...target.querySelectorAll(".row")].find(
       (r) => r.querySelector(".title")?.textContent === "Search",
     ) as HTMLElement;
@@ -202,9 +215,26 @@ describe("command launcher overlay", () => {
     expect(rowTitles(target)).toEqual(["New file"]);
   });
 
+  test("clearing the query closes results and returns to the centered state", async () => {
+    const target = openLauncher();
+    await flush();
+    const input = target.querySelector("input.search") as HTMLInputElement;
+
+    await typeLauncherQuery("new");
+    expect(target.querySelector(".results")).not.toBeNull();
+    expect(target.querySelector(".panel.lifted")).not.toBeNull();
+    expect(input.getAttribute("aria-expanded")).toBe("true");
+
+    await typeLauncherQuery("");
+    expect(target.querySelector(".results")).toBeNull();
+    expect(target.querySelector(".panel.lifted")).toBeNull();
+    expect(input.getAttribute("aria-expanded")).toBe("false");
+  });
+
   test("arrows move the highlight and aria-activedescendant", async () => {
     const target = openLauncher();
     await flush();
+    await typeLauncherQuery();
     const input = target.querySelector("input.search") as HTMLInputElement;
     const launcher = target.querySelector(".launcher") as HTMLElement;
     const rows = () => [...target.querySelectorAll(".row")];
@@ -223,6 +253,7 @@ describe("command launcher overlay", () => {
   test("Enter runs the highlighted command and closes", async () => {
     const target = openLauncher();
     await flush();
+    await typeLauncherQuery("new");
     const launcher = target.querySelector(".launcher") as HTMLElement;
     launcher.dispatchEvent(
       new KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
@@ -236,6 +267,7 @@ describe("command launcher overlay", () => {
   test("clicking a row runs it and closes", async () => {
     const target = openLauncher();
     await flush();
+    await typeLauncherQuery("new");
     const newFileRow = [...target.querySelectorAll(".row")].find(
       (r) => r.querySelector(".title")?.textContent === "New file",
     ) as HTMLElement;

@@ -40,6 +40,7 @@
     onBackdropContextMenu,
     width,
     align = "stretch",
+    lifted = false,
     children,
   }: {
     id: OverlayId;
@@ -49,8 +50,11 @@
     width?: string;
     // Vertical anchoring. "stretch" fills the viewport height (the
     // full-height overlays). "top" pins an auto-height panel near the
-    // top, for a Spotlight-style bubble that grows with its content.
-    align?: "stretch" | "top";
+    // top. "center" places an auto-height panel in the viewport center.
+    align?: "stretch" | "top" | "center";
+    // Centered auto-height overlays can opt into a lifted resting
+    // position when their content expands below the main input.
+    lifted?: boolean;
     children: Snippet;
   } = $props();
 
@@ -88,12 +92,14 @@
   <div
     class="overlay"
     class:top={align === "top"}
+    class:center={align === "center"}
     style="z-index: {zIndex};"
     onclick={onClose}
     oncontextmenu={onContextMenu}
   >
     <div
       class="panel"
+      class:lifted
       style="width: {resolvedWidth};"
       onclick={(e) => e.stopPropagation()}
       role="dialog"
@@ -141,12 +147,20 @@
        silently no-op and overlays look stuck. */
     cursor: pointer;
   }
-  /* Top-anchored variant: the panel takes its content height and pins
-     near the top (below the notch on iOS, a comfortable drop on
-     desktop). Used by the Spotlight-style command launcher. */
+  /* Auto-height variants: the panel takes its content height instead
+     of stretching to fill the viewport. */
   .overlay.top {
     align-items: flex-start;
     padding-top: max(env(safe-area-inset-top, 0px), 10vh);
+  }
+  .overlay.center {
+    align-items: center;
+  }
+  .overlay.top,
+  .overlay.center {
+    background: color-mix(in srgb, var(--bg) 28%, transparent);
+    -webkit-backdrop-filter: blur(10px) saturate(1.08);
+    backdrop-filter: blur(10px) saturate(1.08);
   }
   .panel {
     background: var(--bg-elev);
@@ -176,6 +190,32 @@
     transform: scale(1.005);
     box-shadow: 0 16px 50px rgba(0, 0, 0, 0.52);
   }
+  .overlay.top .panel,
+  .overlay.center .panel {
+    background: color-mix(in srgb, var(--bg-elev) 82%, transparent);
+    border-color: color-mix(in srgb, var(--border) 72%, transparent);
+    border-radius: 30px;
+    box-shadow:
+      0 22px 70px rgba(0, 0, 0, 0.38),
+      0 1px 0 color-mix(in srgb, var(--text) 12%, transparent) inset;
+    -webkit-backdrop-filter: blur(24px) saturate(1.12);
+    backdrop-filter: blur(24px) saturate(1.12);
+    animation: spotlight-pop 300ms cubic-bezier(0.2, 0.85, 0.22, 1.1);
+  }
+  .overlay.center .panel {
+    transform-origin: center;
+  }
+  .overlay.top .panel:hover,
+  .overlay.center .panel:hover {
+    transform: none;
+    box-shadow:
+      0 24px 76px rgba(0, 0, 0, 0.4),
+      0 1px 0 color-mix(in srgb, var(--text) 12%, transparent) inset;
+  }
+  .overlay.center .panel.lifted,
+  .overlay.center .panel.lifted:hover {
+    transform: translateY(-9vh);
+  }
   @keyframes overlay-pop {
     0% {
       opacity: 0;
@@ -186,12 +226,32 @@
       transform: scale(1);
     }
   }
+  @keyframes spotlight-pop {
+    0% {
+      opacity: 0;
+      transform: translateY(-10px) scaleX(1.08) scaleY(0.96);
+      filter: blur(14px);
+    }
+    100% {
+      opacity: 1;
+      transform: translateY(0) scaleX(1) scaleY(1);
+      filter: blur(0);
+    }
+  }
   @media (prefers-reduced-motion: reduce) {
     .panel,
-    .panel:hover {
+    .panel:hover,
+    .overlay.top .panel,
+    .overlay.top .panel:hover,
+    .overlay.center .panel,
+    .overlay.center .panel:hover {
       animation: none;
       transition: none;
       transform: none;
+    }
+    .overlay.center .panel.lifted,
+    .overlay.center .panel.lifted:hover {
+      transform: translateY(-9vh);
     }
   }
 </style>

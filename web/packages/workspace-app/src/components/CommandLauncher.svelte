@@ -1,10 +1,10 @@
 <script lang="ts">
-  // The Spotlight-style command launcher (Cmd+K / Ctrl+Alt+K). A top-anchored bubble
-  // over OverlayShell: one search input plus a categorized, type-ahead
-  // filtered list of every command available in the current window and
-  // active surface. Keyboard-first: the input holds focus, arrows move a
-  // highlight, Enter runs, Esc dismisses through the shared overlay
-  // stack. Chorded commands show their current chord read-only.
+  // The Spotlight-style command launcher (Cmd+K / Ctrl+Alt+K). A centered
+  // search capsule over OverlayShell: typing lifts it and opens a categorized,
+  // type-ahead filtered list of every command available in the current window
+  // and active surface. Keyboard-first: the input holds focus, arrows move a
+  // highlight, Enter runs, Esc dismisses through the shared overlay stack.
+  // Chorded commands show their current chord read-only.
   //
   // Focus discipline OverlayShell lacks: focus the input on open, trap
   // Tab inside the panel, and restore focus to the previously-focused
@@ -12,6 +12,19 @@
   // command's action owns focus next).
 
   import { tick } from "svelte";
+  import {
+    BarChart2,
+    ChevronRight,
+    Command as CommandIcon,
+    FilePlus,
+    FileText,
+    Folder,
+    Network,
+    Search as SearchIcon,
+    Settings2,
+    Shapes,
+    Terminal,
+  } from "lucide-svelte";
   import OverlayShell from "./OverlayShell.svelte";
   import { launcherPanel, closeCommandLauncher } from "../state/store.svelte";
   import {
@@ -28,6 +41,31 @@
 
   const LIST_ID = "command-launcher-list";
   const optionId = (i: number): string => `command-launcher-opt-${i}`;
+  type IconComponent = typeof SearchIcon;
+  const categoryIcons: Record<CommandCategory, IconComponent> = {
+    Global: CommandIcon,
+    Workspace: Folder,
+    Search: SearchIcon,
+    Tabs: FilePlus,
+    Panes: Shapes,
+    Editor: FileText,
+    "File Browser": Folder,
+    Terminal,
+    Dashboard: BarChart2,
+    Graph: Network,
+  };
+  const namedIcons: Record<string, IconComponent> = {
+    command: CommandIcon,
+    dashboard: BarChart2,
+    file: FileText,
+    folder: Folder,
+    graph: Network,
+    panes: Shapes,
+    search: SearchIcon,
+    settings: Settings2,
+    tabs: FilePlus,
+    terminal: Terminal,
+  };
 
   let inputEl = $state<HTMLInputElement>();
   let highlight = $state(0);
@@ -88,6 +126,7 @@
   type ScoredCommand = { cmd: Command; score: number };
 
   const ctx = $derived(commandContext());
+  const hasQuery = $derived(launcherPanel.query.trim().length > 0);
 
   function compareText(a: string, b: string): number {
     return (
@@ -133,12 +172,18 @@
     return compareText(a, b);
   }
 
+  function iconFor(cmd: Command): IconComponent {
+    if (cmd.icon) return namedIcons[cmd.icon] ?? categoryIcons[cmd.category];
+    return categoryIcons[cmd.category];
+  }
+
   // Filtered, category-grouped rows. Categories and rows sort
   // alphabetically, with the active tab's matching category pinned first.
   // Each row carries its flat index so arrow navigation and
   // aria-activedescendant span groups in order.
   const groups = $derived.by<Group[]>(() => {
     const query = launcherPanel.query.trim().toLowerCase();
+    if (query === "") return [];
     const scored = availableCommands(ctx)
       .map((cmd) => ({ cmd, score: commandScore(cmd, query) }))
       .filter((x): x is { cmd: Command; score: number } => x.score !== null);
@@ -241,56 +286,72 @@
   id="launcher"
   open={launcherPanel.open}
   onClose={closeCommandLauncher}
-  align="top"
-  width="min(640px, calc(100vw - 32px))"
+  align="center"
+  lifted={hasQuery}
+  width="min(760px, calc(100vw - 32px))"
 >
   <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div class="launcher" onkeydown={onKeydown}>
-    <input
-      class="search"
-      bind:this={inputEl}
-      bind:value={launcherPanel.query}
-      type="text"
-      role="combobox"
-      aria-expanded="true"
-      aria-controls={LIST_ID}
-      aria-activedescendant={flat.length ? optionId(highlight) : undefined}
-      aria-autocomplete="list"
-      aria-label="Search commands"
-      placeholder="Type a command"
-      autocomplete="off"
-      autocorrect="off"
-      autocapitalize="off"
-      spellcheck="false"
-    />
-    <div class="results" id={LIST_ID} role="listbox" aria-label="Commands">
-      {#if flat.length === 0}
-        <div class="empty">No commands</div>
-      {:else}
-        {#each groups as group (group.category)}
-          <div class="group" role="group" aria-label={group.category}>
-            <div class="group-label">{group.category}</div>
-            {#each group.rows as row (row.cmd.id + "␟" + row.cmd.title)}
-              {@const chord = chordFor(row.cmd.id)}
-              <!-- svelte-ignore a11y_click_events_have_key_events -->
-              <div
-                class="row"
-                class:active={row.index === highlight}
-                id={optionId(row.index)}
-                role="option"
-                tabindex="-1"
-                aria-selected={row.index === highlight}
-                onclick={() => run(row.cmd)}
-                onmouseenter={() => (highlight = row.index)}
-              >
-                <span class="title">{row.cmd.title}</span>
-                {#if chord}<span class="chord">{chord}</span>{/if}
-              </div>
-            {/each}
-          </div>
-        {/each}
-      {/if}
+  <div class="launcher" class:has-results={hasQuery} onkeydown={onKeydown}>
+    <div class="search-row">
+      <SearchIcon size={28} strokeWidth={1.45} aria-hidden="true" />
+      <input
+        class="search"
+        bind:this={inputEl}
+        bind:value={launcherPanel.query}
+        type="text"
+        role="combobox"
+        aria-expanded={hasQuery}
+        aria-controls={LIST_ID}
+        aria-activedescendant={flat.length ? optionId(highlight) : undefined}
+        aria-autocomplete="list"
+        aria-label="Search commands"
+        placeholder="Search"
+        autocomplete="off"
+        autocorrect="off"
+        autocapitalize="off"
+        spellcheck="false"
+      />
     </div>
+    {#if hasQuery}
+      <div class="results" id={LIST_ID} role="listbox" aria-label="Commands">
+        {#if flat.length === 0}
+          <div class="empty">No commands</div>
+        {:else}
+          {#each groups as group (group.category)}
+            <div class="group" role="group" aria-label={group.category}>
+              <div class="group-label">{group.category}</div>
+              {#each group.rows as row (row.cmd.id + "␟" + row.cmd.title)}
+                {@const chord = chordFor(row.cmd.id)}
+                {@const Icon = iconFor(row.cmd)}
+                <!-- svelte-ignore a11y_click_events_have_key_events -->
+                <div
+                  class="row"
+                  class:active={row.index === highlight}
+                  id={optionId(row.index)}
+                  role="option"
+                  tabindex="-1"
+                  aria-selected={row.index === highlight}
+                  onclick={() => run(row.cmd)}
+                  onmouseenter={() => (highlight = row.index)}
+                >
+                  <span class="row-icon">
+                    <Icon size={21} strokeWidth={1.6} aria-hidden="true" />
+                  </span>
+                  <span class="row-copy">
+                    <span class="title">{row.cmd.title}</span>
+                    <span class="description">{row.cmd.category}</span>
+                  </span>
+                  {#if chord}<span class="chord">{chord}</span>{/if}
+                  <span class="chevron">
+                    <ChevronRight size={20} strokeWidth={1.8} aria-hidden="true" />
+                  </span>
+                </div>
+              {/each}
+            </div>
+          {/each}
+        {/if}
+      </div>
+    {/if}
   </div>
 </OverlayShell>
 
@@ -300,31 +361,46 @@
     flex-direction: column;
     min-height: 0;
     max-height: min(70vh, 560px);
+    color: var(--text);
+  }
+  .search-row {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    height: 66px;
+    padding: 0 22px;
+    background: color-mix(in srgb, var(--bg-elev) 86%, transparent);
+    color: color-mix(in srgb, var(--text) 82%, transparent);
   }
   .search {
-    flex: 0 0 auto;
+    flex: 1 1 auto;
+    min-width: 0;
     box-sizing: border-box;
     width: 100%;
-    padding: 16px 18px;
+    height: 100%;
+    padding: 0;
     border: none;
-    border-bottom: 1px solid var(--border);
     background: transparent;
     color: var(--text);
-    font-size: 17px;
+    font-size: 24px;
     line-height: 1.3;
     outline: none;
   }
   .search::placeholder {
-    color: var(--text-secondary);
+    color: color-mix(in srgb, var(--text-secondary) 82%, transparent);
   }
   .results {
     flex: 1 1 auto;
     min-height: 0;
     overflow-y: auto;
-    padding: 6px;
+    padding: 8px;
+    border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+    background: color-mix(in srgb, var(--bg-card) 82%, var(--bg-elev) 18%);
+    animation: results-open 180ms ease-out;
   }
   .empty {
-    padding: 18px;
+    padding: 22px;
     text-align: center;
     color: var(--text-secondary);
     font-size: 13px;
@@ -333,7 +409,7 @@
     margin-top: 4px;
   }
   .group-label {
-    padding: 6px 10px 2px;
+    padding: 7px 12px 4px;
     font-size: 11px;
     font-weight: 600;
     letter-spacing: 0.04em;
@@ -343,29 +419,60 @@
   .row {
     display: flex;
     align-items: center;
-    justify-content: space-between;
+    justify-content: flex-start;
     gap: 12px;
-    padding: 8px 10px;
-    border-radius: 6px;
+    min-height: 48px;
+    padding: 7px 10px;
+    border-radius: 14px;
     cursor: pointer;
     color: var(--text);
+    transition:
+      background-color 140ms ease,
+      box-shadow 140ms ease,
+      transform 140ms ease;
   }
   .row:hover {
-    background: var(--hover-bg);
+    background: var(--bg-elev);
+    box-shadow: 0 8px 22px rgba(0, 0, 0, 0.16);
   }
-  /* Keyboard highlight is a neutral focus box so it follows the app
-     chrome in both light and dark themes. */
   .row.active {
-    background: var(--hover-bg);
-    background: color-mix(in srgb, var(--text) 10%, transparent);
+    background: var(--bg-elev);
     color: var(--text);
-    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 22%, transparent);
+    box-shadow:
+      0 8px 22px rgba(0, 0, 0, 0.16),
+      inset 0 0 0 1px color-mix(in srgb, var(--text) 18%, transparent);
+  }
+  .row-icon {
+    flex: 0 0 auto;
+    width: 34px;
+    height: 34px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 999px;
+    color: var(--text);
+    background: color-mix(in srgb, var(--text) 8%, transparent);
+  }
+  .row-copy {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
   }
   .title {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
     font-size: 14px;
+    font-weight: 600;
+  }
+  .description {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text-secondary);
+    font-size: 12px;
   }
   .chord {
     flex: 0 0 auto;
@@ -381,5 +488,49 @@
     border-color: color-mix(in srgb, var(--text) 28%, transparent);
     background: color-mix(in srgb, var(--bg) 75%, transparent);
     color: var(--text-secondary);
+  }
+  .chevron {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-secondary);
+    opacity: 0;
+    transform: translateX(-4px);
+    transition:
+      opacity 140ms ease,
+      transform 140ms ease;
+  }
+  .row:hover .chevron,
+  .row.active .chevron {
+    opacity: 1;
+    transform: translateX(0);
+  }
+  @keyframes results-open {
+    0% {
+      opacity: 0;
+      max-height: 0;
+      transform: translateY(-8px);
+    }
+    100% {
+      opacity: 1;
+      max-height: min(70vh, 494px);
+      transform: translateY(0);
+    }
+  }
+  @media (max-width: 560px) {
+    .search-row {
+      height: 60px;
+      padding: 0 16px;
+    }
+    .search {
+      font-size: 21px;
+    }
+    .description {
+      display: none;
+    }
+    .chord {
+      display: none;
+    }
   }
 </style>
