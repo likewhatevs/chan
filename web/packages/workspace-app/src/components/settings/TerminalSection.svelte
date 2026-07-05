@@ -3,7 +3,7 @@
   // are spawn-time, so a change applies to newly spawned terminals. The
   // scrollback slider and the free-text TERM field debounce their
   // writes. Terminal font selection (with its font download) stays on
-  // the terminal back-of-pane card this round.
+  // the terminal back-of-pane card.
 
   import type { Preferences } from "../../api/types";
   import type { CommitFn } from "./commit";
