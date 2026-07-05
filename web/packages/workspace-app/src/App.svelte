@@ -32,6 +32,7 @@
   import PromptModal from "./components/PromptModal.svelte";
   import SearchPanel from "./components/SearchPanel.svelte";
   import CommandLauncher from "./components/CommandLauncher.svelte";
+  import SettingsOverlay from "./components/SettingsOverlay.svelte";
   import ImportContactsModal from "./components/ImportContactsModal.svelte";
   import Workspace from "./components/Workspace.svelte";
   import {
@@ -60,6 +61,7 @@
     scheduleSessionSave,
     searchPanel,
     launcherPanel,
+    settingsPanel,
     importContactsPanel,
     closeImportContacts,
     toggleCommandLauncher,
@@ -286,6 +288,7 @@
   $effect(() => {
     void searchPanel.open;
     void launcherPanel.open;
+    void settingsPanel.open;
     syncOverlayStack();
   });
 
@@ -1471,6 +1474,7 @@
 <WorkspaceWarningsModal />
 <SearchPanel />
 <CommandLauncher />
+<SettingsOverlay />
 <ImportContactsModal
   open={importContactsPanel.open}
   defaultDir={importContactsPanel.defaultDir}
