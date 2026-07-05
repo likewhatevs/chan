@@ -127,12 +127,17 @@ describe("editor body-context vs tab-context split", () => {
     );
   });
 
-  test("Cut / Copy gate on a selection (disabled when empty)", () => {
+  test("Cut gates on a text selection; Copy also enables for a selected image", () => {
     expect(editor).toMatch(
       /onclick=\{doCutSelection\}[\s\S]{1,120}disabled=\{!bodyHasSelection\}/,
     );
+    // Copy widens to bodyCanCopy so a ring-selected image (empty text
+    // selection) can still copy its markdown source.
     expect(editor).toMatch(
-      /onclick=\{doCopySelection\}[\s\S]{1,120}disabled=\{!bodyHasSelection\}/,
+      /onclick=\{doCopySelection\}[\s\S]{1,120}disabled=\{!bodyCanCopy\}/,
+    );
+    expect(editor).toMatch(
+      /bodyCanCopy = \$derived\([\s\S]{1,80}bodyImageMarkdown !== null\)/,
     );
   });
 

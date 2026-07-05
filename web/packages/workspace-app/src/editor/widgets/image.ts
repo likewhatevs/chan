@@ -43,6 +43,7 @@ import {
 } from "../extensions/image";
 import { renderExcalidrawFile } from "../excalidraw_render";
 import { detectEmbed, embedRenderFromInfo } from "../../api/embed";
+import { writeClipboardText } from "../../api/desktop";
 import {
   clearImageDragIndicator,
   startImageDragIndicator,
@@ -159,40 +160,35 @@ const COPY_ICON_SVG =
 const CHECK_ICON_SVG =
   '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>';
 
-/// Copy the image at `src` to the clipboard at its natural pixel
-/// dimensions. Fragment hints (`#w=`, `#h=`, `#left`, `#right`) are
-/// stripped before fetching so we always pull the original asset,
-/// not a resized variant. The blob is re-encoded to PNG via canvas
-/// because PNG is the only image MIME most browsers accept on the
-/// async Clipboard API, and the canvas pass naturally captures the
-/// image at its natural width/height.
-async function copyImageToClipboard(
-  src: string,
-  fromPath: string | null,
+/// Copy an image's underlying markdown source (`![alt](src)`) to the
+/// clipboard, so a paste re-inserts the markdown and it re-renders as the
+/// image. Resolves the live Image node range from the stamped nodePos, so
+/// it survives edits that shift the doc. Desktop routes through the native
+/// text IPC (sidesteps WKWebView's async-clipboard image quirks that broke
+/// the old pixel copy); web falls back to writeText.
+async function copyImageMarkdown(
+  view: EditorView,
+  nodePos: number,
 ): Promise<void> {
-  const cleanSrc = src.split("#")[0]!;
-  const url = resolveImageSrc(cleanSrc, fromPath);
-  if (!url) throw new Error("cannot resolve image url");
-  const resp = await fetch(url);
-  if (!resp.ok) throw new Error(`fetch ${resp.status}`);
-  const blob = await resp.blob();
-  const bitmap = await createImageBitmap(blob);
-  const canvas = document.createElement("canvas");
-  canvas.width = bitmap.width;
-  canvas.height = bitmap.height;
-  const ctx = canvas.getContext("2d");
-  if (!ctx) throw new Error("no 2d context");
-  ctx.drawImage(bitmap, 0, 0);
-  bitmap.close?.();
-  const pngBlob = await new Promise<Blob>((resolve, reject) => {
-    canvas.toBlob(
-      (b) => (b ? resolve(b) : reject(new Error("toBlob failed"))),
-      "image/png",
-    );
-  });
-  await navigator.clipboard.write([
-    new ClipboardItem({ "image/png": pngBlob }),
-  ]);
+  const range = imageNodeRange(view, nodePos);
+  if (!range) throw new Error("no image source range");
+  await writeClipboardText(view.state.sliceDoc(range.from, range.to));
+}
+
+/// Markdown source of the currently ring-selected image, or null when no
+/// image is selected. An image atom selects via a visual ring (the
+/// `data-selected` attribute), not a CM text range, so the right-click
+/// Copy path reads it from here rather than the empty text selection.
+export function selectedImageMarkdown(view: EditorView): string | null {
+  const wrap = view.dom.querySelector<HTMLElement>(
+    ".cm-md-image-wrap[data-selected]",
+  );
+  const posAttr = wrap?.dataset.imagePos;
+  if (posAttr === undefined) return null;
+  const nodePos = Number(posAttr);
+  if (!Number.isFinite(nodePos)) return null;
+  const range = imageNodeRange(view, nodePos);
+  return range ? view.state.sliceDoc(range.from, range.to) : null;
 }
 
 function renderExcalidrawEmbedError(body: HTMLElement, message: string): void {
@@ -596,7 +592,7 @@ class ImageWidget extends WidgetType {
     copyBtn.addEventListener("mousedown", (e) => {
       e.preventDefault();
       e.stopPropagation();
-      void copyImageToClipboard(this.src, this.fromPath).then(
+      void copyImageMarkdown(view, this.nodePos).then(
         () => {
           copyBtn.innerHTML = CHECK_ICON_SVG;
           setTimeout(() => {
@@ -719,7 +715,7 @@ function ensureDeselectListener(view: EditorView): void {
     ) {
       if (payload && !isExcalidrawImageSrc(payload.src)) {
         e.preventDefault();
-        void copyImageToClipboard(payload.src, payload.fromPath);
+        void copyImageMarkdown(view, payload.nodePos);
       }
       return;
     }

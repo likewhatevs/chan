@@ -660,6 +660,17 @@
     return activeEditorRef()?.selectionText() ?? "";
   });
   const bodyHasSelection = $derived(bodySelectionText.trim().length > 0);
+  // A ring-selected image carries no text selection, so its markdown source
+  // is read separately (Wysiwyg only; source mode selects the image text
+  // like any other run). It gates Copy alone, not Cut / Search.
+  const bodyImageMarkdown = $derived.by<string | null>(() => {
+    void selVer;
+    void tabMenu.anchor;
+    return tab.mode === "wysiwyg"
+      ? (wysiwygRef?.selectedImageMarkdown() ?? null)
+      : null;
+  });
+  const bodyCanCopy = $derived(bodyHasSelection || bodyImageMarkdown !== null);
 
   // Expose this editor's imperative surface (code-block fold, live
   // selection) to the command catalog, keyed by tab id. Every mounted
@@ -904,7 +915,7 @@
           <button
             class="mbtn"
             onclick={doCopySelection}
-            disabled={!bodyHasSelection}
+            disabled={!bodyCanCopy}
           >
             <span class="mbtn-icon">
               <Copy size={16} strokeWidth={1.75} aria-hidden="true" />

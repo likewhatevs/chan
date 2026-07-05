@@ -35,8 +35,10 @@
     collectDocImageSrcs,
     imageCaretRedirect,
     imageDecorations,
+    selectedImageMarkdown as imageSelectedMarkdown,
     type ImageClickArgs,
   } from "./widgets/image";
+  import { writeClipboardText } from "../api/desktop";
   import { tableDecorations } from "./widgets/table";
   import { mermaidDecorations, excalidrawDecorations } from "./widgets/diagram";
   import { bubbleKeymap, bubbleListener } from "./bubbles/controller";
@@ -382,8 +384,20 @@
   export function selectionText(): string {
     return view ? clip.selectionText(view) : "";
   }
+  // Markdown source of the ring-selected image, or null. Backs the
+  // right-click Copy on an image, whose CM text selection is empty.
+  export function selectedImageMarkdown(): string | null {
+    return view ? imageSelectedMarkdown(view) : null;
+  }
   export function copySelection(): Promise<void> {
-    return view ? clip.copySelection(view, chanClipboardCtx()) : Promise.resolve();
+    if (!view) return Promise.resolve();
+    // An image atom carries an empty text selection, so fall back to its
+    // markdown source: a paste re-inserts the markdown and re-renders.
+    if (clip.selectionText(view) === "") {
+      const md = imageSelectedMarkdown(view);
+      if (md !== null) return writeClipboardText(md);
+    }
+    return clip.copySelection(view, chanClipboardCtx());
   }
   export function cutSelection(): Promise<void> {
     return view ? clip.cutSelection(view, chanClipboardCtx()) : Promise.resolve();
