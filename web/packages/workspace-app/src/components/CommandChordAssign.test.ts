@@ -24,7 +24,7 @@ function cmd(id: string, title: string): Command {
 
 // A chorded command (real SHORTCUTS id) and a chordless one.
 registerCommands([
-  cmd("app.search.toggle", "Search"),
+  cmd("app.window.reload", "Reload"),
   cmd("app.custom.demo", "Demo"),
 ]);
 
@@ -66,9 +66,9 @@ describe("CommandChordAssign", () => {
   });
 
   test("shows the built-in chord for a chorded command", () => {
-    const target = mountAssign(cmd("app.search.toggle", "Search"));
+    const target = mountAssign(cmd("app.window.reload", "Reload"));
     const btn = target.querySelector(".chord-btn") as HTMLElement;
-    expect(btn.textContent?.trim()).toBe("Cmd+S");
+    expect(btn.textContent?.trim()).toBe("Cmd+R");
     expect(target.querySelector(".reset")).toBeNull();
   });
 
@@ -96,32 +96,32 @@ describe("CommandChordAssign", () => {
   });
 
   test("a conflicting chord is reported and not assigned", async () => {
-    // Search already holds Cmd+S (its built-in); try to bind it to Demo.
+    // Reload already holds Cmd+R (its built-in); try to bind it to Demo.
     const command = cmd("app.custom.demo", "Demo");
     const target = mountAssign(command);
     (target.querySelector(".chord-btn") as HTMLElement).click();
     await flush();
 
-    key(target, { key: "s", metaKey: true });
+    key(target, { key: "r", metaKey: true });
     await flush();
 
     const capture = target.querySelector(".capture") as HTMLElement;
     expect(capture).not.toBeNull(); // still capturing, not committed
     expect(capture.classList.contains("conflict")).toBe(true);
-    expect(capture.textContent).toContain("In use by Search");
+    expect(capture.textContent).toContain("In use by Reload");
     expect(overrideChordFor("app.custom.demo")).toBeUndefined();
   });
 
   test("reset clears the override back to the built-in", async () => {
-    assignOverride("app.search.toggle", "Mod+J");
-    const target = mountAssign(cmd("app.search.toggle", "Search"));
+    assignOverride("app.window.reload", "Mod+J");
+    const target = mountAssign(cmd("app.window.reload", "Reload"));
     expect((target.querySelector(".chord-btn") as HTMLElement).textContent?.trim()).toBe(
       "Cmd+J",
     );
     (target.querySelector(".reset") as HTMLElement).click();
     await flush();
-    expect(overrideChordFor("app.search.toggle")).toBeUndefined();
-    expect(chordFor("app.search.toggle")).toBe("Cmd+S");
+    expect(overrideChordFor("app.window.reload")).toBeUndefined();
+    expect(chordFor("app.window.reload")).toBe("Cmd+R");
   });
 
   test("an explicit slot assigns that OS only, leaving the client slot alone", async () => {

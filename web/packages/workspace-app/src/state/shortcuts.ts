@@ -4,8 +4,7 @@
 //   1. App.svelte's `onWindowKey` (browser keymap).
 //   2. chan-desktop's KEY_BRIDGE_JS (native keymap; rebroadcasts as
 //      `chan:command` events that chan handles).
-//   3. The empty-pane background table.
-//   4. crates/chan/src/lib.rs SERVE_LONG_ABOUT (the `chan open
+//   3. crates/chan/src/lib.rs SERVE_LONG_ABOUT (the `chan open
 //      --help` text). Resync via `node web/packages/workspace-app/scripts/shortcuts-table.mjs`.
 //
 // Chord grammar: a `+`-separated list of modifier tokens followed by
@@ -78,20 +77,6 @@ export type Shortcut = {
 /// The complete chord registry. Order in this list is the order the
 /// table renders rows within each group.
 export const SHORTCUTS: readonly Shortcut[] = [
-  // App-level navigation
-  //
-  // Cmd+, flips the focused pane (Terminal / Editor / Graph /
-  // FB / Dashboard) to its back-of-card config surface via
-  // `flipHybrid(layout.activePaneId)`. Press again to flip back.
-  // The macOS preferences convention motivates this chord.
-  {
-    id: "app.settings.toggle",
-    label: "Flip focused Hybrid",
-    web: "Mod+,",
-    native: "Mod+,",
-    group: "App",
-    escapeTerminal: true,
-  },
   // Command launcher: Cmd+K on native macOS, Ctrl+Alt+K on web and
   // on native Linux / Windows. The off-mac chord avoids stealing
   // plain Ctrl+K from readline shells.
@@ -101,46 +86,6 @@ export const SHORTCUTS: readonly Shortcut[] = [
     web: "Ctrl+Alt+K",
     native: "Mod+K",
     group: "App",
-    escapeTerminal: true,
-  },
-  // Team Work chord: Mod+P native / Cmd+Alt+P web-Mac so the
-  // spawn-chord family (Cmd+T/O/P, Cmd+Shift+M) reads uniformly.
-  // Hybrid Nav `p` covers Win/Linux web where Cmd+P is the
-  // browser's print dialog and Cmd+Alt+P isn't available.
-  {
-    id: "app.terminal.teamWork",
-    label: "Team Work",
-    web: "Cmd+Alt+P",
-    native: "Mod+P",
-    group: "App",
-    note: "macOS web + native everywhere; all platforms via Mod+. p (Hybrid Nav)",
-    escapeTerminal: true,
-  },
-  // Broadcast-input toggle for the active terminal (mirrors iTerm).
-  // Native only: cmd+shift+i is the browser DevTools chord on the web
-  // build, so there is no `web` binding. `Mod` renders Cmd on macOS /
-  // Ctrl on Linux+Windows, and KEY_BRIDGE_JS fires on both mods (its
-  // DevTools chord moved to the Alt variant), so it works on every
-  // desktop platform.
-  {
-    id: "app.terminal.broadcastToggle",
-    label: "Toggle broadcast to all terminals",
-    native: "Mod+Shift+I",
-    group: "App",
-    note: "native only (cmd/ctrl+shift+i is the browser DevTools chord on web)",
-    escapeTerminal: true,
-  },
-  // File-browser top-level chord. Native uses Cmd+O; web fallback
-  // is Cmd+Alt+O because the browser owns Cmd+O for Open File on
-  // Mac. Hybrid Nav `o` gives every platform a reachable chord
-  // even when Cmd+Alt+O isn't bound on Win/Linux.
-  {
-    id: "app.files.toggle",
-    label: "File browser",
-    web: "Cmd+Alt+O",
-    native: "Mod+O",
-    group: "App",
-    note: "macOS web + native everywhere; all platforms via Mod+. o (Hybrid Nav)",
     escapeTerminal: true,
   },
   // File-browser destructive delete. Bare Backspace (the Mac "delete"
@@ -158,33 +103,19 @@ export const SHORTCUTS: readonly Shortcut[] = [
     native: "Backspace",
     group: "File",
   },
-  // Graph top-level chord. Context-aware spawn: the focused doc / terminal
-  // cwd seeds the graph's scope. Native and web share the same chord because
-  // browsers don't reserve Cmd+Shift+M. Hybrid Nav `m` is the fallback
-  // discoverability path; the "Graph from here" inspector action spawns a new
-  // graph tab.
-  {
-    id: "app.graph.toggle",
-    label: "Graph",
-    web: "Mod+Shift+M",
-    native: "Mod+Shift+M",
-    group: "App",
-    note: "or Mod+. M (Hybrid Nav)",
-    escapeTerminal: true,
-  },
-  // New terminal in the active pane as a direct chord. Browsers
-  // reserve Cmd+T at the OS level, so the web variant uses
-  // Cmd+Alt+T (Mac only). Ctrl+Alt+T on Win/Linux web is owned
-  // by `app.tab.reopenClosed`, so Pane Mode is the fallback there.
-  // Hybrid Nav `t` is the universal chord on every platform,
-  // surfaced in the PaneModeHelp cheatsheet as an alias for `1`.
+  // New terminal in the active pane as a direct chord. Cmd+T on the macOS
+  // desktop; Ctrl+Shift+T everywhere else (Linux / Windows desktop and every
+  // browser), because plain Cmd+T / Ctrl+T is a new-tab or terminal chord. On
+  // a browser Ctrl+Shift+T is the reopen-closed-tab chord, so browser clients
+  // rebind; the desktop is the primary target. The off-mac native divergence
+  // lives in `osChord`. Hybrid Nav `t` remains a universal alternate.
   {
     id: "app.terminal.toggle",
     label: "New terminal",
-    web: "Cmd+Alt+T",
+    web: "Ctrl+Shift+T",
     native: "Mod+T",
     group: "App",
-    note: "macOS web + native everywhere; all platforms via Mod+. t (Hybrid Nav)",
+    note: "Cmd+T on macOS desktop; or Mod+. t (Hybrid Nav)",
     escapeTerminal: true,
   },
   // Mod+. is not browser-reserved on macOS, so it survives both
@@ -219,38 +150,6 @@ export const SHORTCUTS: readonly Shortcut[] = [
     group: "App",
     note: "Ctrl+Shift+R on Linux / Windows",
     escapeTerminal: true,
-  },
-  // New Draft: creates a fresh draft dir under the configured
-  // in-workspace Drafts folder (default `.Drafts`) and opens
-  // `draft.md` in the Hybrid Editor. chan-desktop's "New Window"
-  // accelerator is
-  // Cmd+Shift+N, leaving plain Cmd+N for this SPA handler.
-  {
-    id: "app.draft.new",
-    label: "New draft",
-    web: "Mod+N",
-    native: "Mod+N",
-    group: "App",
-    escapeTerminal: true,
-  },
-  // Manual screensaver lock. Routes through `screensaver.svelte::
-  // lockNow()` which sets `locked=true`; the App-root
-  // `ScreensaverOverlay` covers the SPA. Surfaced only via the
-  // Hybrid Nav chain so plain Cmd+L stays free for the browser
-  // location bar.
-  {
-    id: "app.screensaver.lock",
-    label: "Lock screen",
-    web: "Mod+. L",
-    native: "Mod+. L",
-    group: "App",
-  },
-  {
-    id: "app.pane.flip",
-    label: "Flip Hybrid",
-    web: "Mod+. Tab",
-    native: "Mod+. Tab",
-    group: "Panes",
   },
   // Pane nav splits per platform. Desktop-native keeps Cmd+[/]
   // (no browser chrome to fight). The web build uses Alt+[/]
@@ -294,43 +193,18 @@ export const SHORTCUTS: readonly Shortcut[] = [
     native: "Mod+Shift+/",
     group: "Panes",
   },
-  {
-    id: "app.pane.closeTabs",
-    label: "Close all tabs in pane",
-    web: "Mod+. x",
-    native: "Mod+. x",
-    group: "Panes",
-  },
-  {
-    id: "app.pane.kill",
-    label: "Kill pane",
-    web: "Mod+. Backspace",
-    native: "Mod+. Backspace",
-    group: "Panes",
-  },
-  // Mod+W closes the ACTIVE pane only when it is an EMPTY pane; with
-  // tabs present the chord falls through untouched (browser tab close
-  // on web, native window close on desktop). The conditional dispatch
-  // lives in App.svelte's onWindowKey.
-  {
-    id: "app.pane.closeEmpty",
-    label: "Close empty pane",
-    web: "Mod+W",
-    native: "Mod+W",
-    group: "Panes",
-    note: "empty panes only; otherwise the browser / window close fires",
-  },
-  // The explicit "close this window" action. The browser owns Ctrl+Shift+W
-  // (close browser window) and Cmd+W (close tab), so there is no in-page web
-  // chord — on the web a browser tab close IS the discard. chan-desktop binds
-  // Ctrl+Shift+W and maps the OS close button here when a devserver is NOT
+  // The explicit "close this window" action. Native chord: Cmd+Shift+W on
+  // macOS, Ctrl+Shift+W on Linux / Windows. There is no in-page web chord:
+  // on the web a browser tab close IS the discard. chan-desktop binds the
+  // native chord and maps the OS close button here when a devserver is NOT
   // connected (when connected the button buries the window instead, serve.rs).
   // Drives the window-discard path (an explicit DELETE of the saved window
-  // blob), distinct from Ctrl+D (close tab) and Mod+W (close empty pane).
+  // blob), distinct from the tab-close chords (Cmd+W on macOS, Ctrl+D
+  // everywhere).
   {
     id: "app.window.close",
     label: "Close window",
-    native: "Ctrl+Shift+W",
+    native: "Mod+Shift+W",
     group: "App",
     note: "discard an empty / terminal window; buries when devserver-connected",
     escapeTerminal: true,
@@ -342,54 +216,33 @@ export const SHORTCUTS: readonly Shortcut[] = [
     native: "Esc",
     group: "App",
   },
-  // Autosave is the canonical write path (debounced on idle +
-  // tab-close + visibility hooks), so Cmd+S is free for
-  // workspace-wide search. preventDefault on web suppresses the
-  // browser save-page dialog. The stored chord is the macOS form
-  // (Cmd+S); on Linux/Windows plain Ctrl+S collides with a Claude Code
-  // chord, so search diverges to Ctrl+Shift+S there (in `osChord`, like
-  // reload). Distinct from Cmd+Shift+S strikethrough (mac, owned by the
-  // editor).
-  {
-    id: "app.search.toggle",
-    label: "Search",
-    web: "Mod+S",
-    native: "Mod+S",
-    group: "App",
-    note: "Ctrl+Shift+S on Linux / Windows",
-    escapeTerminal: true,
-  },
-  // Dashboard direct chord, OUT of Hybrid Nav (it was the only surface still
-  // mixed with it). Native (Tauri webview): Mod+Shift+D (Cmd+Shift+D mac /
-  // Ctrl+Shift+D linux), free since there is no browser chrome to fight. Web:
-  // Alt+Shift+D, because Cmd/Ctrl+Shift+D is the browser's "bookmark all tabs"
-  // which page JS cannot reliably preventDefault (the same web-vs-native split
-  // as tab/pane nav). escapeTerminal so the chord fires from a focused
-  // terminal. Mod+. i (Hybrid Nav) + the hamburger remain as alternate paths.
-  {
-    id: "app.dashboard.open",
-    label: "Dashboard",
-    web: "Alt+Shift+D",
-    native: "Mod+Shift+D",
-    group: "App",
-    note: "or Mod+. i (Hybrid Nav)",
-    escapeTerminal: true,
-  },
   // Tab navigation
+  //
+  // Close tab: Cmd+W is the primary on macOS; Ctrl+D is the alternate on
+  // every platform (it works everywhere except Excalidraw, which reserves
+  // Ctrl+D for duplicate-object and wins on that tab). The mac Cmd+W primary
+  // lives in `osChord`; the stored Ctrl+D is what web and the off-mac desktop
+  // render. No escapeTerminal: Ctrl+D must still reach a focused shell as EOF.
   {
     id: "app.tab.close",
     label: "Close tab",
     web: "Ctrl+D",
     native: "Ctrl+D",
     group: "Tabs",
-    note: "Cmd+W also closes the tab on native",
+    note: "Cmd+W on macOS",
   },
+  // Reopen closed tab: Cmd+Shift+T on the macOS desktop; Ctrl+Alt+Shift+T on
+  // web and the Linux / Windows desktop, because plain Ctrl+Shift+T is the
+  // browser's own reopen-tab chord and the New-terminal desktop chord, so
+  // reopen takes the Alt form. The off-mac native divergence lives in
+  // `osChord`.
   {
     id: "app.tab.reopenClosed",
     label: "Reopen closed tab",
-    web: "Ctrl+Alt+T",
+    web: "Ctrl+Alt+Shift+T",
     native: "Mod+Shift+T",
     group: "Tabs",
+    note: "Cmd+Shift+T on macOS desktop",
   },
   {
     id: "app.tab.next",
@@ -495,21 +348,20 @@ export const SHORTCUTS: readonly Shortcut[] = [
     group: "Terminal",
     note: "Ctrl+Shift+V on Linux / Windows",
   },
-  // Rich Prompt toggle for the focused pane's active terminal
-  // (workspace windows only; no-op when the focused tab is not a
-  // terminal). Dispatched by App.svelte's onWindowKey; the terminal
-  // right-click menu mirrors it and reads its label via `chordFor`.
-  // macOS uses the physical Cmd; off macOS the Win / Super key is ruled
-  // out, so the chord diverges by surface in `osChord` (Ctrl+Shift+P
-  // native, Alt+Shift+P web — the Dashboard split). The registry stores
-  // the macOS form.
+  // Rich Prompt toggle for the focused pane's active terminal (workspace
+  // windows only; no-op when the focused tab is not a terminal). Dispatched by
+  // App.svelte's onWindowKey; the terminal right-click menu mirrors it and
+  // reads its label via `chordFor`. Cmd+Shift+P on macOS; Ctrl+Shift+P on every
+  // other surface (Linux / Windows desktop and browsers), since off macOS the
+  // Win / Super key is ruled out. On a browser Ctrl+Shift+P is the private-
+  // window chord, so browser clients rebind. The registry stores the macOS form.
   {
     id: "terminal.richPrompt",
     label: "Show/Hide Rich Prompt",
     web: "Cmd+Shift+P",
     native: "Cmd+Shift+P",
     group: "Terminal",
-    note: "Ctrl+Shift+P (desktop) / Alt+Shift+P (web) on Linux / Windows",
+    note: "Ctrl+Shift+P on Linux / Windows",
     escapeTerminal: true,
   },
   // Terminal-local find (the terminal's own find bar). Dispatched by
@@ -543,29 +395,36 @@ export function formatChord(chord: Chord, os: OS): string {
   return chord.replaceAll(/\bMod\b/g, MOD_LABEL[os]);
 }
 
-/// Shortcuts whose chord diverges by OS, not just by label (macOS keeps the
-/// stored chord; Linux / Windows get a DIFFERENT chord because the macOS one
-/// collides with a control code there).
+/// Shortcuts whose chord diverges by OS or surface, not just by label (macOS
+/// keeps the stored chord; other platforms get a DIFFERENT chord because the
+/// macOS one collides with a control code, a browser chord, or is unreachable).
 const RELOAD_SHORTCUT_ID = "app.window.reload";
-const SEARCH_SHORTCUT_ID = "app.search.toggle";
 const LAUNCHER_SHORTCUT_ID = "app.launcher.toggle";
 const TERMINAL_COPY_ID = "terminal.copy";
 const TERMINAL_PASTE_ID = "terminal.paste";
 const RICH_PROMPT_ID = "terminal.richPrompt";
+const TAB_CLOSE_ID = "app.tab.close";
+const TERMINAL_TOGGLE_ID = "app.terminal.toggle";
+const TAB_REOPEN_ID = "app.tab.reopenClosed";
 
 /// Resolve a shortcut's chord for a platform with chan's OS-level chord
 /// overrides applied. Most chords differ only by LABEL (`Mod` -> Cmd/Ctrl);
-/// a few diverge into a different chord entirely on Linux / Windows:
+/// a few diverge into a different chord entirely:
 ///   - Reload: Cmd+R (mac) vs Ctrl+Shift+R (plain Ctrl+R is the shell's
 ///     reverse-search).
-///   - Search: Cmd+S (mac) vs Ctrl+Shift+S (bare Ctrl+S collides with a
-///     Claude Code chord).
 ///   - Command launcher: Cmd+K (native macOS) vs Ctrl+Alt+K (web and
 ///     off-mac native; plain Ctrl+K is a shell editing chord).
 ///   - Terminal copy / paste: Cmd+C/V (mac) vs Ctrl+Shift+C/V (bare Ctrl+C/V
 ///     is the shell's SIGINT / EOF). TerminalTab's clipboard handler splits on
 ///     the same rule at the event layer; this keeps the displayed hint + the
 ///     help table correct per-OS.
+///   - Rich Prompt: Cmd+Shift+P (mac) vs Ctrl+Shift+P off-mac (native + web;
+///     the Win / Super key is ruled out).
+///   - Close tab: Cmd+W is the macOS-native primary; every other surface keeps
+///     the stored Ctrl+D (the alternate that works everywhere but Excalidraw).
+///   - New terminal: Cmd+T (mac native) vs Ctrl+Shift+T (off-mac native).
+///   - Reopen closed tab: Cmd+Shift+T (mac native) vs Ctrl+Alt+Shift+T
+///     (off-mac native; the web set already stores that form).
 /// This function is the ONE place OS-level divergence lives, so the escape
 /// matcher, the on-screen labels, and the help table all agree. App.svelte's
 /// keymap and chan-desktop's KEY_BRIDGE_JS branch on the same rule at the
@@ -578,20 +437,30 @@ export function osChord(
   const chord = s[platform];
   if (!chord) return undefined;
   if (s.id === RELOAD_SHORTCUT_ID && os !== "mac") return "Mod+Shift+R";
-  if (s.id === SEARCH_SHORTCUT_ID && os !== "mac") return "Mod+Shift+S";
   if (s.id === LAUNCHER_SHORTCUT_ID && platform === "native" && os !== "mac") {
     return "Ctrl+Alt+K";
   }
   if (s.id === TERMINAL_COPY_ID && os !== "mac") return "Mod+Shift+C";
   if (s.id === TERMINAL_PASTE_ID && os !== "mac") return "Mod+Shift+V";
-  // Rich Prompt: Cmd+Shift+P on macOS. Off macOS the Win / Super key is
-  // ruled out (the OS / shell eat most of those chords), so it diverges
-  // by SURFACE, mirroring the Dashboard split: native uses Ctrl+Shift+P
-  // (free in the Tauri webview), web uses Alt+Shift+P (Ctrl+Shift+P is
-  // the browser's private-window chord, unpreventable like the
-  // bookmark-all-tabs chord Dashboard dodges).
-  if (s.id === RICH_PROMPT_ID && os !== "mac") {
-    return platform === "native" ? "Mod+Shift+P" : "Alt+Shift+P";
+  // Rich Prompt: Cmd+Shift+P on macOS. Off macOS the Win / Super key is ruled
+  // out, so native and web both take Ctrl+Shift+P. On a browser that is the
+  // private-window chord, so browser clients rebind (desktop-first).
+  if (s.id === RICH_PROMPT_ID && os !== "mac") return "Mod+Shift+P";
+  // Close tab: Cmd+W is the macOS-native primary. Every other surface keeps
+  // the stored Ctrl+D (the alternate that survives everywhere but Excalidraw).
+  if (s.id === TAB_CLOSE_ID && platform === "native" && os === "mac") {
+    return "Mod+W";
+  }
+  // New terminal: Cmd+T on the macOS desktop; Ctrl+Shift+T on the Linux /
+  // Windows desktop, where bare Ctrl+T is a terminal chord.
+  if (s.id === TERMINAL_TOGGLE_ID && platform === "native" && os !== "mac") {
+    return "Mod+Shift+T";
+  }
+  // Reopen closed tab: Cmd+Shift+T on the macOS desktop; Ctrl+Alt+Shift+T on
+  // the Linux / Windows desktop, where Ctrl+Shift+T is the New-terminal chord
+  // and the browser's own reopen. The web set already stores that Alt form.
+  if (s.id === TAB_REOPEN_ID && platform === "native" && os !== "mac") {
+    return "Ctrl+Alt+Shift+T";
   }
   return chord;
 }
@@ -626,6 +495,24 @@ let overrideResolver: OverrideResolver | null = null;
 
 export function registerOverrideResolver(fn: OverrideResolver | null): void {
   overrideResolver = fn;
+}
+
+/// Runtime hook the override layer installs so a focused terminal escapes a
+/// user-assigned chord. A de-defaulted command has no `escapeTerminal`
+/// registry entry to match, so without this its assigned chord would be
+/// swallowed by xterm instead of bubbling to the App keymap. Given a captured
+/// chord in registry grammar, returns true when it maps to a user override on
+/// the current client. Injected like the resolver so `shortcuts.ts` stays free
+/// of the reactive store and the standalone table generator compiles it in
+/// isolation; with no matcher registered the override-escape path is inert.
+export type OverrideEscapeMatcher = (chord: Chord) => boolean;
+
+let overrideEscapeMatcher: OverrideEscapeMatcher | null = null;
+
+export function registerOverrideEscapeMatcher(
+  fn: OverrideEscapeMatcher | null,
+): void {
+  overrideEscapeMatcher = fn;
 }
 
 /// Return the formatted chord for a command id on the current platform
@@ -700,13 +587,16 @@ function canonicalKey(e: KeyboardEvent): string | null {
   return k;
 }
 
-/// Chord-escape lookup. Returns true when the incoming
-/// `KeyboardEvent` matches any registry entry flagged
-/// `escapeTerminal: true`. `handleTerminalKeyEvent` calls this;
-/// on true, returns `false` to xterm so the event bubbles to
-/// the App-level keymap.
+/// Chord-escape lookup. Returns true when the incoming `KeyboardEvent`
+/// matches a user-assigned override chord OR any registry entry flagged
+/// `escapeTerminal: true`. `handleTerminalKeyEvent` calls this; on true, it
+/// returns `false` to xterm so the event bubbles to the App-level keymap.
 ///
-/// Matches BOTH the platform-resolved chord AND the
+/// The override arm keeps a rebound command reachable from terminal focus even
+/// after its built-in default (and its `escapeTerminal` flag) is gone: the
+/// onWindowKey override dispatch only fires if the event first leaves xterm.
+///
+/// The registry arm matches BOTH the platform-resolved chord AND the
 /// cross-platform `Cmd+` literal alias (the registry's `Mod`
 /// expands to Cmd on Mac + Ctrl elsewhere; `Cmd+` is the
 /// literal Cmd key used by the web-fallback chords). The
@@ -716,6 +606,7 @@ function canonicalKey(e: KeyboardEvent): string | null {
 export function shouldEscapeTerminal(e: KeyboardEvent): boolean {
   const chord = chordFromEvent(e);
   if (!chord) return false;
+  if (overrideEscapeMatcher?.(chord)) return true;
   const eventTokens = canonicalChordTokens(chord);
   const platform = currentPlatform();
   for (const s of SHORTCUTS) {

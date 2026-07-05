@@ -40,17 +40,23 @@ describe("Windows shortcut labels are Ctrl-based", () => {
         osChord(SHORTCUTS.find((s) => s.id === id)!, platform, "windows")!,
         "windows",
       );
-    // Shell / app collisions → Ctrl+Shift, freeing bare Ctrl+C (SIGINT),
-    // Ctrl+R (reverse-search), and Ctrl+S (a Claude Code chord).
+    // Shell / app collisions → Ctrl+Shift, freeing bare Ctrl+C (SIGINT) and
+    // Ctrl+R (reverse-search).
     expect(pick("app.window.reload", "native")).toBe("Ctrl+Shift+R");
-    expect(pick("app.search.toggle", "native")).toBe("Ctrl+Shift+S");
     expect(pick("app.launcher.toggle", "native")).toBe("Ctrl+Alt+K");
     expect(pick("app.launcher.toggle", "web")).toBe("Ctrl+Alt+K");
     expect(pick("terminal.copy", "native")).toBe("Ctrl+Shift+C");
     expect(pick("terminal.paste", "native")).toBe("Ctrl+Shift+V");
-    // Rich Prompt: Win key ruled out → Ctrl+Shift+P native, Alt+Shift+P web.
+    // Rich Prompt: Win key ruled out → Ctrl+Shift+P on native and web alike.
     expect(pick("terminal.richPrompt", "native")).toBe("Ctrl+Shift+P");
-    expect(pick("terminal.richPrompt", "web")).toBe("Alt+Shift+P");
+    expect(pick("terminal.richPrompt", "web")).toBe("Ctrl+Shift+P");
+    // No-defaults rebinds: tab / terminal / window chords diverge on the
+    // Windows desktop. Close tab keeps its universal Ctrl+D (the mac Cmd+W
+    // primary does not apply off-mac).
+    expect(pick("app.window.close", "native")).toBe("Ctrl+Shift+W");
+    expect(pick("app.terminal.toggle", "native")).toBe("Ctrl+Shift+T");
+    expect(pick("app.tab.reopenClosed", "native")).toBe("Ctrl+Alt+Shift+T");
+    expect(pick("app.tab.close", "native")).toBe("Ctrl+D");
   });
 
   test("native (desktop) Windows has ZERO Cmd labels", () => {
@@ -60,19 +66,15 @@ describe("Windows shortcut labels are Ctrl-based", () => {
     expect(offenders).toEqual([]);
   });
 
-  test("the only web Cmd labels are the documented Mac-web spawn fallbacks", () => {
-    // These three web chords are Cmd+Alt+<key> Mac-only fallbacks (identical
-    // on Linux); on Windows the real path is Hybrid Nav (Ctrl+. <key>), and
-    // each carries a note saying so. The native column renders them as
-    // Ctrl+<key>. Not a Windows-specific regression — left as-is this phase.
+  test("no web Cmd labels remain after the no-defaults rebinds", () => {
+    // The Cmd+Alt+<key> Mac-web spawn fallbacks are gone: Team Work and File
+    // browser lost their defaults, and New terminal's web chord is now the
+    // literal Ctrl+Shift+T (desktop-first). So no web chord renders a Cmd
+    // label on Windows.
     const webCmd = windowsLabels("web")
       .filter((x) => x.label.includes("Cmd"))
       .map((x) => x.id)
       .sort();
-    expect(webCmd).toEqual([
-      "app.files.toggle",
-      "app.terminal.teamWork",
-      "app.terminal.toggle",
-    ]);
+    expect(webCmd).toEqual([]);
   });
 });

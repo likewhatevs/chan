@@ -7,13 +7,13 @@ describe("shortcut table", () => {
     expect(renderTable("native", "mac")).toMatch(/^Command launcher\s+Cmd\+K/m);
   });
 
-  // "New terminal" is a direct chord so power users can spawn a
-  // terminal without entering Pane Mode. Cmd+T on native;
-  // Cmd+Alt+T on web-Mac (Ctrl+Alt+T on Win/Linux web is owned
-  // by tab.reopenClosed).
-  test("advertises New terminal under Cmd+Alt+T (web mac)", () => {
+  // "New terminal" is a direct chord so power users can spawn a terminal
+  // without entering Pane Mode. Cmd+T on the macOS desktop; Ctrl+Shift+T on
+  // web (and the off-mac desktop) after the no-defaults round: a desktop-first
+  // literal, browser clients rebind.
+  test("advertises New terminal under Ctrl+Shift+T (web mac)", () => {
     const table = renderTable("web", "mac");
-    expect(table).toMatch(/^New terminal +Cmd\+Alt\+T\b/m);
+    expect(table).toMatch(/^New terminal +Ctrl\+Shift\+T\b/m);
   });
 
   test("advertises New terminal under Cmd+T (native mac)", () => {
@@ -46,11 +46,32 @@ describe("shortcut table", () => {
     expect(native).toMatch(/^Enter Hybrid Nav\s+Cmd\+\.$/m);
   });
 
-  test("close-tab chord is Ctrl+D on both platforms", () => {
+  // No-defaults rebind: Cmd+W is the macOS primary; Ctrl+D stays the
+  // alternate on web and the off-mac desktop.
+  test("close-tab: Ctrl+D on web, Cmd+W primary on native mac", () => {
     const web = renderTable("web", "mac");
     const native = renderTable("native", "mac");
     expect(web).toMatch(/^Close tab\s+Ctrl\+D/m);
-    expect(native).toMatch(/^Close tab\s+Ctrl\+D/m);
+    expect(native).toMatch(/^Close tab\s+Cmd\+W/m);
+  });
+
+  // Reopen closed tab rebinds off plain Ctrl+Shift+T (now the off-mac
+  // New-terminal chord and the browser's own reopen): Cmd+Shift+T on mac
+  // native, Ctrl+Alt+Shift+T on web.
+  test("reopen-closed-tab: Ctrl+Alt+Shift+T on web, Cmd+Shift+T on native mac", () => {
+    expect(renderTable("web", "mac")).toMatch(
+      /^Reopen closed tab\s+Ctrl\+Alt\+Shift\+T/m,
+    );
+    expect(renderTable("native", "mac")).toMatch(
+      /^Reopen closed tab\s+Cmd\+Shift\+T/m,
+    );
+  });
+
+  // Close window is native-only; on macOS it takes Cmd+Shift+W (Cmd+W now
+  // closes the tab).
+  test("close-window is native-only, Cmd+Shift+W on mac", () => {
+    expect(renderTable("native", "mac")).toMatch(/^Close window\s+Cmd\+Shift\+W/m);
+    expect(renderTable("web", "mac")).not.toMatch(/^Close window\b/m);
   });
 
   // Pane nav splits per platform: web uses Alt+[/] because Cmd+[/]
@@ -64,19 +85,32 @@ describe("shortcut table", () => {
     expect(native).toMatch(/^Next pane\s+Cmd\+\]/m);
   });
 
-  // Cmd+S = workspace-wide search; autosave is the canonical write
-  // path so this chord is free.
-  test("advertises Cmd+S search on both platforms", () => {
-    expect(renderTable("web", "mac")).toMatch(/^Search\s+Cmd\+S/m);
-    expect(renderTable("native", "mac")).toMatch(/^Search\s+Cmd\+S/m);
-  });
-
-  // Dashboard now has a direct chord, out of Hybrid Nav: native Cmd+Shift+D
-  // (free in the Tauri webview), web Alt+Shift+D (Cmd+Shift+D is the
-  // browser's bookmark-all on web). Mod+. i stays as an alternate path.
-  test("advertises Dashboard direct chord (native Cmd+Shift+D, web Alt+Shift+D)", () => {
-    expect(renderTable("web", "mac")).toMatch(/^Dashboard\s+Alt\+Shift\+D/m);
-    expect(renderTable("native", "mac")).toMatch(/^Dashboard\s+Cmd\+Shift\+D/m);
+  // No-defaults cleanup: these commands lost their built-in chord and no
+  // longer render a table row (each stays assignable in the config UI).
+  test("dropped-default commands have no table row", () => {
+    const dropped = [
+      "Flip focused Hybrid",
+      "Team Work",
+      "Toggle broadcast to all terminals",
+      "File browser",
+      "Graph",
+      "New draft",
+      "Lock screen",
+      "Search",
+      "Dashboard",
+      "Flip Hybrid",
+      "Close all tabs in pane",
+      "Kill pane",
+      "Close empty pane",
+    ];
+    for (const platform of ["web", "native"] as const) {
+      const table = renderTable(platform, "mac");
+      for (const label of dropped) {
+        expect(table, `${label} (${platform})`).not.toMatch(
+          new RegExp(`^${label}\\s`, "m"),
+        );
+      }
+    }
   });
 
   test("advertises editor Bold (Cmd+B) and Italic (Cmd+I)", () => {
@@ -98,15 +132,4 @@ describe("shortcut table", () => {
     expect(native).toMatch(/^Split bottom\s+Cmd\+Shift\+\//m);
   });
 
-  test("advertises Hybrid Nav close-all and kill-pane chords", () => {
-    const table = renderTable("web", "mac");
-    expect(table).toMatch(/^Close all tabs in pane\s+Cmd\+\. x/m);
-    expect(table).toMatch(/^Kill pane\s+Cmd\+\. Backspace/m);
-  });
-
-  test("advertises screen lock only through Hybrid Nav", () => {
-    const table = renderTable("web", "mac");
-    expect(table).toMatch(/^Lock screen\s+Cmd\+\. L/m);
-    expect(table).not.toMatch(/^Lock screen\s+Cmd\+L/m);
-  });
 });

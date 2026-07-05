@@ -18,6 +18,7 @@ import {
   currentPlatform,
   formatChord,
   osChord,
+  registerOverrideEscapeMatcher,
   registerOverrideResolver,
   SHORTCUTS,
   type Chord,
@@ -160,6 +161,12 @@ export function commandIdForChord(chord: Chord): string | undefined {
   }
   return undefined;
 }
+
+// A user-assigned override chord must bubble out of a focused terminal so its
+// command can fire from the onWindowKey override dispatch (a de-defaulted
+// command has no built-in `escapeTerminal` flag). Escape exactly when dispatch
+// would fire, reusing the same reverse lookup.
+registerOverrideEscapeMatcher((chord) => commandIdForChord(chord) !== undefined);
 
 // ---- persistence seam --------------------------------------------------
 //

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { chordFor } from "./shortcuts";
+import { chordFor, shouldEscapeTerminal } from "./shortcuts";
 import type { Command } from "./commands";
 import {
   assignOverride,
@@ -57,37 +57,37 @@ describe("keymap override store", () => {
   });
 
   test("assign makes chordFor resolve the override over the built-in", () => {
-    // app.search.toggle built-in is Cmd+S on web mac.
-    expect(chordFor("app.search.toggle")).toBe("Cmd+S");
-    assignOverride("app.search.toggle", "Mod+J");
-    expect(overrideChordFor("app.search.toggle")).toBe("Mod+J");
-    expect(chordFor("app.search.toggle")).toBe("Cmd+J");
+    // app.window.reload built-in is Cmd+R on web mac.
+    expect(chordFor("app.window.reload")).toBe("Cmd+R");
+    assignOverride("app.window.reload", "Mod+J");
+    expect(overrideChordFor("app.window.reload")).toBe("Mod+J");
+    expect(chordFor("app.window.reload")).toBe("Cmd+J");
   });
 
   test("clear restores the built-in chord", () => {
-    assignOverride("app.search.toggle", "Mod+J");
-    clearOverride("app.search.toggle");
-    expect(overrideChordFor("app.search.toggle")).toBeUndefined();
-    expect(chordFor("app.search.toggle")).toBe("Cmd+S");
+    assignOverride("app.window.reload", "Mod+J");
+    clearOverride("app.window.reload");
+    expect(overrideChordFor("app.window.reload")).toBeUndefined();
+    expect(chordFor("app.window.reload")).toBe("Cmd+R");
   });
 
   test("an override targets only the current client's slot", () => {
     // Assigned as a browser (web slot). A desktop mac client must not see it.
-    assignOverride("app.search.toggle", "Mod+J");
-    expect(chordFor("app.search.toggle")).toBe("Cmd+J");
+    assignOverride("app.window.reload", "Mod+J");
+    expect(chordFor("app.window.reload")).toBe("Cmd+J");
     tauri(true); // now a desktop mac client -> macos slot, unassigned
-    expect(overrideChordFor("app.search.toggle")).toBeUndefined();
-    expect(chordFor("app.search.toggle")).toBe("Cmd+S");
+    expect(overrideChordFor("app.window.reload")).toBeUndefined();
+    expect(chordFor("app.window.reload")).toBe("Cmd+R");
   });
 
   test("resolvedKeymapEntries is override-first over the SHORTCUTS baseline", () => {
-    const commands = [cmd("app.search.toggle"), cmd("app.custom.chordless")];
-    assignOverride("app.search.toggle", "Mod+J");
+    const commands = [cmd("app.window.reload"), cmd("app.custom.chordless")];
+    assignOverride("app.window.reload", "Mod+J");
     assignOverride("app.custom.chordless", "Mod+Y");
     const byId = new Map(
       resolvedKeymapEntries(commands).map((e) => [e.id, e.chord]),
     );
-    expect(byId.get("app.search.toggle")).toBe("Mod+J"); // override wins
+    expect(byId.get("app.window.reload")).toBe("Mod+J"); // override wins
     expect(byId.get("app.launcher.toggle")).toBe("Ctrl+Alt+K"); // baseline
     expect(byId.get("app.custom.chordless")).toBe("Mod+Y"); // chordless override
   });
@@ -95,16 +95,16 @@ describe("keymap override store", () => {
   test("commandIdForChord matches an override but not a bare default", () => {
     assignOverride("app.terminal.toggle", "Mod+J");
     expect(commandIdForChord("Mod+J")).toBe("app.terminal.toggle");
-    // Cmd+S is app.search.toggle's built-in default, not overridden: the
+    // Cmd+R is app.window.reload's built-in default, not overridden: the
     // compile-time branch owns it, so the override lookup must miss.
-    expect(commandIdForChord("Mod+S")).toBeUndefined();
+    expect(commandIdForChord("Mod+R")).toBeUndefined();
   });
 
   test("an override equal to the command's own default does not double-fire", () => {
-    // Assigning app.search.toggle back to its own Cmd+S must NOT surface in
+    // Assigning app.window.reload back to its own Cmd+R must NOT surface in
     // the dispatch lookup, or the default branch and this path both fire.
-    assignOverride("app.search.toggle", "Mod+S");
-    expect(commandIdForChord("Mod+S")).toBeUndefined();
+    assignOverride("app.window.reload", "Mod+R");
+    expect(commandIdForChord("Mod+R")).toBeUndefined();
   });
 
   test("serialize / hydrate round-trips and drops junk slots", () => {
@@ -132,6 +132,17 @@ describe("keymap override store", () => {
     expect(seen[0]).toEqual({ "app.search.toggle": { web: "Mod+J" } });
     expect(seen[1]).toEqual({});
   });
+
+  test("a user-assigned override chord escapes a focused terminal", () => {
+    // Importing the store registers the override-escape matcher. A de-defaulted
+    // command (search lost Cmd+S) whose new chord the user assigns must bubble
+    // out of xterm so the onWindowKey override dispatch can fire.
+    const cmdAltJ = () =>
+      new KeyboardEvent("keydown", { key: "j", metaKey: true, altKey: true });
+    expect(shouldEscapeTerminal(cmdAltJ())).toBe(false); // nothing bound to it
+    assignOverride("app.search.toggle", "Mod+Alt+J");
+    expect(shouldEscapeTerminal(cmdAltJ())).toBe(true); // override -> escapes
+  });
 });
 
 describe("per-OS slot resolution (the assignment grid)", () => {
@@ -147,22 +158,22 @@ describe("per-OS slot resolution (the assignment grid)", () => {
   });
 
   test("formattedChordForSlot renders each slot's built-in with its OS label", () => {
-    // search built-in: Cmd+S on mac; Ctrl+Shift+S off-mac (shell collision).
-    expect(formattedChordForSlot("app.search.toggle", "macos")).toBe("Cmd+S");
-    expect(formattedChordForSlot("app.search.toggle", "linux")).toBe("Ctrl+Shift+S");
-    expect(formattedChordForSlot("app.search.toggle", "windows")).toBe("Ctrl+Shift+S");
-    expect(formattedChordForSlot("app.search.toggle", "web")).toBe("Cmd+S");
+    // reload built-in: Cmd+R on mac; Ctrl+Shift+R off-mac (shell collision).
+    expect(formattedChordForSlot("app.window.reload", "macos")).toBe("Cmd+R");
+    expect(formattedChordForSlot("app.window.reload", "linux")).toBe("Ctrl+Shift+R");
+    expect(formattedChordForSlot("app.window.reload", "windows")).toBe("Ctrl+Shift+R");
+    expect(formattedChordForSlot("app.window.reload", "web")).toBe("Cmd+R");
   });
 
   test("an override renders in its slot and is independent of the others", () => {
-    assignOverride("app.search.toggle", "Mod+J", "macos");
-    expect(overrideChordForSlot("app.search.toggle", "macos")).toBe("Mod+J");
-    expect(formattedChordForSlot("app.search.toggle", "macos")).toBe("Cmd+J");
+    assignOverride("app.window.reload", "Mod+J", "macos");
+    expect(overrideChordForSlot("app.window.reload", "macos")).toBe("Mod+J");
+    expect(formattedChordForSlot("app.window.reload", "macos")).toBe("Cmd+J");
     // Other slots untouched: still their built-in.
-    expect(overrideChordForSlot("app.search.toggle", "web")).toBeUndefined();
-    expect(formattedChordForSlot("app.search.toggle", "linux")).toBe("Ctrl+Shift+S");
+    expect(overrideChordForSlot("app.window.reload", "web")).toBeUndefined();
+    expect(formattedChordForSlot("app.window.reload", "linux")).toBe("Ctrl+Shift+R");
     // A browser client (web slot) is unaffected by a macos assignment.
-    expect(formattedChordForSlot("app.search.toggle", "web")).toBe("Cmd+S");
+    expect(formattedChordForSlot("app.window.reload", "web")).toBe("Cmd+R");
   });
 
   test("formattedChordForSlot is null for an unbound chordless command", () => {
@@ -176,7 +187,7 @@ describe("per-OS slot resolution (the assignment grid)", () => {
       resolvedKeymapEntriesForSlot([], "linux").map((e) => [e.id, e.chord]),
     );
     // Off-mac divergence surfaces in the raw chord (Mod is still Mod here).
-    expect(linux.get("app.search.toggle")).toBe("Mod+Shift+S");
+    expect(linux.get("app.window.reload")).toBe("Mod+Shift+R");
     expect(linux.get("app.launcher.toggle")).toBe("Ctrl+Alt+K");
   });
 });

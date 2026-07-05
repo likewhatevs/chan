@@ -98,18 +98,10 @@ In-app keybindings (Cmd = Ctrl on Linux / Windows):
 
   App
   ---
-  Flip focused Hybrid                          Cmd+,
   Command launcher                             Ctrl+Alt+K
-  Team Work                                    Cmd+Alt+P   (macOS web + native everywhere; all platforms via Mod+. p (Hybrid Nav))
-  File browser                                 Cmd+Alt+O   (macOS web + native everywhere; all platforms via Mod+. o (Hybrid Nav))
-  Graph                                        Cmd+Shift+M   (or Mod+. M (Hybrid Nav))
-  New terminal                                 Cmd+Alt+T   (macOS web + native everywhere; all platforms via Mod+. t (Hybrid Nav))
+  New terminal                                 Ctrl+Shift+T   (Cmd+T on macOS desktop; or Mod+. t (Hybrid Nav))
   Reload window                                Cmd+R   (Ctrl+Shift+R on Linux / Windows)
-  New draft                                    Cmd+N
-  Lock screen                                  Cmd+. L
   Dismiss overlay                              Esc
-  Search                                       Cmd+S   (Ctrl+Shift+S on Linux / Windows)
-  Dashboard                                    Alt+Shift+D   (or Mod+. i (Hybrid Nav))
   
   File
   ----
@@ -118,19 +110,15 @@ In-app keybindings (Cmd = Ctrl on Linux / Windows):
   Panes
   -----
   Enter Hybrid Nav                             Cmd+.
-  Flip Hybrid                                  Cmd+. Tab
   Previous pane                                Alt+[
   Next pane                                    Alt+]
   Split right                                  Ctrl+Alt+/
   Split bottom                                 Ctrl+Alt+?
-  Close all tabs in pane                       Cmd+. x
-  Kill pane                                    Cmd+. Backspace
-  Close empty pane                             Cmd+W   (empty panes only; otherwise the browser / window close fires)
   
   Tabs
   ----
-  Close tab                                    Ctrl+D   (Cmd+W also closes the tab on native)
-  Reopen closed tab                            Ctrl+Alt+T
+  Close tab                                    Ctrl+D   (Cmd+W on macOS)
+  Reopen closed tab                            Ctrl+Alt+Shift+T   (Cmd+Shift+T on macOS desktop)
   Next tab                                     Alt+Shift+]
   Previous tab                                 Alt+Shift+[
   Jump to tab N                                Ctrl+Alt+1..9
@@ -145,7 +133,7 @@ In-app keybindings (Cmd = Ctrl on Linux / Windows):
   --------
   Copy selection                               Cmd+C   (Ctrl+Shift+C on Linux / Windows)
   Paste                                        Cmd+V   (Ctrl+Shift+V on Linux / Windows)
-  Show/Hide Rich Prompt                        Cmd+Shift+P   (Ctrl+Shift+P (desktop) / Alt+Shift+P (web) on Linux / Windows)
+  Show/Hide Rich Prompt                        Cmd+Shift+P   (Ctrl+Shift+P on Linux / Windows)
   Find in terminal                             Cmd+F
 ";
 

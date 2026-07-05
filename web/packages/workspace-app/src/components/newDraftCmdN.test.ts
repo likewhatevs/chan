@@ -16,10 +16,11 @@ describe("api.createDraft helper", () => {
 });
 
 describe("app.draft.new shortcut registry", () => {
-  test("app.draft.new bound to Mod+N (web + native)", () => {
-    expect(shortcuts).toMatch(
-      /id: "app\.draft\.new",[\s\S]*?label: "New draft",[\s\S]*?web: "Mod\+N",[\s\S]*?native: "Mod\+N",/,
-    );
+  test("app.draft.new has no built-in chord after no-defaults", () => {
+    // The Mod+N default was dropped: New draft stays reachable via Hybrid Nav
+    // and the launcher, and is assignable in the config UI, so no
+    // app.draft.new entry remains in the SHORTCUTS registry.
+    expect(shortcuts).not.toContain('id: "app.draft.new"');
   });
 });
 

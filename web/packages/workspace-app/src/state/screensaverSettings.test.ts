@@ -9,17 +9,13 @@ import dashboard from "../components/dashboard/AboutSlotConfig.svelte?raw";
 // About slot body (dashboard/AboutSlotConfig.svelte).
 
 describe("Hybrid Nav lock chord", () => {
-  test("shortcut registry advertises only Cmd+. L for screen lock", () => {
-    expect(shortcuts).toMatch(
-      /id: "app\.screensaver\.lock",[\s\S]{1,60}label: "Lock screen",[\s\S]{1,200}web: "Mod\+\. L",[\s\S]{1,80}native: "Mod\+\. L",/,
-    );
+  test("screen lock has no built-in chord in the registry (no-defaults)", () => {
+    // The Mod+. L default was dropped in the no-defaults round. Screen lock
+    // stays reachable via the Dashboard back-of-card and the launcher, and is
+    // assignable in the config UI, so no app.screensaver.lock entry remains in
+    // SHORTCUTS. Plain Mod+L is likewise never claimed.
+    expect(shortcuts).not.toContain('id: "app.screensaver.lock"');
     expect(shortcuts).not.toMatch(/web: "Mod\+L"[\s\S]{1,80}native: "Mod\+L"/);
-  });
-
-  test("shortcut group pinned", () => {
-    expect(shortcuts).toMatch(
-      /id: "app\.screensaver\.lock",[\s\S]{1,400}group: "App",/,
-    );
   });
 
   test("App.svelte runCommand branch routes app.screensaver.lock through lockNow", () => {

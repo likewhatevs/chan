@@ -14,13 +14,10 @@ describe("shortcuts.ts Hybrid Nav label casing", () => {
   });
 
   test("registry notes carry the title-case `Hybrid Nav` form", () => {
-    // Spot-check entries that confirm the rename is complete.
-    expect(shortcuts).toContain("Mod+. p (Hybrid Nav)");
-    expect(shortcuts).toContain("Mod+. o (Hybrid Nav)");
+    // Spot-check a surviving Hybrid Nav note: the spawn-alt notes went with
+    // their commands in the no-defaults round, but New terminal is kept and
+    // keeps its Mod+. t alias in the title-case form.
     expect(shortcuts).toContain("Mod+. t (Hybrid Nav)");
-    // The graph top-level chord is Cmd+Shift+M (web + native) again; its
-    // Hybrid Nav alias is Mod+. M, carried in the title-case note.
-    expect(shortcuts).toContain('note: "or Mod+. M (Hybrid Nav)"');
   });
 
   test("`Enter Hybrid Nav` label reads title-case", () => {

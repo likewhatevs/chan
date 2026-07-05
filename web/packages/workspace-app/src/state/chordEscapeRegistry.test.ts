@@ -7,29 +7,26 @@ import {
   shouldEscapeTerminal,
 } from "./shortcuts";
 
-// Chord-escape registry. Global App-group chords (Settings,
-// TeamWork, Reload, FB, Graph, NewDraft, New Terminal, Hybrid
-// Nav) carry `escapeTerminal: true`. The
-// `handleTerminalKeyEvent` xterm-`customKeyEventHandler`
-// callback consults the registry: matched events return false
-// so the chord bubbles out of xterm to the App-level keymap.
+// Chord-escape registry. Global chords that must reach the App keymap even
+// from a focused terminal (Command launcher, New terminal, Reload, Hybrid
+// Nav, Close window, Rich Prompt) carry `escapeTerminal: true`, and a
+// user-assigned override chord escapes too (covered by the override-escape
+// test in keymapOverrides.svelte.test.ts). The `handleTerminalKeyEvent`
+// xterm-`customKeyEventHandler` callback consults the registry: matched
+// events return false so the chord bubbles out of xterm to the App keymap.
 
 describe("chord-escape registry shape", () => {
   test("Shortcut type carries an optional escapeTerminal flag", () => {
     expect(shortcutsRaw).toMatch(/escapeTerminal\?: boolean;/);
   });
 
-  test("App-group chords flagged escapeTerminal=true", () => {
+  test("global chords flagged escapeTerminal=true", () => {
     const required = [
-      "app.settings.toggle",
       "app.launcher.toggle",
-      "app.terminal.teamWork",
-      "app.files.toggle",
-      "app.graph.toggle",
       "app.terminal.toggle",
       "app.pane.mode",
       "app.window.reload",
-      "app.draft.new",
+      "app.window.close",
     ];
     for (const id of required) {
       const entry = SHORTCUTS.find((s) => s.id === id);
@@ -88,16 +85,14 @@ describe("shouldEscapeTerminal lookup", () => {
     vi.unstubAllGlobals();
   });
 
-  test("Cmd+Alt+P (team work web Mac chord) escapes", () => {
-    // Test env runs as web platform (no Tauri global). Web Mac
-    // users fire the Cmd+Alt+P fallback (Cmd+P is browser-owned
-    // for the print dialog). Native chan-desktop's
-    // KEY_BRIDGE_JS handles Cmd+P → SPA itself; that path is
-    // not exercised in this test surface.
+  test("Ctrl+Shift+T (new terminal web chord) escapes", () => {
+    // Test env runs as web platform (no Tauri global). New terminal's web chord
+    // is the literal Ctrl+Shift+T after the no-defaults round, and it keeps its
+    // escapeTerminal flag.
     const e = new KeyboardEvent("keydown", {
-      key: "p",
-      metaKey: true,
-      altKey: true,
+      key: "t",
+      ctrlKey: true,
+      shiftKey: true,
     });
     expect(shouldEscapeTerminal(e)).toBe(true);
   });
@@ -107,20 +102,12 @@ describe("shouldEscapeTerminal lookup", () => {
     expect(shouldEscapeTerminal(e)).toBe(true);
   });
 
-  test("Cmd+Shift+M (graph) escapes", () => {
-    // The top-level Cmd+Shift+M graph chord bubbles out of a focused
-    // terminal to the App keymap (escapeTerminal on app.graph.toggle).
-    const e = new KeyboardEvent("keydown", {
-      key: "m",
-      metaKey: true,
-      shiftKey: true,
-    });
-    expect(shouldEscapeTerminal(e)).toBe(true);
-  });
-
-  test("Cmd+, (settings) escapes", () => {
-    const e = new KeyboardEvent("keydown", { key: ",", metaKey: true });
-    expect(shouldEscapeTerminal(e)).toBe(true);
+  test("a de-defaulted command's chord no longer escapes via the registry", () => {
+    // Search lost its Cmd+S default in the no-defaults round; with no override
+    // registered (this file does not import the store) the registry arm no
+    // longer matches it. The override arm is covered in the store test.
+    const e = new KeyboardEvent("keydown", { key: "s", metaKey: true });
+    expect(shouldEscapeTerminal(e)).toBe(false);
   });
 
   test("Ctrl+Alt+K (web command launcher) escapes", () => {

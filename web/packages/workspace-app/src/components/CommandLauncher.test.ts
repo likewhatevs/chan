@@ -29,7 +29,11 @@ const runHidden = vi.fn();
 // re-register under a re-run collapses rather than stacking.
 registerCommands([
   {
-    id: "app.search.toggle",
+    // Reuses a kept, chorded SHORTCUTS id (app.window.reload) so chordFor
+    // resolves a real chord for the "shows the current chord" test. The
+    // displayed title is arbitrary for the fixture; the id only feeds the
+    // chord lookup (the launcher dispatches run(), not the id).
+    id: "app.window.reload",
     title: "Search",
     category: "Global",
     keywords: ["find"],
