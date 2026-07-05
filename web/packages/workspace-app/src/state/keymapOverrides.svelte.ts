@@ -16,6 +16,7 @@ import {
   chordsEqual,
   currentOS,
   currentPlatform,
+  formatChord,
   osChord,
   registerOverrideResolver,
   SHORTCUTS,
@@ -44,6 +45,24 @@ function slotFor(platform: Platform, os: OS): OverrideSlot {
   return os === "mac" ? "macos" : os;
 }
 
+/// The platform + OS a slot resolves + renders against. The native slots
+/// pin their OS; the web slot has no single OS (one browser set across
+/// OSes), so it borrows the editing client's OS for its built-in fallback
+/// and label. The per-OS assignment grid uses this to resolve and format
+/// each slot independent of the client actually viewing it.
+function platformOsForSlot(slot: OverrideSlot): { platform: Platform; os: OS } {
+  switch (slot) {
+    case "macos":
+      return { platform: "native", os: "mac" };
+    case "linux":
+      return { platform: "native", os: "linux" };
+    case "windows":
+      return { platform: "native", os: "windows" };
+    case "web":
+      return { platform: "web", os: currentOS() };
+  }
+}
+
 /// The slot the current client resolves + assigns against.
 export function currentSlot(): OverrideSlot {
   return slotFor(currentPlatform(), currentOS());
@@ -61,23 +80,47 @@ function resolveOverride(
 
 registerOverrideResolver(resolveOverride);
 
+/// The raw override chord stored in `slot` for `id`, or undefined. The
+/// per-OS grid reads this per cell to know whether a clear applies.
+export function overrideChordForSlot(
+  id: string,
+  slot: OverrideSlot,
+): Chord | undefined {
+  return keymapOverrides.byId[id]?.[slot];
+}
+
 /// The override chord for `id` on the current client, or undefined. The
 /// launcher reads this to show the assigned chord and to offer a clear.
 export function overrideChordFor(id: string): Chord | undefined {
-  return resolveOverride(id, currentPlatform(), currentOS());
+  return overrideChordForSlot(id, currentSlot());
 }
 
-/// The full resolved keymap for the current client: every command's active
-/// chord, override first then the SHORTCUTS baseline. Spans every SHORTCUTS
-/// entry (so a rebind can't collide with an editor or terminal chord) and
-/// every catalog command (so it can't collide with a chordless command that
+/// The resolved chord for `id` in `slot` (override first, else the built-in),
+/// formatted for that slot's OS, or null when neither is set. The per-OS
+/// grid renders each cell with this so a slot with no override still shows
+/// its inherited default.
+export function formattedChordForSlot(
+  id: string,
+  slot: OverrideSlot,
+): string | null {
+  const { platform, os } = platformOsForSlot(slot);
+  const override = keymapOverrides.byId[id]?.[slot];
+  if (override) return formatChord(override, os);
+  const s = SHORTCUTS.find((x) => x.id === id);
+  const builtin = s ? osChord(s, platform, os) : undefined;
+  return builtin ? formatChord(builtin, os) : null;
+}
+
+/// The full resolved keymap for `slot`: every command's active chord,
+/// override first then the SHORTCUTS baseline. Spans every SHORTCUTS entry
+/// (so a rebind can't collide with an editor or terminal chord) and every
+/// catalog command (so it can't collide with a chordless command that
 /// carries an override). Conflict detection runs against this set.
-export function resolvedKeymapEntries(
+export function resolvedKeymapEntriesForSlot(
   commands: readonly Command[],
+  slot: OverrideSlot,
 ): KeymapEntry[] {
-  const platform = currentPlatform();
-  const os = currentOS();
-  const slot = slotFor(platform, os);
+  const { platform, os } = platformOsForSlot(slot);
   const byId = new Map<string, Chord>();
   for (const s of SHORTCUTS) {
     const chord = keymapOverrides.byId[s.id]?.[slot] ?? osChord(s, platform, os);
@@ -89,6 +132,13 @@ export function resolvedKeymapEntries(
     if (chord) byId.set(c.id, chord);
   }
   return [...byId].map(([id, chord]) => ({ id, chord }));
+}
+
+/// The resolved keymap for the current client (the launcher's conflict set).
+export function resolvedKeymapEntries(
+  commands: readonly Command[],
+): KeymapEntry[] {
+  return resolvedKeymapEntriesForSlot(commands, currentSlot());
 }
 
 /// Reverse lookup for the key dispatch: the command id an OVERRIDE chord

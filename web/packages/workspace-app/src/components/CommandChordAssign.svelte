@@ -13,23 +13,30 @@
 
   import { tick } from "svelte";
   import { X } from "lucide-svelte";
-  import { chordFor, SHORTCUTS } from "../state/shortcuts";
+  import { SHORTCUTS } from "../state/shortcuts";
   import { captureChord, keymapConflicts } from "../state/keymapAssign";
   import { allCommands, type Command } from "../state/commands";
   import {
     assignOverride,
     clearOverride,
-    overrideChordFor,
-    resolvedKeymapEntries,
+    currentSlot,
+    formattedChordForSlot,
+    overrideChordForSlot,
+    resolvedKeymapEntriesForSlot,
+    type OverrideSlot,
   } from "../state/keymapOverrides.svelte";
 
   let {
     cmd,
+    slot = currentSlot(),
     onCaptureEnd,
   }: {
     cmd: Command;
-    // Called after capture commits or is cancelled by Escape, so the launcher
-    // can return focus to its search input. Not called on a click-away blur.
+    // Which OS slot to assign. Defaults to the current client's slot (the
+    // launcher's quick-assign); the per-OS grid passes an explicit slot.
+    slot?: OverrideSlot;
+    // Called after capture commits or is cancelled by Escape, so the caller
+    // can return focus. Not called on a click-away blur.
     onCaptureEnd?: () => void;
   } = $props();
 
@@ -37,8 +44,8 @@
   let conflictLabel = $state<string | null>(null);
   let captureEl = $state<HTMLButtonElement>();
 
-  const chord = $derived(chordFor(cmd.id));
-  const hasOverride = $derived(overrideChordFor(cmd.id) !== undefined);
+  const chord = $derived(formattedChordForSlot(cmd.id, slot));
+  const hasOverride = $derived(overrideChordForSlot(cmd.id, slot) !== undefined);
 
   // A conflicting binding's display name: catalog title, else the SHORTCUTS
   // label (editor / terminal chords are registry-only), else the raw id.
@@ -74,20 +81,20 @@
     if (!candidate) return; // modifier-only or bare key: keep composing
     const conflicts = keymapConflicts(
       candidate,
-      resolvedKeymapEntries(allCommands()),
+      resolvedKeymapEntriesForSlot(allCommands(), slot),
       cmd.id,
     );
     if (conflicts.length > 0) {
       conflictLabel = labelForId(conflicts[0].id);
       return; // hold capture open so the user can pick a free chord
     }
-    assignOverride(cmd.id, candidate);
+    assignOverride(cmd.id, candidate, slot);
     endCapture(true);
   }
 
   function reset(e: MouseEvent): void {
     e.stopPropagation();
-    clearOverride(cmd.id);
+    clearOverride(cmd.id, slot);
   }
 </script>
 

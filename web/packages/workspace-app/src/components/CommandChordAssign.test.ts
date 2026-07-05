@@ -13,6 +13,8 @@ import {
   assignOverride,
   hydrateOverrides,
   overrideChordFor,
+  overrideChordForSlot,
+  type OverrideSlot,
 } from "../state/keymapOverrides.svelte";
 
 function cmd(id: string, title: string): Command {
@@ -32,14 +34,12 @@ async function flush(): Promise<void> {
   await tick();
 }
 
-function mountAssign(command: Command): HTMLElement {
+function mountAssign(command: Command, slot?: OverrideSlot): HTMLElement {
   const target = document.createElement("div");
   document.body.append(target);
+  const props = slot ? { cmd: command, slot } : { cmd: command };
   mounted.push(
-    mount(CommandChordAssign, { target, props: { cmd: command } }) as Record<
-      string,
-      unknown
-    >,
+    mount(CommandChordAssign, { target, props }) as Record<string, unknown>,
   );
   return target;
 }
@@ -117,5 +117,26 @@ describe("CommandChordAssign", () => {
     await flush();
     expect(overrideChordFor("app.search.toggle")).toBeUndefined();
     expect(chordFor("app.search.toggle")).toBe("Cmd+S");
+  });
+
+  test("an explicit slot assigns that OS only, leaving the client slot alone", async () => {
+    // A mac browser (web slot) editing the linux column via the grid.
+    const command = cmd("app.custom.demo", "Demo");
+    const target = mountAssign(command, "linux");
+    // The linux cell shows the linux built-in? Demo is chordless -> Assign.
+    expect((target.querySelector(".chord-btn") as HTMLElement).textContent?.trim()).toBe(
+      "Assign",
+    );
+    (target.querySelector(".chord-btn") as HTMLElement).click();
+    await flush();
+    key(target, { key: "j", metaKey: true });
+    await flush();
+    expect(overrideChordForSlot("app.custom.demo", "linux")).toBe("Mod+J");
+    // The web slot (this client) is untouched.
+    expect(overrideChordForSlot("app.custom.demo", "web")).toBeUndefined();
+    // The cell renders the linux label (Ctrl+J), not the mac Cmd+J.
+    expect((target.querySelector(".chord-btn") as HTMLElement).textContent?.trim()).toBe(
+      "Ctrl+J",
+    );
   });
 });

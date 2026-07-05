@@ -6,10 +6,13 @@ import {
   clearOverride,
   commandIdForChord,
   currentSlot,
+  formattedChordForSlot,
   hydrateOverrides,
   overrideChordFor,
+  overrideChordForSlot,
   registerOverridePersist,
   resolvedKeymapEntries,
+  resolvedKeymapEntriesForSlot,
   serializeOverrides,
 } from "./keymapOverrides.svelte";
 
@@ -128,5 +131,52 @@ describe("keymap override store", () => {
     expect(seen).toHaveLength(2);
     expect(seen[0]).toEqual({ "app.search.toggle": { web: "Mod+J" } });
     expect(seen[1]).toEqual({});
+  });
+});
+
+describe("per-OS slot resolution (the assignment grid)", () => {
+  beforeEach(() => {
+    vi.stubGlobal("navigator", { userAgent: "Mac OS X" });
+    tauri(false); // a browser editing all four slots
+  });
+  afterEach(() => {
+    hydrateOverrides(null);
+    registerOverridePersist(null);
+    tauri(false);
+    vi.unstubAllGlobals();
+  });
+
+  test("formattedChordForSlot renders each slot's built-in with its OS label", () => {
+    // search built-in: Cmd+S on mac; Ctrl+Shift+S off-mac (shell collision).
+    expect(formattedChordForSlot("app.search.toggle", "macos")).toBe("Cmd+S");
+    expect(formattedChordForSlot("app.search.toggle", "linux")).toBe("Ctrl+Shift+S");
+    expect(formattedChordForSlot("app.search.toggle", "windows")).toBe("Ctrl+Shift+S");
+    expect(formattedChordForSlot("app.search.toggle", "web")).toBe("Cmd+S");
+  });
+
+  test("an override renders in its slot and is independent of the others", () => {
+    assignOverride("app.search.toggle", "Mod+J", "macos");
+    expect(overrideChordForSlot("app.search.toggle", "macos")).toBe("Mod+J");
+    expect(formattedChordForSlot("app.search.toggle", "macos")).toBe("Cmd+J");
+    // Other slots untouched: still their built-in.
+    expect(overrideChordForSlot("app.search.toggle", "web")).toBeUndefined();
+    expect(formattedChordForSlot("app.search.toggle", "linux")).toBe("Ctrl+Shift+S");
+    // A browser client (web slot) is unaffected by a macos assignment.
+    expect(formattedChordForSlot("app.search.toggle", "web")).toBe("Cmd+S");
+  });
+
+  test("formattedChordForSlot is null for an unbound chordless command", () => {
+    expect(formattedChordForSlot("app.custom.chordless", "linux")).toBeNull();
+    assignOverride("app.custom.chordless", "Mod+Y", "linux");
+    expect(formattedChordForSlot("app.custom.chordless", "linux")).toBe("Ctrl+Y");
+  });
+
+  test("resolvedKeymapEntriesForSlot resolves against the slot's OS", () => {
+    const linux = new Map(
+      resolvedKeymapEntriesForSlot([], "linux").map((e) => [e.id, e.chord]),
+    );
+    // Off-mac divergence surfaces in the raw chord (Mod is still Mod here).
+    expect(linux.get("app.search.toggle")).toBe("Mod+Shift+S");
+    expect(linux.get("app.launcher.toggle")).toBe("Ctrl+Alt+K");
   });
 });
