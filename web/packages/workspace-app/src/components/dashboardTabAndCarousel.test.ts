@@ -407,7 +407,7 @@ describe("Dashboard back-of-card is per-slot (DashboardSlotBack)", () => {
 });
 
 describe("EmptyPaneWelcome empty-pane surface", () => {
-  test("EmptyPaneWelcome.svelte shows the workspace path + waves and auto-opens the launcher", async () => {
+  test("EmptyPaneWelcome.svelte shows the workspace path + waves without auto-opening the launcher", async () => {
     const welcome = (await import("./EmptyPaneWelcome.svelte?raw"))
       .default as string;
     // The surface is the mark, the absolute workspace path, and the
@@ -417,10 +417,13 @@ describe("EmptyPaneWelcome empty-pane surface", () => {
     expect(welcome).toMatch(
       /class="welcome-name" title=\{workspace\.info\.root\}[\s\S]{1,120}\{workspace\.info\.root\}/,
     );
-    // The command launcher auto-opens when the surface appears.
-    expect(welcome).toMatch(
-      /onMount\(\(\) => \{[\s\S]{0,80}openCommandLauncher\(\);/,
-    );
+    expect(welcome).toMatch(/width: min\(1120px, 100%\);/);
+    expect(welcome).toMatch(/overflow-wrap: break-word;/);
+    expect(welcome).not.toMatch(/overflow-wrap: anywhere/);
+    // New workspace windows should stay quiet until the user explicitly
+    // opens the launcher from a menu or global chord.
+    expect(welcome).not.toMatch(/openCommandLauncher/);
+    expect(welcome).not.toMatch(/onMount/);
     // No spawn grid, secondary band, chord hints, or graph-scope hint.
     expect(welcome).not.toMatch(/spawn-row/);
     expect(welcome).not.toMatch(/SpawnRow/);

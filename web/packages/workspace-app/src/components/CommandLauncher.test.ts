@@ -9,6 +9,8 @@ vi.mock("../state/commands/install", () => ({}));
 
 import CommandLauncher from "./CommandLauncher.svelte";
 import appRaw from "../App.svelte?raw";
+import launcherRaw from "./CommandLauncher.svelte?raw";
+import overlayShellRaw from "./OverlayShell.svelte?raw";
 import { launcherPanel } from "../state/store.svelte";
 import { registerCommands } from "../state/commands";
 import { layout, type BrowserTab, type LeafNode } from "../state/tabs.svelte";
@@ -147,6 +149,24 @@ describe("command launcher overlay", () => {
   test("command launcher chords route through the app keymap", () => {
     expect(appRaw).toMatch(
       /isTauriDesktop\(\) && currentOS\(\) === "mac"[\s\S]{1,220}e\.metaKey[\s\S]{1,220}e\.ctrlKey && !e\.metaKey && e\.altKey[\s\S]{1,240}toggleCommandLauncher\(\);/,
+    );
+  });
+
+  test("launcher backdrop is 80% transparent while launcher chrome stays opaque", () => {
+    expect(launcherRaw).toMatch(
+      /\.search-row \{[\s\S]{1,240}background: color-mix\(in srgb, var\(--bg-elev\) 86%, transparent\);/,
+    );
+    expect(launcherRaw).toMatch(
+      /\.results \{[\s\S]{1,240}background: color-mix\(in srgb, var\(--bg-card\) 82%, var\(--bg-elev\) 18%\);/,
+    );
+    expect(overlayShellRaw).toMatch(
+      /\.overlay\.top,[\s\S]{1,80}\.overlay\.center \{[\s\S]{1,160}background: color-mix\(in srgb, var\(--bg\) 20%, transparent\);[\s\S]{1,160}backdrop-filter: blur\(10px\) saturate\(1\.08\);/,
+    );
+    expect(overlayShellRaw).toMatch(
+      /\.overlay\.top \.panel,[\s\S]{1,80}\.overlay\.center \.panel \{[\s\S]{1,320}background: color-mix\(in srgb, var\(--bg-elev\) 82%, transparent\);[\s\S]{1,240}backdrop-filter: blur\(24px\) saturate\(1\.12\);/,
+    );
+    expect(overlayShellRaw).toMatch(
+      /@keyframes spotlight-pop \{[\s\S]{1,240}filter: blur\(14px\);[\s\S]{1,240}filter: blur\(0\);/,
     );
   });
 

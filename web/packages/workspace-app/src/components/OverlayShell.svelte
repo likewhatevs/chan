@@ -158,7 +158,7 @@
   }
   .overlay.top,
   .overlay.center {
-    background: color-mix(in srgb, var(--bg) 28%, transparent);
+    background: color-mix(in srgb, var(--bg) 20%, transparent);
     -webkit-backdrop-filter: blur(10px) saturate(1.08);
     backdrop-filter: blur(10px) saturate(1.08);
   }

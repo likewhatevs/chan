@@ -1,19 +1,13 @@
 <script lang="ts">
   // Empty single-pane welcome surface: the chan mark, the workspace's
   // absolute path, and the dotted wave field pinned to the bottom. It
-  // carries no actions of its own; the command launcher auto-opens when
-  // this surface appears (openCommandLauncher on mount) and is how the
-  // user spawns anything from here, or reopens it from the pane menu.
+  // carries no actions of its own; users can reopen the command launcher
+  // from the pane menu or the global launcher chord.
   // Only mounted for a lone, non-terminal pane (see Pane.svelte), so it
   // needs no terminal-window branch.
 
-  import { onMount } from "svelte";
-  import { workspace, openCommandLauncher } from "../state/store.svelte";
+  import { workspace } from "../state/store.svelte";
   import DottedSurface from "./DottedSurface.svelte";
-
-  onMount(() => {
-    openCommandLauncher();
-  });
 </script>
 
 <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
@@ -59,19 +53,23 @@
   .welcome-header {
     position: relative;
     z-index: 1;
+    box-sizing: border-box;
+    width: min(1120px, 100%);
     display: flex;
     flex-direction: column;
     align-items: center;
     gap: 4px;
     margin-top: -0.5rem;
+    padding: 0 clamp(16px, 5vw, 80px);
   }
   .welcome-name {
-    max-width: min(720px, 90%);
+    width: 100%;
     font-size: 16px;
     color: var(--text);
     opacity: 0.85;
     letter-spacing: 0.01em;
     text-align: center;
-    overflow-wrap: anywhere;
+    overflow-wrap: break-word;
+    word-break: normal;
   }
 </style>
