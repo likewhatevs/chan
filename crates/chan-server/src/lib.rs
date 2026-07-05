@@ -18,6 +18,7 @@
 mod auth;
 mod bus;
 mod config;
+mod config_watch;
 mod control_socket;
 mod devserver;
 /// Devserver management-API wire contract (HTTP/JSON), public so a
@@ -83,7 +84,7 @@ pub use error::Error;
 pub use mcp_bridge::run_stdio_proxy as run_mcp_stdio_proxy;
 pub use preferences::{
     BrowserSidePanes, EditorPrefs, EditorTheme, HybridSurfaceThemes, LineSpacing, PaneWidths,
-    SurfaceThemeChoice, ThemeChoice,
+    ShortcutOverride, SurfaceThemeChoice, ThemeChoice,
 };
 pub use routes::{build_fs_graph, FsGraphResponse, FsGraphScope};
 
@@ -1283,6 +1284,21 @@ pub async fn serve(
         chan_library::UnserveMode::Standalone,
     )
     .await?;
+    // External / CLI edits to the per-library config (`chan config`, a
+    // hand-edit, a synced dotfile) refresh open windows, on top of the
+    // PATCH path's push-on-write. Held for serve()'s lifetime; dropping it
+    // stops the watch. A registration failure is non-fatal: external edits
+    // then reconcile on the next reload.
+    let _config_watcher = match config_watch::start(artifacts.state.clone()) {
+        Ok(watcher) => Some(watcher),
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                "config watch registration failed; external config edits reconcile on reload"
+            );
+            None
+        }
+    };
     let handle = ServeHandle {
         addr,
         prefix: config.prefix.clone(),

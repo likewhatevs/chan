@@ -29,12 +29,16 @@
 //!     migrated from the SPA `chan.csLinkDismissed` localStorage)
 //!   - hybrid_surface_themes (optional body-theme overrides for
 //!     Hybrid Editor / Terminal / File Browser / Graph / Dashboard)
+//!   - shortcuts (per-command keyboard overrides, keyed by Command id,
+//!     one optional chord per platform; a local-machine part that travels
+//!     with the client, see [`ShortcutOverride`])
 //!
 //! The Preferences view returned over /api/workspace and /api/config is
 //! assembled in lib.rs by joining EditorPrefs with ServerConfig.
 //! PATCH /api/config splits the incoming body the same way: edits land
 //! in whichever store owns the field.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -91,6 +95,36 @@ pub struct EditorPrefs {
     /// until dismissed).
     #[serde(default)]
     pub cs_dismissed: bool,
+    /// Per-command keyboard shortcut overrides, keyed by `Command` id
+    /// (`state/commands.ts`). A local-machine part under the per-OS
+    /// shortcut model: the desktop client's overrides travel to every
+    /// devserver it reaches; a devserver's own table serves that
+    /// devserver's browser clients. Sparse and opaque to the server (see
+    /// [`ShortcutOverride`]). Skipped from the file when empty so an
+    /// unconfigured library writes no `[shortcuts]` table.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub shortcuts: BTreeMap<String, ShortcutOverride>,
+}
+
+/// One command's shortcut override: an optional chord per platform. The
+/// running CLIENT's platform selects which field applies (a browser uses
+/// `web`, chan-desktop uses its native-OS field). Chord strings are stored
+/// verbatim in the app's registry grammar (the `Mod`-token form, e.g.
+/// `"Mod+K"`); the server does NO chord parsing or validation, and an empty
+/// string is preserved verbatim rather than coerced to absent (reserved as
+/// a future "suppressed" marker). Sparse: only the platforms a user
+/// assigned are present, and an absent slot falls through to the
+/// compile-time default.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ShortcutOverride {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub web: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub macos: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub linux: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub windows: Option<String>,
 }
 
 fn default_empty_pane_carousel_cycling() -> bool {
@@ -119,6 +153,7 @@ impl Default for EditorPrefs {
             page_width_ratio: default_page_width_ratio(),
             overlay_maximized: false,
             cs_dismissed: false,
+            shortcuts: BTreeMap::new(),
         }
     }
 }
@@ -508,6 +543,61 @@ mod tests {
         assert_eq!(reloaded.page_width_ratio, 0.5);
         assert!(reloaded.overlay_maximized);
         assert!(reloaded.cs_dismissed);
+    }
+
+    #[test]
+    fn shortcuts_round_trip_sparse_and_preserve_empty_string() {
+        // The keymap override table is sparse (only assigned slots), stores
+        // chord strings verbatim, and preserves an empty string (the reserved
+        // "suppressed" marker) rather than coercing it to absent.
+        let mut shortcuts = BTreeMap::new();
+        shortcuts.insert(
+            "app.launcher.toggle".to_string(),
+            ShortcutOverride {
+                web: Some("Mod+K".to_string()),
+                macos: Some("Cmd+K".to_string()),
+                ..Default::default()
+            },
+        );
+        shortcuts.insert(
+            "app.pane.mode".to_string(),
+            ShortcutOverride {
+                web: Some(String::new()),
+                ..Default::default()
+            },
+        );
+        let prefs = EditorPrefs {
+            shortcuts: shortcuts.clone(),
+            ..Default::default()
+        };
+
+        let tmp = TempDir::new().unwrap();
+        let p = tmp.path().join("preferences.toml");
+        prefs.save_to(&p).unwrap();
+        let raw = std::fs::read_to_string(&p).unwrap();
+        // Command ids carry dots, so the table header quotes the key; only
+        // assigned slots appear (linux/windows absent), and the empty-string
+        // slot is written verbatim.
+        assert!(raw.contains("[shortcuts.\"app.launcher.toggle\"]"), "{raw}");
+        assert!(raw.contains("web = \"Mod+K\""), "{raw}");
+        assert!(raw.contains("web = \"\""), "empty string preserved: {raw}");
+        assert!(!raw.contains("linux"), "absent slots stay absent: {raw}");
+
+        let loaded = EditorPrefs::load_from(&p).unwrap();
+        assert_eq!(loaded.shortcuts, shortcuts);
+    }
+
+    #[test]
+    fn empty_shortcuts_writes_no_table() {
+        // An unconfigured library writes no `[shortcuts]` table.
+        let tmp = TempDir::new().unwrap();
+        let p = tmp.path().join("preferences.toml");
+        EditorPrefs::default().save_to(&p).unwrap();
+        let raw = std::fs::read_to_string(&p).unwrap();
+        assert!(
+            !raw.contains("shortcuts"),
+            "no shortcuts table when empty: {raw}"
+        );
     }
 
     #[test]

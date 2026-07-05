@@ -77,6 +77,7 @@ pub use inspector::api_inspector;
 pub use library::launcher_router;
 pub use mentions::api_get_mentions;
 pub use metadata::{api_metadata_export, api_metadata_import};
+pub(crate) use preferences::broadcast_config_changed;
 pub use preferences::{
     api_get_config, api_get_server_config, api_patch_config, api_patch_server_config,
 };

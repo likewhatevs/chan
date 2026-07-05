@@ -6,6 +6,7 @@
 //! the assistant overlay; MCP access is configured through the server
 //! runtime, not through global user preferences.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use axum::extract::State;
@@ -21,7 +22,7 @@ use crate::preferences::BubbleOverlayMode;
 use crate::state::AppState;
 use crate::{
     BrowserSidePanes, EditorTheme, HybridSurfaceThemes, LineSpacing, PaneWidths, ServerConfig,
-    ThemeChoice,
+    ShortcutOverride, ThemeChoice,
 };
 
 /// Unified preferences shape returned over /api/workspace and /api/config.
@@ -50,6 +51,11 @@ pub struct PreferencesView {
     pub overlay_maximized: bool,
     #[serde(default)]
     pub cs_dismissed: bool,
+    /// Per-command keyboard shortcut overrides, keyed by `Command` id.
+    /// Opaque chord strings, sparse, `""` preserved verbatim; the server
+    /// stores and serves them without parsing (see `ShortcutOverride`).
+    #[serde(default)]
+    pub shortcuts: BTreeMap<String, ShortcutOverride>,
 }
 
 fn default_empty_pane_carousel_cycling() -> bool {
@@ -86,6 +92,7 @@ pub(super) fn preferences_view(state: &AppState) -> Result<PreferencesView, Erro
         page_width_ratio: editor.page_width_ratio,
         overlay_maximized: editor.overlay_maximized,
         cs_dismissed: editor.cs_dismissed,
+        shortcuts: editor.shortcuts.clone(),
     })
 }
 
@@ -246,7 +253,7 @@ fn patch_config(state: &AppState, body: PatchConfigBody) -> Result<GlobalConfigV
 /// events but bypasses the self-write dedupe (it is a synthetic frame, not a
 /// file event), so sibling windows reliably see config flips. A no-subscriber
 /// `send` is the only `Err` a broadcast yields, so it is ignored.
-fn broadcast_config_changed(state: &AppState) {
+pub(crate) fn broadcast_config_changed(state: &AppState) {
     let _ = state
         .events_tx
         .send(r#"{"kind":"config_changed"}"#.to_string());
@@ -271,6 +278,7 @@ fn apply_preferences(state: &AppState, view: PreferencesView) -> Result<(), Erro
         editor.page_width_ratio = view.page_width_ratio;
         editor.overlay_maximized = view.overlay_maximized;
         editor.cs_dismissed = view.cs_dismissed;
+        editor.shortcuts = view.shortcuts;
         editor.save()?;
     }
     {
