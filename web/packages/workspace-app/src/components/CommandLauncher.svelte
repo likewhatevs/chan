@@ -23,6 +23,7 @@
     Search as SearchIcon,
     Settings2,
     Shapes,
+    SquareStack,
     Terminal,
   } from "lucide-svelte";
   import OverlayShell from "./OverlayShell.svelte";
@@ -47,6 +48,7 @@
     Workspace: Folder,
     Search: SearchIcon,
     Apps: FilePlus,
+    Tabs: SquareStack,
     Panes: Shapes,
     Editor: FileText,
     "File Browser": Folder,

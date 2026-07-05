@@ -1,4 +1,4 @@
-// Reuse-existing Global, Apps, and Panes commands: each maps a launcher
+// Reuse-existing Global, Apps, Tabs, and Panes commands: each maps a launcher
 // entry to an action that already runs through a chord. Chorded ids
 // dispatch a chan:command so they share App.svelte's dispatch and its
 // window-mode guard; the two chordless entries (Hybrid Nav, Reopen closed
@@ -50,17 +50,6 @@ registerCommands([
     available: () => true,
     run: () => enterPaneMode(),
   },
-  {
-    id: "app.tab.reopenClosed",
-    title: "Reopen last closed tab",
-    category: "Global",
-    keywords: ["undo", "restore", "tab"],
-    // Only offer it when the closed-tab stack has something to restore.
-    available: () => canReopenClosedTab(),
-    run: () => {
-      reopenClosedTab();
-    },
-  },
   reuse("app.screensaver.lock", "Lock screen now", "Global", [
     "screensaver",
     "lock",
@@ -77,7 +66,27 @@ registerCommands([
     "explorer",
   ]),
   reuse("app.dashboard.open", "New dashboard", "Apps", ["slides", "present"]),
-  reuse("app.tab.close", "Close tab", "Apps", ["close"]),
+
+  // Tabs
+  reuse("app.tab.close", "Close tab", "Tabs", ["close"]),
+  reuse("app.tab.next", "Next tab", "Tabs", ["tab", "next", "switch"]),
+  reuse("app.tab.prev", "Previous tab", "Tabs", [
+    "tab",
+    "previous",
+    "switch",
+    "back",
+  ]),
+  {
+    id: "app.tab.reopenClosed",
+    title: "Reopen last closed tab",
+    category: "Tabs",
+    keywords: ["undo", "restore", "tab"],
+    // Only offer it when the closed-tab stack has something to restore.
+    available: () => canReopenClosedTab(),
+    run: () => {
+      reopenClosedTab();
+    },
+  },
 
   // Panes
   reuse("app.pane.splitRight", "Split right", "Panes", ["split", "vertical"]),

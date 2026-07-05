@@ -22,6 +22,7 @@ export type CommandCategory =
   | "Workspace"
   | "Search"
   | "Apps"
+  | "Tabs"
   | "Panes"
   | "Editor"
   | "File Browser"
