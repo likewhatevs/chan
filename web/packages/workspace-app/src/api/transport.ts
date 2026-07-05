@@ -134,6 +134,65 @@ export function authToken(): string | null {
   return token;
 }
 
+function cookieValue(name: string): string {
+  if (typeof document === "undefined") return "";
+  const prefix = `${name}=`;
+  for (const part of document.cookie.split(";")) {
+    const s = part.trim();
+    if (s.startsWith(prefix)) {
+      try {
+        return decodeURIComponent(s.slice(prefix.length));
+      } catch {
+        return "";
+      }
+    }
+  }
+  return "";
+}
+
+function isUnsafeMethod(method: string): boolean {
+  const normalized = method.toUpperCase();
+  return (
+    normalized === "POST" ||
+    normalized === "PUT" ||
+    normalized === "PATCH" ||
+    normalized === "DELETE"
+  );
+}
+
+function headersWithValue(
+  headers: HeadersInit | undefined,
+  name: string,
+  value: string,
+): HeadersInit {
+  if (headers instanceof Headers) {
+    const next = new Headers(headers);
+    next.set(name, value);
+    return next;
+  }
+  if (Array.isArray(headers)) {
+    const lower = name.toLowerCase();
+    return [
+      ...headers.filter(([key]) => key.toLowerCase() !== lower),
+      [name, value],
+    ];
+  }
+  return { ...(headers ?? {}), [name]: value };
+}
+
+/// Add the gateway CSRF mirror when a request can mutate state. The cookie is
+/// absent on loopback, so this is a no-op outside the gateway.
+export function withGatewayCsrf(init: RequestInit = {}): RequestInit {
+  const method = init.method ?? "GET";
+  if (!isUnsafeMethod(method)) return init;
+  const csrf = cookieValue("devserver_csrf");
+  if (!csrf) return init;
+  return {
+    ...init,
+    headers: headersWithValue(init.headers, "x-chan-csrf", csrf),
+  };
+}
+
 /// Injectable HTTP + WebSocket primitives. Both default to the real browser
 /// globals, so the production path is unchanged. A frontend-only demo (the
 /// marketing-site workspace demo) installs replacements before the app mounts
@@ -191,7 +250,7 @@ export function handleDemoDownload(path: string, isDir: boolean): boolean {
 /// The fetch every API call routes through: typed api methods, streaming
 /// NDJSON, and multipart uploads alike. Defaults to the global fetch.
 export function chanFetch(input: string, init?: RequestInit): Promise<Response> {
-  return fetchImpl(input, init);
+  return fetchImpl(input, withGatewayCsrf(init));
 }
 
 /// The WebSocket constructor every socket routes through: the watcher, the

@@ -6,8 +6,9 @@
 //! chan-workspace's `fs_ops::atomic_write` so the parent-dir fsync invariant
 //! matches the rest of the app.
 //!
-//! Tunnel mode forces the gate off (`AppState::token == None`); the
-//! workspace.chan.app gateway is the trust boundary in that path.
+//! Devserver tunnel requests carry `TunnelOrigin`; the gateway is the trust
+//! boundary in that path, so the local bearer gate admits those requests after
+//! the proxy has authenticated them.
 
 use std::path::Path;
 use std::sync::atomic::Ordering;
@@ -117,6 +118,10 @@ pub async fn auth_middleware(
     };
     let path = req.uri().path();
     if !(path.starts_with("/api") || path == "/ws") {
+        bump();
+        return next.run(req).await;
+    }
+    if req.extensions().get::<crate::TunnelOrigin>().is_some() {
         bump();
         return next.run(req).await;
     }

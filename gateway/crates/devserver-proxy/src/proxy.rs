@@ -329,7 +329,7 @@ struct GatewayCaller {
 
 /// Outcome of the auth-gate decision.
 enum Gate {
-    /// Forward the request unchanged.
+    /// Forward the request under an existing gateway session.
     Pass { sub: Uuid, role: String },
     /// Entry token validated; mint a session cookie carrying the
     /// entry's `sub` and 303 to the clean URL (no `?t=` query). `sub`
@@ -345,12 +345,12 @@ enum Gate {
 fn resolve_gate(state: &AppState, req: &Request, devserver_id: &str, aud: &str) -> Gate {
     let secret = state.cfg.workspace_gate_secret.as_bytes();
 
-    // Entry token in `?t=` takes precedence: it's how the dashboard
-    // hands a freshly authenticated user off to the wildcard. A valid
-    // entry triggers the cookie-mint redirect; a malformed one is
-    // rejected outright (no fall-through to the cookie path, so a
-    // malicious tenant cannot strip a real session cookie by appending
-    // a junk `?t=`).
+    // Entry token in `?t=` is how the dashboard hands a freshly
+    // authenticated user off to the wildcard. A valid entry triggers
+    // the cookie-mint redirect. An invalid `t` must fall through to the
+    // session-cookie path: chan tenants also use `?t=` for their own
+    // per-tenant bearer, and browsers with an existing devserver_gate
+    // cookie need that query to reach the upstream intact.
     //
     // We do not compare `sub` against the registry-cached owner: that
     // would lock out every accepted grantee. The aud + drv claims
@@ -359,13 +359,14 @@ fn resolve_gate(state: &AppState, req: &Request, devserver_id: &str, aud: &str) 
     // the policy; devserver-proxy verifies the assertion. `drv` is the
     // devserver id, matched against the user's live registration.
     if let Some(token) = entry_token_param(req.uri()) {
-        return match devserver_gate::decode(secret, &token, TokenType::Entry, aud, devserver_id) {
-            Ok(claims) => Gate::IssueSession {
+        if let Ok(claims) =
+            devserver_gate::decode(secret, &token, TokenType::Entry, aud, devserver_id)
+        {
+            return Gate::IssueSession {
                 sub: claims.sub,
                 role: claims.role,
-            },
-            Err(_) => Gate::Reject,
-        };
+            };
+        }
     }
 
     // No entry token: any one valid session cookie admits. A browser
@@ -406,14 +407,16 @@ fn is_management_path(path: &str) -> bool {
     path == "/api/devserver" || path.starts_with("/api/devserver/")
 }
 
-/// The path forwarded into the tunnel: the full inbound path+query with
-/// the `?t=` entry token stripped. The proxy is a segment-PRESERVING
-/// forwarder. It does NOT strip the `{workspace}` segment; the devserver
-/// mounts each tenant at its public `/{workspace}/` slug and routes
-/// internally. Always returns a path that starts with `/`.
+/// The path forwarded into the tunnel: the full inbound path+query. The proxy is
+/// a segment-PRESERVING forwarder. It does NOT strip the `{workspace}` segment;
+/// the devserver mounts each tenant at its public `/{workspace}/` slug and
+/// routes internally. Valid gateway entry tokens are consumed before forwarding
+/// and 303 to a clean URL; any forwarded `?t=` belongs to the upstream tenant.
+/// Always returns a path that starts with `/`.
 fn forward_path(uri: &Uri) -> String {
-    let pq = uri.path_and_query().map(|p| p.as_str()).unwrap_or("/");
-    strip_entry_token_query(pq)
+    uri.path_and_query()
+        .map(|p| p.as_str().to_string())
+        .unwrap_or_else(|| "/".to_string())
 }
 
 /// Pull `?t=<token>` value out of the URI. Returns None when absent
@@ -1076,7 +1079,7 @@ mod tests {
     #[test]
     fn forward_path_preserves_segment() {
         // Segment-preserving: the {workspace} segment is forwarded
-        // unchanged; only the ?t= entry token is stripped.
+        // unchanged, and normal forwarding preserves the query.
         let u = |s: &str| s.parse::<Uri>().unwrap();
         assert_eq!(forward_path(&u("/blog/")), "/blog/");
         assert_eq!(forward_path(&u("/blog/assets/x.js")), "/blog/assets/x.js");
@@ -1085,12 +1088,23 @@ mod tests {
     }
 
     #[test]
-    fn forward_path_drops_t_param() {
+    fn forward_path_preserves_t_param_for_upstream_tenants() {
         let u = |s: &str| s.parse::<Uri>().unwrap();
-        assert_eq!(forward_path(&u("/blog/?t=abc")), "/blog/");
-        assert_eq!(forward_path(&u("/blog/?t=abc&keep=1")), "/blog/?keep=1");
         assert_eq!(
             forward_path(&u("/blog/path?a=1&t=secret&b=2")),
+            "/blog/path?a=1&t=secret&b=2"
+        );
+    }
+
+    #[test]
+    fn strip_entry_token_query_drops_t_param_for_clean_redirect() {
+        assert_eq!(strip_entry_token_query("/blog/?t=abc"), "/blog/");
+        assert_eq!(
+            strip_entry_token_query("/blog/?t=abc&keep=1"),
+            "/blog/?keep=1"
+        );
+        assert_eq!(
+            strip_entry_token_query("/blog/path?a=1&t=secret&b=2"),
             "/blog/path?a=1&b=2"
         );
     }

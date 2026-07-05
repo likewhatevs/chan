@@ -1831,6 +1831,38 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn tunnel_origin_bypasses_tenant_bearer_gate() {
+        use tower::ServiceExt;
+
+        let home = tempfile::tempdir().expect("home");
+        let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let state = test_state(home.path(), addr);
+        state
+            .mount_shared_terminal_tenant()
+            .await
+            .expect("mount shared terminal tenant");
+        let host = state.host.clone();
+        let (app, _serve_addr) = build_devserver_app(state, host);
+        let tunnel = app.clone().layer(middleware::from_fn_with_state(
+            test_tunnel_assertion(),
+            mark_tunnel_origin,
+        ));
+
+        let req = || {
+            HttpRequest::builder()
+                .uri("/api/terminal/api/session?w=w-test")
+                .body(Body::empty())
+                .unwrap()
+        };
+
+        let local = app.clone().oneshot(req()).await.unwrap();
+        assert_eq!(local.status(), StatusCode::UNAUTHORIZED);
+
+        let tunneled = tunnel.oneshot(req()).await.unwrap();
+        assert_eq!(tunneled.status(), StatusCode::NO_CONTENT);
+    }
+
+    #[tokio::test]
     async fn workspace_on_off_toggle_round_trip() {
         let home = tempfile::tempdir().expect("home");
         let ws = tempfile::tempdir().expect("workspace");

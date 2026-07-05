@@ -99,7 +99,7 @@ import {
 } from "./tabs.svelte";
 import { openTeamDialog, teamDialogState } from "./teamDialog.svelte";
 import { graphData, invalidateGraph, ensureGraphLoaded } from "./graphData.svelte";
-import { handleDemoDownload, withTokenQuery } from "../api/transport";
+import { chanFetch, handleDemoDownload, withTokenQuery } from "../api/transport";
 import { uiConfirm } from "./confirm.svelte";
 import { applyEditorToolPreferences } from "./editorTools.svelte";
 import { updateGlobalConfigSerial } from "./configWrite";
@@ -2518,7 +2518,7 @@ export function discardWindowSession(opts?: { reap?: boolean }): void {
   // sessionPath() always carries `?w=`, so `&moved=1` is always a valid append.
   const url = withTokenQuery(sessionPath()) + (opts?.reap === false ? "&moved=1" : "");
   try {
-    void fetch(url, {
+    void chanFetch(url, {
       method: "DELETE",
       keepalive: true,
     }).catch(() => {});
@@ -2583,10 +2583,10 @@ function flushSessionSaveOnExit(): void {
       // saved window. keepalive lets the request outlive the unload. A web
       // follower skips this: the layout belongs to the leader.
       if (!followerSuppressesSessionDelete()) {
-        fetch(url, { method: "DELETE", keepalive: true }).catch(() => {});
+        chanFetch(url, { method: "DELETE", keepalive: true }).catch(() => {});
       }
     } else {
-      fetch(url, {
+      chanFetch(url, {
         method: "PUT",
         headers: { "content-type": "application/json" },
         body: next,
