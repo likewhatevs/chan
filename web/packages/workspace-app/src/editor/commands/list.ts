@@ -303,11 +303,18 @@ export function stripUnusedInlineImageSpaceOnEnter(view: EditorView): boolean {
   const sel = view.state.selection.main;
   if (!sel.empty) return false;
   const line = view.state.doc.lineAt(sel.head);
-  if (sel.head !== line.to || !parseListPrefix(line.text)) return false;
+  if (!parseListPrefix(line.text)) return false;
+  // An image paste drops the caret just after the `)` (before the inserted
+  // separator space), not at EOL, so accept either the `)` boundary or true
+  // EOL. Deleting the trailing space lands the caret at the new EOL so the
+  // next keymap entry, continueListOnEnter, continues the list instead of
+  // Enter falling through to a plain newline that breaks out of it.
+  if (sel.head !== line.to && sel.head !== line.to - 1) return false;
   if (!/!\[[^\]\n]*\]\([^)]+#w=\d+\)[ \t]$/.test(line.text)) return false;
+  const spacePos = line.to - 1;
   view.dispatch({
-    changes: { from: sel.head - 1, to: sel.head, insert: "" },
-    selection: { anchor: sel.head - 1 },
+    changes: { from: spacePos, to: spacePos + 1, insert: "" },
+    selection: { anchor: spacePos },
   });
   return false;
 }

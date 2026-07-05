@@ -374,6 +374,19 @@ describe("inline image paste helpers", () => {
     });
   });
 
+  test("retracts the pasted-image space when the caret rests after the )", () => {
+    // The image paste leaves the caret just after the `)`, before the
+    // trailing space (doc.length - 1), not at EOL. Strip must still fire so
+    // continueListOnEnter then sees a caret at the true EOL.
+    const doc = "- ![](photo.png#w=250) ";
+    mount(doc, doc.length - 1);
+    expect(stripUnusedInlineImageSpaceOnEnter(view)).toBe(false);
+    expect(snapshot()).toEqual({
+      doc: "- ![](photo.png#w=250)",
+      head: doc.length - 1,
+    });
+  });
+
   test("keeps normal trailing spaces outside pasted image markers", () => {
     const doc = "- words ";
     mount(doc, doc.length);
