@@ -110,12 +110,9 @@
     paneMode,
     paneModeEqualize,
     paneModeMoveFocus,
-    paneModeOpenBrowser,
-    paneModeOpenGraph,
     paneModeOpenTerminal,
     paneModeResize,
     paneModeSplit,
-    paneModeStageDraftEditor,
     paneModeSwap,
     setWindowFocusColor,
     splitActive,
@@ -642,79 +639,18 @@
       case "0":
         paneModeEqualize();
         return;
-      // Hybrid Nav T / O / P / G / E chords STAGE additions into the draft
-      // layout instead of committing immediately. Multiple presses stack.
-      // Enter materializes; Esc discards. `v` is aliased to `g` for
-      // compatibility.
+      // Hybrid Nav `t` STAGES a new terminal into the draft layout instead of
+      // committing immediately. Multiple presses stack; Enter materializes,
+      // Esc discards.
       case "t":
       case "T":
         paneModeOpenTerminal(resolveSpawnContext());
-        return;
-      case "o":
-      case "O": {
-        // File browser: no workspace surface in terminal-only mode.
-        if (ui.terminalOnly) return;
-        const ctx = resolveSpawnContext();
-        paneModeOpenBrowser(ctx);
-        if (ctx.file) revealAndSelect(ctx.file);
-        else if (ctx.dir) revealAndSelect(ctx.dir);
-        return;
-      }
-      case "g":
-      case "G":
-      case "m":
-      case "M":
-        // Graph: workspace-only (Hybrid Nav Mod+. M, with g as a mnemonic alias).
-        if (ui.terminalOnly) return;
-        paneModeOpenGraph(resolveSpawnContext());
-        return;
-      // Search lives in an OverlayShell, not a tab type. Open the overlay
-      // outside the transaction so it can capture keyboard input cleanly;
-      // commit the draft first so layout edits aren't dropped.
-      case "f":
-      case "F":
-        // Search: workspace-only (no /api/search route in terminal mode).
-        if (ui.terminalOnly) return;
-        commitPaneMode();
-        scheduleSessionSave();
-        searchPanel.open = true;
         return;
       // `h` toggles the Hybrid Nav help cheatsheet without committing the draft;
       // the user is still shaping their layout.
       case "h":
       case "H":
         paneModeHelpVisible = !paneModeHelpVisible;
-        return;
-      // Screen lock is intentionally only reachable through the
-      // Hybrid Nav chain. Plain Cmd+L must stay available for the
-      // browser location bar in web builds.
-      case "l":
-      case "L":
-        commitPaneMode();
-        scheduleSessionSave();
-        paneModeHelpVisible = false;
-        lockNow();
-        return;
-      // `i` opens a Dashboard tab. Same commit-then-act shape as Search /
-      // Lock so layout edits aren't dropped.
-      case "i":
-      case "I":
-        // Dashboard: workspace-only surface.
-        if (ui.terminalOnly) return;
-        commitPaneMode();
-        scheduleSessionSave();
-        paneModeHelpVisible = false;
-        openDashboardInActivePane();
-        return;
-      // `N` stages a new draft editor. The intent queues onto
-      // `paneMode.stagedDraftEditors` pinned to the focused pane; Enter
-      // resolves the queue via materializeStagedDraftEditors, Esc bails
-      // before the round-trips fire so no orphan drafts are created.
-      case "n":
-      case "N":
-        // New draft editor: workspace-only (writes into the drafts dir).
-        if (ui.terminalOnly) return;
-        paneModeStageDraftEditor();
         return;
       // `<` / `>` toggle the docked file browsers. Arrow direction is
       // intentionally opposite to the dock side:
@@ -734,12 +670,6 @@
         scheduleSessionSave();
         toggleBrowserSidePane("left");
         return;
-      // Tab flips the focused Hybrid inside the transaction so Esc can roll
-      // it back. flipHybrid targets whichever side is currently visible;
-      // two presses toggle back.
-      case "Tab":
-        flipHybrid(paneMode.draft?.activePaneId ?? layout.activePaneId);
-        return;
       // Split right (`/`) and split bottom (`?` = Shift+/) mirror the
       // top-level Cmd+/ / Cmd+Shift+/ chords. New pane lands as the focus
       // so subsequent transaction edits target it. `?` avoids 1Password's
@@ -750,116 +680,36 @@
       case "?":
         paneModeSplit("column");
         return;
-      // Close-all / kill-pane reuse the existing affordances and their
-      // terminal-confirmation modal. Commit first so the confirmation runs
-      // against the layout the user just shaped.
-      // Backspace = delete is the intuitive mapping for kill-pane.
-      case "x":
-      case "X":
-        commitPaneMode();
-        closeTabsInActivePane();
-        return;
-      case "Backspace":
-        commitPaneMode();
-        killActivePane();
-        return;
     }
   }
-    // Cmd+, flips the focused Hybrid (Terminal / Editor / Graph / FB /
-    // Dashboard) to its back-of-card; Cmd+, again flips back.
-    // Match `e.code === "Comma"` (layout-independent) ahead of `e.key`
-    // so AZERTY/QWERTZ keyboards still land here. stopImmediatePropagation
-    // prevents duplicate handlers from toggling showingBack twice.
-    if (
-      meta &&
-      !e.shiftKey &&
-      !e.altKey &&
-      (e.code === "Comma" || e.key === ",")
-    ) {
-      // A modal or the search overlay owns the keyboard: let it keep
-      // the key rather than flipping the pane hidden behind it.
-      if (paneChordBlocked()) return;
-      e.preventDefault();
-      e.stopImmediatePropagation();
-      flipHybrid(layout.activePaneId);
-      return;
-    }
-    // Spawn-chord family. Each Cmd+Alt+<letter> is the macOS web fallback
-    // for the matching native Cmd+<letter> that browsers reserve at the OS
-    // level (Cmd+T new tab, Cmd+O open file, Cmd+P print). Chan-desktop's
-    // KEY_BRIDGE_JS intercepts native chords and replays them as
-    // `chan:command` events routed through the same context-aware helpers.
-    //
-    // Mac-only: require metaKey explicitly (not the `meta` shorthand that
-    // includes Ctrl) so Ctrl+Alt+<letter> on Win/Linux stays free.
-    if (e.metaKey && e.altKey && !e.shiftKey && !e.ctrlKey && e.code === "KeyT") {
+    // New terminal (registry app.terminal.toggle). On the web the chord is
+    // the literal Ctrl+Shift+T on every OS; the desktop uses Cmd+T (mac) /
+    // Ctrl+Shift+T (off-mac) through KEY_BRIDGE_JS -> the app.terminal.toggle
+    // command. On a browser Ctrl+Shift+T is the reopen-tab chord, so we
+    // preventDefault and browser clients rebind if the browser wins.
+    if (e.ctrlKey && e.shiftKey && !e.metaKey && !e.altKey && e.code === "KeyT") {
       e.preventDefault();
       spawnTerminalFromContext();
       return;
     }
-    if (e.metaKey && e.altKey && !e.shiftKey && !e.ctrlKey && e.code === "KeyO") {
-      e.preventDefault();
-      spawnBrowserFromContext();
-      return;
-    }
-    if (e.metaKey && e.altKey && !e.shiftKey && !e.ctrlKey && e.code === "KeyP") {
-      e.preventDefault();
-      spawnTeamWorkFromContext();
-      return;
-    }
-    // Cmd+Shift+M spawns a context-aware graph on both web and native.
-    // Browsers don't reserve this chord so no Cmd+Alt+M fallback is needed.
-    if (e.metaKey && !e.altKey && e.shiftKey && !e.ctrlKey && e.code === "KeyM") {
-      e.preventDefault();
-      spawnGraphFromContext();
-      return;
-    }
-    // `terminal.richPrompt` toggles the Rich Prompt bubble, PER-TERMINAL,
-    // on the focused pane's active terminal only. No-op when the focused tab
-    // is not a terminal. macOS: Cmd+Shift+P. Off macOS the Win/Super key is
-    // ruled out, so the chord diverges by surface like the Dashboard chord —
-    // Ctrl+Shift+P in the desktop webview (free), Alt+Shift+P on web
-    // (Ctrl+Shift+P is the browser's private-window chord). Keep this in sync
-    // with `osChord`'s RICH_PROMPT_ID branch. Also reachable via the terminal
-    // right-click row and command launcher entry, whose labels read the store.
+    // `terminal.richPrompt` toggles the Rich Prompt bubble, PER-TERMINAL, on
+    // the focused pane's active terminal only. No-op when the focused tab is
+    // not a terminal. Cmd+Shift+P on macOS; Ctrl+Shift+P off macOS on both the
+    // desktop webview and the browser (the Win/Super key is ruled out). On a
+    // browser Ctrl+Shift+P is the private-window chord, so we preventDefault
+    // and browser clients rebind. Keep in sync with osChord's RICH_PROMPT_ID
+    // branch. Also on the terminal right-click row and the launcher entry.
     if (e.code === "KeyP") {
-      const richPromptChord = isTauriDesktop()
-        ? currentOS() === "mac"
+      const richPromptChord =
+        currentOS() === "mac"
           ? e.metaKey && !e.ctrlKey && !e.altKey && e.shiftKey
-          : e.ctrlKey && !e.metaKey && !e.altKey && e.shiftKey
-        : currentOS() === "mac"
-          ? e.metaKey && !e.ctrlKey && !e.altKey && e.shiftKey
-          : e.altKey && e.shiftKey && !e.metaKey && !e.ctrlKey;
+          : e.ctrlKey && !e.metaKey && !e.altKey && e.shiftKey;
       if (richPromptChord) {
         e.preventDefault();
         // Rich Prompt is workspace-only; off in terminal-only windows.
         if (ui.terminalOnly) return;
         const term = activeTerminalTab();
         if (term) toggleRichPromptForTab(term.id);
-        return;
-      }
-    }
-    // Dashboard direct chord, OUT of Hybrid Nav (Dashboard was the only
-    // surface still mixed with it). Native (Tauri): Mod+Shift+D (Cmd+Shift+D
-    // mac / Ctrl+Shift+D linux), free in the webview. Web: Alt+Shift+D, because
-    // Cmd/Ctrl+Shift+D is the browser's "bookmark all tabs" which page JS
-    // cannot reliably preventDefault - same web-vs-native split as tab/pane
-    // nav. e.code === "KeyD" is layout/Option-glyph agnostic. On native this
-    // branch fires when chan-desktop's KEY_BRIDGE_JS does NOT intercept the
-    // chord; if it does, it stopImmediatePropagation + routes the
-    // `chan:command` app.dashboard.open bridge instead (no double-fire).
-    // Mod+. i (Hybrid Nav) + the hamburger remain.
-    if (e.code === "KeyD") {
-      const dashboardChord = isTauriDesktop()
-        ? currentOS() === "mac"
-          ? e.metaKey && !e.ctrlKey && !e.altKey && e.shiftKey
-          : e.ctrlKey && !e.metaKey && !e.altKey && e.shiftKey
-        : e.altKey && e.shiftKey && !e.metaKey && !e.ctrlKey;
-      if (dashboardChord) {
-        e.preventDefault();
-        // Dashboard is a workspace-only surface; no-op in terminal mode.
-        if (ui.terminalOnly) return;
-        openDashboardInActivePane();
         return;
       }
     }
@@ -878,43 +728,25 @@
       selectNextPane();
       return;
     }
-    // Search toggle. macOS: Cmd+S. Linux/Windows: Ctrl+Shift+S, so plain
-    // Ctrl+S falls through (bare Ctrl+S collides with a Claude Code chord).
-    // Save is autosave-only so the chord is safe to claim; preventDefault
-    // suppresses the browser save-page dialog. Desktop routes this via
-    // KEY_BRIDGE_JS (stops propagation before this handler). Branch per-OS
-    // like the reload chord below; Cmd+Shift+S stays the editor's
-    // strikethrough (mac only).
-    const searchChord =
-      currentOS() === "mac"
-        ? e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey && e.code === "KeyS"
-        : e.ctrlKey && e.shiftKey && !e.metaKey && !e.altKey && e.code === "KeyS";
-    if (searchChord) {
-      e.preventDefault();
-      // Search is workspace-only; swallow the chord in terminal mode so the
-      // browser save dialog still stays suppressed but nothing else fires.
-      if (ui.terminalOnly) return;
-      searchPanel.open = !searchPanel.open;
-      return;
-    }
-    // `app.pane.closeEmpty` (Mod+W): only an EMPTY active pane closes;
-    // otherwise the chord falls through to the browser / native close.
+    // Cmd+W is the macOS close-tab primary (registry app.tab.close). Preserve
+    // the control-terminal close path: in a control window Cmd+W drives the
+    // window close even while the connect script's PTY is live, and
+    // request_close_window hands that close to the desktop, which reaps the
+    // terminal. Otherwise mac Cmd+W closes the active tab (or the empty pane
+    // when the pane has no tabs, via the app.tab.close command). Off-mac
+    // Ctrl+W is not claimed here (Ctrl+D closes tabs off-mac and the browser
+    // owns Ctrl+W), so it falls through.
     if (meta && !e.altKey && !e.shiftKey && e.code === "KeyW") {
-      // In a control terminal window, Cmd+W must drive the close path even
-      // while the connect script's PTY is live (closeActiveEmptyPane is a
-      // no-op with a live shell). request_close_window hands the
-      // control-terminal close to the desktop, which reaps that terminal.
-      // (macOS routes Cmd+W through the native menu; this covers the web +
-      // Linux/Windows keymap path.)
       if (ui.terminalControl) {
         e.preventDefault();
         e.stopPropagation();
         if (isTauriDesktop()) void requestCloseWindow();
         return;
       }
-      if (closeActiveEmptyPane()) {
+      if (e.metaKey) {
         e.preventDefault();
         e.stopPropagation();
+        runCommand("app.tab.close", {});
         return;
       }
     }
@@ -971,27 +803,10 @@
       void reloadWindow();
       return;
     }
-    // New draft (registry app.draft.new = Mod+N): Cmd+N on macOS, Ctrl+N
-    // on Linux/Windows. The earlier `meta && !e.ctrlKey` form was Mac-only
-    // by accident - `meta` is `metaKey || ctrlKey`, so `!e.ctrlKey` excluded
-    // the very Ctrl that Mod resolves to off macOS and Ctrl+N never fired.
-    // Mirror the reload chord's per-OS split; Cmd/Ctrl+Shift+N still falls
-    // through to the desktop's New Window.
-    const newDraftChord =
-      currentOS() === "mac"
-        ? e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey && e.code === "KeyN"
-        : e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && e.code === "KeyN";
-    if (newDraftChord) {
-      e.preventDefault();
-      // New draft is workspace-only (writes into the drafts dir).
-      if (ui.terminalOnly) return;
-      void createDraftAndOpen();
-      return;
-    }
     // Mod+E (Obsidian-style "Show Source Code") flips the active file tab
     // between source and rendered views. No-op when no file tab is active.
-    // Same Mac-only slip as New Draft above; split per-OS so Ctrl+E reaches
-    // it off macOS (registry app.editor.toggleMode = Mod+E).
+    // Split per-OS so Ctrl+E reaches it off macOS (registry
+    // app.editor.toggleMode = Mod+E).
     const toggleModeChord =
       currentOS() === "mac"
         ? e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey && e.code === "KeyE"
@@ -1003,7 +818,7 @@
     }
     // No `KeyI` branch here: the editor claims Cmd+I for italic
     // (Wysiwyg.svelte's CM6 keymap); outside the editor Cmd+I is inert.
-    // Dashboard is reachable via Hybrid Nav `Cmd+. i` and the hamburger.
+    // Dashboard is reachable from the launcher and the pane hamburger.
   }
 
   async function createDraftAndOpen(): Promise<void> {

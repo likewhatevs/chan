@@ -28,10 +28,10 @@ describe("Hybrid Nav lock chord", () => {
     expect(app).not.toMatch(/e\.code === "KeyL"[\s\S]{1,160}lockNow\(\);/);
   });
 
-  test("App.svelte Hybrid Nav L handler fires lockNow", () => {
-    expect(app).toMatch(
-      /case "l":[\s\S]{1,40}case "L":[\s\S]{1,220}lockNow\(\);/,
-    );
+  test("App.svelte no longer binds a Hybrid Nav L handler", () => {
+    // The no-defaults round dropped the Mod+. L screen-lock binding; lock is
+    // reached via the app.screensaver.lock command and the launcher.
+    expect(app).not.toMatch(/case "l":[\s\S]{1,40}case "L":[\s\S]{1,220}lockNow\(\);/);
   });
 
   test("App.svelte imports lockNow alongside the tracker + loader", () => {

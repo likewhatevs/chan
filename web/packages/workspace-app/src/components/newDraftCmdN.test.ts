@@ -24,10 +24,14 @@ describe("app.draft.new shortcut registry", () => {
   });
 });
 
-describe("Cmd+N keymap branch", () => {
-  test("App.svelte keymap intercepts bare Mod+N per-OS (Cmd+N mac / Ctrl+N else)", () => {
+describe("New draft command wiring", () => {
+  test("New draft is via the app.draft.new command, not a Cmd+N chord", () => {
+    // The no-defaults round dropped the Cmd+N default; New draft is reached
+    // through the launcher / chan:command -> runCommand path. No newDraftChord
+    // keydown branch remains.
+    expect(app).not.toMatch(/const newDraftChord =/);
     expect(app).toMatch(
-      /const newDraftChord =[\s\S]{1,80}currentOS\(\) === "mac"[\s\S]{1,120}e\.metaKey && !e\.ctrlKey[\s\S]{1,80}e\.code === "KeyN"[\s\S]{1,120}: e\.ctrlKey && !e\.metaKey[\s\S]{1,80}e\.code === "KeyN";[\s\S]{1,200}void createDraftAndOpen\(\);/,
+      /case "app\.draft\.new":[\s\S]{1,80}void createDraftAndOpen\(\);/,
     );
   });
 

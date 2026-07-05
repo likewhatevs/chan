@@ -1,17 +1,17 @@
 import { describe, expect, test } from "vitest";
 import appSource from "../App.svelte?raw";
 
-// Cmd+, flips the focused Hybrid pane. It must NOT fire while a modal or
-// the search overlay owns the keyboard, or it flips the pane hidden
-// behind the surface - the reported "panes flip" desync. Reproduced on a
-// real build: open Search (or the New file dialog), press Cmd+,, dismiss
-// the surface -> the obscured pane had silently flipped to its back.
+// The "Flip focused Hybrid" command (app.settings.toggle) flips the focused
+// pane. It must NOT fire while a modal or the search overlay owns the
+// keyboard, or it flips the pane hidden behind the surface - the reported
+// "panes flip" desync. Reproduced on a real build: open Search (or the New
+// file dialog), trigger the flip, dismiss the surface -> the obscured pane
+// had silently flipped to its back.
 //
-// Both Cmd+, paths route through the same flip and must share the guard:
-// the web chord (onWindowKey) and chan-desktop's KEY_BRIDGE_JS, which
-// replays the native Cmd+, as the `app.settings.toggle` command. The
-// behavior is verified in the browser; these lock the wiring.
-describe("Cmd+, pane-flip modal/overlay guard", () => {
+// The no-defaults round dropped the Cmd+, default chord, so the command path
+// (the launcher / chan:command -> runCommand app.settings.toggle) is the entry
+// point that still carries the guard; this locks that wiring.
+describe("Flip-pane command modal/overlay guard", () => {
   const src = appSource.replace(/\s+/g, " ");
 
   test("paneChordBlocked checks the overlay stack and every modal", () => {
@@ -35,13 +35,13 @@ describe("Cmd+, pane-flip modal/overlay guard", () => {
     }
   });
 
-  test("both Cmd+, flip entry points bail when a modal or overlay is active", () => {
+  test("the flip command bails when a modal or overlay is active", () => {
     const guards = src.match(/if \(paneChordBlocked\(\)\) return;/g) ?? [];
-    expect(guards.length).toBeGreaterThanOrEqual(2);
+    expect(guards.length).toBeGreaterThanOrEqual(1);
   });
 
-  test("the flip action is preserved at both entry points", () => {
+  test("the flip action is guarded at the command entry point", () => {
     const flips = src.match(/flipHybrid\(layout\.activePaneId\)/g) ?? [];
-    expect(flips.length).toBeGreaterThanOrEqual(2);
+    expect(flips.length).toBeGreaterThanOrEqual(1);
   });
 });

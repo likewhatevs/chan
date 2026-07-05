@@ -22,24 +22,11 @@ describe("Hybrid Nav keymap (inversion)", () => {
   });
 });
 
-// Hybrid NAV spawn cases: numeric 1/2/3/4 are gone (they duplicated
-// Cmd+T / Cmd+O / Cmd+P / Cmd+Shift+M). Letter mnemonics t/o/p/m/g
-// are the in-NAV path; f/F (Search) and h/H (Help) are unchanged.
+// Hybrid Nav spawn cases: numeric 1/2/3/4 are gone (they duplicated the old
+// spawn chords), and the no-defaults round removed the o/g/f/l/i/n/Tab/x
+// mnemonics with their commands. Only `t` (new terminal) and `h` (help) remain
+// alongside the layout keys.
 describe("Hybrid Nav keymap (transactional staging)", () => {
-  test("g / G writes directly to the draft layout (no immediate commit)", () => {
-    expect(app).toMatch(
-      /case "g":\s*\n\s*case "G":\s*\n?\s*case "m":\s*\n\s*case "M":[\s\S]*?paneModeOpenGraph\(resolveSpawnContext\(\)\);[\s\S]*?return;/,
-    );
-    // m / M is the Hybrid Nav graph chord (Mod+. M); g / G is the mnemonic alias.
-    expect(app).toMatch(/case "m":\s*\n\s*case "M":[\s\S]*?paneModeOpenGraph/);
-  });
-
-  test("lowercase f opens the Search overlay (commits first)", () => {
-    expect(app).toMatch(
-      /case "f":[\s\S]*?case "F":[\s\S]*?commitPaneMode\(\);[\s\S]*?searchPanel\.open = true;/,
-    );
-  });
-
   test("h toggles the Hybrid Nav help overlay without committing", () => {
     expect(app).toContain(
       'case "h":\n      case "H":\n        paneModeHelpVisible = !paneModeHelpVisible;',
@@ -65,27 +52,12 @@ describe("Hybrid Nav transactional staging", () => {
     );
   });
 
-  test("o / O stages a browser + primes browserSelection without committing", () => {
-    expect(app).toMatch(
-      /case "o":\s*\n\s*case "O": \{[\s\S]*?const ctx = resolveSpawnContext\(\);[\s\S]*?paneModeOpenBrowser\(ctx\);[\s\S]*?revealAndSelect\(ctx\.file\);[\s\S]*?revealAndSelect\(ctx\.dir\);[\s\S]*?return;\s*\n\s*\}/,
-    );
-  });
-
   test("p / P no longer stages a Team Work terminal (decoupled to lead-only)", () => {
     // The pane-mode P binding that spawned a bare Team Work bubble terminal on
     // an arbitrary pane was removed: the bubble renders only on a team LEAD
     // terminal via the Cmd+P workflow, so pane mode no longer references the
     // removed spawn.
     expect(app).not.toMatch(/paneModeOpenTeamWorkTerminal/);
-  });
-
-  test("n / N stages a new draft editor onto the focused pane", () => {
-    // The terminal-only guard (`if (ui.terminalOnly) return;`) sits between
-    // the case labels and the stage call in a `?kind=terminal` window, so
-    // allow arbitrary intervening source here.
-    expect(app).toMatch(
-      /case "n":\s*\n\s*case "N":[\s\S]*?paneModeStageDraftEditor\(\);\s*\n\s*return;/,
-    );
   });
 
   test("Enter materializes staged draft editors before commit", () => {
@@ -105,33 +77,13 @@ describe("Hybrid Nav transactional staging", () => {
   });
 });
 
-describe("Cmd+T / O / P / Cmd+Shift+M top-level chords", () => {
-  test("Cmd+Alt+T (web Mac) routes through context-aware spawn helper", () => {
-    // Routes through spawnTerminalFromContext so resolveSpawnContext().dir
-    // is threaded as cwd.
+describe("New terminal web chord + the chan:command bridge", () => {
+  test("Ctrl+Shift+T (web) routes through the context-aware spawn helper", () => {
+    // The no-defaults round moved New terminal's web chord to the literal
+    // Ctrl+Shift+T (every browser OS); it still routes through
+    // spawnTerminalFromContext so resolveSpawnContext().dir threads as cwd.
     expect(app).toMatch(
-      /e\.metaKey && e\.altKey && !e\.shiftKey && !e\.ctrlKey && e\.code === "KeyT"[\s\S]*?spawnTerminalFromContext\(\)/,
-    );
-  });
-
-  test("Cmd+Alt+O (web Mac) spawns file browser with context", () => {
-    expect(app).toMatch(
-      /e\.metaKey && e\.altKey && !e\.shiftKey && !e\.ctrlKey && e\.code === "KeyO"[\s\S]*?spawnBrowserFromContext\(\)/,
-    );
-  });
-
-  test("Cmd+Alt+P (web Mac) spawns Team Work with context", () => {
-    expect(app).toMatch(
-      /e\.metaKey && e\.altKey && !e\.shiftKey && !e\.ctrlKey && e\.code === "KeyP"[\s\S]*?spawnTeamWorkFromContext\(\)/,
-    );
-  });
-
-  test("Cmd+Shift+M (web + native) spawns graph with context", () => {
-    // The top-level Cmd+Shift+M graph chord: the web keydown fires
-    // spawnGraphFromContext; the native half routes via the app.graph.toggle
-    // bridge (below). Hybrid Nav Mod+. M is the in-NAV alias.
-    expect(app).toMatch(
-      /e\.metaKey && !e\.altKey && e\.shiftKey && !e\.ctrlKey && e\.code === "KeyM"[\s\S]*?spawnGraphFromContext\(\)/,
+      /e\.ctrlKey && e\.shiftKey && !e\.metaKey && !e\.altKey && e\.code === "KeyT"[\s\S]*?spawnTerminalFromContext\(\)/,
     );
   });
 
@@ -175,14 +127,14 @@ describe("Hybrid Nav Team Work binding", () => {
   });
 });
 
-describe("Hybrid Nav Backspace kill-pane", () => {
-  test("Backspace closes the focused pane; k no longer bound to kill-pane", () => {
-    // kill-pane moved to Backspace; the old `k` / `K` binding is gone.
-    expect(app).toMatch(
-      /case "Backspace":[\s\S]*?commitPaneMode\(\);[\s\S]*?killActivePane\(\);/,
-    );
+describe("Hybrid Nav kill-pane removed", () => {
+  test("pane mode no longer binds Backspace (or k) to kill-pane", () => {
+    // The no-defaults round dropped the Hybrid Nav kill-pane binding; kill-pane
+    // is reachable via the app.pane.kill command (asserted above). Neither the
+    // Backspace case nor the old k / K case remains in the pane-mode switch.
+    expect(app).not.toMatch(/case "Backspace":[\s\S]{0,80}killActivePane\(\);/);
     expect(app).not.toMatch(
-      /case "k":\s*\n\s*case "K":\s*\n\s*commitPaneMode\(\);[\s\S]*?killActivePane\(\);/,
+      /case "k":\s*\n\s*case "K":[\s\S]{0,80}killActivePane\(\);/,
     );
   });
 });

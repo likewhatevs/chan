@@ -1,22 +1,22 @@
 import { describe, expect, test } from "vitest";
 import app from "./App.svelte?raw";
 
-// The Cmd+, keymap handler in App.svelte's onWindowKey is layout-
-// independent (matches `e.code === "Comma"` ahead of the `e.key === ","`
-// form) and calls stopImmediatePropagation so no downstream listener can
-// re-trigger flipHybrid in the same tick. It requires meta + !shift +
-// !alt so Cmd+Shift+, / Cmd+Alt+, stay free for future bindings.
+// The Cmd+, default chord was dropped in the no-defaults round: "Flip focused
+// Hybrid" (app.settings.toggle) is reachable via the launcher and the
+// chan:command -> runCommand path, not an onWindowKey keydown matcher. This
+// pins that the Cmd+, matcher is gone so the default is not silently re-added.
 
-describe("Cmd+, matcher is layout-independent + stops propagation", () => {
-  test("matcher uses e.code === Comma ahead of e.key === ',' fallback", () => {
-    expect(app).toMatch(
-      /if \(\s*meta &&\s*!e\.shiftKey &&\s*!e\.altKey &&\s*\(e\.code === "Comma" \|\| e\.key === ","\)\s*\) \{/,
-    );
+describe("Cmd+, chord is removed (no-defaults)", () => {
+  test("onWindowKey has no e.code === Comma flip matcher", () => {
+    expect(app).not.toMatch(/\(e\.code === "Comma" \|\| e\.key === ","\)/);
   });
 
-  test("matcher preventDefaults AND stopImmediatePropagation before flipping", () => {
-    expect(app).toMatch(
-      /\(e\.code === "Comma" \|\| e\.key === ","\)\s*\) \{[\s\S]{1,300}e\.preventDefault\(\);[\s\S]{1,200}e\.stopImmediatePropagation\(\);[\s\S]{1,200}flipHybrid\(layout\.activePaneId\);/,
+  test("the flip action survives only on the command path", () => {
+    // flipHybrid(layout.activePaneId) remains in the runCommand
+    // app.settings.toggle case, but no longer behind a Cmd+, keydown branch.
+    expect(app).toMatch(/case "app\.settings\.toggle":/);
+    expect(app).not.toMatch(
+      /"Comma"[\s\S]{1,200}flipHybrid\(layout\.activePaneId\)/,
     );
   });
 });
