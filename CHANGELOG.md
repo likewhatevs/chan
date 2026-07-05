@@ -10,28 +10,34 @@ The command launcher becomes configurable. A new Settings surface renders a web 
 
 ### Added
 
-- **A Settings configuration surface.** Opening "Settings" from the command launcher brings up a web form over the per-library configuration, grouped into Appearance, Editor, Terminal, Files & search, and Keyboard Shortcuts. Each change saves as you make it and reflects live in every open window. A devserver's own configuration is editable the same way from its window. The back-of-pane configuration cards stay and show the same settings.
+- **A Settings configuration surface.** Opening "Settings" from the command launcher brings up a web form over the per-library configuration, grouped into Appearance (with a per-surface body theme), Editor, Terminal (with a font choice), Files & search, and Keyboard Shortcuts. Each change saves as you make it and reflects live in every open window. A devserver's own configuration is editable the same way from its window. The back-of-pane configuration cards stay and show the same settings.
 - **Assign your own keyboard shortcuts.** Every command in the launcher is now rebindable: click its chord to capture a new one, with conflict detection against the rest of the keymap and reset-to-default. Shortcuts are stored per operating system (web, macOS, Linux, Windows), so the set you configure in chan-desktop applies locally and to every devserver you open from it, while a browser client uses the web set. A Keyboard Shortcuts section in Settings edits any OS's chord for any command.
 - **Reload and Open Inspector in the launcher.** The WebView reload and the DevTools inspector, previously only in the right-click menu, are now commands in the launcher (Open Inspector on chan-desktop).
 - **Jump to a dashboard slide.** New launcher commands jump straight to Workspace status, Indexing status, or About chan.
 
 ### Changed
 
-- **The command launcher is a centered spotlight.** The palette opens as a centered capsule that lifts as you type, carries a per-row icon, and stays empty until you type.
+- **The command launcher is a centered spotlight.** The palette opens as a centered capsule that lifts as you type, over a lightly tinted backdrop. Its search row shows a command-prompt cue and reads "Command", and each result row carries a per-category icon.
+- **The launcher keeps the full catalog visible.** It stays empty until you type; then the best matches surface in a Results group while the rest of the commands stay browsable below, grouped by category with the active surface pinned first, so nothing is hidden.
+- **The launcher opens in a terminal-only window.** Cmd+K and the launcher command now work in a terminal-only window.
 - **The launcher's tab commands split into Apps and Tabs.** New terminal, team, draft, graph, file browser, dashboard, and diagram group under "Apps"; the tab operations (Close tab, Reopen closed tab, Next and Previous tab) group under "Tabs". Next and Previous tab now appear in the launcher too.
-- **The empty single pane shows the workspace path and opens the launcher.** A single empty pane now shows the workspace's absolute path (not just its name) with no action buttons, and opens the command launcher automatically; reopen it from the pane menu's Commands item.
+- **The empty single pane shows the workspace path.** A single empty pane shows the workspace's absolute path (not just its name), with no action buttons. Open the command launcher from the pane menu's Commands item.
 - **The pane menu has "Enter Hybrid Nav" again**, directly under Commands.
-- **New workspaces start with reports off.** Report generation now defaults off for a new workspace.
 - **A config file edited outside chan refreshes open windows.** Editing a configuration file directly, or through `chan config set`, now refreshes any open window without a reload.
 
 ### Fixed
 
 - **A stuck "PTY did not report CWD" notification.** It could linger with no way to dismiss it; it is now dismissable, as is the editor's "copy failed" notification. The copy-path and new-file commands are offered only where a working directory is available.
+- **"Copy path to $CWD" now copies.** The command focuses the terminal and writes through the desktop clipboard, copying the absolute working directory.
 - **Enter after pasting an image into a list continues the list** instead of breaking out of it.
 - **Copying an editor image copies its markdown.** Cmd+C, the context-menu Copy, and the hover copy icon now put the image's markdown on the clipboard, so it pastes and re-renders.
 - **Reopening the last tab after deleting a draft opens a fresh draft** instead of trying to reopen the just-deleted file.
 - **A stale full-line selection highlight** after repeated word-select-then-undo in the editor (chan-desktop).
 - **The pane menu could open partly off-screen** when a pane transform was mid-animation; it now stays within the window.
+
+### Security
+
+- **Hardened devserver access over the tunnel.** Writes to a tunneled devserver carry a double-submit CSRF token, origin and session checks are tightened, the local IPC sockets are created with 0600 permissions, and chan-desktop pins the gateway's identity assertion.
 
 ## [v0.64.0] - 2026-07-05
 
