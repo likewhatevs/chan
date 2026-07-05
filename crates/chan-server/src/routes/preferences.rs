@@ -349,6 +349,51 @@ mod tests {
     }
 
     #[test]
+    fn preferences_view_shortcuts_round_trip_the_wire() {
+        // Pin the shortcut-override wire the config UI and the keymap layer
+        // consume: `preferences.shortcuts.<command-id>.<os>`, sparse (absent OS
+        // slots omitted), empty string preserved verbatim, and a stable
+        // serialize -> deserialize round-trip through the PATCH-body shape.
+        let state = make_test_state(false);
+        {
+            let mut editor = state.editor_prefs.lock().unwrap();
+            editor.shortcuts.insert(
+                "app.launcher.toggle".to_string(),
+                ShortcutOverride {
+                    web: Some("Mod+K".to_string()),
+                    macos: Some("Cmd+K".to_string()),
+                    ..Default::default()
+                },
+            );
+            editor.shortcuts.insert(
+                "app.pane.mode".to_string(),
+                ShortcutOverride {
+                    web: Some(String::new()),
+                    ..Default::default()
+                },
+            );
+        }
+        let view = preferences_view(&state).expect("preferences view");
+        let json = serde_json::to_value(&view).expect("serialize");
+
+        assert_eq!(json["shortcuts"]["app.launcher.toggle"]["web"], "Mod+K");
+        assert_eq!(json["shortcuts"]["app.launcher.toggle"]["macos"], "Cmd+K");
+        assert!(
+            json["shortcuts"]["app.launcher.toggle"]
+                .get("linux")
+                .is_none(),
+            "an unassigned OS slot is omitted, not null"
+        );
+        assert_eq!(
+            json["shortcuts"]["app.pane.mode"]["web"], "",
+            "the empty-string marker is preserved verbatim"
+        );
+
+        let back: PreferencesView = serde_json::from_value(json).expect("deserialize");
+        assert_eq!(back.shortcuts, view.shortcuts);
+    }
+
+    #[test]
     fn broadcast_config_changed_emits_a_config_changed_frame_on_the_ws_bus() {
         // Cross-window settings sync: the SPA's /ws event store keys on a
         // frame whose `kind` is exactly "config_changed" (it then re-fetches
