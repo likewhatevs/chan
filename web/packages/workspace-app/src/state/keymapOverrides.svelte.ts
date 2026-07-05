@@ -162,6 +162,19 @@ export function commandIdForChord(chord: Chord): string | undefined {
   return undefined;
 }
 
+/// Whether the current client's built-in chord for `id` has been replaced by
+/// a user assignment. Built-in keydown branches use this so an assignment
+/// changes the shortcut instead of adding a second permanent alias.
+export function builtInChordSuperseded(id: string): boolean {
+  const platform = currentPlatform();
+  const os = currentOS();
+  const override = overrideChordForSlot(id, slotFor(platform, os));
+  if (!override) return false;
+  const s = SHORTCUTS.find((x) => x.id === id);
+  const builtin = s ? osChord(s, platform, os) : undefined;
+  return !builtin || !chordsEqual(override, builtin);
+}
+
 // A user-assigned override chord must bubble out of a focused terminal so its
 // command can fire from the onWindowKey override dispatch (a de-defaulted
 // command has no built-in `escapeTerminal` flag). Escape exactly when dispatch

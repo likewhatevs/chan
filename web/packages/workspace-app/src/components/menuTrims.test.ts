@@ -5,10 +5,9 @@ import fileTree from "./FileTree.svelte?raw";
 import graph from "./GraphPanel.svelte?raw";
 
 // Right-click menu trims across Terminal / FB / Graph + FB
-// click-to-inspector for tab + overlay variants. Search (global shortcut /
-// Hybrid Nav f)
-// and Settings (Cmd+,) are global keystrokes and are not duplicated
-// in per-tab menus. Show/Hide Details is redundant once row-clicks
+// click-to-inspector for tab + overlay variants. Search and Settings are
+// global commands and are not duplicated in per-tab menus. Show/Hide Details
+// is redundant once row-clicks
 // auto-open the inspector in tab + overlay variants.
 
 describe("TerminalTab right-click: launcher-overlap rows stay gone", () => {
@@ -18,9 +17,7 @@ describe("TerminalTab right-click: launcher-overlap rows stay gone", () => {
   });
 
   test("no openSettingsFromMenu entry (the global Settings overlay opener)", () => {
-    // `-80` dropped duplicating the global Settings chord
-    // (Cmd+,) in per-tab menus. That rule stands - no
-    // `openSettingsFromMenu` style handler in the source.
+    // Settings is a global overlay command; per-tab menus do not duplicate it.
     expect(terminal).not.toContain("onclick={openSettingsFromMenu}");
   });
 

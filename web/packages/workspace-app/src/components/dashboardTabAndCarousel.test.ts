@@ -317,8 +317,7 @@ describe("DashboardTab mounts the carousel", () => {
 describe("Dashboard back card is per-slot (DashboardSlotBack)", () => {
   test("DashboardTab right-click menu lists slot toggles + Settings + Reload", () => {
     // The body right-click menu carries a per-slot on/off checkbox row,
-    // a separator, a Settings (Cmd+,) row that flips to the back face,
-    // and Reload.
+    // a separator, a Settings row that flips to the back face, and Reload.
     expect(dashboard).toMatch(/import HamburgerMenu from "\.\/HamburgerMenu\.svelte";/);
     expect(dashboard).toMatch(/function onContextMenu\(e: MouseEvent\): void/);
     expect(dashboard).toMatch(/menu\?\.openAtCursor\(e\.clientX, e\.clientY\)/);
@@ -342,7 +341,7 @@ describe("Dashboard back card is per-slot (DashboardSlotBack)", () => {
     expect(dashboard).toMatch(
       /function onSlotToggle\(i: number\): void \{[\s\S]{1,200}toggleDashboardSlot\(tab, i\);/,
     );
-    // Settings flips the active pane via flipHybrid (the Cmd+, path).
+    // Settings flips the active pane via flipHybrid.
     expect(dashboard).toMatch(
       /function doSettings\(\): void \{[\s\S]{1,200}flipHybrid\(layout\.activePaneId\);/,
     );

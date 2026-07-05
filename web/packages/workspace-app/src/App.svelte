@@ -13,8 +13,8 @@
   import WorkspaceWarningsModal from "./components/WorkspaceWarningsModal.svelte";
   import TeamDialog from "./components/TeamDialog.svelte";
   import { teamDialogState, openTeamDialog } from "./state/teamDialog.svelte";
-  // Modal-visibility flags read by paneChordBlocked() so Cmd+, never
-  // flips a pane hidden behind a dialog. conflictDialog drives
+  // Modal-visibility flags read by paneChordBlocked() so the pane-flip command
+  // never flips a pane hidden behind a dialog. conflictDialog drives
   // ConflictModal; workspaceWarningsDialog drives WorkspaceWarningsModal.
   import { conflictDialog } from "./state/tabs.svelte";
   import { workspaceWarningsDialog } from "./state/store.svelte";
@@ -62,6 +62,7 @@
     searchPanel,
     launcherPanel,
     settingsPanel,
+    openSettings,
     importContactsPanel,
     closeImportContacts,
     toggleCommandLauncher,
@@ -125,7 +126,10 @@
   import { activeTransferCount } from "./state/transfers.svelte";
   import { chordFromEvent, currentOS } from "./state/shortcuts";
   import { allCommands, commandContext } from "./state/commands";
-  import { commandIdForChord } from "./state/keymapOverrides.svelte";
+  import {
+    builtInChordSuperseded,
+    commandIdForChord,
+  } from "./state/keymapOverrides.svelte";
   import { api, openLocalColorWatch, openLocalThemeWatch } from "./api/client";
   import {
     applyInitialPageWidth,
@@ -448,7 +452,9 @@
   ///   Mod+. t/o/p/m  -> universal aliases via Hybrid Nav
   ///
   /// Other app chords:
-  ///   Cmd/Ctrl+,             -> flip focused Hybrid surface
+  ///   Cmd/Ctrl+,             -> Settings
+  ///   Cmd+Shift+S            -> Search on macOS
+  ///   Ctrl+Alt+S             -> Search on Linux / Windows
   ///   Cmd+. L                -> Lock screen
   ///   Alt+Shift+[ / ]        -> previous / next tab  (web fallback)
   ///   Ctrl+Alt+1..9          -> jump to tab N        (web fallback)
@@ -466,8 +472,8 @@
   ///   Cmd+W / Cmd+N / Cmd+Shift+[/] / Cmd+1..9 are OS-level reserved in
   ///   browsers; native binds the VS Code-shaped chords directly.
   ///
-  /// True when a modal or search overlay owns the keyboard. The Cmd+, pane
-  /// flip must bail in this case to avoid flipping a pane hidden behind a dialog.
+  /// True when a modal or search overlay owns the keyboard. The pane-flip
+  /// command must bail here to avoid flipping a pane hidden behind a dialog.
   function paneChordBlocked(): boolean {
     return (
       topOverlay() !== null ||
@@ -533,8 +539,9 @@
         }
       }
     }
+    const os = currentOS();
     const commandLauncherChord =
-      isTauriDesktop() && currentOS() === "mac"
+      isTauriDesktop() && os === "mac"
         ? e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey && e.code === "KeyK"
         : e.ctrlKey && !e.metaKey && e.altKey && !e.shiftKey && e.code === "KeyK";
     if (commandLauncherChord) {
@@ -542,10 +549,36 @@
       toggleCommandLauncher();
       return;
     }
-    // Cmd+. enters Hybrid Nav. Cmd+, is reserved for the focused-Hybrid
-    // flip (macOS app-preferences convention). Cmd+. is not
-    // browser-reserved on macOS (Safari + Chrome both let JS intercept
-    // it), so the same chord works on the web SPA and the desktop shell.
+    const settingsChord =
+      os === "mac"
+        ? e.metaKey &&
+          !e.ctrlKey &&
+          !e.altKey &&
+          !e.shiftKey &&
+          e.code === "Comma"
+        : e.ctrlKey &&
+          !e.metaKey &&
+          !e.altKey &&
+          !e.shiftKey &&
+          e.code === "Comma";
+    if (settingsChord && !builtInChordSuperseded("app.settings.open")) {
+      e.preventDefault();
+      openSettings();
+      return;
+    }
+    const searchChord =
+      os === "mac"
+        ? e.metaKey && !e.ctrlKey && !e.altKey && e.shiftKey && e.code === "KeyS"
+        : e.ctrlKey && !e.metaKey && e.altKey && !e.shiftKey && e.code === "KeyS";
+    if (searchChord && !builtInChordSuperseded("app.search.toggle")) {
+      e.preventDefault();
+      searchPanel.open = !searchPanel.open;
+      return;
+    }
+    // Cmd+. enters Hybrid Nav. Cmd+, / Ctrl+, opens Settings above so the
+    // pane flip stays on its explicit command or user-assigned chord.
+    // Cmd+. is not browser-reserved on macOS (Safari + Chrome both let JS
+    // intercept it), so the same chord works on the web SPA and desktop shell.
     if (meta && !e.shiftKey && !e.altKey && e.code === "Period") {
       e.preventDefault();
       enterPaneMode();
@@ -993,10 +1026,12 @@
     )
       return;
     switch (name) {
+      case "app.settings.open":
+        openSettings();
+        return;
       case "app.settings.toggle":
-        // Command id used by chan-desktop KEY_BRIDGE_JS (native Cmd+,);
-        // the action is the focused-Hybrid flip. Same guard as the web
-        // chord so the native key can't flip from under a dialog.
+        // Focused-Hybrid flip. The Settings overlay owns comma; this command
+        // remains launcher-reachable and user-assignable.
         if (paneChordBlocked()) return;
         flipHybrid(layout.activePaneId);
         return;

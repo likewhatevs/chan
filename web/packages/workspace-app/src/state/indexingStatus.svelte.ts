@@ -1,8 +1,8 @@
 // Shared cache of the last successful indexing-state poll.
 //
 // The Dashboard carousel's Indexing slide mounts `GraphCanvas` to draw
-// the directory spine. A Hybrid flip (Cmd+,) unmounts the whole front
-// face, including the carousel, and flip-back remounts it from scratch.
+// the directory spine. A Hybrid flip unmounts the whole front face,
+// including the carousel, and flip-back remounts it from scratch.
 // Holding the last response in a module-level `$state` lets the
 // remounted slide render its graph synchronously from cache instead of
 // flashing empty while a fresh poll round-trips (the empty mount was

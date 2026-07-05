@@ -2610,18 +2610,18 @@ mod tests {
 
     #[test]
     fn key_bridge_drops_chords_covered_by_pane_mode() {
-        // Chords with a Hybrid Nav equivalent, and the commands whose
-        // built-in default was removed (no-defaults), stay out of the
-        // native bridge; they reach through Hybrid Nav or the launcher.
-        // The absences here catch accidental reverts.
+        // Chords handled by the SPA keymap or Hybrid Nav stay out of the
+        // native bridge so user assignments can replace their defaults.
+        // The absences here catch accidental native interception.
         assert!(!KEY_BRIDGE_JS.contains("app.file.new"));
         assert!(!KEY_BRIDGE_JS.contains("Backquote"));
-        // De-defaulted: File Browser, Graph, Team Work, Search, and the
-        // broadcast toggle no longer carry a native chord.
+        assert!(!KEY_BRIDGE_JS.contains("app.settings.open"));
+        assert!(!KEY_BRIDGE_JS.contains("app.search.toggle"));
+        // File Browser, Graph, Team Work, and the broadcast toggle remain
+        // command-only or Hybrid Nav driven.
         assert!(!KEY_BRIDGE_JS.contains("app.files.toggle"));
         assert!(!KEY_BRIDGE_JS.contains("app.graph.toggle"));
         assert!(!KEY_BRIDGE_JS.contains("app.terminal.teamWork"));
-        assert!(!KEY_BRIDGE_JS.contains("app.search.toggle"));
         assert!(!KEY_BRIDGE_JS.contains("app.terminal.broadcastToggle"));
     }
 

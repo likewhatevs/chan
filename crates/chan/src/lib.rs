@@ -99,6 +99,8 @@ In-app keybindings (Cmd = Ctrl on Linux / Windows):
   App
   ---
   Command launcher                             Ctrl+Alt+K
+  Settings                                     Cmd+,
+  Search                                       Cmd+Shift+S   (Ctrl+Alt+S on Linux / Windows)
   New terminal                                 Ctrl+Shift+T   (Cmd+T on macOS desktop; or Mod+. t (Hybrid Nav))
   Reload window                                Cmd+R   (Ctrl+Shift+R on Linux / Windows)
   Dismiss overlay                              Esc

@@ -1,19 +1,17 @@
 import { describe, expect, test } from "vitest";
 import app from "./App.svelte?raw";
 
-// The Cmd+, default chord was dropped in the no-defaults round: "Flip focused
-// Hybrid" (app.settings.toggle) is reachable via the launcher and the
-// chan:command -> runCommand path, not an onWindowKey keydown matcher. This
-// pins that the Cmd+, matcher is gone so the default is not silently re-added.
+// Comma opens Settings. The focused-pane flip remains a separate command and
+// must not be wired to the comma key path.
 
-describe("Cmd+, chord is removed (no-defaults)", () => {
-  test("onWindowKey has no e.code === Comma flip matcher", () => {
-    expect(app).not.toMatch(/\(e\.code === "Comma" \|\| e\.key === ","\)/);
+describe("Cmd+, opens Settings", () => {
+  test("onWindowKey routes comma to app.settings.open", () => {
+    expect(app).toMatch(
+      /const settingsChord =[\s\S]*?os === "mac"[\s\S]*?e\.metaKey[\s\S]*?e\.code === "Comma"[\s\S]*?: e\.ctrlKey[\s\S]*?e\.code === "Comma"[\s\S]*?builtInChordSuperseded\("app\.settings\.open"\)[\s\S]*?openSettings\(\);/,
+    );
   });
 
-  test("the flip action survives only on the command path", () => {
-    // flipHybrid(layout.activePaneId) remains in the runCommand
-    // app.settings.toggle case, but no longer behind a Cmd+, keydown branch.
+  test("the flip action stays off the comma key path", () => {
     expect(app).toMatch(/case "app\.settings\.toggle":/);
     expect(app).not.toMatch(
       /"Comma"[\s\S]{1,200}flipHybrid\(layout\.activePaneId\)/,

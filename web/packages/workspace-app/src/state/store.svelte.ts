@@ -2179,10 +2179,10 @@ const HASH_LAYOUT = "s";
 const HASH_SIDEBAR = "c"; // "1" if collapsed, absent if expanded
 const HASH_SEARCH = "search";
 // The `settings`, `files`, `graph`, and `search_scope` overlay hash
-// keys are no longer active. Cmd+, flips the focused Hybrid (no global
-// Settings overlay); graph and browser surfaces are first-class tabs
-// that persist via the layout `s` key; search is workspace-wide with
-// no scope. Old bookmarks with these keys degrade gracefully: they are
+// keys are no longer active. Settings is an overlay without hash state;
+// graph and browser surfaces are first-class tabs that persist via the
+// layout `s` key; search is workspace-wide with no scope. Old bookmarks
+// with these keys degrade gracefully: they are
 // not in HASH_KEYS so dropUnknownHashKeys strips them on the next write.
 const HASH_KEYS = new Set([
   HASH_LAYOUT,

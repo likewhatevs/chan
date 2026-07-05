@@ -152,7 +152,7 @@ afterEach(() => {
 describe("command launcher overlay", () => {
   test("command launcher chords route through the app keymap", () => {
     expect(appRaw).toMatch(
-      /isTauriDesktop\(\) && currentOS\(\) === "mac"[\s\S]{1,220}e\.metaKey[\s\S]{1,220}e\.ctrlKey && !e\.metaKey && e\.altKey[\s\S]{1,240}toggleCommandLauncher\(\);/,
+      /const os = currentOS\(\);[\s\S]{1,120}isTauriDesktop\(\) && os === "mac"[\s\S]{1,220}e\.metaKey[\s\S]{1,220}e\.ctrlKey && !e\.metaKey && e\.altKey[\s\S]{1,240}toggleCommandLauncher\(\);/,
     );
   });
 

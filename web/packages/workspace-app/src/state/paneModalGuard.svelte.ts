@@ -8,8 +8,8 @@
 // Each such modal registers via markPaneModalOpen() while visible and
 // calls the returned releaser when it closes (drive both from one
 // $effect with a cleanup return). paneChordBlocked() then bails on
-// `openCount > 0` so Cmd+, never flips the pane hidden behind the
-// dialog, matching the guard the app-root modals already get.
+// `openCount > 0` so the pane-flip command never flips the pane hidden
+// behind the dialog, matching the guard the app-root modals already get.
 
 export const paneModalGuard = $state<{ openCount: number }>({ openCount: 0 });
 

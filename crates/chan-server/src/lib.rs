@@ -992,12 +992,12 @@ fn terminal_router(state: Arc<AppState>) -> Router {
         )
         .route("/api/build-info", get(api_build_info))
         .route("/api/health", get(api_health))
-        // Global preferences: Cmd+, flips the pane to the terminal config
-        // back face, which reads and writes the `terminal` sub-config here.
-        // Both handlers are workspace-free (editor_prefs + server_config +
-        // the registry view), so they are safe on the slim tenant. PATCH
-        // skips the tunnel settings_guard: a terminal window is always a
-        // local desktop mount, never a tunnel run.
+        // Global preferences: Settings opens the shared configuration surface,
+        // which reads and writes the `terminal` sub-config here. Both handlers
+        // are workspace-free (editor_prefs + server_config + the registry
+        // view), so they are safe on the slim tenant. PATCH skips the tunnel
+        // settings_guard: a terminal window is always a local desktop mount,
+        // never a tunnel run.
         .route("/api/config", get(api_get_config).patch(api_patch_config))
         // Per-window layout blob: the terminal SPA persists its split /
         // tab layout here keyed by `?w=<window-label>`, same contract as

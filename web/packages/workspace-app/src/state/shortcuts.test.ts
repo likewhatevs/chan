@@ -7,6 +7,22 @@ describe("shortcut table", () => {
     expect(renderTable("native", "mac")).toMatch(/^Command launcher\s+Cmd\+K/m);
   });
 
+  test("advertises Settings on comma", () => {
+    expect(renderTable("web", "mac")).toMatch(/^Settings\s+Cmd\+,/m);
+    expect(renderTable("native", "mac")).toMatch(/^Settings\s+Cmd\+,/m);
+    expect(renderTable("web", "linux")).toMatch(/^Settings\s+Ctrl\+,/m);
+    expect(renderTable("native", "windows")).toMatch(/^Settings\s+Ctrl\+,/m);
+  });
+
+  test("advertises Search as Cmd+Shift+S on macOS and Ctrl+Alt+S elsewhere", () => {
+    expect(renderTable("web", "mac")).toMatch(
+      /^Search\s+Cmd\+Shift\+S\s+\(Ctrl\+Alt\+S on Linux \/ Windows\)/m,
+    );
+    expect(renderTable("native", "mac")).toMatch(/^Search\s+Cmd\+Shift\+S/m);
+    expect(renderTable("web", "linux")).toMatch(/^Search\s+Ctrl\+Alt\+S/m);
+    expect(renderTable("native", "windows")).toMatch(/^Search\s+Ctrl\+Alt\+S/m);
+  });
+
   // "New terminal" is a direct chord so power users can spawn a terminal
   // without entering Pane Mode. Cmd+T on the macOS desktop; Ctrl+Shift+T on
   // web (and the off-mac desktop) after the no-defaults round: a desktop-first
@@ -96,7 +112,6 @@ describe("shortcut table", () => {
       "Graph",
       "New draft",
       "Lock screen",
-      "Search",
       "Dashboard",
       "Flip Hybrid",
       "Close all tabs in pane",

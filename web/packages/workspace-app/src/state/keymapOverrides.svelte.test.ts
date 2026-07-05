@@ -3,6 +3,7 @@ import { chordFor, shouldEscapeTerminal } from "./shortcuts";
 import type { Command } from "./commands";
 import {
   assignOverride,
+  builtInChordSuperseded,
   clearOverride,
   commandIdForChord,
   currentSlot,
@@ -107,6 +108,14 @@ describe("keymap override store", () => {
     expect(commandIdForChord("Mod+R")).toBeUndefined();
   });
 
+  test("builtInChordSuperseded tracks whether an override replaces the default", () => {
+    expect(builtInChordSuperseded("app.settings.open")).toBe(false);
+    assignOverride("app.settings.open", "Mod+,");
+    expect(builtInChordSuperseded("app.settings.open")).toBe(false);
+    assignOverride("app.settings.open", "Mod+J");
+    expect(builtInChordSuperseded("app.settings.open")).toBe(true);
+  });
+
   test("serialize / hydrate round-trips and drops junk slots", () => {
     assignOverride("app.search.toggle", "Mod+J", "web");
     assignOverride("app.search.toggle", "Cmd+K", "macos");
@@ -134,14 +143,22 @@ describe("keymap override store", () => {
   });
 
   test("a user-assigned override chord escapes a focused terminal", () => {
-    // Importing the store registers the override-escape matcher. A de-defaulted
-    // command (search lost Cmd+S) whose new chord the user assigns must bubble
-    // out of xterm so the onWindowKey override dispatch can fire.
+    // Importing the store registers the override-escape matcher. A user
+    // assignment must bubble out of xterm so the onWindowKey override dispatch
+    // can fire.
     const cmdAltJ = () =>
       new KeyboardEvent("keydown", { key: "j", metaKey: true, altKey: true });
     expect(shouldEscapeTerminal(cmdAltJ())).toBe(false); // nothing bound to it
     assignOverride("app.search.toggle", "Mod+Alt+J");
     expect(shouldEscapeTerminal(cmdAltJ())).toBe(true); // override -> escapes
+  });
+
+  test("a replacement override stops the old default from escaping terminals", () => {
+    const searchDefault = () =>
+      new KeyboardEvent("keydown", { key: "s", metaKey: true, shiftKey: true });
+    expect(shouldEscapeTerminal(searchDefault())).toBe(true);
+    assignOverride("app.search.toggle", "Mod+Alt+J");
+    expect(shouldEscapeTerminal(searchDefault())).toBe(false);
   });
 });
 

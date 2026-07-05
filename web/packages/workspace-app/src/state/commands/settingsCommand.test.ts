@@ -1,6 +1,5 @@
 // The settings command: registration, availability, and that its run()
-// opens the surface directly (chordless, so it does not route through
-// App.svelte's runCommand switch).
+// opens the surface directly from the launcher.
 
 import { afterEach, describe, expect, it } from "vitest";
 import { availableCommands, type CommandContext } from "../commands";

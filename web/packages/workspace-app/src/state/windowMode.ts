@@ -9,10 +9,11 @@
 /// outside this set needs a workspace (editor / graph / file browser /
 /// dashboard / rich-prompt / drafts / search), so it is dropped before
 /// the dispatch switch when `ui.terminalOnly` is set. Terminal lifecycle,
-/// the command launcher, pane/tab navigation, the settings flip, broadcast,
+/// the command launcher, Settings, pane/tab navigation, pane flip, broadcast,
 /// and the screensaver lock all work without a workspace and stay live.
 export const TERMINAL_ONLY_COMMANDS: ReadonlySet<string> = new Set<string>([
   "app.launcher.toggle",
+  "app.settings.open",
   "app.settings.toggle",
   "app.terminal.toggle",
   "app.terminal.broadcastToggle",

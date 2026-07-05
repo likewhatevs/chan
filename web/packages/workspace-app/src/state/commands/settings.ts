@@ -1,9 +1,8 @@
-// The settings command: opens the configuration surface. Chordless by
-// default (the launcher reaches it, and the shortcut-assignment view can
-// bind one), so it calls its action directly rather than dispatching
-// through App.svelte's runCommand switch. Machine-global config, so it
-// stays available in every window, including standalone terminals. See
-// state/commands.ts for the Command shape and helpers.
+// The settings command opens the configuration surface. It calls its action
+// directly from the launcher; the default and assigned chords route through
+// App.svelte so host dispatch and keyboard dispatch share the same command id.
+// Machine-global config stays available in every window, including standalone
+// terminals. See state/commands.ts for the Command shape and helpers.
 
 import { registerCommands } from "../commands";
 import { openSettings } from "../store.svelte";

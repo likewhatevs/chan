@@ -45,6 +45,9 @@ describe("Windows shortcut labels are Ctrl-based", () => {
     expect(pick("app.window.reload", "native")).toBe("Ctrl+Shift+R");
     expect(pick("app.launcher.toggle", "native")).toBe("Ctrl+Alt+K");
     expect(pick("app.launcher.toggle", "web")).toBe("Ctrl+Alt+K");
+    expect(pick("app.settings.open", "native")).toBe("Ctrl+,");
+    expect(pick("app.search.toggle", "native")).toBe("Ctrl+Alt+S");
+    expect(pick("app.search.toggle", "web")).toBe("Ctrl+Alt+S");
     expect(pick("terminal.copy", "native")).toBe("Ctrl+Shift+C");
     expect(pick("terminal.paste", "native")).toBe("Ctrl+Shift+V");
     // Rich Prompt: Win key ruled out → Ctrl+Shift+P on native and web alike.

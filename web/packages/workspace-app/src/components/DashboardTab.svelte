@@ -5,8 +5,8 @@
   // play/pause + pagination + 3 slides: Workspace / Search /
   // About) renders here.
   //
-  // Cmd+, on a focused Hybrid surface flips it to its back-side;
-  // Cmd+, again flips back.
+  // The focused-pane flip command turns a Hybrid surface to its back side;
+  // running it again flips back.
   //
   // The back body is per-slot: Pane.svelte's back-side
   // switch mounts `dashboard/DashboardSlotBack.svelte` on the
@@ -93,8 +93,7 @@
 
   function doSettings(): void {
     menu?.close();
-    // Mirror the global Cmd+, (app.settings.toggle in App.svelte): flip
-    // the active pane's Hybrid surface to its back face.
+    // Flip the active pane's Hybrid surface to its back face.
     flipHybrid(layout.activePaneId);
   }
 
@@ -136,9 +135,8 @@
     <!-- Right-click menu for the Dashboard tab: a per-slot on/off
          checkbox row for each carousel slide (at least one stays on,
          enforced in toggleDashboardSlot); unchecked slots drop out of
-         auto-rotation and the dots. A separator, then Settings (Cmd+,)
-         which flips to the per-slot back via flipHybrid (same path as the
-         global Cmd+,), then Reload. -->
+         auto-rotation and the dots. A separator, then Settings, which flips
+         to the per-slot back via flipHybrid, then Reload. -->
     {#each SLOTS as label, i}
       <li>
         <button

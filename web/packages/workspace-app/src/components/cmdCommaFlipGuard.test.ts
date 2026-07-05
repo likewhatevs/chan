@@ -8,17 +8,16 @@ import appSource from "../App.svelte?raw";
 // file dialog), trigger the flip, dismiss the surface -> the obscured pane
 // had silently flipped to its back.
 //
-// The no-defaults round dropped the Cmd+, default chord, so the command path
-// (the launcher / chan:command -> runCommand app.settings.toggle) is the entry
-// point that still carries the guard; this locks that wiring.
+// The Settings overlay owns comma, so the pane-flip command path carries this
+// guard explicitly.
 describe("Flip-pane command modal/overlay guard", () => {
   const src = appSource.replace(/\s+/g, " ");
 
   test("paneChordBlocked checks the overlay stack and every modal", () => {
     // Per-term so a new modal added to the guard (or a reordering /
     // inline comment) doesn't force a brittle contiguous-string rewrite.
-    // Every surface that renders OVER the pane must appear here, or Cmd+,
-    // could flip a pane hidden behind it.
+    // Every surface that renders OVER the pane must appear here, or the pane
+    // flip command could flip a pane hidden behind it.
     expect(src).toContain("function paneChordBlocked(): boolean {");
     for (const term of [
       "topOverlay() !== null",

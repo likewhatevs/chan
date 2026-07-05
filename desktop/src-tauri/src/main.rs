@@ -4442,10 +4442,10 @@ fn main() {
 /// Build and install the application menu.
 ///
 /// The Window submenu carries Workspaces / New Window so a closed main
-/// window stays reachable by name. There is no Settings menu item: Cmd+,
-/// is the SPA's Hybrid-flip chord (`app.settings.toggle`), bound by the
-/// SPA itself, so no menu accelerator may claim Comma or the keydown
-/// never reaches the webview.
+/// window stays reachable by name. There is no Settings menu item: the
+/// Settings chord is owned by the SPA keymap so user assignments can replace
+/// the built-in Comma chord. No native menu accelerator may claim Comma or the
+/// keydown never reaches the webview.
 ///
 /// macOS starts from Tauri's `Menu::default` (the system menubar already
 /// carries the App menu's About / Quit). Off macOS `Menu::default` has no

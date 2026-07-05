@@ -88,6 +88,23 @@ export const SHORTCUTS: readonly Shortcut[] = [
     group: "App",
     escapeTerminal: true,
   },
+  {
+    id: "app.settings.open",
+    label: "Settings",
+    web: "Mod+,",
+    native: "Mod+,",
+    group: "App",
+    escapeTerminal: true,
+  },
+  {
+    id: "app.search.toggle",
+    label: "Search",
+    web: "Mod+Shift+S",
+    native: "Mod+Shift+S",
+    group: "App",
+    note: "Ctrl+Alt+S on Linux / Windows",
+    escapeTerminal: true,
+  },
   // File-browser destructive delete. Bare Backspace (the Mac "delete"
   // key) or forward-Delete removes the selected entry; the dispatch
   // source is FileTree's `onTreeKeydown`, with the uiConfirm in
@@ -120,7 +137,7 @@ export const SHORTCUTS: readonly Shortcut[] = [
   },
   // Mod+. is not browser-reserved on macOS, so it survives both
   // web + native dispatch through the same chord descriptor.
-  // Mod+, takes the macOS preferences convention (Settings flip),
+  // Mod+, takes the macOS preferences convention (Settings),
   // leaving Mod+. for Hybrid Nav. The Flip chord (Mod+. Tab)
   // pairs with the same prefix for internal consistency.
   {
@@ -406,6 +423,7 @@ const RICH_PROMPT_ID = "terminal.richPrompt";
 const TAB_CLOSE_ID = "app.tab.close";
 const TERMINAL_TOGGLE_ID = "app.terminal.toggle";
 const TAB_REOPEN_ID = "app.tab.reopenClosed";
+const SEARCH_TOGGLE_ID = "app.search.toggle";
 
 /// Resolve a shortcut's chord for a platform with chan's OS-level chord
 /// overrides applied. Most chords differ only by LABEL (`Mod` -> Cmd/Ctrl);
@@ -425,6 +443,7 @@ const TAB_REOPEN_ID = "app.tab.reopenClosed";
 ///   - New terminal: Cmd+T (mac native) vs Ctrl+Shift+T (off-mac native).
 ///   - Reopen closed tab: Cmd+Shift+T (mac native) vs Ctrl+Alt+Shift+T
 ///     (off-mac native; the web set already stores that form).
+///   - Search: Cmd+Shift+S on macOS, Ctrl+Alt+S off macOS.
 /// This function is the ONE place OS-level divergence lives, so the escape
 /// matcher, the on-screen labels, and the help table all agree. App.svelte's
 /// keymap and chan-desktop's KEY_BRIDGE_JS branch on the same rule at the
@@ -462,6 +481,7 @@ export function osChord(
   if (s.id === TAB_REOPEN_ID && platform === "native" && os !== "mac") {
     return "Ctrl+Alt+Shift+T";
   }
+  if (s.id === SEARCH_TOGGLE_ID && os !== "mac") return "Ctrl+Alt+S";
   return chord;
 }
 
@@ -609,10 +629,13 @@ export function shouldEscapeTerminal(e: KeyboardEvent): boolean {
   if (overrideEscapeMatcher?.(chord)) return true;
   const eventTokens = canonicalChordTokens(chord);
   const platform = currentPlatform();
+  const os = currentOS();
   for (const s of SHORTCUTS) {
     if (!s.escapeTerminal) continue;
-    const registryChord = osChord(s, platform, currentOS());
+    const registryChord = osChord(s, platform, os);
     if (!registryChord) continue;
+    const override = overrideResolver?.(s.id, platform, os);
+    if (override && !chordsEqual(override, registryChord)) continue;
     if (sameChord(eventTokens, canonicalChordTokens(registryChord))) {
       return true;
     }

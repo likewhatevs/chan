@@ -8,8 +8,8 @@ import {
 } from "./shortcuts";
 
 // Chord-escape registry. Global chords that must reach the App keymap even
-// from a focused terminal (Command launcher, New terminal, Reload, Hybrid
-// Nav, Close window, Rich Prompt) carry `escapeTerminal: true`, and a
+// from a focused terminal (Command launcher, Settings, Search, New terminal,
+// Reload, Hybrid Nav, Close window, Rich Prompt) carry `escapeTerminal: true`, and a
 // user-assigned override chord escapes too (covered by the override-escape
 // test in keymapOverrides.svelte.test.ts). The `handleTerminalKeyEvent`
 // xterm-`customKeyEventHandler` callback consults the registry: matched
@@ -23,6 +23,8 @@ describe("chord-escape registry shape", () => {
   test("global chords flagged escapeTerminal=true", () => {
     const required = [
       "app.launcher.toggle",
+      "app.settings.open",
+      "app.search.toggle",
       "app.terminal.toggle",
       "app.pane.mode",
       "app.window.reload",
@@ -102,12 +104,33 @@ describe("shouldEscapeTerminal lookup", () => {
     expect(shouldEscapeTerminal(e)).toBe(true);
   });
 
-  test("a de-defaulted command's chord no longer escapes via the registry", () => {
-    // Search lost its Cmd+S default in the no-defaults round; with no override
-    // registered (this file does not import the store) the registry arm no
-    // longer matches it. The override arm is covered in the store test.
+  test("plain Cmd+S is not a global default", () => {
     const e = new KeyboardEvent("keydown", { key: "s", metaKey: true });
     expect(shouldEscapeTerminal(e)).toBe(false);
+  });
+
+  test("Cmd+, (Settings) escapes", () => {
+    const e = new KeyboardEvent("keydown", { key: ",", metaKey: true });
+    expect(shouldEscapeTerminal(e)).toBe(true);
+  });
+
+  test("Cmd+Shift+S (Search on macOS) escapes", () => {
+    const e = new KeyboardEvent("keydown", {
+      key: "s",
+      metaKey: true,
+      shiftKey: true,
+    });
+    expect(shouldEscapeTerminal(e)).toBe(true);
+  });
+
+  test("Ctrl+Alt+S (Search off macOS) escapes", () => {
+    vi.stubGlobal("navigator", { userAgent: "Windows" });
+    const e = new KeyboardEvent("keydown", {
+      key: "s",
+      ctrlKey: true,
+      altKey: true,
+    });
+    expect(shouldEscapeTerminal(e)).toBe(true);
   });
 
   test("Ctrl+Alt+K (web command launcher) escapes", () => {
