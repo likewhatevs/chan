@@ -2039,9 +2039,17 @@ const KEY_BRIDGE_JS: &str = r#"
       console.error('[chan] IPC ' + cmd + ' failed:', err);
     });
   }
-  // Chord policy: actions reachable through Pane Mode (Cmd+K) stay
+  function isMac() {
+    return /Mac|iPhone|iPad|iPod/.test(navigator.platform || navigator.userAgent || '');
+  }
+  function commandLauncherChord(e) {
+    return isMac()
+      ? e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey && e.code === 'KeyK'
+      : e.ctrlKey && !e.metaKey && e.altKey && !e.shiftKey && e.code === 'KeyK';
+  }
+  // Chord policy: actions reachable through Hybrid Nav (Cmd+.) stay
   // unbound here (Cmd+`, Cmd+Shift+F) so the native layer claims as
-  // little as possible. Direct chords exist where Pane Mode is no
+  // little as possible. Direct chords exist where Hybrid Nav is no
   // substitute: Cmd+W (close tab; pairs with the SPA's context-aware
   // Ctrl+D), Cmd+F/G (find on page), Cmd+1..9 (jump to tab),
   // Cmd+[/Cmd+] (pane nav), Cmd+S (search), Cmd+/ and Cmd+Shift+/
@@ -2058,10 +2066,14 @@ const KEY_BRIDGE_JS: &str = r#"
     const shift = e.shiftKey;
     const alt = e.altKey;
     const code = e.code;
+    if (commandLauncherChord(e)) {
+      fire(e, 'app.launcher.toggle');
+      return;
+    }
     if (alt) {
       // Cmd+Opt+I (macOS) / Ctrl+Alt+I (Linux/Windows) → DevTools.
-      // No other meta+alt chord today; bail out for everything else
-      // so we don't shadow the webview's defaults.
+      // Other meta+alt chords are handled before this branch or left
+      // to the webview defaults.
       if (!shift && code === 'KeyI') {
         invokeIpc(e, 'open_devtools');
       }
@@ -2618,12 +2630,12 @@ mod tests {
 
     #[test]
     fn key_bridge_drops_chords_covered_by_pane_mode() {
-        // Chords with a Pane Mode equivalent stay out of the native
+        // Chords with a Hybrid Nav equivalent stay out of the native
         // bridge. The direct-chord exceptions (Cmd+T terminal, Cmd+O
         // files, Cmd+Shift+M graph, Cmd+P Team Work, Cmd+S search)
         // are asserted in `key_bridge_keeps_independent_chords`; the
         // absences here catch accidental reverts of chords that
-        // should go through Pane Mode only.
+        // should go through Hybrid Nav only.
         assert!(!KEY_BRIDGE_JS.contains("app.file.new"));
         assert!(!KEY_BRIDGE_JS.contains("Backquote"));
     }
@@ -2631,10 +2643,13 @@ mod tests {
     #[test]
     fn key_bridge_keeps_independent_chords() {
         // Tab close + reopen + Find on page + tab nav + tab jump
-        // are NOT duplicated by Pane Mode and must stay reachable
-        // through the native bridge. Cmd+T / Cmd+O / Cmd+P /
-        // Cmd+Shift+M are the context-aware
-        // spawn chord family.
+        // are NOT duplicated by Hybrid Nav and must stay reachable
+        // through the native bridge. Cmd+K / Ctrl+Alt+K opens the
+        // command launcher; Cmd+T / Cmd+O / Cmd+P / Cmd+Shift+M are
+        // the context-aware spawn chord family.
+        assert!(KEY_BRIDGE_JS.contains("function commandLauncherChord"));
+        assert!(KEY_BRIDGE_JS.contains("app.launcher.toggle"));
+        assert!(KEY_BRIDGE_JS.contains("e.ctrlKey && !e.metaKey && e.altKey"));
         assert!(KEY_BRIDGE_JS.contains("app.terminal.toggle"));
         assert!(KEY_BRIDGE_JS.contains("app.files.toggle"));
         assert!(KEY_BRIDGE_JS.contains("app.terminal.teamWork"));

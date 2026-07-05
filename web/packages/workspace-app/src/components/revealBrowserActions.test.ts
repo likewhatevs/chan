@@ -66,7 +66,7 @@ describe("no inline close affordance on first-class surfaces", () => {
   });
 
   // Overlay-era maximize button + scope selector dropdown are gone.
-  // Cmd+K + "Graph from here" are the canonical scope-setting paths.
+  // Hybrid Nav + "Graph from here" are the canonical scope-setting paths.
   test("GraphPanel chrome has no Maximize2 / Minimize2 button", () => {
     expect(graph).not.toContain("<Maximize2");
     expect(graph).not.toContain("<Minimize2");

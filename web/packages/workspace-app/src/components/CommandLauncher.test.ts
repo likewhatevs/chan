@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 vi.mock("../state/commands/install", () => ({}));
 
 import CommandLauncher from "./CommandLauncher.svelte";
+import appRaw from "../App.svelte?raw";
 import { launcherPanel } from "../state/store.svelte";
 import { registerCommands } from "../state/commands";
 
@@ -81,6 +82,12 @@ afterEach(() => {
 });
 
 describe("command launcher overlay", () => {
+  test("command launcher chords route through the app keymap", () => {
+    expect(appRaw).toMatch(
+      /isTauriDesktop\(\) && currentOS\(\) === "mac"[\s\S]{1,220}e\.metaKey[\s\S]{1,220}e\.ctrlKey && !e\.metaKey && e\.altKey[\s\S]{1,240}toggleCommandLauncher\(\);/,
+    );
+  });
+
   test("renders nothing while closed", async () => {
     const target = document.createElement("div");
     document.body.append(target);

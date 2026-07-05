@@ -22,6 +22,7 @@ describe("chord-escape registry shape", () => {
   test("App-group chords flagged escapeTerminal=true", () => {
     const required = [
       "app.settings.toggle",
+      "app.launcher.toggle",
       "app.terminal.teamWork",
       "app.files.toggle",
       "app.graph.toggle",
@@ -120,6 +121,33 @@ describe("shouldEscapeTerminal lookup", () => {
   test("Cmd+, (settings) escapes", () => {
     const e = new KeyboardEvent("keydown", { key: ",", metaKey: true });
     expect(shouldEscapeTerminal(e)).toBe(true);
+  });
+
+  test("Ctrl+Alt+K (web command launcher) escapes", () => {
+    const e = new KeyboardEvent("keydown", {
+      key: "k",
+      ctrlKey: true,
+      altKey: true,
+    });
+    expect(shouldEscapeTerminal(e)).toBe(true);
+  });
+
+  test("Ctrl+Alt+K (off-mac command launcher) escapes", () => {
+    vi.stubGlobal("navigator", { userAgent: "Windows" });
+    const e = new KeyboardEvent("keydown", {
+      key: "k",
+      ctrlKey: true,
+      altKey: true,
+    });
+    expect(shouldEscapeTerminal(e)).toBe(true);
+  });
+
+  test("Cmd+K (native macOS command launcher) escapes", () => {
+    const w = window as typeof window & { __TAURI__?: unknown };
+    w.__TAURI__ = {};
+    const e = new KeyboardEvent("keydown", { key: "k", metaKey: true });
+    expect(shouldEscapeTerminal(e)).toBe(true);
+    delete w.__TAURI__;
   });
 
   test("Cmd+. (Hybrid Nav) escapes", () => {

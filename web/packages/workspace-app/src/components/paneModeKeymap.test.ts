@@ -1,11 +1,11 @@
-// Raw-source assertions on the Cmd+K pane-mode keymap in App.svelte.
+// Raw-source assertions on the Hybrid Nav keymap in App.svelte.
 // The dispatcher is hard to mount in isolation, so the source is read
 // directly. Pins the arrow = move-focus and WASD = swap arrangement.
 
 import { describe, expect, test } from "vitest";
 import app from "../App.svelte?raw";
 
-describe("Cmd+K pane mode keymap (inversion)", () => {
+describe("Hybrid Nav keymap (inversion)", () => {
   test("arrow keys move focus", () => {
     expect(app).toContain('case "ArrowUp":\n        paneModeMoveFocus("up");');
     expect(app).toContain('case "ArrowLeft":\n        paneModeMoveFocus("left");');
@@ -25,7 +25,7 @@ describe("Cmd+K pane mode keymap (inversion)", () => {
 // Hybrid NAV spawn cases: numeric 1/2/3/4 are gone (they duplicated
 // Cmd+T / Cmd+O / Cmd+P / Cmd+Shift+M). Letter mnemonics t/o/p/m/g
 // are the in-NAV path; f/F (Search) and h/H (Help) are unchanged.
-describe("Cmd+K pane mode keymap (transactional staging)", () => {
+describe("Hybrid Nav keymap (transactional staging)", () => {
   test("g / G writes directly to the draft layout (no immediate commit)", () => {
     expect(app).toMatch(
       /case "g":\s*\n\s*case "G":\s*\n?\s*case "m":\s*\n\s*case "M":[\s\S]*?paneModeOpenGraph\(resolveSpawnContext\(\)\);[\s\S]*?return;/,
@@ -40,7 +40,7 @@ describe("Cmd+K pane mode keymap (transactional staging)", () => {
     );
   });
 
-  test("h toggles the Pane Mode help overlay without committing", () => {
+  test("h toggles the Hybrid Nav help overlay without committing", () => {
     expect(app).toContain(
       'case "h":\n      case "H":\n        paneModeHelpVisible = !paneModeHelpVisible;',
     );
@@ -54,7 +54,7 @@ describe("Cmd+K pane mode keymap (transactional staging)", () => {
   });
 });
 
-describe("Cmd+K pane mode transactional staging", () => {
+describe("Hybrid Nav transactional staging", () => {
   test("t / T stages a terminal write into the draft (no immediate commit)", () => {
     expect(app).toMatch(
       /case "t":\s*\n\s*case "T":\s*\n?\s*paneModeOpenTerminal\(resolveSpawnContext\(\)\);\s*\n\s*return;/,
@@ -154,7 +154,7 @@ describe("Cmd+T / O / P / Cmd+Shift+M top-level chords", () => {
   });
 });
 
-describe("Cmd+K pane mode Team Work binding", () => {
+describe("Hybrid Nav Team Work binding", () => {
   test("Hybrid Nav has no P Team Work binding (lead-only via the Cmd+P dialog)", () => {
     // The Hybrid Nav P binding that spawned a bare Team Work bubble terminal
     // was removed when the bubble was decoupled from arbitrary terminals. Team
@@ -175,7 +175,7 @@ describe("Cmd+K pane mode Team Work binding", () => {
   });
 });
 
-describe("Cmd+K Backspace kill-pane", () => {
+describe("Hybrid Nav Backspace kill-pane", () => {
   test("Backspace closes the focused pane; k no longer bound to kill-pane", () => {
     // kill-pane moved to Backspace; the old `k` / `K` binding is gone.
     expect(app).toMatch(
@@ -224,7 +224,7 @@ describe("Track C pane shortcut wiring", () => {
   });
 });
 
-describe("Cmd+K dock toggles", () => {
+describe("Hybrid Nav dock toggles", () => {
   test("< toggles the right-side file browser dock", () => {
     expect(app).toMatch(
       /case "<":[\s\S]*?commitPaneMode\(\);[\s\S]*?toggleBrowserSidePane\("right"\);/,

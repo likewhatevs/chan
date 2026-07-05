@@ -99,7 +99,7 @@ In-app keybindings (Cmd = Ctrl on Linux / Windows):
   App
   ---
   Flip focused Hybrid                          Cmd+,
-  Command launcher                             Cmd+K
+  Command launcher                             Ctrl+Alt+K
   Team Work                                    Cmd+Alt+P   (macOS web + native everywhere; all platforms via Mod+. p (Hybrid Nav))
   File browser                                 Cmd+Alt+O   (macOS web + native everywhere; all platforms via Mod+. o (Hybrid Nav))
   Graph                                        Cmd+Shift+M   (or Mod+. M (Hybrid Nav))

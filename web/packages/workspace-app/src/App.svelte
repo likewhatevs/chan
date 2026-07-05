@@ -153,9 +153,9 @@
     to: "# Draft".length,
   };
   let bootstrapped = $state(false);
-  // `h` inside Pane Mode toggles a cheatsheet overlay listing every
-  // Cmd+K binding. The flag lives in App.svelte because Pane Mode is
-  // global (one transaction per Cmd+K press), no per-pane scoping needed.
+  // `h` inside Hybrid Nav toggles a cheatsheet overlay listing every
+  // in-mode binding. The flag lives in App.svelte because Hybrid Nav is
+  // global (one transaction per Cmd+. press), no per-pane scoping needed.
   let paneModeHelpVisible = $state(false);
   $effect(() => {
     // Touch enough of the layout to trip reactivity on common
@@ -508,6 +508,15 @@
       handlePaneModeKey(e);
       return;
     }
+    const commandLauncherChord =
+      isTauriDesktop() && currentOS() === "mac"
+        ? e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey && e.code === "KeyK"
+        : e.ctrlKey && !e.metaKey && e.altKey && !e.shiftKey && e.code === "KeyK";
+    if (commandLauncherChord) {
+      e.preventDefault();
+      toggleCommandLauncher();
+      return;
+    }
     // Cmd+. enters Hybrid Nav. Cmd+, is reserved for the focused-Hybrid
     // flip (macOS app-preferences convention). Cmd+. is not
     // browser-reserved on macOS (Safari + Chrome both let JS intercept
@@ -642,7 +651,7 @@
         scheduleSessionSave();
         searchPanel.open = true;
         return;
-      // `h` toggles the Cmd+K help cheatsheet without committing the draft;
+      // `h` toggles the Hybrid Nav help cheatsheet without committing the draft;
       // the user is still shaping their layout.
       case "h":
       case "H":
@@ -1091,7 +1100,7 @@
       e.stopPropagation();
       return;
     }
-    // In-house modals + the Cmd+K pane-mode dispatcher own their
+    // In-house modals + the Hybrid Nav dispatcher own their
     // own keyboard contexts; never close a tab from under them.
     if (promptState.open || pathPromptState.open || confirmState.open || draftCloseState.open) {
       return;
@@ -1417,7 +1426,7 @@
      shows who is asking to take over, with Accept / Reject. Mounted once,
      window-anchored like the transfer bubble. -->
 <SessionHandoverBubble />
-<!-- Pane Mode (Cmd+K) cheatsheet, toggled with `h` while pane mode
+<!-- Hybrid Nav (Cmd+.) cheatsheet, toggled with `h` while pane mode
      is active. Gated on the live `paneMode.active` so it auto-hides
      the moment the transaction commits / discards. -->
 {#if paneMode.active && paneModeHelpVisible}

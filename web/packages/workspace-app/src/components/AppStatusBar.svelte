@@ -209,9 +209,8 @@
           <span class="sep"> - </span>
         {/if}
         {#if paneModeVisible}
-          <!-- Status-bar label for Hybrid Nav (Cmd+K). The
-               spawn-intent chip stays because 1/2/3 still stage
-               a tab spawn before commit. -->
+          <!-- Status-bar label for Hybrid Nav (Cmd+.). The spawn-intent
+               chip reflects any staged tab spawn before commit. -->
           <span class="section pane-mode-pill" aria-label="Hybrid Nav active">
             <span class="dot working"></span>
             Hybrid ☯ Enter commit, Esc discard, H help

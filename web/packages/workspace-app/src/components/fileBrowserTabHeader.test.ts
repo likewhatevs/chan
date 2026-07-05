@@ -43,7 +43,7 @@ describe("FileBrowserSurface header is overlay-only", () => {
 
   test("dock variant has no on-surface unstick chrome button", () => {
     // With the dock chrome bar gone, unstick is reachable only via
-    // the right-click menu or Cmd+K < / >.
+    // the right-click menu or Hybrid Nav < / >.
     expect(fileBrowserSurface).not.toContain("function unstick()");
     expect(fileBrowserSurface).not.toContain('title={side === "right" ? "Unstick right" : "Unstick left"}');
   });

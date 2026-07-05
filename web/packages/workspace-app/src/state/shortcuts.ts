@@ -92,14 +92,13 @@ export const SHORTCUTS: readonly Shortcut[] = [
     group: "App",
     escapeTerminal: true,
   },
-  // Command launcher (Cmd+K): a Spotlight-style palette listing every
-  // action available in the current window and active surface.
-  // escapeTerminal so it opens from a focused terminal like the other
-  // App chords.
+  // Command launcher: Cmd+K on native macOS, Ctrl+Alt+K on web and
+  // on native Linux / Windows. The off-mac chord avoids stealing
+  // plain Ctrl+K from readline shells.
   {
     id: "app.launcher.toggle",
     label: "Command launcher",
-    web: "Mod+K",
+    web: "Ctrl+Alt+K",
     native: "Mod+K",
     group: "App",
     escapeTerminal: true,
@@ -549,6 +548,7 @@ export function formatChord(chord: Chord, os: OS): string {
 /// collides with a control code there).
 const RELOAD_SHORTCUT_ID = "app.window.reload";
 const SEARCH_SHORTCUT_ID = "app.search.toggle";
+const LAUNCHER_SHORTCUT_ID = "app.launcher.toggle";
 const TERMINAL_COPY_ID = "terminal.copy";
 const TERMINAL_PASTE_ID = "terminal.paste";
 const RICH_PROMPT_ID = "terminal.richPrompt";
@@ -560,14 +560,16 @@ const RICH_PROMPT_ID = "terminal.richPrompt";
 ///     reverse-search).
 ///   - Search: Cmd+S (mac) vs Ctrl+Shift+S (bare Ctrl+S collides with a
 ///     Claude Code chord).
+///   - Command launcher: Cmd+K (native macOS) vs Ctrl+Alt+K (web and
+///     off-mac native; plain Ctrl+K is a shell editing chord).
 ///   - Terminal copy / paste: Cmd+C/V (mac) vs Ctrl+Shift+C/V (bare Ctrl+C/V
 ///     is the shell's SIGINT / EOF). TerminalTab's clipboard handler splits on
 ///     the same rule at the event layer; this keeps the displayed hint + the
 ///     help table correct per-OS.
-/// The registry stores the macOS form; this function is the ONE place the
-/// divergence lives, so the escape matcher, the on-screen labels, and the
-/// help table all agree. App.svelte's keymap and chan-desktop's KEY_BRIDGE_JS
-/// branch on the same rule (Cmd vs Ctrl+Shift) at the raw-event layer.
+/// This function is the ONE place OS-level divergence lives, so the escape
+/// matcher, the on-screen labels, and the help table all agree. App.svelte's
+/// keymap and chan-desktop's KEY_BRIDGE_JS branch on the same rule at the
+/// raw-event layer.
 export function osChord(
   s: Shortcut,
   platform: Platform,
@@ -577,6 +579,9 @@ export function osChord(
   if (!chord) return undefined;
   if (s.id === RELOAD_SHORTCUT_ID && os !== "mac") return "Mod+Shift+R";
   if (s.id === SEARCH_SHORTCUT_ID && os !== "mac") return "Mod+Shift+S";
+  if (s.id === LAUNCHER_SHORTCUT_ID && platform === "native" && os !== "mac") {
+    return "Ctrl+Alt+K";
+  }
   if (s.id === TERMINAL_COPY_ID && os !== "mac") return "Mod+Shift+C";
   if (s.id === TERMINAL_PASTE_ID && os !== "mac") return "Mod+Shift+V";
   // Rich Prompt: Cmd+Shift+P on macOS. Off macOS the Win / Super key is
@@ -697,14 +702,18 @@ export function shouldEscapeTerminal(e: KeyboardEvent): boolean {
 }
 
 /// Normalise a chord string into a Set-shape comparable across
-/// the `Mod` / `Cmd` aliasing on Mac. Both `Mod+Alt+P` and
-/// `Cmd+Alt+P` collapse to the same key set on Mac; on
-/// Linux/Windows they stay distinct (Mod → Ctrl, Cmd → literal
-/// Cmd which most keyboards don't have anyway).
+/// physical modifier aliases. On Mac, `Mod` and `Cmd` are the same
+/// key. Off Mac, `Mod` and `Ctrl` are the same key; this lets literal
+/// Ctrl+Alt web fallbacks escape xterm even though raw events first
+/// normalise platform Ctrl as `Mod`.
 function canonicalChordTokens(chord: string): Set<string> {
   const tokens = new Set(chord.split("+"));
   if (currentOS() === "mac" && tokens.has("Cmd")) {
     tokens.delete("Cmd");
+    tokens.add("Mod");
+  }
+  if (currentOS() !== "mac" && tokens.has("Ctrl")) {
+    tokens.delete("Ctrl");
     tokens.add("Mod");
   }
   return tokens;

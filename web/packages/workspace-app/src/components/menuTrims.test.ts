@@ -5,13 +5,14 @@ import fileTree from "./FileTree.svelte?raw";
 import graph from "./GraphPanel.svelte?raw";
 
 // Right-click menu trims across Terminal / FB / Graph + FB
-// click-to-inspector for tab + overlay variants. Search (Cmd+K f)
+// click-to-inspector for tab + overlay variants. Search (global shortcut /
+// Hybrid Nav f)
 // and Settings (Cmd+,) are global keystrokes and are not duplicated
 // in per-tab menus. Show/Hide Details is redundant once row-clicks
 // auto-open the inspector in tab + overlay variants.
 
 describe("TerminalTab right-click: Search still gone; Settings comes back as flip", () => {
-  test("no Search menu entry (Cmd+K f is the global surface)", () => {
+  test("no Search menu entry (global shortcut / Hybrid Nav f is the global surface)", () => {
     expect(terminal).not.toContain('onclick={openSearch}');
     expect(terminal).not.toMatch(/<span class="mbtn-label">Search<\/span>/);
   });

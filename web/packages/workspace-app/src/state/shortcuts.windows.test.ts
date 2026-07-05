@@ -44,6 +44,8 @@ describe("Windows shortcut labels are Ctrl-based", () => {
     // Ctrl+R (reverse-search), and Ctrl+S (a Claude Code chord).
     expect(pick("app.window.reload", "native")).toBe("Ctrl+Shift+R");
     expect(pick("app.search.toggle", "native")).toBe("Ctrl+Shift+S");
+    expect(pick("app.launcher.toggle", "native")).toBe("Ctrl+Alt+K");
+    expect(pick("app.launcher.toggle", "web")).toBe("Ctrl+Alt+K");
     expect(pick("terminal.copy", "native")).toBe("Ctrl+Shift+C");
     expect(pick("terminal.paste", "native")).toBe("Ctrl+Shift+V");
     // Rich Prompt: Win key ruled out → Ctrl+Shift+P native, Alt+Shift+P web.

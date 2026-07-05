@@ -945,7 +945,7 @@ export const layout = $state<{
 
 export type LayoutState = typeof layout;
 
-/// Staged spawn intent for Pane Mode number keys. The intent queues
+/// Staged spawn intent for Hybrid Nav spawn keys. The intent queues
 /// here so the pane-mode "Enter commit / Esc discard" contract holds
 /// for every keystroke; `commitPaneMode()` materializes it as part of
 /// the seal. A second staging overwrites the first; Esc clears it
@@ -3423,7 +3423,7 @@ export function paneModeEqualize(): void {
 
 /// Insert `newPane` next to `originalId` inside a layout state. Same
 /// shape as the live-layout `insertSiblingPane` helper, but operates
-/// on any LayoutState so it works for the Cmd+K pane-mode draft.
+/// on any LayoutState so it works for the Hybrid Nav draft.
 function insertSiblingPaneIn(
   state: LayoutState,
   originalId: string,
@@ -3456,7 +3456,7 @@ function insertSiblingPaneIn(
   }
 }
 
-/// Cmd+K mode `/` and `\\` keybinds. Splits the focused pane in the
+/// Hybrid Nav `/` and `?` keybinds. Splits the focused pane in the
 /// draft tree only; Enter seals the split and any tabs spawned during
 /// the mode, Esc rolls everything back. Structural actions are
 /// constrained to right + down.
@@ -3489,7 +3489,7 @@ export function paneModeSplit(direction: "row" | "column"): void {
   if (isTerminalWindow()) paneModeOpenTerminal();
 }
 
-/// Context for a Pane Mode spawn key. The Cmd+K 1/2/3/4 handlers
+/// Context for a Hybrid Nav spawn key. The in-mode spawn handlers
 /// resolve the focused tab into this shape before calling the spawn
 /// helpers, so a new terminal lands on the source file's parent
 /// directory and a new Graph tab can scope to (and pre-select) the
@@ -3506,7 +3506,7 @@ export type SpawnContext = {
   file?: string;
 };
 
-/// Cmd+K mode `1`. Spawn a new terminal tab inside the draft's focused
+/// Hybrid Nav `t`. Spawn a new terminal tab inside the draft's focused
 /// pane. The session WebSocket opens only when the tab mounts, so an
 /// Esc rollback leaves no backend state behind.
 export function paneModeOpenTerminal(ctx?: SpawnContext): void {
@@ -3535,7 +3535,7 @@ export function paneModeOpenTerminal(ctx?: SpawnContext): void {
   tab.pendingGlobalName = true;
 }
 
-/// Cmd+K mode `2`. Spawn a fresh File Browser tab inside the draft's
+/// Hybrid Nav `o`. Spawn a fresh File Browser tab inside the draft's
 /// focused pane. Every press is a new tab so the user can pile up
 /// multiple browser views. When `ctx` carries a file or dir, the
 /// inspector opens so the auto-selected node lands with its info pane
@@ -3556,7 +3556,7 @@ export function paneModeOpenBrowser(ctx?: SpawnContext): void {
   p.activeTabId = tab.id;
 }
 
-/// Cmd+K mode `3`. Spawn a fresh Graph tab inside the draft's focused
+/// Hybrid Nav `g` / `m`. Spawn a fresh Graph tab inside the draft's focused
 /// pane. Same no-dedup semantic as `paneModeOpenBrowser`. When `ctx`
 /// carries a file or dir, scope the new tab to that node and pre-select
 /// it; GraphPanel pops the inspector on `pendingSelectId`.

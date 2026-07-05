@@ -1,7 +1,7 @@
 import { describe, expect, test } from "vitest";
 import pane from "./Pane.svelte?raw";
 
-// Pane mode (Hybrid NAV / Cmd+K) must not unmount TerminalTab instances.
+// Hybrid Nav (Cmd+.) must not unmount TerminalTab instances.
 // Unmounting disposes the xterm.js EditorView and drops the scrollback
 // buffer. Instead the `active` prop flips to false and the existing CSS
 // visibility rule hides the terminal. These pins catch any regression

@@ -3,7 +3,7 @@ import tree from "./FileTree.svelte?raw";
 
 // FileTree in-tree selection menu: "From selection" header, New Graph
 // entry, label updates (New Terminal), Search entry removed (search is
-// workspace-wide via Cmd+K), separator between workflow and per-row
+// workspace-wide via the global shortcut / Hybrid Nav), separator between workflow and per-row
 // ops, and unified "New File or Directory" dialog.
 
 describe("FileTree selection menu header + new entries", () => {
@@ -13,7 +13,7 @@ describe("FileTree selection menu header + new entries", () => {
     );
   });
 
-  test("Search entry removed (search is workspace-wide via Cmd+K)", () => {
+  test("Search entry removed (search is workspace-wide via global shortcuts)", () => {
     expect(tree).not.toMatch(/<span>Search<\/span>/);
     expect(tree).not.toMatch(/<span>Search this<\/span>/);
   });

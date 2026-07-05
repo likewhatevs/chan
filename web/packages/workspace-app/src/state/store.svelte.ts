@@ -2637,7 +2637,8 @@ export const searchPanel = $state<{
 
 // ---- command launcher overlay ------------------------------------------
 //
-// The Spotlight-style command palette (Cmd+K). Its `.open` flag is the
+// The Spotlight-style command palette (Cmd+K on native macOS,
+// Ctrl+Alt+K on web and off-mac native). Its `.open` flag is the
 // single source of truth for "is it on screen", so the shared overlay
 // stack in App.svelte tracks it exactly like searchPanel. `query` is
 // the live type-ahead string; it lives here rather than in the
@@ -2664,8 +2665,8 @@ export function closeCommandLauncher(): void {
   launcherPanel.open = false;
 }
 
-/// Toggle the launcher. Bound to `app.launcher.toggle` (Cmd+K); a
-/// second press closes it, matching the search chord's toggle feel.
+/// Toggle the launcher. Bound to `app.launcher.toggle`; a second
+/// press closes it, matching the search chord's toggle feel.
 export function toggleCommandLauncher(): void {
   if (launcherPanel.open) closeCommandLauncher();
   else openCommandLauncher();

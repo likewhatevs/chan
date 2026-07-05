@@ -144,7 +144,7 @@
       //       applyOverlaysFromHash before the panel went open.
       //       Keep it as-is and run a search.
       //   (b) Text-selection seed - query was empty, the user
-      //       had real text selected when they hit Cmd+K. Adopt
+      //       had real text selected when they opened Search. Adopt
       //       it and run a search.
       //   (c) Fresh empty open - wait for the user to type.
       const restored = searchPanel.query.trim();

@@ -15,7 +15,7 @@ describe("handleTerminalKeyEvent has no Alt+Space branch", () => {
   test("handleTerminalKeyEvent still defers to handleTerminalMetaKey", () => {
     // Sanity check: removal shouldn't strip the meta-key
     // delegation that handles the legitimate terminal-side
-    // keymap surfaces (Cmd+K leader chord, etc.).
+    // keymap surfaces (Hybrid Nav leader chord, etc.).
     expect(terminal).toMatch(
       /function handleTerminalKeyEvent\(e: KeyboardEvent\): boolean \{[\s\S]*?return handleTerminalMetaKey\(e, sendUserInput, tab\.keyboardProtocol\);/,
     );

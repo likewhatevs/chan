@@ -1,5 +1,5 @@
 <script lang="ts">
-  // The Spotlight-style command launcher (Cmd+K). A top-anchored bubble
+  // The Spotlight-style command launcher (Cmd+K / Ctrl+Alt+K). A top-anchored bubble
   // over OverlayShell: one search input plus a categorized, type-ahead
   // filtered list of every command available in the current window and
   // active surface. Keyboard-first: the input holds focus, arrows move a

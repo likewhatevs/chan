@@ -2,6 +2,11 @@ import { describe, expect, test } from "vitest";
 import { renderTable } from "./shortcuts";
 
 describe("shortcut table", () => {
+  test("advertises Command launcher as Ctrl+Alt+K on web and Cmd+K on native mac", () => {
+    expect(renderTable("web", "mac")).toMatch(/^Command launcher\s+Ctrl\+Alt\+K/m);
+    expect(renderTable("native", "mac")).toMatch(/^Command launcher\s+Cmd\+K/m);
+  });
+
   // "New terminal" is a direct chord so power users can spawn a
   // terminal without entering Pane Mode. Cmd+T on native;
   // Cmd+Alt+T on web-Mac (Ctrl+Alt+T on Win/Linux web is owned
