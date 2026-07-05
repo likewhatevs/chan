@@ -46,7 +46,7 @@
     Global: CommandIcon,
     Workspace: Folder,
     Search: SearchIcon,
-    Tabs: FilePlus,
+    Apps: FilePlus,
     Panes: Shapes,
     Editor: FileText,
     "File Browser": Folder,

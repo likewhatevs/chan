@@ -1,4 +1,4 @@
-// Reuse-existing Global, Tabs, and Panes commands: each maps a launcher
+// Reuse-existing Global, Apps, and Panes commands: each maps a launcher
 // entry to an action that already runs through a chord. Chorded ids
 // dispatch a chan:command so they share App.svelte's dispatch and its
 // window-mode guard; the two chordless entries (Hybrid Nav, Reopen closed
@@ -66,18 +66,18 @@ registerCommands([
     "lock",
   ]),
 
-  // Tabs
-  reuse("app.terminal.toggle", "New terminal", "Tabs", ["shell", "console"]),
-  reuse("app.terminal.teamWork", "New team", "Tabs", ["team work", "agents"]),
-  reuse("app.draft.new", "New draft", "Tabs", ["markdown", "note"]),
-  reuse("app.graph.toggle", "New graph", "Tabs", ["links", "network"]),
-  reuse("app.files.toggle", "New file browser", "Tabs", [
+  // Apps
+  reuse("app.terminal.toggle", "New terminal", "Apps", ["shell", "console"]),
+  reuse("app.terminal.teamWork", "New team", "Apps", ["team work", "agents"]),
+  reuse("app.draft.new", "New draft", "Apps", ["markdown", "note"]),
+  reuse("app.graph.toggle", "New graph", "Apps", ["links", "network"]),
+  reuse("app.files.toggle", "New file browser", "Apps", [
     "files",
     "tree",
     "explorer",
   ]),
-  reuse("app.dashboard.open", "New dashboard", "Tabs", ["slides", "present"]),
-  reuse("app.tab.close", "Close tab", "Tabs", ["close"]),
+  reuse("app.dashboard.open", "New dashboard", "Apps", ["slides", "present"]),
+  reuse("app.tab.close", "Close tab", "Apps", ["close"]),
 
   // Panes
   reuse("app.pane.splitRight", "Split right", "Panes", ["split", "vertical"]),
