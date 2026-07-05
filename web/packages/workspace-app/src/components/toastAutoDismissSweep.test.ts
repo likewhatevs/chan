@@ -20,20 +20,23 @@ describe("confirmed same-shape success swaps", () => {
 
 describe("error paths stay persistent", () => {
   test("FileEditorTab copy-failed stays persistent", () => {
-    // Copy errors route through the shared copyTextToClipboard
-    // helper's onError callback, which still assigns ui.status
-    // (= persistent). The `msg` parameter is the already-resolved
-    // error string the helper passes back.
+    // Copy errors route through the shared copyTextToClipboard helper's
+    // onError callback, which sets ui.status AND marks it persistent so
+    // the error pill is dismissable; a null statusKind gets no dismiss
+    // control and never auto-clears. The `msg` parameter is the
+    // already-resolved error string the helper passes back.
     expect(fileEditor).toMatch(
-      /onError: \(msg\) => \(ui\.status = `copy failed: \$\{msg\}`\),?/,
+      /onError: \(msg\) => \{[\s\S]{0,120}ui\.status = `copy failed: \$\{msg\}`;[\s\S]{0,160}ui\.statusKind = "persistent";/,
     );
   });
 });
 
 describe("directive + persistent surfaces unchanged", () => {
   test("TerminalTab 'PTY did not report CWD' stays persistent (PTY signal)", () => {
+    // Explicitly persistent so the cwd-unavailable pill is dismissable;
+    // a null statusKind would stick with no x and no auto-clear.
     expect(terminal).toMatch(
-      /ui\.status = "PTY did not report CWD";/,
+      /ui\.status = "PTY did not report CWD";[\s\S]{0,200}ui\.statusKind = "persistent";/,
     );
   });
 

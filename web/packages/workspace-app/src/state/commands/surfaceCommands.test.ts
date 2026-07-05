@@ -96,6 +96,7 @@ describe("terminal surface commands", () => {
     for (const id of [
       "app.terminal.broadcastToggle",
       "app.terminal.copyCwd",
+      "app.terminal.newFsEntry",
       "terminal.richPrompt",
     ]) {
       expect(onTerminal.has(id)).toBe(true);
@@ -103,11 +104,18 @@ describe("terminal surface commands", () => {
     expect(idsIn(ctx({ activeSurface: "file" })).has("terminal.richPrompt")).toBe(
       false,
     );
-    expect(
-      idsIn(ctx({ terminalOnly: true, activeSurface: "terminal" })).has(
-        "terminal.richPrompt",
-      ),
-    ).toBe(false);
+    // The cwd-resolving commands and Rich Prompt only work against a
+    // workspace root, so a standalone (terminalOnly) window drops them.
+    const inStandalone = idsIn(
+      ctx({ terminalOnly: true, activeSurface: "terminal" }),
+    );
+    for (const id of [
+      "terminal.richPrompt",
+      "app.terminal.copyCwd",
+      "app.terminal.newFsEntry",
+    ]) {
+      expect(inStandalone.has(id)).toBe(false);
+    }
   });
 });
 

@@ -702,7 +702,12 @@
     if (!url) return;
     await copyTextToClipboard(url, {
       onSuccess: () => setTransientStatus("Copied link"),
-      onError: (msg) => (ui.status = `copy failed: ${msg}`),
+      onError: (msg) => {
+        ui.status = `copy failed: ${msg}`;
+        // Persistent so the error pill is dismissable; a null statusKind
+        // would leave it stuck with no x and no auto-clear.
+        ui.statusKind = "persistent";
+      },
     });
   }
 

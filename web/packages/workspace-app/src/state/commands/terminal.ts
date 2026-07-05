@@ -109,7 +109,10 @@ registerCommands([
     title: "Copy path to $CWD",
     category: "Terminal",
     keywords: ["cwd", "path", "directory", "clipboard"],
-    available: onTerminal,
+    // Resolve the cwd against the workspace root, so offer it only on a
+    // workspace terminal; a standalone terminal has no root and it can
+    // only fail there.
+    available: onWorkspaceTerminal,
     run: () => dispatchChanCommand("app.terminal.copyCwd"),
   },
   {
@@ -117,7 +120,7 @@ registerCommands([
     title: "New file or directory ($CWD)",
     category: "Terminal",
     keywords: ["new", "file", "directory", "folder", "cwd"],
-    available: onTerminal,
+    available: onWorkspaceTerminal,
     run: () => dispatchChanCommand("app.terminal.newFsEntry"),
   },
 ]);
