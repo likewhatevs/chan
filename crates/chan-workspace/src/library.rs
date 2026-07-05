@@ -171,9 +171,14 @@ impl Library {
     /// after another process (`chan devserver`, `chan workspace add`, etc.) mutates
     /// the shared registry.
     pub fn reload_registry(&self) -> Result<()> {
+        // Serialize reload with same-handle writers. The notify event that
+        // triggers a reload can lag behind a local register/remove; reading
+        // before this mutex risks applying an older on-disk snapshot after the
+        // writer has already saved and updated memory.
+        let mut registry_guard = self.inner.registry.lock().unwrap();
         let registry = Registry::load_from(&self.inner.config_path)?;
         let walk_filter = Arc::new(WalkFilter::new(registry.index_excluded_dirs.clone()));
-        *self.inner.registry.lock().unwrap() = registry;
+        *registry_guard = registry;
         *self.inner.walk_filter.lock().unwrap() = walk_filter;
         Ok(())
     }
