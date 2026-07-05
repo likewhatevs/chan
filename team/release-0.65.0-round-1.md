@@ -1,0 +1,36 @@
+# v0.65.0 Round 1 - config UI, shortcut assignment, workspace UX
+
+Round 1 of v0.65.0 makes the command launcher configurable and moves configuration into a settings surface: a web form over each chan-library's config, per-OS assignable keyboard shortcuts, a spotlight launcher redesign, Reload and Open Inspector in the launcher, and a batch of workspace-UX and editor fixes. Branch `config-cleanup-v0650` off `d53467cd` (worktree `../chan-v0650`), coordination tree `dev/v0.65.0/`. Pinned to `0.65.0-rc1` for host smoke; this is a Round 1 delivery, so no `v*` tag (a tag auto-publishes `latest.json` to every client regardless of base). Round 2 (back-of-pane migration and the no-defaults shortcut cleanup) and GA follow.
+
+## The round
+
+Five lanes on one shared worktree, coordinating through an append-only task/journal bus in the main tree:
+
+- Lead: the App.svelte wiring (the override-dispatch block, the settings-surface mount), integration and cross-lane sequencing (the launcher-file spine, the persistence-wire seam, the config-shape sign-off), the CI/release macOS parallelization, the CHANGELOG and doc/comment review, the full gate, the version bump, this report, and host-smoke.
+- Config-Web: the launcher-reachable Settings surface over the split-store `PreferencesView`, save-as-you-go single-field PATCH, cross-window live refresh, and the Keyboard Shortcuts section that hosts the assign grid.
+- Keymap: the persisted per-OS shortcut override layer, writable `chordFor` and dispatch, capture and conflict detection, the per-OS assignment grid, and the native-keymap and shortcuts-table regeneration.
+- Server: the per-command shortcut override table on the config wire, the `notify` config-file watch, the `reports_enabled` default flip, and the A1 remote-config confirmation with the stale settings-lockdown comments corrected.
+- Shell: all of `workspace-ux.md` (the spotlight redesign, the Tabs to Apps rename and the Apps/Tabs split, the empty single-pane redesign, the pane hamburger menu, the dashboard slide-jump commands) and all of `bug-reports.md` (the stuck CWD notification plus four editor bugs), plus the Reload and Open Inspector commands.
+
+Each lane own-gated scoped and reported a pathspec sha; the two headline surfaces were browser-smoked against a real build (Config-Web 9/9 on the settings surface, Keymap 7/7 on the assign-fire-persist round-trip) before the cut. The cross-lane hazards (the launcher file shared by the spotlight redesign and the writable chord render, the shortcut-persistence wire spanning three lanes, the security-sensitive remote-config route) were sequenced through the lead; every load-bearing worker claim was re-verified firsthand before a relay or a commit (the config-shape finding that `settings_guard` scopes only the `--no-settings` kiosk, the wire path at `config.preferences.shortcuts`, the shortcut-matrix cells).
+
+## What shipped
+
+- **A Settings configuration surface.** A launcher-reachable web form over each chan-library's config (Appearance, Editor, Terminal, Files & search, Keyboard Shortcuts), saving each field as you change it, reflecting live in every open window, and leaving the back-of-pane cards in place. A devserver's own config is editable the same way from its window (the mounted-tenant PATCH already authenticates the owner; no guard lift, no new route).
+- **Per-OS keyboard shortcut assignment.** Every launcher command is rebindable: capture a new chord with conflict detection and reset-to-default, stored per OS (web, macOS, Linux, Windows). A chan-desktop's set applies locally and to every devserver it opens; a browser uses the web set. Persisted to `preferences.toml` under `shortcuts`, resolved by the running client's platform, with the native keymap and shortcuts table regenerated in lockstep.
+- **A spotlight launcher and a cleaner catalog.** The launcher is a centered capsule that lifts on type, with per-row icons and empty-until-typed results. Its tab commands split into "Apps" (the spawn commands) and "Tabs" (Close / Reopen / Next / Previous tab); Reload and Open Inspector join it as Global commands (Open Inspector desktop-only); dashboard slide-jump commands land beside next/prev.
+- **Workspace-shell polish.** The empty single pane shows the workspace's absolute path with no buttons and auto-opens the launcher; the pane hamburger has "Enter Hybrid Nav" again; the pane menu no longer opens off-screen mid-transform.
+- **Config backend.** A `notify` watch refreshes open windows on external or CLI config edits; new workspaces default reports off.
+- **Fixes.** The stuck "PTY did not report CWD" notification (and its editor copy-failed twin) is dismissable; list continuation survives an image paste; editor image copy puts markdown on the clipboard; reopen-last-tab after deleting a draft opens a fresh draft; the stale selection-highlight band clears.
+- **CI/release.** The macOS gate (ci.yml) and release build (release.yml `macos-validate`) run parallel to Linux instead of gated behind it; the release skill records the parallel fan-out and the branch-vs-tag naming invariant.
+
+## The cut
+
+Full `make pre-push` in the worktree at `2a8e093f` (fmt, clippy `-D warnings`, test, `--no-default-features` build, the gateway workspace, web check with svelte-check plus vitest plus both SPA production builds, and the marketing check): green, with the whole workspace compiling at `0.65.0-rc1` (the launcher 198 and workspace-app 2485 vitest suites and both svelte-check passes clean, the gateway build finished, and the marketing dist built and smoked for chan 0.65.0-rc1). A final doc-and-comment review over everything the round wrote confirmed snapshot style, no em dashes, and no round or phase references in code or commit subjects (two stale comments corrected: the `ui.status` persistence claim that was the CWD bug's root, and a round reference in a settings section). The workspace is pinned to `0.65.0-rc1` (pin only; no `v*` tag this round, since a tag push publishes `latest.json`). CHANGELOG stays `[Unreleased]`; GA renames it after Round 2. The branch is one docs-only commit behind main (`f340e3dd`, the v0.64.0 release notes); reconcile at the eventual merge.
+
+## Carryover
+
+- Round 2: move the back-of-pane config content into the config UI (keeping the pane-flip and a "Flip the pane" command), then the no-defaults shortcut cleanup with the config UI as the rebinding escape hatch.
+- Shortcut defaults: `dev/v0.65.0/shortcuts-matrix.md` (machine-checked against the resolver) captures every command's current per-OS chord for the host to pick rebinds from; this round changed no default chords (additive).
+- Follow-ups flagged, not this round: two aspirational `--tunnel-public` references in `routes/workspace.rs` and `routes/cs_link.rs` (name-only; intent correct), and the devserver multi-tenant fan-out for the config watch (documented in `server-config-shape.md`).
+- Host smoke: `dev/v0.65.0/host-smoke.md`, with the WKWebView-only items (the selection-band bug, image-copy clipboard, the Open Inspector DevTools path) flagged as the desktop hand-smoke priorities.
