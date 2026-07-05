@@ -20,7 +20,12 @@
   import "@xterm/xterm/css/xterm.css";
   import { api, sessionWindowId, withTokenQuery } from "../api/client";
   import { createSocket } from "../api/transport";
-  import { isTauriDesktop, readClipboardText, readDroppedPaths } from "../api/desktop";
+  import {
+    isTauriDesktop,
+    readClipboardText,
+    readDroppedPaths,
+    writeClipboardText,
+  } from "../api/desktop";
   import { isOsFileDrag, shellEscapePaths } from "../state/fileDropGuard";
   import { openExternalUrl } from "../editor/external_links";
   import { chordFor, currentOS, shouldEscapeTerminal } from "../state/shortcuts";
@@ -1506,12 +1511,28 @@
     term?.focus();
   }
 
+  /// The path "Copy path to $CWD" puts on the clipboard: the shell's real
+  /// working directory, so prefer the absolute path the PTY reports. Fall
+  /// back to the workspace-relative path only for a virtual cwd that has no
+  /// absolute form. `newFsEntry` still uses terminalCwdRel(), which the
+  /// workspace file API needs rooted.
+  function terminalCwdForCopy(): string | null {
+    if (terminalCwdAbs) return terminalCwdAbs;
+    return terminalCwdRel();
+  }
+
   async function copyTerminalCwd(): Promise<void> {
-    const cwd = terminalCwdRel();
+    const cwd = terminalCwdForCopy();
     if (cwd === null) return terminalCwdUnavailable();
     closeTabMenu();
-    await navigator.clipboard?.writeText(cwd);
+    // The launcher dispatches this while its overlay is dismissing, so the
+    // document can momentarily lack focus and gesture, which makes a bare
+    // navigator.clipboard.writeText() reject silently under the caller's
+    // `void`. writeClipboardText writes natively on desktop (no gesture),
+    // and focusing the terminal first gives the web fallback a focused
+    // document.
     term?.focus();
+    await writeClipboardText(cwd);
   }
 
   // The command launcher runs at the app root, but a terminal's live $CWD
