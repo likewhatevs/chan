@@ -5,6 +5,7 @@
     activeLayout,
     bumpTabFocusPulse,
     closeTab,
+    enterPaneMode,
     enterPaneModeTransaction,
     flipHybrid,
     focusColorForWindow,
@@ -42,6 +43,7 @@
     FileText,
     Folder,
     Command as CommandIcon,
+    LayoutGrid,
     Network,
     Palette,
     Radio,
@@ -1190,7 +1192,7 @@
         bind:this={paneMenu}
         bind:open={paneMenuOpen}
         width={250}
-        height={210}
+        height={250}
         onBeforeOpen={closePaneContextMenus}
       >
         <li>
@@ -1198,6 +1200,13 @@
             <CommandIcon size={16} strokeWidth={1.75} aria-hidden="true" />
             <span class="menu-row-label">Commands</span>
             <span class="menu-row-chord">{chordLabel("app.launcher.toggle")}</span>
+          </button>
+        </li>
+        <li>
+          <button role="menuitem" onclick={() => { closePaneHamburgerMenu(); enterPaneMode(); }}>
+            <LayoutGrid size={16} strokeWidth={1.75} aria-hidden="true" />
+            <span class="menu-row-label">Enter Hybrid Nav</span>
+            <span class="menu-row-chord">{chordLabel("app.pane.mode")}</span>
           </button>
         </li>
         <li class="sep" role="separator"></li>

@@ -161,6 +161,7 @@ describe("Pane right-click menus", () => {
     );
     expect(menuLabels()).toEqual([
       "Commands",
+      "Enter Hybrid Nav",
       "blue",
       "orange",
       "green",
@@ -188,7 +189,14 @@ describe("Pane right-click menus", () => {
     await tick();
 
     const labels = menuLabels();
-    expect(labels).toEqual(["Commands", "blue", "orange", "green", "pink"]);
+    expect(labels).toEqual([
+      "Commands",
+      "Enter Hybrid Nav",
+      "blue",
+      "orange",
+      "green",
+      "pink",
+    ]);
     for (const label of [
       "New Draft",
       "Terminal",
@@ -197,7 +205,6 @@ describe("Pane right-click menus", () => {
       "Graph",
       "Search",
       "Dashboard",
-      "Enter Hybrid Nav",
       "Split right",
       "Split bottom",
       "Next pane",
