@@ -103,6 +103,10 @@ import { handleDemoDownload, withTokenQuery } from "../api/transport";
 import { uiConfirm } from "./confirm.svelte";
 import { applyEditorToolPreferences } from "./editorTools.svelte";
 import { updateGlobalConfigSerial } from "./configWrite";
+import {
+  hydrateOverrides,
+  registerOverridePersist,
+} from "./keymapOverrides.svelte";
 import { hydratePageWidthFromPrefs } from "./pageWidth.svelte";
 import { fbWatchResyncAll } from "./fbWatch.svelte";
 // `workspace` + the draft-path helpers live in a side-effect-free leaf
@@ -374,6 +378,14 @@ function persistHybridSurfaceThemes(): Promise<void> {
     hybrid_surface_themes: next,
   }));
 }
+
+// Route the keymap override layer's writes through the same serialized
+// config chain: every shortcut assign/clear PATCHes the whole override
+// table into `preferences.shortcuts`. The server broadcasts config_changed,
+// so applyServerPreferences re-hydrates every other window.
+registerOverridePersist((shortcuts) => {
+  void updateGlobalConfigSerial((prefs) => ({ ...prefs, shortcuts }));
+});
 
 const TRANSIENT_STATUS_DEFAULT_MS = 3000;
 let transientStatusTimer: ReturnType<typeof setTimeout> | null = null;
@@ -656,6 +668,9 @@ export function applyServerPreferences(): void {
   }
   applyEditorToolPreferences(prefs);
   hydratePageWidthFromPrefs(prefs.page_width_ratio, prefs.overlay_maximized);
+  // Load the keymap overrides so chordFor + the dispatch resolve the user's
+  // assignments; re-runs on every config_changed for cross-window refresh.
+  hydrateOverrides(prefs.shortcuts);
 }
 
 /** Subscribe to OS-level color-scheme changes. While the user is in

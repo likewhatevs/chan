@@ -260,7 +260,26 @@ export type Preferences = {
   /// Optional on the wire; absent is treated as not-dismissed, so the
   /// offer shows until the user dismisses it.
   cs_dismissed?: boolean;
+  /// Per-command keyboard shortcut overrides, keyed by Command id, each
+  /// holding an optional chord per client slot. Sparse: absent slots fall
+  /// back to the built-in chord. Consumed by the keymap override layer
+  /// (state/keymapOverrides.svelte). Optional on the wire; absent is an
+  /// empty table.
+  shortcuts?: ShortcutOverrides;
 };
+
+/// A single command's per-OS chord overrides. `web` is the browser set;
+/// the rest are the chan-desktop native sets. All optional; an empty
+/// string is a reserved "cleared" marker, treated as absent today.
+export type ShortcutOverride = {
+  web?: string;
+  macos?: string;
+  linux?: string;
+  windows?: string;
+};
+
+/// The shortcut override table: command id -> per-OS chords.
+export type ShortcutOverrides = Record<string, ShortcutOverride>;
 
 export type TreeEntry = {
   path: string;
