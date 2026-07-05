@@ -26,8 +26,6 @@
   import FileInfoBody from "./FileInfoBody.svelte";
   import WorkspaceInfoBody from "./WorkspaceInfoBody.svelte";
   import HamburgerMenu from "./HamburgerMenu.svelte";
-  import ImportContactsModal from "./ImportContactsModal.svelte";
-  import { markPaneModalOpen } from "../state/paneModalGuard.svelte";
   import { tabMenu } from "../state/tabMenu.svelte";
   import { chordFor } from "../state/shortcuts";
   import { classifyEntry, isOpenableTextKind } from "../state/kinds";
@@ -46,6 +44,7 @@
     openFsGraphForFile,
     openGraphForContact,
     openGraphForLanguage,
+    openImportContacts,
     paneWidths,
     persistPaneWidths,
     schedulePersistStateToHash,
@@ -186,15 +185,6 @@
   let findInputEl: HTMLInputElement | undefined = $state();
   let menu: HamburgerMenu | undefined = $state();
   let menuOpen = $state(false);
-  let importContactsOpen = $state(false);
-  // The import-contacts wizard renders OVER this file-browser pane and
-  // owns the keyboard. Register with the shared pane-modal guard so
-  // Cmd+, doesn't flip the pane hidden behind it (App.svelte's
-  // paneChordBlocked()).
-  $effect(() => {
-    if (!importContactsOpen) return;
-    return markPaneModalOpen();
-  });
 
   /// Per-tab File Browser view state.
   /// When this surface renders for a tab (variant === "tab"), the
@@ -530,9 +520,9 @@
     onClose?.();
   }
 
-  function openImportContacts(): void {
+  function openImportContactsFromMenu(): void {
     menu?.close();
-    importContactsOpen = true;
+    openImportContacts(pickInitialFolder(browserSelection.path));
   }
 
   function pickInitialFolder(sel: string | null): string {
@@ -787,7 +777,7 @@
   </li>
   <li class="sep" role="separator"></li>
   <li>
-    <button role="menuitem" onclick={openImportContacts}>
+    <button role="menuitem" onclick={openImportContactsFromMenu}>
       <Users size={16} strokeWidth={1.75} aria-hidden="true" />
       <span class="menu-row-label">Import contacts...</span>
       <span class="menu-row-chord"></span>
@@ -825,12 +815,6 @@
     </li>
   {/if}
 {/snippet}
-
-<ImportContactsModal
-  open={importContactsOpen}
-  defaultDir={pickInitialFolder(browserSelection.path)}
-  onClose={() => (importContactsOpen = false)}
-/>
 
 <style>
   .browser {

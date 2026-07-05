@@ -1165,6 +1165,14 @@ export function activeGraphTab(): GraphTab | null {
   return t;
 }
 
+export function activeBrowserTab(): BrowserTab | null {
+  const p = activePane();
+  if (!p.activeTabId) return null;
+  const t = p.tabs.find((tab) => tab.id === p.activeTabId);
+  if (!t || t.kind !== "browser") return null;
+  return t;
+}
+
 export function activeDashboardTab(): DashboardTab | null {
   const p = activePane();
   if (!p.activeTabId) return null;

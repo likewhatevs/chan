@@ -1273,7 +1273,7 @@ function isSurveyCloseReason(value: unknown): value is SurveyCloseReason {
 /// open a NATIVE picker instead (`pickUploadFiles`) and wrap the returned bytes
 /// in `File` objects for the SAME `uploadFilesTo`. Mirrors how
 /// `downloadPathWithProgress` branches on `isTauriDesktop()`.
-function raiseUploadPicker(destDir: string): void {
+export function raiseUploadPicker(destDir: string): void {
   if (isTauriDesktop()) {
     void raiseDesktopUploadPicker(destDir);
     return;
@@ -1298,6 +1298,28 @@ function raiseUploadPicker(destDir: string): void {
   input.click();
 }
 
+export function raiseReplacePicker(targetPath: string): void {
+  if (isTauriDesktop()) {
+    void raiseDesktopReplacePicker(targetPath);
+    return;
+  }
+  const input = document.createElement("input");
+  input.type = "file";
+  input.style.display = "none";
+  input.addEventListener(
+    "change",
+    () => {
+      const file = input.files?.[0];
+      input.remove();
+      if (file) void fileOps.replaceFileAt(targetPath, file);
+    },
+    { once: true },
+  );
+  input.addEventListener("cancel", () => input.remove(), { once: true });
+  document.body.appendChild(input);
+  input.click();
+}
+
 /// chan-desktop upload path: open the native picker, wrap the chosen bytes in
 /// `File` objects, and hand them to the same `fileOps.uploadFilesTo` pipeline as
 /// the browser path. An empty result is a cancel (no-op); an ACL refusal /
@@ -1315,6 +1337,23 @@ async function raiseDesktopUploadPicker(destDir: string): Promise<void> {
   if (picked.length === 0) return;
   const files = picked.map((f) => new File([new Uint8Array(f.bytes)], f.name));
   await fileOps.uploadFilesTo(destDir, files);
+}
+
+async function raiseDesktopReplacePicker(targetPath: string): Promise<void> {
+  let picked: Awaited<ReturnType<typeof pickUploadFiles>>;
+  try {
+    picked = await pickUploadFiles();
+  } catch (err) {
+    ui.status = `upload failed: ${err instanceof Error ? err.message : String(err)}`;
+    ui.statusKind = "persistent";
+    return;
+  }
+  const first = picked[0];
+  if (!first) return;
+  await fileOps.replaceFileAt(
+    targetPath,
+    new File([new Uint8Array(first.bytes)], first.name),
+  );
 }
 
 async function handleWindowCommand(raw: unknown): Promise<void> {
@@ -2618,6 +2657,26 @@ function applyProgressEvent(ev: ProgressFrame | null): void {
 export const importStatus = $state<{ value: { label: string } | null }>({
   value: null,
 });
+
+/// Window-level contacts import wizard state. File Browser menus and the
+/// command launcher both open the same modal with a chosen default
+/// directory; the wizard owns the import flow once visible.
+export const importContactsPanel = $state<{
+  open: boolean;
+  defaultDir: string;
+}>({
+  open: false,
+  defaultDir: "Contacts",
+});
+
+export function openImportContacts(defaultDir = "Contacts"): void {
+  importContactsPanel.defaultDir = defaultDir;
+  importContactsPanel.open = true;
+}
+
+export function closeImportContacts(): void {
+  importContactsPanel.open = false;
+}
 
 /// Open/closed state of the content-search command palette
 /// (`SearchPanel.svelte`). Toggled by Cmd/Ctrl+K and by the

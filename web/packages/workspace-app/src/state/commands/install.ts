@@ -8,6 +8,7 @@ import "./workspace";
 import "./search";
 import "./diagram";
 import "./editor";
+import "./browser";
 import "./terminal";
 import "./dashboard";
 import "./graph";

@@ -71,7 +71,7 @@ describe("FBSurface menu body: dock / expand / root-spawn / import in order", ()
 
   test("Import contacts entry kept, after the root-spawn band", () => {
     expect(surface).toMatch(
-      /onclick=\{newGraphFromRoot\}[\s\S]{1,800}<li class="sep" role="separator"><\/li>[\s\S]{1,400}onclick=\{openImportContacts\}/,
+      /onclick=\{newGraphFromRoot\}[\s\S]{1,800}<li class="sep" role="separator"><\/li>[\s\S]{1,400}onclick=\{openImportContactsFromMenu\}/,
     );
   });
 });

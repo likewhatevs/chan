@@ -11,6 +11,7 @@ import CommandLauncher from "./CommandLauncher.svelte";
 import appRaw from "../App.svelte?raw";
 import { launcherPanel } from "../state/store.svelte";
 import { registerCommands } from "../state/commands";
+import { layout, type BrowserTab, type LeafNode } from "../state/tabs.svelte";
 
 // jsdom does not implement scrollIntoView; the launcher calls it on the
 // highlighted row.
@@ -18,6 +19,8 @@ Element.prototype.scrollIntoView = vi.fn();
 
 const runSearch = vi.fn();
 const runNewFile = vi.fn();
+const runBrowserAlpha = vi.fn();
+const runBrowserZoom = vi.fn();
 const runHidden = vi.fn();
 
 // Register once. allCommands de-dups by (id, category, title), so a
@@ -38,6 +41,22 @@ registerCommands([
     keywords: ["create"],
     available: () => true,
     run: runNewFile,
+  },
+  {
+    id: "app.browser.zoom",
+    title: "Zoom browser",
+    category: "File Browser",
+    keywords: ["files"],
+    available: () => true,
+    run: runBrowserZoom,
+  },
+  {
+    id: "app.browser.alpha",
+    title: "Alpha browser",
+    category: "File Browser",
+    keywords: ["files"],
+    available: () => true,
+    run: runBrowserAlpha,
   },
   {
     id: "app.hidden.one",
@@ -68,7 +87,45 @@ function rowTitles(target: HTMLElement): (string | null)[] {
   return [...target.querySelectorAll(".row .title")].map((e) => e.textContent);
 }
 
+function groupLabels(target: HTMLElement): (string | null)[] {
+  return [...target.querySelectorAll(".group-label")].map((e) => e.textContent);
+}
+
+function rowTitlesInGroup(target: HTMLElement, label: string): (string | null)[] {
+  const group = [...target.querySelectorAll(".group")].find(
+    (g) => g.querySelector(".group-label")?.textContent === label,
+  );
+  return group ? rowTitles(group as HTMLElement) : [];
+}
+
+function resetLayout(): LeafNode {
+  const pane: LeafNode = {
+    kind: "leaf",
+    id: "command-launcher-pane",
+    tabs: [],
+    activeTabId: null,
+  };
+  layout.rootId = pane.id;
+  layout.activePaneId = pane.id;
+  layout.nodes = { [pane.id]: pane };
+  layout.focusColor = "blue";
+  return pane;
+}
+
+function setActiveBrowserTab(): void {
+  const pane = resetLayout();
+  const tab: BrowserTab = {
+    kind: "browser",
+    id: "browser-test",
+    title: "Files",
+    inspectorOpen: false,
+  };
+  pane.tabs = [tab];
+  pane.activeTabId = tab.id;
+}
+
 beforeEach(() => {
+  resetLayout();
   launcherPanel.open = false;
   launcherPanel.query = "";
 });
@@ -105,7 +162,25 @@ describe("command launcher overlay", () => {
     const titles = rowTitles(target);
     expect(titles).toContain("Search");
     expect(titles).toContain("New file");
+    expect(titles).toContain("Alpha browser");
     expect(titles).not.toContain("Hidden command");
+  });
+
+  test("sorts sections and rows alphabetically", async () => {
+    const target = openLauncher();
+    await flush();
+    expect(groupLabels(target)).toEqual(["Editor", "File Browser", "Global"]);
+    expect(rowTitlesInGroup(target, "File Browser")).toEqual([
+      "Alpha browser",
+      "Zoom browser",
+    ]);
+  });
+
+  test("pins the active tab category before the alphabetical sections", async () => {
+    setActiveBrowserTab();
+    const target = openLauncher();
+    await flush();
+    expect(groupLabels(target)).toEqual(["File Browser", "Editor", "Global"]);
   });
 
   test("shows the current chord next to a chorded command", async () => {
@@ -153,8 +228,8 @@ describe("command launcher overlay", () => {
       new KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
     );
     await tick();
-    expect(runSearch).toHaveBeenCalledTimes(1);
-    expect(runNewFile).not.toHaveBeenCalled();
+    expect(runNewFile).toHaveBeenCalledTimes(1);
+    expect(runSearch).not.toHaveBeenCalled();
     expect(launcherPanel.open).toBe(false);
   });
 

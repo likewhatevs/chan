@@ -24,28 +24,15 @@ export type CommandCategory =
   | "Tabs"
   | "Panes"
   | "Editor"
+  | "File Browser"
   | "Terminal"
   | "Dashboard"
   | "Graph";
 
-/// Render order for the launcher's category groups. Matches the
-/// brainstorm's grouping.
-export const COMMAND_CATEGORY_ORDER: readonly CommandCategory[] = [
-  "Global",
-  "Workspace",
-  "Search",
-  "Tabs",
-  "Panes",
-  "Editor",
-  "Terminal",
-  "Dashboard",
-  "Graph",
-];
-
 /// The active surface is the kind of the focused pane's active tab, or
 /// null when the pane is empty. Surface commands (Editor / Terminal /
-/// Graph / Dashboard) key their availability off this. The literals
-/// mirror the Tab union's `kind` discriminants.
+/// File Browser / Graph / Dashboard) key their availability off this.
+/// The literals mirror the Tab union's `kind` discriminants.
 export type CommandSurface =
   | "file"
   | "terminal"
@@ -105,8 +92,7 @@ export function allCommands(): Command[] {
   return [...byKey.values()];
 }
 
-/// Commands visible in `ctx`. The launcher groups the result by category
-/// (COMMAND_CATEGORY_ORDER) for display.
+/// Commands visible in `ctx`. The launcher owns display ordering.
 export function availableCommands(ctx: CommandContext): Command[] {
   return allCommands().filter((c) => c.available(ctx));
 }

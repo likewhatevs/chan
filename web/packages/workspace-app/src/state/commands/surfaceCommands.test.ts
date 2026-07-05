@@ -1,5 +1,5 @@
-// Registration and availability gating for the Editor, Graph, and
-// Dashboard surface command modules. Importing the three modules is the
+// Registration and availability gating for the Editor, File Browser,
+// Graph, and Dashboard surface command modules. Importing the modules is the
 // registration side effect; availableCommands then filters by a
 // hand-built context, so these assert the surface gates without a live
 // layout or the launcher UI.
@@ -8,6 +8,7 @@ import { describe, it, expect } from "vitest";
 import { availableCommands, type CommandContext } from "../commands";
 
 import "./editor";
+import "./browser";
 import "./graph";
 import "./dashboard";
 import "./diagram";
@@ -70,6 +71,25 @@ describe("graph surface commands", () => {
   });
 });
 
+describe("file browser surface commands", () => {
+  it("appear only on a file browser surface", () => {
+    const onBrowser = idsIn(ctx({ activeSurface: "browser" }));
+    for (const id of [
+      "app.browser.surfaceTheme.dark",
+      "app.browser.expandAll",
+      "app.browser.importContacts",
+      "app.browser.newFsEntry",
+      "app.browser.newGraph",
+      "app.browser.newTerminal",
+      "app.browser.toggleLeftDock",
+      "app.browser.uploadSelection",
+    ]) {
+      expect(onBrowser.has(id)).toBe(true);
+    }
+    expect(idsIn(ctx({ activeSurface: "file" })).has("app.browser.newGraph")).toBe(false);
+  });
+});
+
 describe("dashboard surface commands", () => {
   it("appear only on a dashboard surface", () => {
     const onDash = idsIn(ctx({ activeSurface: "dashboard" }));
@@ -99,6 +119,7 @@ describe("surface commands in a standalone terminal window", () => {
     const inTerminal = idsIn(ctx({ terminalOnly: true, activeSurface: "terminal" }));
     for (const id of [
       "app.editor.outline",
+      "app.browser.newGraph",
       "app.graph.copyLink",
       "app.dashboard.nextSlide",
     ]) {

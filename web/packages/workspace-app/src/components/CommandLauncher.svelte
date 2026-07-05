@@ -17,9 +17,9 @@
   import {
     availableCommands,
     commandContext,
-    COMMAND_CATEGORY_ORDER,
     type Command,
     type CommandCategory,
+    type CommandSurface,
   } from "../state/commands";
   import { chordFor } from "../state/shortcuts";
   // Load the per-category registrations (side effect) so the catalog is
@@ -71,8 +71,8 @@
   }
 
   // Best score across a command's title and keywords, or null if none
-  // match. An empty query matches everything (score 0), preserving the
-  // registration order for a stable full list.
+  // match. The score is only a filter threshold; visible commands stay
+  // alphabetized so sections do not jump around while narrowing.
   function commandScore(cmd: Command, query: string): number | null {
     if (query === "") return 0;
     let best: number | null = null;
@@ -85,22 +85,79 @@
 
   type Row = { cmd: Command; index: number };
   type Group = { category: CommandCategory; rows: Row[] };
+  type ScoredCommand = { cmd: Command; score: number };
 
   const ctx = $derived(commandContext());
 
-  // Filtered, category-grouped rows. Each row carries its flat index so
-  // arrow navigation and aria-activedescendant span groups in order.
+  function compareText(a: string, b: string): number {
+    return (
+      a.localeCompare(b, undefined, { sensitivity: "base" }) ||
+      a.localeCompare(b)
+    );
+  }
+
+  function compareCommands(a: ScoredCommand, b: ScoredCommand): number {
+    return (
+      compareText(a.cmd.title, b.cmd.title) ||
+      compareText(a.cmd.category, b.cmd.category) ||
+      compareText(a.cmd.id, b.cmd.id)
+    );
+  }
+
+  function categoryForSurface(
+    surface: CommandSurface | null,
+  ): CommandCategory | null {
+    switch (surface) {
+      case "file":
+        return "Editor";
+      case "browser":
+        return "File Browser";
+      case "terminal":
+        return "Terminal";
+      case "dashboard":
+        return "Dashboard";
+      case "graph":
+        return "Graph";
+      default:
+        return null;
+    }
+  }
+
+  function compareCategories(
+    active: CommandCategory | null,
+    a: CommandCategory,
+    b: CommandCategory,
+  ): number {
+    if (a === active && b !== active) return -1;
+    if (b === active && a !== active) return 1;
+    return compareText(a, b);
+  }
+
+  // Filtered, category-grouped rows. Categories and rows sort
+  // alphabetically, with the active tab's matching category pinned first.
+  // Each row carries its flat index so arrow navigation and
+  // aria-activedescendant span groups in order.
   const groups = $derived.by<Group[]>(() => {
     const query = launcherPanel.query.trim().toLowerCase();
     const scored = availableCommands(ctx)
       .map((cmd) => ({ cmd, score: commandScore(cmd, query) }))
       .filter((x): x is { cmd: Command; score: number } => x.score !== null);
+    const byCategory = new Map<CommandCategory, ScoredCommand[]>();
+    for (const entry of scored) {
+      const rows = byCategory.get(entry.cmd.category) ?? [];
+      rows.push(entry);
+      byCategory.set(entry.cmd.category, rows);
+    }
+    const activeCategory = categoryForSurface(ctx.activeSurface);
+    const categories = [...byCategory.keys()].sort((a, b) =>
+      compareCategories(activeCategory, a, b),
+    );
     const out: Group[] = [];
     let index = 0;
-    for (const category of COMMAND_CATEGORY_ORDER) {
-      const inCat = scored.filter((x) => x.cmd.category === category);
-      if (inCat.length === 0) continue;
-      if (query !== "") inCat.sort((a, b) => b.score - a.score);
+    for (const category of categories) {
+      const inCat = byCategory.get(category);
+      if (!inCat) continue;
+      inCat.sort(compareCommands);
       out.push({
         category,
         rows: inCat.map((x) => ({ cmd: x.cmd, index: index++ })),
@@ -296,11 +353,13 @@
   .row:hover {
     background: var(--hover-bg);
   }
-  /* Keyboard highlight is a solid accent bar, distinct from the subtler
-     mouse hover so the arrow cursor is never ambiguous. */
+  /* Keyboard highlight is a neutral focus box so it follows the app
+     chrome in both light and dark themes. */
   .row.active {
-    background: var(--accent);
-    color: #fff;
+    background: var(--hover-bg);
+    background: color-mix(in srgb, var(--text) 10%, transparent);
+    color: var(--text);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 22%, transparent);
   }
   .title {
     overflow: hidden;
@@ -319,8 +378,8 @@
     white-space: nowrap;
   }
   .row.active .chord {
-    border-color: rgba(255, 255, 255, 0.5);
-    background: rgba(255, 255, 255, 0.16);
-    color: #fff;
+    border-color: color-mix(in srgb, var(--text) 28%, transparent);
+    background: color-mix(in srgb, var(--bg) 75%, transparent);
+    color: var(--text-secondary);
   }
 </style>

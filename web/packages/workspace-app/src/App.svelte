@@ -18,8 +18,8 @@
   // ConflictModal; workspaceWarningsDialog drives WorkspaceWarningsModal.
   import { conflictDialog } from "./state/tabs.svelte";
   import { workspaceWarningsDialog } from "./state/store.svelte";
-  // Open-count of pane-LOCAL modals (MCP-env info, import-contacts) whose
-  // visibility lives in component state App.svelte can't otherwise see.
+  // Open-count of pane-LOCAL modals (MCP-env info) whose visibility
+  // lives in component state App.svelte can't otherwise see.
   import { paneModalGuard } from "./state/paneModalGuard.svelte";
   import { installFileDropGuard } from "./state/fileDropGuard";
   import { toggleRichPromptForTab } from "./state/richPrompt.svelte";
@@ -32,6 +32,7 @@
   import PromptModal from "./components/PromptModal.svelte";
   import SearchPanel from "./components/SearchPanel.svelte";
   import CommandLauncher from "./components/CommandLauncher.svelte";
+  import ImportContactsModal from "./components/ImportContactsModal.svelte";
   import Workspace from "./components/Workspace.svelte";
   import {
     applyInitialTheme,
@@ -59,6 +60,8 @@
     scheduleSessionSave,
     searchPanel,
     launcherPanel,
+    importContactsPanel,
+    closeImportContacts,
     toggleCommandLauncher,
     setTransientStatus,
     syncOverlayStack,
@@ -479,9 +482,10 @@
       teamDialogState.request !== null ||
       conflictDialog.open ||
       workspaceWarningsDialog.open ||
-      // Pane-local modals (MCP-env info in a terminal pane, the
-      // import-contacts wizard in a file-browser pane) register here
-      // while open since their visibility isn't an app-root flag.
+      importContactsPanel.open ||
+      // Pane-local modals (currently MCP-env info in a terminal pane)
+      // register here while open since their visibility isn't an
+      // app-root flag.
       paneModalGuard.openCount > 0
     );
   }
@@ -1440,6 +1444,11 @@
 <WorkspaceWarningsModal />
 <SearchPanel />
 <CommandLauncher />
+<ImportContactsModal
+  open={importContactsPanel.open}
+  defaultDir={importContactsPanel.defaultDir}
+  onClose={closeImportContacts}
+/>
 <!-- CAS conflict prompt: surfaces when a save returns 409. Mounted
      once per window so any pane can trigger it; the dialog itself
      keys off `conflictDialog.tabId`. -->
