@@ -87,6 +87,9 @@ beforeEach(() => {
       }
       return jsonResponse(server);
     }
+    if (url.includes("/api/fonts/source-code-pro/download")) {
+      return jsonResponse({ dir: "fonts", files: [] });
+    }
     return new Response(null, { status: 404 });
   });
 });
@@ -165,5 +168,62 @@ describe("settings surface render", () => {
     expect(
       target.querySelector('input[aria-label="Filter commands"]'),
     ).not.toBeNull();
+  });
+
+  test("the per-surface body theme sets then clears the override key", async () => {
+    const target = openSurface();
+    await flush();
+    // Appearance is the default section. Pin the editor body to Dark.
+    const darkRadio = target.querySelector(
+      'input[name="settings-surface-theme-editor"][value="dark"]',
+    ) as HTMLInputElement;
+    expect(darkRadio).not.toBeNull();
+    darkRadio.click();
+    await flush();
+    const afterSet = patches[patches.length - 1]!;
+    expect(
+      (afterSet.preferences.hybrid_surface_themes as Record<string, string>)
+        .editor,
+    ).toBe("dark");
+    // Unrelated slice preserved (single-field overlay, not a clobber).
+    expect(
+      (afterSet.preferences.terminal as { default_term: string }).default_term,
+    ).toBe("xterm-256color");
+    // Inherit drops the key entirely.
+    const inheritRadio = target.querySelector(
+      'input[name="settings-surface-theme-editor"][value="inherit"]',
+    ) as HTMLInputElement;
+    inheritRadio.click();
+    await flush();
+    const afterClear = patches[patches.length - 1]!;
+    expect(
+      (afterClear.preferences.hybrid_surface_themes as Record<string, string>)
+        .editor,
+    ).toBeUndefined();
+  });
+
+  test("selecting Source Code Pro downloads then PATCHes terminal.font", async () => {
+    const target = openSurface();
+    await flush();
+    const terminalTab = [...target.querySelectorAll(".section-tab")].find(
+      (e) => e.textContent?.trim() === "Terminal",
+    ) as HTMLElement;
+    terminalTab.click();
+    await flush();
+    const fontSelect = target.querySelector(
+      'select[aria-label="Terminal font"]',
+    ) as HTMLSelectElement;
+    expect(fontSelect).not.toBeNull();
+    fontSelect.value = "source-code-pro";
+    fontSelect.dispatchEvent(new Event("change", { bubbles: true }));
+    await flush();
+    const last = patches[patches.length - 1]!;
+    expect((last.preferences.terminal as { font: string }).font).toBe(
+      "source-code-pro",
+    );
+    // The MCP-env slice (a sibling terminal field) is preserved.
+    expect((last.preferences.terminal as { mcp_env: boolean }).mcp_env).toBe(
+      false,
+    );
   });
 });

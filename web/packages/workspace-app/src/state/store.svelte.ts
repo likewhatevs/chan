@@ -366,6 +366,14 @@ export function setHybridSurfaceTheme(
   void persistHybridSurfaceThemes();
 }
 
+/// Drop a surface's body-theme override so it falls back to the global
+/// `theme`. The settings surface's per-surface control offers this as
+/// "Inherit"; the back-of-pane card toggle is binary and has no reset.
+export function clearHybridSurfaceTheme(kind: HybridSurfaceKind): void {
+  delete hybridSurfaceThemes[kind];
+  void persistHybridSurfaceThemes();
+}
+
 // updateGlobalConfigSerial lives in ./configWrite (a leaf module with no store
 // dependency) so editorTools.svelte.ts can share the SAME write chain without
 // an import cycle — store imports editorTools, so editorTools must not import

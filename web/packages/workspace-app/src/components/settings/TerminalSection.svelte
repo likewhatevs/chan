@@ -5,7 +5,8 @@
   // writes. Terminal font selection (with its font download) stays on
   // the terminal back-of-pane card.
 
-  import type { Preferences } from "../../api/types";
+  import { api } from "../../api/client";
+  import type { Preferences, TerminalFontChoice } from "../../api/types";
   import type { CommitFn } from "./commit";
   import SettingField from "./SettingField.svelte";
   import PillToggle from "./PillToggle.svelte";
@@ -46,6 +47,47 @@
       termTimer = null;
       commit((p) => ({ ...p, terminal: { ...p.terminal, default_term: value } }));
     }, 400);
+  }
+
+  // Terminal font. Enabling Source Code Pro downloads the woff2 into the
+  // user config dir first; the preference is persisted only after the
+  // download lands, so the config never claims SCP while the file is
+  // missing (the terminal card holds the same invariant). `pendingFont`
+  // shows the picked value in the select while the download is in flight,
+  // before the buffer slice is committed.
+  let fontDownloading = $state(false);
+  let fontStatus = $state<string | null>(null);
+  let pendingFont = $state<TerminalFontChoice | null>(null);
+  const currentFont = $derived(
+    (prefs.terminal.font ?? "os-default") as TerminalFontChoice,
+  );
+  const displayFont = $derived(pendingFont ?? currentFont);
+
+  async function selectFont(next: TerminalFontChoice): Promise<void> {
+    if (next === displayFont) return;
+    fontStatus = null;
+    if (next === "source-code-pro") {
+      pendingFont = "source-code-pro";
+      fontDownloading = true;
+      fontStatus = "Downloading Source Code Pro...";
+      try {
+        await api.fontsSourceCodeProDownload();
+        commit((p) => ({
+          ...p,
+          terminal: { ...p.terminal, font: "source-code-pro" },
+        }));
+        fontStatus = "Source Code Pro ready.";
+      } catch (e) {
+        // Leave the preference at os-default; the select reverts when
+        // pendingFont clears, so the SPA never claims SCP is active.
+        fontStatus = `Download failed: ${(e as Error).message}`;
+      } finally {
+        pendingFont = null;
+        fontDownloading = false;
+      }
+    } else {
+      commit((p) => ({ ...p, terminal: { ...p.terminal, font: "os-default" } }));
+    }
   }
 </script>
 
@@ -91,11 +133,34 @@
   />
 </SettingField>
 
+<SettingField
+  label="Terminal font"
+  hint="Font for new terminals. Source Code Pro downloads ~80 KB into your config dir on first enable; existing terminals keep their font until they restart."
+>
+  <select
+    value={displayFont}
+    disabled={fontDownloading}
+    onchange={(e) =>
+      void selectFont(e.currentTarget.value as TerminalFontChoice)}
+    aria-label="Terminal font"
+  >
+    <option value="os-default">OS default (mono)</option>
+    <option value="source-code-pro">Source Code Pro</option>
+  </select>
+  {#if fontStatus}
+    <span class="font-status" role="status">{fontStatus}</span>
+  {/if}
+</SettingField>
+
 <style>
   .value {
     color: var(--text-secondary);
     font-size: 13px;
     min-width: 4.5em;
     text-align: right;
+  }
+  .font-status {
+    color: var(--text-secondary);
+    font-size: 12px;
   }
 </style>
