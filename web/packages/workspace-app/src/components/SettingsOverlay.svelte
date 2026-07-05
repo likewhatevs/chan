@@ -3,11 +3,10 @@
   // split-store PreferencesView. It reads the current config, presents
   // editable fields grouped by topic, and writes each change back as a
   // single-field slice through the shared serial config-write chain, so
-  // a save here never clobbers a concurrent back-of-pane card save. The
+  // a save here never clobbers a concurrent config write. The
   // form re-reads on the config_changed WS event (a sibling window's
   // change refreshes workspace.info.preferences), so every open window
-  // stays in sync. It is additive: the back-of-pane cards stay this
-  // round and present the same underlying config.
+  // stays in sync.
 
   import {
     FileCog,
@@ -116,9 +115,8 @@
     editing = normalize(clone(info.preferences));
   });
 
-  // Live-apply the editor theme so it is already in place when the
-  // surface closes, matching the back-of-pane editor card. Other fields
-  // apply on the server refresh.
+  // Live-apply the editor theme so it is already in place when the surface
+  // closes. Other fields apply on the server refresh.
   $effect(() => {
     if (editing) applyEditorTheme(editing.editor_theme);
   });
@@ -135,8 +133,8 @@
   /// Apply a single-field mutation. The optimistic local apply gives the
   /// control instant feedback; the persist runs through the shared
   /// serial config-write chain by default (re-reads the latest config
-  /// and overlays only this slice, so a concurrent back-of-pane save is
-  /// never clobbered). A caller passes its own persist for a field with
+  /// and overlays only this slice, so a concurrent config write is never
+  /// clobbered). A caller passes its own persist for a field with
   /// a dedicated store/api setter (theme). The write's config_changed
   /// then reconciles the buffer through the cross-window effect below,
   /// reflecting any server-side sanitization; the inflight counter holds

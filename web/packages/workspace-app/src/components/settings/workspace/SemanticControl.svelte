@@ -3,7 +3,7 @@
   // settings tab. The endpoints are stateful POSTs; the SPA owns the
   // downloading/enabling spinners (a model download runs a 3s poller while it
   // lands). The model file is shared across workspaces, but the enable state is
-  // per-workspace. Ported from the Search back-of-pane surface.
+  // per-workspace.
 
   import { onDestroy, onMount } from "svelte";
   import { api } from "../../../api/client";

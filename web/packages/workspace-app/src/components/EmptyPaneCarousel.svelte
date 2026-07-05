@@ -78,8 +78,8 @@
   // ---- About slide -------------------------------------------------------
   //
   // Sole home for the version + attribution surface. The embeddings /
-  // hybrid-search status lives in the Search dashboard slot
-  // (SearchSlotConfig), not here, so the About card stays "what + who".
+  // hybrid-search controls live in Settings > This workspace, not here,
+  // so the About card stays "what + who".
 
   let buildInfo = $state<BuildInfo | null>(null);
 
@@ -295,7 +295,7 @@
   // carousel is CONTROLLED: tab.carouselSlide is the single source of
   // truth, so the front dots and the flip-back slot picker stay in
   // sync with no snapshot to drift. `active` is false while the pane is
-  // flipped to its config back; the front then force-pauses auto-rotate
+  // flipped to its back face; the front then force-pauses auto-rotate
   // and the indexing poll, so a back-side slot pick is not yanked out
   // from under the user and the rotated-away carousel does not tick
   // invisibly.
@@ -572,10 +572,8 @@
            picker / depth slider / filter chips): the slide is purely
            a status read-out. -->
       <div class="slide slide-indexing" aria-label="Indexing graph">
-        <!-- The slot is labelled "Search":
-             this front slot pairs with a Search config back (index status
-             + semantic + embedding). The graph itself is still the
-             indexing spine, so its aria-label stays "Indexing graph". -->
+        <!-- The slot is labelled "Search": the graph itself is the indexing
+             spine, so its aria-label stays "Indexing graph". -->
         <div class="slide-title">Search</div>
         {#if indexingError}
           <div class="indexing-stub">

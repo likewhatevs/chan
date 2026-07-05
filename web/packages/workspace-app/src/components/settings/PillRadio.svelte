@@ -1,6 +1,6 @@
 <script lang="ts">
-  // A radio-pill group, the launcher/back-of-pane pill shape reused for
-  // the settings surface. Controlled: `value` is the current selection
+  // A radio-pill group, matching the shared launcher/settings pill shape.
+  // Controlled: `value` is the current selection
   // and `onselect` fires the write. The pill CSS is kept local so the
   // component does not depend on a sibling's styles being mounted.
 

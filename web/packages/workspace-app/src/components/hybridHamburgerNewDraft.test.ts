@@ -39,7 +39,7 @@ describe("Hybrid hamburger carries no theme/flip rows", () => {
   });
 
   test("no Settings footer in the Hybrid pane menu", () => {
-    // Cmd+, opens Settings via the Dashboard back-of-card (flipHybrid);
+    // Cmd+, flips the active pane through the app.settings.toggle command;
     // a duplicate Settings row is not needed in the pane menu.
     expect(pane).not.toMatch(
       /onclick=\{\(\) => dispatchCommand\("app\.settings\.toggle"\)\}[\s\S]*?<span class="menu-row-label">Settings<\/span>/,

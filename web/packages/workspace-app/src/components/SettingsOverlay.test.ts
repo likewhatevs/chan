@@ -1,10 +1,8 @@
-// Clobber-safety source pins for the settings surface. This is an
-// additive round: the settings form and the back-of-pane cards both
-// write the same config block. A whole-block PATCH built from the
-// form's buffer would drop a field a concurrent card save just landed,
-// so every write must be a single-field slice through the shared serial
-// config-write chain (which re-reads the latest config and overlays
-// only that slice). These pins guard that invariant.
+// Clobber-safety source pins for the settings surface. A whole-block PATCH built
+// from the form's buffer would drop a field a concurrent config write just
+// landed, so every write must be a single-field slice through the shared serial
+// config-write chain (which re-reads the latest config and overlays only that
+// slice). These pins guard that invariant.
 
 import { describe, expect, test } from "vitest";
 import overlaySource from "./SettingsOverlay.svelte?raw";

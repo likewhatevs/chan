@@ -1,8 +1,7 @@
 <script lang="ts">
   // Screen lock for the "This workspace" settings tab. Auto-locks the
   // workspace view after inactivity with an optional local PIN (salted by the
-  // workspace root, so it is per-workspace). Faithful port of the screen-lock
-  // state machine from the About back-of-pane surface: enable/timeout/theme
+  // workspace root, so it is per-workspace). It owns enable/timeout/theme
   // patches, the PIN set/confirm/clear dialog, a Test action, and the theme
   // preview.
 

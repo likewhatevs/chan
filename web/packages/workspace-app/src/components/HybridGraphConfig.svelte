@@ -91,11 +91,10 @@
   ];
 </script>
 
-<HybridSurfaceConfigShell title="Hybrid Graph" surface="graph" {onDone}>
+<HybridSurfaceConfigShell title="Hybrid Graph" {onDone}>
     <p class="hint">
-      Colour scheme for graph nodes. Same palette renders on the
-      graph canvas + here; the top-bar theme switch applies to
-      ALL graph tab bodies.
+      Colour scheme for graph nodes. Same palette renders on the graph canvas
+      and here.
     </p>
 
     {#each groups as group (group.title)}

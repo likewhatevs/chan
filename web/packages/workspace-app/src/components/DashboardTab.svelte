@@ -8,12 +8,11 @@
   // Cmd+, on a focused Hybrid surface flips it to its back-side;
   // Cmd+, again flips back.
   //
-  // The back-of-card body is per-slot now: Pane.svelte's back-side
+  // The back body is per-slot: Pane.svelte's back-side
   // switch mounts `dashboard/DashboardSlotBack.svelte` on the
   // `active?.kind === "dashboard"` arm, which mirrors the carousel's
-  // current slot (Workspace / Search / About) and shows that slot's
-  // config body. DashboardTab renders only the FRONT (the carousel)
-  // plus a right-click Reload row.
+  // current slot (Workspace / Search / About). DashboardTab renders only
+  // the front carousel plus a right-click Reload row.
 
   import { Check, RefreshCw, Settings2 } from "lucide-svelte";
   import { reloadWindow } from "../api/desktop";
@@ -42,7 +41,7 @@
   // MOUNTED across tab switches and flips (so the Indexing graph keeps its
   // force layout + poll state and never reloads on its own), hiding via
   // the visibility contract when it is not the front-facing active tab.
-  // It is false while the pane is flipped to its config back or while
+  // It is false while the pane is flipped to its back face or while
   // another tab is active; the carousel then force-pauses so it does not
   // auto-rotate invisibly, yank a back-side slot pick, or poll the indexer
   // in the background.
@@ -95,7 +94,7 @@
   function doSettings(): void {
     menu?.close();
     // Mirror the global Cmd+, (app.settings.toggle in App.svelte): flip
-    // the active pane's Hybrid surface to its per-slot config back.
+    // the active pane's Hybrid surface to its back face.
     flipHybrid(layout.activePaneId);
   }
 
@@ -138,8 +137,8 @@
          checkbox row for each carousel slide (at least one stays on,
          enforced in toggleDashboardSlot); unchecked slots drop out of
          auto-rotation and the dots. A separator, then Settings (Cmd+,)
-         which flips to the per-slot config back via flipHybrid (same
-         path as the global Cmd+,), then Reload. -->
+         which flips to the per-slot back via flipHybrid (same path as the
+         global Cmd+,), then Reload. -->
     {#each SLOTS as label, i}
       <li>
         <button

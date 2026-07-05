@@ -46,8 +46,7 @@
 
   // Per-Hybrid body-theme overrides. Each surface can pin its body to
   // Light or Dark independently of the app theme, or Inherit it. Inherit
-  // drops the key; the back-of-pane card's header toggle is binary and
-  // has no reset, so this is the only surface offering one.
+  // drops the key so the surface follows the app theme again.
   const SURFACE_THEME_OPTIONS = [
     { value: "inherit", label: "Inherit" },
     { value: "light", label: "Light" },
@@ -158,7 +157,7 @@
   <SettingField
     label={row.label}
     hint={i === 0
-      ? "Pin a Hybrid surface's body to Light or Dark independently of the app theme, or Inherit it. Same override the surface's back-of-pane header toggles."
+      ? "Pin a Hybrid surface's body to Light or Dark independently of the app theme, or Inherit it."
       : undefined}
   >
     <PillRadio

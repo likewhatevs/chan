@@ -1,13 +1,12 @@
 import { describe, expect, test } from "vitest";
 import dashboardBack from "./dashboard/DashboardSlotBack.svelte?raw";
 
-// The dashboard config back's slot picker is a carousel navigator - prev/next
-// chevrons + a dot pager + a pause/play toggle - mirroring the front
-// carousel's control affordances. Asserted as source shape because the
-// markup is a Svelte component, not a pure function; the real interaction
-// is browser-smoked.
+// The dashboard back's slot picker is a carousel navigator - prev/next chevrons
+// + a dot pager + a pause/play toggle - mirroring the front carousel's control
+// affordances. Asserted as source shape because the markup is a Svelte
+// component, not a pure function; the real interaction is browser-smoked.
 
-describe("dashboard config slot selector is a carousel navigator", () => {
+describe("dashboard back slot selector is a carousel navigator", () => {
   test("imports the chevron + play/pause icons", () => {
     expect(dashboardBack).toMatch(
       /import \{[^}]*\bChevronLeft\b[^}]*\bChevronRight\b[^}]*\bPause\b[^}]*\bPlay\b[^}]*\} from "lucide-svelte"/,
@@ -48,8 +47,8 @@ describe("dashboard config slot selector is a carousel navigator", () => {
     // The nav shares the OK footer row - centered, OK pinned
     // right, no divider - via the shell's `footerCenter` snippet +
     // `footerBorder={false}`, instead of a separate centered bottom row in
-    // the body above the divider. The slot body still renders before the nav.
-    const slotIdx = dashboardBack.indexOf("<SearchSlotConfig />");
+    // the body above the divider. The Workspace body still renders before the nav.
+    const slotIdx = dashboardBack.indexOf("<WorkspaceSlotConfig />");
     const navIdx = dashboardBack.indexOf('class="carousel-nav"');
     expect(slotIdx).toBeGreaterThan(-1);
     expect(navIdx).toBeGreaterThan(slotIdx);

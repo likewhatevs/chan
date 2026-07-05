@@ -6,8 +6,13 @@ import dashboard from "./DashboardTab.svelte?raw";
 import app from "../App.svelte?raw";
 import shell from "./HybridSurfaceConfigShell.svelte?raw";
 import dashboardBack from "./dashboard/DashboardSlotBack.svelte?raw";
-import aboutSlot from "./dashboard/AboutSlotConfig.svelte?raw";
 import workspaceSlot from "./dashboard/WorkspaceSlotConfig.svelte?raw";
+import indexControl from "./settings/workspace/IndexControl.svelte?raw";
+import semanticControl from "./settings/workspace/SemanticControl.svelte?raw";
+import excludedDirsControl from "./settings/workspace/ExcludedDirsControl.svelte?raw";
+import reportsControl from "./settings/workspace/ReportsControl.svelte?raw";
+import metadataControl from "./settings/workspace/MetadataControl.svelte?raw";
+import screenLockControl from "./settings/workspace/ScreenLockControl.svelte?raw";
 import fileInfo from "./FileInfoBody.svelte?raw";
 import inspector from "./InspectorBody.svelte?raw";
 
@@ -126,10 +131,9 @@ describe("carousel slides", () => {
       /<div class="slide slide-about" aria-label="About">/,
     );
     expect(carousel).toMatch(/chan version/);
-    // The embeddings / hybrid-search status row moved to the Search
-    // dashboard slot (SearchSlotConfig); the About card no longer renders
-    // it. Match the visible label text, not source comments that explain
-    // the move.
+    // The embeddings / hybrid-search status row lives in Settings > This
+    // workspace; the About card no longer renders it. Match the visible label
+    // text, not source comments that explain the move.
     expect(carousel).not.toMatch(/>embeddings</);
     expect(carousel).not.toMatch(/features\.embeddings/);
     // The third-party font + screensaver attributions were dropped from
@@ -310,10 +314,10 @@ describe("DashboardTab mounts the carousel", () => {
   });
 });
 
-describe("Dashboard back-of-card is per-slot (DashboardSlotBack)", () => {
+describe("Dashboard back card is per-slot (DashboardSlotBack)", () => {
   test("DashboardTab right-click menu lists slot toggles + Settings + Reload", () => {
     // The body right-click menu carries a per-slot on/off checkbox row,
-    // a separator, a Settings (Cmd+,) row that flips to the config back,
+    // a separator, a Settings (Cmd+,) row that flips to the back face,
     // and Reload.
     expect(dashboard).toMatch(/import HamburgerMenu from "\.\/HamburgerMenu\.svelte";/);
     expect(dashboard).toMatch(/function onContextMenu\(e: MouseEvent\): void/);
@@ -356,17 +360,20 @@ describe("Dashboard back-of-card is per-slot (DashboardSlotBack)", () => {
   });
 
   test("DashboardSlotBack wraps the shared shell + dispatches one body per slot", () => {
-    // Same shell every other Hybrid back uses, titled by the active
-    // slot, mounting one of the three slot bodies off tab.carouselSlide.
+    // Same shell every other Hybrid back uses, titled by the active slot.
+    // Only the Workspace slot still has body content: read-only recent
+    // workspaces.
     expect(dashboardBack).toMatch(
-      /<HybridSurfaceConfigShell[\s\S]{1,200}title=\{SLOTS\[slot\]\}[\s\S]{1,120}surface="dashboard"[\s\S]{1,200}ariaLabel="Dashboard settings"[\s\S]{1,120}\{onDone\}/,
+      /<HybridSurfaceConfigShell[\s\S]{1,200}title=\{SLOTS\[slot\]\}[\s\S]{1,200}ariaLabel="Dashboard settings"[\s\S]{1,120}\{onDone\}/,
     );
     expect(dashboardBack).toMatch(
       /const SLOTS = \["Workspace", "Search", "About"\] as const;/,
     );
     expect(dashboardBack).toMatch(
-      /\{#if slot === 0\}[\s\S]{1,80}<WorkspaceSlotConfig \/>[\s\S]{1,160}<SearchSlotConfig \/>[\s\S]{1,120}<AboutSlotConfig \/>/,
+      /\{#if slot === 0\}[\s\S]{1,80}<WorkspaceSlotConfig \/>[\s\S]{1,80}\{\/if\}/,
     );
+    expect(dashboardBack).not.toMatch(/SearchSlotConfig/);
+    expect(dashboardBack).not.toMatch(/AboutSlotConfig/);
     // Picking a slot moves the shared carousel cursor so the front
     // carousel lands on the same slot on flip-back.
     expect(dashboardBack).toMatch(/tab\.carouselSlide = i;/);
@@ -376,24 +383,23 @@ describe("Dashboard back-of-card is per-slot (DashboardSlotBack)", () => {
     );
   });
 
-  test("About slot owns Appearance + Screen lock; Workspace slot owns chan-reports + Metadata archive", () => {
-    // The monolithic HybridDashboardConfig split per slot: Appearance +
-    // Screen lock to the About body, Metadata archive (plus chan-reports
-    // lifted from the former File Browser config) to the Workspace body.
-    expect(aboutSlot).toMatch(/<h3>Appearance<\/h3>/);
-    expect(aboutSlot).toMatch(/<h3>Screen lock<\/h3>/);
-    expect(aboutSlot).toMatch(/name="app-appearance"/);
-    expect(aboutSlot).toMatch(
-      /onMount\(\(\) => \{[\s\S]{1,200}void loadScreenLockState\(\);/,
-    );
-    expect(workspaceSlot).toMatch(/<h3>chan-reports<\/h3>/);
-    expect(workspaceSlot).toMatch(/<h3>Metadata archive<\/h3>/);
-    expect(workspaceSlot).toMatch(/await api\.metadataExport\(\)/);
-    expect(workspaceSlot).toMatch(/await api\.metadataImport\(metadataImportFile/);
-    expect(workspaceSlot).toContain("Export metadata archive");
-    expect(workspaceSlot).toContain("Import metadata archive");
-    expect(workspaceSlot).toMatch(/bind:checked=\{metadataImportRescan\}/);
-    expect(workspaceSlot).toMatch(/bind:checked=\{metadataImportForceScm\}/);
+  test("migrated workspace controls live in Settings, not Dashboard backs", () => {
+    expect(workspaceSlot).toMatch(/<h3>Workspaces<\/h3>/);
+    expect(workspaceSlot).toMatch(/globalConfig\?\.workspaces/);
+    expect(workspaceSlot).not.toMatch(/<h3>chan-reports<\/h3>/);
+    expect(workspaceSlot).not.toMatch(/<h3>Metadata archive<\/h3>/);
+    expect(workspaceSlot).not.toMatch(/api\.metadataExport\(\)/);
+    expect(workspaceSlot).not.toMatch(/api\.metadataImport/);
+    expect(workspaceSlot).not.toMatch(/api\.reportsEnable\(\)/);
+
+    expect(indexControl).toMatch(/api\.indexRebuild\(\)/);
+    expect(semanticControl).toMatch(/api\.semanticEnable\(\)/);
+    expect(semanticControl).toMatch(/api\.semanticModelPatch\(model\)/);
+    expect(excludedDirsControl).toMatch(/api\.setExcludedDirs\(additions\)/);
+    expect(reportsControl).toMatch(/api\.reportsEnable\(\)/);
+    expect(metadataControl).toMatch(/api\.metadataExport\(\)/);
+    expect(metadataControl).toMatch(/api\.metadataImport\(metadataImportFile/);
+    expect(screenLockControl).toMatch(/api\.screensaverState\(\)/);
   });
 
   test("Pane.svelte back-side switch mounts DashboardSlotBack on the dashboard arm", () => {
@@ -562,26 +568,26 @@ describe("Search-slot directory inspector actions", () => {
   });
 });
 
-describe("About-back screensaver preview reacts to theme", () => {
+describe("Settings workspace screensaver preview reacts to theme", () => {
   test("preview switches on screensaverTheme; hint tracks the theme", () => {
-    expect(aboutSlot).toMatch(
-      /import PlainScreensaverPreview from "\.\.\/screensaver\/PlainScreensaverPreview\.svelte";/,
+    expect(screenLockControl).toMatch(
+      /import PlainScreensaverPreview from "\.\.\/\.\.\/screensaver\/PlainScreensaverPreview\.svelte";/,
     );
-    expect(aboutSlot).toMatch(
+    expect(screenLockControl).toMatch(
       /\{#if screensaverTheme === "matrix"\}[\s\S]{1,160}<MatrixRainPreview[\s\S]{1,80}\{:else\}[\s\S]{1,160}<PlainScreensaverPreview/,
     );
-    expect(aboutSlot).toMatch(
+    expect(screenLockControl).toMatch(
       /Preview of the \{screensaverTheme === "matrix"[\s\S]{1,80}\? "Matrix"[\s\S]{1,80}: "Default"\} lock[\s\S]{1,20}theme/,
     );
     // No longer hardcoded to a Matrix-only preview + hint.
-    expect(aboutSlot).not.toMatch(/Static preview of the Matrix lock theme\./);
+    expect(screenLockControl).not.toMatch(/Static preview of the Matrix lock theme\./);
     // The preview now lives INSIDE the Screen lock box (a div with a
     // title), not as a separate standalone <section> below it.
-    expect(aboutSlot).not.toMatch(/<section class="screensaver-preview">/);
-    expect(aboutSlot).toMatch(/class="preview-title">Screensaver preview</);
+    expect(screenLockControl).not.toMatch(/<section class="screensaver-preview">/);
+    expect(screenLockControl).toMatch(/class="preview-title">Screensaver preview</);
     // ...and only renders while the screen lock is ON (gated inside the
     // screensaverEnabled === true block).
-    expect(aboutSlot).toMatch(
+    expect(screenLockControl).toMatch(
       /\{#if screensaverEnabled === true\}[\s\S]*?class="screensaver-preview"[\s\S]*?\{\/if\}/,
     );
   });

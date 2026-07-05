@@ -1,17 +1,10 @@
 <script lang="ts">
   import type { Snippet } from "svelte";
-  import ThemeToggleButton from "./ThemeToggleButton.svelte";
-  import type { HybridSurfaceKind, SurfaceThemeChoice } from "../api/types";
-  import {
-    effectiveHybridSurfaceTheme,
-    setHybridSurfaceTheme,
-  } from "../state/store.svelte";
 
   type SaveStatus = "idle" | "saving" | "saved" | { error: string };
 
   let {
     title,
-    surface,
     ariaLabel = `${title} configuration`,
     saveStatus = "idle",
     onDone,
@@ -20,7 +13,6 @@
     footerBorder = true,
   }: {
     title: string;
-    surface: HybridSurfaceKind;
     ariaLabel?: string;
     saveStatus?: SaveStatus;
     onDone?: () => void;
@@ -32,12 +24,6 @@
     // controls into the footer row can drop it for a seamless single row.
     footerBorder?: boolean;
   } = $props();
-
-  const activeTheme = $derived(effectiveHybridSurfaceTheme(surface));
-
-  function setTheme(choice: SurfaceThemeChoice): void {
-    setHybridSurfaceTheme(surface, choice);
-  }
 </script>
 
 <section class="hybrid-config" aria-label={ariaLabel}>
@@ -53,11 +39,6 @@
         <span class="err" title={saveStatus.error}>save failed</span>
       {/if}
     </div>
-    <ThemeToggleButton
-      theme={activeTheme}
-      label={`${title} body`}
-      onToggle={() => setTheme(activeTheme === "dark" ? "light" : "dark")}
-    />
   </header>
   <div class="config-body">
     {#if children}

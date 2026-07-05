@@ -3,8 +3,7 @@
   // live indexer state (chunks/vectors/model when idle, progress while
   // building/reindexing) and offers an explicit rebuild. The status poller is
   // owned here and cleared in onDestroy, so polling stops the moment the tab
-  // unmounts (the SettingsOverlay mounts only the active section). Ported from
-  // the Search back-of-pane Index widget.
+  // unmounts (the SettingsOverlay mounts only the active section).
 
   import { onDestroy, onMount, untrack } from "svelte";
   import { api } from "../../../api/client";

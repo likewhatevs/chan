@@ -2,21 +2,18 @@
   // Per-slot Dashboard flip-back. Replaces the monolithic
   // HybridDashboardConfig: the back now mirrors the front carousel's
   // current slot (Workspace / Search / About) and shows that slot's own
-  // config body. A carousel navigator (prev/next chevrons + a dot pager +
-  // a pause/play toggle) lets the user move between slot configs without
+  // body. A carousel navigator (prev/next chevrons + a dot pager +
+  // a pause/play toggle) lets the user move between slots without
   // flipping back to the front; selecting a slot moves the shared
   // `tab.carouselSlide` cursor so the front carousel follows on flip-back
-  // (the carousel is controlled off the same field). The shell (title
-  // band, per-Hybrid Dark/Light override, OK) is HybridSurfaceConfigShell,
-  // same as every other Hybrid back.
+  // (the carousel is controlled off the same field). The shell (title band
+  // and OK) is HybridSurfaceConfigShell, same as every other Hybrid back.
 
   import { ChevronLeft, ChevronRight, Pause, Play } from "lucide-svelte";
   import type { DashboardTab } from "../../state/tabs.svelte";
   import { scheduleSessionSave } from "../../state/store.svelte";
   import HybridSurfaceConfigShell from "../HybridSurfaceConfigShell.svelte";
-  import AboutSlotConfig from "./AboutSlotConfig.svelte";
   import WorkspaceSlotConfig from "./WorkspaceSlotConfig.svelte";
-  import SearchSlotConfig from "./SearchSlotConfig.svelte";
 
   type Props = { tab: DashboardTab; onDone?: () => void };
   let { tab, onDone }: Props = $props();
@@ -39,10 +36,9 @@
     scheduleSessionSave();
   }
 
-  // Prev/next wrap across all three slots so the config back can reach
-  // every slot's config even when a slot is toggled off for the front
-  // rotation (the front carousel filters its dots by disabledSlots; this
-  // navigator does not, matching the old segmented picker's reach).
+  // Prev/next wrap across all three slots so the back can reach every slot
+  // even when a slot is toggled off for the front rotation (the front carousel
+  // filters its dots by disabledSlots; this navigator does not).
   function step(delta: number): void {
     selectSlot((slot + delta + SLOTS.length) % SLOTS.length);
   }
@@ -55,17 +51,12 @@
 
 <HybridSurfaceConfigShell
   title={SLOTS[slot]}
-  surface="dashboard"
   ariaLabel="Dashboard settings"
   {onDone}
   footerBorder={false}
 >
   {#if slot === 0}
     <WorkspaceSlotConfig />
-  {:else if slot === 1}
-    <SearchSlotConfig />
-  {:else}
-    <AboutSlotConfig />
   {/if}
 
   <!-- Carousel navigator. Mirrors the FRONT card's carousel controls

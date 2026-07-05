@@ -1,13 +1,11 @@
 import { api } from "../api/client";
 import type { Preferences } from "../api/types";
 
-// Every PATCH /api/config is a whole-block replacement, so two back-of-card
-// surfaces doing read-modify-write concurrently can clobber a field neither
-// meant to touch — e.g. the terminal-config autosave reads config before a
-// just-fired hybrid_surface_themes override PATCH lands, then writes the block
-// back without the override. Funnel all config writes through one chain so each
-// task re-reads the latest config, applies its mutation, and writes with no
-// interleaving. A mutation that returns null skips a redundant PATCH.
+// Every PATCH /api/config is a whole-block replacement, so concurrent
+// read-modify-write tasks can clobber a field neither meant to touch. Funnel
+// all config writes through one chain so each task re-reads the latest config,
+// applies its mutation, and writes with no interleaving. A mutation that returns
+// null skips a redundant PATCH.
 //
 // This is a leaf module (depends only on the api client) so both
 // store.svelte.ts and editorTools.svelte.ts can import the SAME chain without

@@ -8,10 +8,10 @@ import fbSurface from "./FileBrowserSurface.svelte?raw";
 // Workspace-root inspector behaves like any other directory. The
 // `inspector` variant renders the standard directory action row; the
 // `dashboard` variant (Dashboard front slide) drops it. The read-only
-// recent-workspaces list lives on WorkspaceSlotConfig (the slot's
-// flip-back); there is no default-workspace concept, since chan open
-// requires an explicit path. Source-level pins lock the variant split,
-// action row, the recents' home, and host wiring.
+// recent-workspaces list lives on WorkspaceSlotConfig (the slot's flip-back);
+// there is no default-workspace concept, since chan open requires an explicit
+// path. Source-level pins lock the variant split, action row, the recents'
+// home, and host wiring.
 
 describe("WorkspaceInfoBody variant split + directory action row", () => {
   test("a `variant` prop selects inspector vs dashboard", () => {
@@ -102,18 +102,12 @@ describe("WorkspaceInfoBody variant split + directory action row", () => {
     expect(workspaceSlotConfig).toMatch(/globalConfig\?\.workspaces/);
   });
 
-  test("WorkspaceSlotConfig divides chan-reports / Metadata archive / Workspaces", () => {
-    // Two dashed separators: one before Metadata archive, one before the
-    // Workspaces config, matching the workspace-inspector divider idiom.
-    expect(workspaceSlotConfig).toMatch(
-      /<section class="divided">\s*<h3>Metadata archive<\/h3>/,
-    );
-    expect(workspaceSlotConfig).toMatch(
-      /<section class="divided">\s*<h3>Workspaces<\/h3>/,
-    );
-    expect(workspaceSlotConfig).toMatch(
-      /\.divided \{[\s\S]*?border-top: 1px dashed var\(--border\);/,
-    );
+  test("WorkspaceSlotConfig carries no migrated per-workspace config controls", () => {
+    expect(workspaceSlotConfig).not.toMatch(/<h3>chan-reports<\/h3>/);
+    expect(workspaceSlotConfig).not.toMatch(/<h3>Metadata archive<\/h3>/);
+    expect(workspaceSlotConfig).not.toMatch(/api\.reportsEnable\(\)/);
+    expect(workspaceSlotConfig).not.toMatch(/api\.metadataExport\(\)/);
+    expect(workspaceSlotConfig).not.toMatch(/class="divided"/);
   });
 
   test("EmptyPaneCarousel passes variant=\"dashboard\"", () => {

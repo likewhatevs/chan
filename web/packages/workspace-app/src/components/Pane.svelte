@@ -1403,12 +1403,12 @@
           />
         {/each}
       </div>
-      <!-- BACK face: per-surface configuration view, mirrored 180deg so
-           it reads upright once the card is flipped. Dispatched off the
+      <!-- BACK face: per-surface view, mirrored 180deg so it reads upright
+           once the card is flipped. Dispatched off the
            active FRONT tab kind; switching the front tab while flipped
            swaps the back's content to the matching surface family.
            Latched-mounted via `backMounted` (see the latch effect): a
-           pane never flipped never mounts its config body, while a
+           pane never flipped never mounts its back body, while a
            flipped pane keeps the back present through the rotation. -->
       <div class="face back" inert={!flipped}>
         {#if backMounted && !paneMode.active}
@@ -1423,16 +1423,15 @@
               <HybridFileBrowserConfig onDone={() => flipHybrid(pane.id)} />
             {:else if active?.kind === "dashboard"}
               <!-- Per-slot Dashboard back: mirrors the front carousel's
-                   current slot (About / Workspace / Search) and shows
-                   that slot's config body, with a force-paused slot
-                   picker. Replaces the monolithic HybridDashboardConfig. -->
+                   current slot (About / Workspace / Search), with a
+                   force-paused slot picker. -->
               <DashboardSlotBack
                 tab={active}
                 onDone={() => flipHybrid(pane.id)}
               />
             {:else}
               <!-- Empty pane (no active front tab). Open a front tab and
-                   flip again to see its configuration surface. -->
+                   flip again to see its back surface. -->
               <div class="back-empty">
                 <h2 class="back-title">Hybrid</h2>
                 <p class="back-hint">

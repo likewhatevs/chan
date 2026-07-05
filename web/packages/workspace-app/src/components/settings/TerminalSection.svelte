@@ -1,9 +1,7 @@
 <script lang="ts">
   // Terminal settings: the server-config `terminal` slice. All fields
   // are spawn-time, so a change applies to newly spawned terminals. The
-  // scrollback slider and the free-text TERM field debounce their
-  // writes. Terminal font selection (with its font download) stays on
-  // the terminal back-of-pane card.
+  // scrollback slider and the free-text TERM field debounce their writes.
 
   import { api } from "../../api/client";
   import type { Preferences, TerminalFontChoice } from "../../api/types";

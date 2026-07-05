@@ -3,8 +3,7 @@
   // settings tab. Names of directories to skip when indexing + building the
   // graph; the walk skips union(defaults, additions). `defaults` is the
   // machine-wide baseline (read-only); this edits only the per-workspace
-  // additions. GET-then-PUT-the-whole-set with a debounced save, faithfully
-  // ported from the File Browser back-of-pane surface.
+  // additions. GET-then-PUT-the-whole-set with a debounced save.
 
   import { onDestroy, onMount } from "svelte";
   import { api } from "../../../api/client";

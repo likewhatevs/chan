@@ -16,7 +16,7 @@ export function applyEditorToolPreferences(prefs: {
 export function persistStripTrailingWhitespaceOnSave(value: boolean): Promise<void> {
   editorToolsPrefs.stripTrailingWhitespaceOnSave = value;
   // Serialized with every other config write (shared chain) so a concurrent
-  // back-of-card save can't clobber this field — or be clobbered by it.
+  // config write can't clobber this field, or be clobbered by it.
   // Skips the PATCH when the value already matches.
   return updateGlobalConfigSerial((prefs) =>
     prefs.strip_trailing_whitespace_on_save === value

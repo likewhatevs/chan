@@ -1,8 +1,7 @@
 <script lang="ts">
   // Per-workspace metadata archive export/import for the "This workspace"
   // settings tab. Import replaces the per-workspace metadata (index, graph,
-  // report, sessions) and reloads the window. Ported from the Workspace
-  // back-of-pane surface.
+  // report, sessions) and reloads the window.
 
   import { Download, Upload } from "lucide-svelte";
   import { api } from "../../../api/client";

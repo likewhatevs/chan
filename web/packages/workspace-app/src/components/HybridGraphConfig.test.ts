@@ -136,7 +136,7 @@ describe("Hybrid Graph legend grid", () => {
   test("Wave 4 OK button routes through onDone", () => {
     expect(source).toMatch(/let \{ onDone \}: \{ onDone\?: \(\) => void \} = \$props\(\)/);
     expect(source).toMatch(
-      /<HybridSurfaceConfigShell title="Hybrid Graph" surface="graph" \{onDone\}>/,
+      /<HybridSurfaceConfigShell title="Hybrid Graph" \{onDone\}>/,
     );
     expect(shell).toMatch(
       /<button type="button" class="config-ok" onclick=\{\(\) => onDone\?\.\(\)\}>OK<\/button>/,

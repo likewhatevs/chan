@@ -368,7 +368,7 @@ export function setHybridSurfaceTheme(
 
 /// Drop a surface's body-theme override so it falls back to the global
 /// `theme`. The settings surface's per-surface control offers this as
-/// "Inherit"; the back-of-pane card toggle is binary and has no reset.
+/// "Inherit".
 export function clearHybridSurfaceTheme(kind: HybridSurfaceKind): void {
   delete hybridSurfaceThemes[kind];
   void persistHybridSurfaceThemes();
@@ -637,8 +637,8 @@ export function applyLocalTheme(theme: string | null): void {
 
 function persistThemeChoice(choice: ThemeChoice): Promise<void> {
   // Serialized with every other config write (shared chain) so a rapid
-  // theme flip can't clobber — or be clobbered by — a parallel
-  // back-of-card save. Skips the PATCH when the value already matches.
+  // theme flip can't clobber, or be clobbered by, a parallel config write.
+  // Skips the PATCH when the value already matches.
   return updateGlobalConfigSerial((prefs) =>
     prefs.theme === choice ? null : { ...prefs, theme: choice },
   );
@@ -4033,7 +4033,7 @@ export function revealAndEnterDirectory(path: string): void {
 }
 
 /// True when every directory in the current tree is expanded.
-/// Workspaces the header toggle's glyph + title.
+/// Feeds the expand/collapse affordance's glyph and title.
 export function isFullyExpanded(): boolean {
   for (const e of tree.entries) {
     if (e.is_dir && !treeExpanded.map[e.path]) return false;
@@ -4048,7 +4048,7 @@ export function isFullyExpanded(): boolean {
 // tab, or two split panes) keep independent expand/collapse state. These
 // mirror the global `expandAllFolders` / `collapseAllFolders` /
 // `isFullyExpanded` above but target one instance's map. The FB header
-// menu workspaces them with the surface's own instance id.
+// menu calls them with the surface's own instance id.
 
 /// Expand every directory in the current tree for one instance.
 export function expandAllFoldersForInstance(id: string): void {
@@ -4070,7 +4070,7 @@ export function collapseAllFoldersForInstance(id: string): void {
 }
 
 /// True when every directory in the current tree is expanded for one
-/// instance. Workspaces the header toggle's glyph for that surface.
+/// instance. Feeds the expand/collapse affordance for that surface.
 export function isFullyExpandedForInstance(id: string): boolean {
   const inst = fbTreeInstance(id);
   if (!inst) return false;
