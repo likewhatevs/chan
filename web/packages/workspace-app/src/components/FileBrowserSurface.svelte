@@ -3,18 +3,12 @@
   import {
     ArrowLeft,
     ArrowRight,
-    FilePlus,
     FolderOpen,
     HardDrive,
-    History,
     Maximize2,
     Minimize2,
-    Network,
     PanelLeftOpen,
     PanelRightOpen,
-    Settings2,
-    Terminal as TerminalIcon,
-    Users,
     X,
   } from "lucide-svelte";
   import {
@@ -32,24 +26,18 @@
   import {
     browserSelection,
     browserSidePanes,
-    collapseAllFoldersForInstance,
-    expandAllFoldersForInstance,
     ensureFbTreeInstance,
     fbTreeInstance,
     fbSelectSet,
     fbSelectSingle,
-    fileOps,
-    isFullyExpandedForInstance,
     openFsGraphForDirectory,
     openFsGraphForFile,
     openGraphForContact,
     openGraphForLanguage,
-    openImportContacts,
     paneWidths,
     persistPaneWidths,
     schedulePersistStateToHash,
     scheduleSessionSave,
-    persistFbTreeInstanceExpansion,
     seedFbTreeInstanceFromReloadSnapshot,
     surfaceThemeOverride,
     toggleBrowserSidePane,
@@ -57,15 +45,10 @@
     workspace,
   } from "../state/store.svelte";
   import {
-    canReopenClosedTab,
-    layout,
     openBrowserInActivePane,
     openInActivePane,
-    openTerminalInPane,
-    reopenClosedTab,
   } from "../state/tabs.svelte";
   import type { BrowserTab } from "../state/tabs.svelte";
-  import { terminalFromHereTarget } from "../terminal/fromHere";
   import {
     fbWatchRegister,
     fbWatchReconcile,
@@ -88,9 +71,8 @@
     tab?: BrowserTab;
     onClose?: () => void;
     // Parent (Pane.svelte) supplies the flip callback for the tab
-    // variant. Dock + overlay variants don't pass one; the Settings
-    // (flip) entry hides for those variants since there's no Hybrid
-    // back-side to flip to.
+    // variant, forwarded to FileTree whose row menu carries the
+    // Settings (flip) entry. Dock + overlay variants pass none.
     onFlip?: () => void;
   } = $props();
 
@@ -107,15 +89,6 @@
     { inspectorOpen: false },
   );
   const browserState = $derived(tab ?? dockBrowserState);
-  const fullyExpanded = $derived.by(() => {
-    void tree.entries;
-    // READ the per-instance map so a dirty re-eval picks up THIS surface's
-    // expansion, not a sibling's. Must NOT call ensureFbTreeInstance here
-    // (it mutates $state -> state_unsafe_mutation inside a $derived); the
-    // instance is created by the subscription-reconcile effect below.
-    void fbTreeInstance(instanceId)?.expanded;
-    return isFullyExpandedForInstance(instanceId);
-  });
 
   // ---- per-instance scoped /ws subscriptions -----------------------------
   //
@@ -372,15 +345,6 @@
     openFind();
   }
 
-  function toggleAll(): void {
-    // Expand / collapse all targets THIS surface's instance only, so the
-    // dock and a tab don't toggle each other.
-    if (fullyExpanded) collapseAllFoldersForInstance(instanceId);
-    else expandAllFoldersForInstance(instanceId);
-    persistFbTreeInstanceExpansion(instanceId);
-    menu?.close();
-  }
-
   function openSelected(): void {
     const path = browserSelection.path;
     if (!path) return;
@@ -433,26 +397,6 @@
     menu?.close();
   }
 
-  /// Workspace-root actions for the FB tab / hamburger menu. Unlike
-  /// the FileTree in-row menu (which roots under the selected entry),
-  /// these always act from the workspace root (""), matching the
-  /// menu's "act on the whole workspace" framing. They reuse the same
-  /// store helpers the in-row menu calls.
-  function newFileOrDirFromRoot(): void {
-    menu?.close();
-    void fileOps.createFileOrDir("");
-  }
-
-  function newTerminalFromRoot(): void {
-    menu?.close();
-    openTerminalInPane(layout.activePaneId, terminalFromHereTarget("", true));
-  }
-
-  function newGraphFromRoot(): void {
-    menu?.close();
-    openFsGraphForDirectory("");
-  }
-
   function showWorkspaceInfo(): void {
     if (isDock) {
       openCurrentInFileBrowser();
@@ -495,45 +439,12 @@
     browserSelection.showWorkspace = true;
   }
 
-  /// Flip to back-side config view. Routes through the `onFlip`
-  /// callback the tab variant's parent (Pane.svelte) supplies. The
-  /// menu entry is gated on `isTab && onFlip` so dock + overlay
-  /// variants don't render a Settings entry that would no-op.
-  function flipToSettings(): void {
-    menu?.close();
-    onFlip?.();
-  }
-
-  /// Reopen Closed Tab for the File Browser menu. Available regardless
-  /// of variant since the closed-tab stack is window-global; the entry
-  /// disables when the stack is empty.
-  function doReopenClosedTab(): void {
-    menu?.close();
-    reopenClosedTab();
-  }
-
   /// Close, only renders in the tab variant where there's a tab to
   /// close. Routes through `onClose` (which Pane.svelte wires to
   /// `closeTab(pane.id, tab.id)`).
   function closeFromMenu(): void {
     menu?.close();
     onClose?.();
-  }
-
-  function openImportContactsFromMenu(): void {
-    menu?.close();
-    openImportContacts(pickInitialFolder(browserSelection.path));
-  }
-
-  function pickInitialFolder(sel: string | null): string {
-    if (!sel) return "Contacts";
-    const entry = tree.entries.find((e) => e.path === sel);
-    if (entry?.is_dir) return entry.path;
-    if (entry && !entry.is_dir) {
-      const slash = entry.path.lastIndexOf("/");
-      return slash > 0 ? entry.path.slice(0, slash) : "";
-    }
-    return "Contacts";
   }
 </script>
 
@@ -689,14 +600,12 @@
 
 {#snippet menuItems()}
   <!-- File Browser menu.
-       Header: path-derived workspace label + full-path row (workspace icon,
-       grey, fade-on-overflow, click -> workspace inspector). Body:
-       dock toggles, expand/collapse, import contacts. Foot: Settings
-       (flipHybrid) + Reopen Closed Tab + Close.
-       Selection menu (rename/delete/etc.) lives on FileTree's
-       row right-click; this menu is the FB tab right-click +
-       hamburger. New file / New directory entries moved to the
-       selection menu where they're CWD-aware. -->
+       Header: path-derived workspace label + full-path row (workspace
+       icon, grey, fade-on-overflow, click -> workspace inspector).
+       Body: dock stick toggles. Foot: Close (tab variant only). Every
+       other File Browser action lives in the command launcher; the
+       FileTree row right-click carries the per-entry selection menu
+       (rename/delete/etc.). -->
   <li class="workspace-label-row" role="none" title={workspace.info?.root}>
     <HardDrive size={16} strokeWidth={1.75} aria-hidden="true" />
     <span class="workspace-label-text">{workspace.info?.label ?? ""}</span>
@@ -741,70 +650,8 @@
       <span class="menu-row-chord"></span>
     </button>
   </li>
-  <li class="sep" role="separator"></li>
-  <li>
-    <button role="menuitem" onclick={toggleAll}>
-      <span class="glyph" aria-hidden="true">⇅</span>
-      <span class="menu-row-label">
-        {fullyExpanded ? "Collapse all directories" : "Expand all directories"}
-      </span>
-      <span class="menu-row-chord"></span>
-    </button>
-  </li>
-  <!-- Workspace-root spawn actions (replace the removed Reload entry).
-       Each acts from the workspace root, not the current selection. -->
-  <li>
-    <button role="menuitem" onclick={newFileOrDirFromRoot}>
-      <FilePlus size={16} strokeWidth={1.75} aria-hidden="true" />
-      <span class="menu-row-label">New file or Directory</span>
-      <span class="menu-row-chord"></span>
-    </button>
-  </li>
-  <li>
-    <button role="menuitem" onclick={newTerminalFromRoot}>
-      <TerminalIcon size={16} strokeWidth={1.75} aria-hidden="true" />
-      <span class="menu-row-label">New Terminal</span>
-      <span class="menu-row-chord"></span>
-    </button>
-  </li>
-  <li>
-    <button role="menuitem" onclick={newGraphFromRoot}>
-      <Network size={16} strokeWidth={1.75} aria-hidden="true" />
-      <span class="menu-row-label">New Graph</span>
-      <span class="menu-row-chord"></span>
-    </button>
-  </li>
-  <li class="sep" role="separator"></li>
-  <li>
-    <button role="menuitem" onclick={openImportContactsFromMenu}>
-      <Users size={16} strokeWidth={1.75} aria-hidden="true" />
-      <span class="menu-row-label">Import contacts...</span>
-      <span class="menu-row-chord"></span>
-    </button>
-  </li>
-  {#if isTab && onFlip}
-    <li class="sep" role="separator"></li>
-    <li>
-      <button role="menuitem" onclick={flipToSettings}>
-        <Settings2 size={16} strokeWidth={1.75} aria-hidden="true" />
-        <span class="menu-row-label">Settings</span>
-        <span class="menu-row-chord"></span>
-      </button>
-    </li>
-  {/if}
   {#if isTab}
     <li class="sep" role="separator"></li>
-    <li>
-      <button
-        role="menuitem"
-        onclick={doReopenClosedTab}
-        disabled={!canReopenClosedTab()}
-      >
-        <History size={16} strokeWidth={1.75} aria-hidden="true" />
-        <span class="menu-row-label">Reopen Closed Tab</span>
-        <span class="menu-row-chord">{chordFor("app.tab.reopenClosed") ?? ""}</span>
-      </button>
-    </li>
     <li>
       <button role="menuitem" onclick={closeFromMenu}>
         <X size={16} strokeWidth={1.75} aria-hidden="true" />

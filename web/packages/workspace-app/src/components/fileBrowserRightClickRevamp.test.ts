@@ -30,7 +30,7 @@ describe("FBSurface menu header: path-derived workspace label + path row", () =>
   });
 });
 
-describe("FBSurface menu body: dock / expand / root-spawn / import in order", () => {
+describe("FBSurface menu body: dock open + stick toggles only", () => {
   test("dock variant can open a File Browser tab for current selection or workspace", () => {
     expect(surface).toMatch(
       /function openCurrentInFileBrowser\(\): void \{[\s\S]{1,300}const path = browserSelection\.path;[\s\S]{1,200}const tab = openBrowserInActivePane\(path \? \{ select: path \} : \{\}\);[\s\S]{1,200}tab\.inspectorOpen = true;/,
@@ -55,12 +55,12 @@ describe("FBSurface menu body: dock / expand / root-spawn / import in order", ()
     );
   });
 
-  test("expand-all + root spawn actions sit between dock and import sections", () => {
-    // Reload was removed; below Expand-all the menu gains three
-    // workspace-root spawn entries in order: New file or Directory,
-    // New Terminal, New Graph.
+  test("below Stick-to-right the menu holds only the isTab Close entry", () => {
+    // The trimmed menu ends after the stick toggles with just a
+    // separator + the tab-variant Close; every other File Browser
+    // action now lives in the command launcher.
     expect(surface).toMatch(
-      /toggleStick\("right"\)[\s\S]{1,1000}<li class="sep" role="separator"><\/li>[\s\S]{1,200}onclick=\{toggleAll\}[\s\S]{1,700}onclick=\{newFileOrDirFromRoot\}[\s\S]{1,400}onclick=\{newTerminalFromRoot\}[\s\S]{1,400}onclick=\{newGraphFromRoot\}/,
+      /toggleStick\("right"\)[\s\S]{1,400}<\/li>\s*\{#if isTab\}\s*<li class="sep" role="separator"><\/li>[\s\S]{1,200}onclick=\{closeFromMenu\}[\s\S]{1,200}<span class="menu-row-label">Close<\/span>/,
     );
   });
 
@@ -69,29 +69,21 @@ describe("FBSurface menu body: dock / expand / root-spawn / import in order", ()
     expect(surface).not.toMatch(/<span class="menu-row-label">Reload<\/span>/);
   });
 
-  test("Import contacts entry kept, after the root-spawn band", () => {
-    expect(surface).toMatch(
-      /onclick=\{newGraphFromRoot\}[\s\S]{1,800}<li class="sep" role="separator"><\/li>[\s\S]{1,400}onclick=\{openImportContactsFromMenu\}/,
-    );
+  test("launcher-owned FB actions no longer render in the surface menu", () => {
+    expect(surface).not.toContain("onclick={toggleAll}");
+    expect(surface).not.toContain("onclick={newFileOrDirFromRoot}");
+    expect(surface).not.toContain("onclick={newTerminalFromRoot}");
+    expect(surface).not.toContain("onclick={newGraphFromRoot}");
+    expect(surface).not.toContain("onclick={openImportContactsFromMenu}");
+    expect(surface).not.toContain("onclick={flipToSettings}");
+    expect(surface).not.toContain("onclick={doReopenClosedTab}");
   });
 });
 
-describe("FBSurface menu foot: Settings / Reopen / Close (tab variant only)", () => {
-  test("Settings (flip) entry gated on isTab + onFlip", () => {
+describe("FBSurface menu foot: Close (tab variant only)", () => {
+  test("Close entry gated on isTab only", () => {
     expect(surface).toMatch(
-      /\{#if isTab && onFlip\}[\s\S]{1,800}onclick=\{flipToSettings\}/,
-    );
-  });
-
-  test("flipToSettings routes through onFlip callback", () => {
-    expect(surface).toMatch(
-      /function flipToSettings\(\): void \{[\s\S]{1,200}menu\?\.close\(\);[\s\S]{1,200}onFlip\?\.\(\);/,
-    );
-  });
-
-  test("Reopen + Close entries gated on isTab only", () => {
-    expect(surface).toMatch(
-      /\{#if isTab\}[\s\S]{1,2000}onclick=\{doReopenClosedTab\}[\s\S]{1,1000}onclick=\{closeFromMenu\}/,
+      /\{#if isTab\}\s*<li class="sep" role="separator"><\/li>[\s\S]{1,400}onclick=\{closeFromMenu\}/,
     );
   });
 
