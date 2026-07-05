@@ -111,8 +111,10 @@
   }
 
   // Best score across a command's title and keywords, or null if none
-  // match. The score is only a filter threshold; visible commands stay
-  // alphabetized so sections do not jump around while narrowing.
+  // match. A non-null score ranks a command in the top "Results" section
+  // (best first). A null score does NOT hide the command: it drops to the
+  // discovery catalog below, so a query only promotes matches, never
+  // removes anything available in the current context.
   function commandScore(cmd: Command, query: string): number | null {
     if (query === "") return 0;
     let best: number | null = null;
@@ -124,7 +126,7 @@
   }
 
   type Row = { cmd: Command; index: number };
-  type Group = { category: CommandCategory; rows: Row[] };
+  type Group = { label: string; rows: Row[] };
   type ScoredCommand = { cmd: Command; score: number };
 
   const ctx = $derived(commandContext());
@@ -179,35 +181,55 @@
     return categoryIcons[cmd.category];
   }
 
-  // Filtered, category-grouped rows. Categories and rows sort
-  // alphabetically, with the active tab's matching category pinned first.
-  // Each row carries its flat index so arrow navigation and
-  // aria-activedescendant span groups in order.
+  // The query never hides an available command; it only reorders. Matches
+  // float to a top "Results" section (best score first). Below them the
+  // full remaining catalog stays visible, grouped by category with the
+  // active surface's category pinned first, so a partial query still lets
+  // the user discover everything available in this context (the terminal
+  // options on a terminal tab, the dashboard jumps on a dashboard tab, and
+  // then the rest). Each row carries its flat index so arrow navigation and
+  // aria-activedescendant span the sections in order.
   const groups = $derived.by<Group[]>(() => {
     const query = launcherPanel.query.trim().toLowerCase();
     if (query === "") return [];
-    const scored = availableCommands(ctx)
-      .map((cmd) => ({ cmd, score: commandScore(cmd, query) }))
-      .filter((x): x is { cmd: Command; score: number } => x.score !== null);
-    const byCategory = new Map<CommandCategory, ScoredCommand[]>();
-    for (const entry of scored) {
-      const rows = byCategory.get(entry.cmd.category) ?? [];
-      rows.push(entry);
-      byCategory.set(entry.cmd.category, rows);
+    const matches: ScoredCommand[] = [];
+    const rest: Command[] = [];
+    for (const cmd of availableCommands(ctx)) {
+      const score = commandScore(cmd, query);
+      if (score !== null) matches.push({ cmd, score });
+      else rest.push(cmd);
+    }
+    const out: Group[] = [];
+    let index = 0;
+    // Top: the query matches, best score first (alphabetical tiebreak).
+    if (matches.length) {
+      matches.sort((a, b) => b.score - a.score || compareCommands(a, b));
+      out.push({
+        label: "Results",
+        rows: matches.map((x) => ({ cmd: x.cmd, index: index++ })),
+      });
+    }
+    // Below: the rest of the available catalog, nothing dropped, grouped by
+    // category with the active surface pinned first.
+    const byCategory = new Map<CommandCategory, Command[]>();
+    for (const cmd of rest) {
+      const inCat = byCategory.get(cmd.category) ?? [];
+      inCat.push(cmd);
+      byCategory.set(cmd.category, inCat);
     }
     const activeCategory = categoryForSurface(ctx.activeSurface);
     const categories = [...byCategory.keys()].sort((a, b) =>
       compareCategories(activeCategory, a, b),
     );
-    const out: Group[] = [];
-    let index = 0;
     for (const category of categories) {
       const inCat = byCategory.get(category);
       if (!inCat) continue;
-      inCat.sort(compareCommands);
+      inCat.sort(
+        (a, b) => compareText(a.title, b.title) || compareText(a.id, b.id),
+      );
       out.push({
-        category,
-        rows: inCat.map((x) => ({ cmd: x.cmd, index: index++ })),
+        label: category,
+        rows: inCat.map((cmd) => ({ cmd, index: index++ })),
       });
     }
     return out;
@@ -319,9 +341,9 @@
         {#if flat.length === 0}
           <div class="empty">No commands</div>
         {:else}
-          {#each groups as group (group.category)}
-            <div class="group" role="group" aria-label={group.category}>
-              <div class="group-label">{group.category}</div>
+          {#each groups as group (group.label)}
+            <div class="group" role="group" aria-label={group.label}>
+              <div class="group-label">{group.label}</div>
               {#each group.rows as row (row.cmd.id + "␟" + row.cmd.title)}
                 {@const Icon = iconFor(row.cmd)}
                 <!-- svelte-ignore a11y_click_events_have_key_events -->

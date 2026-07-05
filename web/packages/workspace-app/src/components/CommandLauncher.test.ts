@@ -196,10 +196,12 @@ describe("command launcher overlay", () => {
     expect(titles).not.toContain("Hidden command");
   });
 
-  test("sorts sections and rows alphabetically", async () => {
+  test("a non-matching query still shows the full catalog, sorted", async () => {
     const target = openLauncher();
     await flush();
-    await typeLauncherQuery();
+    // No command matches "zzz", so there is no Results section and the whole
+    // available catalog stays visible for discovery, category-sorted.
+    await typeLauncherQuery("zzz");
     expect(groupLabels(target)).toEqual(["Editor", "File Browser", "Global"]);
     expect(rowTitlesInGroup(target, "File Browser")).toEqual([
       "Alpha browser",
@@ -211,8 +213,20 @@ describe("command launcher overlay", () => {
     setActiveBrowserTab();
     const target = openLauncher();
     await flush();
-    await typeLauncherQuery();
+    await typeLauncherQuery("zzz");
     expect(groupLabels(target)).toEqual(["File Browser", "Editor", "Global"]);
+  });
+
+  test("keeps the active surface pinned below the query matches", async () => {
+    setActiveBrowserTab();
+    const target = openLauncher();
+    await flush();
+    await typeLauncherQuery("new");
+    // Matches lead under "Results"; the active surface (File Browser) is
+    // pinned ahead of the other discovery sections even though none of its
+    // commands matched the query.
+    expect(groupLabels(target)).toEqual(["Results", "File Browser", "Global"]);
+    expect(rowTitlesInGroup(target, "Results")).toEqual(["New file"]);
   });
 
   test("shows the current chord next to a chorded command", async () => {
@@ -231,12 +245,23 @@ describe("command launcher overlay", () => {
     expect(text).not.toBe("Assign");
   });
 
-  test("type-ahead filters the list", async () => {
+  test("a query promotes matches to a Results section but hides nothing", async () => {
     const target = openLauncher();
     await flush();
     launcherPanel.query = "new";
     await tick();
-    expect(rowTitles(target)).toEqual(["New file"]);
+    // "New file" matches and leads the list under a "Results" section...
+    expect(groupLabels(target)[0]).toBe("Results");
+    expect(rowTitlesInGroup(target, "Results")).toEqual(["New file"]);
+    expect(rowTitles(target)[0]).toBe("New file");
+    // ...but every other available command stays discoverable below, in its
+    // own category rather than dropped.
+    expect(rowTitlesInGroup(target, "File Browser")).toEqual([
+      "Alpha browser",
+      "Zoom browser",
+    ]);
+    expect(rowTitlesInGroup(target, "Global")).toEqual(["Search"]);
+    expect(rowTitles(target)).not.toContain("Hidden command");
   });
 
   test("clearing the query closes results and returns to the centered state", async () => {
