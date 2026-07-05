@@ -6,7 +6,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-The command launcher becomes configurable. A new Settings surface renders a web form over each chan-library's configuration, every command's keyboard shortcut is reassignable per operating system, and the launcher itself is redesigned as a centered spotlight. Reload and Open Inspector join the launcher, and a batch of editor and workspace fixes land.
+The command launcher becomes configurable. A new Settings surface renders a web form over each chan-library's configuration, every command's keyboard shortcut is reassignable per operating system, and the launcher itself is redesigned as a centered spotlight. Reload and Open Inspector join the launcher, and a batch of editor and workspace fixes land. Now that shortcuts are reassignable, the opinionated default chords are trimmed to a minimal set.
 
 ### Added
 
@@ -17,13 +17,14 @@ The command launcher becomes configurable. A new Settings surface renders a web 
 
 ### Changed
 
-- **The command launcher is a centered spotlight.** The palette opens as a centered capsule that lifts as you type, over a lightly tinted backdrop. Its search row shows a command-prompt cue and reads "Command", and each result row carries a per-category icon.
+- **The command launcher is a centered spotlight.** The palette opens as a centered capsule that lifts as you type, over a dark scrim so the workspace behind stays readable. Its search row shows a command-prompt cue and reads "Command", and each result row carries a per-category icon.
 - **The launcher keeps the full catalog visible.** It stays empty until you type; then the best matches surface in a Results group while the rest of the commands stay browsable below, grouped by category with the active surface pinned first, so nothing is hidden.
 - **The launcher opens in a terminal-only window.** Cmd+K and the launcher command now work in a terminal-only window.
 - **The launcher's tab commands split into Apps and Tabs.** New terminal, team, draft, graph, file browser, dashboard, and diagram group under "Apps"; the tab operations (Close tab, Reopen closed tab, Next and Previous tab) group under "Tabs". Next and Previous tab now appear in the launcher too.
 - **The empty single pane shows the workspace path.** A single empty pane shows the workspace's absolute path (not just its name), with no action buttons. Open the command launcher from the pane menu's Commands item.
 - **The pane menu has "Enter Hybrid Nav" again**, directly under Commands.
 - **A config file edited outside chan refreshes open windows.** Editing a configuration file directly, or through `chan config set`, now refreshes any open window without a reload.
+- **Default keyboard shortcuts are trimmed to a minimal set.** With shortcuts now reassignable, the opinionated spawn, navigation, and pane / tab chords (New terminal, New draft, Search, Graph, Dashboard, File browser, Team Work, and the pane split / nav / close / kill chords) no longer ship a built-in default; bind the keys you want in Settings > Keyboard Shortcuts. The non-negotiables stay: the Cmd+K launcher, and Close tab (now Cmd+W on macOS, with Ctrl+D everywhere as an alternate). The universal conventions stay too (copy, paste, find, editor bold and italic, delete file, Esc). A few kept commands rebind: Close window to Cmd+Shift+W, New terminal to Cmd+T (Ctrl+Shift+T off macOS), Reopen closed tab to Cmd+Shift+T (Ctrl+Alt+Shift+T off macOS), and Rich Prompt to Cmd+Shift+P (Ctrl+Shift+P off macOS).
 
 ### Fixed
 
