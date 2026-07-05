@@ -2440,8 +2440,8 @@ impl Workspace {
     }
 
     /// Read the per-workspace chan-report opt-in flag.
-    /// Mirrors `DashboardConfig::reports_enabled`; default-FALSE for a brand-new
-    /// workspace (reports off by default), while an
+    /// Mirrors `DashboardConfig::reports_enabled`; default-TRUE for a brand-new
+    /// workspace (reports on by default), while an
     /// existing workspace keeps its persisted value. Consumers gate
     /// `Workspace::report()` initialization + the per-workspace
     /// language-graph layer on this flag.
@@ -6579,21 +6579,19 @@ mod tests {
     }
 
     #[test]
-    fn reports_default_off_and_enable_boot_kicks_off_initial_scan() {
+    fn reports_enabled_defaults_true_round_trips_and_boot_kicks_off_initial_scan() {
         // Workspace::reports_enabled defaults
-        // FALSE for a new workspace (reports off by default); enabling the flag
-        // and booting kicks off the initial scan so the first
-        // `Workspace::report()` consumer sees populated data;
-        // set_reports_enabled round-trips the flag; disable drops the persisted
-        // jsonl.
+        // TRUE for a new workspace (reports on by default); boot kicks off the
+        // initial scan when the flag is on so the first `Workspace::report()`
+        // consumer sees populated data; set_reports_enabled round-trips the
+        // flag; disable drops the persisted jsonl.
         let (_cfg, _root, workspace) = fixture();
         assert!(
-            !workspace.reports_enabled().unwrap(),
-            "a new workspace defaults to reports OFF"
+            workspace.reports_enabled().unwrap(),
+            "a new workspace defaults to reports ON"
         );
 
-        // Turn reports on, then boot kicks the initial scan. boot() is idempotent.
-        workspace.set_reports_enabled(true).unwrap();
+        // On by default, so boot kicks the initial scan. boot() is idempotent.
         workspace.boot().unwrap();
         workspace.boot().unwrap(); // re-call no-op
                                    // Confirm the report state was initialized (the persisted
@@ -6654,9 +6652,8 @@ mod tests {
         // boot() with both feature flags off is a
         // pure no-op. No report scan kicked off; no eager
         // initialization that would slow down chan-server startup
-        // on a lean workspace. Both features default off; the
-        // explicit disable keeps the both-off intent robust to a
-        // future default change.
+        // on a lean workspace. Reports default ON, so
+        // explicitly turn it off to exercise the both-off no-op path.
         let (_cfg, _root, workspace) = fixture();
         workspace.set_reports_enabled(false).unwrap();
         assert!(!workspace.semantic_enabled().unwrap());

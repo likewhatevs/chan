@@ -72,14 +72,12 @@ impl Default for DashboardConfig {
     fn default() -> Self {
         Self {
             semantic_enabled: false,
-            // Reports default OFF for a brand-new workspace (used by `load` only
+            // Reports default ON for a brand-new workspace (used by `load` only
             // when no dashboard.toml exists yet). An existing file keeps its
             // persisted value, and a file that omits the key deserializes to
-            // false via the field's `#[serde(default)]`, so the struct default
-            // and the omitted-key default agree. Users opt in per workspace
-            // (`chan add --reports`, `chan reports enable`, or the Settings
-            // toggle).
-            reports_enabled: false,
+            // false via the field's `#[serde(default)]`, so existing workspaces
+            // never silently flip.
+            reports_enabled: true,
             screensaver_enabled: false,
             screensaver_timeout_secs: default_screensaver_timeout_secs(),
             screensaver_theme: ScreensaverTheme::Plain,
@@ -154,8 +152,9 @@ pub fn save(root: &Path, cfg: &DashboardConfig) -> Result<()> {
 /// The dashboard keys as they used to live in `<index_dir>/config.toml`, read
 /// with the OLD `IndexConfig` serde defaults so a migration is byte-faithful to
 /// what the index config would have reported. In particular `reports_enabled`
-/// defaults `false` here (an existing workspace that never set it stays off),
-/// matching the brand-new-workspace default in [`DashboardConfig::default`]. The
+/// defaults `false` here (an existing workspace that never set it stays off);
+/// the reports-default-ON only applies to a brand-new workspace, which has no
+/// index config to migrate and so picks up [`DashboardConfig::default`]. The
 /// search keys (model, chunking, vectors_*, excluded_dirs, schema_version) are
 /// ignored.
 #[derive(Deserialize)]
@@ -196,8 +195,8 @@ impl LegacyDashboardKeys {
 /// A no-op once `dashboard.toml` exists. Gated on the legacy index config
 /// EXISTING (not on which keys it carries): a workspace with an index config is
 /// "existing", so even one omitting every toggle migrates to faithful values
-/// (the omitted `reports_enabled` reads as false, the same as the new-workspace
-/// default). A truly brand-new workspace has no index config, so it is skipped and
+/// (reports off) rather than picking up the new-workspace default (reports on).
+/// A truly brand-new workspace has no index config, so it is skipped and
 /// [`load`] returns [`DashboardConfig::default`]. A malformed index config is
 /// skipped too (left for `index::config::load` to surface, so open stays as
 /// lenient as before).
@@ -232,8 +231,8 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let cfg = load(tmp.path()).unwrap();
         assert_eq!(cfg, DashboardConfig::default());
-        // Reports default OFF for a brand-new workspace, like the rest.
-        assert!(!cfg.reports_enabled);
+        // Reports default ON for a brand-new workspace; the rest off/plain.
+        assert!(cfg.reports_enabled);
         assert!(!cfg.semantic_enabled);
         assert!(!cfg.screensaver_enabled);
         assert_eq!(cfg.screensaver_timeout_secs, 300);
@@ -350,23 +349,23 @@ mod tests {
     #[test]
     fn migrate_is_noop_for_a_brand_new_workspace() {
         // No index config.toml → nothing to migrate; `load` falls to defaults
-        // (reports OFF for a brand-new workspace).
+        // (reports ON for a brand-new workspace).
         let tmp = TempDir::new().unwrap();
         let root = tmp.path().join("meta");
         let index_dir = root.join("index");
         migrate_from_index_config(&root, &index_dir).unwrap();
         assert!(!config_path(&root).exists(), "no dashboard.toml written");
         assert!(
-            !load(&root).unwrap().reports_enabled,
-            "a brand-new workspace defaults reports OFF"
+            load(&root).unwrap().reports_enabled,
+            "a brand-new workspace defaults reports ON"
         );
     }
 
     #[test]
     fn migrate_existing_index_without_toggles_keeps_reports_off() {
-        // An existing workspace whose index config omits every toggle migrates
-        // to faithful values: the omitted `reports_enabled` reads as false, the
-        // same as the brand-new-workspace default.
+        // An existing workspace whose index config omits every toggle is NOT
+        // brand-new: it migrates to faithful values (reports OFF), not the
+        // new-workspace default (reports ON).
         let tmp = TempDir::new().unwrap();
         let root = tmp.path().join("meta");
         let index_dir = root.join("index");

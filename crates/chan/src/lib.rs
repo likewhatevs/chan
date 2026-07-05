@@ -1240,7 +1240,7 @@ fn init_tracing(verbosity: u8) {
 /// tokei (pulled in transitively by chan-report for the language-count
 /// lens) logs `Unknown extension: <ext>` at WARN through tokei's own
 /// `LanguageType::from_path` for every file it can't classify. chan-report
-/// is default-off (`DashboardConfig::reports_enabled = false`), so on a source
+/// is default-on (`DashboardConfig::reports_enabled = true`), so on a source
 /// tree with reports enabled this is pure console noise with no downstream
 /// effect (the graph language lens already degrades when a bucket is
 /// absent). Cap tokei at ERROR so the spam disappears but genuine tokei
