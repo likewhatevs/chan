@@ -53,30 +53,40 @@
   /// its REAL bounding box and re-clamp into the viewport. The
   /// estimated `width` / `height` props are only used for the first
   /// frame - actual content size wins thereafter.
+  const TRIGGER_GAP = 6;
+
+  /// Live anchor for a trigger-opened menu: below the trigger's bottom,
+  /// X aligned per triggerMenuX. Re-derived from a fresh bounding box so
+  /// refineAfterMount can pick up a trigger whose transform (a pane flip
+  /// or hover-scale in flight at click time) has settled since.
+  function triggerAnchor(): { x: number; y: number } | null {
+    if (!triggerEl) return null;
+    const r = triggerEl.getBoundingClientRect();
+    return { x: triggerMenuX(r, width), y: r.bottom + TRIGGER_GAP };
+  }
+
   function placeNearCursor(x: number, y: number): void {
     pos = clampToViewport(width, height, { x, y });
-    refineAfterMount(x, y);
+    refineAfterMount(() => ({ x, y }));
   }
 
   /// Open below the trigger's bottom-right corner. The clamp helper
   /// keeps the bubble on-screen if the trigger sits close to the
   /// viewport edge (e.g., when its container is near the right or
   /// bottom of the window).
-  function placeUnderTrigger(r: DOMRect): void {
-    const gap = 6;
-    const desiredX = triggerMenuX(r, width);
-    const desiredY = r.bottom + gap;
-    pos = clampToViewport(width, height, { x: desiredX, y: desiredY });
-    refineAfterMount(desiredX, desiredY);
+  function placeUnderTrigger(anchor: { x: number; y: number }): void {
+    pos = clampToViewport(width, height, anchor);
+    refineAfterMount(() => triggerAnchor() ?? anchor);
   }
 
-  /// After the bubble renders, swap the estimated size for the real
-  /// one and re-clamp. Runs at next-frame to catch the painted box.
-  function refineAfterMount(x: number, y: number): void {
+  /// After the bubble renders, swap the estimated size for the real one
+  /// and re-clamp against a freshly resolved anchor. Runs at next-frame
+  /// to catch the painted box and any settled trigger transform.
+  function refineAfterMount(anchor: () => { x: number; y: number }): void {
     requestAnimationFrame(() => {
       if (!menuEl) return;
       const r = menuEl.getBoundingClientRect();
-      pos = clampToViewport(r.width, r.height, { x, y });
+      pos = clampToViewport(r.width, r.height, anchor());
     });
   }
 
@@ -85,13 +95,14 @@
       open = false;
       return;
     }
-    if (!triggerEl) {
+    const anchor = triggerAnchor();
+    if (!anchor) {
       onBeforeOpen?.();
       open = true;
       return;
     }
     onBeforeOpen?.();
-    placeUnderTrigger(triggerEl.getBoundingClientRect());
+    placeUnderTrigger(anchor);
     open = true;
   }
 

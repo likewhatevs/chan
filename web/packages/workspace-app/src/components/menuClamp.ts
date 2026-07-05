@@ -49,6 +49,12 @@ export function clampToViewport(
   if (top + height > vh - margin) {
     top = Math.max(margin, vh - margin - height);
   }
+  // The flips above only pull the menu back from the right and bottom
+  // edges. A displaced anchor (e.g. a trigger rect measured while a pane
+  // flip or hover-scale is mid-transform) can sit past the top or left
+  // edge, where nothing above catches it, so floor both here.
+  left = Math.max(margin, left);
+  top = Math.max(margin, top);
   return { left, top };
 }
 
