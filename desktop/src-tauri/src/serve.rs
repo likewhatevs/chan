@@ -2054,18 +2054,15 @@ const KEY_BRIDGE_JS: &str = r#"
       : e.ctrlKey && !e.metaKey && e.altKey && !e.shiftKey && e.code === 'KeyK';
   }
   // Chord policy: actions reachable through Hybrid Nav (Cmd+.) stay
-  // unbound here (Cmd+`, Cmd+Shift+F) so the native layer claims as
-  // little as possible. Direct chords exist where Hybrid Nav is no
-  // substitute: Cmd+W (close tab; pairs with the SPA's context-aware
-  // Ctrl+D), Cmd+F/G (find on page), Cmd+1..9 (jump to tab),
-  // Cmd+[/Cmd+] (pane nav), Cmd+S (search), Cmd+/ and Cmd+Shift+/
-  // (split right / down), Cmd+Shift+T (reopen closed), Cmd+Shift+[/]
-  // (tab nav), Cmd+Shift+G (find prev), plus the context-aware spawn
-  // family Cmd+T (terminal) / Cmd+O (File Browser) / Cmd+P (Team
-  // Work) / Cmd+Shift+M (Graph), whose `app.files.toggle` /
-  // `app.terminal.teamWork` / `app.graph.toggle` commands route
-  // through the context-aware helpers in App.svelte. Universal
-  // Hybrid NAV `t/o/p/v` covers the web/Win/Linux fallback path.
+  // unbound here so the native layer claims as little as possible.
+  // Direct chords exist where Hybrid Nav is no substitute: Cmd+W (close
+  // tab; pairs with the SPA's context-aware Ctrl+D), Cmd+Shift+W (close
+  // window), Cmd+F/G (find on page), Cmd+1..9 (jump to tab), Cmd+[/Cmd+]
+  // (pane nav), Cmd+/ and Cmd+Shift+/ (split right / down), Cmd+Shift+[/]
+  // (tab nav), Cmd+Shift+G (find prev), plus New terminal (Cmd+T on
+  // macOS, Ctrl+Shift+T off-mac) and Reopen closed tab (Cmd+Shift+T on
+  // macOS, Ctrl+Alt+Shift+T off-mac), which route through the
+  // context-aware helpers in App.svelte.
   function onKey(e) {
     const meta = e.metaKey || e.ctrlKey;
     if (!meta) return;
@@ -2078,10 +2075,13 @@ const KEY_BRIDGE_JS: &str = r#"
     }
     if (alt) {
       // Cmd+Opt+I (macOS) / Ctrl+Alt+I (Linux/Windows) → DevTools.
-      // Other meta+alt chords are handled before this branch or left
-      // to the webview defaults.
+      // Ctrl+Alt+Shift+T reopens the last closed tab on the Linux /
+      // Windows desktop, where Ctrl+Shift+T is the New-terminal chord.
+      // Other meta+alt chords are left to the webview defaults.
       if (!shift && code === 'KeyI') {
         invokeIpc(e, 'open_devtools');
+      } else if (!e.metaKey && shift && code === 'KeyT') {
+        fire(e, 'app.tab.reopenClosed');
       }
       return;
     }
@@ -2112,9 +2112,10 @@ const KEY_BRIDGE_JS: &str = r#"
         // preventDefault -> falls through to xterm), mirroring the
         // Cmd+W idiom below.
         case 'KeyR': if (e.metaKey) invokeIpc(e, 'reload_window'); return;
-        case 'KeyT': fire(e, 'app.terminal.toggle'); return;
-        case 'KeyO': fire(e, 'app.files.toggle');    return;
-        case 'KeyP': fire(e, 'app.terminal.teamWork'); return;
+        // New terminal: Cmd+T on macOS. Off-mac the chord is Ctrl+Shift+T
+        // (shift branch below), so gate on metaKey and leave plain Ctrl+T
+        // to a focused terminal, mirroring the reload idiom above.
+        case 'KeyT': if (e.metaKey) fire(e, 'app.terminal.toggle'); return;
         // Cmd+W closes the tab
         // on macOS. On Linux the platform mod is Ctrl and Ctrl+W is
         // readline delete-word inside a focused terminal, so DON'T
@@ -2140,21 +2141,14 @@ const KEY_BRIDGE_JS: &str = r#"
             fire(e, 'app.tab.close');
           }
           return;
-        // Search. macOS binds Cmd+S (metaKey); Linux/Windows moves to
-        // Ctrl+Shift+S (shift branch below) so bare Ctrl+S no longer
-        // collides with a Claude Code chord and reaches the page / shell.
-        // Gating on metaKey mirrors the reload + Cmd+W idiom above.
-        case 'KeyS': if (e.metaKey) fire(e, 'app.search.toggle'); return;
         case 'KeyF': fire(e, 'app.find.open');        return;
         case 'KeyG': fire(e, 'app.find.next');        return;
-        // Cmd+I does NOT open Dashboard; it is reserved for the
-        // editor's italic chord (bound in
-        // Wysiwyg.svelte's CM6 keymap). Dashboard is reachable via
-        // Hybrid Nav `Cmd+. i` + the Dashboard hamburger. With no
-        // `KeyI` case here, Cmd+I falls through to the focused webview
-        // (the editor toggles italic; otherwise inert). Cmd+Opt+I
-        // (DevTools, alt branch above) and Cmd+Shift+I (broadcast,
-        // shift branch below) are unaffected.
+        // Cmd+I does NOT open Dashboard; it is reserved for the editor's
+        // italic chord (bound in Wysiwyg.svelte's CM6 keymap). Dashboard
+        // is reachable via the launcher + the Dashboard hamburger. With
+        // no `KeyI` case here, Cmd+I falls through to the focused webview
+        // (the editor toggles italic; otherwise inert). Cmd+Opt+I opens
+        // DevTools (the alt branch above).
         case 'BracketLeft':  fire(e, 'app.pane.prev'); return;
         case 'BracketRight': fire(e, 'app.pane.next'); return;
         // Cmd+/ split right. Split
@@ -2177,37 +2171,27 @@ const KEY_BRIDGE_JS: &str = r#"
         // the !shift branch above); the !metaKey form fires only for the
         // Ctrl+Shift+R that Linux/Windows users press.
         case 'KeyR': if (!e.metaKey) invokeIpc(e, 'reload_window'); return;
-        // Search on Linux/Windows: Ctrl+Shift+S. Gate on !metaKey so
-        // macOS Cmd+Shift+S stays the editor's strikethrough (macOS
-        // searches on Cmd+S in the !shift branch above).
-        case 'KeyS': if (!e.metaKey) fire(e, 'app.search.toggle'); return;
-        // Close on Linux/Windows: Ctrl+Shift+W (plain Ctrl+W stays
-        // readline delete-word inside a focused terminal, which is why
-        // the !shift branch never claims it off macOS). Gate on
-        // !metaKey so macOS keeps plain Cmd+W and Cmd+Shift+W stays
-        // unclaimed there. Same routing as Cmd+W: cancel-close on the
-        // connecting screen, tab-close everywhere else.
+        // Close window: Cmd+Shift+W (macOS) / Ctrl+Shift+W (Linux,
+        // Windows) discards this window (app.window.close). Tab-close is
+        // Cmd+W on macOS (!shift branch above) and Ctrl+D off-mac (the
+        // SPA's onCtrlDCapture), so KeyW here is window-close on both
+        // mods. On the connecting screen the SPA command bus is dead, so
+        // destroy the window directly to cancel the connect.
         case 'KeyW':
-          if (!e.metaKey) {
-            if (location.pathname.endsWith('/connecting.html')) {
-              invokeIpc(e, 'request_close_window');
-              return;
-            }
-            fire(e, 'app.tab.close');
+          if (location.pathname.endsWith('/connecting.html')) {
+            invokeIpc(e, 'request_close_window');
+            return;
           }
+          fire(e, 'app.window.close');
           return;
         case 'KeyG':         fire(e, 'app.find.prev');     return;
-        case 'KeyT':         fire(e, 'app.tab.reopenClosed'); return;
-        case 'KeyM':         fire(e, 'app.graph.toggle');  return;
-        // Cmd+Shift+I (mac) / Ctrl+Shift+I (Linux,
-        // Windows) toggles broadcast-input select-all/deselect-all for the
-        // active terminal (mirrors iTerm). Ungated within the shift branch so
-        // both platform mods fire; DevTools lives on the ALT chord
-        // (Cmd+Opt+I / Ctrl+Alt+I, the `alt` branch above), and `fire()`
-        // preventDefaults so the webview's built-in Ctrl+Shift+I DevTools
-        // chord is suppressed. Web has no binding (cmd+shift+i is the browser
-        // DevTools there).
-        case 'KeyI': fire(e, 'app.terminal.broadcastToggle'); return;
+        // Reopen closed tab: Cmd+Shift+T on macOS. Off-mac Ctrl+Shift+T is
+        // New terminal (bare Ctrl+T being a terminal chord), so reopen
+        // moves to Ctrl+Alt+Shift+T (the alt branch above).
+        case 'KeyT':
+          if (e.metaKey) fire(e, 'app.tab.reopenClosed');
+          else fire(e, 'app.terminal.toggle');
+          return;
         case 'BracketLeft':  fire(e, 'app.tab.prev');      return;
         case 'BracketRight': fire(e, 'app.tab.next');      return;
         // Cmd+Shift+/ (= Cmd+?) splits the active pane
@@ -2447,16 +2431,6 @@ mod tests {
     }
 
     #[test]
-    fn key_bridge_wires_shift_i_to_broadcast_toggle_on_both_mods() {
-        // Cmd+Shift+I (mac) / Ctrl+Shift+I (Linux, Windows) toggles
-        // broadcast-input select-all/deselect-all for the active terminal.
-        // Ungated within the shift branch (no `metaKey` gate) so both
-        // platform mods fire; DevTools stays on the ALT chord.
-        assert!(KEY_BRIDGE_JS.contains("case 'KeyI': fire(e, 'app.terminal.broadcastToggle');"));
-        assert!(!KEY_BRIDGE_JS.contains("if (e.metaKey) fire(e, 'app.terminal.broadcastToggle')"));
-    }
-
-    #[test]
     fn invoke_handler_registers_zoom_commands() {
         // zoom_in / zoom_out / zoom_reset must be
         // in `tauri::generate_handler!` so KEY_BRIDGE_JS's IPC
@@ -2636,48 +2610,46 @@ mod tests {
 
     #[test]
     fn key_bridge_drops_chords_covered_by_pane_mode() {
-        // Chords with a Hybrid Nav equivalent stay out of the native
-        // bridge. The direct-chord exceptions (Cmd+T terminal, Cmd+O
-        // files, Cmd+Shift+M graph, Cmd+P Team Work, Cmd+S search)
-        // are asserted in `key_bridge_keeps_independent_chords`; the
-        // absences here catch accidental reverts of chords that
-        // should go through Hybrid Nav only.
+        // Chords with a Hybrid Nav equivalent, and the commands whose
+        // built-in default was removed (no-defaults), stay out of the
+        // native bridge; they reach through Hybrid Nav or the launcher.
+        // The absences here catch accidental reverts.
         assert!(!KEY_BRIDGE_JS.contains("app.file.new"));
         assert!(!KEY_BRIDGE_JS.contains("Backquote"));
+        // De-defaulted: File Browser, Graph, Team Work, Search, and the
+        // broadcast toggle no longer carry a native chord.
+        assert!(!KEY_BRIDGE_JS.contains("app.files.toggle"));
+        assert!(!KEY_BRIDGE_JS.contains("app.graph.toggle"));
+        assert!(!KEY_BRIDGE_JS.contains("app.terminal.teamWork"));
+        assert!(!KEY_BRIDGE_JS.contains("app.search.toggle"));
+        assert!(!KEY_BRIDGE_JS.contains("app.terminal.broadcastToggle"));
     }
 
     #[test]
     fn key_bridge_keeps_independent_chords() {
-        // Tab close + reopen + Find on page + tab nav + tab jump
-        // are NOT duplicated by Hybrid Nav and must stay reachable
-        // through the native bridge. Cmd+K / Ctrl+Alt+K opens the
-        // command launcher; Cmd+T / Cmd+O / Cmd+P / Cmd+Shift+M are
-        // the context-aware spawn chord family.
+        // Tab close + reopen + close window + Find on page + tab nav +
+        // tab jump + splits are NOT duplicated by Hybrid Nav and must
+        // stay reachable through the native bridge. Cmd+K / Ctrl+Alt+K
+        // opens the command launcher; New terminal is the context-aware
+        // spawn chord (Cmd+T on macOS, Ctrl+Shift+T off-mac).
         assert!(KEY_BRIDGE_JS.contains("function commandLauncherChord"));
         assert!(KEY_BRIDGE_JS.contains("app.launcher.toggle"));
         assert!(KEY_BRIDGE_JS.contains("e.ctrlKey && !e.metaKey && e.altKey"));
         assert!(KEY_BRIDGE_JS.contains("app.terminal.toggle"));
-        assert!(KEY_BRIDGE_JS.contains("app.files.toggle"));
-        assert!(KEY_BRIDGE_JS.contains("app.terminal.teamWork"));
         assert!(KEY_BRIDGE_JS.contains("app.pane.prev"));
         assert!(KEY_BRIDGE_JS.contains("app.pane.next"));
-        assert!(KEY_BRIDGE_JS.contains("app.graph.toggle"));
         assert!(KEY_BRIDGE_JS.contains("app.tab.close"));
         assert!(KEY_BRIDGE_JS.contains("app.tab.reopenClosed"));
+        assert!(KEY_BRIDGE_JS.contains("app.window.close"));
         assert!(KEY_BRIDGE_JS.contains("app.find.open"));
         assert!(KEY_BRIDGE_JS.contains("app.tab.jump"));
         assert!(KEY_BRIDGE_JS.contains("app.tab.next"));
         assert!(KEY_BRIDGE_JS.contains("app.tab.prev"));
-        // Cmd+S search + Cmd+/ (right)
-        // / Cmd+Shift+/ (bottom) splits route through the native bridge
-        // too.
-        assert!(KEY_BRIDGE_JS.contains("app.search.toggle"));
         assert!(KEY_BRIDGE_JS.contains("app.pane.splitRight"));
         assert!(KEY_BRIDGE_JS.contains("app.pane.splitDown"));
-        // Cmd+I is reserved for the editor's
-        // italic chord, so the native bridge must not map it to
-        // Dashboard. Pin the absence so a regression that re-adds the
-        // case is caught (Dashboard is Hybrid-Nav-only).
+        // Cmd+I is reserved for the editor's italic chord, so the native
+        // bridge must not map it to Dashboard. Pin the absence so a
+        // regression that re-adds the case is caught.
         assert!(!KEY_BRIDGE_JS.contains("app.dashboard.open"));
     }
 
