@@ -1079,6 +1079,15 @@ export function reopenClosedTab(): boolean {
   const targetNode = layout.nodes[entry.paneId];
   const target =
     targetNode && targetNode.kind === "leaf" ? targetNode : activePane();
+  // A closed draft's backing file is always gone after its close (the close
+  // path discards, promotes, or already found it missing), so re-adding its
+  // dead path would open a missing-file tab pointing at the just-deleted
+  // draft. Mint a fresh draft and carry the closed buffer's content into it
+  // instead, so a reopen restores the user's text.
+  if (isDraftTab(entry.tab)) {
+    void recoverClosedDraft(target.id, entry.tab);
+    return true;
+  }
   const tab = tabForReopen(entry.tab);
   if (tabIdExists(tab.id)) {
     tab.id = id(tab.kind === "terminal" ? "term" : "tab");
@@ -1087,6 +1096,38 @@ export function reopenClosedTab(): boolean {
   target.activeTabId = tab.id;
   layout.activePaneId = target.id;
   return true;
+}
+
+/// Reopen a closed draft as a fresh draft. The original draft file no
+/// longer exists (discarded or promoted during the close), so mint a new
+/// draft of the same kind (markdown or diagram) and seed it with the
+/// closed buffer's content when that content is more than the default
+/// seed. Async: draft creation is a server round-trip, so reopenClosedTab
+/// fires this and returns.
+async function recoverClosedDraft(
+  paneId: string,
+  closed: FileTab,
+): Promise<void> {
+  try {
+    const diagram = isExcalidraw(closed.path);
+    const { path } = diagram
+      ? await api.createDiagram()
+      : await api.createDraft();
+    const seed = diagram ? NEW_DIAGRAM_SEED : NEW_DRAFT_SEED;
+    if (closed.content.trim().length > 0 && closed.content !== seed) {
+      await api.write(path, closed.content);
+    }
+    // Lazy import to break the eager cyclic dependency with store.svelte
+    // (see the import-site comment at the top of this module).
+    const { noteDraftCreated } = await import("./store.svelte");
+    await noteDraftCreated(path);
+    const node = layout.nodes[paneId];
+    const openPaneId = node && node.kind === "leaf" ? paneId : activePane().id;
+    await openInPane(openPaneId, path);
+  } catch (err) {
+    console.warn("[chan] reopen closed draft failed", err);
+    notify(`Reopen draft failed: ${(err as Error).message}`);
+  }
 }
 
 function tabIdExists(tabId: string): boolean {

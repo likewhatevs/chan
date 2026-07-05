@@ -482,6 +482,56 @@ describe("tab close confirmation", () => {
     expect(activePane().activeTabId).toBe(reopened.id);
   });
 
+  test("reopening a closed draft mints a fresh draft, not the deleted path", async () => {
+    // A closed draft's backing file is always gone after close (discarded,
+    // promoted, or missing), so reopen must not re-add the dead path.
+    const tab = fileTab({
+      path: ".Drafts/untitled-1/draft.md",
+      content: "# my recovered note\n",
+      saved: "# my recovered note\n",
+    });
+    const pane = resetLayout([tab]);
+    const createDraft = vi.spyOn(api, "createDraft").mockResolvedValue({
+      path: ".Drafts/untitled-2/draft.md",
+      name: "untitled-2",
+    });
+    const write = vi
+      .spyOn(api, "write")
+      .mockResolvedValue({ mtime: 1, mtime_ns: "1" });
+    vi.spyOn(api, "readStream").mockResolvedValue({
+      path: ".Drafts/untitled-2/draft.md",
+      content: "# my recovered note\n",
+      mtime: 1,
+      writable: true,
+    });
+
+    await closeTab(pane.id, tab.id, { force: true });
+    expect(canReopenClosedTab()).toBe(true);
+
+    expect(reopenClosedTab()).toBe(true);
+    // The recovery starts a fresh draft (createDraft runs synchronously,
+    // before the first await) and never re-adds the just-deleted path.
+    expect(createDraft).toHaveBeenCalledTimes(1);
+    const deadPathReAdded = activePane().tabs.some(
+      (t) => t.kind === "file" && t.path === ".Drafts/untitled-1/draft.md",
+    );
+    expect(deadPathReAdded).toBe(false);
+
+    // Once the round-trip settles, the fresh draft is open, seeded with the
+    // recovered buffer (content differs from the default seed).
+    await vi.waitFor(() =>
+      expect(
+        activePane().tabs.some(
+          (t) => t.kind === "file" && t.path === ".Drafts/untitled-2/draft.md",
+        ),
+      ).toBe(true),
+    );
+    expect(write).toHaveBeenCalledWith(
+      ".Drafts/untitled-2/draft.md",
+      "# my recovered note\n",
+    );
+  });
+
   describe("openInPane caret command", () => {
     // openInPane mutates the layout-proxied tab; read it back via activePane()
     // (the local `tab` reference is the pre-proxy object and stays stale).
