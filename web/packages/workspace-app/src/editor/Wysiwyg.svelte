@@ -70,6 +70,7 @@
   } from "./commands/list";
   import type { FindAdapter } from "./find";
   import { breathingRoom } from "./breathing_room";
+  import { selectionLayerRepaintFix } from "./selection_repaint";
   import { clickToPlaceCaret } from "./click_caret";
   import {
     externalLinkClickHandler,
@@ -505,6 +506,7 @@
         // tracks the editor's selection state directly and clears
         // on every selection change.
         drawSelection(),
+        selectionLayerRepaintFix(),
         breathingRoom(),
         // Blank-area click helper: only fires when the precise hit-test
         // misses (a click past a short line's end or below the doc) to
