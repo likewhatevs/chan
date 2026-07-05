@@ -226,29 +226,29 @@ mod tests {
         let app = route_test_app();
         let router = crate::router(app.state);
 
-        // Initial state: reports defaults ON.
-        let (status, body) = fetch_state(&router, true).await;
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(body["enabled"], true);
-
-        // Disable: flip to false + response carries the new state.
-        let (status, body) = post(&router, "/api/index/reports/disable").await;
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(body["enabled"], false);
-
-        // Re-check via state: still false after the flip persists.
+        // Initial state: reports default OFF.
         let (status, body) = fetch_state(&router, true).await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["enabled"], false);
 
-        // Enable: flip back + response carries the new state.
+        // Enable: flip to true + response carries the new state.
         let (status, body) = post(&router, "/api/index/reports/enable").await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["enabled"], true);
 
-        // Re-check via state: still true.
-        let (_, body) = fetch_state(&router, true).await;
+        // Re-check via state: still true after the flip persists.
+        let (status, body) = fetch_state(&router, true).await;
+        assert_eq!(status, StatusCode::OK);
         assert_eq!(body["enabled"], true);
+
+        // Disable: flip back + response carries the new state.
+        let (status, body) = post(&router, "/api/index/reports/disable").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["enabled"], false);
+
+        // Re-check via state: still false.
+        let (_, body) = fetch_state(&router, true).await;
+        assert_eq!(body["enabled"], false);
     }
 
     #[tokio::test]
@@ -256,8 +256,8 @@ mod tests {
         // chan-workspace's set_reports_enabled(false)
         // on an already-off workspace is a no-op + returns Ok. The
         // route must surface 200 + the current state, not error. Reports
-        // default ON, so the first disable turns it off;
-        // the SECOND disable is the already-off idempotent case under test.
+        // default OFF, so both disables here hit the already-off
+        // idempotent path under test.
         let app = route_test_app();
         let router = crate::router(app.state);
         let (status, body) = post(&router, "/api/index/reports/disable").await;
