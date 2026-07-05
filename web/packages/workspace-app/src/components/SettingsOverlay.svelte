@@ -37,7 +37,9 @@
   import EditorSection from "./settings/EditorSection.svelte";
   import TerminalSection from "./settings/TerminalSection.svelte";
   import FilesSearchSection from "./settings/FilesSearchSection.svelte";
-  import ShortcutsSection from "./settings/ShortcutsSection.svelte";
+  // The per-OS shortcut-assignment grid is the Keymap lane's; this
+  // surface owns only its placement in the section below.
+  import KeymapSettings from "./KeymapSettings.svelte";
 
   // Editable buffer of the split-store preferences. Refetched on each
   // open, and re-seeded whenever the server view changes (a sibling
@@ -153,7 +155,7 @@
     { id: "editor", label: "Editor", icon: SlidersHorizontal },
     { id: "terminal", label: "Terminal", icon: SquareTerminal },
     { id: "files", label: "Files & search", icon: FileCog },
-    { id: "shortcuts", label: "Shortcuts", icon: Keyboard },
+    { id: "shortcuts", label: "Keyboard Shortcuts", icon: Keyboard },
   ] as const;
   type SectionId = (typeof SECTIONS)[number]["id"];
   let activeSection = $state<SectionId>("appearance");
@@ -225,7 +227,7 @@
         {:else if activeSection === "files"}
           <FilesSearchSection prefs={editing} {commit} />
         {:else if activeSection === "shortcuts"}
-          <ShortcutsSection />
+          <KeymapSettings />
         {/if}
       </div>
     </div>
