@@ -11,6 +11,7 @@
 
   import {
     FileCog,
+    FolderCog,
     Keyboard,
     Maximize2,
     Minimize2,
@@ -40,6 +41,9 @@
   // The per-OS shortcut-assignment grid is the Keymap lane's; this
   // surface owns only its placement in the section below.
   import KeymapSettings from "./KeymapSettings.svelte";
+  // The per-workspace tab; its controls call their own endpoints and do not
+  // flow through the PreferencesView buffer the per-machine sections use.
+  import WorkspaceSection from "./settings/workspace/WorkspaceSection.svelte";
 
   // Editable buffer of the split-store preferences. Refetched on each
   // open, and re-seeded whenever the server view changes (a sibling
@@ -150,15 +154,32 @@
     });
   };
 
-  const SECTIONS = [
+  // Per-machine sections are always present. "This workspace" is per-workspace,
+  // so it is shown only when Settings is opened from a workspace context
+  // (workspace.info is null in a launcher / terminal-only window). That
+  // conditional presence keeps the per-machine surface device-global while
+  // giving the per-workspace controls a home scoped to an active workspace.
+  const ALL_SECTIONS = [
     { id: "appearance", label: "Appearance", icon: Palette },
     { id: "editor", label: "Editor", icon: SlidersHorizontal },
     { id: "terminal", label: "Terminal", icon: SquareTerminal },
     { id: "files", label: "Files & search", icon: FileCog },
     { id: "shortcuts", label: "Keyboard Shortcuts", icon: Keyboard },
+    { id: "workspace", label: "This workspace", icon: FolderCog },
   ] as const;
-  type SectionId = (typeof SECTIONS)[number]["id"];
+  type SectionId = (typeof ALL_SECTIONS)[number]["id"];
+  const sections = $derived(
+    ALL_SECTIONS.filter((s) => s.id !== "workspace" || workspace.info !== null),
+  );
   let activeSection = $state<SectionId>("appearance");
+  // If the workspace tab is active but the workspace goes away (or Settings is
+  // reopened in a terminal-only window), fall back so the content pane never
+  // points at a hidden tab. Converges: the reset makes the guard false.
+  $effect(() => {
+    if (activeSection === "workspace" && workspace.info === null) {
+      activeSection = "appearance";
+    }
+  });
 
   function toggleMax(): void {
     setOverlayMaximized(!overlayMaximized.on);
@@ -194,7 +215,7 @@
     </header>
     <div class="body">
       <nav class="sections" aria-label="Settings sections">
-        {#each SECTIONS as s (s.id)}
+        {#each sections as s (s.id)}
           {@const Icon = s.icon}
           <button
             type="button"
@@ -235,6 +256,8 @@
               <TerminalSection prefs={editing} {commit} />
             {:else if activeSection === "files"}
               <FilesSearchSection prefs={editing} {commit} />
+            {:else if activeSection === "workspace"}
+              <WorkspaceSection />
             {/if}
           </div>
         {/if}
