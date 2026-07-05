@@ -23,7 +23,9 @@ const runSearch = vi.fn();
 const runNewFile = vi.fn();
 const runBrowserAlpha = vi.fn();
 const runBrowserZoom = vi.fn();
+const runLate = vi.fn();
 const runHidden = vi.fn();
+let showLate = false;
 
 // Register once. allCommands de-dups by (id, category, title), so a
 // re-register under a re-run collapses rather than stacking.
@@ -63,6 +65,14 @@ registerCommands([
     keywords: ["files"],
     available: () => true,
     run: runBrowserAlpha,
+  },
+  {
+    id: "app.browser.late",
+    title: "Late browser",
+    category: "File Browser",
+    keywords: ["catalog"],
+    available: () => showLate,
+    run: runLate,
   },
   {
     id: "app.hidden.one",
@@ -139,6 +149,7 @@ beforeEach(() => {
   resetLayout();
   launcherPanel.open = false;
   launcherPanel.query = "";
+  showLate = false;
 });
 
 afterEach(() => {
@@ -147,6 +158,7 @@ afterEach(() => {
   launcherPanel.open = false;
   launcherPanel.query = "";
   vi.clearAllMocks();
+  showLate = false;
 });
 
 describe("command launcher overlay", () => {
@@ -267,6 +279,42 @@ describe("command launcher overlay", () => {
     ]);
     expect(rowTitlesInGroup(target, "Global")).toEqual(["Search"]);
     expect(rowTitles(target)).not.toContain("Hidden command");
+  });
+
+  test("catalog growth below Results preserves the highlighted command", async () => {
+    setActiveBrowserTab();
+    const target = openLauncher();
+    await flush();
+    await typeLauncherQuery("new");
+    const launcher = target.querySelector(".launcher") as HTMLElement;
+
+    launcher.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }),
+    );
+    await tick();
+    expect(
+      target.querySelector(".row[aria-selected='true'] .title")?.textContent,
+    ).toBe("Alpha browser");
+
+    showLate = true;
+    resetLayout();
+    await tick();
+    setActiveBrowserTab();
+    await tick();
+
+    expect(rowTitlesInGroup(target, "File Browser")).toEqual([
+      "Alpha browser",
+      "Late browser",
+      "Zoom browser",
+    ]);
+    expect(
+      target.querySelector(".row[aria-selected='true'] .title")?.textContent,
+    ).toBe("Alpha browser");
+  });
+
+  test("rows follow pointer movement, not mouseenter caused by inserted rows", () => {
+    expect(launcherRaw).toContain("onpointermove={() => setHighlight(row.index)}");
+    expect(launcherRaw).not.toContain("onmouseenter");
   });
 
   test("clearing the query closes results and returns to the centered state", async () => {

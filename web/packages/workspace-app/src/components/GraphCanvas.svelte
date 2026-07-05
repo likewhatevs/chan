@@ -26,7 +26,7 @@
   //   - filter chips (link / tag / mention / img)
   //   - depth slider, inspector, scope history, hamburger menu
 
-  import { onDestroy, onMount } from "svelte";
+  import { onDestroy, onMount, tick } from "svelte";
   import {
     forceCenter,
     forceCollide,
@@ -55,6 +55,7 @@
     GraphViewNode,
     { kind: "file" | "tag" | "mention" | "language" | "folder" }
   >;
+  type ExpansionFitRequest = { nonce: number; ids: string[] };
 
   // ---- props ------------------------------------------------------------
 
@@ -96,6 +97,10 @@
     /// object to re-tune (the sim rebuilds + reheats on reference
     /// change).
     force?: GraphForce;
+    /// Incremented by GraphPanel after a directory expansion. Fits the
+    /// expanded directory, its parent, and the newly visible nodes without
+    /// resetting the user's manual-pan ownership for later refreshes.
+    expansionFitRequest?: ExpansionFitRequest | null;
   };
   let {
     open,
@@ -111,6 +116,7 @@
     onSetAsScope,
     focalAnchor = "bottom",
     force = DEFAULT_FORCE,
+    expansionFitRequest = null,
   }: Props = $props();
 
   // ---- types: d3-shaped working copies ---------------------------------
@@ -240,6 +246,8 @@
   /// for transform; null = no easing in flight.
   let refitUntil = 0;
   let fitTarget: { x: number; y: number; k: number } | null = null;
+  let expansionRefit: { until: number; ids: Set<string> } | null = null;
+  let seenExpansionFitNonce = 0;
   /// Once the user has manually panned, zoomed, or dragged a node,
   /// the view belongs to them. Periodic re-renders of the same node
   /// set (e.g., the Dashboard indexing slide polling
@@ -1187,7 +1195,14 @@
     // view tracks the cluster as the sim spreads / contracts. Once
     // the window expires we keep easing toward the last target until
     // it converges, then drop it.
-    if (now < refitUntil) {
+    if (expansionRefit) {
+      if (now < expansionRefit.until) {
+        const t = computeFitForNodes(32, expansionRefit.ids, false, transform.k);
+        if (t) fitTarget = t;
+      } else {
+        expansionRefit = null;
+      }
+    } else if (now < refitUntil) {
       const t = computeFit(24);
       if (t) fitTarget = t;
     }
@@ -1387,7 +1402,12 @@
   /// changes; the zoom is then chosen so the farthest node still
   /// fits inside the padded viewport. Falls back to bbox-center
   /// framing for views without a focal pin (e.g. whole-workspace).
-  function computeFit(pad: number): { x: number; y: number; k: number } | null {
+  function computeFitForNodes(
+    pad: number,
+    ids: Set<string> | null,
+    anchorFocal: boolean,
+    maxK?: number,
+  ): { x: number; y: number; k: number } | null {
     if (!canvas || dNodes.length === 0) return null;
     const cw = canvas.clientWidth;
     const ch = canvas.clientHeight;
@@ -1396,12 +1416,13 @@
     let ymin = Infinity, ymax = -Infinity;
     let focal: { x: number; y: number } | null = null;
     for (const n of dNodes) {
+      if (ids !== null && !ids.has(n.id)) continue;
       if (n.x == null || n.y == null) continue;
       if (n.x - n.radius < xmin) xmin = n.x - n.radius;
       if (n.x + n.radius > xmax) xmax = n.x + n.radius;
       if (n.y - n.radius < ymin) ymin = n.y - n.radius;
       if (n.y + n.radius > ymax) ymax = n.y + n.radius;
-      if (n.isFocal && !focal) focal = { x: n.x, y: n.y };
+      if (anchorFocal && n.isFocal && !focal) focal = { x: n.x, y: n.y };
     }
     if (!isFinite(xmin)) return null;
     let cx: number, cy: number, halfW: number, halfH: number;
@@ -1433,14 +1454,19 @@
       : Math.max(1, ch / 2 - pad);
     // Clamp to the wheel-zoom range, with the same upper cap so a
     // tiny cluster (1-2 nodes) doesn't zoom in past a sensible level.
-    const k = Math.min(
+    let k = Math.min(
       6,
       Math.max(
         0.15,
         Math.min(availHalfW / Math.max(1, halfW), availHalfH / Math.max(1, halfH)),
       ),
     );
+    if (maxK !== undefined) k = Math.min(k, maxK);
     return { x: cw / 2 - cx * k, y: anchorY - cy * k, k };
+  }
+
+  function computeFit(pad: number): { x: number; y: number; k: number } | null {
+    return computeFitForNodes(pad, null, true);
   }
 
   /// Snap the transform to fit the current node set. Used at first
@@ -1465,11 +1491,25 @@
     refitUntil = performance.now() + ms;
   }
 
+  function scheduleExpansionFit(ids: string[], ms: number): void {
+    if (ids.length === 0) return;
+    const set = new Set(ids);
+    expansionRefit = { until: performance.now() + ms, ids: set };
+    const t = computeFitForNodes(32, set, false, transform.k);
+    if (t) fitTarget = t;
+  }
+
+  function applyExpansionFitRequest(request: ExpansionFitRequest): void {
+    seenExpansionFitNonce = request.nonce;
+    scheduleExpansionFit(request.ids, 900);
+  }
+
   /// User pan / zoom / drag cancels any in-flight auto-fit so manual
   /// interaction wins immediately.
   function cancelRefit(): void {
     refitUntil = 0;
     fitTarget = null;
+    expansionRefit = null;
   }
 
   function stop(): void {
@@ -1654,6 +1694,26 @@
     // filter toggles settle fastest.
     const ms = added.length > 0 ? 900 : 600;
     scheduleRefit(ms);
+  });
+
+  /// Directory expansion fit. Runs after the visibility effect above so
+  /// `dNodes` contains the newly visible directory children. Unlike the
+  /// normal content refit, this bypasses `userInteracted` because it is a
+  /// direct result of the user's expand gesture. The target caps zoom at the
+  /// current scale, so it can zoom out or pan but never zoom in.
+  $effect(() => {
+    const request = expansionFitRequest;
+    if (!request || request.nonce === seenExpansionFitNonce) return;
+    if (!sim) {
+      void tick().then(() => {
+        if (expansionFitRequest !== request || !sim || request.nonce === seenExpansionFitNonce) {
+          return;
+        }
+        applyExpansionFitRequest(request);
+      });
+      return;
+    }
+    applyExpansionFitRequest(request);
   });
 
   /// Live re-tune: the graph-tuner playground swaps in a NEW `force`

@@ -78,15 +78,30 @@ describe("file browser surface commands", () => {
       "app.browser.surfaceTheme.dark",
       "app.browser.expandAll",
       "app.browser.importContacts",
-      "app.browser.newFsEntry",
       "app.browser.newGraph",
       "app.browser.newTerminal",
-      "app.browser.toggleLeftDock",
       "app.browser.uploadSelection",
     ]) {
       expect(onBrowser.has(id)).toBe(true);
     }
     expect(idsIn(ctx({ activeSurface: "file" })).has("app.browser.newGraph")).toBe(false);
+  });
+
+  it("workspace-wide browser commands are available off the browser surface", () => {
+    const onFile = idsIn(ctx({ activeSurface: "file" }));
+    for (const id of [
+      "app.browser.newFsEntry",
+      "app.browser.toggleLeftDock",
+      "app.browser.toggleRightDock",
+    ]) {
+      expect(onFile.has(id)).toBe(true);
+    }
+    const inStandalone = idsIn(
+      ctx({ terminalOnly: true, activeSurface: "terminal" }),
+    );
+    expect(inStandalone.has("app.browser.newFsEntry")).toBe(false);
+    expect(inStandalone.has("app.browser.toggleLeftDock")).toBe(false);
+    expect(inStandalone.has("app.browser.toggleRightDock")).toBe(false);
   });
 });
 

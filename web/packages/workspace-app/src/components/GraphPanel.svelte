@@ -48,7 +48,7 @@
     tree,
     treeExpanded,
   } from "../state/store.svelte";
-  import { onDestroy, untrack } from "svelte";
+  import { onDestroy, tick, untrack } from "svelte";
   import {
     fbWatchRegister,
     fbWatchReconcile,
@@ -278,7 +278,9 @@
     if (graphState.expanded[path]) {
       delete graphState.expanded[path];
     } else {
+      const before = new Set(visibleNodeIds);
       graphState.expanded[path] = true;
+      void requestExpansionFitAfterUpdate(path, before);
     }
   }
 
@@ -287,6 +289,23 @@
   function parentDirOf(path: string): string {
     const i = path.lastIndexOf("/");
     return i < 0 ? "" : path.slice(0, i);
+  }
+
+  function renderedDirectoryId(path: string): string {
+    return filesystemMode ? path : directoryNodeId(path);
+  }
+
+  async function requestExpansionFitAfterUpdate(
+    path: string,
+    before: Set<string>,
+  ): Promise<void> {
+    await tick();
+    const ids = new Set<string>([renderedDirectoryId(path)]);
+    if (path) ids.add(renderedDirectoryId(parentDirOf(path)));
+    for (const id of visibleNodeIds) {
+      if (!before.has(id)) ids.add(id);
+    }
+    expansionFitRequest = { nonce: ++expansionFitNonce, ids: [...ids] };
   }
 
   /// True once at least one child of `dir` is in the loaded spine, so a
@@ -476,8 +495,10 @@
     if (graphState.expanded[path]) {
       delete graphState.expanded[path];
     } else {
+      const before = new Set(visibleNodeIds);
       graphState.expanded[path] = true;
       if (!dirChildrenLoaded(path)) await fetchDirChildren(path);
+      await requestExpansionFitAfterUpdate(path, before);
     }
   }
 
@@ -780,6 +801,8 @@
   // auto-open on click; the panel's Open button is the only path to
   // opening a file from here.
   let selectedId = $state<string | null>(null);
+  let expansionFitNonce = 0;
+  let expansionFitRequest = $state<{ nonce: number; ids: string[] } | null>(null);
 
   /// Tab right-click bubble state. Open when the
   /// shared tab-menu state addresses THIS tab; positioned via the
@@ -2715,6 +2738,7 @@
           {/if}
         </span>
       </div>
+      <div class="msep graph-filter-sep" role="separator"></div>
       {#each ["tag", "mention", "language", "img", "folder", "markdown", "source"] as const as kind (kind)}
         {@const workspaceLike =
           currentScope?.kind === "workspace"}
@@ -2788,6 +2812,7 @@
         {visibleEdges}
         {focalIds}
         {selectedId}
+        {expansionFitRequest}
         onSelect={setSelected}
         onContextMenu={onGraphContextMenu}
         onSetAsScope={onGraphDoubleClick}

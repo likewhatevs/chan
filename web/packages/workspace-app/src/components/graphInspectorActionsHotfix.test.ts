@@ -29,7 +29,7 @@ describe("graph reload is anchored on scope/depth/mode, not layout churn", () =>
   });
 
   test("untrack is imported from svelte", () => {
-    expect(panel).toMatch(/import \{ onDestroy, untrack \} from "svelte";/);
+    expect(panel).toMatch(/import \{ onDestroy, tick, untrack \} from "svelte";/);
   });
 });
 

@@ -71,6 +71,8 @@
 
   let inputEl = $state<HTMLInputElement>();
   let highlight = $state(0);
+  let highlightedCommandKey: string | null = null;
+  let lastQuery = "";
 
   // Where focus was before opening, restored on a dismissal. `ranCommand`
   // suppresses that restore when a command ran (its action owns focus).
@@ -181,6 +183,21 @@
     return categoryIcons[cmd.category];
   }
 
+  function commandKey(cmd: Command): string {
+    return `${cmd.id}\u001f${cmd.category}\u001f${cmd.title}`;
+  }
+
+  function setHighlight(index: number): void {
+    if (flat.length === 0) {
+      highlight = 0;
+      highlightedCommandKey = null;
+      return;
+    }
+    const n = ((index % flat.length) + flat.length) % flat.length;
+    highlight = n;
+    highlightedCommandKey = commandKey(flat[n]);
+  }
+
   // The query never hides an available command; it only reorders. Matches
   // float to a top "Results" section (best score first). Below them the
   // full remaining catalog stays visible, grouped by category with the
@@ -237,11 +254,30 @@
 
   const flat = $derived(groups.flatMap((g) => g.rows.map((r) => r.cmd)));
 
-  // Snap the highlight back to the top whenever the visible set changes.
+  // Query changes start at the top. Catalog recomputes keep the same
+  // highlighted command by id/title/category so appending discovery rows
+  // below Results does not steal the active selection.
   $effect(() => {
-    void launcherPanel.query;
-    void flat.length;
-    highlight = 0;
+    const query = launcherPanel.query;
+    const rows = flat;
+    if (query !== lastQuery) {
+      lastQuery = query;
+      setHighlight(0);
+      return;
+    }
+    if (rows.length === 0) {
+      highlight = 0;
+      highlightedCommandKey = null;
+      return;
+    }
+    if (highlightedCommandKey) {
+      const index = rows.findIndex((cmd) => commandKey(cmd) === highlightedCommandKey);
+      if (index >= 0) {
+        highlight = index;
+        return;
+      }
+    }
+    setHighlight(0);
   });
 
   // Open/close focus management.
@@ -250,7 +286,8 @@
     if (open && !wasOpen) {
       restoreTarget = document.activeElement as HTMLElement | null;
       ranCommand = false;
-      highlight = 0;
+      lastQuery = launcherPanel.query;
+      setHighlight(0);
       void tick().then(() => inputEl?.focus());
     } else if (!open && wasOpen) {
       if (!ranCommand && restoreTarget && document.contains(restoreTarget)) {
@@ -282,12 +319,12 @@
     if (e.key === "ArrowDown") {
       e.preventDefault();
       e.stopPropagation();
-      if (flat.length) highlight = (highlight + 1) % flat.length;
+      if (flat.length) setHighlight(highlight + 1);
       scrollHighlightIntoView();
     } else if (e.key === "ArrowUp") {
       e.preventDefault();
       e.stopPropagation();
-      if (flat.length) highlight = (highlight - 1 + flat.length) % flat.length;
+      if (flat.length) setHighlight(highlight - 1);
       scrollHighlightIntoView();
     } else if (e.key === "Enter") {
       e.preventDefault();
@@ -355,7 +392,7 @@
                   tabindex="-1"
                   aria-selected={row.index === highlight}
                   onclick={() => run(row.cmd)}
-                  onmouseenter={() => (highlight = row.index)}
+                  onpointermove={() => setHighlight(row.index)}
                 >
                   <span class="row-icon">
                     <Icon size={21} strokeWidth={1.6} aria-hidden="true" />

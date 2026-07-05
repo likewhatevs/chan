@@ -131,4 +131,10 @@ describe("GraphPanel keeps workspace, depth, filters, and close", () => {
     expect(filter).toBeGreaterThan(depth);
     expect(close).toBeGreaterThan(filter);
   });
+
+  test("separator splits the depth slider from filters", () => {
+    expect(graph).toMatch(
+      /class="mbtn depth-row"[\s\S]*?<div class="msep graph-filter-sep" role="separator"><\/div>\s*\{#each \["tag", "mention", "language", "img", "folder", "markdown", "source"\]/,
+    );
+  });
 });

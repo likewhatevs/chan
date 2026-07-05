@@ -1,7 +1,7 @@
-// File Browser surface commands: available when a File Browser tab is
-// active. They mirror the File Browser right-click menus, using the
-// active browser selection for row actions and the workspace root when
-// an action naturally has a root fallback.
+// File Browser commands. Selection-scoped actions stay available only when
+// a File Browser tab is active; workspace-scoped actions such as opening the
+// side docks or creating an entry stay reachable from the launcher anywhere
+// in a workspace window.
 
 import {
   registerCommands,
@@ -51,6 +51,10 @@ type BrowserSelection = {
 
 function onBrowser(ctx: CommandContext): boolean {
   return workspaceOnly(ctx) && onSurface(ctx, "browser");
+}
+
+function inWorkspace(ctx: CommandContext): boolean {
+  return workspaceOnly(ctx);
 }
 
 function selectedPath(tab = activeBrowserTab()): string | null {
@@ -323,7 +327,7 @@ registerCommands([
     title: "New file or directory",
     category: "File Browser",
     keywords: ["create", "file", "folder"],
-    available: onBrowser,
+    available: inWorkspace,
     run: () => void fileOps.createFileOrDir(targetDirFromSelection()),
   },
   {
@@ -395,7 +399,7 @@ registerCommands([
     title: "Toggle left file browser dock",
     category: "File Browser",
     keywords: ["stick", "unstick", "side pane", "dock"],
-    available: onBrowser,
+    available: inWorkspace,
     run: () => toggleBrowserSidePane("left"),
   },
   {
@@ -403,7 +407,7 @@ registerCommands([
     title: "Toggle right file browser dock",
     category: "File Browser",
     keywords: ["stick", "unstick", "side pane", "dock"],
-    available: onBrowser,
+    available: inWorkspace,
     run: () => toggleBrowserSidePane("right"),
   },
   {
