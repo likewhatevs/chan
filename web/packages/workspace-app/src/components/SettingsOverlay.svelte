@@ -1,0 +1,352 @@
+<script lang="ts">
+  // The configuration surface: a launcher-reachable web form over the
+  // split-store PreferencesView. It reads the current config, presents
+  // editable fields grouped by topic, and writes each change back as a
+  // single-field slice through the shared serial config-write chain, so
+  // a save here never clobbers a concurrent back-of-pane card save. The
+  // form re-reads on the config_changed WS event (a sibling window's
+  // change refreshes workspace.info.preferences), so every open window
+  // stays in sync. It is additive: the back-of-pane cards stay this
+  // round and present the same underlying config.
+
+  import {
+    FileCog,
+    Keyboard,
+    Maximize2,
+    Minimize2,
+    Palette,
+    SlidersHorizontal,
+    SquareTerminal,
+    X,
+  } from "lucide-svelte";
+  import type { Preferences } from "../api/types";
+  import { api } from "../api/client";
+  import {
+    closeSettings,
+    settingsPanel,
+    updateGlobalConfigSerial,
+    workspace,
+  } from "../state/store.svelte";
+  import { overlayMaximized, setOverlayMaximized } from "../state/pageWidth.svelte";
+  import { applyEditorTheme } from "../state/editorTheme";
+  import { editorToolsPrefs } from "../state/editorTools.svelte";
+  import { DATE_FORMATS } from "../editor/dateFormats";
+  import OverlayShell from "./OverlayShell.svelte";
+  import type { CommitFn } from "./settings/commit";
+  import AppearanceSection from "./settings/AppearanceSection.svelte";
+  import EditorSection from "./settings/EditorSection.svelte";
+  import TerminalSection from "./settings/TerminalSection.svelte";
+  import FilesSearchSection from "./settings/FilesSearchSection.svelte";
+  import ShortcutsSection from "./settings/ShortcutsSection.svelte";
+
+  // Editable buffer of the split-store preferences. Refetched on each
+  // open, and re-seeded whenever the server view changes (a sibling
+  // window's config_changed refreshes workspace.info.preferences),
+  // except while a local write is in flight so an in-progress edit is
+  // not stomped mid-round-trip.
+  let editing = $state<Preferences | null>(null);
+  let loadError = $state<string | null>(null);
+  let inflight = $state(0);
+  let loading = false;
+  let lastServerSnap = "";
+
+  function clone(p: Preferences): Preferences {
+    return JSON.parse(JSON.stringify(p)) as Preferences;
+  }
+
+  /// Normalize the fields the form presents that carry legacy aliases,
+  /// so a persisted "tight" spacing or a retired date-format id maps to
+  /// a value the controls can select. Other fields pass through.
+  function normalize(p: Preferences): Preferences {
+    if (p.line_spacing === "tight") p.line_spacing = "compact";
+    if (p.line_spacing !== "compact" && p.line_spacing !== "standard") {
+      p.line_spacing = "standard";
+    }
+    const knownDates = new Set<string>(DATE_FORMATS.map((f) => f.id));
+    if (!knownDates.has(p.date_format)) {
+      p.date_format = DATE_FORMATS[0]!.id;
+    }
+    return p;
+  }
+
+  async function reload(): Promise<void> {
+    if (loading) return;
+    loading = true;
+    try {
+      const view = await api.config();
+      lastServerSnap = JSON.stringify(view.preferences);
+      editing = normalize(clone(view.preferences));
+      loadError = null;
+    } catch (e) {
+      loadError = (e as Error).message;
+    } finally {
+      loading = false;
+    }
+  }
+
+  // Refetch on every open transition so the surface always starts from
+  // the current config, in every window type (workspace or standalone
+  // terminal, where api.workspace() would 404 but api.config() works).
+  let wasOpen = false;
+  $effect(() => {
+    const open = settingsPanel.open;
+    if (open && !wasOpen) void reload();
+    wasOpen = open;
+  });
+
+  // Cross-window live refresh. A sibling window's PATCH broadcasts
+  // config_changed, which refreshes workspace.info.preferences; mirror
+  // that into the buffer so the open form reflects it. Guarded on the
+  // server snapshot (a content-identical reassign would churn the
+  // $state proxy and re-fire this effect: Svelte 5's
+  // effect_update_depth_exceeded) and skipped while a local write is in
+  // flight so it can't revert an edit mid-round-trip.
+  $effect(() => {
+    const info = workspace.info;
+    if (!settingsPanel.open || !info || inflight > 0) return;
+    const snap = JSON.stringify(info.preferences);
+    if (snap === lastServerSnap) return;
+    lastServerSnap = snap;
+    editing = normalize(clone(info.preferences));
+  });
+
+  // Live-apply the editor theme so it is already in place when the
+  // surface closes, matching the back-of-pane editor card. Other fields
+  // apply on the server refresh.
+  $effect(() => {
+    if (editing) applyEditorTheme(editing.editor_theme);
+  });
+
+  // Keep the editor-tools snapshot in sync so an open editor observes a
+  // strip-on-save toggle immediately, before the round-trip.
+  $effect(() => {
+    if (editing) {
+      editorToolsPrefs.stripTrailingWhitespaceOnSave =
+        editing.strip_trailing_whitespace_on_save;
+    }
+  });
+
+  /// Apply a single-field mutation. The optimistic local apply gives the
+  /// control instant feedback; the persist runs through the shared
+  /// serial config-write chain by default (re-reads the latest config
+  /// and overlays only this slice, so a concurrent back-of-pane save is
+  /// never clobbered). A caller passes its own persist for a field with
+  /// a dedicated store/api setter (theme). The write's config_changed
+  /// then reconciles the buffer through the cross-window effect below,
+  /// reflecting any server-side sanitization; the inflight counter holds
+  /// that effect off until the write settles so it can't revert the
+  /// optimistic value mid-round-trip.
+  const commit: CommitFn = (mutate, persist) => {
+    if (!editing) return;
+    editing = normalize(mutate(clone(editing)));
+    inflight++;
+    const run = persist
+      ? persist()
+      : updateGlobalConfigSerial((prefs) => mutate(prefs));
+    void Promise.resolve(run).finally(() => {
+      inflight--;
+    });
+  };
+
+  const SECTIONS = [
+    { id: "appearance", label: "Appearance", icon: Palette },
+    { id: "editor", label: "Editor", icon: SlidersHorizontal },
+    { id: "terminal", label: "Terminal", icon: SquareTerminal },
+    { id: "files", label: "Files & search", icon: FileCog },
+    { id: "shortcuts", label: "Shortcuts", icon: Keyboard },
+  ] as const;
+  type SectionId = (typeof SECTIONS)[number]["id"];
+  let activeSection = $state<SectionId>("appearance");
+
+  function toggleMax(): void {
+    setOverlayMaximized(!overlayMaximized.on);
+  }
+</script>
+
+<OverlayShell id="settings" open={settingsPanel.open} onClose={closeSettings}>
+  <div class="settings">
+    <header>
+      <button
+        type="button"
+        class="chrome-btn"
+        onclick={toggleMax}
+        title={overlayMaximized.on ? "Restore size" : "Maximize"}
+        aria-label={overlayMaximized.on ? "Restore size" : "Maximize"}
+      >
+        {#if overlayMaximized.on}
+          <Minimize2 size={14} strokeWidth={1.75} aria-hidden="true" />
+        {:else}
+          <Maximize2 size={14} strokeWidth={1.75} aria-hidden="true" />
+        {/if}
+      </button>
+      <h2>Settings</h2>
+      <button
+        type="button"
+        class="chrome-btn close"
+        onclick={closeSettings}
+        title="Close"
+        aria-label="Close"
+      >
+        <X size={14} strokeWidth={1.75} aria-hidden="true" />
+      </button>
+    </header>
+    <div class="body">
+      <nav class="sections" aria-label="Settings sections">
+        {#each SECTIONS as s (s.id)}
+          {@const Icon = s.icon}
+          <button
+            type="button"
+            class="section-tab"
+            class:on={activeSection === s.id}
+            aria-current={activeSection === s.id ? "page" : undefined}
+            onclick={() => (activeSection = s.id)}
+          >
+            <Icon size={16} strokeWidth={1.75} aria-hidden="true" />
+            <span>{s.label}</span>
+          </button>
+        {/each}
+      </nav>
+      <div class="content">
+        {#if loadError}
+          <div class="state">
+            <p class="err">Could not load settings: {loadError}</p>
+            <button type="button" class="retry" onclick={() => void reload()}>
+              Retry
+            </button>
+          </div>
+        {:else if !editing}
+          <div class="state"><p>Loading settings...</p></div>
+        {:else if activeSection === "appearance"}
+          <AppearanceSection prefs={editing} {commit} />
+        {:else if activeSection === "editor"}
+          <EditorSection prefs={editing} {commit} />
+        {:else if activeSection === "terminal"}
+          <TerminalSection prefs={editing} {commit} />
+        {:else if activeSection === "files"}
+          <FilesSearchSection prefs={editing} {commit} />
+        {:else if activeSection === "shortcuts"}
+          <ShortcutsSection />
+        {/if}
+      </div>
+    </div>
+  </div>
+</OverlayShell>
+
+<style>
+  .settings {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    min-height: 0;
+  }
+  header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--border);
+  }
+  header h2 {
+    flex: 1;
+    margin: 0;
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text);
+    text-align: center;
+  }
+  .chrome-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+  }
+  .chrome-btn:hover {
+    background: var(--hover-bg);
+    color: var(--text);
+  }
+  .body {
+    display: flex;
+    flex: 1;
+    min-height: 0;
+  }
+  .sections {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    width: 200px;
+    padding: 12px 8px;
+    border-right: 1px solid var(--border);
+    overflow-y: auto;
+  }
+  .section-tab {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 10px;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+    font-size: 14px;
+    text-align: left;
+  }
+  .section-tab:hover {
+    background: var(--hover-bg);
+    color: var(--text);
+  }
+  .section-tab.on {
+    background: var(--hover-bg);
+    color: var(--text);
+    font-weight: 600;
+  }
+  .content {
+    flex: 1;
+    min-width: 0;
+    padding: 8px 24px 24px;
+    overflow-y: auto;
+  }
+  .state {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 24px 0;
+    color: var(--text-secondary);
+  }
+  .err {
+    margin: 0;
+    color: var(--danger, #ef4444);
+  }
+  .retry {
+    padding: 5px 12px;
+    border: 1px solid var(--btn-border);
+    border-radius: 6px;
+    background: var(--btn-bg);
+    color: var(--text);
+    cursor: pointer;
+    font: inherit;
+  }
+  .retry:hover {
+    border-color: var(--btn-hover);
+  }
+  /* Stack the section rail above the content on narrow viewports. */
+  @media (max-width: 640px) {
+    .body {
+      flex-direction: column;
+    }
+    .sections {
+      flex-direction: row;
+      width: auto;
+      border-right: 0;
+      border-bottom: 1px solid var(--border);
+      overflow-x: auto;
+    }
+  }
+</style>

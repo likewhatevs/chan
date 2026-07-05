@@ -4,6 +4,7 @@
 
 import "./core";
 import "./global";
+import "./settings";
 import "./workspace";
 import "./search";
 import "./diagram";

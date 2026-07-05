@@ -2731,6 +2731,38 @@ export function toggleCommandLauncher(): void {
   else openCommandLauncher();
 }
 
+// ---- settings overlay --------------------------------------------------
+//
+// The configuration surface: a web form over the split-store
+// PreferencesView, launcher-reachable through `app.settings.open`. Its
+// `.open` flag is the single source of truth for "is it on screen", so
+// the shared overlay stack tracks it exactly like the launcher and
+// search palettes. The form re-reads on the `config_changed` WS event,
+// so a change in one window reflects in every other.
+export const settingsPanel = $state<{
+  open: boolean;
+}>({
+  open: false,
+});
+
+/// Open the settings surface. Idempotent when already open.
+export function openSettings(): void {
+  settingsPanel.open = true;
+}
+
+/// Close the settings surface. Same effect as `closeOverlay("settings")`,
+/// so a direct close and the Escape/stack route agree.
+export function closeSettings(): void {
+  settingsPanel.open = false;
+}
+
+/// Toggle the settings surface, for a bound chord or the native host
+/// bridge; a second press closes it.
+export function toggleSettings(): void {
+  if (settingsPanel.open) closeSettings();
+  else openSettings();
+}
+
 // ---- graph overlay -----------------------------------------------------
 //
 // Open + scope picker state, plus a `depth` knob for how far the
@@ -3181,7 +3213,7 @@ function resolveGraphSpawnContext(scopeId: string): SpawnContext {
 // the topmost overlay is visually accessible, the scrim target is
 // naturally the same as the stack top.
 
-export type OverlayId = "search" | "launcher";
+export type OverlayId = "search" | "launcher" | "settings";
 
 export const overlayStack = $state<{ ids: OverlayId[] }>({ ids: [] });
 
@@ -3210,6 +3242,9 @@ export function closeOverlay(id: OverlayId): void {
     case "launcher":
       launcherPanel.open = false;
       return;
+    case "settings":
+      settingsPanel.open = false;
+      return;
   }
 }
 
@@ -3223,6 +3258,7 @@ export function syncOverlayStack(): void {
   const open = new Set<OverlayId>();
   if (searchPanel.open) open.add("search");
   if (launcherPanel.open) open.add("launcher");
+  if (settingsPanel.open) open.add("settings");
   // Drop closed entries while preserving the existing relative
   // order of those that remain.
   const kept = overlayStack.ids.filter((id) => open.has(id));
