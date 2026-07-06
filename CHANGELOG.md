@@ -6,7 +6,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-The command launcher becomes configurable. A new Settings surface renders a web form over each chan-library's configuration, every command's keyboard shortcut is reassignable per operating system, and the launcher itself is redesigned as a centered spotlight. Reload and Open Inspector join the launcher, and a batch of editor and workspace fixes land. Now that shortcuts are reassignable, the opinionated default chords are trimmed to a minimal set, and Settings becomes the sole interactive configuration surface.
+The command launcher becomes configurable. A new Settings surface renders a web form over each chan-library's configuration, every command's keyboard shortcut is reassignable per operating system, and the launcher itself is redesigned as a centered spotlight. Reload and Open Inspector join the launcher, and a batch of editor, graph, pane, and workspace fixes land. Now that shortcuts are reassignable, the opinionated default chords are trimmed to a minimal set, and Settings becomes the sole interactive configuration surface.
 
 ### Added
 
@@ -15,6 +15,8 @@ The command launcher becomes configurable. A new Settings surface renders a web 
 - **Assign your own keyboard shortcuts.** Every command in the launcher is now rebindable: click its chord to capture a new one, with conflict detection against the rest of the keymap and reset-to-default. Shortcuts are stored per operating system (web, macOS, Linux, Windows), so the set you configure in chan-desktop applies locally and to every devserver you open from it, while a browser client uses the web set. A Keyboard Shortcuts section in Settings edits any OS's chord for any command.
 - **Reload and Open Inspector in the launcher.** The WebView reload and the DevTools inspector, previously only in the right-click menu, are now commands in the launcher (Open Inspector on chan-desktop).
 - **Jump to a dashboard slide.** New launcher commands jump straight to Workspace status, Indexing status, or About chan.
+- **A/B pane sides.** Panes now have side A and side B tab sets, with commands to send the active tab between sides and a side glyph that flips between them.
+- **`cs open` accepts graph links.** Passing a `chan://graph?...` URL to `cs open` opens a new graph tab through the same parser the editor uses for graph links.
 
 ### Changed
 
@@ -23,10 +25,11 @@ The command launcher becomes configurable. A new Settings surface renders a web 
 - **The launcher opens in a terminal-only window.** Cmd+K and the launcher command now work in a terminal-only window.
 - **The launcher's tab commands split into Apps and Tabs.** New terminal, team, draft, graph, file browser, dashboard, and diagram group under "Apps"; the tab operations (Close tab, Reopen closed tab, Next and Previous tab) group under "Tabs". Next and Previous tab now appear in the launcher too.
 - **The empty single pane shows the workspace path.** A single empty pane shows the workspace's absolute path (not just its name), with no action buttons. Open the command launcher from the pane menu's Commands item.
-- **The pane menu has "Enter Hybrid Nav" again**, directly under Commands.
+- **The pane menu has "Hybrid Nav"**, directly under Commands.
 - **A config file edited outside chan refreshes open windows.** Editing a configuration file directly, or through `chan config set`, now refreshes any open window without a reload.
 - **Default keyboard shortcuts are trimmed to a minimal set.** With shortcuts now reassignable, the opinionated spawn, navigation, and pane / tab chords (New draft, Graph, Dashboard, File browser, Team Work, and the pane split / nav / close / kill chords) no longer ship a built-in default; bind the keys you want in Settings > Keyboard Shortcuts. The non-negotiables stay: Settings (Cmd/Ctrl+,), Search (Cmd+Shift+S on macOS, Ctrl+Alt+S elsewhere), the Cmd+K launcher, and Close tab (now Cmd+W on macOS, with Ctrl+D everywhere as an alternate). The universal conventions stay too (copy, paste, find, editor bold and italic, delete file, Esc). A few kept commands rebind: Close window to Cmd+Shift+W, New terminal to Cmd+T (Ctrl+Shift+T off macOS), Reopen closed tab to Cmd+Shift+T (Ctrl+Alt+Shift+T off macOS), and Rich Prompt to Cmd+Shift+P (Ctrl+Shift+P off macOS). On chan-desktop the native menu accelerators follow the same chords (off macOS, New Terminal is Ctrl+Shift+T and Close Window closes the window on Ctrl+Shift+W).
 - **Back-of-pane configuration duplicates are removed.** The panes still flip and OK returns to the front, but Editor, Terminal, and File Browser backs are shell-only. Graph keeps its read-only colour legend, and Dashboard keeps the slot navigator plus the Workspace recent-workspaces list. Settings is the only interactive configuration surface.
+- **Pane flipping uses a stronger 3D card effect.** A/B side flips now use the pane's shape to choose the flip axis, and tab labels fade only when the label does not fit the tab title space.
 - **The desktop reconnect follow-up is deferred.** The rc3/rc4 smoke accepted the current reconnect behavior, so this closeout does not change the reconnect path.
 
 ### Fixed
@@ -38,6 +41,9 @@ The command launcher becomes configurable. A new Settings surface renders a web 
 - **Reopening the last tab after deleting a draft opens a fresh draft** instead of trying to reopen the just-deleted file.
 - **A stale full-line selection highlight** after repeated word-select-then-undo in the editor (chan-desktop).
 - **The pane menu could open partly off-screen** when a pane transform was mid-animation; it now stays within the window.
+- **Graph directory scopes keep their spine edges.** Directory-scoped graphs keep ancestor directories visible, so selected files stay connected to the visible directory tree.
+- **Graph expansion keeps the target in view.** Launcher and graph inspector expansion paths preserve viewport framing when they open or expand a focused node.
+- **Close shortcuts explain hidden-side blockers.** Ctrl+D, Cmd+W, and Cmd+Shift+W keep the pane/window open when the visible side is empty but the other side still has tabs, and the A/B button flashes amber to show what blocked the close.
 
 ### Security
 
