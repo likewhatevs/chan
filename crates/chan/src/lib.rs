@@ -1705,6 +1705,7 @@ where
     None
 }
 
+#[cfg(unix)]
 fn push_unique_path(paths: &mut Vec<PathBuf>, path: PathBuf) {
     if !paths.iter().any(|existing| existing == &path) {
         paths.push(path);
