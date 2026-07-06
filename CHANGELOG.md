@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [v0.65.0] - 2026-07-06
 
 The command launcher becomes configurable. A new Settings surface renders a web form over each chan-library's configuration, every command's keyboard shortcut is reassignable per operating system, and the launcher itself is redesigned as a centered spotlight. Reload and Open Inspector join the launcher, and a batch of editor, graph, pane, and workspace fixes land. Now that shortcuts are reassignable, the opinionated default chords are trimmed to a minimal set, and Settings becomes the sole interactive configuration surface.
 
