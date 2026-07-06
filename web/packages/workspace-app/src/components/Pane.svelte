@@ -27,6 +27,7 @@
     paneModeStagedTabIds,
     paneModeSwapWith,
     paneActiveTabId,
+    paneSideToggleFlash,
     paneWobble,
     paneSide,
     paneTabs,
@@ -370,6 +371,30 @@
     });
   });
 
+  const sideToggleFlashVersion = $derived(paneSideToggleFlash.versions[pane.id] ?? 0);
+  let sideToggleFlashActive = $state(false);
+  let lastSideToggleFlashVersion = 0;
+  let sideToggleFlashFrame: number | null = null;
+
+  function clearSideToggleFlashFrame(): void {
+    if (sideToggleFlashFrame !== null) {
+      cancelAnimationFrame(sideToggleFlashFrame);
+      sideToggleFlashFrame = null;
+    }
+  }
+
+  $effect(() => {
+    if (sideToggleFlashVersion === lastSideToggleFlashVersion) return;
+    lastSideToggleFlashVersion = sideToggleFlashVersion;
+    if (sideToggleFlashVersion === 0) return;
+    sideToggleFlashActive = false;
+    clearSideToggleFlashFrame();
+    sideToggleFlashFrame = requestAnimationFrame(() => {
+      sideToggleFlashFrame = null;
+      sideToggleFlashActive = true;
+    });
+  });
+
   /// Side flips animate on the axis that matches the pane's shape:
   /// wide panes turn horizontally, tall panes turn vertically, and a
   /// square pane chooses either axis so both orientations stay possible.
@@ -432,7 +457,10 @@
     });
   });
 
-  onDestroy(clearSideFlipHandles);
+  onDestroy(() => {
+    clearSideFlipHandles();
+    clearSideToggleFlashFrame();
+  });
 
   function closePaneMenus(): void {
     paneMenu?.close();
@@ -1277,7 +1305,11 @@
     <div class="actions">
       <button
         class="side-toggle"
+        class:side-toggle-flash={sideToggleFlashActive}
         onclick={() => flipHybrid(pane.id)}
+        onanimationend={(e) => {
+          if (e.animationName === "pane-side-toggle-flash") sideToggleFlashActive = false;
+        }}
         title={sideToggleTitle}
         aria-label={sideToggleTitle}
       >
@@ -1856,6 +1888,24 @@
   }
   .side-toggle:hover {
     background: var(--hover-bg);
+  }
+  .side-toggle.side-toggle-flash {
+    animation: pane-side-toggle-flash 620ms ease-in-out;
+  }
+  @keyframes pane-side-toggle-flash {
+    0%,
+    100% {
+      border-color: var(--border);
+      color: var(--text);
+      background: var(--bg-card);
+      box-shadow: none;
+    }
+    50% {
+      border-color: #e3b341;
+      color: #e3b341;
+      background: color-mix(in srgb, #e3b341 18%, transparent);
+      box-shadow: 0 0 0 2px color-mix(in srgb, #e3b341 24%, transparent);
+    }
   }
   /* Dead zone on the top bar: the stretch between the last tab and
      the hamburger. mousedown + drag past 5 px

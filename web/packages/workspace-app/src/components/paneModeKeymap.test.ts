@@ -204,6 +204,12 @@ describe("Track C pane shortcut wiring", () => {
       /case "app\.window\.close":[\s\S]*?if \(closeActiveEmptyPane\(\)\) return;[\s\S]*?discardWindowSession\(\);/,
     );
   });
+
+  test("empty visible side with hidden-side tabs flashes the A/B button and blocks close", () => {
+    expect(app).toMatch(
+      /function closeActiveEmptyPane\(\): boolean \{[\s\S]*?if \(paneTabs\(p\)\.length !== 0\) return false;[\s\S]*?if \(allPaneTabs\(p\)\.length !== 0\) \{[\s\S]*?requestPaneSideToggleFlash\(p\.id\);[\s\S]*?return true;/,
+    );
+  });
 });
 
 describe("Hybrid Nav dock toggles", () => {

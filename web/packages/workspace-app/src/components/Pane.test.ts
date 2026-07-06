@@ -21,6 +21,8 @@ import {
   paneModeSetGrab,
   paneModeSetHover,
   paneSide,
+  paneSideToggleFlash,
+  requestPaneSideToggleFlash,
   splitPane,
   type LeafNode,
   type TerminalTab,
@@ -54,6 +56,7 @@ afterEach(() => {
   for (const component of mounted.splice(0)) unmount(component);
   document.body.innerHTML = "";
   cancelPaneMode();
+  paneSideToggleFlash.versions = {};
 });
 
 function terminalTab(partial: Partial<TerminalTab> = {}): TerminalTab {
@@ -381,6 +384,38 @@ describe("Pane side flip", () => {
       (el) => el.textContent?.trim(),
     );
     expect(labels).toEqual(["B tab"]);
+  });
+
+  test("side glyph flashes when a close shortcut is blocked by the hidden side", async () => {
+    const hidden = terminalTab({ id: "hidden-side", title: "Hidden" });
+    const pane: LeafNode = {
+      kind: "leaf",
+      id: "pane-side-flash",
+      tabs: [],
+      activeTabId: null,
+      bTabs: [hidden],
+      bActiveTabId: hidden.id,
+      side: "a",
+    };
+    const target = await renderPane(pane, { paneMode: false });
+    const button = target.querySelector<HTMLButtonElement>(".side-toggle");
+    expect(button?.classList.contains("side-toggle-flash")).toBe(false);
+
+    requestPaneSideToggleFlash(pane.id);
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    await tick();
+
+    expect(button?.classList.contains("side-toggle-flash")).toBe(true);
+
+    const end = new Event("animationend") as AnimationEvent;
+    Object.defineProperty(end, "animationName", {
+      configurable: true,
+      value: "pane-side-toggle-flash",
+    });
+    button?.dispatchEvent(end);
+    await tick();
+
+    expect(button?.classList.contains("side-toggle-flash")).toBe(false);
   });
 
   test("side changes trigger a shape-aware flip animation", async () => {

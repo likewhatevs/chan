@@ -1063,6 +1063,19 @@ export function requestPaneWobble(paneId: string): void {
   paneWobble.versions[paneId] = (paneWobble.versions[paneId] ?? 0) + 1;
 }
 
+/// Single-fire attention flash for the A/B side-toggle button. Used when a
+/// close shortcut hits an empty visible side but the opposite side still has
+/// tabs, so the pane/window stays open and the chrome points at why.
+export const paneSideToggleFlash = $state<{ versions: Record<string, number> }>({
+  versions: {},
+});
+
+export function requestPaneSideToggleFlash(paneId: string): void {
+  if (!paneId) return;
+  paneSideToggleFlash.versions[paneId] =
+    (paneSideToggleFlash.versions[paneId] ?? 0) + 1;
+}
+
 export function activeLayout(): LayoutState {
   return paneMode.active && paneMode.draft ? paneMode.draft : layout;
 }

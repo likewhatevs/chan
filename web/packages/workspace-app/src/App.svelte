@@ -123,6 +123,8 @@
     paneModeStageDiagramEditor,
     paneModeStageDraftEditor,
     paneModeSwap,
+    paneTabs,
+    requestPaneSideToggleFlash,
     setWindowFocusColor,
     splitActive,
     toggleActiveFileTabMode,
@@ -961,7 +963,11 @@
   }
   function closeActiveEmptyPane(): boolean {
     const p = activePane();
-    if (allPaneTabs(p).length !== 0) return false;
+    if (paneTabs(p).length !== 0) return false;
+    if (allPaneTabs(p).length !== 0) {
+      requestPaneSideToggleFlash(p.id);
+      return true;
+    }
     // The last empty pane triggers window close on desktop, returning focus
     // to the workspace launcher. Web stays a no-op (Cmd+W falls through to
     // the browser). The launcher's CloseRequested hides rather than destroys,
