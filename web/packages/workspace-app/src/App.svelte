@@ -76,9 +76,11 @@
   import { confirmState } from "./state/confirm.svelte";
   import { windowModeAllowsCommand } from "./state/windowMode";
   import {
+    activeTabInPane,
     activeFileTab,
     activePane,
     activeTerminalTab,
+    allPaneTabs,
     allTerminalTabs,
     hasAnyTab,
     closeFind,
@@ -108,12 +110,18 @@
     selectTabAtIndexInActivePane,
     setActivePane,
     openTerminalInActivePane,
+    paneActiveTabId,
     paneMode,
     paneModeEqualize,
     paneModeMoveFocus,
+    paneModeOpenBrowser,
+    paneModeOpenDashboard,
+    paneModeOpenGraph,
     paneModeOpenTerminal,
     paneModeResize,
     paneModeSplit,
+    paneModeStageDiagramEditor,
+    paneModeStageDraftEditor,
     paneModeSwap,
     setWindowFocusColor,
     splitActive,
@@ -174,15 +182,15 @@
     for (const node of Object.values(layout.nodes)) {
       if (node.kind !== "leaf") continue;
       void node.activeTabId;
+      void node.bActiveTabId;
+      void node.side;
       void node.tabs.length;
-      // The Hybrid flip + per-Hybrid theme persist (sb / ht in the SerLeaf)
-      // but live on the pane, not a tab. Read them here so a bare flip /
-      // theme change re-runs this effect and schedules the save; without
-      // these a flip-only change never persists and a reload restores the
-      // un-flipped layout.
-      void node.showingBack;
+      void (node.bTabs?.length ?? 0);
+      // The Hybrid visible side + per-Hybrid theme persist on the pane, not a
+      // tab. Read them here so a bare side flip or theme change schedules the
+      // save.
       void node.theme;
-      for (const t of node.tabs) {
+      for (const t of allPaneTabs(node)) {
         if (t.kind === "terminal") {
           void t.title;
           void t.broadcastEnabled;
@@ -584,6 +592,18 @@
       enterPaneMode();
       return;
     }
+    if (
+      e.ctrlKey &&
+      !e.metaKey &&
+      !e.altKey &&
+      !e.shiftKey &&
+      e.code === "Backquote" &&
+      !builtInChordSuperseded("app.pane.flip")
+    ) {
+      e.preventDefault();
+      if (!paneChordBlocked()) flipHybrid(layout.activePaneId);
+      return;
+    }
     // Escape: pop just the topmost overlay so a stack of open
     // surfaces unwinds one at a time.
     if (e.key === "Escape" && !meta && !e.altKey && !e.shiftKey) {
@@ -619,12 +639,15 @@
         return;
       }
       case "Escape":
-        // Discard staged drafts. T / O / P / G additions live inside the
+        // Discard staged additions. T / O / G / B additions live inside the
         // draft layout and disappear automatically when commitPaneMode does
         // not run. Esc bails before materializeStagedDraftEditors fires,
         // so no orphan drafts are created.
         cancelPaneMode();
         paneModeHelpVisible = false;
+        return;
+      case "Tab":
+        if (paneMode.draft) flipHybrid(paneMode.draft.activePaneId);
         return;
       // Arrows navigate (move focus); WASD moves tiles (swap).
       // Intentionally asymmetric: arrow = focus, letter = move.
@@ -648,7 +671,7 @@
       case "A":
         paneModeSwap("left");
         return;
-      // `s` / `S` are in the WASD swap-tile group; search lives on `f` / `F`.
+      // `s` / `S` are in the WASD swap-tile group.
       case "s":
       case "S":
         paneModeSwap("down");
@@ -678,6 +701,31 @@
       case "t":
       case "T":
         paneModeOpenTerminal(resolveSpawnContext());
+        return;
+      case "o":
+      case "O":
+        if (ui.terminalOnly) return;
+        paneModeOpenBrowser(resolveSpawnContext());
+        return;
+      case "g":
+      case "G":
+        if (ui.terminalOnly) return;
+        paneModeOpenGraph(resolveSpawnContext());
+        return;
+      case "b":
+      case "B":
+        if (ui.terminalOnly) return;
+        paneModeOpenDashboard();
+        return;
+      case "n":
+      case "N":
+        if (ui.terminalOnly) return;
+        paneModeStageDraftEditor();
+        return;
+      case "i":
+      case "I":
+        if (ui.terminalOnly) return;
+        paneModeStageDiagramEditor();
         return;
       // `h` toggles the Hybrid Nav help cheatsheet without committing the draft;
       // the user is still shaping their layout.
@@ -877,10 +925,16 @@
     for (const entry of queue) {
       void (async () => {
         try {
-          const { path } = await api.createDraft();
+          const { path } =
+            entry.kind === "diagram"
+              ? await api.createDiagram()
+              : await api.createDraft();
           await noteDraftCreated(path);
           await openInPane(entry.paneId, path, {
-            initialSelection: NEW_DRAFT_TITLE_SELECTION,
+            side: entry.side,
+            ...(entry.kind === "draft"
+              ? { initialSelection: NEW_DRAFT_TITLE_SELECTION }
+              : {}),
           });
         } catch (err) {
           console.warn("[chan] paneMode stagedDraftEditor failed", err);
@@ -906,7 +960,7 @@
   }
   function closeActiveEmptyPane(): boolean {
     const p = activePane();
-    if (p.tabs.length !== 0) return false;
+    if (allPaneTabs(p).length !== 0) return false;
     // The last empty pane triggers window close on desktop, returning focus
     // to the workspace launcher. Web stays a no-op (Cmd+W falls through to
     // the browser). The launcher's CloseRequested hides rather than destroys,
@@ -983,7 +1037,7 @@
     }
     if (paneMode.active) return;
     const p = activePane();
-    const active = p.tabs.find((t) => t.id === p.activeTabId);
+    const active = activeTabInPane(p);
     if (!active) {
       if (closeActiveEmptyPane()) {
         e.preventDefault();
@@ -1014,24 +1068,29 @@
   /// on any in-app key chord. Unknown ids are a no-op so hosts can ship
   /// ahead of chan adding the command.
   function runCommand(name: string, detail: Record<string, unknown>): void {
+    const commandName = name === "app.settings.toggle" ? "app.pane.flip" : name;
     // Terminal-only and control windows drop the commands they can't run;
     // windowMode.ts is the single gate the command launcher's availability
     // reads too, so a hidden launcher row and a dropped dispatch never
     // disagree.
     if (
-      !windowModeAllowsCommand(name, {
+      !windowModeAllowsCommand(commandName, {
         terminalOnly: ui.terminalOnly,
         terminalControl: ui.terminalControl,
       })
     )
       return;
-    switch (name) {
+    switch (commandName) {
       case "app.settings.open":
         openSettings();
         return;
-      case "app.settings.toggle":
-        // Focused-Hybrid flip. The Settings overlay owns comma; this command
-        // remains launcher-reachable and user-assignable.
+      case "app.window.reload":
+        void reloadWindow();
+        return;
+      case "app.pane.mode":
+        enterPaneMode();
+        return;
+      case "app.pane.flip":
         if (paneChordBlocked()) return;
         flipHybrid(layout.activePaneId);
         return;
@@ -1121,7 +1180,8 @@
       }
       case "app.tab.close": {
         const p = activePane();
-        if (p.activeTabId) closeTab(p.id, p.activeTabId);
+        const activeTabId = paneActiveTabId(p);
+        if (activeTabId) closeTab(p.id, activeTabId);
         else closeActiveEmptyPane();
         return;
       }

@@ -5,6 +5,8 @@ describe("terminal-only command gate", () => {
   test("allows the command launcher in standalone and control terminal windows", () => {
     expect(TERMINAL_ONLY_COMMANDS.has("app.launcher.toggle")).toBe(true);
     expect(TERMINAL_ONLY_COMMANDS.has("app.settings.open")).toBe(true);
+    expect(TERMINAL_ONLY_COMMANDS.has("app.window.reload")).toBe(true);
+    expect(TERMINAL_ONLY_COMMANDS.has("app.pane.mode")).toBe(true);
     expect(
       windowModeAllowsCommand("app.launcher.toggle", {
         terminalOnly: true,

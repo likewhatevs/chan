@@ -15,24 +15,24 @@ describe("TerminalTabs survive Hybrid NAV toggles", () => {
     // adjacency catches the regression without false-matching the
     // separate `{#if paneMode.active}` block above (which renders
     // the pane-mode-preview).
-    const banned = /\{#if\s+!paneMode\.active\}\s+\{#each pane\.tabs\.filter\(\(t\) => t\.kind === "terminal"\) as t \(t\.id\)\}/;
+    const banned = /\{#if\s+!paneMode\.active\}\s+\{#each everyTab\.filter\(\(t\) => t\.kind === "terminal"\) as t \(t\.id\)\}/;
     expect(pane).not.toMatch(banned);
   });
 
-  test("active prop is gated by !paneMode.active + !pane.showingBack", () => {
+  test("active prop is gated by pane mode + visible-side active tab", () => {
     // The prop short-circuits on pane mode so the visibility-hidden
-    // CSS fires during Hybrid NAV. `!pane.showingBack` keeps terminals
-    // hidden while the back-side configuration view is up.
+    // CSS fires during Hybrid NAV. isLiveActive() keeps only the active
+    // tab on the visible A/B side live.
     expect(pane).toMatch(
-      /active=\{!paneMode\.active && !pane\.showingBack && t\.id === pane\.activeTabId\}/,
+      /active=\{isLiveActive\(t\)\}/,
     );
   });
 
-  test("focused prop is gated by !paneMode.active + !pane.showingBack", () => {
+  test("focused prop is gated by visible-side active tab and active pane", () => {
     // Same gates on focused so focus is never pulled into a hidden
-    // xterm during pane mode or the back-side config view.
+    // xterm during pane mode, from a hidden side, or from another pane.
     expect(pane).toMatch(
-      /focused=\{!paneMode\.active && !pane\.showingBack && t\.id === pane\.activeTabId && viewLayout\.activePaneId === pane\.id\}/,
+      /focused=\{isLiveActive\(t\) && viewLayout\.activePaneId === pane\.id\}/,
     );
   });
 });

@@ -188,7 +188,7 @@
      same affordance. */
   .hamburger-menu {
     position: fixed;
-    z-index: 25500;
+    z-index: 29000;
     margin: 0;
     padding: 6px;
     list-style: none;

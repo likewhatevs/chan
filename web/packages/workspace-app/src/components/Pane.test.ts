@@ -20,6 +20,7 @@ import {
   paneMode,
   paneModeSetGrab,
   paneModeSetHover,
+  paneSide,
   splitPane,
   type LeafNode,
   type TerminalTab,
@@ -43,6 +44,10 @@ globalThis.matchMedia = ((query: string) => ({
   removeListener() {},
   dispatchEvent: () => false,
 })) as any;
+globalThis.requestAnimationFrame ??= ((callback: FrameRequestCallback) =>
+  window.setTimeout(() => callback(performance.now()), 0)) as any;
+globalThis.cancelAnimationFrame ??= ((handle: number) =>
+  window.clearTimeout(handle)) as any;
 HTMLCanvasElement.prototype.getContext = (() => ({})) as any;
 
 afterEach(() => {
@@ -72,7 +77,9 @@ async function renderPane(pane: LeafNode, options: { paneMode?: boolean } = {}) 
   else cancelPaneMode();
   const target = document.createElement("div");
   document.body.append(target);
-  const component = mount(Pane, { target, props: { pane } });
+  const livePane = layout.nodes[pane.id];
+  if (livePane?.kind !== "leaf") throw new Error("expected leaf");
+  const component = mount(Pane, { target, props: { pane: livePane } });
   mounted.push(component);
   await tick();
   return target;
@@ -161,7 +168,7 @@ describe("Pane right-click menus", () => {
     );
     expect(menuLabels()).toEqual([
       "Commands",
-      "Enter Hybrid Nav",
+      "Hybrid Nav",
       "blue",
       "orange",
       "green",
@@ -191,7 +198,7 @@ describe("Pane right-click menus", () => {
     const labels = menuLabels();
     expect(labels).toEqual([
       "Commands",
-      "Enter Hybrid Nav",
+      "Hybrid Nav",
       "blue",
       "orange",
       "green",
@@ -211,7 +218,6 @@ describe("Pane right-click menus", () => {
       "Previous pane",
       "Close all tabs",
       "Kill pane",
-      "Flip Hybrid",
       "Close pane",
     ]) {
       expect(labels).not.toContain(label);
@@ -316,230 +322,155 @@ describe("Pane right-click menus", () => {
     expect(menuLabels()).toEqual(["Reload", "Open Inspector"]);
   });
 
-  // The back-side configuration view model has no "unread" or
-  // "activity" surface to flag, so no back-attention indicator exists.
+  // Side B is a normal tab side, so activity belongs to its own tab strip.
 });
 
-describe("Pane back-side configuration view", () => {
-  test("passes the flip callback into every back-side config OK button", () => {
-    expect(paneSource).toMatch(
-      /<HybridTerminalConfig onDone=\{\(\) => flipHybrid\(pane\.id\)\} \/>/,
-    );
-    expect(paneSource).toMatch(
-      /<HybridEditorConfig onDone=\{\(\) => flipHybrid\(pane\.id\)\} \/>/,
-    );
-    expect(paneSource).toMatch(
-      /<HybridGraphConfig onDone=\{\(\) => flipHybrid\(pane\.id\)\} \/>/,
-    );
-    expect(paneSource).toMatch(
-      /<HybridFileBrowserConfig onDone=\{\(\) => flipHybrid\(pane\.id\)\} \/>/,
-    );
-  });
-
-  test("renders HybridTerminalConfig when active front tab is terminal", async () => {
-    const front = terminalTab({ id: "front-term", title: "front" });
-    const pane: LeafNode = {
-      kind: "leaf",
-      id: "pane-back-term",
-      tabs: [front],
-      activeTabId: front.id,
-      back: {},
-      showingBack: true,
-    };
-    const target = await renderPane(pane, { paneMode: false });
-
-    expect(
-      target.querySelector('[aria-label="Hybrid Terminal configuration"]'),
-    ).not.toBeNull();
-    // The tab strip stays visible on the back side (mirrored via .flipped).
-    // The back-side config component owns its own title; the tab strip
-    // carries no family-name title slot.
-    const tabs = target.querySelector(".tabs");
-    expect(tabs).not.toBeNull();
-    expect(tabs!.classList.contains("flipped")).toBe(true);
-    expect(target.querySelector(".hybrid-title")).toBeNull();
-  });
-
-  test("renders HybridEditorConfig when active front tab is a file", async () => {
-    const front = {
-      kind: "file" as const,
-      fileKind: "document" as const,
-      id: "front-file",
-      path: "notes/a.md",
-      content: "",
-      saved: "",
-      savedMtime: null,
-      mode: "wysiwyg" as const,
-      loading: false,
-      error: null,
-      fileMissing: null,
-      inspectorOpen: false,
-      outlineOpen: false,
-      repoRoot: null,
-      readMode: false,
-      fsWritable: true,
-      styleToolbarOpen: false,
-      syntaxHighlight: true,
-      highlightTrailingWhitespace: false,
-      codeBlocksCollapsed: false,
-    };
-    const pane: LeafNode = {
-      kind: "leaf",
-      id: "pane-back-editor",
-      tabs: [front],
-      activeTabId: front.id,
-      back: {},
-      showingBack: true,
-    };
-    const target = await renderPane(pane, { paneMode: false });
-
-    expect(
-      target.querySelector('[aria-label="Hybrid Editor configuration"]'),
-    ).not.toBeNull();
-  });
-
-  test("renders Hybrid placeholder when no front tab is active", async () => {
-    const pane: LeafNode = {
-      kind: "leaf",
-      id: "pane-back-empty",
-      tabs: [],
-      activeTabId: null,
-      back: {},
-      showingBack: true,
-    };
-    const target = await renderPane(pane, { paneMode: false });
-
-    // No specific config surface - the empty-state placeholder
-    // renders instead, asking the user to open a front tab first.
-    expect(target.querySelector(".back-empty")).not.toBeNull();
-    expect(
-      target.querySelector('[aria-label="hybrid back side"]'),
-    ).not.toBeNull();
-  });
-
-  test("front-tab content does not render while showingBack=true (a-54)", async () => {
+describe("Pane side flip", () => {
+  test("side glyph exposes the Flip shortcut outside the hamburger", async () => {
     const front = terminalTab({ id: "front-term" });
     const pane: LeafNode = {
       kind: "leaf",
-      id: "pane-back-content-hidden",
-      tabs: [front],
-      activeTabId: front.id,
-      back: {},
-      showingBack: true,
-    };
-    const target = await renderPane(pane, { paneMode: false });
-
-    // The tab strip stays visible on the back side. The back-side
-    // wrapper still renders below the tab strip.
-    const tabs = target.querySelector(".tabs");
-    expect(tabs).not.toBeNull();
-    expect(tabs!.classList.contains("flipped")).toBe(true);
-    expect(target.querySelector(".back-side")).not.toBeNull();
-  });
-});
-
-describe("Pane flip UX redesign", () => {
-  test("family-name title is NOT rendered in the tab strip", async () => {
-    const front = {
-      kind: "file" as const,
-      fileKind: "document" as const,
-      id: "front-file",
-      path: "notes/a.md",
-      content: "",
-      saved: "",
-      savedMtime: null,
-      mode: "wysiwyg" as const,
-      loading: false,
-      error: null,
-      fileMissing: null,
-      inspectorOpen: false,
-      outlineOpen: false,
-      repoRoot: null,
-      readMode: false,
-      fsWritable: true,
-      styleToolbarOpen: false,
-      syntaxHighlight: true,
-      highlightTrailingWhitespace: false,
-      codeBlocksCollapsed: false,
-    };
-    const pane: LeafNode = {
-      kind: "leaf",
-      id: "pane-fly-editor",
-      tabs: [front],
-      activeTabId: front.id,
-      back: {},
-      showingBack: true,
-    };
-    const target = await renderPane(pane, { paneMode: false });
-    // The back-side config component owns its own title; the tab-strip slot is empty.
-    expect(target.querySelector(".hybrid-title")).toBeNull();
-    // The back-side config view IS still rendered.
-    expect(
-      target.querySelector('[aria-label="Hybrid Editor configuration"]'),
-    ).not.toBeNull();
-  });
-
-  test("front-state pane does not carry the .flipped class", async () => {
-    const front = terminalTab({ id: "front-term" });
-    const pane: LeafNode = {
-      kind: "leaf",
-      id: "pane-front-no-flip",
+      id: "pane-flip-menu",
       tabs: [front],
       activeTabId: front.id,
     };
     const target = await renderPane(pane, { paneMode: false });
-    const tabs = target.querySelector(".tabs");
-    expect(tabs).not.toBeNull();
-    expect(tabs!.classList.contains("flipped")).toBe(false);
-    expect(target.querySelector(".hybrid-title")).toBeNull();
-  });
+    const sideButton = target.querySelector<HTMLButtonElement>(".side-toggle");
+    expect(sideButton?.title).toBe("Flip to side B (Ctrl+`)");
+    expect(sideButton?.getAttribute("aria-label")).toBe("Flip to side B (Ctrl+`)");
 
-  test("Pane source carries the flip CSS (per-child scaleX + row-reverse)", () => {
-    // The transform is applied to per-child selectors so the `.tab`
-    // element's click target stays in natural coordinates.
-    expect(paneSource).toMatch(
-      /\.tabs\.flipped \.tab \.tab-icon[\s\S]*?\.tabs\.flipped \.tab \.path[\s\S]*?transform: scaleX\(-1\)/,
-    );
-    // Whole-tab transform must not exist (it breaks click routing).
-    expect(paneSource).not.toMatch(
-      /\.tabs\.flipped \.tab \{ transform: scaleX\(-1\); \}/,
-    );
-    // Right-alignment: row-reverse on flipped + order: 1 on actions
-    // puts hamburger leftmost with tabs flowing from the right edge.
-    expect(paneSource).toMatch(
-      /\.tabs\.flipped \{[\s\S]*?flex-direction: row-reverse/,
-    );
-    expect(paneSource).toMatch(/\.tabs\.flipped \.actions \{[\s\S]*?order: 1/);
-    expect(paneSource).not.toMatch(/\.tabs\.flipped \.actions \{[\s\S]*?order: -1/);
-  });
-
-  test("clicking a tab from the flipped state still swaps active", async () => {
-    const t1 = terminalTab({ id: "front-t1", title: "T1" });
-    const t2 = terminalTab({ id: "front-t2", title: "T2" });
-    const pane: LeafNode = {
-      kind: "leaf",
-      id: "pane-flip-click",
-      tabs: [t1, t2],
-      activeTabId: t1.id,
-      back: {},
-      showingBack: true,
-    };
-    const target = await renderPane(pane, { paneMode: false });
-
-    // The second tab is inactive at start.
-    const tabs = target.querySelectorAll<HTMLElement>(".tabs .tab");
-    expect(tabs.length).toBe(2);
-    const t2El = tabs[1]!;
-    expect(t2El.classList.contains("active")).toBe(false);
-
-    // Fire mousedown - the active-tab swap path lives there
-    // (the click handler is bookkeeping; the actual write to
-    // `pane.activeTabId` is in onmousedown).
-    t2El.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    target.querySelector<HTMLButtonElement>(".hamburger-trigger")?.click();
     await tick();
 
-    // Active-tab swap visible via the live pane state.
-    expect(pane.activeTabId).toBe(t2.id);
+    expect(menuLabels()).toEqual([
+      "Commands",
+      "Hybrid Nav",
+      "blue",
+      "orange",
+      "green",
+      "pink",
+    ]);
+    expect(menuRowChords()["Flip"]).toBeUndefined();
+  });
+
+  test("side glyph flips between A and B", async () => {
+    const a = terminalTab({ id: "side-a", title: "A tab" });
+    const b = terminalTab({ id: "side-b", title: "B tab" });
+    const pane: LeafNode = {
+      kind: "leaf",
+      id: "pane-side-button",
+      tabs: [a],
+      activeTabId: a.id,
+      bTabs: [b],
+      bActiveTabId: b.id,
+    };
+    const target = await renderPane(pane, { paneMode: false });
+    const button = target.querySelector<HTMLButtonElement>(".side-toggle");
+    expect(button?.textContent?.trim()).toBe("A");
+    expect(button?.title).toBe("Flip to side B (Ctrl+`)");
+
+    button?.click();
+    await tick();
+
+    const live = layout.nodes[pane.id];
+    if (live?.kind !== "leaf") throw new Error("expected leaf");
+    expect(paneSide(live)).toBe("b");
+    expect(button?.textContent?.trim()).toBe("B");
+    expect(button?.title).toBe("Flip to side A (Ctrl+`)");
+    const labels = [...target.querySelectorAll('[role="tab"] .path')].map(
+      (el) => el.textContent?.trim(),
+    );
+    expect(labels).toEqual(["B tab"]);
+  });
+
+  test("side changes trigger a shape-aware flip animation", async () => {
+    const originalRect = HTMLElement.prototype.getBoundingClientRect;
+    HTMLElement.prototype.getBoundingClientRect = function () {
+      if (this.classList.contains("pane")) {
+        return {
+          x: 0,
+          y: 0,
+          top: 0,
+          left: 0,
+          right: 320,
+          bottom: 120,
+          width: 320,
+          height: 120,
+          toJSON: () => ({}),
+        } as DOMRect;
+      }
+      return originalRect.call(this);
+    };
+    try {
+      const a = terminalTab({ id: "flip-a", title: "A tab" });
+      const b = terminalTab({ id: "flip-b", title: "B tab" });
+      const pane: LeafNode = {
+        kind: "leaf",
+        id: "pane-side-effect",
+        tabs: [a],
+        activeTabId: a.id,
+        bTabs: [b],
+        bActiveTabId: b.id,
+      };
+      const target = await renderPane(pane, { paneMode: false });
+      target.querySelector<HTMLButtonElement>(".side-toggle")?.click();
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+      await tick();
+
+      const paneEl = target.querySelector<HTMLElement>(".pane");
+      expect(paneEl?.classList.contains("sideFlipActive")).toBe(true);
+      expect(paneEl?.classList.contains("sideFlipHorizontal")).toBe(true);
+      expect(paneEl?.classList.contains("sideFlipVertical")).toBe(false);
+      expect(paneEl?.style.getPropertyValue("--pane-side-flip-start")).toContain(
+        "rotateX(",
+      );
+    } finally {
+      HTMLElement.prototype.getBoundingClientRect = originalRect;
+    }
+  });
+
+  test("flip axis follows pane dimensions", () => {
+    expect(paneSource).toMatch(/if \(height > width\) return "vertical"/);
+    expect(paneSource).toMatch(/if \(width > height\) return "horizontal"/);
+    expect(paneSource).toMatch(/return Math\.random\(\) < 0\.5 \? "vertical" : "horizontal"/);
+    expect(paneSource).toMatch(/axis === "vertical" \? "rotateY" : "rotateX"/);
+    expect(paneSource).toMatch(/class:sideFlipActive=\{sideFlipActive\}/);
+    expect(paneSource).toMatch(/@keyframes pane-side-flip/);
+  });
+
+  test("tab label fade is gated on measured overflow", () => {
+    const basePathBlock = paneSource.match(/\.path \{[\s\S]*?\n  \}/)?.[0] ?? "";
+    expect(paneSource).toContain("use:tabPathOverflow={label}");
+    expect(paneSource).toMatch(/scrollWidth > node\.clientWidth \+ 1/);
+    expect(paneSource).toMatch(/\.path\.overflowing \{[\s\S]*?mask-image:/);
+    expect(basePathBlock).not.toContain("mask-image");
+  });
+
+  test("clicking a visible B-side tab swaps only B active state", async () => {
+    const a = terminalTab({ id: "front-t1", title: "A" });
+    const b1 = terminalTab({ id: "back-t1", title: "B1" });
+    const b2 = terminalTab({ id: "back-t2", title: "B2" });
+    const pane: LeafNode = {
+      kind: "leaf",
+      id: "pane-side-click",
+      tabs: [a],
+      activeTabId: a.id,
+      bTabs: [b1, b2],
+      bActiveTabId: b1.id,
+      side: "b",
+    };
+    const target = await renderPane(pane, { paneMode: false });
+    const tabs = target.querySelectorAll<HTMLElement>(".tabs .tab");
+
+    expect(tabs.length).toBe(2);
+    expect(tabs[1]?.classList.contains("active")).toBe(false);
+    tabs[1]?.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    await tick();
+
+    const live = layout.nodes[pane.id];
+    if (live?.kind !== "leaf") throw new Error("expected leaf");
+    expect(live.bActiveTabId).toBe(b2.id);
+    expect(live.activeTabId).toBe(a.id);
   });
 });
 
@@ -650,6 +581,7 @@ describe("Pane cross-window tab DnD (pane-id collision fix)", () => {
     expect(paneSource).toMatch(
       /TAB_DRAG_MIME,[\s\S]{1,160}fromWindow: sessionWindowId\(\)/,
     );
+    expect(paneSource).toMatch(/JSON\.stringify\(\{ fromPaneId: pane\.id, fromSide, tabId, fromWindow: sessionWindowId\(\) \}\)/);
     expect(paneSource).toMatch(
       /import \{\s*api,\s*dragScopeMimeToken,\s*sessionWindowId,\s*windowDragScope,\s*windowLibraryId,\s*\} from "\.\.\/api\/client"/,
     );
@@ -701,17 +633,27 @@ describe("Pane cross-kind / cross-workspace tab DnD guard", () => {
 
   test("compatibility is the source scope type matching THIS window's scope", () => {
     expect(paneSource).toMatch(
-      /function isTabDragScopeCompatible\(e: DragEvent\): boolean \{[\s\S]{1,160}includes\(scopeMime\(currentDragScope\(\)\)\)/,
+      /function isTabDragScopeCompatible\(e: DragEvent\): boolean \{[\s\S]{1,120}dragHasType\(e, scopeMime\(currentDragScope\(\)\)\)/,
     );
   });
 
   test("both dragover handlers reject an incompatible tab move (no-drop cursor)", () => {
-    // Bail before preventDefault so the browser shows the no-drop cursor; file
-    // drags (not isTabMoveDrag) are unaffected.
+    // Bail before preventDefault and force `dropEffect = "none"` so the
+    // browser shows the no-drop cursor; file drags (not isTabMoveDrag) are
+    // unaffected.
+    expect(paneSource).toMatch(
+      /function rejectTabMoveDrag\(e: DragEvent\): void \{[\s\S]{1,120}dropEffect = "none"/,
+    );
     const overGates = paneSource.match(
-      /if \(isTabMoveDrag\(e\) && !isTabDragScopeCompatible\(e\)\) return;/g,
+      /if \(isTabMoveDrag\(e\) && !isTabDragScopeCompatible\(e\)\) \{[\s\S]{1,80}rejectTabMoveDrag\(e\);[\s\S]{1,80}return;/g,
     );
     expect(overGates?.length).toBe(2);
+  });
+
+  test("drag type lookup supports both Array and DOMStringList transfer types", () => {
+    expect(paneSource).toMatch(
+      /function dragHasType\(e: DragEvent, mime: string\): boolean \{[\s\S]*bag\.includes[\s\S]*bag\.contains[\s\S]*bag\[i\] === mime/,
+    );
   });
 
   test("both drop handlers gate cross-window acceptance on scope compatibility", () => {

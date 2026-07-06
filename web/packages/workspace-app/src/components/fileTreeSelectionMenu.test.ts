@@ -44,7 +44,7 @@ describe("FileTree selection menu header + new entries", () => {
 
   test("selection-menu shortcut hints read from the central store (chordFor)", () => {
     // New Terminal cmd+t, New Graph cmd+shift+m, Delete backspace,
-    // Settings cmd+, - each surfaced via chordFor so they port across
+    // Flip ctrl+` - each surfaced via chordFor so they port across
     // web/native and stay in sync with the keymap layer.
     expect(tree).toContain('import { chordFor } from "../state/shortcuts";');
     expect(tree).toMatch(
@@ -57,7 +57,7 @@ describe("FileTree selection menu header + new entries", () => {
       /<span class="menu-row-chord">\{chordFor\("app\.files\.delete"\) \?\? ""\}<\/span>/,
     );
     expect(tree).toMatch(
-      /<span class="menu-row-chord">\{chordFor\("app\.settings\.toggle"\) \?\? ""\}<\/span>/,
+      /<span class="menu-row-chord">\{chordFor\("app\.pane\.flip"\) \?\? ""\}<\/span>/,
     );
   });
 

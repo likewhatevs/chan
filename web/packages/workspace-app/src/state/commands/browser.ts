@@ -380,11 +380,11 @@ registerCommands([
   },
   {
     id: "app.browser.settings",
-    title: "Settings",
+    title: "Flip",
     category: "File Browser",
-    keywords: ["flip", "config"],
+    keywords: ["flip", "side"],
     available: onBrowser,
-    run: () => dispatchChanCommand("app.settings.toggle"),
+    run: () => dispatchChanCommand("app.pane.flip"),
   },
   {
     id: "app.browser.showWorkspaceInfo",

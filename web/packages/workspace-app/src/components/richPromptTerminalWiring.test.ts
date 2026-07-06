@@ -46,9 +46,9 @@ describe("TerminalTab Rich Prompt wiring", () => {
     expect(pane).toMatch(
       /\{#if t\.kind === "terminal" && \(t\.queueDepth \?\? 0\) > 0\}[\s\S]{1,220}title="queued terminal messages"[\s\S]{1,120}\{t\.queueDepth\}/,
     );
-    // The flipped strip counter-mirrors text-bearing children; the
-    // pill's digit must be in that selector list or it renders mirrored.
-    expect(pane).toMatch(/\.tabs\.flipped \.tab \.queue-pill,/);
+    // A/B sides use the same strip orientation, so there is no flipped mirror
+    // selector that would need a queue-pill exception.
+    expect(pane).not.toContain(".tabs.flipped");
   });
 
   test("socket loss and session end fail the pending prompt and zero the badge", () => {

@@ -13,7 +13,7 @@ import {
 // user-assigned override chord escapes too (covered by the override-escape
 // test in keymapOverrides.svelte.test.ts). The `handleTerminalKeyEvent`
 // xterm-`customKeyEventHandler` callback consults the registry: matched
-// events return false so the chord bubbles out of xterm to the App keymap.
+// events return false so no bytes reach the PTY.
 
 describe("chord-escape registry shape", () => {
   test("Shortcut type carries an optional escapeTerminal flag", () => {
@@ -27,6 +27,7 @@ describe("chord-escape registry shape", () => {
       "app.search.toggle",
       "app.terminal.toggle",
       "app.pane.mode",
+      "app.pane.flip",
       "app.window.reload",
       "app.window.close",
     ];
@@ -165,6 +166,15 @@ describe("shouldEscapeTerminal lookup", () => {
     expect(shouldEscapeTerminal(e)).toBe(true);
   });
 
+  test("Ctrl+` (pane side flip) escapes", () => {
+    const e = new KeyboardEvent("keydown", {
+      key: "`",
+      code: "Backquote",
+      ctrlKey: true,
+    });
+    expect(shouldEscapeTerminal(e)).toBe(true);
+  });
+
   test("plain alphabet keys (typing in terminal) do NOT escape", () => {
     const e = new KeyboardEvent("keydown", { key: "a" });
     expect(shouldEscapeTerminal(e)).toBe(false);
@@ -176,7 +186,7 @@ describe("shouldEscapeTerminal lookup", () => {
   });
 });
 
-describe("TerminalTab consults shouldEscapeTerminal", () => {
+describe("TerminalTab escapes terminal-owned shortcut chords", () => {
   test("handleTerminalKeyEvent imports + calls shouldEscapeTerminal", () => {
     expect(terminalRaw).toMatch(
       /import \{[\s\S]*?\bshouldEscapeTerminal\b[\s\S]*?\} from "\.\.\/state\/shortcuts";/,
@@ -186,8 +196,7 @@ describe("TerminalTab consults shouldEscapeTerminal", () => {
     );
   });
 
-  test("rationale comment cites the registry + the xterm-consumption issue", () => {
+  test("rationale comment cites the registry", () => {
     expect(terminalRaw).toMatch(/chord-escape registry/i);
-    expect(terminalRaw).toMatch(/Without this gate[\s\S]{1,200}swallowed by xterm/i);
   });
 });

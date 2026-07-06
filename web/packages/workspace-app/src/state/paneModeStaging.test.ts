@@ -2,15 +2,14 @@ import { describe, expect, test } from "vitest";
 import tabs from "./tabs.svelte.ts?raw";
 import pane from "../components/Pane.svelte?raw";
 
-// Hybrid Nav transactional staging. T / O / P / G / N stage
-// additions into the draft layout (and `stagedDraftEditors`
-// queue for N); Enter materializes, Esc discards. Tests pin
-// the state machine + helper shape.
+// Hybrid Nav transactional staging. T / O / G / B stage tab additions into the
+// draft layout; N / I queue draft-editor materialization. Enter materializes,
+// Esc discards. Tests pin the state machine + helper shape.
 
 describe("paneMode state: stagedDraftEditors field", () => {
   test("paneMode singleton carries stagedDraftEditors as an array field", () => {
     expect(tabs).toMatch(
-      /stagedDraftEditors: \{ paneId: string \}\[\];[\s\S]{1,400}stagedDraftEditors: \[\],/,
+      /stagedDraftEditors: \{\s*paneId: string;\s*side: PaneSide;\s*kind: PaneModeDraftEditorKind;\s*\}\[\];[\s\S]{1,400}stagedDraftEditors: \[\],/,
     );
   });
 
@@ -42,9 +41,15 @@ describe("paneMode staging: spawn helpers", () => {
     expect(tabs).not.toMatch(/export function paneModeOpenTeamWorkTerminal\b/);
   });
 
-  test("paneModeStageDraftEditor pushes a {paneId} entry pinned at press time", () => {
+  test("paneModeStageDraftEditor pushes pane id, side, and kind pinned at press time", () => {
     expect(tabs).toMatch(
-      /export function paneModeStageDraftEditor\(\): void \{[\s\S]{1,400}const paneId = paneMode\.draft\.activePaneId;[\s\S]{1,200}paneMode\.stagedDraftEditors\.push\(\{ paneId \}\);/,
+      /export function paneModeStageDraftEditor\(kind: PaneModeDraftEditorKind = "draft"\): void \{[\s\S]{1,220}const paneId = paneMode\.draft\.activePaneId;[\s\S]{1,180}const node = leafPaneFrom\(paneMode\.draft, paneId\);[\s\S]{1,240}paneMode\.stagedDraftEditors\.push\(\{\s*paneId,\s*side: node \? paneSide\(node\) : "a",\s*kind,/,
+    );
+  });
+
+  test("paneModeStageDiagramEditor stages a diagram editor intent", () => {
+    expect(tabs).toMatch(
+      /export function paneModeStageDiagramEditor\(\): void \{\s*paneModeStageDraftEditor\("diagram"\);\s*\}/,
     );
   });
 

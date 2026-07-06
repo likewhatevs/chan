@@ -28,19 +28,19 @@ describe("tabFocusPulse mechanism", () => {
 
   test("selectPrevTabInActivePane bumps the pulse after mutating activeTabId", () => {
     expect(tabs).toMatch(
-      /export function selectPrevTabInActivePane\(\): void \{[\s\S]*?p\.activeTabId = p\.tabs\[next\]\.id;[\s\S]*?bumpTabFocusPulse\(\);/,
+      /export function selectPrevTabInActivePane\(\): void \{[\s\S]*?const side = paneSide\(p\);[\s\S]*?const tabs = paneTabs\(p, side\);[\s\S]*?setPaneActiveTabId\(p, tabs\[next\]\.id, side\);[\s\S]*?bumpTabFocusPulse\(\);/,
     );
   });
 
   test("selectNextTabInActivePane bumps the pulse", () => {
     expect(tabs).toMatch(
-      /export function selectNextTabInActivePane\(\): void \{[\s\S]*?p\.activeTabId = p\.tabs\[next\]\.id;[\s\S]*?bumpTabFocusPulse\(\);/,
+      /export function selectNextTabInActivePane\(\): void \{[\s\S]*?const side = paneSide\(p\);[\s\S]*?const tabs = paneTabs\(p, side\);[\s\S]*?setPaneActiveTabId\(p, tabs\[next\]\.id, side\);[\s\S]*?bumpTabFocusPulse\(\);/,
     );
   });
 
   test("selectTabAtIndexInActivePane bumps the pulse", () => {
     expect(tabs).toMatch(
-      /export function selectTabAtIndexInActivePane\(index: number\): void \{[\s\S]*?p\.activeTabId = p\.tabs\[index\]\.id;[\s\S]*?bumpTabFocusPulse\(\);/,
+      /export function selectTabAtIndexInActivePane\(index: number\): void \{[\s\S]*?const side = paneSide\(p\);[\s\S]*?const tabs = paneTabs\(p, side\);[\s\S]*?setPaneActiveTabId\(p, tabs\[index\]\.id, side\);[\s\S]*?bumpTabFocusPulse\(\);/,
     );
   });
 });
@@ -54,13 +54,13 @@ describe("tabFocusPulse mechanism", () => {
 describe("openInPane moves focus to the opened editor", () => {
   test("new-tab path bumps the pulse after activating", () => {
     expect(tabs).toMatch(
-      /export async function openInPane\([\s\S]*?p\.tabs\.push\(newTab\);[\s\S]*?p\.activeTabId = newTab\.id;[\s\S]*?bumpTabFocusPulse\(\);/,
+      /export async function openInPane\([\s\S]*?tabs\.push\(newTab\);[\s\S]*?setPaneActiveTabId\(p, newTab\.id, side\);[\s\S]*?p\.side = side;[\s\S]*?bumpTabFocusPulse\(\);/,
     );
   });
 
   test("existing-tab path bumps the pulse after activating", () => {
     expect(tabs).toMatch(
-      /export async function openInPane\([\s\S]*?p\.activeTabId = existing\.id;[\s\S]*?bumpTabFocusPulse\(\);/,
+      /export async function openInPane\([\s\S]*?setPaneActiveTabId\(p, existing\.id, side\);[\s\S]*?p\.side = side;[\s\S]*?bumpTabFocusPulse\(\);/,
     );
   });
 
@@ -78,7 +78,7 @@ describe("tab header click refocuses input-capable tabs", () => {
 
   test("terminal/editor tab mousedown selects the tab then pulses content focus", () => {
     expect(pane).toMatch(
-      /onmousedown=\{\(\) => \{[\s\S]*?pane\.activeTabId = t\.id;[\s\S]*?if \(t\.kind === "terminal"\) setTerminalActivity\(t, false\);[\s\S]*?if \(t\.kind === "terminal" \|\| t\.kind === "file"\) bumpTabFocusPulse\(\);/,
+      /onmousedown=\{\(\) => \{[\s\S]*?selectTabInPane\(pane\.id, t\.id\);[\s\S]*?if \(t\.kind === "terminal"\) setTerminalActivity\(t, false\);[\s\S]*?if \(t\.kind === "terminal" \|\| t\.kind === "file"\) bumpTabFocusPulse\(\);/,
     );
   });
 

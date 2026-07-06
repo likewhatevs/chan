@@ -50,6 +50,12 @@ describe("App.svelte keymap binding", () => {
       /if \(reloadChord\) \{[\s\S]*?e\.preventDefault\(\);[\s\S]*?void reloadWindow\(\);/,
     );
   });
+
+  test("chan:command bridge routes app.window.reload through reloadWindow()", () => {
+    expect(app).toMatch(
+      /case "app\.window\.reload":[\s\S]{1,80}void reloadWindow\(\);[\s\S]{1,40}return;/,
+    );
+  });
 });
 
 describe("Pane.svelte menu annotation", () => {
@@ -65,17 +71,18 @@ describe("Pane.svelte menu annotation", () => {
   });
 });
 
-describe("layout-persist effect tracks the Hybrid flip (reload survival)", () => {
-  // The flip (pane.showingBack) + per-Hybrid theme live on the pane, not a
-  // tab. The single layout-persist $effect schedules the hash + session save
-  // by reading reactive deps; it MUST read these pane fields or a bare flip /
-  // theme change never schedules a save and a reload restores the un-flipped
-  // layout. The serialize/restore already round-trip sb/ht; this guards the
-  // missing reactive dep that left the flip unpersisted (a Svelte-5 reactivity
-  // regression the static type/test gate cannot catch at runtime).
-  test("the persist effect reads node.showingBack + node.theme", () => {
-    // `void node.showingBack;` only appears in the layout-persist effect's
-    // leaf loop; asserting the adjacent pane-field reads pins the fix.
-    expect(app).toMatch(/void node\.showingBack;\s*void node\.theme;/);
+describe("layout-persist effect tracks the Hybrid side state (reload survival)", () => {
+  // The visible side, B-side tabs, and per-Hybrid theme live on the pane, not
+  // a tab. The single layout-persist $effect schedules the hash + session save
+  // by reading reactive deps; it MUST read these pane fields or a bare side
+  // flip / theme change never schedules a save and reload restores the wrong
+  // side. The serialize/restore already round-trip sb/bt/ht; this guards the
+  // missing reactive dep class that Svelte-5 static checks cannot catch at
+  // runtime.
+  test("the persist effect reads side, B active/tab list, and theme", () => {
+    expect(app).toMatch(
+      /void node\.activeTabId;\s*void node\.bActiveTabId;\s*void node\.side;\s*void node\.tabs\.length;\s*void \(node\.bTabs\?\.length \?\? 0\);[\s\S]{1,260}void node\.theme;/,
+    );
+    expect(app).toMatch(/for \(const t of allPaneTabs\(node\)\)/);
   });
 });

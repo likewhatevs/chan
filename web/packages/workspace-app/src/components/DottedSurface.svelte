@@ -87,9 +87,8 @@
 
     function resize(): void {
       if (!canvas) return;
-      const rect = canvas.getBoundingClientRect();
-      width = Math.max(1, Math.floor(rect.width));
-      height = Math.max(1, Math.floor(rect.height));
+      width = Math.max(1, Math.floor(canvas.clientWidth));
+      height = Math.max(1, Math.floor(canvas.clientHeight));
       const dpr = Math.min(window.devicePixelRatio || 1, MAX_DPR);
       canvas.width = Math.floor(width * dpr);
       canvas.height = Math.floor(height * dpr);

@@ -5,7 +5,7 @@ import graphCanvas from "./GraphCanvas.svelte?raw";
 
 // Graph tabs are kept ALIVE, exactly like terminals and file editors
 // (see paneTerminalMount / paneFileTabKeepAlive): Pane.svelte renders
-// every graph tab from an each-block inside .face.front and flips an
+// every graph tab from an all-pane each-block and flips an
 // `active` prop; inactive graphs hide via the visibility:hidden
 // contract (never display:none — a display:none host reports 0x0,
 // GraphCanvas.resize() refits to nothing and pan/zoom is lost). Before
@@ -17,7 +17,7 @@ import graphCanvas from "./GraphCanvas.svelte?raw";
 describe("graph tabs survive tab switches (keep-alive)", () => {
   test("graph each-block renders all graph tabs, keyed by tab id", () => {
     expect(pane).toMatch(
-      /\{#each pane\.tabs\.filter\(\(t\) => t\.kind === "graph"\) as t \(t\.id\)\}\s+<GraphPanel/,
+      /\{#each everyTab\.filter\(\(t\) => t\.kind === "graph"\) as t \(t\.id\)\}\s+<GraphPanel/,
     );
   });
 
@@ -25,15 +25,14 @@ describe("graph tabs survive tab switches (keep-alive)", () => {
     // The pre-fix branch mounted ONLY the active graph
     // (`<GraphPanel tab={active} ...>` under
     // `{:else if active?.kind === "graph"}`), so every switch
-    // remounted it. The back-face HybridGraphConfig dispatch still
-    // keys off `active?.kind === "graph"` — that chain is fine; what
-    // must not return is a GraphPanel mounted off `active`.
+    // remounted it. What must not return is a GraphPanel mounted off
+    // `active`.
     expect(pane).not.toMatch(/<GraphPanel\s+tab=\{active\}/);
   });
 
-  test("active prop is gated by !paneMode.active + !pane.showingBack + activeTabId", () => {
+  test("active prop is gated by pane mode + visible-side active tab", () => {
     expect(pane).toMatch(
-      /<GraphPanel\s+tab=\{t\}\s+active=\{!paneMode\.active && !pane\.showingBack && t\.id === pane\.activeTabId\}/,
+      /<GraphPanel\s+tab=\{t\}\s+active=\{isLiveActive\(t\)\}/,
     );
   });
 

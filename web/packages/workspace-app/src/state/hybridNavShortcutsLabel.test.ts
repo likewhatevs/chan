@@ -20,7 +20,7 @@ describe("shortcuts.ts Hybrid Nav label casing", () => {
     expect(shortcuts).toContain("Mod+. t (Hybrid Nav)");
   });
 
-  test("`Enter Hybrid Nav` label reads title-case", () => {
-    expect(shortcuts).toContain('"Enter Hybrid Nav"');
+  test("`Hybrid Nav` label reads title-case", () => {
+    expect(shortcuts).toContain('"Hybrid Nav"');
   });
 });

@@ -15,7 +15,7 @@ describe("menu-top Name input", () => {
 
   test("Page width follows Name after the first separator", () => {
     expect(editor).toMatch(
-      /<div class="action-list">[\s\S]{1,1200}<label class="name-row">[\s\S]{1,1400}<\/label>[\s\S]{1,120}<div class="msep" role="separator"><\/div>\s*<!-- Page-width slider:[\s\S]{1,400}<div class="page-width-row">/,
+      /<div class="action-list">[\s\S]{1,1200}<label class="name-row">[\s\S]{1,1400}<\/label>[\s\S]{1,120}\{#if showPageWidthMenuRow\}\s*<div class="msep" role="separator"><\/div>\s*<!-- Page-width slider:[\s\S]{1,400}<div class="page-width-row">/,
     );
   });
 
@@ -37,13 +37,25 @@ describe("menu-top Name input", () => {
 describe("tab-menu foot", () => {
   test("Page width is followed by a separator and Close", () => {
     expect(editor).toMatch(
-      /<div class="page-width-row">[\s\S]{1,900}<\/div>\s*<div class="msep" role="separator"><\/div>\s*<button class="mbtn" onclick=\{doCloseTab\}>[\s\S]{1,300}<span class="mbtn-label">Close<\/span>/,
+      /<div class="page-width-row">[\s\S]{1,900}<\/div>\s*\{\/if\}\s*<div class="msep" role="separator"><\/div>\s*<button class="mbtn" onclick=\{doCloseTab\}>[\s\S]{1,300}<span class="mbtn-label">Close<\/span>/,
     );
   });
 
-  test("Close shows the close-tab chord", () => {
+  test("Page width is hidden for Excalidraw canvas tabs as one conditional block", () => {
     expect(editor).toMatch(
-      /<span class="mbtn-label">Close<\/span>\s*<span class="mbtn-chord">\{chordLabel\("app\.tab\.close"\)\}<\/span>/,
+      /const showPageWidthMenuRow = \$derived\(tab\.mode !== "canvas"\);/,
+    );
+    expect(editor).toMatch(
+      /\{#if showPageWidthMenuRow\}[\s\S]{1,1200}<div class="page-width-row">[\s\S]{1,1200}\{\/if\}\s*<div class="msep" role="separator"><\/div>\s*<button class="mbtn" onclick=\{doCloseTab\}>/,
+    );
+  });
+
+  test("Close shows the close-tab chord with a canvas macOS Cmd+W override", () => {
+    expect(editor).toMatch(
+      /function closeTabMenuChordLabel\(\): string \{[\s\S]{1,220}if \(tab\.mode === "canvas" && currentOS\(\) === "mac"\) return "Cmd\+W";[\s\S]{1,120}return chordLabel\("app\.tab\.close"\);/,
+    );
+    expect(editor).toMatch(
+      /<span class="mbtn-label">Close<\/span>\s*<span class="mbtn-chord">\{closeTabMenuChordLabel\(\)\}<\/span>/,
     );
   });
 });

@@ -43,15 +43,12 @@ describe("FileEditorTab focus follows the active pane", () => {
     );
   });
 
-  test("Pane.svelte gates FileEditorTab focus on active pane AND front-facing", () => {
-    // The two-face card keeps the editor mounted on the rotated-away
-    // front face while flipped, so the focus gate carries
-    // `!pane.showingBack`: a flipped pane's editor must not pull DOM
-    // focus from the back config. With the keep-alive each-block (see
-    // paneFileTabKeepAlive.test.ts) the gate also short-circuits on
-    // pane mode and on non-active sibling tabs, mirroring terminals.
+  test("Pane.svelte gates FileEditorTab focus on active pane and visible side", () => {
+    // With the keep-alive each-block (see paneFileTabKeepAlive.test.ts)
+    // the gate short-circuits on pane mode, hidden A/B sides, non-active
+    // sibling tabs, and non-active panes, mirroring terminals.
     expect(pane).toMatch(
-      /<FileEditorTab\s+tab=\{t\}\s+active=\{[^}]*\}\s+focused=\{!paneMode\.active && !pane\.showingBack && t\.id === pane\.activeTabId && viewLayout\.activePaneId === pane\.id\}\s*\/>/,
+      /<FileEditorTab\s+tab=\{t\}\s+active=\{[^}]*\}\s+focused=\{isLiveActive\(t\) && viewLayout\.activePaneId === pane\.id\}\s*\/>/,
     );
   });
 });

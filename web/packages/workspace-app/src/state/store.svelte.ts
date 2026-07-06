@@ -31,6 +31,8 @@ import { applySessionRoster, isFollower, showHandover, type SessionParticipant }
 import { isWindowEnded, markWindowDiscarded, markWindowHidden } from "./windowLifecycle.svelte";
 import {
   activeLayout,
+  activeTabInPane,
+  allPaneTabs,
   closePane,
   closeTab,
   hasBrowserTab,
@@ -41,6 +43,9 @@ import {
   scheduleMissingFileCheck,
   openGraphInActivePane,
   parseGraphLink,
+  paneActiveTabId,
+  paneSide,
+  paneTabs,
   openInActivePane,
   openTerminalInActivePane,
   openDashboardInActivePane,
@@ -50,6 +55,7 @@ import {
   registerDraftPromotionSink,
   restoreLayout,
   serializeLayout,
+  selectTabInPane,
   setActivePane,
   splitPane,
   type BrowserTab,
@@ -1109,8 +1115,8 @@ async function applyPaneExec(op: PaneExecOp): Promise<PaneExecResult> {
       const p = paneByIdOrActive(op.pane_id);
       if (!p)
         return { ok: false, summary: `no such pane ${op.pane_id ?? layout.activePaneId}`, blocked };
-      const tabId = op.tab_id ?? p.activeTabId;
-      const tab = tabId ? p.tabs.find((t) => t.id === tabId) : undefined;
+      const tabId = op.tab_id ?? paneActiveTabId(p);
+      const tab = tabId ? allPaneTabs(p).find((t) => t.id === tabId) : undefined;
       if (!tab) return { ok: false, summary: "no tab to close", blocked };
       const reason = paneCloseBlock(tab);
       if (reason && !op.force) {
@@ -1124,7 +1130,7 @@ async function applyPaneExec(op: PaneExecOp): Promise<PaneExecResult> {
       const p = paneByIdOrActive(op.pane_id);
       if (!p)
         return { ok: false, summary: `no such pane ${op.pane_id ?? layout.activePaneId}`, blocked };
-      collectBlocks(p.tabs, op.force, blocked);
+      collectBlocks(allPaneTabs(p), op.force, blocked);
       if (blocked.length)
         return { ok: false, summary: `blocked ${blocked.length} tab(s)`, blocked };
       await closePane(p.id, { force: true });
@@ -1132,14 +1138,14 @@ async function applyPaneExec(op: PaneExecOp): Promise<PaneExecResult> {
     }
     case "close_all": {
       const panes = paneLeaves();
-      for (const p of panes) collectBlocks(p.tabs, op.force, blocked);
+      for (const p of panes) collectBlocks(allPaneTabs(p), op.force, blocked);
       if (blocked.length)
         return { ok: false, summary: `blocked ${blocked.length} tab(s)`, blocked };
       let closed = 0;
       for (const id of panes.map((p) => p.id)) {
         const node = layout.nodes[id];
         if (node && node.kind === "leaf") {
-          closed += node.tabs.length;
+          closed += allPaneTabs(node).length;
           await closePane(id, { force: true });
         }
       }
@@ -1198,8 +1204,9 @@ async function respondPaneQuery(requestId: string): Promise<void> {
     .map((pane) => ({
       id: pane.id,
       active: pane.id === layout.activePaneId,
-      activeTabId: pane.activeTabId,
-      tabs: pane.tabs.map((tab) => paneQueryTab(tab, pane.activeTabId)),
+      side: paneSide(pane),
+      activeTabId: paneActiveTabId(pane),
+      tabs: paneTabs(pane).map((tab) => paneQueryTab(tab, paneActiveTabId(pane))),
     }));
   try {
     await api.windowReply({
@@ -2009,7 +2016,7 @@ export function activeFbScopes(): string[] {
   }
   for (const node of Object.values(layout.nodes)) {
     if (node.kind !== "leaf") continue;
-    for (const tab of node.tabs) {
+    for (const tab of allPaneTabs(node)) {
       if (tab.kind === "browser") {
         scopes.push(fbScopeForSelection(tab.selected));
       }
@@ -3102,11 +3109,11 @@ export function openBrowser(): BrowserTab {
 function focusExistingBrowserTab(): BrowserTab | null {
   for (const node of Object.values(layout.nodes)) {
     if (node.kind !== "leaf") continue;
-    const tab = node.tabs.find(
+    const tab = allPaneTabs(node).find(
       (candidate): candidate is BrowserTab => candidate.kind === "browser",
     );
     if (!tab) continue;
-    node.activeTabId = tab.id;
+    selectTabInPane(node.id, tab.id);
     layout.activePaneId = node.id;
     return tab;
   }
@@ -3173,8 +3180,8 @@ export function revealPathInBrowser(
 export function resolveSpawnContext(): SpawnContext {
   const snapshot = activeLayout();
   const node = snapshot.nodes[snapshot.activePaneId];
-  if (!node || node.kind !== "leaf" || !node.activeTabId) return { dir: "" };
-  const tab = node.tabs.find((t) => t.id === node.activeTabId);
+  if (!node || node.kind !== "leaf") return { dir: "" };
+  const tab = activeTabInPane(node);
   if (!tab) return { dir: "" };
   switch (tab.kind) {
     case "terminal":
@@ -4817,7 +4824,7 @@ export const fileOps = {
       const toClose: Array<[string, string]> = [];
       for (const node of Object.values(layout.nodes)) {
         if (node.kind !== "leaf") continue;
-        for (const t of node.tabs) {
+        for (const t of allPaneTabs(node)) {
           if (t.kind !== "file") continue;
           if (underDeleted(t.path)) {
             toClose.push([node.id, t.id]);

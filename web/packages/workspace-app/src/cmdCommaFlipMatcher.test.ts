@@ -12,7 +12,9 @@ describe("Cmd+, opens Settings", () => {
   });
 
   test("the flip action stays off the comma key path", () => {
-    expect(app).toMatch(/case "app\.settings\.toggle":/);
+    expect(app).toMatch(
+      /const commandName = name === "app\.settings\.toggle" \? "app\.pane\.flip" : name;/,
+    );
     expect(app).not.toMatch(
       /"Comma"[\s\S]{1,200}flipHybrid\(layout\.activePaneId\)/,
     );

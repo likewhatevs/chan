@@ -144,8 +144,8 @@ describe("keymap override store", () => {
 
   test("a user-assigned override chord escapes a focused terminal", () => {
     // Importing the store registers the override-escape matcher. A user
-    // assignment must bubble out of xterm so the onWindowKey override dispatch
-    // can fire.
+    // assignment must escape so the app key handler can see it from terminal
+    // focus.
     const cmdAltJ = () =>
       new KeyboardEvent("keydown", { key: "j", metaKey: true, altKey: true });
     expect(shouldEscapeTerminal(cmdAltJ())).toBe(false); // nothing bound to it

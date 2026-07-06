@@ -1617,16 +1617,9 @@
     // `paste` listener handles it (see handleTerminalClipboardChord) - that is
     // the buttonless, bracketed path, not a double-paste.
     if (handleTerminalClipboardChord(e)) return false;
-    // Chord-escape registry. When the incoming event matches a
-    // shortcut flagged `escapeTerminal: true` in shortcuts.ts, return
-    // false so
-    // xterm doesn't consume the keystroke (the contract
-    // `attachCustomKeyEventHandler` reads: false = let the
-    // browser dispatch it). App.svelte's window-level keymap
-    // then handles the chord. Without this gate Cmd+P,
-    // Cmd+Shift+M, Cmd+R, etc. fired from a focused terminal
-    // would be swallowed by xterm + written to the PTY as
-    // escape sequences.
+    // Chord-escape registry. When the incoming event matches a shortcut
+    // flagged `escapeTerminal: true` in shortcuts.ts, return false so xterm
+    // does not consume the keystroke.
     if (shouldEscapeTerminal(e)) return false;
     // Alt+Shift+[ / ] is the web tab-nav chord (App.svelte onWindowKey). Let it
     // through (false = browser dispatches it) so xterm does NOT write it to the

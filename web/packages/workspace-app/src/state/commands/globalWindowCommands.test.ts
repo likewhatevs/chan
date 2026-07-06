@@ -14,7 +14,13 @@ import "./global";
 type TauriWindow = typeof window & { __TAURI__?: unknown };
 
 function ctx(): CommandContext {
-  return { terminalOnly: false, terminalControl: false, activeSurface: null };
+  return {
+    terminalOnly: false,
+    terminalControl: false,
+    activeSurface: null,
+    activeSide: null,
+    activeTabId: null,
+  };
 }
 
 function categoryOf(id: string): string | undefined {

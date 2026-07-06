@@ -1,12 +1,12 @@
 import { describe, expect, test } from "vitest";
 import appSource from "../App.svelte?raw";
 
-// The "Flip focused Hybrid" command (app.settings.toggle) flips the focused
+// The "Flip pane" command (app.pane.flip) flips the focused
 // pane. It must NOT fire while a modal or the search overlay owns the
 // keyboard, or it flips the pane hidden behind the surface - the reported
 // "panes flip" desync. Reproduced on a real build: open Search (or the New
 // file dialog), trigger the flip, dismiss the surface -> the obscured pane
-// had silently flipped to its back.
+// had silently flipped to its other side.
 //
 // The Settings overlay owns comma, so the pane-flip command path carries this
 // guard explicitly.
@@ -42,5 +42,14 @@ describe("Flip-pane command modal/overlay guard", () => {
   test("the flip action is guarded at the command entry point", () => {
     const flips = src.match(/flipHybrid\(layout\.activePaneId\)/g) ?? [];
     expect(flips.length).toBeGreaterThanOrEqual(1);
+  });
+
+  test("Ctrl+Backquote web chord dispatches app.pane.flip through the same guard", () => {
+    expect(appSource).toMatch(
+      /e\.ctrlKey &&\s*!e\.metaKey &&\s*!e\.altKey &&\s*!e\.shiftKey &&\s*e\.code === "Backquote" &&\s*!builtInChordSuperseded\("app\.pane\.flip"\)/,
+    );
+    expect(src).toMatch(
+      /if \( e\.ctrlKey && !e\.metaKey && !e\.altKey && !e\.shiftKey && e\.code === "Backquote" && !builtInChordSuperseded\("app\.pane\.flip"\) \) \{ e\.preventDefault\(\); if \(!paneChordBlocked\(\)\) flipHybrid\(layout\.activePaneId\); return; \}/,
+    );
   });
 });

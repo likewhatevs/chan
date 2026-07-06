@@ -22,10 +22,9 @@ describe("Hybrid Nav keymap (inversion)", () => {
   });
 });
 
-// Hybrid Nav spawn cases: numeric 1/2/3/4 are gone (they duplicated the old
-// spawn chords), and the no-defaults round removed the o/g/f/l/i/n/Tab/x
-// mnemonics with their commands. Only `t` (new terminal) and `h` (help) remain
-// alongside the layout keys.
+// Hybrid Nav spawn cases: numeric 1/2/3/4 are gone. App keys stage into the
+// draft layout: t/o/g/b/n/i, while Tab flips the draft pane side without
+// committing.
 describe("Hybrid Nav keymap (transactional staging)", () => {
   test("h toggles the Hybrid Nav help overlay without committing", () => {
     expect(app).toContain(
@@ -42,6 +41,13 @@ describe("Hybrid Nav keymap (transactional staging)", () => {
 });
 
 describe("Hybrid Nav transactional staging", () => {
+  test("Tab flips the draft pane side without committing", () => {
+    expect(app).toMatch(
+      /case "Tab":\s*\n\s*if \(paneMode\.draft\) flipHybrid\(paneMode\.draft\.activePaneId\);\s*\n\s*return;/,
+    );
+    expect(app).not.toMatch(/case "Tab":[\s\S]{0,160}commitPaneMode\(\);/);
+  });
+
   test("t / T stages a terminal write into the draft (no immediate commit)", () => {
     expect(app).toMatch(
       /case "t":\s*\n\s*case "T":\s*\n?\s*paneModeOpenTerminal\(resolveSpawnContext\(\)\);\s*\n\s*return;/,
@@ -49,6 +55,27 @@ describe("Hybrid Nav transactional staging", () => {
     // No commitPaneMode inside the t/T branch.
     expect(app).not.toMatch(
       /case "t":\s*\n\s*case "T":\s*\n?\s*paneModeOpenTerminal\(resolveSpawnContext\(\)\);\s*\n\s*commitPaneMode/,
+    );
+  });
+
+  test("o / g / b stage workspace app tabs into the draft", () => {
+    expect(app).toMatch(
+      /case "o":\s*\n\s*case "O":\s*\n\s*if \(ui\.terminalOnly\) return;\s*\n\s*paneModeOpenBrowser\(resolveSpawnContext\(\)\);\s*\n\s*return;/,
+    );
+    expect(app).toMatch(
+      /case "g":\s*\n\s*case "G":\s*\n\s*if \(ui\.terminalOnly\) return;\s*\n\s*paneModeOpenGraph\(resolveSpawnContext\(\)\);\s*\n\s*return;/,
+    );
+    expect(app).toMatch(
+      /case "b":\s*\n\s*case "B":\s*\n\s*if \(ui\.terminalOnly\) return;\s*\n\s*paneModeOpenDashboard\(\);\s*\n\s*return;/,
+    );
+  });
+
+  test("n / i stage draft and diagram editors without committing", () => {
+    expect(app).toMatch(
+      /case "n":\s*\n\s*case "N":\s*\n\s*if \(ui\.terminalOnly\) return;\s*\n\s*paneModeStageDraftEditor\(\);\s*\n\s*return;/,
+    );
+    expect(app).toMatch(
+      /case "i":\s*\n\s*case "I":\s*\n\s*if \(ui\.terminalOnly\) return;\s*\n\s*paneModeStageDiagramEditor\(\);\s*\n\s*return;/,
     );
   });
 

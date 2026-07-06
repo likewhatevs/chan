@@ -76,15 +76,15 @@
     {
       // Spawn chords STAGE additions into the draft layout.
       // Multiple presses stack: three T's queue three terminals on
-      // the focused pane. Enter materializes; Esc discards. `v` is
-      // aliased to `g` (legacy muscle-memory key).
+      // the focused pane. Enter materializes; Esc discards.
       title: "Stage (Enter to commit, Esc to discard)",
       rows: [
         { caps: [{ label: "t", key: "t" }], action: "Stage Terminal" },
         { caps: [{ label: "o", key: "o" }], action: "Stage File Browser", workspaceOnly: true },
         { caps: [{ label: "g", key: "g" }], action: "Stage Graph", workspaceOnly: true },
+        { caps: [{ label: "b", key: "b" }], action: "Stage Dashboard", workspaceOnly: true },
         { caps: [{ label: "n", key: "n" }], action: "Stage New Draft", workspaceOnly: true },
-        { caps: [{ label: "f", key: "f" }], action: "Search overlay", workspaceOnly: true },
+        { caps: [{ label: "i", key: "i" }], action: "Stage Diagram", workspaceOnly: true },
       ],
     },
     {
@@ -103,15 +103,6 @@
       rows: [
         { caps: [{ label: "<", key: "<" }], action: "Toggle right-side file browser dock" },
         { caps: [{ label: ">", key: ">" }], action: "Toggle left-side file browser dock" },
-      ],
-    },
-    {
-      title: "Close",
-      rows: [
-        { caps: [{ label: "x", key: "x" }], action: "Close all tabs in pane" },
-        // Kill-pane is Backspace (a delete-shaped key for the
-        // delete-shaped action).
-        { caps: [{ label: "⌫", key: "Backspace" }], action: "Kill pane" },
       ],
     },
     {
@@ -151,8 +142,7 @@
         { caps: [{ label: "Enter", key: "Enter" }], action: "Commit draft" },
         { caps: [{ label: "Esc", key: "Escape" }], action: "Discard draft" },
         { caps: [{ label: "h", key: "h" }], action: "Toggle this help" },
-        { caps: [{ label: "Tab", key: "Tab" }], action: "Flip Hybrid" },
-        { caps: [{ label: "L", key: "l" }], action: "Lock screen" },
+        { caps: [{ label: "Tab", key: "Tab" }], action: "Flip side" },
       ],
     },
   ];

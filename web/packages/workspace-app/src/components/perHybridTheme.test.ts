@@ -14,8 +14,10 @@ import dashboard from "./DashboardTab.svelte?raw";
 describe("Track C: Hybrid surface body themes", () => {
   test("Pane no longer themes the whole Hybrid chrome", () => {
     expect(pane).not.toContain("data-theme={pane.theme}");
-    expect(pane).toContain("<HybridTerminalConfig onDone=");
-    expect(pane).toContain("<HybridEditorConfig onDone=");
+    expect(pane).not.toContain("<HybridTerminalConfig");
+    expect(pane).not.toContain("<HybridEditorConfig");
+    expect(pane).toContain("<TerminalTab");
+    expect(pane).toContain("<FileEditorTab");
   });
 
   test("CSS token blocks can apply to any themed surface subtree", () => {
@@ -25,7 +27,7 @@ describe("Track C: Hybrid surface body themes", () => {
     expect(app).not.toContain(":global(.pane[data-theme=\"light\"])");
   });
 
-  test("front-side Hybrid bodies opt into their surface override only", () => {
+  test("Hybrid bodies opt into their surface override only", () => {
     expect(fileEditor).toContain('data-theme={surfaceThemeOverride("editor")}');
     expect(terminal).toContain('data-theme={surfaceThemeOverride("terminal")}');
     expect(browser).toContain(
@@ -53,7 +55,7 @@ describe("Track C: Hybrid surface body themes", () => {
     expect(appearance).toContain('name={`settings-surface-theme-${row.kind}`}');
   });
 
-  test("shared back-side shell owns only footer OK", () => {
+  test("legacy config shell owns only footer OK", () => {
     expect(shell).not.toContain("setHybridSurfaceTheme");
     expect(shell).not.toContain("effectiveHybridSurfaceTheme");
     expect(shell).not.toContain("ThemeToggleButton");

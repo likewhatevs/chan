@@ -82,6 +82,7 @@ export type Mode = "wysiwyg" | "source" | "pretty" | "table" | "canvas";
 export type EditorSelection = { from: number; to: number };
 export type OpenFileOptions = {
   initialSelection?: EditorSelection;
+  side?: PaneSide;
   /// Force the caret to document top, overriding any persisted/restored
   /// position. Set by explicit user-driven opens (File-Tree click, File
   /// Browser open, create, duplicate, `cs open`); omitted by implicit opens
@@ -552,6 +553,7 @@ export type Tab =
 
 type ClosedTab = {
   paneId: string;
+  side: PaneSide;
   tab: Tab;
 };
 
@@ -771,7 +773,7 @@ function terminalTabsIn(state: LayoutState): TerminalTab[] {
   const out: TerminalTab[] = [];
   for (const node of Object.values(state.nodes)) {
     if (node.kind !== "leaf") continue;
-    for (const tab of node.tabs) {
+    for (const tab of allPaneTabs(node)) {
       if (tab.kind === "terminal") out.push(tab);
     }
   }
@@ -870,37 +872,94 @@ export async function applyGlobalTerminalName(tab: TerminalTab): Promise<void> {
   }
 }
 
-/// Each pane (Hybrid in user-facing copy) holds an optional back-side
-/// slot. The back is a per-surface configuration view scoped to the
-/// type of the currently-active front tab. `pane.tabs` /
-/// `pane.activeTabId` always describe the FRONT side; `showingBack`
-/// toggles which surface renders. Both sides share `pane.theme`.
+/// Each pane (Hybrid in user-facing copy) has two tab sides. Side A
+/// keeps the historical `tabs` / `activeTabId` fields; side B uses
+/// `bTabs` / `bActiveTabId`. `side` selects which tab strip and active
+/// content the user is currently looking at.
 export type HybridTheme = "dark" | "light";
-
-export type HybridSide = {
-  /// Marker type for "this pane has been flipped at least once."
-  /// Empty body: `pane.theme` owns the single per-Hybrid theme.
-  /// `pane.back !== undefined` discriminates Hybrid vs never-flipped
-  /// for menu gating in `Pane.svelte`.
-};
+export type PaneSide = "a" | "b";
 
 export type Pane = {
   id: string;
   tabs: Tab[];
   activeTabId: string | null;
+  bTabs?: Tab[];
+  bActiveTabId?: string | null;
+  side?: PaneSide;
   /// Visible-side theme override (`undefined` = follow global).
   theme?: HybridTheme;
-  /// Hidden side. `undefined` for never-flipped panes; the first
-  /// `flipHybrid()` call lazily materializes it so `pane.back !== undefined`
-  /// gates the Hybrid menu entries.
-  back?: HybridSide;
-  /// User-visible flag for "this Hybrid is currently flipped to its
-  /// back-side configuration view". Independent of whether `back`
-  /// exists: a pane that has been flipped twice has
-  /// `back !== undefined` but `showingBack === false` again.
-  /// Defaults to false.
-  showingBack?: boolean;
 };
+
+export function paneSide(p: Pane): PaneSide {
+  return p.side === "b" ? "b" : "a";
+}
+
+export function oppositePaneSide(side: PaneSide): PaneSide {
+  return side === "a" ? "b" : "a";
+}
+
+export function paneTabs(p: Pane, side: PaneSide = paneSide(p)): Tab[] {
+  return side === "b" ? (p.bTabs ?? []) : p.tabs;
+}
+
+function mutablePaneTabs(p: Pane, side: PaneSide = paneSide(p)): Tab[] {
+  if (side === "b") {
+    if (!p.bTabs) p.bTabs = [];
+    return p.bTabs;
+  }
+  return p.tabs;
+}
+
+export function paneActiveTabId(
+  p: Pane,
+  side: PaneSide = paneSide(p),
+): string | null {
+  return side === "b" ? (p.bActiveTabId ?? null) : p.activeTabId;
+}
+
+function setPaneActiveTabId(
+  p: Pane,
+  tabId: string | null,
+  side: PaneSide = paneSide(p),
+): void {
+  if (side === "b") p.bActiveTabId = tabId;
+  else p.activeTabId = tabId;
+}
+
+export function activeTabInPane(p: Pane, side: PaneSide = paneSide(p)): Tab | null {
+  const activeId = paneActiveTabId(p, side);
+  if (!activeId) return null;
+  return paneTabs(p, side).find((tab) => tab.id === activeId) ?? null;
+}
+
+export function allPaneTabs(p: Pane): Tab[] {
+  return [...p.tabs, ...(p.bTabs ?? [])];
+}
+
+function paneHasAnyTabs(p: Pane): boolean {
+  return p.tabs.length > 0 || (p.bTabs?.length ?? 0) > 0;
+}
+
+function findTabInPane(
+  p: Pane,
+  tabId: string,
+  side?: PaneSide,
+): { side: PaneSide; tabs: Tab[]; index: number; tab: Tab } | null {
+  if (!side || side === "a") {
+    const aIndex = p.tabs.findIndex((tab) => tab.id === tabId);
+    if (aIndex >= 0) {
+      return { side: "a", tabs: p.tabs, index: aIndex, tab: p.tabs[aIndex]! };
+    }
+  }
+  if (!side || side === "b") {
+    const bTabs = p.bTabs ?? [];
+    const bIndex = bTabs.findIndex((tab) => tab.id === tabId);
+    if (bIndex >= 0) {
+      return { side: "b", tabs: bTabs, index: bIndex, tab: bTabs[bIndex]! };
+    }
+  }
+  return null;
+}
 
 export type FocusColor = "blue" | "orange" | "green" | "pink";
 
@@ -950,11 +1009,12 @@ export type LayoutState = typeof layout;
 /// for every keystroke; `commitPaneMode()` materializes it as part of
 /// the seal. A second staging overwrites the first; Esc clears it
 /// without spawning.
-export type PaneModeSpawnKind = "terminal" | "browser" | "graph";
+export type PaneModeSpawnKind = "terminal" | "browser" | "graph" | "dashboard";
 export type PaneModeSpawnIntent = {
   kind: PaneModeSpawnKind;
   ctx: SpawnContext;
 };
+export type PaneModeDraftEditorKind = "draft" | "diagram";
 
 /// Mouse-driven variant of Hybrid Nav. Entered by drag-from-dead-zone
 /// (sets `grabPaneId` to the originating pane) or by double-click on
@@ -973,7 +1033,11 @@ export const paneMode = $state<{
   /// pane-mode session. Materialized on Enter (commit); discarded on
   /// Esc (cancel). Each entry pins the target paneId at press time so
   /// later focus changes don't redirect materialization.
-  stagedDraftEditors: { paneId: string }[];
+  stagedDraftEditors: {
+    paneId: string;
+    side: PaneSide;
+    kind: PaneModeDraftEditorKind;
+  }[];
 }>({
   active: false,
   draft: null,
@@ -999,12 +1063,6 @@ export function requestPaneWobble(paneId: string): void {
   paneWobble.versions[paneId] = (paneWobble.versions[paneId] ?? 0) + 1;
 }
 
-/// The Hybrid flip no longer needs an event bus. The two-face card in
-/// Pane.svelte rotates via a CSS transition driven directly by
-/// `showingBack`, so toggling that boolean is the entire trigger. Only
-/// the structural-change cue (`paneWobble`: split / close / swap)
-/// keeps its versioned-counter bus; orientation changes do not.
-
 export function activeLayout(): LayoutState {
   return paneMode.active && paneMode.draft ? paneMode.draft : layout;
 }
@@ -1013,6 +1071,11 @@ function pane(id: string): LeafNode {
   const n = layout.nodes[id];
   if (!n || n.kind !== "leaf") throw new Error(`not a pane: ${id}`);
   return n;
+}
+
+function leafPaneFrom(state: LayoutState, paneId: string): LeafNode | null {
+  const n = state.nodes[paneId];
+  return n && n.kind === "leaf" ? n : null;
 }
 
 export function activePane(): LeafNode {
@@ -1026,18 +1089,29 @@ const CLOSED_TAB_LIMIT = 20;
 const recentlyClosedTabs = $state<ClosedTab[]>([]);
 const localTabDrops = new Set<string>();
 
-function tabDropKey(paneId: string, tabId: string): string {
-  return `${paneId}:${tabId}`;
+function tabDropKey(paneId: string, tabId: string, side?: PaneSide): string {
+  return `${paneId}:${side ?? "*"}:${tabId}`;
 }
 
-export function markLocalTabDrop(fromPaneId: string, tabId: string): void {
-  localTabDrops.add(tabDropKey(fromPaneId, tabId));
+export function markLocalTabDrop(
+  fromPaneId: string,
+  tabId: string,
+  side?: PaneSide,
+): void {
+  localTabDrops.add(tabDropKey(fromPaneId, tabId, side));
+}
+
+function consumeLocalTabDrop(paneId: string, tabId: string, side?: PaneSide): boolean {
+  const exact = side ? tabDropKey(paneId, tabId, side) : null;
+  if (exact && localTabDrops.delete(exact)) return true;
+  return localTabDrops.delete(tabDropKey(paneId, tabId));
 }
 
 export function shouldCloseTabAfterDragEnd(
   paneId: string,
   tabId: string,
   dropEffect: string | undefined,
+  side?: PaneSide,
 ): boolean {
   // A cross-window drop that a target accepted (dropEffect === "move") leaves
   // the source tab still in this pane: remove it so the visual matches the
@@ -1050,10 +1124,11 @@ export function shouldCloseTabAfterDragEnd(
   // duplicate. If the source pane then becomes empty, the close-on-last-tab
   // watcher closes the window - correct (no empty terminal window).
   if (dropEffect !== "move") return false;
-  const localDrop = localTabDrops.delete(tabDropKey(paneId, tabId));
+  const localDrop = consumeLocalTabDrop(paneId, tabId, side);
   const n = layout.nodes[paneId];
   if (!n || n.kind !== "leaf") return false;
-  const stillHere = n.tabs.some((t) => t.id === tabId);
+  const tabs = side ? paneTabs(n, side) : allPaneTabs(n);
+  const stillHere = tabs.some((t) => t.id === tabId);
   return stillHere && !localDrop;
 }
 
@@ -1066,8 +1141,8 @@ export function clearRecentlyClosedTabsForTest(): void {
   localTabDrops.clear();
 }
 
-function rememberClosedTab(paneId: string, tab: Tab): void {
-  recentlyClosedTabs.push({ paneId, tab: cloneTab(tab) });
+function rememberClosedTab(paneId: string, side: PaneSide, tab: Tab): void {
+  recentlyClosedTabs.push({ paneId, side, tab: cloneTab(tab) });
   if (recentlyClosedTabs.length > CLOSED_TAB_LIMIT) {
     recentlyClosedTabs.splice(0, recentlyClosedTabs.length - CLOSED_TAB_LIMIT);
   }
@@ -1085,15 +1160,17 @@ export function reopenClosedTab(): boolean {
   // draft. Mint a fresh draft and carry the closed buffer's content into it
   // instead, so a reopen restores the user's text.
   if (isDraftTab(entry.tab)) {
-    void recoverClosedDraft(target.id, entry.tab);
+    void recoverClosedDraft(target.id, entry.side, entry.tab);
     return true;
   }
   const tab = tabForReopen(entry.tab);
   if (tabIdExists(tab.id)) {
     tab.id = id(tab.kind === "terminal" ? "term" : "tab");
   }
-  target.tabs.push(tab);
-  target.activeTabId = tab.id;
+  const side = entry.side;
+  mutablePaneTabs(target, side).push(tab);
+  setPaneActiveTabId(target, tab.id, side);
+  target.side = side;
   layout.activePaneId = target.id;
   return true;
 }
@@ -1106,6 +1183,7 @@ export function reopenClosedTab(): boolean {
 /// fires this and returns.
 async function recoverClosedDraft(
   paneId: string,
+  side: PaneSide,
   closed: FileTab,
 ): Promise<void> {
   try {
@@ -1123,7 +1201,9 @@ async function recoverClosedDraft(
     await noteDraftCreated(path);
     const node = layout.nodes[paneId];
     const openPaneId = node && node.kind === "leaf" ? paneId : activePane().id;
-    await openInPane(openPaneId, path);
+    await openInPane(openPaneId, path, {
+      side,
+    });
   } catch (err) {
     console.warn("[chan] reopen closed draft failed", err);
     notify(`Reopen draft failed: ${(err as Error).message}`);
@@ -1132,7 +1212,7 @@ async function recoverClosedDraft(
 
 function tabIdExists(tabId: string): boolean {
   return Object.values(layout.nodes).some(
-    (node) => node.kind === "leaf" && node.tabs.some((tab) => tab.id === tabId),
+    (node) => node.kind === "leaf" && allPaneTabs(node).some((tab) => tab.id === tabId),
   );
 }
 
@@ -1184,40 +1264,35 @@ export function closeFind(tabId: string): void {
 /// without each call site re-deriving the lookup.
 export function activeFileTab(): FileTab | null {
   const p = activePane();
-  if (!p.activeTabId) return null;
-  const t = p.tabs.find((tab) => tab.id === p.activeTabId);
+  const t = activeTabInPane(p);
   if (!t || t.kind !== "file") return null;
   return t;
 }
 
 export function activeTerminalTab(): TerminalTab | null {
   const p = activePane();
-  if (!p.activeTabId) return null;
-  const t = p.tabs.find((tab) => tab.id === p.activeTabId);
+  const t = activeTabInPane(p);
   if (!t || t.kind !== "terminal") return null;
   return t;
 }
 
 export function activeGraphTab(): GraphTab | null {
   const p = activePane();
-  if (!p.activeTabId) return null;
-  const t = p.tabs.find((tab) => tab.id === p.activeTabId);
+  const t = activeTabInPane(p);
   if (!t || t.kind !== "graph") return null;
   return t;
 }
 
 export function activeBrowserTab(): BrowserTab | null {
   const p = activePane();
-  if (!p.activeTabId) return null;
-  const t = p.tabs.find((tab) => tab.id === p.activeTabId);
+  const t = activeTabInPane(p);
   if (!t || t.kind !== "browser") return null;
   return t;
 }
 
 export function activeDashboardTab(): DashboardTab | null {
   const p = activePane();
-  if (!p.activeTabId) return null;
-  const t = p.tabs.find((tab) => tab.id === p.activeTabId);
+  const t = activeTabInPane(p);
   if (!t || t.kind !== "dashboard") return null;
   return t;
 }
@@ -1298,7 +1373,7 @@ export function createTeamWorkLeadTerminal(
 export function findTeamWorkPendingLead(): TeamDialogRequest | null {
   for (const node of Object.values(layout.nodes)) {
     if (node.kind !== "leaf") continue;
-    for (const tab of node.tabs) {
+    for (const tab of allPaneTabs(node)) {
       if (tab.kind === "terminal" && tab.teamWorkPending) {
         return { leadTabId: tab.id, leadPaneId: node.id };
       }
@@ -1340,8 +1415,8 @@ export function clearTeamWorkPending(req: TeamDialogRequest): void {
 function teamWorkLeadTab(req: TeamDialogRequest): TerminalTab | null {
   const node = layout.nodes[req.leadPaneId];
   if (!node || node.kind !== "leaf") return null;
-  const tab = node.tabs.find((t) => t.id === req.leadTabId);
-  return tab && tab.kind === "terminal" ? tab : null;
+  const found = findTabInPane(node, req.leadTabId);
+  return found?.tab.kind === "terminal" ? found.tab : null;
 }
 
 export type OpenTerminalOptions = {
@@ -1351,6 +1426,7 @@ export type OpenTerminalOptions = {
   sessionId?: string;
   controlledTerminal?: boolean;
   group?: string;
+  side?: PaneSide;
 };
 
 export function openTerminalInActivePane(opts: OpenTerminalOptions = {}): TerminalTab | null {
@@ -1363,6 +1439,8 @@ export function openTerminalInPane(
 ): TerminalTab | null {
   const p = layout.nodes[paneId];
   if (!p || p.kind !== "leaf") return null;
+  const side = opts.side ?? paneSide(p);
+  const tabs = mutablePaneTabs(p, side);
   const cwd = opts.cwd?.trim();
   const seedInput = opts.seedInput?.trim();
   const title = opts.title?.trim();
@@ -1382,8 +1460,9 @@ export function openTerminalInPane(
     seedInput: seedInput || undefined,
     group: group && group !== DEFAULT_TERMINAL_GROUP ? group : undefined,
   };
-  p.tabs.push(tab);
-  p.activeTabId = tab.id;
+  tabs.push(tab);
+  setPaneActiveTabId(p, tab.id, side);
+  p.side = side;
   layout.activePaneId = p.id;
   // Number from the per-tenant counter so Terminal-N stays consistent across
   // every window of the tenant (all terminal windows, or all windows of one
@@ -1431,6 +1510,8 @@ export function reattachTerminalInPane(
 ): TerminalTab | null {
   const p = layout.nodes[paneId];
   if (!p || p.kind !== "leaf") return null;
+  const side = paneSide(p);
+  const tabs = mutablePaneTabs(p, side);
   const sessionId = payload.terminalSessionId?.trim();
   if (!sessionId) return null;
   const group = payload.group?.trim();
@@ -1462,8 +1543,9 @@ export function reattachTerminalInPane(
     seedInput: undefined,
     group: group && group !== DEFAULT_TERMINAL_GROUP ? group : undefined,
   };
-  p.tabs.push(tab);
-  p.activeTabId = tab.id;
+  tabs.push(tab);
+  setPaneActiveTabId(p, tab.id, side);
+  p.side = side;
   layout.activePaneId = p.id;
   // Pull keyboard focus to the just-dropped terminal: making it the active
   // tab isn't enough on its own (the terminal's focus effect only grabs the
@@ -1494,6 +1576,8 @@ export function openGraphInActivePane(opts: OpenGraphOptions = {}): GraphTab {
 
 export function openGraphInPane(paneId: string, opts: OpenGraphOptions = {}): GraphTab {
   const p = pane(paneId);
+  const side = paneSide(p);
+  const tabs = mutablePaneTabs(p, side);
   const mode = opts.mode ?? "semantic";
   const scopeId = opts.scopeId ?? "workspace";
   // No dedup on spawn. Each invocation creates a fresh graph tab with
@@ -1520,8 +1604,9 @@ export function openGraphInPane(paneId: string, opts: OpenGraphOptions = {}): Gr
       opts.pendingSelectId ??
       (scopeId === "workspace" && mode === "semantic" ? "" : null),
   };
-  p.tabs.push(tab);
-  p.activeTabId = tab.id;
+  tabs.push(tab);
+  setPaneActiveTabId(p, tab.id, side);
+  p.side = side;
   layout.activePaneId = p.id;
   return tab;
 }
@@ -1530,6 +1615,8 @@ export function openBrowserInActivePane(
   opts: { select?: string | null } = {},
 ): BrowserTab {
   const p = activePane();
+  const side = paneSide(p);
+  const tabs = mutablePaneTabs(p, side);
   // No dedup. Each press spawns a new browser tab with its own current
   // dir and inspector state.
   const tab: BrowserTab = {
@@ -1539,8 +1626,9 @@ export function openBrowserInActivePane(
     inspectorOpen: defaultBrowserInspectorOpen(),
     ...(opts.select ? { selected: opts.select } : {}),
   };
-  p.tabs.push(tab);
-  p.activeTabId = tab.id;
+  tabs.push(tab);
+  setPaneActiveTabId(p, tab.id, side);
+  p.side = side;
   layout.activePaneId = p.id;
   return tab;
 }
@@ -1555,7 +1643,7 @@ function nextBrowserTitle(): string {
   let hasUnnumbered = false;
   for (const node of Object.values(layout.nodes)) {
     if (node.kind !== "leaf") continue;
-    for (const tab of node.tabs) {
+    for (const tab of allPaneTabs(node)) {
       if (tab.kind !== "browser") continue;
       const match = /^Files(?: (\d+))?$/.exec(tab.title);
       if (!match) continue;
@@ -1912,19 +2000,19 @@ export function findTerminalBySession(sessionId: string): TerminalTab | null {
 /// prompting Hide / Close / Cancel for a window with real tabs.
 export function hasAnyTab(): boolean {
   return Object.values(layout.nodes).some(
-    (node) => node.kind === "leaf" && node.tabs.length > 0,
+    (node) => node.kind === "leaf" && paneHasAnyTabs(node),
   );
 }
 
 export function hasGraphTab(): boolean {
   return Object.values(layout.nodes).some(
-    (node) => node.kind === "leaf" && node.tabs.some((tab) => tab.kind === "graph"),
+    (node) => node.kind === "leaf" && allPaneTabs(node).some((tab) => tab.kind === "graph"),
   );
 }
 
 export function hasBrowserTab(): boolean {
   return Object.values(layout.nodes).some(
-    (node) => node.kind === "leaf" && node.tabs.some((tab) => tab.kind === "browser"),
+    (node) => node.kind === "leaf" && allPaneTabs(node).some((tab) => tab.kind === "browser"),
   );
 }
 
@@ -2287,8 +2375,8 @@ async function loadTabContent(
     if (tabLoadVersions.get(tabId) !== loadVersion) return undefined;
     const node = layout.nodes[paneId];
     if (!node || node.kind !== "leaf") return undefined;
-    const t = node.tabs.find((tab) => tab.id === tabId);
-    return t && t.kind === "file" ? t : undefined;
+    const found = findTabInPane(node, tabId);
+    return found?.tab.kind === "file" ? found.tab : undefined;
   };
   try {
     const start = live();
@@ -2416,10 +2504,12 @@ export async function openInPane(
     return;
   }
   const p = pane(paneId);
+  const side = opts.side ?? paneSide(p);
+  const tabs = mutablePaneTabs(p, side);
   const pendingReopen =
     pendingMissingFileReopenTabId === null
       ? undefined
-      : p.tabs.find(
+      : tabs.find(
           (t): t is FileTab =>
             t.kind === "file" &&
             t.id === pendingMissingFileReopenTabId &&
@@ -2446,13 +2536,14 @@ export async function openInPane(
     if (opts.landAtTop) issueCaretCommand(pendingReopen, 0, 0);
     else if (opts.initialSelection)
       pendingReopen.caret = { ...opts.initialSelection };
-    p.activeTabId = pendingReopen.id;
+    setPaneActiveTabId(p, pendingReopen.id, side);
+    p.side = side;
     layout.activePaneId = paneId;
     bumpTabFocusPulse();
     await loadTabContent(paneId, pendingReopen.id, path);
     return;
   }
-  const existing = p.tabs.find(
+  const existing = tabs.find(
     (t): t is FileTab => t.kind === "file" && t.path === path,
   );
   if (existing) {
@@ -2467,7 +2558,8 @@ export async function openInPane(
         opts.initialSelection.from,
         opts.initialSelection.to,
       );
-    p.activeTabId = existing.id;
+    setPaneActiveTabId(p, existing.id, side);
+    p.side = side;
     layout.activePaneId = paneId;
     bumpTabFocusPulse();
     return;
@@ -2511,8 +2603,9 @@ export async function openInPane(
   // forces top, overriding any restored position.
   if (opts.landAtTop) newTab.caret = { from: 0, to: 0 };
   else if (opts.initialSelection) newTab.caret = { ...opts.initialSelection };
-  p.tabs.push(newTab);
-  p.activeTabId = newTab.id;
+  tabs.push(newTab);
+  setPaneActiveTabId(p, newTab.id, side);
+  p.side = side;
   layout.activePaneId = paneId;
   // Pull keyboard focus to the just-opened editor: making it the active tab
   // isn't enough on its own (the editor's focus effect only grabs the live
@@ -2538,9 +2631,8 @@ export async function openInPane(
 function maybeAutoOpenSlidesOutline(paneId: string, tabId: string): void {
   const node = layout.nodes[paneId];
   if (!node || node.kind !== "leaf") return;
-  const t = node.tabs.find(
-    (tab): tab is FileTab => tab.kind === "file" && tab.id === tabId,
-  );
+  const found = findTabInPane(node, tabId);
+  const t = found?.tab.kind === "file" ? found.tab : undefined;
   if (!t || t.error || t.fileMissing || t.outlineOpen) return;
   if (parseSlidesSpec(t.content) === null) return;
   setTabOutlineOpen(t, true);
@@ -2568,9 +2660,8 @@ function restoreSavedCaretAfterLoad(
   if (opts.initialSelection) return;
   const node = layout.nodes[paneId];
   if (!node || node.kind !== "leaf") return;
-  const t = node.tabs.find(
-    (tab): tab is FileTab => tab.kind === "file" && tab.id === tabId,
-  );
+  const found = findTabInPane(node, tabId);
+  const t = found?.tab.kind === "file" ? found.tab : undefined;
   if (!t || t.error || t.fileMissing) return;
   // Explicit top-open: re-claim focus at the doc start regardless of any
   // saved caret (so this never consults readCaret).
@@ -2660,21 +2751,27 @@ export function bumpTabFocusPulse(): void {
 
 export function selectPrevTabInActivePane(): void {
   const p = activePane();
-  if (p.tabs.length === 0 || p.activeTabId === null) return;
-  const idx = p.tabs.findIndex((t) => t.id === p.activeTabId);
+  const side = paneSide(p);
+  const tabs = paneTabs(p, side);
+  const activeId = paneActiveTabId(p, side);
+  if (tabs.length === 0 || activeId === null) return;
+  const idx = tabs.findIndex((t) => t.id === activeId);
   if (idx < 0) return;
-  const next = (idx - 1 + p.tabs.length) % p.tabs.length;
-  p.activeTabId = p.tabs[next].id;
+  const next = (idx - 1 + tabs.length) % tabs.length;
+  setPaneActiveTabId(p, tabs[next].id, side);
   bumpTabFocusPulse();
 }
 
 export function selectNextTabInActivePane(): void {
   const p = activePane();
-  if (p.tabs.length === 0 || p.activeTabId === null) return;
-  const idx = p.tabs.findIndex((t) => t.id === p.activeTabId);
+  const side = paneSide(p);
+  const tabs = paneTabs(p, side);
+  const activeId = paneActiveTabId(p, side);
+  if (tabs.length === 0 || activeId === null) return;
+  const idx = tabs.findIndex((t) => t.id === activeId);
   if (idx < 0) return;
-  const next = (idx + 1) % p.tabs.length;
-  p.activeTabId = p.tabs[next].id;
+  const next = (idx + 1) % tabs.length;
+  setPaneActiveTabId(p, tabs[next].id, side);
   bumpTabFocusPulse();
 }
 
@@ -2683,8 +2780,10 @@ export function selectNextTabInActivePane(): void {
 /// Cmd+9 jumping to the last tab only when nine or more exist.
 export function selectTabAtIndexInActivePane(index: number): void {
   const p = activePane();
-  if (index < 0 || index >= p.tabs.length) return;
-  p.activeTabId = p.tabs[index].id;
+  const side = paneSide(p);
+  const tabs = paneTabs(p, side);
+  if (index < 0 || index >= tabs.length) return;
+  setPaneActiveTabId(p, tabs[index].id, side);
   bumpTabFocusPulse();
 }
 
@@ -2745,9 +2844,9 @@ async function closeTabAsync(
   opts?: CloseTabsOptions,
 ): Promise<void> {
   const p = pane(paneId);
-  const idx = p.tabs.findIndex((t) => t.id === tabId);
-  if (idx < 0) return;
-  const tab = p.tabs[idx];
+  const found = findTabInPane(p, tabId);
+  if (!found) return;
+  const { tabs, index: idx, tab, side } = found;
   // Capture move-out intent NOW, before the terminal close-sink below consumes
   // `terminalsMovingOut`. A cross-window MOVE marks the tab moving-out
   // (Pane.svelte drag-end) right before this call.
@@ -2774,15 +2873,11 @@ async function closeTabAsync(
   // a later genuine discard, and set right before the splice so the reactive
   // empty-window `$effect` reads it deterministically.
   lastTerminalCloseWasMoveOut = movingOut;
-  rememberClosedTab(paneId, tab);
-  p.tabs.splice(idx, 1);
-  if (p.activeTabId === tabId) {
-    p.activeTabId = p.tabs[Math.max(0, idx - 1)]?.id ?? null;
+  rememberClosedTab(paneId, side, tab);
+  tabs.splice(idx, 1);
+  if (paneActiveTabId(p, side) === tabId) {
+    setPaneActiveTabId(p, tabs[Math.max(0, idx - 1)]?.id ?? null, side);
   }
-  // Flip is strictly for panes with >= 1 tab; closing the last tab
-  // drops any flip so the pane lands on its empty front (welcome)
-  // instead of a stuck back-config surface the chord cannot undo.
-  if (p.tabs.length === 0) p.showingBack = false;
   // Do NOT auto-collapse an empty Hybrid pane. Closing the last tab
   // should leave the pane in place rendering the empty landing so the
   // Hybrid structure survives a transient empty state. Use the explicit
@@ -2803,13 +2898,16 @@ async function closeTabAsync(
 export function removeExplicitlyClosedTerminalTab(tabId: string): void {
   for (const node of Object.values(layout.nodes)) {
     if (node.kind !== "leaf") continue;
-    const idx = node.tabs.findIndex((t) => t.id === tabId);
-    if (idx < 0) continue;
-    node.tabs.splice(idx, 1);
-    if (node.activeTabId === tabId) {
-      node.activeTabId = node.tabs[Math.max(0, idx - 1)]?.id ?? null;
+    const found = findTabInPane(node, tabId);
+    if (!found) continue;
+    found.tabs.splice(found.index, 1);
+    if (paneActiveTabId(node, found.side) === tabId) {
+      setPaneActiveTabId(
+        node,
+        found.tabs[Math.max(0, found.index - 1)]?.id ?? null,
+        found.side,
+      );
     }
-    if (node.tabs.length === 0) node.showingBack = false;
     return;
   }
 }
@@ -2983,15 +3081,30 @@ export async function saveDraftTabToWorkspace(tab: FileTab): Promise<boolean> {
 /// tabs go. Used by mobile reset flows so the editor stops showing a
 /// now-deleted file after the user wipes the workspace.
 export async function closeAllTabs(opts?: CloseTabsOptions): Promise<void> {
-  const entries = Object.values(layout.nodes).flatMap((node) =>
-    node.kind === "leaf" ? node.tabs.map((tab) => ({ paneId: node.id, tab })) : [],
-  );
+  const entries = Object.values(layout.nodes).flatMap((node) => {
+    if (node.kind !== "leaf") return [];
+    return [
+      ...paneTabs(node, "a").map((tab) => ({
+        paneId: node.id,
+        side: "a" as const,
+        tab,
+      })),
+      ...paneTabs(node, "b").map((tab) => ({
+        paneId: node.id,
+        side: "b" as const,
+        tab,
+      })),
+    ];
+  });
   if (!(await confirmCloseTabs(entries.map((entry) => entry.tab), opts))) return;
-  for (const entry of entries) rememberClosedTab(entry.paneId, entry.tab);
+  for (const entry of entries) rememberClosedTab(entry.paneId, entry.side, entry.tab);
   for (const node of Object.values(layout.nodes)) {
     if (node.kind !== "leaf") continue;
     node.tabs.length = 0;
     node.activeTabId = null;
+    if (node.bTabs) node.bTabs.length = 0;
+    node.bActiveTabId = null;
+    node.side = "a";
   }
 }
 
@@ -3001,17 +3114,21 @@ export async function closeOtherTabsInPane(
   opts?: CloseTabsOptions,
 ): Promise<void> {
   const p = pane(paneId);
-  const closing = p.tabs.filter((t) => t.id !== keepTabId);
+  const side = paneSide(p);
+  const tabs = mutablePaneTabs(p, side);
+  const closing = tabs.filter((t) => t.id !== keepTabId);
   if (closing.length === 0) return;
   if (!(await confirmCloseTabs(closing, opts))) return;
   const closeIds = new Set<string>();
   for (const tab of closing) {
     if (tab.kind === "terminal" && !(await runTerminalCloseSink(tab))) continue;
-    rememberClosedTab(paneId, tab);
+    rememberClosedTab(paneId, side, tab);
     closeIds.add(tab.id);
   }
-  p.tabs = p.tabs.filter((t) => t.id === keepTabId || !closeIds.has(t.id));
-  p.activeTabId = p.tabs.find((t) => t.id === keepTabId)?.id ?? p.tabs[0]?.id ?? null;
+  const next = tabs.filter((t) => t.id === keepTabId || !closeIds.has(t.id));
+  if (side === "b") p.bTabs = next;
+  else p.tabs = next;
+  setPaneActiveTabId(p, next.find((t) => t.id === keepTabId)?.id ?? next[0]?.id ?? null, side);
 }
 
 export async function closeTabsInPane(
@@ -3019,16 +3136,17 @@ export async function closeTabsInPane(
   opts?: CloseTabsOptions,
 ): Promise<boolean> {
   const p = pane(paneId);
-  const closing = [...p.tabs];
+  const side = paneSide(p);
+  const tabs = mutablePaneTabs(p, side);
+  const closing = [...tabs];
   if (!(await confirmCloseTabs(closing, opts))) return false;
   if (!(await runTerminalCloseSinks(closing))) return false;
   for (const tab of closing) {
-    rememberClosedTab(paneId, tab);
+    rememberClosedTab(paneId, side, tab);
   }
-  p.tabs = [];
-  p.activeTabId = null;
-  // Empty pane is never flipped.
-  p.showingBack = false;
+  if (side === "b") p.bTabs = [];
+  else p.tabs = [];
+  setPaneActiveTabId(p, null, side);
   return true;
 }
 
@@ -3042,12 +3160,18 @@ export async function closePane(
   opts?: CloseTabsOptions,
 ): Promise<boolean> {
   const p = pane(paneId);
-  const closing = [...p.tabs];
-  if (!(await confirmCloseTabs(closing, opts))) return false;
-  if (!(await runTerminalCloseSinks(closing))) return false;
-  for (const tab of closing) rememberClosedTab(paneId, tab);
+  const closing = [
+    ...paneTabs(p, "a").map((tab) => ({ side: "a" as const, tab })),
+    ...paneTabs(p, "b").map((tab) => ({ side: "b" as const, tab })),
+  ];
+  if (!(await confirmCloseTabs(closing.map((entry) => entry.tab), opts))) return false;
+  if (!(await runTerminalCloseSinks(closing.map((entry) => entry.tab)))) return false;
+  for (const entry of closing) rememberClosedTab(paneId, entry.side, entry.tab);
   p.tabs.length = 0;
   p.activeTabId = null;
+  if (p.bTabs) p.bTabs.length = 0;
+  p.bActiveTabId = null;
+  p.side = "a";
   if (paneId !== layout.rootId) {
     collapseEmptyPane(paneId);
   }
@@ -3057,19 +3181,25 @@ export async function closePane(
 /// Reorder a tab within its pane. `toIndex` is the destination index
 /// in the post-removal array (so e.g. moving tab 0 to index 2 in a
 /// list of 4 tabs lands the tab as the new index 2).
-export function reorderTab(paneId: string, tabId: string, toIndex: number): void {
+export function reorderTab(
+  paneId: string,
+  tabId: string,
+  toIndex: number,
+  side: PaneSide = paneSide(pane(paneId)),
+): void {
   const p = pane(paneId);
-  const from = p.tabs.findIndex((t) => t.id === tabId);
+  const tabs = mutablePaneTabs(p, side);
+  const from = tabs.findIndex((t) => t.id === tabId);
   if (from < 0) return;
-  const clamped = Math.max(0, Math.min(toIndex, p.tabs.length - 1));
+  const clamped = Math.max(0, Math.min(toIndex, tabs.length - 1));
   if (from === clamped) return;
   // Snapshot the tab before splicing so the proxied entry doesn't get
   // re-wrapped in a way that confuses callers (see moveTab below).
-  const src = p.tabs[from]!;
+  const src = tabs[from]!;
   const moved = cloneTab(src);
-  p.tabs.splice(from, 1);
-  p.tabs.splice(clamped, 0, moved);
-  p.activeTabId = moved.id;
+  tabs.splice(from, 1);
+  tabs.splice(clamped, 0, moved);
+  setPaneActiveTabId(p, moved.id, side);
 }
 
 /// Plain-data copy of a tab. The deep proxy that wraps `Tab` array
@@ -3196,12 +3326,10 @@ function cloneNode(src: Node): Node {
     id: src.id,
     tabs: src.tabs.map((tab) => cloneTab(tab)),
     activeTabId: src.activeTabId,
+    ...(src.bTabs ? { bTabs: src.bTabs.map((tab) => cloneTab(tab)) } : {}),
+    ...(src.bActiveTabId !== undefined ? { bActiveTabId: src.bActiveTabId } : {}),
+    ...(src.side ? { side: src.side } : {}),
     ...(src.theme ? { theme: src.theme } : {}),
-    // HybridSide is an empty marker. Preserve "back has been
-    // materialized" by cloning an empty object; pane.back !== undefined
-    // still discriminates Hybrid vs never-flipped.
-    ...(src.back ? { back: {} } : {}),
-    ...(src.showingBack ? { showingBack: true } : {}),
   };
 }
 
@@ -3270,6 +3398,7 @@ export function commitPaneMode(): void {
     if (kind === "terminal") paneModeOpenTerminal(ctx);
     else if (kind === "browser") paneModeOpenBrowser(ctx);
     else if (kind === "graph") paneModeOpenGraph(ctx);
+    else if (kind === "dashboard") paneModeOpenDashboard();
   }
   const next = cloneLayoutState(paneMode.draft);
   layout.rootId = next.rootId;
@@ -3312,7 +3441,7 @@ function killStagedTerminalSessions(): void {
   if (staged.size === 0) return;
   for (const node of Object.values(draft.nodes)) {
     if (node.kind !== "leaf") continue;
-    for (const t of node.tabs) {
+    for (const t of allPaneTabs(node)) {
       if (t.kind === "terminal" && staged.has(t.id)) {
         void runTerminalCloseSink(t);
       }
@@ -3417,10 +3546,22 @@ export function paneModeSwapWith(grabId: string, dropId: string): void {
   if (!a || a.kind !== "leaf" || !b || b.kind !== "leaf") return;
   const aTabs = a.tabs;
   const aActive = a.activeTabId;
+  const aBTabs = a.bTabs;
+  const aBActive = a.bActiveTabId;
+  const aSide = a.side;
+  const aTheme = a.theme;
   a.tabs = b.tabs;
   a.activeTabId = b.activeTabId;
+  a.bTabs = b.bTabs;
+  a.bActiveTabId = b.bActiveTabId;
+  a.side = b.side;
+  a.theme = b.theme;
   b.tabs = aTabs;
   b.activeTabId = aActive;
+  b.bTabs = aBTabs;
+  b.bActiveTabId = aBActive;
+  b.side = aSide;
+  b.theme = aTheme;
   draft.activePaneId = b.id;
   // Both panes had their content swapped, so both should
   // wobble so the user's eye tracks where their content
@@ -3563,6 +3704,8 @@ export function paneModeOpenTerminal(ctx?: SpawnContext): void {
   if (!draft) return;
   const p = draft.nodes[draft.activePaneId];
   if (!p || p.kind !== "leaf") return;
+  const side = paneSide(p);
+  const tabs = mutablePaneTabs(p, side);
   const cwd = ctx?.dir?.trim();
   const tab: TerminalTab = {
     kind: "terminal",
@@ -3576,8 +3719,9 @@ export function paneModeOpenTerminal(ctx?: SpawnContext): void {
     cwd: cwd || undefined,
     seedInput: undefined,
   };
-  p.tabs.push(tab);
-  p.activeTabId = tab.id;
+  tabs.push(tab);
+  setPaneActiveTabId(p, tab.id, side);
+  p.side = side;
   // Number from the per-tenant counter (see applyGlobalTerminalName). A
   // pane-mode spawn never carries an explicit title, so every split-spawn is
   // server-numbered; the name resolves in `connect()` before the WS opens.
@@ -3594,6 +3738,8 @@ export function paneModeOpenBrowser(ctx?: SpawnContext): void {
   if (!draft) return;
   const p = draft.nodes[draft.activePaneId];
   if (!p || p.kind !== "leaf") return;
+  const side = paneSide(p);
+  const tabs = mutablePaneTabs(p, side);
   const hasCtx = !!(ctx?.file || ctx?.dir);
   const tab: BrowserTab = {
     kind: "browser",
@@ -3601,8 +3747,9 @@ export function paneModeOpenBrowser(ctx?: SpawnContext): void {
     title: "Files",
     inspectorOpen: hasCtx ? true : defaultBrowserInspectorOpen(),
   };
-  p.tabs.push(tab);
-  p.activeTabId = tab.id;
+  tabs.push(tab);
+  setPaneActiveTabId(p, tab.id, side);
+  p.side = side;
 }
 
 /// Hybrid Nav `g` / `m`. Spawn a fresh Graph tab inside the draft's focused
@@ -3614,6 +3761,8 @@ export function paneModeOpenGraph(ctx?: SpawnContext): void {
   if (!draft) return;
   const p = draft.nodes[draft.activePaneId];
   if (!p || p.kind !== "leaf") return;
+  const side = paneSide(p);
+  const tabs = mutablePaneTabs(p, side);
   const mode: GraphTab["mode"] = "semantic";
   let scopeId = "workspace";
   let pendingSelectId: string | null = null;
@@ -3636,8 +3785,28 @@ export function paneModeOpenGraph(ctx?: SpawnContext): void {
     inspectorOpen: false,
     pendingSelectId,
   };
-  p.tabs.push(tab);
-  p.activeTabId = tab.id;
+  tabs.push(tab);
+  setPaneActiveTabId(p, tab.id, side);
+  p.side = side;
+}
+
+export function paneModeOpenDashboard(opts?: OpenDashboardOptions): void {
+  const draft = draftLayout();
+  if (!draft) return;
+  const p = draft.nodes[draft.activePaneId];
+  if (!p || p.kind !== "leaf") return;
+  const side = paneSide(p);
+  const tabs = mutablePaneTabs(p, side);
+  const tab: DashboardTab = {
+    kind: "dashboard",
+    id: id("dashboard"),
+    title: "Dashboard",
+  };
+  if (opts?.slide !== undefined) tab.carouselSlide = opts.slide;
+  if (opts?.autoRotate !== undefined) tab.autoRotate = opts.autoRotate;
+  tabs.push(tab);
+  setPaneActiveTabId(p, tab.id, side);
+  p.side = side;
 }
 
 /// Carousel slide index of the Search / Indexing graph. Matches the
@@ -3662,6 +3831,8 @@ export function openDashboardInPane(
 ): void {
   const node = layout.nodes[paneId];
   if (!node || node.kind !== "leaf") return;
+  const side = paneSide(node);
+  const tabs = mutablePaneTabs(node, side);
   const tab: DashboardTab = {
     kind: "dashboard",
     id: id("dashboard"),
@@ -3669,8 +3840,10 @@ export function openDashboardInPane(
   };
   if (opts?.slide !== undefined) tab.carouselSlide = opts.slide;
   if (opts?.autoRotate !== undefined) tab.autoRotate = opts.autoRotate;
-  node.tabs.push(tab);
-  node.activeTabId = tab.id;
+  tabs.push(tab);
+  setPaneActiveTabId(node, tab.id, side);
+  node.side = side;
+  layout.activePaneId = node.id;
 }
 
 export function openDashboardInActivePane(opts?: OpenDashboardOptions): void {
@@ -3696,11 +3869,22 @@ export function openIndexingDashboard(): void {
 /// resolver.
 export interface StagedDraftEditor {
   paneId: string;
+  side: PaneSide;
+  kind: PaneModeDraftEditorKind;
 }
-export function paneModeStageDraftEditor(): void {
+export function paneModeStageDraftEditor(kind: PaneModeDraftEditorKind = "draft"): void {
   if (!paneMode.active || !paneMode.draft) return;
   const paneId = paneMode.draft.activePaneId;
-  paneMode.stagedDraftEditors.push({ paneId });
+  const node = leafPaneFrom(paneMode.draft, paneId);
+  paneMode.stagedDraftEditors.push({
+    paneId,
+    side: node ? paneSide(node) : "a",
+    kind,
+  });
+}
+
+export function paneModeStageDiagramEditor(): void {
+  paneModeStageDraftEditor("diagram");
 }
 
 /// Return the set of tab ids that exist in the draft but not in the
@@ -3712,13 +3896,13 @@ export function paneModeStagedTabIds(): Set<string> {
   const live = new Set<string>();
   for (const node of Object.values(layout.nodes)) {
     if (node.kind === "leaf") {
-      for (const t of node.tabs) live.add(t.id);
+      for (const t of allPaneTabs(node)) live.add(t.id);
     }
   }
   const staged = new Set<string>();
   for (const node of Object.values(paneMode.draft.nodes)) {
     if (node.kind === "leaf") {
-      for (const t of node.tabs) {
+      for (const t of allPaneTabs(node)) {
         if (!live.has(t.id)) staged.add(t.id);
       }
     }
@@ -3728,39 +3912,88 @@ export function paneModeStagedTabIds(): Set<string> {
 
 /// Move a tab from one pane to another. If `toIndex` is omitted the tab
 /// is appended. Source pane collapses if it becomes empty.
+export type MoveTabOptions = {
+  fromSide?: PaneSide;
+  toSide?: PaneSide;
+};
 export function moveTab(
   fromPaneId: string,
   tabId: string,
   toPaneId: string,
   toIndex?: number,
+  opts: MoveTabOptions = {},
 ): void {
-  if (fromPaneId === toPaneId) {
-    if (toIndex !== undefined) reorderTab(fromPaneId, tabId, toIndex);
-    return;
-  }
   const from = pane(fromPaneId);
   const to = pane(toPaneId);
-  const idx = from.tabs.findIndex((t) => t.id === tabId);
-  if (idx < 0) return;
+  const found = findTabInPane(from, tabId, opts.fromSide);
+  if (!found) return;
+  const targetSide = opts.toSide ?? paneSide(to);
+  if (fromPaneId === toPaneId && found.side === targetSide) {
+    if (toIndex !== undefined) reorderTab(fromPaneId, tabId, toIndex, found.side);
+    return;
+  }
+  const targetTabs = mutablePaneTabs(to, targetSide);
   // Pull a plain snapshot of the tab. The proxied element won't survive
   // splice + push cleanly across pane boundaries; copying its fields
   // sidesteps the question.
-  const src = from.tabs[idx]!;
-  const moved = cloneTab(src);
-  from.tabs.splice(idx, 1);
-  if (from.activeTabId === tabId) {
-    from.activeTabId = from.tabs[Math.max(0, idx - 1)]?.id ?? null;
+  const moved = cloneTab(found.tab);
+  found.tabs.splice(found.index, 1);
+  if (paneActiveTabId(from, found.side) === tabId) {
+    setPaneActiveTabId(
+      from,
+      found.tabs[Math.max(0, found.index - 1)]?.id ?? null,
+      found.side,
+    );
   }
-  if (toIndex === undefined || toIndex >= to.tabs.length) {
-    to.tabs.push(moved);
+  if (toIndex === undefined || toIndex >= targetTabs.length) {
+    targetTabs.push(moved);
   } else {
-    to.tabs.splice(Math.max(0, toIndex), 0, moved);
+    targetTabs.splice(Math.max(0, toIndex), 0, moved);
   }
-  to.activeTabId = moved.id;
+  setPaneActiveTabId(to, moved.id, targetSide);
+  to.side = targetSide;
   layout.activePaneId = to.id;
-  if (from.tabs.length === 0 && layout.rootId !== from.id) {
+  if (!paneHasAnyTabs(from) && layout.rootId !== from.id) {
     collapseEmptyPane(from.id);
   }
+}
+
+export function selectTabInPane(paneId: string, tabId: string): void {
+  const current = activeLayout();
+  const p = leafPaneFrom(current, paneId);
+  if (!p) return;
+  const found = findTabInPane(p, tabId);
+  if (!found) return;
+  p.side = found.side;
+  setPaneActiveTabId(p, tabId, found.side);
+  current.activePaneId = p.id;
+  bumpTabFocusPulse();
+}
+
+export function moveActiveTabToSide(targetSide: PaneSide): boolean {
+  const current = activeLayout();
+  const p = activePane();
+  const sourceSide = paneSide(p);
+  if (sourceSide === targetSide) return false;
+  const activeId = paneActiveTabId(p, sourceSide);
+  if (!activeId) return false;
+  const sourceTabs = mutablePaneTabs(p, sourceSide);
+  const sourceIndex = sourceTabs.findIndex((tab) => tab.id === activeId);
+  if (sourceIndex < 0) return false;
+  const moved = cloneTab(sourceTabs[sourceIndex]!);
+  sourceTabs.splice(sourceIndex, 1);
+  setPaneActiveTabId(
+    p,
+    sourceTabs[Math.max(0, sourceIndex - 1)]?.id ?? null,
+    sourceSide,
+  );
+  const targetTabs = mutablePaneTabs(p, targetSide);
+  targetTabs.push(moved);
+  setPaneActiveTabId(p, moved.id, targetSide);
+  p.side = targetSide;
+  current.activePaneId = p.id;
+  bumpTabFocusPulse();
+  return true;
 }
 
 export type PaneDropEdge = "left" | "right" | "top" | "bottom";
@@ -3780,16 +4013,20 @@ export function detachTabToPaneEdge(
   if (!fromNode || fromNode.kind !== "leaf") return;
   if (!targetNode || targetNode.kind !== "leaf") return;
 
-  const idx = fromNode.tabs.findIndex((t) => t.id === tabId);
-  if (idx < 0) return;
-  if (fromPaneId === targetPaneId && fromNode.tabs.length <= 1) return;
+  const found = findTabInPane(fromNode, tabId);
+  if (!found) return;
+  if (fromPaneId === targetPaneId && allPaneTabs(fromNode).length <= 1) return;
 
-  const moved = cloneTab(fromNode.tabs[idx]!);
-  fromNode.tabs.splice(idx, 1);
-  if (fromNode.activeTabId === tabId) {
-    fromNode.activeTabId = fromNode.tabs[Math.max(0, idx - 1)]?.id ?? null;
+  const moved = cloneTab(found.tab);
+  found.tabs.splice(found.index, 1);
+  if (paneActiveTabId(fromNode, found.side) === tabId) {
+    setPaneActiveTabId(
+      fromNode,
+      found.tabs[Math.max(0, found.index - 1)]?.id ?? null,
+      found.side,
+    );
   }
-  if (fromNode.tabs.length === 0 && fromNode.id !== targetNode.id && layout.rootId !== fromNode.id) {
+  if (!paneHasAnyTabs(fromNode) && fromNode.id !== targetNode.id && layout.rootId !== fromNode.id) {
     collapseEmptyPane(fromNode.id);
   }
 
@@ -3909,10 +4146,6 @@ export function splitPane(
 ): void {
   if (!canSplit()) return;
   const original = pane(paneId);
-  // New panes are born empty and must NOT inherit the original's flip.
-  // A flipped state belongs strictly to a pane with >= 1 tab; copying
-  // showingBack onto a 0-tab pane produces a stuck "flipped empty pane"
-  // the chord cannot undo.
   const newPane: LeafNode = {
     kind: "leaf",
     id: id("pane"),
@@ -3964,34 +4197,20 @@ export function setActivePane(paneId: string): void {
   // pane (already-focused) stay quiet; otherwise the wobble would
   // re-trigger on every mousedown that lands on the focused pane.
   const previousActive = current.activePaneId;
-  // Focus changes must NOT touch any pane's `showingBack`. The flip is
-  // a per-pane boolean owned solely by flipHybrid on the focused,
-  // non-empty pane; each pane keeps its own state independently and
-  // across reloads. Coupling this to focus causes moving focus to visibly
-  // flip sibling tabs.
   current.activePaneId = paneId;
   if (previousActive !== paneId) requestPaneWobble(paneId);
 }
 
-/// Flip the pane between its front (content tabs) and its back
-/// (per-surface configuration view). `pane.tabs` always stays the
-/// front's tab list. `pane.theme` is the single per-Hybrid theme
-/// value; this function only toggles `showingBack`.
+/// Flip the pane between its A and B tab sides.
 export function flipHybrid(paneId: string): void {
   const node = activeLayout().nodes[paneId];
   if (!node || node.kind !== "leaf") return;
-  // Empty pane has no surface to flip; guard so the chrome animation
-  // does not fire on an empty pane.
-  if (node.tabs.length === 0) return;
-  if (!node.back) {
-    // Lazy init: materialise an empty back marker so `pane.back !== undefined`
-    // gates the hamburger Theme / Flip entries. `pane.theme` owns the
-    // single per-Hybrid theme value.
-    node.back = {};
+  const next = oppositePaneSide(paneSide(node));
+  node.side = next;
+  const tabs = paneTabs(node, next);
+  if (!paneActiveTabId(node, next) && tabs.length > 0) {
+    setPaneActiveTabId(node, tabs[0]!.id, next);
   }
-  // The two-face card transitions off `showingBack` directly, so the
-  // boolean toggle is the whole flip trigger (no orientation bus).
-  node.showingBack = !node.showingBack;
 }
 
 export function setMode(tab: Tab, mode: Mode): void {
@@ -4011,10 +4230,8 @@ export function setMode(tab: Tab, mode: Mode): void {
 /// position, so the offset shifts) before flipping, so the caret lands on the
 /// same logical spot. No-op when the active tab isn't a file tab.
 export function toggleActiveFileTabMode(): void {
-  const node = layout.nodes[layout.activePaneId];
-  if (!node || node.kind !== "leaf") return;
-  const tab = node.tabs.find((t) => t.id === node.activeTabId);
-  if (!tab || tab.kind !== "file") return;
+  const tab = activeFileTab();
+  if (!tab) return;
   const rendered = defaultModeForPath(tab.path, tab.fileKind);
   if (rendered === "source") return;
   const next = tab.mode === "source" ? rendered : "source";
@@ -4146,8 +4363,8 @@ export function dismissConflict(): void {
 function findFileTabById(tabId: string): { paneId: string; tab: FileTab } | null {
   for (const [paneId, node] of Object.entries(layout.nodes)) {
     if (node.kind !== "leaf") continue;
-    const tab = node.tabs.find((t) => t.id === tabId);
-    if (tab && tab.kind === "file") return { paneId, tab };
+    const found = findTabInPane(node, tabId);
+    if (found?.tab.kind === "file") return { paneId, tab: found.tab };
   }
   return null;
 }
@@ -4283,8 +4500,9 @@ export function scheduleAutosave(paneId: string, tabId: string): void {
     autosaveTimers.delete(tabId);
     const node = layout.nodes[paneId];
     if (!node || node.kind !== "leaf") return;
-    const t = node.tabs.find((tab) => tab.id === tabId);
-    if (!t || t.kind !== "file") return;
+    const found = findTabInPane(node, tabId);
+    const t = found?.tab.kind === "file" ? found.tab : undefined;
+    if (!t) return;
     if (t.loading || t.content === t.saved) return;
     try {
       await performSave(t);
@@ -4304,7 +4522,7 @@ export function scheduleAutosave(paneId: string, tabId: string): void {
 function mirrorToSiblings(path: string, content: string, originId: string): void {
   for (const node of Object.values(layout.nodes)) {
     if (node.kind !== "leaf") continue;
-    for (const sib of node.tabs) {
+    for (const sib of allPaneTabs(node)) {
       if (sib.kind !== "file") continue;
       if (sib.id === originId) continue;
       if (sib.path !== path) continue;
@@ -4353,7 +4571,7 @@ export function dirtyPaths(): Set<string> {
   const out = new Set<string>();
   for (const node of Object.values(layout.nodes)) {
     if (node.kind !== "leaf") continue;
-    for (const t of node.tabs) {
+    for (const t of allPaneTabs(node)) {
       if (t.kind === "file" && !t.loading && t.content !== t.saved) out.add(t.path);
     }
   }
@@ -4492,18 +4710,15 @@ type SerLeaf = {
   f?: 1;
   wc?: SerFocusColor;
   pc?: SerFocusColor;
-  /// Per-pane Hybrid back-side state. The back is a per-surface
-  /// configuration view; `pane.theme` is the single per-Hybrid theme.
-  /// Wire-compat: legacy `bt` and `hb` fields from older sessions are
-  /// parsed and discarded on rehydrate; the front-side `ht` wins.
+  /// Per-pane Hybrid side state.
+  /// `t`: side A tabs.
+  /// `bt`: side B tabs.
   /// `ht`: per-Hybrid theme override.
-  /// `sb`: `1` when the pane is currently flipped to its back view.
-  /// `bm`: `1` when the pane has been flipped at least once.
+  /// `sb`: `1` when side B is visible.
+  /// `bm` / `hb`: legacy config-back hints, ignored on restore.
   ht?: SerHybridTheme;
   sb?: 1;
   bm?: 1;
-  /// Legacy: back-side tabs and back-side theme override from older
-  /// sessions. Ignored on rehydrate for wire compat.
   bt?: SerTab[];
   hb?: SerHybridTheme;
 };
@@ -4805,20 +5020,18 @@ function serializeNode(
     const tabs: SerTab[] = n.tabs.map((t) =>
       serializeTab(t, t.id === n.activeTabId, opts),
     );
+    const bTabs: SerTab[] = (n.bTabs ?? []).map((t) =>
+      serializeTab(t, t.id === (n.bActiveTabId ?? null), opts),
+    );
     const out: SerLeaf = {
       k: "l",
       t: tabs,
       ...(n.id === layout.activePaneId ? { f: 1 as const } : {}),
     };
-    // Hybrid back-side state is inlined into SerLeaf so the URL hash
-    // and per-window session both round-trip the flip-aware layout.
-    // Never-flipped panes emit nothing extra. `bm` marks "has been
-    // flipped at least once" so a Hybrid with no per-side theme still
-    // serializes its Hybrid-ness.
     const ht = serializeHybridTheme(n.theme);
     if (ht) out.ht = ht;
-    if (n.back !== undefined) out.bm = 1;
-    if (n.showingBack) out.sb = 1;
+    if (bTabs.length > 0) out.bt = bTabs;
+    if (paneSide(n) === "b") out.sb = 1;
     return out;
   }
   const a = serializeNode(n.a, opts);
@@ -4845,7 +5058,13 @@ export function serializeLayout(opts: SerializeLayoutOptions = {}): SerNode | nu
     ...tree,
     ...serializeFocusColor(layout.focusColor),
   };
-  if (serialized.k === "l" && serialized.t.length === 0 && !serialized.wc) return null;
+  if (
+    serialized.k === "l" &&
+    serialized.t.length === 0 &&
+    (serialized.bt?.length ?? 0) === 0 &&
+    !serialized.wc
+  )
+    return null;
   return serialized;
 }
 
@@ -4868,16 +5087,21 @@ export async function restoreLayout(
   function build(node: SerNode): string {
     if (node.k === "l") {
       const sessionLeaf = sessionLeaves[leafIndex++] ?? null;
-      const savedTerms =
-        sessionLeaf?.t.filter((t) => (t.k ?? "f") === "t") ?? [];
-      let termIndex = 0;
       const p: LeafNode = {
         kind: "leaf",
         id: id("pane"),
         tabs: [],
         activeTabId: null,
       };
-      for (const sertab of node.t) {
+      const restoreTabsForSide = (
+        side: PaneSide,
+        serializedTabs: SerTab[],
+        sessionTabs: SerTab[],
+      ): void => {
+        const savedTerms = sessionTabs.filter((t) => (t.k ?? "f") === "t");
+        let termIndex = 0;
+        const targetTabs = mutablePaneTabs(p, side);
+        for (const sertab of serializedTabs) {
         const kind = sertab.k ?? "f";
         if (kind === "g") {
           const mode = restoreGraphMode(sertab.gm);
@@ -4907,8 +5131,8 @@ export async function restoreLayout(
               ? { inspectorWidth: sertab.iw }
               : {}),
           };
-          p.tabs.push(tab);
-          if (sertab.a) p.activeTabId = tab.id;
+          targetTabs.push(tab);
+          if (sertab.a) setPaneActiveTabId(p, tab.id, side);
           continue;
         }
         if (kind === "b") {
@@ -4929,8 +5153,8 @@ export async function restoreLayout(
               ? { inspectorWidth: sertab.iw }
               : {}),
           };
-          p.tabs.push(tab);
-          if (sertab.a) p.activeTabId = tab.id;
+          targetTabs.push(tab);
+          if (sertab.a) setPaneActiveTabId(p, tab.id, side);
           continue;
         }
         // Settings ("s") and health ("h") are overlays now; silently
@@ -4980,8 +5204,8 @@ export async function restoreLayout(
               : {}),
             ...(twk ? { teamWorkPending: twk } : {}),
           };
-          p.tabs.push(tab);
-          if (sertab.a) p.activeTabId = tab.id;
+          targetTabs.push(tab);
+          if (sertab.a) setPaneActiveTabId(p, tab.id, side);
           // Reshow the bubble so the restored queued message is visible +
           // actionable without re-toggling Cmd+Shift+P (GAP 2).
           if (sertab.rpv ?? savedTerm?.rpv) showRichPromptForTab(tab.id);
@@ -5021,8 +5245,8 @@ export async function restoreLayout(
             tab.carouselSlide = firstEnabledSlot(tab);
           }
           if (sertab.ar === false) tab.autoRotate = false;
-          p.tabs.push(tab);
-          if (sertab.a) p.activeTabId = tab.id;
+          targetTabs.push(tab);
+          if (sertab.a) setPaneActiveTabId(p, tab.id, side);
           continue;
         }
         if (kind !== "f") continue;
@@ -5095,30 +5319,22 @@ export async function restoreLayout(
             ? { outlineWidth: sertab.ow }
             : {}),
         };
-        p.tabs.push(tab);
-        if (sertab.a) p.activeTabId = tab.id;
+        targetTabs.push(tab);
+        if (sertab.a) setPaneActiveTabId(p, tab.id, side);
         if (tab.path) {
           tabsToLoad.push({ paneId: p.id, tabId: tab.id, path: tab.path });
         }
       }
+      };
+      restoreTabsForSide("a", node.t, sessionLeaf?.t ?? []);
+      restoreTabsForSide("b", node.bt ?? [], sessionLeaf?.bt ?? []);
       // If no tab was marked active but there are tabs, focus the first.
       if (!p.activeTabId && p.tabs.length > 0) p.activeTabId = p.tabs[0]!.id;
-      // The back is a configuration view, not a tab collection.
-      // `bm` is the wire signal for "pane has been flipped at least
-      // once." Legacy `bt` / `hb` are accepted but discarded; their
-      // presence implies the pane was a Hybrid, so materialise the
-      // empty back marker to keep `pane.back !== undefined` accurate.
-      if (
-        node.bm ||
-        node.hb ||
-        (node.bt && node.bt.length > 0)
-      ) {
-        p.back = {};
+      if (!p.bActiveTabId && (p.bTabs?.length ?? 0) > 0) {
+        p.bActiveTabId = p.bTabs![0]!.id;
       }
       if (node.ht) p.theme = node.ht === "d" ? "dark" : "light";
-      // The flip persists across reloads, but only for non-empty panes.
-      // A stale `sb` on an empty pane is dropped defensively.
-      if (node.sb && p.tabs.length > 0) p.showingBack = true;
+      p.side = node.sb ? "b" : "a";
       layout.nodes[p.id] = p;
       if (node.f) activePaneId = p.id;
       return p.id;
@@ -5165,9 +5381,7 @@ function serializedLeaves(node: SerNode | null, out: SerLeaf[] = []): SerLeaf[] 
 /// all-terminal rule (chan-workspace) that prunes existing such phantoms.
 export function layoutHasDurableContent(layout: SerNode | null): boolean {
   for (const leaf of serializedLeaves(layout)) {
-    // Front tabs plus legacy Hybrid back-tabs (`bt`), for parity with the
-    // backend walk; `bt` is discarded on rehydrate but a stray non-terminal
-    // there still counts as content we should not silently drop.
+    // Side A plus side B tabs.
     for (const tab of [...leaf.t, ...(leaf.bt ?? [])]) {
       if ((tab.k ?? "f") !== "t") return true;
     }
@@ -5222,20 +5436,30 @@ export function hydrateTerminalSessionsFromLayout(sessionLayout: SerNode | null)
     const live = layout.nodes[livePaneIds[i]!];
     const saved = sessionLeaves[i];
     if (!live || live.kind !== "leaf" || !saved) continue;
-    const liveTerms = live.tabs.filter((t): t is TerminalTab => t.kind === "terminal");
-    const savedTerms = saved.t.filter((t) => (t.k ?? "f") === "t");
-    for (let j = 0; j < liveTerms.length; j++) {
-      const savedTerm = savedTerms[j];
-      if (!savedTerm) continue;
-      if (savedTerm.tsid) {
-        liveTerms[j]!.terminalSessionId = savedTerm.tsid;
-        liveTerms[j]!.lastAgentEchoSeq =
-          typeof savedTerm.tae === "number" && Number.isFinite(savedTerm.tae)
-            ? Math.max(0, Math.floor(savedTerm.tae))
-            : undefined;
+    const pairs: Array<[TerminalTab[], SerTab[]]> = [
+      [
+        live.tabs.filter((t): t is TerminalTab => t.kind === "terminal"),
+        saved.t.filter((t) => (t.k ?? "f") === "t"),
+      ],
+      [
+        (live.bTabs ?? []).filter((t): t is TerminalTab => t.kind === "terminal"),
+        (saved.bt ?? []).filter((t) => (t.k ?? "f") === "t"),
+      ],
+    ];
+    for (const [liveTerms, savedTerms] of pairs) {
+      for (let j = 0; j < liveTerms.length; j++) {
+        const savedTerm = savedTerms[j];
+        if (!savedTerm) continue;
+        if (savedTerm.tsid) {
+          liveTerms[j]!.terminalSessionId = savedTerm.tsid;
+          liveTerms[j]!.lastAgentEchoSeq =
+            typeof savedTerm.tae === "number" && Number.isFinite(savedTerm.tae)
+              ? Math.max(0, Math.floor(savedTerm.tae))
+              : undefined;
+        }
+        if (savedTerm.rpd) liveTerms[j]!.richPromptDraftPath = savedTerm.rpd;
+        if (savedTerm.twk) liveTerms[j]!.teamWorkPending = savedTerm.twk;
       }
-      if (savedTerm.rpd) liveTerms[j]!.richPromptDraftPath = savedTerm.rpd;
-      if (savedTerm.twk) liveTerms[j]!.teamWorkPending = savedTerm.twk;
     }
   }
 }
@@ -5387,7 +5611,13 @@ export function beginMissingFileReopen(tabId: string): void {
   if (!found || found.tab.fileMissing === null) return;
   pendingMissingFileReopenTabId = tabId;
   const node = layout.nodes[found.paneId];
-  if (node?.kind === "leaf") node.activeTabId = tabId;
+  if (node?.kind === "leaf") {
+    const match = findTabInPane(node, tabId);
+    if (match) {
+      node.side = match.side;
+      setPaneActiveTabId(node, tabId, match.side);
+    }
+  }
   layout.activePaneId = found.paneId;
 }
 
@@ -5437,8 +5667,8 @@ export function isWindowFullyReadOnly(): boolean {
   let sawFile = false;
   for (const node of Object.values(layout.nodes)) {
     if (node.kind !== "leaf") continue;
-    if (node.tabs.length === 0) continue;
-    const active = node.tabs.find((t) => t.id === node.activeTabId);
+    if (paneTabs(node).length === 0) continue;
+    const active = activeTabInPane(node);
     if (!active || active.kind !== "file") continue;
     sawFile = true;
     if (!active.readMode && active.fsWritable) return false;
@@ -5453,7 +5683,7 @@ export function tabsForPath(path: string): { paneId: string; tabId: string }[] {
   const out: { paneId: string; tabId: string }[] = [];
   for (const [paneId, node] of Object.entries(layout.nodes)) {
     if (node.kind !== "leaf") continue;
-    for (const t of node.tabs) {
+    for (const t of allPaneTabs(node)) {
       if (t.kind === "file" && t.path === path) {
         out.push({ paneId, tabId: t.id });
       }
@@ -5482,7 +5712,7 @@ export function rekeyTabsForRename(from: string, to: string): void {
   const newDirPrefix = `${to}/`;
   for (const node of Object.values(layout.nodes)) {
     if (node.kind !== "leaf") continue;
-    for (const t of node.tabs) {
+    for (const t of allPaneTabs(node)) {
       if (t.kind !== "file") continue;
       if (t.path === from) {
         t.path = to;

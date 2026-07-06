@@ -45,6 +45,7 @@
   import { portal } from "./portal";
   import {
     layout,
+    allPaneTabs,
     attemptInPlaceReopen,
     beginMissingFileReopen,
     closeTab,
@@ -504,7 +505,7 @@
 
   function paneIdForTab(): string | null {
     for (const [paneId, node] of Object.entries(layout.nodes)) {
-      if (node.kind === "leaf" && node.tabs.some((candidate) => candidate.id === tab.id)) {
+      if (node.kind === "leaf" && allPaneTabs(node).some((candidate) => candidate.id === tab.id)) {
         return paneId;
       }
     }
@@ -811,6 +812,15 @@
   function chordLabel(id: string | undefined): string {
     return id ? (chordFor(id) ?? "") : "";
   }
+
+  const showPageWidthMenuRow = $derived(tab.mode !== "canvas");
+
+  function closeTabMenuChordLabel(): string {
+    // The canvas surface keeps Ctrl+D for Excalidraw's duplicate gesture, so
+    // the macOS menu should advertise the working app-level close path.
+    if (tab.mode === "canvas" && currentOS() === "mac") return "Cmd+W";
+    return chordLabel("app.tab.close");
+  }
 </script>
 
 <svelte:window onkeydown={onMenuKeydown} onpointerdown={onDocPointerDown} />
@@ -1008,33 +1018,35 @@
             />
           </label>
         {/if}
-        <div class="msep" role="separator"></div>
-        <!-- Page-width slider: ratio of the current window width.
-             100 % is the "no cap" sentinel (drag all the way right).
-             Stored as a ratio so window resize and browser zoom both
-             keep the cap proportional to the viewport. -->
-        <div class="page-width-row">
-          <span class="page-width-label">Page width</span>
-          <input
-            class="page-width-slider"
-            type="range"
-            min={PAGE_WIDTH_MIN_PCT}
-            max={PAGE_WIDTH_MAX_PCT}
-            step={PAGE_WIDTH_STEP_PCT}
-            value={Math.round(pageWidth.ratio * 100)}
-            oninput={onPageWidthSlider}
-            onmousedown={(e) => e.stopPropagation()}
-            aria-label="page width"
-          />
-          <span class="page-width-value">{Math.round(pageWidth.ratio * 100)}%</span>
-        </div>
+        {#if showPageWidthMenuRow}
+          <div class="msep" role="separator"></div>
+          <!-- Page-width slider: ratio of the current window width.
+               100 % is the "no cap" sentinel (drag all the way right).
+               Stored as a ratio so window resize and browser zoom both
+               keep the cap proportional to the viewport. -->
+          <div class="page-width-row">
+            <span class="page-width-label">Page width</span>
+            <input
+              class="page-width-slider"
+              type="range"
+              min={PAGE_WIDTH_MIN_PCT}
+              max={PAGE_WIDTH_MAX_PCT}
+              step={PAGE_WIDTH_STEP_PCT}
+              value={Math.round(pageWidth.ratio * 100)}
+              oninput={onPageWidthSlider}
+              onmousedown={(e) => e.stopPropagation()}
+              aria-label="page width"
+            />
+            <span class="page-width-value">{Math.round(pageWidth.ratio * 100)}%</span>
+          </div>
+        {/if}
         <div class="msep" role="separator"></div>
         <button class="mbtn" onclick={doCloseTab}>
           <span class="mbtn-icon">
             <X size={16} strokeWidth={1.75} aria-hidden="true" />
           </span>
           <span class="mbtn-label">Close</span>
-          <span class="mbtn-chord">{chordLabel("app.tab.close")}</span>
+          <span class="mbtn-chord">{closeTabMenuChordLabel()}</span>
         </button>
       </div>
       {/if}

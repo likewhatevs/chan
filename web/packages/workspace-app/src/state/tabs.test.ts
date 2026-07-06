@@ -13,7 +13,9 @@ import {
   teamDialogState,
 } from "./teamDialog.svelte";
 import {
+  activeTabInPane,
   activePane,
+  allPaneTabs,
   applyTerminalRoster,
   beginMissingFileReopen,
   broadcastTerminalInput,
@@ -49,6 +51,7 @@ import {
   openLinkTarget,
   openFind,
   openTerminalInPane,
+  paneActiveTabId,
   paneMode,
   paneModeEqualize,
   paneModeMoveFocus,
@@ -62,6 +65,8 @@ import {
   paneModeStageSpawn,
   paneModeSwap,
   paneModeSwapWith,
+  paneSide,
+  paneTabs,
   removeTerminalFromBroadcastGroup,
   registerDraftPromotionSink,
   registerTerminalCloseSink,
@@ -69,6 +74,7 @@ import {
   resolveDraftClose,
   markLocalTabDrop,
   markTerminalEnvNameRestarted,
+  moveActiveTabToSide,
   moveTab,
   reattachTerminalInPane,
   renameTerminalTab,
@@ -82,6 +88,7 @@ import {
   scheduleAutosave,
   serializeLayout,
   setActivePane,
+  selectTabInPane,
   setTabCaret,
   setTerminalActivity,
   setTerminalActivityPulsing,
@@ -110,6 +117,7 @@ import {
   type FileTab,
   type GraphTab,
   type LeafNode,
+  type Tab,
   type TerminalTab,
 } from "./tabs.svelte";
 
@@ -119,7 +127,7 @@ import {
 vi.mock("./caretIndex");
 import { readCaret, recordCaret } from "./caretIndex";
 
-function resetLayout(tabs: Array<FileTab | TerminalTab>): LeafNode {
+function resetLayout(tabs: Tab[]): LeafNode {
   const pane: LeafNode = {
     kind: "leaf",
     id: "pane-test",
@@ -813,26 +821,23 @@ describe("tab close confirmation", () => {
     expect(reopened.expanded).not.toBe(originalExpanded);
   });
 
-  test("closing the last front tab clears the flip", async () => {
-    // The flip is strictly tied to panes with >= 1 tab: a 0-tab pane
-    // is never flipped. Closing the last front tab while flipped drops
-    // the flip and lands the pane on its empty front (welcome), instead
-    // of a stuck back-config surface the flip chord can't undo
-    // (flipHybrid's empty-pane guard would block re-flipping it).
-    const front = fileTab({ id: "front", path: "notes/front.md" });
-    const seed = resetLayout([front]);
-    flipHybrid(seed.id);
-    let live = layout.nodes[seed.id];
-    if (live?.kind !== "leaf") throw new Error("expected leaf");
-    expect(live.showingBack).toBe(true);
+  test("closing the last tab on the visible side clears only that side", async () => {
+    const a = fileTab({ id: "side-a", path: "notes/a.md" });
+    const b = fileTab({ id: "side-b", path: "notes/b.md" });
+    const seed = resetLayout([a]);
+    seed.bTabs = [b];
+    seed.bActiveTabId = b.id;
+    seed.side = "b";
 
-    await closeTab(seed.id, "front", { force: true });
+    await closeTab(seed.id, b.id, { force: true });
 
-    live = layout.nodes[seed.id];
+    const live = layout.nodes[seed.id];
     if (live?.kind !== "leaf") throw new Error("expected leaf");
-    expect(live.showingBack).toBe(false);
-    expect(live.tabs).toHaveLength(0);
-    expect(live.activeTabId).toBeNull();
+    expect(paneSide(live)).toBe("b");
+    expect(paneTabs(live, "b")).toHaveLength(0);
+    expect(paneActiveTabId(live, "b")).toBeNull();
+    expect(paneTabs(live, "a").map((tab) => tab.id)).toEqual(["side-a"]);
+    expect(paneActiveTabId(live, "a")).toBe("side-a");
   });
 
   test("closing the last tab in a Hybrid pane leaves the pane in place", async () => {
@@ -881,6 +886,61 @@ describe("tab drag and drop", () => {
     expect(activePane().activeTabId).toBe(active.id);
     expect(shouldCloseTabAfterDragEnd(pane.id, active.id, "move")).toBe(false);
     expect(activePane().tabs.map((tab) => tab.id)).toEqual([inactive.id, active.id]);
+  });
+
+  test("moves a B-side tab into another pane's visible A side", () => {
+    const sourceA = fileTab({ id: "source-a", path: "notes/source-a.md" });
+    const sourceB = fileTab({ id: "source-b", path: "notes/source-b.md" });
+    const targetA = fileTab({ id: "target-a", path: "notes/target-a.md" });
+    const left = resetLayout([sourceA]);
+    left.bTabs = [sourceB];
+    left.bActiveTabId = sourceB.id;
+    left.side = "b";
+
+    splitPane(left.id, "row", "after");
+    const root = layout.nodes[layout.rootId];
+    if (root?.kind !== "split") throw new Error("expected split");
+    const right = layout.nodes[root.b];
+    if (right?.kind !== "leaf") throw new Error("expected right leaf");
+    right.tabs = [targetA];
+    right.activeTabId = targetA.id;
+    right.side = "a";
+
+    moveTab(left.id, sourceB.id, right.id, 1, { fromSide: "b", toSide: "a" });
+
+    const liveLeft = layout.nodes[left.id];
+    const liveRight = layout.nodes[right.id];
+    if (liveLeft?.kind !== "leaf" || liveRight?.kind !== "leaf") {
+      throw new Error("expected live leaves");
+    }
+    expect(paneTabs(liveLeft, "a").map((tab) => tab.id)).toEqual(["source-a"]);
+    expect(paneTabs(liveLeft, "b")).toEqual([]);
+    expect(paneTabs(liveRight, "a").map((tab) => tab.id)).toEqual(["target-a", "source-b"]);
+    expect(paneActiveTabId(liveRight, "a")).toBe("source-b");
+    expect(paneSide(liveRight)).toBe("a");
+    expect(layout.activePaneId).toBe(liveRight.id);
+  });
+
+  test("same-pane drag can move a tab from A to B without drag-end closing it", () => {
+    const a1 = fileTab({ id: "a1", path: "notes/a1.md" });
+    const a2 = fileTab({ id: "a2", path: "notes/a2.md" });
+    const b1 = fileTab({ id: "b1", path: "notes/b1.md" });
+    const pane = resetLayout([a1, a2]);
+    pane.bTabs = [b1];
+    pane.bActiveTabId = b1.id;
+    pane.side = "b";
+
+    markLocalTabDrop(pane.id, a2.id, "a");
+    moveTab(pane.id, a2.id, pane.id, 1, { fromSide: "a", toSide: "b" });
+
+    const live = layout.nodes[pane.id];
+    if (live?.kind !== "leaf") throw new Error("expected live leaf");
+    expect(paneTabs(live, "a").map((tab) => tab.id)).toEqual(["a1"]);
+    expect(paneActiveTabId(live, "a")).toBe("a1");
+    expect(paneTabs(live, "b").map((tab) => tab.id)).toEqual(["b1", "a2"]);
+    expect(paneActiveTabId(live, "b")).toBe("a2");
+    expect(paneSide(live)).toBe("b");
+    expect(shouldCloseTabAfterDragEnd(live.id, a2.id, "move", "a")).toBe(false);
   });
 });
 
@@ -2196,105 +2256,88 @@ describe("Hybrid NAV transaction mode", () => {
 });
 
 describe("splitPane side preservation", () => {
-  test("splitting from the front side leaves the new pane on the front", () => {
+  test("splitting from side A leaves the new pane on side A", () => {
     const seed = resetLayout([fileTab({ id: "f", path: "a.md" })]);
     splitPane(seed.id, "row", "after");
     const root = layout.nodes[layout.rootId];
     if (root?.kind !== "split") throw new Error("expected split");
     const newPane = layout.nodes[root.b];
     if (newPane?.kind !== "leaf") throw new Error("expected leaf");
-    expect(newPane.showingBack).toBeFalsy();
-    expect(newPane.back).toBeUndefined();
+    expect(paneSide(newPane)).toBe("a");
+    expect(paneTabs(newPane, "a")).toHaveLength(0);
+    expect(paneTabs(newPane, "b")).toHaveLength(0);
   });
 
-  test("splitting a flipped pane yields a clean, unflipped new pane", () => {
-    // The new pane is born empty, and flip is strictly tied to panes
-    // with >= 1 tab, so it must NOT inherit showingBack/back. Copying
-    // the flip onto an empty new pane creates a stuck 0-tab pane the
-    // flip chord cannot undo, whose orientation leaks across panes.
+  test("splitting a side-B pane yields a clean side-A new pane", () => {
     const seed = resetLayout([fileTab({ id: "f", path: "a.md" })]);
     flipHybrid(seed.id);
     const live = layout.nodes[seed.id];
     if (live?.kind !== "leaf") throw new Error("expected leaf");
-    expect(live.showingBack).toBe(true);
+    expect(paneSide(live)).toBe("b");
 
     splitPane(seed.id, "row", "after");
     const root = layout.nodes[layout.rootId];
     if (root?.kind !== "split") throw new Error("expected split");
     const newPane = layout.nodes[root.b];
     if (newPane?.kind !== "leaf") throw new Error("expected leaf");
-    expect(newPane.showingBack).toBeFalsy();
-    expect(newPane.back).toBeUndefined();
-    // Original pane keeps its own flip.
+    expect(paneSide(newPane)).toBe("a");
+    expect(paneTabs(newPane, "a")).toHaveLength(0);
+    expect(paneTabs(newPane, "b")).toHaveLength(0);
     const original = layout.nodes[seed.id];
     if (original?.kind !== "leaf") throw new Error("expected leaf");
-    expect(original.showingBack).toBe(true);
+    expect(paneSide(original)).toBe("b");
   });
 });
 
-describe("Hybrid flip", () => {
-  test("first flip materialises back marker; pane.theme is preserved", () => {
-    const front = fileTab({ id: "front", path: "notes/front.md" });
-    const seed = resetLayout([front]);
-    expect(seed.back).toBeUndefined();
+describe("Hybrid side flip", () => {
+  test("first flip selects side B while preserving side A tabs", () => {
+    const a = fileTab({ id: "side-a", path: "notes/a.md" });
+    const seed = resetLayout([a]);
+    expect(paneSide(seed)).toBe("a");
 
     flipHybrid(seed.id);
 
-    // Read the live pane through layout.nodes - $state proxies live
-    // there, and the plain `seed` returned by resetLayout isn't the
-    // reactive view.
     const live = layout.nodes[seed.id];
     expect(live?.kind).toBe("leaf");
     if (live?.kind !== "leaf") return;
-    expect(live.showingBack).toBe(true);
-    // `pane.tabs` always describes the FRONT; flipping does not swap
-    // tab collections.
-    expect(live.tabs.map((t) => t.id)).toEqual(["front"]);
-    expect(live.activeTabId).toBe("front");
-    // `pane.theme` is a single per-Hybrid value; flip does not invert it.
-    // Theme stays at the user's last explicit choice (undefined here).
+    expect(paneSide(live)).toBe("b");
+    expect(paneTabs(live, "a").map((t) => t.id)).toEqual(["side-a"]);
+    expect(paneActiveTabId(live, "a")).toBe("side-a");
+    expect(paneTabs(live, "b")).toEqual([]);
+    expect(paneActiveTabId(live, "b")).toBeNull();
     expect(live.theme).toBeUndefined();
-    // back is materialised as an empty marker so menu gating
-    // (`pane.back !== undefined`) can identify this as a Hybrid pane.
-    expect(live.back).toEqual({});
   });
 
-  test("flipping back round-trips showingBack; pane.theme is single + stable", () => {
-    const front = fileTab({ id: "f1", path: "a.md" });
-    const seed = resetLayout([front]);
+  test("flipping round-trips side while pane theme stays stable", () => {
+    const a = fileTab({ id: "a1", path: "a.md" });
+    const b = fileTab({ id: "b1", path: "b.md" });
+    const seed = resetLayout([a]);
+    seed.bTabs = [b];
+    seed.bActiveTabId = b.id;
 
     flipHybrid(seed.id);
     let live = layout.nodes[seed.id];
     if (live?.kind !== "leaf") throw new Error("expected leaf");
-    expect(live.showingBack).toBe(true);
-    // pane.theme is a single per-Hybrid value shared by both sides.
-    // The user picks dark; the same value is in force after flipping back.
+    expect(paneSide(live)).toBe("b");
+    expect(activeTabInPane(live)?.id).toBe("b1");
     live.theme = "dark";
 
     flipHybrid(seed.id);
     live = layout.nodes[seed.id];
     if (live?.kind !== "leaf") throw new Error("expected leaf");
-    expect(live.showingBack).toBe(false);
-    expect(live.tabs.map((t) => t.id)).toEqual(["f1"]);
-    // Theme is unchanged across the flip.
+    expect(paneSide(live)).toBe("a");
+    expect(activeTabInPane(live)?.id).toBe("a1");
     expect(live.theme).toBe("dark");
-    // The `back` marker survives across flips; it signals "Hybrid" and
-    // its shape is an empty object.
-    expect(live.back).toEqual({});
 
     flipHybrid(seed.id);
     live = layout.nodes[seed.id];
     if (live?.kind !== "leaf") throw new Error("expected leaf");
-    expect(live.showingBack).toBe(true);
-    expect(live.tabs.map((t) => t.id)).toEqual(["f1"]);
+    expect(paneSide(live)).toBe("b");
+    expect(activeTabInPane(live)?.id).toBe("b1");
     expect(live.theme).toBe("dark");
   });
 
-  test("flipHybrid toggles showingBack without firing the wobble bus", async () => {
-    // The two-face card rotates off `showingBack` via a CSS transition,
-    // so the flip has no event bus of its own. The structural wobble bus
-    // (scale bounce used for split/close/swap) must stay untouched on a
-    // flip so the two visual signals don't compound.
+  test("flipHybrid toggles side without firing the wobble bus", async () => {
     const front = fileTab({ id: "fw", path: "wobble.md" });
     const seed = resetLayout([front]);
     const { paneWobble } = await import("./tabs.svelte");
@@ -2304,7 +2347,7 @@ describe("Hybrid flip", () => {
 
     const live = layout.nodes[seed.id];
     if (live?.kind !== "leaf") throw new Error("expected leaf");
-    expect(live.showingBack).toBe(true);
+    expect(paneSide(live)).toBe("b");
     expect(paneWobble.versions[seed.id] ?? 0).toBe(beforeWobble);
   });
 
@@ -2313,29 +2356,111 @@ describe("Hybrid flip", () => {
     flipHybrid("does-not-exist");
     const live = layout.nodes[seed.id];
     if (live?.kind !== "leaf") throw new Error("expected leaf");
-    expect(live.showingBack).toBeFalsy();
-    expect(live.back).toBeUndefined();
+    expect(paneSide(live)).toBe("a");
   });
 
-  test("flipHybrid is a no-op on an empty pane", () => {
-    // Guard reads `tabs.length === 0` before mutating state, so an empty
-    // pane never flips: there is no surface to configure on the back.
+  test("flipHybrid works on an empty pane", () => {
     const seed = resetLayout([]);
 
     flipHybrid(seed.id);
 
     const live = layout.nodes[seed.id];
     if (live?.kind !== "leaf") throw new Error("expected leaf");
-    expect(live.tabs).toHaveLength(0);
-    expect(live.showingBack).toBeFalsy();
-    expect(live.back).toBeUndefined();
+    expect(paneSide(live)).toBe("b");
+    expect(allPaneTabs(live)).toHaveLength(0);
+    expect(paneActiveTabId(live)).toBeNull();
   });
 
-  test("serialize / restore round-trips theme + showingBack + back marker", async () => {
-    const front = fileTab({ id: "front", path: "front.md" });
-    const seed = resetLayout([front]);
+  test("moveActiveTabToSide moves the visible active tab and switches side", () => {
+    const a1 = fileTab({ id: "a1", path: "a1.md" });
+    const a2 = fileTab({ id: "a2", path: "a2.md" });
+    const seed = resetLayout([a1, a2]);
+    seed.activeTabId = a2.id;
 
-    flipHybrid(seed.id);
+    expect(moveActiveTabToSide("b")).toBe(true);
+    const live = layout.nodes[seed.id];
+    if (live?.kind !== "leaf") throw new Error("expected leaf");
+    expect(paneSide(live)).toBe("b");
+    expect(paneTabs(live, "a").map((t) => t.id)).toEqual(["a1"]);
+    expect(paneActiveTabId(live, "a")).toBe("a1");
+    expect(paneTabs(live, "b").map((t) => t.id)).toEqual(["a2"]);
+    expect(paneActiveTabId(live, "b")).toBe("a2");
+    expect(activeTabInPane(live)?.id).toBe("a2");
+    expect(moveActiveTabToSide("b")).toBe(false);
+  });
+
+  test("reopenClosedTab restores the side the tab was closed from", async () => {
+    const a = fileTab({ id: "a", path: "a.md" });
+    const b = fileTab({ id: "b", path: "b.md" });
+    const seed = resetLayout([a]);
+    seed.bTabs = [b];
+    seed.bActiveTabId = b.id;
+    seed.side = "b";
+
+    await closeTab(seed.id, b.id, { force: true });
+    let live = layout.nodes[seed.id];
+    if (live?.kind !== "leaf") throw new Error("expected leaf");
+    live.side = "a";
+    expect(paneTabs(live, "b")).toHaveLength(0);
+
+    expect(reopenClosedTab()).toBe(true);
+
+    live = layout.nodes[seed.id];
+    if (live?.kind !== "leaf") throw new Error("expected leaf");
+    expect(paneSide(live)).toBe("b");
+    expect(paneTabs(live, "a").map((tab) => tab.id)).toEqual(["a"]);
+    expect(paneTabs(live, "b").map((tab) => tab.id)).toEqual(["b"]);
+    expect(activeTabInPane(live)?.id).toBe("b");
+  });
+
+  test("selectTabInPane switches to the side containing the tab", () => {
+    const a = fileTab({ id: "a", path: "a.md" });
+    const b = fileTab({ id: "b", path: "b.md" });
+    const seed = resetLayout([a]);
+    seed.bTabs = [b];
+    seed.bActiveTabId = null;
+
+    selectTabInPane(seed.id, b.id);
+
+    const live = layout.nodes[seed.id];
+    if (live?.kind !== "leaf") throw new Error("expected leaf");
+    expect(paneSide(live)).toBe("b");
+    expect(paneActiveTabId(live, "b")).toBe("b");
+    expect(activeTabInPane(live)?.id).toBe("b");
+  });
+
+  test("reorder and close operate on the visible side only", async () => {
+    const a = fileTab({ id: "a", path: "a.md" });
+    const b1 = fileTab({ id: "b1", path: "b1.md" });
+    const b2 = fileTab({ id: "b2", path: "b2.md" });
+    const seed = resetLayout([a]);
+    seed.bTabs = [b1, b2];
+    seed.bActiveTabId = b1.id;
+    seed.side = "b";
+
+    reorderTab(seed.id, b2.id, 0);
+    let live = layout.nodes[seed.id];
+    if (live?.kind !== "leaf") throw new Error("expected leaf");
+    expect(paneTabs(live, "a").map((t) => t.id)).toEqual(["a"]);
+    expect(paneTabs(live, "b").map((t) => t.id)).toEqual(["b2", "b1"]);
+    expect(paneActiveTabId(live, "b")).toBe("b2");
+
+    await closeTab(seed.id, b2.id, { force: true });
+    live = layout.nodes[seed.id];
+    if (live?.kind !== "leaf") throw new Error("expected leaf");
+    expect(paneSide(live)).toBe("b");
+    expect(paneTabs(live, "a").map((t) => t.id)).toEqual(["a"]);
+    expect(paneTabs(live, "b").map((t) => t.id)).toEqual(["b1"]);
+    expect(paneActiveTabId(live, "b")).toBe("b1");
+  });
+
+  test("serialize / restore round-trips A tabs, B tabs, visible side, and theme", async () => {
+    const a = fileTab({ id: "front", path: "front.md" });
+    const b = terminalTab({ id: "back-term", title: "Back Terminal" });
+    const seed = resetLayout([a]);
+    seed.bTabs = [b];
+    seed.bActiveTabId = b.id;
+    seed.side = "b";
     const live = layout.nodes[seed.id];
     if (live?.kind !== "leaf") throw new Error("expected leaf");
     live.theme = "dark";
@@ -2345,31 +2470,22 @@ describe("Hybrid flip", () => {
     if (!snapshot) return;
     const json = JSON.stringify(snapshot);
     expect(json).toContain("\"sb\":1");
+    expect(json).toContain("\"bt\":");
     expect(json).toContain("\"ht\":\"d\"");
-    // No `bt` (back-side tabs) emitted.
-    expect(json).not.toContain("\"bt\":");
-    // No `hb` (back-side theme) emitted.
     expect(json).not.toContain("\"hb\":");
-    // A flipped pane emits `bm` so the back marker survives the
-    // round-trip even without a per-side theme.
-    expect(json).toContain("\"bm\":1");
+    expect(json).not.toContain("\"bm\":");
 
     await restoreLayout(snapshot);
 
     const restored = activePane();
-    expect(restored.showingBack).toBe(true);
+    expect(paneSide(restored)).toBe("b");
     expect(restored.theme).toBe("dark");
-    expect(restored.tabs.map((t) => t.kind)).toEqual(["file"]);
-    // `bm` round-trips the Hybrid marker; menu gating reads
-    // `pane.back !== undefined`, so we assert it's set on restore.
-    expect(restored.back).toEqual({});
+    expect(paneTabs(restored, "a").map((t) => t.kind)).toEqual(["file"]);
+    expect(paneTabs(restored, "b").map((t) => t.kind)).toEqual(["terminal"]);
+    expect(activeTabInPane(restored)?.kind).toBe("terminal");
   });
 
-  test("legacy `hb` payload is accepted on rehydrate and dropped", async () => {
-    // Old serializers emitted both `ht` (front) and `hb` (back)
-    // per-side theme overrides. The front-side is canonical: `ht`
-    // survives, `hb` is dropped. The presence of `hb` also implies
-    // the pane was a Hybrid, so the back marker materialises.
+  test("legacy `hb` and `bm` payloads are accepted as inert hints", async () => {
     const front = fileTab({ id: "legacy-front", path: "legacy.md" });
     resetLayout([front]);
 
@@ -2386,24 +2502,21 @@ describe("Hybrid flip", () => {
       f: 1 as const,
       ht: "d" as const,
       hb: "l" as const,
+      bm: 1 as const,
       sb: 1 as const,
     };
 
     await restoreLayout(legacyLeaf as never);
 
     const restored = activePane();
-    // Front-side theme wins; back-side `hb` ignored.
     expect(restored.theme).toBe("dark");
-    expect(restored.showingBack).toBe(true);
-    // Back marker materialises because the pane was a Hybrid.
-    expect(restored.back).toEqual({});
+    expect(paneSide(restored)).toBe("b");
+    expect(paneTabs(restored, "a").map((t) => t.kind)).toEqual(["file"]);
+    expect(paneTabs(restored, "b")).toEqual([]);
+    expect(activeTabInPane(restored)).toBeNull();
   });
 
-  test("focus changes never touch any pane's flip; flips are per-pane", () => {
-    // The flip is a strictly per-pane boolean that ONLY flipHybrid
-    // writes; setActivePane leaves every pane's flip untouched, so two
-    // panes can be independently flipped and focus moves between them
-    // preserve both states.
+  test("focus changes never touch any pane's side; sides are per-pane", () => {
     const left = fileTab({ id: "left", path: "notes/left.md" });
     const right = fileTab({ id: "right", path: "notes/right.md" });
     const leftPane = resetLayout([left]);
@@ -2413,40 +2526,34 @@ describe("Hybrid flip", () => {
     const rightPaneId = root.b;
     const rightPane = layout.nodes[rightPaneId];
     if (rightPane?.kind !== "leaf") throw new Error("expected leaf");
-    // The split's new pane is born clean: NOT flipped, even though
-    // it was created while the focus was on a flipped pane.
-    expect(rightPane.showingBack).toBeFalsy();
+    expect(paneSide(rightPane)).toBe("a");
     rightPane.tabs.push(right);
     rightPane.activeTabId = right.id;
 
-    // Flip the left pane.
     setActivePane(leftPane.id);
     flipHybrid(leftPane.id);
     const leftFlipped = layout.nodes[leftPane.id];
     if (leftFlipped?.kind !== "leaf") throw new Error("expected leaf");
-    expect(leftFlipped.showingBack).toBe(true);
+    expect(paneSide(leftFlipped)).toBe("b");
 
-    // Focus the right pane: the left pane STAYS flipped (no coupling).
     setActivePane(rightPaneId);
     const leftAfterFocus = layout.nodes[leftPane.id];
     if (leftAfterFocus?.kind !== "leaf") throw new Error("expected leaf");
-    expect(leftAfterFocus.showingBack).toBe(true);
+    expect(paneSide(leftAfterFocus)).toBe("b");
+    expect(paneSide(rightPane)).toBe("a");
 
-    // Flip the right pane too: now BOTH panes are independently flipped.
     flipHybrid(rightPaneId);
-    expect((layout.nodes[leftPane.id] as LeafNode).showingBack).toBe(true);
-    expect((layout.nodes[rightPaneId] as LeafNode).showingBack).toBe(true);
+    expect(paneSide(layout.nodes[leftPane.id] as LeafNode)).toBe("b");
+    expect(paneSide(layout.nodes[rightPaneId] as LeafNode)).toBe("b");
 
-    // Focus bouncing between them changes nothing.
     setActivePane(leftPane.id);
     setActivePane(rightPaneId);
-    expect((layout.nodes[leftPane.id] as LeafNode).showingBack).toBe(true);
-    expect((layout.nodes[rightPaneId] as LeafNode).showingBack).toBe(true);
+    expect(paneSide(layout.nodes[leftPane.id] as LeafNode)).toBe("b");
+    expect(paneSide(layout.nodes[rightPaneId] as LeafNode)).toBe("b");
 
-    // Flipping one back is local to that pane.
     flipHybrid(leftPane.id);
-    expect((layout.nodes[leftPane.id] as LeafNode).showingBack).toBe(false);
-    expect((layout.nodes[rightPaneId] as LeafNode).showingBack).toBe(true);
+    expect(paneSide(layout.nodes[leftPane.id] as LeafNode)).toBe("a");
+    expect(paneSide(layout.nodes[rightPaneId] as LeafNode)).toBe("b");
   });
 });
 

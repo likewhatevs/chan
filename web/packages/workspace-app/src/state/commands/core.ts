@@ -99,10 +99,10 @@ registerCommands([
   reuse("app.pane.next", "Next pane", "Panes", ["focus", "pane"]),
   reuse("app.pane.closeTabs", "Close all tabs in pane", "Panes", ["close"]),
   reuse("app.pane.kill", "Close pane", "Panes", ["close", "kill"]),
-  reuse("app.settings.toggle", "Flip focused pane", "Panes", [
+  reuse("app.pane.flip", "Flip pane", "Panes", [
     "flip",
-    "settings",
-    "config",
-    "back",
+    "side",
+    "a",
+    "b",
   ]),
 ]);

@@ -5677,8 +5677,7 @@ fn request_quit(app: &tauri::AppHandle) {
 
 /// Eval a `chan:command` dispatch on the currently-focused workspace
 /// webview. Used by menu items that should defer to chan's per-workspace
-/// behavior (Settings). No-op when the focused window isn't a workspace,
-/// matching the "each window owns its own settings" model.
+/// behavior. No-op when the focused window isn't a workspace.
 fn dispatch_to_focused_workspace(app: &tauri::AppHandle, command: &str) {
     let Some(w) = app
         .webview_windows()

@@ -5,15 +5,6 @@
   // play/pause + pagination + 3 slides: Workspace / Search /
   // About) renders here.
   //
-  // The focused-pane flip command turns a Hybrid surface to its back side;
-  // running it again flips back.
-  //
-  // The back body is per-slot: Pane.svelte's back-side
-  // switch mounts `dashboard/DashboardSlotBack.svelte` on the
-  // `active?.kind === "dashboard"` arm, which mirrors the carousel's
-  // current slot (Workspace / Search / About). DashboardTab renders only
-  // the front carousel plus a right-click Reload row.
-
   import { Check, RefreshCw, Settings2 } from "lucide-svelte";
   import { reloadWindow } from "../api/desktop";
   import { chordFor } from "../state/shortcuts";
@@ -38,13 +29,11 @@
   // proxy from tabs.svelte.ts; mutating `tab.carouselSlide`
   // reactively updates the layout snapshot the next session save
   // observes. `active` is the keep-alive visibility gate: the tab stays
-  // MOUNTED across tab switches and flips (so the Indexing graph keeps its
-  // force layout + poll state and never reloads on its own), hiding via
-  // the visibility contract when it is not the front-facing active tab.
-  // It is false while the pane is flipped to its back face or while
-  // another tab is active; the carousel then force-pauses so it does not
-  // auto-rotate invisibly, yank a back-side slot pick, or poll the indexer
-  // in the background.
+  // MOUNTED across tab switches and side flips (so the Indexing graph keeps
+  // its force layout + poll state and never reloads on its own), hiding via
+  // the visibility contract when it is not the active tab on the visible side.
+  // The carousel force-pauses when inactive so it does not auto-rotate or poll
+  // the indexer in the background.
   type Props = { tab: DashboardTab; active?: boolean };
   let { tab, active = true }: Props = $props();
 
@@ -74,9 +63,8 @@
     await reloadWindow();
   }
 
-  // Slot labels mirror the carousel slide titles + DashboardSlotBack's
-  // SLOTS list; the array index is the slide identity (0 Workspace, 1
-  // Search, 2 About).
+  // Slot labels mirror the carousel slide titles; the array index is the
+  // slide identity (0 Workspace, 1 Search, 2 About).
   const SLOTS = ["Workspace", "Search", "About"] as const;
 
   function onSlotToggle(i: number): void {
@@ -93,14 +81,13 @@
 
   function doSettings(): void {
     menu?.close();
-    // Flip the active pane's Hybrid surface to its back face.
     flipHybrid(layout.activePaneId);
   }
 
   // Tab-title right-click parity: Pane.svelte routes every tab kind
   // through the shared `tabMenu` state. Translate a request targeting
   // this dashboard tab into opening its HamburgerMenu at the click point,
-  // so the slot toggles + Settings + Reload are reachable from the tab
+  // so the slot toggles + Flip + Reload are reachable from the tab
   // title (not only the body). Reuses the same menu rows.
   $effect(() => {
     if (tabMenu.openForTabId !== tab.id || !tabMenu.anchor) return;
@@ -135,8 +122,7 @@
     <!-- Right-click menu for the Dashboard tab: a per-slot on/off
          checkbox row for each carousel slide (at least one stays on,
          enforced in toggleDashboardSlot); unchecked slots drop out of
-         auto-rotation and the dots. A separator, then Settings, which flips
-         to the per-slot back via flipHybrid, then Reload. -->
+         auto-rotation and the dots. A separator, then Flip and Reload. -->
     {#each SLOTS as label, i}
       <li>
         <button
@@ -158,8 +144,8 @@
     <li>
       <button role="menuitem" onclick={doSettings}>
         <Settings2 size={16} strokeWidth={1.75} aria-hidden="true" />
-        <span class="menu-row-label">Settings</span>
-        <span class="menu-row-chord">{chordLabel("app.settings.toggle")}</span>
+        <span class="menu-row-label">Flip</span>
+        <span class="menu-row-chord">{chordLabel("app.pane.flip")}</span>
       </button>
     </li>
     <li>

@@ -10,6 +10,7 @@ import "./search";
 import "./diagram";
 import "./editor";
 import "./browser";
+import "./tabs";
 import "./terminal";
 import "./dashboard";
 import "./graph";

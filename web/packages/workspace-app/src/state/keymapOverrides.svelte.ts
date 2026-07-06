@@ -176,9 +176,9 @@ export function builtInChordSuperseded(id: string): boolean {
 }
 
 // A user-assigned override chord must bubble out of a focused terminal so its
-// command can fire from the onWindowKey override dispatch (a de-defaulted
-// command has no built-in `escapeTerminal` flag). Escape exactly when dispatch
-// would fire, reusing the same reverse lookup.
+// command can fire from terminal focus (a de-defaulted command has no built-in
+// `escapeTerminal` flag). Escape exactly when dispatch would fire, reusing the
+// same reverse lookup.
 registerOverrideEscapeMatcher((chord) => commandIdForChord(chord) !== undefined);
 
 // ---- persistence seam --------------------------------------------------

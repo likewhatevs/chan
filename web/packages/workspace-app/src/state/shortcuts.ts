@@ -138,13 +138,20 @@ export const SHORTCUTS: readonly Shortcut[] = [
   // Mod+. is not browser-reserved on macOS, so it survives both
   // web + native dispatch through the same chord descriptor.
   // Mod+, takes the macOS preferences convention (Settings),
-  // leaving Mod+. for Hybrid Nav. The Flip chord (Mod+. Tab)
-  // pairs with the same prefix for internal consistency.
+  // leaving Mod+. for Hybrid Nav.
   {
     id: "app.pane.mode",
-    label: "Enter Hybrid Nav",
+    label: "Hybrid Nav",
     web: "Mod+.",
     native: "Mod+.",
+    group: "Panes",
+    escapeTerminal: true,
+  },
+  {
+    id: "app.pane.flip",
+    label: "Flip pane side",
+    web: "Ctrl+`",
+    native: "Ctrl+`",
     group: "Panes",
     escapeTerminal: true,
   },
@@ -601,6 +608,7 @@ function canonicalKey(e: KeyboardEvent): string | null {
   if (!k || k === "Shift" || k === "Alt" || k === "Control" || k === "Meta") {
     return null;
   }
+  if (e.code === "Backquote") return "`";
   if (k.length === 1) return k.toUpperCase();
   // Multi-char keys: registry uses the browser's `KeyboardEvent.key`
   // names verbatim (`Enter`, `Tab`, `Escape`, `ArrowLeft`, ...).
@@ -609,12 +617,10 @@ function canonicalKey(e: KeyboardEvent): string | null {
 
 /// Chord-escape lookup. Returns true when the incoming `KeyboardEvent`
 /// matches a user-assigned override chord OR any registry entry flagged
-/// `escapeTerminal: true`. `handleTerminalKeyEvent` calls this; on true, it
-/// returns `false` to xterm so the event bubbles to the App-level keymap.
+/// `escapeTerminal: true`.
 ///
 /// The override arm keeps a rebound command reachable from terminal focus even
-/// after its built-in default (and its `escapeTerminal` flag) is gone: the
-/// onWindowKey override dispatch only fires if the event first leaves xterm.
+/// after its built-in default (and its `escapeTerminal` flag) is gone.
 ///
 /// The registry arm matches BOTH the platform-resolved chord AND the
 /// cross-platform `Cmd+` literal alias (the registry's `Mod`
@@ -627,6 +633,10 @@ export function shouldEscapeTerminal(e: KeyboardEvent): boolean {
   const chord = chordFromEvent(e);
   if (!chord) return false;
   if (overrideEscapeMatcher?.(chord)) return true;
+  return registryEscapeCommandId(chord) !== null;
+}
+
+function registryEscapeCommandId(chord: Chord): string | null {
   const eventTokens = canonicalChordTokens(chord);
   const platform = currentPlatform();
   const os = currentOS();
@@ -637,10 +647,10 @@ export function shouldEscapeTerminal(e: KeyboardEvent): boolean {
     const override = overrideResolver?.(s.id, platform, os);
     if (override && !chordsEqual(override, registryChord)) continue;
     if (sameChord(eventTokens, canonicalChordTokens(registryChord))) {
-      return true;
+      return s.id;
     }
   }
-  return false;
+  return null;
 }
 
 /// Normalise a chord string into a Set-shape comparable across

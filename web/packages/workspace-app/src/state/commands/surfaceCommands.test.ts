@@ -19,6 +19,8 @@ function ctx(partial: Partial<CommandContext>): CommandContext {
     terminalOnly: false,
     terminalControl: false,
     activeSurface: null,
+    activeSide: null,
+    activeTabId: null,
     ...partial,
   };
 }

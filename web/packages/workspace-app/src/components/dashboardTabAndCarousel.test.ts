@@ -32,7 +32,7 @@ describe("DashboardTab type + helpers", () => {
 
   test("openDashboardInPane appends a Dashboard tab + activates it", () => {
     expect(tabs).toMatch(
-      /export function openDashboardInPane\(\s*paneId: string,\s*opts\?: OpenDashboardOptions,\s*\): void \{[\s\S]{1,800}kind: "dashboard",[\s\S]{1,400}node\.tabs\.push\(tab\);[\s\S]{1,200}node\.activeTabId = tab\.id;/,
+      /export function openDashboardInPane\(\s*paneId: string,\s*opts\?: OpenDashboardOptions,\s*\): void \{[\s\S]{1,500}const side = paneSide\(node\);[\s\S]{1,160}const tabs = mutablePaneTabs\(node, side\);[\s\S]{1,500}tabs\.push\(tab\);[\s\S]{1,200}setPaneActiveTabId\(node, tab\.id, side\);[\s\S]{1,120}node\.side = side;/,
     );
   });
 
@@ -83,13 +83,12 @@ describe("Pane.svelte render branch + import", () => {
     // state instead of reloading. The live DashboardTab proxy is threaded
     // through so the carousel slide cursor round-trips into the session
     // serializer; the `active` gate hides it + pauses the carousel/poll
-    // when it is not the front-facing active tab.
+    // when it is not the active tab on the visible side.
     expect(pane).toMatch(
-      /\{#each pane\.tabs\.filter\(\(t\) => t\.kind === "dashboard"\) as t \(t\.id\)\}[\s\S]{1,400}<DashboardTab[\s\S]{1,200}tab=\{t\}[\s\S]{1,200}active=\{!paneMode\.active && !pane\.showingBack && t\.id === pane\.activeTabId\}/,
+      /\{#each everyTab\.filter\(\(t\) => t\.kind === "dashboard"\) as t \(t\.id\)\}[\s\S]{1,400}<DashboardTab[\s\S]{1,200}tab=\{t\}[\s\S]{1,200}active=\{isLiveActive\(t\)\}/,
     );
-    // No front-face if-chain arm mounts the dashboard off `active` (which
-    // would remount it on every switch); the back-face DashboardSlotBack
-    // dispatch still keys off active?.kind, and that one stays.
+    // No active-tab if-chain arm mounts the dashboard off `active` (which
+    // would remount it on every switch).
     expect(pane).not.toMatch(/<DashboardTab\s+tab=\{active\}/);
   });
 });
@@ -315,9 +314,9 @@ describe("DashboardTab mounts the carousel", () => {
 });
 
 describe("Dashboard back card is per-slot (DashboardSlotBack)", () => {
-  test("DashboardTab right-click menu lists slot toggles + Settings + Reload", () => {
+  test("DashboardTab right-click menu lists slot toggles + Flip + Reload", () => {
     // The body right-click menu carries a per-slot on/off checkbox row,
-    // a separator, a Settings row that flips to the back face, and Reload.
+    // a separator, a Flip row that switches pane side, and Reload.
     expect(dashboard).toMatch(/import HamburgerMenu from "\.\/HamburgerMenu\.svelte";/);
     expect(dashboard).toMatch(/function onContextMenu\(e: MouseEvent\): void/);
     expect(dashboard).toMatch(/menu\?\.openAtCursor\(e\.clientX, e\.clientY\)/);
@@ -341,12 +340,12 @@ describe("Dashboard back card is per-slot (DashboardSlotBack)", () => {
     expect(dashboard).toMatch(
       /function onSlotToggle\(i: number\): void \{[\s\S]{1,200}toggleDashboardSlot\(tab, i\);/,
     );
-    // Settings flips the active pane via flipHybrid.
+    // Flip switches the active pane side via flipHybrid.
     expect(dashboard).toMatch(
       /function doSettings\(\): void \{[\s\S]{1,200}flipHybrid\(layout\.activePaneId\);/,
     );
     expect(dashboard).toMatch(
-      /onclick=\{doSettings\}[\s\S]{1,200}<span class="menu-row-label">Settings<\/span>[\s\S]{1,200}chordLabel\("app\.settings\.toggle"\)/,
+      /onclick=\{doSettings\}[\s\S]{1,200}<span class="menu-row-label">Flip<\/span>[\s\S]{1,200}chordLabel\("app\.pane\.flip"\)/,
     );
     // Reload stays.
     expect(dashboard).toMatch(
@@ -401,13 +400,11 @@ describe("Dashboard back card is per-slot (DashboardSlotBack)", () => {
     expect(screenLockControl).toMatch(/api\.screensaverState\(\)/);
   });
 
-  test("Pane.svelte back-side switch mounts DashboardSlotBack on the dashboard arm", () => {
-    expect(pane).toMatch(
+  test("Pane.svelte does not mount DashboardSlotBack", () => {
+    expect(pane).not.toMatch(
       /import DashboardSlotBack from "\.\/dashboard\/DashboardSlotBack\.svelte";/,
     );
-    expect(pane).toMatch(
-      /\{:else if active\?\.kind === "dashboard"\}[\s\S]{1,600}<DashboardSlotBack[\s\S]{1,160}tab=\{active\}[\s\S]{1,160}onDone=\{\(\) => flipHybrid\(pane\.id\)\}/,
-    );
+    expect(pane).not.toMatch(/<DashboardSlotBack/);
   });
 });
 
@@ -455,6 +452,14 @@ describe("EmptyPaneWelcome empty-pane surface", () => {
     expect(pane).not.toMatch(
       /import EmptyPaneCarousel from "\.\/EmptyPaneCarousel\.svelte";/,
     );
+  });
+
+  test("DottedSurface sizing ignores transient flip transforms", async () => {
+    const dotted = (await import("./DottedSurface.svelte?raw"))
+      .default as string;
+    expect(dotted).toMatch(/canvas\.clientWidth/);
+    expect(dotted).toMatch(/canvas\.clientHeight/);
+    expect(dotted).not.toMatch(/canvas\.getBoundingClientRect\(\)/);
   });
 });
 

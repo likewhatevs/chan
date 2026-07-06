@@ -293,12 +293,9 @@
   // DashboardTab passes the live slide cursor in (sourced from
   // tab.carouselSlide) plus `onSlideChange` to write moves back. The
   // carousel is CONTROLLED: tab.carouselSlide is the single source of
-  // truth, so the front dots and the flip-back slot picker stay in
-  // sync with no snapshot to drift. `active` is false while the pane is
-  // flipped to its back face; the front then force-pauses auto-rotate
-  // and the indexing poll, so a back-side slot pick is not yanked out
-  // from under the user and the rotated-away carousel does not tick
-  // invisibly.
+  // truth, so the dots stay in sync with no snapshot to drift. `active`
+  // is false while the tab is hidden; the carousel then force-pauses
+  // auto-rotate and the indexing poll.
   type Props = {
     slide?: number;
     onSlideChange?: (slide: number) => void;

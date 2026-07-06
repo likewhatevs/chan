@@ -282,7 +282,7 @@ Key rotation and updater-payload signing/verification are documented in `.agents
 
 ## 10. Settings and developer controls
 
-chan owns the Settings surface per workspace. The desktop menu item dispatches `app.settings.toggle` into the focused workspace webview; it is a no-op when focus is not inside a workspace window.
+chan owns the Settings overlay per workspace. The Settings chord is handled in the SPA so user keymap assignments can replace it; pane side flip is a separate `app.pane.flip` command.
 
 Maintainer controls stay native:
 

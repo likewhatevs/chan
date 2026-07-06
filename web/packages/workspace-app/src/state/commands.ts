@@ -14,7 +14,13 @@
 // the launcher and command-forwarding surfaces consume.
 
 import { ui } from "./store.svelte";
-import { activePane } from "./tabs.svelte";
+import {
+  activePane,
+  activeTabInPane,
+  paneActiveTabId,
+  paneSide,
+  type PaneSide,
+} from "./tabs.svelte";
 import { windowModeAllowsCommand } from "./windowMode";
 
 export type CommandCategory =
@@ -47,6 +53,8 @@ export type CommandContext = {
   terminalOnly: boolean;
   terminalControl: boolean;
   activeSurface: CommandSurface | null;
+  activeSide: PaneSide | null;
+  activeTabId: string | null;
 };
 
 export type Command = {
@@ -100,26 +108,37 @@ export function availableCommands(ctx: CommandContext): Command[] {
 
 // ---- context -----------------------------------------------------------
 
-function activeSurface(): CommandSurface | null {
+function activeCommandTarget(): {
+  surface: CommandSurface | null;
+  side: PaneSide | null;
+  tabId: string | null;
+} {
   try {
     const pane = activePane();
-    if (!pane.activeTabId) return null;
-    const tab = pane.tabs.find((t) => t.id === pane.activeTabId);
-    return tab ? tab.kind : null;
+    const side = paneSide(pane);
+    const tab = activeTabInPane(pane, side);
+    return {
+      surface: tab ? tab.kind : null,
+      side,
+      tabId: paneActiveTabId(pane, side),
+    };
   } catch {
     // activePane throws when the active node is not a leaf (mid-layout
     // transition); treat that as no active surface.
-    return null;
+    return { surface: null, side: null, tabId: null };
   }
 }
 
 /// Snapshot the current command context. Reads the reactive `ui` flags
 /// and the active tab, so calling this inside a $derived tracks changes.
 export function commandContext(): CommandContext {
+  const target = activeCommandTarget();
   return {
     terminalOnly: ui.terminalOnly,
     terminalControl: ui.terminalControl,
-    activeSurface: activeSurface(),
+    activeSurface: target.surface,
+    activeSide: target.side,
+    activeTabId: target.tabId,
   };
 }
 

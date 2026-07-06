@@ -5,7 +5,7 @@ import carousel from "./EmptyPaneCarousel.svelte?raw";
 
 // Dashboard tabs are kept ALIVE, exactly like graphs, terminals, and file
 // editors (see paneGraphTabKeepAlive): Pane.svelte renders every dashboard
-// tab from an each-block inside .face.front and flips an `active` prop;
+// tab from an all-pane each-block and flips an `active` prop;
 // inactive dashboards hide via the visibility:hidden contract (never
 // display:none, which would make the Indexing GraphCanvas refit to nothing
 // and lose its layout). Mounting only the active tab from an if-chain would
@@ -16,22 +16,21 @@ import carousel from "./EmptyPaneCarousel.svelte?raw";
 describe("dashboard tabs survive tab switches (keep-alive)", () => {
   test("dashboard each-block renders all dashboard tabs, keyed by tab id", () => {
     expect(pane).toMatch(
-      /\{#each pane\.tabs\.filter\(\(t\) => t\.kind === "dashboard"\) as t \(t\.id\)\}\s+<DashboardTab/,
+      /\{#each everyTab\.filter\(\(t\) => t\.kind === "dashboard"\) as t \(t\.id\)\}\s+<DashboardTab/,
     );
   });
 
   test("dashboard tabs never mount from the active-tab if-chain", () => {
     // Mounting the active dashboard from a front-face if-chain arm
     // (`<DashboardTab tab={active} ...>`) would remount it on every switch
-    // and reload the Indexing graph. The back-face DashboardSlotBack
-    // dispatch still keys off `active?.kind === "dashboard"`; that chain is
-    // fine. What must not appear is a DashboardTab mounted off `active`.
+    // and reload the Indexing graph. What must not appear is a DashboardTab
+    // mounted off `active`.
     expect(pane).not.toMatch(/<DashboardTab\s+tab=\{active\}/);
   });
 
-  test("active prop is gated by !paneMode.active + !pane.showingBack + activeTabId", () => {
+  test("active prop is gated by pane mode + visible-side active tab", () => {
     expect(pane).toMatch(
-      /<DashboardTab\s+tab=\{t\}\s+active=\{!paneMode\.active && !pane\.showingBack && t\.id === pane\.activeTabId\}/,
+      /<DashboardTab\s+tab=\{t\}\s+active=\{isLiveActive\(t\)\}/,
     );
   });
 

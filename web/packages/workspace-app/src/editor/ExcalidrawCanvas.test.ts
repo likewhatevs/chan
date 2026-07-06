@@ -74,8 +74,8 @@ describe("ExcalidrawCanvas island", () => {
 
 describe("inactive canvas tab hides via display:none (WKWebView island leak)", () => {
   // A GPU-composited Excalidraw island (the zoom/undo footer) leaks through
-  // an ancestor's visibility:hidden under the flip-card's preserve-3d
-  // context in WKWebView; hiding the shell with display:none stops it.
+  // an ancestor's visibility:hidden in WKWebView; hiding the shell with
+  // display:none stops it.
   test("the shell gains an offscreen hook toggled off the active prop", () => {
     expect(canvasSrc).toContain("class:offscreen={!active}");
     expect(canvasSrc).toMatch(/\.excalidraw-shell\.offscreen \{\s*display: none;\s*\}/);

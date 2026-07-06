@@ -580,7 +580,7 @@
     browserSelection.showWorkspace = false;
     menu = null;
   }
-  /// Settings (flip), routes through the surface-supplied `onFlip`
+  /// Flip routes through the surface-supplied `onFlip`
   /// callback (FBSurface → Pane.svelte → `flipHybrid(pane.id)`).
   /// Gated on `onFlip` existence so dock + overlay variants don't
   /// surface the entry.
@@ -1357,7 +1357,7 @@
          / Rename / Delete, kept here since this is the only surface
          for destructive + path ops). The unified "New File or
          Directory" entry detects file-vs-dir from the path's
-         trailing slash. A Settings (flip) entry renders at the foot
+         trailing slash. A Flip entry renders at the foot
          when `onFlip` is wired (tab variant only; dock + overlay
          variants pass no onFlip so the entry hides). Transfer rows
          are docked only because tab and overlay variants expose the
@@ -1412,8 +1412,8 @@
       <div class="ctx-sep" role="separator"></div>
       <button onclick={flipFromMenu}>
         <Settings2 size={16} strokeWidth={1.75} aria-hidden="true" />
-        <span class="menu-row-label">Settings</span>
-        <span class="menu-row-chord">{chordFor("app.settings.toggle") ?? ""}</span>
+        <span class="menu-row-label">Flip</span>
+        <span class="menu-row-chord">{chordFor("app.pane.flip") ?? ""}</span>
       </button>
     {/if}
   </div>

@@ -4,7 +4,7 @@ import fileEditorTab from "./FileEditorTab.svelte?raw";
 
 // File tabs are kept ALIVE, exactly like terminals (see
 // paneTerminalMount.test.ts): Pane.svelte renders every file tab from
-// an each-block inside .face.front and flips an `active` prop; the
+// an all-pane each-block and flips an `active` prop; the
 // inactive editors hide via `visibility: hidden` (never display:none,
 // so CM6 keeps real layout geometry while hidden). Unmount-on-switch
 // was the root cause of the WKWebView raw-markdown flash + scroll
@@ -15,7 +15,7 @@ import fileEditorTab from "./FileEditorTab.svelte?raw";
 describe("file tabs survive tab switches (keep-alive)", () => {
   test("file each-block renders all file tabs, keyed by tab id", () => {
     expect(pane).toMatch(
-      /\{#each pane\.tabs\.filter\(\(t\) => t\.kind === "file"\) as t \(t\.id\)\}\s+<FileEditorTab/,
+      /\{#each everyTab\.filter\(\(t\) => t\.kind === "file"\) as t \(t\.id\)\}\s+<FileEditorTab/,
     );
   });
 
@@ -23,22 +23,20 @@ describe("file tabs survive tab switches (keep-alive)", () => {
     // The pre-fix branch mounted ONLY the active file tab
     // (`<FileEditorTab tab={active} ...>` under
     // `{:else if active?.kind === "file"}`), so every switch destroyed
-    // and recreated the EditorView. The back face still dispatches
-    // HybridEditorConfig off `active?.kind === "file"` — that chain is
-    // fine; what must not return is a FileEditorTab mounted off
-    // `active`.
+    // and recreated the EditorView. What must not return is a
+    // FileEditorTab mounted off `active`.
     expect(pane).not.toMatch(/<FileEditorTab\s+tab=\{active\}/);
   });
 
-  test("active prop is gated by !paneMode.active + !pane.showingBack + activeTabId", () => {
+  test("active prop is gated by pane mode + visible-side active tab", () => {
     expect(pane).toMatch(
-      /<FileEditorTab\s+tab=\{t\}\s+active=\{!paneMode\.active && !pane\.showingBack && t\.id === pane\.activeTabId\}/,
+      /<FileEditorTab\s+tab=\{t\}\s+active=\{isLiveActive\(t\)\}/,
     );
   });
 
   test("focused prop adds the active-pane gate on top of the active gates", () => {
     expect(pane).toMatch(
-      /<FileEditorTab\s+tab=\{t\}\s+active=\{[^}]*\}\s+focused=\{!paneMode\.active && !pane\.showingBack && t\.id === pane\.activeTabId && viewLayout\.activePaneId === pane\.id\}\s*\/>/,
+      /<FileEditorTab\s+tab=\{t\}\s+active=\{[^}]*\}\s+focused=\{isLiveActive\(t\) && viewLayout\.activePaneId === pane\.id\}\s*\/>/,
     );
   });
 

@@ -58,8 +58,13 @@ describe("shortcut table", () => {
     // not reserved by any browser, surviving both web + native.
     const web = renderTable("web", "mac");
     const native = renderTable("native", "mac");
-    expect(web).toMatch(/^Enter Hybrid Nav\s+Cmd\+\.$/m);
-    expect(native).toMatch(/^Enter Hybrid Nav\s+Cmd\+\.$/m);
+    expect(web).toMatch(/^Hybrid Nav\s+Cmd\+\.$/m);
+    expect(native).toMatch(/^Hybrid Nav\s+Cmd\+\.$/m);
+  });
+
+  test("advertises pane side flip on Ctrl+`", () => {
+    expect(renderTable("web", "mac")).toMatch(/^Flip pane side\s+Ctrl\+`/m);
+    expect(renderTable("native", "mac")).toMatch(/^Flip pane side\s+Ctrl\+`/m);
   });
 
   // No-defaults rebind: Cmd+W is the macOS primary; Ctrl+D stays the

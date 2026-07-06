@@ -4,7 +4,7 @@ import store from "../state/store.svelte.ts?raw";
 import tree from "./FileTree.svelte?raw";
 import surface from "./FileBrowserSurface.svelte?raw";
 
-// Unified "New File or Directory" dialog and FileTree Settings flip.
+// Unified "New File or Directory" dialog and FileTree pane Flip.
 // The dialog detects file-vs-dir from the path's trailing slash.
 // `onFlip` is piped from FBSurface so the in-tree Settings entry
 // calls `flipHybrid(pane.id)`.
@@ -98,9 +98,9 @@ describe("FileTree wiring", () => {
     );
   });
 
-  test("Settings flip entry sits at the foot, gated on onFlip", () => {
+  test("Flip entry sits at the foot, gated on onFlip", () => {
     expect(tree).toMatch(
-      /\{#if onFlip\}[\s\S]{1,400}<div class="ctx-sep" role="separator"><\/div>[\s\S]{1,400}onclick=\{flipFromMenu\}[\s\S]{1,400}<span class="menu-row-label">Settings<\/span>/,
+      /\{#if onFlip\}[\s\S]{1,400}<div class="ctx-sep" role="separator"><\/div>[\s\S]{1,400}onclick=\{flipFromMenu\}[\s\S]{1,400}<span class="menu-row-label">Flip<\/span>/,
     );
   });
 });

@@ -20,8 +20,9 @@ describe("PaneModeHelp terminal-only filtering", () => {
     for (const action of [
       "Stage File Browser",
       "Stage Graph",
+      "Stage Dashboard",
       "Stage New Draft",
-      "Search overlay",
+      "Stage Diagram",
     ]) {
       expect(src).toMatch(
         new RegExp(`action: "${action}", workspaceOnly: true`),

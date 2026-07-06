@@ -55,7 +55,7 @@ describe("store-side helper", () => {
     // csv→table); source-only files (.rs/.py) yield "source" and the toggle
     // no-ops. Mirrors FileEditorTab's hasRenderedMode / renderedModeForTab gate.
     expect(tabs).toMatch(
-      /export function toggleActiveFileTabMode\(\): void \{[\s\S]{1,800}if \(!tab \|\| tab\.kind !== "file"\) return;[\s\S]{1,300}const rendered = defaultModeForPath\(tab\.path, tab\.fileKind\);[\s\S]{1,120}if \(rendered === "source"\) return;[\s\S]{1,200}const next = tab\.mode === "source" \? rendered : "source";[\s\S]{1,700}setMode\(tab, next\);/,
+      /export function toggleActiveFileTabMode\(\): void \{[\s\S]{1,120}const tab = activeFileTab\(\);[\s\S]{1,120}if \(!tab\) return;[\s\S]{1,300}const rendered = defaultModeForPath\(tab\.path, tab\.fileKind\);[\s\S]{1,120}if \(rendered === "source"\) return;[\s\S]{1,200}const next = tab\.mode === "source" \? rendered : "source";[\s\S]{1,700}setMode\(tab, next\);/,
     );
   });
 
@@ -70,7 +70,7 @@ describe("store-side helper", () => {
 
   test("helper is a no-op when the active tab isn't a file", () => {
     expect(tabs).toMatch(
-      /export function toggleActiveFileTabMode\(\): void \{[\s\S]{1,400}const node = layout\.nodes\[layout\.activePaneId\];[\s\S]{1,200}if \(!node \|\| node\.kind !== "leaf"\) return;/,
+      /export function toggleActiveFileTabMode\(\): void \{[\s\S]{1,120}const tab = activeFileTab\(\);[\s\S]{1,120}if \(!tab\) return;/,
     );
   });
 });

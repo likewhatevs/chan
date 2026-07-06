@@ -167,12 +167,11 @@
   /* WKWebView leaks the composited Excalidraw zoom/undo Island (the
      .layer-ui__wrapper__footer, a plain absolute z-index-4 layer inside
      the React root with no portal, position:fixed, or visibility override)
-     through an ancestor's visibility:hidden under the flip-card's
-     preserve-3d 3D context, so an inactive board keeps painting its footer
-     over the active tab. Canvas tabs hold no CodeMirror or xterm, so the
-     keep-alive contract's pre-layout reason does not apply here; display:none
-     is safe and Excalidraw re-measures on unhide. Do not generalize this to
-     editor/terminal tabs. */
+     through an ancestor's visibility:hidden, so an inactive board keeps
+     painting its footer over the active tab. Canvas tabs hold no CodeMirror
+     or xterm, so the keep-alive contract's pre-layout reason does not apply
+     here; display:none is safe and Excalidraw re-measures on unhide. Do not
+     generalize this to editor/terminal tabs. */
   .excalidraw-shell.offscreen {
     display: none;
   }

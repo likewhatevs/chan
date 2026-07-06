@@ -3,6 +3,8 @@
 
   import {
     activeLayout,
+    activeTabInPane,
+    allPaneTabs,
     bumpTabFocusPulse,
     closeTab,
     enterPaneMode,
@@ -24,13 +26,18 @@
     paneModeSetHover,
     paneModeStagedTabIds,
     paneModeSwapWith,
+    paneActiveTabId,
     paneWobble,
+    paneSide,
+    paneTabs,
     reorderTab,
     reopenClosedTab,
+    selectTabInPane,
     setActivePane,
     setWindowFocusColor,
     setTerminalActivity,
     shouldCloseTabAfterDragEnd,
+    type PaneSide,
     type FocusColor,
     type LeafNode,
     type PaneDropEdge,
@@ -54,11 +61,6 @@
     X,
   } from "lucide-svelte";
 
-  import HybridTerminalConfig from "./HybridTerminalConfig.svelte";
-  import HybridEditorConfig from "./HybridEditorConfig.svelte";
-  import HybridGraphConfig from "./HybridGraphConfig.svelte";
-  import HybridFileBrowserConfig from "./HybridFileBrowserConfig.svelte";
-  import DashboardSlotBack from "./dashboard/DashboardSlotBack.svelte";
   import EmptyPaneWelcome from "./EmptyPaneWelcome.svelte";
   import FileEditorTab from "./FileEditorTab.svelte";
   import DashboardTab from "./DashboardTab.svelte";
@@ -102,12 +104,20 @@
 
   let { pane }: { pane: LeafNode } = $props();
 
-  const active = $derived(pane.tabs.find((t) => t.id === pane.activeTabId) ?? null);
+  const visibleSide = $derived(paneSide(pane));
+  const visibleTabs = $derived(paneTabs(pane, visibleSide));
+  const visibleActiveTabId = $derived(paneActiveTabId(pane, visibleSide));
+  const active = $derived(activeTabInPane(pane, visibleSide));
+  const everyTab = $derived(allPaneTabs(pane));
+  type PaneFlipAxis = "horizontal" | "vertical";
 
-  // No "HYBRID X" label in the tab strip's dead-zone slot: the
-  // family-name title lives at the top of the back-side config view
-  // component (`HybridXConfig.svelte`), so a tab-strip-level
-  // duplicate would be redundant chrome.
+  function isVisibleTab(tab: Tab): boolean {
+    return visibleTabs.some((candidate) => candidate.id === tab.id);
+  }
+
+  function isLiveActive(tab: Tab): boolean {
+    return !paneMode.active && tab.id === visibleActiveTabId && isVisibleTab(tab);
+  }
 
   /// Per-row is_dir lookup for the active tree, keyed by path. Workspaces
   /// the File-Browser tab title which needs to render "the parent
@@ -122,6 +132,39 @@
     const sel = tab.selected ?? undefined;
     const selectedIsDir = sel ? treeIsDir.get(sel) : undefined;
     return { workspaceName: workspaceDisplayName(), selectedIsDir };
+  }
+
+  function tabPathOverflow(
+    node: HTMLElement,
+    label: string,
+  ): { update(label: string): void; destroy(): void } {
+    let frame: number | null = null;
+
+    const measure = () => {
+      frame = null;
+      node.classList.toggle("overflowing", node.scrollWidth > node.clientWidth + 1);
+    };
+    const schedule = () => {
+      if (frame !== null) cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(measure);
+    };
+
+    const resizeObserver =
+      typeof ResizeObserver === "undefined" ? null : new ResizeObserver(schedule);
+    resizeObserver?.observe(node);
+    void label;
+    schedule();
+
+    return {
+      update(nextLabel: string) {
+        void nextLabel;
+        schedule();
+      },
+      destroy() {
+        resizeObserver?.disconnect();
+        if (frame !== null) cancelAnimationFrame(frame);
+      },
+    };
   }
 
   /// Per-path "is this file a contact?" lookup. Workspaces the tab-strip
@@ -145,6 +188,10 @@
   function chordLabel(id: string | undefined): string {
     return id ? (chordFor(id) ?? "") : "";
   }
+  const flipChord = $derived(chordLabel("app.pane.flip"));
+  const sideToggleTitle = $derived(
+    `Flip to side ${visibleSide === "a" ? "B" : "A"}${flipChord ? ` (${flipChord})` : ""}`,
+  );
 
   /// Empty panes have no right-click context menu. The command
   /// launcher is the discovery surface for spawn actions; the pane
@@ -295,7 +342,7 @@
       paneMode.hoverPaneId === pane.id,
   );
 
-  /// Ids of tabs added by the T/O/P/G/E chords during the current
+  /// Ids of tabs added by app-spawn chords during the current
   /// pane-mode session. Each entry is a "ghost tab": visible in the
   /// draft layout but not yet committed to the live one. Empty when
   /// pane mode is inactive.
@@ -310,6 +357,7 @@
   /// `onanimationend` handler clears the class so the next event
   /// can re-trigger cleanly.
   const wobbleVersion = $derived(paneWobble.versions[pane.id] ?? 0);
+  let paneEl: HTMLDivElement | undefined = $state();
   let wobbleActive = $state(false);
   let lastWobbleVersion = 0;
   $effect(() => {
@@ -322,27 +370,69 @@
     });
   });
 
-  /// True two-face card: front and back are co-rendered on a
-  /// `preserve-3d` `.flip-card` that rotates via a CSS transition on
-  /// `transform`, driven directly by `showingBack`. No rAF, no version
-  /// bus, no keyframe. `paneMode` (Hybrid Nav) force-fronts the card so
-  /// its flat preview never reveals the rotated-away back face.
-  const flipped = $derived(pane.showingBack && !paneMode.active);
+  /// Side flips animate on the axis that matches the pane's shape:
+  /// wide panes turn horizontally, tall panes turn vertically, and a
+  /// square pane chooses either axis so both orientations stay possible.
+  let sideFlipActive = $state(false);
+  let sideFlipAxis = $state<PaneFlipAxis>("horizontal");
+  let sideFlipStartTransform = $state("perspective(1200px) rotateX(-78deg) scale(0.985)");
+  let sideFlipMidTransform = $state("perspective(1200px) rotateX(8deg) scale(1.005)");
+  let lastSideForFlip: PaneSide | null = null;
+  let sideFlipFrame: number | null = null;
+  let sideFlipTimer: ReturnType<typeof setTimeout> | null = null;
 
-  /// Latch: the back face mounts on the first flip and stays mounted. A
-  /// pane never flipped never mounts (and so never polls) its config
-  /// body; once flipped, the back persists so the flip-back animation
-  /// keeps it visible through the rotation. A reload into a flipped pane
-  /// initialises the latch from `showingBack`.
-  let backMounted = $state(false);
+  function clearSideFlipHandles(): void {
+    if (sideFlipFrame !== null) {
+      cancelAnimationFrame(sideFlipFrame);
+      sideFlipFrame = null;
+    }
+    if (sideFlipTimer !== null) {
+      clearTimeout(sideFlipTimer);
+      sideFlipTimer = null;
+    }
+  }
+
+  function sideFlipAxisForPane(): PaneFlipAxis {
+    const rect = paneEl?.getBoundingClientRect();
+    const width = Math.round(rect?.width ?? 0);
+    const height = Math.round(rect?.height ?? 0);
+    if (height > width) return "vertical";
+    if (width > height) return "horizontal";
+    return Math.random() < 0.5 ? "vertical" : "horizontal";
+  }
+
+  function configureSideFlip(from: PaneSide, to: PaneSide): void {
+    const axis = sideFlipAxisForPane();
+    const turn = from === "a" && to === "b" ? -1 : 1;
+    const rotate = axis === "vertical" ? "rotateY" : "rotateX";
+    sideFlipAxis = axis;
+    sideFlipStartTransform = `perspective(1200px) ${rotate}(${turn * 78}deg) scale(0.985)`;
+    sideFlipMidTransform = `perspective(1200px) ${rotate}(${-turn * 8}deg) scale(1.005)`;
+  }
+
   $effect(() => {
-    if (pane.showingBack) backMounted = true;
+    const side = visibleSide;
+    if (lastSideForFlip === null) {
+      lastSideForFlip = side;
+      return;
+    }
+    if (lastSideForFlip === side) return;
+    const previousSide = lastSideForFlip;
+    lastSideForFlip = side;
+    configureSideFlip(previousSide, side);
+    sideFlipActive = false;
+    clearSideFlipHandles();
+    sideFlipFrame = requestAnimationFrame(() => {
+      sideFlipFrame = null;
+      sideFlipActive = true;
+      sideFlipTimer = setTimeout(() => {
+        sideFlipActive = false;
+        sideFlipTimer = null;
+      }, 320);
+    });
   });
 
-  /// No back-side-attention indicator: the back is a per-surface
-  /// configuration view, not a content tab collection, so there is no
-  /// "unread" or "activity" signal on a settings surface to attend
-  /// to.
+  onDestroy(clearSideFlipHandles);
 
   function closePaneMenus(): void {
     paneMenu?.close();
@@ -427,14 +517,9 @@
   let bodyDropEdge: PaneDropEdge | null = $state(null);
   // Index where a per-tab drop indicator (a thin vertical bar) is
   // currently shown. -1 means no indicator. We render a visual bar
-  // before tab[idx]; idx === pane.tabs.length means "after the last
-  // tab".
+  // before tab[idx]; idx === visibleTabs.length means "after the
+  // last tab".
   let dropIndicator = $state<number>(-1);
-  /// Snapshot of `pane.activeTabId` taken in a tab's onmousedown,
-  /// read in the same tab's onclick. Lets the click handler tell a
-  /// tab-switch (was a different tab) apart from a re-click on the
-  /// already-active tab (only the latter pops the menu).
-  let tabMouseDownPrevActive: string | null = null;
 
   // No Cmd+S save keystroke. Autosave (debounced on idle +
   // tab-close + visibility hooks) is the canonical write path, so an
@@ -492,6 +577,13 @@
   const TAB_DRAG_MIME = "application/x-md-tab";
   const CROSS_TAB_MIME = "application/x-chan-tab+json";
   const FILE_DRAG_MIME = "application/x-md-file";
+  type TabDragPayload = {
+    fromPaneId: string;
+    fromSide?: PaneSide;
+    tabId: string;
+    fromWindow?: string;
+  };
+  const activeDragSourceSides = new Map<string, PaneSide>();
   // The drag's scope (window kind + workspace identity) is carried as a MIME
   // TYPE so a target can read it during `dragover` (when payload VALUES are
   // not readable). The human-readable scope carries `:`/`|`, which WKWebView
@@ -514,8 +606,26 @@
       workspaceKey: workspace.info?.metadata_key ?? workspace.info?.root ?? null,
     });
 
-  function onDragStart(e: DragEvent, tabId: string): void {
+  function dragHasType(e: DragEvent, mime: string): boolean {
+    const types = e.dataTransfer?.types;
+    if (!types) return false;
+    const bag = types as unknown as {
+      includes?: (value: string) => boolean;
+      contains?: (value: string) => boolean;
+      length: number;
+      [index: number]: string;
+    };
+    if (typeof bag.includes === "function" && bag.includes(mime)) return true;
+    if (typeof bag.contains === "function" && bag.contains(mime)) return true;
+    for (let i = 0; i < bag.length; i += 1) {
+      if (bag[i] === mime) return true;
+    }
+    return false;
+  }
+
+  function onDragStart(e: DragEvent, tabId: string, fromSide: PaneSide): void {
     if (!e.dataTransfer) return;
+    activeDragSourceSides.set(tabId, fromSide);
     e.dataTransfer.effectAllowed = "move";
     // `fromWindow` is what actually separates an intra-window move from a
     // cross-window one: pane IDs are a per-window counter (tabs.svelte.ts
@@ -523,9 +633,9 @@
     // match a same-id local pane. See isIntraWindowDrag.
     e.dataTransfer.setData(
       TAB_DRAG_MIME,
-      JSON.stringify({ fromPaneId: pane.id, tabId, fromWindow: sessionWindowId() }),
+      JSON.stringify({ fromPaneId: pane.id, fromSide, tabId, fromWindow: sessionWindowId() }),
     );
-    const t = pane.tabs.find((tab) => tab.id === tabId);
+    const t = paneTabs(pane, fromSide).find((tab) => tab.id === tabId);
     if (t) {
       e.dataTransfer.setData(CROSS_TAB_MIME, JSON.stringify(crossWindowPayload(t)));
     }
@@ -580,11 +690,13 @@
   /// still in this pane after a successful move, the drop must have
   /// landed in another window - close it locally so the visual
   /// matches the cross-window result.
-  function onDragEnd(e: DragEvent, tabId: string): void {
-    if (!shouldCloseTabAfterDragEnd(pane.id, tabId, e.dataTransfer?.dropEffect)) {
+  function onDragEnd(e: DragEvent, tabId: string, fallbackSide: PaneSide): void {
+    const fromSide = activeDragSourceSides.get(tabId) ?? fallbackSide;
+    activeDragSourceSides.delete(tabId);
+    if (!shouldCloseTabAfterDragEnd(pane.id, tabId, e.dataTransfer?.dropEffect, fromSide)) {
       return;
     }
-    const t = pane.tabs.find((tab) => tab.id === tabId);
+    const t = allPaneTabs(pane).find((tab) => tab.id === tabId);
     if (t?.kind === "terminal" && t.terminalSessionId) {
       // Session-preserving cross-window MOVE: the target window re-attached to
       // this SAME live PTY (shared `/terminal` registry), so remove the source
@@ -644,22 +756,16 @@
   }
 
   function isAcceptedDrag(e: DragEvent): boolean {
-    const types = e.dataTransfer?.types;
-    if (!types) return false;
     return (
-      types.includes(TAB_DRAG_MIME) ||
-      types.includes(CROSS_TAB_MIME) ||
-      types.includes(FILE_DRAG_MIME)
+      dragHasType(e, TAB_DRAG_MIME) ||
+      dragHasType(e, CROSS_TAB_MIME) ||
+      dragHasType(e, FILE_DRAG_MIME)
     );
   }
 
   /// A tab MOVE (vs a file-tree drag, which is same-window and always allowed).
   function isTabMoveDrag(e: DragEvent): boolean {
-    const types = e.dataTransfer?.types;
-    return (
-      !!types &&
-      (types.includes(TAB_DRAG_MIME) || types.includes(CROSS_TAB_MIME))
-    );
+    return dragHasType(e, TAB_DRAG_MIME) || dragHasType(e, CROSS_TAB_MIME);
   }
 
   /// Whether a tab move is scope-compatible with THIS window: it must carry our
@@ -668,21 +774,26 @@
   /// terminal↔workspace and different-workspace drags carry a different scope
   /// (absent → rejected). Blocks the cross-window drags that misbehave today.
   function isTabDragScopeCompatible(e: DragEvent): boolean {
-    const types = e.dataTransfer?.types;
-    return !!types && types.includes(scopeMime(currentDragScope()));
+    return dragHasType(e, scopeMime(currentDragScope()));
+  }
+
+  function rejectTabMoveDrag(e: DragEvent): void {
+    if (e.dataTransfer) e.dataTransfer.dropEffect = "none";
+    dropActive = false;
+    dropIndicator = -1;
   }
 
   function onDragOver(e: DragEvent): void {
     if (!isAcceptedDrag(e)) return;
     // Disallowed cross-window tab move (different kind / workspace): leave it
     // un-prevented so the browser shows the no-drop cursor. File drags pass.
-    if (isTabMoveDrag(e) && !isTabDragScopeCompatible(e)) return;
+    if (isTabMoveDrag(e) && !isTabDragScopeCompatible(e)) {
+      rejectTabMoveDrag(e);
+      return;
+    }
     e.preventDefault();
     if (e.dataTransfer) {
-      const isTabMove =
-        e.dataTransfer.types.includes(TAB_DRAG_MIME) ||
-        e.dataTransfer.types.includes(CROSS_TAB_MIME);
-      e.dataTransfer.dropEffect = isTabMove ? "move" : "copy";
+      e.dataTransfer.dropEffect = isTabMoveDrag(e) ? "move" : "copy";
     }
     dropActive = true;
   }
@@ -697,20 +808,20 @@
     }
   }
 
-  function tabDragPayload(
-    e: DragEvent,
-  ): { fromPaneId: string; tabId: string; fromWindow?: string } | null {
+  function tabDragPayload(e: DragEvent): TabDragPayload | null {
     const raw = e.dataTransfer?.getData(TAB_DRAG_MIME);
     if (!raw) return null;
     try {
       const parsed = JSON.parse(raw) as {
         fromPaneId?: string;
+        fromSide?: PaneSide;
         tabId?: string;
         fromWindow?: string;
       };
       if (!parsed.fromPaneId || !parsed.tabId) return null;
       return {
         fromPaneId: parsed.fromPaneId,
+        fromSide: parsed.fromSide === "a" || parsed.fromSide === "b" ? parsed.fromSide : undefined,
         tabId: parsed.tabId,
         fromWindow: parsed.fromWindow,
       };
@@ -750,8 +861,10 @@
       !payload ||
       !isIntraWindowDrag(payload.fromWindow) ||
       !paneInThisWindow(payload.fromPaneId)
-    )
+    ) {
+      if (isTabMoveDrag(e)) rejectTabMoveDrag(e);
       return;
+    }
     e.preventDefault();
     e.stopPropagation();
     if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
@@ -780,7 +893,7 @@
       return;
     e.preventDefault();
     e.stopPropagation();
-    markLocalTabDrop(payload.fromPaneId, payload.tabId);
+    markLocalTabDrop(payload.fromPaneId, payload.tabId, payload.fromSide);
     detachTabToPaneEdge(payload.fromPaneId, payload.tabId, pane.id, edge);
   }
 
@@ -801,13 +914,13 @@
   /// or after this tab" semantic since insertion between tabs is the
   /// useful action there.
   function isSamePaneDrag(e: DragEvent): boolean {
-    const raw = e.dataTransfer?.getData(TAB_DRAG_MIME);
-    if (!raw) return false;
-    try {
-      return (JSON.parse(raw) as { fromPaneId: string }).fromPaneId === pane.id;
-    } catch {
-      return false;
-    }
+    const payload = tabDragPayload(e);
+    return (
+      !!payload &&
+      isIntraWindowDrag(payload.fromWindow) &&
+      payload.fromPaneId === pane.id &&
+      (payload.fromSide ?? visibleSide) === visibleSide
+    );
   }
 
   function onTabDragOver(e: DragEvent, tabIdx: number): void {
@@ -816,14 +929,14 @@
     // browser shows the no-drop cursor and no insertion indicator appears.
     // Returning before stopPropagation lets the strip-level handler also
     // reject it consistently. File drags pass.
-    if (isTabMoveDrag(e) && !isTabDragScopeCompatible(e)) return;
+    if (isTabMoveDrag(e) && !isTabDragScopeCompatible(e)) {
+      rejectTabMoveDrag(e);
+      return;
+    }
     e.preventDefault();
     e.stopPropagation(); // don't let the strip-level handler also fire
     if (e.dataTransfer) {
-      const isTabMove =
-        e.dataTransfer.types.includes(TAB_DRAG_MIME) ||
-        e.dataTransfer.types.includes(CROSS_TAB_MIME);
-      e.dataTransfer.dropEffect = isTabMove ? "move" : "copy";
+      e.dataTransfer.dropEffect = isTabMoveDrag(e) ? "move" : "copy";
     }
     dropActive = true;
     // For same-pane drags we show the indicator at the target tab's
@@ -848,22 +961,21 @@
     const tabRaw = dt.getData(TAB_DRAG_MIME);
     if (tabRaw) {
       try {
-        const { fromPaneId, tabId, fromWindow } = JSON.parse(tabRaw) as {
-          fromPaneId: string;
-          tabId: string;
-          fromWindow?: string;
-        };
+        const { fromPaneId, fromSide, tabId, fromWindow } = JSON.parse(tabRaw) as TabDragPayload;
         if (isIntraWindowDrag(fromWindow) && paneInThisWindow(fromPaneId)) {
           e.preventDefault();
           e.stopPropagation();
-          markLocalTabDrop(fromPaneId, tabId);
-          if (fromPaneId === pane.id) {
+          markLocalTabDrop(fromPaneId, tabId, fromSide);
+          if (fromPaneId === pane.id && (fromSide ?? visibleSide) === visibleSide) {
             // Same-pane reorder: drop on tab T means source lands at
             // position T in the final array. No half-tab logic; drops
             // on either half of the target produce the same swap.
-            reorderTab(pane.id, tabId, tabIdx);
+            reorderTab(pane.id, tabId, tabIdx, visibleSide);
           } else {
-            moveTab(fromPaneId, tabId, pane.id, indicatorIndexFor(tabIdx, e));
+            moveTab(fromPaneId, tabId, pane.id, indicatorIndexFor(tabIdx, e), {
+              fromSide,
+              toSide: visibleSide,
+            });
           }
           return;
         }
@@ -905,23 +1017,22 @@
     const tabRaw = dt.getData(TAB_DRAG_MIME);
     if (tabRaw) {
       try {
-        const { fromPaneId, tabId, fromWindow } = JSON.parse(tabRaw) as {
-          fromPaneId: string;
-          tabId: string;
-          fromWindow?: string;
-        };
+        const { fromPaneId, fromSide, tabId, fromWindow } = JSON.parse(tabRaw) as TabDragPayload;
         if (isIntraWindowDrag(fromWindow) && paneInThisWindow(fromPaneId)) {
           e.preventDefault();
-          markLocalTabDrop(fromPaneId, tabId);
-          if (fromPaneId === pane.id) {
+          markLocalTabDrop(fromPaneId, tabId, fromSide);
+          if (fromPaneId === pane.id && (fromSide ?? visibleSide) === visibleSide) {
             // Strip-level drop in the same pane (i.e., dropped on the
             // background or actions area, not directly on a tab). Treat
             // it as "move source to the end" so dragging a leftmost tab
             // rightward past the last tab does the obvious thing instead
             // of silently no-op'ing.
-            reorderTab(pane.id, tabId, Math.max(0, pane.tabs.length - 1));
+            reorderTab(pane.id, tabId, Math.max(0, visibleTabs.length - 1), visibleSide);
           } else {
-            moveTab(fromPaneId, tabId, pane.id);
+            moveTab(fromPaneId, tabId, pane.id, undefined, {
+              fromSide,
+              toSide: visibleSide,
+            });
           }
           return;
         }
@@ -959,9 +1070,15 @@
   class="pane"
   class:focused={isFocused}
   class:wobble={wobbleActive}
+  class:sideFlipActive={sideFlipActive}
+  class:sideFlipHorizontal={sideFlipAxis === "horizontal"}
+  class:sideFlipVertical={sideFlipAxis === "vertical"}
   class:transaction-active={paneMode.transactionMode}
   class:transaction-grab={isTransactionGrab}
   class:transaction-drop-target={isTransactionDropTarget}
+  bind:this={paneEl}
+  style:--pane-side-flip-start={sideFlipStartTransform}
+  style:--pane-side-flip-mid={sideFlipMidTransform}
   data-focus-color={focusColorForWindow()}
   data-pane-id={pane.id}
   onmousedown={(e) => {
@@ -973,23 +1090,15 @@
   onmouseup={onPaneBodyMouseUp}
   onanimationend={(e) => {
     if (e.animationName === "pane-wobble-once") wobbleActive = false;
+    if (e.animationName === "pane-side-flip") sideFlipActive = false;
   }}
   role="region"
   aria-label="editor pane"
 >
-  <!-- The tab strip stays visible on the back-side configuration
-       view: tabs render mirrored (`scaleX(-1)`), the hamburger swaps
-       to the opposite end via `order: -1`, and the family-name title
-       ("Hybrid Terminal" / "Hybrid Editor" / "Hybrid Graph" /
-       "Hybrid File Browser") lives inside the dead-zone slot. Tabs
-       stay clickable: clicking a mirrored tab swaps the active
-       front-tab and the back-side dispatch follows. Flip back via the
-       `Cmd+. Tab` chord or the hamburger Flip entry. -->
   <!-- svelte-ignore a11y_interactive_supports_focus -->
   <div
     class="tabs"
     class:drop-active={dropActive}
-    class:flipped={pane.showingBack}
     class:control-hidden={ui.terminalControl}
     role="tablist"
     ondragover={onDragOver}
@@ -999,28 +1108,22 @@
       if ((e.target as Element | null)?.closest(".tab, .actions")) return;
       // Empty panes have no right-click menu; only non-empty panes
       // get the Reload / Open Inspector context menu.
-      if (pane.tabs.length === 0) return;
+      if (visibleTabs.length === 0) return;
       openPaneContextAt(e);
     }}
   >
-    {#each pane.tabs as t, i (t.id)}
+    {#each visibleTabs as t, i (t.id)}
+      {@const label = tabLabelInPane(t, visibleTabs, browserCtxFor(t))}
       {#if dropIndicator === i}
         <div class="drop-bar" aria-hidden="true"></div>
       {/if}
       <!-- svelte-ignore a11y_click_events_have_key_events -->
       <div
         class="tab"
-        class:active={t.id === pane.activeTabId}
+        class:active={t.id === visibleActiveTabId}
         class:staged={paneModeStagedSet.has(t.id)}
         onmousedown={() => {
-          // Stash the pre-switch active tab id so the onclick handler
-          // can tell whether this is a tab-switch (do NOT pop the
-          // menu) or a re-click on the already-active tab (DO pop the
-          // menu). Cleared in onclick. mousedown fires before click,
-          // so this captures the previous value before we overwrite
-          // it below.
-          tabMouseDownPrevActive = pane.activeTabId;
-          pane.activeTabId = t.id;
+          selectTabInPane(pane.id, t.id);
           if (t.kind === "terminal") setTerminalActivity(t, false);
           if (t.kind === "terminal" || t.kind === "file") bumpTabFocusPulse();
         }}
@@ -1038,13 +1141,10 @@
           if (e.button !== 0) return;
           if (t.kind === "terminal" || t.kind === "file") bumpTabFocusPulse();
         }}
-        onclick={() => {
-          tabMouseDownPrevActive = null;
-        }}
         oncontextmenu={(e) => {
           e.preventDefault();
           e.stopPropagation();
-          pane.activeTabId = t.id;
+          selectTabInPane(pane.id, t.id);
           if (t.kind === "terminal") setTerminalActivity(t, false);
           layout.activePaneId = pane.id;
           openTabMenu(t.id, {
@@ -1056,11 +1156,11 @@
         }}
         role="tab"
         tabindex="0"
-        aria-selected={t.id === pane.activeTabId}
+        aria-selected={t.id === visibleActiveTabId}
         title={tabTooltip(t)}
         draggable="true"
-        ondragstart={(e) => onDragStart(e, t.id)}
-        ondragend={(e) => onDragEnd(e, t.id)}
+        ondragstart={(e) => onDragStart(e, t.id, visibleSide)}
+        ondragend={(e) => onDragEnd(e, t.id, visibleSide)}
         ondragover={(e) => onTabDragOver(e, i)}
         ondrop={(e) => onTabDrop(e, i)}
       >
@@ -1106,16 +1206,16 @@
         <!-- svelte-ignore a11y_no_static_element_interactions -->
         <span
           class="path"
+          use:tabPathOverflow={label}
           aria-haspopup="menu"
           aria-expanded={tabMenu.openForTabId === t.id}
           onclick={(e) => {
             e.stopPropagation();
-            tabMouseDownPrevActive = null;
           }}
           oncontextmenu={(e) => {
             e.preventDefault();
             e.stopPropagation();
-            pane.activeTabId = t.id;
+            selectTabInPane(pane.id, t.id);
             if (t.kind === "terminal") setTerminalActivity(t, false);
             layout.activePaneId = pane.id;
             openTabMenu(t.id, {
@@ -1125,7 +1225,7 @@
               bottom: e.clientY,
             });
           }}
-        >{tabLabelInPane(t, pane.tabs, browserCtxFor(t))}</span>
+        >{label}</span>
         {#if isDirty(t)}
           <span class="dirty unsaved" title="unsaved changes">●</span>
         {/if}
@@ -1151,11 +1251,11 @@
             closeTab(pane.id, t.id);
           }}
           title="close"
-          aria-label={`close ${tabLabelInPane(t, pane.tabs, browserCtxFor(t))}`}
+          aria-label={`close ${label}`}
         >×</button>
       </div>
     {/each}
-    {#if dropIndicator === pane.tabs.length}
+    {#if dropIndicator === visibleTabs.length}
       <div class="drop-bar" aria-hidden="true"></div>
     {/if}
     <!-- Top-bar dead zone. The empty stretch between the last tab
@@ -1172,6 +1272,14 @@
       ondblclick={onDeadZoneDblClick}
     ></div>
     <div class="actions">
+      <button
+        class="side-toggle"
+        onclick={() => flipHybrid(pane.id)}
+        title={sideToggleTitle}
+        aria-label={sideToggleTitle}
+      >
+        {visibleSide.toUpperCase()}
+      </button>
       <!-- Pane chrome menu: command launcher, then pane-local focus
            border colour. Surface actions live in the launcher. -->
       <HamburgerMenu
@@ -1191,7 +1299,7 @@
         <li>
           <button role="menuitem" onclick={() => { closePaneHamburgerMenu(); enterPaneMode(); }}>
             <LayoutGrid size={16} strokeWidth={1.75} aria-hidden="true" />
-            <span class="menu-row-label">Enter Hybrid Nav</span>
+            <span class="menu-row-label">Hybrid Nav</span>
             <span class="menu-row-chord">{chordLabel("app.pane.mode")}</span>
           </button>
         </li>
@@ -1256,18 +1364,7 @@
     role="group"
     aria-label="pane content"
   >
-    <!-- True two-face card. Front and back are co-rendered on a
-         `preserve-3d` rotor INSIDE the editor body; the tab strip above
-         is pane chrome and does not rotate. `flipped` rotates the card
-         0deg<->180deg via a CSS transition on `transform` (no keyframe,
-         no rAF, no version bus), so the flip fires in place the instant
-         `showingBack` toggles instead of waiting on focus to leave the
-         pane. Each face is `backface-visibility:hidden`; `inert` on the
-         rotated-away face blurs it, drops it from the a11y tree, and
-         stops the stacked faces from capturing input. -->
-    <div class="flip-card" class:showing-back={flipped}>
-      <div class="face front" inert={flipped}>
-        {#if paneMode.active}
+    {#if paneMode.active}
           <div class="pane-mode-preview" aria-label="Hybrid Nav preview">
             <div class="pane-mode-title">{active ? tabLabel(active, browserCtxFor(active)) : "Empty pane"}</div>
             <div class="pane-mode-subtitle">
@@ -1284,21 +1381,21 @@
                         : "no active tab"}
             </div>
           </div>
-        {:else if active?.kind === "browser"}
-          <FileBrowserSurface
-            variant="tab"
-            tab={active}
-            onClose={() => {
-              void closeTab(pane.id, active.id);
-            }}
-            onFlip={() => flipHybrid(pane.id)}
-          />
-        {:else if !active}
-          <div
-            class="placeholder"
-            aria-label="no tab open"
-            role="presentation"
-          >
+    {:else if active?.kind === "browser"}
+      <FileBrowserSurface
+        variant="tab"
+        tab={active}
+        onClose={() => {
+          void closeTab(pane.id, active.id);
+        }}
+        onFlip={() => flipHybrid(pane.id)}
+      />
+    {:else if !active}
+      <div
+        class="placeholder"
+        aria-label="no tab open"
+        role="presentation"
+      >
             <!-- Single-pane lone-pane case renders the static welcome
                  surface: 5-tile spawn grid + Dashboard tile + footer
                  hint. The rotating carousel widget (About / Workspace
@@ -1314,33 +1411,33 @@
                  closes the window), so the lone Terminal spawn tile only ever
                  flashed during the transient empty boot layout. Fall through
                  to the minimal chan mark instead. -->
-            {#if !multiPane && !ui.terminalOnly}
-              <EmptyPaneWelcome />
-            {:else}
-              <div class="placeholder-stack">
-                <div class="placeholder-mark"></div>
-              </div>
-            {/if}
+        {#if !multiPane && !ui.terminalOnly}
+          <EmptyPaneWelcome />
+        {:else}
+          <div class="placeholder-stack">
+            <div class="placeholder-mark"></div>
           </div>
         {/if}
+      </div>
+    {/if}
         <!--
           Keep terminal tabs mounted across Hybrid Nav (pane mode) and
-          flip toggles so xterm.js's 20k-line scrollback buffer survives.
+          side flips so xterm.js's 20k-line scrollback buffer survives.
           Unmounting a terminal would dispose the EditorView and drop the
           buffer, losing every line that had scrolled off screen. The
           active terminal is hidden by `class:active` flipping to false
-          during pane mode / flip (the existing
+          during pane mode or while the tab is on the hidden side (the existing
           `visibility: hidden; pointer-events: none` rule does the
           hiding).
         -->
-        {#each pane.tabs.filter((t) => t.kind === "terminal") as t (t.id)}
-          <TerminalTab
-            tab={t}
-            paneId={pane.id}
-            active={!paneMode.active && !pane.showingBack && t.id === pane.activeTabId}
-            focused={!paneMode.active && !pane.showingBack && t.id === pane.activeTabId && viewLayout.activePaneId === pane.id}
-          />
-        {/each}
+    {#each everyTab.filter((t) => t.kind === "terminal") as t (t.id)}
+      <TerminalTab
+        tab={t}
+        paneId={pane.id}
+        active={isLiveActive(t)}
+        focused={isLiveActive(t) && viewLayout.activePaneId === pane.id}
+      />
+    {/each}
         <!--
           File tabs are kept mounted for the same reason as terminals
           above: unmounting destroys the CM6 EditorView, and on remount
@@ -1354,13 +1451,13 @@
           `focused` additionally feeds the editors' autoFocus so a
           session restore of N background tabs never steals the caret.
         -->
-        {#each pane.tabs.filter((t) => t.kind === "file") as t (t.id)}
-          <FileEditorTab
-            tab={t}
-            active={!paneMode.active && !pane.showingBack && t.id === pane.activeTabId}
-            focused={!paneMode.active && !pane.showingBack && t.id === pane.activeTabId && viewLayout.activePaneId === pane.id}
-          />
-        {/each}
+    {#each everyTab.filter((t) => t.kind === "file") as t (t.id)}
+      <FileEditorTab
+        tab={t}
+        active={isLiveActive(t)}
+        focused={isLiveActive(t) && viewLayout.activePaneId === pane.id}
+      />
+    {/each}
         <!--
           Graph tabs join the keep-alive family: rendering GraphPanel
           inside the active-tab if-chain remounted it on every switch,
@@ -1374,15 +1471,15 @@
           `focused` prop: a graph owns no keyboard caret (the canvas
           focuses on click, the menu is portal-anchored).
         -->
-        {#each pane.tabs.filter((t) => t.kind === "graph") as t (t.id)}
-          <GraphPanel
-            tab={t}
-            active={!paneMode.active && !pane.showingBack && t.id === pane.activeTabId}
-            onClose={() => {
-              void closeTab(pane.id, t.id);
-            }}
-          />
-        {/each}
+    {#each everyTab.filter((t) => t.kind === "graph") as t (t.id)}
+      <GraphPanel
+        tab={t}
+        active={isLiveActive(t)}
+        onClose={() => {
+          void closeTab(pane.id, t.id);
+        }}
+      />
+    {/each}
         <!--
           Dashboard tabs join the keep-alive family for the same reason as
           graphs: the Indexing carousel slide hosts a GraphCanvas whose force
@@ -1393,56 +1490,15 @@
           keeps its layout across switches and only refreshes in place; a
           reload is now an explicit user action (Cmd+R or the right-click
           Reload row). The `active` gate also pauses the carousel + poll while
-          the tab is hidden or flipped. No `focused` prop: a dashboard owns no
+          the tab is hidden. No `focused` prop: a dashboard owns no
           keyboard caret.
         -->
-        {#each pane.tabs.filter((t) => t.kind === "dashboard") as t (t.id)}
-          <DashboardTab
-            tab={t}
-            active={!paneMode.active && !pane.showingBack && t.id === pane.activeTabId}
-          />
-        {/each}
-      </div>
-      <!-- BACK face: per-surface view, mirrored 180deg so it reads upright
-           once the card is flipped. Dispatched off the
-           active FRONT tab kind; switching the front tab while flipped
-           swaps the back's content to the matching surface family.
-           Latched-mounted via `backMounted` (see the latch effect): a
-           pane never flipped never mounts its back body, while a
-           flipped pane keeps the back present through the rotation. -->
-      <div class="face back" inert={!flipped}>
-        {#if backMounted && !paneMode.active}
-          <div class="back-side" role="region" aria-label="hybrid back side">
-            {#if active?.kind === "terminal"}
-              <HybridTerminalConfig onDone={() => flipHybrid(pane.id)} />
-            {:else if active?.kind === "file"}
-              <HybridEditorConfig onDone={() => flipHybrid(pane.id)} />
-            {:else if active?.kind === "graph"}
-              <HybridGraphConfig onDone={() => flipHybrid(pane.id)} />
-            {:else if active?.kind === "browser"}
-              <HybridFileBrowserConfig onDone={() => flipHybrid(pane.id)} />
-            {:else if active?.kind === "dashboard"}
-              <!-- Per-slot Dashboard back: mirrors the front carousel's
-                   current slot (About / Workspace / Search), with a
-                   force-paused slot picker. -->
-              <DashboardSlotBack
-                tab={active}
-                onDone={() => flipHybrid(pane.id)}
-              />
-            {:else}
-              <!-- Empty pane (no active front tab). Open a front tab and
-                   flip again to see its back surface. -->
-              <div class="back-empty">
-                <h2 class="back-title">Hybrid</h2>
-                <p class="back-hint">
-                  Open a tab on the front to configure its surface here.
-                </p>
-              </div>
-            {/if}
-          </div>
-        {/if}
-      </div>
-    </div>
+    {#each everyTab.filter((t) => t.kind === "dashboard") as t (t.id)}
+      <DashboardTab
+        tab={t}
+        active={isLiveActive(t)}
+      />
+    {/each}
   </div>
 </div>
 
@@ -1515,69 +1571,29 @@
         var(--pane-shadow);
     }
   }
-  /* True two-face card flip. Front and back are co-rendered as two
-     absolutely-stacked faces on a `preserve-3d` rotor; the card itself
-     rotates 0deg<->180deg via a transition on `transform` driven by
-     `.showing-back`. Each face is `backface-visibility: hidden`, so at
-     any rotation only the viewer-facing face paints. The perspective
-     lives on `.editor-wrap` (the card's parent) so the rotation reads
-     as depth rather than a flat squash. cubic-bezier(0.4, 0, 0.2, 1) is
-     the Material standard for UI motion; 400ms matches the old wobble so
-     the cadence is unchanged. The rotated-away face also carries `inert`
-     (set in the template) so it can't be focused, clicked, or read by
-     assistive tech while it faces away. */
-  .flip-card {
-    position: relative;
-    flex: 1;
-    min-width: 0;
-    min-height: 0;
-    transform-style: preserve-3d;
-    transform: rotateY(0deg);
-    transition: transform 400ms cubic-bezier(0.4, 0, 0.2, 1);
-  }
-  .flip-card.showing-back {
-    transform: rotateY(180deg);
-  }
-  .flip-card .face {
-    position: absolute;
-    inset: 0;
-    display: flex;
-    flex-direction: column;
-    min-width: 0;
-    min-height: 0;
+  .pane.sideFlipActive .tabs,
+  .pane.sideFlipActive .editor-wrap {
+    transform-origin: center center;
     backface-visibility: hidden;
-    -webkit-backface-visibility: hidden;
-    /* WebKitGTK (the Linux desktop webview) ignores backface-visibility
-       inside a preserve-3d context, so the rotated-away face keeps
-       painting; since the back face sits later in source order it then
-       covers the front mirror-reversed and the flip looks stuck on the
-       Settings side. Blink (the browser build) honors it, which is why
-       the bug is desktop-only. So drive each face's visibility off the
-       flip state as the real hider, not just backface-visibility. The
-       0s/140ms transition defers the swap to the ~90deg edge-on point of
-       the 400ms turn (where the Material curve crosses half-rotation) so
-       the face vanishes while the card is edge-on and the swap is unseen;
-       backface-visibility is kept for Blink/WebKit, where it already
-       lines up at that same instant. */
-    transition: visibility 0s linear 140ms;
+    will-change: transform, opacity, filter;
+    animation: pane-side-flip 320ms cubic-bezier(0.34, 1.56, 0.64, 1);
   }
-  .flip-card .face.front {
-    visibility: visible;
-  }
-  .flip-card .face.back {
-    transform: rotateY(180deg);
-    visibility: hidden;
-  }
-  .flip-card.showing-back .face.front {
-    visibility: hidden;
-  }
-  .flip-card.showing-back .face.back {
-    visibility: visible;
-  }
-  @media (prefers-reduced-motion: reduce) {
-    .flip-card { transition: none; }
-    /* No turn to mask, so swap the faces instantly with the class. */
-    .flip-card .face { transition: none; }
+  @keyframes pane-side-flip {
+    0% {
+      transform: var(--pane-side-flip-start);
+      opacity: 0.72;
+      filter: brightness(0.92) saturate(0.95);
+    }
+    58% {
+      transform: var(--pane-side-flip-mid);
+      opacity: 1;
+      filter: brightness(1.02) saturate(1);
+    }
+    100% {
+      transform: perspective(1200px) rotateX(0deg) rotateY(0deg) scale(1);
+      opacity: 1;
+      filter: none;
+    }
   }
   /* iTerm-style strip: a dark bar with no per-tab dividers. The
      active tab is a rounded pill sitting on the bar rather than a
@@ -1602,41 +1618,6 @@
      in-page tab or split affordance. */
   .tabs.control-hidden {
     display: none;
-  }
-  /* Flipped chrome:
-     * Tab CONTENT mirrors via per-child `scaleX(-1)` so each
-       tab's icon + path + dirty marker reads as if viewed from
-       behind. The `.tab` element ITSELF stays un-transformed so
-       its click target lives in natural coordinates and the
-       mousedown handler (which writes `pane.activeTabId`) fires
-       cleanly. Transforming the whole `.tab` would break click
-       routing on the back side.
-     * `.tabs.flipped` uses `flex-direction: row-reverse` so the
-       tabs flow from the right edge (aligned right when flipped,
-       not left). The `.actions` container (hamburger) gets
-       `order: 1` so it ends up on the LEFT under row-reverse
-       ordering.
-     * No family-name title in the dead-zone slot: the back-side
-       config component owns its own title. The dead-zone's
-       drag-to-NAV cursor reverts to default on the back (the
-       rearrangement semantic doesn't apply when flipped). */
-  .tabs.flipped {
-    flex-direction: row-reverse;
-  }
-  .tabs.flipped .actions {
-    order: 1;
-  }
-  .tabs.flipped .tab .tab-icon,
-  .tabs.flipped .tab .path,
-  .tabs.flipped .tab .dirty,
-  .tabs.flipped .tab .queue-pill,
-  .tabs.flipped .tab .broadcast-marker,
-  .tabs.flipped .tab .marker {
-    transform: scaleX(-1);
-    display: inline-block;
-  }
-  .tabs.flipped .dead-zone {
-    cursor: default;
   }
   .tab[draggable="true"] { -webkit-user-drag: element; }
   /* Vertical bar between tabs that shows where a drop will land. */
@@ -1763,26 +1744,25 @@
       opacity: 0.35;
     }
   }
-  /* Chrome-style tab-name fade. A CSS mask gradient at the right
-     edge fades the visible text into transparency when it overflows,
-     with no `[..]` / ellipsis character. The tooltip on the parent
-     `<button>`
-     (`title={tabTooltip(t)}`) still surfaces the full path on
-     hover so truncation never costs the user disambiguation.
+  /* Chrome-style tab-name clipping. The overflow action adds
+     `.overflowing` only when scrollWidth exceeds the rendered label box;
+     short titles stay unmasked so their final glyphs render at full opacity.
+     The tooltip on the parent `<button>` (`title={tabTooltip(t)}`) still
+     surfaces the full path on hover so truncation never costs the user
+     disambiguation.
      `max-width` caps the visible width without forcing a hard
      box around shorter titles; `white-space: nowrap` keeps the
-     mask edge straight; `overflow: hidden` is what makes the
-     mask actually clip when the text is wider than the cap. */
+     edge straight; `overflow: hidden` is what clips when the text
+     is wider than the cap. */
   .path {
     display: inline-block;
     max-width: 22ch;
     overflow: hidden;
     white-space: nowrap;
+  }
+  .path.overflowing {
     /* The fade covers the last 1.25rem of the BOX, and the box
-       shrink-fits short titles - without spare room the gradient eats
-       the final glyph ("Terminal-1" rendered with a washed-out "1").
-       5px of right padding widens the box (and the pill) so the text
-       sits mostly clear of the fade while long titles still taper. */
+       only receives the extra width when it actually overflows. */
     padding-right: 5px;
     mask-image: linear-gradient(to right, black calc(100% - 1.25rem), transparent);
     -webkit-mask-image: linear-gradient(to right, black calc(100% - 1.25rem), transparent);
@@ -1808,6 +1788,25 @@
     flex-shrink: 0;
   }
   .actions { margin-left: auto; display: flex; align-items: center; gap: 6px; padding-left: 4px; }
+  .side-toggle {
+    width: 24px;
+    height: 24px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: var(--bg-card);
+    color: var(--text);
+    font-size: 11px;
+    font-weight: 700;
+    line-height: 1;
+    cursor: pointer;
+    flex: 0 0 auto;
+  }
+  .side-toggle:hover {
+    background: var(--hover-bg);
+  }
   /* Dead zone on the top bar: the stretch between the last tab and
      the hamburger. mousedown + drag past 5 px
      enters transaction-mode NAV (Entry A, drag-with-payload);
@@ -1851,42 +1850,6 @@
     background: color-mix(in srgb, var(--pane-focus) 8%, transparent);
     z-index: 5;
   }
-  /* Back-side surface wrapper. The back is a per-surface
-     configuration view scoped to the active front-tab type, so there
-     is no "unread" or "activity" signal on it to flag and the chrome
-     stays lean. Each HybridXConfig carries its own title band; this
-     wrapper fills the editor-wrap so the body reads as a single
-     config page. */
-  .back-side {
-    display: flex;
-    flex-direction: column;
-    flex: 1;
-    min-width: 0;
-    min-height: 0;
-    overflow: auto;
-    background: var(--bg);
-  }
-  .back-empty {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    padding: 24px;
-    text-align: center;
-    color: var(--text-secondary);
-    gap: 8px;
-  }
-  .back-empty .back-title {
-    margin: 0;
-    font-size: 18px;
-    font-weight: 600;
-    color: var(--text);
-  }
-  .back-empty .back-hint {
-    margin: 0;
-    font-size: 13px;
-  }
   :global(.hamburger-menu .menu-label) {
     display: flex;
     align-items: center;
@@ -1911,11 +1874,6 @@
     display: flex;
     flex-direction: column;
     min-height: 0;
-    /* Perspective for the two-face .flip-card child: gives the Y-axis
-       rotation depth instead of a flat horizontal squash. Only the
-       flip-card is 3D-transformed; the ::after drop overlay stays a
-       flat z=0 sibling and paints normally. */
-    perspective: 1600px;
   }
   .editor-wrap::after {
     content: "";
@@ -2011,6 +1969,10 @@
       transition: border-color 100ms ease, box-shadow 120ms ease;
     }
     .pane.focused.wobble {
+      animation: none;
+    }
+    .pane.sideFlipActive .tabs,
+    .pane.sideFlipActive .editor-wrap {
       animation: none;
     }
     .tab,
