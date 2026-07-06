@@ -82,6 +82,7 @@
   import { chordFor } from "../state/shortcuts";
   import { FS_GRAPH_DEPTH_MAX, graphDepthCap, relativeDepth } from "../graph/depth";
   import { pullMetaNeighbours } from "../graph/lensClosure";
+  import { ancestorsExpanded } from "../graph/pathVisibility";
 
   let {
     tab,
@@ -312,27 +313,6 @@
   /// re-expand can show it without another fetch.
   function dirChildrenLoaded(dir: string): boolean {
     return fsNodes.some((n) => n.path !== dir && parentDirOf(n.path) === dir);
-  }
-
-  /// True when every ancestor directory between the scope root and
-  /// `nodePath` is expanded. The scope root itself is always shown.
-  function ancestorsExpanded(
-    rootPath: string,
-    nodePath: string,
-    expanded: Record<string, boolean>,
-  ): boolean {
-    if (!nodePath || nodePath === rootPath) return true;
-    const rel =
-      rootPath && nodePath.startsWith(`${rootPath}/`)
-        ? nodePath.slice(rootPath.length + 1)
-        : nodePath;
-    const parts = rel.split("/");
-    let prefix = rootPath;
-    for (let i = 0; i < parts.length - 1; i += 1) {
-      prefix = prefix ? `${prefix}/${parts[i]}` : parts[i];
-      if (!expanded[prefix]) return false;
-    }
-    return true;
   }
 
   /// Merge a single-directory fs-graph batch into the accumulated spine

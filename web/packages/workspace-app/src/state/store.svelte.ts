@@ -888,6 +888,12 @@ type WindowCommandFrame =
   | {
       type: "window_command";
       window_id: string;
+      command: "open_graph_link";
+      link: string;
+    }
+  | {
+      type: "window_command";
+      window_id: string;
       command: "open_term_new";
       cwd?: string | null;
       tab_name?: string | null;
@@ -1438,6 +1444,14 @@ async function handleWindowCommand(raw: unknown): Promise<void> {
       setTransientStatus("opened graph");
     }
     scheduleSessionSave();
+    return;
+  }
+  if (frame.command === "open_graph_link" && typeof frame.link === "string") {
+    if (openGraphFromLink(frame.link)) {
+      setTransientStatus("opened graph link");
+    } else {
+      setTransientStatus("could not open graph link");
+    }
     return;
   }
   if (frame.command === "open_term_new") {

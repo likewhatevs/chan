@@ -22,6 +22,8 @@ use crate::wire::{
     MAX_CLIPBOARD_BYTES,
 };
 
+const GRAPH_LINK_PREFIX: &str = "chan://graph?";
+
 /// Top-level `cs` parser. The `chan` binary reaches `cs` through its own
 /// `Cli` (rewriting `cs ...` into `chan shell ...` in `parse_cli`), but
 /// `chan-desktop` has no `chan` binary, so it parses `cs` argv directly
@@ -53,11 +55,11 @@ where
 
 #[derive(Subcommand, Debug)]
 pub enum ShellAction {
-    /// Open a path in the current window. Without a path, opens the
-    /// terminal's current directory in the browser.
+    /// Open a path or chan://graph URL in the current window. Without a path,
+    /// opens the terminal's current directory in the browser.
     Open {
         #[arg(value_hint = clap::ValueHint::AnyPath)]
-        path: Option<PathBuf>,
+        path: Option<String>,
     },
     /// Open the documentation graph in the current window. With a path,
     /// focuses the graph on that file or directory. Workspace windows only:
@@ -764,8 +766,20 @@ pub async fn dispatch(action: ShellAction) -> Result<()> {
     match action {
         ShellAction::Open { path } => {
             let env = open_env()?;
+            if let Some(link) = path.as_deref().filter(|p| p.starts_with(GRAPH_LINK_PREFIX)) {
+                let message = send_control_request(
+                    &env.control_socket,
+                    ControlRequest::OpenGraphLink {
+                        window_id: env.window_id,
+                        link: link.to_string(),
+                    },
+                )
+                .await?;
+                eprintln!("{message}");
+                return Ok(());
+            }
             // No path -> open the terminal's cwd in the browser.
-            let abs = absolutize(path.unwrap_or(PathBuf::from(".")))?;
+            let abs = absolutize(path.map(PathBuf::from).unwrap_or(PathBuf::from(".")))?;
             let message = send_control_request(
                 &env.control_socket,
                 ControlRequest::OpenPath {

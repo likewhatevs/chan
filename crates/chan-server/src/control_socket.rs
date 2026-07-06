@@ -68,6 +68,9 @@ enum WindowCommand {
         path: Option<String>,
         is_dir: bool,
     },
+    OpenGraphLink {
+        link: String,
+    },
     OpenTermNew {
         #[serde(skip_serializing_if = "Option::is_none")]
         cwd: Option<String>,
@@ -304,6 +307,10 @@ fn terminal_tenant_refusal(req: &ControlRequest, tenant: ControlTenant) -> Optio
     }
     match req {
         ControlRequest::OpenPath { path, .. } => Some(chan_open_guidance(path)),
+        ControlRequest::OpenGraphLink { .. } => Some(workspace_only_refusal(
+            "open",
+            Some("Graph links need a workspace window."),
+        )),
         ControlRequest::OpenGraph { .. } => Some(workspace_only_refusal("graph", None)),
         ControlRequest::Search { .. } => Some(workspace_only_refusal("search", None)),
         ControlRequest::OpenTermNew { path: Some(_), .. } => Some(workspace_only_refusal(
@@ -406,6 +413,10 @@ mod tenant_gate_tests {
         // refuses on a standalone terminal.
         let mut reqs = vec![
             open_path("/x/y"),
+            ControlRequest::OpenGraphLink {
+                window_id: "w".into(),
+                link: "chan://graph?s=workspace".into(),
+            },
             ControlRequest::OpenGraph {
                 window_id: "w".into(),
                 path: None,
@@ -447,6 +458,10 @@ mod tenant_gate_tests {
         // (including --script) need a workspace, so they refuse on a standalone
         // terminal, and every refusal reads as the same message family.
         let mut reqs = vec![
+            ControlRequest::OpenGraphLink {
+                window_id: "w".into(),
+                link: "chan://graph?s=workspace".into(),
+            },
             ControlRequest::OpenGraph {
                 window_id: "w".into(),
                 path: None,
@@ -788,6 +803,15 @@ async fn handle_request(req: ControlRequest, ctx: &ControlSocketCtx) -> ControlR
                 &path,
                 events_tx,
             ))
+        }
+        ControlRequest::OpenGraphLink { window_id, link } => {
+            if let Err(message) = require_window_id(&window_id) {
+                return ControlResponse::Error { message };
+            }
+            if let Err(message) = workspace_from_cell(workspace_cell).map(|_| ()) {
+                return ControlResponse::Error { message };
+            }
+            into_response(open_graph_link(&window_id, &link, events_tx))
         }
         ControlRequest::OpenGraph { window_id, path } => {
             if let Err(message) = require_window_id(&window_id) {
@@ -2618,6 +2642,24 @@ fn open_graph(
     })
 }
 
+/// Category 1: open a graph tab from a serialized `chan://graph?...` link.
+/// The SPA owns the graph-link parser already, so the control socket forwards
+/// the exact link instead of duplicating query decoding server-side.
+fn open_graph_link(
+    window_id: &str,
+    link: &str,
+    events_tx: &broadcast::Sender<String>,
+) -> Result<String, String> {
+    send_window_command(
+        window_id,
+        WindowCommand::OpenGraphLink {
+            link: link.to_string(),
+        },
+        events_tx,
+    )?;
+    Ok("graph link request queued".into())
+}
+
 /// Category 1: open a new terminal tab in the originating window. A
 /// requested file resolves to its parent directory as the cwd.
 fn open_term_new(
@@ -3841,6 +3883,20 @@ mod tests {
         assert_eq!(frame["command"], "open_graph");
         assert_eq!(frame["path"], Value::Null);
         assert_eq!(frame["is_dir"], false);
+    }
+
+    #[test]
+    fn open_graph_link_broadcasts_window_command() {
+        let (tx, mut rx) = broadcast::channel(4);
+        let link = "chan://graph?s=dir%3Acrates%2Fchan-tunnel-proto%2Fsrc&m=s&f=2ltmaifds&n=crates%2Fchan-tunnel-proto%2Fsrc%2Fh2_duplex.rs";
+
+        let message = open_graph_link("window-a", link, &tx).expect("open graph link");
+
+        assert_eq!(message, "graph link request queued");
+        let frame: Value = serde_json::from_str(&rx.try_recv().expect("window command"))
+            .expect("window command json");
+        assert_eq!(frame["command"], "open_graph_link");
+        assert_eq!(frame["link"], link);
     }
 
     #[test]

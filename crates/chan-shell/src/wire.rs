@@ -58,6 +58,10 @@ pub enum ControlRequest {
         window_id: String,
         path: PathBuf,
     },
+    OpenGraphLink {
+        window_id: String,
+        link: String,
+    },
     OpenGraph {
         window_id: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -762,6 +766,24 @@ mod survey_wire_tests {
         let back: ControlRequest =
             serde_json::from_str(&serde_json::to_string(&req).unwrap()).unwrap();
         assert!(matches!(back, ControlRequest::WindowOpen { .. }));
+    }
+
+    #[test]
+    fn open_graph_link_request_tag_window_id_and_link() {
+        let req = ControlRequest::OpenGraphLink {
+            window_id: "workspace-aa-0".into(),
+            link: "chan://graph?s=dir%3Acrates%2Fchan-tunnel-proto%2Fsrc&m=s".into(),
+        };
+        let v: serde_json::Value = serde_json::to_value(&req).unwrap();
+        assert_eq!(v["type"], "open_graph_link");
+        assert_eq!(v["window_id"], "workspace-aa-0");
+        assert_eq!(
+            v["link"],
+            "chan://graph?s=dir%3Acrates%2Fchan-tunnel-proto%2Fsrc&m=s",
+        );
+        let back: ControlRequest =
+            serde_json::from_str(&serde_json::to_string(&req).unwrap()).unwrap();
+        assert!(matches!(back, ControlRequest::OpenGraphLink { .. }));
     }
 
     #[test]

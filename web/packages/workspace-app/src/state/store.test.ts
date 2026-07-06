@@ -599,6 +599,26 @@ describe("window commands", () => {
     expect(treeExpanded.map["notes"]).toBe(true);
   });
 
+  test("open_graph_link opens a graph tab through the existing link parser", () => {
+    window.history.replaceState(null, "", "/?w=window-a");
+    const link =
+      "chan://graph?s=dir%3Acrates%2Fchan-tunnel-proto%2Fsrc&m=s&f=2ltmaifds&n=crates%2Fchan-tunnel-proto%2Fsrc%2Fh2_duplex.rs";
+
+    onWatchEvent({
+      type: "window_command",
+      window_id: "window-a",
+      command: "open_graph_link",
+      link,
+    });
+
+    const tab = activePane().tabs.at(-1);
+    expect(tab?.kind).toBe("graph");
+    const graph = tab as GraphTab;
+    expect(graph.mode).toBe("semantic");
+    expect(graph.scopeId).toBe("dir:crates/chan-tunnel-proto/src");
+    expect(graph.pendingSelectId).toBe("crates/chan-tunnel-proto/src/h2_duplex.rs");
+  });
+
   test("revealPathInBrowser always OPENS a File Browser tab (never focuses the dock / an existing tab)", () => {
     // With a docked File Browser, reveal-in-browser must never focus
     // the dock (or silently reuse another pane's browser tab) - it

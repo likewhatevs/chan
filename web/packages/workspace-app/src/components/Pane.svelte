@@ -404,7 +404,7 @@
   function configureSideFlip(from: PaneSide, to: PaneSide): void {
     const axis = sideFlipAxisForPane();
     const turn = from === "a" && to === "b" ? -1 : 1;
-    const rotate = axis === "horizontal" ? "rotateY" : "rotateX";
+    const rotate = axis === "vertical" ? "rotateY" : "rotateX";
     sideFlipAxis = axis;
     sideFlipStartTransform = `${rotate}(${turn * 180}deg)`;
     sideFlipBackTransform = `${rotate}(${turn * 180}deg)`;
