@@ -375,8 +375,8 @@
   /// square pane chooses either axis so both orientations stay possible.
   let sideFlipActive = $state(false);
   let sideFlipAxis = $state<PaneFlipAxis>("horizontal");
-  let sideFlipStartTransform = $state("perspective(1200px) rotateX(-78deg) scale(0.985)");
-  let sideFlipMidTransform = $state("perspective(1200px) rotateX(8deg) scale(1.005)");
+  let sideFlipStartTransform = $state("rotateY(-180deg)");
+  let sideFlipBackTransform = $state("rotateY(-180deg)");
   let lastSideForFlip: PaneSide | null = null;
   let sideFlipFrame: number | null = null;
   let sideFlipTimer: ReturnType<typeof setTimeout> | null = null;
@@ -404,10 +404,10 @@
   function configureSideFlip(from: PaneSide, to: PaneSide): void {
     const axis = sideFlipAxisForPane();
     const turn = from === "a" && to === "b" ? -1 : 1;
-    const rotate = axis === "vertical" ? "rotateY" : "rotateX";
+    const rotate = axis === "horizontal" ? "rotateY" : "rotateX";
     sideFlipAxis = axis;
-    sideFlipStartTransform = `perspective(1200px) ${rotate}(${turn * 78}deg) scale(0.985)`;
-    sideFlipMidTransform = `perspective(1200px) ${rotate}(${-turn * 8}deg) scale(1.005)`;
+    sideFlipStartTransform = `${rotate}(${turn * 180}deg)`;
+    sideFlipBackTransform = `${rotate}(${turn * 180}deg)`;
   }
 
   $effect(() => {
@@ -1078,7 +1078,7 @@
   class:transaction-drop-target={isTransactionDropTarget}
   bind:this={paneEl}
   style:--pane-side-flip-start={sideFlipStartTransform}
-  style:--pane-side-flip-mid={sideFlipMidTransform}
+  style:--pane-side-flip-back={sideFlipBackTransform}
   data-focus-color={focusColorForWindow()}
   data-pane-id={pane.id}
   onmousedown={(e) => {
@@ -1095,6 +1095,9 @@
   role="region"
   aria-label="editor pane"
 >
+  <div class="pane-card">
+    <div class="pane-card-inner" data-side-label={visibleSide.toUpperCase()}>
+      <div class="pane-card-face">
   <!-- svelte-ignore a11y_interactive_supports_focus -->
   <div
     class="tabs"
@@ -1500,6 +1503,9 @@
       />
     {/each}
   </div>
+      </div>
+    </div>
+  </div>
 </div>
 
 <style>
@@ -1511,18 +1517,19 @@
     flex: 1;
     position: relative;
     border: 1px solid transparent;
-    background: var(--bg);
+    background: transparent;
     color: var(--text);
     /* Pane chrome - floating shade. Margin keeps panes off the
        workspace edge and off each other (the split divider is
        4px; with 4px margin on each side the inter-pane gap reads
-       as one clean 12px channel). Overflow:hidden lets the
-       rounded corners clip the tabs strip + editor body; the
-       drop shadow paints inside the margin space (well outside
-       the rounded box) so it isn't clipped by the .half wrapper. */
+       as one clean 12px channel). The card face clips the tabs
+       strip + editor body; the drop shadow paints inside the
+       margin space so it isn't clipped by the .half wrapper. */
     margin: 4px;
     border-radius: 6px;
-    overflow: hidden;
+    overflow: visible;
+    -webkit-perspective: 1200px;
+    perspective: 1200px;
     box-shadow: var(--pane-shadow);
     transition:
       border-color 100ms ease,
@@ -1571,28 +1578,71 @@
         var(--pane-shadow);
     }
   }
-  .pane.sideFlipActive .tabs,
-  .pane.sideFlipActive .editor-wrap {
-    transform-origin: center center;
+  .pane-card {
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    display: flex;
+    border-radius: inherit;
+    -webkit-transform-style: preserve-3d;
+    transform-style: preserve-3d;
+  }
+  .pane-card-inner {
+    position: relative;
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    display: flex;
+    border-radius: inherit;
+    -webkit-transform-style: preserve-3d;
+    transform-style: preserve-3d;
+  }
+  .pane-card-inner::before {
+    content: attr(data-side-label);
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+    display: grid;
+    place-items: center;
+    border-radius: inherit;
+    background:
+      radial-gradient(circle at 50% 42%, color-mix(in srgb, var(--pane-highlight-color, var(--pane-active-focus)) 18%, transparent), transparent 34%),
+      var(--bg-card);
+    color: color-mix(in srgb, var(--text) 70%, transparent);
+    font-size: 44px;
+    font-weight: 700;
+    line-height: 1;
+    letter-spacing: 0;
+    pointer-events: none;
+    transform: var(--pane-side-flip-back);
+    -webkit-backface-visibility: hidden;
     backface-visibility: hidden;
-    will-change: transform, opacity, filter;
-    animation: pane-side-flip 320ms cubic-bezier(0.34, 1.56, 0.64, 1);
+  }
+  .pane-card-face {
+    position: relative;
+    z-index: 1;
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    border-radius: inherit;
+    overflow: hidden;
+    background: var(--bg);
+    -webkit-backface-visibility: hidden;
+    backface-visibility: hidden;
+  }
+  .pane.sideFlipActive .pane-card-inner {
+    transform-origin: center center;
+    will-change: transform;
+    animation: pane-side-flip 520ms cubic-bezier(0.2, 0.7, 0.2, 1);
   }
   @keyframes pane-side-flip {
     0% {
       transform: var(--pane-side-flip-start);
-      opacity: 0.72;
-      filter: brightness(0.92) saturate(0.95);
-    }
-    58% {
-      transform: var(--pane-side-flip-mid);
-      opacity: 1;
-      filter: brightness(1.02) saturate(1);
     }
     100% {
-      transform: perspective(1200px) rotateX(0deg) rotateY(0deg) scale(1);
-      opacity: 1;
-      filter: none;
+      transform: rotateX(0deg) rotateY(0deg);
     }
   }
   /* iTerm-style strip: a dark bar with no per-tab dividers. The
@@ -1971,8 +2021,7 @@
     .pane.focused.wobble {
       animation: none;
     }
-    .pane.sideFlipActive .tabs,
-    .pane.sideFlipActive .editor-wrap {
+    .pane.sideFlipActive .pane-card-inner {
       animation: none;
     }
     .tab,

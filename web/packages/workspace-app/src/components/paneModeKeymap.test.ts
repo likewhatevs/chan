@@ -193,12 +193,15 @@ describe("Track C pane shortcut wiring", () => {
     );
   });
 
-  test("empty-pane close is wired through Ctrl+D and app.tab.close", () => {
+  test("empty-pane close is wired through Ctrl+D, app.tab.close, and app.window.close", () => {
     expect(app).toMatch(
       /if \(!active\) \{[\s\S]*?if \(closeActiveEmptyPane\(\)\) \{[\s\S]*?e\.preventDefault\(\);[\s\S]*?e\.stopPropagation\(\);/,
     );
     expect(app).toMatch(
       /case "app\.tab\.close": \{[\s\S]*?else closeActiveEmptyPane\(\);/,
+    );
+    expect(app).toMatch(
+      /case "app\.window\.close":[\s\S]*?if \(closeActiveEmptyPane\(\)\) return;[\s\S]*?discardWindowSession\(\);/,
     );
   });
 });

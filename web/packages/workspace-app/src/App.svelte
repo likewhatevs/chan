@@ -535,11 +535,12 @@
     // the same window-mode + surface gate the launcher shows.
     {
       const overrideChord = chordFromEvent(e);
+      const commands = allCommands();
       const overrideId = overrideChord
-        ? commandIdForChord(overrideChord)
+        ? commandIdForChord(overrideChord, commands)
         : undefined;
       if (overrideId) {
-        const cmd = allCommands().find((c) => c.id === overrideId);
+        const cmd = commands.find((c) => c.id === overrideId);
         if (cmd && cmd.available(commandContext())) {
           e.preventDefault();
           cmd.run();
@@ -1017,6 +1018,7 @@
   /// leaves a stale multi-selection on every close.
   function onCtrlDCapture(e: KeyboardEvent): void {
     if (!e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return;
+    if (builtInChordSuperseded("app.tab.close")) return;
     // e.key is lowercase "d" or uppercase "D" depending on
     // caps-lock; e.code === "KeyD" is layout-agnostic and matches
     // both. The keystroke we care about is the literal Ctrl + the
@@ -1192,6 +1194,7 @@
       // from a bury (connected close button), which keeps the blob so the
       // window can be re-surfaced.
       case "app.window.close":
+        if (closeActiveEmptyPane()) return;
         discardWindowSession();
         if (isTauriDesktop()) void requestCloseWindow();
         return;

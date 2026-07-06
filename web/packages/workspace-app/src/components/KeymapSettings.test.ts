@@ -10,13 +10,24 @@ import KeymapSettings from "./KeymapSettings.svelte";
 import { registerCommands, type Command } from "../state/commands";
 import { hydrateOverrides } from "../state/keymapOverrides.svelte";
 
-function cmd(id: string, title: string): Command {
-  return { id, title, category: "Global", available: () => true, run: () => {} };
+function cmd(id: string, title: string, extra: Partial<Command> = {}): Command {
+  return {
+    id,
+    title,
+    category: "Global",
+    available: () => true,
+    run: () => {},
+    ...extra,
+  };
 }
 
 registerCommands([
   cmd("app.search.toggle", "Search"),
   cmd("app.custom.demo", "Demo"),
+  cmd("app.pane.kill", "Close pane", {
+    shortcutEditable: false,
+    shortcutIds: ["app.tab.close", "app.window.close"],
+  }),
 ]);
 
 const mounted: Array<Record<string, unknown>> = [];
@@ -73,6 +84,17 @@ describe("KeymapSettings grid", () => {
     ) as HTMLElement;
     // Four slots, each a CommandChordAssign chord button.
     expect(searchRow.querySelectorAll(".chord-btn").length).toBe(4);
+  });
+
+  test("renders non-editable commands as read-only shortcut cells", async () => {
+    const target = mountGrid();
+    await flush();
+    const rows = [...target.querySelectorAll(".grid .row:not(.head)")];
+    const closePaneRow = rows.find(
+      (r) => r.querySelector(".col-cmd")?.textContent === "Close pane",
+    ) as HTMLElement;
+    expect(closePaneRow.querySelectorAll(".chord-btn.readonly").length).toBe(4);
+    expect(closePaneRow.querySelector(".reset")).toBeNull();
   });
 
   test("the filter narrows the command list", async () => {

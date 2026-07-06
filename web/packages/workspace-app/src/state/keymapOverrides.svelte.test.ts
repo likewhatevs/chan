@@ -20,13 +20,14 @@ import {
 // Importing the store registers its resolver with shortcuts.ts, so chordFor
 // is override-aware for this whole test file (vitest isolates files).
 
-function cmd(id: string): Command {
+function cmd(id: string, extra: Partial<Command> = {}): Command {
   return {
     id,
     title: id,
     category: "Global",
     available: () => true,
     run: () => {},
+    ...extra,
   };
 }
 
@@ -91,6 +92,21 @@ describe("keymap override store", () => {
     expect(byId.get("app.window.reload")).toBe("Mod+J"); // override wins
     expect(byId.get("app.launcher.toggle")).toBe("Ctrl+Alt+K"); // baseline
     expect(byId.get("app.custom.chordless")).toBe("Mod+Y"); // chordless override
+  });
+
+  test("resolvedKeymapEntries skips read-only command overrides", () => {
+    const commands = [
+      cmd("app.pane.kill", {
+        shortcutEditable: false,
+        shortcutIds: ["app.tab.close", "app.window.close"],
+      }),
+    ];
+    assignOverride("app.pane.kill", "Mod+Y");
+    const byId = new Map(
+      resolvedKeymapEntries(commands).map((e) => [e.id, e.chord]),
+    );
+    expect(byId.has("app.pane.kill")).toBe(false);
+    expect(commandIdForChord("Mod+Y", commands)).toBeUndefined();
   });
 
   test("commandIdForChord matches an override but not a bare default", () => {

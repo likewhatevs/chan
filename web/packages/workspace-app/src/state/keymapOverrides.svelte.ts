@@ -128,6 +128,7 @@ export function resolvedKeymapEntriesForSlot(
     if (chord) byId.set(s.id, chord);
   }
   for (const c of commands) {
+    if (c.shortcutEditable === false) continue;
     if (byId.has(c.id)) continue;
     const chord = keymapOverrides.byId[c.id]?.[slot];
     if (chord) byId.set(c.id, chord);
@@ -147,11 +148,16 @@ export function resolvedKeymapEntries(
 /// match here (the compile-time onWindowKey branches already fire the
 /// built-in chords), and an override equal to the command's own built-in
 /// chord is skipped so the default branch and this path never double-fire.
-export function commandIdForChord(chord: Chord): string | undefined {
+export function commandIdForChord(
+  chord: Chord,
+  commands: readonly Command[] = [],
+): string | undefined {
   const platform = currentPlatform();
   const os = currentOS();
   const slot = slotFor(platform, os);
   for (const [id, override] of Object.entries(keymapOverrides.byId)) {
+    const command = commands.find((c) => c.id === id);
+    if (command?.shortcutEditable === false) continue;
     const oc = override[slot];
     if (!oc || !chordsEqual(oc, chord)) continue;
     const s = SHORTCUTS.find((x) => x.id === id);

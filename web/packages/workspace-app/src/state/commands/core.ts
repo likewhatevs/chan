@@ -18,6 +18,8 @@ import {
   canReopenClosedTab,
 } from "../tabs.svelte";
 
+type ReuseOptions = Pick<Command, "shortcutEditable" | "shortcutIds">;
+
 /// A reuse-existing chorded command: run() dispatches the id, available()
 /// mirrors runCommand's window-mode guard so the launcher hides it in the
 /// same windows runCommand would drop it.
@@ -26,11 +28,13 @@ function reuse(
   title: string,
   category: CommandCategory,
   keywords: string[],
+  options: ReuseOptions = {},
 ): Command {
   return {
     id,
     title,
     category,
+    ...options,
     keywords,
     available: (ctx) => allowedInWindow(id, ctx),
     run: () => dispatchChanCommand(id),
@@ -98,7 +102,10 @@ registerCommands([
   reuse("app.pane.prev", "Previous pane", "Panes", ["focus", "pane"]),
   reuse("app.pane.next", "Next pane", "Panes", ["focus", "pane"]),
   reuse("app.pane.closeTabs", "Close all tabs in pane", "Panes", ["close"]),
-  reuse("app.pane.kill", "Close pane", "Panes", ["close", "kill"]),
+  reuse("app.pane.kill", "Close pane", "Panes", ["close", "kill"], {
+    shortcutEditable: false,
+    shortcutIds: ["app.tab.close", "app.window.close"],
+  }),
   reuse("app.pane.flip", "Flip pane", "Panes", [
     "flip",
     "side",

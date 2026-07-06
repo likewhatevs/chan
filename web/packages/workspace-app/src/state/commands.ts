@@ -64,6 +64,13 @@ export type Command = {
   id: string;
   title: string;
   category: CommandCategory;
+  /// Optional shortcut ids to render for this command instead of `id`.
+  /// Used when a command is intentionally read-only but should advertise
+  /// the same close path as another command.
+  shortcutIds?: readonly string[];
+  /// False keeps the chord visible but removes the assignment affordance.
+  /// Defaults to true.
+  shortcutEditable?: boolean;
   /// Extra terms the type-ahead matches beyond the title (synonyms, the
   /// surface name, related verbs).
   keywords?: readonly string[];

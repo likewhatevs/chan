@@ -18,8 +18,15 @@ import {
   type OverrideSlot,
 } from "../state/keymapOverrides.svelte";
 
-function cmd(id: string, title: string): Command {
-  return { id, title, category: "Global", available: () => true, run: () => {} };
+function cmd(id: string, title: string, extra: Partial<Command> = {}): Command {
+  return {
+    id,
+    title,
+    category: "Global",
+    available: () => true,
+    run: () => {},
+    ...extra,
+  };
 }
 
 // A chorded command (real SHORTCUTS id) and a chordless one.
@@ -77,6 +84,19 @@ describe("CommandChordAssign", () => {
     expect((target.querySelector(".chord-btn") as HTMLElement).textContent?.trim()).toBe(
       "Assign",
     );
+  });
+
+  test("renders read-only shortcut aliases without an assign affordance", () => {
+    const command = cmd("app.pane.kill", "Close pane", {
+      shortcutEditable: false,
+      shortcutIds: ["app.tab.close", "app.window.close"],
+    });
+    const target = mountAssign(command, "macos");
+    const chord = target.querySelector(".chord-btn") as HTMLElement;
+    expect(chord.tagName).toBe("SPAN");
+    expect(chord.classList.contains("readonly")).toBe(true);
+    expect(chord.textContent?.trim()).toBe("Cmd+W / Cmd+Shift+W");
+    expect(target.querySelector(".reset")).toBeNull();
   });
 
   test("capturing a free chord assigns it and reveals a reset control", async () => {

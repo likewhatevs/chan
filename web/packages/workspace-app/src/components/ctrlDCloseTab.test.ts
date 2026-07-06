@@ -103,6 +103,7 @@ describe("Ctrl+D close-tab behaviour", () => {
 describe("Ctrl+D dispatcher (App.svelte raw-source guards)", () => {
   test("scoped to the literal Ctrl modifier on the D physical key", () => {
     expect(app).toContain('if (!e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return;');
+    expect(app).toContain('if (builtInChordSuperseded("app.tab.close")) return;');
     expect(app).toContain('if (e.code !== "KeyD") return;');
   });
 

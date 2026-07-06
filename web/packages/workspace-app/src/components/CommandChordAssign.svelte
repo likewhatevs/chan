@@ -4,8 +4,8 @@
   // "Assign" prompt when it has none, and on click captures a new chord for
   // the current client's OS slot, checks it against the resolved keymap, and
   // either assigns it or reports the conflict. A cleared override falls back
-  // to the built-in chord. Every command in the catalog is assignable,
-  // chorded or not.
+  // to the built-in chord. Commands can opt into a read-only chord display for
+  // aliases such as Close pane inheriting the close-tab/window chords.
   //
   // Capture runs on a dedicated focusable element that swallows its keydowns,
   // so it never reaches the launcher's arrow/enter navigation or types into
@@ -44,8 +44,18 @@
   let conflictLabel = $state<string | null>(null);
   let captureEl = $state<HTMLButtonElement>();
 
-  const chord = $derived(formattedChordForSlot(cmd.id, slot));
-  const hasOverride = $derived(overrideChordForSlot(cmd.id, slot) !== undefined);
+  const editable = $derived(cmd.shortcutEditable !== false);
+  const shortcutIds = $derived(cmd.shortcutIds?.length ? cmd.shortcutIds : [cmd.id]);
+  const chord = $derived.by(() => {
+    const values = shortcutIds
+      .map((id) => formattedChordForSlot(id, slot))
+      .filter((value): value is string => value !== null);
+    const unique = [...new Set(values)];
+    return unique.join(" / ") || null;
+  });
+  const hasOverride = $derived(
+    editable && overrideChordForSlot(cmd.id, slot) !== undefined,
+  );
 
   // A conflicting binding's display name: catalog title, else the SHORTCUTS
   // label (editor / terminal chords are registry-only), else the raw id.
@@ -111,6 +121,16 @@
   >
     {conflictLabel !== null ? `In use by ${conflictLabel}` : "Press keys"}
   </button>
+{:else if !editable}
+  <span
+    class="chord-btn readonly"
+    class:empty={!chord}
+    aria-label={chord
+      ? `${cmd.title} uses ${chord}`
+      : `${cmd.title} has no editable shortcut`}
+  >
+    {chord ?? "Built in"}
+  </span>
 {:else}
   <span class="assign">
     <button
@@ -163,6 +183,15 @@
     background: transparent;
     border-style: dashed;
     opacity: 0.75;
+  }
+  .chord-btn.readonly {
+    display: inline-block;
+    cursor: default;
+    opacity: 0.82;
+  }
+  .chord-btn.readonly:hover {
+    border-color: var(--border);
+    color: var(--text-secondary);
   }
   .reset {
     display: inline-flex;
