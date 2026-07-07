@@ -1773,11 +1773,22 @@ fn fmt_spawn_failures(failed: &[(String, String)]) -> String {
 }
 
 /// The blocking `cs terminal survey` path: resolve the tab selector to the
-/// owning SPA window(s), mint a survey id, push the `open_survey` overlay to
-/// each, park a oneshot, and AWAIT the SPA's reply (delivered by C's
-/// `POST /api/survey/reply` -> `SurveyBus::complete_survey`). The returned
-/// message is what the CLI prints to stdout: the chosen option label, or the
-/// followup-file path the UI created on `[F]`.
+/// owning SPA window(s), take a turn in the target's survey FIFO, mint a
+/// survey id, push the `open_survey` overlay to each window, park a oneshot,
+/// and AWAIT the SPA's reply (delivered by C's `POST /api/survey/reply` ->
+/// `SurveyBus::complete_survey`). The returned message is what the CLI prints
+/// to stdout: the chosen option label, or the followup-file path the UI
+/// created on `[F]`.
+///
+/// Surveys addressed to the same target run ONE at a time: the SPA holds a
+/// single overlay slot per tab (and one window-wide slot), so a concurrent
+/// second `open_survey` would replace the first and strand its caller. A
+/// later survey waits in a bounded per-target queue and only opens once every
+/// earlier one resolves (reply, dismiss, or timeout). The caller's
+/// `--timeout` bounds the TOTAL wait (queue time plus reply time), so a
+/// survey can time out while still queued; it then leaves the queue without
+/// ever opening an overlay. A target already at capacity is refused with an
+/// explicit queue-full response.
 async fn handle_survey(
     mut spec: SurveySpec,
     tab_name: Option<&str>,
@@ -1809,6 +1820,53 @@ async fn handle_survey(
             message: "no live terminal session matched".into(),
         };
     }
+    // The `--timeout` deadline is fixed HERE, before any queueing, so it
+    // bounds the total wait. A duration too large for the clock clamps to
+    // ~30 years, preserving "effectively never" without panicking.
+    let deadline = tokio::time::Instant::now()
+        .checked_add(std::time::Duration::from_secs(timeout_secs))
+        .unwrap_or_else(|| {
+            tokio::time::Instant::now() + std::time::Duration::from_secs(60 * 60 * 24 * 365 * 30)
+        });
+    // Take a turn in the target's FIFO. The guard releases the slot (and
+    // promotes the next survey) when this handler returns on ANY path, so a
+    // timed-out or cancelled queued survey never blocks its successors.
+    let _turn_guard =
+        match survey_bus.enqueue_turn(crate::survey::survey_queue_key(&windows, tab_name)) {
+            crate::survey::SurveyTurn::Ready(guard) => guard,
+            crate::survey::SurveyTurn::Wait(guard, turn_rx) => {
+                match tokio::time::timeout_at(deadline, turn_rx).await {
+                    Ok(Ok(())) => guard,
+                    // The sender dropped without firing: the bus vanished
+                    // mid-wait (server teardown). Nothing was pushed, so there
+                    // is no overlay to close.
+                    Ok(Err(_)) => {
+                        return ControlResponse::Error {
+                            message: "survey cancelled while queued".into(),
+                        };
+                    }
+                    // The caller's window elapsed while still queued: leave the
+                    // queue (guard drop) having never opened an overlay.
+                    Err(_elapsed) => {
+                        return ControlResponse::Timeout {
+                            message: format!(
+                            "no reply within {timeout_secs}s (timed out while queued behind an \
+                             earlier survey for this target)"
+                        ),
+                        };
+                    }
+                }
+            }
+            crate::survey::SurveyTurn::Full => {
+                return ControlResponse::QueueFull {
+                    message: format!(
+                        "survey queue for this target is full ({} open or waiting); retry after \
+                     the pending surveys resolve",
+                        crate::survey::SURVEY_QUEUE_CAP
+                    ),
+                };
+            }
+        };
     // Park the oneshot (and stamp its id onto the spec) BEFORE pushing the
     // overlay, so a fast reply cannot arrive before the survey is
     // registered.
@@ -1830,11 +1888,11 @@ async fn handle_survey(
             return ControlResponse::Error { message };
         }
     }
-    // Block until C's reply route fires the oneshot, the timeout window
-    // elapses, or the sender is dropped. Mirrors the `cs pane` round-trip
+    // Block until C's reply route fires the oneshot, the deadline passes, or
+    // the sender is dropped. Mirrors the `cs pane` round-trip
     // (PANE_REPLY_TIMEOUT), but the window is the caller's `--timeout` (the
     // host needs real time to read and answer, unlike pane's instant reply).
-    match tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), rx).await {
+    match tokio::time::timeout_at(deadline, rx).await {
         Ok(Ok((reply, answered_by))) => {
             // Close the STALE overlay in the other target windows, but NOT the
             // one that answered: it already dismissed its overlay via the
@@ -4980,6 +5038,258 @@ is_lead = false
         assert!(
             closes.iter().all(|frame| frame["window_id"] != "win-a"),
             "the answering window must be excluded from the close fan-out"
+        );
+    }
+
+    /// A registry holding one live session named `@@T` owned by `win-a`,
+    /// the single survey target the FIFO tests address.
+    fn single_tab_registry() -> (tempfile::TempDir, Arc<TerminalRegistry>) {
+        let (root, registry) = empty_registry();
+        registry
+            .create(CreateOptions {
+                size: PtySize {
+                    cols: 80,
+                    rows: 24,
+                    pixel_width: 0,
+                    pixel_height: 0,
+                },
+                tab_name: Some("@@T".into()),
+                tab_group: None,
+                window_id: Some("win-a".into()),
+                mcp_env: true,
+                cwd: None,
+                command: None,
+                env: Default::default(),
+            })
+            .expect("spawn survey target");
+        (root, Arc::new(registry))
+    }
+
+    /// A minimal one-option spec whose body names the survey, so a test can
+    /// tell overlays apart on the frame stream.
+    fn survey_spec(body: &str) -> SurveySpec {
+        SurveySpec {
+            survey_id: String::new(),
+            title: None,
+            body_markdown: body.into(),
+            options: vec!["ok".into()],
+            followup: None,
+        }
+    }
+
+    /// Await the next `open_survey` frame on the `/ws` fan-out.
+    async fn recv_open_survey(rx: &mut broadcast::Receiver<String>) -> serde_json::Value {
+        loop {
+            let raw = rx.recv().await.expect("open_survey frame");
+            let frame: serde_json::Value = serde_json::from_str(&raw).unwrap();
+            if frame["command"] == "open_survey" {
+                return frame;
+            }
+        }
+    }
+
+    /// Answer an open survey through the bus the way `POST /api/survey/reply`
+    /// does, echoing the id the frame carried.
+    fn answer_survey(
+        survey_bus: &crate::survey::SurveyBus,
+        open_frame: &serde_json::Value,
+        label: &str,
+    ) {
+        let survey_id = open_frame["survey"]["surveyId"]
+            .as_str()
+            .expect("server-minted id")
+            .to_string();
+        assert!(survey_bus.complete_survey(
+            &survey_id,
+            SurveyReply::Option {
+                survey_id: survey_id.clone(),
+                option_index: 0,
+                option_label: label.into(),
+            },
+            Some("win-a".into()),
+        ));
+    }
+
+    #[tokio::test]
+    async fn second_survey_for_the_same_tab_defers_until_the_first_resolves() {
+        // Two surveys addressed to the same tab serialize server-side: the
+        // second's open_survey is pushed only after the first resolves, so
+        // the SPA's single per-tab slot never sees two at once and BOTH are
+        // answerable, in order.
+        let (_root, registry) = single_tab_registry();
+        let events_tx: broadcast::Sender<String> = broadcast::channel(64).0;
+        let mut rx = events_tx.subscribe();
+        let survey_bus = Arc::new(crate::survey::SurveyBus::new());
+
+        let driver = async {
+            let open_a = recv_open_survey(&mut rx).await;
+            assert_eq!(open_a["survey"]["bodyMarkdown"], "first");
+            // The second survey is enqueued by now (join! polled it) and must
+            // NOT have opened while the first is unresolved.
+            assert!(
+                rx.try_recv().is_err(),
+                "second survey opened before the first resolved"
+            );
+            answer_survey(&survey_bus, &open_a, "first-answer");
+            let open_b = recv_open_survey(&mut rx).await;
+            assert_eq!(open_b["survey"]["bodyMarkdown"], "second");
+            answer_survey(&survey_bus, &open_b, "second-answer");
+        };
+        let (resp_a, resp_b, ()) = tokio::join!(
+            handle_survey(
+                survey_spec("first"),
+                Some("@@T"),
+                None,
+                30,
+                &events_tx,
+                &survey_bus,
+                Some(&registry),
+            ),
+            handle_survey(
+                survey_spec("second"),
+                Some("@@T"),
+                None,
+                30,
+                &events_tx,
+                &survey_bus,
+                Some(&registry),
+            ),
+            driver,
+        );
+
+        match resp_a {
+            ControlResponse::Ok { message } => assert_eq!(message, "first-answer"),
+            other => panic!("first survey should resolve Ok, got {other:?}"),
+        }
+        match resp_b {
+            ControlResponse::Ok { message } => assert_eq!(message, "second-answer"),
+            other => panic!("second survey should resolve Ok, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn queued_survey_times_out_while_waiting_and_leaves_the_queue() {
+        // A QUEUED survey whose --timeout elapses before its turn answers
+        // Timeout without ever opening an overlay, and its queue slot is
+        // vacated: no ghost head blocks the next survey for the target.
+        let (_root, registry) = single_tab_registry();
+        let events_tx: broadcast::Sender<String> = broadcast::channel(64).0;
+        let mut rx = events_tx.subscribe();
+        let survey_bus = Arc::new(crate::survey::SurveyBus::new());
+
+        let driver = async {
+            // Queued behind the open first survey with a 0s budget: the
+            // deadline passes while waiting, so it times out in the queue.
+            let resp_b = handle_survey(
+                survey_spec("second"),
+                Some("@@T"),
+                None,
+                0,
+                &events_tx,
+                &survey_bus,
+                Some(&registry),
+            )
+            .await;
+            match resp_b {
+                ControlResponse::Timeout { message } => {
+                    assert!(message.contains("queued"), "unexpected message: {message}")
+                }
+                other => panic!("queued survey should time out, got {other:?}"),
+            }
+            // Only the first survey's overlay ever opened; the queued
+            // timeout pushed no open and no close of its own.
+            let open_a = recv_open_survey(&mut rx).await;
+            assert_eq!(open_a["survey"]["bodyMarkdown"], "first");
+            assert!(
+                rx.try_recv().is_err(),
+                "a queued timeout must not push frames"
+            );
+            // The first survey is still answerable, and with the timed-out
+            // one gone from the queue a third survey opens as soon as the
+            // first resolves.
+            answer_survey(&survey_bus, &open_a, "first-answer");
+            let (resp_c, ()) = tokio::join!(
+                handle_survey(
+                    survey_spec("third"),
+                    Some("@@T"),
+                    None,
+                    30,
+                    &events_tx,
+                    &survey_bus,
+                    Some(&registry),
+                ),
+                async {
+                    let open_c = recv_open_survey(&mut rx).await;
+                    assert_eq!(open_c["survey"]["bodyMarkdown"], "third");
+                    answer_survey(&survey_bus, &open_c, "third-answer");
+                },
+            );
+            match resp_c {
+                ControlResponse::Ok { message } => assert_eq!(message, "third-answer"),
+                other => panic!("third survey should resolve Ok, got {other:?}"),
+            }
+        };
+        let (resp_a, ()) = tokio::join!(
+            handle_survey(
+                survey_spec("first"),
+                Some("@@T"),
+                None,
+                30,
+                &events_tx,
+                &survey_bus,
+                Some(&registry),
+            ),
+            driver,
+        );
+
+        match resp_a {
+            ControlResponse::Ok { message } => assert_eq!(message, "first-answer"),
+            other => panic!("first survey should resolve Ok, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn survey_against_a_full_target_queue_is_refused_with_queue_full() {
+        // A target already holding SURVEY_QUEUE_CAP surveys refuses the next
+        // one with the explicit queue-full response and pushes nothing.
+        let (_root, registry) = single_tab_registry();
+        let events_tx: broadcast::Sender<String> = broadcast::channel(64).0;
+        let mut rx = events_tx.subscribe();
+        let survey_bus = Arc::new(crate::survey::SurveyBus::new());
+
+        // Fill the handler's own key for the @@T/win-a target.
+        let key = crate::survey::survey_queue_key(&["win-a".to_string()], Some("@@T"));
+        let mut held = Vec::new();
+        for n in 0..crate::survey::SURVEY_QUEUE_CAP {
+            match survey_bus.enqueue_turn(key.clone()) {
+                crate::survey::SurveyTurn::Ready(guard) => held.push((guard, None)),
+                crate::survey::SurveyTurn::Wait(guard, turn_rx) => {
+                    held.push((guard, Some(turn_rx)))
+                }
+                crate::survey::SurveyTurn::Full => panic!("queue full at {n}, before the cap"),
+            }
+        }
+
+        let response = handle_survey(
+            survey_spec("overflow"),
+            Some("@@T"),
+            None,
+            30,
+            &events_tx,
+            &survey_bus,
+            Some(&registry),
+        )
+        .await;
+
+        match response {
+            ControlResponse::QueueFull { message } => {
+                assert!(message.contains("full"), "unexpected message: {message}")
+            }
+            other => panic!("expected QueueFull, got {other:?}"),
+        }
+        assert!(
+            rx.try_recv().is_err(),
+            "a refused survey must not push frames"
         );
     }
 

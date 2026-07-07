@@ -133,6 +133,11 @@ pub async fn send_control_request(socket: &Path, request: ControlRequest) -> Res
         ControlResponse::Timeout { message } => {
             Err(crate::exit_code::ControlTimeout { message }.into())
         }
+        // The server refused the request outright because the queue that
+        // serializes it is full (today only `cs terminal survey` against a
+        // flooded target). A plain error: nothing was delivered and nothing
+        // waits server-side, so the caller may simply retry later.
+        ControlResponse::QueueFull { message } => anyhow::bail!("{message}"),
     }
 }
 
@@ -232,6 +237,43 @@ mod tests {
         .unwrap();
         assert_eq!(env.window_id, "win");
         assert_eq!(env.control_socket, PathBuf::from("/tmp/chan-control.sock"));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn send_control_request_renders_queue_full_as_a_plain_error() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        // A one-shot fake server that answers every request with the
+        // queue-full status, standing in for a survey target whose FIFO is
+        // at capacity.
+        let socket =
+            std::env::temp_dir().join(format!("chan-cs-queue-full-{}.sock", std::process::id()));
+        let _ = std::fs::remove_file(&socket);
+        let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+        let server = tokio::spawn(async move {
+            let (mut conn, _) = listener.accept().await.unwrap();
+            let mut buf = [0u8; 4096];
+            let _ = conn.read(&mut buf).await.unwrap();
+            conn.write_all(
+                b"{\"status\":\"queue_full\",\"message\":\"survey queue for this target is full\"}\n",
+            )
+            .await
+            .unwrap();
+        });
+
+        let err = send_control_request(&socket, ControlRequest::WindowList)
+            .await
+            .unwrap_err();
+        server.await.unwrap();
+        let _ = std::fs::remove_file(&socket);
+
+        // Rendered as a plain error carrying the server's line, not a decode
+        // failure and not the timeout path (nothing to downcast).
+        assert_eq!(err.to_string(), "survey queue for this target is full");
+        assert!(err
+            .downcast_ref::<crate::exit_code::ControlTimeout>()
+            .is_none());
     }
 
     #[tokio::test]

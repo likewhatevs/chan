@@ -736,6 +736,20 @@ mod survey_wire_tests {
     }
 
     #[test]
+    fn control_response_queue_full_tag_round_trips() {
+        // The queue-full refusal is a distinct `status` so the client renders
+        // an explicit failure instead of a decode error or a silent drop.
+        let resp = ControlResponse::QueueFull {
+            message: "survey queue for this target is full".into(),
+        };
+        let v: serde_json::Value = serde_json::to_value(&resp).unwrap();
+        assert_eq!(v["status"], "queue_full");
+        assert_eq!(v["message"], "survey queue for this target is full");
+        let back: ControlResponse = serde_json::from_str(&v.to_string()).unwrap();
+        assert!(matches!(back, ControlResponse::QueueFull { .. }));
+    }
+
+    #[test]
     fn window_list_request_tag() {
         // The wire tag is `window_list` (a bare unit variant; no fields).
         // A Rust rename that drifts it breaks the server's decode with a
@@ -1245,6 +1259,15 @@ pub enum ControlResponse {
     /// dropped connection. `message` is the elapsed-window line the CLI
     /// prints (e.g. `no reply within 600s`).
     Timeout {
+        message: String,
+    },
+    /// A blocking request the server refused OUTRIGHT because the queue that
+    /// serializes it is at capacity (today only `cs terminal survey`, whose
+    /// per-target FIFO holds the open survey plus the waiters). Distinct
+    /// from `Error` on the wire so the refusal is explicit (nothing was
+    /// delivered and nothing waits server-side) and never a silent drop.
+    /// `message` is the queue-full line the CLI prints.
+    QueueFull {
         message: String,
     },
 }

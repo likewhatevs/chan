@@ -2,7 +2,9 @@
 //!
 //! * `POST /api/drafts/new` — Cmd+N from the SPA. Creates
 //!   `<drafts_dir>/<next-untitled>/draft.md` + indexes it + returns
-//!   the real in-root path.
+//!   the real in-root path. An optional JSON body picks the seed:
+//!   no body (or no `kind`) seeds a plain markdown draft,
+//!   `{"kind": "slides"}` seeds a slide deck.
 //!
 //! Drafts are real in-root files under the configured drafts
 //! directory (default `.Drafts`), named by `Workspace::drafts_dir_name`.
@@ -23,6 +25,20 @@ use crate::error::{err, err_from};
 use crate::state::AppState;
 
 const NEW_DRAFT_CONTENT: &str = "# Draft\n";
+
+/// Seed for a brand-new slide deck: the canonical `chan: kind: slides`
+/// frontmatter block the SPA's `parseSlidesSpec` recognizes (16:9 default
+/// aspect) plus a first slide heading, so the draft opens straight into the
+/// slides layout. The primary file is still `draft.md`: a deck is markdown.
+const NEW_SLIDES_CONTENT: &str = r#"---
+chan:
+  kind: slides
+  slides:
+    aspect_ratio: "16:9"
+---
+
+# Slide 1
+"#;
 
 /// Seed for a brand-new diagram: a valid, non-empty Excalidraw scene so
 /// the board opens cleanly and is not treated as an empty file that
@@ -104,6 +120,34 @@ pub struct DraftPromoteResponse {
     pub mode: &'static str,
 }
 
+/// Optional body of `POST /api/drafts/new`. The plain Cmd+N path sends no
+/// body at all; `kind` picks the seed content when present.
+#[derive(Deserialize, Default)]
+pub struct DraftCreatePayload {
+    /// `"slides"` seeds a slide deck; absent seeds a markdown draft.
+    #[serde(default)]
+    kind: Option<String>,
+}
+
+/// Resolve the `draft.md` seed for a create-draft request body. An empty
+/// body or an omitted `kind` seeds the markdown draft; `{"kind":"slides"}`
+/// seeds the slide deck. Anything else is a client error, refused before
+/// touching the workspace.
+fn draft_seed_for_body(body: &[u8]) -> Result<&'static str, String> {
+    if body.is_empty() {
+        return Ok(NEW_DRAFT_CONTENT);
+    }
+    let payload: DraftCreatePayload =
+        serde_json::from_slice(body).map_err(|e| format!("invalid create-draft body: {e}"))?;
+    match payload.kind.as_deref() {
+        None => Ok(NEW_DRAFT_CONTENT),
+        Some("slides") => Ok(NEW_SLIDES_CONTENT),
+        Some(other) => Err(format!(
+            "unknown draft kind {other:?} (expected \"slides\")"
+        )),
+    }
+}
+
 /// Create a fresh draft directory + a seeded `draft.md` inside.
 ///
 /// Race-window note: `next_untitled_draft_name` + `create_draft_dir`
@@ -111,14 +155,21 @@ pub struct DraftPromoteResponse {
 /// returns `AlreadyExists` we retry once with a re-resolved name.
 /// The race is rare in practice (single-user / single-machine) but
 /// the retry keeps the contract clean.
-pub async fn api_create_draft(State(state): State<Arc<AppState>>) -> Response {
+pub async fn api_create_draft(
+    State(state): State<Arc<AppState>>,
+    body: axum::body::Bytes,
+) -> Response {
+    let seed = match draft_seed_for_body(&body) {
+        Ok(seed) => seed,
+        Err(message) => return err(StatusCode::BAD_REQUEST, message),
+    };
     let workspace = state.workspace().clone();
     // Note the draft path inside the blocking task, before it returns to
     // the await, so the watcher's Created event for our own draft is
     // suppressed without the post-await race (see files.rs::api_write_file).
     let self_writes = Arc::clone(&state.self_writes);
     let result = tokio::task::spawn_blocking(move || {
-        let name = create_draft_sync(&workspace)?;
+        let name = create_draft_sync(&workspace, seed)?;
         self_writes.note(&format!("{}/{name}/draft.md", workspace.drafts_dir_name()));
         Ok::<_, chan_workspace::ChanError>((name, workspace.drafts_dir_name().to_string()))
     })
@@ -184,13 +235,14 @@ fn create_diagram_sync(
 
 fn create_draft_sync(
     workspace: &chan_workspace::Workspace,
+    seed: &str,
 ) -> Result<String, chan_workspace::ChanError> {
     for _ in 0..2 {
         let name = workspace.next_untitled_draft_name()?;
         match workspace.create_draft_dir(&name) {
             Ok(_) => {
                 let path = format!("{}/{name}/draft.md", workspace.drafts_dir_name());
-                workspace.write_text(&path, NEW_DRAFT_CONTENT)?;
+                workspace.write_text(&path, seed)?;
                 return Ok(name);
             }
             Err(chan_workspace::ChanError::Io(msg)) if msg.contains("already exists") => {
@@ -325,11 +377,39 @@ mod tests {
     fn create_draft_sync_seeds_title() {
         let (_cfg, _root, workspace) = make_workspace();
 
-        let name = create_draft_sync(&workspace).unwrap();
+        let name = create_draft_sync(&workspace, NEW_DRAFT_CONTENT).unwrap();
         let path = format!(".Drafts/{name}/draft.md");
 
         assert_eq!(name, "untitled");
         assert_eq!(workspace.read_text(&path).unwrap(), NEW_DRAFT_CONTENT);
+    }
+
+    #[test]
+    fn draft_seed_for_body_picks_the_kind() {
+        // No body / no kind: the plain markdown draft (the Cmd+N path).
+        assert_eq!(draft_seed_for_body(b"").unwrap(), NEW_DRAFT_CONTENT);
+        assert_eq!(draft_seed_for_body(b"{}").unwrap(), NEW_DRAFT_CONTENT);
+        // The slides kind seeds the deck.
+        assert_eq!(
+            draft_seed_for_body(br#"{"kind":"slides"}"#).unwrap(),
+            NEW_SLIDES_CONTENT
+        );
+        // An unknown kind (and a malformed body) is refused, not defaulted.
+        assert!(draft_seed_for_body(br#"{"kind":"sculpture"}"#)
+            .unwrap_err()
+            .contains("sculpture"));
+        assert!(draft_seed_for_body(b"not json").is_err());
+    }
+
+    #[test]
+    fn slides_seed_carries_the_canonical_frontmatter_block() {
+        // The exact block `parseSlidesSpec` matches on: frontmatter at the
+        // very start, `chan: kind: slides`, quoted 16:9 aspect. A drift here
+        // opens the new deck as a plain draft instead of slides.
+        assert!(NEW_SLIDES_CONTENT.starts_with(
+            "---\nchan:\n  kind: slides\n  slides:\n    aspect_ratio: \"16:9\"\n---\n"
+        ));
+        assert!(NEW_SLIDES_CONTENT.contains("# Slide 1"));
     }
 
     #[test]
@@ -471,7 +551,7 @@ mod tests {
 
         // Create the draft the way api_create_draft does: seed draft.md,
         // note the path so the Created event is suppressed.
-        let name = create_draft_sync(&workspace).unwrap();
+        let name = create_draft_sync(&workspace, NEW_DRAFT_CONTENT).unwrap();
         let path = format!(".Drafts/{name}/draft.md");
         self_writes.note(&path);
         echo(&bridge, WatchKind::Created, &path);
@@ -537,5 +617,183 @@ mod tests {
             matches!(err, chan_workspace::ChanError::WriteConflict { .. }),
             "stale token did not conflict: {err:?}",
         );
+    }
+
+    // ---- Route-level create-draft tests --------------------------------
+    //
+    // These go through the real router (auth middleware + body extraction),
+    // pinning the `POST /api/drafts/new` contract: no body seeds the plain
+    // markdown draft, `{"kind":"slides"}` seeds the deck, an unknown kind
+    // is a 400. Mirrors the route_test_app harness in routes/index.rs.
+
+    use std::sync::atomic::AtomicU64;
+    use std::sync::{Mutex, RwLock};
+
+    use axum::body::Body;
+    use axum::http::{header, Request};
+    use chan_workspace::SearchAggression;
+    use tokio::sync::{broadcast, watch};
+    use tower::ServiceExt;
+
+    use crate::self_writes::SelfWrites;
+    use crate::state::WorkspaceCell;
+    use crate::terminal_sessions::{Registry as TerminalRegistry, RegistryConfig};
+    use crate::{EditorPrefs, ServerConfig};
+
+    struct RouteTestApp {
+        _cfg: TempDir,
+        _root: TempDir,
+        state: Arc<AppState>,
+    }
+
+    fn route_test_app() -> RouteTestApp {
+        let cfg = TempDir::new().unwrap();
+        let root = TempDir::new().unwrap();
+        let lib = chan_workspace::Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_workspace(root.path()).unwrap();
+        let workspace = lib.open_workspace(root.path()).unwrap();
+
+        let (events_tx, _) = broadcast::channel::<String>(1);
+        let (index_events_tx, _) = broadcast::channel::<chan_workspace::WatchEvent>(1);
+        let indexer = Arc::new(crate::indexer::Indexer::spawn(
+            workspace.clone(),
+            index_events_tx.subscribe(),
+            false,
+            SearchAggression::Conservative,
+            Arc::new(chan_workspace::NoProgress),
+        ));
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        std::mem::forget(shutdown_tx);
+
+        let state = Arc::new(AppState {
+            library: lib,
+            workspace_root: root.path().to_path_buf(),
+            workspace_cell: Arc::new(RwLock::new(Some(WorkspaceCell {
+                workspace,
+                watch_handle: None,
+                indexer,
+            }))),
+            token: Some("secret".to_string()),
+            prefix: Arc::new(RwLock::new(String::new())),
+            settings_disabled: false,
+            last_activity: Arc::new(AtomicU64::new(0)),
+            events_tx,
+            index_events_tx,
+            server_config: Mutex::new(ServerConfig::default()),
+            editor_prefs: Mutex::new(EditorPrefs::default()),
+            self_writes: Arc::new(SelfWrites::new()),
+            terminal_sessions: Arc::new(TerminalRegistry::new(RegistryConfig {
+                workspace_root: root.path().to_path_buf(),
+                mcp_socket_path: None,
+                control_socket_path: None,
+                terminal: ServerConfig::default().terminal,
+            })),
+            shutdown_rx,
+            scope_registry: std::sync::Arc::new(crate::bus::ScopeRegistry::new()),
+            survey_bus: std::sync::Arc::new(crate::survey::SurveyBus::new()),
+            window_bus: std::sync::Arc::new(crate::window_bus::WindowBus::new()),
+            handover_bus: std::sync::Arc::new(crate::handover_bus::HandoverBus::new()),
+            ephemeral_sessions: std::sync::Mutex::new(std::collections::HashMap::new()),
+            terminal_session_dir: None,
+            window_presence: std::sync::Arc::new(crate::window_presence::WindowPresence::new()),
+            session_registry: std::sync::Arc::new(crate::session_presence::SessionRegistry::new()),
+            window_transfers: std::sync::Arc::new(crate::window_transfers::WindowTransfers::new()),
+            window_titles: std::sync::Arc::new(crate::window_titles::WindowTitles::new()),
+            instance_id: "test-instance".to_string(),
+        });
+
+        RouteTestApp {
+            _cfg: cfg,
+            _root: root,
+            state,
+        }
+    }
+
+    /// POST /api/drafts/new with an optional JSON body, the way the SPA
+    /// does: no body means no content-type header either.
+    async fn post_create_draft(
+        router: &axum::Router,
+        body: Option<&str>,
+    ) -> (StatusCode, serde_json::Value) {
+        let mut req = Request::builder()
+            .method("POST")
+            .uri("/api/drafts/new")
+            .header(header::AUTHORIZATION, "Bearer secret");
+        let body = if let Some(b) = body {
+            req = req.header(header::CONTENT_TYPE, "application/json");
+            Body::from(b.to_string())
+        } else {
+            Body::empty()
+        };
+        let response = router
+            .clone()
+            .oneshot(req.body(body).unwrap())
+            .await
+            .unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json = serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
+        (status, json)
+    }
+
+    #[tokio::test]
+    async fn create_draft_route_with_slides_kind_seeds_the_slides_deck() {
+        let app = route_test_app();
+        let router = crate::router(app.state.clone());
+
+        let (status, body) = post_create_draft(&router, Some(r#"{"kind":"slides"}"#)).await;
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["name"], "untitled");
+        assert_eq!(body["path"], ".Drafts/untitled/draft.md");
+        // Seeded with EXACTLY the slides content (frontmatter + heading).
+        assert_eq!(
+            app.state
+                .workspace()
+                .read_text(".Drafts/untitled/draft.md")
+                .unwrap(),
+            NEW_SLIDES_CONTENT
+        );
+    }
+
+    #[tokio::test]
+    async fn create_draft_route_without_body_seeds_the_markdown_draft() {
+        // The plain Cmd+N path sends no body and no content-type; it keeps
+        // seeding the markdown draft.
+        let app = route_test_app();
+        let router = crate::router(app.state.clone());
+
+        let (status, body) = post_create_draft(&router, None).await;
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["name"], "untitled");
+        assert_eq!(
+            app.state
+                .workspace()
+                .read_text(".Drafts/untitled/draft.md")
+                .unwrap(),
+            NEW_DRAFT_CONTENT
+        );
+    }
+
+    #[tokio::test]
+    async fn create_draft_route_refuses_an_unknown_kind() {
+        let app = route_test_app();
+        let router = crate::router(app.state.clone());
+
+        let (status, body) = post_create_draft(&router, Some(r#"{"kind":"sculpture"}"#)).await;
+
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(
+            body["error"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("sculpture"),
+            "unexpected error body: {body}"
+        );
+        // Nothing was created for the refused request.
+        assert!(!app.state.workspace().drafts_dir().join("untitled").exists());
     }
 }
