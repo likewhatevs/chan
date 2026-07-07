@@ -44,7 +44,7 @@ Host smoke: the per-bug pass is the release owner's `dev/v0.66.1/host-smoke.md`;
 RC dry runs:
 
 - Run 1: id `28889761776`, head `68d5a791`, result FAILURE. macOS validation only: the stable control-socket name overflowed the 104-byte macOS `sun_path` cap in `/var/folders` temp dirs, so no stable socket bound (three `devserver_resilience` tests). Fixed by `d7085700`. Everything else was green, including `Windows packages (signed)`, which is the first Windows compile of the new socket cfg surface, and the parallel macOS fan-out off `context`.
-- Run 2: dispatched on the branch head carrying `6e7839a1` + `d7085700`; id and result recorded below when concluded.
+- Run 2: id `28891608356`, head `8e5fd15c`, result SUCCESS. Every job green: macOS validation (confirming the `d7085700` socket-name fix on the runner), macOS CLI and desktop packages through the sign/notarize path, Windows packages (signed), Linux validation and packages, both gateway targets, all docker builds; publish jobs skipped as expected for `publish=false`. URL: `https://github.com/fiorix/chan/actions/runs/28891608356`.
 
 No `v*` tag is pushed for an rc; the rc is a pin state only.
 
