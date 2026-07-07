@@ -21,6 +21,8 @@ Bugfix candidate off `v0.66.0` (`aef78ecb`) fixing the six bugs the release owne
   - `0a3a7ff8` `fix(web): rich prompt persistence, excalidraw actions, menu separator`
   - `f864a44a` `docs(release): add v0.66.1 unreleased notes`
   - `fee6dcd6` `chore(release): open 0.66.1-rc1`
+  - `6e7839a1` `fix(web): back the empty-pane path label with a translucent pill` (owner request during the rc)
+  - `d7085700` `fix(server): fit stable control-socket names in macOS socket dirs` (first dry run's macOS failure)
 
 ## Validation
 
@@ -39,12 +41,10 @@ Host smoke: the per-bug pass is the release owner's `dev/v0.66.1/host-smoke.md`;
 
 ## Release Workflow
 
-RC dry run:
+RC dry runs:
 
-- Workflow: `.github/workflows/release.yml`
-- Ref: `release-v0661`
-- Input: `publish=false`
-- Run id / result: pending dispatch.
+- Run 1: id `28889761776`, head `68d5a791`, result FAILURE. macOS validation only: the stable control-socket name overflowed the 104-byte macOS `sun_path` cap in `/var/folders` temp dirs, so no stable socket bound (three `devserver_resilience` tests). Fixed by `d7085700`. Everything else was green, including `Windows packages (signed)`, which is the first Windows compile of the new socket cfg surface, and the parallel macOS fan-out off `context`.
+- Run 2: dispatched on the branch head carrying `6e7839a1` + `d7085700`; id and result recorded below when concluded.
 
 No `v*` tag is pushed for an rc; the rc is a pin state only.
 
