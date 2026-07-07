@@ -204,6 +204,7 @@ jobs:
           # Cargo reuses the signed desktop binary when sources are fresh; the
           # signCommand in tauri.windows.conf.json signs the NSIS installer.
           (cd desktop/src-tauri && cargo tauri build --bundles nsis --config tauri.windows.conf.json)
+          powershell -NoProfile -ExecutionPolicy Bypass -File desktop/src-tauri/scripts/windows/sign.ps1 target/release/chan-desktop.exe
 
       - if: matrix.os == 'windows-latest'
         name: Verify Windows Authenticode signatures
