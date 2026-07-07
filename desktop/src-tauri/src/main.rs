@@ -1428,8 +1428,9 @@ fn reap_devserver_control_terminal(app: &tauri::AppHandle, state: &AppState, id:
 /// Drop a devserver's live connection windows: stop its window watcher and
 /// remove its workspace tenants/standalone terminals, then drop it from the
 /// launcher feed. Leaves the control terminal to the caller: a live but
-/// unreachable connection may keep it for attention, while a terminated
-/// script-backed connection reaps it through full teardown. Idempotent.
+/// unreachable connection may keep it for attention, a clean past-grace
+/// script exit reaps it through full teardown, and a failing script exit
+/// keeps it at "process exited" for the death reason. Idempotent.
 fn remove_devserver_windows(app: &tauri::AppHandle, state: &AppState, id: &str) {
     // Cancel the window watcher (it detaches its windows, not reap -- the
     // devserver keeps its set server-side).
@@ -1470,12 +1471,16 @@ fn teardown_devserver_connection(app: &tauri::AppHandle, state: &AppState, id: &
 /// A script-backed devserver's control script exited (the script IS the
 /// connection), or its connect failed while the control terminal is still live.
 /// Mark the connection DOWN but KEEP the control terminal at "process exited" so
-/// the user can read the death reason, and KEEP the workspace windows open on
-/// the reconnect spinner. Reconnect stays BLOCKED (`control_terminal_dead`) until
-/// the user closes the control terminal (`close_devserver_control_terminal`
-/// clears it) or hits Reconnect (whose teardown reaps it). This is the
-/// counterpart to `teardown_devserver_connection`, which reaps everything, and
-/// to the exit watcher's clean-exit auto-reap, which keeps nothing. Idempotent.
+/// the user can read the death reason. Workspace windows are the CALLER's call:
+/// this function leaves them alone, so the connect error arm keeps them open on
+/// the reconnect spinner while the exit watcher closes them (via
+/// `remove_devserver_windows`) before marking. Reconnect stays BLOCKED
+/// (`control_terminal_dead`) until the user closes the control terminal
+/// (`close_devserver_control_terminal` clears it) or hits Reconnect (whose
+/// teardown reaps it). This is the counterpart to
+/// `teardown_devserver_connection`, which reaps everything, and to the exit
+/// watcher's within-grace clean-exit auto-reap, which reaps only the control
+/// terminal. Idempotent.
 fn mark_devserver_control_exited(app: &tauri::AppHandle, state: &AppState, id: &str) {
     // Keeping requires something to keep: with no current control run (a
     // concurrent close or reconnect reaped it between the caller's currency
@@ -1491,11 +1496,11 @@ fn mark_devserver_control_exited(app: &tauri::AppHandle, state: &AppState, id: &
         .unwrap()
         .insert(id.to_string());
     // Retire the window watcher + workspace poll WITHOUT closing the workspace
-    // windows: their own `/ws` to the now-dead transport drops, so each shows the
-    // DisconnectOverlay reconnect spinner. Do NOT forget the feed or reap the
-    // control terminal, so the launcher keeps rendering the flashing control row
-    // (a `control:true` record under the devserver's `lib-` library) at "process
-    // exited".
+    // windows here; the caller decides their fate (kept windows drop their own
+    // `/ws` to the now-dead transport and show the DisconnectOverlay reconnect
+    // spinner). Do NOT forget the feed or reap the control terminal, so the
+    // launcher keeps rendering the flashing control row (a `control:true`
+    // record under the devserver's `lib-` library) at "process exited".
     if let Some(cancel) = state.devserver_watchers.lock().unwrap().remove(id) {
         let _ = cancel.send(DevserverWatcherStop::RetireKeepWindows);
     }
@@ -1755,19 +1760,28 @@ fn ensure_control_run_live(
 }
 
 /// Watch a scripted devserver's control-terminal PTY from the moment its prefix
-/// is registered. What the script's exit means depends on how it ended:
+/// is registered. The script IS the connection for a persistent transport
+/// (`ssh -N`, `limactl shell ... chan devserver --join`), so what its exit
+/// means depends on how and when it ended:
 ///
-/// - CLEAN (status 0) with the connection up: the script finished its job and
-///   returned (a daemonizing `chan devserver --service=chan` does this on
-///   every healthy connect), and a clean exit carries no death reason worth
-///   reading, so the control terminal is auto-reaped. The connection, its
-///   windows, and reconnect are untouched. A clean exit while the connect flow
-///   is still in flight defers judgment until that flow resolves (the startup
-///   race: the script can return before the connection is recorded).
-/// - Anything else (a non-zero status, a signal, or an exit with no connection
-///   to show for it): the script-backed connection is dead (a persistent
-///   transport like `ssh -N` must keep its script alive). Mark it down but
-///   KEEP the control terminal at "process exited"
+/// - CLEAN (status 0) while the connect flow is still in flight: healthy vs
+///   failed is unknowable until that flow resolves (the startup race: a
+///   daemonizing script can return before the connection is recorded), so
+///   judgment is deferred.
+/// - CLEAN with the connection up, within `CLEAN_EXIT_GRACE` of the
+///   connection registering: the daemonize handshake (`chan devserver
+///   --service=chan` prints the token, detaches the server, and returns 0 on
+///   every healthy connect). A clean exit carries no death reason worth
+///   reading, so the control terminal is auto-reaped; the connection, its
+///   windows, and reconnect are untouched.
+/// - CLEAN with the connection up, past the grace: the script was the
+///   transport and its return ends the connection (a ^C forwarded into
+///   `limactl shell` kills the remote, which exits 0, relayed as a clean
+///   exit), so the whole connection tears down: conn dropped, control
+///   terminal reaped, workspace windows closed, launcher shows.
+/// - Anything else (a non-zero status, a signal, or a clean exit with no
+///   connection to show for it): the connection stops and its workspace
+///   windows close, but the control terminal is KEPT at "process exited"
 ///   (`mark_devserver_control_exited`) so the user can read the death reason;
 ///   reconnect stays blocked until they close it. A non-responsive but
 ///   still-running script is handled by the workspace poll attention path
@@ -1788,6 +1802,10 @@ fn spawn_control_terminal_exit_watcher(
 ) {
     tauri::async_runtime::spawn(async move {
         const POLL: std::time::Duration = std::time::Duration::from_millis(1000);
+        // A clean exit within this window of the connection registering reads
+        // as the daemonize handshake returning; a clean exit past it means the
+        // script was the transport and the connection is over.
+        const CLEAN_EXIT_GRACE: std::time::Duration = std::time::Duration::from_secs(10);
         loop {
             if !control_run_is_current(&state, &id, generation, &prefix) {
                 return;
@@ -1808,7 +1826,7 @@ fn spawn_control_terminal_exit_watcher(
             // connect flow is still recording the connection, so healthy vs
             // failed is unknowable until that flow resolves. Keep polling (the
             // connect's own budgets bound the wait). Checked BEFORE the
-            // is_connected gate below: reaping mid-connect would fail the
+            // connected gate below: reaping mid-connect would fail the
             // in-flight attempt's liveness checks and tear down a connect that
             // was about to land.
             if clean && state.devserver_connecting.lock().unwrap().contains(&id) {
@@ -1819,22 +1837,47 @@ fn spawn_control_terminal_exit_watcher(
                 return;
             }
             if clean && state.devservers.is_connected(&id) {
+                // The registration age tells the two clean endings apart:
+                // within the grace this is the daemonize handshake returning
+                // (the detached server carries the connection on), past it the
+                // script was the transport and its return ends the connection.
+                // A conn racing away between the gate above and this read
+                // yields None and lands on the (idempotent) full disconnect.
+                let within_grace = state
+                    .devservers
+                    .registered_elapsed(&id)
+                    .is_some_and(|age| age <= CLEAN_EXIT_GRACE);
+                if within_grace {
+                    tracing::info!(
+                        devserver = %id,
+                        "control script exited cleanly within the connect grace; reaping the control terminal"
+                    );
+                    reap_devserver_control_terminal(&app, &state, &id);
+                    if let Some(embedded) = state.embedded() {
+                        embedded.signal_library_change();
+                    }
+                    let _ = app.emit(serve::SERVES_CHANGED, ());
+                    return;
+                }
                 tracing::info!(
                     devserver = %id,
-                    "control script exited cleanly with the connection up; reaping the control terminal"
+                    "control script exited cleanly past the connect grace; disconnecting the devserver"
                 );
-                reap_devserver_control_terminal(&app, &state, &id);
-                if let Some(embedded) = state.embedded() {
-                    embedded.signal_library_change();
-                }
-                let _ = app.emit(serve::SERVES_CHANGED, ());
+                teardown_devserver_connection(&app, &state, &id);
                 return;
             }
             tracing::info!(
                 devserver = %id,
                 exit = %exit,
-                "control script exited without a healthy connection; marking devserver down, keeping control terminal"
+                "control script exited without a healthy connection; closing windows, keeping control terminal"
             );
+            // Close the workspace windows FIRST, while the window watcher is
+            // still registered: the removal closes watcher-driven windows by
+            // cancelling that watcher with CloseWindows, and the mark below
+            // retires the same watcher KEEPING its windows. Composed the other
+            // way round the retire wins and the windows stay open against a
+            // dead transport.
+            remove_devserver_windows(&app, &state, &id);
             mark_devserver_control_exited(&app, &state, &id);
             return;
         }
@@ -2347,8 +2390,10 @@ async fn connect_devserver_impl_inner(
     //
     // The control terminal stays open after connect while its script runs. Its
     // exit watcher (started as soon as the prefix was registered, before token
-    // scraping) auto-reaps it once the script returns cleanly with the
-    // connection up, and keeps it at "process exited" when the script fails.
+    // scraping) auto-reaps it when the script returns cleanly within the
+    // connect grace (the daemonize handshake), disconnects the whole devserver
+    // when a clean return comes later (the script was the transport), and
+    // keeps it at "process exited" when the script fails.
     // Auto-hide the control terminal on connect success when the devserver's
     // "auto-hide control terminal on success" is set. A PROGRAMMATIC hide → reuse
     // the silent-hide path so it does NOT fire the bury notice (unlike the OS
@@ -5959,13 +6004,18 @@ mod tests {
             .expect("scrape probes the script exit");
         assert!(token_pos < exit_pos);
 
-        // Exit watcher: a CLEAN exit with the connection up auto-reaps the
-        // control terminal (no down-mark, no teardown, no reconnect block); a
-        // failing or premature exit keeps it via mark_devserver_control_exited
-        // so the user can read the death reason. A clean exit during an
-        // in-flight connect defers judgment until the connect resolves, and
-        // that deferral must come BEFORE the is_connected reap gate: reaping
-        // mid-connect fails the attempt's own liveness checks.
+        // Exit watcher: a CLEAN exit with the connection up splits on the
+        // registration age. Within the handshake grace it is the daemonizing
+        // script returning: auto-reap the control terminal, keep the
+        // connection (no down-mark, no reconnect block). Past the grace the
+        // script WAS the transport, so the whole connection tears down:
+        // windows closed, control terminal reaped, launcher shows. A failing
+        // or premature exit closes the windows but keeps the control terminal
+        // via mark_devserver_control_exited so the user can read the death
+        // reason. A clean exit during an in-flight connect defers judgment
+        // until the connect resolves, and that deferral must come BEFORE the
+        // is_connected gate: reaping mid-connect fails the attempt's own
+        // liveness checks.
         let exit_watcher = MAIN_RS
             .split("fn spawn_control_terminal_exit_watcher")
             .nth(1)
@@ -5974,9 +6024,6 @@ mod tests {
             .next()
             .expect("watcher section ends before connect implementation");
         assert!(exit_watcher.contains("control_script_exit_is_clean"));
-        assert!(exit_watcher.contains("reap_devserver_control_terminal"));
-        assert!(exit_watcher.contains("mark_devserver_control_exited"));
-        assert!(!exit_watcher.contains("teardown_devserver_connection"));
         assert!(!exit_watcher.contains("control_terminal_dead"));
         assert!(!exit_watcher.contains("devserver-control-closed"));
         let connecting_pos = exit_watcher
@@ -5984,13 +6031,39 @@ mod tests {
             .expect("watcher defers a clean exit while a connect is in flight");
         let connected_pos = exit_watcher
             .find("devservers.is_connected")
-            .expect("watcher gates the auto-reap on a live connection");
+            .expect("watcher gates the clean-exit split on a live connection");
         assert!(connecting_pos < connected_pos);
+        // The grace split: the registration-age read gates the two clean
+        // endings, the within-grace reap-and-keep before the past-grace full
+        // teardown.
+        let grace_pos = exit_watcher
+            .find("registered_elapsed")
+            .expect("watcher reads the registration age");
+        let reap_pos = exit_watcher
+            .find("reap_devserver_control_terminal")
+            .expect("a within-grace clean exit reaps the control terminal");
+        let teardown_pos = exit_watcher
+            .find("teardown_devserver_connection")
+            .expect("a past-grace clean exit tears the connection down");
+        assert!(connected_pos < grace_pos);
+        assert!(grace_pos < reap_pos);
+        assert!(reap_pos < teardown_pos);
+        // The failing-exit compose: the windows close THROUGH the still-
+        // registered window watcher (CloseWindows) BEFORE the mark retires
+        // that watcher keeping its windows; the reverse order leaks the
+        // windows open against a dead transport.
+        let close_windows_pos = exit_watcher
+            .find("remove_devserver_windows")
+            .expect("a failing exit closes the workspace windows");
+        let mark_pos = exit_watcher
+            .find("mark_devserver_control_exited")
+            .expect("a failing exit keeps the control terminal");
+        assert!(close_windows_pos < mark_pos);
 
-        // mark_devserver_control_exited (the failed-exit keep path) keeps the
-        // control terminal (no reap, no window teardown), retires the watcher
-        // KEEPING the workspace windows, and blocks reconnect via
-        // control_terminal_dead.
+        // mark_devserver_control_exited (the failed-exit keep primitive) keeps
+        // the control terminal and does no window closure of its own (the exit
+        // watcher composes that ahead of it), retires the watcher KEEPING the
+        // workspace windows, and blocks reconnect via control_terminal_dead.
         let mark_exited = MAIN_RS
             .split("fn mark_devserver_control_exited")
             .nth(1)

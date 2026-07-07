@@ -17,7 +17,7 @@
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
@@ -83,26 +83,50 @@ struct GatewaySession {
 /// In-memory map of connected devservers keyed by `Devserver.id`. A
 /// devserver absent from the map is disconnected: its `[DEVSERVER]` section
 /// shows the disconnected placeholder rather than live workspace rows.
+///
+/// Every entry carries the `Instant` it was registered, stamped inside `set`
+/// (the single chokepoint every registration site goes through) and read via
+/// [`registered_elapsed`](Self::registered_elapsed): the control-script exit
+/// watcher uses the age to tell a connect-time daemonize-handshake exit from a
+/// later death of the script that IS the connection. A re-`set` (token
+/// rotation) re-stamps it: the rotation is a fresh registration.
 #[derive(Default)]
 pub struct DevserverConns {
-    inner: Mutex<HashMap<String, DevserverConn>>,
+    inner: Mutex<HashMap<String, (DevserverConn, Instant)>>,
 }
 
 impl DevserverConns {
     pub fn get(&self, id: &str) -> Option<DevserverConn> {
-        self.inner.lock().unwrap().get(id).cloned()
+        self.inner
+            .lock()
+            .unwrap()
+            .get(id)
+            .map(|(conn, _)| conn.clone())
     }
 
     pub fn set(&self, id: String, conn: DevserverConn) {
-        self.inner.lock().unwrap().insert(id, conn);
+        self.inner
+            .lock()
+            .unwrap()
+            .insert(id, (conn, Instant::now()));
     }
 
     pub fn remove(&self, id: &str) -> Option<DevserverConn> {
-        self.inner.lock().unwrap().remove(id)
+        self.inner.lock().unwrap().remove(id).map(|(conn, _)| conn)
     }
 
     pub fn is_connected(&self, id: &str) -> bool {
         self.inner.lock().unwrap().contains_key(id)
+    }
+
+    /// How long ago this devserver's connection was registered (its latest
+    /// `set` stamp), or `None` when it is not connected.
+    pub fn registered_elapsed(&self, id: &str) -> Option<Duration> {
+        self.inner
+            .lock()
+            .unwrap()
+            .get(id)
+            .map(|(_, registered)| registered.elapsed())
     }
 }
 
@@ -1659,5 +1683,28 @@ mod tests {
         assert_eq!(conns.get("ds1").unwrap().port, 8787);
         assert!(conns.remove("ds1").is_some());
         assert!(!conns.is_connected("ds1"));
+    }
+
+    #[test]
+    fn conns_stamp_registration_on_set_and_clear_on_remove() {
+        // `set` stamps the registration Instant the exit watcher's handshake
+        // grace reads; `remove` clears it with the entry, so a disconnected
+        // devserver has no age to misread.
+        let conns = DevserverConns::default();
+        assert_eq!(conns.registered_elapsed("ds1"), None);
+        conns.set(
+            "ds1".into(),
+            DevserverConn {
+                host: "127.0.0.1".into(),
+                port: 8787,
+                token: "tok".into(),
+                name: "box".into(),
+                gateway: None,
+            },
+        );
+        let age = conns.registered_elapsed("ds1").expect("registered");
+        assert!(age < Duration::from_secs(60), "fresh registration: {age:?}");
+        assert!(conns.remove("ds1").is_some());
+        assert_eq!(conns.registered_elapsed("ds1"), None);
     }
 }
