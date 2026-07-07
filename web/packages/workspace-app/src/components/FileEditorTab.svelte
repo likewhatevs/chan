@@ -1070,12 +1070,13 @@
           <span class="mbtn-label">Copy path to file</span>
           <span class="mbtn-chord">{chordLabel("app.editor.copyPath")}</span>
         </button>
+        <!-- No chord hint: `app.files.delete` (Backspace) only binds in
+             FileTree's rows; nothing in the editor tab dispatches it. -->
         <button class="mbtn" onclick={() => void doDeleteFile()}>
           <span class="mbtn-icon">
             <Trash2 size={16} strokeWidth={1.75} aria-hidden="true" />
           </span>
           <span class="mbtn-label">Delete</span>
-          <span class="mbtn-chord">{chordLabel("app.files.delete")}</span>
         </button>
         <button class="mbtn" onclick={() => void doDuplicateFile()}>
           <span class="mbtn-icon">

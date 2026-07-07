@@ -8,6 +8,7 @@ import { allCommands, availableCommands, type CommandContext } from "../commands
 
 import "./core";
 import "./diagram";
+import "./slides";
 import "./tabs";
 
 function categoryOf(id: string): string | undefined {
@@ -39,6 +40,7 @@ describe("launcher Apps / Tabs split", () => {
       "app.files.toggle",
       "app.dashboard.open",
       "app.diagram.new",
+      "app.slides.new",
     ]) {
       expect(categoryOf(id)).toBe("Apps");
     }

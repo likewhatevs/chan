@@ -409,29 +409,62 @@ describe("Dashboard back card is per-slot (DashboardSlotBack)", () => {
 });
 
 describe("EmptyPaneWelcome empty-pane surface", () => {
-  test("EmptyPaneWelcome.svelte shows the workspace path + waves without auto-opening the launcher", async () => {
+  test("EmptyPaneWelcome.svelte shows mark + waves with the floating Apps menu", async () => {
     const welcome = (await import("./EmptyPaneWelcome.svelte?raw"))
       .default as string;
-    // The surface is the mark, the absolute workspace path, and the
-    // dotted wave field; it carries no spawn buttons of its own.
+    // The surface is the mark, the dotted wave field, and the floating
+    // Apps button; the absolute workspace path label is gone.
     expect(welcome).toMatch(/<div class="welcome-mark"><\/div>/);
     expect(welcome).toMatch(/<DottedSurface \/>/);
+    expect(welcome).not.toMatch(/workspace\.info/);
+    expect(welcome).not.toMatch(/welcome-name/);
+    expect(welcome).not.toMatch(/welcome-header/);
+    // Short panes hide the mark via a container query on the surface
+    // itself, so the rule is pane-aware in splits.
+    expect(welcome).toMatch(/container-type: size;/);
     expect(welcome).toMatch(
-      /class="welcome-name" title=\{workspace\.info\.root\}[\s\S]{1,120}\{workspace\.info\.root\}/,
+      /@container \(max-height: 420px\) \{[\s\S]{1,120}\.welcome-mark \{[\s\S]{1,60}display: none;/,
     );
-    expect(welcome).toMatch(/width: min\(1120px, 100%\);/);
-    expect(welcome).toMatch(/overflow-wrap: break-word;/);
-    expect(welcome).not.toMatch(/overflow-wrap: anywhere/);
+    // The Apps button floats top-left and opens a portalled HamburgerMenu
+    // whose rows dispatch spawn commands (chan:command) with their chords.
+    expect(welcome).toMatch(/class="welcome-apps hamburger-trigger"/);
+    expect(welcome).toMatch(/<HamburgerMenu[\s\S]{1,200}showTrigger=\{false\}/);
+    expect(welcome).toMatch(
+      /new CustomEvent\("chan:command", \{ detail: \{ name: id \} \}\)/,
+    );
+    expect(welcome).toMatch(/\{chordLabel\(row\.id\)\}/);
+    // Rows, alphabetical by title, one per spawnable app surface.
+    const rowIds = [...welcome.matchAll(/\{ id: "([^"]+)"/g)].map((m) => m[1]);
+    expect(rowIds).toEqual([
+      "app.dashboard.open",
+      "app.diagram.new",
+      "app.draft.new",
+      "app.files.toggle",
+      "app.graph.toggle",
+      "app.slides.new",
+      "app.terminal.teamWork",
+      "app.terminal.toggle",
+    ]);
     // New workspace windows should stay quiet until the user explicitly
-    // opens the launcher from a menu or global chord.
+    // opens the launcher from a menu or global chord; the menu is the
+    // only action surface.
     expect(welcome).not.toMatch(/openCommandLauncher/);
     expect(welcome).not.toMatch(/onMount/);
-    // No spawn grid, secondary band, chord hints, or graph-scope hint.
     expect(welcome).not.toMatch(/spawn-row/);
     expect(welcome).not.toMatch(/SpawnRow/);
     expect(welcome).not.toMatch(/spawn-chord/);
-    expect(welcome).not.toMatch(/chordLabel/);
     expect(welcome).not.toMatch(/class="welcome-hint"/);
+  });
+
+  test("chordless Apps spawns route through runCommand for the welcome menu", () => {
+    // The welcome rows dispatch chan:command for every id; the two
+    // catalog-only spawns need their runCommand cases to land anywhere.
+    expect(app).toMatch(
+      /case "app\.diagram\.new":[\s\S]{1,120}createDiagramAndOpen\(\);/,
+    );
+    expect(app).toMatch(
+      /case "app\.slides\.new":[\s\S]{1,120}createSlidesAndOpen\(\);/,
+    );
   });
 
   test("Pane.svelte mounts EmptyPaneWelcome (not EmptyPaneCarousel) on lone-pane empty case", async () => {

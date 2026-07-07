@@ -3,9 +3,10 @@
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { ensureSyntaxTree } from "@codemirror/language";
-import { afterEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { chanMarkdown } from "../markdown/grammar";
 import { renderExcalidrawFile } from "../excalidraw_render";
+import { writeClipboardPayload } from "../../api/clipboard";
 import { computeBubbleSpec } from "../bubbles/triggers";
 import { imageDecorations } from "./image";
 
@@ -14,6 +15,10 @@ vi.mock("../excalidraw_render", () => ({
     ok: true,
     svg: `<svg data-excalidraw-theme="${dark ? "dark" : "light"}"></svg>`,
   })),
+}));
+
+vi.mock("../../api/clipboard", () => ({
+  writeClipboardPayload: vi.fn(async () => {}),
 }));
 
 function mount(
@@ -169,6 +174,143 @@ describe("excalidraw image embeds", () => {
         expect.stringContaining("/api/files/board.excalidraw"),
         false,
       );
+    } finally {
+      view.destroy();
+      parent.remove();
+    }
+  });
+});
+
+describe("excalidraw embed error face", () => {
+  test("a failed render marks the wrap and a click reveals the source", async () => {
+    vi.mocked(renderExcalidrawFile).mockImplementationOnce(async () => ({
+      ok: false,
+      error: "fetch failed: 404",
+    }));
+    const doc = "![](missing.excalidraw)";
+    const { parent, view } = mount(doc, false);
+    try {
+      await vi.waitFor(() => {
+        expect(
+          parent.querySelector(".cm-md-excalidraw-embed-error"),
+        ).toBeTruthy();
+      });
+      // The wrap carries the error marker (drives the pointer cursor).
+      expect(
+        parent.querySelector(
+          ".cm-md-image-wrap[data-excalidraw-error='true']",
+        ),
+      ).toBeTruthy();
+      const face = parent.querySelector<HTMLElement>(
+        ".cm-md-excalidraw-embed-error",
+      )!;
+      face.dispatchEvent(
+        new MouseEvent("mousedown", { bubbles: true, button: 0 }),
+      );
+      // The caret lands strictly inside the URL slot (urlFrom + 1), the
+      // same landing the broken-raster badge uses, so the user can fix
+      // the path instead of being trapped by an inert face.
+      expect(view.state.selection.main.head).toBe(doc.indexOf("(") + 2);
+    } finally {
+      view.destroy();
+      parent.remove();
+    }
+  });
+});
+
+describe("excalidraw embed copy", () => {
+  /// jsdom's Image never decodes; this stand-in fires onload as soon as a
+  /// src lands, which is the browser contract the rasterizer relies on.
+  class FakeImage {
+    onload: (() => void) | null = null;
+    onerror: (() => void) | null = null;
+    naturalWidth = 0;
+    naturalHeight = 0;
+    set src(_v: string) {
+      queueMicrotask(() => this.onload?.());
+    }
+  }
+
+  const origGetContext = HTMLCanvasElement.prototype.getContext;
+  const origToBlob = HTMLCanvasElement.prototype.toBlob;
+
+  beforeEach(() => {
+    vi.stubGlobal("Image", FakeImage);
+    HTMLCanvasElement.prototype.getContext = vi.fn(() => ({
+      fillStyle: "",
+      fillRect: vi.fn(),
+      drawImage: vi.fn(),
+    })) as never;
+    HTMLCanvasElement.prototype.toBlob = function (cb: BlobCallback) {
+      cb(new Blob([new Uint8Array([1, 2, 3])], { type: "image/png" }));
+    };
+    // The rasterizer needs a measurable size; the file-wide default mock
+    // SVG has no viewBox, so override with one that does.
+    vi.mocked(renderExcalidrawFile).mockImplementation(
+      async (_url: string, dark: boolean) => ({
+        ok: true,
+        svg: `<svg viewBox="0 0 80 40" data-excalidraw-theme="${dark ? "dark" : "light"}"></svg>`,
+      }),
+    );
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    HTMLCanvasElement.prototype.getContext = origGetContext;
+    HTMLCanvasElement.prototype.toBlob = origToBlob;
+    // Restore the file-wide default implementation for later describes.
+    vi.mocked(renderExcalidrawFile).mockImplementation(
+      async (_url: string, dark: boolean) => ({
+        ok: true,
+        svg: `<svg data-excalidraw-theme="${dark ? "dark" : "light"}"></svg>`,
+      }),
+    );
+  });
+
+  test("copy hides until the render succeeds, then writes a PNG payload", async () => {
+    const { parent, view } = mount("![](board.excalidraw)", false);
+    try {
+      const copyBtn = parent.querySelector<HTMLButtonElement>(
+        ".cm-md-image-action.cm-md-image-copy",
+      );
+      expect(copyBtn).toBeTruthy();
+      // Same gating as View: hidden until the async render lands.
+      expect(copyBtn!.style.display).toBe("none");
+      await vi.waitFor(() => {
+        expect(copyBtn!.style.display).toBe("");
+      });
+      copyBtn!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await vi.waitFor(() => {
+        expect(writeClipboardPayload).toHaveBeenCalledWith(
+          "image/png",
+          expect.any(Uint8Array),
+        );
+      });
+    } finally {
+      view.destroy();
+      parent.remove();
+    }
+  });
+
+  test("a dark editor copies a fresh light render", async () => {
+    const { parent, view } = mount("![](board.excalidraw)", true);
+    try {
+      const copyBtn = parent.querySelector<HTMLButtonElement>(
+        ".cm-md-image-action.cm-md-image-copy",
+      )!;
+      await vi.waitFor(() => {
+        expect(copyBtn.style.display).toBe("");
+      });
+      copyBtn.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      // The embed rendered dark; the copy path re-renders light before
+      // rasterizing, matching the View button's discipline.
+      await vi.waitFor(() => {
+        expect(renderExcalidrawFile).toHaveBeenCalledWith(
+          expect.stringContaining("/api/files/board.excalidraw"),
+          false,
+        );
+        expect(writeClipboardPayload).toHaveBeenCalledTimes(1);
+      });
     } finally {
       view.destroy();
       parent.remove();

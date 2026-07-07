@@ -12,6 +12,7 @@ import "./browser";
 import "./graph";
 import "./dashboard";
 import "./diagram";
+import "./slides";
 import "./terminal";
 
 function ctx(partial: Partial<CommandContext>): CommandContext {
@@ -162,6 +163,16 @@ describe("new diagram command", () => {
     expect(idsIn(ctx({ activeSurface: null })).has("app.diagram.new")).toBe(true);
     expect(
       idsIn(ctx({ terminalOnly: true, activeSurface: "terminal" })).has("app.diagram.new"),
+    ).toBe(false);
+  });
+});
+
+describe("new slide deck command", () => {
+  it("follows the workspace gate, independent of the active surface", () => {
+    expect(idsIn(ctx({ activeSurface: "file" })).has("app.slides.new")).toBe(true);
+    expect(idsIn(ctx({ activeSurface: null })).has("app.slides.new")).toBe(true);
+    expect(
+      idsIn(ctx({ terminalOnly: true, activeSurface: "terminal" })).has("app.slides.new"),
     ).toBe(false);
   });
 });

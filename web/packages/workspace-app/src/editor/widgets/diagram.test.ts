@@ -2,14 +2,25 @@
 
 import { EditorSelection, EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
-import { describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { chanMarkdown } from "../markdown/grammar";
-import { EXCALIDRAW_LANG, excalidrawDecorations, mermaidDecorations } from "./diagram";
+import {
+  EXCALIDRAW_LANG,
+  diagramDecorations,
+  excalidrawDecorations,
+  mermaidDecorations,
+} from "./diagram";
+import { writeClipboardPayload } from "../../api/clipboard";
 import diagramSrc from "./diagram.ts?raw";
+import diagramCopySrc from "./diagram_copy.ts?raw";
 import mermaidRenderSrc from "../mermaid_render.ts?raw";
 import excalidrawRenderSrc from "../excalidraw_render.ts?raw";
 import blocksSrc from "../decorations/blocks.ts?raw";
 import wysiwygSrc from "../Wysiwyg.svelte?raw";
+
+vi.mock("../../api/clipboard", () => ({
+  writeClipboardPayload: vi.fn(async () => {}),
+}));
 
 // Excalidraw + React are heavy; mock the two libraries so mounting an
 // excalidraw block in jsdom never pulls the real React runtime. The widget
@@ -124,6 +135,96 @@ describe("excalidraw diagram cursor-render", () => {
   });
 });
 
+describe("diagram copy affordance", () => {
+  /// jsdom's Image never decodes; this stand-in fires onload as soon as a
+  /// src lands, which is the browser contract the rasterizer relies on.
+  class FakeImage {
+    onload: (() => void) | null = null;
+    onerror: (() => void) | null = null;
+    naturalWidth = 0;
+    naturalHeight = 0;
+    set src(_v: string) {
+      queueMicrotask(() => this.onload?.());
+    }
+  }
+
+  const origGetContext = HTMLCanvasElement.prototype.getContext;
+  const origToBlob = HTMLCanvasElement.prototype.toBlob;
+
+  beforeEach(() => {
+    vi.stubGlobal("Image", FakeImage);
+    HTMLCanvasElement.prototype.getContext = vi.fn(() => ({
+      fillStyle: "",
+      fillRect: vi.fn(),
+      drawImage: vi.fn(),
+    })) as never;
+    HTMLCanvasElement.prototype.toBlob = function (cb: BlobCallback) {
+      cb(new Blob([new Uint8Array([1, 2, 3])], { type: "image/png" }));
+    };
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    HTMLCanvasElement.prototype.getContext = origGetContext;
+    HTMLCanvasElement.prototype.toBlob = origToBlob;
+    vi.clearAllMocks();
+    document.body.innerHTML = "";
+  });
+
+  test("copy hides until the render succeeds, then writes a PNG payload", async () => {
+    const deco = diagramDecorations({
+      lang: "mermaid",
+      label: "Mermaid",
+      render: async () => ({ ok: true, svg: '<svg viewBox="0 0 40 20"></svg>' }),
+      isDark: () => false,
+    });
+    const { parent, view } = mount(deco, MERMAID_DOC, 0);
+    const copyBtn = parent.querySelector<HTMLButtonElement>(".cm-md-diagram-copy");
+    expect(copyBtn).toBeTruthy();
+    // Same gating as View: hidden until the async render lands.
+    expect(copyBtn!.style.display).toBe("none");
+    await vi.waitFor(() => {
+      expect(copyBtn!.style.display).toBe("");
+    });
+    copyBtn!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await vi.waitFor(() => {
+      expect(writeClipboardPayload).toHaveBeenCalledWith(
+        "image/png",
+        expect.any(Uint8Array),
+      );
+    });
+    view.destroy();
+    parent.remove();
+  });
+
+  test("a dark editor copies a fresh light render", async () => {
+    const render = vi.fn(async (_src: string, dark: boolean) => ({
+      ok: true,
+      svg: `<svg viewBox="0 0 40 20" data-dark="${dark}"></svg>`,
+    }));
+    const deco = diagramDecorations({
+      lang: "mermaid",
+      label: "Mermaid",
+      render,
+      isDark: () => true,
+    });
+    const { parent, view } = mount(deco, MERMAID_DOC, 0);
+    const copyBtn = parent.querySelector<HTMLButtonElement>(".cm-md-diagram-copy");
+    await vi.waitFor(() => {
+      expect(copyBtn!.style.display).toBe("");
+    });
+    copyBtn!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    // The face rendered dark; the copy path re-renders light before
+    // rasterizing (the dark strokes would be illegible on paste targets).
+    await vi.waitFor(() => {
+      expect(render).toHaveBeenCalledWith(expect.any(String), false);
+      expect(writeClipboardPayload).toHaveBeenCalledTimes(1);
+    });
+    view.destroy();
+    parent.remove();
+  });
+});
+
 describe("diagram wiring", () => {
   test("mermaid is dynamic-imported (never in the initial bundle)", () => {
     expect(mermaidRenderSrc).toMatch(/import\("mermaid"\)/);
@@ -155,6 +256,18 @@ describe("diagram wiring", () => {
     // cached (already light) face.
     expect(diagramSrc).toMatch(/this\.spec\.render\(this\.source, false\)/);
     expect(diagramSrc).toMatch(/onView\(renderedSvg\)/);
+  });
+
+  test("copy affordance rasterizes the face to a PNG clipboard payload", () => {
+    // Both diagram surfaces mount the shared copy button: the fenced-block
+    // widget row and the inline .excalidraw embed row. The payload rides
+    // writeClipboardPayload so the desktop IPC / web ClipboardItem fork is
+    // the clipboard bridge's, not the widget's.
+    expect(diagramSrc).toMatch(
+      /diagramCopyButton\(\s*"cm-md-diagram-view cm-md-diagram-copy"/,
+    );
+    expect(diagramCopySrc).toMatch(/writeClipboardPayload\("image\/png"/);
+    expect(wysiwygSrc).toMatch(/cm-md-diagram-actions/);
   });
 
   test("vertical arrow keys step INTO a rendered block (no widget skip)", () => {

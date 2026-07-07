@@ -136,6 +136,8 @@
   import { activeTransferCount } from "./state/transfers.svelte";
   import { chordFromEvent, currentOS } from "./state/shortcuts";
   import { allCommands, commandContext } from "./state/commands";
+  import { createDiagramAndOpen } from "./state/commands/diagram";
+  import { createSlidesAndOpen } from "./state/commands/slides";
   import {
     builtInChordSuperseded,
     commandIdForChord,
@@ -332,10 +334,20 @@
     // Apply the var (border) AND sync the menu/`data-focus-color` so a live push
     // doesn't leave the checkmark + new split panes disagreeing with the border.
     // Disposed on unmount.
-    disposeLocalColorWatch = openLocalColorWatch((color) => {
-      applyLivePaneColor(color);
-      syncLiveFocusColorMenu(color, setWindowFocusColor);
-    });
+    //
+    // Launcher-hosted surfaces only: the watch route lives on the root
+    // launcher router, mounted by the desktop embedded host and the headless
+    // devserver, the hosts every desktop window is served from. A standalone
+    // `chan open` server never mounts it, so subscribing there just 404s the
+    // handshake into the endless reconnect backoff. Same gating idea as the
+    // sibling theme watch below (whose terminal-only windows are also
+    // desktop-minted).
+    if (isTauriDesktop()) {
+      disposeLocalColorWatch = openLocalColorWatch((color) => {
+        applyLivePaneColor(color);
+        syncLiveFocusColorMenu(color, setWindowFocusColor);
+      });
+    }
     // A local standalone terminal window follows the launcher's light/dark
     // choice: subscribe to the local-theme watch (push-on-connect seeds it,
     // then live on each toggle), applying `null` as OS-follow. Workspace
@@ -1136,6 +1148,15 @@
       // on a single handler.
       case "app.draft.new":
         void createDraftAndOpen();
+        return;
+      // Chordless Apps spawns: the launcher catalog run()s these actions
+      // directly, and the welcome Apps menu (plus any host bridge) reaches
+      // the same handlers through this dispatch.
+      case "app.diagram.new":
+        void createDiagramAndOpen();
+        return;
+      case "app.slides.new":
+        void createSlidesAndOpen();
         return;
       // Plain Cmd+L is deliberately not claimed by App.svelte so the
       // browser location bar keeps working; lock is only via this command

@@ -226,6 +226,64 @@ describe("command launcher overlay", () => {
     ]);
   });
 
+  test("Enter on a no-match query does nothing", async () => {
+    const target = openLauncher();
+    await flush();
+    await typeLauncherQuery("zzz");
+    // Nothing matched: the discovery catalog is visible but no row is
+    // auto-highlighted, so a blind Enter must not run a command.
+    expect(target.querySelector(".row[aria-selected='true']")).toBeNull();
+    const input = target.querySelector("input.search") as HTMLInputElement;
+    expect(input.getAttribute("aria-activedescendant")).toBeNull();
+    const launcher = target.querySelector(".launcher") as HTMLElement;
+    launcher.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
+    );
+    await tick();
+    expect(runSearch).not.toHaveBeenCalled();
+    expect(runNewFile).not.toHaveBeenCalled();
+    expect(runBrowserAlpha).not.toHaveBeenCalled();
+    expect(runBrowserZoom).not.toHaveBeenCalled();
+    expect(launcherPanel.open).toBe(true);
+  });
+
+  test("arrowing into the discovery catalog re-arms Enter on a no-match query", async () => {
+    const target = openLauncher();
+    await flush();
+    await typeLauncherQuery("zzz");
+    const launcher = target.querySelector(".launcher") as HTMLElement;
+    launcher.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }),
+    );
+    await tick();
+    // First catalog row (Editor / New file) takes the highlight...
+    expect(
+      target.querySelector(".row[aria-selected='true'] .title")?.textContent,
+    ).toBe("New file");
+    launcher.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
+    );
+    await tick();
+    // ...and Enter now runs the explicit pick.
+    expect(runNewFile).toHaveBeenCalledTimes(1);
+    expect(launcherPanel.open).toBe(false);
+  });
+
+  test("ArrowUp from the top row wraps to the last row on a match query", async () => {
+    const target = openLauncher();
+    await flush();
+    await typeLauncherQuery("new");
+    const launcher = target.querySelector(".launcher") as HTMLElement;
+    launcher.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true }),
+    );
+    await tick();
+    const rows = [...target.querySelectorAll(".row")];
+    const selected = target.querySelector(".row[aria-selected='true']");
+    expect(selected).toBeTruthy();
+    expect(selected).toBe(rows[rows.length - 1]);
+  });
+
   test("pins the active tab category before the alphabetical sections", async () => {
     setActiveBrowserTab();
     const target = openLauncher();

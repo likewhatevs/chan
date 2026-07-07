@@ -9,8 +9,11 @@ import tabs from "../state/tabs.svelte.ts?raw";
 
 describe("api.createDraft helper", () => {
   test("createDraft posts to /api/drafts/new + returns { path, name }", () => {
+    // The optional kind rides the JSON body ({"kind":"slides"} seeds a
+    // slide deck); the plain call sends no body at all, keeping the
+    // original markdown-draft contract.
     expect(client).toMatch(
-      /createDraft: \(\) =>[\s\S]*?req<\{ path: string; name: string \}>\("POST", "\/api\/drafts\/new"\)/,
+      /createDraft: \(kind\?: "slides"\) =>[\s\S]*?req<\{ path: string; name: string \}>\([\s\S]*?"POST",[\s\S]*?"\/api\/drafts\/new",[\s\S]*?kind \? \{ kind \} : undefined,/,
     );
   });
 });

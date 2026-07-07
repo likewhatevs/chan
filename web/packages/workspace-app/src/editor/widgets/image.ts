@@ -45,6 +45,11 @@ import { renderExcalidrawFile } from "../excalidraw_render";
 import { detectEmbed, embedRenderFromInfo } from "../../api/embed";
 import { writeClipboardText } from "../../api/desktop";
 import {
+  CHECK_ICON_SVG,
+  COPY_ICON_SVG,
+  diagramCopyButton,
+} from "./diagram_copy";
+import {
   clearImageDragIndicator,
   startImageDragIndicator,
 } from "../image_drag_indicator";
@@ -151,15 +156,6 @@ function imageEditEntered(
   return false;
 }
 
-/// Lucide Copy + Check icons inlined as SVG strings - the widget is
-/// raw DOM, not Svelte, so we can't reuse lucide-svelte components.
-/// Compact 12px icons with stroke weights tuned for the image
-/// widget's small action row.
-const COPY_ICON_SVG =
-  '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>';
-const CHECK_ICON_SVG =
-  '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>';
-
 /// Copy an image's underlying markdown source (`![alt](src)`) to the
 /// clipboard, so a paste re-inserts the markdown and it re-renders as the
 /// image. Resolves the live Image node range from the stamped nodePos, so
@@ -191,12 +187,31 @@ export function selectedImageMarkdown(view: EditorView): string | null {
   return range ? view.state.sliceDoc(range.from, range.to) : null;
 }
 
-function renderExcalidrawEmbedError(body: HTMLElement, message: string): void {
+/// Error face for an excalidraw embed. Clickable, like the broken-raster
+/// badge: a press runs `reveal` (placeCaretInImageUrl) so the user can fix
+/// the bad path instead of being trapped by an inert face - the widget's
+/// `ignoreEvent()` returns true, so without an explicit handler a click
+/// never places the caret in the source. `data-excalidraw-error` marks the
+/// wrap for styling and tests; the error-face class carries the pointer
+/// cursor (CSS in Wysiwyg.svelte).
+function renderExcalidrawEmbedError(
+  wrap: HTMLElement,
+  body: HTMLElement,
+  message: string,
+  reveal: () => void,
+): void {
+  wrap.dataset.excalidrawError = "true";
   body.classList.add("cm-md-excalidraw-embed-error");
   body.replaceChildren();
   const label = document.createElement("span");
   label.textContent = `Excalidraw render failed: ${message}`;
   body.append(label);
+  body.addEventListener("mousedown", (e) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    reveal();
+  });
 }
 
 /// Line decoration applied to the line AFTER an inline-floated image.
@@ -370,18 +385,43 @@ class ImageWidget extends WidgetType {
       let renderedSvg: string | null = null;
       let viewBtn: HTMLButtonElement | null = null;
       const resolved = resolveImageSrc(this.src, this.fromPath);
+      const revealSource = () => placeCaretInImageUrl(view, this.nodePos);
+      // Copy: rasterize the rendered scene to a PNG clipboard payload,
+      // re-rendering the light face from a dark editor (View's
+      // discipline). Hidden until a render succeeds, like View.
+      const copyBtn = diagramCopyButton(
+        "cm-md-image-action cm-md-image-copy",
+        async () => {
+          if (!renderedSvg || !resolved) return null;
+          if (!this.dark) return renderedSvg;
+          const res = await renderExcalidrawFile(resolved, false);
+          return res.ok && res.svg ? res.svg : null;
+        },
+      );
       if (!resolved) {
-        renderExcalidrawEmbedError(body, "cannot resolve Excalidraw file");
+        renderExcalidrawEmbedError(
+          wrap,
+          body,
+          "cannot resolve Excalidraw file",
+          revealSource,
+        );
       } else {
         void renderExcalidrawFile(resolved, this.dark).then((res) => {
           if (!wrap.isConnected) return;
           if (res.ok && res.svg) {
+            delete wrap.dataset.excalidrawError;
             body.classList.remove("cm-md-excalidraw-embed-error");
             body.innerHTML = res.svg;
             renderedSvg = res.svg;
             if (viewBtn) viewBtn.style.display = "";
+            copyBtn.style.display = "";
           } else {
-            renderExcalidrawEmbedError(body, res.error ?? "render failed");
+            renderExcalidrawEmbedError(
+              wrap,
+              body,
+              res.error ?? "render failed",
+              revealSource,
+            );
           }
         });
       }
@@ -396,10 +436,11 @@ class ImageWidget extends WidgetType {
       }
 
       // Hover action overlay, mirroring the raster row: Edit in writable
-      // mode, View always. View opens the pan/zoom diagram overlay (the
-      // same viewer mermaid's View uses), never the raster zoom modal -
-      // excalidraw is deliberately excluded from that one. Hidden until a
-      // render succeeds so it never offers an errored diagram.
+      // mode, View always, Copy last. View opens the pan/zoom diagram
+      // overlay (the same viewer mermaid's View uses), never the raster
+      // zoom modal - excalidraw is deliberately excluded from that one.
+      // View + Copy hide until a render succeeds so they never offer an
+      // errored diagram.
       const actions = document.createElement("span");
       actions.className = "cm-md-image-actions";
       if (editable) {
@@ -439,7 +480,8 @@ class ImageWidget extends WidgetType {
         });
         actions.appendChild(viewBtn);
       }
-      if (actions.childElementCount > 0) wrap.appendChild(actions);
+      actions.appendChild(copyBtn);
+      wrap.appendChild(actions);
 
       (wrap as HTMLElement & { _chanImg?: ImageActionPayload })._chanImg = {
         src: this.src,

@@ -188,8 +188,10 @@
   }
 
   function setHighlight(index: number): void {
-    if (flat.length === 0) {
-      highlight = 0;
+    // -1 is the explicit "no row highlighted" state: `flat[-1]` is
+    // undefined, so Enter no-ops until the user picks a row.
+    if (index < 0 || flat.length === 0) {
+      highlight = -1;
       highlightedCommandKey = null;
       return;
     }
@@ -254,19 +256,28 @@
 
   const flat = $derived(groups.flatMap((g) => g.rows.map((r) => r.cmd)));
 
-  // Query changes start at the top. Catalog recomputes keep the same
-  // highlighted command by id/title/category so appending discovery rows
-  // below Results does not steal the active selection.
+  // Whether the current query matched anything. Matches float into the
+  // leading "Results" section (no CommandCategory shares that label), so
+  // its presence is the signal.
+  const hasMatches = $derived(groups.length > 0 && groups[0].label === "Results");
+
+  // Query changes start at the top match. A query that matches nothing
+  // keeps the discovery catalog visible but highlights NO row, so a blind
+  // Enter can't run a command the user never picked; arrow keys still step
+  // into the catalog. Catalog recomputes keep the same highlighted command
+  // by id/title/category so appending discovery rows below Results does
+  // not steal the active selection.
   $effect(() => {
     const query = launcherPanel.query;
     const rows = flat;
+    const autoIndex = hasQuery && !hasMatches ? -1 : 0;
     if (query !== lastQuery) {
       lastQuery = query;
-      setHighlight(0);
+      setHighlight(autoIndex);
       return;
     }
     if (rows.length === 0) {
-      highlight = 0;
+      highlight = -1;
       highlightedCommandKey = null;
       return;
     }
@@ -277,7 +288,7 @@
         return;
       }
     }
-    setHighlight(0);
+    setHighlight(autoIndex);
   });
 
   // Open/close focus management.
@@ -319,12 +330,14 @@
     if (e.key === "ArrowDown") {
       e.preventDefault();
       e.stopPropagation();
-      if (flat.length) setHighlight(highlight + 1);
+      // From the unhighlighted state (no-match query) enter the catalog at
+      // its first row; ArrowUp mirrors with the last.
+      if (flat.length) setHighlight(highlight < 0 ? 0 : highlight + 1);
       scrollHighlightIntoView();
     } else if (e.key === "ArrowUp") {
       e.preventDefault();
       e.stopPropagation();
-      if (flat.length) setHighlight(highlight - 1);
+      if (flat.length) setHighlight(highlight <= 0 ? flat.length - 1 : highlight - 1);
       scrollHighlightIntoView();
     } else if (e.key === "Enter") {
       e.preventDefault();
@@ -363,7 +376,7 @@
         role="combobox"
         aria-expanded={hasQuery}
         aria-controls={LIST_ID}
-        aria-activedescendant={flat.length ? optionId(highlight) : undefined}
+        aria-activedescendant={flat.length && highlight >= 0 ? optionId(highlight) : undefined}
         aria-autocomplete="list"
         aria-label="Command"
         placeholder="Command"

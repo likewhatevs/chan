@@ -1466,13 +1466,23 @@
     transform-origin: center top;
     animation: cm-md-diagram-flip-in 0.45s ease;
   }
-  /* Hover "View" affordance over a rendered diagram: opens the pan/zoom
-     overlay. Hidden until the diagram is hovered (or the button is
-     keyboard-focused), mirroring the image actions row. */
-  :global(.md-wysiwyg-cm6 .cm-md-diagram-view) {
+  /* Hover actions row over a rendered diagram: "View" (pan/zoom overlay)
+     plus the icon-only PNG copy. Hidden until the diagram is hovered (or
+     a button is keyboard-focused), mirroring the image actions row. */
+  :global(.md-wysiwyg-cm6 .cm-md-diagram-actions) {
     position: absolute;
     top: 8px;
     right: 8px;
+    display: flex;
+    gap: 4px;
+    opacity: 0;
+    transition: opacity 0.15s ease;
+  }
+  :global(.md-wysiwyg-cm6 .cm-md-diagram-inner:hover .cm-md-diagram-actions),
+  :global(.md-wysiwyg-cm6 .cm-md-diagram-actions:focus-within) {
+    opacity: 1;
+  }
+  :global(.md-wysiwyg-cm6 .cm-md-diagram-view) {
     padding: 2px 10px;
     border: 1px solid var(--border, #ddd);
     border-radius: 6px;
@@ -1480,18 +1490,20 @@
     color: var(--text, inherit);
     font: 12px/1.4 var(--chan-editor-body-family);
     cursor: pointer;
-    opacity: 0;
-    transition: opacity 0.15s ease;
-  }
-  :global(.md-wysiwyg-cm6 .cm-md-diagram-inner:hover .cm-md-diagram-view) {
-    opacity: 1;
   }
   :global(.md-wysiwyg-cm6 .cm-md-diagram-view:focus-visible) {
-    opacity: 1;
     outline: 2px solid var(--focus, #0a66ff);
   }
   :global(.md-wysiwyg-cm6 .cm-md-diagram-view:hover) {
     background: var(--bg-hover, rgba(0, 0, 0, 0.08));
+  }
+  /* Icon-only Copy: flex-center the 12px SVG so it aligns with the View
+     label; tighter horizontal padding keeps the row balanced. */
+  :global(.md-wysiwyg-cm6 .cm-md-diagram-view.cm-md-diagram-copy) {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 2px 7px;
   }
   @keyframes cm-md-diagram-flip-in {
     from {
@@ -1599,6 +1611,8 @@
     max-width: 100%;
     height: auto;
   }
+  /* The error face is clickable (reveal the source, caret in the URL),
+     mirroring the broken-raster badge; the pointer advertises it. */
   :global(.md-wysiwyg-cm6 .cm-md-excalidraw-embed.cm-md-excalidraw-embed-error) {
     display: block;
     color: var(--danger-text, #d33);
@@ -1606,6 +1620,7 @@
     font-size: 12px;
     white-space: pre-wrap;
     line-height: 1.4;
+    cursor: pointer;
   }
   :global(.md-wysiwyg-cm6 .cm-md-image-broken) {
     display: inline-flex;

@@ -4,9 +4,9 @@
 // (blocks.ts is untouched, so it looks byte-for-byte as before); when the
 // cursor LEAVES a COMPLETE (closed) block it is replaced by the rendered
 // diagram, which flips in on the horizontal (rotateX) axis. Cursor back
-// inside reveals the source again. A hover "View" button opens the
-// pan/zoom overlay; otherwise the cursor is the only trigger, like every
-// other atom.
+// inside reveals the source again. A hover actions row offers "View"
+// (the pan/zoom overlay) and a PNG copy-to-clipboard; otherwise the
+// cursor is the only trigger, like every other atom.
 //
 // The flip is symmetric: cursor-LEAVE plays the forward flip-in on the
 // new widget's mount (CSS, Wysiwyg.svelte); cursor-ENTER plays a reverse
@@ -48,6 +48,7 @@ import { selectionInRange } from "../decorations/selection";
 import { type DiagramRenderer, type DiagramResult } from "../diagram_render";
 import { renderMermaid } from "../mermaid_render";
 import { renderExcalidraw } from "../excalidraw_render";
+import { diagramCopyButton } from "./diagram_copy";
 
 /// The fence token that triggers the mermaid-to-excalidraw renderer. One
 /// constant so the exact spelling is greppable and pinned by a test.
@@ -261,13 +262,16 @@ class DiagramWidget extends WidgetType {
     diagram.textContent = "rendering…";
     inner.append(diagram);
 
-    // Hover "View" affordance -> open the pan/zoom overlay with the rendered
-    // SVG. Hidden until a render succeeds (so it never offers a missing /
-    // errored diagram); its mousedown is swallowed so opening the viewer
-    // never drops the caret into the source, which would de-render the block
-    // via the selection-intersect rule.
+    // Hover actions row -> "View" opens the pan/zoom overlay with the
+    // rendered SVG; the icon-only copy rasterizes it to a PNG clipboard
+    // payload. Both hidden until a render succeeds (so they never offer a
+    // missing / errored diagram); mousedown is swallowed so neither drops
+    // the caret into the source, which would de-render the block via the
+    // selection-intersect rule.
     const onView = this.spec.onView;
     let renderedSvg: string | null = null;
+    const actions = document.createElement("span");
+    actions.className = "cm-md-diagram-actions";
     let viewBtn: HTMLButtonElement | null = null;
     if (onView) {
       viewBtn = document.createElement("button");
@@ -295,8 +299,21 @@ class DiagramWidget extends WidgetType {
           onView(renderedSvg);
         }
       });
-      inner.append(viewBtn);
+      actions.append(viewBtn);
     }
+    // Copy sits last in the row, like the image widget's action row. A
+    // dark editor rasterizes a fresh light render (View's discipline).
+    const copyBtn = diagramCopyButton(
+      "cm-md-diagram-view cm-md-diagram-copy",
+      async () => {
+        if (!renderedSvg) return null;
+        if (!this.dark) return renderedSvg;
+        const res = await this.spec.render(this.source, false);
+        return res.ok && res.svg ? res.svg : null;
+      },
+    );
+    actions.append(copyBtn);
+    inner.append(actions);
     wrap.append(inner);
 
     void this.spec.render(this.source, this.dark).then((res) => {
@@ -304,6 +321,7 @@ class DiagramWidget extends WidgetType {
         diagram.innerHTML = res.svg;
         renderedSvg = res.svg;
         if (viewBtn) viewBtn.style.display = "";
+        copyBtn.style.display = "";
         // Stash the face so the reverse (enter) flip can ghost it after
         // CM tears the widget down, and clear any stale error so the
         // source view stops accenting a now-fixed line.

@@ -769,9 +769,16 @@ export const api = {
   /// /api/drafts/new. Picks the next `untitled` / `untitled-N`
   /// name server-side. Returns the real in-workspace relpath
   /// `<draftsDir>/<name>/draft.md` which the SPA opens via
-  /// the existing /api/files/* GET path.
-  createDraft: () =>
-    req<{ path: string; name: string }>("POST", "/api/drafts/new"),
+  /// the existing /api/files/* GET path. An optional `kind` picks the
+  /// seed content: no body seeds the plain markdown draft, `"slides"`
+  /// seeds the canonical slides frontmatter; the route 400s any other
+  /// kind.
+  createDraft: (kind?: "slides") =>
+    req<{ path: string; name: string }>(
+      "POST",
+      "/api/drafts/new",
+      kind ? { kind } : undefined,
+    ),
   /// Create a new diagram draft with a seeded `<name>.excalidraw` scene
   /// via /api/diagrams/new. Same response shape as createDraft; the SPA
   /// opens the returned path in canvas mode via isExcalidraw.
