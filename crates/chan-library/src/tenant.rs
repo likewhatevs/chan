@@ -181,6 +181,12 @@ pub struct TenantArtifacts {
 #[async_trait]
 pub trait TenantBuilder: Send + Sync {
     /// Build a workspace tenant mounted under `config.prefix`.
+    ///
+    /// `control_identity` is the host's stable control-socket identity (see
+    /// [`WorkspaceHost::install_control_identity`](
+    /// crate::WorkspaceHost::install_control_identity)): `Some` makes the
+    /// tenant bind its control socket at a path stable across server
+    /// restarts, `None` keeps the pid-scoped path of a window-spawned server.
     async fn build_workspace(
         &self,
         library: Library,
@@ -188,10 +194,13 @@ pub trait TenantBuilder: Send + Sync {
         config: &ServeConfig,
         desktop: DesktopBridge,
         unserve: UnserveMode,
+        control_identity: Option<String>,
     ) -> Result<TenantArtifacts, Error>;
 
     /// Build a workspace-less terminal tenant, optionally running `command` on
     /// its PTYs, with an optional persisted per-window session dir.
+    /// `control_identity` as in [`build_workspace`](Self::build_workspace).
+    #[allow(clippy::too_many_arguments)]
     async fn build_terminal(
         &self,
         library: Library,
@@ -200,5 +209,6 @@ pub trait TenantBuilder: Send + Sync {
         unserve: UnserveMode,
         command: Option<String>,
         session_dir: Option<PathBuf>,
+        control_identity: Option<String>,
     ) -> Result<TenantArtifacts, Error>;
 }

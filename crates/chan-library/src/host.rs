@@ -290,6 +290,15 @@ pub struct WorkspaceHost {
     /// `lib-<hex>` for a devserver. Stamped on every window record. Set with the
     /// registry; defaults to `"local"` when unset.
     library_id: OnceLock<String>,
+    /// Stable control-socket identity, installed only by a server whose
+    /// tenants must stay reachable across restarts (the devserver, via
+    /// [`install_control_identity`](Self::install_control_identity)). When
+    /// set, every tenant this host mounts binds its control socket at a path
+    /// derived from it (plus the tenant prefix) instead of the pid-scoped
+    /// path, so `$CHAN_CONTROL_SOCKET` in already-open shells survives a
+    /// restart. Unset on window-spawned servers (desktop, `chan open`),
+    /// whose sockets SHOULD die with the process.
+    control_identity: OnceLock<String>,
     /// Route prefix of this library's shared terminal tenant — the one
     /// standalone-terminal tenant mounted via [`open_terminal_session`](
     /// Self::open_terminal_session) that every terminal window attaches to.
@@ -416,6 +425,7 @@ impl WorkspaceHost {
             local_color: OnceLock::new(),
             local_theme: OnceLock::new(),
             library_id: OnceLock::new(),
+            control_identity: OnceLock::new(),
             terminal_tenant_prefix: OnceLock::new(),
             control_tenants: RwLock::new(HashMap::new()),
             library_change_notify: Arc::new(Notify::new()),
@@ -455,6 +465,22 @@ impl WorkspaceHost {
         }
         let _ = self.window_registry.set(registry);
         let _ = self.library_id.set(library_id);
+    }
+
+    /// Install the stable control-socket identity every tenant of this host
+    /// binds under (the devserver's persisted `lib-<hex>`). Idempotent
+    /// set-once, called before the first mount. A host that never installs
+    /// one keeps pid-scoped control sockets, which is correct for
+    /// window-spawned servers: their shells' `$CHAN_CONTROL_SOCKET` going
+    /// stale on process death is the truth, not a bug.
+    pub fn install_control_identity(&self, identity: String) {
+        let _ = self.control_identity.set(identity);
+    }
+
+    /// The installed stable control-socket identity, cloned per mount for the
+    /// tenant builder. `None` on hosts that keep pid-scoped sockets.
+    fn control_identity(&self) -> Option<String> {
+        self.control_identity.get().cloned()
     }
 
     /// Fire the aggregate window-set change signal that the watch feed awaits.
@@ -779,6 +805,7 @@ impl WorkspaceHost {
                 &config,
                 self.desktop.clone(),
                 self.unserve_mode(),
+                self.control_identity(),
             )
             .await?;
         // Presence transitions (a window's first socket connecting / last one
@@ -920,6 +947,7 @@ impl WorkspaceHost {
                 self.unserve_mode(),
                 command,
                 session_dir,
+                self.control_identity(),
             )
             .await?;
         // Feed the tenant's presence the aggregate change signal (see
@@ -2684,6 +2712,7 @@ mod tests {
             config: &ServeConfig,
             _desktop: DesktopBridge,
             _unserve: UnserveMode,
+            _control_identity: Option<String>,
         ) -> Result<TenantArtifacts, Error> {
             let root = workspace.root().to_string_lossy().to_string();
             let inner = Router::new()
@@ -2715,6 +2744,7 @@ mod tests {
             _unserve: UnserveMode,
             command: Option<String>,
             _session_dir: Option<PathBuf>,
+            _control_identity: Option<String>,
         ) -> Result<TenantArtifacts, Error> {
             let inner = Router::new().route(
                 "/api/build-info",

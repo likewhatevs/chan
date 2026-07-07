@@ -214,9 +214,18 @@ struct WindowCommandFrame {
     command: WindowCommand,
 }
 
+#[derive(Debug)]
 pub struct ControlHandle {
     socket_path: PathBuf,
     accept_loop: JoinHandle<()>,
+    /// Held open for the server's lifetime on a STABLE socket path: the
+    /// flock on the `.lock` sibling is what makes a takeover race-free (a
+    /// later bind that cannot take the flock knows the socket is live and
+    /// must not clobber it). `None` on pid-scoped paths, which are unique
+    /// by construction. The lock file itself is left on disk on drop --
+    /// unlinking it would race a concurrent taker that already opened it.
+    #[cfg(unix)]
+    _stable_lock: Option<std::fs::File>,
 }
 
 impl ControlHandle {
@@ -240,6 +249,50 @@ impl Drop for ControlHandle {
 #[cfg(unix)]
 pub fn pick_socket_path() -> PathBuf {
     crate::mcp_bridge::pick_named_socket_path("control")
+}
+
+/// The control-socket path for a tenant of a server with a STABLE identity
+/// (a devserver): `chan-control-<identity>-<prefix hash>.sock` in the same
+/// directory pid-scoped sockets use. Deterministic in (identity, prefix), so
+/// a restarted devserver rebinds the exact path already baked into every
+/// open shell's `$CHAN_CONTROL_SOCKET` and `cs` transparently reaches the
+/// new instance. The tenant prefix is folded in as a hash rather than
+/// verbatim so a long workspace slug can never push the path past the
+/// 104-byte macOS `sun_path` cap.
+pub fn stable_socket_path(identity: &str, prefix: &str) -> PathBuf {
+    let name = stable_socket_name(identity, prefix);
+    #[cfg(unix)]
+    {
+        crate::mcp_bridge::unix_socket_dir().join(name)
+    }
+    #[cfg(windows)]
+    {
+        PathBuf::from(format!(r"\\.\pipe\{}", name.trim_end_matches(".sock")))
+    }
+}
+
+/// `chan-control-<identity>-<16 hex>.sock`. The identity is filename-
+/// sanitized and length-capped defensively (it is normally the minted
+/// `lib-<16hex>`, but it round-trips through a user-editable config file).
+/// The hash is FNV-1a 64 rather than `DefaultHasher` because the name must
+/// be stable across chan builds, not just within one process.
+fn stable_socket_name(identity: &str, prefix: &str) -> String {
+    let identity: String = identity
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+        .take(32)
+        .collect();
+    format!("chan-control-{identity}-{:016x}.sock", fnv1a64(prefix))
+}
+
+/// FNV-1a 64-bit: tiny, dependency-free, and stable across releases.
+fn fnv1a64(input: &str) -> u64 {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in input.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
 }
 
 /// On Windows the control "socket" is a named pipe, so the path is the pipe
@@ -572,9 +625,70 @@ pub struct ControlSocketCtx {
 }
 
 pub fn start(socket_path: PathBuf, ctx: ControlSocketCtx) -> std::io::Result<ControlHandle> {
-    let mut listener = transport::bind(&socket_path)?;
+    let listener = transport::bind(&socket_path)?;
+    Ok(ControlHandle {
+        accept_loop: spawn_accept_loop(listener, ctx),
+        socket_path,
+        #[cfg(unix)]
+        _stable_lock: None,
+    })
+}
 
-    let accept_loop = tokio::spawn(async move {
+/// [`start`] for a STABLE socket path (see [`stable_socket_path`]): take over
+/// the path only when no live server owns it. On unix the takeover is
+/// serialized by a flock on the `.lock` sibling, held for the handle's
+/// lifetime, so a stale node from a dead server is replaced but a live
+/// server's socket is never clobbered (the plain [`start`] bind unlinks
+/// unconditionally, which is only safe for pid-unique paths). On windows the
+/// named-pipe bind already has both properties: `first_pipe_instance(true)`
+/// refuses a name a live process owns, and a dead owner's name is reclaimed
+/// by the OS.
+pub fn start_stable(socket_path: PathBuf, ctx: ControlSocketCtx) -> std::io::Result<ControlHandle> {
+    #[cfg(unix)]
+    {
+        let stable_lock = take_stable_lock(&socket_path)?;
+        let listener = transport::bind(&socket_path)?;
+        Ok(ControlHandle {
+            accept_loop: spawn_accept_loop(listener, ctx),
+            socket_path,
+            _stable_lock: Some(stable_lock),
+        })
+    }
+    #[cfg(windows)]
+    {
+        start(socket_path, ctx)
+    }
+}
+
+/// Own the takeover right for a stable socket path, or fail `AddrInUse` when
+/// a live server holds it. The flock releases on process death, so a crashed
+/// devserver never wedges its successor.
+#[cfg(unix)]
+fn take_stable_lock(socket_path: &Path) -> std::io::Result<std::fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let mut lock_path = socket_path.as_os_str().to_owned();
+    lock_path.push(".lock");
+    let lock = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .mode(0o600)
+        .open(PathBuf::from(lock_path))?;
+    match lock.try_lock() {
+        Ok(()) => Ok(lock),
+        Err(_) => Err(std::io::Error::new(
+            std::io::ErrorKind::AddrInUse,
+            format!(
+                "control socket {} is owned by a live server",
+                socket_path.display()
+            ),
+        )),
+    }
+}
+
+fn spawn_accept_loop(mut listener: transport::Listener, ctx: ControlSocketCtx) -> JoinHandle<()> {
+    tokio::spawn(async move {
         loop {
             let conn = match listener.accept().await {
                 Ok(conn) => conn,
@@ -587,11 +701,6 @@ pub fn start(socket_path: PathBuf, ctx: ControlSocketCtx) -> std::io::Result<Con
             let ctx = ctx.clone();
             tokio::spawn(serve_connection(conn, ctx));
         }
-    });
-
-    Ok(ControlHandle {
-        socket_path,
-        accept_loop,
     })
 }
 
@@ -754,10 +863,10 @@ pub(crate) mod transport {
         }
     }
 
-    // `Listener` is reached only through `bind`'s inferred return type, so it
-    // needs no re-export; `Conn` names `serve_connection`'s parameter. `connect`
-    // + `Client` are the proxy (client) side the MCP bridge reuses.
-    pub use imp::{bind, connect, Client, Conn};
+    // `Listener` names `spawn_accept_loop`'s parameter; `Conn` names
+    // `serve_connection`'s. `connect` + `Client` are the proxy (client) side
+    // the MCP bridge reuses.
+    pub use imp::{bind, connect, Client, Conn, Listener};
 }
 // The transport split ends here; the request handlers below are platform-neutral.
 
@@ -1055,6 +1164,10 @@ async fn handle_request(req: ControlRequest, ctx: &ControlSocketCtx) -> ControlR
             let identity = Identity {
                 kind,
                 version: env!("CARGO_PKG_VERSION").to_string(),
+                // Lets a caller that reached this socket by name-scanning
+                // (stable devserver sockets carry no pid in the filename)
+                // confirm which process it landed on.
+                pid: std::process::id(),
             };
             into_response(
                 serde_json::to_string(&identity).map_err(|e| format!("encoding identity: {e}")),
@@ -3365,6 +3478,109 @@ mod tests {
             window_titles: titles,
         };
         assert_eq!(kind_of(&ctx).await, ServeKind::Desktop);
+    }
+
+    #[test]
+    fn stable_socket_name_is_deterministic_and_tenant_scoped() {
+        // Same identity + prefix on every boot => the exact path already baked
+        // into open shells' $CHAN_CONTROL_SOCKET; a different tenant prefix
+        // gets its own socket.
+        assert_eq!(
+            stable_socket_name("lib-00ff", "/blog"),
+            stable_socket_name("lib-00ff", "/blog")
+        );
+        assert_ne!(
+            stable_socket_name("lib-00ff", "/blog"),
+            stable_socket_name("lib-00ff", "/api/terminal")
+        );
+        assert_ne!(
+            stable_socket_name("lib-00ff", "/blog"),
+            stable_socket_name("lib-11aa", "/blog")
+        );
+        // The identity round-trips through a user-editable config file, so it
+        // is sanitized and capped before it becomes a filename.
+        let name = stable_socket_name("../we ird/☃id", "/p");
+        assert!(name.starts_with("chan-control-"), "{name}");
+        assert!(name.ends_with(".sock"), "{name}");
+        assert!(!name.contains('/') && !name.contains(' '), "{name}");
+    }
+
+    /// One `Identify` round-trip over a live control socket, speaking the
+    /// line-framed wire directly (chan-server links chan-shell without its
+    /// client feature, so tests write the frame by hand).
+    #[cfg(unix)]
+    async fn identify_round_trip(socket: &std::path::Path) -> ControlResponse {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+        let stream = tokio::net::UnixStream::connect(socket)
+            .await
+            .expect("connect control socket");
+        let (read, mut write) = stream.into_split();
+        write
+            .write_all(b"{\"type\":\"identify\"}\n")
+            .await
+            .expect("write identify");
+        let mut line = String::new();
+        BufReader::new(read)
+            .read_line(&mut line)
+            .await
+            .expect("read identify reply");
+        serde_json::from_str(&line).expect("control response json")
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn stable_bind_takes_over_a_dead_servers_node_and_serves_old_clients() {
+        // A crashed server leaves its socket node behind (Drop never ran) and
+        // holds no flock. The next boot must take the path over, and a client
+        // holding the OLD $CHAN_CONTROL_SOCKET value must reach the NEW server.
+        let dir = tempfile::tempdir().expect("socket dir");
+        let path = dir.path().join(stable_socket_name("lib-test", "/blog"));
+        drop(std::os::unix::net::UnixListener::bind(&path).expect("stale node"));
+        assert!(path.exists(), "the stale node survives its listener");
+
+        let cell = Arc::new(RwLock::new(None));
+        let handle = start_stable(
+            path.clone(),
+            test_ctx(cell.clone(), ControlTenant::Workspace),
+        )
+        .expect("take over the dead server's stable path");
+        assert!(matches!(
+            identify_round_trip(&path).await,
+            ControlResponse::Ok { .. }
+        ));
+
+        // A clean shutdown then releases the path for the next incarnation.
+        drop(handle);
+        let _next = start_stable(path.clone(), test_ctx(cell, ControlTenant::Workspace))
+            .expect("rebind on the same stable path");
+        assert!(matches!(
+            identify_round_trip(&path).await,
+            ControlResponse::Ok { .. }
+        ));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn stable_bind_refuses_to_clobber_a_live_server() {
+        let dir = tempfile::tempdir().expect("socket dir");
+        let path = dir.path().join(stable_socket_name("lib-test", "/blog"));
+        let cell = Arc::new(RwLock::new(None));
+        let _live = start_stable(
+            path.clone(),
+            test_ctx(cell.clone(), ControlTenant::Workspace),
+        )
+        .expect("first bind");
+
+        let err = start_stable(path.clone(), test_ctx(cell, ControlTenant::Workspace))
+            .expect_err("a live stable socket must not be clobbered");
+        assert_eq!(err.kind(), std::io::ErrorKind::AddrInUse);
+
+        // The live server keeps serving on its socket.
+        assert!(matches!(
+            identify_round_trip(&path).await,
+            ControlResponse::Ok { .. }
+        ));
     }
 
     #[test]

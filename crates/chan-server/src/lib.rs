@@ -353,12 +353,44 @@ fn prime_terminal_shell() {
     }
 }
 
+/// Bind the tenant's control socket: a path stable across server restarts
+/// (with the no-clobber takeover) when the host installed a control identity
+/// (the devserver), else the pid-scoped fresh-per-process path. A bind
+/// failure degrades to no control socket -- shells then simply lack
+/// `$CHAN_CONTROL_SOCKET` -- rather than failing the tenant.
+fn start_control_socket(
+    control_identity: Option<&str>,
+    prefix: &str,
+    ctx: control_socket::ControlSocketCtx,
+) -> (Option<PathBuf>, Option<control_socket::ControlHandle>) {
+    let (path, bound) = match control_identity {
+        Some(identity) => {
+            let path = control_socket::stable_socket_path(identity, prefix);
+            let bound = control_socket::start_stable(path.clone(), ctx);
+            (path, bound)
+        }
+        None => {
+            let path = control_socket::pick_socket_path();
+            let bound = control_socket::start(path.clone(), ctx);
+            (path, bound)
+        }
+    };
+    match bound {
+        Ok(handle) => (Some(handle.socket_path().to_path_buf()), Some(handle)),
+        Err(e) => {
+            tracing::warn!("control socket bind failed at {}: {e}", path.display());
+            (None, None)
+        }
+    }
+}
+
 async fn build_app(
     library: Library,
     workspace: Arc<Workspace>,
     config: &ServeConfig,
     desktop: crate::desktop_window_ops::DesktopBridge,
     unserve: chan_library::UnserveMode,
+    control_identity: Option<String>,
 ) -> Result<AppArtifacts, Error> {
     // Captured before `workspace` is moved into AppState below; the standalone
     // unserve scope names this root.
@@ -561,11 +593,10 @@ async fn build_app(
             (None, None)
         }
     };
-    let control_socket_path = control_socket::pick_socket_path();
-    // The terminal registry is built below (it needs control_socket_path
-    // for $CHAN_CONTROL_SOCKET), so the control socket gets an empty cell
-    // now and we fill it once the registry exists. Category-2 control
-    // requests (cs term write / list) read it.
+    // The terminal registry is built below (it needs the resolved control
+    // socket path for $CHAN_CONTROL_SOCKET), so the control socket gets an
+    // empty cell now and we fill it once the registry exists. Category-2
+    // control requests (cs term write / list) read it.
     let terminal_registry_cell: control_socket::TerminalRegistryCell =
         Arc::new(std::sync::OnceLock::new());
     // Survey bus: shared between the control socket (the blocked
@@ -605,8 +636,9 @@ async fn build_app(
         chan_library::UnserveMode::Host(weak) => chan_library::UnserveScope::Host(weak),
         chan_library::UnserveMode::Unsupported => chan_library::UnserveScope::Unsupported,
     };
-    let control = control_socket::start(
-        control_socket_path.clone(),
+    let (control_socket_path, control_socket) = start_control_socket(
+        control_identity.as_deref(),
+        &config.prefix,
         control_socket::ControlSocketCtx {
             workspace_cell: state_for_bridge.clone(),
             events_tx: events_tx.clone(),
@@ -621,16 +653,6 @@ async fn build_app(
             unserve: unserve_scope,
         },
     );
-    let (control_socket_path, control_socket) = match control {
-        Ok(handle) => (Some(handle.socket_path().to_path_buf()), Some(handle)),
-        Err(e) => {
-            tracing::warn!(
-                "control socket bind failed at {}: {e}",
-                control_socket_path.display()
-            );
-            (None, None)
-        }
-    };
     prime_terminal_shell();
     let terminal_sessions = Arc::new(TerminalRegistry::new(TerminalRegistryConfig {
         workspace_root: workspace_root.clone(),
@@ -732,6 +754,7 @@ async fn build_terminal_app(
     desktop: crate::desktop_window_ops::DesktopBridge,
     unserve: chan_library::UnserveMode,
     session_dir: Option<std::path::PathBuf>,
+    control_identity: Option<String>,
 ) -> Result<AppArtifacts, Error> {
     let token = if config.no_token {
         None
@@ -796,8 +819,10 @@ async fn build_terminal_app(
     // so SPA replies (`/api/window/reply`, `/api/survey/reply`)
     // complete the blocked `cs pane` / `cs terminal survey` calls.
     // Socket paths are pid+random-suffixed (`/tmp/chan-control-<pid>-
-    // <8hex>.sock`), so concurrent serves and the desktop's workspace
-    // tenants can't collide.
+    // <8hex>.sock`) so concurrent serves and the desktop's workspace
+    // tenants can't collide, except on a host with a stable control
+    // identity (the devserver), whose per-tenant paths are stable
+    // across restarts instead (see `start_control_socket`).
     let survey_bus = Arc::new(survey::SurveyBus::new());
     let window_bus = Arc::new(window_bus::WindowBus::new());
     let handover_bus = Arc::new(handover_bus::HandoverBus::new());
@@ -811,7 +836,6 @@ async fn build_terminal_app(
     );
     let terminal_registry_cell: control_socket::TerminalRegistryCell =
         Arc::new(std::sync::OnceLock::new());
-    let control_socket_path = control_socket::pick_socket_path();
     // A terminal tenant has no workspace to unserve, so a standalone
     // terminal refuses; a hosted terminal still carries the host handle so an
     // Unserve that lands on its socket can unmount the right WORKSPACE tenant.
@@ -821,8 +845,9 @@ async fn build_terminal_app(
             chan_library::UnserveScope::Unsupported
         }
     };
-    let control = control_socket::start(
-        control_socket_path.clone(),
+    let (control_socket_path, control_socket) = start_control_socket(
+        control_identity.as_deref(),
+        &config.prefix,
         control_socket::ControlSocketCtx {
             workspace_cell: workspace_cell.clone(),
             events_tx: events_tx.clone(),
@@ -837,18 +862,6 @@ async fn build_terminal_app(
             unserve: unserve_scope,
         },
     );
-    let (control_socket_path, control_socket) = match control {
-        Ok(handle) => (Some(handle.socket_path().to_path_buf()), Some(handle)),
-        Err(e) => {
-            // Warn-and-degrade like the serve path: shells just won't
-            // have $CHAN_CONTROL_SOCKET.
-            tracing::warn!(
-                "terminal tenant control socket bind failed at {}: {e}",
-                control_socket_path.display()
-            );
-            (None, None)
-        }
-    };
     prime_terminal_shell();
     let terminal_sessions = Arc::new(TerminalRegistry::new(TerminalRegistryConfig {
         workspace_root: workspace_root.clone(),
@@ -1138,8 +1151,17 @@ impl chan_library::TenantBuilder for RouteLayer {
         config: &ServeConfig,
         desktop: DesktopBridge,
         unserve: chan_library::UnserveMode,
+        control_identity: Option<String>,
     ) -> Result<chan_library::TenantArtifacts, Error> {
-        let artifacts = build_app(library, workspace, config, desktop, unserve).await?;
+        let artifacts = build_app(
+            library,
+            workspace,
+            config,
+            desktop,
+            unserve,
+            control_identity,
+        )
+        .await?;
         Ok(into_tenant_artifacts(artifacts))
     }
 
@@ -1151,8 +1173,17 @@ impl chan_library::TenantBuilder for RouteLayer {
         unserve: chan_library::UnserveMode,
         command: Option<String>,
         session_dir: Option<PathBuf>,
+        control_identity: Option<String>,
     ) -> Result<chan_library::TenantArtifacts, Error> {
-        let artifacts = build_terminal_app(library, config, desktop, unserve, session_dir).await?;
+        let artifacts = build_terminal_app(
+            library,
+            config,
+            desktop,
+            unserve,
+            session_dir,
+            control_identity,
+        )
+        .await?;
         // The tenant's terminals run `command` (when set) rather than the
         // default shell; applied before the SPA can open the first one.
         artifacts.terminal_sessions.set_default_command(command);
@@ -1279,13 +1310,16 @@ pub async fn serve(
         "boot: listener bound"
     );
     // Standalone `chan open`: no desktop attached, so no window-ops
-    // bridge and an empty (unwritten) title map.
+    // bridge and an empty (unwritten) title map. No stable control
+    // identity either -- a window-spawned serve's control socket dies
+    // with the process by design.
     let artifacts = build_app(
         library,
         workspace,
         &config,
         crate::desktop_window_ops::DesktopBridge::default(),
         chan_library::UnserveMode::Standalone,
+        None,
     )
     .await?;
     // External / CLI edits to the per-library config (`chan config`, a

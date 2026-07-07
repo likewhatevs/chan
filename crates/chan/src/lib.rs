@@ -1460,7 +1460,7 @@ async fn cmd_ps(json: bool) -> Result<()> {
 /// `-` in the BY column (the STATE column still distinguishes served vs
 /// free).
 async fn serving_kind(holder_pid: u32) -> Option<ServedBy> {
-    let socket = control_socket_for_pid(holder_pid)?;
+    let socket = control_socket_for_pid(holder_pid).await?;
     let message = chan_shell::send_control_request(&socket, chan_shell::ControlRequest::Identify)
         .await
         .ok()?;
@@ -1627,7 +1627,7 @@ async fn unserve_running(
     let Some(record) = chan_workspace::lock::read_lock_record(&paths.lock) else {
         return Ok(UnserveOutcome::NotServed); // no holder record on disk
     };
-    let Some(socket) = control_socket_for_pid(record.pid) else {
+    let Some(socket) = control_socket_for_pid(record.pid).await else {
         // A record but no reachable control socket: the holder is gone
         // (stale record -- the lock is free / steal-able) or runs no control
         // socket. Nothing to tear down over the wire.
@@ -1656,17 +1656,22 @@ async fn unserve_running(
     Ok(UnserveOutcome::Unserved)
 }
 
-/// Find a control socket for `pid` by its well-known name
-/// (`chan-control-<pid>-<rand>`). A dedicated `chan open` serve has exactly
-/// one; a multi-tenant devserver has one per tenant under the same pid.
-/// Either way every socket routes the `Close { path }` verb to the server,
-/// which acts by path -- so the first match is sufficient and we must NOT
-/// broadcast (once the first tenant unmounts, the rest 404). On Unix the
-/// socket is a `.sock` file in `$XDG_RUNTIME_DIR` when present and `/tmp`
-/// otherwise; on Windows it is a named pipe under the `\\.\pipe\` namespace.
+/// Find a control socket for `pid`. A window-spawned server's sockets carry
+/// the pid in their name (`chan-control-<pid>-<rand>`) and match by name
+/// alone; a devserver's are stable-named (`chan-control-<identity>-<hash>`,
+/// no pid, so `$CHAN_CONTROL_SOCKET` survives its restarts) and are matched
+/// by asking each candidate who it is (a bounded `Identify` round-trip whose
+/// reply carries the serving pid). A dedicated `chan open` serve has exactly
+/// one socket; a multi-tenant devserver has one per tenant under the same
+/// pid. Either way every socket routes the `Close { path }` verb to the
+/// server, which acts by path -- so the first match is sufficient and we
+/// must NOT broadcast (once the first tenant unmounts, the rest 404). On
+/// Unix the socket is a `.sock` file in `$XDG_RUNTIME_DIR` when present and
+/// `/tmp` otherwise; on Windows it is a named pipe under the `\\.\pipe\`
+/// namespace.
 #[cfg(unix)]
-fn control_socket_for_pid(pid: u32) -> Option<PathBuf> {
-    control_socket_for_pid_in_dirs(unix_control_socket_dirs(), pid, true)
+async fn control_socket_for_pid(pid: u32) -> Option<PathBuf> {
+    control_socket_for_pid_in_dirs(unix_control_socket_dirs(), pid, true).await
 }
 
 #[cfg(unix)]
@@ -1684,13 +1689,17 @@ fn unix_control_socket_dirs() -> Vec<PathBuf> {
 }
 
 #[cfg(windows)]
-fn control_socket_for_pid(pid: u32) -> Option<PathBuf> {
+async fn control_socket_for_pid(pid: u32) -> Option<PathBuf> {
     // Windows control sockets are named pipes under the `\\.\pipe\`
-    // namespace, which is directory-enumerable; the names carry the pid.
-    control_socket_for_pid_in_dirs([std::path::Path::new(r"\\.\pipe\")], pid, false)
+    // namespace, which is directory-enumerable.
+    control_socket_for_pid_in_dirs([std::path::Path::new(r"\\.\pipe\")], pid, false).await
 }
 
-fn control_socket_for_pid_in_dirs<I, P>(
+/// Overall bound on one stable-candidate `Identify` probe, so a wedged server
+/// (accepts but never replies) cannot hang `chan ps` / `chan close`.
+const STABLE_SOCKET_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
+
+async fn control_socket_for_pid_in_dirs<I, P>(
     dirs: I,
     pid: u32,
     require_sock_ext: bool,
@@ -1699,18 +1708,79 @@ where
     I: IntoIterator<Item = P>,
     P: AsRef<Path>,
 {
-    let mut seen = Vec::new();
+    let mut seen: Vec<PathBuf> = Vec::new();
     for dir in dirs {
         let dir = dir.as_ref();
         if seen.iter().any(|seen| seen == dir) {
             continue;
         }
         seen.push(dir.to_path_buf());
+    }
+    // Pass 1, by name: a pid-named socket needs no round-trip.
+    for dir in &seen {
         if let Some(socket) = control_socket_for_pid_in(dir, pid, require_sock_ext) {
             return Some(socket);
         }
     }
+    // Pass 2, by identity: stable-named candidates carry no pid, so ask each
+    // one who it is and match the reported pid. Dead sockets fail the connect
+    // immediately; only a live-but-wedged one costs the probe timeout.
+    for dir in &seen {
+        for candidate in stable_control_socket_candidates(dir, require_sock_ext) {
+            if socket_identity_pid(&candidate).await == Some(pid) {
+                return Some(candidate);
+            }
+        }
+    }
     None
+}
+
+/// The stable-named control-socket candidates in `dir`, sorted for a
+/// deterministic probe order.
+fn stable_control_socket_candidates(dir: &Path, require_sock_ext: bool) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut candidates: Vec<PathBuf> = entries
+        .flatten()
+        .filter(|entry| {
+            let name = entry.file_name();
+            stable_control_socket_name(&name.to_string_lossy(), require_sock_ext)
+        })
+        .map(|entry| entry.path())
+        .collect();
+    candidates.sort();
+    candidates
+}
+
+/// True when `name` is a STABLE-identity control socket candidate: the
+/// `chan-control-` family without a leading pid segment. A pid-shaped name
+/// (`chan-control-<digits>-...`) belongs to whatever process minted it; had
+/// it been the holder's, the name pass would already have matched it, so the
+/// probe skips those instead of knocking on every serve's socket.
+fn stable_control_socket_name(name: &str, require_sock_ext: bool) -> bool {
+    let Some(rest) = name.strip_prefix("chan-control-") else {
+        return false;
+    };
+    if require_sock_ext && !name.ends_with(".sock") {
+        return false;
+    }
+    let pid_shaped = rest
+        .split_once('-')
+        .is_some_and(|(head, _)| !head.is_empty() && head.bytes().all(|b| b.is_ascii_digit()));
+    !pid_shaped
+}
+
+/// The pid serving `socket`, from a bounded `Identify` round-trip. `None` for
+/// a dead / unreachable / wedged socket or an unparseable reply.
+async fn socket_identity_pid(socket: &Path) -> Option<u32> {
+    let identify = chan_shell::send_control_request(socket, chan_shell::ControlRequest::Identify);
+    let message = tokio::time::timeout(STABLE_SOCKET_PROBE_TIMEOUT, identify)
+        .await
+        .ok()?
+        .ok()?;
+    let identity: chan_shell::Identity = serde_json::from_str(&message).ok()?;
+    Some(identity.pid)
 }
 
 #[cfg(unix)]
@@ -5652,16 +5722,85 @@ mod tests {
         );
     }
 
-    #[test]
-    fn control_socket_for_pid_searches_candidate_dirs() {
+    #[tokio::test]
+    async fn control_socket_for_pid_searches_candidate_dirs() {
         let first = tempfile::TempDir::new().unwrap();
         let second = tempfile::TempDir::new().unwrap();
         let want = second.path().join("chan-control-4242-ef01.sock");
         std::fs::write(&want, b"").unwrap();
         assert_eq!(
-            control_socket_for_pid_in_dirs([first.path(), second.path()], 4242, true),
+            control_socket_for_pid_in_dirs([first.path(), second.path()], 4242, true).await,
             Some(want)
         );
+    }
+
+    #[test]
+    fn stable_control_socket_name_excludes_pid_shaped_names() {
+        // A devserver's stable socket (identity + prefix hash, no pid) is a
+        // probe candidate; a pid-named socket or an unrelated file is not.
+        assert!(stable_control_socket_name(
+            "chan-control-lib-0011223344556677-89abcdef01234567.sock",
+            true
+        ));
+        assert!(!stable_control_socket_name(
+            "chan-control-4242-ef01.sock",
+            true
+        ));
+        assert!(!stable_control_socket_name("chan-mcp-4242-ef01.sock", true));
+        // The `.sock` suffix is required only on unix (a Windows pipe name
+        // has none).
+        assert!(!stable_control_socket_name("chan-control-lib-aa-bb", true));
+        assert!(stable_control_socket_name("chan-control-lib-aa-bb", false));
+    }
+
+    /// A stub control server on a unix socket that answers every `Identify`
+    /// with the given pid, standing in for a devserver tenant socket.
+    #[cfg(unix)]
+    fn spawn_identify_stub(socket: &std::path::Path, pid: u32) -> tokio::task::JoinHandle<()> {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+        let listener = tokio::net::UnixListener::bind(socket).expect("bind stub socket");
+        tokio::spawn(async move {
+            loop {
+                let Ok((stream, _)) = listener.accept().await else {
+                    return;
+                };
+                let (read, mut write) = stream.into_split();
+                let mut line = String::new();
+                let _ = BufReader::new(read).read_line(&mut line).await;
+                let identity = chan_shell::Identity {
+                    kind: chan_shell::ServeKind::Devserver,
+                    version: env!("CARGO_PKG_VERSION").to_string(),
+                    pid,
+                };
+                let reply = chan_shell::ControlResponse::Ok {
+                    message: serde_json::to_string(&identity).expect("identity json"),
+                };
+                let mut out = serde_json::to_vec(&reply).expect("response json");
+                out.push(b'\n');
+                let _ = write.write_all(&out).await;
+            }
+        })
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn control_socket_for_pid_probes_stable_named_sockets() {
+        // A devserver's stable-named socket carries no pid, so discovery must
+        // resolve it through the Identify round-trip. The wrong pid must NOT
+        // resolve to it (a stale lock record's holder is genuinely gone).
+        let dir = tempfile::TempDir::new().unwrap();
+        let stable = dir.path().join("chan-control-lib-00aa-11bb.sock");
+        let stub = spawn_identify_stub(&stable, 4242);
+        assert_eq!(
+            control_socket_for_pid_in_dirs([dir.path()], 4242, true).await,
+            Some(stable.clone())
+        );
+        assert_eq!(
+            control_socket_for_pid_in_dirs([dir.path()], 7777, true).await,
+            None
+        );
+        stub.abort();
     }
 
     #[test]

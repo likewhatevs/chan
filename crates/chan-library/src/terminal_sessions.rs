@@ -527,10 +527,17 @@ impl TerminalExit {
         Self::Unknown
     }
 
-    pub fn legacy_code(&self) -> u32 {
+    /// The exit code for the terminal `/ws` exit frame, `None` when there is
+    /// no honest one to report. A signal death maps to the generic failure
+    /// code 1; `Unknown` stays codeless -- it means the real status is
+    /// unobtainable (a restored session's shell was reparented when the old
+    /// server died), and inventing a number there mislabels a clean `logout`
+    /// as a failure.
+    pub fn wire_code(&self) -> Option<u32> {
         match self {
-            Self::Code { code } => *code,
-            Self::Signal { .. } | Self::Unknown => 1,
+            Self::Code { code } => Some(*code),
+            Self::Signal { .. } => Some(1),
+            Self::Unknown => None,
         }
     }
 }
@@ -3049,7 +3056,17 @@ struct ImportedPtyFd(File);
 #[cfg(target_os = "linux")]
 impl Read for ImportedPtyFd {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        self.0.read(buf)
+        match self.0.read(buf) {
+            // On Linux a PTY master read returns EIO once the last slave fd
+            // closes (the shell exited). portable_pty's reader translates
+            // that to EOF for freshly spawned sessions; mirror it here so a
+            // restored session's shell exit is a clean end-of-stream, not a
+            // broadcast "terminal read failed: I/O error" plus a fabricated
+            // failure exit. Any other errno is a genuine read failure and
+            // still surfaces as one.
+            Err(e) if e.raw_os_error() == Some(rustix::io::Errno::IO.raw_os_error()) => Ok(0),
+            other => other,
+        }
     }
 }
 
@@ -3914,6 +3931,96 @@ mod tests {
             TerminalExit::Signal { signal } => assert!(!signal.is_empty()),
             other => panic!("expected a signal exit, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn wire_code_reports_no_code_for_an_unknown_exit() {
+        // The `/ws` exit frame: a real code passes through, a signal death
+        // keeps the generic failure code, and Unknown stays codeless (the
+        // restored-session case where the true status is unobtainable).
+        assert_eq!(TerminalExit::Code { code: 0 }.wire_code(), Some(0));
+        assert_eq!(TerminalExit::Code { code: 7 }.wire_code(), Some(7));
+        assert_eq!(
+            TerminalExit::Signal {
+                signal: "SIGTERM".into()
+            }
+            .wire_code(),
+            Some(1)
+        );
+        assert_eq!(TerminalExit::Unknown.wire_code(), None);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn imported_session_slave_close_is_a_clean_exit_not_an_error() {
+        // A devserver-restart-restored PTY reads its master through
+        // `ImportedPtyFd`. When the restored shell exits, the kernel reports
+        // EIO on the master (not EOF); that must surface as an Exit event
+        // with no fabricated code, and never as a "terminal read failed"
+        // Error broadcast.
+        let pair = native_pty_system().openpty(test_size()).unwrap();
+        let master_fd = pair
+            .master
+            .as_raw_fd()
+            .and_then(|fd| clone_master_fd(fd).ok())
+            .expect("dup master fd");
+        let meta = FdStoreSessionMeta {
+            tenant_prefix: "/w".to_string(),
+            session_id: "restored-1".to_string(),
+            tab_name: None,
+            tab_group: None,
+            window_id: Some("win-1".to_string()),
+            pane_id: None,
+            tab_id: None,
+            cwd: None,
+            command: None,
+            env: BTreeMap::new(),
+            mcp_env: false,
+            child_pid: None,
+            size: test_size().into(),
+            seq: 0,
+            generation: 1,
+            alt_screen: false,
+            private_modes: Vec::new(),
+        };
+        let registry_last_exit = Arc::new(Mutex::new(None));
+        let session = Session::from_imported(
+            test_config(1024, 4, 10),
+            FdStoreSessionImport {
+                meta,
+                master_fd,
+                replay: Vec::new(),
+            },
+            registry_last_exit.clone(),
+        )
+        .expect("import session");
+        let mut rx = session.output_tx.subscribe();
+
+        // The restored shell exits: the last slave fd closes, so the
+        // reader's next master read fails EIO.
+        drop(pair);
+
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            match tokio::time::timeout(remaining, rx.recv()).await {
+                Ok(Ok(SessionEvent::Exit(exit))) => {
+                    assert_eq!(exit, TerminalExit::Unknown);
+                    assert_eq!(exit.wire_code(), None);
+                    break;
+                }
+                Ok(Ok(SessionEvent::Error(message))) => {
+                    panic!("slave close must not broadcast an error: {message}")
+                }
+                Ok(Ok(_)) => {}
+                Ok(Err(e)) => panic!("event channel closed before the exit event: {e}"),
+                Err(_) => panic!("no exit event within 10s of slave close"),
+            }
+        }
+        assert_eq!(
+            *registry_last_exit.lock().unwrap(),
+            Some(TerminalExit::Unknown)
+        );
     }
 
     #[test]

@@ -219,8 +219,15 @@ enum ServerFrame {
     },
     #[serde(rename = "resize")]
     Resize { cols: u16, rows: u16 },
+    /// The PTY's process ended. `code` is omitted when no honest exit status
+    /// exists (`TerminalExit::Unknown`: a devserver-restart-restored shell is
+    /// reparented, so its real status is unobtainable); the SPA then renders
+    /// a codeless "process exited".
     #[serde(rename = "exit")]
-    Exit { code: u32 },
+    Exit {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        code: Option<u32>,
+    },
     #[serde(rename = "closed")]
     Closed { reason: CloseReason },
     #[serde(rename = "error")]
@@ -797,7 +804,7 @@ async fn terminal_ws(mut socket: WebSocket, state: Arc<AppState>, opts: Terminal
                     Ok(SessionEvent::Exit(exit)) => {
                         let id = session.id().to_owned();
                         state.terminal_sessions.remove(&id);
-                        let _ = send_frame(&mut socket, ServerFrame::Exit { code: exit.legacy_code() }).await;
+                        let _ = send_frame(&mut socket, ServerFrame::Exit { code: exit.wire_code() }).await;
                         break;
                     }
                     Ok(SessionEvent::Error(message)) => {

@@ -1203,15 +1203,17 @@ mod survey_wire_tests {
         ));
 
         // The reply payload (JSON in Ok.message): kind serializes to the
-        // `standalone`/`desktop`/`devserver` strings `chan ps` shows.
+        // `standalone`/`desktop`/`devserver` strings `chan ps` shows, and pid
+        // is the serving process the stable-socket discovery matches on.
         let id = Identity {
             kind: ServeKind::Devserver,
             version: "0.40.0".into(),
+            pid: 4242,
         };
         let v = serde_json::to_value(&id).unwrap();
         assert_eq!(
             v,
-            serde_json::json!({ "kind": "devserver", "version": "0.40.0" })
+            serde_json::json!({ "kind": "devserver", "version": "0.40.0", "pid": 4242 })
         );
         assert_eq!(id, serde_json::from_value(v).unwrap());
         assert_eq!(
@@ -1260,9 +1262,13 @@ pub enum ServeKind {
 
 /// Reply payload for [`ControlRequest::Identify`], JSON-encoded into the
 /// `Ok.message` of a [`ControlResponse`] (the convention for structured control
-/// replies). `version` is the server's `CARGO_PKG_VERSION`.
+/// replies). `version` is the server's `CARGO_PKG_VERSION`. `pid` is the
+/// serving process: a devserver's stable-named control sockets carry no pid in
+/// their filename, so `chan ps` / `chan close` resolve a lock-record holder to
+/// its socket by asking each stable-named candidate who it is.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Identity {
     pub kind: ServeKind,
     pub version: String,
+    pub pid: u32,
 }

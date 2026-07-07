@@ -67,7 +67,7 @@ fn xdg_runtime_dir() -> Option<PathBuf> {
 }
 
 #[cfg(unix)]
-fn unix_socket_dir() -> PathBuf {
+pub(crate) fn unix_socket_dir() -> PathBuf {
     xdg_runtime_dir().unwrap_or_else(|| PathBuf::from("/tmp"))
 }
 

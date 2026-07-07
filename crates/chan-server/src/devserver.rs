@@ -23,6 +23,9 @@
 //! reconnecting client re-hydrates its panes from the tenant. Terminal PTY
 //! contents reset except for an explicit Linux systemd fdstore restart, which
 //! re-associates inherited PTY masters with freshly built session objects.
+//! Per-tenant control sockets bind at paths derived from the persisted
+//! library id (not the pid), so the `$CHAN_CONTROL_SOCKET` baked into
+//! already-open shells reaches the restarted instance and `cs` keeps working.
 
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
@@ -653,6 +656,13 @@ pub async fn run_devserver(library: Library, config: DevserverConfig) -> anyhow:
         Arc::new(WindowRegistry::open(windows_store)),
         library_id.clone(),
     );
+    // Every tenant this devserver mounts binds its control socket at a path
+    // derived from the persisted library id, stable across restarts, so
+    // `$CHAN_CONTROL_SOCKET` in shells that predate a restart still reaches
+    // the new instance (`cs` keeps working across `--service=chan` daemon
+    // restarts and systemd unit restarts alike). Installed before the first
+    // mount so the shared terminal tenant gets it too.
+    host.install_control_identity(library_id.clone());
     // Install the library-owned workspace on/off overlay beside the window
     // registry, so the restore below re-mounts what was on. Same shape + store
     // the desktop-local library uses (`~/.chan/workspaces.json`).

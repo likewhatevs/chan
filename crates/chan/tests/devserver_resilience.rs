@@ -570,6 +570,64 @@ async fn devserver_sigterm_exits_clean() {
     assert!(elapsed < EXIT_BUDGET, "devserver SIGTERM took {elapsed:?}");
 }
 
+/// The devserver's stable control-socket names in `dir`
+/// (`chan-control-lib-<identity>-<prefix hash>.sock`), sorted.
+fn stable_control_sockets(dir: &Path) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(dir)
+        .map(|entries| {
+            entries
+                .flatten()
+                .filter_map(|entry| entry.file_name().to_str().map(str::to_string))
+                .filter(|name| name.starts_with("chan-control-lib-") && name.ends_with(".sock"))
+                .collect()
+        })
+        .unwrap_or_default();
+    names.sort();
+    names
+}
+
+/// A devserver restart must keep `cs` working in shells opened BEFORE the
+/// restart: the control-socket path derives from the persisted library id
+/// (not the pid), so the new instance rebinds the exact path already baked
+/// into every pre-restart `$CHAN_CONTROL_SOCKET`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn devserver_restart_rebinds_the_same_control_socket_paths() {
+    let sandbox = Sandbox::new();
+    let port = free_port();
+    let (mut server, _addr) = spawn_devserver(&sandbox, port).await;
+    let before = stable_control_sockets(sandbox.runtime.path());
+    assert!(
+        !before.is_empty(),
+        "devserver mints stable control sockets:\n{}",
+        server.out.dump()
+    );
+
+    send_signal(server.pid(), "TERM");
+    wait_exit(&mut server, EXIT_BUDGET)
+        .await
+        .unwrap_or_else(|| panic!("devserver did not exit on SIGTERM:\n{}", server.out.dump()));
+    drop(server);
+
+    let (server, _addr) = spawn_devserver(&sandbox, port).await;
+    let after = stable_control_sockets(sandbox.runtime.path());
+    assert_eq!(
+        before,
+        after,
+        "restart rebinds the same stable control sockets:\n{}",
+        server.out.dump()
+    );
+
+    // A client holding a pre-restart $CHAN_CONTROL_SOCKET value reaches the
+    // new instance.
+    let pre_restart_path = sandbox.runtime.path().join(&before[0]);
+    let reply =
+        chan_shell::send_control_request(&pre_restart_path, chan_shell::ControlRequest::Identify)
+            .await
+            .expect("identify over the pre-restart control socket path");
+    let identity: serde_json::Value = serde_json::from_str(&reply).expect("identity json");
+    assert_eq!(identity["kind"], "devserver");
+}
+
 /// The portable `--service=chan` backend starts a detached daemon, reports
 /// status from its pidfile, lets a joiner detach without stopping it, restarts
 /// onto a new port, and stops idempotently.
