@@ -748,7 +748,7 @@ jobs:
             $signature = Get-AuthenticodeSignature -FilePath $file
             $signature | Format-List Path,Status,StatusMessage,SignerCertificate,TimeStamperCertificate
             if ($signature.Status -ne "Valid") {
-              throw "Authenticode signature is not valid for $file: $($signature.Status)"
+              throw "Authenticode signature is not valid for ${file}: $($signature.Status)"
             }
             & $signtool verify /pa /v $file
             if ($LASTEXITCODE -ne 0) {
