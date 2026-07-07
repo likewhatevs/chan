@@ -166,7 +166,7 @@ pub struct AppState {
     /// control terminal is KEPT at "process exited" so the user can read the
     /// death reason. Reconnect is BLOCKED for these ids until the control
     /// terminal is closed (`close_devserver_control_terminal` clears the id), so
-    /// the user has to see why it ended (or hit Reconnect, which force-closes it).
+    /// the user has to see why it ended (or hit Reconnect, whose teardown reaps it).
     pub control_terminal_dead: Mutex<std::collections::HashSet<String>>,
     /// Monotonic generation source for scripted control runs.
     pub control_terminal_generation: std::sync::atomic::AtomicU64,
@@ -1473,8 +1473,9 @@ fn teardown_devserver_connection(app: &tauri::AppHandle, state: &AppState, id: &
 /// the user can read the death reason, and KEEP the workspace windows open on
 /// the reconnect spinner. Reconnect stays BLOCKED (`control_terminal_dead`) until
 /// the user closes the control terminal (`close_devserver_control_terminal`
-/// clears it) or hits Reconnect (which force-closes it). This is the counterpart
-/// to `teardown_devserver_connection`, which reaps everything. Idempotent.
+/// clears it) or hits Reconnect (whose teardown reaps it). This is the
+/// counterpart to `teardown_devserver_connection`, which reaps everything, and
+/// to the exit watcher's clean-exit auto-reap, which keeps nothing. Idempotent.
 fn mark_devserver_control_exited(app: &tauri::AppHandle, state: &AppState, id: &str) {
     // Keeping requires something to keep: with no current control run (a
     // concurrent close or reconnect reaped it between the caller's currency
@@ -1584,10 +1585,12 @@ fn persist_window_hidden(state: &AppState, label: &str, hidden: bool) {
 ///
 /// `abort` is checked before every attempt: for a scripted devserver the
 /// caller passes the control-run liveness probe, so the connect attempt fails
-/// within one backoff of the script dying instead of spinning out the whole
+/// within one backoff of the script FAILING instead of spinning out the whole
 /// budget against a transport that can never come up (the launcher's Connect
 /// button rides `devserver_connecting`, so a spun-out wait pins the spinner
-/// for the full budget). No-script connects pass a probe that never fires.
+/// for the full budget). A clean script return does not abort: a daemonizing
+/// script exits 0 with the devserver up, so the dial is the arbiter there.
+/// No-script connects pass a probe that never fires.
 async fn wait_for_devserver(
     host: &str,
     port: u16,
@@ -1658,7 +1661,16 @@ async fn scrape_control_terminal_token(
     // a user close (below) rather than the build race.
     let mut window_seen = false;
     for _ in 0..MAX_ATTEMPTS {
-        // No token yet, and the connect script's PTY has exited: a failed
+        // The scrollback is read BEFORE the exit probe: a daemonizing connect
+        // script prints the token and returns inside a single poll window, and
+        // a token it already printed must win over the exit that follows it.
+        // The exit probe below then only fails scripts that died with no token
+        // to show.
+        if let Some(token) = devserver::scrape_token(&embedded.read_control_terminal_output(prefix))
+        {
+            return Ok(token);
+        }
+        // No token, and the connect script's PTY has exited: a failed
         // connect (bad credentials, script error, a ^C-killed script). Fail fast
         // instead of waiting out the full backoff budget, so the launcher
         // surveys (abandon/edit/retry) promptly rather than sticking on
@@ -1668,10 +1680,6 @@ async fn scrape_control_terminal_token(
             return Err(ConnectDevserverError::ControlTerminated(format!(
                 "the devserver connect script exited ({exit}) before the connection was established"
             )));
-        }
-        if let Some(token) = devserver::scrape_token(&embedded.read_control_terminal_output(prefix))
-        {
-            return Ok(token);
         }
         // The user closed the control terminal (^W / red button) before it
         // connected. A window close does NOT reap the tenant — the PTY outlives
@@ -1707,6 +1715,16 @@ fn control_run_is_current(state: &AppState, id: &str, generation: u64, prefix: &
         .unwrap_or(false)
 }
 
+/// Whether a control script's exit is CLEAN (status 0). A daemonizing connect
+/// script (for example `chan devserver --service=chan`) prints the token,
+/// detaches the server, and returns 0 on every healthy connect, so a clean
+/// exit means "the script finished its job", never "read what failed here".
+/// Anything else (a non-zero status, a signal, an unknown status) is a
+/// failure.
+fn control_script_exit_is_clean(exit: &chan_server::TerminalExit) -> bool {
+    matches!(exit, chan_server::TerminalExit::Code { code: 0 })
+}
+
 fn ensure_control_run_live(
     state: &AppState,
     id: &str,
@@ -1723,20 +1741,37 @@ fn ensure_control_run_live(
         .get()
         .and_then(|e| e.control_terminal_exit(prefix))
     {
-        return Err(ConnectDevserverError::ControlTerminated(format!(
-            "the devserver connect script exited ({exit})"
-        )));
+        // A clean return is not a death: a daemonizing connect script exits 0
+        // once the devserver is detached, while the connect flow is still
+        // dialing. Whether the transport survived the script is the dial's
+        // call, not this probe's.
+        if !control_script_exit_is_clean(&exit) {
+            return Err(ConnectDevserverError::ControlTerminated(format!(
+                "the devserver connect script exited ({exit})"
+            )));
+        }
     }
     Ok(())
 }
 
 /// Watch a scripted devserver's control-terminal PTY from the moment its prefix
-/// is registered. The connect script returning on its own, or a ^C in the
-/// control window, means the script-backed connection is dead even if the exit
-/// happens before token scrape, while hidden, or after a successful connect. On
-/// such an exit, mark the connection down but KEEP the control terminal at
-/// "process exited" (`mark_devserver_control_exited`), so the user can read the
-/// death reason; reconnect stays blocked until they close it.
+/// is registered. What the script's exit means depends on how it ended:
+///
+/// - CLEAN (status 0) with the connection up: the script finished its job and
+///   returned (a daemonizing `chan devserver --service=chan` does this on
+///   every healthy connect), and a clean exit carries no death reason worth
+///   reading, so the control terminal is auto-reaped. The connection, its
+///   windows, and reconnect are untouched. A clean exit while the connect flow
+///   is still in flight defers judgment until that flow resolves (the startup
+///   race: the script can return before the connection is recorded).
+/// - Anything else (a non-zero status, a signal, or an exit with no connection
+///   to show for it): the script-backed connection is dead (a persistent
+///   transport like `ssh -N` must keep its script alive). Mark it down but
+///   KEEP the control terminal at "process exited"
+///   (`mark_devserver_control_exited`) so the user can read the death reason;
+///   reconnect stays blocked until they close it. A non-responsive but
+///   still-running script is handled by the workspace poll attention path
+///   instead.
 ///
 /// Stops without firing once this watcher's control terminal is no longer the
 /// devserver's current one: a disconnect/forget removes the prefix (and reaps
@@ -1761,27 +1796,47 @@ fn spawn_control_terminal_exit_watcher(
                 .embedded
                 .get()
                 .and_then(|e| e.control_terminal_exit(&prefix));
-            if let Some(exit) = exited {
-                // For a script-based devserver, the control script is the
-                // connection (for example `ssh -N` or a foreground `chan
-                // devserver`), so its PTY exiting means the session ended. A
-                // persistent connection must keep its script alive; a
-                // non-responsive but still-running script is handled by the
-                // workspace poll attention path instead. Mark the connection down
-                // but KEEP the control terminal at "process exited" so the user
-                // can read the death reason; reconnect stays blocked until they
-                // close it.
-                if script_based && control_run_is_current(&state, &id, generation, &prefix) {
-                    tracing::info!(
-                        devserver = %id,
-                        exit = %exit,
-                        "control script exited; marking devserver down, keeping control terminal (script == connection)"
-                    );
-                    mark_devserver_control_exited(&app, &state, &id);
-                }
+            let Some(exit) = exited else {
+                tokio::time::sleep(POLL).await;
+                continue;
+            };
+            if !script_based {
                 return;
             }
-            tokio::time::sleep(POLL).await;
+            let clean = control_script_exit_is_clean(&exit);
+            // The startup race: a daemonizing script returns cleanly while the
+            // connect flow is still recording the connection, so healthy vs
+            // failed is unknowable until that flow resolves. Keep polling (the
+            // connect's own budgets bound the wait). Checked BEFORE the
+            // is_connected gate below: reaping mid-connect would fail the
+            // in-flight attempt's liveness checks and tear down a connect that
+            // was about to land.
+            if clean && state.devserver_connecting.lock().unwrap().contains(&id) {
+                tokio::time::sleep(POLL).await;
+                continue;
+            }
+            if !control_run_is_current(&state, &id, generation, &prefix) {
+                return;
+            }
+            if clean && state.devservers.is_connected(&id) {
+                tracing::info!(
+                    devserver = %id,
+                    "control script exited cleanly with the connection up; reaping the control terminal"
+                );
+                reap_devserver_control_terminal(&app, &state, &id);
+                if let Some(embedded) = state.embedded() {
+                    embedded.signal_library_change();
+                }
+                let _ = app.emit(serve::SERVES_CHANGED, ());
+                return;
+            }
+            tracing::info!(
+                devserver = %id,
+                exit = %exit,
+                "control script exited without a healthy connection; marking devserver down, keeping control terminal"
+            );
+            mark_devserver_control_exited(&app, &state, &id);
+            return;
         }
     });
 }
@@ -1813,8 +1868,8 @@ async fn connect_devserver_impl(
         return Ok(());
     }
     // A dead control terminal blocks reconnect: the user must close it (read the
-    // death reason) first, or use Reconnect (which force-closes it, clearing this
-    // before it dials). The block is only honored while its terminal actually
+    // death reason) first, or use Reconnect (whose teardown reaps it, clearing
+    // this before it dials). The block is only honored while its terminal actually
     // exists: a stale entry whose window is gone (any residual race that strands
     // the flag) self-heals here instead of walling off connect with an
     // instruction the user cannot follow.
@@ -2290,8 +2345,10 @@ async fn connect_devserver_impl_inner(
     // terminal the very first time, never re-minted once the user closes it), so
     // the desktop just reconciles whatever the feed reports.
     //
-    // The control terminal stays open after connect. Its exit watcher was
-    // started as soon as the prefix was registered, before token scraping.
+    // The control terminal stays open after connect while its script runs. Its
+    // exit watcher (started as soon as the prefix was registered, before token
+    // scraping) auto-reaps it once the script returns cleanly with the
+    // connection up, and keeps it at "process exited" when the script fails.
     // Auto-hide the control terminal on connect success when the devserver's
     // "auto-hide control terminal on success" is set. A PROGRAMMATIC hide → reuse
     // the silent-hide path so it does NOT fire the bury notice (unlike the OS
@@ -3421,9 +3478,11 @@ fn hide_window_from_close_confirm(app: tauri::AppHandle, window: tauri::WebviewW
 /// Abandon the devserver backing a workspace window (the disconnect overlay's
 /// Abandon button). A devserver window's label is `<library_id>::<window_id>`;
 /// resolve it through the same cached label lookup Reconnect uses, then reveal
-/// the launcher (it hides, not destroys) and tear the devserver down directly in
-/// Rust, including the control terminal. The `devserver-abandon` event still
-/// fires so the launcher refreshes its row. Inert on a local window, or when no
+/// the launcher (it hides, not destroys) and tear the devserver down directly
+/// in Rust. Kill-then-act: the teardown's control-terminal reap kills a
+/// still-running connect script synchronously before the connection state and
+/// workspace windows drop with it. The `devserver-abandon` event still fires so
+/// the launcher refreshes its row. Inert on a local window, or when no
 /// devserver matches the library.
 #[tauri::command]
 fn abandon_devserver_for_window(
@@ -3435,8 +3494,9 @@ fn abandon_devserver_for_window(
     if let Some(id) = devserver_id {
         let _ = show_window(&app, "main");
         // Tear down directly in Rust so Abandon works even when the launcher is
-        // not listening for the event; this is a terminated devserver, so the
-        // control terminal leaves with the workspace windows.
+        // not listening for the event. The teardown covers every control-run
+        // state: reaping the control terminal kills a still-running connect
+        // script, and is a no-op on an exited or absent one.
         teardown_devserver_connection(&app, &state, &id);
         let _ = app.emit("devserver-abandon", id);
     }
@@ -3444,12 +3504,16 @@ fn abandon_devserver_for_window(
 }
 
 /// Reconnect the devserver backing a workspace window (the disconnect overlay's
-/// Reconnect button, desktop-only). The devserver is already DISCONNECTED with
-/// its control terminal sitting dead at "process exited", so resolve the owning
-/// devserver from the window's `<library_id>::<window_id>` label through the
-/// cached lookup. Force-close the dead control terminal (clearing the reconnect
-/// block), then run the connect flow, which re-runs the connect script. Inert on
-/// a local window or when no devserver matches the library.
+/// Reconnect button, desktop-only). Kill-then-act: resolve the owning devserver
+/// from the window's `<library_id>::<window_id>` label through the cached
+/// lookup, run the disconnect flow (the teardown's control-terminal reap kills
+/// a still-running connect script and clears the reconnect block), then run the
+/// connect flow, which re-runs the connect script. Tearing down first is what
+/// lets Reconnect act on a connection in ANY state: connect's `is_connected`
+/// guard would no-op a live-but-unreachable one. A connect already in flight is
+/// left alone, so a second Reconnect racing the first cannot tear down the
+/// attempt the first one just started. Inert on a local window or when no
+/// devserver matches the library.
 #[tauri::command]
 async fn reconnect_devserver_for_window(
     app: tauri::AppHandle,
@@ -3459,19 +3523,10 @@ async fn reconnect_devserver_for_window(
     let devserver_id = devserver_id_for_window_label(&state.devserver_feed, window.label());
     if let Some(id) = devserver_id {
         let state_arc = Arc::clone(state.inner());
-        // Force-close only a KEPT-DEAD control terminal (clearing the reconnect
-        // block). A live control run is left alone: the connect flow reaps and
-        // respawns it itself when a script is configured, and a second Reconnect
-        // racing the first must not tear down the run the first one just
-        // started.
-        if state_arc
-            .control_terminal_dead
-            .lock()
-            .unwrap()
-            .contains(&id)
-        {
-            close_devserver_control_terminal(&app, &state_arc, &id);
+        if state_arc.devserver_connecting.lock().unwrap().contains(&id) {
+            return Ok(());
         }
+        teardown_devserver_connection(&app, &state_arc, &id);
         connect_devserver_impl(app.clone(), state_arc, id).await?;
     }
     Ok(())
@@ -5854,7 +5909,7 @@ mod tests {
     }
 
     #[test]
-    fn control_script_exit_keeps_control_terminal_and_blocks_reconnect() {
+    fn control_script_clean_exit_reaps_and_failed_exit_keeps_terminal() {
         const MAIN_RS: &str = include_str!("main.rs");
         let request_close = MAIN_RS
             .split("fn request_close_window")
@@ -5866,9 +5921,51 @@ mod tests {
         assert!(request_close.contains("close_devserver_control_terminal"));
         assert!(!request_close.contains("devserver-control-closed"));
 
-        // On a control-script exit the watcher marks the connection down but
-        // KEEPS the control terminal (it does NOT reap/teardown), so the user can
-        // read the death reason and reconnect stays blocked until they close it.
+        // Only a status-0 exit counts as clean, and the post-token liveness
+        // probe lets a clean (daemonizing) script return through while still
+        // failing everything else.
+        let clean = MAIN_RS
+            .split("fn control_script_exit_is_clean")
+            .nth(1)
+            .expect("control_script_exit_is_clean exists")
+            .split("fn ensure_control_run_live")
+            .next()
+            .expect("clean-exit helper precedes ensure_control_run_live");
+        assert!(clean.contains("TerminalExit::Code { code: 0 }"));
+        let ensure = MAIN_RS
+            .split("fn ensure_control_run_live")
+            .nth(1)
+            .expect("ensure_control_run_live exists")
+            .split("/// Watch a scripted devserver")
+            .next()
+            .expect("ensure section ends before the exit watcher");
+        assert!(ensure.contains("control_script_exit_is_clean"));
+
+        // The token scrape reads the scrollback BEFORE the exit probe: a
+        // daemonizing script prints the token and returns inside one poll
+        // window, and the printed token must win over the exit behind it.
+        let scrape = MAIN_RS
+            .split("async fn scrape_control_terminal_token")
+            .nth(1)
+            .expect("scrape_control_terminal_token exists")
+            .split("fn control_run_is_current")
+            .next()
+            .expect("scrape section ends before control_run_is_current");
+        let token_pos = scrape
+            .find("scrape_token")
+            .expect("scrape reads the scrollback");
+        let exit_pos = scrape
+            .find("control_terminal_exit")
+            .expect("scrape probes the script exit");
+        assert!(token_pos < exit_pos);
+
+        // Exit watcher: a CLEAN exit with the connection up auto-reaps the
+        // control terminal (no down-mark, no teardown, no reconnect block); a
+        // failing or premature exit keeps it via mark_devserver_control_exited
+        // so the user can read the death reason. A clean exit during an
+        // in-flight connect defers judgment until the connect resolves, and
+        // that deferral must come BEFORE the is_connected reap gate: reaping
+        // mid-connect fails the attempt's own liveness checks.
         let exit_watcher = MAIN_RS
             .split("fn spawn_control_terminal_exit_watcher")
             .nth(1)
@@ -5876,13 +5973,24 @@ mod tests {
             .split("/// Connect to a configured devserver")
             .next()
             .expect("watcher section ends before connect implementation");
+        assert!(exit_watcher.contains("control_script_exit_is_clean"));
+        assert!(exit_watcher.contains("reap_devserver_control_terminal"));
         assert!(exit_watcher.contains("mark_devserver_control_exited"));
         assert!(!exit_watcher.contains("teardown_devserver_connection"));
+        assert!(!exit_watcher.contains("control_terminal_dead"));
         assert!(!exit_watcher.contains("devserver-control-closed"));
+        let connecting_pos = exit_watcher
+            .find("devserver_connecting")
+            .expect("watcher defers a clean exit while a connect is in flight");
+        let connected_pos = exit_watcher
+            .find("devservers.is_connected")
+            .expect("watcher gates the auto-reap on a live connection");
+        assert!(connecting_pos < connected_pos);
 
-        // mark_devserver_control_exited keeps the control terminal (no reap, no
-        // window teardown), retires the watcher KEEPING the workspace windows,
-        // and blocks reconnect via control_terminal_dead.
+        // mark_devserver_control_exited (the failed-exit keep path) keeps the
+        // control terminal (no reap, no window teardown), retires the watcher
+        // KEEPING the workspace windows, and blocks reconnect via
+        // control_terminal_dead.
         let mark_exited = MAIN_RS
             .split("fn mark_devserver_control_exited")
             .nth(1)
@@ -5902,8 +6010,9 @@ mod tests {
         // window rows from the launcher (the kept control row is a registry
         // row, not a feed row, so it survives to show the death reason).
         assert!(mark_exited.contains("set_down(id, true)"));
-        // The connect wait aborts on control-script death instead of pinning
-        // the launcher's Connect spinner for the full come-up budget.
+        // The connect wait aborts on a FAILING control-script death instead of
+        // pinning the launcher's Connect spinner for the full come-up budget
+        // (the liveness probe lets a clean return keep dialing).
         let wait = MAIN_RS
             .split("async fn wait_for_devserver(")
             .nth(1)
@@ -5913,7 +6022,8 @@ mod tests {
             .expect("wait section ends before the error enum");
         assert!(wait.contains("if let Some(e) = abort()"));
 
-        // A dead control terminal blocks reconnect; closing it clears the block.
+        // A dead control terminal blocks a plain connect; closing it clears
+        // the block.
         let connect = MAIN_RS
             .split("async fn connect_devserver_impl(")
             .nth(1)
@@ -5949,11 +6059,22 @@ mod tests {
             .expect("close precedes persist_window_hidden");
         assert!(close.contains("control_terminal_dead"));
 
-        // Reconnect force-closes a KEPT-DEAD control terminal BEFORE dialing,
-        // so the control record drops from the feed and the block clears first.
-        // The close is gated on the dead flag: a live control run is left for
-        // the connect flow to reap/respawn, so two racing Reconnects cannot
-        // tear down the run the first one just started.
+        // Abandon is kill-then-disconnect: one unconditional teardown, whose
+        // control-terminal reap kills a still-running connect script before
+        // the connection state and windows drop.
+        let abandon = MAIN_RS
+            .split("fn abandon_devserver_for_window")
+            .nth(1)
+            .expect("abandon_devserver_for_window exists")
+            .split("/// Reconnect the devserver backing")
+            .next()
+            .expect("abandon precedes reconnect_devserver_for_window");
+        assert!(abandon.contains("teardown_devserver_connection"));
+
+        // Reconnect is kill-then-disconnect-then-connect: an unconditional
+        // teardown (killing a running script and clearing connection state so
+        // the dial is not no-opped by the is_connected guard) BEFORE the
+        // connect, gated only on no connect already being in flight.
         let reconnect = MAIN_RS
             .split("async fn reconnect_devserver_for_window")
             .nth(1)
@@ -5961,14 +6082,15 @@ mod tests {
             .split("fn ")
             .next()
             .expect("reconnect body");
-        assert!(reconnect.contains("control_terminal_dead"));
-        let close_pos = reconnect
-            .find("close_devserver_control_terminal")
-            .expect("reconnect force-closes the control terminal");
+        assert!(reconnect.contains("devserver_connecting"));
+        assert!(!reconnect.contains("close_devserver_control_terminal"));
+        let teardown_pos = reconnect
+            .find("teardown_devserver_connection")
+            .expect("reconnect tears the connection down first");
         let connect_pos = reconnect
             .find("connect_devserver_impl")
             .expect("reconnect then dials");
-        assert!(close_pos < connect_pos);
+        assert!(teardown_pos < connect_pos);
     }
 
     #[test]
