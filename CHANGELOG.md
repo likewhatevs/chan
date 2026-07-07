@@ -4,6 +4,31 @@ All notable changes to this project will be documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+v0.66.0-rc1 starts the next UI and devserver service round from `v0.65.0`. Settings becomes keyboard-focusable as an overlay, pane side flips keep their visual rotation direction, empty panes get a taller anchored dotted surface, launcher startup is less blocked by registry restoration, desktop devserver recovery actions expose pending/error states, macOS desktop updates move to an in-window restart dialog, and `chan devserver --service=chan` becomes the portable background daemon backend.
+
+### Added
+
+- **A launcher update-ready dialog for chan-desktop.** macOS desktop updater installs now emit `desktop-update-ready` to launcher windows with the downloaded version, and the launcher shows an in-window restart dialog. Restart is driven through the narrow `restart_desktop_after_update` app command and a launcher-scoped capability instead of granting broad process restart permissions to remote content.
+- **A portable `--service=chan` background daemon.** `chan devserver --service=chan` and `--service=chan --start` now spawn a detached `__devserver-daemon` child, redirect stdout/stderr to the existing devserver log path, wait for pidfile plus health readiness, and return idempotently. `--join` starts the daemon if needed and then attaches as a health watchdog until interrupted; `--stop`, `--status`, and `--restart` manage the same daemon. Tunnel tokens are passed to the child through the environment only.
+
+### Changed
+
+- **Settings participates in focus and keyboard navigation.** Opening Settings focuses the overlay, its section list uses roving keyboard navigation, and closing Settings pulses focus back to the active Terminal or Editor tab.
+- **Pane side flips keep one visual rotation direction.** Moving A to B and then B to A now completes the same full rotation instead of reversing the previous half flip.
+- **The empty-pane dotted surface is taller and path-aware.** Empty panes draw the dotted wave 25% taller by default and anchor its top just below the absolute path label across desktop and mobile layouts.
+- **Launcher startup opens the window feed before registry restoration.** New Terminal and other local window operations can respond while workspace/devserver lists are still loading.
+- **Reconnect and Abandon expose recovery state.** Devserver disconnect overlays disable duplicate clicks while Reconnect or Abandon is pending and show IPC/ACL errors inline instead of silently leaving the overlay unchanged.
+
+### Fixed
+
+- **Reconnect and Abandon resolve devserver windows through one cached lookup.** Loopback and tunnel workspace windows now use the same window-label-to-devserver mapping, including cached library ids after the live watcher snapshot is hidden or retired.
+
+### Removed
+
+- **Desktop self-upgrade remains macOS-only.** Windows and Linux desktop self-upgrade paths return clear unsupported errors for this rc; Linux AppImage self-upgrade is not claimed without signed updater payload/feed validation.
+
 ## [v0.65.0] - 2026-07-06
 
 The command launcher becomes configurable. A new Settings surface renders a web form over each chan-library's configuration, every command's keyboard shortcut is reassignable per operating system, and the launcher itself is redesigned as a centered spotlight. Reload and Open Inspector join the launcher, and a batch of editor, graph, pane, and workspace fixes land. Now that shortcuts are reassignable, the opinionated default chords are trimmed to a minimal set, and Settings becomes the sole interactive configuration surface.
