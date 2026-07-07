@@ -194,11 +194,15 @@ jobs:
           # PowerShell). The shims (cs_install.rs) re-point at it when present.
           cargo build --release -p chan
           powershell -NoProfile -ExecutionPolicy Bypass -File desktop/src-tauri/scripts/windows/sign.ps1 target/release/chan.exe
+          cargo build --release -p chan-desktop
+          powershell -NoProfile -ExecutionPolicy Bypass -File desktop/src-tauri/scripts/windows/sign.ps1 target/release/chan-desktop.exe
           # NSIS only: the cross-platform `bundle.targets: "all"` would also try
           # the WiX MSI, which needs the WiX toolset we deliberately dropped.
           # `tauri.windows.conf.json` (a deep-merge over tauri.conf.json, Windows
           # only) bundles the chan.exe built just above as a resource; the main
           # conf can't carry it because the file does not exist on macOS/Linux.
+          # Cargo reuses the signed desktop binary when sources are fresh; the
+          # signCommand in tauri.windows.conf.json signs the NSIS installer.
           (cd desktop/src-tauri && cargo tauri build --bundles nsis --config tauri.windows.conf.json)
 
       - if: matrix.os == 'windows-latest'

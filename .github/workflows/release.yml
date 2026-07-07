@@ -710,8 +710,12 @@ jobs:
           cp LICENSE README.md staging/
           # chan-x86_64-pc-windows-msvc.zip — the name the install page resolves.
           (cd staging && 7z a -tzip ../release-artifacts/chan-x86_64-pc-windows-msvc.zip chan.exe LICENSE README.md)
+          cargo build --release -p chan-desktop
+          powershell -NoProfile -ExecutionPolicy Bypass -File desktop/src-tauri/scripts/windows/sign.ps1 target/release/chan-desktop.exe
           # NSIS only: bundle.targets "all" would also try the WiX MSI we dropped.
           # tauri.windows.conf.json deep-merges the chan.exe built above as a resource.
+          # Cargo reuses the signed desktop binary when sources are fresh; the
+          # signCommand in tauri.windows.conf.json signs the NSIS installer.
           (cd desktop/src-tauri && cargo tauri build --bundles nsis --config tauri.windows.conf.json)
           cp "target/release/bundle/nsis/Chan_${VERSION}_x64-setup.exe" release-artifacts/
           ls -la release-artifacts
