@@ -1658,8 +1658,8 @@ async fn unserve_running(
 
 /// Find a control socket for `pid`. A window-spawned server's sockets carry
 /// the pid in their name (`chan-control-<pid>-<rand>`) and match by name
-/// alone; a devserver's are stable-named (`chan-control-<identity>-<hash>`,
-/// no pid, so `$CHAN_CONTROL_SOCKET` survives its restarts) and are matched
+/// alone; a devserver's are stable-named (`chan-control-s<hash>`, no pid,
+/// so `$CHAN_CONTROL_SOCKET` survives its restarts) and are matched
 /// by asking each candidate who it is (a bounded `Identify` round-trip whose
 /// reply carries the serving pid). A dedicated `chan open` serve has exactly
 /// one socket; a multi-tenant devserver has one per tenant under the same
@@ -1753,22 +1753,22 @@ fn stable_control_socket_candidates(dir: &Path, require_sock_ext: bool) -> Vec<P
     candidates
 }
 
-/// True when `name` is a STABLE-identity control socket candidate: the
-/// `chan-control-` family without a leading pid segment. A pid-shaped name
-/// (`chan-control-<digits>-...`) belongs to whatever process minted it; had
-/// it been the holder's, the name pass would already have matched it, so the
-/// probe skips those instead of knocking on every serve's socket.
+/// True when `name` is a devserver's STABLE control socket:
+/// `chan-control-s<16 hex>`, `.sock`-suffixed on unix. The `s` marker and
+/// exact shape separate it from the pid-scoped `chan-control-<digits>-<rand>`
+/// family, which belongs to whatever process minted it; had one been the
+/// holder's, the name pass would already have matched it, so the probe only
+/// knocks on stable candidates instead of every serve's socket.
 fn stable_control_socket_name(name: &str, require_sock_ext: bool) -> bool {
-    let Some(rest) = name.strip_prefix("chan-control-") else {
+    let Some(rest) = name.strip_prefix("chan-control-s") else {
         return false;
     };
-    if require_sock_ext && !name.ends_with(".sock") {
-        return false;
-    }
-    let pid_shaped = rest
-        .split_once('-')
-        .is_some_and(|(head, _)| !head.is_empty() && head.bytes().all(|b| b.is_ascii_digit()));
-    !pid_shaped
+    let hash = match rest.strip_suffix(".sock") {
+        Some(hash) => hash,
+        None if require_sock_ext => return false,
+        None => rest,
+    };
+    hash.len() == 16 && hash.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
 }
 
 /// The pid serving `socket`, from a bounded `Identify` round-trip. `None` for
@@ -5736,10 +5736,10 @@ mod tests {
 
     #[test]
     fn stable_control_socket_name_excludes_pid_shaped_names() {
-        // A devserver's stable socket (identity + prefix hash, no pid) is a
+        // A devserver's stable socket (`chan-control-s<16 hex>`, no pid) is a
         // probe candidate; a pid-named socket or an unrelated file is not.
         assert!(stable_control_socket_name(
-            "chan-control-lib-0011223344556677-89abcdef01234567.sock",
+            "chan-control-s89abcdef01234567.sock",
             true
         ));
         assert!(!stable_control_socket_name(
@@ -5747,10 +5747,25 @@ mod tests {
             true
         ));
         assert!(!stable_control_socket_name("chan-mcp-4242-ef01.sock", true));
+        // Only the exact 16-lowercase-hex hash shape qualifies.
+        assert!(!stable_control_socket_name(
+            "chan-control-s89abcdef.sock",
+            true
+        ));
+        assert!(!stable_control_socket_name(
+            "chan-control-s89ABCDEF01234567.sock",
+            true
+        ));
         // The `.sock` suffix is required only on unix (a Windows pipe name
         // has none).
-        assert!(!stable_control_socket_name("chan-control-lib-aa-bb", true));
-        assert!(stable_control_socket_name("chan-control-lib-aa-bb", false));
+        assert!(!stable_control_socket_name(
+            "chan-control-s89abcdef01234567",
+            true
+        ));
+        assert!(stable_control_socket_name(
+            "chan-control-s89abcdef01234567",
+            false
+        ));
     }
 
     /// A stub control server on a unix socket that answers every `Identify`
@@ -5790,7 +5805,7 @@ mod tests {
         // resolve it through the Identify round-trip. The wrong pid must NOT
         // resolve to it (a stale lock record's holder is genuinely gone).
         let dir = tempfile::TempDir::new().unwrap();
-        let stable = dir.path().join("chan-control-lib-00aa-11bb.sock");
+        let stable = dir.path().join("chan-control-s00aa11bb22cc33dd.sock");
         let stub = spawn_identify_stub(&stable, 4242);
         assert_eq!(
             control_socket_for_pid_in_dirs([dir.path()], 4242, true).await,

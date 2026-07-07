@@ -571,14 +571,17 @@ async fn devserver_sigterm_exits_clean() {
 }
 
 /// The devserver's stable control-socket names in `dir`
-/// (`chan-control-lib-<identity>-<prefix hash>.sock`), sorted.
+/// (`chan-control-s<identity+prefix hash>.sock`), sorted. The short
+/// single-hash name keeps the full path under the macOS 104-byte
+/// `sun_path` cap; the `s` marker separates it from the pid-scoped
+/// `chan-control-<pid>-<rand>.sock` names.
 fn stable_control_sockets(dir: &Path) -> Vec<String> {
     let mut names: Vec<String> = std::fs::read_dir(dir)
         .map(|entries| {
             entries
                 .flatten()
                 .filter_map(|entry| entry.file_name().to_str().map(str::to_string))
-                .filter(|name| name.starts_with("chan-control-lib-") && name.ends_with(".sock"))
+                .filter(|name| name.starts_with("chan-control-s") && name.ends_with(".sock"))
                 .collect()
         })
         .unwrap_or_default();

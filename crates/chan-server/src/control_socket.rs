@@ -252,13 +252,13 @@ pub fn pick_socket_path() -> PathBuf {
 }
 
 /// The control-socket path for a tenant of a server with a STABLE identity
-/// (a devserver): `chan-control-<identity>-<prefix hash>.sock` in the same
-/// directory pid-scoped sockets use. Deterministic in (identity, prefix), so
-/// a restarted devserver rebinds the exact path already baked into every
+/// (a devserver): `chan-control-s<hash>.sock` in the same directory
+/// pid-scoped sockets use. Deterministic in (identity, prefix), so a
+/// restarted devserver rebinds the exact path already baked into every
 /// open shell's `$CHAN_CONTROL_SOCKET` and `cs` transparently reaches the
-/// new instance. The tenant prefix is folded in as a hash rather than
-/// verbatim so a long workspace slug can never push the path past the
-/// 104-byte macOS `sun_path` cap.
+/// new instance. Identity and prefix are folded into one short hash rather
+/// than spelled out so the name fits the `sun_path` cap even in a long
+/// socket dir (see [`stable_socket_name`]).
 pub fn stable_socket_path(identity: &str, prefix: &str) -> PathBuf {
     let name = stable_socket_name(identity, prefix);
     #[cfg(unix)]
@@ -271,18 +271,21 @@ pub fn stable_socket_path(identity: &str, prefix: &str) -> PathBuf {
     }
 }
 
-/// `chan-control-<identity>-<16 hex>.sock`. The identity is filename-
-/// sanitized and length-capped defensively (it is normally the minted
-/// `lib-<16hex>`, but it round-trips through a user-editable config file).
-/// The hash is FNV-1a 64 rather than `DefaultHasher` because the name must
-/// be stable across chan builds, not just within one process.
+/// `chan-control-s<16 hex>.sock`: one FNV-1a 64 hash over the
+/// NUL-separated (identity, prefix) pair, so the pair folds in
+/// unambiguously and even a hostile identity (it round-trips through a
+/// user-editable config file) never reaches the filename verbatim. The
+/// leading `s` (stable) marker keeps the name distinguishable from the
+/// pid-scoped `chan-control-<digits>-<rand>` family, even for an
+/// all-digits identity; discovery's stable-candidate classifier in the
+/// `chan` CLI matches this exact shape. The hash is FNV-1a 64 rather than
+/// `DefaultHasher` because the name must be stable across chan builds,
+/// not just within one process.
 fn stable_socket_name(identity: &str, prefix: &str) -> String {
-    let identity: String = identity
-        .chars()
-        .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
-        .take(32)
-        .collect();
-    format!("chan-control-{identity}-{:016x}.sock", fnv1a64(prefix))
+    format!(
+        "chan-control-s{:016x}.sock",
+        fnv1a64(&format!("{identity}\0{prefix}"))
+    )
 }
 
 /// FNV-1a 64-bit: tiny, dependency-free, and stable across releases.
@@ -3497,12 +3500,33 @@ mod tests {
             stable_socket_name("lib-00ff", "/blog"),
             stable_socket_name("lib-11aa", "/blog")
         );
-        // The identity round-trips through a user-editable config file, so it
-        // is sanitized and capped before it becomes a filename.
+        // The identity round-trips through a user-editable config file; it
+        // only ever reaches the filename as a hash, so even a hostile one
+        // yields a well-formed name.
         let name = stable_socket_name("../we ird/☃id", "/p");
-        assert!(name.starts_with("chan-control-"), "{name}");
+        assert!(name.starts_with("chan-control-s"), "{name}");
         assert!(name.ends_with(".sock"), "{name}");
         assert!(!name.contains('/') && !name.contains(' '), "{name}");
+        // The `s` marker keeps an all-digits identity from minting a
+        // pid-shaped name (`chan-control-<digits>-...`), which discovery
+        // would then skip in its stable-candidate pass.
+        let name = stable_socket_name("123456", "/p");
+        assert!(name.starts_with("chan-control-s"), "{name}");
+    }
+
+    #[test]
+    fn stable_socket_name_fits_macos_socket_dirs() {
+        // sockaddr_un's sun_path caps the WHOLE socket path at 104 bytes on
+        // macOS (SUN_LEN; 108 on Linux), and macOS temp dirs are long
+        // (/var/folders/<2>/<31>/T/<tempdir> burns 55-60 bytes). The name
+        // budget below keeps the stable path bindable there; overflowing it
+        // makes every devserver control socket fail to bind on macOS.
+        let name = stable_socket_name("lib-0011223344556677", "/some/long/workspace/prefix");
+        assert!(
+            name.len() <= 40,
+            "stable socket name must stay within the macOS path budget ({} chars): {name}",
+            name.len()
+        );
     }
 
     /// One `Identify` round-trip over a live control socket, speaking the
