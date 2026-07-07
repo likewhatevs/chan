@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import SettingsOverlay from "./SettingsOverlay.svelte";
 import { settingsPanel } from "../state/store.svelte";
+import { tabFocusPulse } from "../state/tabs.svelte";
 import { DATE_FORMATS } from "../editor/dateFormats";
 
 type Cfg = { preferences: Record<string, unknown>; workspaces: unknown[] };
@@ -118,6 +119,34 @@ describe("settings surface render", () => {
       e.textContent,
     );
     expect(labels).toContain("GitHub");
+  });
+
+  test("focuses itself on open, roves section focus, and pulses focus on close", async () => {
+    const target = openSurface();
+    await flush();
+
+    const settings = target.querySelector<HTMLElement>(".settings");
+    expect(document.activeElement).toBe(settings);
+
+    const first = target.querySelector<HTMLButtonElement>(".section-tab");
+    expect(first?.textContent?.trim()).toBe("Appearance");
+    first?.focus();
+    first?.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }),
+    );
+    await tick();
+    await Promise.resolve();
+
+    const active = target.querySelector<HTMLButtonElement>(
+      '.section-tab[aria-current="page"]',
+    );
+    expect(active?.textContent?.trim()).toBe("Editor");
+    expect(document.activeElement).toBe(active);
+
+    const pulse = tabFocusPulse.value;
+    settingsPanel.open = false;
+    await flush();
+    expect(tabFocusPulse.value).toBe(pulse + 1);
   });
 
   test("changing a field PATCHes exactly that slice", async () => {

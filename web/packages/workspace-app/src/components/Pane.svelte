@@ -426,13 +426,12 @@
     return Math.random() < 0.5 ? "vertical" : "horizontal";
   }
 
-  function configureSideFlip(from: PaneSide, to: PaneSide): void {
+  function configureSideFlip(): void {
     const axis = sideFlipAxisForPane();
-    const turn = from === "a" && to === "b" ? -1 : 1;
     const rotate = axis === "vertical" ? "rotateY" : "rotateX";
     sideFlipAxis = axis;
-    sideFlipStartTransform = `${rotate}(${turn * 180}deg)`;
-    sideFlipBackTransform = `${rotate}(${turn * 180}deg)`;
+    sideFlipStartTransform = `${rotate}(-180deg)`;
+    sideFlipBackTransform = `${rotate}(-180deg)`;
   }
 
   $effect(() => {
@@ -442,9 +441,8 @@
       return;
     }
     if (lastSideForFlip === side) return;
-    const previousSide = lastSideForFlip;
     lastSideForFlip = side;
-    configureSideFlip(previousSide, side);
+    configureSideFlip();
     sideFlipActive = false;
     clearSideFlipHandles();
     sideFlipFrame = requestAnimationFrame(() => {

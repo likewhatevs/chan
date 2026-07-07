@@ -51,6 +51,44 @@ describe("loadLibrary", () => {
       expect(typeof ds.has_token).toBe("boolean");
     }
   });
+
+  it("subscribes to the window feed before registry restoration settles", async () => {
+    stopWatching();
+    const { backend } = await import("../api/backend");
+    const order: string[] = [];
+    let resolveWorkspaces: (value: []) => void = () => {};
+    let resolveDevservers: (value: []) => void = () => {};
+    const watch = vi.spyOn(backend, "watchWindows").mockImplementation(() => {
+      order.push("watch");
+      return () => {};
+    });
+    const workspaces = vi.spyOn(backend, "listWorkspaces").mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          order.push("workspaces");
+          resolveWorkspaces = resolve as (value: []) => void;
+        }),
+    );
+    const devservers = vi.spyOn(backend, "listDevservers").mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          order.push("devservers");
+          resolveDevservers = resolve as (value: []) => void;
+        }),
+    );
+
+    const loading = loadLibrary();
+    expect(order[0]).toBe("watch");
+    expect(order).toEqual(["watch", "workspaces", "devservers"]);
+
+    resolveWorkspaces([]);
+    resolveDevservers([]);
+    await loading;
+
+    watch.mockRestore();
+    workspaces.mockRestore();
+    devservers.mockRestore();
+  });
 });
 
 describe("workspace registry", () => {

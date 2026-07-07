@@ -19,6 +19,7 @@
     SquareTerminal,
     X,
   } from "lucide-svelte";
+  import { tick } from "svelte";
   import type { Preferences } from "../api/types";
   import { api } from "../api/client";
   import {
@@ -28,6 +29,7 @@
     workspace,
   } from "../state/store.svelte";
   import { overlayMaximized, setOverlayMaximized } from "../state/pageWidth.svelte";
+  import { bumpTabFocusPulse } from "../state/tabs.svelte";
   import { applyEditorTheme } from "../state/editorTheme";
   import { editorToolsPrefs } from "../state/editorTools.svelte";
   import { DATE_FORMATS } from "../editor/dateFormats";
@@ -54,6 +56,8 @@
   let inflight = $state(0);
   let loading = false;
   let lastServerSnap = "";
+  let settingsEl: HTMLDivElement | undefined = $state();
+  let sectionNavEl: HTMLElement | undefined = $state();
 
   function clone(p: Preferences): Preferences {
     return JSON.parse(JSON.stringify(p)) as Preferences;
@@ -95,7 +99,16 @@
   let wasOpen = false;
   $effect(() => {
     const open = settingsPanel.open;
-    if (open && !wasOpen) void reload();
+    if (open && !wasOpen) {
+      void reload();
+      void tick().then(() => {
+        if (settingsPanel.open) settingsEl?.focus({ preventScroll: true });
+      });
+    } else if (!open && wasOpen) {
+      void tick().then(() => {
+        if (!settingsPanel.open) bumpTabFocusPulse();
+      });
+    }
     wasOpen = open;
   });
 
@@ -182,10 +195,45 @@
   function toggleMax(): void {
     setOverlayMaximized(!overlayMaximized.on);
   }
+
+  function focusSection(index: number): void {
+    const s = sections[index];
+    if (!s) return;
+    activeSection = s.id;
+    void tick().then(() => {
+      const buttons = sectionNavEl?.querySelectorAll<HTMLButtonElement>(".section-tab");
+      buttons?.[index]?.focus({ preventScroll: true });
+    });
+  }
+
+  function onSectionKeyDown(e: KeyboardEvent): void {
+    const current = sections.findIndex((s) => s.id === activeSection);
+    if (current < 0 || sections.length === 0) return;
+    switch (e.key) {
+      case "ArrowDown":
+      case "ArrowRight":
+        e.preventDefault();
+        focusSection((current + 1) % sections.length);
+        break;
+      case "ArrowUp":
+      case "ArrowLeft":
+        e.preventDefault();
+        focusSection((current - 1 + sections.length) % sections.length);
+        break;
+      case "Home":
+        e.preventDefault();
+        focusSection(0);
+        break;
+      case "End":
+        e.preventDefault();
+        focusSection(sections.length - 1);
+        break;
+    }
+  }
 </script>
 
 <OverlayShell id="settings" open={settingsPanel.open} onClose={closeSettings}>
-  <div class="settings">
+  <div class="settings" bind:this={settingsEl} tabindex="-1">
     <header>
       <button
         type="button"
@@ -212,7 +260,11 @@
       </button>
     </header>
     <div class="body">
-      <nav class="sections" aria-label="Settings sections">
+      <nav
+        class="sections"
+        aria-label="Settings sections"
+        bind:this={sectionNavEl}
+      >
         {#each sections as s (s.id)}
           {@const Icon = s.icon}
           <button
@@ -220,6 +272,8 @@
             class="section-tab"
             class:on={activeSection === s.id}
             aria-current={activeSection === s.id ? "page" : undefined}
+            tabindex={activeSection === s.id ? 0 : -1}
+            onkeydown={onSectionKeyDown}
             onclick={() => (activeSection = s.id)}
           >
             <Icon size={16} strokeWidth={1.75} aria-hidden="true" />
@@ -270,6 +324,7 @@
     flex-direction: column;
     height: 100%;
     min-height: 0;
+    outline: none;
   }
   header {
     display: flex;

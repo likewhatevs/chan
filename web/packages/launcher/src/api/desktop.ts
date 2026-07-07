@@ -18,9 +18,13 @@ interface TauriEventApi {
   listen<T>(event: string, handler: (e: TauriEvent<T>) => void): Promise<UnlistenFn>;
 }
 
+interface TauriCoreApi {
+  invoke<T = unknown>(cmd: string, args?: unknown): Promise<T>;
+}
+
 type TauriWindow = Window &
   typeof globalThis & {
-    __TAURI__?: { event?: TauriEventApi };
+    __TAURI__?: { event?: TauriEventApi; core?: TauriCoreApi; invoke?: TauriCoreApi["invoke"] };
   };
 
 /// True only when running inside chan-desktop's Tauri webview WITH the global
@@ -46,4 +50,17 @@ export async function onTauriEvent<T>(
     console.warn(`onTauriEvent(${event}) failed:`, err);
     return () => {};
   }
+}
+
+async function tauriInvoke<T>(cmd: string, args?: unknown): Promise<T> {
+  const tauri = (window as TauriWindow).__TAURI__;
+  const invoke = tauri?.core?.invoke ?? tauri?.invoke;
+  if (!invoke) throw new Error(`tauriInvoke(${cmd}): not running under Tauri`);
+  return (await invoke(cmd, args)) as T;
+}
+
+/// Restart chan-desktop after an updater install. The narrow app command is
+/// granted through `launcher-update.json`, not through the broad process plugin.
+export async function restartDesktopAfterUpdate(): Promise<void> {
+  await tauriInvoke("restart_desktop_after_update");
 }

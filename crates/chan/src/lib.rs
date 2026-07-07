@@ -69,7 +69,7 @@ use serde::{Deserialize, Serialize};
 
 mod update;
 
-/// The `--service=chan` self-managed daemon: a cross-OS foreground devserver
+/// The `--service=chan` self-managed daemon: a cross-OS background devserver
 /// guarded by a single-instance pidfile + flock (the systemd/launchd analog
 /// where there is no OS supervisor, and the portable choice everywhere).
 mod devserver_daemon;
@@ -362,16 +362,15 @@ enum Command {
         /// supervises under `systemd` (Linux), `launchd` (macOS), or the
         /// self-managed `chan` daemon (Windows); with no action verb it runs in
         /// the FOREGROUND (Ctrl-C to stop). `none` forces that unsupervised
-        /// foreground server. `chan` is the cross-OS self-managed foreground
-        /// daemon (pidfile + flock), tied to the launching session. `systemd`
-        /// (Linux) and `launchd` (macOS) are detached background services that
-        /// survive logout; each needs an explicit action verb (`--start`/
-        /// `--stop`/`--restart`/`--status`/`--join`).
+        /// foreground server. `chan` is the cross-OS self-managed background
+        /// daemon (pidfile + flock). `systemd` (Linux) and `launchd` (macOS) are
+        /// OS-backed background services. `chan` may run bare or with an action
+        /// verb; `systemd` / `launchd` need an explicit action verb.
         #[arg(long, value_enum, num_args = 0..=1, default_value = "auto", default_missing_value = "auto")]
         service: ServiceKind,
         /// Start the background service (write/refresh its unit, enable it on
-        /// boot, and start it), then return. systemd/launchd only. `chan` is a
-        /// foreground backend, so run it with no action to own it.
+        /// boot where the backend supports that, and start it), then return.
+        /// Idempotent when it is already running.
         #[arg(long, group = "action")]
         start: bool,
         /// Stop the service AND disable it, so it does not come back on the next
@@ -413,6 +412,22 @@ enum Command {
         /// does not appear in `ps`.
         #[arg(long, env = "CHAN_TUNNEL_TOKEN")]
         tunnel_token: Option<String>,
+    },
+    /// Internal: run the background `--service=chan` daemon child. The parent
+    /// process detaches this command, redirects stdout/stderr to the devserver
+    /// log, and passes any tunnel token through the environment only.
+    #[command(name = "__devserver-daemon", hide = true)]
+    DevserverDaemon {
+        /// Host address to bind.
+        #[arg(long)]
+        bind: IpAddr,
+        /// Port to bind.
+        #[arg(long)]
+        port: u16,
+        /// Tunnel endpoint URL. The token, if any, is read only from
+        /// CHAN_TUNNEL_TOKEN.
+        #[arg(long, default_value = "https://devserver.chan.app/v1/tunnel")]
+        tunnel_url: String,
     },
     /// Read or write settings persisted outside the workspace. Keys use
     /// the same namespaces as the web Settings overlay where possible
@@ -863,7 +878,7 @@ pub enum ServiceKind {
     /// No supervision: run in the foreground on `--bind`/`--port` (Ctrl-C stops).
     #[value(name = "none")]
     None,
-    /// The cross-OS self-managed foreground daemon (pidfile + flock).
+    /// The cross-OS self-managed background daemon (pidfile + flock).
     Chan,
     /// A systemd user service (Linux only).
     Systemd,
@@ -912,10 +927,9 @@ impl DevAction {
 /// action)` pair is validated.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DevPlan {
-    /// Run in the foreground: `--service=none` (no supervision) or the
-    /// `--service=chan` self-managed daemon. Both block until Ctrl-C.
+    /// Run in the foreground: `--service=none` or the no-action `auto` default.
     Foreground(ServiceKind),
-    /// A management verb on the `chan` foreground daemon (never `Start`).
+    /// A management verb on the `chan` background daemon.
     ChanVerb(DevAction),
     /// A verb against a `systemd`/`launchd` background service.
     Supervised(ServiceKind, DevAction),
@@ -950,8 +964,8 @@ fn selected_devserver_action(
 /// of the validity matrix is unit-tested without a real service manager.
 ///
 /// - `none` (foreground) takes no action verb.
-/// - `chan` (foreground) runs bare, or takes `--stop`/`--restart`/`--status`/
-///   `--join`, but not `--start` (there is no background to start).
+/// - `chan` starts the portable background daemon when run bare or with
+///   `--start`, and accepts `--stop`/`--restart`/`--status`/`--join`.
 /// - `systemd`/`launchd` (detached) require an explicit verb; a bare
 ///   `--service=systemd` is ambiguous and rejected.
 fn plan_devserver(service: ServiceKind, action: Option<DevAction>) -> Result<DevPlan, String> {
@@ -965,13 +979,7 @@ fn plan_devserver(service: ServiceKind, action: Option<DevAction>) -> Result<Dev
              backend (--service=chan/systemd/launchd)",
             a.flag()
         )),
-        (ServiceKind::Chan, None) => Ok(DevPlan::Foreground(ServiceKind::Chan)),
-        (ServiceKind::Chan, Some(DevAction::Start)) => Err(
-            "--service=chan is a foreground backend; run `chan devserver --service=chan` with \
-             no action to own it, or use --service=systemd/launchd for a detached background \
-             service"
-                .to_string(),
-        ),
+        (ServiceKind::Chan, None) => Ok(DevPlan::ChanVerb(DevAction::Start)),
         (ServiceKind::Chan, Some(a)) => Ok(DevPlan::ChanVerb(a)),
         (kind @ (ServiceKind::Systemd | ServiceKind::Launchd), None) => Err(format!(
             "--service={} needs an action: one of --start/--stop/--status/--restart/--join",
@@ -988,33 +996,24 @@ fn plan_devserver(service: ServiceKind, action: Option<DevAction>) -> Result<Dev
 /// so the whole matrix is unit-tested without a real OS.
 ///
 /// With NO action verb the devserver always runs in the foreground, so a bare
-/// `chan devserver` works on every host: `None` (unsupervised) on Linux, macOS,
-/// and an unrecognized OS; `Chan` on Windows, which has no OS supervisor to
-/// detach under, so its cross-OS foreground daemon is the auto pick. With an
-/// action verb it selects the OS supervisor: `Systemd` on Linux, `Launchd` on
-/// macOS, `Chan` on Windows. An unrecognized OS has no manager for an action
-/// verb, so that one case errors (the message points at `--service=chan`). The
-/// OS is not threaded into `plan_devserver`, which keeps validating the resolved
+/// `chan devserver` works on every host as `None` (unsupervised). With an action
+/// verb it selects the OS supervisor: `Systemd` on Linux, `Launchd` on macOS,
+/// `Chan` on Windows. An unrecognized OS has no manager for an action verb, so
+/// that one case errors (the message points at `--service=chan`). The OS is not
+/// threaded into `plan_devserver`, which keeps validating the resolved
 /// `(backend, action)` pair on its own matrix.
 fn resolve_auto(os: &str, has_action: bool) -> Result<ServiceKind, String> {
+    if !has_action {
+        return Ok(ServiceKind::None);
+    }
     match os {
         "windows" => Ok(ServiceKind::Chan),
-        "linux" => Ok(if has_action {
-            ServiceKind::Systemd
-        } else {
-            ServiceKind::None
-        }),
-        "macos" => Ok(if has_action {
-            ServiceKind::Launchd
-        } else {
-            ServiceKind::None
-        }),
-        other if has_action => Err(format!(
+        "linux" => Ok(ServiceKind::Systemd),
+        "macos" => Ok(ServiceKind::Launchd),
+        other => Err(format!(
             "could not auto-detect a service backend for this OS (\"{other}\"); \
-             use --service=chan for the portable foreground daemon"
+             use --service=chan for the portable background daemon"
         )),
-        // Unknown OS, no action verb: bare foreground still works everywhere.
-        _ => Ok(ServiceKind::None),
     }
 }
 
@@ -1038,7 +1037,7 @@ fn require_systemd_for_auto(present: bool) -> Result<(), String> {
         Err(
             "--service auto selected systemd for this Linux host, but systemd is not \
              available (no /run/systemd/system). Use --service=chan for the portable \
-             foreground daemon."
+             background daemon."
                 .to_string(),
         )
     }
@@ -1184,6 +1183,15 @@ where
                 verbose,
             )
             .await
+        }
+        Command::DevserverDaemon {
+            bind,
+            port,
+            tunnel_url,
+        } => {
+            let addr = SocketAddr::new(bind, port);
+            let tunnel = build_devserver_tunnel_from_env(tunnel_url);
+            devserver_daemon::run_devserver_daemon_child(addr, tunnel).await
         }
         Command::Config { action } => cmd_config(action),
         Command::Upgrade {
@@ -2369,9 +2377,9 @@ fn devserver_port_collision_hint(port: u16, err: &chan_server::Error) -> Option<
     ))
 }
 
-/// Run a headless multi-workspace devserver. `--service=none` (the default)
-/// runs in the foreground on `bind:port`; `--service=chan` is the self-managed
-/// foreground daemon; `--service=systemd`/`launchd` are detached background
+/// Run a headless multi-workspace devserver. The no-service default and
+/// `--service=none` run in the foreground on `bind:port`; `--service=chan` is
+/// the portable background daemon; `--service=systemd`/`launchd` are OS-backed
 /// services driven by explicit action verbs (`--start`/`--stop`/`--restart`/
 /// `--status`/`--join`). [`plan_devserver`] validates the `(service, action)`
 /// pair before we touch any real service manager.
@@ -2428,29 +2436,29 @@ async fn cmd_devserver(
             let listen = resolve_devserver_listen(tunnel.is_some(), devserver_listen_override())?;
             run_devserver_foreground(requested, tunnel, listen).await
         }
-        DevPlan::Foreground(ServiceKind::Chan) => {
-            warn_non_loopback_bind(requested);
-            // The `chan` daemon serves in-process (it never persists the token to
-            // a unit/plist), so the tunnel rides along with it just like the
-            // plain foreground.
-            let tunnel = build_devserver_tunnel(tunnel_token, tunnel_url);
-            devserver_daemon::run_devserver_as_chan(requested, force, verbose, tunnel).await
-        }
         DevPlan::Foreground(kind) => {
-            unreachable!("plan_devserver only routes none/chan to Foreground, got {kind:?}")
+            unreachable!("plan_devserver only routes none to Foreground, got {kind:?}")
         }
         DevPlan::ChanVerb(action) => {
-            // A --tunnel-token is meaningless with a chan management verb (the
-            // running daemon already owns any tunnel), so it is ignored here.
             // Preserve the daemon's bound address when --bind/--port are omitted.
             let addr = service_target_addr(ServiceKind::Chan, bind, port);
             match action {
                 DevAction::Stop => devserver_daemon::stop_devserver_chan(verbose).await,
-                DevAction::Restart => devserver_daemon::restart_devserver_chan(addr, verbose).await,
+                DevAction::Restart => {
+                    warn_non_loopback_bind(addr);
+                    let tunnel = build_devserver_tunnel(tunnel_token, tunnel_url);
+                    devserver_daemon::restart_devserver_chan(addr, force, verbose, tunnel).await
+                }
                 DevAction::Status => devserver_daemon::status_devserver_chan(verbose),
-                DevAction::Join => devserver_daemon::join_devserver_chan(verbose).await,
                 DevAction::Start => {
-                    unreachable!("plan_devserver rejects --service=chan --start")
+                    warn_non_loopback_bind(addr);
+                    let tunnel = build_devserver_tunnel(tunnel_token, tunnel_url);
+                    devserver_daemon::run_devserver_as_chan(addr, force, verbose, tunnel).await
+                }
+                DevAction::Join => {
+                    warn_non_loopback_bind(addr);
+                    let tunnel = build_devserver_tunnel(tunnel_token, tunnel_url);
+                    devserver_daemon::join_devserver_chan(addr, force, verbose, tunnel).await
                 }
             }
         }
@@ -2504,6 +2512,15 @@ fn build_devserver_tunnel(
              Prefer CHAN_TUNNEL_TOKEN env var instead."
         );
     }
+    Some(chan_server::DevserverTunnel { tunnel_url, token })
+}
+
+/// Hidden daemon child tunnel config. The token is never accepted as an argv
+/// field here; the parent passes it through CHAN_TUNNEL_TOKEN only.
+fn build_devserver_tunnel_from_env(tunnel_url: String) -> Option<chan_server::DevserverTunnel> {
+    let token = std::env::var("CHAN_TUNNEL_TOKEN")
+        .ok()
+        .filter(|token| !token.is_empty())?;
     Some(chan_server::DevserverTunnel { tunnel_url, token })
 }
 
@@ -5963,8 +5980,9 @@ mod tests {
     }
 
     /// Every cell of the `(--service, action)` validity matrix resolves to the
-    /// documented plan or errors: `none`/`chan` run bare, `none` rejects all
-    /// verbs, `chan` rejects only `--start`, and systemd/launchd require a verb.
+    /// documented plan or errors: `none` runs bare and rejects all verbs,
+    /// `chan` starts in the background and accepts every verb, and
+    /// systemd/launchd require a verb.
     #[test]
     fn devserver_plan_validity_matrix() {
         use DevAction::*;
@@ -5976,7 +5994,7 @@ mod tests {
         );
         assert_eq!(
             plan_devserver(Chan, Option::None),
-            Ok(DevPlan::Foreground(Chan))
+            Ok(DevPlan::ChanVerb(Start))
         );
 
         // `none` (foreground) rejects every action verb.
@@ -5987,9 +6005,8 @@ mod tests {
             );
         }
 
-        // `chan` (foreground) takes management verbs but not `--start`.
-        assert!(plan_devserver(Chan, Some(Start)).is_err());
-        for a in [Stop, Restart, Status, Join] {
+        // `chan` starts/manages the portable background daemon.
+        for a in [Start, Stop, Restart, Status, Join] {
             assert_eq!(plan_devserver(Chan, Some(a)), Ok(DevPlan::ChanVerb(a)));
         }
 
@@ -6009,19 +6026,18 @@ mod tests {
     }
 
     /// `--service=auto` resolves per-OS: an action verb picks the OS supervisor
-    /// (systemd/launchd/chan), no action verb runs the foreground server, an
-    /// unrecognized OS still runs bare foreground but errors on an action verb,
-    /// and the Linux systemd pick is gated on systemd actually being the init.
+    /// (systemd/launchd/chan), no action verb runs the foreground server on
+    /// every OS, and the Linux systemd pick is gated on systemd actually being
+    /// the init.
     #[test]
     fn resolve_auto_matrix() {
         use ServiceKind::{Chan, Launchd, Systemd};
 
-        // No action verb: always foreground. `None` (unsupervised) on
-        // Linux/macOS/unknown, `Chan` (the foreground daemon) on Windows.
+        // No action verb: always plain foreground.
         assert_eq!(resolve_auto("linux", false), Ok(ServiceKind::None));
         assert_eq!(resolve_auto("macos", false), Ok(ServiceKind::None));
         assert_eq!(resolve_auto("plan9", false), Ok(ServiceKind::None));
-        assert_eq!(resolve_auto("windows", false), Ok(Chan));
+        assert_eq!(resolve_auto("windows", false), Ok(ServiceKind::None));
 
         // An action verb selects the OS supervisor.
         assert_eq!(resolve_auto("linux", true), Ok(Systemd));

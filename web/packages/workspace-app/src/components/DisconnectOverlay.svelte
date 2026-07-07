@@ -28,19 +28,41 @@
   const canRecover = isTauriDesktop() && windowLibraryId() !== "local";
   let reconnectBtn: HTMLButtonElement | null = $state(null);
   let abandonBtn: HTMLButtonElement | null = $state(null);
+  let pendingAction = $state<"reconnect" | "abandon" | null>(null);
+  let recoveryError = $state<string | null>(null);
+
+  function errorText(e: unknown): string {
+    return e instanceof Error ? e.message : String(e);
+  }
+
+  async function runRecovery(
+    action: "reconnect" | "abandon",
+    fn: () => Promise<void>,
+  ): Promise<void> {
+    if (pendingAction !== null) return;
+    pendingAction = action;
+    recoveryError = null;
+    try {
+      await fn();
+    } catch (e) {
+      recoveryError = errorText(e);
+    } finally {
+      pendingAction = null;
+    }
+  }
 
   // Reconnect: ask the desktop to force-close the dead control terminal and
-  // re-run the connect flow. Best-effort; a failed/inert IPC just leaves the
-  // overlay (the auto-reconnect loop keeps trying underneath).
+  // re-run the connect flow. Failures stay visible so the user can distinguish a
+  // live retry from an IPC/ACL refusal.
   function reconnect(): void {
-    void reconnectDevserverForWindow();
+    void runRecovery("reconnect", reconnectDevserverForWindow);
   }
 
   // Abandon: ask the desktop to disconnect this window's devserver. The window
-  // closes async via the watcher; best-effort, so a failed/inert IPC just leaves
-  // the overlay (the auto-reconnect loop keeps trying underneath).
+  // closes async via the watcher. Failures stay visible instead of silently
+  // leaving the overlay in the same state.
   function abandon(): void {
-    void abandonDevserverForWindow();
+    void runRecovery("abandon", abandonDevserverForWindow);
   }
 
   /// Show the overlay only AFTER the watcher channel has been open
@@ -79,6 +101,8 @@
     if (ui.ws === "open") {
       hasBeenOpen = true;
       visible = false;
+      pendingAction = null;
+      recoveryError = null;
       return;
     }
     if (!hasBeenOpen) {
@@ -176,13 +200,26 @@
       <div class="spinner" aria-hidden="true"></div>
       <div class="title">{message}</div>
       <div class="meta" aria-live="polite">{meta}</div>
+      {#if recoveryError}
+        <div class="error" role="alert">{recoveryError}</div>
+      {/if}
       {#if canRecover}
         <div class="actions">
-          <button class="reconnect" bind:this={reconnectBtn} onclick={reconnect}>
-            Reconnect
+          <button
+            class="reconnect"
+            bind:this={reconnectBtn}
+            disabled={pendingAction !== null}
+            onclick={reconnect}
+          >
+            {pendingAction === "reconnect" ? "Reconnecting..." : "Reconnect"}
           </button>
-          <button class="abandon" bind:this={abandonBtn} onclick={abandon}>
-            Abandon
+          <button
+            class="abandon"
+            bind:this={abandonBtn}
+            disabled={pendingAction !== null}
+            onclick={abandon}
+          >
+            {pendingAction === "abandon" ? "Abandoning..." : "Abandon"}
           </button>
         </div>
       {/if}
@@ -250,6 +287,15 @@
     color: var(--text-secondary);
     font-variant-numeric: tabular-nums;
   }
+  .error {
+    padding: 6px 8px;
+    border: 1px solid color-mix(in srgb, var(--danger, #ef4444) 45%, transparent);
+    border-radius: 6px;
+    background: color-mix(in srgb, var(--danger, #ef4444) 12%, transparent);
+    color: var(--danger, #ef4444);
+    font-size: 13px;
+    line-height: 1.35;
+  }
   .actions {
     display: flex;
     gap: 10px;
@@ -281,5 +327,9 @@
   .abandon:hover {
     border-color: var(--danger);
     color: var(--danger);
+  }
+  .actions button:disabled {
+    cursor: wait;
+    opacity: 0.62;
   }
 </style>

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
 import overlay from "./DisconnectOverlay.svelte?raw";
+import desktop from "../api/desktop.ts?raw";
 
 // The disconnect overlay is a reconnecting status plus recovery actions on a
 // devserver-backed desktop window: a primary Reconnect (force-close the dead
@@ -18,11 +19,30 @@ describe("DisconnectOverlay", () => {
     );
     // Both recovery buttons render together under the same desktop gate.
     expect(overlay).toMatch(
-      /\{#if canRecover\}[\s\S]{1,300}onclick=\{reconnect\}[\s\S]{1,200}onclick=\{abandon\}/,
+      /\{#if canRecover\}[\s\S]*onclick=\{reconnect\}[\s\S]*onclick=\{abandon\}/,
     );
-    // Each button invokes its own desktop IPC wrapper (best-effort).
-    expect(overlay).toMatch(/reconnectDevserverForWindow\(\)/);
-    expect(overlay).toMatch(/abandonDevserverForWindow\(\)/);
+    // Each button invokes its own desktop IPC wrapper through the shared
+    // pending/error path.
+    expect(overlay).toMatch(/runRecovery\("reconnect", reconnectDevserverForWindow\)/);
+    expect(overlay).toMatch(/runRecovery\("abandon", abandonDevserverForWindow\)/);
+  });
+
+  test("recovery actions expose pending state and visible IPC errors", () => {
+    expect(overlay).toMatch(/let pendingAction = \$state<"reconnect" \| "abandon" \| null>/);
+    expect(overlay).toMatch(/let recoveryError = \$state<string \| null>/);
+    expect(overlay).toMatch(/disabled=\{pendingAction !== null\}/);
+    expect(overlay).toMatch(/\{pendingAction === "reconnect" \? "Reconnecting\.\.\." : "Reconnect"\}/);
+    expect(overlay).toMatch(/\{#if recoveryError\}[\s\S]*role="alert"[\s\S]*\{recoveryError\}/);
+  });
+
+  test("desktop recovery IPC wrappers throw after logging failures", () => {
+    expect(desktop).toMatch(/throw new Error\("not running under Tauri"\)/);
+    expect(desktop).toMatch(
+      /abandonDevserverForWindow[\s\S]*catch \(err\)[\s\S]*console\.warn[\s\S]*throw err;/,
+    );
+    expect(desktop).toMatch(
+      /reconnectDevserverForWindow[\s\S]*catch \(err\)[\s\S]*console\.warn[\s\S]*throw err;/,
+    );
   });
 
   test("removes the standing subline (Q7=b: everywhere)", () => {

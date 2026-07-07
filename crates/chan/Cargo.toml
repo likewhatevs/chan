@@ -68,6 +68,7 @@ serde_json = { workspace = true }
 toml = { workspace = true }
 reqwest = { workspace = true, features = ["stream"] }
 sha2 = { workspace = true }
+rustix = { workspace = true }
 
 # Archive extraction for the upgrade flow. Published standalone CLI
 # releases ship as `.tar.gz` on Linux and macOS.

@@ -67,10 +67,39 @@ function reconcilePending(): void {
   reconcile(current);
 }
 
+function ensureWindowFeed(): void {
+  if (unwatch) return;
+  try {
+    unwatch = backend.watchWindows((set) => {
+      library.windows = set.windows;
+      library.leaders = set.leaders ?? {};
+      // On a self-managed surface, reconcile the window.open handle map against
+      // the feed (close handles for discarded records, flag orphans). Inert on
+      // desktop (bridge-driven, no browser-origin records) and in the demo.
+      if (selfManagedWindows) reconcileWindows(set);
+      // The feed also fires on workspace mount/unmount (chan open / on / off)
+      // and on a devserver connect/disconnect (its windows enter/leave + its
+      // served-workspace rows merge in/out, and its `connected` flag flips), so
+      // re-fetch both registries to reflect the new state live.
+      void refreshWorkspacesLive();
+      void refreshDevserversLive();
+    });
+  } catch {
+    // The window feed is best-effort: a host without WebSocket or a failed
+    // connection must not break loading the registries.
+  }
+  installVisibilityResync();
+  startWorkspacePolling();
+}
+
 /** Load both registries and subscribe to the window feed (idempotent watch). */
 export async function loadLibrary(): Promise<void> {
   library.loading = true;
   library.error = null;
+  // Start the window feed before registry restoration. Local terminal creation
+  // uses the window API and should remain responsive while workspace listing is
+  // slow or rebuilding.
+  ensureWindowFeed();
   try {
     const [workspaces, devservers] = await Promise.all([
       backend.listWorkspaces(),
@@ -86,32 +115,6 @@ export async function loadLibrary(): Promise<void> {
     library.error = errorText(e);
   } finally {
     library.loading = false;
-  }
-  if (!unwatch) {
-    try {
-      unwatch = backend.watchWindows((set) => {
-        library.windows = set.windows;
-        library.leaders = set.leaders ?? {};
-        // On a self-managed surface, reconcile the window.open handle map against
-        // the feed (close handles for discarded records, flag orphans). Inert on
-        // desktop (bridge-driven, no browser-origin records) and in the demo.
-        if (selfManagedWindows) reconcileWindows(set);
-        // The feed also fires on workspace mount/unmount (chan open / on / off)
-        // and on a devserver connect/disconnect (its windows enter/leave + its
-        // served-workspace rows merge in/out, and its `connected` flag flips),
-        // so re-fetch both registries to reflect the new state live — no manual
-        // reload, even when the change is out-of-band (desktop menu / CLI /
-        // another launcher). Each is coalesced so a burst of window pushes
-        // collapses to at most one extra GET apiece.
-        void refreshWorkspacesLive();
-        void refreshDevserversLive();
-      });
-    } catch {
-      // The window feed is best-effort: a host without WebSocket or a failed
-      // connection must not break loading the registries.
-    }
-    installVisibilityResync();
-    startWorkspacePolling();
   }
 }
 

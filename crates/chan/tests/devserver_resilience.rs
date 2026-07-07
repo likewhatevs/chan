@@ -4,8 +4,8 @@
 //! drives the whole stack at the process boundary the way an operator and the
 //! desktop client do.
 //!
-//! Each test runs in a sandbox: `HOME` + `XDG_RUNTIME_DIR` point at fresh
-//! tempdirs, so the entire `~/.chan` library (workspace registry, devserver
+//! Each test runs in a sandbox: `CHAN_HOME`, `HOME`, and `XDG_RUNTIME_DIR` point
+//! at fresh tempdirs, so the entire chan library (workspace registry, devserver
 //! config, per-uid discovery socket) is isolated from the developer's real
 //! state and from other tests. `CHAN_NO_DESKTOP_HANDOFF` +
 //! `CHAN_NO_DEVSERVER_HANDOFF` keep a `chan open` standalone instead of
@@ -46,6 +46,7 @@ const EXIT_BUDGET: Duration = Duration::from_secs(12);
 /// Per-test sandbox: a redirected `HOME` and `XDG_RUNTIME_DIR`, plus a scratch
 /// area for workspace roots and pid files. Dropping it removes everything.
 struct Sandbox {
+    chan_home: TempDir,
     home: TempDir,
     runtime: TempDir,
     scratch: TempDir,
@@ -54,6 +55,7 @@ struct Sandbox {
 impl Sandbox {
     fn new() -> Self {
         Self {
+            chan_home: tempfile::tempdir().expect("chan home tempdir"),
             home: tempfile::tempdir().expect("home tempdir"),
             runtime: tempfile::tempdir().expect("runtime tempdir"),
             scratch: tempfile::tempdir().expect("scratch tempdir"),
@@ -72,7 +74,8 @@ impl Sandbox {
     /// inside a chan terminal doesn't accidentally drive handoff.
     fn command(&self) -> Command {
         let mut cmd = Command::new(CHAN);
-        cmd.env("HOME", self.home.path())
+        cmd.env("CHAN_HOME", self.chan_home.path())
+            .env("HOME", self.home.path())
             .env("XDG_RUNTIME_DIR", self.runtime.path())
             .env("TMPDIR", self.runtime.path())
             .env("CHAN_NO_DESKTOP_HANDOFF", "1")
@@ -286,6 +289,38 @@ async fn wait_exit(server: &mut Server, timeout: Duration) -> Option<(ExitStatus
     }
 }
 
+fn assert_output_ok(out: std::process::Output, label: &str) -> (String, String) {
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(
+        out.status.success(),
+        "{label} failed: status={:?}\nstdout={stdout}\nstderr={stderr}",
+        out.status
+    );
+    (stdout, stderr)
+}
+
+fn daemon_record_path(sandbox: &Sandbox) -> std::path::PathBuf {
+    sandbox
+        .chan_home
+        .path()
+        .join("devserver")
+        .join("daemon.json")
+}
+
+fn read_daemon_record(sandbox: &Sandbox) -> serde_json::Value {
+    let path = daemon_record_path(sandbox);
+    let text =
+        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+    serde_json::from_str(&text).expect("daemon record json")
+}
+
+fn daemon_pid(sandbox: &Sandbox) -> u32 {
+    read_daemon_record(sandbox)["pid"]
+        .as_u64()
+        .expect("pid field") as u32
+}
+
 // ---------------------------------------------------------------------------
 // Devserver management API (a thin client over the spawned binary).
 // ---------------------------------------------------------------------------
@@ -309,6 +344,24 @@ async fn wait_devserver_up(client: &reqwest::Client, addr: SocketAddr) {
         }
         if Instant::now() >= deadline {
             panic!("devserver /info never came up at {addr}");
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+async fn wait_devserver_down(client: &reqwest::Client, addr: SocketAddr) -> bool {
+    let url = format!("http://{addr}/api/devserver/info");
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        let down = match client.get(&url).send().await {
+            Ok(resp) => !resp.status().is_success(),
+            Err(_) => true,
+        };
+        if down {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
@@ -515,6 +568,205 @@ async fn devserver_sigterm_exits_clean() {
         "devserver SIGTERM exit not clean: {status:?}"
     );
     assert!(elapsed < EXIT_BUDGET, "devserver SIGTERM took {elapsed:?}");
+}
+
+/// The portable `--service=chan` backend starts a detached daemon, reports
+/// status from its pidfile, lets a joiner detach without stopping it, restarts
+/// onto a new port, and stops idempotently.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn chan_service_start_status_join_restart_stop() {
+    let sandbox = Sandbox::new();
+    let client = http();
+    let port = free_port();
+    let addr: SocketAddr = format!("127.0.0.1:{port}").parse().unwrap();
+
+    let out = sandbox
+        .command()
+        .arg("devserver")
+        .arg("--service=chan")
+        .args(["--bind", "127.0.0.1"])
+        .args(["--port", &port.to_string()])
+        .output()
+        .expect("start chan service");
+    let (stdout, stderr) = assert_output_ok(out, "chan service start");
+    assert!(
+        stdout.contains("CHAN_DEVSERVER_TOKEN="),
+        "start must surface the token marker: stdout={stdout:?} stderr={stderr:?}"
+    );
+    wait_devserver_up(&client, addr).await;
+    let first_pid = daemon_pid(&sandbox);
+    assert!(pid_alive(first_pid), "daemon pid {first_pid} should run");
+
+    let out = sandbox
+        .command()
+        .arg("devserver")
+        .arg("--service=chan")
+        .arg("--status")
+        .output()
+        .expect("status chan service");
+    let (stdout, _stderr) = assert_output_ok(out, "chan service status");
+    assert!(stdout.contains("running"), "status output: {stdout}");
+    assert!(
+        stdout.contains(&port.to_string()),
+        "status output: {stdout}"
+    );
+
+    let mut join_child = sandbox
+        .command()
+        .arg("devserver")
+        .arg("--service=chan")
+        .arg("--join")
+        .args(["--bind", "127.0.0.1"])
+        .args(["--port", &port.to_string()])
+        .spawn()
+        .expect("join chan service");
+    let join_out = Transcript::capture(&mut join_child);
+    let mut join = Server {
+        child: join_child,
+        out: join_out,
+    };
+    join.out
+        .wait_for(
+            "attached to the running self-managed daemon",
+            Duration::from_secs(15),
+        )
+        .await
+        .unwrap_or_else(|| panic!("join never attached:\n{}", join.out.dump()));
+    send_signal(join.pid(), "INT");
+    let (status, _elapsed) = wait_exit(&mut join, EXIT_BUDGET)
+        .await
+        .unwrap_or_else(|| panic!("join did not detach:\n{}", join.out.dump()));
+    assert!(status.success(), "join detach exit not clean: {status:?}");
+    wait_devserver_up(&client, addr).await;
+    assert!(
+        pid_alive(first_pid),
+        "daemon pid {first_pid} should survive join detach"
+    );
+
+    let restart_port = free_port();
+    let restart_addr: SocketAddr = format!("127.0.0.1:{restart_port}").parse().unwrap();
+    let out = sandbox
+        .command()
+        .arg("devserver")
+        .arg("--service=chan")
+        .arg("--restart")
+        .args(["--bind", "127.0.0.1"])
+        .args(["--port", &restart_port.to_string()])
+        .output()
+        .expect("restart chan service");
+    let (_stdout, _stderr) = assert_output_ok(out, "chan service restart");
+    assert!(
+        wait_devserver_down(&client, addr).await,
+        "old daemon address {addr} still answered after restart"
+    );
+    wait_devserver_up(&client, restart_addr).await;
+    let restarted_pid = daemon_pid(&sandbox);
+    assert!(
+        pid_alive(restarted_pid),
+        "restarted daemon pid {restarted_pid} should run"
+    );
+
+    let out = sandbox
+        .command()
+        .arg("devserver")
+        .arg("--service=chan")
+        .arg("--stop")
+        .output()
+        .expect("stop chan service");
+    let (_stdout, _stderr) = assert_output_ok(out, "chan service stop");
+    assert!(
+        wait_devserver_down(&client, restart_addr).await,
+        "daemon still answered after stop"
+    );
+
+    let out = sandbox
+        .command()
+        .arg("devserver")
+        .arg("--service=chan")
+        .arg("--status")
+        .output()
+        .expect("status stopped chan service");
+    let (stdout, _stderr) = assert_output_ok(out, "chan service stopped status");
+    assert!(stdout.contains("not running"), "status output: {stdout}");
+}
+
+/// Re-running start against the same bind returns successfully and leaves the
+/// original daemon in place.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn chan_service_start_is_idempotent() {
+    let sandbox = Sandbox::new();
+    let port = free_port();
+
+    let out = sandbox
+        .command()
+        .arg("devserver")
+        .arg("--service=chan")
+        .args(["--bind", "127.0.0.1"])
+        .args(["--port", &port.to_string()])
+        .output()
+        .expect("first chan service start");
+    let (_stdout, _stderr) = assert_output_ok(out, "first chan service start");
+    let first_pid = daemon_pid(&sandbox);
+
+    let out = sandbox
+        .command()
+        .arg("devserver")
+        .arg("--service=chan")
+        .args(["--bind", "127.0.0.1"])
+        .args(["--port", &port.to_string()])
+        .output()
+        .expect("second chan service start");
+    let (_stdout, stderr) = assert_output_ok(out, "second chan service start");
+    let second_pid = daemon_pid(&sandbox);
+    assert_eq!(first_pid, second_pid, "idempotent start must keep pid");
+    assert!(
+        stderr.contains("already running"),
+        "second start should report idempotency: {stderr}"
+    );
+
+    let out = sandbox
+        .command()
+        .arg("devserver")
+        .arg("--service=chan")
+        .arg("--stop")
+        .output()
+        .expect("stop chan service");
+    let (_stdout, _stderr) = assert_output_ok(out, "stop chan service");
+}
+
+/// A leaked pidfile without a held daemon flock is stale and must be cleared
+/// instead of reported as running or signalled.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn chan_service_status_clears_stale_pidfile() {
+    let sandbox = Sandbox::new();
+    let record_path = daemon_record_path(&sandbox);
+    std::fs::create_dir_all(record_path.parent().unwrap()).unwrap();
+    std::fs::write(
+        &record_path,
+        serde_json::json!({
+            "pid": 999999999u32,
+            "creation_time": 0u64,
+            "addr": "127.0.0.1:8787",
+            "started_at": "2026-01-01T00:00:00Z"
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    let out = sandbox
+        .command()
+        .arg("devserver")
+        .arg("--service=chan")
+        .arg("--status")
+        .output()
+        .expect("status stale chan service");
+    let (stdout, _stderr) = assert_output_ok(out, "status stale chan service");
+    assert!(stdout.contains("not running"), "status output: {stdout}");
+    assert!(
+        !record_path.exists(),
+        "status should remove stale pidfile {}",
+        record_path.display()
+    );
 }
 
 /// A devserver with a live PTY on a mounted workspace must leave no orphan

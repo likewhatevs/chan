@@ -457,7 +457,7 @@ describe("Pane side flip", () => {
       expect(paneEl?.classList.contains("sideFlipHorizontal")).toBe(true);
       expect(paneEl?.classList.contains("sideFlipVertical")).toBe(false);
       expect(paneEl?.style.getPropertyValue("--pane-side-flip-start")).toContain(
-        "rotateX(",
+        "rotateX(-180deg)",
       );
     } finally {
       HTMLElement.prototype.getBoundingClientRect = originalRect;
@@ -470,6 +470,9 @@ describe("Pane side flip", () => {
     expect(paneSource).toMatch(/return Math\.random\(\) < 0\.5 \? "vertical" : "horizontal"/);
     expect(paneSource).toMatch(/axis === "vertical" \? "rotateY" : "rotateX"/);
     expect(paneSource).toMatch(/class:sideFlipActive=\{sideFlipActive\}/);
+    expect(paneSource).toContain('sideFlipStartTransform = `${rotate}(-180deg)`;');
+    expect(paneSource).toContain('sideFlipBackTransform = `${rotate}(-180deg)`;');
+    expect(paneSource).not.toMatch(/from === "a" && to === "b"/);
     expect(paneSource).toContain('class="pane-card-inner"');
     expect(paneSource).toMatch(/backface-visibility: hidden/);
     expect(paneSource).toMatch(/@keyframes pane-side-flip/);

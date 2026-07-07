@@ -5,7 +5,7 @@
 // payload to the handler, returning the unlisten handle.
 
 import { describe, it, expect, afterEach, vi } from "vitest";
-import { hasTauriEvents, onTauriEvent } from "./desktop";
+import { hasTauriEvents, onTauriEvent, restartDesktopAfterUpdate } from "./desktop";
 
 type W = Window & typeof globalThis & { __TAURI__?: unknown };
 
@@ -74,5 +74,19 @@ describe("onTauriEvent", () => {
     expect(typeof unlisten).toBe("function");
     unlisten(); // must not throw
     warn.mockRestore();
+  });
+});
+
+describe("restartDesktopAfterUpdate", () => {
+  it("invokes the narrow restart app command", async () => {
+    const invoke = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(window, "__TAURI__", {
+      value: { core: { invoke } },
+      configurable: true,
+    });
+
+    await restartDesktopAfterUpdate();
+
+    expect(invoke).toHaveBeenCalledWith("restart_desktop_after_update", undefined);
   });
 });

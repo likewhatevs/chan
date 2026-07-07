@@ -40,6 +40,14 @@ use window_watcher_wiring::DevserverWatcherStop;
 
 const CHAN_BUSY_CHANGED: &str = "chan-busy";
 const SYSTEM_NOTICE: &str = "system-notice";
+#[cfg(target_os = "macos")]
+const DESKTOP_UPDATE_READY_EVENT: &str = "desktop-update-ready";
+
+#[cfg(any(target_os = "macos", test))]
+#[derive(Debug, Clone, Serialize)]
+struct DesktopUpdateReadyPayload {
+    version: String,
+}
 
 /// Process-wide state. Shared via `Arc` because Tauri commands and
 /// background runtime owners need the same state handle.
@@ -739,18 +747,25 @@ impl DevserverFeed {
         })
     }
 
-    /// The devserver id owning `library_id`, learned from the live window
-    /// snapshots (each devserver's records carry its remote `library_id`). The
-    /// reverse of [`library_id_of`]; the close handler uses it to find which
-    /// devserver's watcher view to bury a `lib-<hex>::…` window through.
+    /// The devserver id owning `library_id`, learned from live window snapshots
+    /// or the cached library id seeded at connect. The reverse of
+    /// [`library_id_of`]; window-label actions use it so a disconnect overlay
+    /// still resolves after the live snapshot is hidden or retired.
     fn devserver_id_for_library(&self, library_id: &str) -> Option<String> {
-        self.windows.lock().unwrap().iter().find_map(|(id, snap)| {
+        if let Some(id) = self.windows.lock().unwrap().iter().find_map(|(id, snap)| {
             snap.lock()
                 .unwrap()
                 .iter()
                 .any(|r| r.library_id == library_id)
                 .then(|| id.clone())
-        })
+        }) {
+            return Some(id);
+        }
+        self.library_ids
+            .lock()
+            .unwrap()
+            .iter()
+            .find_map(|(id, cached)| (cached == library_id).then(|| id.clone()))
     }
 }
 
@@ -2808,22 +2823,22 @@ async fn close_workspace_from_handoff(
 /// the multi-MB download can't be awaited from the CLI socket round-trip);
 /// when it finishes we re-affirm the `~/.local/bin/{chan,cs}` shims and
 /// relaunch into the new version.
-/// Windows: `chan upgrade` is not wired over the hand-off this phase (no Windows
-/// updater feed), and no Windows `chan` sends an `Upgrade` request, so this is
-/// effectively dead — it exists only so the (now cross-platform) hand-off
-/// listener's `Upgrade` arm compiles. Returns a clear error rather than
-/// pretending to upgrade.
-#[cfg(windows)]
+/// Desktop updater payloads are currently signed and published only for macOS.
+/// Windows and Linux return a clear error rather than pretending to upgrade.
+#[cfg(not(target_os = "macos"))]
 async fn desktop_handle_upgrade(
     _app: tauri::AppHandle,
     _check_only: bool,
 ) -> chan_server::handoff::Response {
     chan_server::handoff::Response::Error {
-        message: "desktop upgrade over hand-off is not supported on Windows yet".into(),
+        message: format!(
+            "desktop upgrade over hand-off is not supported on {}",
+            std::env::consts::OS
+        ),
     }
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "macos")]
 async fn desktop_handle_upgrade(
     app: tauri::AppHandle,
     check_only: bool,
@@ -2902,11 +2917,10 @@ async fn desktop_handle_upgrade(
 ///
 /// Opt-out mirrors the CLI's `CHAN_UPDATE_CHECK=0` (`chan::update` `ENV_DISABLE`)
 /// so one env silences both the CLI banner probe and this desktop check. The new
-/// bundle is downloaded + installed in the background, then the user is asked
-/// whether to relaunch now (the bundle applies on the next launch either way, so
-/// "Later" is non-destructive). Windows has no updater feed (see
-/// `desktop_handle_upgrade`), so this is a no-op there.
-#[cfg(unix)]
+/// bundle is downloaded + installed in the background, then the launcher is
+/// notified to show its update-ready dialog. Only macOS has a signed desktop
+/// updater payload/feed today; non-macOS platforms are explicit no-ops.
+#[cfg(target_os = "macos")]
 fn spawn_launch_update_check(app: tauri::AppHandle) {
     use tauri_plugin_updater::UpdaterExt;
 
@@ -2943,8 +2957,8 @@ fn spawn_launch_update_check(app: tauri::AppHandle) {
                                 tracing::warn!(error = %e, "re-affirming bin shims after update failed")
                             }
                         }
-                        tracing::info!(%version, "on-launch update installed; prompting to restart");
-                        prompt_restart_for_update(&app, &version);
+                        tracing::info!(%version, "on-launch update installed; notifying launcher");
+                        notify_desktop_update_ready(&app, &version);
                     }
                     Err(e) => {
                         tracing::warn!(error = %e, "on-launch update download/install failed");
@@ -2957,37 +2971,49 @@ fn spawn_launch_update_check(app: tauri::AppHandle) {
     });
 }
 
-#[cfg(windows)]
+#[cfg(not(target_os = "macos"))]
 fn spawn_launch_update_check(_app: tauri::AppHandle) {
-    // No Windows updater feed (see `desktop_handle_upgrade`); nothing to check.
+    // No signed desktop updater feed for this platform; nothing to check.
 }
 
-/// After an on-launch update installs, ask whether to relaunch now. The new
-/// bundle is already on disk, so "Later" simply applies it on the next launch;
-/// "Restart" relaunches into the new version immediately. Tauri dialogs must run
-/// on the main thread.
-#[cfg(unix)]
-fn prompt_restart_for_update(app: &tauri::AppHandle, version: &str) {
-    let app_owned = app.clone();
-    let message = format!(
-        "chan-desktop {version} has been downloaded. Restart now to use it, \
-         or it will apply the next time you open chan-desktop."
-    );
-    // `native_dialog::confirm` handles the main-thread hop; on macOS it routes
-    // Return to the "Restart" default (the prompt can fire while chan is not
-    // frontmost — see native_dialog).
-    native_dialog::confirm(
-        app,
-        "Update ready",
-        &message,
-        "Restart",
-        "Later",
-        move |restart| {
-            if restart {
-                app_owned.restart();
-            }
-        },
-    );
+/// After an on-launch update installs, bring the launcher forward and let its
+/// in-window update dialog ask whether to relaunch now. The new bundle is
+/// already on disk, so dismissing the dialog simply applies it on the next
+/// launch.
+#[cfg(target_os = "macos")]
+fn notify_desktop_update_ready(app: &tauri::AppHandle, version: &str) {
+    let _ = show_window(app, "main");
+    let payload = DesktopUpdateReadyPayload {
+        version: version.to_string(),
+    };
+    let labels: Vec<String> = app
+        .webview_windows()
+        .keys()
+        .filter(|label| label.as_str() == "main" || label.starts_with("main-"))
+        .cloned()
+        .collect();
+    if labels.is_empty() {
+        let _ = app.emit(DESKTOP_UPDATE_READY_EVENT, payload);
+        return;
+    }
+    for label in labels {
+        let _ = app.emit_to(label.as_str(), DESKTOP_UPDATE_READY_EVENT, payload.clone());
+    }
+}
+
+#[tauri::command]
+#[cfg(target_os = "macos")]
+fn restart_desktop_after_update(app: tauri::AppHandle) {
+    app.restart();
+}
+
+#[tauri::command]
+#[cfg(not(target_os = "macos"))]
+fn restart_desktop_after_update() -> Result<(), String> {
+    Err(format!(
+        "desktop self-upgrade is not supported on {}",
+        std::env::consts::OS
+    ))
 }
 
 /// Result of a connecting-screen reachability probe. `reachable` is
@@ -3229,6 +3255,18 @@ fn show_window(app: &tauri::AppHandle, label: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn devserver_library_id_from_window_label(label: &str) -> Option<&str> {
+    label
+        .split_once("::")
+        .map(|(library_id, _)| library_id)
+        .filter(|library_id| library_id.starts_with("lib-"))
+}
+
+fn devserver_id_for_window_label(feed: &DevserverFeed, label: &str) -> Option<String> {
+    let library_id = devserver_library_id_from_window_label(label)?;
+    feed.devserver_id_for_library(library_id)
+}
+
 /// Reload the calling webview window. Backs the SPA's tab
 /// context-menu "Reload" entry AND the
 /// `Cmd+R` accelerator wired in `KEY_BRIDGE_JS`. The accelerator
@@ -3382,31 +3420,18 @@ fn hide_window_from_close_confirm(app: tauri::AppHandle, window: tauri::WebviewW
 
 /// Abandon the devserver backing a workspace window (the disconnect overlay's
 /// Abandon button). A devserver window's label is `<library_id>::<window_id>`;
-/// resolve the owning devserver from that library id via the cached
-/// `library_id_of` over the CONNECTED devservers -- NOT `devserver_id_for_library`,
-/// whose live-snapshot read is empty exactly when the overlay shows -- then reveal
-/// the launcher (it hides, not destroys) and tear the devserver down DIRECTLY in
-/// Rust, including the control terminal, so Abandon works even when the launcher
-/// is not listening for the event. The `devserver-abandon` event still fires so
-/// the launcher refreshes its row. Inert on a local window, or when no connected
-/// devserver matches (already disconnected -- its windows are already gone).
+/// resolve it through the same cached label lookup Reconnect uses, then reveal
+/// the launcher (it hides, not destroys) and tear the devserver down directly in
+/// Rust, including the control terminal. The `devserver-abandon` event still
+/// fires so the launcher refreshes its row. Inert on a local window, or when no
+/// devserver matches the library.
 #[tauri::command]
 fn abandon_devserver_for_window(
     app: tauri::AppHandle,
     state: State<Arc<AppState>>,
     window: tauri::WebviewWindow,
 ) -> Result<(), String> {
-    let label = window.label();
-    let Some(library_id) = label.split("::").next().filter(|l| l.starts_with("lib-")) else {
-        return Ok(()); // a local window has no devserver to abandon
-    };
-    let cfg = state.store.lock().unwrap().get().map_err(err)?;
-    let devserver_id = cfg
-        .devservers
-        .iter()
-        .filter(|d| state.devservers.is_connected(&d.id))
-        .find(|d| state.devserver_feed.library_id_of(&d.id).as_deref() == Some(library_id))
-        .map(|d| d.id.clone());
+    let devserver_id = devserver_id_for_window_label(&state.devserver_feed, window.label());
     if let Some(id) = devserver_id {
         let _ = show_window(&app, "main");
         // Tear down directly in Rust so Abandon works even when the launcher is
@@ -3421,9 +3446,8 @@ fn abandon_devserver_for_window(
 /// Reconnect the devserver backing a workspace window (the disconnect overlay's
 /// Reconnect button, desktop-only). The devserver is already DISCONNECTED with
 /// its control terminal sitting dead at "process exited", so resolve the owning
-/// devserver from the window's `<library_id>::<window_id>` label WITHOUT the
-/// connected filter Abandon uses (the cached `library_id_of` mapping survives on
-/// the kept feed). Force-close the dead control terminal (clearing the reconnect
+/// devserver from the window's `<library_id>::<window_id>` label through the
+/// cached lookup. Force-close the dead control terminal (clearing the reconnect
 /// block), then run the connect flow, which re-runs the connect script. Inert on
 /// a local window or when no devserver matches the library.
 #[tauri::command]
@@ -3432,17 +3456,7 @@ async fn reconnect_devserver_for_window(
     state: State<'_, Arc<AppState>>,
     window: tauri::WebviewWindow,
 ) -> Result<(), String> {
-    let devserver_id = {
-        let label = window.label();
-        let Some(library_id) = label.split("::").next().filter(|l| l.starts_with("lib-")) else {
-            return Ok(()); // a local window has no devserver to reconnect
-        };
-        let cfg = state.store.lock().unwrap().get().map_err(err)?;
-        cfg.devservers
-            .iter()
-            .find(|d| state.devserver_feed.library_id_of(&d.id).as_deref() == Some(library_id))
-            .map(|d| d.id.clone())
-    };
+    let devserver_id = devserver_id_for_window_label(&state.devserver_feed, window.label());
     if let Some(id) = devserver_id {
         let state_arc = Arc::clone(state.inner());
         // Force-close only a KEPT-DEAD control terminal (clearing the reconnect
@@ -3931,7 +3945,6 @@ fn main() {
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(state)
         .setup(move |app| {
@@ -4334,6 +4347,7 @@ fn main() {
             hide_window_from_close_confirm,
             abandon_devserver_for_window,
             reconnect_devserver_for_window,
+            restart_desktop_after_update,
             download::save_file_to_downloads,
             // Registered on every platform; returns [] off macOS so the
             // SPA's terminal drop handler needs no platform branching.
@@ -6014,6 +6028,49 @@ mod tests {
         assert_eq!(feed.library_id_of("ds-1"), Some("lib-abc123".to_string()));
         // The seed is per-devserver; an unrelated id stays unresolved.
         assert_eq!(feed.library_id_of("ds-2"), None);
+    }
+
+    #[test]
+    fn devserver_window_label_lookup_uses_cached_library_id() {
+        let feed = DevserverFeed::default();
+        feed.seed_library_id("ds-1".to_string(), "lib-fed".to_string());
+
+        assert_eq!(
+            devserver_library_id_from_window_label("lib-fed::w-1"),
+            Some("lib-fed"),
+        );
+        assert_eq!(
+            devserver_id_for_window_label(&feed, "lib-fed::w-1").as_deref(),
+            Some("ds-1"),
+        );
+        assert_eq!(devserver_id_for_window_label(&feed, "local::w-1"), None);
+        assert_eq!(devserver_id_for_window_label(&feed, "lib-fed"), None);
+    }
+
+    #[test]
+    fn desktop_update_ready_payload_serializes_version() {
+        let payload = DesktopUpdateReadyPayload {
+            version: "0.66.0".to_string(),
+        };
+        assert_eq!(
+            serde_json::to_value(payload).expect("payload serializes"),
+            serde_json::json!({ "version": "0.66.0" }),
+        );
+    }
+
+    #[test]
+    fn desktop_update_uses_event_and_narrow_restart_command() {
+        const MAIN_RS: &str = include_str!("main.rs");
+        assert!(
+            MAIN_RS.contains("const DESKTOP_UPDATE_READY_EVENT: &str = \"desktop-update-ready\"")
+        );
+        assert!(MAIN_RS.contains("fn notify_desktop_update_ready"));
+        assert!(MAIN_RS.contains("fn restart_desktop_after_update"));
+        assert!(MAIN_RS.contains("restart_desktop_after_update,"));
+        assert!(
+            !MAIN_RS.contains(concat!("prompt_restart", "_for_update")),
+            "update-ready prompt must not use the native restart alert path",
+        );
     }
 
     #[test]

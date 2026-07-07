@@ -153,10 +153,11 @@
 <style>
   .dotted-surface {
     position: absolute;
+    top: var(--dotted-surface-top, auto);
     left: 0;
     right: 0;
-    bottom: 0;
-    height: clamp(260px, 32%, 380px);
+    bottom: var(--dotted-surface-bottom, 0);
+    height: var(--dotted-surface-height, clamp(260px, 40%, 475px));
     z-index: 0;
     --dotted-surface-dot-rgb: 200, 200, 200;
     --dotted-surface-alpha-base: 0.18;

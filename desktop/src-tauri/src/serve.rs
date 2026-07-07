@@ -2682,6 +2682,8 @@ mod tests {
     const LOCAL_DROP_CAPABILITY_JSON: &str = include_str!("../capabilities/local-drop.json");
     const LAUNCHER_EVENTS_CAPABILITY_JSON: &str =
         include_str!("../capabilities/launcher-events.json");
+    const LAUNCHER_UPDATE_CAPABILITY_JSON: &str =
+        include_str!("../capabilities/launcher-update.json");
     const DEVSERVER_ABANDON_CAPABILITY_JSON: &str =
         include_str!("../capabilities/devserver-abandon.json");
     const APP_PERMISSIONS_TOML: &str = include_str!("../permissions/app.toml");
@@ -3183,6 +3185,10 @@ mod tests {
             perms.iter().any(|p| p == "opener:allow-open-url"),
             "default capability must include opener:allow-open-url: {perms:?}",
         );
+        assert!(
+            perms.iter().all(|p| !p.starts_with("process:")),
+            "default capability must not grant broad process plugin permissions: {perms:?}",
+        );
     }
 
     #[test]
@@ -3236,5 +3242,32 @@ mod tests {
                 "launcher-events must not broaden {forbidden} onto remote content: {perms:?}",
             );
         }
+    }
+
+    #[test]
+    fn launcher_update_capability_grants_only_restart_update_command_to_remote_launcher() {
+        let windows = capability_windows(LAUNCHER_UPDATE_CAPABILITY_JSON);
+        assert!(
+            windows.iter().any(|w| w == "main"),
+            "launcher-update capability must target main: {windows:?}",
+        );
+        assert!(
+            windows.iter().any(|w| w == "main-*"),
+            "launcher-update capability must target additional launchers: {windows:?}",
+        );
+        let remote_urls = capability_remote_urls(LAUNCHER_UPDATE_CAPABILITY_JSON);
+        assert!(
+            remote_urls.iter().any(|u| u == "http://127.0.0.1:*"),
+            "launcher-update must cover the loopback launcher origin: {remote_urls:?}",
+        );
+        let perms = capability_permissions(LAUNCHER_UPDATE_CAPABILITY_JSON);
+        assert_eq!(
+            perms,
+            vec!["allow-restart-desktop-after-update".to_string()],
+            "launcher-update must grant only the narrow restart command: {perms:?}",
+        );
+        let permissions = APP_PERMISSIONS_TOML;
+        assert!(permissions.contains("identifier = \"allow-restart-desktop-after-update\""));
+        assert!(permissions.contains("commands.allow = [\"restart_desktop_after_update\"]"));
     }
 }

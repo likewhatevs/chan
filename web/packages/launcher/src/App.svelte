@@ -3,12 +3,13 @@
   // New/Edit dialog mounted while open. Data loads on mount and the tree stays
   // live through the window-watch subscription.
   import { onMount } from "svelte";
-  import { X } from "lucide-svelte";
+  import { RotateCw, X } from "lucide-svelte";
   import TopBar from "./components/TopBar.svelte";
   import SelectionBar from "./components/SelectionBar.svelte";
   import Library from "./components/Library.svelte";
   import NewWorkspaceDialog from "./components/NewWorkspaceDialog.svelte";
   import ConfirmDialog from "./components/ConfirmDialog.svelte";
+  import Modal from "./components/Modal.svelte";
   import { library, loadLibrary, clearError } from "./state/library.svelte";
   import { dialog } from "./state/dialog.svelte";
   import { confirm } from "./state/confirm.svelte";
@@ -19,9 +20,34 @@
     pruneControlAttention,
     resolvePendingControlAttention,
   } from "./state/controlAttention.svelte";
-  import { onTauriEvent } from "./api/desktop";
+  import { onTauriEvent, restartDesktopAfterUpdate } from "./api/desktop";
   import { applyTheme, reconcileLocalTheme } from "./state/theme.svelte";
   import { readOnly } from "./state/capabilities";
+
+  let updateReadyVersion: string | null = $state(null);
+  let updateRestarting = $state(false);
+  let updateError: string | null = $state(null);
+
+  type DesktopUpdateReadyPayload = {
+    version: string;
+  };
+
+  function onDesktopUpdateReady(payload: DesktopUpdateReadyPayload): void {
+    updateReadyVersion = payload.version;
+    updateRestarting = false;
+    updateError = null;
+  }
+
+  async function restartAfterUpdate(): Promise<void> {
+    updateRestarting = true;
+    updateError = null;
+    try {
+      await restartDesktopAfterUpdate();
+    } catch (e) {
+      updateRestarting = false;
+      updateError = (e as Error).message;
+    }
+  }
 
   onMount(() => {
     applyTheme();
@@ -36,15 +62,23 @@
     // bridge is absent in a browser).
     let unlistenAttention: (() => void) | null = null;
     let unlistenRestored: (() => void) | null = null;
+    let unlistenUpdate: (() => void) | null = null;
     void onTauriEvent("devserver-control-attention", onControlAttentionEvent).then((un) => {
       unlistenAttention = un;
     });
     void onTauriEvent("devserver-control-restored", onControlRestoredEvent).then((un) => {
       unlistenRestored = un;
     });
+    void onTauriEvent<DesktopUpdateReadyPayload>(
+      "desktop-update-ready",
+      onDesktopUpdateReady,
+    ).then((un) => {
+      unlistenUpdate = un;
+    });
     return () => {
       unlistenAttention?.();
       unlistenRestored?.();
+      unlistenUpdate?.();
     };
   });
 
@@ -103,6 +137,36 @@
   <ConfirmDialog />
 {/if}
 
+{#if updateReadyVersion}
+  <Modal title="Update ready" onclose={() => (updateReadyVersion = null)}>
+    <p class="update-copy">
+      chan-desktop {updateReadyVersion} has been downloaded and will apply on the next launch.
+    </p>
+    {#if updateError}
+      <p class="update-error" role="alert">{updateError}</p>
+    {/if}
+    <div class="update-actions">
+      <button
+        class="secondary"
+        type="button"
+        onclick={() => (updateReadyVersion = null)}
+        disabled={updateRestarting}
+      >
+        Later
+      </button>
+      <button
+        class="primary"
+        type="button"
+        onclick={() => void restartAfterUpdate()}
+        disabled={updateRestarting}
+      >
+        <RotateCw size={15} strokeWidth={1.8} aria-hidden="true" />
+        <span>{updateRestarting ? "Restarting..." : "Restart"}</span>
+      </button>
+    </div>
+  </Modal>
+{/if}
+
 <style>
   .content {
     max-width: 44rem;
@@ -152,5 +216,57 @@
 
   .banner-dismiss:hover {
     background: color-mix(in srgb, var(--danger) 22%, transparent);
+  }
+
+  .update-copy {
+    margin: 0;
+    color: var(--text);
+    line-height: 1.45;
+  }
+
+  .update-error {
+    margin: 0.85rem 0 0;
+    padding: 0.55rem 0.65rem;
+    border: 1px solid color-mix(in srgb, var(--danger) 35%, transparent);
+    border-radius: 6px;
+    background: color-mix(in srgb, var(--danger) 12%, transparent);
+    color: var(--danger);
+    font-size: 0.88rem;
+  }
+
+  .update-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.6rem;
+    margin-top: 1.1rem;
+  }
+
+  .update-actions button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.4rem;
+    min-height: 2.1rem;
+    padding: 0 0.85rem;
+    border-radius: 6px;
+    font: inherit;
+    cursor: pointer;
+  }
+
+  .update-actions button:disabled {
+    cursor: progress;
+    opacity: 0.65;
+  }
+
+  .update-actions .secondary {
+    border: 1px solid var(--border);
+    background: var(--bg);
+    color: var(--text-secondary);
+  }
+
+  .update-actions .primary {
+    border: 1px solid color-mix(in srgb, var(--accent) 70%, transparent);
+    background: var(--accent);
+    color: #fff;
   }
 </style>

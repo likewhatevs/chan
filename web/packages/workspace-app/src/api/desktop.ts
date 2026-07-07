@@ -228,10 +228,10 @@ export async function hideWindowFromCloseConfirm(): Promise<void> {
 /// devserver-backed desktop window whose watcher channel has dropped. The desktop
 /// resolves which devserver this window belongs to (from its window label), shows
 /// the launcher, and drives the disconnect; the window then closes async via the
-/// watcher. No-op off-desktop; INERT on a non-loopback devserver window (the IPC
-/// ACL is not granted there) -- both degrade to a silent best-effort no-op.
+/// watcher. Throws on IPC/ACL failure so the reconnect overlay can surface a
+/// visible error instead of leaving the action silent.
 export async function abandonDevserverForWindow(): Promise<void> {
-  if (!isTauriDesktop()) return;
+  if (!isTauriDesktop()) throw new Error("not running under Tauri");
   try {
     await tauriInvoke("abandon_devserver_for_window");
   } catch (err) {
@@ -239,6 +239,7 @@ export async function abandonDevserverForWindow(): Promise<void> {
       "abandonDevserverForWindow: abandon_devserver_for_window IPC failed",
       err,
     );
+    throw err;
   }
 }
 
@@ -246,11 +247,10 @@ export async function abandonDevserverForWindow(): Promise<void> {
 /// force-close the (dead) control terminal and re-run the connect flow. Called
 /// by the disconnect overlay's Reconnect button on a devserver-backed desktop
 /// window. The desktop resolves which devserver this window belongs to (from
-/// its window label). No-op off-desktop; INERT on a non-loopback devserver
-/// window (the IPC ACL is not granted there) -- both degrade to a silent
-/// best-effort no-op.
+/// its window label). Throws on IPC/ACL failure so the reconnect overlay can
+/// surface a visible error instead of leaving the action silent.
 export async function reconnectDevserverForWindow(): Promise<void> {
-  if (!isTauriDesktop()) return;
+  if (!isTauriDesktop()) throw new Error("not running under Tauri");
   try {
     await tauriInvoke("reconnect_devserver_for_window");
   } catch (err) {
@@ -258,6 +258,7 @@ export async function reconnectDevserverForWindow(): Promise<void> {
       "reconnectDevserverForWindow: reconnect_devserver_for_window IPC failed",
       err,
     );
+    throw err;
   }
 }
 
