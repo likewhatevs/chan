@@ -63,7 +63,8 @@
     padding: 0 clamp(16px, 5vw, 80px);
   }
   .welcome-name {
-    width: 100%;
+    width: fit-content;
+    max-width: 100%;
     font-size: 16px;
     color: var(--text);
     opacity: 0.85;
@@ -71,5 +72,10 @@
     text-align: center;
     overflow-wrap: break-word;
     word-break: normal;
+    /* Translucent pill so the label stays readable over the wave dots
+       cresting at the horizon line behind it. */
+    padding: 4px 14px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--bg) 55%, transparent);
   }
 </style>

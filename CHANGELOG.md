@@ -15,6 +15,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **`cs` survives a devserver restart.** A devserver binds control sockets at a stable per-library path that a restarted instance rebinds, so `$CHAN_CONTROL_SOCKET` in already-open shells keeps working instead of failing with a stale-socket error. Shells opened under earlier versions still carry the old per-pid path until respawned.
 - **Restored terminals close cleanly after a devserver restart.** Exiting a shell that survived a restart through the systemd fd store no longer prints `terminal read failed: I/O error (os error 5)`, and the exit reports without a fabricated code 1 (the real status of a reparented shell is unknowable).
 - **The editor tab menu draws a single separator** between Page width and Copy path to file; the page-width row's own bottom border no longer doubles the line.
+- **The empty-pane workspace path stays readable over the waves.** The label sits on a translucent pill, so the dotted wave field cresting behind it no longer blends into the text in dark mode.
 
 ## [v0.66.0] - 2026-07-07
 
