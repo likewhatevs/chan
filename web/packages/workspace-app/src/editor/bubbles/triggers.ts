@@ -24,6 +24,7 @@
 
 import { syntaxTree } from "@codemirror/language";
 import type { EditorState } from "@codemirror/state";
+import { isExcalidrawImageSrc } from "../extensions/image";
 import type { BubbleSpec } from "./types";
 
 const SKIP_INSIDE = new Set<string>([
@@ -352,7 +353,17 @@ function imageUrlAtCaret(
   state: EditorState,
   pos: number,
 ): { from: number; to: number; queryUpToCaret: string } | null {
-  return urlSlotAtCaret(state, pos, "Image");
+  const slot = urlSlotAtCaret(state, pos, "Image");
+  if (!slot) return null;
+  // Excalidraw carve-out: an `.excalidraw` source renders as a static SVG
+  // embed, not a raster image. The raster image bubble cannot preview it
+  // (its <img> can't decode the JSON scene) and would anchor over the
+  // revealed source, so Edit on an excalidraw embed exposes the markdown
+  // with no bubble.
+  if (isExcalidrawImageSrc(state.doc.sliceString(slot.from, slot.to))) {
+    return null;
+  }
+  return slot;
 }
 
 /// Common URL-slot detector for both Link and Image syntax nodes.

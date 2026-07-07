@@ -538,6 +538,7 @@
           getCurrentPath: () => currentPath,
           onImageClick: handleImageClick,
           isDark: () => effectiveHybridSurfaceTheme(surface) === "dark",
+          onDiagramView: (svg) => openDiagramZoom(svg),
         }),
         imageCaretRedirect(),
         // Rich copy / cut lives in the ALWAYS-ON bundle (not the write-side

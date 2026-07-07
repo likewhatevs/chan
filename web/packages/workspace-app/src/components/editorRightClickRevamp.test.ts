@@ -50,6 +50,13 @@ describe("tab-menu foot", () => {
     );
   });
 
+  test("page-width-row draws no separator of its own (single line above Copy path)", () => {
+    // The separator between Page width and Copy path to file is the single
+    // .msep in the markup; a border-bottom on .page-width-row would render
+    // as a second line right under it.
+    expect(editor).not.toMatch(/\.page-width-row \{[^}]*border-bottom/);
+  });
+
   test("Close shows the close-tab chord with a canvas macOS Cmd+W override", () => {
     expect(editor).toMatch(
       /function closeTabMenuChordLabel\(\): string \{[\s\S]{1,220}if \(tab\.mode === "canvas" && currentOS\(\) === "mac"\) return "Cmd\+W";[\s\S]{1,120}return chordLabel\("app\.tab\.close"\);/,

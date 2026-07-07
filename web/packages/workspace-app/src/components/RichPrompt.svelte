@@ -22,17 +22,29 @@
     failPendingPrompt,
     sendCancelToTerminal,
     sendPromptToTerminal,
+    setRichPromptCaret,
+    setRichPromptHeight,
+    tabFocusPulse,
     type TerminalTab,
   } from "../state/tabs.svelte";
   import { api } from "../api/client";
 
-  let { tab }: { tab: TerminalTab } = $props();
+  // `focused` is true only while this bubble's terminal is the active tab
+  // of the active pane. It gates the editor's mount autofocus and the
+  // refocus effect below: the bubble stays mounted while its tab is hidden
+  // (keep-alive, like the terminal body), so an ungated focus would let a
+  // background tab's composer steal the keyboard.
+  let { tab, focused = false }: { tab: TerminalTab; focused?: boolean } =
+    $props();
 
   let rootEl = $state<HTMLDivElement>();
   let editor = $state<Wysiwyg>();
   let content = $state("");
   let loaded = $state(false);
-  let customHeight = $state<number | null>(null);
+  // Seeded from the persisted per-terminal height so a restored bubble
+  // reopens at the size the user left it; drag-resize commits back on end.
+  // svelte-ignore state_referenced_locally
+  let customHeight = $state<number | null>(tab.richPromptHeight ?? null);
   const MIN_PROMPT_HEIGHT = 56;
   let resizing = false;
   let resizeStartY = 0;
@@ -156,7 +168,12 @@
       content = "";
       void flushWrite();
       lastQueued = null;
-      queueMicrotask(() => editor?.focusAt(0));
+      // The cleared composer restarts at offset 0: reset the persisted
+      // caret with it, and only refocus when this terminal is the focused
+      // one - a delivery landing on a background tab's kept-mounted bubble
+      // must not steal the keyboard.
+      setRichPromptCaret(tab, 0, 0);
+      if (focused) queueMicrotask(() => editor?.focusAt(0));
     } else {
       showTransientNote(
         phase === "rejected"
@@ -174,6 +191,22 @@
     } else if (phase === "delivered" || phase === "rejected" || phase === "failed") {
       consumeTerminalPhase(phase);
     }
+  });
+
+  // Pull keyboard focus back into the composer whenever this terminal
+  // becomes the focused tab again (tab switch back, pane focus). The bubble
+  // stays mounted while hidden, so no mount autofocus fires on the way
+  // back; this effect restores focus without touching the editor's
+  // selection, so the caret stays exactly where the user left it. Mirrors
+  // FileEditorTab's focus effect (same pulse + same !focused gates); the
+  // terminal's own pulse effect defers to the bubble while it is open.
+  $effect(() => {
+    if (!focused) return;
+    tabFocusPulse.value;
+    queueMicrotask(() => {
+      if (!focused) return;
+      editor?.focus();
+    });
   });
 
   function recallFromView(view: EditorView): boolean {
@@ -356,6 +389,9 @@
     } catch {
       // capture may already be released; ignore.
     }
+    // Commit the final height once per drag so a reload / cross-window
+    // restore reopens the bubble at this size.
+    if (customHeight !== null) setRichPromptHeight(tab, customHeight);
   }
 
   function dropOrAbandonFromView(view: EditorView): boolean {
@@ -433,7 +469,9 @@
         bind:this={editor}
         bind:value={content}
         currentPath={draftPath}
-        autoFocus={true}
+        autoFocus={focused}
+        initialCaret={tab.richPromptCaret ?? null}
+        onCaretChange={(from, to) => setRichPromptCaret(tab, from, to)}
         extraExtensions={editorExtensions}
         surface="terminal"
         placeholderText=""

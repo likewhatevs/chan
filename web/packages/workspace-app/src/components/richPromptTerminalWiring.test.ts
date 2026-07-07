@@ -72,14 +72,18 @@ describe("TerminalTab Rich Prompt wiring", () => {
     );
   });
 
-  test("mounts <RichPrompt> on the active terminal, passing the tab", () => {
+  test("keeps <RichPrompt> mounted across tab switches, passing tab + focused", () => {
     expect(terminal).toMatch(/import RichPrompt from "\.\/RichPrompt\.svelte"/);
     // The tab is passed so the bubble binds to THIS terminal's per-terminal
     // Drafts-backed draft; visibility is per-terminal (keyed by tab id), not a
-    // window-global flag.
+    // window-global flag. The mount guard is NOT gated on `active`: the bubble
+    // stays mounted like the terminal body (hidden by the root's visibility
+    // flip) so its editor keeps caret/selection/undo across a tab switch, and
+    // `focused` gates autofocus so a hidden bubble never steals the keyboard.
     expect(terminal).toMatch(
-      /\{#if active && isRichPromptVisible\(tab\.id\)\}[\s\S]{1,120}<RichPrompt \{tab\} \/>/,
+      /\{#if isRichPromptVisible\(tab\.id\)\}[\s\S]{1,120}<RichPrompt \{tab\} \{focused\} \/>/,
     );
+    expect(terminal).not.toMatch(/\{#if active && isRichPromptVisible\(tab\.id\)\}/);
   });
 
   test("discards the per-terminal Rich Prompt draft folder on terminal close", () => {

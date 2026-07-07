@@ -177,7 +177,7 @@
     | { type: "resize"; cols: number; rows: number }
     | { type: "resize_other"; cols: number; rows: number }
     | { type: "closed"; reason: CloseReason }
-    | { type: "exit"; code: number }
+    | { type: "exit"; code?: number }
     | { type: "error"; message?: string; reason?: string }
     /// Server-side `dispatch_agent_event` emits this frame rather
     /// than writing the `poke + chord` echo directly to the agent
@@ -961,12 +961,18 @@
         }
       } else if (frame.type === "exit") {
         status = "exited";
-        statusDetail = `exit ${frame.code}`;
+        // A session restored across a server restart has no reapable child,
+        // so its exit frame carries no code.
+        statusDetail = frame.code == null ? "exited" : `exit ${frame.code}`;
         setTerminalQueueDepth(tab, 0);
         failPendingPrompt(tab);
         clearTerminalSession(tab);
         scheduleTerminalSessionSave();
-        term?.writeln(`\r\nprocess exited (${frame.code}); press Ctrl+D to close this tab`);
+        term?.writeln(
+          frame.code == null
+            ? "\r\nprocess exited; press Ctrl+D to close this tab"
+            : `\r\nprocess exited (${frame.code}); press Ctrl+D to close this tab`,
+        );
       } else if (frame.type === "error") {
         const detail = frame.message ?? frame.reason ?? "unknown error";
         statusDetail = detail;
@@ -1953,11 +1959,15 @@
   ></div>
   <!-- Rich Prompt bubble floats over this terminal's bottom (the
        .terminal-tab is the position:absolute context). PER-TERMINAL: mounts
-       only when THIS terminal's bubble is toggled on and the tab is active in
-       its pane, so each terminal shows its own bubble (not a window-global
-       one). Toggled by Cmd+Shift+P / the right-click menu. -->
-  {#if active && isRichPromptVisible(tab.id)}
-    <RichPrompt {tab} />
+       when THIS terminal's bubble is toggled on, so each terminal shows its
+       own bubble (not a window-global one). Deliberately NOT gated on
+       `active`: like the terminal body, the bubble stays mounted across tab
+       switches (the root's visibility flip hides it) so the composer's
+       editor keeps its caret, selection, and undo state. `focused` gates
+       the editor's autofocus/refocus so a hidden terminal's bubble never
+       steals the keyboard. Toggled by Cmd+Shift+P / the right-click menu. -->
+  {#if isRichPromptVisible(tab.id)}
+    <RichPrompt {tab} {focused} />
   {/if}
   <!-- Per-terminal survey overlay: a survey raised on THIS terminal
        (`cs terminal survey --tab-name`) renders anchored over it, keyed by

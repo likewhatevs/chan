@@ -371,6 +371,17 @@ export type TerminalTab = {
   /// Persisted (SerTab.rpd) so a window reload rebinds + the close cleanup
   /// targets the right draft (no leak).
   richPromptDraftPath?: string;
+  /// Rich Prompt composer caret (doc offsets in the draft). The bubble's
+  /// editor pushes updates here on every selection change; the editor that
+  /// mounts next reads it once on first content apply (same restore dance
+  /// as `FileTab.caret`). Persisted (SerTab.rpc) so a reload or a
+  /// cross-window restore reopens the composer with the caret where the
+  /// user left it.
+  richPromptCaret?: { from: number; to: number };
+  /// Rich Prompt bubble height in px from the user's drag-resize; unset is
+  /// the default auto height. Persisted (SerTab.rph) so a restored bubble
+  /// reopens at the size the user left it.
+  richPromptHeight?: number;
   /// Broadcast group label. A group is a plain string, not an allocated
   /// resource: it "exists" iff >=1 terminal references it, and is
   /// implicitly destroyed when the last member closes. Defaults to
@@ -4290,6 +4301,21 @@ export function issueCaretCommand(tab: FileTab, from: number, to: number): void 
 export function clearTabCaretCommand(tab: FileTab): void {
   tab.caretCommand = undefined;
 }
+/// Rich Prompt composer caret mirror. The bubble's editor pushes every
+/// selection change here so the caret survives a bubble remount, a window
+/// reload, and a cross-window restore (serialized as SerTab.rpc alongside
+/// the draft path).
+export function setRichPromptCaret(
+  tab: TerminalTab,
+  from: number,
+  to: number,
+): void {
+  tab.richPromptCaret = { from, to };
+}
+/// Rich Prompt bubble height mirror, committed when a drag-resize ends.
+export function setRichPromptHeight(tab: TerminalTab, height: number): void {
+  tab.richPromptHeight = height;
+}
 export function setTabInspectorOpen(tab: FileTab, open: boolean): void {
   tab.inspectorOpen = open;
 }
@@ -4660,6 +4686,13 @@ type SerTab = {
   /// so a reload rebinds the per-terminal Rich Prompt draft + the close
   /// cleanup deletes the right draft folder. Per-window session payloads only.
   rpd?: string;
+  /// Rich Prompt composer caret as `[from, to]`. Omitted at offset 0 (the
+  /// fresh-composer default). Per-window session payloads only, like `rpd`
+  /// (the caret indexes into the draft the same payload carries).
+  rpc?: [number, number];
+  /// Rich Prompt bubble drag-resized height in px. Omitted at the default
+  /// auto height. Per-window session payloads only.
+  rph?: number;
   /// Rich Prompt in-flight message (id + phase) so a queued message survives a
   /// window reload (GAP 2 / the reload contract): on reattach it is re-proved
   /// against the `session` frame's `queued_prompt_ids` (still queued → re-lock +
@@ -4909,6 +4942,22 @@ function serializeTab(
         : {}),
       ...(opts.terminalSessions && t.richPromptDraftPath
         ? { rpd: t.richPromptDraftPath }
+        : {}),
+      // Rich Prompt composer caret + drag-resized height. The caret is
+      // skipped at offset 0 (the fresh-composer default) so terminal
+      // payloads stay compact, mirroring the file-tab `c` field.
+      ...(opts.terminalSessions &&
+      t.richPromptCaret &&
+      (t.richPromptCaret.from !== 0 || t.richPromptCaret.to !== 0)
+        ? {
+            rpc: [t.richPromptCaret.from, t.richPromptCaret.to] as [
+              number,
+              number,
+            ],
+          }
+        : {}),
+      ...(opts.terminalSessions && t.richPromptHeight && t.richPromptHeight > 0
+        ? { rph: Math.round(t.richPromptHeight) }
         : {}),
       // Persist a QUEUED Rich Prompt message (id + phase) + bubble visibility
       // so it survives a reload (GAP 2). Only "queued" (acked + in the queue)
@@ -5192,6 +5241,9 @@ export async function restoreLayout(
           // from the positional `savedTerm` graft, same as `tsid`. Presence
           // makes `findTeamWorkPendingLead` reopen the dialog post-restore.
           const twk = sertab.twk ?? savedTerm?.twk;
+          // Rich Prompt composer caret + height (session-only, like `rpd`).
+          const rpc = sertab.rpc ?? savedTerm?.rpc;
+          const rph = sertab.rph ?? savedTerm?.rph;
           const tab: TerminalTab = {
             kind: "terminal",
             id: id("term"),
@@ -5212,6 +5264,12 @@ export async function restoreLayout(
                 ? Math.max(0, Math.floor((sertab.tae ?? savedTerm?.tae)!))
                 : undefined,
             richPromptDraftPath: (sertab.rpd ?? savedTerm?.rpd) || undefined,
+            ...(Array.isArray(rpc) && rpc.length === 2
+              ? { richPromptCaret: { from: rpc[0], to: rpc[1] } }
+              : {}),
+            ...(typeof rph === "number" && rph > 0
+              ? { richPromptHeight: rph }
+              : {}),
             ...(pp && (pp.ph === "sent" || pp.ph === "queued")
               ? { pendingPrompt: { id: pp.id, phase: pp.ph } }
               : {}),
@@ -5471,6 +5529,13 @@ export function hydrateTerminalSessionsFromLayout(sessionLayout: SerNode | null)
               : undefined;
         }
         if (savedTerm.rpd) liveTerms[j]!.richPromptDraftPath = savedTerm.rpd;
+        if (savedTerm.rpc) {
+          liveTerms[j]!.richPromptCaret = {
+            from: savedTerm.rpc[0],
+            to: savedTerm.rpc[1],
+          };
+        }
+        if (savedTerm.rph) liveTerms[j]!.richPromptHeight = savedTerm.rph;
         if (savedTerm.twk) liveTerms[j]!.teamWorkPending = savedTerm.twk;
       }
     }

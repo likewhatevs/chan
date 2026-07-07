@@ -234,6 +234,11 @@ export interface ImageOptions {
   /// Whether the editor surface is currently dark; used by static
   /// Excalidraw image embeds so their exported strokes read on the page.
   isDark?: () => boolean;
+  /// Optional View handler for Excalidraw embeds: receives the rendered
+  /// SVG markup and opens the pan/zoom diagram overlay (the same viewer
+  /// mermaid's View uses). Raster images route through `onImageClick`
+  /// instead; the raster zoom modal deliberately excludes excalidraw.
+  onDiagramView?: (svg: string) => void;
 }
 
 class ImageWidget extends WidgetType {
@@ -266,6 +271,7 @@ class ImageWidget extends WidgetType {
     readonly writable: boolean,
     readonly dark: boolean,
     readonly onClick: ((args: ImageClickArgs) => void) | undefined,
+    readonly onDiagramView: ((svg: string) => void) | undefined,
   ) {
     super();
   }
@@ -361,6 +367,8 @@ class ImageWidget extends WidgetType {
       if (width != null) body.style.width = `${width}px`;
       wrap.appendChild(body);
 
+      let renderedSvg: string | null = null;
+      let viewBtn: HTMLButtonElement | null = null;
       const resolved = resolveImageSrc(this.src, this.fromPath);
       if (!resolved) {
         renderExcalidrawEmbedError(body, "cannot resolve Excalidraw file");
@@ -370,6 +378,8 @@ class ImageWidget extends WidgetType {
           if (res.ok && res.svg) {
             body.classList.remove("cm-md-excalidraw-embed-error");
             body.innerHTML = res.svg;
+            renderedSvg = res.svg;
+            if (viewBtn) viewBtn.style.display = "";
           } else {
             renderExcalidrawEmbedError(body, res.error ?? "render failed");
           }
@@ -383,9 +393,16 @@ class ImageWidget extends WidgetType {
           startResize(e, wrap, body, view),
         );
         wrap.appendChild(handle);
+      }
 
-        const actions = document.createElement("span");
-        actions.className = "cm-md-image-actions";
+      // Hover action overlay, mirroring the raster row: Edit in writable
+      // mode, View always. View opens the pan/zoom diagram overlay (the
+      // same viewer mermaid's View uses), never the raster zoom modal -
+      // excalidraw is deliberately excluded from that one. Hidden until a
+      // render succeeds so it never offers an errored diagram.
+      const actions = document.createElement("span");
+      actions.className = "cm-md-image-actions";
+      if (editable) {
         const editBtn = document.createElement("button");
         editBtn.type = "button";
         editBtn.className = "cm-md-image-action";
@@ -396,8 +413,33 @@ class ImageWidget extends WidgetType {
           placeCaretInImageUrl(view, this.nodePos);
         });
         actions.appendChild(editBtn);
-        wrap.appendChild(actions);
       }
+      const onDiagramView = this.onDiagramView;
+      if (onDiagramView && resolved) {
+        viewBtn = document.createElement("button");
+        viewBtn.type = "button";
+        viewBtn.className = "cm-md-image-action";
+        viewBtn.textContent = "View";
+        viewBtn.style.display = "none";
+        viewBtn.addEventListener("mousedown", (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          if (!renderedSvg) return;
+          // The overlay presents on a LIGHT panel. In a dark editor the
+          // embed holds the dark render (pale strokes that would vanish
+          // on white), so re-render the light face for the overlay; a
+          // light editor hands over the already-rendered SVG.
+          if (this.dark) {
+            void renderExcalidrawFile(resolved, false).then((res) => {
+              if (res.ok && res.svg) onDiagramView(res.svg);
+            });
+          } else {
+            onDiagramView(renderedSvg);
+          }
+        });
+        actions.appendChild(viewBtn);
+      }
+      if (actions.childElementCount > 0) wrap.appendChild(actions);
 
       (wrap as HTMLElement & { _chanImg?: ImageActionPayload })._chanImg = {
         src: this.src,
@@ -1070,6 +1112,7 @@ function scanImagesInline(view: EditorView, opts: ImageOptions): DecorationSet {
         editable,
         dark,
         opts.onImageClick,
+        opts.onDiagramView,
       );
       decos.push({
         from: outerFrom,
@@ -1154,6 +1197,7 @@ function scanImagesBlock(
         editable,
         dark,
         opts.onImageClick,
+        opts.onDiagramView,
       );
       decos.push({
         from: line.from,

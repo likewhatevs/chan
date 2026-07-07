@@ -61,7 +61,7 @@ describe("RichPrompt.svelte component", () => {
     // so pasted images upload into the draft folder as markdown embeds and
     // render in-place.
     expect(richPromptSrc).toMatch(
-      /let \{ tab \}: \{ tab: TerminalTab \} = \$props\(\)/,
+      /let \{ tab, focused = false \}: \{ tab: TerminalTab; focused\?: boolean \} =\s*\$props\(\)/,
     );
     expect(richPromptSrc).toMatch(/currentPath=\{draftPath\}/);
     expect(richPromptSrc).not.toMatch(/getTerminalCwdRel/);

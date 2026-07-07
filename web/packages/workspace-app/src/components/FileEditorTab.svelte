@@ -1497,7 +1497,6 @@
     align-items: center;
     gap: 8px;
     padding: 6px 4px;
-    border-bottom: 1px solid var(--separator);
   }
   .page-width-label {
     color: var(--text-secondary);
