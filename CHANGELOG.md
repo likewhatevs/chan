@@ -6,16 +6,29 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **An Apps menu on the empty pane.** The single empty pane grows a floating Apps button whose menu spawns every app surface (terminal, file browser, graph, draft, diagram, slide deck, dashboard, team), alphabetical, showing assigned shortcuts.
+- **New slide deck.** A new Apps command creates a draft pre-seeded with the slides frontmatter and a first slide heading; `POST /api/drafts/new` accepts `{"kind":"slides"}`.
+- **Copy on rendered diagrams.** Fenced mermaid and mermaid-to-excalidraw blocks and inline `.excalidraw` embeds gain a Copy action that puts the rendered diagram on the clipboard as PNG (native image IPC on desktop); dark editors copy the light render.
+
+### Changed
+
+- **The empty pane sheds the workspace-path label.** The path no longer renders under the chan mark, and the mark hides on short panes to give the waves room, reappearing when the pane grows.
+- **Terminal surveys queue per target.** A second survey addressed to the same tab now waits its turn instead of replacing the visible one and starving its caller into a timeout; an overflowing target (100 open or waiting) is refused with an explicit queue-full error.
+
 ### Fixed
 
 - **The rich prompt survives tab switches.** The prompt stays mounted like the terminal it overlays, and its caret and bubble height persist per terminal across tab switches, window switches, and reloads instead of resetting to the start of the line. A background prompt no longer steals keyboard focus when a delivery completes.
 - **Excalidraw embeds get View, and Edit shows the source.** Inline `.excalidraw` embeds now offer the same View action as mermaid diagrams, opening the pan/zoom overlay on the rendered SVG. Edit reveals the `![](...)` source markdown; the raster image bubble no longer opens over it with a broken preview.
-- **Healthy devserver connects no longer strand control terminals.** A connect script that exits cleanly with the connection up (the daemonizing `chan devserver --service=chan` case) auto-closes its control terminal with no down-mark and no reconnect block. A failing script still keeps its terminal open so the failure can be read. As a consequence, a transport script that exits cleanly mid-session is also reaped; the outage surfaces through the workspace poll, and a clean-exit script whose devserver never answers fails only after the full connect dial budget.
+- **Control-terminal script exits now resolve the connection deterministically.** A connect script that exits cleanly right after establishing the connection (the daemonizing `chan devserver --service=chan` handshake, within a 10s grace of registration) auto-closes its control terminal and keeps the connection, with no down-mark and no reconnect block. Any script exit after that stops the connection: a clean exit (a forwarded ^C through ssh/lima transports) runs the full disconnect flow, and a failing exit stops the connection and closes the windows but keeps the terminal open so the failure can be read. Previously a healthy connect stranded a "process exited" terminal, and a post-connect script death could leave the connection registered with no control terminal at all. A clean-exit script whose devserver never answers still fails only after the full connect dial budget.
 - **Reconnect and Abandon act even while the connect script runs.** Both kill the running script first; Abandon then runs the disconnect flow, and Reconnect runs the disconnect flow followed by a fresh connect. Reconnect previously no-opped while the stale connection was still registered.
 - **`cs` survives a devserver restart.** A devserver binds control sockets at a stable per-library path that a restarted instance rebinds, so `$CHAN_CONTROL_SOCKET` in already-open shells keeps working instead of failing with a stale-socket error. Shells opened under earlier versions still carry the old per-pid path until respawned.
 - **Restored terminals close cleanly after a devserver restart.** Exiting a shell that survived a restart through the systemd fd store no longer prints `terminal read failed: I/O error (os error 5)`, and the exit reports without a fabricated code 1 (the real status of a reparented shell is unknowable).
-- **The editor tab menu draws a single separator** between Page width and Copy path to file; the page-width row's own bottom border no longer doubles the line.
-- **The empty-pane workspace path stays readable over the waves.** The label sits on a translucent pill, so the dotted wave field cresting behind it no longer blends into the text in dark mode.
+- **The editor tab menu draws a single separator** between Page width and Copy path to file; the page-width row's own bottom border no longer doubles the line. The Delete row also drops its misleading Backspace shortcut hint (no such binding exists while an editor tab is focused).
+- **A failed excalidraw embed is no longer a trap.** `![](missing.excalidraw)` and render failures show an error face that is clickable: the click reveals the source markdown for fixing, matching how broken raster images behave.
+- **The command launcher no longer fires on a no-match Enter.** A query matching no command rests unhighlighted, so Enter does nothing until you arrow into the catalog or click a row.
+- **Standalone servers stop probing the focus-colour websocket.** The pane focus-border colour watch only subscribes on desktop surfaces, ending the 404 retry churn a plain `chan open` logged on every boot.
 
 ## [v0.66.0] - 2026-07-07
 
