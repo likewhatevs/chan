@@ -416,9 +416,6 @@ describe("EmptyPaneWelcome empty-pane surface", () => {
     // dotted wave field; it carries no spawn buttons of its own.
     expect(welcome).toMatch(/<div class="welcome-mark"><\/div>/);
     expect(welcome).toMatch(/<DottedSurface \/>/);
-    expect(welcome).toMatch(/bind:this=\{welcomeEl\}/);
-    expect(welcome).toMatch(/bind:this=\{headerEl\}/);
-    expect(welcome).toMatch(/--dotted-surface-top/);
     expect(welcome).toMatch(
       /class="welcome-name" title=\{workspace\.info\.root\}[\s\S]{1,120}\{workspace\.info\.root\}/,
     );
@@ -463,8 +460,10 @@ describe("EmptyPaneWelcome empty-pane surface", () => {
     expect(dotted).toMatch(/canvas\.clientWidth/);
     expect(dotted).toMatch(/canvas\.clientHeight/);
     expect(dotted).not.toMatch(/canvas\.getBoundingClientRect\(\)/);
-    expect(dotted).toMatch(/height: var\(--dotted-surface-height, clamp\(260px, 40%, 475px\)\)/);
-    expect(dotted).toMatch(/top: var\(--dotted-surface-top, auto\)/);
+    expect(dotted).toMatch(/const HORIZON_RATIO = -0\.05;/);
+    expect(dotted).toMatch(/height: clamp\(260px, 33%, 400px\);/);
+    expect(dotted).toMatch(/bottom: 0;/);
+    expect(dotted).not.toMatch(/mask-image/);
   });
 });
 

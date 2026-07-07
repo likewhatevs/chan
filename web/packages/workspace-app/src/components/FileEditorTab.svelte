@@ -22,17 +22,18 @@
     type InternalLinkHit,
   } from "../editor/link_preview";
   import {
-    Clipboard,
     ClipboardPaste,
     Copy,
     ExternalLink,
     Eye,
+    Files,
     Folder,
     Link as LinkIcon,
     Pencil,
     Save,
     Scissors,
     Search as SearchIcon,
+    Trash2,
     X,
   } from "lucide-svelte";
   import { chordFor, currentOS } from "../state/shortcuts";
@@ -718,6 +719,27 @@
     });
   }
 
+  async function doCopyPathToFile(): Promise<void> {
+    closeTabMenu();
+    await copyTextToClipboard(tab.path, {
+      onSuccess: () => setTransientStatus("Copied file path"),
+      onError: (msg) => {
+        ui.status = `copy failed: ${msg}`;
+        ui.statusKind = "persistent";
+      },
+    });
+  }
+
+  async function doDeleteFile(): Promise<void> {
+    closeTabMenu();
+    await fileOps.remove(tab.path, false);
+  }
+
+  async function doDuplicateFile(): Promise<void> {
+    closeTabMenu();
+    await fileOps.duplicateFile(tab.path);
+  }
+
   /// Open the read-only markdown preview for the internal wiki link
   /// under the cursor. The popover's Open button navigates to the
   /// target in the active pane.
@@ -1040,6 +1062,28 @@
             <span class="page-width-value">{Math.round(pageWidth.ratio * 100)}%</span>
           </div>
         {/if}
+        <div class="msep" role="separator"></div>
+        <button class="mbtn" onclick={() => void doCopyPathToFile()}>
+          <span class="mbtn-icon">
+            <Copy size={16} strokeWidth={1.75} aria-hidden="true" />
+          </span>
+          <span class="mbtn-label">Copy path to file</span>
+          <span class="mbtn-chord">{chordLabel("app.editor.copyPath")}</span>
+        </button>
+        <button class="mbtn" onclick={() => void doDeleteFile()}>
+          <span class="mbtn-icon">
+            <Trash2 size={16} strokeWidth={1.75} aria-hidden="true" />
+          </span>
+          <span class="mbtn-label">Delete</span>
+          <span class="mbtn-chord">{chordLabel("app.files.delete")}</span>
+        </button>
+        <button class="mbtn" onclick={() => void doDuplicateFile()}>
+          <span class="mbtn-icon">
+            <Files size={16} strokeWidth={1.75} aria-hidden="true" />
+          </span>
+          <span class="mbtn-label">Duplicate</span>
+          <span class="mbtn-chord">{chordLabel("app.file.duplicate")}</span>
+        </button>
         <div class="msep" role="separator"></div>
         <button class="mbtn" onclick={doCloseTab}>
           <span class="mbtn-icon">

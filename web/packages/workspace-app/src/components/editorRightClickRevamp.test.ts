@@ -35,9 +35,9 @@ describe("menu-top Name input", () => {
 });
 
 describe("tab-menu foot", () => {
-  test("Page width is followed by a separator and Close", () => {
+  test("Page width is followed by file actions and Close", () => {
     expect(editor).toMatch(
-      /<div class="page-width-row">[\s\S]{1,900}<\/div>\s*\{\/if\}\s*<div class="msep" role="separator"><\/div>\s*<button class="mbtn" onclick=\{doCloseTab\}>[\s\S]{1,300}<span class="mbtn-label">Close<\/span>/,
+      /<div class="page-width-row">[\s\S]{1,900}<\/div>\s*\{\/if\}\s*<div class="msep" role="separator"><\/div>\s*<button class="mbtn" onclick=\{\(\) => void doCopyPathToFile\(\)\}>[\s\S]{1,350}<span class="mbtn-label">Copy path to file<\/span>[\s\S]{1,500}<span class="mbtn-label">Delete<\/span>[\s\S]{1,500}<span class="mbtn-label">Duplicate<\/span>[\s\S]{1,300}<button class="mbtn" onclick=\{doCloseTab\}>[\s\S]{1,300}<span class="mbtn-label">Close<\/span>/,
     );
   });
 
@@ -46,7 +46,7 @@ describe("tab-menu foot", () => {
       /const showPageWidthMenuRow = \$derived\(tab\.mode !== "canvas"\);/,
     );
     expect(editor).toMatch(
-      /\{#if showPageWidthMenuRow\}[\s\S]{1,1200}<div class="page-width-row">[\s\S]{1,1200}\{\/if\}\s*<div class="msep" role="separator"><\/div>\s*<button class="mbtn" onclick=\{doCloseTab\}>/,
+      /\{#if showPageWidthMenuRow\}[\s\S]{1,1200}<div class="page-width-row">[\s\S]{1,1200}\{\/if\}\s*<div class="msep" role="separator"><\/div>\s*<button class="mbtn" onclick=\{\(\) => void doCopyPathToFile\(\)\}>/,
     );
   });
 
@@ -94,16 +94,14 @@ describe("dropped entries", () => {
     expect(editor).not.toMatch(/<span class="mbtn-label">Copy File Path<\/span>/);
   });
 
-  test("launcher-overlap rows are gone from the tab menu", () => {
+  test("most launcher-overlap rows are gone from the tab menu", () => {
     for (const label of [
       "Show Source Code",
       "Collapse Code Blocks",
       "Expand Code Blocks",
       "Search",
-      "Copy path to file",
       "Copy path to $CWD",
       "Reload from Disk",
-      "Duplicate File",
       "New File",
       "New Terminal",
       "New File Browser",
@@ -114,6 +112,26 @@ describe("dropped entries", () => {
       expect(editor).not.toContain(`<span class="mbtn-label">${label}</span>`);
     }
     expect(editor).not.toContain("from-cwd-label");
+  });
+});
+
+describe("file action group", () => {
+  test("Copy path to file, Delete, Duplicate sit alphabetically before Close", () => {
+    expect(editor).toMatch(
+      /<span class="mbtn-label">Copy path to file<\/span>[\s\S]{1,650}<span class="mbtn-label">Delete<\/span>[\s\S]{1,650}<span class="mbtn-label">Duplicate<\/span>[\s\S]{1,650}<span class="mbtn-label">Close<\/span>/,
+    );
+  });
+
+  test("file actions reuse fileOps and clipboard helpers", () => {
+    expect(editor).toMatch(
+      /function doCopyPathToFile\(\): Promise<void> \{[\s\S]{1,300}copyTextToClipboard\(tab\.path/,
+    );
+    expect(editor).toMatch(
+      /function doDeleteFile\(\): Promise<void> \{[\s\S]{1,220}fileOps\.remove\(tab\.path, false\)/,
+    );
+    expect(editor).toMatch(
+      /function doDuplicateFile\(\): Promise<void> \{[\s\S]{1,220}fileOps\.duplicateFile\(tab\.path\)/,
+    );
   });
 });
 

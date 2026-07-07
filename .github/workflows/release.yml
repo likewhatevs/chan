@@ -515,7 +515,7 @@ jobs:
           [ -n "$TAURI_SIGNING_PRIVATE_KEY" ] || missing+=("TAURI_SIGNING_PRIVATE_KEY")
           if [ ${#missing[@]} -gt 0 ]; then
             echo "::error::Missing signing secrets: ${missing[*]}"
-            echo "::error::Populate Apple secrets per docs/release/README.md and updater key secrets per .agents/desktop.md."
+            echo "::error::Populate Apple signing and updater key secrets per .agents/desktop.md."
             exit 1
           fi
 
@@ -611,16 +611,9 @@ jobs:
           if-no-files-found: error
 
   windows-artifacts:
-    name: Windows packages (unsigned)
+    name: Windows packages (signed)
     needs: context
     runs-on: windows-latest
-    # Windows desktop is experimental and the NSIS installer is UNSIGNED (the
-    # SSL.com Authenticode cert is still pending -- docs/release/README.md).
-    # A Windows build failure must NOT block the Linux+macOS release: continue-on-error
-    # lets publish-release proceed, and the install page + /dl metadata already treat
-    # the Windows assets as optional, so they simply omit Windows until the next good
-    # build. The build recipe mirrors release-desktop.yml's proven Windows job.
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v6
         with:
@@ -644,11 +637,64 @@ jobs:
         with:
           tool: tauri-cli@2
 
-      - name: Build Windows packages (CLI zip + NSIS installer, unsigned)
+      - name: Verify Windows signing secrets present
+        shell: pwsh
+        env:
+          ES_USERNAME: ${{ secrets.ES_USERNAME }}
+          ES_PASSWORD: ${{ secrets.ES_PASSWORD }}
+          CREDENTIAL_ID: ${{ secrets.CREDENTIAL_ID }}
+          ES_TOTP_SECRET: ${{ secrets.ES_TOTP_SECRET }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $missing = @()
+          foreach ($name in @("ES_USERNAME", "ES_PASSWORD", "CREDENTIAL_ID", "ES_TOTP_SECRET")) {
+            $value = [Environment]::GetEnvironmentVariable($name)
+            if ([string]::IsNullOrWhiteSpace($value)) {
+              $missing += $name
+            } else {
+              Write-Output "::add-mask::$value"
+            }
+          }
+          if ($missing.Count -gt 0) {
+            Write-Output "::error::Missing Windows signing secrets: $($missing -join ', ')"
+            Write-Output "::error::Populate ES_USERNAME, ES_PASSWORD, CREDENTIAL_ID, and ES_TOTP_SECRET before running the release workflow."
+            exit 1
+          }
+
+      - id: codesigntool
+        name: Install SSL.com CodeSignTool
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $archive = Join-Path $env:RUNNER_TEMP "codesigntool-for-windows.zip"
+          $extractRoot = Join-Path $env:RUNNER_TEMP "codesigntool"
+          Invoke-WebRequest `
+            -Uri "https://ssl.com/download/codesigntool-for-windows/" `
+            -OutFile $archive
+          New-Item -ItemType Directory -Force -Path $extractRoot | Out-Null
+          Expand-Archive -LiteralPath $archive -DestinationPath $extractRoot -Force
+          $tool = Get-ChildItem -LiteralPath $extractRoot -Filter "CodeSignTool.bat" -Recurse -File |
+            Select-Object -First 1
+          if (-not $tool) {
+            Write-Output "::error::Downloaded SSL.com CodeSignTool archive did not contain CodeSignTool.bat"
+            Get-ChildItem -LiteralPath $extractRoot -Recurse | Select-Object FullName
+            exit 1
+          }
+          "path=$($tool.FullName)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "root=$($tool.DirectoryName)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          Write-Output "CodeSignTool.bat: $($tool.FullName)"
+
+      - name: Build Windows packages (signed CLI zip + signed NSIS installer)
         working-directory: chan
         shell: bash
         env:
           VERSION: ${{ needs.context.outputs.version }}
+          ES_USERNAME: ${{ secrets.ES_USERNAME }}
+          ES_PASSWORD: ${{ secrets.ES_PASSWORD }}
+          CREDENTIAL_ID: ${{ secrets.CREDENTIAL_ID }}
+          ES_TOTP_SECRET: ${{ secrets.ES_TOTP_SECRET }}
+          CODESIGNTOOL: ${{ steps.codesigntool.outputs.path }}
+          CODE_SIGN_TOOL_PATH: ${{ steps.codesigntool.outputs.root }}
         run: |
           set -euo pipefail
           # chan / chan-desktop embed BOTH frontend bundles via rust-embed: web/dist
@@ -658,6 +704,7 @@ jobs:
           # Console-subsystem chan.exe CLI (a real terminal program): shipped standalone
           # as the Windows CLI zip AND embedded into the NSIS installer as a resource.
           cargo build --release -p chan
+          powershell -NoProfile -ExecutionPolicy Bypass -File desktop/src-tauri/scripts/windows/sign.ps1 target/release/chan.exe
           mkdir -p release-artifacts staging
           cp target/release/chan.exe staging/
           cp LICENSE README.md staging/
@@ -668,6 +715,46 @@ jobs:
           (cd desktop/src-tauri && cargo tauri build --bundles nsis --config tauri.windows.conf.json)
           cp "target/release/bundle/nsis/Chan_${VERSION}_x64-setup.exe" release-artifacts/
           ls -la release-artifacts
+
+      - name: Verify Windows Authenticode signatures
+        working-directory: chan
+        shell: pwsh
+        env:
+          VERSION: ${{ needs.context.outputs.version }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $installer = "release-artifacts/Chan_${env:VERSION}_x64-setup.exe"
+          if (-not (Test-Path -LiteralPath $installer -PathType Leaf)) {
+            Write-Output "::error::Missing NSIS installer: $installer"
+            Get-ChildItem -LiteralPath "release-artifacts" -Recurse | Select-Object FullName
+            exit 1
+          }
+
+          $signtool = (Get-Command "signtool.exe" -ErrorAction SilentlyContinue).Source
+          if (-not $signtool) {
+            $windowsKits = Join-Path ${env:ProgramFiles(x86)} "Windows Kits\10\bin"
+            if (Test-Path -LiteralPath $windowsKits -PathType Container) {
+              $signtool = Get-ChildItem -LiteralPath $windowsKits -Filter "signtool.exe" -Recurse -File |
+                Where-Object { $_.FullName -match "\\x64\\signtool\.exe$" } |
+                Sort-Object FullName -Descending |
+                Select-Object -First 1 -ExpandProperty FullName
+            }
+          }
+          if (-not $signtool) {
+            throw "signtool.exe not found"
+          }
+
+          foreach ($file in @("target/release/chan.exe", "target/release/chan-desktop.exe", $installer)) {
+            $signature = Get-AuthenticodeSignature -FilePath $file
+            $signature | Format-List Path,Status,StatusMessage,SignerCertificate,TimeStamperCertificate
+            if ($signature.Status -ne "Valid") {
+              throw "Authenticode signature is not valid for $file: $($signature.Status)"
+            }
+            & $signtool verify /pa /v $file
+            if ($LASTEXITCODE -ne 0) {
+              throw "signtool verify failed for $file with exit code $LASTEXITCODE"
+            }
+          }
 
       - name: Headless boot + /api/health smoke
         working-directory: chan

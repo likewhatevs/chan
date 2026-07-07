@@ -15,6 +15,7 @@
   const POINT_SIZE = 6.4;
   const WAVE_SPEED = 1.45;
   const FRAME_INTERVAL_MS = 1000 / 24;
+  const HORIZON_RATIO = -0.05;
 
   let canvas = $state<HTMLCanvasElement | undefined>();
 
@@ -50,7 +51,7 @@
       const alphaRange = cssNumber("--dotted-surface-alpha-range", 0.30);
       const sizeScale = cssNumber("--dotted-surface-size-scale", 1);
       const focal = (height * 1.28) / (2 * Math.tan(FOV_RAD / 2));
-      const horizon = height * 0.34;
+      const horizon = height * HORIZON_RATIO;
 
       ctx.clearRect(0, 0, width, height);
       ctx.fillStyle = `rgb(${dotColor})`;
@@ -153,11 +154,10 @@
 <style>
   .dotted-surface {
     position: absolute;
-    top: var(--dotted-surface-top, auto);
     left: 0;
     right: 0;
-    bottom: var(--dotted-surface-bottom, 0);
-    height: var(--dotted-surface-height, clamp(260px, 40%, 475px));
+    bottom: 0;
+    height: clamp(260px, 33%, 400px);
     z-index: 0;
     --dotted-surface-dot-rgb: 200, 200, 200;
     --dotted-surface-alpha-base: 0.18;
@@ -166,8 +166,6 @@
     pointer-events: none;
     overflow: hidden;
     opacity: 1;
-    -webkit-mask-image: linear-gradient(to bottom, transparent, black 38%);
-            mask-image: linear-gradient(to bottom, transparent, black 38%);
   }
   canvas {
     width: 100%;
