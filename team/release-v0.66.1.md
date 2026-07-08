@@ -36,8 +36,8 @@ v0.66.1 closes the `release-v0661` cycle that started from `origin/main` at `v0.
 - Run 1 (rc1, `68d5a791`): FAILURE, macOS-only: the stable control-socket name overflowed the 104-byte macOS `sun_path`; fixed by `d7085700`.
 - Run 2 (rc1, `8e5fd15c`): SUCCESS. `https://github.com/fiorix/chan/actions/runs/28891608356`
 - Run 3 (rc2, `77b151f3`): SUCCESS. `https://github.com/fiorix/chan/actions/runs/28906533900`
-- Run 4 (GA pins): `publish=false` on the GA commit; recorded below before tagging.
-- GA publish: annotated tag `v0.66.1` pushed after the pre-tag gate and the dry run pass.
+- Run 4 (GA pins, `68758bf4`): `publish=false`, SUCCESS. `https://github.com/fiorix/chan/actions/runs/28921365205`
+- GA publish: annotated tag `v0.66.1` on `68758bf4`, pushed after the pre-tag gate and run 4 passed; publish run `28923462155`.
 
 ## Known Limitations
 
