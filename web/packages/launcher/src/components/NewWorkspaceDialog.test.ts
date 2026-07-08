@@ -86,7 +86,9 @@ describe("New workspace dialog -- devserver", () => {
     expect(el.textContent).toContain("Address");
     expect(el.querySelector("textarea")).not.toBeNull();
     expect(el.textContent).toContain("Auto-hide control terminal on success");
-    expect(el.textContent).toContain('chan open <url> [--script "…"]');
+    expect(el.textContent).toContain(
+      "Tip: keep connection scripts in the foreground, e.g. ssh -N.",
+    );
     // The single Address field replaces the old separate Host / Port / Token
     // inputs -- none of those remain.
     expect(el.querySelector('input[type="number"]')).toBeNull();

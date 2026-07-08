@@ -280,9 +280,7 @@
     <div class="tip">
       <SquareTerminal size={16} />
       <span>
-        Tip: keep connection scripts in the foreground, e.g.
-        <code>exec ssh -N …</code>. <code>chan open &lt;url&gt; [--script "…"]</code> adds a dev
-        server from the command line with the same result.
+        Tip: keep connection scripts in the foreground, e.g. <code>ssh -N</code>.
       </span>
     </div>
   {/if}
