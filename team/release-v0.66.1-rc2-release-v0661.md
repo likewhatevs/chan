@@ -28,13 +28,13 @@ Second candidate on `release-v0661`, folding in every finding from the release o
 - Desktop lane: clippy + `cargo test -p chan-desktop` (173 passed; the source-text semantics test rewritten to pin the grace split and the windows-close-before-mark compose, which the lane verified is the only non-leaking order) + scoped fmt.
 - Web lane: svelte-check (0 errors) + full workspace-app vitest (266 files, 2536 tests) after completing the lane across two agents (the first died mid-run on an API error; the second salvaged and finished). Adversarial reviews on all three lanes; the one user-visible catch (launcher ArrowUp-from-top dead stop) was fixed and pinned before commit.
 - Full `make pre-push` green on the integrated branch at `44634cd4`.
-- Headless-Chrome browser verification of the web items: recorded in `dev/v0.66.1/browser-smoke/` (rc2 pass pending at report-writing time; result noted in the smoke doc).
+- Headless-Chrome browser verification of the web items: 7/7 verified against a real test-server build at `77b151f3`, including a stub-free clipboard PNG write and the dark-editor-copies-light-face check; evidence in `dev/v0.66.1/browser-smoke-rc2/`.
 
 ## Release Workflow
 
 - Run 1 (rc1): `28889761776`, FAILURE (macOS SUN_LEN, fixed in rc1 by `d7085700`).
 - Run 2 (rc1): `28891608356`, SUCCESS.
-- Run 3 (rc2): dispatched on the rc2 pin head with `publish=false`; id and result recorded when concluded.
+- Run 3 (rc2): id `28906533900`, head `77b151f3`, result SUCCESS — every platform green including macOS sign/notarize and Windows signed packages; publish jobs skipped as expected. URL: `https://github.com/fiorix/chan/actions/runs/28906533900`.
 
 No `v*` tag is pushed for an rc.
 
