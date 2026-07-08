@@ -34,3 +34,37 @@ describe("launcher demo api", () => {
     expect(await api.listDevservers()).toHaveLength(before.length);
   });
 });
+
+describe("launcher demo api: empty variants", () => {
+  it.each(["empty", "devserver"] as const)("%s seeds nothing and flags no attention devserver", async (variant) => {
+    const api = createLauncherDemoApi({ variant });
+
+    expect(api.attentionDevserverId).toBeNull();
+    const [workspaces, devservers, windows] = await Promise.all([
+      api.listWorkspaces(),
+      api.listDevservers(),
+      api.listWindows(),
+    ]);
+    expect(workspaces).toHaveLength(0);
+    expect(devservers).toHaveLength(0);
+    expect(windows).toHaveLength(0);
+  });
+
+  it("creates terminals and workspaces from empty, and resets back to empty", async () => {
+    const api = createLauncherDemoApi({ variant: "empty" });
+
+    await api.createWindow("terminal");
+    const picked = await api.pickFolder();
+    expect(picked).toBe("/Users/you/dev/your-project");
+    await api.addLocalWorkspace(picked!, "");
+
+    expect(await api.listWindows()).toHaveLength(1);
+    const workspaces = await api.listWorkspaces();
+    expect(workspaces).toHaveLength(1);
+    expect(workspaces[0]!.on).toBe(true);
+
+    api.reset();
+    expect(await api.listWindows()).toHaveLength(0);
+    expect(await api.listWorkspaces()).toHaveLength(0);
+  });
+});

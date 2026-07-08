@@ -3,6 +3,8 @@
 
 interface DemoState {
   enabled: boolean;
+  // Non-null repurposes the local FolderPlus button into "Reset demo data" (the
+  // home hero); null keeps the real New-workspace flow (the manual's empty embed).
   reset: (() => Promise<void> | void) | null;
 }
 
@@ -11,9 +13,17 @@ export const demoState = $state<DemoState>({
   reset: null,
 });
 
+export interface DemoMode {
+  reset?: (() => Promise<void> | void) | null;
+}
+
+export function setDemoMode(mode: DemoMode | null): void {
+  demoState.enabled = mode !== null;
+  demoState.reset = mode?.reset ?? null;
+}
+
 export function setDemoReset(reset: (() => Promise<void> | void) | null): void {
-  demoState.enabled = reset !== null;
-  demoState.reset = reset;
+  setDemoMode(reset ? { reset } : null);
 }
 
 export async function resetDemo(): Promise<void> {

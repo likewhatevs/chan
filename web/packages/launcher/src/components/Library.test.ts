@@ -16,6 +16,7 @@ import { beginPending, clearAllPending, dsKey, isPending, wsKey } from "../state
 import { confirm, requestConfirm, resolveConfirm, cancelConfirm } from "../state/confirm.svelte";
 import { ApiError, type DevserverEntry, type WorkspaceEntry } from "../api/library";
 import { controlAttention, clearAllControlAttention } from "../state/controlAttention.svelte";
+import { setDemoMode } from "../state/demo.svelte";
 
 vi.mock("../api/backend", async () => {
   const { mockApi } = await import("../api/mock");
@@ -500,6 +501,26 @@ describe("Library: nested machine tree", () => {
     (target!.querySelector(".count-badge") as HTMLButtonElement).click();
     flushSync();
     expect(target!.querySelector(".ws-windows")).toBeNull();
+  });
+});
+
+describe("Library: demo mode", () => {
+  afterEach(() => {
+    setDemoMode(null);
+  });
+
+  it("repurposes FolderPlus into Reset only when a reset callback is registered", () => {
+    setDemoMode({ reset: () => {} });
+    mountList();
+    expect(byAria("Reset demo data")).toBeTruthy();
+    expect(byAria("New local workspace")).toBeUndefined();
+  });
+
+  it("keeps the real New-workspace action in demo mode without a reset", () => {
+    setDemoMode({});
+    mountList();
+    expect(byAria("New local workspace")).toBeTruthy();
+    expect(byAria("Reset demo data")).toBeUndefined();
   });
 });
 

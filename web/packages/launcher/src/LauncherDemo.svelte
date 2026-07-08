@@ -1,17 +1,25 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import App from "./App.svelte";
-  import { createLauncherDemoApi } from "./api/demo";
+  import { createLauncherDemoApi, type LauncherDemoVariant } from "./api/demo";
   import { resetBackend, setBackend } from "./api/backend";
-  import { loadLibrary, stopWatching } from "./state/library.svelte";
-  import { closeDialog } from "./state/dialog.svelte";
+  import { library, loadLibrary, stopWatching } from "./state/library.svelte";
+  import { closeDialog, openNewDialog } from "./state/dialog.svelte";
   import { cancelConfirm } from "./state/confirm.svelte";
   import { clearSelection } from "./state/selection.svelte";
   import { clearAllControlAttention, markControlAttention } from "./state/controlAttention.svelte";
-  import { setDemoReset } from "./state/demo.svelte";
+  import { setDemoMode } from "./state/demo.svelte";
   import { themeState } from "./state/theme.svelte";
 
-  let { onOpenWindow }: { onOpenWindow?: (id: string) => void } = $props();
+  let {
+    onOpenWindow,
+    variant = "populated",
+    hints = false,
+  }: {
+    onOpenWindow?: (id: string) => void;
+    variant?: LauncherDemoVariant;
+    hints?: boolean;
+  } = $props();
 
   // The marketing mock always demos the dark theme to match the desktop
   // screenshots and the dark widget frame, regardless of the visitor's
@@ -19,10 +27,10 @@
   // theme toggle as a moon instead of the desktop's sun).
   themeState.theme = "dark";
 
-  // Initial-value capture is deliberate: the embed wires the handler once at
-  // mount and never swaps it.
+  // Initial-value capture is deliberate: the embed wires the handler, variant,
+  // and hints once at mount and never swaps them.
   // svelte-ignore state_referenced_locally
-  const api = createLauncherDemoApi({ onOpenWindow });
+  const api = createLauncherDemoApi({ onOpenWindow, variant });
   setBackend(api);
 
   async function resetDemoData(): Promise<void> {
@@ -33,23 +41,47 @@
     clearSelection();
     clearAllControlAttention();
     await loadLibrary();
-    markControlAttention(api.attentionDevserverId);
+    if (api.attentionDevserverId) markControlAttention(api.attentionDevserverId);
   }
 
-  setDemoReset(resetDemoData);
+  // The populated hero repurposes FolderPlus into "Reset demo data"; the empty
+  // manual embeds keep the real New-workspace flow, so they register no reset.
+  // svelte-ignore state_referenced_locally
+  setDemoMode({ reset: variant === "populated" ? resetDemoData : null });
+
+  // First-run hints ride on the frame as data attributes so the EMBEDDING page
+  // can render callout bubbles outside the mock window (the frame's overflow:
+  // hidden would clip anything inside, and stacked in-window bubbles cover the
+  // card). Each flag tracks live library state: it clears once the action is
+  // done and returns if the user discards everything again.
+  const hintTerminal = $derived(
+    hints && !library.windows.some((w) => w.library_id === "local" && w.kind === "terminal"),
+  );
+  const hintWorkspace = $derived(
+    hints && !library.workspaces.some((w) => w.devserver_id === null),
+  );
 
   onMount(() => {
-    void resetDemoData();
+    void resetDemoData().then(() => {
+      // The devserver embed is ABOUT the Add-dev-server form, so it greets the
+      // reader with the dialog already open (closable and reopenable via the
+      // real Add dev server button).
+      if (variant === "devserver") openNewDialog("devserver");
+    });
     return () => {
       stopWatching();
-      setDemoReset(null);
+      setDemoMode(null);
       clearAllControlAttention();
       resetBackend();
     };
   });
 </script>
 
-<div class="launcher-demo-frame" data-theme={themeState.theme}>
+<div
+  class="launcher-demo-frame"
+  data-theme={themeState.theme}
+  data-hint-terminal={hintTerminal ? "true" : undefined}
+  data-hint-workspace={hintWorkspace ? "true" : undefined}>
   <App />
 </div>
 

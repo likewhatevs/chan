@@ -14,7 +14,8 @@ interface DemoDevserver extends DevserverEntry {
 
 export interface LauncherDemoApi extends LibraryApi {
   reset(): void;
-  attentionDevserverId: string;
+  // Null when the variant seeds no devservers, so there is nothing to flash.
+  attentionDevserverId: string | null;
 }
 
 const LIMA_LIBRARY_ID = "lib-lima";
@@ -151,6 +152,20 @@ function seed(): Seed {
   };
 }
 
+// The manual's first-run mock: just the local machine, nothing created yet, so
+// the reader performs the New-terminal / New-workspace steps themselves.
+function emptySeed(): Seed {
+  return {
+    nextWs: 1,
+    nextDs: 1,
+    workspaces: [],
+    devservers: [],
+    devserverWorkspaces: [],
+    windows: [],
+    liveTerminals: [],
+  };
+}
+
 function terminal(
   window_id: string,
   library_id: string,
@@ -214,11 +229,17 @@ function tick<T>(value: T): Promise<T> {
   return Promise.resolve(value);
 }
 
+export type LauncherDemoVariant = "populated" | "empty" | "devserver";
+
 export type LauncherDemoOptions = {
   /// Fired whenever the demo opens/focuses a window row. The marketing embed
   /// hooks this to open the frontend-only workspace demo overlay; the demo
   /// state change (hidden/connected) still happens either way.
   onOpenWindow?: (id: string) => void;
+  /// "populated" is the home hero's library fixture; "empty" is the manual's
+  /// first-run mock (local machine only, nothing created yet); "devserver" is
+  /// the same empty seed with the Add-dev-server dialog opened on mount.
+  variant?: LauncherDemoVariant;
 };
 
 export function createLauncherDemoApi(opts: LauncherDemoOptions = {}): LauncherDemoApi {
@@ -231,8 +252,10 @@ export function createLauncherDemoApi(opts: LauncherDemoOptions = {}): LauncherD
   let nextDs = 1;
   const subscribers = new Set<(set: WindowSet) => void>();
 
+  const startsEmpty = opts.variant === "empty" || opts.variant === "devserver";
+
   function reset(): void {
-    const s = seed();
+    const s = startsEmpty ? emptySeed() : seed();
     workspaces = clone(s.workspaces);
     devservers = clone(s.devservers);
     devserverWorkspaces = clone(s.devserverWorkspaces);
@@ -268,7 +291,7 @@ export function createLauncherDemoApi(opts: LauncherDemoOptions = {}): LauncherD
   reset();
 
   return {
-    attentionDevserverId: ATTENTION_DEVSERVER_ID,
+    attentionDevserverId: startsEmpty ? null : ATTENTION_DEVSERVER_ID,
     reset,
     listWorkspaces: () => tick(mergedWorkspaces()),
     addLocalWorkspace: (path, label) => {
@@ -427,7 +450,9 @@ export function createLauncherDemoApi(opts: LauncherDemoOptions = {}): LauncherD
       }
       return tick(undefined);
     },
-    pickFolder: () => tick("/Users/hacker/demo-reset"),
+    // The empty variants' Browse... fills a path matching the manual's
+    // `chan open ./your-project` walkthrough.
+    pickFolder: () => tick(startsEmpty ? "/Users/you/dev/your-project" : "/Users/hacker/demo-reset"),
     listWindows: () => tick(windows.map((w) => ({ ...w }))),
     createWindow: (kind, opts) => {
       const workspacePath = opts?.workspacePath;

@@ -43,8 +43,10 @@ const requiredDownloadIds = [
 
 const requiredInputs = [
   path.join(srcRoot, "templates", "base.html"),
+  path.join(srcRoot, "templates", "demo-embed.html"),
   path.join(srcRoot, "pages", "home.html"),
   path.join(srcRoot, "pages", "install.html"),
+  path.join(srcRoot, "pages", "manual.html"),
   path.join(srcRoot, "install.sh"),
   path.join(srcRoot, "styles.css"),
   path.join(srcRoot, "site.js"),
@@ -59,6 +61,8 @@ async function main() {
   const baseTemplate = await fs.readFile(path.join(srcRoot, "templates", "base.html"), "utf8");
   const homeTemplate = await fs.readFile(path.join(srcRoot, "pages", "home.html"), "utf8");
   const installTemplate = await fs.readFile(path.join(srcRoot, "pages", "install.html"), "utf8");
+  const manualTemplate = await fs.readFile(path.join(srcRoot, "pages", "manual.html"), "utf8");
+  const demoEmbedTemplate = await fs.readFile(path.join(srcRoot, "templates", "demo-embed.html"), "utf8");
 
   await fs.rm(distRoot, { recursive: true, force: true });
   await fs.mkdir(path.join(distRoot, "assets"), { recursive: true });
@@ -70,6 +74,8 @@ async function main() {
   const releaseTemplateValues = {
     githubReleasesUrl: githubRepoUrl + "/releases",
   };
+  const launcherDemoHead =
+    '<link rel="stylesheet" href="/assets/launcher-demo.css" />\n<script type="module" src="/assets/launcher-demo.js"></script>';
   await writePage(
     "index.html",
     renderPage(baseTemplate, {
@@ -79,7 +85,7 @@ async function main() {
       description:
         "Chan is your new terminal and workspace manager (or IDE if you prefer). Local and remote, on macOS, Linux, and Windows. Unblock 10x productivity.",
       content: fillTemplate(homeTemplate, { version, ...releaseTemplateValues }),
-      headExtra: '<link rel="stylesheet" href="/assets/launcher-demo.css" />\n<script type="module" src="/assets/launcher-demo.js"></script>',
+      headExtra: launcherDemoHead,
     }),
   );
 
@@ -91,6 +97,29 @@ async function main() {
       title: "Install chan",
       description: "Install Chan Desktop or the standalone chan CLI.",
       content: fillTemplate(installTemplate, { version, ...releaseTemplateValues }),
+    }),
+  );
+
+  await writePage(
+    "manual/index.html",
+    renderPage(baseTemplate, {
+      active: "manual",
+      bodyClass: "manual-page",
+      title: "Chan manual",
+      description: "What chan is and how to get productive with it: terminals, workspaces, the command launcher, and dev servers.",
+      content: fillTemplate(manualTemplate, { version, ...releaseTemplateValues }),
+      headExtra: launcherDemoHead,
+    }),
+  );
+
+  // The manual's devserver-form demo rides in an iframe: a LauncherDemo mount
+  // is one-per-page (module-level launcher stores), so the second instance
+  // gets its own bare document instead of a second mount on /manual/.
+  await writePage(
+    "manual/demo/devserver/index.html",
+    fillTemplate(demoEmbedTemplate, {
+      title: "Add dev server demo",
+      variant: "devserver",
     }),
   );
 
@@ -223,6 +252,7 @@ async function scopeDemoCss(fileName, frameSelector) {
 function renderSiteNav(active) {
   const links = [
     ["install", "/install/", "Install"],
+    ["manual", "/manual/", "Manual"],
     ["github", githubRepoUrl, "GitHub"],
   ];
   return links
@@ -284,7 +314,7 @@ async function validateDist(version) {
     }
   }
 
-  for (const required of ["index.html", "install/index.html", "install.sh", "CNAME"]) {
+  for (const required of ["index.html", "install/index.html", "manual/index.html", "manual/demo/devserver/index.html", "install.sh", "CNAME"]) {
     if (!allDistPaths.has(required)) throw new Error(`dist is missing ${required}`);
   }
 

@@ -435,9 +435,9 @@
             <button
               class="icon-btn"
               type="button"
-              title={demoState.enabled ? "Reset demo data" : "New workspace"}
-              aria-label={demoState.enabled ? "Reset demo data" : "New local workspace"}
-              onclick={() => (demoState.enabled ? run(resetDemo()) : openNewDialog("local"))}>
+              title={demoState.reset ? "Reset demo data" : "New workspace"}
+              aria-label={demoState.reset ? "Reset demo data" : "New local workspace"}
+              onclick={() => (demoState.reset ? run(resetDemo()) : openNewDialog("local"))}>
               <FolderPlus size={16} />
             </button>
           {/if}

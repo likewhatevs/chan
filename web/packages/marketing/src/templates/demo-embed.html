@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>{{title}}</title>
+<meta name="robots" content="noindex" />
+<link rel="icon" type="image/png" href="/chan-favicon.png" />
+<link rel="stylesheet" href="/assets/launcher-demo.css" />
+<script type="module" src="/assets/launcher-demo.js"></script>
+<style>
+  html,
+  body {
+    margin: 0;
+    height: 100%;
+    background: #1c1c1e;
+  }
+
+  .launcher-demo-mount {
+    display: none;
+    height: 100vh;
+    overflow: hidden;
+  }
+
+  .launcher-demo-mount.mounted {
+    display: block;
+  }
+
+  .demo-embed-fallback {
+    color: #98989d;
+    font: 14px system-ui, sans-serif;
+    padding: 1rem;
+  }
+
+  .launcher-demo-mount.mounted + .demo-embed-fallback {
+    display: none;
+  }
+</style>
+</head>
+<body>
+<div id="launcher-demo" class="launcher-demo-mount" data-variant="{{variant}}"></div>
+<p class="demo-embed-fallback">Interactive demo (enable JavaScript)</p>
+</body>
+</html>

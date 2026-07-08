@@ -1,0 +1,187 @@
+<section class="page-head">
+  <h1>Manual</h1>
+  <p>What chan is and how to get productive with it: terminals, workspaces, the command launcher, and dev servers.</p>
+</section>
+
+<section class="manual-block" id="what-is-chan">
+  <div class="section-heading">
+    <h2><a class="heading-anchor" href="#what-is-chan">What is chan?</a></h2>
+  </div>
+  <p>chan turns a folder on your disk into a workspace: it indexes the content for search, gives Markdown files autocompletion for linking to each other, and builds a graph of the project. Around that it gives you a desktop app with a fast terminal emulator, split panes, and built-in apps (editor, file browser, graph, dashboard, and more), so you and your coding agents work on the same project side by side. Everything runs locally by default, and the same experience works against a remote machine through Chan Devserver.</p>
+</section>
+
+<section class="manual-block" id="install">
+  <div class="section-heading">
+    <h2><a class="heading-anchor" href="#install">Install</a></h2>
+  </div>
+  <p><strong>Chan Desktop</strong> is the place to start: a small binary that bundles the terminal emulator and the workspace UI. Grab it for your platform from the <a href="/install/">install page</a>.</p>
+</section>
+
+<section class="manual-block" id="first-run">
+  <div class="section-heading">
+    <h2><a class="heading-anchor" href="#first-run">First run: the Computers screen</a></h2>
+  </div>
+  <p>Chan Desktop opens on the Computers screen. It lists this machine and any dev servers you add later. The "This machine" card has two buttons:</p>
+  <ul>
+    <li><strong>New terminal</strong> opens a standalone terminal window.</li>
+    <li><strong>New workspace</strong> registers a folder as a workspace (see Workspaces below).</li>
+  </ul>
+  <figure class="launcher-manual">
+    <div class="launcher-demo-wrap">
+      <div id="launcher-demo" class="launcher-demo-mount" data-variant="empty" data-hints="true" aria-label="Interactive Computers screen demo"></div>
+      <div class="launcher-fallback shot-placeholder-frame">interactive demo (enable JavaScript)</div>
+      <div class="manual-callouts" aria-hidden="true">
+        <p class="manual-callout callout-terminal"><strong>New terminal</strong> opens a standalone terminal window.</p>
+        <p class="manual-callout callout-workspace"><strong>New workspace</strong> turns a folder into a workspace.</p>
+      </div>
+    </div>
+    <figcaption>The Computers screen on first run. This is a live mock: click the buttons.</figcaption>
+  </figure>
+</section>
+
+<section class="manual-block" id="terminals">
+  <div class="section-heading">
+    <h2><a class="heading-anchor" href="#terminals">Terminals</a></h2>
+  </div>
+  <p>Inside every chan terminal, the <code>chan</code> and <code>cs</code> (chan shell) commands drive the UI. Try:</p>
+  <div class="command-copy" data-copy-block>
+    <code><span>$</span><b data-copy-value>cs terminal new</b></code>
+    <button type="button">Copy</button>
+  </div>
+  <p>This opens a new terminal tab in the current window. A few things to know about tabs and panes:</p>
+  <ul>
+    <li>Split a pane with <code>Cmd+/</code> (split right) or <code>Cmd+Shift+/</code> (split bottom) on macOS, <code>Ctrl+/</code> and <code>Ctrl+Shift+/</code> on Windows and Linux, <code>Ctrl+Alt+/</code> and <code>Ctrl+Alt+?</code> on web. Both also live in the command launcher.</li>
+    <li>Drag tabs across panes to rearrange them.</li>
+    <li>Every pane has two sides, A and B. The A/B button in the pane's top bar flips between them (<code>Ctrl+`</code>), so one pane can hold two sets of tabs.</li>
+    <li>Close a tab with <code>Cmd+W</code> on macOS, or <code>Ctrl+D</code> on any platform.</li>
+    <li>Close a window with <code>Cmd+Shift+W</code> on macOS, <code>Ctrl+Shift+W</code> on Windows and Linux. On web, close the browser tab.</li>
+    <li>If a window refuses to close, the hidden side of a pane still has tabs: the A/B button flashes to show you where they are. Flip and close them first.</li>
+    <li>Clicking the [X] close button in your window manager offers to hide the window (everything keeps running) or close it.</li>
+  </ul>
+  <figure class="inline-shot">
+    <img src="/assets/manual/terminal-panes.png" alt="A terminal window split into two panes; a cs terminal survey command in the left pane drives a Pick-your-choice prompt in the right pane" />
+    <figcaption>A terminal window split into two panes. Each pane's top bar carries the A/B side toggle and the hamburger menu.</figcaption>
+  </figure>
+</section>
+
+<section class="manual-block" id="command-launcher">
+  <div class="section-heading">
+    <h2><a class="heading-anchor" href="#command-launcher">The command launcher</a></h2>
+  </div>
+  <p>Press <code>Cmd+K</code> on macOS (<code>Ctrl+Alt+K</code> on Windows, Linux, and web) to open the command launcher, or pick Commands from the pane's hamburger menu. The launcher opens as a search box; start typing to reveal the list of commands, with the best matches on top and every row showing its keyboard shortcut. Not sure what to type? Type <code>/</code>: it matches nothing, so the launcher shows the full catalog instead. The launcher is contextual: on an empty pane you get the apps and everything else available, and inside an app that app's commands come first.</p>
+  <figure class="inline-shot">
+    <img src="/assets/manual/command-launcher-terminal.png" alt="The command launcher opened in a standalone terminal window after typing a slash: terminal commands first, then the app catalog" />
+    <figcaption>The command launcher in a standalone terminal window: terminal commands first, then the catalog.</figcaption>
+  </figure>
+  <figure class="inline-shot">
+    <img src="/assets/manual/command-launcher-workspace.png" alt="The command launcher opened in a workspace window, with the workspace's commands listed first" />
+    <figcaption>The command launcher in a workspace window.</figcaption>
+  </figure>
+</section>
+
+<section class="manual-block" id="workspaces">
+  <div class="section-heading">
+    <h2><a class="heading-anchor" href="#workspaces">Workspaces</a></h2>
+  </div>
+  <p>A workspace is a directory that chan treats as a project:</p>
+  <ul>
+    <li>The content is indexed for search.</li>
+    <li>Markdown files get autocompletion for linking to each other.</li>
+    <li>chan builds a project graph from the links, tags, and mentions in your documents, plus language and size stats for the code.</li>
+    <li>Each workspace keeps its own set of windows, panes, and tabs.</li>
+  </ul>
+  <p>Any directory can become a workspace. For a first try, start from an existing git repo. In a chan terminal:</p>
+  <div class="command-copy" data-copy-block>
+    <code><span>$</span><b data-copy-value>git clone https://github.com/you/your-project</b></code>
+    <button type="button">Copy</button>
+  </div>
+  <div class="command-copy" data-copy-block>
+    <code><span>$</span><b data-copy-value>chan open ./your-project</b></code>
+    <button type="button">Copy</button>
+  </div>
+  <p class="minor"><code>chan open</code> expects the root of a repository. To open a subdirectory inside one, add <code>--here</code>.</p>
+  <p>Back on the Computers screen, the new workspace appears with its power toggle On: the workspace is alive, indexed, and keeping the state of your windows, panes, and tabs. Click <strong>New window of your-project</strong> and the real power of chan begins:</p>
+  <ul>
+    <li>The pane's hamburger menu lists the built-in apps: dashboard, diagram, draft, file browser, graph, slide deck, team, and terminal.</li>
+    <li>The command launcher works here too, with the workspace's commands first.</li>
+  </ul>
+  <p>You can quit and reopen Chan Desktop and your windows and layouts are restored. Local terminals keep their layout, but their shells are restarted.</p>
+  <p>Everything you can do in Chan Desktop, standalone terminals and workspaces alike, also works on a remote machine through Chan Devserver.</p>
+  <figure class="inline-shot">
+    <img src="/assets/manual/workspace-editor.png" alt="A workspace window with the docked file browser showing the repository tree and the Markdown editor rendering design.md with an architecture diagram" />
+    <figcaption>A workspace window: the docked file browser and the Markdown editor.</figcaption>
+  </figure>
+  <figure class="inline-shot">
+    <img src="/assets/manual/workspace-graph-dirs.png" alt="The graph app showing the project's first level of directories as connected nodes" />
+    <figcaption>Graph of the project's first level of directories.</figcaption>
+  </figure>
+  <figure class="inline-shot">
+    <img src="/assets/manual/workspace-graph-full.png" alt="The graph app showing the whole project with one node selected and its connections highlighted" />
+    <figcaption>Graph of the whole project, one node selected.</figcaption>
+  </figure>
+</section>
+
+<section class="manual-block" id="devserver">
+  <div class="section-heading">
+    <h2><a class="heading-anchor" href="#devserver">Chan Devserver</a></h2>
+  </div>
+  <p>The devserver runs chan on another machine, or in an isolated environment on this one, and lets Chan Desktop connect to it. Sessions live on the server, so you can disconnect and reconnect while terminals and agents keep running.</p>
+  <p>Pick where to run it:</p>
+  <ul>
+    <li>On macOS: a lima-vm, or a remote machine via ssh.</li>
+    <li>On Windows: a WSL sandbox, or a remote machine via ssh.</li>
+    <li>On Linux: an isolated devserver on the same machine (all platforms support <code>CHAN_HOME=/path</code>), a <a href="/install/">docker container</a>, or a remote machine via ssh.</li>
+  </ul>
+  <p>On the target system, install chan:</p>
+  <div class="command-copy" data-copy-block>
+    <code><span>$</span><b data-copy-value>curl -fsSL https://chan.app/install.sh | sh</b></code>
+    <button type="button">Copy</button>
+  </div>
+  <p>This installs <code>$HOME/.local/bin/chan</code> and the symlink <code>cs -&gt; chan</code> in the same directory. Start the devserver:</p>
+  <div class="command-copy" data-copy-block>
+    <code><span>$</span><b data-copy-value>$HOME/.local/bin/chan devserver --start</b></code>
+    <button type="button">Copy</button>
+  </div>
+  <p>This installs the devserver as a background service listening on <code>localhost:8787</code>, using the default service manager for your platform:</p>
+  <ul>
+    <li>On Linux it uses systemd: a user-scoped service that survives logout once linger is on (chan enables it, or asks you to run <code>sudo loginctl enable-linger</code>).</li>
+    <li>On macOS it uses launchd: the service runs while you are logged in.</li>
+    <li>On Windows it uses chan's own daemon mode, which works on all platforms.</li>
+    <li>You can override the choice with <code>--service=[auto,none,chan,systemd,launchd]</code>. The other action flags are <code>--stop</code>, <code>--status</code>, <code>--restart</code>, and <code>--join</code>.</li>
+    <li>Without an action flag, <code>chan devserver</code> runs in the foreground.</li>
+  </ul>
+  <p>Now add the devserver to Chan Desktop:</p>
+  <ol>
+    <li>On the Computers screen, click <strong>Add dev server</strong> at the bottom.</li>
+    <li>Fill in Name, Address, and Connect script. Examples:
+      <ul>
+        <li>lima-vm from macOS:
+          <ul>
+            <li>Address: <code>localhost:8787</code></li>
+            <li>Script: <code>limactl shell default ~/.local/bin/chan devserver --join</code></li>
+          </ul>
+        </li>
+        <li>WSL from Windows:
+          <ul>
+            <li>Address: <code>localhost:8787</code></li>
+            <li>Script: <code>wsl ~/.local/bin/chan devserver --join</code></li>
+          </ul>
+        </li>
+        <li>Remote machine via ssh:
+          <ul>
+            <li>Address: <code>localhost:9901</code></li>
+            <li>Script: <code>ssh user@host -L 9901:localhost:8787 ~/.local/bin/chan devserver --join</code></li>
+          </ul>
+        </li>
+      </ul>
+    </li>
+    <li>Optionally tick <strong>Auto-hide control terminal on success</strong> so the terminal running the connect script hides itself once connected.</li>
+    <li>Click <strong>Add dev server</strong>, then click Connect on the machine's row.</li>
+  </ol>
+  <figure class="launcher-manual">
+    <iframe class="launcher-demo-embed" src="/manual/demo/devserver/" title="Interactive Add dev server demo" loading="lazy"></iframe>
+    <figcaption>The Add dev server form. This is a live mock too: fill it in, add, and connect.</figcaption>
+  </figure>
+  <p>Once connected, remote terminals and workspaces behave like local ones. Disconnecting keeps the remote sessions alive and running; reconnect and pick up where you left off.</p>
+  <p>On Linux devservers you can even restart the devserver process without losing your shells: the PTY file descriptors are parked in the systemd fdstore while the devserver restarts, then loaded back up, so your agents continue working and your terminals are always alive.</p>
+</section>
