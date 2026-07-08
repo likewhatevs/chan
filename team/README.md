@@ -1,6 +1,6 @@
 # Release history
 
-The development history of chan, one consolidated report per release era. Each `release-{NN}-{version}.md` is that era's front door: its roadmap (the asks), how the rounds and waves were structured, who worked it and how they coordinated, what shipped, and a retrospective with the lessons worth carrying forward. The `NN` prefix orders the reports chronologically; the version marks the release(s) the era shipped (`prerelease`/`unreleased` where no tag was cut). Going-forward reports drop the prefix and are named for their release (`release-{version}.md`).
+The development history of chan, one consolidated report per release era. Each `release-{NN}-{version}.md` is that era's front door: its roadmap (the asks), how the rounds and waves were structured, who worked it and how they coordinated, what shipped, and a retrospective with the lessons worth carrying forward. The `NN` prefix orders the reports chronologically; the version marks the release(s) the era shipped (`prerelease`/`unreleased` where no tag was cut). Going-forward reports drop the `NN` prefix and are named for their release (`release-v{version}.md`); a release cut through release candidates keeps its per-cycle rc reports (`release-v{version}-rc{N}.md`) as indented sub-entries under that release.
 
 These reports are the project's second brain. The raw per-author journals and coordination buses that backed them were distilled into these files; the raw material is preserved in git history.
 
@@ -54,10 +54,27 @@ New agents should also read [`.agents/playbook.md`](../.agents/playbook.md), the
 - [release-44-v0.53.1](release-44-v0.53.1.md) - a Windows, clipboard, and editor patch.
 - [release-45-v0.54.0](release-45-v0.54.0.md) - machine-first launcher, Docker publishing, editor polish, and chan open routing.
 - [release-pub-site](release-pub-site.md) - a standalone branding and positioning re-steer plus marketing site refresh (not a numbered release era).
-- [release-0.55.0](release-0.55.0.md) - editor polish, devserver hardening, docs consolidation, and the validation carryover into v0.56.0.
-- [release-0.56.0](release-0.56.0.md) - design-doc cleanup, the `DEVSERVER_*` gateway contract, v0.55 validation carryovers, and devserver lifecycle hardening.
-- [release-0.56.1](release-0.56.1.md) - control-terminal exit attention, launcher hover polish, and split desktop package targets.
+- [release-v0.55.0](release-v0.55.0.md) - editor polish, devserver hardening, docs consolidation, and the validation carryover into v0.56.0.
+- [release-v0.56.0](release-v0.56.0.md) - design-doc cleanup, the `DEVSERVER_*` gateway contract, v0.55 validation carryovers, and devserver lifecycle hardening.
+- [release-v0.56.1](release-v0.56.1.md) - control-terminal exit attention, launcher hover polish, and split desktop package targets.
+- [release-v0.56.2](release-v0.56.2.md) - markdown list rendering fixes (guide bars removed, prose-aligned markers) and owner-side, typed workspace lifecycle state.
+- [release-v0.56.3](release-v0.56.3.md) - markdown list alignment across marker types and platform-accurate pane shortcut hints.
+- [release-v0.56.4](release-v0.56.4.md) - wide markdown table containment.
+- [release-v0.57.0](release-v0.57.0.md) - systemd fdstore restarts and devserver close sync.
+- [release-v0.58.0](release-v0.58.0.md) - systemd PTY restore polish and the desktop reconnect follow-up.
 - [release-v0.59.0](release-v0.59.0.md) - the v0.59.0 feature wave: the mermaid-to-excalidraw diagram renderer, graph focus and lens fixes with an indexing placeholder, the actionable indexing dashboard, the `chan devserver --service` action-verb reshape, editor list and directory-link fixes, `cs copy`/`cs paste` clipboard bridging, a semantic-search opt-out, and chan-desktop geometry/glyph/clipboard fixes.
+- [release-v0.59.1](release-v0.59.1.md) - the v0.59.0 chan-desktop known-limitation fix (excalidraw subgraphs now render everywhere), the launcher left-icon-column revert, and the remote window-title arrow glyph.
+- [release-v0.60.0](release-v0.60.0.md) - the axum 0.7 to 0.8 migration across both Cargo workspaces, plus the `chan upgrade` prerelease-version fix found in the rc smoke.
+- [release-v0.61.0](release-v0.61.0.md) - interactive Excalidraw whiteboard tabs and markdown slide preview, plus desktop-PWA and leader/follower session integration.
+- [release-v0.62.0](release-v0.62.0.md) - the polish-and-cleanup round: no new surfaces, the existing ones done right.
+- [release-v0.63.0](release-v0.63.0.md) - the Rich Prompt composer onto chan's main WYSIWYG editor, and readable, reconnectable devserver control terminals after a control-script death.
+- [release-v0.64.0](release-v0.64.0.md) - the Cmd+K command launcher that lists, filters, and runs every UI action, plus trimmed tab menus and cross-machine workspace surfacing.
+- [release-v0.65.0](release-v0.65.0.md) - a configurable command launcher and Settings as the one place for interactive config (per-OS shortcuts, a conditional "This workspace" tab), plus late workspace polish.
+- [release-v0.66.0](release-v0.66.0.md) - the Settings overlay (focused, keyboard-navigable, focus-restoring) and consistent pane A/B side-flip rotation.
+  - [release-v0.66.0-rc1](release-v0.66.0-rc1.md) - the v0.66.0 UI round validated as a pin state (Settings overlay, pane A/B flip).
+- [release-v0.66.1](release-v0.66.1.md) - deterministic devserver control terminals (the daemonize handshake versus a later script exit) and unconditional Reconnect/Abandon.
+  - [release-v0.66.1-rc1](release-v0.66.1-rc1.md) - rc1 fixing six post-v0.66.0 bugs (rich-prompt persistence, excalidraw View/Edit) across three file-disjoint lanes.
+  - [release-v0.66.1-rc2](release-v0.66.1-rc2.md) - rc2 folding in the rc1 smoke findings: the post-connect control-terminal rule, a per-tab survey FIFO, and small fixes and UX additions.
 
 ## Conventions
 
