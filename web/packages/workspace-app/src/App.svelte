@@ -1157,15 +1157,15 @@
         if (term) toggleRichPromptForTab(term.id);
         return;
       }
-      // Route through createDraftAndOpen so the command launcher,
-      // welcome grid, Cmd+N chord, and desktop native menu all converge
-      // on a single handler.
+      // Route through createDraftAndOpen so the command launcher, pane
+      // hamburger Apps row, Cmd+N chord, and desktop native menu all
+      // converge on a single handler.
       case "app.draft.new":
         void createDraftAndOpen();
         return;
       // Chordless Apps spawns: the launcher catalog run()s these actions
-      // directly, and the welcome Apps menu (plus any host bridge) reaches
-      // the same handlers through this dispatch.
+      // directly, and the pane hamburger's Apps rows (plus any host
+      // bridge) reach the same handlers through this dispatch.
       case "app.diagram.new":
         void createDiagramAndOpen();
         return;
@@ -1179,7 +1179,7 @@
         lockNow();
         return;
       // Open Dashboard in the active pane. Same command from the command
-      // launcher, welcome grid, and carousel slide-1 button.
+      // launcher, pane hamburger Apps row, and carousel slide-1 button.
       case "app.dashboard.open":
         openDashboardInActivePane();
         return;

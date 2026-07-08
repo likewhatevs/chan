@@ -46,6 +46,7 @@
   } from "../state/tabs.svelte";
 
   import {
+    BarChart2,
     Bug,
     Check,
     FileText,
@@ -54,11 +55,13 @@
     LayoutGrid,
     Network,
     Palette,
+    Presentation,
     Radio,
     RefreshCw,
     Shapes,
     Terminal,
     User,
+    Users,
     X,
   } from "lucide-svelte";
 
@@ -194,9 +197,9 @@
     `Flip to side ${visibleSide === "a" ? "B" : "A"}${flipChord ? ` (${flipChord})` : ""}`,
   );
 
-  /// Empty panes have no right-click context menu. The command
-  /// launcher is the discovery surface for spawn actions; the pane
-  /// hamburger only keeps pane-local chrome controls.
+  /// Empty panes have no right-click context menu. The pane hamburger
+  /// and the command launcher are the discovery surfaces for spawn
+  /// actions; the hamburger also keeps the pane-local chrome controls.
 
   /// Pane chrome menu: the ⋮ in the tab strip that replaces the
   /// per-button split / close controls.
@@ -525,6 +528,28 @@
     window.dispatchEvent(
       new CustomEvent("chan:command", { detail: { name: id } }),
     );
+  }
+
+  type IconComponent = typeof LayoutGrid;
+  type AppRow = { id: string; title: string; icon: IconComponent };
+
+  // One row per spawnable app surface, alphabetical by title. Six ids are
+  // the chorded spawn commands; New diagram / New slide deck are the
+  // chordless catalog entries runCommand also routes (App.svelte).
+  const appRows: AppRow[] = [
+    { id: "app.dashboard.open", title: "New dashboard", icon: BarChart2 },
+    { id: "app.diagram.new", title: "New diagram", icon: Shapes },
+    { id: "app.draft.new", title: "New draft", icon: FileText },
+    { id: "app.files.toggle", title: "New file browser", icon: Folder },
+    { id: "app.graph.toggle", title: "New graph", icon: Network },
+    { id: "app.slides.new", title: "New slide deck", icon: Presentation },
+    { id: "app.terminal.teamWork", title: "New team", icon: Users },
+    { id: "app.terminal.toggle", title: "New terminal", icon: Terminal },
+  ];
+
+  function runAppRow(id: string): void {
+    closePaneHamburgerMenu();
+    dispatchCommand(id);
   }
   // Single-pane layouts hide the focus highlight: it's only useful
   // when there's more than one pane to disambiguate. Re-derives on
@@ -1313,13 +1338,13 @@
       >
         {visibleSide.toUpperCase()}
       </button>
-      <!-- Pane chrome menu: command launcher, then pane-local focus
-           border colour. Surface actions live in the launcher. -->
+      <!-- Pane chrome menu: command launcher and Hybrid Nav, the Apps
+           spawn rows, then pane-local focus border colour last. -->
       <HamburgerMenu
         bind:this={paneMenu}
         bind:open={paneMenuOpen}
         width={250}
-        height={250}
+        height={470}
         onBeforeOpen={closePaneContextMenus}
       >
         <li>
@@ -1336,6 +1361,17 @@
             <span class="menu-row-chord">{chordLabel("app.pane.mode")}</span>
           </button>
         </li>
+        <li class="sep" role="separator"></li>
+        {#each appRows as row (row.id)}
+          {@const Icon = row.icon}
+          <li>
+            <button role="menuitem" onclick={() => runAppRow(row.id)}>
+              <Icon size={16} strokeWidth={1.75} aria-hidden="true" />
+              <span class="menu-row-label">{row.title}</span>
+              <span class="menu-row-chord">{chordLabel(row.id)}</span>
+            </button>
+          </li>
+        {/each}
         <li class="sep" role="separator"></li>
         <li class="menu-label">
           <Palette size={16} strokeWidth={1.75} aria-hidden="true" />
@@ -1430,14 +1466,14 @@
         role="presentation"
       >
             <!-- Single-pane lone-pane case renders the static welcome
-                 surface: 5-tile spawn grid + Dashboard tile + footer
-                 hint. The rotating carousel widget (About / Workspace
-                 metadata / Indexing graph) lives inside the Dashboard
-                 tab. Multi-pane empty panes keep the minimal chrome
-                 (just the chan mark). Empty panes have no right-click
-                 menu; spawn actions live in the welcome grid and
-                 command launcher, so right-clicking an empty pane is
-                 a no-op.
+                 surface: the chan mark over the dotted wave field. The
+                 rotating carousel widget (About / Workspace metadata /
+                 Indexing graph) lives inside the Dashboard tab.
+                 Multi-pane empty panes keep the minimal chrome (just
+                 the chan mark). Empty panes have no right-click menu;
+                 spawn actions live in the pane hamburger's Apps rows
+                 and the command launcher, so right-clicking an empty
+                 pane is a no-op.
 
                  Terminal-only windows skip the welcome entirely: they always
                  hold at least one terminal (boot opens one, close-on-last-tab

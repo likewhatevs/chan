@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
 import {
+  firstSlideHeadingCaret,
   groupHeadingsBySlides,
   parseSlidesSpec,
   slideIndexForLine,
@@ -221,6 +222,62 @@ text
     expect(slideIndexForLine(pages, 3)).toBe(1);
     expect(slideIndexForLine(pages, 6)).toBe(2);
     expect(slideIndexForLine(pages, null)).toBe(0);
+  });
+});
+
+describe("firstSlideHeadingCaret", () => {
+  // Mirrors chan-server's NEW_SLIDES_CONTENT seed (routes/drafts.rs) so
+  // the New slide deck caret landing is pinned against the real payload.
+  const seed = `---
+chan:
+  kind: slides
+  slides:
+    aspect_ratio: "16:9"
+---
+
+# Slide 1
+`;
+
+  test("lands at the end of the seed's # Slide 1 heading line", () => {
+    const at = firstSlideHeadingCaret(seed);
+    expect(at).toBe(seed.indexOf("# Slide 1") + "# Slide 1".length);
+    // The offset sits past the closing frontmatter fence, never inside
+    // the metadata block.
+    expect(at).toBeGreaterThan(seed.indexOf("\n---\n") + "\n---\n".length);
+    expect(seed.slice(at! - "# Slide 1".length, at!)).toBe("# Slide 1");
+  });
+
+  test("CRLF sources resolve to the heading end before the \\r", () => {
+    const crlf = seed.replaceAll("\n", "\r\n");
+    const at = firstSlideHeadingCaret(crlf);
+    expect(at).not.toBeNull();
+    expect(crlf.slice(at! - "# Slide 1".length, at!)).toBe("# Slide 1");
+    expect(crlf[at!]).toBe("\r");
+  });
+
+  test("skips #-looking lines inside the frontmatter block", () => {
+    const source = `---
+chan:
+  kind: slides
+# a yaml comment, not a heading
+---
+
+# Real title
+`;
+    const at = firstSlideHeadingCaret(source);
+    expect(source.slice(at! - "# Real title".length, at!)).toBe("# Real title");
+  });
+
+  test("documents without frontmatter land at their first heading", () => {
+    expect(firstSlideHeadingCaret("# Draft\nbody\n")).toBe("# Draft".length);
+  });
+
+  test("returns null when no heading follows the frontmatter", () => {
+    expect(
+      firstSlideHeadingCaret("---\nchan:\n  kind: slides\n---\n\nno heading\n"),
+    ).toBeNull();
+    expect(firstSlideHeadingCaret("#nospace is not a heading\n")).toBeNull();
+    expect(firstSlideHeadingCaret("")).toBeNull();
   });
 });
 

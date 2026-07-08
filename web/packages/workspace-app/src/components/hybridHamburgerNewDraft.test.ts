@@ -2,8 +2,9 @@ import { describe, expect, test } from "vitest";
 import pane from "./Pane.svelte?raw";
 import app from "../App.svelte?raw";
 
-// Spawn actions now live in the command launcher. The pane hamburger
-// stays small: Commands, separator, focus border colour.
+// Spawn actions live in the command launcher and the pane hamburger's
+// Apps rows; the old spawnActions grid (title-case rows like "New
+// Draft") stays gone.
 
 describe("pane hamburger no longer owns spawnActions", () => {
   test("spawnActions data and New Draft row are absent from Pane.svelte", () => {
@@ -18,9 +19,9 @@ describe("pane hamburger no longer owns spawnActions", () => {
     );
   });
 
-  test("source comment points spawn discovery at the launcher", () => {
+  test("source comment points spawn discovery at the hamburger + launcher", () => {
     expect(pane).toMatch(
-      /launcher is the discovery surface for spawn actions/i,
+      /pane hamburger[\s\S]{1,120}discovery surfaces for spawn[\s\S]{1,40}actions/i,
     );
   });
 });

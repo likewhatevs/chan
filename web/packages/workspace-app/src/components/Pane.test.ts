@@ -153,8 +153,27 @@ describe("Pane terminal tab activity marker", () => {
   });
 });
 
+// Every hamburger row in menu order: Commands / Hybrid Nav, the eight
+// Apps spawn rows (alphabetical by title), then the focus colours.
+const HAMBURGER_LABELS = [
+  "Commands",
+  "Hybrid Nav",
+  "New dashboard",
+  "New diagram",
+  "New draft",
+  "New file browser",
+  "New graph",
+  "New slide deck",
+  "New team",
+  "New terminal",
+  "blue",
+  "orange",
+  "green",
+  "pink",
+];
+
 describe("Pane right-click menus", () => {
-  test("hamburger exposes Commands and focus colour order", async () => {
+  test("hamburger exposes Commands, Apps rows, and focus colour order", async () => {
     const pane: LeafNode = {
       kind: "leaf",
       id: "pane-menu",
@@ -169,14 +188,7 @@ describe("Pane right-click menus", () => {
     expect(document.body.querySelector(".menu-label span")?.textContent?.trim()).toBe(
       "Focus border colour",
     );
-    expect(menuLabels()).toEqual([
-      "Commands",
-      "Hybrid Nav",
-      "blue",
-      "orange",
-      "green",
-      "pink",
-    ]);
+    expect(menuLabels()).toEqual(HAMBURGER_LABELS);
 
     const orange = [...document.body.querySelectorAll<HTMLButtonElement>(".hamburger-menu button")]
       .find((button) => button.textContent?.includes("orange"));
@@ -186,7 +198,7 @@ describe("Pane right-click menus", () => {
     expect(target.querySelector(".pane")?.getAttribute("data-focus-color")).toBe("orange");
   });
 
-  test("pane hamburger leaves surface and pane actions to the launcher", async () => {
+  test("pane hamburger keeps pane actions in the launcher (Apps rows aside)", async () => {
     const pane: LeafNode = {
       kind: "leaf",
       id: "pane-trim",
@@ -199,14 +211,7 @@ describe("Pane right-click menus", () => {
     await tick();
 
     const labels = menuLabels();
-    expect(labels).toEqual([
-      "Commands",
-      "Hybrid Nav",
-      "blue",
-      "orange",
-      "green",
-      "pink",
-    ]);
+    expect(labels).toEqual(HAMBURGER_LABELS);
     for (const label of [
       "New Draft",
       "Terminal",
@@ -225,6 +230,49 @@ describe("Pane right-click menus", () => {
     ]) {
       expect(labels).not.toContain(label);
     }
+  });
+
+  test("hamburger nests the Apps rows between the two separators", async () => {
+    const pane: LeafNode = {
+      kind: "leaf",
+      id: "pane-apps-rows",
+      tabs: [terminalTab()],
+      activeTabId: "term-1",
+    };
+    const target = await renderPane(pane, { paneMode: false });
+
+    target.querySelector<HTMLButtonElement>(".hamburger-trigger")?.click();
+    await tick();
+
+    // Menu structure: Commands / Hybrid Nav, separator, the eight Apps
+    // rows, separator, then the Focus border colour section last.
+    const items = [...document.body.querySelectorAll(".hamburger-menu li")];
+    const sepIdx = items
+      .map((li, i) => (li.classList.contains("sep") ? i : -1))
+      .filter((i) => i >= 0);
+    expect(sepIdx).toHaveLength(2);
+    const between = items
+      .slice(sepIdx[0]! + 1, sepIdx[1]!)
+      .map((li) => li.querySelector(".menu-row-label")?.textContent?.trim());
+    expect(between).toEqual([
+      "New dashboard",
+      "New diagram",
+      "New draft",
+      "New file browser",
+      "New graph",
+      "New slide deck",
+      "New team",
+      "New terminal",
+    ]);
+    // Every Apps row renders a chord slot so the right column stays
+    // aligned even for the chordless catalog spawns.
+    for (const li of items.slice(sepIdx[0]! + 1, sepIdx[1]!)) {
+      expect(li.querySelector(".menu-row-chord")).not.toBeNull();
+    }
+    // The Focus border colour section follows the second separator.
+    expect(
+      items[sepIdx[1]! + 1]?.classList.contains("menu-label"),
+    ).toBe(true);
   });
 
   test("pane hamburger shows the launcher chord", async () => {
@@ -345,14 +393,7 @@ describe("Pane side flip", () => {
     target.querySelector<HTMLButtonElement>(".hamburger-trigger")?.click();
     await tick();
 
-    expect(menuLabels()).toEqual([
-      "Commands",
-      "Hybrid Nav",
-      "blue",
-      "orange",
-      "green",
-      "pink",
-    ]);
+    expect(menuLabels()).toEqual(HAMBURGER_LABELS);
     expect(menuRowChords()["Flip"]).toBeUndefined();
   });
 

@@ -137,6 +137,28 @@ export function slideIndexForLine(
   return index;
 }
 
+/// Doc offset of the END of the first markdown heading line after the
+/// frontmatter (the deck seed's "# Slide 1"), or null when the document
+/// has no heading below the frontmatter. New slide deck
+/// (state/commands/slides.ts) lands the caret here so a fresh deck opens
+/// ready to type at its title rather than inside the frontmatter block.
+/// Lines split on "\n" (each separator exactly one char, so offsets stay
+/// raw doc offsets); a CRLF line's trailing "\r" is excluded from the
+/// returned end so the caret sits after the heading text.
+export function firstSlideHeadingCaret(source: string): number | null {
+  const lines = source.split("\n");
+  const bodyStart = frontmatterEndLine(lines);
+  let offset = 0;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i] ?? "";
+    if (i >= bodyStart && /^#{1,6} /.test(line)) {
+      return offset + line.replace(/\r$/, "").length;
+    }
+    offset += line.length + 1;
+  }
+  return null;
+}
+
 function frontmatterBody(source: string): string | null {
   const match = source.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/);
   return match?.[1] ?? null;

@@ -13,7 +13,7 @@ import { openInActivePane } from "../tabs.svelte";
 /// it in the active pane. Mirrors createDraftAndOpen: surface it in the
 /// tree and refresh graph/workspace before opening. Exported so
 /// App.svelte's runCommand can route the `app.diagram.new` dispatch
-/// (welcome Apps menu, host bridge) through the same handler.
+/// (pane hamburger Apps rows, host bridge) through the same handler.
 export async function createDiagramAndOpen(): Promise<void> {
   try {
     const { path } = await api.createDiagram();
