@@ -4,18 +4,22 @@ All notable changes to this project will be documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [v0.66.1] - 2026-07-08
+
+v0.66.1 hardens the devserver lifecycle around control terminals, sockets, and restored terminals, queues terminal surveys, and lands a round of editor, launcher, and pane polish including slide decks and diagram copy.
 
 ### Added
 
-- **An Apps menu on the empty pane.** The single empty pane grows a floating Apps button whose menu spawns every app surface (terminal, file browser, graph, draft, diagram, slide deck, dashboard, team), alphabetical, showing assigned shortcuts.
-- **New slide deck.** A new Apps command creates a draft pre-seeded with the slides frontmatter and a first slide heading; `POST /api/drafts/new` accepts `{"kind":"slides"}`.
+- **Apps in the pane hamburger.** The pane hamburger menu carries the app-spawn rows (terminal, file browser, graph, draft, diagram, slide deck, dashboard, team), alphabetical, showing assigned shortcuts, between the navigation items and the focus-border colours; workspace windows only.
+- **New slide deck.** A new Apps command creates a draft pre-seeded with the slides frontmatter, opening with the caret on the first slide heading; `POST /api/drafts/new` accepts `{"kind":"slides"}`.
 - **Copy on rendered diagrams.** Fenced mermaid and mermaid-to-excalidraw blocks and inline `.excalidraw` embeds gain a Copy action that puts the rendered diagram on the clipboard as PNG (native image IPC on desktop); dark editors copy the light render.
+- **A macOS chord for group broadcast.** Cmd+Shift+I on the macOS desktop toggles broadcast select-all for the focused terminal's group; other surfaces bind it through shortcut assignment.
 
 ### Changed
 
-- **The empty pane sheds the workspace-path label.** The path no longer renders under the chan mark, and the mark hides on short panes to give the waves room, reappearing when the pane grows.
+- **The empty pane sheds the workspace-path label.** The path no longer renders under the chan mark, and the mark hides on short panes to give the waves room, reappearing when the pane grows. The pane carries no actions of its own; the Apps rows live in the hamburger.
 - **Terminal surveys queue per target.** A second survey addressed to the same tab now waits its turn instead of replacing the visible one and starving its caller into a timeout; an overflowing target (100 open or waiting) is refused with an explicit queue-full error.
+- **The dev-server form tip is shorter.** It keeps only the foreground guidance with a plain `ssh -N` example.
 
 ### Fixed
 
