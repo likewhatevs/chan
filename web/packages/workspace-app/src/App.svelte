@@ -816,7 +816,11 @@
     // path above). Keep in sync with osChord's BROADCAST_TOGGLE_ID branch.
     if (e.code === "KeyI" && isTauriDesktop() && currentOS() === "mac") {
       const broadcastChord =
-        e.metaKey && !e.ctrlKey && !e.altKey && e.shiftKey;
+        e.metaKey &&
+        !e.ctrlKey &&
+        !e.altKey &&
+        e.shiftKey &&
+        !builtInChordSuperseded("app.terminal.broadcastToggle");
       if (broadcastChord) {
         e.preventDefault();
         toggleActiveTerminalBroadcastSelectAll();

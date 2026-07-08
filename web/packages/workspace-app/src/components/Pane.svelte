@@ -1361,17 +1361,22 @@
             <span class="menu-row-chord">{chordLabel("app.pane.mode")}</span>
           </button>
         </li>
-        <li class="sep" role="separator"></li>
-        {#each appRows as row (row.id)}
-          {@const Icon = row.icon}
-          <li>
-            <button role="menuitem" onclick={() => runAppRow(row.id)}>
-              <Icon size={16} strokeWidth={1.75} aria-hidden="true" />
-              <span class="menu-row-label">{row.title}</span>
-              <span class="menu-row-chord">{chordLabel(row.id)}</span>
-            </button>
-          </li>
-        {/each}
+        {#if !ui.terminalOnly}
+          <!-- The app-spawn rows are workspace-window commands; runCommand's
+               window-mode gate silently drops most of them in a terminal-only
+               window, so the rows do not render there at all. -->
+          <li class="sep" role="separator"></li>
+          {#each appRows as row (row.id)}
+            {@const Icon = row.icon}
+            <li>
+              <button role="menuitem" onclick={() => runAppRow(row.id)}>
+                <Icon size={16} strokeWidth={1.75} aria-hidden="true" />
+                <span class="menu-row-label">{row.title}</span>
+                <span class="menu-row-chord">{chordLabel(row.id)}</span>
+              </button>
+            </li>
+          {/each}
+        {/if}
         <li class="sep" role="separator"></li>
         <li class="menu-label">
           <Palette size={16} strokeWidth={1.75} aria-hidden="true" />
