@@ -20,9 +20,12 @@ export interface LauncherDemoApi extends LibraryApi {
 
 const LIMA_LIBRARY_ID = "lib-lima";
 const WINDOWS_LIBRARY_ID = "lib-windows";
-// The control terminal that slow-flashes for attention belongs to a connected
-// remote whose devserver stopped responding while its control script still runs.
-const ATTENTION_DEVSERVER_ID = "ds-lima";
+const LINUX_LIBRARY_ID = "lib-linux";
+// The control terminal that slow-flashes for attention belongs to a
+// disconnected remote whose control script died: the dead control row stays
+// mounted so the user can open it and read the death reason, and the shared
+// attention state turns the devserver's status dot red.
+const ATTENTION_DEVSERVER_ID = "ds-linux";
 
 interface Seed {
   workspaces: WorkspaceEntry[];
@@ -62,7 +65,7 @@ function seed(): Seed {
     ],
     devservers: [
       {
-        id: ATTENTION_DEVSERVER_ID,
+        id: "ds-lima",
         url: "http://127.0.0.1:9001",
         host: "127.0.0.1",
         port: 9001,
@@ -72,7 +75,9 @@ function seed(): Seed {
         token: "",
         library_id: LIMA_LIBRARY_ID,
         status: "connected",
-        auto_hide_control: false,
+        // Auto-hide ticked and the connect succeeded, so the control
+        // terminal below is seeded hidden: the clean fully-green remote.
+        auto_hide_control: true,
         os: "linux",
         pretty_name: "Ubuntu 24.04.1 LTS",
       },
@@ -92,7 +97,7 @@ function seed(): Seed {
         pretty_name: "Windows 11 Pro",
       },
       {
-        id: "ds-linux",
+        id: ATTENTION_DEVSERVER_ID,
         url: "http://127.0.0.1:9003",
         host: "127.0.0.1",
         port: 9003,
@@ -100,12 +105,13 @@ function seed(): Seed {
         script: "ssh linux-tunnel -L 9003:localhost:8787 chan devserver --join",
         has_token: false,
         token: "",
-        library_id: null,
-        status: "connecting",
+        library_id: LINUX_LIBRARY_ID,
+        // The attention scenario: it connected once (so the OS is known),
+        // then the tunnel dropped and the control script died. No workspaces.
+        status: "disconnected",
         auto_hide_control: false,
-        // Still connecting: it has not self-reported its OS yet (no icon).
-        os: "",
-        pretty_name: null,
+        os: "linux",
+        pretty_name: "Debian GNU/Linux 13",
       },
     ],
     devserverWorkspaces: [
@@ -145,8 +151,13 @@ function seed(): Seed {
       terminal("w-local-term-2", "local", "Terminal Window 2", 2, "t/local-2", true),
       workspaceWindow("w-secret-1", "local", "secret Window 1", 1, "/Users/hacker/dev/my-secret-project", "w/secret", true),
       workspaceWindow("w-secret-2", "local", "secret Window 2", 2, "/Users/hacker/dev/my-secret-project", "w/secret-2", false),
-      terminal("control-terminal-ds-lima", LIMA_LIBRARY_ID, "Control terminal", 0, "control/lima", true, true),
+      // Auto-hidden after lima's successful connect (connected:false seeds it hidden).
+      terminal("w-lima-control", LIMA_LIBRARY_ID, "Control terminal", 0, "control/lima", false, true),
       terminal("w-windows-control", WINDOWS_LIBRARY_ID, "Control terminal", 0, "t/windows-control", true, true),
+      // linux-tunnel's DEAD control row: the script exited, so the webview is
+      // gone (connected:false) but the row stays VISIBLE to flash for
+      // attention, overriding the factory's hidden = !connected coupling.
+      { ...terminal("control-terminal-ds-linux", LINUX_LIBRARY_ID, "Control terminal", 0, "control/linux", false, true), hidden: false },
     ],
     liveTerminals: [["ds-lima:w/systemd", 2]],
   };

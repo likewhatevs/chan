@@ -13,13 +13,16 @@ describe("launcher demo api", () => {
 
     expect(workspaces.filter((w) => w.devserver_id === null).length).toBeGreaterThanOrEqual(2);
     expect(devservers.filter((d) => d.status === "connected").length).toBeGreaterThanOrEqual(1);
-    expect(devservers.find((d) => d.id === api.attentionDevserverId)?.status).toBe("connected");
+    // The attention remote is the disconnected one whose dead control row
+    // stays mounted and visible so it can flash.
+    expect(devservers.find((d) => d.id === api.attentionDevserverId)?.status).toBe("disconnected");
+    const attentionRow = windows.find(
+      (w) => w.control && w.window_id === `control-terminal-${api.attentionDevserverId}`,
+    );
+    expect(attentionRow?.hidden).toBe(false);
+    // lima-vm connected cleanly with auto-hide on, so its control row is hidden.
+    expect(windows.find((w) => w.control && w.library_id === "lib-lima")?.hidden).toBe(true);
     expect(windows.filter((w) => w.kind === "terminal" && w.library_id === "local").length).toBeGreaterThanOrEqual(2);
-    expect(
-      windows.some(
-        (w) => w.control && w.window_id === `control-terminal-${api.attentionDevserverId}`,
-      ),
-    ).toBe(true);
     expect(workspaces.map((w) => w.path)).not.toContainEqual(expect.stringMatching(/^\\\\\?\\/));
   });
 
