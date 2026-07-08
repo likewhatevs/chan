@@ -234,3 +234,16 @@ chan:
     <figcaption>The rendered deck in preview. Present runs it as a fullscreen presentation.</figcaption>
   </figure>
 </section>
+
+<section class="manual-block" id="diagrams">
+  <div class="section-heading">
+    <h2><a class="heading-anchor" href="#diagrams">Diagrams</a></h2>
+  </div>
+  <p>Chan bundles an interactive Excalidraw board for freehand diagrams and whiteboarding. Open one with "New diagram" in the pane's hamburger menu or the command launcher (in a workspace window): chan seeds a <code>.excalidraw</code> draft and opens it on the canvas, with the full Excalidraw toolset for shapes, arrows, freehand, text, and images.</p>
+  <ul>
+    <li>A new diagram lands in the workspace's drafts folder; a board you never draw on discards itself when closed.</li>
+    <li>Any <code>.excalidraw</code> file in the workspace opens on the same canvas.</li>
+    <li>Embed a drawing in Markdown with <code>![](drawing.excalidraw)</code>; it renders inline as an SVG.</li>
+    <li>For text-first diagrams, write <code>mermaid</code> or <code>mermaid-to-excalidraw</code> fences instead (see <a href="#editor">Editor</a>).</li>
+  </ul>
+</section>
