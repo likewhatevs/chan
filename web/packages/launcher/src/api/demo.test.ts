@@ -20,8 +20,10 @@ describe("launcher demo api", () => {
       (w) => w.control && w.window_id === `control-terminal-${api.attentionDevserverId}`,
     );
     expect(attentionRow?.hidden).toBe(false);
-    // lima-vm connected cleanly with auto-hide on, so its control row is hidden.
+    // lima-vm connected cleanly with auto-hide on, so its control row is hidden
+    // and its two workspaces surface through the connected-devserver merge.
     expect(windows.find((w) => w.control && w.library_id === "lib-lima")?.hidden).toBe(true);
+    expect(workspaces.filter((w) => w.devserver_id === "ds-lima")).toHaveLength(2);
     expect(windows.filter((w) => w.kind === "terminal" && w.library_id === "local").length).toBeGreaterThanOrEqual(2);
     expect(workspaces.map((w) => w.path)).not.toContainEqual(expect.stringMatching(/^\\\\\?\\/));
   });

@@ -122,7 +122,7 @@ function seed(): Seed {
         on: true,
         status: "running",
         library_id: LIMA_LIBRARY_ID,
-        devserver_id: ATTENTION_DEVSERVER_ID,
+        devserver_id: "ds-lima",
         prefix: "w/linux",
       },
       {
@@ -132,7 +132,7 @@ function seed(): Seed {
         on: true,
         status: "running",
         library_id: LIMA_LIBRARY_ID,
-        devserver_id: ATTENTION_DEVSERVER_ID,
+        devserver_id: "ds-lima",
         prefix: "w/systemd",
       },
       {
