@@ -388,6 +388,21 @@ export const SHORTCUTS: readonly Shortcut[] = [
     note: "Ctrl+Shift+P on Linux / Windows",
     escapeTerminal: true,
   },
+  // Broadcast select-all / deselect-all for the focused terminal's group
+  // (no-op when the focused tab is not a terminal). Dispatched by
+  // App.svelte's onWindowKey; the terminal right-click row and the
+  // launcher entry read the label via `chordFor`. Cmd+Shift+I on the
+  // macOS desktop only: off macOS Ctrl+Shift+I is the webview / browser
+  // inspector chord, so `osChord` blanks it there and those surfaces
+  // bind through user overrides instead.
+  {
+    id: "app.terminal.broadcastToggle",
+    label: "Toggle group broadcast",
+    native: "Cmd+Shift+I",
+    group: "Terminal",
+    note: "macOS desktop only",
+    escapeTerminal: true,
+  },
   // Terminal-local find (the terminal's own find bar). Dispatched by
   // the terminal's keydown handler like copy / paste, not the App
   // keymap; the handler accepts both the Cmd and Ctrl forms.
@@ -427,6 +442,7 @@ const LAUNCHER_SHORTCUT_ID = "app.launcher.toggle";
 const TERMINAL_COPY_ID = "terminal.copy";
 const TERMINAL_PASTE_ID = "terminal.paste";
 const RICH_PROMPT_ID = "terminal.richPrompt";
+const BROADCAST_TOGGLE_ID = "app.terminal.broadcastToggle";
 const TAB_CLOSE_ID = "app.tab.close";
 const TERMINAL_TOGGLE_ID = "app.terminal.toggle";
 const TAB_REOPEN_ID = "app.tab.reopenClosed";
@@ -472,6 +488,9 @@ export function osChord(
   // out, so native and web both take Ctrl+Shift+P. On a browser that is the
   // private-window chord, so browser clients rebind (desktop-first).
   if (s.id === RICH_PROMPT_ID && os !== "mac") return "Mod+Shift+P";
+  // Group broadcast: macOS desktop only. Off macOS Ctrl+Shift+I is the
+  // webview / browser inspector chord, so no default is minted there.
+  if (s.id === BROADCAST_TOGGLE_ID && os !== "mac") return undefined;
   // Close tab: Cmd+W is the macOS-native primary. Every other surface keeps
   // the stored Ctrl+D (the alternate that survives everywhere but Excalidraw).
   if (s.id === TAB_CLOSE_ID && platform === "native" && os === "mac") {
@@ -710,7 +729,9 @@ export function currentPlatform(): Platform {
 export function renderTable(platform: Platform, os: OS): string {
   const groups = new Map<ShortcutGroup, Shortcut[]>();
   for (const s of SHORTCUTS) {
-    const chord = s[platform];
+    // Resolve through osChord so an entry blanked for this OS (e.g. the
+    // macOS-only group-broadcast chord) drops its row entirely.
+    const chord = osChord(s, platform, os);
     if (!chord) continue;
     const list = groups.get(s.group) ?? [];
     list.push(s);
