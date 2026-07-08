@@ -106,7 +106,7 @@ async function main() {
       active: "manual",
       bodyClass: "manual-page",
       title: "Chan manual",
-      description: "What chan is and how to get productive with it: terminals, workspaces, the command launcher, and dev servers.",
+      description: "What chan is and how to get productive with it: terminals, workspaces, the command launcher, dev servers, and the editor.",
       content: fillTemplate(manualTemplate, { version, ...releaseTemplateValues }),
       headExtra: launcherDemoHead,
     }),

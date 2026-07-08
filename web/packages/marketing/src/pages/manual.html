@@ -1,6 +1,6 @@
 <section class="page-head">
   <h1>Manual</h1>
-  <p>What chan is and how to get productive with it: terminals, workspaces, the command launcher, and dev servers.</p>
+  <p>What chan is and how to get productive with it: terminals, workspaces, the command launcher, dev servers, and the editor.</p>
 </section>
 
 <section class="manual-block" id="what-is-chan">
@@ -62,6 +62,16 @@
     <img src="/assets/manual/terminal-panes.png" alt="A terminal window split into two panes; a cs terminal survey command in the left pane drives a Pick-your-choice prompt in the right pane" />
     <figcaption>A terminal window split into two panes. Each pane's top bar carries the A/B side toggle and the hamburger menu.</figcaption>
   </figure>
+  <h3 id="rich-prompt"><a class="heading-anchor" href="#rich-prompt">Rich Prompt</a></h3>
+  <p>When a terminal needs more than a line, like pasting images into a remote agent or editing a longer prompt, bring up the Rich Prompt bubble over the terminal: press <code>Cmd+Shift+P</code> on macOS (<code>Ctrl+Shift+P</code> on Windows and Linux), or find "Show/Hide Rich Prompt" in the command launcher and the terminal's right-click menu. Write Markdown, paste images, and submit with <code>Cmd+Enter</code>; submissions are queued so writes from other terminals (<code>cs terminal write</code>) do not conflict with your typing.</p>
+  <figure class="inline-shot">
+    <img src="/assets/manual/rich-prompt.png" alt="The Rich Prompt bubble over a terminal running a coding agent: rendered Markdown with a list, a pasted image, and a submit-with-cmd-enter hint" />
+    <figcaption>The Rich Prompt bubble over a terminal running an agent on a devserver.</figcaption>
+  </figure>
+  <h3 id="copy-paste"><a class="heading-anchor" href="#copy-paste">Copy and paste freely</a></h3>
+  <p>The commands <code>cs copy</code> and <code>cs paste</code> integrate every chan terminal, standalone or workspace, local or on a devserver, with your clipboard: <code>cs copy &lt; photo.png</code> puts stdin on the clipboard (plain text, HTML, or an image), and <code>cs paste &gt; file.png</code> writes it back out as raw bytes. The clipboard is always the one on the machine running Chan Desktop, while the command runs wherever the terminal lives: use it locally like <code>pbcopy</code>/<code>pbpaste</code>, copy on a devserver and paste into any app, or move content across devservers by copying on one and pasting on another.</p>
+  <h3 id="download-upload"><a class="heading-anchor" href="#download-upload">Download and upload freely</a></h3>
+  <p>Similarly, <code>cs download {path}</code> downloads a file or a tarball of the target directory, and <code>cs upload {path}</code> imports files into the target directory through a file picker. Both show the same progress UI as the Inspector, and <code>.</code> means the current directory. This works in local and devserver terminals alike, so files flow between your machine and any chan session.</p>
 </section>
 
 <section class="manual-block" id="command-launcher">
@@ -100,6 +110,7 @@
     <button type="button">Copy</button>
   </div>
   <p class="minor"><code>chan open</code> expects the root of a repository. To open a subdirectory inside one, add <code>--here</code>.</p>
+  <p><code>chan open {path}</code> works anywhere chan runs: in a local terminal it registers the workspace on this machine (the same thing the New workspace button does), and in a devserver terminal it registers the workspace on that devserver, which then shows up under the devserver's card on the Computers screen.</p>
   <p>Back on the Computers screen, the new workspace appears with its power toggle On: the workspace is alive, indexed, and keeping the state of your windows, panes, and tabs. Click <strong>New window of your-project</strong> and the real power of chan begins:</p>
   <ul>
     <li>The pane's hamburger menu lists the built-in apps: dashboard, diagram, draft, file browser, graph, slide deck, team, and terminal.</li>
@@ -137,9 +148,9 @@
     <code><span>$</span><b data-copy-value>curl -fsSL https://chan.app/install.sh | sh</b></code>
     <button type="button">Copy</button>
   </div>
-  <p>This installs <code>$HOME/.local/bin/chan</code> and the symlink <code>cs -&gt; chan</code> in the same directory. Start the devserver:</p>
+  <p>This installs <code>~/.local/bin/chan</code> and the symlink <code>cs -&gt; chan</code> in the same directory. Start the devserver:</p>
   <div class="command-copy" data-copy-block>
-    <code><span>$</span><b data-copy-value>$HOME/.local/bin/chan devserver --start</b></code>
+    <code><span>$</span><b data-copy-value>~/.local/bin/chan devserver --start</b></code>
     <button type="button">Copy</button>
   </div>
   <p>This installs the devserver as a background service listening on <code>localhost:8787</code>, using the default service manager for your platform:</p>
@@ -147,7 +158,7 @@
     <li>On Linux it uses systemd: a user-scoped service that survives logout once linger is on (chan enables it, or asks you to run <code>sudo loginctl enable-linger</code>).</li>
     <li>On macOS it uses launchd: the service runs while you are logged in.</li>
     <li>On Windows it uses chan's own daemon mode, which works on all platforms.</li>
-    <li>You can override the choice with <code>--service=[auto,none,chan,systemd,launchd]</code>. The other action flags are <code>--stop</code>, <code>--status</code>, <code>--restart</code>, and <code>--join</code>.</li>
+    <li>You can override the choice with <code>--service=[auto,none,chan,systemd,launchd]</code>. The action flags are <code>--start</code>, <code>--stop</code>, <code>--status</code>, <code>--restart</code>, and <code>--join</code>.</li>
     <li>Without an action flag, <code>chan devserver</code> runs in the foreground.</li>
   </ul>
   <p>Now add the devserver to Chan Desktop:</p>
@@ -182,6 +193,36 @@
     <iframe class="launcher-demo-embed" src="/manual/demo/devserver/" title="Interactive Add dev server demo" loading="lazy"></iframe>
     <figcaption>The Add dev server form. This is a live mock too: fill it in, add, and connect.</figcaption>
   </figure>
-  <p>Once connected, remote terminals and workspaces behave like local ones. Disconnecting keeps the remote sessions alive and running; reconnect and pick up where you left off.</p>
+  <p>Once connected, remote terminals and workspaces behave like local ones: run <code>chan open {path}</code> in a devserver terminal to create a workspace on that machine. Disconnecting keeps the remote sessions alive and running; reconnect and pick up where you left off.</p>
+  <p>The clipboard and file transfer work across the connection too: see <a href="#copy-paste">Copy and paste freely</a> and <a href="#download-upload">Download and upload freely</a> in the Terminals section.</p>
   <p>On Linux devservers you can even restart the devserver process without losing your shells: the PTY file descriptors are parked in the systemd fdstore while the devserver restarts, then loaded back up, so your agents continue working and your terminals are always alive.</p>
+</section>
+
+<section class="manual-block" id="editor">
+  <div class="section-heading">
+    <h2><a class="heading-anchor" href="#editor">Editor</a></h2>
+  </div>
+  <p>Chan has an embedded source code editor that renders Markdown live, diagrams included: fence a code block with <code>mermaid</code> to render a Mermaid diagram, or <code>mermaid-to-excalidraw</code> to render the same Mermaid source in Excalidraw style. <code>.excalidraw</code> files open directly on a drawing canvas.</p>
+  <p>Key habits in Markdown files:</p>
+  <ul>
+    <li>Type <code>@today</code> or <code>@date</code> and press Space. <code>@today</code> inserts today's date as a pill; <code>@date</code> also opens a calendar to pick another day or format.</li>
+    <li>Type <code>@name</code> to search your contacts, or <code>@@name</code> to commit a mention pill that links into the graph.</li>
+    <li>Type <code>[[</code> to autocomplete links to files in the workspace; <code>[[file#</code> autocompletes headings inside the file.</li>
+    <li>Use <code>![](media)</code> to embed media inline, including SVG images and <code>.excalidraw</code> drawings.</li>
+  </ul>
+  <h3>Special frontmatter</h3>
+  <p>Chan recognizes a <code>chan:</code> block in Markdown frontmatter. <code>kind: contact</code> turns the file into a Contact, a distinct node in the graph that mentions resolve against; the optional <code>aliases</code> list is what <code>@@alias</code> mentions match:</p>
+  <pre><code>---
+aliases: [jq, jdoe]
+chan:
+  kind: contact
+---</code></pre>
+  <p><code>kind: slides</code> turns the file into a slide deck; start a new slide with <code>@pagebreak</code> on its own line. The <code>slides:</code> block is optional: <code>aspect_ratio</code> takes <code>"16:9"</code> or <code>"4:3"</code>, and <code>zoom_factor</code> scales the slide content (a number, default 2, or a percentage like <code>"150%"</code>):</p>
+  <pre><code>---
+chan:
+  kind: slides
+  slides:
+    aspect_ratio: "16:9"
+    zoom_factor: 2
+---</code></pre>
 </section>

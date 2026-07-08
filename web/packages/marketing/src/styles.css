@@ -603,6 +603,27 @@ code {
   margin: 6px 0;
 }
 
+.manual-block h3 {
+  font-size: 1.02rem;
+  margin: 24px 0 8px;
+}
+
+.manual-block pre {
+  background: var(--code-bg);
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  margin: 14px 0;
+  overflow-x: auto;
+  padding: 12px 14px;
+}
+
+.manual-block pre code {
+  background: transparent;
+  border: 0;
+  font-size: 0.85rem;
+  padding: 0;
+}
+
 /* Section headings are self-links so a reader can share a section URL. The
    heading look stays; a # affordance appears on hover. */
 .manual-block .heading-anchor {
