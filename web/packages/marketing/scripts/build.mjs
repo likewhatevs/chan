@@ -81,11 +81,10 @@ async function main() {
     renderPage(baseTemplate, {
       active: "home",
       bodyClass: "home-page",
-      title: "chan - your new terminal and workspace manager",
+      title: "chan - a new kind of IDE",
       description:
-        "Chan is your new terminal and workspace manager (or IDE if you prefer). Local and remote, on macOS, Linux, and Windows. Unblock 10x productivity.",
+        "Chan is a new kind of IDE: drive AI agents to ship faster. Local and remote, on macOS, Windows, and Linux, on x86 and arm64.",
       content: fillTemplate(homeTemplate, { version, ...releaseTemplateValues }),
-      headExtra: launcherDemoHead,
     }),
   );
 

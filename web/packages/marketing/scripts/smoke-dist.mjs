@@ -10,7 +10,11 @@ const siteRoot = path.resolve(path.dirname(scriptPath), "..");
 const distRoot = path.join(siteRoot, "dist");
 
 const checks = [
-  { path: "/", status: 200, includes: 'src="/assets/home-hero.png"' },
+  { path: "/", status: 200, includes: "data-carousel" },
+  { path: "/", status: 200, includes: 'src="/assets/home/team-spawn.png"' },
+  { path: "/", status: 200, includes: 'src="/assets/manual/terminal-panes.png"' },
+  { path: "/", status: 200, includes: "A new kind of" },
+  { path: "/", status: 200, excludes: "launcher-demo.js" },
   { path: "/", status: 200, includes: 'href="/install/">Install' },
   { path: "/install/", status: 200, includes: "Install Chan" },
   { path: "/install/", status: 200, includes: 'data-release-download="cli-linux-x64"' },
@@ -112,10 +116,13 @@ async function runCheck(port, check) {
   if (response.status !== check.status) {
     throw new Error(`${check.path} returned HTTP ${response.status}, expected ${check.status}`);
   }
-  if (check.includes) {
+  if (check.includes || check.excludes) {
     const body = await response.text();
-    if (!body.includes(check.includes)) {
+    if (check.includes && !body.includes(check.includes)) {
       throw new Error(`${check.path} did not contain ${JSON.stringify(check.includes)}`);
+    }
+    if (check.excludes && body.includes(check.excludes)) {
+      throw new Error(`${check.path} must not contain ${JSON.stringify(check.excludes)}`);
     }
   }
 }

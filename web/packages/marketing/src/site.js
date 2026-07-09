@@ -98,7 +98,7 @@
   // Click (or Enter/Space) a product screenshot to view it larger in a
   // lightbox; click the backdrop or press Escape to close.
   const shots = Array.from(
-    document.querySelectorAll(".hero-shot img, .inline-shot img"),
+    document.querySelectorAll(".hero-shot img, .inline-shot img, .carousel-frame img"),
   );
   if (shots.length === 0) return;
 
@@ -145,5 +145,106 @@
         open(img.currentSrc || img.src, img.alt);
       }
     });
+  });
+})();
+
+(function () {
+  // The home hero carousel: crossfade through the stacked screenshots.
+  // Auto-advances every 5s unless the visitor prefers reduced motion; the
+  // arrows, dots, and Left/Right keys drive it manually. Hover or focus
+  // pauses auto-play so a slide can be read (or zoomed) in peace.
+  document.querySelectorAll("[data-carousel]").forEach((carousel) => {
+    const slides = Array.from(carousel.querySelectorAll(".carousel-frame img"));
+    const caption = carousel.querySelector(".carousel-caption");
+    const dotsHost = carousel.querySelector(".carousel-dots");
+    if (slides.length < 2 || !dotsHost) return;
+
+    const dots = slides.map((_slide, i) => {
+      const dot = document.createElement("button");
+      dot.type = "button";
+      dot.className = "carousel-dot";
+      dot.setAttribute("aria-label", `Screenshot ${i + 1} of ${slides.length}`);
+      dot.addEventListener("click", () => {
+        show(i);
+        restart();
+      });
+      dotsHost.appendChild(dot);
+      return dot;
+    });
+
+    let index = Math.max(
+      slides.findIndex((slide) => slide.classList.contains("active")),
+      0,
+    );
+
+    function show(i) {
+      index = (i + slides.length) % slides.length;
+      slides.forEach((slide, n) => slide.classList.toggle("active", n === index));
+      dots.forEach((dot, n) => {
+        if (n === index) dot.setAttribute("aria-current", "true");
+        else dot.removeAttribute("aria-current");
+      });
+      if (caption) caption.textContent = slides[index].dataset.caption || "";
+    }
+
+    const autoPlay = !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    let paused = false;
+    let timer = 0;
+
+    function start() {
+      if (!autoPlay || paused || timer) return;
+      timer = window.setInterval(() => show(index + 1), 5000);
+    }
+
+    function stop() {
+      window.clearInterval(timer);
+      timer = 0;
+    }
+
+    function restart() {
+      stop();
+      start();
+    }
+
+    carousel.querySelector(".carousel-prev")?.addEventListener("click", () => {
+      show(index - 1);
+      restart();
+    });
+    carousel.querySelector(".carousel-next")?.addEventListener("click", () => {
+      show(index + 1);
+      restart();
+    });
+    carousel.addEventListener("keydown", (event) => {
+      if (event.key === "ArrowLeft") {
+        event.preventDefault();
+        show(index - 1);
+        restart();
+      } else if (event.key === "ArrowRight") {
+        event.preventDefault();
+        show(index + 1);
+        restart();
+      }
+    });
+    carousel.addEventListener("pointerenter", () => {
+      paused = true;
+      stop();
+    });
+    carousel.addEventListener("pointerleave", () => {
+      paused = false;
+      start();
+    });
+    carousel.addEventListener("focusin", () => {
+      paused = true;
+      stop();
+    });
+    carousel.addEventListener("focusout", (event) => {
+      if (!carousel.contains(event.relatedTarget)) {
+        paused = false;
+        start();
+      }
+    });
+
+    show(index);
+    start();
   });
 })();
