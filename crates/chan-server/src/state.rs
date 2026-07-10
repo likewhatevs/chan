@@ -90,6 +90,15 @@ pub struct AppState {
     /// browser reload until explicit close, workspace close, shutdown,
     /// cap eviction, or idle prune.
     pub terminal_sessions: Arc<TerminalRegistry>,
+    /// Live co-editing document sessions. The doc WebSocket route
+    /// attaches editors here; the flusher and reconciler tasks keep
+    /// the sessions and the disk in step. Survives `/api/storage/
+    /// reset` structurally (the registry object persists) but reset
+    /// closes every session via `close_all` before the cell swap.
+    // Read by nothing until the doc ws route mounts; drop the allow
+    // with that mount.
+    #[allow(dead_code)]
+    pub doc_sessions: Arc<crate::doc_sessions::DocRegistry>,
     /// Process-wide shutdown signal. Fires once SIGINT/SIGTERM or
     /// the idle-timeout watcher trip. Long-lived handlers (e.g.
     /// `/ws`) observe this to close their sockets promptly so axum's
@@ -304,6 +313,7 @@ pub(crate) mod test_support {
                 control_socket_path: None,
                 terminal: ServerConfig::default().terminal,
             })),
+            doc_sessions: Arc::new(crate::doc_sessions::DocRegistry::new()),
             shutdown_rx,
             scope_registry: Arc::new(crate::bus::ScopeRegistry::new()),
             survey_bus: Arc::new(crate::survey::SurveyBus::new()),

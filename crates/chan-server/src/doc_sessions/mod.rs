@@ -1,12 +1,1700 @@
 //! Live document sessions: the server-side authority for collaborative
 //! editing over `@codemirror/collab`'s update-log model.
 //!
-//! `changes` is the pure ChangeSet layer (the pinned wire grammar, the
-//! UTF-16 applier, whole-document diff); the session registry and the
-//! disk-integration tasks build on top of it.
+//! One `DocSession` per attached workspace-relative path. Clients push
+//! `{version, updates}` batches; the authority accepts a batch only at
+//! the matching version (a stale push is answered `push-stale` and the
+//! client rebases), applies it all-or-nothing through the pure UTF-16
+//! applier in [`changes`], appends to a bounded update log, and fans
+//! the committed updates to every attachment, including the sender
+//! (the own-clientID echo is the sender's confirmation). The authority
+//! never transforms.
+//!
+//! Fan-out uses one unbounded mpsc outbox per attachment, and every
+//! server->client frame is enqueued while the session state lock is
+//! held: doc updates are keystroke-scale and must never drop or
+//! reorder (a lost update permanently desyncs a client), so each
+//! socket sees a strict per-session FIFO consistent with version
+//! order. The wire shapes come from `crate::routes::doc`, the single
+//! source for the doc ws contract.
+//!
+//! While a session is live the server is the single writer to disk:
+//! the flusher debounces dirty sessions to atomic CAS writes, and the
+//! reconciler folds external writes back in as synthetic `$disk`
+//! updates instead of raising the "changed on disk" banner. Locks are
+//! std mutexes with short critical sections, never held across await;
+//! lock order is registry map, then session state.
 
 // Inert: nothing routes into this module until the doc WebSocket route
 // mounts and the registry lands on AppState. Drop this allow then.
 #![allow(dead_code)]
 
 pub mod changes;
+
+use std::collections::{HashMap, VecDeque};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, RwLock};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+use chan_workspace::{ChanError, FileStat, WatchEvent, WatchKind, Workspace, TEXT_WRITE_LIMIT};
+use tokio::sync::{broadcast, mpsc, watch, Notify};
+
+use crate::routes::doc::{PeerCursor, ServerFrame};
+use crate::self_writes::SelfWrites;
+use crate::state::WorkspaceCell;
+use changes::{Applied, ApplyError, ChangeSetJson, Section, UpdateJson};
+
+/// Update-log ring caps. Attached clients never need the log (their
+/// outboxes are lossless); it serves only `pull` requests and
+/// `?version=` reconnects, so a bounded ring with snapshot fallback
+/// below the base is enough.
+const DOC_LOG_MAX_UPDATES: usize = 512;
+const DOC_LOG_MAX_BYTES: usize = 256 * 1024;
+
+/// Debounce between a session turning dirty and its disk flush; parity
+/// with the SPA's classic autosave debounce.
+const DOC_FLUSH_DEBOUNCE: Duration = Duration::from_millis(800);
+
+/// How long a fully detached session survives before the reaper drops
+/// it. A browser reload reattaches well within the grace window and
+/// takes the cheap incremental-catch-up path instead of a snapshot.
+const DOC_DETACH_GRACE: Duration = Duration::from_secs(30);
+
+/// Flusher wake cadence; the debounce is measured against
+/// `dirty_since`, the tick only bounds how late a flush can start.
+const FLUSH_TICK: Duration = Duration::from_millis(200);
+
+/// Reserved synthetic-participant prefix. Client pushes carrying it
+/// are rejected so a peer can never impersonate the disk or HTTP
+/// reconcilers.
+const RESERVED_CLIENT_PREFIX: char = '$';
+const DISK_CLIENT: &str = "$disk";
+
+/// All live doc sessions, keyed by workspace-relative POSIX path.
+pub struct DocRegistry {
+    sessions: Mutex<HashMap<String, Arc<DocSession>>>,
+    /// Wakes the flusher out of its tick sleep (detach and forced
+    /// flushes want sub-tick latency).
+    flush_wake: Notify,
+    next_attach_id: AtomicU64,
+}
+
+/// One live document: the authority text plus everything needed to
+/// serve attaches, pushes, and the disk integration.
+pub struct DocSession {
+    /// Workspace-relative POSIX path; the registry key.
+    pub path: String,
+    state: Mutex<DocState>,
+    /// Mirror of `state.attaches.len()` maintained on attach/detach,
+    /// readable without the state lock.
+    attach_count: AtomicUsize,
+    /// Unix millis stamped when the last attachment dropped; 0 while
+    /// attached. The reaper ages fully detached sessions from here.
+    detached_at: AtomicI64,
+    /// Set under the state lock by the reaper and `close_all`; a
+    /// closed session accepts nothing and is (being) removed from the
+    /// registry map.
+    closed: AtomicBool,
+}
+
+struct AttachSink {
+    outbox: mpsc::UnboundedSender<String>,
+    window_id: String,
+}
+
+struct CursorPos {
+    window_id: String,
+    anchor: u64,
+    head: u64,
+    version: u64,
+}
+
+struct LoggedUpdate {
+    client_id: String,
+    changes: ChangeSetJson,
+    /// Approximate wire cost, counted against `DOC_LOG_MAX_BYTES`.
+    cost: usize,
+}
+
+/// Approximate wire bytes of a change set, for the log ring's byte
+/// cap. Exactness does not matter; the cap only bounds memory.
+fn changeset_cost(cs: &ChangeSetJson) -> usize {
+    cs.sections
+        .iter()
+        .map(|s| match s {
+            Section::Retain(_) => 8,
+            Section::Edit { lines, .. } => 8 + lines.iter().map(|l| l.len() + 4).sum::<usize>(),
+        })
+        .sum()
+}
+
+struct DocState {
+    /// Authority text. Invariants: valid UTF-8 (a `String`), at most
+    /// `TEXT_WRITE_LIMIT` bytes (the applier and the replace paths
+    /// enforce it).
+    text: String,
+    /// Cached UTF-16 length of `text`, kept incrementally.
+    len16: u64,
+    /// Count of accepted updates since session creation.
+    version: u64,
+    /// Updates for versions `[log_base, version)`, oldest first.
+    log: VecDeque<Arc<LoggedUpdate>>,
+    log_base: u64,
+    log_bytes: usize,
+    attaches: HashMap<u64, AttachSink>,
+    cursors: HashMap<u64, CursorPos>,
+    /// When the authority first diverged from the flushed disk state;
+    /// None while clean. The flush debounce is measured from here.
+    dirty_since: Option<Instant>,
+    /// Skip the debounce on the next flusher pass (detach, forced
+    /// flush).
+    flush_now: bool,
+    /// CAS token of the last flushed (or adopted) disk state. None
+    /// when the file is gone or the token is unknown; a CAS write
+    /// against None creates the file.
+    flushed_mtime_ns: Option<i64>,
+    /// Version captured by the flush in flight; a commit only clears
+    /// `dirty_since` when the version still matches, so edits landing
+    /// mid-flush keep the session dirty.
+    flush_epoch_version: u64,
+    /// Consecutive flush failures; the error fan starts at the second
+    /// so a single transient miss stays quiet.
+    flush_failures: u32,
+}
+
+/// A registered attachment. Dropping it detaches: the outbox and
+/// cursor are removed (peers see `cursor-gone`), and the last drop
+/// stamps the detach time and requests a prompt flush.
+pub struct DocAttachHandle {
+    registry: Arc<DocRegistry>,
+    session: Arc<DocSession>,
+    attach_id: u64,
+    frames: Option<mpsc::UnboundedReceiver<String>>,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum AttachError {
+    /// Path validation or the seeding disk read failed (missing file,
+    /// not editable text, non-UTF-8, oversized, ...).
+    #[error(transparent)]
+    Workspace(#[from] ChanError),
+    #[error("doc session read task failed: {0}")]
+    Task(String),
+}
+
+/// A push the route must answer with an `error` frame and close the
+/// attachment. A stale base version is NOT an error (the session
+/// answers `push-stale` itself).
+#[derive(Debug, thiserror::Error)]
+pub enum PushError {
+    #[error("reserved client id {0:?}")]
+    ReservedClientId(String),
+    #[error(transparent)]
+    Apply(#[from] ApplyError),
+    #[error("session closed")]
+    Closed,
+}
+
+fn now_unix_millis() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+/// Serialization of the doc wire frames cannot fail: every shape is
+/// string-keyed plain data. The pin tests in routes/doc.rs would catch
+/// a change that breaks this before it could panic here.
+fn serialize(frame: &ServerFrame) -> String {
+    serde_json::to_string(frame).expect("serialize doc server frame")
+}
+
+fn updates_frame<'a>(base: u64, entries: impl Iterator<Item = &'a Arc<LoggedUpdate>>) -> String {
+    let updates = entries
+        .map(|e| UpdateJson {
+            client_id: e.client_id.clone(),
+            changes: e.changes.clone(),
+        })
+        .collect();
+    serialize(&ServerFrame::Updates {
+        version: base,
+        updates,
+    })
+}
+
+fn snapshot_frame(path: &str, st: &DocState) -> String {
+    let cursors = st
+        .cursors
+        .iter()
+        .map(|(id, c)| PeerCursor {
+            id: *id,
+            w: c.window_id.clone(),
+            anchor: c.anchor,
+            head: c.head,
+            version: c.version,
+        })
+        .collect();
+    serialize(&ServerFrame::Snapshot {
+        path: path.to_string(),
+        version: st.version,
+        doc: st.text.clone(),
+        dirty: st.dirty_since.is_some(),
+        mtime_ns: st.flushed_mtime_ns.map(|n| n.to_string()),
+        cursors,
+    })
+}
+
+fn flush_frame(st: &DocState) -> String {
+    serialize(&ServerFrame::Flush {
+        dirty: st.dirty_since.is_some(),
+        mtime_ns: st.flushed_mtime_ns.map(|n| n.to_string()),
+        error: None,
+    })
+}
+
+impl DocState {
+    fn fan(&self, json: &str) {
+        for sink in self.attaches.values() {
+            // A send only fails when the pump died; its handle drop
+            // cleans the attach up.
+            let _ = sink.outbox.send(json.to_owned());
+        }
+    }
+
+    fn fan_except(&self, skip: u64, json: &str) {
+        for (id, sink) in &self.attaches {
+            if *id != skip {
+                let _ = sink.outbox.send(json.to_owned());
+            }
+        }
+    }
+
+    fn send_to(&self, id: u64, json: String) {
+        if let Some(sink) = self.attaches.get(&id) {
+            let _ = sink.outbox.send(json);
+        }
+    }
+
+    fn mark_dirty(&mut self) {
+        if self.dirty_since.is_none() {
+            self.dirty_since = Some(Instant::now());
+        }
+    }
+
+    fn append_log(&mut self, entry: Arc<LoggedUpdate>) {
+        self.version += 1;
+        self.log_bytes += entry.cost;
+        self.log.push_back(entry);
+        while self.log.len() > DOC_LOG_MAX_UPDATES || self.log_bytes > DOC_LOG_MAX_BYTES {
+            let Some(evicted) = self.log.pop_front() else {
+                break;
+            };
+            self.log_base += 1;
+            self.log_bytes -= evicted.cost;
+        }
+    }
+}
+
+impl DocSession {
+    fn new(path: &str, text: String, stat: &FileStat) -> Self {
+        let len16 = changes::utf16_len(&text);
+        Self {
+            path: path.to_string(),
+            state: Mutex::new(DocState {
+                text,
+                len16,
+                version: 0,
+                log: VecDeque::new(),
+                log_base: 0,
+                log_bytes: 0,
+                attaches: HashMap::new(),
+                cursors: HashMap::new(),
+                dirty_since: None,
+                flush_now: false,
+                flushed_mtime_ns: stat.mtime_ns,
+                flush_epoch_version: 0,
+                flush_failures: 0,
+            }),
+            attach_count: AtomicUsize::new(0),
+            detached_at: AtomicI64::new(0),
+            closed: AtomicBool::new(false),
+        }
+    }
+
+    fn lock_state(&self) -> std::sync::MutexGuard<'_, DocState> {
+        self.state.lock().expect("doc session state poisoned")
+    }
+
+    pub fn attach_count(&self) -> usize {
+        self.attach_count.load(Ordering::Relaxed)
+    }
+
+    /// Current authority text plus the session CAS token, for the GET
+    /// divert: a client about to attach sees exactly the bytes its
+    /// snapshot will carry, under a token consistent with the session.
+    pub fn authority_view(&self) -> (String, Option<i64>) {
+        let st = self.lock_state();
+        (st.text.clone(), st.flushed_mtime_ns)
+    }
+
+    /// Session CAS token for the PUT divert's conflict check.
+    pub fn token(&self) -> Option<i64> {
+        self.lock_state().flushed_mtime_ns
+    }
+
+    /// Replace the whole authority text as a synthetic update from
+    /// `client_id` (the `$http` divert). Fans like any edit and marks
+    /// the session dirty; the caller decides when to flush.
+    pub fn apply_replace(&self, client_id: &str, new_text: &str) -> Result<(), ApplyError> {
+        if new_text.len() as u64 > TEXT_WRITE_LIMIT {
+            return Err(ApplyError::DocTooLarge {
+                bytes: new_text.len() as u64,
+                limit: TEXT_WRITE_LIMIT,
+            });
+        }
+        let mut st = self.lock_state();
+        if new_text == st.text {
+            return Ok(());
+        }
+        self.replace_locked(&mut st, client_id, new_text.to_string());
+        st.mark_dirty();
+        Ok(())
+    }
+
+    /// Commit `new_text` as a synthetic update under an already-held
+    /// state lock: log, fan, bump version. Leaves dirty/token handling
+    /// to the caller (the `$disk` and `$http` paths differ there).
+    fn replace_locked(&self, st: &mut DocState, client_id: &str, new_text: String) {
+        let cs = changes::replace_diff(&st.text, &new_text);
+        let cost = changeset_cost(&cs) + client_id.len();
+        let entry = Arc::new(LoggedUpdate {
+            client_id: client_id.to_string(),
+            changes: cs,
+            cost,
+        });
+        let frame = updates_frame(st.version, std::iter::once(&entry));
+        st.len16 = changes::utf16_len(&new_text);
+        st.text = new_text;
+        st.append_log(entry);
+        st.fan(&frame);
+    }
+
+    /// Fold external disk content into the session as a `$disk`
+    /// update: clients converge on the disk state, the token is
+    /// adopted, and the session is clean afterwards. Equal content
+    /// adopts the token silently.
+    fn merge_disk(&self, disk_text: String, stat: &FileStat) {
+        let mut st = self.lock_state();
+        if disk_text != st.text {
+            self.replace_locked(&mut st, DISK_CLIENT, disk_text);
+        }
+        st.flushed_mtime_ns = stat.mtime_ns;
+        st.dirty_since = None;
+        st.flush_failures = 0;
+    }
+
+    /// The file vanished from disk. Forget the token, stop the flush
+    /// clock (a deliberate delete is never resurrected by a flush; the
+    /// next client edit re-dirties and the CAS-against-None write
+    /// recreates), and tell every client.
+    fn mark_removed(&self) {
+        let mut st = self.lock_state();
+        st.flushed_mtime_ns = None;
+        st.dirty_since = None;
+        st.flush_now = false;
+        st.fan(&serialize(&ServerFrame::Removed));
+    }
+
+    /// First half of a flush: capture the text and token under the
+    /// lock. Returns None when there is nothing to flush. Clears
+    /// `flush_now` either way.
+    fn begin_flush(&self) -> Option<FlushJob> {
+        let mut st = self.lock_state();
+        st.flush_now = false;
+        st.dirty_since?;
+        st.flush_epoch_version = st.version;
+        Some(FlushJob {
+            text: st.text.clone(),
+            expected_mtime_ns: st.flushed_mtime_ns,
+            epoch: st.version,
+        })
+    }
+
+    /// Second half of a successful flush: adopt the fresh token, clear
+    /// dirty only if no edit landed while the write was in flight, and
+    /// fan the flush state.
+    fn finish_flush(&self, epoch: u64, stat: &FileStat) {
+        let mut st = self.lock_state();
+        st.flushed_mtime_ns = stat.mtime_ns;
+        st.flush_failures = 0;
+        if st.version == epoch {
+            st.dirty_since = None;
+        }
+        let frame = flush_frame(&st);
+        st.fan(&frame);
+    }
+
+    fn note_flush_failure(&self, message: String) {
+        let mut st = self.lock_state();
+        st.flush_failures += 1;
+        if st.flush_failures >= 2 {
+            let frame = serialize(&ServerFrame::Flush {
+                dirty: true,
+                mtime_ns: None,
+                error: Some(message),
+            });
+            st.fan(&frame);
+        }
+    }
+}
+
+struct FlushJob {
+    text: String,
+    expected_mtime_ns: Option<i64>,
+    epoch: u64,
+}
+
+impl DocAttachHandle {
+    pub fn attach_id(&self) -> u64 {
+        self.attach_id
+    }
+
+    pub fn session(&self) -> &Arc<DocSession> {
+        &self.session
+    }
+
+    /// The per-attachment frame stream, taken once by the socket pump.
+    /// Every frame is a complete serialized `ServerFrame`.
+    pub fn take_frames(&mut self) -> mpsc::UnboundedReceiver<String> {
+        self.frames.take().expect("doc attach frames taken twice")
+    }
+
+    /// Version-gated batch push. A base-version mismatch is answered
+    /// with `push-stale` on this attachment's own stream and returns
+    /// Ok. On success the committed updates fan to every attachment
+    /// (sender included), then `push-ok` to the sender, both enqueued
+    /// under the same lock. An Err means the route should answer an
+    /// `error` frame and drop this attachment; the authority text is
+    /// untouched (the batch is all-or-nothing).
+    pub fn push(&self, base_version: u64, updates: Vec<UpdateJson>) -> Result<(), PushError> {
+        // The changes are already grammar-checked (UpdateJson carries a
+        // typed ChangeSetJson from frame decode); only the reserved
+        // synthetic-participant ids are ours to police.
+        for update in &updates {
+            if update.client_id.starts_with(RESERVED_CLIENT_PREFIX) {
+                return Err(PushError::ReservedClientId(update.client_id.clone()));
+            }
+        }
+
+        let mut st = self.session.lock_state();
+        if self.session.closed.load(Ordering::Relaxed) {
+            return Err(PushError::Closed);
+        }
+        if st.version != base_version {
+            let frame = serialize(&ServerFrame::PushStale {
+                version: st.version,
+            });
+            st.send_to(self.attach_id, frame);
+            return Ok(());
+        }
+
+        // All-or-nothing: apply the whole batch against locals; only
+        // then commit.
+        let mut applied: Option<Applied> = None;
+        for update in &updates {
+            let (text, len16) = match &applied {
+                Some(a) => (a.text.as_str(), a.len16),
+                None => (st.text.as_str(), st.len16),
+            };
+            applied = Some(changes::apply(text, len16, &update.changes)?);
+        }
+
+        if let Some(a) = applied {
+            let base = st.version;
+            st.text = a.text;
+            st.len16 = a.len16;
+            let entries: Vec<Arc<LoggedUpdate>> = updates
+                .into_iter()
+                .map(|update| {
+                    let cost = changeset_cost(&update.changes) + update.client_id.len();
+                    Arc::new(LoggedUpdate {
+                        client_id: update.client_id,
+                        changes: update.changes,
+                        cost,
+                    })
+                })
+                .collect();
+            let frame = updates_frame(base, entries.iter());
+            for entry in entries {
+                st.append_log(entry);
+            }
+            st.mark_dirty();
+            st.fan(&frame);
+        }
+        let ok = serialize(&ServerFrame::PushOk {
+            version: st.version,
+        });
+        st.send_to(self.attach_id, ok);
+        Ok(())
+    }
+
+    /// Explicit catch-up: inside the log answers the missing updates,
+    /// outside it answers a fresh snapshot; at the current version
+    /// answers nothing.
+    pub fn pull(&self, version: u64) {
+        let st = self.session.lock_state();
+        if version >= st.log_base && version <= st.version {
+            if version < st.version {
+                let frame = updates_frame(
+                    version,
+                    st.log.iter().skip((version - st.log_base) as usize),
+                );
+                st.send_to(self.attach_id, frame);
+            }
+        } else {
+            let frame = snapshot_frame(&self.session.path, &st);
+            st.send_to(self.attach_id, frame);
+        }
+    }
+
+    /// Selection moved: clamp to the document, stamp the current
+    /// version, store for future snapshots, and fan to the OTHER
+    /// attachments (the owner knows its own selection).
+    pub fn cursor(&self, anchor: u64, head: u64) {
+        let mut st = self.session.lock_state();
+        let Some(window_id) = st
+            .attaches
+            .get(&self.attach_id)
+            .map(|s| s.window_id.clone())
+        else {
+            return;
+        };
+        let anchor = anchor.min(st.len16);
+        let head = head.min(st.len16);
+        let version = st.version;
+        st.cursors.insert(
+            self.attach_id,
+            CursorPos {
+                window_id: window_id.clone(),
+                anchor,
+                head,
+                version,
+            },
+        );
+        let frame = serialize(&ServerFrame::Cursor {
+            id: self.attach_id,
+            w: window_id,
+            anchor,
+            head,
+            version,
+        });
+        st.fan_except(self.attach_id, &frame);
+    }
+}
+
+impl Drop for DocAttachHandle {
+    fn drop(&mut self) {
+        let mut st = self.session.lock_state();
+        st.attaches.remove(&self.attach_id);
+        if st.cursors.remove(&self.attach_id).is_some() {
+            let frame = serialize(&ServerFrame::CursorGone { id: self.attach_id });
+            st.fan(&frame);
+        }
+        let last = st.attaches.is_empty();
+        if last && !self.session.closed.load(Ordering::Relaxed) {
+            self.session
+                .detached_at
+                .store(now_unix_millis(), Ordering::Relaxed);
+            st.flush_now = true;
+        }
+        drop(st);
+        self.session.attach_count.fetch_sub(1, Ordering::Relaxed);
+        if last {
+            self.registry.flush_wake.notify_one();
+        }
+    }
+}
+
+impl Default for DocRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl DocRegistry {
+    pub fn new() -> Self {
+        Self {
+            sessions: Mutex::new(HashMap::new()),
+            flush_wake: Notify::new(),
+            next_attach_id: AtomicU64::new(1),
+        }
+    }
+
+    fn lock_sessions(&self) -> std::sync::MutexGuard<'_, HashMap<String, Arc<DocSession>>> {
+        self.sessions.lock().expect("doc registry poisoned")
+    }
+
+    /// The live session for a path, if any (the GET/PUT diverts and
+    /// the reconciler key on this).
+    pub fn get(&self, path: &str) -> Option<Arc<DocSession>> {
+        self.lock_sessions()
+            .get(path)
+            .filter(|s| !s.closed.load(Ordering::Relaxed))
+            .cloned()
+    }
+
+    fn sessions_snapshot(&self) -> Vec<Arc<DocSession>> {
+        self.lock_sessions().values().cloned().collect()
+    }
+
+    /// Attach to the session for `path`, creating it from disk on the
+    /// first attachment. The returned handle's frame stream already
+    /// carries the catch-up: a full `snapshot`, or, for a usable
+    /// `client_version`, the incremental `updates` plus current
+    /// cursors and flush state. Enqueued under the same lock that
+    /// registers the attachment, so no update can slip in between.
+    pub async fn attach(
+        self: &Arc<Self>,
+        workspace: &Arc<Workspace>,
+        path: &str,
+        window_id: &str,
+        client_version: Option<u64>,
+    ) -> Result<DocAttachHandle, AttachError> {
+        chan_workspace::fs_ops::validate_rel(path)?;
+        loop {
+            // Fast path: live session.
+            {
+                let sessions = self.lock_sessions();
+                if let Some(session) = sessions.get(path) {
+                    if let Some(handle) =
+                        self.register_attach(session.clone(), window_id, client_version)
+                    {
+                        return Ok(handle);
+                    }
+                    // Closed but not yet removed: fall through and
+                    // seed a replacement.
+                }
+            }
+
+            // First attach: seed from disk OUTSIDE every lock (the
+            // read enforces the editable-text gate, valid UTF-8, and
+            // the size cap).
+            let ws = Arc::clone(workspace);
+            let read_path = path.to_string();
+            let (text, stat) =
+                tokio::task::spawn_blocking(move || ws.read_text_with_stat(&read_path))
+                    .await
+                    .map_err(|e| AttachError::Task(e.to_string()))??;
+
+            // Re-lock and double-check: a concurrent first attach may
+            // have won the race; use its session and discard this read
+            // (the ptr-equality idiom from terminal_sessions).
+            let mut sessions = self.lock_sessions();
+            match sessions.get(path) {
+                Some(existing) if !existing.closed.load(Ordering::Relaxed) => {
+                    let session = existing.clone();
+                    if let Some(handle) = self.register_attach(session, window_id, client_version) {
+                        return Ok(handle);
+                    }
+                    // Raced a close between the lookups; start over.
+                }
+                _ => {
+                    let session = Arc::new(DocSession::new(path, text, &stat));
+                    sessions.insert(path.to_string(), session.clone());
+                    let handle = self
+                        .register_attach(session, window_id, client_version)
+                        .expect("fresh session cannot be closed under the map lock");
+                    return Ok(handle);
+                }
+            }
+        }
+    }
+
+    /// Register an attachment on `session` and enqueue its catch-up.
+    /// None when the session is closed (caller retries against the
+    /// map). Callers hold the registry map lock, which is what makes
+    /// the closed check race-free against the reaper and `close_all`.
+    fn register_attach(
+        self: &Arc<Self>,
+        session: Arc<DocSession>,
+        window_id: &str,
+        client_version: Option<u64>,
+    ) -> Option<DocAttachHandle> {
+        let attach_id = self.next_attach_id.fetch_add(1, Ordering::Relaxed);
+        let (tx, rx) = mpsc::unbounded_channel();
+        let mut st = session.lock_state();
+        if session.closed.load(Ordering::Relaxed) {
+            return None;
+        }
+        match client_version {
+            Some(v) if v >= st.log_base && v <= st.version => {
+                if v < st.version {
+                    let frame = updates_frame(v, st.log.iter().skip((v - st.log_base) as usize));
+                    let _ = tx.send(frame);
+                }
+                for (id, c) in &st.cursors {
+                    let _ = tx.send(serialize(&ServerFrame::Cursor {
+                        id: *id,
+                        w: c.window_id.clone(),
+                        anchor: c.anchor,
+                        head: c.head,
+                        version: c.version,
+                    }));
+                }
+                let _ = tx.send(flush_frame(&st));
+            }
+            _ => {
+                let _ = tx.send(snapshot_frame(&session.path, &st));
+            }
+        }
+        st.attaches.insert(
+            attach_id,
+            AttachSink {
+                outbox: tx,
+                window_id: window_id.to_string(),
+            },
+        );
+        drop(st);
+        session.attach_count.fetch_add(1, Ordering::Relaxed);
+        session.detached_at.store(0, Ordering::Relaxed);
+        Some(DocAttachHandle {
+            registry: Arc::clone(self),
+            session,
+            attach_id,
+            frames: Some(rx),
+        })
+    }
+
+    /// One flusher sweep: flush every session that is due (debounce
+    /// elapsed or flush requested).
+    pub async fn flush_pass(&self, workspace: &Arc<Workspace>, self_writes: &SelfWrites) {
+        for session in self.sessions_snapshot() {
+            let due = {
+                let st = session.lock_state();
+                st.flush_now
+                    || st
+                        .dirty_since
+                        .is_some_and(|since| since.elapsed() >= DOC_FLUSH_DEBOUNCE)
+            };
+            if due {
+                flush_session(&session, workspace, self_writes).await;
+            }
+        }
+    }
+
+    /// Drop sessions that have been fully detached past the grace
+    /// window and hold nothing unflushed. Marks them closed under the
+    /// map lock so a concurrent attach either finds them gone or sees
+    /// the closed flag and reseeds.
+    pub fn reap_pass(&self) {
+        let now = now_unix_millis();
+        let mut sessions = self.lock_sessions();
+        sessions.retain(|_, session| {
+            let st = session.lock_state();
+            let detached_at = session.detached_at.load(Ordering::Relaxed);
+            let reap = st.attaches.is_empty()
+                && st.dirty_since.is_none()
+                && detached_at > 0
+                && now.saturating_sub(detached_at) >= DOC_DETACH_GRACE.as_millis() as i64;
+            if reap {
+                session.closed.store(true, Ordering::Relaxed);
+            }
+            !reap
+        });
+    }
+
+    /// Registry-initiated teardown (storage reset, shutdown): flush
+    /// what can be flushed, tell every attachment `closed`, and drop
+    /// all sessions. Pass the pre-swap workspace on reset so dirty
+    /// sessions land on disk first.
+    pub async fn close_all(
+        &self,
+        reason: &'static str,
+        workspace: Option<&Arc<Workspace>>,
+        self_writes: &SelfWrites,
+    ) {
+        let sessions: Vec<Arc<DocSession>> = {
+            let mut map = self.lock_sessions();
+            map.drain().map(|(_, s)| s).collect()
+        };
+        for session in sessions {
+            if let Some(ws) = workspace {
+                session.lock_state().flush_now = true;
+                flush_session(&session, ws, self_writes).await;
+            }
+            let mut st = session.lock_state();
+            session.closed.store(true, Ordering::Relaxed);
+            st.fan(&serialize(&ServerFrame::Closed { reason }));
+            st.attaches.clear();
+            st.cursors.clear();
+        }
+    }
+
+    /// Route one raw watcher event into the affected session, if any.
+    /// A rename is a remove of the source key and a modify of the
+    /// destination key.
+    pub async fn reconcile_event(&self, workspace: &Arc<Workspace>, event: WatchEvent) {
+        match event.kind {
+            WatchKind::Created | WatchKind::Modified => {
+                if let Some(session) = event.path.as_deref().and_then(|p| self.get(p)) {
+                    reconcile_session(&session, workspace).await;
+                }
+            }
+            WatchKind::Removed => {
+                if let Some(session) = event.path.as_deref().and_then(|p| self.get(p)) {
+                    session.mark_removed();
+                }
+            }
+            WatchKind::Renamed => {
+                if let Some(session) = event.path.as_deref().and_then(|p| self.get(p)) {
+                    session.mark_removed();
+                }
+                if let Some(session) = event.to.as_deref().and_then(|p| self.get(p)) {
+                    reconcile_session(&session, workspace).await;
+                }
+            }
+            WatchKind::ProviderError => self.reconcile_all(workspace).await,
+        }
+    }
+
+    /// Stat-and-reconcile every live session; the answer to a lagged
+    /// or unreliable watch stream.
+    pub async fn reconcile_all(&self, workspace: &Arc<Workspace>) {
+        for session in self.sessions_snapshot() {
+            reconcile_session(&session, workspace).await;
+        }
+    }
+}
+
+/// Flush one session to disk: capture under the lock, CAS-write
+/// outside it, commit the token. A CAS conflict means the disk changed
+/// under us: reconcile (merging the external content) and retry once.
+/// Other failures keep the session dirty; the content stays safe in
+/// memory and in every client, and the error fan starts on the second
+/// consecutive failure.
+pub(crate) async fn flush_session(
+    session: &Arc<DocSession>,
+    workspace: &Arc<Workspace>,
+    self_writes: &SelfWrites,
+) {
+    for attempt in 0..2u32 {
+        let Some(job) = session.begin_flush() else {
+            return;
+        };
+        // Note the self-write BEFORE the blocking write runs, exactly
+        // like the files.rs save path: the watcher can deliver the
+        // resulting event the instant the write lands, and noting
+        // afterwards would let our own flush surface as an external
+        // edit.
+        self_writes.note(&session.path);
+        let ws = Arc::clone(workspace);
+        let path = session.path.clone();
+        let epoch = job.epoch;
+        let result = tokio::task::spawn_blocking(move || {
+            ws.write_text_if_unchanged(&path, job.expected_mtime_ns, &job.text)?;
+            ws.stat(&path)
+        })
+        .await;
+        match result {
+            Ok(Ok(stat)) => {
+                session.finish_flush(epoch, &stat);
+                return;
+            }
+            Ok(Err(ChanError::WriteConflict { .. })) if attempt == 0 => {
+                // Disk changed since our token: fold the external
+                // content in, then retry with the adopted token. If
+                // the merge left nothing dirty the retry no-ops.
+                reconcile_session(session, workspace).await;
+            }
+            Ok(Err(e)) => {
+                session.note_flush_failure(e.to_string());
+                return;
+            }
+            Err(join) => {
+                session.note_flush_failure(join.to_string());
+                return;
+            }
+        }
+    }
+}
+
+/// Bring one session in line with the disk: an unchanged token is our
+/// own flush echo (ignore); equal content adopts the token silently;
+/// different content merges in as a `$disk` update; a vanished file
+/// routes into the removed path. Unreadable content (non-UTF-8,
+/// oversized) is ignored with a warning: a deliberate stalemate that
+/// surfaces through flush errors rather than corrupting the session.
+pub(crate) async fn reconcile_session(session: &Arc<DocSession>, workspace: &Arc<Workspace>) {
+    if session.closed.load(Ordering::Relaxed) {
+        return;
+    }
+    let ws = Arc::clone(workspace);
+    let stat_path = session.path.clone();
+    let stat = match tokio::task::spawn_blocking(move || ws.stat(&stat_path)).await {
+        Ok(Ok(stat)) => stat,
+        Ok(Err(_)) => {
+            let ws = Arc::clone(workspace);
+            let probe_path = session.path.clone();
+            let exists = tokio::task::spawn_blocking(move || ws.exists(&probe_path))
+                .await
+                .unwrap_or(true);
+            if !exists {
+                session.mark_removed();
+            }
+            return;
+        }
+        Err(_) => return,
+    };
+    {
+        let st = session.lock_state();
+        if stat.mtime_ns.is_some() && stat.mtime_ns == st.flushed_mtime_ns {
+            return;
+        }
+    }
+    let ws = Arc::clone(workspace);
+    let read_path = session.path.clone();
+    match tokio::task::spawn_blocking(move || ws.read_text_with_stat(&read_path)).await {
+        Ok(Ok((disk_text, disk_stat))) => session.merge_disk(disk_text, &disk_stat),
+        Ok(Err(e)) => {
+            tracing::warn!(
+                error = %e,
+                path = %session.path,
+                "doc session reconcile read failed; keeping the authority text"
+            );
+        }
+        Err(_) => {}
+    }
+}
+
+fn cell_workspace(cell: &Arc<RwLock<Option<WorkspaceCell>>>) -> Option<Arc<Workspace>> {
+    cell.read().ok()?.as_ref().map(|c| c.workspace.clone())
+}
+
+/// The background flusher: debounced dirty-session writes, detach
+/// flushes, the detach-grace reaper, and the flush-all on shutdown.
+/// Spawned once in build_app next to the other long-lived tasks.
+pub fn spawn_flusher(
+    registry: Arc<DocRegistry>,
+    workspace_cell: Arc<RwLock<Option<WorkspaceCell>>>,
+    self_writes: Arc<SelfWrites>,
+    mut shutdown_rx: watch::Receiver<bool>,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                _ = registry.flush_wake.notified() => {}
+                _ = tokio::time::sleep(FLUSH_TICK) => {}
+                changed = shutdown_rx.changed() => {
+                    if changed.is_err() || *shutdown_rx.borrow() {
+                        let ws = cell_workspace(&workspace_cell);
+                        registry
+                            .close_all("shutdown", ws.as_ref(), &self_writes)
+                            .await;
+                        return;
+                    }
+                }
+            }
+            if let Some(ws) = cell_workspace(&workspace_cell) {
+                registry.flush_pass(&ws, &self_writes).await;
+            }
+            registry.reap_pass();
+        }
+    })
+}
+
+/// The reconciler: subscribes the RAW watcher feed (pre-suppression;
+/// sessions do their own precise mtime-token echo filtering instead of
+/// the coarse SelfWrites window) and folds external writes into live
+/// sessions. A lagged receiver or provider error reconciles everything.
+pub fn spawn_reconciler(
+    registry: Arc<DocRegistry>,
+    workspace_cell: Arc<RwLock<Option<WorkspaceCell>>>,
+    mut events: broadcast::Receiver<WatchEvent>,
+    mut shutdown_rx: watch::Receiver<bool>,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                changed = shutdown_rx.changed() => {
+                    if changed.is_err() || *shutdown_rx.borrow() {
+                        return;
+                    }
+                }
+                received = events.recv() => {
+                    let Some(ws) = cell_workspace(&workspace_cell) else {
+                        continue;
+                    };
+                    match received {
+                        Ok(event) => registry.reconcile_event(&ws, event).await,
+                        Err(broadcast::error::RecvError::Lagged(_)) => {
+                            registry.reconcile_all(&ws).await;
+                        }
+                        Err(broadcast::error::RecvError::Closed) => return,
+                    }
+                }
+            }
+        }
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::{json, Value};
+    use tempfile::TempDir;
+
+    struct Fixture {
+        _cfg: TempDir,
+        root: TempDir,
+        workspace: Arc<Workspace>,
+        registry: Arc<DocRegistry>,
+        self_writes: SelfWrites,
+    }
+
+    fn fixture(files: &[(&str, &str)]) -> Fixture {
+        let cfg = TempDir::new().unwrap();
+        let root = TempDir::new().unwrap();
+        let lib = chan_workspace::Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_workspace(root.path()).unwrap();
+        let workspace = lib.open_workspace(root.path()).unwrap();
+        for (path, content) in files {
+            workspace.write_text(path, content).unwrap();
+        }
+        Fixture {
+            _cfg: cfg,
+            root,
+            workspace,
+            registry: Arc::new(DocRegistry::new()),
+            self_writes: SelfWrites::new(),
+        }
+    }
+
+    async fn attach(
+        fx: &Fixture,
+        path: &str,
+        window: &str,
+        version: Option<u64>,
+    ) -> (DocAttachHandle, mpsc::UnboundedReceiver<String>) {
+        let mut handle = fx
+            .registry
+            .attach(&fx.workspace, path, window, version)
+            .await
+            .expect("attach");
+        let frames = handle.take_frames();
+        (handle, frames)
+    }
+
+    /// Drain everything currently enqueued. All enqueues under test
+    /// happen synchronously before this runs, so nothing is racy.
+    fn drain(rx: &mut mpsc::UnboundedReceiver<String>) -> Vec<Value> {
+        let mut out = Vec::new();
+        while let Ok(s) = rx.try_recv() {
+            out.push(serde_json::from_str(&s).unwrap());
+        }
+        out
+    }
+
+    fn update(client: &str, changes: Value) -> UpdateJson {
+        UpdateJson {
+            client_id: client.into(),
+            changes: serde_json::from_value(changes).expect("valid change set"),
+        }
+    }
+
+    fn backdate_dirty(session: &Arc<DocSession>) {
+        let mut st = session.lock_state();
+        st.dirty_since = Some(
+            Instant::now()
+                .checked_sub(DOC_FLUSH_DEBOUNCE + Duration::from_millis(50))
+                .unwrap(),
+        );
+    }
+
+    #[tokio::test]
+    async fn attach_snapshots_and_seeds_from_disk() {
+        let fx = fixture(&[("a.md", "hello")]);
+        let (_h, mut rx) = attach(&fx, "a.md", "win-1", None).await;
+        let frames = drain(&mut rx);
+        assert_eq!(frames.len(), 1);
+        let snap = &frames[0];
+        assert_eq!(snap["type"], "snapshot");
+        assert_eq!(snap["path"], "a.md");
+        assert_eq!(snap["version"], 0);
+        assert_eq!(snap["doc"], "hello");
+        assert_eq!(snap["dirty"], false);
+        assert!(snap["mtime_ns"].is_string());
+        assert_eq!(snap["cursors"], json!([]));
+    }
+
+    #[tokio::test]
+    async fn concurrent_first_attaches_share_one_session() {
+        let fx = fixture(&[("a.md", "x")]);
+        let (a, b) = tokio::join!(
+            fx.registry.attach(&fx.workspace, "a.md", "w1", None),
+            fx.registry.attach(&fx.workspace, "a.md", "w2", None),
+        );
+        let (a, b) = (a.unwrap(), b.unwrap());
+        assert!(Arc::ptr_eq(a.session(), b.session()));
+        assert_eq!(fx.registry.lock_sessions().len(), 1);
+        assert_eq!(a.session().attach_count(), 2);
+    }
+
+    #[tokio::test]
+    async fn push_commits_fans_to_all_and_acks_sender() {
+        let fx = fixture(&[("a.md", "ab")]);
+        let (ha, mut rxa) = attach(&fx, "a.md", "w1", None).await;
+        let (_hb, mut rxb) = attach(&fx, "a.md", "w2", None).await;
+        drain(&mut rxa);
+        drain(&mut rxb);
+
+        ha.push(0, vec![update("c1", json!([1, [0, "X"], 1]))])
+            .unwrap();
+
+        let a_frames = drain(&mut rxa);
+        assert_eq!(a_frames.len(), 2, "sender sees echo then ack: {a_frames:?}");
+        assert_eq!(a_frames[0]["type"], "updates");
+        assert_eq!(a_frames[0]["version"], 0);
+        assert_eq!(a_frames[0]["updates"][0]["clientID"], "c1");
+        assert_eq!(
+            a_frames[0]["updates"][0]["changes"],
+            json!([1, [0, "X"], 1])
+        );
+        assert_eq!(a_frames[1]["type"], "push-ok");
+        assert_eq!(a_frames[1]["version"], 1);
+
+        let b_frames = drain(&mut rxb);
+        assert_eq!(b_frames.len(), 1);
+        assert_eq!(b_frames[0]["type"], "updates");
+
+        let (text, _) = ha.session().authority_view();
+        assert_eq!(text, "aXb");
+    }
+
+    #[tokio::test]
+    async fn stale_push_answers_push_stale_to_sender_only() {
+        let fx = fixture(&[("a.md", "ab")]);
+        let (ha, mut rxa) = attach(&fx, "a.md", "w1", None).await;
+        let (hb, mut rxb) = attach(&fx, "a.md", "w2", None).await;
+        drain(&mut rxa);
+        drain(&mut rxb);
+
+        ha.push(0, vec![update("c1", json!([[2, "yo"]]))]).unwrap();
+        drain(&mut rxa);
+        drain(&mut rxb);
+
+        // B pushes at the version it last confirmed; the authority has
+        // moved on.
+        hb.push(0, vec![update("c2", json!([2, [0, "!"]]))])
+            .unwrap();
+        let b_frames = drain(&mut rxb);
+        assert_eq!(b_frames.len(), 1);
+        assert_eq!(b_frames[0]["type"], "push-stale");
+        assert_eq!(b_frames[0]["version"], 1);
+        assert_eq!(drain(&mut rxa).len(), 0, "no fan on a stale push");
+
+        // After rebasing (here: recomputing against v1) the push lands.
+        hb.push(1, vec![update("c2", json!([2, [0, "!"]]))])
+            .unwrap();
+        assert_eq!(hb.session().authority_view().0, "yo!");
+    }
+
+    #[tokio::test]
+    async fn push_batch_is_all_or_nothing_and_rejects_bad_input() {
+        let fx = fixture(&[("a.md", "abc")]);
+        let (ha, mut rxa) = attach(&fx, "a.md", "w1", None).await;
+        drain(&mut rxa);
+
+        // Second update's span mismatches the doc the first produces.
+        let err = ha
+            .push(
+                0,
+                vec![update("c1", json!([[3, "xy"]])), update("c1", json!([99]))],
+            )
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            PushError::Apply(ApplyError::LengthMismatch { .. })
+        ));
+        let st = ha.session().lock_state();
+        assert_eq!(st.text, "abc", "failed batch must not touch the authority");
+        assert_eq!(st.version, 0);
+        drop(st);
+        assert_eq!(drain(&mut rxa).len(), 0, "failed batch fans nothing");
+
+        // Reserved synthetic ids are rejected before anything runs.
+        let err = ha.push(0, vec![update("$disk", json!([3]))]).unwrap_err();
+        assert!(matches!(err, PushError::ReservedClientId(_)));
+    }
+
+    #[tokio::test]
+    async fn reconnect_version_gets_incremental_catchup_with_flush_state() {
+        let fx = fixture(&[("a.md", "")]);
+        let (ha, mut rxa) = attach(&fx, "a.md", "w1", None).await;
+        drain(&mut rxa);
+        ha.push(0, vec![update("c1", json!([[0, "a"]]))]).unwrap();
+        ha.push(1, vec![update("c1", json!([1, [0, "b"]]))])
+            .unwrap();
+        ha.push(2, vec![update("c1", json!([2, [0, "c"]]))])
+            .unwrap();
+
+        // A reconnect that confirmed v1 gets exactly v1..v3 plus the
+        // flush state, not a snapshot.
+        let (_hb, mut rxb) = attach(&fx, "a.md", "w2", Some(1)).await;
+        let frames = drain(&mut rxb);
+        assert_eq!(frames.len(), 2, "{frames:?}");
+        assert_eq!(frames[0]["type"], "updates");
+        assert_eq!(frames[0]["version"], 1);
+        assert_eq!(frames[0]["updates"].as_array().unwrap().len(), 2);
+        assert_eq!(frames[1]["type"], "flush");
+        assert_eq!(frames[1]["dirty"], true);
+
+        // An explicit pull answers the same shape.
+        drain(&mut rxa);
+        ha.pull(2);
+        let frames = drain(&mut rxa);
+        assert_eq!(frames.len(), 1);
+        assert_eq!(frames[0]["type"], "updates");
+        assert_eq!(frames[0]["version"], 2);
+        assert_eq!(frames[0]["updates"].as_array().unwrap().len(), 1);
+
+        // A pull at the current version has nothing to say.
+        ha.pull(3);
+        assert_eq!(drain(&mut rxa).len(), 0);
+    }
+
+    #[tokio::test]
+    async fn log_ring_evicts_and_reconnect_below_base_snapshots() {
+        let fx = fixture(&[("a.md", "")]);
+        let (ha, mut rxa) = attach(&fx, "a.md", "w1", None).await;
+        drain(&mut rxa);
+
+        // One oversized update blows the byte cap and evicts itself.
+        let big = "x".repeat(DOC_LOG_MAX_BYTES + 1024);
+        ha.push(0, vec![update("c1", json!([[0, big]]))]).unwrap();
+        {
+            let st = ha.session().lock_state();
+            assert_eq!(st.version, 1);
+            assert_eq!(st.log_base, 1, "oversized entry evicted immediately");
+            assert!(st.log.is_empty());
+            assert_eq!(st.log_bytes, 0);
+        }
+
+        // A reconnect below the base cannot be served incrementally.
+        let (_hb, mut rxb) = attach(&fx, "a.md", "w2", Some(0)).await;
+        let frames = drain(&mut rxb);
+        assert_eq!(frames.len(), 1);
+        assert_eq!(frames[0]["type"], "snapshot");
+        assert_eq!(frames[0]["version"], 1);
+
+        // The count cap holds too.
+        for version in 1..=(DOC_LOG_MAX_UPDATES as u64 + 10) {
+            ha.push(version, vec![update("c1", json!([version_len(&ha)]))])
+                .unwrap();
+        }
+        let st = ha.session().lock_state();
+        assert!(st.log.len() <= DOC_LOG_MAX_UPDATES);
+        assert_eq!(st.log_base + st.log.len() as u64, st.version);
+    }
+
+    /// Identity retain over the current doc, as a raw section value.
+    fn version_len(handle: &DocAttachHandle) -> Value {
+        let st = handle.session().lock_state();
+        json!(st.len16)
+    }
+
+    #[tokio::test]
+    async fn cursor_clamps_fans_to_others_and_cleans_up() {
+        let fx = fixture(&[("a.md", "hello")]);
+        let (ha, mut rxa) = attach(&fx, "a.md", "w1", None).await;
+        let (hb, mut rxb) = attach(&fx, "a.md", "w2", None).await;
+        drain(&mut rxa);
+        drain(&mut rxb);
+
+        ha.cursor(3, 9999);
+        assert_eq!(drain(&mut rxa).len(), 0, "own cursor is not echoed");
+        let frames = drain(&mut rxb);
+        assert_eq!(frames.len(), 1);
+        assert_eq!(frames[0]["type"], "cursor");
+        assert_eq!(frames[0]["id"], ha.attach_id());
+        assert_eq!(frames[0]["w"], "w1");
+        assert_eq!(frames[0]["anchor"], 3);
+        assert_eq!(frames[0]["head"], 5, "head clamps to len16");
+
+        // A later attach sees the cursor in its snapshot.
+        let (_hc, mut rxc) = attach(&fx, "a.md", "w3", None).await;
+        let frames = drain(&mut rxc);
+        assert_eq!(frames[0]["cursors"][0]["id"], ha.attach_id());
+
+        // Detach fans cursor-gone to the survivors.
+        let a_id = ha.attach_id();
+        drop(ha);
+        let frames = drain(&mut rxb);
+        assert_eq!(frames.len(), 1);
+        assert_eq!(frames[0]["type"], "cursor-gone");
+        assert_eq!(frames[0]["id"], a_id);
+        assert_eq!(hb.session().attach_count(), 2);
+    }
+
+    #[tokio::test]
+    async fn flush_debounces_writes_and_stamps_token() {
+        let fx = fixture(&[("a.md", "ab")]);
+        let (ha, mut rxa) = attach(&fx, "a.md", "w1", None).await;
+        drain(&mut rxa);
+        ha.push(0, vec![update("c1", json!([2, [0, "c"]]))])
+            .unwrap();
+        drain(&mut rxa);
+
+        // Inside the debounce window nothing flushes.
+        fx.registry.flush_pass(&fx.workspace, &fx.self_writes).await;
+        assert_eq!(fx.workspace.read_text("a.md").unwrap(), "ab");
+        assert_eq!(drain(&mut rxa).len(), 0);
+
+        // Past the debounce the write lands, the token is adopted, and
+        // the clients hear about it.
+        backdate_dirty(ha.session());
+        fx.registry.flush_pass(&fx.workspace, &fx.self_writes).await;
+        assert_eq!(fx.workspace.read_text("a.md").unwrap(), "abc");
+        assert!(fx.self_writes.should_suppress("a.md"));
+        let frames = drain(&mut rxa);
+        assert_eq!(frames.len(), 1);
+        assert_eq!(frames[0]["type"], "flush");
+        assert_eq!(frames[0]["dirty"], false);
+        assert!(frames[0]["mtime_ns"].is_string());
+        let st = ha.session().lock_state();
+        assert!(st.dirty_since.is_none());
+        assert!(st.flushed_mtime_ns.is_some());
+    }
+
+    #[tokio::test]
+    async fn edit_during_flush_keeps_the_session_dirty() {
+        let fx = fixture(&[("a.md", "")]);
+        let (ha, mut rxa) = attach(&fx, "a.md", "w1", None).await;
+        drain(&mut rxa);
+        ha.push(0, vec![update("c1", json!([[0, "v1"]]))]).unwrap();
+
+        // Interleave: capture the flush job, then land another edit
+        // before the write "completes".
+        let job = ha.session().begin_flush().expect("dirty session");
+        ha.push(1, vec![update("c1", json!([2, [0, "+"]]))])
+            .unwrap();
+        fx.workspace
+            .write_text_if_unchanged("a.md", job.expected_mtime_ns, &job.text)
+            .unwrap();
+        let stat = fx.workspace.stat("a.md").unwrap();
+        ha.session().finish_flush(job.epoch, &stat);
+
+        let st = ha.session().lock_state();
+        assert!(
+            st.dirty_since.is_some(),
+            "the mid-flight edit must survive as dirt"
+        );
+        assert_eq!(st.flushed_mtime_ns, stat.mtime_ns, "token still adopted");
+        drop(st);
+        let frames = drain(&mut rxa);
+        let flush = frames.last().unwrap();
+        assert_eq!(flush["type"], "flush");
+        assert_eq!(flush["dirty"], true);
+    }
+
+    #[tokio::test]
+    async fn detach_forces_flush_grace_reaps_and_reattach_within_grace_is_incremental() {
+        let fx = fixture(&[("a.md", "")]);
+        let (ha, _rxa) = attach(&fx, "a.md", "w1", None).await;
+        ha.push(0, vec![update("c1", json!([[0, "typed"]]))])
+            .unwrap();
+        let session = Arc::clone(ha.session());
+        drop(ha);
+
+        // The last detach requests a prompt flush; the pass honors it
+        // without waiting out the debounce.
+        assert!(session.lock_state().flush_now);
+        fx.registry.flush_pass(&fx.workspace, &fx.self_writes).await;
+        assert_eq!(fx.workspace.read_text("a.md").unwrap(), "typed");
+
+        // Within grace the session survives, so a versioned reattach
+        // takes the incremental path (here: already current, so just
+        // cursors-and-flush, no snapshot).
+        let (hb, mut rxb) = attach(&fx, "a.md", "w2", Some(1)).await;
+        let frames = drain(&mut rxb);
+        assert_eq!(frames.len(), 1, "{frames:?}");
+        assert_eq!(frames[0]["type"], "flush");
+        assert!(Arc::ptr_eq(hb.session(), &session), "same session reused");
+        drop(hb);
+
+        // Not yet aged: the reaper leaves it.
+        fx.registry.reap_pass();
+        assert_eq!(fx.registry.lock_sessions().len(), 1);
+
+        // Aged past grace and clean: reaped, and the next attach
+        // starts a fresh session from disk.
+        session.detached_at.store(
+            now_unix_millis() - DOC_DETACH_GRACE.as_millis() as i64 - 1_000,
+            Ordering::Relaxed,
+        );
+        fx.registry.reap_pass();
+        assert_eq!(fx.registry.lock_sessions().len(), 0);
+        assert!(session.closed.load(Ordering::Relaxed));
+        let (hc, mut rxc) = attach(&fx, "a.md", "w3", Some(1)).await;
+        let frames = drain(&mut rxc);
+        assert_eq!(frames[0]["type"], "snapshot");
+        assert_eq!(frames[0]["doc"], "typed");
+        assert_eq!(frames[0]["version"], 0, "fresh session, fresh log");
+        assert!(!Arc::ptr_eq(hc.session(), &session));
+    }
+
+    #[tokio::test]
+    async fn reaper_spares_dirty_sessions() {
+        let fx = fixture(&[("a.md", "")]);
+        let (ha, _rxa) = attach(&fx, "a.md", "w1", None).await;
+        ha.push(0, vec![update("c1", json!([[0, "unsaved"]]))])
+            .unwrap();
+        let session = Arc::clone(ha.session());
+        drop(ha);
+        session.detached_at.store(
+            now_unix_millis() - DOC_DETACH_GRACE.as_millis() as i64 - 1_000,
+            Ordering::Relaxed,
+        );
+        fx.registry.reap_pass();
+        assert_eq!(
+            fx.registry.lock_sessions().len(),
+            1,
+            "unflushed content must never be reaped away"
+        );
+    }
+
+    #[tokio::test]
+    async fn reconcile_ignores_own_flush_echo() {
+        let fx = fixture(&[("a.md", "ab")]);
+        let (ha, mut rxa) = attach(&fx, "a.md", "w1", None).await;
+        drain(&mut rxa);
+        ha.push(0, vec![update("c1", json!([2, [0, "c"]]))])
+            .unwrap();
+        backdate_dirty(ha.session());
+        fx.registry.flush_pass(&fx.workspace, &fx.self_writes).await;
+        drain(&mut rxa);
+        let version_before = ha.session().lock_state().version;
+
+        // The watcher event our own flush produced: token matches,
+        // nothing happens.
+        reconcile_session(ha.session(), &fx.workspace).await;
+        assert_eq!(ha.session().lock_state().version, version_before);
+        assert_eq!(drain(&mut rxa).len(), 0);
+    }
+
+    #[tokio::test]
+    async fn reconcile_merges_external_writes_as_disk_updates() {
+        let fx = fixture(&[("a.md", "hello world")]);
+        let (ha, mut rxa) = attach(&fx, "a.md", "w1", None).await;
+        let (_hb, mut rxb) = attach(&fx, "a.md", "w2", None).await;
+        drain(&mut rxa);
+        drain(&mut rxb);
+
+        // An agent appends to the file behind the server's back.
+        std::fs::write(fx.root.path().join("a.md"), "hello world\nagent line\n").unwrap();
+        fx.registry
+            .reconcile_event(
+                &fx.workspace,
+                WatchEvent {
+                    kind: WatchKind::Modified,
+                    path: Some("a.md".into()),
+                    to: None,
+                },
+            )
+            .await;
+
+        let (text, token) = ha.session().authority_view();
+        assert_eq!(text, "hello world\nagent line\n");
+        assert!(token.is_some(), "disk token adopted");
+        let st = ha.session().lock_state();
+        assert_eq!(st.version, 1);
+        assert!(st.dirty_since.is_none(), "authority equals disk: clean");
+        drop(st);
+        for rx in [&mut rxa, &mut rxb] {
+            let frames = drain(rx);
+            assert_eq!(frames.len(), 1);
+            assert_eq!(frames[0]["type"], "updates");
+            assert_eq!(frames[0]["updates"][0]["clientID"], "$disk");
+        }
+    }
+
+    #[tokio::test]
+    async fn reconcile_adopts_token_silently_on_equal_content() {
+        let fx = fixture(&[("a.md", "same")]);
+        let (ha, mut rxa) = attach(&fx, "a.md", "w1", None).await;
+        drain(&mut rxa);
+
+        // Rewrite the identical bytes: mtime changes, content does not.
+        std::fs::write(fx.root.path().join("a.md"), "same").unwrap();
+        let disk_token = fx.workspace.stat("a.md").unwrap().mtime_ns;
+        reconcile_session(ha.session(), &fx.workspace).await;
+
+        let st = ha.session().lock_state();
+        assert_eq!(st.version, 0, "no synthetic update for equal content");
+        assert_eq!(st.flushed_mtime_ns, disk_token, "token adopted");
+        drop(st);
+        assert_eq!(drain(&mut rxa).len(), 0, "silent adoption");
+    }
+
+    #[tokio::test]
+    async fn removed_file_stops_flushing_and_never_resurrects() {
+        let fx = fixture(&[("a.md", "content")]);
+        let (ha, mut rxa) = attach(&fx, "a.md", "w1", None).await;
+        drain(&mut rxa);
+        ha.push(0, vec![update("c1", json!([7, [0, "!"]]))])
+            .unwrap();
+        drain(&mut rxa);
+
+        std::fs::remove_file(fx.root.path().join("a.md")).unwrap();
+        fx.registry
+            .reconcile_event(
+                &fx.workspace,
+                WatchEvent {
+                    kind: WatchKind::Removed,
+                    path: Some("a.md".into()),
+                    to: None,
+                },
+            )
+            .await;
+
+        let frames = drain(&mut rxa);
+        assert_eq!(frames.len(), 1);
+        assert_eq!(frames[0]["type"], "removed");
+        {
+            let st = ha.session().lock_state();
+            assert_eq!(st.flushed_mtime_ns, None);
+            assert!(st.dirty_since.is_none(), "flush clock stopped");
+        }
+        fx.registry.flush_pass(&fx.workspace, &fx.self_writes).await;
+        assert!(
+            !fx.workspace.exists("a.md"),
+            "a deliberate delete is not resurrected"
+        );
+
+        // The next client edit re-dirties; the CAS-against-None write
+        // recreates the file.
+        ha.push(1, vec![update("c1", json!([[8], [0, "fresh"]]))])
+            .unwrap();
+        backdate_dirty(ha.session());
+        fx.registry.flush_pass(&fx.workspace, &fx.self_writes).await;
+        assert_eq!(fx.workspace.read_text("a.md").unwrap(), "fresh");
+    }
+
+    #[tokio::test]
+    async fn lagged_watch_reconciles_every_live_session() {
+        let fx = fixture(&[("a.md", "one"), ("b.md", "two")]);
+        let (ha, mut rxa) = attach(&fx, "a.md", "w1", None).await;
+        let (hb, mut rxb) = attach(&fx, "b.md", "w1", None).await;
+        drain(&mut rxa);
+        drain(&mut rxb);
+
+        std::fs::write(fx.root.path().join("a.md"), "one CHANGED").unwrap();
+        fx.registry.reconcile_all(&fx.workspace).await;
+
+        assert_eq!(ha.session().authority_view().0, "one CHANGED");
+        assert_eq!(hb.session().authority_view().0, "two");
+        assert_eq!(drain(&mut rxa).len(), 1, "merged session heard the update");
+        assert_eq!(drain(&mut rxb).len(), 0, "untouched session stays silent");
+    }
+
+    #[tokio::test]
+    async fn flush_cas_conflict_reconciles_and_retries() {
+        let fx = fixture(&[("a.md", "base")]);
+        let (ha, mut rxa) = attach(&fx, "a.md", "w1", None).await;
+        drain(&mut rxa);
+        ha.push(0, vec![update("c1", json!([4, [0, " typed"]]))])
+            .unwrap();
+        drain(&mut rxa);
+
+        // Stale the session token: an external write bumps the mtime.
+        std::fs::write(fx.root.path().join("a.md"), "external").unwrap();
+        backdate_dirty(ha.session());
+        flush_session(ha.session(), &fx.workspace, &fx.self_writes).await;
+
+        // The conflict resolves by merging disk (the accepted
+        // keystroke-revert window) and the retry finds nothing dirty.
+        let (text, _) = ha.session().authority_view();
+        assert_eq!(text, "external");
+        assert_eq!(fx.workspace.read_text("a.md").unwrap(), "external");
+        let st = ha.session().lock_state();
+        assert!(st.dirty_since.is_none());
+        drop(st);
+        let frames = drain(&mut rxa);
+        assert_eq!(frames.len(), 1, "{frames:?}");
+        assert_eq!(frames[0]["updates"][0]["clientID"], "$disk");
+    }
+
+    #[tokio::test]
+    async fn close_all_flushes_fans_closed_and_empties_the_registry() {
+        let fx = fixture(&[("a.md", ""), ("b.md", "clean")]);
+        let (ha, mut rxa) = attach(&fx, "a.md", "w1", None).await;
+        let (hb, mut rxb) = attach(&fx, "b.md", "w1", None).await;
+        drain(&mut rxa);
+        drain(&mut rxb);
+        ha.push(0, vec![update("c1", json!([[0, "dirty"]]))])
+            .unwrap();
+        drain(&mut rxa);
+
+        fx.registry
+            .close_all("reset", Some(&fx.workspace), &fx.self_writes)
+            .await;
+
+        assert_eq!(fx.workspace.read_text("a.md").unwrap(), "dirty");
+        let a_frames = drain(&mut rxa);
+        assert_eq!(a_frames.last().unwrap()["type"], "closed");
+        assert_eq!(a_frames.last().unwrap()["reason"], "reset");
+        assert_eq!(drain(&mut rxb).last().unwrap()["type"], "closed");
+        assert_eq!(fx.registry.lock_sessions().len(), 0);
+        assert!(matches!(
+            ha.push(1, vec![update("c1", json!([5]))]),
+            Err(PushError::Closed)
+        ));
+        assert!(matches!(
+            hb.push(0, vec![update("c1", json!([5]))]),
+            Err(PushError::Closed)
+        ));
+    }
+
+    #[tokio::test]
+    async fn http_replace_fans_and_marks_dirty() {
+        let fx = fixture(&[("a.md", "old")]);
+        let (ha, mut rxa) = attach(&fx, "a.md", "w1", None).await;
+        drain(&mut rxa);
+
+        ha.session().apply_replace("$http", "new body").unwrap();
+        let frames = drain(&mut rxa);
+        assert_eq!(frames.len(), 1);
+        assert_eq!(frames[0]["type"], "updates");
+        assert_eq!(frames[0]["updates"][0]["clientID"], "$http");
+        let st = ha.session().lock_state();
+        assert_eq!(st.text, "new body");
+        assert_eq!(st.version, 1);
+        assert!(st.dirty_since.is_some(), "PUT divert flushes explicitly");
+        drop(st);
+
+        // Equal content is a no-op.
+        ha.session().apply_replace("$http", "new body").unwrap();
+        assert_eq!(drain(&mut rxa).len(), 0);
+        assert_eq!(ha.session().lock_state().version, 1);
+
+        // The divert-side size gate holds here too.
+        let too_big = "x".repeat(TEXT_WRITE_LIMIT as usize + 1);
+        assert!(matches!(
+            ha.session().apply_replace("$http", &too_big),
+            Err(ApplyError::DocTooLarge { .. })
+        ));
+    }
+
+    #[tokio::test]
+    async fn attach_rejects_invalid_and_missing_paths() {
+        let fx = fixture(&[]);
+        for path in ["../escape.md", "no-such.md"] {
+            let err = fx
+                .registry
+                .attach(&fx.workspace, path, "w1", None)
+                .await
+                .err();
+            assert!(err.is_some(), "attach must fail for {path}");
+        }
+        assert_eq!(fx.registry.lock_sessions().len(), 0);
+    }
+}

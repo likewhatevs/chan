@@ -285,6 +285,7 @@ mod tests {
                 control_socket_path: None,
                 terminal: ServerConfig::default().terminal,
             })),
+            doc_sessions: std::sync::Arc::new(crate::doc_sessions::DocRegistry::new()),
             shutdown_rx,
             scope_registry: std::sync::Arc::new(crate::bus::ScopeRegistry::new()),
             survey_bus: std::sync::Arc::new(crate::survey::SurveyBus::new()),

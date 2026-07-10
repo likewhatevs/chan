@@ -120,6 +120,7 @@ mod tests {
                 control_socket_path: None,
                 terminal: ServerConfig::default().terminal,
             })),
+            doc_sessions: std::sync::Arc::new(crate::doc_sessions::DocRegistry::new()),
             shutdown_rx,
             scope_registry: Arc::new(crate::bus::ScopeRegistry::new()),
             survey_bus: Arc::new(crate::survey::SurveyBus::new()),
