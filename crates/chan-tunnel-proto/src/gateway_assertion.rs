@@ -4,6 +4,10 @@
 //! before it forwards a request through the tunnel. This envelope lets the
 //! proxied devserver distinguish an owner request from a read-only grantee
 //! request without trusting any client-supplied header.
+//!
+//! Optional identity claims (`name`, `email`) inherit exactly this trust:
+//! a per-tunnel key derived from the raw PAT, HMAC-signed per request by
+//! the proxy. Loopback participants never traverse this layer.
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -69,6 +73,14 @@ pub struct Claims {
     pub sub: String,
     /// `owner`, `editor`, or `viewer`.
     pub role: String,
+    /// Caller display name resolved by the gateway at entry mint. Absent
+    /// when the gateway predates identity claims or the profile lookup
+    /// failed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// Caller email, same provenance as `name`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub email: Option<String>,
     /// Wildcard host the browser hit.
     pub aud: String,
     /// Token-resolved devserver id.
@@ -81,6 +93,14 @@ impl Claims {
     /// True only for owner-level launcher access.
     pub fn is_owner(&self) -> bool {
         self.role == ROLE_OWNER
+    }
+
+    /// Attach the caller's gateway-resolved identity.
+    #[must_use]
+    pub fn with_identity(mut self, name: Option<String>, email: Option<String>) -> Self {
+        self.name = name;
+        self.email = email;
+        self
     }
 }
 
@@ -125,6 +145,8 @@ pub fn claims(sub: impl Into<String>, role: impl Into<String>, aud: &str, drv: &
     Claims {
         sub: sub.into(),
         role: role.into(),
+        name: None,
+        email: None,
         aud: aud.to_string(),
         drv: drv.to_string(),
         iat: now,
@@ -240,6 +262,46 @@ mod tests {
         let got = verify(&key, &token, "a.dev", "drv").unwrap();
         assert_eq!(got.sub, c.sub);
         assert!(got.is_owner());
+    }
+
+    #[test]
+    fn assertion_roundtrip_with_identity() {
+        let key = derive_assertion_key("chan_pat_secret");
+        let c = claims("u", "viewer", "a.dev", "drv").with_identity(
+            Some("Ada Lovelace".to_string()),
+            Some("ada@example.com".to_string()),
+        );
+        let token = sign(&key, &c).unwrap();
+        let got = verify(&key, &token, "a.dev", "drv").unwrap();
+        assert_eq!(got.name.as_deref(), Some("Ada Lovelace"));
+        assert_eq!(got.email.as_deref(), Some("ada@example.com"));
+    }
+
+    #[test]
+    fn assertion_without_identity_stays_legacy_shaped() {
+        let key = derive_assertion_key("chan_pat_secret");
+        let c = claims("u", "owner", "a.dev", "drv");
+        let payload = serde_json::to_string(&c).unwrap();
+        assert!(!payload.contains("\"name\""));
+        assert!(!payload.contains("\"email\""));
+        let got = verify(&key, &sign(&key, &c).unwrap(), "a.dev", "drv").unwrap();
+        assert_eq!(got.name, None);
+        assert_eq!(got.email, None);
+    }
+
+    #[test]
+    fn assertion_ignores_unknown_claims() {
+        let key = derive_assertion_key("chan_pat_secret");
+        let c = claims("u", "owner", "a.dev", "drv");
+        let mut value = serde_json::to_value(&c).unwrap();
+        value["future_claim"] = serde_json::Value::String("x".to_string());
+        let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(value.to_string());
+        let sig = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(hmac_sha256(&key, payload.as_bytes()));
+        let got = verify(&key, &format!("{payload}.{sig}"), "a.dev", "drv").unwrap();
+        assert_eq!(got.sub, "u");
+        assert_eq!(got.name, None);
+        assert_eq!(got.email, None);
     }
 
     #[test]
