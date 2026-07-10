@@ -15,6 +15,7 @@ import {
   ApiError,
   api,
   authToken,
+  clientNonce,
   openWatchSocket,
   sessionPath,
   sessionWindowId,
@@ -52,6 +53,7 @@ import {
   layoutHasDurableContent,
   layoutHasPersistableStructure,
   layoutHasReattachableTerminal,
+  reconcileLayout,
   registerDraftPromotionSink,
   restoreLayout,
   serializeLayout,
@@ -784,8 +786,11 @@ export function onWatchEvent(e: unknown): void {
     return;
   }
   if (kind === "session_changed") {
-    // Per-window keying means we never share session.json with
-    // siblings. Anything we'd react to here is a no-op today.
+    // A co-viewer of this `?w=` wrote the shared session blob. Filter +
+    // refetch + reconcile live in the session-sync section below.
+    onSessionChangedFrame(
+      e as { w?: string; client?: string; deleted?: boolean },
+    );
     return;
   }
   // Filesystem event from chan-server's WatchBroadcast. Server-side
@@ -2509,24 +2514,114 @@ export function scheduleSessionSave(): void {
   if (sessionTimer) clearTimeout(sessionTimer);
   sessionTimer = setTimeout(() => {
     sessionTimer = null;
-    if (!bootstrapHydrated) return;
-    const payload = serializeSession();
-    // Keep the all-terminal reload-reattach snapshot current (incl. a changed
-    // tsid) before the on-disk dedup short-circuits below.
-    syncLayoutReloadSnapshot(payload);
-    const next = payload ? JSON.stringify(payload) : "";
-    if (next === lastSessionSnapshot) return;
-    lastSessionSnapshot = next;
-    if (!payload) {
-      // Window emptied out (layout serialized to null): delete the blob
-      // rather than writing an empty one, so this window stops appearing
-      // as `saved` in `/api/windows` / `cs window list`. A web follower skips
-      // this: the layout belongs to the leader.
-      if (!followerSuppressesSessionDelete()) void api.deleteSession().catch(() => {});
-    } else {
-      void api.putSession(payload).catch(() => {});
-    }
+    commitSessionSave();
   }, SESSION_DEBOUNCE_MS);
+}
+
+/// Serialize + persist the session now. The debounce body of
+/// `scheduleSessionSave`, also fired early by the co-view sync path when
+/// an inbound notify races a pending local save.
+function commitSessionSave(): void {
+  if (!bootstrapHydrated) return;
+  const payload = serializeSession();
+  // Keep the all-terminal reload-reattach snapshot current (incl. a changed
+  // tsid) before the on-disk dedup short-circuits below.
+  syncLayoutReloadSnapshot(payload);
+  const next = payload ? JSON.stringify(payload) : "";
+  if (next === lastSessionSnapshot) return;
+  lastSessionSnapshot = next;
+  if (!payload) {
+    // Window emptied out (layout serialized to null): delete the blob
+    // rather than writing an empty one, so this window stops appearing
+    // as `saved` in `/api/windows` / `cs window list`. A web follower skips
+    // this: the layout belongs to the leader.
+    if (!followerSuppressesSessionDelete()) void api.deleteSession().catch(() => {});
+  } else {
+    void api.putSession(payload).catch(() => {});
+  }
+}
+
+/// Fire a pending debounced session save immediately. No-op when nothing
+/// is pending.
+function flushPendingSessionSave(): void {
+  if (!sessionTimer) return;
+  clearTimeout(sessionTimer);
+  sessionTimer = null;
+  commitSessionSave();
+}
+
+// ---- live co-view session sync ------------------------------------------
+//
+// Two clients on one `?w=` share a session blob. After every successful
+// blob write the server broadcasts `{"kind":"session_changed","w":...,
+// "client":...}` on the tenant `/ws` bus (`"deleted":true` for a blob
+// DELETE); the receiver refetches the blob and reconciles it onto the
+// live tree via `reconcileLayout` (structure only; per-client view state
+// never syncs). Frames echoing this window's own `client` nonce are
+// dropped; a missing `client` means the writer sent no nonce and is
+// treated as foreign.
+const SESSION_SYNC_REFETCH_MS = 250;
+let sessionSyncTimer: ReturnType<typeof setTimeout> | null = null;
+
+function onSessionChangedFrame(frame: {
+  w?: string;
+  client?: string;
+  deleted?: boolean;
+}): void {
+  // Pre-hydration frames: bootstrap fetches the freshest blob itself. A
+  // discarded window is closing and must not resurrect state.
+  if (!bootstrapHydrated || sessionDiscarded) return;
+  if (frame.w !== sessionWindowId()) return;
+  if (frame.client && frame.client === clientNonce()) return;
+  // A peer deleted the blob. Deliberately not applied: a blob delete
+  // must not tear down this window's live tabs.
+  if (frame.deleted) return;
+  scheduleSessionSyncRefetch();
+}
+
+/// Burst-coalesced refetch, mirroring `scheduleWorkspaceRefresh`: the
+/// first frame arms the timer, the rest of the burst rides it out.
+function scheduleSessionSyncRefetch(): void {
+  if (sessionSyncTimer) return;
+  sessionSyncTimer = setTimeout(() => {
+    sessionSyncTimer = null;
+    // Best-effort: a transient fetch failure is repaired by the next
+    // frame (every PUT notifies) or by the local save-back loop.
+    void applyRemoteSessionBlob().catch(() => {});
+  }, SESSION_SYNC_REFETCH_MS);
+}
+
+async function applyRemoteSessionBlob(): Promise<void> {
+  if (!bootstrapHydrated || sessionDiscarded) return;
+  // An inbound apply must never revert a local edit sitting in the save
+  // debounce: flush the pending save FIRST (our PUT re-notifies the peer,
+  // which reconciles toward it) and re-arm the refetch. The rescheduled
+  // fetch then observes post-flush state: either our own blob (content
+  // compare no-ops) or a genuinely newer peer write (applied; last
+  // writer wins inside a debounce window).
+  if (sessionTimer) {
+    flushPendingSessionSave();
+    scheduleSessionSyncRefetch();
+    return;
+  }
+  const fetched = await api.getSession();
+  if (!fetched) return;
+  // An echo of a blob this window already carries needs no apply.
+  if (JSON.stringify(fetched) === lastSessionSnapshot) return;
+  const payload: SessionPayload = isLegacyLayoutPayload(fetched)
+    ? { layout: fetched }
+    : (fetched as SessionPayload);
+  const remoteLayout = payload.layout;
+  if (!remoteLayout) return;
+  if (reconcileLayout(remoteLayout) === "applied") {
+    // Pre-seed the save dedupe with OUR serialization of the just-applied
+    // state so the trailing reactive save no-ops instead of echoing the
+    // apply back to the peer. A diverged apply leaves the snapshot
+    // unseeded on purpose: the next local save pushes the kept state
+    // back to the peer (self-healing).
+    const local = serializeSession();
+    lastSessionSnapshot = local ? JSON.stringify(local) : "";
+  }
 }
 
 /// Discard this window's saved session: delete the blob NOW (by default the
