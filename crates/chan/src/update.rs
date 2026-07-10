@@ -94,6 +94,26 @@ fn env_disabled() -> bool {
     matches!(env::var(ENV_DISABLE), Ok(v) if v == "0")
 }
 
+/// Build-time marker for distro-packaged builds (rpm spec / debian rules
+/// export `CHAN_PACKAGED=rpm|deb` around `cargo build`). When set, the
+/// package manager owns updates: the probe and banner stay silent and
+/// `chan upgrade` refuses instead of renaming over a root-owned binary.
+pub fn packaged_via() -> Option<&'static str> {
+    option_env!("CHAN_PACKAGED")
+}
+
+fn upgrade_blocked_message(pm: &str) -> String {
+    let hint = match pm {
+        "rpm" => "sudo dnf upgrade",
+        "deb" => "sudo apt upgrade",
+        _ => "your system package manager",
+    };
+    format!(
+        "this build of chan is managed by the system package manager ({pm}); \
+         self-upgrade is disabled. Update with {hint}."
+    )
+}
+
 fn read_state(path: &Path) -> Option<State> {
     let contents = fs::read_to_string(path).ok()?;
     serde_json::from_str(&contents).ok()
@@ -541,7 +561,7 @@ async fn fetch_latest_cli_metadata(client: &reqwest::Client) -> Result<CliReleas
 /// Print the banner if a newer release is cached. Stderr-only,
 /// errors swallowed.
 pub fn maybe_print_banner() {
-    if env_disabled() {
+    if packaged_via().is_some() || env_disabled() {
         return;
     }
     let Some(state) = read_state(&state_path()) else {
@@ -573,7 +593,7 @@ fn probe_due(state: Option<&State>) -> bool {
 /// host stays silent; failures are logged at `debug` so they're
 /// visible under `RUST_LOG=debug` / `chan -vv`.
 pub async fn run_probe() {
-    if env_disabled() {
+    if packaged_via().is_some() || env_disabled() {
         return;
     }
     let path = state_path();
@@ -679,6 +699,9 @@ pub struct UpgradeOptions {
 /// Execute `chan upgrade`. Async because we share the reqwest
 /// client wiring with the serve-time probe.
 pub async fn run_upgrade(opts: UpgradeOptions) -> Result<()> {
+    if let Some(pm) = packaged_via() {
+        bail!(upgrade_blocked_message(pm));
+    }
     let (target, ext, bin_name) = current_target()?;
     let current = env!("CARGO_PKG_VERSION").to_string();
 
@@ -1309,6 +1332,19 @@ mod tests {
 
         assert_eq!(fs::read(&exe).unwrap(), b"new");
         assert!(!new_bin.exists());
+    }
+
+    #[test]
+    fn test_upgrade_blocked_message_names_the_manager() {
+        let rpm = upgrade_blocked_message("rpm");
+        assert!(rpm.contains("(rpm)"));
+        assert!(rpm.contains("dnf upgrade"));
+        let deb = upgrade_blocked_message("deb");
+        assert!(deb.contains("(deb)"));
+        assert!(deb.contains("apt upgrade"));
+        let other = upgrade_blocked_message("nix");
+        assert!(other.contains("(nix)"));
+        assert!(other.contains("package manager"));
     }
 
     #[test]
