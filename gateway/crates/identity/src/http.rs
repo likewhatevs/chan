@@ -1328,6 +1328,14 @@ async fn share_landing_root(
 
 const DESKTOP_CONNECT_SCOPE: &str = "desktop.connect";
 
+/// Stable failure-reason tokens for the desktop entry 404 body. A
+/// de-facto desktop API like the `desktop_authorize` `#error=` reasons:
+/// the desktop branches on these to narrate the failure, so keep them
+/// short and never repurpose one.
+const ENTRY_REASON_NO_DEVSERVER: &str = "no_devserver";
+const ENTRY_REASON_DEVSERVER_OFFLINE: &str = "devserver_offline";
+const ENTRY_REASON_ACCESS_DENIED: &str = "access_denied";
+
 #[derive(Debug, Deserialize)]
 struct DesktopEntryBody {
     #[serde(default)]
@@ -1377,7 +1385,7 @@ async fn desktop_devserver_entry(
                 user = %validated.username,
                 "desktop entry: no live tunnel",
             );
-            return Err(Error::NotFound);
+            return Err(desktop_entry_no_tunnel(&state, &validated).await);
         }
     };
 
@@ -1386,7 +1394,11 @@ async fn desktop_devserver_entry(
         .profile_client
         .devserver_access(validated.user_id, &devserver_id, validated.user_id)
         .await?
-        .ok_or(Error::NotFound)?;
+        .ok_or_else(|| Error::DesktopEntryNotFound {
+            reason: ENTRY_REASON_ACCESS_DENIED,
+            username: validated.username.clone(),
+            label: None,
+        })?;
 
     let path = validate_desktop_entry_path(body.path.as_deref())?;
     let host = state.cfg.devserver_host_for(&validated.username);
@@ -1423,6 +1435,39 @@ async fn desktop_devserver_entry(
         entry_url,
         expires_at: Utc::now() + chrono::Duration::seconds(30),
     }))
+}
+
+/// Classify a no-live-tunnel desktop entry for the 404 body: no
+/// devserver registered at all vs registered but not currently
+/// connected. Best-effort: a failed owned-devserver lookup degrades to
+/// the plain 404 so the narration never changes the endpoint's failure
+/// mode.
+async fn desktop_entry_no_tunnel(state: &AppState, validated: &ValidatedToken) -> Error {
+    let owned = match state
+        .cfg
+        .profile_client
+        .list_owned_devservers(validated.user_id)
+        .await
+    {
+        Ok(owned) => owned,
+        Err(e) => {
+            tracing::warn!(
+                user = %validated.username,
+                error = %e,
+                "desktop entry: owned-devserver lookup failed",
+            );
+            return Error::NotFound;
+        }
+    };
+    let (reason, label) = match owned.into_iter().next() {
+        Some(d) => (ENTRY_REASON_DEVSERVER_OFFLINE, Some(d.label)),
+        None => (ENTRY_REASON_NO_DEVSERVER, None),
+    };
+    Error::DesktopEntryNotFound {
+        reason,
+        username: validated.username.clone(),
+        label,
+    }
 }
 
 fn bearer_token(headers: &HeaderMap) -> Option<&str> {

@@ -24,6 +24,20 @@ pub enum Error {
     #[error("not found")]
     NotFound,
 
+    /// 404 for `POST /desktop/v1/devserver/entry` carrying a
+    /// machine-readable failure reason so the desktop can narrate the
+    /// failure instead of showing a generic string. The reason tokens
+    /// are documented next to the handler in `http.rs`. This shape is
+    /// safe only on self-scoped surfaces (a PAT-authenticated caller
+    /// asking about their own account); the cross-user share-landing
+    /// 404s stay uniform on purpose.
+    #[error("not found: {reason}")]
+    DesktopEntryNotFound {
+        reason: &'static str,
+        username: String,
+        label: Option<String>,
+    },
+
     #[error("conflict: {0}")]
     Conflict(String),
 
@@ -68,32 +82,54 @@ impl From<WorkspaceAdminError> for Error {
 
 impl IntoResponse for Error {
     fn into_response(self) -> Response {
-        let (status, message) = match &self {
-            Error::Unauthorized => (StatusCode::UNAUTHORIZED, "unauthorized".to_string()),
-            Error::Forbidden(m) => (StatusCode::FORBIDDEN, (*m).to_string()),
-            Error::BadRequest(m) => (StatusCode::BAD_REQUEST, m.clone()),
-            Error::NotFound => (StatusCode::NOT_FOUND, "not found".to_string()),
-            Error::Conflict(m) => (StatusCode::CONFLICT, m.clone()),
+        let (status, body) = match &self {
+            Error::Unauthorized => (StatusCode::UNAUTHORIZED, error_body("unauthorized")),
+            Error::Forbidden(m) => (StatusCode::FORBIDDEN, error_body(m)),
+            Error::BadRequest(m) => (StatusCode::BAD_REQUEST, error_body(m)),
+            Error::NotFound => (StatusCode::NOT_FOUND, error_body("not found")),
+            // Superset of the plain {"error": msg} 404 body: a desktop
+            // that predates the reason fields keeps reading `error`, a
+            // reason-aware one branches on the extras.
+            Error::DesktopEntryNotFound {
+                reason,
+                username,
+                label,
+            } => {
+                let mut body = json!({
+                    "error": "not found",
+                    "reason": reason,
+                    "username": username,
+                });
+                if let Some(label) = label {
+                    body["label"] = json!(label);
+                }
+                (StatusCode::NOT_FOUND, body)
+            }
+            Error::Conflict(m) => (StatusCode::CONFLICT, error_body(m)),
             // Upstream detail (oauth2 RequestTokenError, profile-service body,
             // devserver-proxy admin response) stays in the server log; the public
             // body is fixed so OAuth provider errors and profile SQL fragments
             // do not leak through the 502.
             Error::Upstream(detail) => {
                 tracing::warn!(detail = %detail, "upstream error");
-                (StatusCode::BAD_GATEWAY, "upstream unreachable".to_string())
+                (StatusCode::BAD_GATEWAY, error_body("upstream unreachable"))
             }
             Error::Anyhow(e) => {
                 tracing::error!(error = ?e, "internal error");
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
-                    "internal error".to_string(),
+                    error_body("internal error"),
                 )
             }
             Error::Reqwest(e) => {
                 tracing::error!(error = ?e, "reqwest error");
-                (StatusCode::BAD_GATEWAY, "upstream unreachable".to_string())
+                (StatusCode::BAD_GATEWAY, error_body("upstream unreachable"))
             }
         };
-        (status, Json(json!({"error": message}))).into_response()
+        (status, Json(body)).into_response()
     }
+}
+
+fn error_body(message: &str) -> serde_json::Value {
+    json!({ "error": message })
 }
