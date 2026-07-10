@@ -28,6 +28,7 @@ pub mod devserver_api;
 /// UDS. Public so the `chan` CLI (client) and the devserver (listener)
 /// share it; both already depend on chan-server.
 pub mod devserver_handoff;
+mod doc_sessions;
 mod embed_seed;
 mod error;
 /// macOS CLI-to-desktop workspace handoff over a well-known per-user UDS.
