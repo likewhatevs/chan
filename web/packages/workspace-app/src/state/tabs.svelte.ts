@@ -5130,6 +5130,230 @@ export function serializeLayout(opts: SerializeLayoutOptions = {}): SerNode | nu
   return serialized;
 }
 
+// ---- per-kind constructors for serialized tabs ---------------------------
+//
+// One place maps a SerTab onto a fresh live tab object, shared by
+// `restoreLayout` (bootstrap restore) and `reconcileLayout` (live co-view
+// creates). Caller-specific concerns stay with the callers: positional
+// session grafts for terminals arrive via `savedTerm`, and the rpv
+// bubble-reshow side effect, active markers, and content loads are the
+// caller's job.
+
+function restoreGraphTabFromSer(sertab: SerTab): GraphTab {
+  const mode = restoreGraphMode(sertab.gm);
+  const scopeId = sertab.gs || "workspace";
+  // Prefer `gn` (persisted live selection) as the post-restore
+  // seed so the user lands on the same focal node. The graph
+  // load consumes `pendingSelectId` once; `selectedNodeId`
+  // stays so the tab title remains selection-driven.
+  const selectedNodeId = typeof sertab.gn === "string" ? sertab.gn : null;
+  const selectedNodeLabel = typeof sertab.gnl === "string" ? sertab.gnl : null;
+  return {
+    kind: "graph",
+    id: id("graph"),
+    title: graphTitle(mode, scopeId),
+    mode,
+    scopeId,
+    depth: Number.isFinite(sertab.gd) ? Math.max(0, Number(sertab.gd)) : 1,
+    expanded: graphExpandedFromList(sertab.ge),
+    filters: decodeGraphTabFilters(sertab.gf),
+    inspectorOpen: sertab.gi === 1,
+    pendingSelectId: sertab.gp ?? selectedNodeId,
+    selectedNodeId,
+    selectedNodeLabel,
+    ...(typeof sertab.iw === "number" && sertab.iw > 0
+      ? { inspectorWidth: sertab.iw }
+      : {}),
+  };
+}
+
+function restoreBrowserTabFromSer(sertab: SerTab): BrowserTab {
+  return {
+    kind: "browser",
+    id: id("browser"),
+    title: "Files",
+    inspectorOpen: sertab.bi === 1,
+    ...(typeof sertab.bs === "string" ? { selected: sertab.bs } : {}),
+    ...(sertab.bd === 1 ? { showWorkspace: true } : {}),
+    ...(Array.isArray(sertab.be) && sertab.be.length > 0
+      ? { expanded: sertab.be.filter((p) => typeof p === "string") }
+      : {}),
+    ...(typeof sertab.bsc === "number" && sertab.bsc > 0
+      ? { scroll: sertab.bsc }
+      : {}),
+    ...(typeof sertab.iw === "number" && sertab.iw > 0
+      ? { inspectorWidth: sertab.iw }
+      : {}),
+  };
+}
+
+function restoreTerminalTabFromSer(
+  sertab: SerTab,
+  savedTerm?: SerTab,
+): TerminalTab {
+  const terminalSessionId = sertab.tsid ?? savedTerm?.tsid;
+  const group = (sertab.tg ?? savedTerm?.tg)?.trim();
+  // Restore the negotiated keyboard protocol for a reattaching
+  // session so Shift+Enter -> newline survives a reload even when
+  // the agent's original negotiation has scrolled out of replay.
+  const kpSnapshot = terminalSessionId
+    ? (sertab.kp ?? savedTerm?.kp)
+    : undefined;
+  // Restore an in-flight Rich Prompt message (GAP 2). It re-locks the
+  // bubble on mount; the `session` frame's `queued_prompt_ids` then
+  // re-proves it (still queued → keep + position; drained → clear) via
+  // reproveRestoredPrompt.
+  const pp = sertab.pp ?? savedTerm?.pp;
+  // Restore a pending Team Work dialog config (#4 reload-survival). The
+  // hash carries no `twk` (session-only), so a hash reload sources it
+  // from the positional `savedTerm` graft, same as `tsid`. Presence
+  // makes `findTeamWorkPendingLead` reopen the dialog post-restore.
+  const twk = sertab.twk ?? savedTerm?.twk;
+  // Rich Prompt composer caret + height (session-only, like `rpd`).
+  const rpc = sertab.rpc ?? savedTerm?.rpc;
+  const rph = sertab.rph ?? savedTerm?.rph;
+  return {
+    kind: "terminal",
+    id: id("term"),
+    title: sertab.n || "Terminal",
+    createdAt: Date.now(),
+    broadcastEnabled: false,
+    broadcastTargetIds: [],
+    terminalSessionId,
+    controlledTerminal: sertab.tc === 1 || savedTerm?.tc === 1,
+    group: group && group !== DEFAULT_TERMINAL_GROUP ? group : undefined,
+    keyboardProtocol: kpSnapshot
+      ? restoreKeyboardProtocolState(kpSnapshot)
+      : undefined,
+    lastAgentEchoSeq:
+      terminalSessionId &&
+      typeof (sertab.tae ?? savedTerm?.tae) === "number" &&
+      Number.isFinite(sertab.tae ?? savedTerm?.tae)
+        ? Math.max(0, Math.floor((sertab.tae ?? savedTerm?.tae)!))
+        : undefined,
+    richPromptDraftPath: (sertab.rpd ?? savedTerm?.rpd) || undefined,
+    ...(Array.isArray(rpc) && rpc.length === 2
+      ? { richPromptCaret: { from: rpc[0], to: rpc[1] } }
+      : {}),
+    ...(typeof rph === "number" && rph > 0
+      ? { richPromptHeight: rph }
+      : {}),
+    ...(pp && (pp.ph === "sent" || pp.ph === "queued")
+      ? { pendingPrompt: { id: pp.id, phase: pp.ph } }
+      : {}),
+    ...(twk ? { teamWorkPending: twk } : {}),
+  };
+}
+
+function restoreDashboardTabFromSer(sertab: SerTab): DashboardTab {
+  // Sanitize the disabled-slot set to in-range indices; ignore
+  // it entirely if it would leave no slot enabled (malformed
+  // hash) so the carousel can never restore blank.
+  const rawDs = Array.isArray(sertab.ds)
+    ? [...new Set(sertab.ds)]
+        .filter(
+          (n) =>
+            Number.isInteger(n) && n >= 0 && n < DASHBOARD_SLOT_COUNT,
+        )
+        .sort((a, b) => a - b)
+    : [];
+  const disabledSlots =
+    rawDs.length > 0 && rawDs.length < DASHBOARD_SLOT_COUNT
+      ? rawDs
+      : [];
+  const tab: DashboardTab = {
+    kind: "dashboard",
+    id: id("dashboard"),
+    title: "Dashboard",
+    ...(disabledSlots.length > 0 ? { disabledSlots } : {}),
+  };
+  // Restore the carousel slide when the hash carries one, clamping
+  // off a disabled slot to the first enabled one. Absence falls
+  // back to the About slide (slot 0) unless that slot is disabled.
+  if (typeof sertab.cs === "number" && sertab.cs > 0) {
+    const want = Math.max(0, Math.floor(sertab.cs));
+    tab.carouselSlide = dashboardSlotEnabled(tab, want)
+      ? want
+      : firstEnabledSlot(tab);
+  } else if (!dashboardSlotEnabled(tab, 0)) {
+    tab.carouselSlide = firstEnabledSlot(tab);
+  }
+  if (sertab.ar === false) tab.autoRotate = false;
+  return tab;
+}
+
+function restoreFileTabFromSer(sertab: SerTab): FileTab {
+  // Recompute fileKind from the path. Cheaper than persisting
+  // it (the hash already carries the path) and keeps a session
+  // restored after a chan upgrade aligned with the current
+  // classifier instead of a stale snapshot.
+  const restoredPath = sertab.p ?? "";
+  const restoredPathKind = classifyPath(restoredPath);
+  const restoredFileKind: FileKind =
+    restoredPathKind === "document" || restoredPathKind === "text"
+      ? restoredPathKind
+      : "document";
+  return {
+    kind: "file",
+    fileKind: restoredFileKind,
+    id: id("tab"),
+    path: restoredPath,
+    content: "",
+    saved: "",
+    savedMtime: null,
+    savedMtimeNs: null,
+    // Trust the persisted mode when it is a valid pair for
+    // this tab's path; otherwise fall back to the default.
+    // Guards: a markdown-only "wysiwyg" mode persisted for a
+    // .py file restores to source; a "pretty" persisted for a
+    // non-JSON text file restores to source.
+    mode: validateRestoredMode(sertab.m, restoredPath, restoredFileKind),
+    loading: true,
+    error: null,
+    fileMissing: null,
+    inspectorOpen: !!sertab.o,
+    outlineOpen: !!sertab.ol,
+    slidePreview: {
+      open: sertab.spo === 1,
+      index: clampSlidePreviewIndex(
+        typeof sertab.sp === "number" ? sertab.sp : 0,
+      ),
+      mode: sertab.spm === "p" ? "play" : "preview",
+    },
+    // repoRoot is filled in by loadTabContent on first read;
+    // restored sessions start with null and get the real value
+    // once the file fetches.
+    repoRoot: null,
+    // Restore the user-toggled read mode if it was persisted.
+    // fsWritable is NOT carried in the session payload - it's
+    // a disk property; the first loadTabContent refreshes it
+    // (and an `!fsWritable` will dominate even if readMode is
+    // false, so we don't need to fake it here).
+    readMode: sertab.r === 1,
+    fsWritable: true,
+    // Absent means default-off; `s: 1` means the style toolbar is on.
+    styleToolbarOpen: sertab.s === 1,
+    // Default-on. `h: 0` in the hash means user disabled
+    // highlight on this tab; any other value (absent / 1)
+    // restores to default-on.
+    syntaxHighlight: sertab.h !== 0,
+    highlightTrailingWhitespace: false,
+    codeBlocksCollapsed: false,
+    // Restored caret rides through to the editor via tab.caret;
+    // the editor lands it once content finishes loading.
+    caret:
+      Array.isArray(sertab.c) && sertab.c.length === 2
+        ? { from: sertab.c[0], to: sertab.c[1] }
+        : undefined,
+    ...(typeof sertab.iw === "number" && sertab.iw > 0
+      ? { inspectorWidth: sertab.iw }
+      : {}),
+    ...(typeof sertab.ow === "number" && sertab.ow > 0
+      ? { outlineWidth: sertab.ow }
+      : {}),
+  };
+}
+
 /// Replace the live layout with the deserialized tree, then kick off a
 /// content load for every tab. The DOM updates as content arrives;
 /// tabs initially appear in a "loading..." state.
@@ -5164,238 +5388,38 @@ export async function restoreLayout(
         let termIndex = 0;
         const targetTabs = mutablePaneTabs(p, side);
         for (const sertab of serializedTabs) {
-        const kind = sertab.k ?? "f";
-        if (kind === "g") {
-          const mode = restoreGraphMode(sertab.gm);
-          const scopeId = sertab.gs || "workspace";
-          // Prefer `gn` (persisted live selection) as the post-restore
-          // seed so the user lands on the same focal node. The graph
-          // load consumes `pendingSelectId` once; `selectedNodeId`
-          // stays so the tab title remains selection-driven.
-          const selectedNodeId =
-            typeof sertab.gn === "string" ? sertab.gn : null;
-          const selectedNodeLabel =
-            typeof sertab.gnl === "string" ? sertab.gnl : null;
-          const tab: GraphTab = {
-            kind: "graph",
-            id: id("graph"),
-            title: graphTitle(mode, scopeId),
-            mode,
-            scopeId,
-            depth: Number.isFinite(sertab.gd) ? Math.max(0, Number(sertab.gd)) : 1,
-            expanded: graphExpandedFromList(sertab.ge),
-            filters: decodeGraphTabFilters(sertab.gf),
-            inspectorOpen: sertab.gi === 1,
-            pendingSelectId: sertab.gp ?? selectedNodeId,
-            selectedNodeId,
-            selectedNodeLabel,
-            ...(typeof sertab.iw === "number" && sertab.iw > 0
-              ? { inspectorWidth: sertab.iw }
-              : {}),
-          };
-          targetTabs.push(tab);
-          if (sertab.a) setPaneActiveTabId(p, tab.id, side);
-          continue;
-        }
-        if (kind === "b") {
-          const tab: BrowserTab = {
-            kind: "browser",
-            id: id("browser"),
-            title: "Files",
-            inspectorOpen: sertab.bi === 1,
-            ...(typeof sertab.bs === "string" ? { selected: sertab.bs } : {}),
-            ...(sertab.bd === 1 ? { showWorkspace: true } : {}),
-            ...(Array.isArray(sertab.be) && sertab.be.length > 0
-              ? { expanded: sertab.be.filter((p) => typeof p === "string") }
-              : {}),
-            ...(typeof sertab.bsc === "number" && sertab.bsc > 0
-              ? { scroll: sertab.bsc }
-              : {}),
-            ...(typeof sertab.iw === "number" && sertab.iw > 0
-              ? { inspectorWidth: sertab.iw }
-              : {}),
-          };
-          targetTabs.push(tab);
-          if (sertab.a) setPaneActiveTabId(p, tab.id, side);
-          continue;
-        }
-        // Settings ("s") and health ("h") are overlays now; silently
-        // drop saved entries from older sessions.
-        if (kind === "t") {
-          const savedTerm = savedTerms[termIndex++];
-          const terminalSessionId = sertab.tsid ?? savedTerm?.tsid;
-          const group = (sertab.tg ?? savedTerm?.tg)?.trim();
-          // Restore the negotiated keyboard protocol for a reattaching
-          // session so Shift+Enter -> newline survives a reload even when
-          // the agent's original negotiation has scrolled out of replay.
-          const kpSnapshot = terminalSessionId
-            ? (sertab.kp ?? savedTerm?.kp)
-            : undefined;
-          // Restore an in-flight Rich Prompt message (GAP 2). It re-locks the
-          // bubble on mount; the `session` frame's `queued_prompt_ids` then
-          // re-proves it (still queued → keep + position; drained → clear) via
-          // reproveRestoredPrompt.
-          const pp = sertab.pp ?? savedTerm?.pp;
-          // Restore a pending Team Work dialog config (#4 reload-survival). The
-          // hash carries no `twk` (session-only), so a hash reload sources it
-          // from the positional `savedTerm` graft, same as `tsid`. Presence
-          // makes `findTeamWorkPendingLead` reopen the dialog post-restore.
-          const twk = sertab.twk ?? savedTerm?.twk;
-          // Rich Prompt composer caret + height (session-only, like `rpd`).
-          const rpc = sertab.rpc ?? savedTerm?.rpc;
-          const rph = sertab.rph ?? savedTerm?.rph;
-          const tab: TerminalTab = {
-            kind: "terminal",
-            id: id("term"),
-            title: sertab.n || "Terminal",
-            createdAt: Date.now(),
-            broadcastEnabled: false,
-            broadcastTargetIds: [],
-            terminalSessionId,
-            controlledTerminal: sertab.tc === 1 || savedTerm?.tc === 1,
-            group: group && group !== DEFAULT_TERMINAL_GROUP ? group : undefined,
-            keyboardProtocol: kpSnapshot
-              ? restoreKeyboardProtocolState(kpSnapshot)
-              : undefined,
-            lastAgentEchoSeq:
-              terminalSessionId &&
-              typeof (sertab.tae ?? savedTerm?.tae) === "number" &&
-              Number.isFinite(sertab.tae ?? savedTerm?.tae)
-                ? Math.max(0, Math.floor((sertab.tae ?? savedTerm?.tae)!))
-                : undefined,
-            richPromptDraftPath: (sertab.rpd ?? savedTerm?.rpd) || undefined,
-            ...(Array.isArray(rpc) && rpc.length === 2
-              ? { richPromptCaret: { from: rpc[0], to: rpc[1] } }
-              : {}),
-            ...(typeof rph === "number" && rph > 0
-              ? { richPromptHeight: rph }
-              : {}),
-            ...(pp && (pp.ph === "sent" || pp.ph === "queued")
-              ? { pendingPrompt: { id: pp.id, phase: pp.ph } }
-              : {}),
-            ...(twk ? { teamWorkPending: twk } : {}),
-          };
-          targetTabs.push(tab);
-          if (sertab.a) setPaneActiveTabId(p, tab.id, side);
-          // Reshow the bubble so the restored queued message is visible +
-          // actionable without re-toggling Cmd+Shift+P (GAP 2).
-          if (sertab.rpv ?? savedTerm?.rpv) showRichPromptForTab(tab.id);
-          continue;
-        }
-        if (kind === "d") {
-          // Sanitize the disabled-slot set to in-range indices; ignore
-          // it entirely if it would leave no slot enabled (malformed
-          // hash) so the carousel can never restore blank.
-          const rawDs = Array.isArray(sertab.ds)
-            ? [...new Set(sertab.ds)]
-                .filter(
-                  (n) =>
-                    Number.isInteger(n) && n >= 0 && n < DASHBOARD_SLOT_COUNT,
-                )
-                .sort((a, b) => a - b)
-            : [];
-          const disabledSlots =
-            rawDs.length > 0 && rawDs.length < DASHBOARD_SLOT_COUNT
-              ? rawDs
-              : [];
-          const tab: DashboardTab = {
-            kind: "dashboard",
-            id: id("dashboard"),
-            title: "Dashboard",
-            ...(disabledSlots.length > 0 ? { disabledSlots } : {}),
-          };
-          // Restore the carousel slide when the hash carries one, clamping
-          // off a disabled slot to the first enabled one. Absence falls
-          // back to the About slide (slot 0) unless that slot is disabled.
-          if (typeof sertab.cs === "number" && sertab.cs > 0) {
-            const want = Math.max(0, Math.floor(sertab.cs));
-            tab.carouselSlide = dashboardSlotEnabled(tab, want)
-              ? want
-              : firstEnabledSlot(tab);
-          } else if (!dashboardSlotEnabled(tab, 0)) {
-            tab.carouselSlide = firstEnabledSlot(tab);
+          const kind = sertab.k ?? "f";
+          if (kind === "t") {
+            const savedTerm = savedTerms[termIndex++];
+            const tab = restoreTerminalTabFromSer(sertab, savedTerm);
+            targetTabs.push(tab);
+            if (sertab.a) setPaneActiveTabId(p, tab.id, side);
+            // Reshow the bubble so the restored queued message is visible +
+            // actionable without re-toggling Cmd+Shift+P (GAP 2).
+            if (sertab.rpv ?? savedTerm?.rpv) showRichPromptForTab(tab.id);
+            continue;
           }
-          if (sertab.ar === false) tab.autoRotate = false;
+          if (kind === "g" || kind === "b" || kind === "d") {
+            const tab =
+              kind === "g"
+                ? restoreGraphTabFromSer(sertab)
+                : kind === "b"
+                  ? restoreBrowserTabFromSer(sertab)
+                  : restoreDashboardTabFromSer(sertab);
+            targetTabs.push(tab);
+            if (sertab.a) setPaneActiveTabId(p, tab.id, side);
+            continue;
+          }
+          // Settings ("s") and health ("h") are overlays now; silently
+          // drop saved entries from older sessions.
+          if (kind !== "f") continue;
+          const tab = restoreFileTabFromSer(sertab);
           targetTabs.push(tab);
           if (sertab.a) setPaneActiveTabId(p, tab.id, side);
-          continue;
+          if (tab.path) {
+            tabsToLoad.push({ paneId: p.id, tabId: tab.id, path: tab.path });
+          }
         }
-        if (kind !== "f") continue;
-        // Recompute fileKind from the path. Cheaper than persisting
-        // it (the hash already carries the path) and keeps a session
-        // restored after a chan upgrade aligned with the current
-        // classifier instead of a stale snapshot.
-        const restoredPath = sertab.p ?? "";
-        const restoredPathKind = classifyPath(restoredPath);
-        const restoredFileKind: FileKind =
-          restoredPathKind === "document" || restoredPathKind === "text"
-            ? restoredPathKind
-            : "document";
-        const tab: FileTab = {
-          kind: "file",
-          fileKind: restoredFileKind,
-          id: id("tab"),
-          path: restoredPath,
-          content: "",
-          saved: "",
-          savedMtime: null,
-          savedMtimeNs: null,
-          // Trust the persisted mode when it is a valid pair for
-          // this tab's path; otherwise fall back to the default.
-          // Guards: a markdown-only "wysiwyg" mode persisted for a
-          // .py file restores to source; a "pretty" persisted for a
-          // non-JSON text file restores to source.
-          mode: validateRestoredMode(sertab.m, restoredPath, restoredFileKind),
-          loading: true,
-          error: null,
-          fileMissing: null,
-          inspectorOpen: !!sertab.o,
-          outlineOpen: !!sertab.ol,
-          slidePreview: {
-            open: sertab.spo === 1,
-            index: clampSlidePreviewIndex(
-              typeof sertab.sp === "number" ? sertab.sp : 0,
-            ),
-            mode: sertab.spm === "p" ? "play" : "preview",
-          },
-          // repoRoot is filled in by loadTabContent on first read;
-          // restored sessions start with null and get the real value
-          // once the file fetches.
-          repoRoot: null,
-          // Restore the user-toggled read mode if it was persisted.
-          // fsWritable is NOT carried in the session payload - it's
-          // a disk property; the first loadTabContent refreshes it
-          // (and an `!fsWritable` will dominate even if readMode is
-          // false, so we don't need to fake it here).
-          readMode: sertab.r === 1,
-          fsWritable: true,
-          // Absent means default-off; `s: 1` means the style toolbar is on.
-          styleToolbarOpen: sertab.s === 1,
-          // Default-on. `h: 0` in the hash means user disabled
-          // highlight on this tab; any other value (absent / 1)
-          // restores to default-on.
-          syntaxHighlight: sertab.h !== 0,
-          highlightTrailingWhitespace: false,
-          codeBlocksCollapsed: false,
-          // Restored caret rides through to the editor via tab.caret;
-          // the editor lands it once content finishes loading.
-          caret:
-            Array.isArray(sertab.c) && sertab.c.length === 2
-              ? { from: sertab.c[0], to: sertab.c[1] }
-              : undefined,
-          ...(typeof sertab.iw === "number" && sertab.iw > 0
-            ? { inspectorWidth: sertab.iw }
-            : {}),
-          ...(typeof sertab.ow === "number" && sertab.ow > 0
-            ? { outlineWidth: sertab.ow }
-            : {}),
-        };
-        targetTabs.push(tab);
-        if (sertab.a) setPaneActiveTabId(p, tab.id, side);
-        if (tab.path) {
-          tabsToLoad.push({ paneId: p.id, tabId: tab.id, path: tab.path });
-        }
-      }
       };
       restoreTabsForSide("a", node.t, sessionLeaf?.t ?? []);
       restoreTabsForSide("b", node.bt ?? [], sessionLeaf?.bt ?? []);
