@@ -4,6 +4,7 @@
   // width, close.
 
   import { onDestroy, tick } from "svelte";
+  import type { Extension } from "@codemirror/state";
   import Wysiwyg from "../editor/Wysiwyg.svelte";
   import Source from "../editor/Source.svelte";
   import {
@@ -51,6 +52,7 @@
     beginMissingFileReopen,
     closeTab,
     dismissExternalChange,
+    isDocAttached,
     openFind,
     reloadTabFromDisk,
     setMode,
@@ -98,6 +100,12 @@
   } from "../state/tabs.svelte";
   import { terminalFromHereTarget } from "../terminal/fromHere";
   import { csvDelimiter, isCsv, isExcalidraw, isJson } from "../state/fileTypes";
+  import {
+    acquireDocSession,
+    isDocSyncEligible,
+    releaseDocSession,
+    type DocSession,
+  } from "../state/docSync.svelte";
   import {
     registerEditorCommands,
     unregisterEditorCommands,
@@ -332,6 +340,33 @@
   });
   const slidesSpec = $derived(parseSlidesSpec(tab.content));
   const slideShortcutOS = currentOS();
+
+  /// Live doc-session lifecycle. Acquire tracks exactly the eligibility
+  /// inputs (path, mode, loading, fileMissing - see isDocSyncEligible;
+  /// deliberately not content, which is size-gated untracked inside
+  /// acquire); the cleanup release lingers briefly so a cross-pane move
+  /// (a full remount) keeps the socket + shadow. Tab close and rename
+  /// release immediately through the tabs.svelte.ts hook instead.
+  let docSession: DocSession | null = $state(null);
+  $effect(() => {
+    if (!isDocSyncEligible(tab)) {
+      docSession = null;
+      releaseDocSession(tab.id);
+      return;
+    }
+    docSession = acquireDocSession(tab);
+    return () => {
+      docSession = null;
+      releaseDocSession(tab.id);
+    };
+  });
+  /// Per-editor-mount collab + presence extension bundle. Reading
+  /// tab.mode re-mints on a mode toggle so the fresh editor gets a
+  /// fresh compartment (compartment-cycling is how collab reseeds).
+  const docExtensions = $derived.by((): Extension[] => {
+    void tab.mode;
+    return docSession ? [docSession.extension()] : [];
+  });
 
   // Bumped on every selection / doc change in the WYSIWYG editor so
   // the StyleToolbar's active-mark / current-block derivations re-run.
@@ -880,13 +915,14 @@
       </button>
     </div>
   {/if}
-  {#if tab.externalChange}
+  {#if tab.externalChange && !isDocAttached(tab)}
     <!-- An external (non-self) write to this file landed on disk
          while the tab is open. We never auto-reload (that would
          replace the buffer and snap the caret to 1:1 mid-edit); the
          user opts into the reload here or keeps typing (their next
-         save hits the 409 conflict modal). Reuses the recovery-banner
-         palette + layout. -->
+         save hits the 409 conflict modal). Attached tabs never show
+         it: the authority merges external writes live. Reuses the
+         recovery-banner palette + layout. -->
     <div class="recovery-banner" role="alert">
       <span class="recovery-banner-text">
         This file changed on disk.
@@ -1191,6 +1227,7 @@
           bind:value={tab.content}
           autoFocus={focused}
           readonly={readOnly}
+          extraExtensions={docExtensions}
           highlightTrailingWhitespace={tab.highlightTrailingWhitespace}
           initialCaret={tab.caret ?? null}
           onCaretChange={(from, to) => setTabCaret(tab, from, to)}
@@ -1306,6 +1343,7 @@
           autoFocus={focused}
           path={tab.path}
           readonly={readOnly}
+          extraExtensions={docExtensions}
           syntaxHighlight={tab.syntaxHighlight}
           highlightTrailingWhitespace={tab.highlightTrailingWhitespace}
           initialCaret={tab.caret ?? null}

@@ -29,6 +29,7 @@ import {
   type SurveyCloseReason,
 } from "./survey.svelte";
 import { applySessionRoster, isFollower, showHandover, type SessionParticipant } from "./session.svelte";
+import { docSyncRosterChanged } from "./docSync.svelte";
 import { isWindowEnded, markWindowDiscarded, markWindowHidden } from "./windowLifecycle.svelte";
 import {
   activeLayout,
@@ -776,6 +777,9 @@ export function onWatchEvent(e: unknown): void {
     applySessionRoster(
       (e as { participants?: SessionParticipant[]; leader?: string | null } | null) ?? {},
     );
+    // Peer caret name flags resolve through this roster; restamp any
+    // bound editors so a rename swaps flag text without flashing it.
+    docSyncRosterChanged();
     return;
   }
   const kind = (e as { kind?: string } | null)?.kind;
@@ -1014,6 +1018,9 @@ function paneTabTitle(tab: Tab): string {
 /// The close-blocker for a tab, or null when it closes freely. A non-null
 /// reason means `cs pane close*` needs `--force`: an unsaved file or a live
 /// terminal. Mirrors the query's `dirty` / `live` flags from public fields.
+/// For a tab attached to a live doc session, `content !== saved` means
+/// "local edits the authority has not confirmed yet" (tab.saved tracks the
+/// confirmed shadow), which is exactly what should block an unforced close.
 function paneCloseBlock(tab: Tab): string | null {
   if (tab.kind === "file" && tab.content !== tab.saved) return "unsaved changes";
   if (tab.kind === "terminal" && tab.terminalSessionId) return "live terminal";
@@ -1040,6 +1047,9 @@ function paneQueryTab(
     title: paneTabTitle(tab),
     active: tab.id === activeTabId,
   };
+  // For attached tabs `saved` is the doc session's confirmed shadow, so
+  // `dirty` reads as "unconfirmed local edits" (sub-second transient);
+  // for classic tabs it stays "unsaved against disk".
   if (tab.kind === "file") snap.dirty = tab.content !== tab.saved;
   if (tab.kind === "terminal") snap.live = !!tab.terminalSessionId;
   return snap;

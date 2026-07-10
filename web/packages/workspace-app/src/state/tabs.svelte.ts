@@ -2934,6 +2934,10 @@ async function closeTabAsync(
   // empty-window `$effect` reads it deterministically.
   lastTerminalCloseWasMoveOut = movingOut;
   rememberClosedTab(paneId, side, tab);
+  // Close releases the doc session NOW (no remount linger): any dirty
+  // buffer was flushed through the save funnel above, and the immediate
+  // detach asks the server for a prompt flush of anything residual.
+  if (tab.kind === "file") releaseDocSessionForTab(tabId, true);
   tabs.splice(idx, 1);
   if (paneActiveTabId(p, side) === tabId) {
     setPaneActiveTabId(p, tabs[Math.max(0, idx - 1)]?.id ?? null, side);
@@ -3062,6 +3066,11 @@ function shouldDiscardEmptyFileOnClose(tab: Tab): tab is FileTab {
 /// then skips confirmCloseTabs and removes the tab -- or false when the delete
 /// failed, so the close falls back to a normal path and the tab is not trapped.
 async function discardEmptyFileOnClose(tab: FileTab): Promise<boolean> {
+  // Detach the doc session BEFORE the remove: a live session's detach
+  // flush racing the delete could resurrect the file (the server's
+  // reconciler stops the flush clock on Removed, but only if the detach
+  // has landed by then).
+  releaseDocSessionForTab(tab.id, true);
   try {
     await api.remove(tab.path);
   } catch {
@@ -4473,6 +4482,59 @@ export async function overwriteConflictedTab(): Promise<void> {
   await performSave(found.tab);
 }
 
+// ---- live doc-session integration (state/docSync.svelte.ts) ---------------
+// The doc-sync module registers these hooks at ITS module load; tabs never
+// imports docSync (the import edge points docSync -> tabs), so the classic
+// save path below runs unchanged when the module is absent (unit tests
+// that never import it, minimal bundles).
+
+/// Save-funnel delegate: "saved" consumed the save (every local edit is
+/// confirmed and the authority flushed to disk); "degraded" and
+/// "classic" fall through to the PUT path below.
+export type DocSaveDelegate = (
+  t: FileTab,
+) => Promise<"saved" | "degraded" | "classic">;
+let docSaveDelegate: DocSaveDelegate | null = null;
+export function registerDocSaveDelegate(fn: DocSaveDelegate): void {
+  docSaveDelegate = fn;
+}
+
+let docReleaseHook: ((tabId: string, immediate: boolean) => void) | null = null;
+export function registerDocReleaseHook(
+  fn: (tabId: string, immediate: boolean) => void,
+): void {
+  docReleaseHook = fn;
+}
+
+/// Release a tab's live doc session, if any. `immediate` skips the
+/// editor-remount linger: tab close, rename rekey, and file discard must
+/// detach now (a detach also asks the server for a prompt flush).
+export function releaseDocSessionForTab(tabId: string, immediate = false): void {
+  docReleaseHook?.(tabId, immediate);
+}
+
+/// True while a live doc session owns this tab's saves: attached, or in
+/// a window (first connect / reconnect grace) where a classic CAS PUT
+/// could race the authority's own flush. Autosave, the sibling mirror,
+/// and the external-change banner stay quiet in these states; `degraded`
+/// and `off` read false so the classic path resumes.
+export function isDocAttached(t: FileTab): boolean {
+  const s = t.doc?.state;
+  return s === "attached" || s === "connecting" || s === "reconnecting";
+}
+
+/// Mirror mutator for docSync's status/peers writes. Called from socket
+/// callbacks (never effects); deduped so keystroke-scale frame traffic
+/// does not wake reactive consumers spuriously.
+export function setTabDocState(t: FileTab, doc: DocTabState | null): void {
+  if (doc === null) {
+    if (t.doc !== undefined) t.doc = undefined;
+    return;
+  }
+  if (t.doc && t.doc.state === doc.state && t.doc.peers === doc.peers) return;
+  t.doc = doc;
+}
+
 /// Single source of truth for "send this tab's content to the
 /// server". Both autosave and explicit saveTab funnel through here.
 /// On 409, opens the conflict dialog and returns; the dialog's
@@ -4505,6 +4567,18 @@ async function performSaveOnce(t: FileTab): Promise<void> {
   if (t.loading) {
     t.error = "file is still loading";
     return;
+  }
+  // A live doc session owns this tab's saves: confirmed edits are
+  // already on the authority, so "save" means "flush to disk", never a
+  // PUT (the ConflictModal is unreachable while attached). A flush
+  // failure degrades the session and falls through to the classic path
+  // below with the last flush frame's CAS token already stamped.
+  if (docSaveDelegate && isDocAttached(t)) {
+    const r = await docSaveDelegate(t);
+    if (r === "saved") {
+      t.error = null;
+      return;
+    }
   }
   // Excalidraw scenes are JSON too: gate them like .json so a
   // source-mode typo can't write a corrupt scene the canvas then
@@ -4579,6 +4653,10 @@ export function scheduleAutosave(paneId: string, tabId: string): void {
     const t = found?.tab.kind === "file" ? found.tab : undefined;
     if (!t) return;
     if (t.loading || t.content === t.saved) return;
+    // Attached tabs save through the doc session (the autosave effect
+    // already skips them); this re-check covers a status flip in the
+    // debounce window between schedule and fire.
+    if (isDocAttached(t)) return;
     try {
       await performSave(t);
     } catch (e) {
@@ -4603,6 +4681,9 @@ function mirrorToSiblings(path: string, content: string, originId: string): void
       if (sib.path !== path) continue;
       // Honor an unsaved buffer in the sibling; don't clobber.
       if (sib.content !== sib.saved) continue;
+      // Attached siblings get their sync as authority updates; a mirror
+      // write here would fork them from their confirmed shadow.
+      if (isDocAttached(sib)) continue;
       sib.content = content;
       sib.saved = content;
       sib.error = null;
@@ -6075,6 +6156,12 @@ const pendingMissingChecks = new Map<string, ReturnType<typeof setTimeout>>();
 const MISSING_CHECK_DEBOUNCE_MS = 150;
 
 export function scheduleMissingFileCheck(tabId: string, path: string): void {
+  // An attached tab's authority owns the path lifecycle: the session's
+  // `removed` frame routes into the missing-file machinery directly, so
+  // a watcher-driven probe would double-fire and race the reconciler's
+  // rename handling.
+  const attached = findFileTabById(tabId);
+  if (attached && isDocAttached(attached.tab)) return;
   const prior = pendingMissingChecks.get(tabId);
   if (prior !== undefined) clearTimeout(prior);
   const timer = setTimeout(() => {
@@ -6209,7 +6296,11 @@ export async function refreshTabFromDisk(tabId: string): Promise<void> {
 /// (self-write dedupe already drops echoes of our own writes).
 export function flagExternalChange(tabId: string): void {
   const found = findFileTabById(tabId);
-  if (found) found.tab.externalChange = true;
+  if (!found) return;
+  // Attached tabs merge external writes live through the authority's
+  // reconciler; the banner is for the classic disk-mediated path only.
+  if (isDocAttached(found.tab)) return;
+  found.tab.externalChange = true;
 }
 
 /// Dismiss the "changed on disk" banner without reloading (the user
@@ -6284,8 +6375,12 @@ export function rekeyTabsForRename(from: string, to: string): void {
     for (const t of allPaneTabs(node)) {
       if (t.kind !== "file") continue;
       if (t.path === from) {
+        // The doc session is keyed to the old path server-side; detach
+        // now and let the acquire effect re-attach under the new path.
+        releaseDocSessionForTab(t.id, true);
         t.path = to;
       } else if (t.path.startsWith(dirPrefix)) {
+        releaseDocSessionForTab(t.id, true);
         t.path = newDirPrefix + t.path.slice(dirPrefix.length);
       }
     }

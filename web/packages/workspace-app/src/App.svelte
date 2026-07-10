@@ -97,6 +97,7 @@
     createTeamWorkLeadTerminal,
     openBrowserInActivePane,
     toggleActiveTerminalBroadcastSelectAll,
+    isDocAttached,
     openFind,
     openInActivePane,
     openDashboardInActivePane,
@@ -236,7 +237,10 @@
         void t.slidePreview?.open;
         void t.slidePreview?.index;
         void t.slidePreview?.mode;
-        if (bootstrapped && !t.loading && t.content !== t.saved) {
+        // Attached tabs save through the doc session; reading t.doc
+        // here also re-arms autosave the moment a session degrades
+        // (the status write re-runs this effect for a dirty tab).
+        if (bootstrapped && !t.loading && t.content !== t.saved && !isDocAttached(t)) {
           scheduleAutosave(node.id, t.id);
         }
       }

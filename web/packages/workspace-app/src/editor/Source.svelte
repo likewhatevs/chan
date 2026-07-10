@@ -56,6 +56,7 @@
     initialCaret = null,
     autoFocus = true,
     placeholderText,
+    extraExtensions = [],
     onCaretChange,
     onSubmit,
   }: {
@@ -80,6 +81,11 @@
     /// visible in either mode. Unset = no placeholder (the file
     /// editor's source view doesn't want one).
     placeholderText?: string;
+    /// Host-provided CM6 extensions for editor variants that need one-off
+    /// keymaps or event handlers while still using the full source stack.
+    /// Mirrors the same prop on `Wysiwyg.svelte` so hosts can wire both
+    /// editors identically.
+    extraExtensions?: Extension[];
     onCaretChange?: (from: number, to: number) => void;
     /// Chat-style send chord. When wired, plain Enter calls this
     /// (Shift+Enter still inserts a newline via CM6 default). The
@@ -114,6 +120,7 @@
   const trailingWhitespace = new Compartment();
   const editableCompartment = new Compartment();
   const readOnlyCompartment = new Compartment();
+  const extraExtensionsCompartment = new Compartment();
   // Track the language we last asked for; used to dedupe redundant
   // reconfigures when reactive deps re-fire without an actual change
   // (Svelte runs $effect on any prop touch).
@@ -274,6 +281,7 @@
         // so a mode-toggle keeps the placeholder visible in
         // either.
         ...(placeholderText ? [placeholder(placeholderText)] : []),
+        extraExtensionsCompartment.of(extraExtensions),
         breathingRoom(),
         findField,
         rightClickNoSelect(),
@@ -456,6 +464,13 @@
         editableCompartment.reconfigure(EditorView.editable.of(!readonly)),
         readOnlyCompartment.reconfigure(EditorState.readOnly.of(readonly)),
       ],
+    });
+  });
+
+  $effect(() => {
+    if (!view) return;
+    view.dispatch({
+      effects: extraExtensionsCompartment.reconfigure(extraExtensions),
     });
   });
 </script>
