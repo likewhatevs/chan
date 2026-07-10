@@ -101,6 +101,26 @@ linux-gateway: ## Build the gateway .deb packages via sdme (the gateway-linux-pa
 	CHAN_REPO="$(REPO_ROOT)" SDME="$(SDME)" \
 		packaging/gateway/scripts/dev/sdme/build-gateway.sh
 
+.PHONY: distros-tarball
+distros-tarball: ## Build the vendored source tarball (COPR/PPA input) under target/distros.
+	packaging/distros/mkdist --repo "$(REPO_ROOT)"
+
+.PHONY: copr-srpm
+copr-srpm: ## Build the chan + chan-desktop SRPMs locally (fedora container).
+	packaging/distros/copr/build-srpm.sh $(PKG)
+
+.PHONY: copr-build
+copr-build: ## Build the SRPMs and submit them to COPR (needs copr-cli auth).
+	packaging/distros/copr/build-srpm.sh $(PKG) --submit
+
+.PHONY: ppa-source
+ppa-source: ## Build signed per-series Launchpad source packages from the tarball.
+	packaging/distros/debian/build-source.sh $(PKG)
+
+.PHONY: ppa-upload
+ppa-upload: ## dput the built source packages to the Launchpad PPA.
+	packaging/distros/debian/upload.sh
+
 .PHONY: macos-chan-app
 macos-chan-app: ## Build and sign the macOS .app bundle.
 	$(MAKE) -C desktop app-signed
