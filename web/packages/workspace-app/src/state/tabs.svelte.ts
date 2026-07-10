@@ -4508,6 +4508,15 @@ export function registerDocReleaseHook(
   docReleaseHook = fn;
 }
 
+/// Query: is `tabId`'s doc session degraded by a still-retrying CONNECTION
+/// outage (dead server)? When true the classic autosave PUT is doomed and
+/// its `tab.error` would unmount the editor, so the save path stays quiet
+/// and leaves the buffer for the reattach diff-push.
+let docSavePausedQuery: ((tabId: string) => boolean) | null = null;
+export function registerDocSavePausedQuery(fn: (tabId: string) => boolean): void {
+  docSavePausedQuery = fn;
+}
+
 /// Release a tab's live doc session, if any. `immediate` skips the
 /// editor-remount linger: tab close, rename rekey, and file discard must
 /// detach now (a detach also asks the server for a prompt flush).
@@ -4523,6 +4532,21 @@ export function releaseDocSessionForTab(tabId: string, immediate = false): void 
 export function isDocAttached(t: FileTab): boolean {
   const s = t.doc?.state;
   return s === "attached" || s === "connecting" || s === "reconnecting";
+}
+
+/// True when the classic autosave/PUT path must stay quiet: either the
+/// authority owns saves (`isDocAttached`), or the session is degraded by
+/// a still-retrying connection outage (dead server) where a PUT is doomed
+/// and its `tab.error` would unmount the editor and lose the unconfirmed
+/// buffer. Reads the mirrored `t.doc.state` (reactive) and, only for the
+/// degraded case, the session query for the connection-outage nuance - a
+/// degraded-but-reachable session (flush-timeout) and every permanent
+/// stop read false, so the classic path (including error surfacing)
+/// resumes exactly as before.
+export function isDocSavePaused(t: FileTab): boolean {
+  if (isDocAttached(t)) return true;
+  if (t.doc?.state !== "degraded") return false;
+  return docSavePausedQuery?.(t.id) ?? false;
 }
 
 /// Mirror mutator for docSync's status/peers writes. Called from socket
@@ -4582,6 +4606,14 @@ async function performSaveOnce(t: FileTab): Promise<void> {
       return;
     }
   }
+  // Connection-outage suppression: the session is degraded by a still-
+  // retrying dead-server drop, so a classic PUT would hit the same
+  // unreachable server and its `tab.error` would swap the editor for the
+  // error placeholder, unmounting the collab view and losing the buffer.
+  // Stay quiet; the edits live in the buffer (and editorBuffer) for the
+  // reattach diff-push. A reachable-but-degraded session (flush timeout)
+  // reads false here and PUTs normally.
+  if (isDocSavePaused(t)) return;
   // Excalidraw scenes are JSON too: gate them like .json so a
   // source-mode typo can't write a corrupt scene the canvas then
   // refuses to restore.
@@ -4655,10 +4687,11 @@ export function scheduleAutosave(paneId: string, tabId: string): void {
     const t = found?.tab.kind === "file" ? found.tab : undefined;
     if (!t) return;
     if (t.loading || t.content === t.saved) return;
-    // Attached tabs save through the doc session (the autosave effect
-    // already skips them); this re-check covers a status flip in the
-    // debounce window between schedule and fire.
-    if (isDocAttached(t)) return;
+    // Attached tabs save through the doc session, and a connection-outage
+    // degraded tab suppresses the doomed PUT; the autosave effect already
+    // skips both, this re-check covers a status flip in the debounce
+    // window between schedule and fire.
+    if (isDocSavePaused(t)) return;
     try {
       await performSave(t);
     } catch (e) {

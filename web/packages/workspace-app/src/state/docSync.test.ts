@@ -30,6 +30,7 @@ import {
   conflictDialog,
   flagExternalChange,
   isDocAttached,
+  isDocSavePaused,
   layout,
   saveTab,
   scheduleAutosave,
@@ -667,6 +668,110 @@ describe("degradation", () => {
     retry.frame(snap("hello", 0));
     await flushMicro();
     expect(tab.doc?.state).toBe("attached");
+  });
+});
+
+// ---- connection-outage save suppression (task-Web-Fable-3, option B) ----------
+
+describe("connection-outage suppression", () => {
+  /// Attach, make an unconfirmed local edit, then drop the socket past
+  /// the grace so the session is degraded by a still-retrying dead-server
+  /// outage (retryStopped false, socket down).
+  async function outageDegraded(
+    tab: FileTab,
+  ): Promise<{ sock: FakeSocket; view: EditorView; cleanup(): void }> {
+    const { sock, view, cleanup } = await attached(tab, "hello");
+    type(view, "!"); // unconfirmed -> tab.content "hello!"
+    await flushMicro();
+    sock.drop();
+    await vi.advanceTimersByTimeAsync(500);
+    lastSocket().drop();
+    await vi.advanceTimersByTimeAsync(1000);
+    lastSocket().drop();
+    return { sock, view, cleanup };
+  }
+
+  test("degraded-by-outage suppresses the doomed PUT and never sets tab.error", async () => {
+    vi.useFakeTimers();
+    const tab = fileTab();
+    resetLayout([tab]);
+    const t = readTab(tab.id)!;
+    const writeSpy = vi.spyOn(api, "write");
+    const { view, cleanup } = await outageDegraded(t);
+    expect(t.doc?.state).toBe("degraded");
+    expect(isDocSavePaused(t)).toBe(true);
+    // A save (Cmd+S / close-time) must NOT PUT and must NOT set tab.error
+    // (which would swap the editor for the error placeholder); the edit
+    // stays in the buffer for the reattach diff-push.
+    await saveTab(t);
+    expect(writeSpy).not.toHaveBeenCalled();
+    expect(t.error).toBeNull();
+    expect(t.content).toBe("hello!");
+    cleanup();
+    void view;
+  });
+
+  test("scheduleAutosave stays quiet during an outage, re-arms once it heals", async () => {
+    vi.useFakeTimers();
+    const tab = fileTab();
+    const pane = resetLayout([tab]);
+    const t = readTab(tab.id)!;
+    const writeSpy = vi
+      .spyOn(api, "write")
+      .mockResolvedValue({ mtime: 2, mtime_ns: "999" });
+    const { cleanup } = await outageDegraded(t);
+    scheduleAutosave(pane.id, t.id);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(writeSpy).not.toHaveBeenCalled();
+    // Heal: the pending reconnect dial fires; the resumed socket (collab
+    // still installed) reattaches and re-pushes the buffered edit instead
+    // of losing it - no classic PUT ever fires.
+    await vi.advanceTimersByTimeAsync(2000);
+    const healed = lastSocket();
+    healed.open();
+    await flushMicro();
+    expect(t.doc?.state).toBe("attached");
+    expect(isDocSavePaused(t)).toBe(true); // attached -> still paused (flush path)
+    expect(healed.frames("push").length).toBeGreaterThan(0);
+    expect(writeSpy).not.toHaveBeenCalled();
+    cleanup();
+  });
+
+  test("a REACHABLE degrade (flush timeout, socket open) still PUTs classically", async () => {
+    vi.useFakeTimers();
+    const tab = fileTab();
+    resetLayout([tab]);
+    const t = readTab(tab.id)!;
+    const writeSpy = vi
+      .spyOn(api, "write")
+      .mockResolvedValue({ mtime: 2, mtime_ns: "999" });
+    const { view, cleanup } = await attached(t, "hello");
+    type(view, "!");
+    await flushMicro();
+    // Flush never confirms; the save funnel degrades the session, but the
+    // socket stays OPEN (reachable server), so a classic PUT is correct.
+    const save = saveTab(t);
+    await vi.advanceTimersByTimeAsync(DOC_FLUSH_TIMEOUT_MS + 50);
+    await save;
+    expect(t.doc?.state).toBe("degraded");
+    expect(isDocSavePaused(t)).toBe(false); // reachable -> not suppressed
+    expect(writeSpy).toHaveBeenCalledTimes(1);
+    expect(writeSpy.mock.calls[0]![2]).toBe(MTIME);
+    cleanup();
+  });
+
+  test("a permanent stop (attach-failed) is not outage-paused; classic errors surface", async () => {
+    vi.useFakeTimers();
+    const tab = fileTab();
+    resetLayout([tab]);
+    const t = readTab(tab.id)!;
+    acquireDocSession(t);
+    const sock = lastSocket();
+    sock.open();
+    sock.frame({ type: "error", message: "no such file", reason: "attach-failed" });
+    sock.drop();
+    expect(t.doc?.state).toBe("degraded");
+    expect(isDocSavePaused(t)).toBe(false); // retryStopped -> classic resumes
   });
 });
 

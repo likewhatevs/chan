@@ -97,7 +97,7 @@
     createTeamWorkLeadTerminal,
     openBrowserInActivePane,
     toggleActiveTerminalBroadcastSelectAll,
-    isDocAttached,
+    isDocSavePaused,
     openFind,
     openInActivePane,
     openDashboardInActivePane,
@@ -237,10 +237,12 @@
         void t.slidePreview?.open;
         void t.slidePreview?.index;
         void t.slidePreview?.mode;
-        // Attached tabs save through the doc session; reading t.doc
-        // here also re-arms autosave the moment a session degrades
-        // (the status write re-runs this effect for a dirty tab).
-        if (bootstrapped && !t.loading && t.content !== t.saved && !isDocAttached(t)) {
+        // Attached tabs save through the doc session, and a
+        // connection-outage degraded tab suppresses the doomed PUT;
+        // reading t.doc here re-arms autosave the moment a session
+        // leaves those states (the status write re-runs this effect for
+        // a dirty tab).
+        if (bootstrapped && !t.loading && t.content !== t.saved && !isDocSavePaused(t)) {
           scheduleAutosave(node.id, t.id);
         }
       }

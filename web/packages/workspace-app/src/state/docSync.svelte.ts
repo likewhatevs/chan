@@ -56,6 +56,7 @@ import {
   markTabFileMissing,
   registerDocReleaseHook,
   registerDocSaveDelegate,
+  registerDocSavePausedQuery,
   setTabDocState,
   type DocSyncStatus,
   type FileTab,
@@ -298,6 +299,25 @@ export class DocSession {
       this.status === "connecting" ||
       this.status === "reconnecting"
     );
+  }
+
+  /// True when the session is degraded specifically by a CONNECTION-class
+  /// outage that is still retrying: the socket is down and background
+  /// reconnects are live (`retryStopped` false). In that state a classic
+  /// autosave PUT would hit the same unreachable server, fail, and its
+  /// `tab.error` would swap the editor for the error placeholder -
+  /// unmounting the collab view and losing the unconfirmed buffer. The
+  /// save path suppresses the PUT + error here; the buffer stays in the
+  /// live editor (and the localStorage editorBuffer) for the reattach
+  /// diff-push. Deliberately FALSE when the socket is still open (a
+  /// flush-timeout degrade against a reachable server - classic CAS PUT
+  /// is correct there) and for every permanent stop (CRLF, doc-too-large,
+  /// attach-failed, closed, capability-off - `retryStopped` true or a
+  /// self-close - where the server is alive and classic errors belong).
+  isOutagePaused(): boolean {
+    if (this.retryStopped || this.closedByUs) return false;
+    if (this.status !== "degraded") return false;
+    return !(this.ws !== null && this.ws.readyState === WebSocket.OPEN);
   }
 
   peers(): number {
@@ -1096,4 +1116,8 @@ registerDocSaveDelegate(async (t: FileTab) => {
 
 registerDocReleaseHook((tabId: string, immediate: boolean) => {
   releaseDocSession(tabId, { immediate });
+});
+
+registerDocSavePausedQuery((tabId: string) => {
+  return registry.get(tabId)?.isOutagePaused() ?? false;
 });
