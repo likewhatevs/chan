@@ -483,7 +483,10 @@ impl std::fmt::Display for GatewayEntryError {
                 "devserver \"{label}\" is registered but not currently connected"
             ),
             Self::DevserverOffline { label: None, .. } => {
-                write!(f, "your devserver is registered but not currently connected")
+                write!(
+                    f,
+                    "your devserver is registered but not currently connected"
+                )
             }
             Self::AccessDenied => write!(f, "the gateway denied access to this devserver"),
             Self::Other(message) => f.write_str(message),
@@ -1588,10 +1591,8 @@ mod tests {
         // An old gateway (or the endpoint's best-effort degrade on profile
         // hiccups) sends the plain error body with no reason: keep the
         // generic HTTP-status string, exactly the pre-taxonomy behavior.
-        let plain = classify_entry_error(
-            reqwest::StatusCode::NOT_FOUND,
-            br#"{"error":"not found"}"#,
-        );
+        let plain =
+            classify_entry_error(reqwest::StatusCode::NOT_FOUND, br#"{"error":"not found"}"#);
         assert_eq!(
             plain,
             GatewayEntryError::Other("gateway entry returned HTTP 404 Not Found".into())
@@ -1606,7 +1607,10 @@ mod tests {
         );
         // Non-JSON body (a proxy error page): fallback, never a parse error.
         assert_eq!(
-            classify_entry_error(reqwest::StatusCode::BAD_GATEWAY, b"<html>bad gateway</html>"),
+            classify_entry_error(
+                reqwest::StatusCode::BAD_GATEWAY,
+                b"<html>bad gateway</html>"
+            ),
             GatewayEntryError::Other("gateway entry returned HTTP 502 Bad Gateway".into())
         );
     }

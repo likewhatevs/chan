@@ -290,9 +290,7 @@ fn signin_error_message(reason: &str) -> String {
         "user_cancelled" => "sign-in was cancelled in the browser".to_string(),
         "oauth_denied" => "sign-in was denied by the identity provider".to_string(),
         "account_blocked" => "sign-in failed: this account is blocked".to_string(),
-        "mint_failed" => {
-            "sign-in failed: the gateway could not issue an access token".to_string()
-        }
+        "mint_failed" => "sign-in failed: the gateway could not issue an access token".to_string(),
         other => format!("sign-in failed in the browser: {other}"),
     }
 }
@@ -300,8 +298,7 @@ fn signin_error_message(reason: &str) -> String {
 /// The error side carries the message plus whether the in-flight sign-in
 /// state was consumed (see [`CallbackOutcome::Failed`]).
 fn do_handle_callback(app: &AppHandle, raw: &str) -> Result<Option<String>, (String, bool)> {
-    let url =
-        Url::parse(raw).map_err(|e| (format!("malformed callback URL: {e}"), false))?;
+    let url = Url::parse(raw).map_err(|e| (format!("malformed callback URL: {e}"), false))?;
     // Only accept our exact path. Anything else is a confused redirect
     // or a maliciously crafted chan:// URL.
     if url.scheme() != "chan" || url.host_str() != Some("auth") || url.path() != "/callback" {
