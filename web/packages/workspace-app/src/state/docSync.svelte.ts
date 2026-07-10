@@ -61,11 +61,11 @@ import {
   type FileTab,
 } from "./tabs.svelte";
 
-/// Feature flag. Default OFF while the server half lands; flip
-/// DOCSYNC_DEFAULT_ON to true to enable for everyone who has not
-/// explicitly opted out via localStorage `chan.docsync = "0"`.
+/// Feature flag. Default ON (the server half is live); localStorage
+/// `chan.docsync = "0"` opts a browser out, and the capability probe
+/// below silently turns everything off against a pre-doc-sync server.
 const DOCSYNC_FLAG_KEY = "chan.docsync";
-const DOCSYNC_DEFAULT_ON = false;
+const DOCSYNC_DEFAULT_ON = true;
 
 /// Keep the socket + shadow alive briefly after the owning editor
 /// releases. A cross-pane tab move is a full component remount
@@ -206,8 +206,12 @@ export type PeerCursorFrame = {
 };
 
 /// Error reasons that must not trigger a reconnect loop (the retry
-/// would fail identically).
-const PERMANENT_ERROR_REASONS = new Set(["doc-too-large"]);
+/// would fail identically): an attach the server refused outright
+/// (bad path, missing file, non-editable, oversized) and a document
+/// past the size limit. Transient reasons (bad-changeset,
+/// malformed-frame, session-closed) recover through reconnect +
+/// snapshot instead.
+const PERMANENT_ERROR_REASONS = new Set(["attach-failed", "doc-too-large"]);
 
 export type PeerCursor = {
   w: string;

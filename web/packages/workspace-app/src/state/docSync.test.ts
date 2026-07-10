@@ -279,11 +279,13 @@ describe("eligibility", () => {
     expect(isDocSyncEligible(fileTab({ readMode: true }))).toBe(true);
   });
 
-  test("the flag gates everything (default off)", () => {
+  test("the flag defaults ON and localStorage '0' opts out", () => {
     localStorage.removeItem("chan.docsync");
+    expect(isDocSyncEligible(fileTab())).toBe(true);
+    localStorage.setItem("chan.docsync", "0");
     expect(isDocSyncEligible(fileTab())).toBe(false);
     expect(acquireDocSession(fileTab())).toBeNull();
-    localStorage.setItem("chan.docsync", "0");
+    localStorage.setItem("chan.docsync", "off");
     expect(acquireDocSession(fileTab())).toBeNull();
   });
 
@@ -558,6 +560,23 @@ describe("degradation", () => {
     await flushMicro();
     expect(tab.doc?.state).toBe("attached");
     cleanup();
+  });
+
+  test("an attach-failed error frame degrades without a retry loop", async () => {
+    vi.useFakeTimers();
+    const tab = fileTab();
+    acquireDocSession(tab);
+    const sock = lastSocket();
+    sock.open();
+    // The server refuses the attach with a frame BEFORE the close, so
+    // the capability probe never reads this as an old server.
+    sock.frame({ type: "error", message: "no such file", reason: "attach-failed" });
+    sock.drop();
+    expect(tab.doc?.state).toBe("degraded");
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(sockets.length).toBe(1); // no redial of a permanently bad attach
+    // The module-wide latch is untouched: other tabs still attach.
+    expect(acquireDocSession(fileTab())).not.toBeNull();
   });
 
   test("capability probe: first close before any frame latches doc sync off", async () => {
