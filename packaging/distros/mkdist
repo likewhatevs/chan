@@ -117,7 +117,11 @@ EOF
 
 echo >&2 "==> writing tarball"
 TARBALL="$OUTDIR/chan-vendored-$VERSION.tar.xz"
-XZ_OPT="${XZ_OPT:--6 -T0}" tar -C "$STAGE_PARENT" -cJf "$TARBALL" "chan-$VERSION"
+# Write-then-rename: the orig names below are hardlinks, and consumers
+# (unpacked ppa work dirs, a .dsc's recorded checksums) may still point at
+# a previous run's inode; truncating the name in place would corrupt them.
+XZ_OPT="${XZ_OPT:--6 -T0}" tar -C "$STAGE_PARENT" -cJf "$TARBALL.tmp" "chan-$VERSION"
+mv -f "$TARBALL.tmp" "$TARBALL"
 for orig in "chan_$DEBVER.orig.tar.xz" "chan-desktop_$DEBVER.orig.tar.xz"; do
     rm -f "$OUTDIR/$orig"
     ln "$TARBALL" "$OUTDIR/$orig" 2>/dev/null || cp "$TARBALL" "$OUTDIR/$orig"
