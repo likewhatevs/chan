@@ -33,6 +33,12 @@ override_dh_auto_clean:
 override_dh_clean:
 	dh_clean -XCargo.toml.orig
 
+# dh_update_autotools_config replaces every config.guess/config.sub in
+# the tree, including copies bundled inside vendored crates (onig_sys),
+# which also breaks the vendored-source checksums. Nothing in this build
+# is autotools; skip it.
+override_dh_update_autotools_config:
+
 override_dh_auto_build:
 	$(CARGO) build --release --frozen --ignore-rust-version -p chan
 
