@@ -75,6 +75,7 @@ function seed(): Seed {
         token: "",
         library_id: LIMA_LIBRARY_ID,
         status: "connected",
+        pending_signin: false,
         // Auto-hide ticked and the connect succeeded, so the control
         // terminal below is seeded hidden: the clean fully-green remote.
         auto_hide_control: true,
@@ -92,6 +93,7 @@ function seed(): Seed {
         token: "",
         library_id: WINDOWS_LIBRARY_ID,
         status: "connected",
+        pending_signin: false,
         auto_hide_control: false,
         os: "windows",
         pretty_name: "Windows 11 Pro",
@@ -109,6 +111,7 @@ function seed(): Seed {
         // The attention scenario: it connected once (so the OS is known),
         // then the tunnel dropped and the control script died. No workspaces.
         status: "disconnected",
+        pending_signin: false,
         auto_hide_control: false,
         os: "linux",
         pretty_name: "Debian GNU/Linux 13",
@@ -357,6 +360,7 @@ export function createLauncherDemoApi(opts: LauncherDemoOptions = {}): LauncherD
         token: input.token ?? "",
         library_id: null,
         status: "disconnected",
+        pending_signin: false,
         auto_hide_control: input.auto_hide_control ?? false,
         os: "",
         pretty_name: null,

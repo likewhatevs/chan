@@ -506,15 +506,23 @@
                    script died, sitting at "process exited") is not ready to
                    reconnect: the connect op errors until the control terminal is
                    closed. Gate the button and point the user at the control row
-                   (open it to read the reason, close it) or the overlay Reconnect. -->
+                   (open it to read the reason, close it) or the overlay Reconnect.
+                   While a browser sign-in is pending the button stays live: a
+                   re-click re-opens the sign-in page (latest-wins desktop-side). -->
               <button
                 class="icon-btn"
                 type="button"
                 disabled={controlOpen}
-                title={controlOpen ? "Close the control terminal to reconnect" : "Connect"}
+                title={controlOpen
+                  ? "Close the control terminal to reconnect"
+                  : ds.pending_signin
+                    ? "Re-open sign-in in your browser"
+                    : "Connect"}
                 aria-label={controlOpen
                   ? `Close the control terminal to reconnect ${devserverName(ds)}`
-                  : `Connect ${devserverName(ds)}`}
+                  : ds.pending_signin
+                    ? `Re-open sign-in in your browser for ${devserverName(ds)}`
+                    : `Connect ${devserverName(ds)}`}
                 onclick={() => run(connectDevserver(ds.id))}>
                 <Plug size={16} />
               </button>
@@ -524,6 +532,14 @@
       </div>
       {#if hasContent(node)}
         {@render machineContent(node)}
+      {:else if ds.pending_signin}
+        <!-- The connect handed off to a browser sign-in: narrate the wait.
+             The row stays Disconnected (no status dot); the desktop clears
+             the state on the deep-link callback, its timeout, or teardown. -->
+        <p class="connect-prompt waiting">
+          <LoaderCircle class="spin" size={14} aria-hidden="true" />
+          Waiting for sign-in in your browser...
+        </p>
       {:else if dsSpinning(ds)}
         <p class="connect-prompt">Connecting…</p>
       {:else}
@@ -731,6 +747,14 @@
     padding: 0.5rem 0.75rem;
     font-size: 0.82rem;
     color: var(--text-secondary);
+  }
+
+  /* The browser sign-in hand-off: the prompt gains the in-flight spinner
+     (global .spin) beside the text. */
+  .connect-prompt.waiting {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
   }
 
   .empty-hint {

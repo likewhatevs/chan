@@ -10,7 +10,7 @@
   import NewWorkspaceDialog from "./components/NewWorkspaceDialog.svelte";
   import ConfirmDialog from "./components/ConfirmDialog.svelte";
   import Modal from "./components/Modal.svelte";
-  import { library, loadLibrary, clearError } from "./state/library.svelte";
+  import { library, loadLibrary, clearError, reportError, resync } from "./state/library.svelte";
   import { dialog } from "./state/dialog.svelte";
   import { confirm } from "./state/confirm.svelte";
   import { checksVisible } from "./state/selection.svelte";
@@ -63,6 +63,8 @@
     let unlistenAttention: (() => void) | null = null;
     let unlistenRestored: (() => void) | null = null;
     let unlistenUpdate: (() => void) | null = null;
+    let unlistenAuthError: (() => void) | null = null;
+    let unlistenAuthChanged: (() => void) | null = null;
     void onTauriEvent("devserver-control-attention", onControlAttentionEvent).then((un) => {
       unlistenAttention = un;
     });
@@ -75,10 +77,22 @@
     ).then((un) => {
       unlistenUpdate = un;
     });
+    // Gateway sign-in narration. auth-error carries a banner-ready string
+    // (denied/cancelled sign-in, a failed resume connect, the sign-in
+    // timeout); auth-changed fires when a sign-in lands or is cleared, so
+    // re-list the registries and the waiting rows resolve without a reload.
+    void onTauriEvent<string>("auth-error", reportError).then((un) => {
+      unlistenAuthError = un;
+    });
+    void onTauriEvent("auth-changed", () => resync()).then((un) => {
+      unlistenAuthChanged = un;
+    });
     return () => {
       unlistenAttention?.();
       unlistenRestored?.();
       unlistenUpdate?.();
+      unlistenAuthError?.();
+      unlistenAuthChanged?.();
     };
   });
 

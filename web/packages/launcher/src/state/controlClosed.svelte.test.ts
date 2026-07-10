@@ -43,6 +43,7 @@ function devserver(over: Partial<DevserverEntry> & Pick<DevserverEntry, "id">): 
     has_token: true,
     library_id: null,
     status: "connected",
+    pending_signin: false,
     auto_hide_control: false,
     os: "",
     pretty_name: null,

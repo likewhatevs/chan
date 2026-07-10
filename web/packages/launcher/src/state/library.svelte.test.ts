@@ -12,10 +12,12 @@ import {
   openWorkspaceWindow,
   removeDevserver,
   removeWorkspace,
+  resync,
   saveDevserver,
   stopWatching,
   toggleWorkspace,
 } from "./library.svelte";
+import { beginPending, clearAllPending, dsKey, isPending } from "./pending.svelte";
 
 // Pin the in-memory mock as the backend so these tests drive the registry +
 // window feed with no live server, independent of how the app composes its
@@ -190,6 +192,50 @@ describe("devserver registry", () => {
 
     expect(library.devservers.find((d) => d.id === ds.id)?.status).toBe("disconnected");
     expect(library.windows.some((w) => w.library_id === ds.library_id && w.control)).toBe(false);
+  });
+});
+
+describe("gateway sign-in wait", () => {
+  afterEach(() => {
+    clearAllPending();
+  });
+
+  it("clears the click bridge the moment a row reports pending_signin", async () => {
+    // A gateway connect with no PAT returns at once: the row's wire status is
+    // still `disconnected` (waiting is a row state, not a connection state),
+    // so without the synthetic pending_signin mapping the click marker would
+    // spin out its whole backstop. The refetch must read the hand-off as a
+    // state move and hand the spinner to the waiting row.
+    const { backend } = await import("../api/backend");
+    const ds = library.devservers[0]!;
+    beginPending(dsKey(ds.id), "connected");
+    expect(isPending(dsKey(ds.id))).toBe(true);
+    const spy = vi
+      .spyOn(backend, "listDevservers")
+      .mockResolvedValue([{ ...ds, status: "disconnected", pending_signin: true }]);
+    resync();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(isPending(dsKey(ds.id))).toBe(false);
+    expect(library.devservers[0]!.pending_signin).toBe(true);
+    spy.mockRestore();
+  });
+
+  it("holds the click bridge while the row has not moved", async () => {
+    // Control case: no pending_signin and an unmoved status keep the bridge
+    // open (the instant feedback between click and the backend transition).
+    const { backend } = await import("../api/backend");
+    const ds = library.devservers.find((d) => d.status === "disconnected") ?? {
+      ...library.devservers[0]!,
+      status: "disconnected" as const,
+    };
+    beginPending(dsKey(ds.id), "connected");
+    const spy = vi
+      .spyOn(backend, "listDevservers")
+      .mockResolvedValue([{ ...ds, status: "disconnected", pending_signin: false }]);
+    resync();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(isPending(dsKey(ds.id))).toBe(true);
+    spy.mockRestore();
   });
 });
 

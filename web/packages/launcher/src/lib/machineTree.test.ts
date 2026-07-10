@@ -46,6 +46,7 @@ function ds(over: Partial<DevserverEntry> & Pick<DevserverEntry, "id">): Devserv
     has_token: false,
     library_id: null,
     status: "disconnected",
+    pending_signin: false,
     auto_hide_control: false,
     os: "",
     pretty_name: null,

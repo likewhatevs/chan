@@ -55,6 +55,11 @@ export function clearError(): void {
 // whose row's status has moved off its pre-click state (the backend transition
 // landed), is gone, or has backstopped. Called after every registry refresh +
 // on loadLibrary, so once the backend `status` arrives it drives the spinner.
+// A devserver waiting on a browser sign-in reports the synthetic
+// "pending_signin" state: its wire status stays `disconnected` (waiting is a
+// row state, not a connection state), but the bridge must read the hand-off
+// as a state move so the click marker clears the moment the waiting row
+// appears instead of spinning out its backstop.
 function reconcilePending(): void {
   const current: Record<string, string> = {};
   for (const w of library.workspaces) {
@@ -62,7 +67,7 @@ function reconcilePending(): void {
     current[key] = w.status;
   }
   for (const d of library.devservers) {
-    current[dsKey(d.id)] = d.status;
+    current[dsKey(d.id)] = d.pending_signin ? "pending_signin" : d.status;
   }
   reconcile(current);
 }

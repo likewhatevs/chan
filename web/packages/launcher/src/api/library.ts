@@ -181,6 +181,14 @@ export interface DevserverEntry {
    */
   status: DevserverStatus;
   /**
+   * A gateway sign-in for this devserver is waiting on the user's browser:
+   * the desktop opened the identity page and holds this until the deep link
+   * returns, the wait times out, or the row is re-clicked (which re-opens
+   * the browser). Renders as a waiting spinner row; `status` stays
+   * `disconnected` while waiting. Always false off-desktop.
+   */
+  pending_signin: boolean;
+  /**
    * Auto-hide the connect control terminal once the devserver connects: the
    * desktop buries the control-terminal window on success instead of leaving it
    * open. Set from the add/edit dialog; false when unset.

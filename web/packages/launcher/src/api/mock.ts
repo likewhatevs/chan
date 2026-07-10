@@ -67,6 +67,7 @@ const devservers: MockDevserver[] = [
     // Seeded connected so the merged view (remote windows + remote workspace
     // rows + the Disconnect action) has something real to render with no desktop.
     status: "connected",
+    pending_signin: false,
     auto_hide_control: false,
     os: "linux",
     pretty_name: "Debian GNU/Linux 12 (bookworm)",
@@ -235,6 +236,7 @@ function publicDevserver(ds: MockDevserver): DevserverEntry {
     has_token: ds.has_token,
     library_id: ds.library_id,
     status: ds.status,
+    pending_signin: ds.pending_signin,
     auto_hide_control: ds.auto_hide_control,
     os: ds.os,
     pretty_name: ds.pretty_name,
@@ -334,6 +336,7 @@ export const mockApi: LibraryApi = {
       library_id: null,
       // A freshly added devserver is disconnected until the desktop dials it.
       status: "disconnected",
+      pending_signin: false,
       auto_hide_control: input.auto_hide_control ?? false,
       // OS is unknown until the first connect surfaces the self-report.
       os: "",
