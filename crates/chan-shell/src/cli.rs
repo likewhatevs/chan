@@ -277,12 +277,16 @@ pub enum SessionAction {
         #[arg(long)]
         pretty: bool,
     },
-    /// Rename yourself in this session.
+    /// Rename yourself in this session, or reset back to your default name.
     #[command(name = "self")]
     SelfCmd {
         /// The new display name for this client.
+        #[arg(long, conflicts_with = "reset", required_unless_present = "reset")]
+        name: Option<String>,
+        /// Clear your explicit name: fall back to your gateway identity or
+        /// your generated default name.
         #[arg(long)]
-        name: String,
+        reset: bool,
     },
     /// Request a leader handover (default), or accept/reject a pending request
     /// when you are the leader.
@@ -867,11 +871,12 @@ pub async fn dispatch(action: ShellAction) -> Result<()> {
         },
         ShellAction::Session { action } => match action {
             SessionAction::List { json, pretty } => cmd_session_list(json, pretty).await,
-            SessionAction::SelfCmd { name } => {
+            SessionAction::SelfCmd { name, reset } => {
                 let env = open_env()?;
                 cmd_session_op(ControlRequest::SessionSelf {
                     window_id: env.window_id,
                     name,
+                    reset,
                 })
                 .await
             }
@@ -2311,6 +2316,18 @@ mod tests {
         // A bare "h" is ambiguous (help vs hide); confirm it's rejected so
         // the comment above stays honest.
         assert!(CsCli::try_parse_from(["cs", "window", "h", "id-0"]).is_err());
+    }
+
+    #[test]
+    fn session_self_takes_exactly_one_of_name_or_reset() {
+        // `--name` and `--reset` are mutually exclusive and one is required;
+        // the server-side handler assumes clap enforced this.
+        assert!(CsCli::try_parse_from(["cs", "session", "self", "--name", "x"]).is_ok());
+        assert!(CsCli::try_parse_from(["cs", "session", "self", "--reset"]).is_ok());
+        assert!(CsCli::try_parse_from(["cs", "session", "self"]).is_err());
+        assert!(
+            CsCli::try_parse_from(["cs", "session", "self", "--name", "x", "--reset"]).is_err()
+        );
     }
 
     #[test]

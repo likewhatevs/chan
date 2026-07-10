@@ -30,7 +30,7 @@
 //! at-most-one pending request so the leader's separate `cs session handover
 //! --accept` connection can find it.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -48,6 +48,9 @@ pub const RELOAD_GRACE: Duration = Duration::from_secs(5);
 /// network blip without stranding a session on a dead leader. The host-approved
 /// "~30s grace".
 pub const GONE_GRACE: Duration = Duration::from_secs(30);
+
+/// Maximum stored length of an explicit display-name override, in chars.
+pub const NAME_CAP: usize = 64;
 
 /// A participant's connection lifecycle. `Gone` participants are removed from
 /// the registry, so the enum surfaces in snapshots only as `Live` /
@@ -85,10 +88,35 @@ pub enum Role {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ParticipantInfo {
     pub window_id: String,
-    /// The participant's chosen display name, if any (`cs session self --name`).
+    /// The participant's display name: an explicit `cs session self --name`
+    /// override, else the gateway identity (`Display Name <email>`), else the
+    /// generated default. Always present and non-empty; the `Option` is wire
+    /// shape, kept so an older consumer's decode is unchanged.
     pub name: Option<String>,
     pub role: Role,
     pub status: ParticipantState,
+}
+
+/// Gateway-resolved identity for a tunnel participant, mapped by chan-server
+/// from the proxy's per-request assertion at the `/ws` join. Loopback
+/// participants never traverse the tunnel layer and carry none. Inherits
+/// exactly the assertion's trust (PAT-derived HMAC, signed per request).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParticipantIdentity {
+    pub display_name: Option<String>,
+    pub email: Option<String>,
+}
+
+impl ParticipantIdentity {
+    /// `Display Name <email>`, degrading to whichever half is present.
+    fn display_string(&self) -> Option<String> {
+        match (self.display_name.as_deref(), self.email.as_deref()) {
+            (Some(name), Some(email)) => Some(format!("{name} <{email}>")),
+            (Some(name), None) => Some(name.to_string()),
+            (None, Some(email)) => Some(email.to_string()),
+            (None, None) => None,
+        }
+    }
 }
 
 /// A point-in-time view of the whole session: every participant plus the
@@ -118,7 +146,17 @@ pub struct PendingHandover {
 }
 
 struct Participant {
+    /// The explicit display-name override (`cs session self --name`); wins
+    /// over gateway identity and the generated default.
     name: Option<String>,
+    /// Gateway identity, when the join arrived over the tunnel with identity
+    /// claims. Fixed at first insert; a reload overlap keeps the original,
+    /// like `local`.
+    identity: Option<ParticipantIdentity>,
+    /// Generated default display name, collision-checked at join and stable
+    /// for the participant's lifetime (it survives socket drops via the
+    /// grace clock).
+    default_name: String,
     /// Whether this window's `/ws` arrived local-origin (no `TunnelOrigin`: the
     /// loopback bind or an `ssh -L` forward to it). Fixed at first insert; a
     /// reload overlap keeps the original, mirroring `disconnected_at`. Drives
@@ -135,6 +173,19 @@ struct Participant {
 }
 
 impl Participant {
+    /// The display name `snapshot()` publishes: an explicit rename wins, then
+    /// the gateway identity as `Display Name <email>`, then the generated
+    /// default. Never empty.
+    fn effective_name(&self) -> String {
+        if let Some(name) = &self.name {
+            return name.clone();
+        }
+        if let Some(display) = self.identity.as_ref().and_then(|i| i.display_string()) {
+            return display;
+        }
+        self.default_name.clone()
+    }
+
     /// The lifecycle state implied by the socket count and the grace clock at
     /// `now`. Live while a socket is held; otherwise stepped by elapsed grace.
     fn computed_state(&self, now: Instant) -> ParticipantState {
@@ -235,12 +286,18 @@ impl SessionRegistry {
     /// Register one live `/ws` socket for `window_id` and return the RAII guard
     /// that releases it. `local` marks a local-origin socket (see [`Role`]); it
     /// is stored on first insert and fixes this window's display role and its
-    /// weight in the designated-owner election. A socket arriving for a
-    /// participant in its grace window re-lives it (a reload) and keeps the
-    /// ORIGINAL `local`. `changed` reports whether the public snapshot moved (a
-    /// new participant, a revived one, or a re-elected owner) so the caller can
-    /// broadcast.
-    pub fn join(self: &Arc<Self>, window_id: &str, local: bool) -> JoinResult {
+    /// weight in the designated-owner election. `identity` is the gateway
+    /// identity of a tunnel socket, also stored on first insert. A socket
+    /// arriving for a participant in its grace window re-lives it (a reload)
+    /// and keeps the ORIGINAL `local` and `identity`. `changed` reports whether
+    /// the public snapshot moved (a new participant, a revived one, or a
+    /// re-elected owner) so the caller can broadcast.
+    pub fn join(
+        self: &Arc<Self>,
+        window_id: &str,
+        local: bool,
+        identity: Option<ParticipantIdentity>,
+    ) -> JoinResult {
         let changed = {
             let mut inner = self.lock();
             match inner.participants.get_mut(window_id) {
@@ -258,10 +315,21 @@ impl SessionRegistry {
                 None => {
                     let seq = inner.next_seq;
                     inner.next_seq += 1;
+                    // Draw the generated default against every name in play
+                    // (effective names plus overridden defaults), so two
+                    // windows never render the same generated name.
+                    let taken: HashSet<String> = inner
+                        .participants
+                        .values()
+                        .flat_map(|p| [p.effective_name(), p.default_name.clone()])
+                        .collect();
+                    let default_name = crate::participant_names::generate_name(&taken);
                     inner.participants.insert(
                         window_id.to_string(),
                         Participant {
                             name: None,
+                            identity,
+                            default_name,
                             local,
                             sockets: 1,
                             join_seq: seq,
@@ -425,28 +493,43 @@ impl SessionRegistry {
         inner.leader = Self::best_owner(&inner.participants);
     }
 
-    /// Rename a participant (the `cs session self --name` target). Returns
-    /// whether a participant matched (and the snapshot changed).
-    pub fn rename(&self, window_id: &str, name: &str) -> bool {
-        let matched = {
-            let mut inner = self.lock();
-            match inner.participants.get_mut(window_id) {
-                Some(p) => {
-                    let trimmed = name.trim();
-                    p.name = if trimmed.is_empty() {
-                        None
-                    } else {
-                        Some(trimmed.to_string())
-                    };
-                    true
-                }
-                None => false,
-            }
-        };
-        if matched {
-            self.fire_change();
+    /// Set a participant's explicit display-name override (the `cs session
+    /// self --name` target): trimmed, capped at [`NAME_CAP`] chars, and never
+    /// empty (an empty or whitespace-only name is rejected; clearing goes
+    /// through [`Self::reset_name`]). Returns the stored name.
+    pub fn rename(&self, window_id: &str, name: &str) -> Result<String, RenameError> {
+        let trimmed = name.trim();
+        if trimmed.is_empty() {
+            return Err(RenameError::Empty);
         }
-        matched
+        let capped: String = trimmed.chars().take(NAME_CAP).collect();
+        {
+            let mut inner = self.lock();
+            let p = inner
+                .participants
+                .get_mut(window_id)
+                .ok_or(RenameError::NotAParticipant)?;
+            p.name = Some(capped.clone());
+        }
+        self.fire_change();
+        Ok(capped)
+    }
+
+    /// Clear a participant's explicit override (`cs session self --reset`) so
+    /// it falls back to its gateway identity or its generated default. Returns
+    /// the name now in effect.
+    pub fn reset_name(&self, window_id: &str) -> Result<String, RenameError> {
+        let effective = {
+            let mut inner = self.lock();
+            let p = inner
+                .participants
+                .get_mut(window_id)
+                .ok_or(RenameError::NotAParticipant)?;
+            p.name = None;
+            p.effective_name()
+        };
+        self.fire_change();
+        Ok(effective)
     }
 
     /// The current leader's window_id, if any.
@@ -476,7 +559,7 @@ impl SessionRegistry {
                     p.join_seq,
                     ParticipantInfo {
                         window_id: window_id.clone(),
-                        name: p.name.clone(),
+                        name: Some(p.effective_name()),
                         role,
                         status: p.computed_state(now),
                     },
@@ -638,6 +721,16 @@ pub struct HandoverResolved {
     pub new_leader: Option<String>,
 }
 
+/// Why a rename was refused. The control handler maps each to a clear CLI
+/// message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RenameError {
+    /// The trimmed name is empty.
+    Empty,
+    /// The calling window is not a session participant.
+    NotAParticipant,
+}
+
 /// Why a handover/takeover request could not be parked or applied. The control
 /// handler maps each to a clear CLI message.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -703,11 +796,11 @@ mod tests {
     #[test]
     fn local_owns_the_slot_and_remote_follows() {
         let reg = Arc::new(SessionRegistry::new());
-        let a = reg.join("w-a", true); // local origin
+        let a = reg.join("w-a", true, None); // local origin
         assert!(a.changed);
         assert_eq!(reg.leader().as_deref(), Some("w-a"));
 
-        let b = reg.join("w-b", false); // tunnel origin
+        let b = reg.join("w-b", false, None); // tunnel origin
         assert!(b.changed);
         // A remote joining does not move the designated-owner slot off the local.
         assert_eq!(reg.leader().as_deref(), Some("w-a"));
@@ -727,8 +820,8 @@ mod tests {
         // order, so the later local still reads Leader and the earlier remote
         // Follower.
         let reg = Arc::new(SessionRegistry::new());
-        let _remote = reg.join("w-remote", false).guard;
-        let _local = reg.join("w-local", true).guard;
+        let _remote = reg.join("w-remote", false, None).guard;
+        let _local = reg.join("w-local", true, None).guard;
         let snap = reg.snapshot(Instant::now());
         let role_of = |id: &str| {
             snap.participants
@@ -745,9 +838,9 @@ mod tests {
         // A remote connects first and holds the fallback owner slot; when a
         // local window joins it RECLAIMS the slot even though it joined later.
         let reg = Arc::new(SessionRegistry::new());
-        let _remote = reg.join("w-remote", false).guard;
+        let _remote = reg.join("w-remote", false, None).guard;
         assert_eq!(reg.leader().as_deref(), Some("w-remote"));
-        let _local = reg.join("w-local", true).guard;
+        let _local = reg.join("w-local", true, None).guard;
         assert_eq!(reg.leader().as_deref(), Some("w-local"));
     }
 
@@ -757,8 +850,8 @@ mod tests {
         // real remote-only devserver still has a working owner and handover
         // target -- but every remote still reads Follower for display.
         let reg = Arc::new(SessionRegistry::new());
-        let _r1 = reg.join("w-r1", false).guard;
-        let _r2 = reg.join("w-r2", false).guard;
+        let _r1 = reg.join("w-r1", false, None).guard;
+        let _r2 = reg.join("w-r2", false, None).guard;
         assert_eq!(reg.leader().as_deref(), Some("w-r1"));
         let snap = reg.snapshot(Instant::now());
         assert!(
@@ -770,12 +863,12 @@ mod tests {
     #[test]
     fn reload_overlap_keeps_the_participant_live() {
         let reg = Arc::new(SessionRegistry::new());
-        let g1 = reg.join("w-a", true).guard; // local origin
-                                              // A second socket for the same window (the reload overlap) reports no
-                                              // snapshot change and keeps it live after the first guard drops. Even
-                                              // when the reconnect is marked remote it keeps the ORIGINAL local flag,
-                                              // so the role stays Leader (mirrors how it keeps disconnected_at = None).
-        let g2 = reg.join("w-a", false);
+        let g1 = reg.join("w-a", true, None).guard; // local origin
+                                                    // A second socket for the same window (the reload overlap) reports no
+                                                    // snapshot change and keeps it live after the first guard drops. Even
+                                                    // when the reconnect is marked remote it keeps the ORIGINAL local flag,
+                                                    // so the role stays Leader (mirrors how it keeps disconnected_at = None).
+        let g2 = reg.join("w-a", false, None);
         assert!(!g2.changed);
         drop(g1);
         let now = Instant::now();
@@ -798,8 +891,8 @@ mod tests {
     fn lifecycle_steps_disconnecting_then_disconnected_then_gone() {
         let reg = Arc::new(SessionRegistry::new());
         let t0 = Instant::now();
-        let guard = reg.join("w-a", true).guard;
-        let _follower = reg.join("w-b", true).guard; // keep the session non-empty
+        let guard = reg.join("w-a", true, None).guard;
+        let _follower = reg.join("w-b", true, None).guard; // keep the session non-empty
         drop(guard); // last socket of w-a drops at ~t0
 
         // Immediately: Disconnecting.
@@ -826,9 +919,9 @@ mod tests {
     fn leader_gone_auto_promotes_longest_connected_live() {
         let reg = Arc::new(SessionRegistry::new());
         let t0 = Instant::now();
-        let leader = reg.join("w-a", true).guard;
-        let _b = reg.join("w-b", true).guard; // join_seq 1, live
-        let _c = reg.join("w-c", true).guard; // join_seq 2, live
+        let leader = reg.join("w-a", true, None).guard;
+        let _b = reg.join("w-b", true, None).guard; // join_seq 1, live
+        let _c = reg.join("w-c", true, None).guard; // join_seq 2, live
         assert_eq!(reg.leader().as_deref(), Some("w-a"));
 
         drop(leader);
@@ -843,7 +936,7 @@ mod tests {
     fn leader_vacant_when_no_live_participant_remains() {
         let reg = Arc::new(SessionRegistry::new());
         let t0 = Instant::now();
-        let only = reg.join("w-a", true).guard;
+        let only = reg.join("w-a", true, None).guard;
         drop(only);
         let later = t0 + GONE_GRACE + Duration::from_secs(1);
         reg.reap_due(later);
@@ -854,8 +947,8 @@ mod tests {
     fn next_deadline_tracks_the_soonest_transition() {
         let reg = Arc::new(SessionRegistry::new());
         let t0 = Instant::now();
-        let g = reg.join("w-a", true).guard;
-        let _keep = reg.join("w-b", true).guard;
+        let g = reg.join("w-a", true, None).guard;
+        let _keep = reg.join("w-b", true, None).guard;
         drop(g);
         // Before the reload grace, the next transition is the reload threshold.
         let out = reg.reap_due(t0);
@@ -864,27 +957,121 @@ mod tests {
     }
 
     #[test]
-    fn rename_sets_and_clears_the_display_name() {
+    fn rename_trims_caps_and_rejects_empty() {
         let reg = Arc::new(SessionRegistry::new());
-        let _g = reg.join("w-a", true).guard;
-        assert!(reg.rename("w-a", "  Alex  "));
+        let _g = reg.join("w-a", true, None).guard;
+        assert_eq!(reg.rename("w-a", "  Alex  "), Ok("Alex".to_string()));
         let now = Instant::now();
         assert_eq!(
             reg.snapshot(now).participants[0].name.as_deref(),
             Some("Alex")
         );
-        // Whitespace-only clears it.
-        assert!(reg.rename("w-a", "   "));
-        assert_eq!(reg.snapshot(Instant::now()).participants[0].name, None);
+        // Empty or whitespace-only is rejected, not a silent clear.
+        assert_eq!(reg.rename("w-a", "   "), Err(RenameError::Empty));
+        assert_eq!(
+            reg.snapshot(Instant::now()).participants[0].name.as_deref(),
+            Some("Alex"),
+            "a rejected rename leaves the override in place"
+        );
+        // An overlong name is stored capped.
+        let long = "x".repeat(NAME_CAP + 10);
+        let stored = reg.rename("w-a", &long).expect("accepted");
+        assert_eq!(stored.chars().count(), NAME_CAP);
         // Unknown window does not match.
-        assert!(!reg.rename("w-nope", "x"));
+        assert_eq!(reg.rename("w-nope", "x"), Err(RenameError::NotAParticipant));
+        assert_eq!(reg.reset_name("w-nope"), Err(RenameError::NotAParticipant));
+    }
+
+    #[test]
+    fn name_precedence_is_rename_then_identity_then_default() {
+        let reg = Arc::new(SessionRegistry::new());
+        let identity = ParticipantIdentity {
+            display_name: Some("Ada Lovelace".to_string()),
+            email: Some("ada@example.com".to_string()),
+        };
+        let _g = reg.join("w-a", false, Some(identity)).guard;
+
+        // No override: the gateway identity renders as `Display Name <email>`.
+        let name_of = |reg: &SessionRegistry| {
+            reg.snapshot(Instant::now()).participants[0]
+                .name
+                .clone()
+                .expect("name is never absent")
+        };
+        assert_eq!(name_of(&reg), "Ada Lovelace <ada@example.com>");
+
+        // An explicit rename wins over the identity.
+        reg.rename("w-a", "ops").expect("accepted");
+        assert_eq!(name_of(&reg), "ops");
+
+        // Reset falls back to the identity, not the generated default.
+        assert_eq!(
+            reg.reset_name("w-a"),
+            Ok("Ada Lovelace <ada@example.com>".to_string())
+        );
+        assert_eq!(name_of(&reg), "Ada Lovelace <ada@example.com>");
+    }
+
+    #[test]
+    fn identity_halves_degrade_gracefully() {
+        let reg = Arc::new(SessionRegistry::new());
+        let name_only = ParticipantIdentity {
+            display_name: Some("Ada".to_string()),
+            email: None,
+        };
+        let email_only = ParticipantIdentity {
+            display_name: None,
+            email: Some("ada@example.com".to_string()),
+        };
+        let _a = reg.join("w-name", false, Some(name_only)).guard;
+        let _b = reg.join("w-email", false, Some(email_only)).guard;
+        let snap = reg.snapshot(Instant::now());
+        let name_of = |id: &str| {
+            snap.participants
+                .iter()
+                .find(|p| p.window_id == id)
+                .and_then(|p| p.name.clone())
+                .expect("name is never absent")
+        };
+        assert_eq!(name_of("w-name"), "Ada");
+        assert_eq!(name_of("w-email"), "ada@example.com");
+    }
+
+    #[test]
+    fn default_names_are_generated_unique_and_reload_stable() {
+        let reg = Arc::new(SessionRegistry::new());
+        let g1 = reg.join("w-a", true, None).guard;
+        let _g2 = reg.join("w-b", true, None).guard;
+        let snap = reg.snapshot(Instant::now());
+        let names: Vec<String> = snap
+            .participants
+            .iter()
+            .map(|p| p.name.clone().expect("name is never absent"))
+            .collect();
+        assert!(names.iter().all(|n| !n.trim().is_empty()));
+        assert_ne!(names[0], names[1], "two windows never share a default");
+
+        // A reload (socket overlap) keeps the participant and its default.
+        let before = names[0].clone();
+        let g1b = reg.join("w-a", true, None);
+        assert!(!g1b.changed);
+        drop(g1);
+        let after = reg
+            .snapshot(Instant::now())
+            .participants
+            .iter()
+            .find(|p| p.window_id == "w-a")
+            .and_then(|p| p.name.clone())
+            .expect("still present");
+        assert_eq!(before, after, "reload keeps the generated default");
+        drop(g1b.guard);
     }
 
     #[test]
     fn handover_request_then_accept_moves_leadership() {
         let reg = Arc::new(SessionRegistry::new());
-        let _leader = reg.join("w-a", true).guard;
-        let _follower = reg.join("w-b", true).guard;
+        let _leader = reg.join("w-a", true, None).guard;
+        let _follower = reg.join("w-b", true, None).guard;
         let id = reg.mint_handover_id();
         // w-b asks to become leader; the prompt goes to the live leader w-a.
         let recipient = reg
@@ -907,8 +1094,8 @@ mod tests {
     #[test]
     fn handover_reject_keeps_leadership_and_clears_pending() {
         let reg = Arc::new(SessionRegistry::new());
-        let _leader = reg.join("w-a", true).guard;
-        let _follower = reg.join("w-b", true).guard;
+        let _leader = reg.join("w-a", true, None).guard;
+        let _follower = reg.join("w-b", true, None).guard;
         let id = reg.mint_handover_id();
         reg.request_handover(&id, "w-b", None).expect("parked");
         let resolved = reg.resolve_handover(&id, false).expect("resolved");
@@ -920,9 +1107,9 @@ mod tests {
     #[test]
     fn handover_rejects_second_request_while_pending() {
         let reg = Arc::new(SessionRegistry::new());
-        let _leader = reg.join("w-a", true).guard;
-        let _b = reg.join("w-b", true).guard;
-        let _c = reg.join("w-c", true).guard;
+        let _leader = reg.join("w-a", true, None).guard;
+        let _b = reg.join("w-b", true, None).guard;
+        let _c = reg.join("w-c", true, None).guard;
         let id = reg.mint_handover_id();
         reg.request_handover(&id, "w-b", None).expect("parked");
         let id2 = reg.mint_handover_id();
@@ -936,8 +1123,8 @@ mod tests {
     fn handover_to_a_non_live_leader_is_refused() {
         let reg = Arc::new(SessionRegistry::new());
         let t0 = Instant::now();
-        let leader = reg.join("w-a", true).guard;
-        let _b = reg.join("w-b", true).guard;
+        let leader = reg.join("w-a", true, None).guard;
+        let _b = reg.join("w-b", true, None).guard;
         drop(leader);
         reg.reap_due(t0 + RELOAD_GRACE + Duration::from_secs(1)); // leader Disconnected
         let id = reg.mint_handover_id();
@@ -951,8 +1138,8 @@ mod tests {
     fn plain_takeover_only_when_leader_not_live() {
         let reg = Arc::new(SessionRegistry::new());
         let t0 = Instant::now();
-        let leader = reg.join("w-a", true).guard;
-        let _b = reg.join("w-b", true).guard;
+        let leader = reg.join("w-a", true, None).guard;
+        let _b = reg.join("w-b", true, None).guard;
         // Live leader: plain takeover refused.
         assert_eq!(reg.takeover("w-b", false), Err(HandoverError::LeaderLive));
         // Leader drops and ages out of live: plain takeover succeeds.
@@ -965,8 +1152,8 @@ mod tests {
     #[test]
     fn force_takeover_seizes_a_live_leader() {
         let reg = Arc::new(SessionRegistry::new());
-        let _leader = reg.join("w-a", true).guard;
-        let _b = reg.join("w-b", true).guard;
+        let _leader = reg.join("w-a", true, None).guard;
+        let _b = reg.join("w-b", true, None).guard;
         assert_eq!(reg.takeover("w-b", true), Ok(true));
         assert_eq!(reg.leader().as_deref(), Some("w-b"));
         // Taking over when you already lead is a no-op, not an error.
@@ -976,7 +1163,7 @@ mod tests {
     #[test]
     fn takeover_by_non_participant_errors() {
         let reg = Arc::new(SessionRegistry::new());
-        let _leader = reg.join("w-a", true).guard;
+        let _leader = reg.join("w-a", true, None).guard;
         assert_eq!(
             reg.takeover("w-ghost", true),
             Err(HandoverError::NotAParticipant)
@@ -993,8 +1180,8 @@ mod tests {
         reg.install_change_notify(notify.clone());
 
         let t0 = Instant::now();
-        let leader = reg.join("w-a", true).guard; // leader, join_seq 0
-        let _b = reg.join("w-b", true).guard; // live follower, promotes next
+        let leader = reg.join("w-a", true, None).guard; // leader, join_seq 0
+        let _b = reg.join("w-b", true, None).guard; // live follower, promotes next
         drop(leader); // the leader's last socket drops at ~t0
 
         // Arm the waiter AFTER the join fires so it only wakes on the reap; a

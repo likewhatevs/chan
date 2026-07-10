@@ -98,8 +98,8 @@ mod tests {
         let reg = Arc::new(SessionRegistry::new());
         // A local window owns the designated slot; a remote window follows. Hold
         // the guards so both stay Live for the snapshot.
-        let leader = reg.join("w-leader", true);
-        let follower = reg.join("w-follower", false);
+        let leader = reg.join("w-leader", true, None);
+        let follower = reg.join("w-follower", false, None);
 
         let raw = serialize_session_roster(&reg).expect("serialize a roster frame");
         let v: serde_json::Value = serde_json::from_str(&raw).expect("valid JSON");

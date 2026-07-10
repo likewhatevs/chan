@@ -18,7 +18,7 @@ use tokio::task::JoinHandle;
 
 use crate::desktop_window_ops::DesktopWindowOp;
 use crate::handover_bus::{HandoverBus, HandoverReply};
-use crate::session_presence::{HandoverError, SessionRegistry};
+use crate::session_presence::{HandoverError, RenameError, SessionRegistry};
 use crate::state::WorkspaceCell;
 use crate::terminal_sessions::CreateOptions;
 use crate::terminal_sessions::Registry as TerminalRegistry;
@@ -431,7 +431,8 @@ mod tenant_gate_tests {
             ControlRequest::SessionList,
             ControlRequest::SessionSelf {
                 window_id: "w".into(),
-                name: "n".into(),
+                name: Some("n".into()),
+                reset: false,
             },
             ControlRequest::SessionHandover {
                 window_id: "w".into(),
@@ -1119,9 +1120,11 @@ async fn handle_request(req: ControlRequest, ctx: &ControlSocketCtx) -> ControlR
             )
         }
         ControlRequest::SessionList => handle_session_list(session_registry),
-        ControlRequest::SessionSelf { window_id, name } => {
-            handle_session_self(session_registry, events_tx, window_id, name)
-        }
+        ControlRequest::SessionSelf {
+            window_id,
+            name,
+            reset,
+        } => handle_session_self(session_registry, events_tx, window_id, name, reset),
         ControlRequest::SessionHandover {
             window_id,
             to,
@@ -2361,23 +2364,41 @@ fn handle_session_list(session_registry: &SessionRegistry) -> ControlResponse {
     )
 }
 
-/// `cs session self --name`: rename the calling window and rebroadcast the
-/// roster.
+/// `cs session self`: rename the calling window (`--name`) or clear its
+/// override back to gateway identity / the generated default (`--reset`),
+/// then rebroadcast the roster.
 fn handle_session_self(
     session_registry: &SessionRegistry,
     events_tx: &broadcast::Sender<String>,
     window_id: String,
-    name: String,
+    name: Option<String>,
+    reset: bool,
 ) -> ControlResponse {
-    if session_registry.rename(&window_id, &name) {
-        crate::session_roster::broadcast_session_roster(events_tx, session_registry);
-        ControlResponse::Ok {
-            message: format!("renamed to {name}"),
+    let outcome = match (name, reset) {
+        (Some(name), false) => session_registry
+            .rename(&window_id, &name)
+            .map(|stored| format!("renamed to {stored}")),
+        (None, true) => session_registry
+            .reset_name(&window_id)
+            .map(|effective| format!("name reset to {effective}")),
+        // clap enforces the exclusivity; refuse a hand-crafted request.
+        _ => {
+            return ControlResponse::Error {
+                message: "exactly one of --name or --reset is required".into(),
+            }
         }
-    } else {
-        ControlResponse::Error {
+    };
+    match outcome {
+        Ok(message) => {
+            crate::session_roster::broadcast_session_roster(events_tx, session_registry);
+            ControlResponse::Ok { message }
+        }
+        Err(RenameError::Empty) => ControlResponse::Error {
+            message: "name cannot be empty".into(),
+        },
+        Err(RenameError::NotAParticipant) => ControlResponse::Error {
             message: format!("not a session participant: {window_id}"),
-        }
+        },
     }
 }
 
@@ -3452,8 +3473,8 @@ mod tests {
     #[test]
     fn session_list_emits_participant_rows() {
         let registry = Arc::new(SessionRegistry::new());
-        let _leader = registry.join("w-a", true).guard;
-        let _follower = registry.join("w-b", false).guard;
+        let _leader = registry.join("w-a", true, None).guard;
+        let _follower = registry.join("w-b", false, None).guard;
         let ControlResponse::Ok { message } = handle_session_list(&registry) else {
             panic!("expected Ok rows");
         };
@@ -3461,11 +3482,13 @@ mod tests {
         let rows = rows.as_array().expect("array of rows");
         assert_eq!(rows.len(), 2);
         // The {window_id, name, role, status} contract the CLI renderer reads;
-        // the first-joined window leads.
+        // the first-joined window leads, and every row carries a generated
+        // default name (a row never renders unnamed).
         assert_eq!(rows[0]["window_id"], "w-a");
         assert_eq!(rows[0]["role"], "leader");
         assert_eq!(rows[0]["status"], "live");
-        assert!(rows[0]["name"].is_null());
+        let name = rows[0]["name"].as_str().expect("a generated default name");
+        assert!(!name.trim().is_empty());
         assert_eq!(rows[1]["role"], "follower");
     }
 

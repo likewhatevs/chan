@@ -191,11 +191,17 @@ pub enum ControlRequest {
     // in `Ok.message` for the CLI to render (like WindowList). Works on both
     // workspace and terminal tenants. Session-scoped: no window id.
     SessionList,
-    // `cs session self --name=`: rename the CALLING client. window_id is the
-    // caller's own ($CHAN_WINDOW_ID), supplied by the CLI via open_env().
+    // `cs session self --name= / --reset`: rename the CALLING client, or clear
+    // its override back to gateway identity / the generated default. window_id
+    // is the caller's own ($CHAN_WINDOW_ID), supplied by the CLI via
+    // open_env(). Exactly one of `name` (rename) and `reset` is set: clap
+    // enforces it client-side, the handler refuses anything else.
     SessionSelf {
         window_id: String,
-        name: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+        #[serde(default)]
+        reset: bool,
     },
     // `cs session handover`: a FOLLOWER requests handover from the live leader
     // (blocks for accept/reject up to timeout_secs); or the LEADER answers a
@@ -984,12 +990,36 @@ mod survey_wire_tests {
     fn session_self_request_tag_window_id_and_name() {
         let req = ControlRequest::SessionSelf {
             window_id: "w-abc".into(),
-            name: "alice".into(),
+            name: Some("alice".into()),
+            reset: false,
         };
         let v: serde_json::Value = serde_json::to_value(&req).unwrap();
         assert_eq!(v["type"], "session_self");
         assert_eq!(v["window_id"], "w-abc");
         assert_eq!(v["name"], "alice");
+        // A rename without `reset` (an older client's shape) decodes, and a
+        // reset omits `name`.
+        let back: ControlRequest =
+            serde_json::from_str(r#"{"type":"session_self","window_id":"w","name":"n"}"#).unwrap();
+        assert!(matches!(
+            back,
+            ControlRequest::SessionSelf {
+                name: Some(_),
+                reset: false,
+                ..
+            }
+        ));
+        let back: ControlRequest =
+            serde_json::from_str(r#"{"type":"session_self","window_id":"w","reset":true}"#)
+                .unwrap();
+        assert!(matches!(
+            back,
+            ControlRequest::SessionSelf {
+                name: None,
+                reset: true,
+                ..
+            }
+        ));
     }
 
     #[test]

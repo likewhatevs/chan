@@ -17,6 +17,7 @@ pub mod desktop_window_ops;
 pub mod devserver_registry;
 pub mod error;
 pub mod host;
+pub mod participant_names;
 pub mod prefix;
 pub mod serve_config;
 pub mod session_presence;
