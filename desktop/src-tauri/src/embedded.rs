@@ -3,11 +3,12 @@
 //! This owns one loopback listener for the desktop process and
 //! mounts local workspaces into chan-server's multi-workspace host.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::net::{Ipv4Addr, SocketAddr, TcpListener};
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Instant;
 
 use axum::Router;
 use chan_server::{
@@ -53,6 +54,7 @@ impl EmbeddedServer {
         devserver_remove_hook: Arc<OnceLock<DevserverRemoveHook>>,
         devserver_conns: Arc<DevserverConns>,
         devserver_connecting: Arc<Mutex<HashSet<String>>>,
+        devserver_awaiting_signin: Arc<Mutex<HashMap<String, Instant>>>,
         devserver_feed: Arc<crate::DevserverFeed>,
     ) -> Result<Self, String> {
         let library = chan_workspace::Library::open()
@@ -93,6 +95,7 @@ impl EmbeddedServer {
             devserver_remove_hook,
             devserver_conns,
             devserver_connecting,
+            devserver_awaiting_signin,
             devserver_feed,
         )));
         // Install the local-library pane-highlight colour store over the

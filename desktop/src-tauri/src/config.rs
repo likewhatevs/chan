@@ -18,12 +18,12 @@
 //! in memory while a serve is running, and the desktop webview
 //! reloads it fresh on every On toggle.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use chan_server::{DevserverEntry, DevserverInput, DevserverRegistry, DevserverStatus};
 use serde::{Deserialize, Serialize};
@@ -372,6 +372,11 @@ pub struct DevserverConfigRegistry {
     /// `AppState.devserver_connecting`, so list reports `connecting` during the
     /// coalesced dial attempt.
     connecting: Arc<Mutex<HashSet<String>>>,
+    /// Devservers whose gateway sign-in is waiting on the user's browser,
+    /// stamped with when the browser was opened. Shared with
+    /// `AppState.devserver_awaiting_signin`, so list reports `pending_signin`
+    /// and the launcher renders the waiting row.
+    awaiting_signin: Arc<Mutex<HashMap<String, Instant>>>,
     /// The connected-devserver feed (shared with `AppState.devserver_feed`), so
     /// `list` resolves each row's `library_id` from the live window snapshot.
     /// `WorkspaceHost::pane_color` matches a devserver window's `library_id`
@@ -385,6 +390,7 @@ impl DevserverConfigRegistry {
         on_remove: Arc<OnceLock<DevserverRemoveHook>>,
         conns: Arc<DevserverConns>,
         connecting: Arc<Mutex<HashSet<String>>>,
+        awaiting_signin: Arc<Mutex<HashMap<String, Instant>>>,
         feed: Arc<crate::DevserverFeed>,
     ) -> Self {
         Self {
@@ -392,6 +398,7 @@ impl DevserverConfigRegistry {
             on_remove,
             conns,
             connecting,
+            awaiting_signin,
             feed,
         }
     }
@@ -491,6 +498,7 @@ fn entry_from_devserver(
     d: &Devserver,
     conns: &DevserverConns,
     connecting: &Arc<Mutex<HashSet<String>>>,
+    awaiting_signin: &Arc<Mutex<HashMap<String, Instant>>>,
     feed: &crate::DevserverFeed,
 ) -> DevserverEntry {
     // The desktop stores the dial URL (formed from the user's host+port); the wire
@@ -520,6 +528,13 @@ fn entry_from_devserver(
         } else {
             DevserverStatus::Disconnected
         },
+        // The row waits on a browser sign-in (the desktop's awaiting-sign-in
+        // set, cleared by the deep-link callback, its timeout, a teardown, or
+        // a re-click). Presence is the state; the timeout task owns expiry.
+        pending_signin: awaiting_signin
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains_key(&d.id),
         // The connected library id, learned from the live window feed (`None`
         // until this devserver is connected with ≥1 window). `pane_color` matches
         // a devserver window's `library_id` against this (in the feed) to resolve
@@ -544,7 +559,15 @@ impl DevserverRegistry for DevserverConfigRegistry {
             .map(|cfg| {
                 cfg.devservers
                     .iter()
-                    .map(|d| entry_from_devserver(d, &self.conns, &self.connecting, &self.feed))
+                    .map(|d| {
+                        entry_from_devserver(
+                            d,
+                            &self.conns,
+                            &self.connecting,
+                            &self.awaiting_signin,
+                            &self.feed,
+                        )
+                    })
                     .collect()
             })
             .unwrap_or_default()
@@ -570,6 +593,7 @@ impl DevserverRegistry for DevserverConfigRegistry {
             &entry,
             &self.conns,
             &self.connecting,
+            &self.awaiting_signin,
             &self.feed,
         ))
     }
@@ -601,7 +625,13 @@ impl DevserverRegistry for DevserverConfigRegistry {
         } else if input.clear_token {
             ds.token.clear();
         }
-        let entry = entry_from_devserver(ds, &self.conns, &self.connecting, &self.feed);
+        let entry = entry_from_devserver(
+            ds,
+            &self.conns,
+            &self.connecting,
+            &self.awaiting_signin,
+            &self.feed,
+        );
         store.save(&cfg).map_err(|e| e.to_string())?;
         Ok(Some(entry))
     }
@@ -867,6 +897,10 @@ mod tests {
         Arc::new(Mutex::new(HashSet::new()))
     }
 
+    fn empty_awaiting() -> Arc<Mutex<HashMap<String, Instant>>> {
+        Arc::new(Mutex::new(HashMap::new()))
+    }
+
     fn entry(key: &str, label: &str, hash: &str, saved_at: u64) -> WindowConfig {
         WindowConfig {
             key: key.to_string(),
@@ -1091,6 +1125,7 @@ mod tests {
             Arc::new(OnceLock::new()),
             Arc::new(crate::devserver::DevserverConns::default()),
             empty_connecting(),
+            empty_awaiting(),
             Arc::new(crate::DevserverFeed::default()),
         );
         let added = reg
@@ -1131,11 +1166,13 @@ mod tests {
         }));
         let conns = Arc::new(crate::devserver::DevserverConns::default());
         let connecting = empty_connecting();
+        let awaiting = empty_awaiting();
         let reg = DevserverConfigRegistry::new(
             Arc::clone(&store),
             Arc::new(OnceLock::new()),
             Arc::clone(&conns),
             Arc::clone(&connecting),
+            Arc::clone(&awaiting),
             Arc::new(crate::DevserverFeed::default()),
         );
         let id = reg
@@ -1169,6 +1206,16 @@ mod tests {
         conns.remove(&id);
         assert_eq!(reg.list()[0].status, DevserverStatus::Disconnected);
         assert_eq!(store.lock().unwrap().get().unwrap().devservers.len(), 1);
+        // The waiting-on-browser-sign-in flag rides the shared awaiting set the
+        // same way: present -> pending_signin, removed -> back to a plain row.
+        // Status stays disconnected either way (waiting is a row state, not a
+        // connection state).
+        assert!(!reg.list()[0].pending_signin);
+        awaiting.lock().unwrap().insert(id.clone(), Instant::now());
+        assert!(reg.list()[0].pending_signin);
+        assert_eq!(reg.list()[0].status, DevserverStatus::Disconnected);
+        awaiting.lock().unwrap().remove(&id);
+        assert!(!reg.list()[0].pending_signin);
     }
 
     /// `update` with a blank/absent token keeps the stored one; a non-blank
@@ -1185,6 +1232,7 @@ mod tests {
             Arc::new(OnceLock::new()),
             Arc::new(crate::devserver::DevserverConns::default()),
             empty_connecting(),
+            empty_awaiting(),
             Arc::new(crate::DevserverFeed::default()),
         );
         let id = reg
@@ -1262,6 +1310,7 @@ mod tests {
             Arc::new(OnceLock::new()),
             Arc::new(crate::devserver::DevserverConns::default()),
             empty_connecting(),
+            empty_awaiting(),
             Arc::new(crate::DevserverFeed::default()),
         );
         let missing = reg
@@ -1300,6 +1349,7 @@ mod tests {
             Arc::clone(&hook_cell),
             Arc::new(crate::devserver::DevserverConns::default()),
             empty_connecting(),
+            empty_awaiting(),
             Arc::new(crate::DevserverFeed::default()),
         );
         let id = reg
@@ -1329,6 +1379,7 @@ mod tests {
             Arc::new(OnceLock::new()),
             Arc::new(crate::devserver::DevserverConns::default()),
             empty_connecting(),
+            empty_awaiting(),
             Arc::new(crate::DevserverFeed::default()),
         );
         assert!(reg

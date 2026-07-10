@@ -21,6 +21,7 @@ use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Instant;
 
 use serde::Serialize;
 // MenuItemKind is only NAMED by the macOS menu surgery (strip-close /
@@ -173,6 +174,15 @@ pub struct AppState {
     /// Devservers with a connect request currently in flight. A second connect
     /// coalesces into the first instead of spawning another control terminal.
     pub devserver_connecting: Arc<Mutex<std::collections::HashSet<String>>>,
+    /// Devservers whose gateway sign-in is waiting on the user's browser,
+    /// stamped with when the browser was opened. Shared with the launcher's
+    /// [`DevserverConfigRegistry`](config::DevserverConfigRegistry) so rows
+    /// report `pending_signin` (the waiting spinner row). An entry is cleared
+    /// by the deep-link callback, its ~5 min timeout, a teardown
+    /// (disconnect/remove/reconnect), or a re-click, which re-opens the
+    /// browser and re-stamps the entry (latest-wins, like `PendingAuth`); the
+    /// stamp lets the timeout task expire only its own attempt.
+    pub devserver_awaiting_signin: Arc<Mutex<HashMap<String, Instant>>>,
     /// Teardown hook the launcher's [`DevserverConfigRegistry`] fires after an
     /// HTTP `DELETE /api/library/devservers/{id}` drops a row, so that path
     /// reaps a live connection/windows through [`teardown_devserver_connection`]
@@ -2761,6 +2771,7 @@ fn register_devserver_from_handoff(
         Arc::clone(&state.devserver_remove_hook),
         Arc::clone(&state.devservers),
         Arc::clone(&state.devserver_connecting),
+        Arc::clone(&state.devserver_awaiting_signin),
         Arc::clone(&state.devserver_feed),
     );
     registry.add(DevserverInput {
@@ -3932,7 +3943,7 @@ fn resolve_login_shell_path() -> Option<String> {
 /// without a real login shell.
 #[cfg(target_os = "macos")]
 fn wait_for_child(child: &mut std::process::Child, timeout: std::time::Duration) -> bool {
-    use std::time::{Duration, Instant};
+    use std::time::Duration;
     let started = Instant::now();
     loop {
         match child.try_wait() {
@@ -4034,6 +4045,7 @@ fn main() {
         control_terminal_dead: Mutex::new(std::collections::HashSet::new()),
         control_terminal_generation: std::sync::atomic::AtomicU64::new(0),
         devserver_connecting: Arc::new(Mutex::new(std::collections::HashSet::new())),
+        devserver_awaiting_signin: Arc::new(Mutex::new(HashMap::new())),
         devserver_remove_hook: Arc::new(OnceLock::new()),
         quit_confirmed: std::sync::atomic::AtomicBool::new(false),
         quit_prompt_open: std::sync::atomic::AtomicBool::new(false),
@@ -4063,12 +4075,14 @@ fn main() {
             let remove_hook = Arc::clone(&state_for_setup.devserver_remove_hook);
             let conns_for_registry = Arc::clone(&state_for_setup.devservers);
             let connecting_for_registry = Arc::clone(&state_for_setup.devserver_connecting);
+            let awaiting_for_registry = Arc::clone(&state_for_setup.devserver_awaiting_signin);
             let feed_for_registry = Arc::clone(&state_for_setup.devserver_feed);
             match tauri::async_runtime::block_on(embedded::EmbeddedServer::start(
                 config_store,
                 remove_hook,
                 conns_for_registry,
                 connecting_for_registry,
+                awaiting_for_registry,
                 feed_for_registry,
             )) {
                 Ok(server) => {
