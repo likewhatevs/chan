@@ -27,6 +27,12 @@ override_dh_auto_test:
 override_dh_auto_clean:
 	rm -rf debian/cargo-home
 
+# dh_clean sweeps *.orig tree-wide as patch leftovers, which would delete
+# the vendored crates' Cargo.toml.orig files that cargo's checksum
+# manifests cover; the offline build then fails checksum validation.
+override_dh_clean:
+	dh_clean -XCargo.toml.orig
+
 override_dh_auto_build:
 	$(CARGO) build --release --frozen --ignore-rust-version -p chan
 
