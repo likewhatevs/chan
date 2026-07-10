@@ -3,6 +3,7 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
 import {
   api,
+  clientNonce,
   dragScopeMimeToken,
   sessionPath,
   sessionWindowId,
@@ -23,7 +24,7 @@ describe("sessionWindowId", () => {
     window.sessionStorage.setItem("chan.session.window", "tab-a1b2c3d4");
 
     expect(sessionWindowId()).toBe("tab-a1b2c3d4");
-    expect(sessionPath()).toBe("/api/session?w=tab-a1b2c3d4");
+    expect(sessionPath()).toBe(`/api/session?w=tab-a1b2c3d4&client=${clientNonce()}`);
   });
 
   test("generates and reuses a per-tab sessionStorage id", () => {
@@ -40,14 +41,30 @@ describe("sessionWindowId", () => {
     window.history.replaceState(null, "", "/?t=token&w=workspace-notes-7");
 
     expect(sessionWindowId()).toBe("workspace-notes-7");
-    expect(sessionPath()).toBe("/api/session?w=workspace-notes-7");
+    expect(sessionPath()).toBe(`/api/session?w=workspace-notes-7&client=${clientNonce()}`);
   });
 
   test("encodes unusual window labels before calling the session API", () => {
     window.history.replaceState(null, "", "/?w=tunnel%20a/workspace%201");
 
     expect(sessionWindowId()).toBe("tunnel a/workspace 1");
-    expect(sessionPath()).toBe("/api/session?w=tunnel%20a%2Fworkspace%201");
+    expect(sessionPath()).toBe(
+      `/api/session?w=tunnel%20a%2Fworkspace%201&client=${clientNonce()}`,
+    );
+  });
+});
+
+describe("clientNonce", () => {
+  test("is stable across calls within one SPA instance", () => {
+    expect(clientNonce()).toBe(clientNonce());
+    expect(clientNonce().length).toBeGreaterThan(0);
+  });
+
+  test("rides every session-blob request so the server can echo the writer", () => {
+    window.history.replaceState(null, "", "/?w=w-1");
+    const url = new URLSearchParams(sessionPath().split("?")[1]);
+    expect(url.get("client")).toBe(clientNonce());
+    expect(url.get("w")).toBe("w-1");
   });
 });
 

@@ -124,8 +124,23 @@ export function sessionWindowId(): string {
   return browserSessionWindowId() ?? "default";
 }
 
+/// Per-SPA-instance client nonce, carried as `&client=` on every
+/// session-blob request. The server echoes it in the `session_changed`
+/// broadcast so co-viewers of the same `?w=` can tell whose write a
+/// notification describes; this window drops frames carrying its own
+/// nonce. Module-level on purpose: one nonce per SPA instance, minted
+/// fresh on each load (a reloaded window refetches the blob anyway).
+const clientNonceValue: string =
+  typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+    ? crypto.randomUUID()
+    : [randomBrowserSessionId(), randomBrowserSessionId(), randomBrowserSessionId(), randomBrowserSessionId()].join("-");
+
+export function clientNonce(): string {
+  return clientNonceValue;
+}
+
 export function sessionPath(): string {
-  return `/api/session?w=${encodeURIComponent(sessionWindowId())}`;
+  return `/api/session?w=${encodeURIComponent(sessionWindowId())}&client=${encodeURIComponent(clientNonceValue)}`;
 }
 
 /// The chan-library this window belongs to. The library backend appends
