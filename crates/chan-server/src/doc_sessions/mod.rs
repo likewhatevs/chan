@@ -891,14 +891,24 @@ impl DocRegistry {
 /// Other failures keep the session dirty; the content stays safe in
 /// memory and in every client, and the error fan starts on the second
 /// consecutive failure.
+///
+/// Returns whether the state captured by this call settled durably:
+/// true when the write committed, when there was nothing unflushed, or
+/// when the CAS-conflict reconcile left authority and disk equal
+/// (including the removed-file path, whose authoritative disk state is
+/// deliberately "no file"). False means the write failed and the
+/// session stays dirty; the PUT divert turns that into an honest 503.
+/// The signal is race-free where a `dirty()` read would not be: a
+/// concurrent push re-dirtying the session cannot retract a commit
+/// that already happened.
 pub(crate) async fn flush_session(
     session: &Arc<DocSession>,
     workspace: &Arc<Workspace>,
     self_writes: &SelfWrites,
-) {
+) -> bool {
     for attempt in 0..2u32 {
         let Some(job) = session.begin_flush() else {
-            return;
+            return true;
         };
         // Note the self-write BEFORE the blocking write runs, exactly
         // like the files.rs save path: the watcher can deliver the
@@ -917,7 +927,7 @@ pub(crate) async fn flush_session(
         match result {
             Ok(Ok(stat)) => {
                 session.finish_flush(epoch, &stat);
-                return;
+                return true;
             }
             Ok(Err(ChanError::WriteConflict { .. })) if attempt == 0 => {
                 // Disk changed since our token: fold the external
@@ -927,14 +937,17 @@ pub(crate) async fn flush_session(
             }
             Ok(Err(e)) => {
                 session.note_flush_failure(e.to_string());
-                return;
+                return false;
             }
             Err(join) => {
                 session.note_flush_failure(join.to_string());
-                return;
+                return false;
             }
         }
     }
+    // Unreachable: attempt 1 exits through an arm above (a second
+    // consecutive WriteConflict takes the generic-failure arm).
+    false
 }
 
 /// Bring one session in line with the disk: an unchanged token is our
@@ -1701,6 +1714,37 @@ mod tests {
             ha.session().apply_replace("$http", &too_big),
             Err(ApplyError::DocTooLarge { .. })
         ));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn flush_session_reports_failure_and_success() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let fx = fixture(&[("a.md", "x")]);
+        let (ha, mut rxa) = attach(&fx, "a.md", "w1", None).await;
+        drain(&mut rxa);
+        ha.push(0, vec![update("c1", json!([1, [0, "y"]]))])
+            .unwrap();
+
+        // A read-only workspace root makes the atomic write's tempfile
+        // creation fail: a non-CAS flush error.
+        let root = fx.root.path();
+        std::fs::set_permissions(root, std::fs::Permissions::from_mode(0o555)).unwrap();
+        let ok = flush_session(ha.session(), &fx.workspace, &fx.self_writes).await;
+        std::fs::set_permissions(root, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(!ok, "failed write must report false");
+        {
+            let st = ha.session().lock_state();
+            assert!(st.dirty_since.is_some(), "content stays dirty in memory");
+        }
+        assert_eq!(fx.workspace.read_text("a.md").unwrap(), "x");
+
+        // Writable again: the same call commits and reports true; a
+        // clean session is also true (already durable).
+        assert!(flush_session(ha.session(), &fx.workspace, &fx.self_writes).await);
+        assert_eq!(fx.workspace.read_text("a.md").unwrap(), "xy");
+        assert!(flush_session(ha.session(), &fx.workspace, &fx.self_writes).await);
     }
 
     #[tokio::test]
