@@ -820,16 +820,25 @@ pub async fn api_write_file(
     // attachment, and the reply awaits a forced flush so a 200 keeps
     // meaning "bytes on disk". flush_session notes the self-write
     // itself, so the early note below stays disk-path-only.
+    //
+    // Exception: a session in the removed state (file deleted; token
+    // None) deliberately flushes nothing, so an equal-content PUT
+    // would 200 with the file still absent. A PUT there is an explicit
+    // re-create intent: take the classic disk path below (which
+    // recreates) and let the reconciler fold the new file back into
+    // the session.
     if let Some(session) = state.doc_sessions.get(&path) {
-        return write_via_session(
-            &state,
-            &workspace,
-            &session,
-            body.expected_mtime,
-            expected_mtime_ns,
-            &body.content,
-        )
-        .await;
+        if session.token().is_some() {
+            return write_via_session(
+                &state,
+                &workspace,
+                &session,
+                body.expected_mtime,
+                expected_mtime_ns,
+                &body.content,
+            )
+            .await;
+        }
     }
     // Record the self-write BEFORE the blocking write runs. The fs
     // watcher runs on its own thread and can deliver the resulting
@@ -880,7 +889,8 @@ pub async fn api_write_file(
 /// Write an attached path through its doc session: CAS against the
 /// session token, apply as a `$http` update, force and await a flush,
 /// answer with the post-flush token. Status shapes (200 WriteResponse,
-/// 409 WriteConflictBody) match the disk path exactly.
+/// 409 WriteConflictBody) match the disk path exactly; a failed forced
+/// flush answers 503 with the content retained in the session.
 async fn write_via_session(
     state: &Arc<AppState>,
     workspace: &Arc<chan_workspace::Workspace>,
@@ -915,13 +925,15 @@ async fn write_via_session(
         // trims on char boundaries and spans the document exactly.
         return err(StatusCode::PAYLOAD_TOO_LARGE, e.to_string());
     }
-    flush_session(session, workspace, &state.self_writes).await;
-    // The reply carries the post-flush session token. A FAILED flush is
-    // not detectable from here (token-delta checks are unsound: coarse
-    // filesystem clocks give back-to-back writes identical mtimes); the
-    // content is already authoritative in the session and every client,
-    // and a persistent failure surfaces to attached editors through
-    // flush-error frames.
+    // A failed forced flush answers 503: the content is authoritative
+    // in the session and every client (a retried PUT re-applies
+    // idempotently), but a 200 must keep meaning "bytes on disk".
+    if !flush_session(session, workspace, &state.self_writes).await {
+        return err(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "doc session accepted the write but the disk flush failed; retry".into(),
+        );
+    }
     let token = session.token();
     Json(WriteResponse {
         mtime: token.map(|ns| ns / 1_000_000_000),
@@ -2187,7 +2199,7 @@ mod doc_divert_tests {
     use axum::extract::{Path as AxumPath, Query, State};
     use axum::http::{header, StatusCode};
     use axum::Json;
-    use chan_workspace::SearchAggression;
+    use chan_workspace::{SearchAggression, WatchEvent, WatchKind};
     use serde_json::Value;
     use tempfile::TempDir;
     use tokio::sync::{broadcast, watch};
@@ -2458,6 +2470,115 @@ mod doc_divert_tests {
         assert_eq!(
             std::fs::read_to_string(root.path().join("n.md")).unwrap(),
             "four\n"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn put_divert_answers_503_when_the_forced_flush_fails() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let (_cfg, root, state) = divert_app();
+        let workspace = state.try_workspace().unwrap();
+        workspace.write_text("n.md", "one\n").unwrap();
+        let mut handle = state
+            .doc_sessions
+            .attach(&workspace, "n.md", "win-1", None)
+            .await
+            .unwrap();
+        let _frames = handle.take_frames();
+        let session = handle.session().clone();
+        let token0 = session.token().expect("seeded token");
+
+        // Make the workspace root unwritable so the flush's temp-file
+        // rename fails underneath the accepted write.
+        std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o555)).unwrap();
+        let resp = api_write_file(
+            State(state.clone()),
+            AxumPath("n.md".into()),
+            Json(WriteBody {
+                content: "two\n".into(),
+                expected_mtime: None,
+                expected_mtime_ns: Some(token0.to_string()),
+            }),
+        )
+        .await;
+        std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        // Honest 503: the content is authoritative in the session, the
+        // disk is untouched, and a retry (writable again) succeeds and
+        // lands it.
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(session.authority_view().0, "two\n");
+        assert_eq!(
+            std::fs::read_to_string(root.path().join("n.md")).unwrap(),
+            "one\n"
+        );
+        let resp = api_write_file(
+            State(state.clone()),
+            AxumPath("n.md".into()),
+            Json(WriteBody {
+                content: "two\n".into(),
+                expected_mtime: None,
+                expected_mtime_ns: None,
+            }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(
+            std::fs::read_to_string(root.path().join("n.md")).unwrap(),
+            "two\n"
+        );
+    }
+
+    #[tokio::test]
+    async fn put_on_removed_session_takes_the_classic_recreate_path() {
+        // Root's flagged edge: an equal-content PUT on a session in the
+        // removed state no-ops in apply_replace and flushes "true", so
+        // the divert would 200 with the file still absent. The gate
+        // sends removed-state PUTs down the classic path, which
+        // recreates.
+        let (_cfg, root, state) = divert_app();
+        let workspace = state.try_workspace().unwrap();
+        workspace.write_text("n.md", "one\n").unwrap();
+        let mut handle = state
+            .doc_sessions
+            .attach(&workspace, "n.md", "win-1", None)
+            .await
+            .unwrap();
+        let _frames = handle.take_frames();
+        let session = handle.session().clone();
+
+        std::fs::remove_file(root.path().join("n.md")).unwrap();
+        state
+            .doc_sessions
+            .reconcile_event(
+                &workspace,
+                WatchEvent {
+                    kind: WatchKind::Removed,
+                    path: Some("n.md".into()),
+                    to: None,
+                },
+            )
+            .await;
+        assert_eq!(session.token(), None, "removed state");
+
+        // Equal content, no CAS token: must recreate on disk, not 200
+        // into the void.
+        let resp = api_write_file(
+            State(state.clone()),
+            AxumPath("n.md".into()),
+            Json(WriteBody {
+                content: "one\n".into(),
+                expected_mtime: None,
+                expected_mtime_ns: None,
+            }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(
+            std::fs::read_to_string(root.path().join("n.md")).unwrap(),
+            "one\n"
         );
     }
 }
