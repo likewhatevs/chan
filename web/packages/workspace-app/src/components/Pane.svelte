@@ -1283,6 +1283,14 @@
         {#if isDirty(t)}
           <span class="dirty unsaved" title="unsaved changes">●</span>
         {/if}
+        {#if t.kind === "file" && (t.doc?.peers ?? 0) > 0}
+          {@const peers = t.doc?.peers ?? 0}
+          <span
+            class="peers-pill"
+            title={`${peers} collaborator(s) in this file`}
+            aria-label={`${peers} collaborator(s) in this file`}
+          >{peers}</span>
+        {/if}
         {#if t.kind === "terminal" && t.terminalActivity}
           <span
             class="dirty activity"
@@ -1849,6 +1857,20 @@
     text-align: center;
     color: var(--bg-card);
     background: var(--info-text);
+  }
+  /* Live collaborator count on a co-edited file tab. Queue-pill's
+     shape, but link-blue so presence never reads as the green
+     unsaved dot it sits beside. */
+  .peers-pill {
+    flex: 0 0 auto;
+    min-width: 14px;
+    padding: 1px 4px;
+    border-radius: 7px;
+    font-size: 9px;
+    line-height: 1.2;
+    text-align: center;
+    color: var(--bg-card);
+    background: var(--link);
   }
   /* The unseen-output dot PULSES while output is actively arriving,
      then holds SOLID once it stops (still unseen). A smooth opacity

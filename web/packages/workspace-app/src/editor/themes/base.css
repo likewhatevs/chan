@@ -97,3 +97,39 @@
 :root [data-theme="light"] {
   --chan-editor-bg: var(--bg);
 }
+
+/* Peer presence palette: the eight collaborator colors consumed by
+   the remote-cursor decorations (editor/collab/remoteCursors.ts; a
+   peer's slot is a stable hash of their window id). Deliberately
+   NOT per-editor-theme: a collaborator keeps one identity color
+   across github / google_docs / word, branching only on light /
+   dark like the syntax palette. Constraints on any value here: it
+   must carry the flag's fixed white text, read as a 2px caret bar
+   against the scheme's editor background, and stay distinguishable
+   from its neighbors when diluted to a ~22% selection tint. */
+:root,
+:root[data-theme="light"],
+:root [data-theme="light"] {
+  --peer-c0: #1a6fd4;
+  --peer-c1: #c62f2f;
+  --peer-c2: #1e8a44;
+  --peer-c3: #8a3fd1;
+  --peer-c4: #b26305;
+  --peer-c5: #0f8390;
+  --peer-c6: #c22a6e;
+  --peer-c7: #59626e;
+}
+
+/* A notch brighter so bars and tints pop on the dark canvas while
+   staying deep enough for the white flag text. */
+:root[data-theme="dark"],
+:root [data-theme="dark"] {
+  --peer-c0: #3b82d9;
+  --peer-c1: #d34747;
+  --peer-c2: #2f9955;
+  --peer-c3: #9a5ce0;
+  --peer-c4: #bf7015;
+  --peer-c5: #1e97a6;
+  --peer-c6: #cc4680;
+  --peer-c7: #78848f;
+}
