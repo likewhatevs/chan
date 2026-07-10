@@ -135,6 +135,14 @@ Desktop authorize (PAT mint for chan-desktop; consent is session-gated, entry bo
 | GET    | `/desktop/authorize/consent`   | server-rendered consent page   |
 | POST   | `/desktop/authorize/confirm`   | allow / deny -> `chan://` redirect |
 
+Desktop devserver entry (Bearer PAT with the `desktop.connect` scope):
+
+| Method | Path                          | Purpose                                      |
+|--------|-------------------------------|----------------------------------------------|
+| POST   | `/desktop/v1/devserver/entry` | mint an entry URL for the caller's devserver |
+
+A 404 keeps the `{"error": msg}` shape and adds `reason` (`no_devserver`, `devserver_offline`, `access_denied`), `username`, and `label` (offline only) so chan-desktop can narrate the failure; see `design.md`.
+
 Internal (Bearer-gated by `IDENTITY_INTERNAL_TOKEN`):
 
 | Method | Path                                   | Purpose                |

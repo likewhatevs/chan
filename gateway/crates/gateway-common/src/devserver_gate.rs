@@ -25,6 +25,13 @@
 //! gives the smallest token footprint and the simplest key rotation
 //! (one secret rotation invalidates every live token). Asymmetric
 //! buys nothing here.
+//!
+//! Optional identity claims (`name`, `email`) are resolved by
+//! identity-service at entry mint and propagated into the session
+//! token unchanged, so a display-name change stays stale until the
+//! next entry mint (up to the 24h session-cookie lifetime). They are
+//! cosmetic (participant display strings on the devserver), never an
+//! authorization input.
 
 use chrono::{DateTime, Duration, Utc};
 use jsonwebtoken::{
@@ -53,8 +60,36 @@ pub struct Claims {
     pub aud: String,
     /// `"entry"` or `"session"`. See module doc.
     pub typ: String,
+    /// Caller display name, resolved by identity-service at entry
+    /// mint. Absent when the minting service predates identity claims
+    /// or the profile lookup failed. See the module doc for the
+    /// staleness bound.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// Caller email, same provenance as `name`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub email: Option<String>,
     pub iat: i64,
     pub exp: i64,
+}
+
+impl Claims {
+    /// The identity bundle carried by this token, for propagating an
+    /// entry token's identity into the session mint.
+    pub fn identity(&self) -> CallerIdentity {
+        CallerIdentity {
+            name: self.name.clone(),
+            email: self.email.clone(),
+        }
+    }
+}
+
+/// Caller identity attached to a token at mint time. `Default` is the
+/// no-identity bundle for callers that have nothing to attach.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CallerIdentity {
+    pub name: Option<String>,
+    pub email: Option<String>,
 }
 
 fn default_role() -> String {
@@ -122,16 +157,9 @@ pub fn encode_entry(
     role: &str,
     drv: &str,
     aud: &str,
+    identity: CallerIdentity,
 ) -> DevserverGateResult<String> {
-    encode(
-        secret,
-        sub,
-        role,
-        drv,
-        aud,
-        TokenType::Entry,
-        Duration::seconds(30),
-    )
+    encode(secret, sub, role, drv, aud, identity, TokenType::Entry)
 }
 
 /// Mint a session token (24h exp).
@@ -141,16 +169,9 @@ pub fn encode_session(
     role: &str,
     drv: &str,
     aud: &str,
+    identity: CallerIdentity,
 ) -> DevserverGateResult<String> {
-    encode(
-        secret,
-        sub,
-        role,
-        drv,
-        aud,
-        TokenType::Session,
-        Duration::hours(24),
-    )
+    encode(secret, sub, role, drv, aud, identity, TokenType::Session)
 }
 
 fn encode(
@@ -159,20 +180,23 @@ fn encode(
     role: &str,
     drv: &str,
     aud: &str,
+    identity: CallerIdentity,
     typ: TokenType,
-    lifetime: Duration,
 ) -> DevserverGateResult<String> {
     let now = Utc::now();
+    let (iss, lifetime) = match typ {
+        TokenType::Entry => ("id.chan.app", Duration::seconds(30)),
+        TokenType::Session => ("devserver.chan.app", Duration::hours(24)),
+    };
     let claims = Claims {
-        iss: match typ {
-            TokenType::Entry => "id.chan.app".to_string(),
-            TokenType::Session => "devserver.chan.app".to_string(),
-        },
+        iss: iss.to_string(),
         sub,
         role: role.to_string(),
         drv: drv.to_string(),
         aud: aud.to_string(),
         typ: typ.as_str().to_string(),
+        name: identity.name,
+        email: identity.email,
         iat: now.timestamp(),
         exp: (now + lifetime).timestamp(),
     };
@@ -255,6 +279,7 @@ mod tests {
             "owner",
             "blog",
             "alice.devserver.chan.app",
+            CallerIdentity::default(),
         )
         .unwrap();
         let c = decode(
@@ -281,6 +306,7 @@ mod tests {
             "editor",
             "blog",
             "alice.devserver.chan.app",
+            CallerIdentity::default(),
         )
         .unwrap();
         let c = decode(
@@ -307,6 +333,7 @@ mod tests {
             "owner",
             "blog",
             "alice.devserver.chan.app",
+            CallerIdentity::default(),
         )
         .unwrap();
         let err = decode(
@@ -328,6 +355,7 @@ mod tests {
             "owner",
             "blog",
             "alice.devserver.chan.app",
+            CallerIdentity::default(),
         )
         .unwrap();
         let err = decode(
@@ -352,6 +380,7 @@ mod tests {
             "owner",
             "blog",
             "alice.devserver.chan.app",
+            CallerIdentity::default(),
         )
         .unwrap();
         let err = decode(
@@ -373,6 +402,7 @@ mod tests {
             "owner",
             "blog",
             "alice.devserver.chan.app",
+            CallerIdentity::default(),
         )
         .unwrap();
         let err = decode(
@@ -416,5 +446,113 @@ mod tests {
         use base64::engine::general_purpose::URL_SAFE_NO_PAD;
         use base64::Engine;
         URL_SAFE_NO_PAD.encode(s.as_bytes())
+    }
+
+    #[test]
+    fn identity_roundtrips_entry_to_session() {
+        let identity = CallerIdentity {
+            name: Some("Alice Doe".to_string()),
+            email: Some("alice@example.com".to_string()),
+        };
+        let entry = encode_entry(
+            SECRET,
+            sample_uuid(),
+            "editor",
+            "blog",
+            "alice.devserver.chan.app",
+            identity.clone(),
+        )
+        .unwrap();
+        let c = decode(
+            SECRET,
+            &entry,
+            TokenType::Entry,
+            "alice.devserver.chan.app",
+            "blog",
+        )
+        .unwrap();
+        assert_eq!(c.identity(), identity);
+
+        // The proxy propagates the verified entry identity into the
+        // session mint; the session token must carry it unchanged.
+        let session = encode_session(SECRET, c.sub, &c.role, &c.drv, &c.aud, c.identity()).unwrap();
+        let s = decode(
+            SECRET,
+            &session,
+            TokenType::Session,
+            "alice.devserver.chan.app",
+            "blog",
+        )
+        .unwrap();
+        assert_eq!(s.identity(), identity);
+    }
+
+    /// A token minted by a service that predates the identity claims
+    /// has no name/email members at all; it must decode with both None.
+    #[test]
+    fn legacy_token_without_identity_decodes_to_none() {
+        let now = Utc::now().timestamp();
+        let legacy = serde_json::json!({
+            "iss": "id.chan.app",
+            "sub": sample_uuid(),
+            "role": "owner",
+            "drv": "blog",
+            "aud": "alice.devserver.chan.app",
+            "typ": "entry",
+            "iat": now,
+            "exp": now + 30,
+        });
+        let token = jwt_encode(
+            &Header::new(Algorithm::HS256),
+            &legacy,
+            &EncodingKey::from_secret(SECRET),
+        )
+        .unwrap();
+        let c = decode(
+            SECRET,
+            &token,
+            TokenType::Entry,
+            "alice.devserver.chan.app",
+            "blog",
+        )
+        .unwrap();
+        assert_eq!(c.name, None);
+        assert_eq!(c.email, None);
+    }
+
+    /// A token minted by a future service with claims this build does
+    /// not know must still verify; unknown members are ignored.
+    #[test]
+    fn unknown_claims_ignored() {
+        let now = Utc::now().timestamp();
+        let future = serde_json::json!({
+            "iss": "id.chan.app",
+            "sub": sample_uuid(),
+            "role": "owner",
+            "drv": "blog",
+            "aud": "alice.devserver.chan.app",
+            "typ": "entry",
+            "name": "Alice Doe",
+            "email": "alice@example.com",
+            "avatar_url": "https://example.com/a.png",
+            "iat": now,
+            "exp": now + 30,
+        });
+        let token = jwt_encode(
+            &Header::new(Algorithm::HS256),
+            &future,
+            &EncodingKey::from_secret(SECRET),
+        )
+        .unwrap();
+        let c = decode(
+            SECRET,
+            &token,
+            TokenType::Entry,
+            "alice.devserver.chan.app",
+            "blog",
+        )
+        .unwrap();
+        assert_eq!(c.name.as_deref(), Some("Alice Doe"));
+        assert_eq!(c.email.as_deref(), Some("alice@example.com"));
     }
 }

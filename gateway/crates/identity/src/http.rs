@@ -1116,6 +1116,31 @@ fn is_devserver_id_shape(s: &str) -> bool {
 // Share landing
 // ---------------------------------------------------------------------------
 
+/// Resolve the caller's display identity for an entry-token mint.
+/// Best-effort: entry is load-bearing, identity is cosmetic, so any
+/// profile failure mints without identity fields rather than failing
+/// the entry.
+async fn entry_caller_identity(
+    state: &AppState,
+    caller: Uuid,
+) -> gateway_common::devserver_gate::CallerIdentity {
+    match state.cfg.profile_client.get_user(caller).await {
+        Ok(Some(user)) => gateway_common::devserver_gate::CallerIdentity {
+            name: user.display_name,
+            email: Some(user.email),
+        },
+        Ok(None) => Default::default(),
+        Err(e) => {
+            tracing::warn!(
+                caller = %caller,
+                error = %e,
+                "entry mint: caller profile lookup failed; minting without identity",
+            );
+            Default::default()
+        }
+    }
+}
+
 /// Public entry point for a copied per-tenant share link
 /// (`/s/{owner}/{workspace}`).
 ///
@@ -1205,6 +1230,7 @@ async fn share_landing(
         &access.role,
         &devserver_id,
         &aud,
+        entry_caller_identity(&state, uid).await,
     )
     .map_err(|e| Error::Anyhow(anyhow::anyhow!("mint entry token: {e}")))?;
 
@@ -1308,6 +1334,7 @@ async fn share_landing_root(
         &access.role,
         &devserver_id,
         &aud,
+        entry_caller_identity(&state, uid).await,
     )
     .map_err(|e| Error::Anyhow(anyhow::anyhow!("mint entry token: {e}")))?;
 
@@ -1412,6 +1439,7 @@ async fn desktop_devserver_entry(
         &access.role,
         &devserver_id,
         &aud,
+        entry_caller_identity(&state, validated.user_id).await,
     )
     .map_err(|e| Error::Anyhow(anyhow::anyhow!("mint desktop entry token: {e}")))?;
     let proxy_origin = format!(

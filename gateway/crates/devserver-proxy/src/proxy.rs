@@ -55,7 +55,7 @@ use bytes::Bytes;
 use chan_tunnel_proto::gateway_assertion;
 use chan_tunnel_server::TunnelHandle;
 use futures_util::{SinkExt, StreamExt};
-use gateway_common::devserver_gate::{self, TokenType};
+use gateway_common::devserver_gate::{self, CallerIdentity, TokenType};
 use http_body_util::Limited;
 use hyper_util::rt::TokioIo;
 use rand::RngCore;
@@ -221,12 +221,25 @@ pub async fn handle(state: AppState, user: String, req: Request) -> Response {
     // The gate always runs: every devserver tunnel is authenticated,
     // there is no un-gated pass-through.
     let caller = match resolve_gate(&state, &req, &devserver_id, &aud) {
-        Gate::Pass { sub, role } => GatewayCaller { sub, role },
-        Gate::IssueSession { sub, role } => {
+        Gate::Pass {
+            sub,
+            role,
+            identity,
+        } => GatewayCaller {
+            sub,
+            role,
+            identity,
+        },
+        Gate::IssueSession {
+            sub,
+            role,
+            identity,
+        } => {
             return issue_session_cookie(
                 state.cfg.workspace_gate_secret.as_bytes(),
                 sub,
                 &role,
+                identity,
                 &devserver_id,
                 &aud,
                 req.uri(),
@@ -325,18 +338,33 @@ struct ProxyOpts<'a> {
 struct GatewayCaller {
     sub: Uuid,
     role: String,
+    /// Identity resolved by identity-service at entry mint; copied
+    /// into every per-request assertion so the devserver can render
+    /// participant display strings. Never an authorization input.
+    identity: CallerIdentity,
 }
 
 /// Outcome of the auth-gate decision.
 enum Gate {
     /// Forward the request under an existing gateway session.
-    Pass { sub: Uuid, role: String },
+    Pass {
+        sub: Uuid,
+        role: String,
+        identity: CallerIdentity,
+    },
     /// Entry token validated; mint a session cookie carrying the
     /// entry's `sub` and 303 to the clean URL (no `?t=` query). `sub`
     /// is the user identified by identity-service at mint time,
     /// owner or accepted grantee, and is propagated into the session
-    /// cookie so the upstream attribution chain stays accurate.
-    IssueSession { sub: Uuid, role: String },
+    /// cookie so the upstream attribution chain stays accurate. The
+    /// entry's identity claims ride along the same way (no post-entry
+    /// lookups; see the devserver_gate module doc for the staleness
+    /// bound).
+    IssueSession {
+        sub: Uuid,
+        role: String,
+        identity: CallerIdentity,
+    },
     /// Anything that should map to 404 on the proxy path: no token,
     /// bad signature, expired, wrong aud, wrong devserver.
     Reject,
@@ -364,6 +392,7 @@ fn resolve_gate(state: &AppState, req: &Request, devserver_id: &str, aud: &str) 
         {
             return Gate::IssueSession {
                 sub: claims.sub,
+                identity: claims.identity(),
                 role: claims.role,
             };
         }
@@ -380,6 +409,7 @@ fn resolve_gate(state: &AppState, req: &Request, devserver_id: &str, aud: &str) 
         {
             return Gate::Pass {
                 sub: claims.sub,
+                identity: claims.identity(),
                 role: claims.role,
             };
         }
@@ -562,17 +592,19 @@ fn issue_session_cookie(
     secret: &[u8],
     sub: Uuid,
     role: &str,
+    identity: CallerIdentity,
     devserver_id: &str,
     aud: &str,
     uri: &Uri,
 ) -> Response {
-    let session = match devserver_gate::encode_session(secret, sub, role, devserver_id, aud) {
-        Ok(t) => t,
-        Err(e) => {
-            tracing::error!(error = ?e, "failed to mint devserver_gate session token");
-            return (StatusCode::INTERNAL_SERVER_ERROR, "internal error").into_response();
-        }
-    };
+    let session =
+        match devserver_gate::encode_session(secret, sub, role, devserver_id, aud, identity) {
+            Ok(t) => t,
+            Err(e) => {
+                tracing::error!(error = ?e, "failed to mint devserver_gate session token");
+                return (StatusCode::INTERNAL_SERVER_ERROR, "internal error").into_response();
+            }
+        };
     let csrf = random_csrf_token();
     let clean = strip_entry_token_query(uri.path_and_query().map(|p| p.as_str()).unwrap_or("/"));
     // 24h Max-Age matches the JWT exp. Cookies without Max-Age would
@@ -932,7 +964,8 @@ fn gateway_assertion_value(
     devserver_id: &str,
 ) -> Option<HeaderValue> {
     let key = key?;
-    let claims = gateway_assertion::claims(caller.sub.to_string(), &caller.role, aud, devserver_id);
+    let claims = gateway_assertion::claims(caller.sub.to_string(), &caller.role, aud, devserver_id)
+        .with_identity(caller.identity.name.clone(), caller.identity.email.clone());
     let signed = match gateway_assertion::sign(key, &claims) {
         Ok(s) => s,
         Err(e) => {

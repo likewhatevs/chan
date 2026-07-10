@@ -147,7 +147,7 @@ The share-landing handlers (below) mint the entry token; there is no standalone 
 2. Resolve the owner handle to a user record via profile `GET /v1/users/by-username`. Unknown handle returns 404 (same shape as no-access).
 3. Resolve the owner's live devserver id from devserver-proxy (`list_user_tunnels`); no live devserver returns 404.
 4. Call profile `GET /v1/users/{owner_id}/devservers/{devserver_id}/access?as={session.user_id}`. Owner returns `owner`, an accepted grantee returns `viewer`/`editor`, anything else 404. A grant is whole-devserver, so the `{workspace}` segment never enters the access check.
-5. Mint a 30s `entry` JWT (HS256, `DEVSERVER_GATE_SECRET`) with `{sub: session.user_id, drv: <devserver_id>, aud: "{owner}.devserver.chan.app", ...}`. The `aud` is canonicalized as a lowercase host with default ports stripped; local/dev non-default ports remain. `sub` is the *caller's* id, not the owner's, so the devserver_gate cookie minted on the next leg carries the right identity for upstream collab attribution.
+5. Mint a 30s `entry` JWT (HS256, `DEVSERVER_GATE_SECRET`) with `{sub: session.user_id, drv: <devserver_id>, aud: "{owner}.devserver.chan.app", ...}`. The `aud` is canonicalized as a lowercase host with default ports stripped; local/dev non-default ports remain. `sub` is the *caller's* id, not the owner's, so the devserver_gate cookie minted on the next leg carries the right identity for upstream collab attribution. The mint also attaches the caller's display identity (`name`, `email` from profile `GET /v1/users/{caller}`) as optional claims, best-effort: a failed lookup mints without them rather than failing the entry. They ride the session cookie into the per-request gateway assertion so the devserver can render participant names; they are never an authorization input, and a display-name change stays stale until the next entry mint.
 6. 303 to `https://{owner}.devserver.chan.app/{workspace}/?t=<jwt>` (per-workspace) or `https://{owner}.devserver.chan.app/?t=<jwt>` (whole-devserver root).
 
 devserver-proxy verifies the JWT, mints its own 24h session-shape JWT, sets it as a host-only `devserver_gate` cookie, sets a readable host-only `devserver_csrf` cookie for unsafe writes, and 303s to the clean URL. The shared JWT type lives in `gateway_common::devserver_gate`.
@@ -191,7 +191,13 @@ After `upsert_by_identity`, identity calls `POST /v1/users/{id}/grants/claim` wi
 
 ### Desktop authorize (PAT mint for chan-desktop)
 
-OAuth-style consent flow at `/desktop/authorize` (entry, validates the query and stashes it in the session), `/desktop/authorize/consent` (server-rendered HTML consent page, CSRF nonce, `frame-ancestors 'none'`), and `POST /desktop/authorize/confirm` (allow / deny). On allow, a PAT is minted with `TokenOrigin::Desktop` and the browser is 302'd to `chan://auth/callback#id=…&secret=…&state=…` -- the secret rides in the URL fragment so it never reaches access logs. The `redirect_uri` is exact-matched against `chan://auth/callback`, `expires_in` is required and clamped to 90 days, and scopes are checked against a strict allowlist (`tunnel`, `tunnel.public`). Unauthenticated entries bounce through the SPA sign-in; the OAuth callback resumes the flow at the consent page. Deny paths (blocked account, `oauth_login` not granted, user cancel) redirect to the same `chan://` target with a stable `error=` reason so the desktop client can render it. See the `desktop_authorize` module doc for the full hardening posture.
+OAuth-style consent flow at `/desktop/authorize` (entry, validates the query and stashes it in the session), `/desktop/authorize/consent` (server-rendered HTML consent page, CSRF nonce, `frame-ancestors 'none'`), and `POST /desktop/authorize/confirm` (allow / deny). On allow, a PAT is minted with `TokenOrigin::Desktop` and the browser is 302'd to `chan://auth/callback#id=…&secret=…&state=…` -- the secret rides in the URL fragment so it never reaches access logs. The `redirect_uri` is exact-matched against `chan://auth/callback`, `expires_in` is required and clamped to 90 days, and scopes are checked against a strict allowlist (`tunnel`, `desktop.connect`). Unauthenticated entries bounce through the SPA sign-in; the OAuth callback resumes the flow at the consent page. Deny paths (blocked account, `oauth_login` not granted, user cancel) redirect to the same `chan://` target with a stable `error=` reason so the desktop client can render it. See the `desktop_authorize` module doc for the full hardening posture.
+
+### Desktop devserver entry
+
+`POST /desktop/v1/devserver/entry` (Bearer PAT with the `desktop.connect` scope) is how chan-desktop opens the caller's own devserver through the gateway: resolve the caller's single live devserver from the proxy-admin tunnel list, run the same `devserver_access` check as the share landings, and return `{username, devserver_id, proxy_origin, entry_url, expires_at}` where `entry_url` carries a fresh 30s entry JWT (identity claims attached best-effort, as in the share-landing mint).
+
+Failures keep HTTP 404 but the body is a superset of the plain `{"error": msg}` shape: `{"error": "not found", "reason": <token>, "username": <caller>, "label": <owned label>}` with `label` present only for `devserver_offline`. The reason tokens are a stable desktop-facing contract (like the `desktop_authorize` `#error=` reasons): `no_devserver` (nothing registered), `devserver_offline` (registered, no live tunnel; `label` is the first owned row's), `access_denied` (`devserver_access` refused). Classification is best-effort: a profile failure on the owned-devserver lookup degrades to the plain 404 body. This narration is safe because the surface is self-scoped (a PAT-authenticated caller asking about their own account); the cross-user share-landing 404s stay uniform on purpose.
 
 ### Account delete
 
@@ -280,16 +286,17 @@ identity derives `BASE_URL` (its OAuth-callback origin) and `devserver_wildcard_
 
 `identity::Error`:
 
-| Variant       | HTTP | Notes                                  |
-|---------------|------|----------------------------------------|
-| Unauthorized  | 401  | session missing or invalid             |
-| Forbidden     | 403  | account blocked                        |
-| BadRequest    | 400  | input or OAuth-flow failure            |
-| NotFound      | 404  | unknown provider, missing user / token |
-| Conflict      | 409  | username taken, rename cap reached     |
-| Upstream      | 502  | profile / devserver-proxy unhappy          |
-| Anyhow        | 500  | startup or unexpected                  |
-| Reqwest       | 502  | network failure to a sibling service   |
+| Variant              | HTTP | Notes                                       |
+|----------------------|------|---------------------------------------------|
+| Unauthorized         | 401  | session missing or invalid                  |
+| Forbidden            | 403  | account blocked                             |
+| BadRequest           | 400  | input or OAuth-flow failure                 |
+| NotFound             | 404  | unknown provider, missing user / token      |
+| DesktopEntryNotFound | 404  | desktop entry only: reason body (see above) |
+| Conflict             | 409  | username taken, rename cap reached          |
+| Upstream             | 502  | profile / devserver-proxy unhappy           |
+| Anyhow               | 500  | startup or unexpected                       |
+| Reqwest              | 502  | network failure to a sibling service        |
 
 `From<gateway_common::profile_client::ProfileError>` and `From<gateway_common::workspace_admin_client::WorkspaceAdminError>` plug sibling-service errors into the local enum so request handlers can `?` straight through.
 

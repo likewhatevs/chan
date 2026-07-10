@@ -23,6 +23,7 @@ use uuid::Uuid;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
+use gateway_common::devserver_gate;
 use identity::api_tokens::{ApiTokenService, NewToken, RequestMeta, TokenOrigin};
 use identity::config::Config;
 use identity::http;
@@ -309,6 +310,91 @@ async fn entry_404_degrades_to_plain_body_on_profile_error() {
     assert_eq!(s, StatusCode::NOT_FOUND, "narration is best-effort");
     assert_eq!(body["error"], "not found");
     assert!(body.get("reason").is_none(), "got {body}");
+    app.cleanup().await;
+}
+
+/// Mock `GET /v1/users/{uid}` with a live profile row.
+async fn mock_get_user(app: &TestApp, uid: Uuid, display_name: Option<&str>, email: &str) {
+    let now = chrono::Utc::now().to_rfc3339();
+    Mock::given(method("GET"))
+        .and(path(format!("/v1/users/{uid}")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id": uid,
+            "email": email,
+            "display_name": display_name,
+            "username": placeholder_username(uid),
+            "username_edits": 0,
+            "created_at": now,
+            "updated_at": now,
+        })))
+        .mount(&app.profile)
+        .await;
+}
+
+/// Decode the `?t=` entry token off a minted entry_url.
+fn decode_entry_url(entry_url: &str, username: &str, dsid: &str) -> devserver_gate::Claims {
+    let token = entry_url.split("?t=").nth(1).expect("t= in entry_url");
+    devserver_gate::decode(
+        b"test-workspace-gate-secret-32-bytes-aa",
+        token,
+        devserver_gate::TokenType::Entry,
+        &format!("{username}.devserver.chan.app"),
+        dsid,
+    )
+    .expect("entry token decodes")
+}
+
+#[tokio::test]
+async fn entry_token_carries_caller_identity() {
+    let app = TestApp::new().await;
+    let uid = app.insert_user().await;
+    let username = placeholder_username(uid);
+    let pat = app.desktop_pat(uid).await;
+
+    let dsid = "e".repeat(64);
+    mock_tunnels(&app, &username, &[&dsid]).await;
+    Mock::given(method("GET"))
+        .and(path(format!("/v1/users/{uid}/devservers/{dsid}/access")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"role": "owner"})))
+        .mount(&app.profile)
+        .await;
+    mock_get_user(&app, uid, Some("Alice Doe"), "alice@example.com").await;
+
+    let (s, body) = post_entry(&app, &pat).await;
+    assert_eq!(s, StatusCode::OK, "got {body}");
+    let claims = decode_entry_url(body["entry_url"].as_str().unwrap(), &username, &dsid);
+    assert_eq!(claims.name.as_deref(), Some("Alice Doe"));
+    assert_eq!(claims.email.as_deref(), Some("alice@example.com"));
+    app.cleanup().await;
+}
+
+#[tokio::test]
+async fn entry_mints_without_identity_on_profile_error() {
+    // Identity is cosmetic: a profile failure on the get_user lookup
+    // must not fail the entry mint.
+    let app = TestApp::new().await;
+    let uid = app.insert_user().await;
+    let username = placeholder_username(uid);
+    let pat = app.desktop_pat(uid).await;
+
+    let dsid = "f".repeat(64);
+    mock_tunnels(&app, &username, &[&dsid]).await;
+    Mock::given(method("GET"))
+        .and(path(format!("/v1/users/{uid}/devservers/{dsid}/access")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"role": "owner"})))
+        .mount(&app.profile)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/v1/users/{uid}")))
+        .respond_with(ResponseTemplate::new(500))
+        .mount(&app.profile)
+        .await;
+
+    let (s, body) = post_entry(&app, &pat).await;
+    assert_eq!(s, StatusCode::OK, "got {body}");
+    let claims = decode_entry_url(body["entry_url"].as_str().unwrap(), &username, &dsid);
+    assert_eq!(claims.name, None);
+    assert_eq!(claims.email, None);
     app.cleanup().await;
 }
 

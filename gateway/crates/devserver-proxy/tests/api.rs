@@ -309,12 +309,25 @@ fn mint_role(
     drv: &str,
     aud: &str,
 ) -> String {
+    mint_identity(typ, sub, role, drv, aud, Default::default())
+}
+
+fn mint_identity(
+    typ: devserver_gate::TokenType,
+    sub: Uuid,
+    role: &str,
+    drv: &str,
+    aud: &str,
+    identity: devserver_gate::CallerIdentity,
+) -> String {
     match typ {
         devserver_gate::TokenType::Entry => {
-            devserver_gate::encode_entry(DEVSERVER_GATE_SECRET, sub, role, drv, aud).unwrap()
+            devserver_gate::encode_entry(DEVSERVER_GATE_SECRET, sub, role, drv, aud, identity)
+                .unwrap()
         }
         devserver_gate::TokenType::Session => {
-            devserver_gate::encode_session(DEVSERVER_GATE_SECRET, sub, role, drv, aud).unwrap()
+            devserver_gate::encode_session(DEVSERVER_GATE_SECRET, sub, role, drv, aud, identity)
+                .unwrap()
         }
     }
 }
@@ -712,6 +725,7 @@ async fn entry_token_with_bad_signature_is_404() {
         "owner",
         "blog",
         &host,
+        Default::default(),
     )
     .unwrap();
     let (s, _, _) = send_host(
@@ -1090,6 +1104,132 @@ async fn gateway_assertion_matches_authenticated_session() {
     assert_eq!(claims.role, "editor");
     assert_eq!(claims.aud, host);
     assert_eq!(claims.drv, devserver_id);
+    app.cleanup().await;
+}
+
+#[tokio::test]
+async fn gateway_assertion_carries_entry_identity() {
+    // Full identity chain: entry token (as identity-service mints it,
+    // with name/email) -> session cookie minted by the gate -> the
+    // per-request assertion the upstream sees.
+    let app = TestApp::new().await;
+    let owner = Uuid::new_v4();
+    let caller = Uuid::new_v4();
+    let devserver_id = "blog";
+    let tunnel_token = "tok-assertion-identity";
+    let captured = Captured::default();
+    app.register_tunnel_with_token(
+        tunnel_token,
+        "alice",
+        devserver_id,
+        owner,
+        capturing_router(captured.clone()),
+    )
+    .await;
+
+    let host = host_for("alice");
+    let identity = devserver_gate::CallerIdentity {
+        name: Some("Alice Doe".to_string()),
+        email: Some("alice@example.com".to_string()),
+    };
+    let entry = mint_identity(
+        devserver_gate::TokenType::Entry,
+        caller,
+        "editor",
+        devserver_id,
+        &host,
+        identity,
+    );
+    let (s, hdrs, _) = send_host(
+        &app.router,
+        Method::GET,
+        &host,
+        &format!("/blog/?t={entry}"),
+        &[],
+    )
+    .await;
+    assert_eq!(s, StatusCode::SEE_OTHER);
+    let session = hdrs
+        .get_all(header::SET_COOKIE)
+        .iter()
+        .map(|v| v.to_str().unwrap())
+        .find(|v| v.starts_with("devserver_gate="))
+        .expect("session cookie")
+        .split(';')
+        .next()
+        .unwrap()
+        .to_string();
+
+    let proxy_addr = serve_router_real(app.router.clone()).await;
+    let res = reqwest::Client::new()
+        .get(format!("http://{proxy_addr}/blog/assertion"))
+        .header(header::HOST, &host)
+        .header(header::COOKIE, &session)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    let headers = captured.requests.lock().unwrap()[0].headers.clone();
+    let assertion = headers
+        .get(chan_tunnel_proto::gateway_assertion::HEADER_NAME)
+        .expect("gateway assertion header")
+        .to_str()
+        .unwrap();
+    let key = chan_tunnel_proto::gateway_assertion::derive_assertion_key(tunnel_token);
+    let claims = chan_tunnel_proto::gateway_assertion::verify(&key, assertion, &host, devserver_id)
+        .expect("assertion verifies");
+    assert_eq!(claims.sub, caller.to_string());
+    assert_eq!(claims.name.as_deref(), Some("Alice Doe"));
+    assert_eq!(claims.email.as_deref(), Some("alice@example.com"));
+    app.cleanup().await;
+}
+
+#[tokio::test]
+async fn gateway_assertion_empty_identity_for_legacy_session() {
+    // A session cookie minted before identity claims existed carries
+    // no name/email; the assertion must verify and carry None for
+    // both rather than failing or inventing values.
+    let app = TestApp::new().await;
+    let owner = Uuid::new_v4();
+    let caller = Uuid::new_v4();
+    let devserver_id = "blog";
+    let tunnel_token = "tok-assertion-legacy";
+    let captured = Captured::default();
+    app.register_tunnel_with_token(
+        tunnel_token,
+        "alice",
+        devserver_id,
+        owner,
+        capturing_router(captured.clone()),
+    )
+    .await;
+
+    let host = host_for("alice");
+    let proxy_addr = serve_router_real(app.router.clone()).await;
+    let res = reqwest::Client::new()
+        .get(format!("http://{proxy_addr}/blog/assertion"))
+        .header(header::HOST, &host)
+        .header(
+            header::COOKIE,
+            session_cookie_role(caller, "viewer", devserver_id, &host),
+        )
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    let headers = captured.requests.lock().unwrap()[0].headers.clone();
+    let assertion = headers
+        .get(chan_tunnel_proto::gateway_assertion::HEADER_NAME)
+        .expect("gateway assertion header")
+        .to_str()
+        .unwrap();
+    let key = chan_tunnel_proto::gateway_assertion::derive_assertion_key(tunnel_token);
+    let claims = chan_tunnel_proto::gateway_assertion::verify(&key, assertion, &host, devserver_id)
+        .expect("assertion verifies");
+    assert_eq!(claims.name, None);
+    assert_eq!(claims.email, None);
     app.cleanup().await;
 }
 
