@@ -230,11 +230,13 @@ describe("session sync apply pipeline", () => {
     expect(layout.focusColor).toBe("green");
   });
 
-  test("a peer delete stops this window from re-persisting the discarded blob", async () => {
+  test("a peer delete stops the echo save from re-persisting the discarded blob", async () => {
     const putSession = vi.spyOn(api, "putSession").mockResolvedValue(undefined);
 
     // A save sits in the debounce when the peer's DELETE lands: the
-    // pending write is cancelled, and later saves stay suppressed.
+    // frame seeds the dedupe with the current serialization, so the
+    // pending write (same state) dedupes to nothing, and so does any
+    // later save of the unchanged state.
     scheduleSessionSave();
     fireFrame({ w: sessionWindowId(), client: "peer-nonce", deleted: true });
     await vi.advanceTimersByTimeAsync(750);
@@ -245,20 +247,24 @@ describe("session sync apply pipeline", () => {
     expect(putSession).not.toHaveBeenCalled();
   });
 
-  test("a peer write after a peer delete lifts the suppression and resyncs", async () => {
+  test("a peer delete never latches: syncs and new local saves continue", async () => {
+    // Both co-viewers of an empty window fire the routine empty-layout
+    // DELETE at boot; a hard suppression here would deadlock the pair
+    // (neither side could ever PUT again). The deleted frame must only
+    // dedupe the echo, not stop the pipeline.
     const getSession = vi.spyOn(api, "getSession").mockResolvedValue(remotePayload());
     const putSession = vi.spyOn(api, "putSession").mockResolvedValue(undefined);
 
     fireFrame({ w: sessionWindowId(), client: "peer-nonce", deleted: true });
     await vi.advanceTimersByTimeAsync(750);
 
-    // The blob came back: sync resumes...
+    // A later peer write still syncs...
     fireFrame({ w: sessionWindowId(), client: "peer-nonce" });
     await vi.advanceTimersByTimeAsync(250);
     expect(getSession).toHaveBeenCalledTimes(1);
     expect(layout.focusColor).toBe("green");
 
-    // ...and so does persistence: a local change saves again.
+    // ...and a genuinely new local mutation still saves.
     layout.focusColor = "pink";
     scheduleSessionSave();
     await vi.advanceTimersByTimeAsync(750);

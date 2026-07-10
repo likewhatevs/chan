@@ -2563,40 +2563,29 @@ function flushPendingSessionSave(): void {
 const SESSION_SYNC_REFETCH_MS = 250;
 let sessionSyncTimer: ReturnType<typeof setTimeout> | null = null;
 
-/// True when session persistence is suppressed because a PEER deleted
-/// the blob (as opposed to a local window discard). A later peer write
-/// lifts this; a local discard never lifts.
-let sessionSuppressedByPeerDelete = false;
-
 function onSessionChangedFrame(frame: {
   w?: string;
   client?: string;
   deleted?: boolean;
 }): void {
-  // Pre-hydration frames: bootstrap fetches the freshest blob itself.
-  if (!bootstrapHydrated) return;
+  // Pre-hydration frames: bootstrap fetches the freshest blob itself. A
+  // discarded window is closing and must not resurrect state.
+  if (!bootstrapHydrated || sessionDiscarded) return;
   if (frame.w !== sessionWindowId()) return;
   if (frame.client && frame.client === clientNonce()) return;
   if (frame.deleted) {
     // A peer deleted the blob (window discard, empty-out, or a
-    // cross-window move-out). Stop persisting it: without this, the
-    // debounced or exit-flush save re-writes the discarded blob and
-    // the window row resurrects in `cs window list`. The live view is
-    // NOT torn down; only persistence stops.
-    if (!sessionDiscarded) {
-      discardWindowSessionLocal();
-      sessionSuppressedByPeerDelete = true;
-    }
+    // cross-window move-out). Seed the save dedupe with the CURRENT
+    // serialization so a pending or trailing save of this same state
+    // does not immediately re-persist the blob the peer removed (the
+    // follower-resurrects-a-discarded-window quirk). Deliberately NOT a
+    // hard stop: a genuinely new local mutation still saves (the user
+    // is actively using this window), and the routine empty-window
+    // DELETE both co-viewers fire at boot (an empty layout serializes
+    // to null) can never latch the pair into a never-syncing state.
+    const local = serializeSession();
+    lastSessionSnapshot = local ? JSON.stringify(local) : "";
     return;
-  }
-  if (sessionDiscarded) {
-    // The blob came back: a peer re-created it after the delete above
-    // (e.g. emptied the window, then opened a tab). Lift a peer-delete
-    // suppression and resync. A locally discarded window stays
-    // discarded; it is closing.
-    if (!sessionSuppressedByPeerDelete) return;
-    sessionSuppressedByPeerDelete = false;
-    sessionDiscarded = false;
   }
   scheduleSessionSyncRefetch();
 }
@@ -2679,8 +2668,6 @@ export function discardWindowSession(opts?: { reap?: boolean }): void {
 /// already removed tears down cleanly without a redundant DELETE.
 export function discardWindowSessionLocal(): void {
   sessionDiscarded = true;
-  // A local discard is authoritative: no peer write revives persistence.
-  sessionSuppressedByPeerDelete = false;
   if (sessionTimer) {
     clearTimeout(sessionTimer);
     sessionTimer = null;
