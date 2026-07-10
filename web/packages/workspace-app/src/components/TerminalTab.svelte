@@ -679,6 +679,11 @@
         ? FONT_CHAIN_SOURCE_CODE_PRO
         : FONT_CHAIN_OS_DEFAULT;
     term = new Terminal({
+      // xterm gates registerDecoration (plus the markers / unicode
+      // namespaces) behind this flag; the search addon's decorated
+      // find (runFind) throws without it and the find bar matches
+      // nothing.
+      allowProposedApi: true,
       allowTransparency: false,
       cursorBlink: false,
       cursorStyle: "block",
@@ -1546,6 +1551,12 @@
   // live-PTY terminal actions arrive as chan:command events the focused
   // terminal handles. Only the active tab of the focused pane responds, so
   // the launcher's active-surface gate and the acting terminal agree.
+  //
+  // The find family rides the same bus: on desktop the key bridge claims
+  // Mod+F/Mod+G before the webview sees the keydown and fires
+  // app.find.open / app.find.next as chan:command events. App.svelte
+  // serves those for file tabs only, so the focused terminal must serve
+  // itself here or the chord is dead on a terminal pane.
   $effect(() => {
     const onLauncherCommand = (e: Event) => {
       if (!active || !focused) return;
@@ -1553,6 +1564,9 @@
       if (name === "app.terminal.restart") void restart();
       else if (name === "app.terminal.copyCwd") void copyTerminalCwd();
       else if (name === "app.terminal.newFsEntry") openNewFsEntry();
+      else if (name === "app.find.open") openFind();
+      else if (name === "app.find.next" && findOpen) runFind(true);
+      else if (name === "app.find.prev" && findOpen) runFind(false);
     };
     window.addEventListener("chan:command", onLauncherCommand);
     return () => window.removeEventListener("chan:command", onLauncherCommand);
