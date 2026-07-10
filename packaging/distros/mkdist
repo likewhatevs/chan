@@ -1,0 +1,128 @@
+#!/usr/bin/env bash
+#
+# Build the vendored source tarball that feeds the COPR (rpm) and Launchpad
+# (deb) source packages. Both services compile offline, so the tarball must
+# be self-sufficient: a git archive of the requested revision, the prebuilt
+# rust-embed web bundles (web/dist, web-launcher/dist -- gitignored, so never
+# in the archive itself), a cargo vendor/ tree covering the whole root
+# workspace, and an in-tree .cargo/config.toml redirecting crates-io to
+# vendor/. The redirect exists only inside the tarball: cargo's config
+# walk-up gives rpmbuild and debian/rules offline resolution with no
+# activation glue, and it cannot leak into a developer checkout.
+#
+# Needs network (npm install + crate downloads) and node >= 20; run on the
+# host or in the COPR SRPM chroot, never on the offline builders.
+#
+# Outputs under --outdir, all one content, three names:
+#   chan-vendored-<version>.tar.xz          rpm Source0
+#   chan_<debver>.orig.tar.xz               debian orig (chan)
+#   chan-desktop_<debver>.orig.tar.xz       debian orig (chan-desktop)
+# where <debver> is <version> with '-' -> '~' (semver prerelease -rcN
+# becomes ~rcN, which sorts before the final release in both rpm and dpkg).
+# One tarball serves both source packages because both crates resolve from
+# the single root Cargo.lock; Launchpad stores the bytes per source package
+# either way, so component (orig-vendor) tarballs would buy nothing.
+#
+# Usage: mkdist [--repo <path>] [--rev <committish>] [--outdir <dir>]
+#               [--no-filter] [--allow-dirty]
+#
+#   --repo         chan repo root (default: the repo containing this script)
+#   --rev          revision to archive (default: HEAD)
+#   --outdir       output directory (default: <repo>/target/distros)
+#   --no-filter    plain `cargo vendor` even if cargo-vendor-filterer is
+#                  installed (the filterer drops windows/mac-only crate
+#                  payloads, ~35 MB, keeping checksum-valid stubs)
+#   --allow-dirty  permit a dirty working tree when --rev is HEAD (the
+#                  archive still contains only committed content)
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO="$(cd "$SCRIPT_DIR/../.." && pwd)"
+REV=HEAD
+OUTDIR=""
+FILTER=1
+ALLOW_DIRTY=0
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --repo) REPO="$(cd "$2" && pwd)"; shift 2 ;;
+        --rev) REV="$2"; shift 2 ;;
+        --outdir) OUTDIR="$2"; shift 2 ;;
+        --no-filter) FILTER=0; shift ;;
+        --allow-dirty) ALLOW_DIRTY=1; shift ;;
+        *) echo "error: unknown argument: $1" >&2; exit 1 ;;
+    esac
+done
+
+OUTDIR="${OUTDIR:-$REPO/target/distros}"
+
+if ! git -C "$REPO" rev-parse --verify --quiet "$REV^{commit}" >/dev/null; then
+    echo "error: $REV does not name a commit in $REPO" >&2
+    exit 1
+fi
+if [ "$REV" = "HEAD" ] && [ "$ALLOW_DIRTY" = 0 ] \
+    && ! git -C "$REPO" diff --quiet HEAD; then
+    echo "error: working tree is dirty; commit, use --rev, or --allow-dirty" >&2
+    exit 1
+fi
+
+# The version comes from the archived Cargo.toml (not the working tree) so
+# `--rev vX.Y.Z` is self-consistent. Same sed as packaging/linux/Makefile.
+VERSION="$(git -C "$REPO" show "$REV:Cargo.toml" \
+    | sed -n 's/^version = "\(.*\)"/\1/p' | head -1)"
+if [ -z "$VERSION" ]; then
+    echo "error: could not derive version from $REV:Cargo.toml" >&2
+    exit 1
+fi
+DEBVER="$(printf '%s' "$VERSION" | tr -- '-' '~')"
+
+mkdir -p "$OUTDIR"
+STAGE_PARENT="$(mktemp -d "$OUTDIR/mkdist.XXXXXX")"
+trap 'rm -rf "$STAGE_PARENT"' EXIT
+STAGE="$STAGE_PARENT/chan-$VERSION"
+
+echo >&2 "==> mkdist: version=$VERSION rev=$REV outdir=$OUTDIR"
+
+echo >&2 "==> archiving source"
+git -C "$REPO" archive --format=tar --prefix="chan-$VERSION/" "$REV" \
+    | tar -x -C "$STAGE_PARENT"
+
+echo >&2 "==> building web bundles"
+make -C "$STAGE" web 1>&2
+# npm side effects stay out of the tarball; the dists and the
+# .chan-build-stamp files (read by crates/chan-server/build.rs) remain.
+rm -rf "$STAGE/web/node_modules" "$STAGE"/web/packages/*/node_modules
+
+echo >&2 "==> vendoring crates"
+export CARGO_HOME="$STAGE_PARENT/cargo-home"
+if [ "$FILTER" = 1 ] && cargo vendor-filterer --help >/dev/null 2>&1; then
+    (cd "$STAGE" && cargo vendor-filterer \
+        --platform=x86_64-unknown-linux-gnu \
+        --platform=aarch64-unknown-linux-gnu \
+        vendor >/dev/null)
+else
+    [ "$FILTER" = 1 ] \
+        && echo "==> cargo-vendor-filterer not found; plain cargo vendor" >&2
+    (cd "$STAGE" && cargo vendor --locked vendor >/dev/null)
+fi
+mkdir -p "$STAGE/.cargo"
+cat > "$STAGE/.cargo/config.toml" <<'EOF'
+[source.crates-io]
+replace-with = "vendored-sources"
+
+[source.vendored-sources]
+directory = "vendor"
+EOF
+
+echo >&2 "==> writing tarball"
+TARBALL="$OUTDIR/chan-vendored-$VERSION.tar.xz"
+XZ_OPT="${XZ_OPT:--6 -T0}" tar -C "$STAGE_PARENT" -cJf "$TARBALL" "chan-$VERSION"
+for orig in "chan_$DEBVER.orig.tar.xz" "chan-desktop_$DEBVER.orig.tar.xz"; do
+    rm -f "$OUTDIR/$orig"
+    ln "$TARBALL" "$OUTDIR/$orig" 2>/dev/null || cp "$TARBALL" "$OUTDIR/$orig"
+done
+
+echo "$TARBALL"
+echo "$OUTDIR/chan_$DEBVER.orig.tar.xz"
+echo "$OUTDIR/chan-desktop_$DEBVER.orig.tar.xz"

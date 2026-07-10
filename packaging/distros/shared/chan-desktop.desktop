@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Chan
+Comment=AI-native IDE for the modern engineer
+Exec=chan-desktop %U
+Icon=chan-desktop
+Terminal=false
+Categories=Office;TextEditor;
+MimeType=x-scheme-handler/chan;
+StartupWMClass=chan-desktop
