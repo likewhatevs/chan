@@ -36,17 +36,22 @@ done
 OUTDIR="$REPO/target/distros/srpm"
 mkdir -p "$OUTDIR"
 
+# mkdist runs on the host: a bind-mounted git worktree is unreadable in a
+# container (its .git is a pointer into the main repo), and the container
+# then needs nothing beyond rpm-build.
+TARBALL="$("$REPO/packaging/distros/mkdist" --repo "$REPO" \
+    --outdir "$REPO/target/distros" | head -1)"
+
 for pkg in "${PKGS[@]}"; do
     echo "==> building SRPM: $pkg"
-    # The container runs as root: mark the bind-mounted repo safe for git,
-    # and chown the outputs back to the invoking user at the end.
+    # The container runs as root; chown the outputs back to the invoking
+    # user at the end.
     docker run --rm -v "$REPO:/src" "$FEDORA_IMAGE" bash -ec "
-        dnf -y -q install git-core make tar xz rust cargo nodejs npm rpm-build
-        dnf -y -q install cargo-vendor-filterer || true
-        git config --global --add safe.directory /src
+        dnf -y -q install rpm-build
         /src/packaging/distros/copr/make-srpm.sh --repo /src \
             --spec /src/packaging/distros/fedora/$pkg.spec \
-            --outdir /src/target/distros/srpm
+            --outdir /src/target/distros/srpm \
+            --tarball /src/target/distros/$(basename "$TARBALL")
         chown -R $(id -u):$(id -g) /src/target/distros
     "
 done

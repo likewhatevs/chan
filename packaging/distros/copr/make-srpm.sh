@@ -8,6 +8,13 @@
 # copr/build-srpm.sh spins up locally.
 #
 # Usage: make-srpm.sh [--spec <path>] [--outdir <dir>] [--repo <path>]
+#                     [--tarball <path>]
+#
+# --tarball skips mkdist and uses a prebuilt vendored tarball. The local
+# container flow (build-srpm.sh) needs this: it runs mkdist on the host
+# because a bind-mounted git *worktree* is unreadable in a container (its
+# .git is a pointer file into the main repo), and it keeps the container
+# down to rpm-build.
 
 set -euo pipefail
 
@@ -15,12 +22,14 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 SPEC=""
 OUTDIR=""
+TARBALL=""
 
 while [ $# -gt 0 ]; do
     case "$1" in
         --spec) SPEC="$2"; shift 2 ;;
         --outdir) OUTDIR="$2"; shift 2 ;;
         --repo) REPO="$(cd "$2" && pwd)"; shift 2 ;;
+        --tarball) TARBALL="$2"; shift 2 ;;
         *) echo "error: unknown argument: $1" >&2; exit 1 ;;
     esac
 done
@@ -29,8 +38,13 @@ SPEC="${SPEC:-$REPO/packaging/distros/fedora/chan.spec}"
 OUTDIR="${OUTDIR:-$REPO/target/distros/srpm}"
 SOURCEDIR="$REPO/target/distros"
 
-TARBALL="$("$REPO/packaging/distros/mkdist" --repo "$REPO" --outdir "$SOURCEDIR" \
-    | head -1)"
+if [ -z "$TARBALL" ]; then
+    TARBALL="$("$REPO/packaging/distros/mkdist" --repo "$REPO" \
+        --outdir "$SOURCEDIR" | head -1)"
+elif [ ! -f "$TARBALL" ]; then
+    echo "error: $TARBALL not found" >&2
+    exit 1
+fi
 # chan-vendored-<version>.tar.xz -> <version>
 VERSION="$(basename "$TARBALL" .tar.xz)"
 VERSION="${VERSION#chan-vendored-}"
