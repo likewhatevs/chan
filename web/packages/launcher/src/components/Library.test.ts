@@ -214,6 +214,35 @@ describe("Library: devserver groups", () => {
     expect(target!.textContent).toContain("Not connected");
   });
 
+  it("narrates a pending browser sign-in as a waiting row with a live re-click Connect", async () => {
+    // A gateway connect that handed off to the browser: status stays
+    // disconnected (waiting is a row state, not a connection state), but the
+    // row must narrate the wait instead of sitting at "Not connected", keep
+    // the red dot reserved for dropped live connections, and keep the plug
+    // clickable so a re-click re-opens the sign-in page.
+    await saveDevserver({ host: "gw.example", port: 443, label: "gw" });
+    library.devservers = library.devservers.map(
+      (d): DevserverEntry => (d.host === "gw.example" ? { ...d, pending_signin: true } : d),
+    );
+
+    mountList();
+
+    const machines = [...target!.querySelectorAll("section.machine")];
+    const gw = machines.find((m) => m.textContent?.includes("gw.example"));
+    expect(gw).toBeTruthy();
+    expect(gw!.textContent).toContain("Waiting for sign-in in your browser...");
+    expect(gw!.textContent).not.toContain("Not connected");
+    const waiting = gw!.querySelector(".connect-prompt.waiting");
+    expect(waiting).not.toBeNull();
+    expect(waiting!.querySelector("svg.spin")).not.toBeNull();
+    // No red dot: the wait is not a dropped connection.
+    expect(gw!.querySelector(".status-dot.lost")).toBeNull();
+    // The plug stays live and says what a re-click does.
+    const reopen = byAria("Re-open sign-in in your browser for gw");
+    expect(reopen).toBeTruthy();
+    expect(reopen!.disabled).toBe(false);
+  });
+
   it("turns the identity dot red for a connected devserver that needs attention", () => {
     const ds = library.devservers.find((d) => d.id === "ds-1")!;
     controlAttention.libs[ds.library_id!] = true;
