@@ -5457,105 +5457,424 @@ export async function restoreLayout(
 
 /// Result of `reconcileLayout`. "applied": the remote snapshot was
 /// structurally congruent with the live tree and its shared fields were
-/// applied in place. "diverged": the trees differ structurally and
-/// NOTHING was touched. The caller keys echo suppression on this:
-/// applied -> pre-seed the session-save dedupe snapshot so the trailing
-/// local save no-ops; diverged -> leave it unseeded so the next local
-/// save pushes our kept state back to the peer (self-healing).
+/// applied without keeping or refusing anything. "diverged": the live
+/// tree deliberately kept state the remote does not carry (a dirty or
+/// mid-save file tab the peer closed, a peer terminal without a session
+/// id that cannot be attached, a pane-mode transaction in progress). The
+/// caller keys echo suppression on this: applied -> pre-seed the
+/// session-save dedupe snapshot so the trailing local save no-ops;
+/// diverged -> leave it unseeded so the next local save pushes the kept
+/// state back to the peer (self-healing).
 export type ReconcileResult = "applied" | "diverged";
 
 /// Non-destructive sibling of `restoreLayout` for live co-view sync:
 /// apply a peer's persisted layout snapshot onto the LIVE tree without
-/// remounting tabs, so unsaved editors and running xterms survive.
-/// Applies the shared in-place subset only — split ratios, pane A/B side
-/// visibility, per-Hybrid theme overrides, the window focus color, and
-/// terminal titles — and only when the remote tree is congruent with the
-/// live one (same split shape and directions; per pane side the same tab
-/// count, kinds, file paths, and terminal session ids). Anything else
-/// (tab opened/closed, pane split/removed) is a structural divergence:
-/// log and no-op. Per-client view state (active tab `a`, focused pane
-/// `f`, carets, scroll, read mode) is NEVER applied from remote; each
-/// co-viewer keeps its own.
+/// remounting matched tabs, so unsaved editors and running xterms
+/// survive.
+///
+/// Applied from remote: the pane tree (splits, directions, ratios), the
+/// tab set per pane side, pane A/B side visibility, per-Hybrid theme
+/// overrides, the window focus color, and terminal titles. Tabs are
+/// matched TREE-WIDE by stable identity — terminals by `tsid` (with an
+/// ordinal fallback for structure-only blobs that omit session ids),
+/// files by path + ordinal, graph/browser/dashboard by kind + ordinal —
+/// so a matched live tab OBJECT moves to its remote position, including
+/// across panes (the keyed component salvage local drag-move relies on).
+/// Remote tabs with no live match are created via the restore
+/// constructors; a remote terminal without a `tsid` is skipped (a sync
+/// never spawns a PTY; the peer's next save carries the id). Live tabs
+/// absent from the remote are closed, EXCEPT dirty file tabs
+/// (content !== saved) and tabs mid-save, which stay in their pane (or
+/// park in the focused pane when theirs was rebuilt away).
+///
+/// Never applied from remote: active markers `a`, focus `f`, carets,
+/// scroll, read mode. Each co-viewer keeps its own view; local active
+/// tabs and pane focus survive whenever their objects do, falling back
+/// to the remote markers only when the local target vanished.
 export function reconcileLayout(remote: SerNode): ReconcileResult {
-  if (!layoutCongruent(remote, layout.rootId)) {
-    console.warn(
-      "[chan] session sync: remote layout diverged from the live tree; skipping in-place apply",
-    );
-    return "diverged";
-  }
-  applyCongruentNode(remote, layout.rootId);
+  // A pane-mode transaction owns the tree (draft + commit/cancel);
+  // applying under it would clobber the draft. Refuse whole; the
+  // unseeded snapshot save-back reconverges after the transaction ends.
+  if (paneMode.active) return "diverged";
+  const ctx: ReconcileCtx = {
+    diverged: false,
+    remoteFocusPaneId: null,
+    toLoad: [],
+    parked: [],
+    match: matchRemoteTabs(remote),
+    materialized: new Map(),
+  };
+  layout.rootId = reconcileNode(remote, layout.rootId, ctx);
   // `wc` is stamped on the root node only; absence means the default
   // ("blue"), matching serializeLayout's omit-default rule.
   layout.focusColor = restoreFocusColor(remote.wc);
-  return "applied";
+  // Focus overlay: local focus wins while its pane survives; when the
+  // pane was rebuilt away, fall back to the remote focus marker, then
+  // the first leaf.
+  const focused = layout.nodes[layout.activePaneId];
+  if (!focused || focused.kind !== "leaf") {
+    layout.activePaneId = ctx.remoteFocusPaneId ?? firstLeafId(layout.rootId);
+  }
+  // Park protected tabs whose pane was rebuilt away in the focused pane
+  // (their owner keeps them visible; the save-back returns them to the
+  // peer).
+  if (ctx.parked.length > 0) {
+    const target = layout.nodes[layout.activePaneId];
+    if (target?.kind === "leaf") {
+      mutablePaneTabs(target).push(...ctx.parked);
+      if (!paneActiveTabId(target)) {
+        setPaneActiveTabId(target, ctx.parked[0]!.id);
+      }
+    }
+  }
+  // Load content for created file tabs; failures land in tab.error.
+  for (const t of ctx.toLoad) {
+    void loadTabContent(t.paneId, t.tabId, t.path);
+  }
+  return ctx.diverged ? "diverged" : "applied";
 }
 
-function layoutCongruent(remote: SerNode, liveId: string): boolean {
-  const live = layout.nodes[liveId];
-  if (!live) return false;
-  if (remote.k === "s") {
-    if (live.kind !== "split") return false;
-    if (live.direction !== (remote.d === "r" ? "row" : "column")) return false;
-    return layoutCongruent(remote.a, live.a) && layoutCongruent(remote.b, live.b);
-  }
-  if (live.kind !== "leaf") return false;
+type ReconcileCtx = {
+  diverged: boolean;
+  remoteFocusPaneId: string | null;
+  toLoad: { paneId: string; tabId: string; path: string }[];
+  /// Protected tabs whose live pane did not survive a subtree rebuild.
+  parked: Tab[];
+  match: TabMatch;
+  /// SerTab -> live tab for everything placed this apply (matched OR
+  /// created); the per-side active fallback resolves remote `a` markers
+  /// through it.
+  materialized: Map<SerTab, Tab>;
+};
+
+type TabMatch = {
+  byRemote: Map<SerTab, Tab>;
+  consumed: Set<Tab>;
+};
+
+/// A tab the reconcile must never close: a dirty file tab (unsaved
+/// content) or one with a write in flight.
+function reconcileProtectedTab(t: Tab): boolean {
   return (
-    tabListCongruent(remote.t, live.tabs) &&
-    tabListCongruent(remote.bt ?? [], live.bTabs ?? [])
+    t.kind === "file" &&
+    (savingTabs.has(t.id) || (!t.loading && t.content !== t.saved))
   );
 }
 
-/// Tab identity for congruence: same count and kinds in order; file tabs
-/// must agree on path; terminal tabs must agree on session id when both
-/// sides carry one (a structure-only blob omits `tsid`, so a positional
-/// match is accepted). Graph / browser / dashboard tabs match by kind
-/// alone. Legacy overlay kinds ("s" settings, "h" health) no longer
-/// restore, so their presence in a remote blob is a divergence.
-function tabListCongruent(remoteTabs: SerTab[], liveTabs: Tab[]): boolean {
-  if (remoteTabs.length !== liveTabs.length) return false;
-  for (let i = 0; i < remoteTabs.length; i++) {
-    const remote = remoteTabs[i]!;
-    const live = liveTabs[i]!;
-    const kind = remote.k ?? "f";
+function liveLeavesInOrder(nodeId: string, out: LeafNode[] = []): LeafNode[] {
+  const n = layout.nodes[nodeId];
+  if (!n) return out;
+  if (n.kind === "leaf") {
+    out.push(n);
+    return out;
+  }
+  liveLeavesInOrder(n.a, out);
+  liveLeavesInOrder(n.b, out);
+  return out;
+}
+
+/// Tree-wide identity matching between the remote snapshot's tabs and
+/// the live tabs. Terminals match by `tsid` first (the PTY is the
+/// identity); remaining remote terminals WITHOUT a tsid fall back to
+/// ordinal order against unclaimed live terminals, so a peer's
+/// transient structure-only blob (serialized before its terminals
+/// reconnected) does not close every live terminal here. Files match by
+/// path in ordinal order (dup paths pair up nth-to-nth); graph, browser,
+/// and dashboard tabs by kind in ordinal order. Tree-wide (not per-pane)
+/// so a tab the peer moved across panes matches its live object and
+/// moves instead of close-and-recreate.
+function matchRemoteTabs(remote: SerNode): TabMatch {
+  const remoteTabs = serializedLeaves(remote).flatMap((l) => [
+    ...l.t,
+    ...(l.bt ?? []),
+  ]);
+  const liveTabs = liveLeavesInOrder(layout.rootId).flatMap((l) => [
+    ...l.tabs,
+    ...(l.bTabs ?? []),
+  ]);
+  const byRemote = new Map<SerTab, Tab>();
+  const consumed = new Set<Tab>();
+
+  const byTsid = new Map<string, TerminalTab>();
+  for (const t of liveTabs) {
+    if (t.kind === "terminal" && t.terminalSessionId) {
+      byTsid.set(t.terminalSessionId, t);
+    }
+  }
+  for (const st of remoteTabs) {
+    if ((st.k ?? "f") !== "t" || !st.tsid) continue;
+    const hit = byTsid.get(st.tsid);
+    if (hit && !consumed.has(hit)) {
+      byRemote.set(st, hit);
+      consumed.add(hit);
+    }
+  }
+
+  const fileQueues = new Map<string, FileTab[]>();
+  const kindQueues = new Map<string, Tab[]>();
+  const termQueue: TerminalTab[] = [];
+  for (const t of liveTabs) {
+    if (consumed.has(t)) continue;
+    if (t.kind === "file") {
+      const q = fileQueues.get(t.path);
+      if (q) q.push(t);
+      else fileQueues.set(t.path, [t]);
+    } else if (t.kind === "terminal") {
+      termQueue.push(t);
+    } else {
+      const key =
+        t.kind === "graph" ? "g" : t.kind === "browser" ? "b" : "d";
+      const q = kindQueues.get(key);
+      if (q) q.push(t);
+      else kindQueues.set(key, [t]);
+    }
+  }
+  const take = <T extends Tab>(q: T[] | undefined): T | undefined => {
+    const hit = q?.find((t) => !consumed.has(t));
+    if (hit) consumed.add(hit);
+    return hit;
+  };
+  for (const st of remoteTabs) {
+    if (byRemote.has(st)) continue;
+    const kind = st.k ?? "f";
+    if (kind === "t") {
+      // A remote tsid with no live counterpart creates a reattach tab
+      // later; only tsid-less remote terminals match ordinally.
+      if (st.tsid) continue;
+      const hit = take(termQueue);
+      if (hit) byRemote.set(st, hit);
+      continue;
+    }
     if (kind === "f") {
-      if (live.kind !== "file") return false;
-      if ((remote.p ?? "") !== live.path) return false;
+      const hit = take(fileQueues.get(st.p ?? ""));
+      if (hit) byRemote.set(st, hit);
+      continue;
+    }
+    if (kind === "g" || kind === "b" || kind === "d") {
+      const hit = take(kindQueues.get(kind));
+      if (hit) byRemote.set(st, hit);
+    }
+  }
+  return { byRemote, consumed };
+}
+
+/// Walk the remote and live trees together. A live node of the same
+/// shape (leaf, or split with the same direction) is kept in place, its
+/// id and object identity intact; a shape mismatch rebuilds that subtree
+/// from the remote, salvaging matched live tab objects into the new
+/// panes and parking protected leftovers. Returns the (kept or new) node
+/// id for the parent to reference.
+function reconcileNode(
+  remoteNode: SerNode,
+  liveId: string | null,
+  ctx: ReconcileCtx,
+): string {
+  const live = liveId ? layout.nodes[liveId] : undefined;
+  if (remoteNode.k === "s") {
+    const direction = remoteNode.d === "r" ? "row" : "column";
+    if (live?.kind === "split" && live.direction === direction) {
+      // Serialization omits `r` near the 50/50 default, so absence
+      // means the peer's split sits at (or rounded to) even.
+      live.ratio = typeof remoteNode.r === "number" ? remoteNode.r : 0.5;
+      live.a = reconcileNode(remoteNode.a, live.a, ctx);
+      live.b = reconcileNode(remoteNode.b, live.b, ctx);
+      return live.id;
+    }
+    releaseSubtree(liveId, ctx);
+    const split: SplitNode = {
+      kind: "split",
+      id: id("split"),
+      direction,
+      a: reconcileNode(remoteNode.a, null, ctx),
+      b: reconcileNode(remoteNode.b, null, ctx),
+      ratio: typeof remoteNode.r === "number" ? remoteNode.r : 0.5,
+    };
+    layout.nodes[split.id] = split;
+    return split.id;
+  }
+  if (live?.kind === "leaf") {
+    reconcileLeafTabs(remoteNode, live, ctx);
+    applyLeafChrome(remoteNode, live);
+    if (remoteNode.f) ctx.remoteFocusPaneId = live.id;
+    return live.id;
+  }
+  releaseSubtree(liveId, ctx);
+  const p: LeafNode = {
+    kind: "leaf",
+    id: id("pane"),
+    tabs: [],
+    activeTabId: null,
+  };
+  layout.nodes[p.id] = p;
+  p.tabs = materializeSide(remoteNode.t, p.id, ctx);
+  const bTabs = materializeSide(remoteNode.bt ?? [], p.id, ctx);
+  if (bTabs.length > 0) p.bTabs = bTabs;
+  // A rebuilt pane has no local view state to preserve: the remote
+  // active markers (else the first tab) seed each side.
+  p.activeTabId = remoteActiveTabId(remoteNode.t, p.tabs, ctx);
+  if (p.bTabs && p.bTabs.length > 0) {
+    p.bActiveTabId = remoteActiveTabId(remoteNode.bt ?? [], p.bTabs, ctx);
+  }
+  applyLeafChrome(remoteNode, p);
+  if (remoteNode.f) ctx.remoteFocusPaneId = p.id;
+  return p.id;
+}
+
+/// Drop a replaced live subtree from the node table, parking any
+/// protected tabs the tree-wide match did not place elsewhere.
+function releaseSubtree(nodeId: string | null, ctx: ReconcileCtx): void {
+  if (!nodeId) return;
+  const n = layout.nodes[nodeId];
+  if (!n) return;
+  if (n.kind === "leaf") {
+    for (const t of allPaneTabs(n)) {
+      if (!ctx.match.consumed.has(t) && reconcileProtectedTab(t)) {
+        ctx.parked.push(t);
+        ctx.diverged = true;
+      }
+    }
+  } else {
+    releaseSubtree(n.a, ctx);
+    releaseSubtree(n.b, ctx);
+  }
+  delete layout.nodes[nodeId];
+}
+
+/// Rebuild a kept leaf's per-side tab lists in remote order, keeping the
+/// local active tab whenever its object survived on that side.
+function reconcileLeafTabs(
+  remoteLeaf: SerLeaf,
+  live: LeafNode,
+  ctx: ReconcileCtx,
+): void {
+  const prevA = [...live.tabs];
+  const prevB = [...(live.bTabs ?? [])];
+  const priorActiveA = live.activeTabId;
+  const priorActiveB = live.bActiveTabId ?? null;
+
+  const nextA = materializeSide(remoteLeaf.t, live.id, ctx);
+  const nextB = materializeSide(remoteLeaf.bt ?? [], live.id, ctx);
+  // Protected tabs of THIS leaf the remote no longer carries stay on
+  // their side, after the synced set.
+  for (const t of prevA) {
+    if (!ctx.match.consumed.has(t) && reconcileProtectedTab(t)) {
+      nextA.push(t);
+      ctx.diverged = true;
+    }
+  }
+  for (const t of prevB) {
+    if (!ctx.match.consumed.has(t) && reconcileProtectedTab(t)) {
+      nextB.push(t);
+      ctx.diverged = true;
+    }
+  }
+  live.tabs = nextA;
+  if (nextB.length > 0) live.bTabs = nextB;
+  else if (live.bTabs) live.bTabs = [];
+
+  live.activeTabId = overlayActiveTabId(
+    priorActiveA,
+    remoteLeaf.t,
+    nextA,
+    ctx,
+  );
+  live.bActiveTabId =
+    nextB.length > 0
+      ? overlayActiveTabId(priorActiveB, remoteLeaf.bt ?? [], nextB, ctx)
+      : null;
+}
+
+/// Map one side's remote tab list onto live objects: matched tabs move
+/// here (terminal titles ride along), unmatched ones are created via the
+/// restore constructors. A remote terminal without a `tsid` is skipped —
+/// a sync never spawns a PTY — and flags divergence so the local
+/// save-back keeps the peers converging. Legacy overlay kinds ("s"
+/// settings, "h" health) drop silently, as on restore.
+function materializeSide(
+  sertabs: SerTab[],
+  paneId: string,
+  ctx: ReconcileCtx,
+): Tab[] {
+  const out: Tab[] = [];
+  for (const sertab of sertabs) {
+    const kind = sertab.k ?? "f";
+    if (kind === "s" || kind === "h") continue;
+    const matched = ctx.match.byRemote.get(sertab);
+    if (matched) {
+      // Terminal titles are shared structure (a rename should co-view);
+      // every other per-tab field on a matched tab stays local.
+      if (
+        matched.kind === "terminal" &&
+        typeof sertab.n === "string" &&
+        sertab.n &&
+        sertab.n !== matched.title
+      ) {
+        matched.title = sertab.n;
+      }
+      ctx.materialized.set(sertab, matched);
+      out.push(matched);
       continue;
     }
     if (kind === "t") {
-      if (live.kind !== "terminal") return false;
-      if (
-        remote.tsid &&
-        live.terminalSessionId &&
-        remote.tsid !== live.terminalSessionId
-      ) {
-        return false;
+      if (!sertab.tsid) {
+        ctx.diverged = true;
+        continue;
       }
+      const tab = restoreTerminalTabFromSer(sertab);
+      ctx.materialized.set(sertab, tab);
+      out.push(tab);
       continue;
     }
-    if (kind === "g" && live.kind === "graph") continue;
-    if (kind === "b" && live.kind === "browser") continue;
-    if (kind === "d" && live.kind === "dashboard") continue;
-    return false;
+    const tab =
+      kind === "g"
+        ? restoreGraphTabFromSer(sertab)
+        : kind === "b"
+          ? restoreBrowserTabFromSer(sertab)
+          : kind === "d"
+            ? restoreDashboardTabFromSer(sertab)
+            : restoreFileTabFromSer(sertab);
+    ctx.materialized.set(sertab, tab);
+    out.push(tab);
+    if (tab.kind === "file" && tab.path) {
+      ctx.toLoad.push({ paneId, tabId: tab.id, path: tab.path });
+    }
   }
-  return true;
+  return out;
 }
 
-function applyCongruentNode(remote: SerNode, liveId: string): void {
-  const live = layout.nodes[liveId]!;
-  if (remote.k === "s" && live.kind === "split") {
-    // Serialization omits `r` near the 50/50 default, so absence means
-    // the peer's split sits at (or rounded to) even.
-    live.ratio = typeof remote.r === "number" ? remote.r : 0.5;
-    applyCongruentNode(remote.a, live.a);
-    applyCongruentNode(remote.b, live.b);
-    return;
+/// Local active tab wins while it survives on this side; otherwise the
+/// remote `a` marker (resolved through the materialized map), then the
+/// first tab.
+function overlayActiveTabId(
+  priorActiveId: string | null,
+  sertabs: SerTab[],
+  next: Tab[],
+  ctx: ReconcileCtx,
+): string | null {
+  if (priorActiveId && next.some((t) => t.id === priorActiveId)) {
+    return priorActiveId;
   }
-  if (remote.k !== "l" || live.kind !== "leaf") return;
-  // Absent `ht` means "follow global": clear the override rather than
-  // keeping a stale local one.
-  live.theme = remote.ht === "d" ? "dark" : remote.ht === "l" ? "light" : undefined;
-  const side: PaneSide = remote.sb ? "b" : "a";
+  return remoteActiveTabId(sertabs, next, ctx);
+}
+
+function remoteActiveTabId(
+  sertabs: SerTab[],
+  next: Tab[],
+  ctx: ReconcileCtx,
+): string | null {
+  const marked = sertabs.find((st) => st.a);
+  const mapped = marked ? ctx.materialized.get(marked) : undefined;
+  if (mapped && next.some((t) => t.id === mapped.id)) return mapped.id;
+  return next[0]?.id ?? null;
+}
+
+/// Pane chrome shared by kept and rebuilt leaves: theme override and A/B
+/// side visibility. Absent `ht` means "follow global": clear the
+/// override rather than keeping a stale local one.
+function applyLeafChrome(remoteLeaf: SerLeaf, live: LeafNode): void {
+  live.theme =
+    remoteLeaf.ht === "d" ? "dark" : remoteLeaf.ht === "l" ? "light" : undefined;
+  const side: PaneSide = remoteLeaf.sb ? "b" : "a";
   if (paneSide(live) !== side) {
     live.side = side;
     // Mirror flipHybrid: landing on a side that has tabs but no active
@@ -5563,21 +5882,6 @@ function applyCongruentNode(remote: SerNode, liveId: string): void {
     const tabs = paneTabs(live, side);
     if (!paneActiveTabId(live, side) && tabs.length > 0) {
       setPaneActiveTabId(live, tabs[0]!.id, side);
-    }
-  }
-  applyTerminalTitles(remote.t, live.tabs);
-  applyTerminalTitles(remote.bt ?? [], live.bTabs ?? []);
-}
-
-/// Terminal titles are shared structure (a rename should co-view), applied
-/// positionally on a congruent list. Every other per-tab field stays local.
-function applyTerminalTitles(remoteTabs: SerTab[], liveTabs: Tab[]): void {
-  for (let i = 0; i < remoteTabs.length && i < liveTabs.length; i++) {
-    const remote = remoteTabs[i]!;
-    const live = liveTabs[i]!;
-    if ((remote.k ?? "f") !== "t" || live.kind !== "terminal") continue;
-    if (typeof remote.n === "string" && remote.n && remote.n !== live.title) {
-      live.title = remote.n;
     }
   }
 }

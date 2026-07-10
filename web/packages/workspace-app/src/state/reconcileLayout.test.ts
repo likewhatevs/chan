@@ -272,85 +272,268 @@ describe("reconcileLayout in-place subset", () => {
   });
 });
 
-describe("reconcileLayout structural divergence", () => {
-  test("a split-vs-leaf mismatch refuses as one atomic no-op", () => {
-    resetSplitLayout([fileTab()], [terminalTab()], { ratio: 0.6 });
-    const before = fingerprint();
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+describe("reconcileLayout tab-set sync", () => {
+  test("a tab the peer opened is created loading, in remote order", () => {
+    const pane = resetLayout([fileTab()]);
+    const remote: SerNode = {
+      k: "l",
+      t: [{ p: "notes/new.md" }, { p: "notes/a.md" }],
+    };
 
-    expect(reconcileLayout({ k: "l", t: [{ p: "notes/a.md" }], wc: "g" })).toBe(
-      "diverged",
-    );
-    expect(fingerprint()).toBe(before);
-    expect(layout.focusColor).toBe("blue");
-    expect(warn).toHaveBeenCalledOnce();
+    expect(reconcileLayout(remote)).toBe("applied");
+    expect(pane.tabs).toHaveLength(2);
+    const created = pane.tabs[0] as FileTab;
+    expect(created.path).toBe("notes/new.md");
+    expect(created.loading).toBe(true);
+    // The pre-existing tab is the SAME object, not a recreate.
+    expect(pane.tabs[1]!.id).toBe("file-1");
   });
 
-  test("a split direction flip diverges", () => {
-    resetSplitLayout([fileTab()], [terminalTab()]);
-    vi.spyOn(console, "warn").mockImplementation(() => {});
+  test("a clean tab the peer closed is removed; the local active falls back", () => {
+    const keep = fileTab({ id: "file-keep", path: "notes/b.md" });
+    const pane = resetLayout([fileTab(), keep]);
+    pane.activeTabId = "file-1";
+
+    expect(
+      reconcileLayout({ k: "l", t: [{ p: "notes/b.md", a: 1 }] }),
+    ).toBe("applied");
+    expect(pane.tabs).toHaveLength(1);
+    expect(pane.tabs[0]!.id).toBe("file-keep");
+    expect(pane.activeTabId).toBe("file-keep");
+  });
+
+  test("a peer terminal with a tsid reattaches, never spawns", () => {
+    const pane = resetLayout([fileTab()]);
+    const remote: SerNode = {
+      k: "l",
+      t: [{ p: "notes/a.md" }, { k: "t", n: "peer term", tsid: "ts-peer", tc: 1 }],
+    };
+
+    expect(reconcileLayout(remote)).toBe("applied");
+    const term = pane.tabs[1] as TerminalTab;
+    expect(term.kind).toBe("terminal");
+    expect(term.terminalSessionId).toBe("ts-peer");
+    expect(term.controlledTerminal).toBe(true);
+    expect(term.title).toBe("peer term");
+  });
+
+  test("a peer terminal without a tsid is skipped and flags divergence", () => {
+    const pane = resetLayout([fileTab()]);
+    const remote: SerNode = {
+      k: "l",
+      t: [{ p: "notes/a.md" }, { k: "t", n: "not yet connected" }],
+    };
+
+    expect(reconcileLayout(remote)).toBe("diverged");
+    expect(pane.tabs).toHaveLength(1);
+  });
+
+  test("a live terminal the peer closed is removed", () => {
+    const pane = resetLayout([
+      fileTab(),
+      terminalTab({ terminalSessionId: "ts-1" }),
+    ]);
+
+    expect(reconcileLayout({ k: "l", t: [{ p: "notes/a.md" }] })).toBe(
+      "applied",
+    );
+    expect(pane.tabs).toHaveLength(1);
+    expect(pane.tabs[0]!.kind).toBe("file");
+  });
+
+  test("a terminal tsid swap closes the old view and reattaches the new id", () => {
+    const pane = resetLayout([terminalTab({ terminalSessionId: "ts-old" })]);
+
+    expect(
+      reconcileLayout({ k: "l", t: [{ k: "t", n: "T", tsid: "ts-new" }] }),
+    ).toBe("applied");
+    expect(pane.tabs).toHaveLength(1);
+    expect((pane.tabs[0] as TerminalTab).terminalSessionId).toBe("ts-new");
+  });
+
+  test("a structure-only blob (no tsids) keeps live terminals by ordinal", () => {
+    const pane = resetLayout([terminalTab({ terminalSessionId: "ts-live" })]);
+
+    expect(reconcileLayout({ k: "l", t: [{ k: "t", n: "renamed" }] })).toBe(
+      "applied",
+    );
+    expect(pane.tabs[0]!.id).toBe("term-1");
+    expect((pane.tabs[0] as TerminalTab).title).toBe("renamed");
+    expect((pane.tabs[0] as TerminalTab).terminalSessionId).toBe("ts-live");
+  });
+
+  test("legacy overlay kinds in a remote blob drop silently", () => {
+    const pane = resetLayout([fileTab()]);
+
+    expect(
+      reconcileLayout({ k: "l", t: [{ k: "s" }, { p: "notes/a.md" }] }),
+    ).toBe("applied");
+    expect(pane.tabs).toHaveLength(1);
+    expect(pane.tabs[0]!.id).toBe("file-1");
+  });
+
+  test("a reorder moves the same live objects, no recreates", () => {
+    const a = fileTab();
+    const b = fileTab({ id: "file-2", path: "notes/b.md" });
+    const pane = resetLayout([a, b]);
+
+    expect(
+      reconcileLayout({
+        k: "l",
+        t: [{ p: "notes/b.md" }, { p: "notes/a.md" }],
+      }),
+    ).toBe("applied");
+    expect(pane.tabs.map((t) => t.id)).toEqual(["file-2", "file-1"]);
+  });
+
+  test("a cross-pane move salvages the live object into the target pane", () => {
+    const moved = fileTab({ id: "file-moved", path: "notes/b.md" });
+    const { a: paneA, b: paneB } = resetSplitLayout(
+      [fileTab(), moved],
+      [terminalTab({ terminalSessionId: "ts-1" })],
+    );
+    const remote: SerNode = {
+      k: "s",
+      d: "r",
+      a: { k: "l", t: [{ p: "notes/a.md" }] },
+      b: { k: "l", t: [{ k: "t", tsid: "ts-1" }, { p: "notes/b.md" }] },
+    };
+
+    expect(reconcileLayout(remote)).toBe("applied");
+    expect(paneA.tabs.map((t) => t.id)).toEqual(["file-1"]);
+    expect(paneB.tabs.map((t) => t.id)).toEqual(["term-1", "file-moved"]);
+  });
+
+  test("side B syncs too: the peer emptying side B clears clean b tabs", () => {
+    const pane = resetLayout([fileTab()], {
+      bTabs: [terminalTab({ terminalSessionId: "ts-1" })],
+      bActiveTabId: "term-1",
+    });
+
+    expect(reconcileLayout({ k: "l", t: [{ p: "notes/a.md" }] })).toBe(
+      "applied",
+    );
+    expect(pane.bTabs ?? []).toHaveLength(0);
+    expect(pane.bActiveTabId).toBeNull();
+  });
+});
+
+describe("reconcileLayout rebuild + salvage", () => {
+  test("a leaf-to-split rebuild salvages live tabs into the new panes", () => {
+    const file = fileTab();
+    const term = terminalTab({ terminalSessionId: "ts-1" });
+    resetLayout([file, term]);
+    const remote: SerNode = {
+      k: "s",
+      d: "r",
+      r: 0.4,
+      a: { k: "l", t: [{ p: "notes/a.md" }] },
+      b: { k: "l", t: [{ k: "t", tsid: "ts-1" }], f: 1 },
+    };
+
+    expect(reconcileLayout(remote)).toBe("applied");
+    const root = layout.nodes[layout.rootId]!;
+    expect(root.kind).toBe("split");
+    if (root.kind !== "split") return;
+    expect(root.ratio).toBe(0.4);
+    const paneA = layout.nodes[root.a] as LeafNode;
+    const paneB = layout.nodes[root.b] as LeafNode;
+    // Salvage: the SAME live objects landed in the new panes.
+    expect(paneA.tabs.map((t) => t.id)).toEqual(["file-1"]);
+    expect(paneB.tabs.map((t) => t.id)).toEqual(["term-1"]);
+    // The replaced pane is gone from the node table.
+    expect(layout.nodes["pane-test"]).toBeUndefined();
+    // Local focused pane vanished -> the remote focus marker wins.
+    expect(layout.activePaneId).toBe(paneB.id);
+  });
+
+  test("a split direction flip rebuilds and salvages", () => {
+    resetSplitLayout([fileTab()], [terminalTab({ terminalSessionId: "ts-1" })]);
     const remote: SerNode = {
       k: "s",
       d: "c",
       a: { k: "l", t: [{ p: "notes/a.md" }] },
-      b: { k: "l", t: [{ k: "t" }] },
+      b: { k: "l", t: [{ k: "t", tsid: "ts-1" }] },
     };
 
-    expect(reconcileLayout(remote)).toBe("diverged");
+    expect(reconcileLayout(remote)).toBe("applied");
+    const root = layout.nodes[layout.rootId]!;
+    expect(root.kind).toBe("split");
+    if (root.kind !== "split") return;
+    expect(root.direction).toBe("column");
+    expect((layout.nodes[root.a] as LeafNode).tabs[0]!.id).toBe("file-1");
+    expect((layout.nodes[root.b] as LeafNode).tabs[0]!.id).toBe("term-1");
   });
 
-  test("a tab count mismatch diverges", () => {
-    resetLayout([fileTab()]);
-    vi.spyOn(console, "warn").mockImplementation(() => {});
-    const remote: SerNode = {
-      k: "l",
-      t: [{ p: "notes/a.md" }, { p: "notes/new.md" }],
-    };
-
-    expect(reconcileLayout(remote)).toBe("diverged");
-    expect(layout.nodes["pane-test"]).toMatchObject({ kind: "leaf" });
-  });
-
-  test("a file path mismatch diverges", () => {
-    resetLayout([fileTab()]);
-    vi.spyOn(console, "warn").mockImplementation(() => {});
-
-    expect(reconcileLayout({ k: "l", t: [{ p: "notes/other.md" }] })).toBe(
-      "diverged",
+  test("a split-to-leaf collapse salvages the surviving tab set", () => {
+    resetSplitLayout(
+      [fileTab()],
+      [fileTab({ id: "file-2", path: "notes/b.md" })],
     );
-  });
-
-  test("a terminal session id mismatch diverges; a missing one matches positionally", () => {
-    const pane = resetLayout([terminalTab({ terminalSessionId: "ts-live" })]);
-    vi.spyOn(console, "warn").mockImplementation(() => {});
 
     expect(
-      reconcileLayout({ k: "l", t: [{ k: "t", tsid: "ts-other" }] }),
-    ).toBe("diverged");
-
-    // A structure-only blob carries no tsid: positional match is accepted.
-    expect(reconcileLayout({ k: "l", t: [{ k: "t", n: "renamed" }] })).toBe(
-      "applied",
-    );
-    expect((pane.tabs[0] as TerminalTab).title).toBe("renamed");
+      reconcileLayout({
+        k: "l",
+        t: [{ p: "notes/a.md" }, { p: "notes/b.md" }],
+      }),
+    ).toBe("applied");
+    const root = layout.nodes[layout.rootId]!;
+    expect(root.kind).toBe("leaf");
+    if (root.kind !== "leaf") return;
+    expect(root.tabs.map((t) => t.id)).toEqual(["file-1", "file-2"]);
   });
+});
 
-  test("a tab kind mismatch diverges, including legacy overlay kinds", () => {
-    resetLayout([fileTab()]);
-    vi.spyOn(console, "warn").mockImplementation(() => {});
+describe("reconcileLayout protection rules", () => {
+  test("a dirty file tab the peer closed survives in its pane and flags divergence", () => {
+    const dirty = fileTab({
+      id: "file-dirty",
+      path: "notes/dirty.md",
+      content: "unsaved edits",
+      saved: "old",
+    });
+    const pane = resetLayout([fileTab(), dirty]);
 
-    expect(reconcileLayout({ k: "l", t: [{ k: "t" }] })).toBe("diverged");
-    expect(reconcileLayout({ k: "l", t: [{ k: "s" }] })).toBe("diverged");
-  });
-
-  test("side B tab lists are part of congruence", () => {
-    resetLayout([fileTab()], { bTabs: [terminalTab()] });
-    vi.spyOn(console, "warn").mockImplementation(() => {});
-
-    // Remote has no side B tabs -> diverged.
     expect(reconcileLayout({ k: "l", t: [{ p: "notes/a.md" }] })).toBe(
       "diverged",
     );
+    expect(pane.tabs.map((t) => t.id)).toEqual(["file-1", "file-dirty"]);
+  });
+
+  test("a dirty tab whose pane was rebuilt away parks in the focused pane", () => {
+    const dirty = fileTab({
+      id: "file-dirty",
+      path: "notes/dirty.md",
+      content: "unsaved edits",
+      saved: "old",
+    });
+    resetSplitLayout([dirty], [fileTab({ id: "file-b", path: "notes/b.md" })]);
+
+    // The peer collapsed the split to a single pane without the dirty tab.
+    expect(reconcileLayout({ k: "l", t: [{ p: "notes/b.md" }] })).toBe(
+      "diverged",
+    );
+    const root = layout.nodes[layout.rootId]!;
+    expect(root.kind).toBe("leaf");
+    if (root.kind !== "leaf") return;
+    expect(root.tabs.map((t) => t.id)).toEqual(["file-b", "file-dirty"]);
+    // The dirty keep never steals the active slot.
+    expect(root.activeTabId).toBe("file-b");
+  });
+
+  test("an active pane-mode transaction refuses the apply", async () => {
+    const pane = resetLayout([fileTab()]);
+    const { enterPaneMode, cancelPaneMode } = await import("./tabs.svelte");
+    enterPaneMode();
+    try {
+      expect(
+        reconcileLayout({ k: "l", t: [{ p: "notes/a.md" }], wc: "g" }),
+      ).toBe("diverged");
+      expect(layout.focusColor).toBe("blue");
+      expect(pane.tabs).toHaveLength(1);
+    } finally {
+      cancelPaneMode();
+    }
   });
 });
 

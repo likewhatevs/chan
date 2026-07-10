@@ -128,13 +128,14 @@ describe("session_changed frame filter", () => {
     expect(getSession).not.toHaveBeenCalled();
   });
 
-  test("drops deleted frames (a peer's blob delete never tears down live tabs)", async () => {
+  test("a deleted frame never refetches or tears down live tabs", async () => {
     const getSession = vi.spyOn(api, "getSession").mockResolvedValue(remotePayload());
 
     fireFrame({ w: sessionWindowId(), client: "peer-nonce", deleted: true });
     await vi.advanceTimersByTimeAsync(1000);
 
     expect(getSession).not.toHaveBeenCalled();
+    expect((layout.nodes[layout.rootId] as LeafNode).tabs).toHaveLength(1);
   });
 
   test("drops frames before bootstrap hydration", async () => {
@@ -177,21 +178,29 @@ describe("session sync apply pipeline", () => {
   });
 
   test("a diverged apply leaves the snapshot unseeded so the local save pushes back", async () => {
-    // Remote tree has an extra tab: structurally diverged from the live
-    // single-tab pane, so reconcile refuses.
-    vi.spyOn(api, "getSession").mockResolvedValue({
-      layout: {
-        k: "l",
-        t: [{ p: "notes/a.md" }, { p: "notes/other.md" }],
-        wc: "g",
-      },
-    });
+    // The live pane holds a dirty tab the remote no longer carries:
+    // reconcile keeps it (diverged) and must NOT seed the dedupe, so the
+    // trailing local save pushes the kept tab back to the peer.
+    const pane = layout.nodes[layout.rootId];
+    if (pane?.kind === "leaf") {
+      pane.tabs.push(
+        fileTab({
+          id: "file-dirty",
+          path: "notes/dirty.md",
+          content: "unsaved edits",
+          saved: "old",
+        }),
+      );
+    }
+    vi.spyOn(api, "getSession").mockResolvedValue(remotePayload());
     const putSession = vi.spyOn(api, "putSession").mockResolvedValue(undefined);
-    vi.spyOn(console, "warn").mockImplementation(() => {});
 
     fireFrame({ w: sessionWindowId(), client: "peer-nonce" });
     await vi.advanceTimersByTimeAsync(250);
-    expect(layout.focusColor).toBe("blue");
+
+    // The dirty tab survived the apply.
+    const tabs = (layout.nodes[layout.rootId] as LeafNode).tabs;
+    expect(tabs.some((t) => t.id === "file-dirty")).toBe(true);
 
     scheduleSessionSave();
     await vi.advanceTimersByTimeAsync(750);
@@ -219,6 +228,51 @@ describe("session sync apply pipeline", () => {
     await vi.advanceTimersByTimeAsync(250);
     expect(getSession).toHaveBeenCalledTimes(1);
     expect(layout.focusColor).toBe("green");
+  });
+
+  test("a peer delete stops this window from re-persisting the discarded blob", async () => {
+    const putSession = vi.spyOn(api, "putSession").mockResolvedValue(undefined);
+
+    // A save sits in the debounce when the peer's DELETE lands: the
+    // pending write is cancelled, and later saves stay suppressed.
+    scheduleSessionSave();
+    fireFrame({ w: sessionWindowId(), client: "peer-nonce", deleted: true });
+    await vi.advanceTimersByTimeAsync(750);
+    expect(putSession).not.toHaveBeenCalled();
+
+    scheduleSessionSave();
+    await vi.advanceTimersByTimeAsync(750);
+    expect(putSession).not.toHaveBeenCalled();
+  });
+
+  test("a peer write after a peer delete lifts the suppression and resyncs", async () => {
+    const getSession = vi.spyOn(api, "getSession").mockResolvedValue(remotePayload());
+    const putSession = vi.spyOn(api, "putSession").mockResolvedValue(undefined);
+
+    fireFrame({ w: sessionWindowId(), client: "peer-nonce", deleted: true });
+    await vi.advanceTimersByTimeAsync(750);
+
+    // The blob came back: sync resumes...
+    fireFrame({ w: sessionWindowId(), client: "peer-nonce" });
+    await vi.advanceTimersByTimeAsync(250);
+    expect(getSession).toHaveBeenCalledTimes(1);
+    expect(layout.focusColor).toBe("green");
+
+    // ...and so does persistence: a local change saves again.
+    layout.focusColor = "pink";
+    scheduleSessionSave();
+    await vi.advanceTimersByTimeAsync(750);
+    expect(putSession).toHaveBeenCalledTimes(1);
+  });
+
+  test("a local discard is never lifted by a peer write", async () => {
+    const getSession = vi.spyOn(api, "getSession").mockResolvedValue(remotePayload());
+
+    discardWindowSessionLocal();
+    fireFrame({ w: sessionWindowId(), client: "peer-nonce" });
+    await vi.advanceTimersByTimeAsync(1000);
+
+    expect(getSession).not.toHaveBeenCalled();
   });
 
   test("an echo of the blob this window already carries applies nothing", async () => {
