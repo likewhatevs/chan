@@ -635,6 +635,39 @@ describe("degradation", () => {
     expect(sockets.length).toBe(dials); // no redial
     cleanup();
   });
+
+  test("closed{import} tears down exactly like reset (reason-agnostic)", async () => {
+    vi.useFakeTimers();
+    const tab = fileTab();
+    const { sock, cleanup } = await attached(tab, "hello");
+    const dials = sockets.length;
+    sock.frame({ type: "closed", reason: "import" });
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(tab.doc?.state).toBe("off");
+    expect(sockets.length).toBe(dials);
+    cleanup();
+  });
+
+  test("a no-workspace error (dial racing a reset swap) retries, never latches", async () => {
+    vi.useFakeTimers();
+    const tab = fileTab();
+    acquireDocSession(tab);
+    const sock = lastSocket();
+    sock.open();
+    // The server answers the race with a FRAME before closing, so the
+    // capability probe must not read this as a pre-doc-sync server and
+    // the session must redial once the cell swap settles.
+    sock.frame({ type: "error", message: "workspace resetting", reason: "no-workspace" });
+    sock.drop();
+    expect(tab.doc?.state).not.toBe("off");
+    await vi.advanceTimersByTimeAsync(600);
+    expect(sockets.length).toBe(2);
+    const retry = lastSocket();
+    retry.open();
+    retry.frame(snap("hello", 0));
+    await flushMicro();
+    expect(tab.doc?.state).toBe("attached");
+  });
 });
 
 // ---- save funnel (dirty-audit rows 1-3) --------------------------------------
