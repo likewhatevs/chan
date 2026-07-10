@@ -172,6 +172,34 @@ export type SlidePreviewTabState = {
   mode: SlidePreviewMode;
 };
 
+/// Connection state of a tab's live document session (see
+/// state/docSync.svelte.ts):
+///   - `connecting`: first socket dial in progress; classic autosave
+///     stays active until `attached`.
+///   - `attached`: the server authority owns the document; saves flush
+///     through the session and the classic PUT path is suppressed.
+///   - `reconnecting`: transient socket loss inside the grace window;
+///     autosave stays suppressed so a blip cannot race the authority's
+///     flush with a CAS PUT.
+///   - `degraded`: reconnect grace exhausted; classic autosave+CAS has
+///     resumed against the last authority-flushed mtime token.
+///   - `off`: doc sync disabled, unsupported by the server, or the tab
+///     is ineligible.
+export type DocSyncStatus =
+  | "connecting"
+  | "attached"
+  | "reconnecting"
+  | "degraded"
+  | "off";
+
+/// Live doc-session presence mirrored onto a FileTab (`FileTab.doc`).
+export type DocTabState = {
+  state: DocSyncStatus;
+  /// Number of OTHER live attaches on the same path (self excluded);
+  /// > 0 means a peer badge is warranted.
+  peers: number;
+};
+
 /// File-content tab: holds the editable buffer for any text-class
 /// file (markdown documents, contact notes, and arbitrary source /
 /// config text like .py, .json, .yaml).
@@ -248,6 +276,14 @@ export type FileTab = {
   /// on reload (loadTabContent) or dismiss.
   /// Ephemeral - not serialized into the URL hash / session.json.
   externalChange?: boolean;
+  /// Live doc-session sync state for this tab, mirrored from
+  /// state/docSync.svelte.ts while the tab is attached to the server's
+  /// document authority. `state` drives save/autosave routing and the
+  /// editor's degraded-mode affordances; `peers` (other live attaches
+  /// on the same path) drives the tab-strip presence badge. Undefined
+  /// when doc sync is off or the tab is ineligible. Ephemeral - never
+  /// serialized into the URL hash / session.json.
+  doc?: DocTabState;
   /// Whether the floating style toolbar (top-left of the editor
   /// canvas) is mounted for this tab. The user's explicit show /
   /// hide preference from the tab menu (a layer above the hover-
