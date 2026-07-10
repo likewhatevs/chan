@@ -195,6 +195,21 @@ pub enum PushError {
     Closed,
 }
 
+/// Normalize CRLF and lone CR to LF. Both text ingress points (the
+/// session-creation seed and the reconciler's disk read) pass through
+/// here, so the authority text never contains `\r`: CodeMirror
+/// LF-normalizes on input, and a `\r` reaching a client would desync
+/// its length accounting into an error/close/resnapshot cycle. The
+/// conversion is NOT proactively flushed; it lands on disk with the
+/// first real edit's flush, matching the classic save path's
+/// LF-converts-on-first-save semantics.
+fn normalize_lf(text: String) -> String {
+    if !text.contains('\r') {
+        return text;
+    }
+    text.replace("\r\n", "\n").replace('\r', "\n")
+}
+
 fn now_unix_millis() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -384,6 +399,7 @@ impl DocSession {
     /// adopted, and the session is clean afterwards. Equal content
     /// adopts the token silently.
     fn merge_disk(&self, disk_text: String, stat: &FileStat) {
+        let disk_text = normalize_lf(disk_text);
         let mut st = self.lock_state();
         if disk_text != st.text {
             self.replace_locked(&mut st, DISK_CLIENT, disk_text);
@@ -685,6 +701,7 @@ impl DocRegistry {
                 tokio::task::spawn_blocking(move || ws.read_text_with_stat(&read_path))
                     .await
                     .map_err(|e| AttachError::Task(e.to_string()))??;
+            let text = normalize_lf(text);
 
             // Re-lock and double-check: a concurrent first attach may
             // have won the race; use its session and discard this read
@@ -1682,6 +1699,89 @@ mod tests {
             ha.session().apply_replace("$http", &too_big),
             Err(ApplyError::DocTooLarge { .. })
         ));
+    }
+
+    #[tokio::test]
+    async fn crlf_seed_normalizes_to_lf_without_proactive_flush() {
+        let fx = fixture(&[("a.md", "a\r\nb\rc")]);
+        let disk_token = fx.workspace.stat("a.md").unwrap().mtime_ns;
+        let (ha, mut rxa) = attach(&fx, "a.md", "w1", None).await;
+
+        let frames = drain(&mut rxa);
+        assert_eq!(frames[0]["type"], "snapshot");
+        assert_eq!(frames[0]["doc"], "a\nb\nc", "authority text is pure LF");
+        assert_eq!(frames[0]["dirty"], false);
+        {
+            let st = ha.session().lock_state();
+            assert!(st.dirty_since.is_none(), "normalization is not an edit");
+            assert_eq!(st.flushed_mtime_ns, disk_token, "CRLF file's token adopted");
+            assert_eq!(st.len16, 5);
+        }
+
+        // No proactive flush: the disk keeps its CRLF bytes until a
+        // real edit lands.
+        fx.registry.flush_pass(&fx.workspace, &fx.self_writes).await;
+        assert_eq!(fx.workspace.read_text("a.md").unwrap(), "a\r\nb\rc");
+    }
+
+    #[tokio::test]
+    async fn crlf_disk_merge_converges_clients_on_lf() {
+        let fx = fixture(&[("a.md", "one\ntwo")]);
+        let (ha, mut rxa) = attach(&fx, "a.md", "w1", None).await;
+        let (_hb, mut rxb) = attach(&fx, "a.md", "w2", None).await;
+        drain(&mut rxa);
+        drain(&mut rxb);
+
+        std::fs::write(fx.root.path().join("a.md"), "one\r\ntwo\r\nthree\r\n").unwrap();
+        fx.registry
+            .reconcile_event(
+                &fx.workspace,
+                WatchEvent {
+                    kind: WatchKind::Modified,
+                    path: Some("a.md".into()),
+                    to: None,
+                },
+            )
+            .await;
+
+        assert_eq!(ha.session().authority_view().0, "one\ntwo\nthree\n");
+        for rx in [&mut rxa, &mut rxb] {
+            let frames = drain(rx);
+            assert_eq!(frames.len(), 1);
+            assert_eq!(frames[0]["updates"][0]["clientID"], "$disk");
+        }
+
+        // Rewriting the same CRLF bytes bumps only the mtime: after
+        // normalization the content is equal, so the token is adopted
+        // silently and no synthetic update fans.
+        std::fs::write(fx.root.path().join("a.md"), "one\r\ntwo\r\nthree\r\n").unwrap();
+        let new_token = fx.workspace.stat("a.md").unwrap().mtime_ns;
+        let version_before = ha.session().lock_state().version;
+        reconcile_session(ha.session(), &fx.workspace).await;
+        let st = ha.session().lock_state();
+        assert_eq!(st.version, version_before);
+        assert_eq!(st.flushed_mtime_ns, new_token);
+        drop(st);
+        assert_eq!(drain(&mut rxa).len(), 0);
+    }
+
+    #[tokio::test]
+    async fn first_edit_after_crlf_seed_flushes_lf_to_disk() {
+        let fx = fixture(&[("a.md", "l1\r\nl2")]);
+        let (ha, _rxa) = attach(&fx, "a.md", "w1", None).await;
+
+        // Seeded doc is "l1\nl2" (5 units); append "!".
+        ha.push(0, vec![update("c1", json!([5, [0, "!"]]))])
+            .unwrap();
+        backdate_dirty(ha.session());
+        fx.registry.flush_pass(&fx.workspace, &fx.self_writes).await;
+
+        let on_disk = fx.workspace.read_text("a.md").unwrap();
+        assert_eq!(
+            on_disk, "l1\nl2!",
+            "LF conversion lands with the first save"
+        );
+        assert!(!on_disk.contains('\r'));
     }
 
     #[tokio::test]
