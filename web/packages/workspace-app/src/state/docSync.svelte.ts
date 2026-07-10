@@ -528,10 +528,19 @@ export class DocSession {
     if (pending !== null) {
       view.dispatch({ changes: pending });
     }
-    if (this.status === "connecting" || this.status === "reconnecting") {
-      this.setStatus("attached");
-    }
+    this.promoteIfChannelUp();
     this.maybePush();
+  }
+
+  /// Promote to `attached` whenever the shadow is synced and the
+  /// channel is genuinely up. Deliberately not keyed on the CURRENT
+  /// status: a degraded session whose background retry lands a
+  /// snapshot must heal even if the editor binds later (otherwise the
+  /// classic PUT path and the collab pump would run side by side).
+  private promoteIfChannelUp(): void {
+    if (this.retryStopped) return;
+    if (this.ws === null || this.ws.readyState !== WebSocket.OPEN) return;
+    this.setStatus("attached");
   }
 
   // ---- pump ------------------------------------------------------------
@@ -834,9 +843,7 @@ export class DocSession {
     if (!this.view) {
       // Shadow-only session (editor between mounts): the snapshot is
       // fully absorbed; the next bindView attaches against it.
-      if (this.status === "connecting" || this.status === "reconnecting") {
-        this.setStatus("attached");
-      }
+      this.promoteIfChannelUp();
     }
     this.checkFlushWaiters();
   }

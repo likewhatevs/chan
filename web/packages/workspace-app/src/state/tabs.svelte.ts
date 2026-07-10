@@ -195,7 +195,9 @@ export type DocSyncStatus =
 /// Live doc-session presence mirrored onto a FileTab (`FileTab.doc`).
 export type DocTabState = {
   state: DocSyncStatus;
-  /// Number of OTHER live attaches on the same path (self excluded);
+  /// Number of distinct OTHER WINDOWS with a live cursor on the same
+  /// path. Self-window attaches are excluded and a peer's split panes
+  /// collapse to one: the badge counts people, not editor mounts.
   /// > 0 means a peer badge is warranted.
   peers: number;
 };

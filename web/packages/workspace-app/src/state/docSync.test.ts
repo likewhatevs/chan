@@ -570,6 +570,41 @@ describe("degradation", () => {
     expect(acquireDocSession(fileTab())).toBeNull();
   });
 
+  test("a degraded session with no bound view heals to attached on the retry snapshot", async () => {
+    vi.useFakeTimers();
+    const tab = fileTab();
+    const session = acquireDocSession(tab)!;
+    // No editor mount at all: the session syncs its shadow, then the
+    // channel dies past the grace.
+    const first = lastSocket();
+    first.open();
+    first.frame(snap("hello", 0));
+    await flushMicro();
+    expect(tab.doc?.state).toBe("attached");
+    first.drop();
+    await vi.advanceTimersByTimeAsync(500);
+    lastSocket().drop();
+    await vi.advanceTimersByTimeAsync(1000);
+    lastSocket().drop();
+    expect(tab.doc?.state).toBe("degraded");
+    // Background retry lands a snapshot while still unbound: the
+    // session must heal, or a later bind would pump collab while the
+    // classic PUT path stays armed side by side.
+    await vi.advanceTimersByTimeAsync(2000);
+    const healed = lastSocket();
+    healed.open();
+    healed.frame(snap("hello", 0));
+    await flushMicro();
+    expect(tab.doc?.state).toBe("attached");
+    // The late bind attaches against the healed shadow as usual.
+    const mounted = mountEditor(tab, session);
+    await flushMicro();
+    expect(tab.doc?.state).toBe("attached");
+    expect(mounted.view.state.doc.toString()).toBe("hello");
+    expect(healed.frames("push")).toHaveLength(0);
+    mounted.cleanup();
+  });
+
   test("registry-initiated closed frame turns the session off for good", async () => {
     vi.useFakeTimers();
     const tab = fileTab();
