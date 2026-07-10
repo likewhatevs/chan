@@ -4628,7 +4628,7 @@ export function dirtyPaths(): Set<string> {
 //   p,m,o only meaningful for files
 //   a: active tab in this pane (one per pane)
 //   f: focused pane (one per layout)
-type SerTab = {
+export type SerTab = {
   k?: "f" | "b" | "s" | "g" | "h" | "t" | "d";
   p?: string;
   n?: string;
@@ -4748,9 +4748,9 @@ type SerTab = {
   /// emitted as false when the tab opted out of auto-rotation.
   ar?: boolean;
 };
-type SerFocusColor = "o" | "g" | "p";
-type SerHybridTheme = "d" | "l";
-type SerLeaf = {
+export type SerFocusColor = "o" | "g" | "p";
+export type SerHybridTheme = "d" | "l";
+export type SerLeaf = {
   k: "l";
   t: SerTab[];
   f?: 1;
@@ -4768,7 +4768,7 @@ type SerLeaf = {
   bt?: SerTab[];
   hb?: SerHybridTheme;
 };
-type SerSplit = {
+export type SerSplit = {
   k: "s";
   d: "r" | "c";
   a: SerNode;
@@ -4776,7 +4776,7 @@ type SerSplit = {
   r?: number;
   wc?: SerFocusColor;
 };
-type SerNode = SerLeaf | SerSplit;
+export type SerNode = SerLeaf | SerSplit;
 
 function serializeFocusColor(color: FocusColor | undefined): { wc?: SerFocusColor } {
   if (color === "orange") return { wc: "o" };
@@ -5429,6 +5429,133 @@ export async function restoreLayout(
   await Promise.all(
     tabsToLoad.map((t) => loadTabContent(t.paneId, t.tabId, t.path)),
   );
+}
+
+/// Result of `reconcileLayout`. "applied": the remote snapshot was
+/// structurally congruent with the live tree and its shared fields were
+/// applied in place. "diverged": the trees differ structurally and
+/// NOTHING was touched. The caller keys echo suppression on this:
+/// applied -> pre-seed the session-save dedupe snapshot so the trailing
+/// local save no-ops; diverged -> leave it unseeded so the next local
+/// save pushes our kept state back to the peer (self-healing).
+export type ReconcileResult = "applied" | "diverged";
+
+/// Non-destructive sibling of `restoreLayout` for live co-view sync:
+/// apply a peer's persisted layout snapshot onto the LIVE tree without
+/// remounting tabs, so unsaved editors and running xterms survive.
+/// Applies the shared in-place subset only — split ratios, pane A/B side
+/// visibility, per-Hybrid theme overrides, the window focus color, and
+/// terminal titles — and only when the remote tree is congruent with the
+/// live one (same split shape and directions; per pane side the same tab
+/// count, kinds, file paths, and terminal session ids). Anything else
+/// (tab opened/closed, pane split/removed) is a structural divergence:
+/// log and no-op. Per-client view state (active tab `a`, focused pane
+/// `f`, carets, scroll, read mode) is NEVER applied from remote; each
+/// co-viewer keeps its own.
+export function reconcileLayout(remote: SerNode): ReconcileResult {
+  if (!layoutCongruent(remote, layout.rootId)) {
+    console.warn(
+      "[chan] session sync: remote layout diverged from the live tree; skipping in-place apply",
+    );
+    return "diverged";
+  }
+  applyCongruentNode(remote, layout.rootId);
+  // `wc` is stamped on the root node only; absence means the default
+  // ("blue"), matching serializeLayout's omit-default rule.
+  layout.focusColor = restoreFocusColor(remote.wc);
+  return "applied";
+}
+
+function layoutCongruent(remote: SerNode, liveId: string): boolean {
+  const live = layout.nodes[liveId];
+  if (!live) return false;
+  if (remote.k === "s") {
+    if (live.kind !== "split") return false;
+    if (live.direction !== (remote.d === "r" ? "row" : "column")) return false;
+    return layoutCongruent(remote.a, live.a) && layoutCongruent(remote.b, live.b);
+  }
+  if (live.kind !== "leaf") return false;
+  return (
+    tabListCongruent(remote.t, live.tabs) &&
+    tabListCongruent(remote.bt ?? [], live.bTabs ?? [])
+  );
+}
+
+/// Tab identity for congruence: same count and kinds in order; file tabs
+/// must agree on path; terminal tabs must agree on session id when both
+/// sides carry one (a structure-only blob omits `tsid`, so a positional
+/// match is accepted). Graph / browser / dashboard tabs match by kind
+/// alone. Legacy overlay kinds ("s" settings, "h" health) no longer
+/// restore, so their presence in a remote blob is a divergence.
+function tabListCongruent(remoteTabs: SerTab[], liveTabs: Tab[]): boolean {
+  if (remoteTabs.length !== liveTabs.length) return false;
+  for (let i = 0; i < remoteTabs.length; i++) {
+    const remote = remoteTabs[i]!;
+    const live = liveTabs[i]!;
+    const kind = remote.k ?? "f";
+    if (kind === "f") {
+      if (live.kind !== "file") return false;
+      if ((remote.p ?? "") !== live.path) return false;
+      continue;
+    }
+    if (kind === "t") {
+      if (live.kind !== "terminal") return false;
+      if (
+        remote.tsid &&
+        live.terminalSessionId &&
+        remote.tsid !== live.terminalSessionId
+      ) {
+        return false;
+      }
+      continue;
+    }
+    if (kind === "g" && live.kind === "graph") continue;
+    if (kind === "b" && live.kind === "browser") continue;
+    if (kind === "d" && live.kind === "dashboard") continue;
+    return false;
+  }
+  return true;
+}
+
+function applyCongruentNode(remote: SerNode, liveId: string): void {
+  const live = layout.nodes[liveId]!;
+  if (remote.k === "s" && live.kind === "split") {
+    // Serialization omits `r` near the 50/50 default, so absence means
+    // the peer's split sits at (or rounded to) even.
+    live.ratio = typeof remote.r === "number" ? remote.r : 0.5;
+    applyCongruentNode(remote.a, live.a);
+    applyCongruentNode(remote.b, live.b);
+    return;
+  }
+  if (remote.k !== "l" || live.kind !== "leaf") return;
+  // Absent `ht` means "follow global": clear the override rather than
+  // keeping a stale local one.
+  live.theme = remote.ht === "d" ? "dark" : remote.ht === "l" ? "light" : undefined;
+  const side: PaneSide = remote.sb ? "b" : "a";
+  if (paneSide(live) !== side) {
+    live.side = side;
+    // Mirror flipHybrid: landing on a side that has tabs but no active
+    // id seeds the first tab so the flip shows content.
+    const tabs = paneTabs(live, side);
+    if (!paneActiveTabId(live, side) && tabs.length > 0) {
+      setPaneActiveTabId(live, tabs[0]!.id, side);
+    }
+  }
+  applyTerminalTitles(remote.t, live.tabs);
+  applyTerminalTitles(remote.bt ?? [], live.bTabs ?? []);
+}
+
+/// Terminal titles are shared structure (a rename should co-view), applied
+/// positionally on a congruent list. Every other per-tab field stays local.
+function applyTerminalTitles(remoteTabs: SerTab[], liveTabs: Tab[]): void {
+  for (let i = 0; i < remoteTabs.length && i < liveTabs.length; i++) {
+    const remote = remoteTabs[i]!;
+    const live = liveTabs[i]!;
+    if ((remote.k ?? "f") !== "t" || live.kind !== "terminal") continue;
+    if (typeof remote.n === "string" && remote.n && remote.n !== live.title) {
+      live.title = remote.n;
+    }
+  }
 }
 
 function serializedLeaves(node: SerNode | null, out: SerLeaf[] = []): SerLeaf[] {
