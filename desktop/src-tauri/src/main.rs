@@ -1466,6 +1466,11 @@ fn remove_devserver_windows(app: &tauri::AppHandle, state: &AppState, id: &str) 
 /// good. Idempotent; safe to call when the devserver is already disconnected.
 fn teardown_devserver_connection(app: &tauri::AppHandle, state: &AppState, id: &str) {
     state.devservers.remove(id);
+    // A teardown also abandons a pending browser sign-in: the row is going
+    // away (disconnect/remove) or restarting (reconnect), so the waiting
+    // spinner must not outlive it. The follow-up refresh below pushes the
+    // cleared row.
+    state.devserver_awaiting_signin.lock().unwrap().remove(id);
     // A full teardown reaps the control terminal, so the reconnect block must
     // not outlive it: the block's invariant is that a kept "process exited"
     // terminal exists for the user to close. A stale entry here permanently
@@ -2028,6 +2033,91 @@ fn gateway_display_name(configured_label: &str, gateway_url: &str, proxy_origin:
         .unwrap_or_else(|| gateway_url.to_string())
 }
 
+/// How long a gateway connect waits on the browser sign-in before the row
+/// resets. Generous: the user may be creating an account or fishing for a
+/// passkey; a re-click any time re-opens the browser and restarts the clock.
+const GATEWAY_SIGNIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5 * 60);
+
+/// Mark `id` as waiting on a browser sign-in and start its expiry clock. The
+/// launcher renders the row's waiting spinner off the shared map
+/// (`DevserverEntry.pending_signin`). Re-marking re-stamps the entry
+/// (latest-wins, mirroring `PendingAuth`), and the spawned timeout clears
+/// only its own stamp, so an old clock can never expire a newer attempt. On
+/// expiry (row i': the user never completed sign-in) the row resets and the
+/// banner explains.
+fn begin_awaiting_signin(app: &tauri::AppHandle, state: &Arc<AppState>, id: &str) {
+    let stamp = Instant::now();
+    state
+        .devserver_awaiting_signin
+        .lock()
+        .unwrap()
+        .insert(id.to_string(), stamp);
+    signal_devserver_rows_changed(app, state);
+    let app = app.clone();
+    let state = Arc::clone(state);
+    let id = id.to_string();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(GATEWAY_SIGNIN_TIMEOUT).await;
+        let expired = {
+            let mut awaiting = state.devserver_awaiting_signin.lock().unwrap();
+            match awaiting.get(&id) {
+                Some(s) if *s == stamp => {
+                    awaiting.remove(&id);
+                    true
+                }
+                _ => false,
+            }
+        };
+        if expired {
+            let _ = app.emit(
+                auth::AUTH_ERROR,
+                "sign-in was not completed in the browser; click Connect to try again",
+            );
+            signal_devserver_rows_changed(&app, &state);
+        }
+    });
+}
+
+/// Drop `id`'s waiting-on-sign-in mark (the connect resumed, or the
+/// connection was torn down). No-op when it was not waiting.
+fn clear_awaiting_signin(app: &tauri::AppHandle, state: &Arc<AppState>, id: &str) {
+    let removed = state
+        .devserver_awaiting_signin
+        .lock()
+        .unwrap()
+        .remove(id)
+        .is_some();
+    if removed {
+        signal_devserver_rows_changed(app, state);
+    }
+}
+
+/// Drop EVERY waiting-on-sign-in mark. `PendingAuth` is a single slot popped
+/// by any processed deep-link callback, so once a callback is consumed no
+/// waiting row's browser leg can complete anymore; the winner's connect
+/// resumes separately.
+fn clear_all_awaiting_signin(app: &tauri::AppHandle, state: &Arc<AppState>) {
+    let had_any = {
+        let mut awaiting = state.devserver_awaiting_signin.lock().unwrap();
+        let had_any = !awaiting.is_empty();
+        awaiting.clear();
+        had_any
+    };
+    if had_any {
+        signal_devserver_rows_changed(app, state);
+    }
+}
+
+/// Push the launcher a fresh devserver list (the feed re-lists registries on
+/// the library change signal). The waiting-state transitions ride this, the
+/// same push every other row-state change uses.
+fn signal_devserver_rows_changed(app: &tauri::AppHandle, state: &AppState) {
+    if let Some(embedded) = state.embedded() {
+        embedded.signal_library_change();
+    }
+    let _ = app.emit(serve::SERVES_CHANGED, ());
+}
+
 async fn connect_gateway_devserver(
     app: tauri::AppHandle,
     state: Arc<AppState>,
@@ -2037,15 +2127,44 @@ async fn connect_gateway_devserver(
     discovery: devserver::GatewayDiscovery,
 ) -> Result<(), ConnectDevserverError> {
     let Some(pat) = auth::load_gateway_pat(&discovery.identity_origin)? else {
+        // No PAT: hand off to the browser and mark the row waiting so the
+        // launcher narrates the hand-off instead of silently going idle. A
+        // re-click lands here again: open_gateway_signin overwrites the
+        // pending nonce and begin_awaiting_signin re-stamps the row
+        // (latest-wins on both sides).
         auth::open_gateway_signin(
             &app,
             &discovery.identity_origin,
             &discovery.desktop_authorize_url,
             &id,
         )?;
+        begin_awaiting_signin(&app, &state, &id);
         return Ok(());
     };
-    let gateway = devserver::gateway_conn(&discovery, pat.secret).await?;
+    // A PAT-backed connect is running: any waiting mark is stale (this IS the
+    // resume, or a manual connect superseded it).
+    clear_awaiting_signin(&app, &state, &id);
+    let gateway = match devserver::gateway_conn(&discovery, pat.secret).await {
+        Ok(gateway) => gateway,
+        Err(devserver::GatewayEntryError::Unauthorized) => {
+            // The stored PAT is revoked/expired (taxonomy row ii): drop it and
+            // fall into the same browser sign-in as the no-PAT path, so a dead
+            // credential self-heals into re-sign-in instead of dead-ending.
+            auth::clear_gateway_pat(&discovery.identity_origin)?;
+            auth::open_gateway_signin(
+                &app,
+                &discovery.identity_origin,
+                &discovery.desktop_authorize_url,
+                &id,
+            )?;
+            begin_awaiting_signin(&app, &state, &id);
+            return Ok(());
+        }
+        // Known reasons (no devserver, offline, denied) surface their own
+        // banner strings; Other keeps the raw message. No prefix here: the
+        // entry narration IS the failure.
+        Err(e) => return Err(e.to_string().into()),
+    };
     let (host, port) = origin_host_port(&gateway.proxy_origin)?;
     let name = gateway_display_name(&configured_label, &url, &gateway.proxy_origin);
     let conn = devserver::DevserverConn {
@@ -4153,29 +4272,63 @@ fn main() {
             let state_for_links = Arc::clone(&state_for_setup);
             app.deep_link().on_open_url(move |event| {
                 for url in event.urls() {
-                    if let Some(id) = auth::handle_callback(&app_for_links, url.as_str()) {
-                        let app = app_for_links.clone();
-                        let state = Arc::clone(&state_for_links);
-                        tauri::async_runtime::spawn(async move {
-                            if let Err(e) = connect_devserver_impl(app.clone(), state, id).await {
-                                let _ = app.emit(auth::AUTH_ERROR, e);
+                    match auth::handle_callback(&app_for_links, url.as_str()) {
+                        auth::CallbackOutcome::SignedIn { resume_devserver_id } => {
+                            // Any processed callback pops the single pending-
+                            // auth slot, so every waiting row's browser leg is
+                            // settled: clear them all, then resume the winner.
+                            clear_all_awaiting_signin(&app_for_links, &state_for_links);
+                            if let Some(id) = resume_devserver_id {
+                                let app = app_for_links.clone();
+                                let state = Arc::clone(&state_for_links);
+                                tauri::async_runtime::spawn(async move {
+                                    if let Err(e) =
+                                        connect_devserver_impl(app.clone(), state, id).await
+                                    {
+                                        let _ = app.emit(auth::AUTH_ERROR, e);
+                                    }
+                                });
                             }
-                        });
+                        }
+                        auth::CallbackOutcome::Failed {
+                            consumed_pending: true,
+                        } => {
+                            // Denied/cancelled/failed sign-in (row i): the
+                            // banner was emitted by handle_callback; reset the
+                            // waiting rows.
+                            clear_all_awaiting_signin(&app_for_links, &state_for_links);
+                        }
+                        auth::CallbackOutcome::Failed {
+                            consumed_pending: false,
+                        } => {}
                     }
                 }
             });
             if let Ok(Some(urls)) = app.deep_link().get_current() {
                 for url in urls {
-                    if let Some(id) = auth::handle_callback(app.handle(), url.as_str()) {
-                        let app_handle = app.handle().clone();
-                        let state = Arc::clone(&state_for_setup);
-                        tauri::async_runtime::spawn(async move {
-                            if let Err(e) =
-                                connect_devserver_impl(app_handle.clone(), state, id).await
-                            {
-                                let _ = app_handle.emit(auth::AUTH_ERROR, e);
+                    match auth::handle_callback(app.handle(), url.as_str()) {
+                        auth::CallbackOutcome::SignedIn { resume_devserver_id } => {
+                            clear_all_awaiting_signin(app.handle(), &state_for_setup);
+                            if let Some(id) = resume_devserver_id {
+                                let app_handle = app.handle().clone();
+                                let state = Arc::clone(&state_for_setup);
+                                tauri::async_runtime::spawn(async move {
+                                    if let Err(e) =
+                                        connect_devserver_impl(app_handle.clone(), state, id).await
+                                    {
+                                        let _ = app_handle.emit(auth::AUTH_ERROR, e);
+                                    }
+                                });
                             }
-                        });
+                        }
+                        auth::CallbackOutcome::Failed {
+                            consumed_pending: true,
+                        } => {
+                            clear_all_awaiting_signin(app.handle(), &state_for_setup);
+                        }
+                        auth::CallbackOutcome::Failed {
+                            consumed_pending: false,
+                        } => {}
                     }
                 }
             }
@@ -6178,6 +6331,63 @@ mod tests {
             .find("connect_devserver_impl")
             .expect("reconnect then dials");
         assert!(teardown_pos < connect_pos);
+    }
+
+    #[test]
+    fn gateway_signin_wait_rides_the_connect_flow() {
+        const MAIN_RS: &str = include_str!("main.rs");
+        // The gateway connect narrates the browser hand-off: the no-PAT path
+        // marks the row waiting, a 401 clears the dead PAT and re-enters the
+        // SAME sign-in path (self-heal, no dead end), and a PAT-backed connect
+        // clears any stale wait.
+        let connect = MAIN_RS
+            .split("async fn connect_gateway_devserver")
+            .nth(1)
+            .expect("connect_gateway_devserver exists")
+            .split("async fn connect_devserver_impl_inner")
+            .next()
+            .expect("connect_gateway_devserver precedes the raw inner");
+        assert!(connect.contains("begin_awaiting_signin"));
+        assert!(connect.contains("clear_awaiting_signin"));
+        assert!(connect.contains("GatewayEntryError::Unauthorized"));
+        assert!(connect.contains("clear_gateway_pat"));
+        // A teardown (disconnect/remove/reconnect) abandons the wait: the
+        // spinner row must not outlive the connection state.
+        let teardown = MAIN_RS
+            .split("fn teardown_devserver_connection")
+            .nth(1)
+            .expect("teardown_devserver_connection exists")
+            .split("fn mark_devserver_control_exited")
+            .next()
+            .expect("teardown precedes mark_devserver_control_exited");
+        assert!(teardown.contains("devserver_awaiting_signin"));
+        // Any processed deep-link callback settles every waiting row (the
+        // pending-auth slot is single); both the runtime and cold-start
+        // delivery paths clear before resuming the winner.
+        let links = MAIN_RS
+            .split("on_open_url(move |event|")
+            .nth(1)
+            .expect("deep-link handler exists")
+            .split("let launcher_url")
+            .next()
+            .expect("deep-link section ends before the launcher window build");
+        assert_eq!(
+            links.matches("clear_all_awaiting_signin").count(),
+            4,
+            "both delivery paths clear on SignedIn AND on a consumed failure"
+        );
+        // The timeout expires only its own attempt: the clock compares its
+        // stamp before clearing, so a re-click's fresh wait survives an old
+        // timer.
+        let wait = MAIN_RS
+            .split("fn begin_awaiting_signin")
+            .nth(1)
+            .expect("begin_awaiting_signin exists")
+            .split("fn clear_awaiting_signin")
+            .next()
+            .expect("begin precedes clear");
+        assert!(wait.contains("GATEWAY_SIGNIN_TIMEOUT"));
+        assert!(wait.contains("Some(s) if *s == stamp"));
     }
 
     #[test]

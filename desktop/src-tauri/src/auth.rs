@@ -208,6 +208,18 @@ pub fn load_gateway_pat(identity_origin: &str) -> Result<Option<StoredPat>, Stri
     }
 }
 
+/// Drop the stored PAT for a gateway. The connect flow calls this when the
+/// gateway answers 401 (the PAT was revoked or expired server-side), so the
+/// next connect attempt falls into the browser sign-in instead of replaying
+/// a dead credential.
+pub fn clear_gateway_pat(identity_origin: &str) -> Result<(), String> {
+    let account = gateway_account(identity_origin);
+    match entry_for(&account)?.delete_credential() {
+        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+        Err(e) => Err(format!("clearing gateway keychain: {e}")),
+    }
+}
+
 pub fn open_gateway_signin(
     app: &AppHandle,
     identity_origin: &str,
@@ -238,25 +250,62 @@ pub fn open_gateway_signin(
     Ok(())
 }
 
+/// What a `chan://auth/callback` delivery amounted to, so the caller can
+/// resume a devserver connect or clear waiting rows. `PendingAuth` is a
+/// single slot popped by any processed callback, so a consumed failure means
+/// NO waiting sign-in can complete anymore (its browser leg lost the nonce),
+/// not just the one this callback belonged to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CallbackOutcome {
+    /// The PAT was stored and AUTH_CHANGED emitted. `resume_devserver_id`
+    /// names the devserver whose connect launched this sign-in, if any.
+    SignedIn { resume_devserver_id: Option<String> },
+    /// The callback failed and AUTH_ERROR was emitted. `consumed_pending` is
+    /// true when the failure popped the in-flight sign-in state; false means
+    /// the URL never matched a sign-in (malformed, or none in progress) and
+    /// any waiting sign-in is still live.
+    Failed { consumed_pending: bool },
+}
+
 /// Handle a `chan://auth/callback#...` URL delivered by the deep-link
 /// plugin. Validates state, persists the PAT, and emits AUTH_CHANGED
 /// on success or AUTH_ERROR on any failure.
-pub fn handle_callback(app: &AppHandle, raw: &str) -> Option<String> {
+pub fn handle_callback(app: &AppHandle, raw: &str) -> CallbackOutcome {
     match do_handle_callback(app, raw) {
-        Ok(resume) => resume,
-        Err(msg) => {
+        Ok(resume_devserver_id) => CallbackOutcome::SignedIn {
+            resume_devserver_id,
+        },
+        Err((msg, consumed_pending)) => {
             let _ = app.emit(AUTH_ERROR, &msg);
-            None
+            CallbackOutcome::Failed { consumed_pending }
         }
     }
 }
 
-fn do_handle_callback(app: &AppHandle, raw: &str) -> Result<Option<String>, String> {
-    let url = Url::parse(raw).map_err(|e| format!("malformed callback URL: {e}"))?;
+/// Map an id.chan.app `#error=` reason token to the banner string. The
+/// tokens are the gateway's stable desktop-authorize vocabulary; the human
+/// strings live here on the desktop so gateway deploys never reword the UI.
+fn signin_error_message(reason: &str) -> String {
+    match reason {
+        "user_cancelled" => "sign-in was cancelled in the browser".to_string(),
+        "oauth_denied" => "sign-in was denied by the identity provider".to_string(),
+        "account_blocked" => "sign-in failed: this account is blocked".to_string(),
+        "mint_failed" => {
+            "sign-in failed: the gateway could not issue an access token".to_string()
+        }
+        other => format!("sign-in failed in the browser: {other}"),
+    }
+}
+
+/// The error side carries the message plus whether the in-flight sign-in
+/// state was consumed (see [`CallbackOutcome::Failed`]).
+fn do_handle_callback(app: &AppHandle, raw: &str) -> Result<Option<String>, (String, bool)> {
+    let url =
+        Url::parse(raw).map_err(|e| (format!("malformed callback URL: {e}"), false))?;
     // Only accept our exact path. Anything else is a confused redirect
     // or a maliciously crafted chan:// URL.
     if url.scheme() != "chan" || url.host_str() != Some("auth") || url.path() != "/callback" {
-        return Err(format!("unexpected callback URL: {raw}"));
+        return Err((format!("unexpected callback URL: {raw}"), false));
     }
     let fragment = url.fragment().unwrap_or("");
     let params: std::collections::HashMap<String, String> =
@@ -268,16 +317,22 @@ fn do_handle_callback(app: &AppHandle, raw: &str) -> Result<Option<String>, Stri
     // shouldn't leave a stale nonce around for a later callback to
     // replay.
     let expected = pending_state().lock().unwrap().take();
+    let consumed = expected.is_some();
 
     if let Some(err) = params.get("error") {
-        return Err(format!("sign-in cancelled: {err}"));
+        return Err((signin_error_message(err), consumed));
     }
 
     let got_state = params.get("state").cloned().unwrap_or_default();
     let pending = match expected {
         Some(p) if p.state == got_state => p,
-        Some(_) => return Err("sign-in state mismatch (stale browser tab?)".into()),
-        None => return Err("no sign-in in progress".into()),
+        Some(_) => {
+            return Err((
+                "sign-in state mismatch (stale browser tab?)".to_string(),
+                consumed,
+            ))
+        }
+        None => return Err(("no sign-in in progress".to_string(), consumed)),
     };
 
     let id = params.get("id").cloned().unwrap_or_default();
@@ -288,7 +343,7 @@ fn do_handle_callback(app: &AppHandle, raw: &str) -> Result<Option<String>, Stri
         .unwrap_or_else(|| format!("chan-desktop @ {}", hostname()));
     let expires_at = params.get("expires_at").cloned().unwrap_or_default();
     if id.is_empty() || secret.is_empty() {
-        return Err("callback missing id or secret".into());
+        return Err(("callback missing id or secret".to_string(), consumed));
     }
 
     let pat = StoredPat {
@@ -297,7 +352,7 @@ fn do_handle_callback(app: &AppHandle, raw: &str) -> Result<Option<String>, Stri
         label: label.clone(),
         expires_at: expires_at.clone(),
     };
-    store_for(&pending.account, &pat)?;
+    store_for(&pending.account, &pat).map_err(|e| (e, consumed))?;
     let status = AuthStatus {
         is_signed_in: true,
         label: Some(label),
@@ -324,4 +379,36 @@ pub fn signout(app: AppHandle) -> Result<AuthStatus, String> {
     };
     let _ = app.emit(AUTH_CHANGED, &status);
     Ok(status)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn signin_error_message_maps_the_authorize_reason_tokens() {
+        // The gateway's stable `#error=` vocabulary (desktop_authorize):
+        // banner strings live desktop-side, one per token, and an unknown
+        // token still names itself so a future reason is never swallowed.
+        assert_eq!(
+            signin_error_message("user_cancelled"),
+            "sign-in was cancelled in the browser"
+        );
+        assert_eq!(
+            signin_error_message("oauth_denied"),
+            "sign-in was denied by the identity provider"
+        );
+        assert_eq!(
+            signin_error_message("account_blocked"),
+            "sign-in failed: this account is blocked"
+        );
+        assert_eq!(
+            signin_error_message("mint_failed"),
+            "sign-in failed: the gateway could not issue an access token"
+        );
+        assert_eq!(
+            signin_error_message("quota_exceeded"),
+            "sign-in failed in the browser: quota_exceeded"
+        );
+    }
 }

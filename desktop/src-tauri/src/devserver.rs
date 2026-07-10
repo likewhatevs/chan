@@ -434,26 +434,139 @@ struct GatewayEntryResponse {
     entry_url: String,
 }
 
-async fn gateway_entry(gw: &GatewayConn, path: &str) -> Result<GatewayEntryResponse, String> {
-    let resp = http_client()?
+/// Why the gateway refused to mint an entry URL, parsed from the entry
+/// endpoint's status + error body so the connect flow can narrate the failure
+/// (and self-heal a revoked PAT) instead of flattening everything to one
+/// generic string. Every body field beyond `error` is optional on the wire: a
+/// gateway that sends no `reason` (or a non-JSON body) classifies as
+/// [`Other`](Self::Other) with the plain HTTP-status string, so both skew
+/// directions degrade to today's behavior.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GatewayEntryError {
+    /// HTTP 401: the PAT is invalid or revoked. The connect flow clears the
+    /// stored PAT and re-enters the browser sign-in.
+    Unauthorized,
+    /// Signed in, but no devserver is registered for this account.
+    NoDevserver { username: Option<String> },
+    /// A devserver is registered but holds no live tunnel right now.
+    DevserverOffline {
+        username: Option<String>,
+        label: Option<String>,
+    },
+    /// The account's access to the devserver was denied.
+    AccessDenied,
+    /// Any other failure (network, decode, an unknown status, or an older
+    /// gateway whose error body carries no reason).
+    Other(String),
+}
+
+impl std::fmt::Display for GatewayEntryError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Unauthorized => write!(f, "the gateway sign-in is no longer valid (HTTP 401)"),
+            Self::NoDevserver {
+                username: Some(username),
+            } => write!(
+                f,
+                "signed in as {username}, but no devserver is registered; \
+                 run chan on your machine and connect it to the gateway"
+            ),
+            Self::NoDevserver { username: None } => write!(
+                f,
+                "signed in, but no devserver is registered; \
+                 run chan on your machine and connect it to the gateway"
+            ),
+            Self::DevserverOffline {
+                label: Some(label), ..
+            } => write!(
+                f,
+                "devserver \"{label}\" is registered but not currently connected"
+            ),
+            Self::DevserverOffline { label: None, .. } => {
+                write!(f, "your devserver is registered but not currently connected")
+            }
+            Self::AccessDenied => write!(f, "the gateway denied access to this devserver"),
+            Self::Other(message) => f.write_str(message),
+        }
+    }
+}
+
+/// The String conversion the session-refresh paths use: past the connect
+/// narration, an entry failure is just an error message again.
+impl From<GatewayEntryError> for String {
+    fn from(e: GatewayEntryError) -> Self {
+        e.to_string()
+    }
+}
+
+/// The entry endpoint's error body. A superset of the plain `{"error": msg}`
+/// shape: `reason` is a short stable token (`no_devserver`,
+/// `devserver_offline`, `access_denied`); `username`/`label` decorate the
+/// human string when present. Everything is optional so an older gateway's
+/// body (or a proxy error page) parses to no reason and falls through.
+#[derive(Debug, Deserialize)]
+struct GatewayEntryErrorBody {
+    #[serde(default)]
+    reason: Option<String>,
+    #[serde(default)]
+    username: Option<String>,
+    #[serde(default)]
+    label: Option<String>,
+}
+
+/// Classify a non-success entry response. 401 is authorization regardless of
+/// body; anything else consults the body's `reason` token and falls back to
+/// the plain HTTP-status string when the body carries none.
+fn classify_entry_error(status: reqwest::StatusCode, body: &[u8]) -> GatewayEntryError {
+    if status == reqwest::StatusCode::UNAUTHORIZED {
+        return GatewayEntryError::Unauthorized;
+    }
+    if let Ok(body) = serde_json::from_slice::<GatewayEntryErrorBody>(body) {
+        match body.reason.as_deref() {
+            Some("no_devserver") => {
+                return GatewayEntryError::NoDevserver {
+                    username: body.username,
+                }
+            }
+            Some("devserver_offline") => {
+                return GatewayEntryError::DevserverOffline {
+                    username: body.username,
+                    label: body.label,
+                }
+            }
+            Some("access_denied") => return GatewayEntryError::AccessDenied,
+            _ => {}
+        }
+    }
+    GatewayEntryError::Other(format!("gateway entry returned HTTP {status}"))
+}
+
+async fn gateway_entry(
+    gw: &GatewayConn,
+    path: &str,
+) -> Result<GatewayEntryResponse, GatewayEntryError> {
+    let resp = http_client()
+        .map_err(GatewayEntryError::Other)?
         .post(&gw.desktop_entry_url)
         .bearer_auth(&gw.pat)
         .json(&GatewayEntryRequest { path })
         .send()
         .await
-        .map_err(|e| format!("minting gateway entry URL: {e}"))?;
-    if !resp.status().is_success() {
-        return Err(format!("gateway entry returned HTTP {}", resp.status()));
+        .map_err(|e| GatewayEntryError::Other(format!("minting gateway entry URL: {e}")))?;
+    let status = resp.status();
+    if !status.is_success() {
+        let body = resp.bytes().await.unwrap_or_default();
+        return Err(classify_entry_error(status, &body));
     }
     resp.json::<GatewayEntryResponse>()
         .await
-        .map_err(|e| format!("decoding gateway entry: {e}"))
+        .map_err(|e| GatewayEntryError::Other(format!("decoding gateway entry: {e}")))
 }
 
 pub async fn gateway_conn(
     discovery: &GatewayDiscovery,
     pat: String,
-) -> Result<GatewayConn, String> {
+) -> Result<GatewayConn, GatewayEntryError> {
     let probe = GatewayConn::new(
         discovery.identity_origin.clone(),
         discovery.desktop_entry_url.clone(),
@@ -472,7 +585,9 @@ pub async fn gateway_conn(
         proxy_origin,
         probe.pat,
     );
-    establish_gateway_session_from_entry(&gw, &entry.entry_url).await?;
+    establish_gateway_session_from_entry(&gw, &entry.entry_url)
+        .await
+        .map_err(GatewayEntryError::Other)?;
     Ok(gw)
 }
 
@@ -661,7 +776,10 @@ pub async fn gateway_entry_url(conn: &DevserverConn, path: &str) -> Result<Strin
         .gateway
         .as_ref()
         .ok_or_else(|| "not a gateway connection".to_string())?;
-    gateway_entry(gw, path).await.map(|r| r.entry_url)
+    gateway_entry(gw, path)
+        .await
+        .map(|r| r.entry_url)
+        .map_err(String::from)
 }
 
 fn gateway_entry_token(entry_url: &str) -> Result<Option<String>, String> {
@@ -1414,6 +1532,126 @@ mod tests {
         };
         validate_gateway_discovery("http://localhost:7000", d)
             .expect("loopback http is explicit dev use");
+    }
+
+    #[test]
+    fn entry_error_classifies_the_reason_tokens() {
+        // 401 is authorization regardless of body: the PAT is invalid/revoked
+        // and the connect flow self-heals into re-sign-in.
+        assert_eq!(
+            classify_entry_error(reqwest::StatusCode::UNAUTHORIZED, b"{}"),
+            GatewayEntryError::Unauthorized
+        );
+        // The three reason tokens of the entry 404 body.
+        assert_eq!(
+            classify_entry_error(
+                reqwest::StatusCode::NOT_FOUND,
+                br#"{"error":"not found","reason":"no_devserver","username":"alice"}"#,
+            ),
+            GatewayEntryError::NoDevserver {
+                username: Some("alice".into())
+            }
+        );
+        assert_eq!(
+            classify_entry_error(
+                reqwest::StatusCode::NOT_FOUND,
+                br#"{"error":"not found","reason":"devserver_offline","username":"alice","label":"lab box"}"#,
+            ),
+            GatewayEntryError::DevserverOffline {
+                username: Some("alice".into()),
+                label: Some("lab box".into()),
+            }
+        );
+        assert_eq!(
+            classify_entry_error(
+                reqwest::StatusCode::NOT_FOUND,
+                br#"{"error":"not found","reason":"access_denied","username":"alice"}"#,
+            ),
+            GatewayEntryError::AccessDenied
+        );
+        // `label` is omitted (not null) when unknown; absent and null both
+        // read None.
+        assert_eq!(
+            classify_entry_error(
+                reqwest::StatusCode::NOT_FOUND,
+                br#"{"error":"not found","reason":"devserver_offline","username":"alice"}"#,
+            ),
+            GatewayEntryError::DevserverOffline {
+                username: Some("alice".into()),
+                label: None,
+            }
+        );
+    }
+
+    #[test]
+    fn entry_error_falls_back_to_the_generic_status_string() {
+        // An old gateway (or the endpoint's best-effort degrade on profile
+        // hiccups) sends the plain error body with no reason: keep the
+        // generic HTTP-status string, exactly the pre-taxonomy behavior.
+        let plain = classify_entry_error(
+            reqwest::StatusCode::NOT_FOUND,
+            br#"{"error":"not found"}"#,
+        );
+        assert_eq!(
+            plain,
+            GatewayEntryError::Other("gateway entry returned HTTP 404 Not Found".into())
+        );
+        // Unknown reason token: same fallback (forward skew).
+        assert_eq!(
+            classify_entry_error(
+                reqwest::StatusCode::NOT_FOUND,
+                br#"{"error":"not found","reason":"quota_exceeded"}"#,
+            ),
+            GatewayEntryError::Other("gateway entry returned HTTP 404 Not Found".into())
+        );
+        // Non-JSON body (a proxy error page): fallback, never a parse error.
+        assert_eq!(
+            classify_entry_error(reqwest::StatusCode::BAD_GATEWAY, b"<html>bad gateway</html>"),
+            GatewayEntryError::Other("gateway entry returned HTTP 502 Bad Gateway".into())
+        );
+    }
+
+    #[test]
+    fn entry_error_display_carries_the_connect_banner_strings() {
+        // These strings are the launcher's failure narration (a de-facto UX
+        // contract, like the reason tokens themselves); pin them.
+        assert_eq!(
+            GatewayEntryError::NoDevserver {
+                username: Some("alice".into())
+            }
+            .to_string(),
+            "signed in as alice, but no devserver is registered; \
+             run chan on your machine and connect it to the gateway"
+        );
+        assert_eq!(
+            GatewayEntryError::NoDevserver { username: None }.to_string(),
+            "signed in, but no devserver is registered; \
+             run chan on your machine and connect it to the gateway"
+        );
+        assert_eq!(
+            GatewayEntryError::DevserverOffline {
+                username: Some("alice".into()),
+                label: Some("lab box".into()),
+            }
+            .to_string(),
+            "devserver \"lab box\" is registered but not currently connected"
+        );
+        assert_eq!(
+            GatewayEntryError::DevserverOffline {
+                username: None,
+                label: None,
+            }
+            .to_string(),
+            "your devserver is registered but not currently connected"
+        );
+        assert_eq!(
+            GatewayEntryError::AccessDenied.to_string(),
+            "the gateway denied access to this devserver"
+        );
+        assert_eq!(
+            GatewayEntryError::Other("gateway entry returned HTTP 500".into()).to_string(),
+            "gateway entry returned HTTP 500"
+        );
     }
 
     #[test]
