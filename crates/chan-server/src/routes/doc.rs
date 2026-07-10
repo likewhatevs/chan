@@ -18,7 +18,6 @@ use std::sync::Arc;
 
 use axum::extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Query, State};
-use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use serde::{Deserialize, Serialize};
 
@@ -170,15 +169,19 @@ pub async fn api_doc_ws(
     Query(query): Query<DocQuery>,
     ws: WebSocketUpgrade,
 ) -> Response {
-    // Resolve the workspace pre-upgrade: a doc socket is meaningless
-    // without one, and a plain HTTP error here is cheaper for the
-    // client than an upgrade followed by an immediate error frame.
-    let workspace = match state.try_workspace() {
-        Ok(workspace) => workspace,
-        Err(e) => return (StatusCode::SERVICE_UNAVAILABLE, e.to_string()).into_response(),
-    };
-    ws.on_upgrade(move |socket| doc_ws(socket, state, workspace, query))
-        .into_response()
+    // A missing workspace (e.g. a dial racing a storage reset's cell
+    // swap) still upgrades and answers an error FRAME before closing,
+    // symmetric with attach failures: a zero-frame handshake failure
+    // on the page load's first dial would latch the SPA's capability
+    // probe to "no doc sync" for the whole page load.
+    let workspace = state.try_workspace();
+    ws.on_upgrade(move |mut socket| async move {
+        match workspace {
+            Ok(workspace) => doc_ws(socket, state, workspace, query).await,
+            Err(e) => error_close(&mut socket, &e.to_string(), "no-workspace").await,
+        }
+    })
+    .into_response()
 }
 
 async fn doc_ws(
@@ -335,9 +338,9 @@ async fn error_close(socket: &mut WebSocket, message: &str, reason: &'static str
 mod tests {
     use super::*;
     use crate::doc_sessions::changes::{apply_all, replace_diff, utf16_len};
-    use crate::doc_sessions::{DocAttachHandle, DocRegistry};
+    use crate::doc_sessions::{flush_session, DocAttachHandle, DocRegistry};
     use crate::self_writes::SelfWrites;
-    use chan_workspace::Workspace;
+    use chan_workspace::{WatchEvent, WatchKind, Workspace};
     use serde_json::Value;
     use tempfile::TempDir;
     use tokio::sync::mpsc;
@@ -608,6 +611,100 @@ mod tests {
             a.frames.try_recv(),
             Err(mpsc::error::TryRecvError::Disconnected)
         ));
+    }
+
+    #[tokio::test]
+    async fn reconcile_merges_external_write_and_ignores_own_flush_echo() {
+        let (_cfg, root, workspace, registry) = fixture(&[("a.md", "one\n")]);
+        let self_writes = SelfWrites::new();
+        let mut a =
+            FakeClient::attach(&registry, &workspace, "a.md", "win-a", "client-a", None).await;
+        a.drain();
+        let session = a.handle.session().clone();
+
+        // Own-flush echo: push an edit, flush it, then feed the
+        // resulting watcher event back in. The disk token matches the
+        // session token, so nothing fans.
+        a.push_to("two\n").unwrap();
+        a.drain();
+        flush_session(&session, &workspace, &self_writes).await;
+        a.drain();
+        registry
+            .reconcile_event(
+                &workspace,
+                WatchEvent {
+                    kind: WatchKind::Modified,
+                    path: Some("a.md".into()),
+                    to: None,
+                },
+            )
+            .await;
+        assert!(a.drain().is_empty(), "own flush echo must not fan");
+
+        // External write: merged in as a `$disk` update, token adopted,
+        // client text converges on the disk content with NO banner path.
+        std::fs::write(root.path().join("a.md"), "two\nagent line\n").unwrap();
+        registry
+            .reconcile_event(
+                &workspace,
+                WatchEvent {
+                    kind: WatchKind::Modified,
+                    path: Some("a.md".into()),
+                    to: None,
+                },
+            )
+            .await;
+        let frames = a.drain();
+        let updates: Vec<&Value> = frames.iter().filter(|f| f["type"] == "updates").collect();
+        assert_eq!(updates.len(), 1, "{frames:?}");
+        assert_eq!(updates[0]["updates"][0]["clientID"], "$disk");
+        assert_eq!(a.doc, "two\nagent line\n");
+        assert_eq!(session.authority_view().0, "two\nagent line\n");
+    }
+
+    #[tokio::test]
+    async fn reconcile_removed_stops_flush_and_next_edit_recreates() {
+        let (_cfg, root, workspace, registry) = fixture(&[("a.md", "one\n")]);
+        let self_writes = SelfWrites::new();
+        let mut a =
+            FakeClient::attach(&registry, &workspace, "a.md", "win-a", "client-a", None).await;
+        a.drain();
+        let session = a.handle.session().clone();
+
+        // Dirty the session, then delete the file out from under it.
+        a.push_to("two\n").unwrap();
+        a.drain();
+        std::fs::remove_file(root.path().join("a.md")).unwrap();
+        registry
+            .reconcile_event(
+                &workspace,
+                WatchEvent {
+                    kind: WatchKind::Removed,
+                    path: Some("a.md".into()),
+                    to: None,
+                },
+            )
+            .await;
+        let frames = a.drain();
+        assert!(types(&frames).contains(&"removed"), "{frames:?}");
+        assert_eq!(session.token(), None);
+
+        // Removed stopped the debounce clock: a flush pass must NOT
+        // resurrect a deliberate delete.
+        flush_session(&session, &workspace, &self_writes).await;
+        assert!(
+            !root.path().join("a.md").exists(),
+            "delete must not be resurrected"
+        );
+
+        // The next client edit re-dirties; the CAS-None flush recreates.
+        a.push_to("three\n").unwrap();
+        a.drain();
+        flush_session(&session, &workspace, &self_writes).await;
+        assert_eq!(
+            std::fs::read_to_string(root.path().join("a.md")).unwrap(),
+            "three\n"
+        );
     }
 
     // ---- client -> server ----------------------------------------------

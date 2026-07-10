@@ -345,16 +345,12 @@ impl DocSession {
     /// Current authority text plus the session CAS token, for the GET
     /// divert: a client about to attach sees exactly the bytes its
     /// snapshot will carry, under a token consistent with the session.
-    // Unused until the files.rs GET divert glue consumes it.
-    #[allow(dead_code)]
     pub fn authority_view(&self) -> (String, Option<i64>) {
         let st = self.lock_state();
         (st.text.clone(), st.flushed_mtime_ns)
     }
 
     /// Session CAS token for the PUT divert's conflict check.
-    // Unused until the files.rs PUT divert glue consumes it.
-    #[allow(dead_code)]
     pub fn token(&self) -> Option<i64> {
         self.lock_state().flushed_mtime_ns
     }
@@ -362,8 +358,6 @@ impl DocSession {
     /// Replace the whole authority text as a synthetic update from
     /// `client_id` (the `$http` divert). Fans like any edit and marks
     /// the session dirty; the caller decides when to flush.
-    // Unused until the files.rs PUT divert glue consumes it.
-    #[allow(dead_code)]
     pub fn apply_replace(&self, client_id: &str, new_text: &str) -> Result<(), ApplyError> {
         if new_text.len() as u64 > TEXT_WRITE_LIMIT {
             return Err(ApplyError::DocTooLarge {

@@ -94,6 +94,15 @@ pub async fn api_metadata_import(
         return err(StatusCode::BAD_REQUEST, "empty metadata archive".into());
     }
 
+    // Close every live doc session BEFORE the import's cell swap, for
+    // the same reason storage reset does: no cell swap with live doc
+    // sessions. Flush-all against the pre-swap workspace, fan
+    // `closed{import}`, drop the sessions.
+    let doc_workspace = state.try_workspace().ok();
+    state
+        .doc_sessions
+        .close_all("import", doc_workspace.as_ref(), &state.self_writes)
+        .await;
     let state_clone = state.clone();
     let result = tokio::task::spawn_blocking(move || {
         perform_metadata_import(&state_clone, bytes, rescan, force_scm)
