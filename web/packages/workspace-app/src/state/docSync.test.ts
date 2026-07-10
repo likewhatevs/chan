@@ -921,6 +921,20 @@ describe("lifecycle", () => {
     expect(tab.doc).toBeUndefined();
   });
 
+  test("session token is stable across re-acquire, distinct across sessions", () => {
+    // The editor memoizes its per-mount extension on `${token}:${mode}`;
+    // a re-acquire (editor remount within the linger) must keep the same
+    // token so the extension is not re-minted, while a genuinely new
+    // session gets a fresh token.
+    const tab = fileTab();
+    const s1 = acquireDocSession(tab)!;
+    const t1 = s1.token;
+    expect(acquireDocSession(tab)!.token).toBe(t1); // re-acquire: same
+    s1.release({ immediate: true });
+    const s2 = acquireDocSession(fileTab())!;
+    expect(s2.token).not.toBe(t1); // new session: distinct
+  });
+
   test("immediate release destroys now", () => {
     const tab = fileTab();
     acquireDocSession(tab);

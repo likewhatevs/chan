@@ -224,9 +224,17 @@ export type PeerCursor = {
 
 const registry = new Map<string, DocSession>();
 
+let nextSessionToken = 0;
+
 export class DocSession {
   readonly tabId: string;
   readonly path: string;
+  /// Stable per-session identity. A memoizing consumer keys its
+  /// minted-once extension on `${token}:${mode}` so a reactive
+  /// recompute returns the SAME extension reference (a fresh mint per
+  /// recompute would re-run bindView -> tryAttach -> dispatch and storm
+  /// microtasks). Changes only when the session is replaced.
+  readonly token: number = (nextSessionToken += 1);
   private readonly tab: FileTab;
 
   private status: DocSyncStatus = "connecting";

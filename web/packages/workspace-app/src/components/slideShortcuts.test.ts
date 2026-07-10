@@ -23,7 +23,9 @@ describe("slide editor shortcuts", () => {
   });
 
   test("refocuses the editor after closing slide preview", () => {
-    expect(source).toContain('import { onDestroy, tick } from "svelte";');
+    // `tick` drives the deferred refocus; tolerate other svelte imports
+    // on the same line (e.g. untrack for the doc-session effect).
+    expect(source).toMatch(/import \{[^}]*\btick\b[^}]*\} from "svelte";/);
     expect(source).toMatch(
       /function refocusAfterSlidePreviewClose\(\): void \{[\s\S]*?void tick\(\)\.then\(\(\) => \{[\s\S]*?if \(!active \|\| !focused\) return;[\s\S]*?focusActiveEditor\(\);/,
     );

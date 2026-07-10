@@ -3,7 +3,7 @@
   // toolbar; the tab menu is intentionally small chrome: name, page
   // width, close.
 
-  import { onDestroy, tick } from "svelte";
+  import { onDestroy, tick, untrack } from "svelte";
   import type { Extension } from "@codemirror/state";
   import Wysiwyg from "../editor/Wysiwyg.svelte";
   import Source from "../editor/Source.svelte";
@@ -341,31 +341,45 @@
   const slidesSpec = $derived(parseSlidesSpec(tab.content));
   const slideShortcutOS = currentOS();
 
-  /// Live doc-session lifecycle. Acquire tracks exactly the eligibility
-  /// inputs (path, mode, loading, fileMissing - see isDocSyncEligible;
-  /// deliberately not content, which is size-gated untracked inside
-  /// acquire); the cleanup release lingers briefly so a cross-pane move
-  /// (a full remount) keeps the socket + shadow. Tab close and rename
-  /// release immediately through the tabs.svelte.ts hook instead.
+  /// Live doc-session lifecycle. The effect tracks ONLY the eligibility
+  /// inputs (path, mode, loading, fileMissing via isDocSyncEligible);
+  /// the acquire itself runs untracked so its size-gate read of
+  /// tab.content does not re-fire the effect on every keystroke (which
+  /// would release + reacquire the session and re-mint the editor's
+  /// extension per character). The cleanup release lingers briefly so a
+  /// cross-pane move (a full remount) keeps the socket + shadow. Tab
+  /// close and rename release immediately through the tabs hook instead.
   let docSession: DocSession | null = $state(null);
   $effect(() => {
-    if (!isDocSyncEligible(tab)) {
-      docSession = null;
-      releaseDocSession(tab.id);
-      return;
-    }
-    docSession = acquireDocSession(tab);
-    return () => {
-      docSession = null;
-      releaseDocSession(tab.id);
-    };
+    const eligible = isDocSyncEligible(tab);
+    const tabId = tab.id;
+    untrack(() => {
+      docSession = eligible ? acquireDocSession(tab) : null;
+      if (!eligible) releaseDocSession(tabId);
+    });
+    return () =>
+      untrack(() => {
+        docSession = null;
+        releaseDocSession(tabId);
+      });
   });
-  /// Per-editor-mount collab + presence extension bundle. Reading
-  /// tab.mode re-mints on a mode toggle so the fresh editor gets a
-  /// fresh compartment (compartment-cycling is how collab reseeds).
+  /// Per-editor-mount collab + presence extension bundle, minted ONCE
+  /// per (session, mode) and memoized. session.extension() mints a fresh
+  /// compartment + ViewPlugin every call, and the ViewPlugin's
+  /// constructor drives bindView -> tryAttach -> dispatch; returning a
+  /// fresh bundle on every derived recompute would reconstruct the
+  /// plugin on each attach-driven state write and storm microtasks. A
+  /// stable reference per (session, mode) means the editors'
+  /// extraExtensions compartment only reconfigures on a real change (new
+  /// session, or a mode toggle that mounts a fresh editor - the toggle
+  /// is where collab genuinely needs a fresh compartment).
+  let docExtCache: { key: string; ext: Extension[] } | null = null;
   const docExtensions = $derived.by((): Extension[] => {
-    void tab.mode;
-    return docSession ? [docSession.extension()] : [];
+    const key = docSession ? `${docSession.token}:${tab.mode}` : "none";
+    if (docExtCache?.key === key) return docExtCache.ext;
+    const ext = docSession ? [docSession.extension()] : [];
+    docExtCache = { key, ext };
+    return ext;
   });
 
   // Bumped on every selection / doc change in the WYSIWYG editor so
