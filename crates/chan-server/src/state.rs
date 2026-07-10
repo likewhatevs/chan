@@ -95,9 +95,6 @@ pub struct AppState {
     /// the sessions and the disk in step. Survives `/api/storage/
     /// reset` structurally (the registry object persists) but reset
     /// closes every session via `close_all` before the cell swap.
-    // Read by nothing until the doc ws route mounts; drop the allow
-    // with that mount.
-    #[allow(dead_code)]
     pub doc_sessions: Arc<crate::doc_sessions::DocRegistry>,
     /// Process-wide shutdown signal. Fires once SIGINT/SIGTERM or
     /// the idle-timeout watcher trip. Long-lived handlers (e.g.

@@ -97,17 +97,17 @@ use bus::{make_progress_broadcast, make_watch_bridge};
 use routes::{
     api_backlinks, api_build_info, api_cloud_workspaces, api_create_diagram, api_create_draft,
     api_create_file, api_create_terminal, api_cs_link_create, api_delete_file, api_delete_session,
-    api_delete_terminal, api_discard_draft, api_excluded_dirs_get, api_excluded_dirs_put,
-    api_fonts_source_code_pro_download, api_fs_graph, api_fs_transfer, api_get_config,
-    api_get_contacts, api_get_mentions, api_get_server_config, api_get_session, api_get_workspace,
-    api_graph, api_headings, api_health, api_index_rebuild, api_index_status, api_indexing_state,
-    api_inspect_draft, api_inspector, api_language_graph, api_link_targets, api_links,
-    api_list_files, api_list_sessions, api_list_windows, api_metadata_export, api_metadata_import,
-    api_move, api_patch_config, api_patch_server_config, api_patch_workspace, api_post_attachment,
-    api_post_contacts_import, api_preflight, api_preflight_decision, api_promote_draft,
-    api_put_session, api_read_file, api_report_dir, api_report_file, api_report_prefix,
-    api_reports_disable, api_reports_enable, api_reports_state, api_resolve_link,
-    api_restart_terminal, api_screensaver_clear_pin, api_screensaver_patch,
+    api_delete_terminal, api_discard_draft, api_doc_ws, api_excluded_dirs_get,
+    api_excluded_dirs_put, api_fonts_source_code_pro_download, api_fs_graph, api_fs_transfer,
+    api_get_config, api_get_contacts, api_get_mentions, api_get_server_config, api_get_session,
+    api_get_workspace, api_graph, api_headings, api_health, api_index_rebuild, api_index_status,
+    api_indexing_state, api_inspect_draft, api_inspector, api_language_graph, api_link_targets,
+    api_links, api_list_files, api_list_sessions, api_list_windows, api_metadata_export,
+    api_metadata_import, api_move, api_patch_config, api_patch_server_config, api_patch_workspace,
+    api_post_attachment, api_post_contacts_import, api_preflight, api_preflight_decision,
+    api_promote_draft, api_put_session, api_read_file, api_report_dir, api_report_file,
+    api_report_prefix, api_reports_disable, api_reports_enable, api_reports_state,
+    api_resolve_link, api_restart_terminal, api_screensaver_clear_pin, api_screensaver_patch,
     api_screensaver_set_pin, api_screensaver_state, api_screensaver_verify, api_search_content,
     api_search_files, api_session_handover_reply, api_set_terminal_broadcast, api_storage_reset,
     api_survey_reply, api_team_config_read, api_team_config_write, api_terminal_next_name,
@@ -201,6 +201,13 @@ struct AppArtifacts {
     /// leader/followers roster. Held alongside the other background tasks so
     /// dropping AppArtifacts aborts it too.
     _session_reaper: tokio::task::JoinHandle<()>,
+    /// Debounced doc-session disk flusher + detach-grace reaper. Held
+    /// like the terminal tasks above; `None` in the terminal-only app
+    /// (no workspace, no doc route, nothing to flush).
+    _doc_flusher: Option<tokio::task::JoinHandle<()>>,
+    /// Folds raw watcher events into live doc sessions. Same
+    /// terminal-only caveat as the flusher.
+    _doc_reconciler: Option<tokio::task::JoinHandle<()>>,
     /// Mutable handle to the URL prefix injected into the SPA shell
     /// as `<meta name="chan-prefix">`. Local serve sets it once at
     /// build time from `ServeConfig::prefix`; tunnel mode swaps in
@@ -704,6 +711,24 @@ async fn build_app(
         window_titles: desktop.window_titles.clone(),
         instance_id: random_token(),
     });
+    // Doc-session background tasks: the flusher debounces dirty
+    // sessions to atomic CAS disk writes and runs the detach-grace
+    // reaper; the reconciler folds raw watcher events back into live
+    // sessions as synthetic `$disk` updates. Workspace apps only: the
+    // terminal-only app has no workspace, no doc route, nothing to
+    // flush.
+    let doc_flusher = doc_sessions::spawn_flusher(
+        state.doc_sessions.clone(),
+        state.workspace_cell.clone(),
+        state.self_writes.clone(),
+        state.shutdown_rx.clone(),
+    );
+    let doc_reconciler = doc_sessions::spawn_reconciler(
+        state.doc_sessions.clone(),
+        state.workspace_cell.clone(),
+        state.index_events_tx.subscribe(),
+        state.shutdown_rx.clone(),
+    );
     // Nest under the prefix so `--prefix=/foo` makes every existing
     // route reachable at `/foo<route>` without changing any handler.
     // axum strips the prefix from the inner URI, so handlers continue
@@ -724,6 +749,8 @@ async fn build_app(
         _terminal_drainer: terminal_drainer,
         _terminal_roster_broadcaster: terminal_roster_broadcaster,
         _session_reaper: session_reaper,
+        _doc_flusher: Some(doc_flusher),
+        _doc_reconciler: Some(doc_reconciler),
         prefix,
         mcp_bridge,
         control_socket,
@@ -952,6 +979,10 @@ async fn build_terminal_app(
         _terminal_drainer: terminal_drainer,
         _terminal_roster_broadcaster: terminal_roster_broadcaster,
         _session_reaper: session_reaper,
+        // No workspace: no doc sessions to flush or reconcile (the slim
+        // router mounts no doc route).
+        _doc_flusher: None,
+        _doc_reconciler: None,
         prefix,
         // No workspace to MCP-bridge; the control socket above IS the
         // local CLI surface (terminal-scoped).
@@ -1208,6 +1239,8 @@ fn into_tenant_artifacts(a: AppArtifacts) -> chan_library::TenantArtifacts {
         _terminal_drainer,
         _terminal_roster_broadcaster,
         _session_reaper,
+        _doc_flusher,
+        _doc_reconciler,
         prefix,
         mcp_bridge,
         control_socket,
@@ -1243,6 +1276,8 @@ fn into_tenant_artifacts(a: AppArtifacts) -> chan_library::TenantArtifacts {
             _terminal_drainer,
             _terminal_roster_broadcaster,
             _session_reaper,
+            _doc_flusher,
+            _doc_reconciler,
             mcp_bridge,
             control_socket,
             state,
@@ -1594,6 +1629,9 @@ fn router(state: Arc<AppState>) -> Router {
         )
         .route("/api/health", get(api_health))
         .route("/api/terminal/ws", get(api_terminal_ws))
+        // Live co-editing doc sessions: one duplex socket per (editor
+        // mount, document). Wire contract pinned in routes/doc.rs.
+        .route("/api/doc/ws", get(api_doc_ws))
         // Per-workspace Terminal-N sequence + cross-window roster seed.
         // Same handlers as the slim terminal router; the per-tenant registry
         // gives each workspace its own name sequence and roster.

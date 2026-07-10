@@ -68,6 +68,17 @@ pub async fn api_storage_reset(
     // settings_disabled is enforced by `tunnel_guard::settings_guard`
     // at the router layer; no per-handler gate.
     let mode: ResetMode = body.mode.into();
+    // Close every live doc session BEFORE the workspace cell swap:
+    // flush-all against the pre-swap workspace, fan `closed{reset}` so
+    // attached editors detach cleanly, and drop the sessions so no
+    // stale authority text survives into the next workspace
+    // generation. Doc sessions hold no workspace Arc, so this also
+    // keeps them out of the reset drain count.
+    let doc_workspace = state.try_workspace().ok();
+    state
+        .doc_sessions
+        .close_all("reset", doc_workspace.as_ref(), &state.self_writes)
+        .await;
     // Run the reset on a blocking-thread: the drain spin-wait sleeps
     // and the chan-workspace wipe walks the filesystem; neither belongs
     // on the async runtime's worker thread.

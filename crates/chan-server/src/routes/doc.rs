@@ -13,17 +13,23 @@
 //! builds against; the serde tests in this module pin every tag, field
 //! name, and shape. Change a pin only together with the client.
 
-// Referenced only by the wire-contract pin tests until the ws route glue
-// lands and constructs these frames.
-#![allow(dead_code)]
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
 
+use axum::extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade};
+use axum::extract::{Query, State};
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
 use serde::{Deserialize, Serialize};
 
-use crate::doc_sessions::changes::UpdateJson;
+use crate::doc_sessions::changes::{ApplyError, UpdateJson};
+use crate::doc_sessions::PushError;
+use crate::signal::now_unix_secs;
+use crate::state::AppState;
 
 /// Query parameters for `GET /api/doc/ws`.
 #[derive(Debug, Deserialize)]
-struct DocQuery {
+pub struct DocQuery {
     /// Workspace-relative POSIX path of the document to attach.
     path: String,
     /// The attaching window's `window_id`. Presence only: it labels this
@@ -159,12 +165,449 @@ pub(crate) enum ServerFrame {
     Closed { reason: &'static str },
 }
 
+pub async fn api_doc_ws(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<DocQuery>,
+    ws: WebSocketUpgrade,
+) -> Response {
+    // Resolve the workspace pre-upgrade: a doc socket is meaningless
+    // without one, and a plain HTTP error here is cheaper for the
+    // client than an upgrade followed by an immediate error frame.
+    let workspace = match state.try_workspace() {
+        Ok(workspace) => workspace,
+        Err(e) => return (StatusCode::SERVICE_UNAVAILABLE, e.to_string()).into_response(),
+    };
+    ws.on_upgrade(move |socket| doc_ws(socket, state, workspace, query))
+        .into_response()
+}
+
+async fn doc_ws(
+    mut socket: WebSocket,
+    state: Arc<AppState>,
+    workspace: Arc<chan_workspace::Workspace>,
+    query: DocQuery,
+) {
+    state
+        .last_activity
+        .store(now_unix_secs(), Ordering::Relaxed);
+    let mut handle = match state
+        .doc_sessions
+        .attach(&workspace, &query.path, &query.w, query.version)
+        .await
+    {
+        Ok(handle) => handle,
+        Err(e) => {
+            // The error FRAME must precede the close: the SPA's
+            // capability probe reads a close-before-any-frame as "old
+            // server, no doc sync" and would latch docSync off
+            // module-wide over a mere bad path.
+            error_close(&mut socket, &e.to_string(), "attach-failed").await;
+            return;
+        }
+    };
+    let mut frames = handle.take_frames();
+    let mut shutdown_rx = state.shutdown_rx.clone();
+
+    loop {
+        tokio::select! {
+            biased;
+            _ = shutdown_rx.changed() => {
+                // The flusher's shutdown pass flushes every session and
+                // fans `closed{shutdown}`; this socket just says goodbye.
+                let _ = socket
+                    .send(Message::Close(Some(CloseFrame {
+                        code: 1001,
+                        reason: "server shutdown".into(),
+                    })))
+                    .await;
+                break;
+            }
+            msg = socket.recv() => {
+                let Some(msg) = msg else { break };
+                match msg {
+                    Ok(Message::Text(text)) => match serde_json::from_str::<ClientFrame>(&text) {
+                        Ok(ClientFrame::Push { version, updates }) => {
+                            state.last_activity.store(now_unix_secs(), Ordering::Relaxed);
+                            // A stale base is not an error: the session
+                            // already answered `push-stale` on the outbox.
+                            if let Err(e) = handle.push(version, updates) {
+                                error_close(&mut socket, &e.to_string(), push_error_reason(&e))
+                                    .await;
+                                break;
+                            }
+                        }
+                        Ok(ClientFrame::Pull { version }) => handle.pull(version),
+                        Ok(ClientFrame::Cursor { anchor, head }) => {
+                            state.last_activity.store(now_unix_secs(), Ordering::Relaxed);
+                            handle.cursor(anchor, head);
+                        }
+                        Err(e) => {
+                            // A frame this route cannot parse means a
+                            // desynced or drifted peer: per the contract,
+                            // error loudly and close, never a silent drop.
+                            error_close(
+                                &mut socket,
+                                &format!("invalid doc frame: {e}"),
+                                "malformed-frame",
+                            )
+                            .await;
+                            break;
+                        }
+                    },
+                    // The contract is JSON text frames only; binary is a
+                    // drifted peer, same loud path as malformed JSON.
+                    Ok(Message::Binary(_)) => {
+                        error_close(
+                            &mut socket,
+                            "binary frames are not in the doc contract",
+                            "malformed-frame",
+                        )
+                        .await;
+                        break;
+                    }
+                    Ok(Message::Close(_)) => break,
+                    Ok(Message::Ping(_)) | Ok(Message::Pong(_)) => {}
+                    Err(_) => break,
+                }
+            }
+            frame = frames.recv() => {
+                match frame {
+                    // Frames are pre-serialized under the session state
+                    // lock; forward verbatim so per-socket order stays
+                    // version-consistent.
+                    Some(raw) => {
+                        if socket.send(Message::text(raw)).await.is_err() {
+                            break;
+                        }
+                    }
+                    // Outbox senders gone: registry teardown (`closed`
+                    // was the final frame) or this attach was evicted.
+                    None => {
+                        let _ = socket
+                            .send(Message::Close(Some(CloseFrame {
+                                code: 1000,
+                                reason: "doc session closed".into(),
+                            })))
+                            .await;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    // Dropping `handle` detaches: cursor-gone fan; a 1->0 transition
+    // stamps the detach grace and requests a prompt flush.
+}
+
+/// Map a rejected push onto the contract's `error.reason` values.
+fn push_error_reason(e: &PushError) -> &'static str {
+    match e {
+        PushError::ReservedClientId(_) => "reserved-client-id",
+        PushError::Apply(ApplyError::DocTooLarge { .. }) => "doc-too-large",
+        PushError::Apply(_) => "bad-changeset",
+        PushError::Closed => "session-closed",
+    }
+}
+
+/// The contract's loud goodbye: an `error` frame naming the reason,
+/// then a policy-violation close. Send failures are ignored (the peer
+/// may already be gone); dropping the attach handle afterwards is what
+/// actually detaches.
+async fn error_close(socket: &mut WebSocket, message: &str, reason: &'static str) {
+    let frame = ServerFrame::Error {
+        message: message.to_string(),
+        reason,
+    };
+    let _ = socket
+        .send(Message::text(serde_json::to_string(&frame).unwrap_or_else(
+            |e| format!(r#"{{"type":"error","message":"serialize failed: {e}"}}"#),
+        )))
+        .await;
+    let _ = socket
+        .send(Message::Close(Some(CloseFrame {
+            code: 1008,
+            reason: reason.into(),
+        })))
+        .await;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::doc_sessions::changes::{apply_all, replace_diff, utf16_len};
+    use crate::doc_sessions::{DocAttachHandle, DocRegistry};
+    use crate::self_writes::SelfWrites;
+    use chan_workspace::Workspace;
+    use serde_json::Value;
+    use tempfile::TempDir;
+    use tokio::sync::mpsc;
 
     fn enc(frame: &ServerFrame) -> String {
         serde_json::to_string(frame).expect("serialize server frame")
+    }
+
+    fn fixture(files: &[(&str, &str)]) -> (TempDir, TempDir, Arc<Workspace>, Arc<DocRegistry>) {
+        let cfg = TempDir::new().expect("temp config");
+        let root = TempDir::new().expect("temp workspace");
+        for (path, content) in files {
+            let abs = root.path().join(path);
+            if let Some(parent) = abs.parent() {
+                std::fs::create_dir_all(parent).unwrap();
+            }
+            std::fs::write(abs, content).unwrap();
+        }
+        let lib = chan_workspace::Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_workspace(root.path()).unwrap();
+        let workspace = lib.open_workspace(root.path()).unwrap();
+        (cfg, root, workspace, Arc::new(DocRegistry::new()))
+    }
+
+    /// A scripted collab client over the same attach-handle surface the
+    /// ws pump drives. Frames are enqueued synchronously inside the
+    /// `attach`/`push` calls, so a drain right after a call observes
+    /// exactly what a socket would; the fold mirrors what the SPA does
+    /// through `receiveUpdates`.
+    struct FakeClient {
+        handle: DocAttachHandle,
+        frames: mpsc::UnboundedReceiver<String>,
+        id: &'static str,
+        doc: String,
+        len16: u64,
+        version: u64,
+    }
+
+    impl FakeClient {
+        /// `resume`: `Some((version, text))` models a `?version=`
+        /// reconnect of a client whose confirmed state is `text`.
+        async fn attach(
+            registry: &Arc<DocRegistry>,
+            workspace: &Arc<Workspace>,
+            path: &str,
+            w: &str,
+            id: &'static str,
+            resume: Option<(u64, &str)>,
+        ) -> Self {
+            let mut handle = registry
+                .attach(workspace, path, w, resume.map(|(v, _)| v))
+                .await
+                .expect("attach");
+            let frames = handle.take_frames();
+            let (version, doc) = match resume {
+                Some((v, text)) => (v, text.to_string()),
+                None => (0, String::new()),
+            };
+            let len16 = utf16_len(&doc);
+            FakeClient {
+                handle,
+                frames,
+                id,
+                doc,
+                len16,
+                version,
+            }
+        }
+
+        /// Drain every queued frame, folding `snapshot`/`updates` into
+        /// the local doc; returns the raw frames for shape asserts.
+        fn drain(&mut self) -> Vec<Value> {
+            let mut out = Vec::new();
+            while let Ok(raw) = self.frames.try_recv() {
+                let v: Value = serde_json::from_str(&raw).expect("frame json");
+                match v["type"].as_str().expect("frame type") {
+                    "snapshot" => {
+                        self.doc = v["doc"].as_str().unwrap().to_string();
+                        self.len16 = utf16_len(&self.doc);
+                        self.version = v["version"].as_u64().unwrap();
+                    }
+                    "updates" => {
+                        // Strict per-socket order: every broadcast's base
+                        // version matches this client's confirmed version,
+                        // gaplessly.
+                        assert_eq!(
+                            v["version"].as_u64().unwrap(),
+                            self.version,
+                            "updates base must match the confirmed version"
+                        );
+                        let updates: Vec<UpdateJson> =
+                            serde_json::from_value(v["updates"].clone()).unwrap();
+                        self.version += updates.len() as u64;
+                        let applied = apply_all(&self.doc, self.len16, &updates).expect("apply");
+                        self.doc = applied.text;
+                        self.len16 = applied.len16;
+                    }
+                    _ => {}
+                }
+                out.push(v);
+            }
+            out
+        }
+
+        /// Compose the whole-doc edit confirmed -> `target` and push it
+        /// at the confirmed version: what a client whose latest intent
+        /// is `target` does, both first-try and after a stale rebase.
+        fn push_to(&mut self, target: &str) -> Result<(), PushError> {
+            let changes = replace_diff(&self.doc, target);
+            self.handle.push(
+                self.version,
+                vec![UpdateJson {
+                    client_id: self.id.to_string(),
+                    changes,
+                }],
+            )
+        }
+    }
+
+    fn types(frames: &[Value]) -> Vec<&str> {
+        frames.iter().map(|v| v["type"].as_str().unwrap()).collect()
+    }
+
+    #[tokio::test]
+    async fn two_fake_clients_converge_through_a_stale_collision() {
+        let (_cfg, _root, workspace, registry) = fixture(&[("notes/a.md", "base\n")]);
+        let mut a = FakeClient::attach(
+            &registry,
+            &workspace,
+            "notes/a.md",
+            "win-a",
+            "client-a",
+            None,
+        )
+        .await;
+        let mut b = FakeClient::attach(
+            &registry,
+            &workspace,
+            "notes/a.md",
+            "win-b",
+            "client-b",
+            None,
+        )
+        .await;
+        assert_eq!(types(&a.drain()), ["snapshot"]);
+        assert_eq!(types(&b.drain()), ["snapshot"]);
+        assert_eq!(a.doc, "base\n");
+
+        // A lands first; B composes against the same base version, a
+        // deliberate stale collision. Multibyte content on A's side
+        // exercises the UTF-16 path through the whole stack.
+        a.push_to("base\nalpha é🙂\n").unwrap();
+        b.push_to("Base\n").unwrap();
+
+        // Sender confirmation order: own echo, then push-ok.
+        assert_eq!(types(&a.drain()), ["updates", "push-ok"]);
+        // The collider: the missed broadcast is already in flight on the
+        // same socket, then the stale verdict naming the current version.
+        let fb = b.drain();
+        assert_eq!(types(&fb), ["updates", "push-stale"]);
+        assert_eq!(fb[1]["version"].as_u64(), Some(1));
+        assert_eq!(b.doc, "base\nalpha é🙂\n");
+
+        // Rebase: recompose the intent on the caught-up text, re-push.
+        b.push_to("Base\nalpha é🙂\n").unwrap();
+        assert_eq!(types(&b.drain()), ["updates", "push-ok"]);
+        assert_eq!(types(&a.drain()), ["updates"]);
+
+        assert_eq!(a.doc, b.doc);
+        assert_eq!(a.version, b.version);
+        assert_eq!(a.doc, "Base\nalpha é🙂\n");
+        let (authority, _) = a.handle.session().authority_view();
+        assert_eq!(authority, a.doc, "clients and authority converge");
+    }
+
+    #[tokio::test]
+    async fn current_version_resume_gets_flush_state_promptly() {
+        // The SPA counts a dial FAILED when no frame arrives inside its
+        // attach timeout, INCLUDING a `?version=` resume with nothing to
+        // catch up on. An accepted attach must never be silent: the
+        // nothing-to-send path answers with at least the flush-state
+        // frame, or healthy sockets would cycle every timeout.
+        let (_cfg, _root, workspace, registry) = fixture(&[("a.md", "hi")]);
+        let mut a =
+            FakeClient::attach(&registry, &workspace, "a.md", "win-a", "client-a", None).await;
+        a.drain();
+        a.push_to("hi there").unwrap();
+        a.drain();
+        assert_eq!(a.version, 1);
+
+        // Fully-current resume: no snapshot (delta path), no updates to
+        // send, but never zero frames.
+        let mut b = FakeClient::attach(
+            &registry,
+            &workspace,
+            "a.md",
+            "win-b",
+            "client-b",
+            Some((1, "hi there")),
+        )
+        .await;
+        let fb = b.drain();
+        assert!(!fb.is_empty(), "an accepted attach must answer promptly");
+        let t = types(&fb);
+        assert!(t.contains(&"flush"), "flush state is the minimum: {t:?}");
+        assert!(
+            !t.contains(&"snapshot"),
+            "resume takes the delta path: {t:?}"
+        );
+
+        // Behind-by-one resume: incremental catch-up plus flush state,
+        // still no snapshot; the fold lands on the current text.
+        let mut c = FakeClient::attach(
+            &registry,
+            &workspace,
+            "a.md",
+            "win-c",
+            "client-c",
+            Some((0, "hi")),
+        )
+        .await;
+        let fc = c.drain();
+        let t = types(&fc);
+        assert!(t.contains(&"updates") && t.contains(&"flush"), "{t:?}");
+        assert!(!t.contains(&"snapshot"), "{t:?}");
+        assert_eq!(c.doc, "hi there");
+        assert_eq!(c.version, 1);
+    }
+
+    #[tokio::test]
+    async fn reserved_client_id_push_rejects_with_the_pinned_reason() {
+        let (_cfg, _root, workspace, registry) = fixture(&[("a.md", "hi")]);
+        let mut a =
+            FakeClient::attach(&registry, &workspace, "a.md", "win-a", "client-a", None).await;
+        a.drain();
+        let changes = replace_diff("hi", "hi!");
+        let err = a
+            .handle
+            .push(
+                0,
+                vec![UpdateJson {
+                    client_id: "$disk".into(),
+                    changes,
+                }],
+            )
+            .unwrap_err();
+        assert!(matches!(err, PushError::ReservedClientId(_)), "{err:?}");
+        assert_eq!(push_error_reason(&err), "reserved-client-id");
+    }
+
+    #[tokio::test]
+    async fn close_all_fans_closed_then_drops_the_outbox() {
+        // Storage-reset teardown as the pump sees it: `closed` is the
+        // final frame on the outbox, then the channel disconnects,
+        // which is the pump's break-and-close path.
+        let (_cfg, _root, workspace, registry) = fixture(&[("a.md", "hi")]);
+        let mut a =
+            FakeClient::attach(&registry, &workspace, "a.md", "win-a", "client-a", None).await;
+        a.drain();
+        registry
+            .close_all("reset", Some(&workspace), &SelfWrites::new())
+            .await;
+        let frames = a.drain();
+        let t = types(&frames);
+        assert_eq!(t.last(), Some(&"closed"));
+        assert_eq!(frames.last().unwrap()["reason"].as_str(), Some("reset"));
+        assert!(matches!(
+            a.frames.try_recv(),
+            Err(mpsc::error::TryRecvError::Disconnected)
+        ));
     }
 
     // ---- client -> server ----------------------------------------------

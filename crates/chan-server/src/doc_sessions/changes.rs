@@ -164,6 +164,9 @@ pub fn apply(doc: &str, doc_len16: u64, cs: &ChangeSetJson) -> Result<Applied, A
 /// Apply a batch of updates in order, all-or-nothing: the first
 /// failure aborts the batch, and because the whole path is pure the
 /// caller's document is untouched unless every update applied.
+// The session's push path applies per-update against its working copy;
+// this batch form serves the reference and route tests.
+#[allow(dead_code)]
 pub fn apply_all(doc: &str, doc_len16: u64, updates: &[UpdateJson]) -> Result<Applied, ApplyError> {
     let mut applied = Applied {
         text: doc.to_owned(),
