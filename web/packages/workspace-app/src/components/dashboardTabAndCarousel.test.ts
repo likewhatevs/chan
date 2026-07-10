@@ -544,8 +544,10 @@ describe("Dashboard slot on/off helpers + persistence", () => {
   });
 
   test("restore reads ds + clamps carouselSlide off a disabled slot", () => {
+    // The dashboard restore constructor (shared by restoreLayout and
+    // reconcileLayout) owns the ds sanitize + slide clamp.
     expect(tabs).toMatch(
-      /if \(kind === "d"\) \{[\s\S]{1,1400}dashboardSlotEnabled\(tab, want\)[\s\S]{1,80}\? want[\s\S]{1,80}: firstEnabledSlot\(tab\)/,
+      /function restoreDashboardTabFromSer\(sertab: SerTab\): DashboardTab \{[\s\S]{1,1400}dashboardSlotEnabled\(tab, want\)[\s\S]{1,80}\? want[\s\S]{1,80}: firstEnabledSlot\(tab\)/,
     );
   });
 
