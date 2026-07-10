@@ -850,23 +850,23 @@ impl DocRegistry {
     }
 
     /// Route one raw watcher event into the affected session, if any.
-    /// A rename is a remove of the source key and a modify of the
-    /// destination key.
+    /// Every path-bearing event reconciles stat-first, `Removed`
+    /// included: the flusher's atomic temp+rename surfaces a watcher
+    /// `Removed` for the flushed path on every write, so absence must
+    /// be confirmed against the disk (reconcile_session's exists probe)
+    /// before a session routes into the removed flow. A rename
+    /// reconciles both keys: the vacated source stats absent and lands
+    /// in removed, the destination merges as a modify.
     pub async fn reconcile_event(&self, workspace: &Arc<Workspace>, event: WatchEvent) {
         match event.kind {
-            WatchKind::Created | WatchKind::Modified => {
+            WatchKind::Created | WatchKind::Modified | WatchKind::Removed => {
                 if let Some(session) = event.path.as_deref().and_then(|p| self.get(p)) {
                     reconcile_session(&session, workspace).await;
                 }
             }
-            WatchKind::Removed => {
-                if let Some(session) = event.path.as_deref().and_then(|p| self.get(p)) {
-                    session.mark_removed();
-                }
-            }
             WatchKind::Renamed => {
                 if let Some(session) = event.path.as_deref().and_then(|p| self.get(p)) {
-                    session.mark_removed();
+                    reconcile_session(&session, workspace).await;
                 }
                 if let Some(session) = event.to.as_deref().and_then(|p| self.get(p)) {
                     reconcile_session(&session, workspace).await;
@@ -1609,6 +1609,62 @@ mod tests {
         backdate_dirty(ha.session());
         fx.registry.flush_pass(&fx.workspace, &fx.self_writes).await;
         assert_eq!(fx.workspace.read_text("a.md").unwrap(), "fresh");
+    }
+
+    #[tokio::test]
+    async fn flush_echo_removed_event_is_not_a_removal() {
+        let fx = fixture(&[("a.md", "ab")]);
+        let (ha, mut rxa) = attach(&fx, "a.md", "w1", None).await;
+        drain(&mut rxa);
+        ha.push(0, vec![update("c1", json!([2, [0, "c"]]))])
+            .unwrap();
+        backdate_dirty(ha.session());
+        fx.registry.flush_pass(&fx.workspace, &fx.self_writes).await;
+        drain(&mut rxa);
+        let token = ha.session().lock_state().flushed_mtime_ns;
+
+        // The flusher's atomic temp+rename surfaces a watcher Removed
+        // for a path that still exists on disk; it must reconcile as a
+        // flush echo, not a removal.
+        fx.registry
+            .reconcile_event(
+                &fx.workspace,
+                WatchEvent {
+                    kind: WatchKind::Removed,
+                    path: Some("a.md".into()),
+                    to: None,
+                },
+            )
+            .await;
+
+        assert_eq!(drain(&mut rxa).len(), 0, "no spurious removed frame");
+        let st = ha.session().lock_state();
+        assert_eq!(st.flushed_mtime_ns, token, "token untouched");
+        assert!(st.dirty_since.is_none(), "session stays clean");
+    }
+
+    #[tokio::test]
+    async fn rename_away_still_fans_removed_for_the_source() {
+        let fx = fixture(&[("a.md", "x")]);
+        let (ha, mut rxa) = attach(&fx, "a.md", "w1", None).await;
+        drain(&mut rxa);
+
+        std::fs::rename(fx.root.path().join("a.md"), fx.root.path().join("b.md")).unwrap();
+        fx.registry
+            .reconcile_event(
+                &fx.workspace,
+                WatchEvent {
+                    kind: WatchKind::Renamed,
+                    path: Some("a.md".into()),
+                    to: Some("b.md".into()),
+                },
+            )
+            .await;
+
+        let frames = drain(&mut rxa);
+        assert_eq!(frames.len(), 1);
+        assert_eq!(frames[0]["type"], "removed");
+        assert!(ha.session().lock_state().flushed_mtime_ns.is_none());
     }
 
     #[tokio::test]
