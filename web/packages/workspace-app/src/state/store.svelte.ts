@@ -2627,11 +2627,19 @@ async function applyRemoteSessionBlob(): Promise<void> {
   if (reconcileLayout(remoteLayout) === "applied") {
     // Pre-seed the save dedupe with OUR serialization of the just-applied
     // state so the trailing reactive save no-ops instead of echoing the
-    // apply back to the peer. A diverged apply leaves the snapshot
-    // unseeded on purpose: the next local save pushes the kept state
-    // back to the peer (self-healing).
+    // apply back to the peer.
     const local = serializeSession();
     lastSessionSnapshot = local ? JSON.stringify(local) : "";
+  } else {
+    // The apply kept local-only state the remote no longer carries (a
+    // dirty tab, an unattachable terminal). Push it back to the peer:
+    // invalidate the dedupe snapshot and schedule the save. Leaving the
+    // snapshot merely unseeded is not enough -- a keep whose net apply
+    // changed nothing locally serializes identically to the last saved
+    // snapshot, the reactive save dedupes to silence, and the peers sit
+    // diverged until the next unrelated local mutation.
+    lastSessionSnapshot = null;
+    scheduleSessionSave();
   }
 }
 

@@ -202,7 +202,9 @@ describe("session sync apply pipeline", () => {
     const tabs = (layout.nodes[layout.rootId] as LeafNode).tabs;
     expect(tabs.some((t) => t.id === "file-dirty")).toBe(true);
 
-    scheduleSessionSave();
+    // The push-back is self-arming: the diverged apply invalidates the
+    // dedupe snapshot AND schedules the save itself (a keep whose net
+    // apply changes nothing locally would otherwise dedupe to silence).
     await vi.advanceTimersByTimeAsync(750);
 
     expect(putSession).toHaveBeenCalledTimes(1);
