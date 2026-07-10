@@ -19,6 +19,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::doc_sessions::changes::UpdateJson;
+
 /// Query parameters for `GET /api/doc/ws`.
 #[derive(Debug, Deserialize)]
 struct DocQuery {
@@ -35,30 +37,21 @@ struct DocQuery {
     version: Option<u64>,
 }
 
-/// One collab update on the wire: `{clientID, changes}`.
-///
-/// `changes` is the CodeMirror `ChangeSet.toJSON()` value, carried
-/// opaquely here; the section grammar is validated where the update is
-/// applied, not at the frame layer. A client-sent `effects` field is
-/// tolerated on input and dropped: this struct does not hold it, so
-/// echoes and rebroadcasts never carry it.
-#[derive(Debug, Serialize, Deserialize)]
-pub(crate) struct DocUpdate {
-    #[serde(rename = "clientID")]
-    pub(crate) client_id: String,
-    pub(crate) changes: serde_json::Value,
-}
-
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type")]
 enum ClientFrame {
     /// Submit local updates on top of `version` (the client's confirmed
     /// version). Accepted only when it matches the authority's current
-    /// version. ONE push in flight per client at a time.
+    /// version. ONE push in flight per client at a time. Update entries
+    /// are `{clientID, changes}` (`doc_sessions::changes::UpdateJson`,
+    /// which tolerates and drops a client `effects` field): the
+    /// ChangeSet section grammar is enforced by that type's serde, so a
+    /// malformed `changes` fails the frame decode and the error+close
+    /// path fires before the session is ever touched.
     #[serde(rename = "push")]
     Push {
         version: u64,
-        updates: Vec<DocUpdate>,
+        updates: Vec<UpdateJson>,
     },
     /// Explicit catch-up request from `version`.
     #[serde(rename = "pull")]
@@ -109,7 +102,7 @@ pub(crate) enum ServerFrame {
     #[serde(rename = "updates")]
     Updates {
         version: u64,
-        updates: Vec<DocUpdate>,
+        updates: Vec<UpdateJson>,
     },
     /// The in-flight push committed; `version` is the authority version
     /// after the commit.
@@ -194,10 +187,37 @@ mod tests {
                 assert_eq!(version, 7);
                 assert_eq!(updates.len(), 2);
                 assert_eq!(updates[0].client_id, "a-1");
-                assert_eq!(updates[0].changes, serde_json::json!([1, [0, "x"], 3]));
-                assert_eq!(updates[1].changes, serde_json::json!([[5]]));
+                assert_eq!(
+                    serde_json::to_value(&updates[0].changes).unwrap(),
+                    serde_json::json!([1, [0, "x"], 3])
+                );
+                assert_eq!(
+                    serde_json::to_value(&updates[1].changes).unwrap(),
+                    serde_json::json!([[5]])
+                );
             }
             other => panic!("expected Push, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn client_push_rejects_malformed_changes_grammar() {
+        // `changes` deserializes through the ChangeSetJson grammar
+        // (doc_sessions::changes), so a section that is not a bare
+        // retain, `[del]`, or `[del, lines...]` fails the WHOLE frame
+        // decode: the route answers `error` + close without the session
+        // ever seeing the push.
+        for bad in [
+            r#"{"type":"push","version":0,"updates":[{"clientID":"a","changes":[true]}]}"#,
+            r#"{"type":"push","version":0,"updates":[{"clientID":"a","changes":[["x"]]}]}"#,
+            r#"{"type":"push","version":0,"updates":[{"clientID":"a","changes":[[1,2]]}]}"#,
+            r#"{"type":"push","version":0,"updates":[{"clientID":"a","changes":{"del":1}}]}"#,
+            r#"{"type":"push","version":0,"updates":[{"clientID":"a","changes":[-1]}]}"#,
+        ] {
+            assert!(
+                serde_json::from_str::<ClientFrame>(bad).is_err(),
+                "must reject: {bad}"
+            );
         }
     }
 
@@ -309,12 +329,14 @@ mod tests {
 
     #[test]
     fn server_updates_and_push_acks_pin_the_wire_shape() {
+        // Round-trip through UpdateJson: the broadcast serialization must
+        // stay byte-identical to the client's `ChangeSet.toJSON()` form.
+        let entry: UpdateJson =
+            serde_json::from_value(serde_json::json!({"clientID":"$disk","changes":[2,[1,"z"]]}))
+                .unwrap();
         let updates = ServerFrame::Updates {
             version: 4,
-            updates: vec![DocUpdate {
-                client_id: "$disk".into(),
-                changes: serde_json::json!([2, [1, "z"]]),
-            }],
+            updates: vec![entry],
         };
         assert_eq!(
             enc(&updates),
