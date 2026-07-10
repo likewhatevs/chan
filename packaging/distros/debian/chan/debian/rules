@@ -1,0 +1,46 @@
+#!/usr/bin/make -f
+# Offline build from the vendored orig tarball: the in-tree
+# .cargo/config.toml redirects crates-io to vendor/, and CARGO_HOME below
+# keeps cargo state out of the builder's home. The versioned toolchain is
+# preferred when present (Ubuntu ships rust as rustc-1.XX packages);
+# --ignore-rust-version lets the archive toolchain trail the workspace MSRV
+# (rust-toolchain.toml) by a release or two -- drop it, and tighten
+# debian/control, once rustc-1.95 reaches the target series.
+
+export CARGO_HOME = $(CURDIR)/debian/cargo-home
+export CHAN_PACKAGED = deb
+# Newest versioned toolchain when present (Ubuntu ships rust as
+# rustc-1.XX/cargo-1.XX packages; the unversioned default can be far
+# older); sort -V so a future 1.100 orders after 1.99.
+CARGO := $(or $(shell ls /usr/bin/cargo-1.* 2>/dev/null | sort -V | tail -1),cargo)
+export RUSTC := $(or $(shell ls /usr/bin/rustc-1.* 2>/dev/null | sort -V | tail -1),rustc)
+
+%:
+	dh $@
+
+# The root Makefile is a full build surface (clean nukes web dists, install
+# runs npm); never let dh_auto_* touch it.
+override_dh_auto_configure:
+
+override_dh_auto_test:
+
+override_dh_auto_clean:
+	rm -rf debian/cargo-home
+
+override_dh_auto_build:
+	$(CARGO) build --release --frozen --ignore-rust-version -p chan
+
+override_dh_auto_install:
+	install -Dm755 target/release/chan debian/chan/usr/bin/chan
+	# The binary dispatches the `cs` CLI when invoked through a cs name
+	# (argv0).
+	ln -s chan debian/chan/usr/bin/cs
+	install -Dm644 packaging/distros/shared/chan-devserver.service \
+	  debian/chan/usr/lib/systemd/user/chan-devserver.service
+
+override_dh_installsystemduser:
+	dh_installsystemduser --no-enable
+
+# The release profile already strips symbols; there is no debug info for
+# dwz to compress.
+override_dh_dwz:

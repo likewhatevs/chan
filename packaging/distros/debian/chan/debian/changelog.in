@@ -1,0 +1,5 @@
+chan (@VERSION@-1~@SERIES@@SERIESREV@) @SERIES@; urgency=medium
+
+  * Vendored source package for ppa:fiorix/chan.
+
+ -- Alexandre Fiori <fiorix@gmail.com>  @DATE@

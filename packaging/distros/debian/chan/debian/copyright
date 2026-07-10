@@ -1,0 +1,19 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: chan
+Source: https://github.com/fiorix/chan
+
+Files: *
+Copyright: 2026 Alexandre Fiori
+License: Apache-2.0
+
+Files: vendor/*
+Copyright: various (per-crate)
+License: various (per-crate)
+Comment:
+ Vendored Rust crate dependencies (cargo vendor). Each crate keeps its
+ upstream license/copyright files verbatim inside its directory under
+ vendor/; consult those for the authoritative per-crate terms.
+
+License: Apache-2.0
+ On Debian systems, the complete text of the Apache License version 2.0
+ can be found in /usr/share/common-licenses/Apache-2.0.

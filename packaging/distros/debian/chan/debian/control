@@ -1,0 +1,20 @@
+Source: chan
+Section: utils
+Priority: optional
+Maintainer: Alexandre Fiori <fiorix@gmail.com>
+Standards-Version: 4.6.2
+Rules-Requires-Root: no
+Homepage: https://chan.app
+Build-Depends: debhelper-compat (= 13),
+ rustc-1.95 | rustc-1.93 | rustc-1.91 | rustc (>= 1.91),
+ cargo-1.95 | cargo-1.93 | cargo-1.91 | cargo (>= 1.91),
+
+Package: chan
+Architecture: amd64 arm64
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Recommends: systemd
+Description: AI-native IDE for the modern engineer
+ chan is an AI-native IDE for the modern engineer: a CLI plus an HTTP
+ server that serves a hybrid editor, terminal, file browser, and graph
+ over a folder on disk. Cross-file [[wiki-link]] autocomplete, BM25
+ content search, and an MCP server for agents included.

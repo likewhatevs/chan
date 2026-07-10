@@ -1,0 +1,55 @@
+#!/usr/bin/make -f
+# Offline build from the vendored orig tarball; see the chan package's
+# debian/rules for the toolchain and --ignore-rust-version notes (drop it,
+# and tighten debian/control, once rustc-1.95 reaches the target series).
+
+export CARGO_HOME = $(CURDIR)/debian/cargo-home
+export CHAN_PACKAGED = deb
+# Newest versioned toolchain when present (Ubuntu ships rust as
+# rustc-1.XX/cargo-1.XX packages; the unversioned default can be far
+# older); sort -V so a future 1.100 orders after 1.99.
+CARGO := $(or $(shell ls /usr/bin/cargo-1.* 2>/dev/null | sort -V | tail -1),cargo)
+export RUSTC := $(or $(shell ls /usr/bin/rustc-1.* 2>/dev/null | sort -V | tail -1),rustc)
+
+DESTROOT = debian/chan-desktop
+ICONS = desktop/src-tauri/icons
+HICOLOR = $(DESTROOT)/usr/share/icons/hicolor
+
+%:
+	dh $@
+
+# The root Makefile is a full build surface (clean nukes web dists, install
+# runs npm); never let dh_auto_* touch it.
+override_dh_auto_configure:
+
+override_dh_auto_test:
+
+override_dh_auto_clean:
+	rm -rf debian/cargo-home
+
+override_dh_auto_build:
+	$(CARGO) build --release --frozen --ignore-rust-version -p chan-desktop
+
+override_dh_auto_install:
+	install -Dm755 target/release/chan-desktop $(DESTROOT)/usr/bin/chan-desktop
+	# The desktop binary IS the chan/cs command line (argv0 dispatch).
+	ln -s chan-desktop $(DESTROOT)/usr/bin/chan
+	ln -s chan-desktop $(DESTROOT)/usr/bin/cs
+	install -Dm644 packaging/distros/shared/chan-desktop.desktop \
+	  $(DESTROOT)/usr/share/applications/chan-desktop.desktop
+	desktop-file-validate \
+	  $(DESTROOT)/usr/share/applications/chan-desktop.desktop
+	install -Dm644 $(ICONS)/32x32.png $(HICOLOR)/32x32/apps/chan-desktop.png
+	install -Dm644 $(ICONS)/64x64.png $(HICOLOR)/64x64/apps/chan-desktop.png
+	install -Dm644 $(ICONS)/128x128.png $(HICOLOR)/128x128/apps/chan-desktop.png
+	install -Dm644 $(ICONS)/128x128@2x.png $(HICOLOR)/256x256/apps/chan-desktop.png
+	install -Dm644 $(ICONS)/icon.png $(HICOLOR)/512x512/apps/chan-desktop.png
+	install -Dm644 packaging/distros/shared/chan-devserver.service \
+	  $(DESTROOT)/usr/lib/systemd/user/chan-devserver.service
+
+override_dh_installsystemduser:
+	dh_installsystemduser --no-enable
+
+# The release profile already strips symbols; there is no debug info for
+# dwz to compress.
+override_dh_dwz:
