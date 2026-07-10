@@ -9,6 +9,10 @@ mod attachments;
 mod build_info;
 mod contacts;
 mod cs_link;
+// pub(crate) so the server-side doc-session authority (registry, flusher,
+// reconciler) fans the exact ServerFrame shapes the `/api/doc/ws` route
+// serves; the frame enums in `doc` are the wire contract's single source.
+pub(crate) mod doc;
 mod drafts;
 mod excluded_dirs;
 mod files;
