@@ -37,16 +37,6 @@
         <a class="arch-button" href="{{githubReleasesUrl}}" data-release-download="desktop-linux-appimage">amd64</a>
         <a class="arch-button" href="{{githubReleasesUrl}}" data-release-download="desktop-linux-appimage-arm64">aarch64</a>
       </div>
-      <div class="download-row">
-        <span class="download-label">Debian (.deb)</span>
-        <a class="arch-button" href="{{githubReleasesUrl}}" data-release-download="desktop-linux-deb">amd64</a>
-        <a class="arch-button" href="{{githubReleasesUrl}}" data-release-download="desktop-linux-deb-arm64">aarch64</a>
-      </div>
-      <div class="download-row">
-        <span class="download-label">Fedora (.rpm)</span>
-        <a class="arch-button" href="{{githubReleasesUrl}}" data-release-download="desktop-linux-rpm-amd64">amd64</a>
-        <a class="arch-button" href="{{githubReleasesUrl}}" data-release-download="desktop-linux-rpm-arm64">aarch64</a>
-      </div>
     </div>
   </div>
 </section>
@@ -91,16 +81,41 @@
         <a class="arch-button" href="{{githubReleasesUrl}}" data-release-download="cli-linux-x64">amd64</a>
         <a class="arch-button" href="{{githubReleasesUrl}}" data-release-download="cli-linux-arm64">aarch64</a>
       </div>
-      <div class="download-row">
-        <span class="download-label">Debian (.deb)</span>
-        <a class="arch-button" href="{{githubReleasesUrl}}" data-release-download="cli-linux-deb-amd64">amd64</a>
-        <a class="arch-button" href="{{githubReleasesUrl}}" data-release-download="cli-linux-deb-arm64">aarch64</a>
-      </div>
-      <div class="download-row">
-        <span class="download-label">Fedora (.rpm)</span>
-        <a class="arch-button" href="{{githubReleasesUrl}}" data-release-download="cli-linux-rpm-amd64">amd64</a>
-        <a class="arch-button" href="{{githubReleasesUrl}}" data-release-download="cli-linux-rpm-arm64">aarch64</a>
-      </div>
+    </div>
+  </div>
+</section>
+
+<section class="install-block">
+  <div class="section-heading">
+    <h2>Ubuntu &amp; Fedora repositories</h2>
+    <p>Prefer distro packages? Chan ships from a Launchpad PPA and a Fedora COPR, so installs and updates ride <code>apt</code> and <code>dnf</code> instead of the AppImage or static binaries. <code>chan-desktop</code> is the app and also provides the <code>chan</code> and <code>cs</code> commands; install plain <code>chan</code> for headless machines — one or the other, not both.</p>
+  </div>
+
+  <div class="download-group">
+    <h3>Ubuntu <span class="group-note">24.04 LTS &amp; 26.04 LTS, amd64 + aarch64</span></h3>
+    <div class="command-copy multiline" data-copy-block>
+      <code><span>$</span><b data-copy-value>sudo add-apt-repository ppa:fiorix/chan
+sudo apt install chan-desktop   # or: chan</b></code>
+      <button type="button" aria-label="Copy">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <rect x="9" y="9" width="13" height="13" rx="2" />
+          <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+        </svg>
+      </button>
+    </div>
+  </div>
+
+  <div class="download-group">
+    <h3>Fedora <span class="group-note">current releases + rawhide, amd64 + aarch64</span></h3>
+    <div class="command-copy multiline" data-copy-block>
+      <code><span>$</span><b data-copy-value>sudo dnf copr enable fiorix/chan
+sudo dnf install chan-desktop   # or: chan</b></code>
+      <button type="button" aria-label="Copy">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <rect x="9" y="9" width="13" height="13" rx="2" />
+          <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+        </svg>
+      </button>
     </div>
   </div>
 </section>

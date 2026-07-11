@@ -18,8 +18,12 @@ const checks = [
   { path: "/", status: 200, includes: 'href="/install/">Install' },
   { path: "/install/", status: 200, includes: "Install Chan" },
   { path: "/install/", status: 200, includes: 'data-release-download="cli-linux-x64"' },
-  { path: "/install/", status: 200, includes: 'data-release-download="desktop-linux-rpm-amd64"' },
+  { path: "/install/", status: 200, includes: 'data-release-download="desktop-linux-appimage"' },
   { path: "/install/", status: 200, includes: 'data-release-download="gateway-profile-deb-amd64"' },
+  { path: "/install/", status: 200, includes: "ppa:fiorix/chan" },
+  { path: "/install/", status: 200, includes: "dnf copr enable fiorix/chan" },
+  { path: "/install/", status: 200, excludes: 'data-release-download="desktop-linux-rpm-amd64"' },
+  { path: "/install/", status: 200, excludes: 'data-release-download="cli-linux-deb-amd64"' },
   {
     path: "/install.sh",
     status: 200,
