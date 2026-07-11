@@ -72,7 +72,11 @@ for pkg in "${PKGS[@]}"; do
             -e "s/@DATE@/$DATE_RFC/g" \
             "$src/debian/changelog.in" > "$src/debian/changelog"
         rm "$src/debian/changelog.in"
-        (cd "$src" && debuild -S -sa -d "${SIGN_ARGS[@]}")
+        # First upload of an upstream version includes the orig (-sa); a
+        # packaging-only re-upload (SERIESREV > 1) must exclude it (-sd):
+        # Launchpad already has the orig and rejects a differing byte-copy.
+        if [ "$SERIESREV" -gt 1 ]; then orig_arg=-sd; else orig_arg=-sa; fi
+        (cd "$src" && debuild -S "$orig_arg" -d "${SIGN_ARGS[@]}")
     done
 done
 

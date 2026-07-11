@@ -1,0 +1,110 @@
+# Publish the distro packages after a release lands: trigger the COPR
+# package builds and upload the signed Debian source packages to the
+# Launchpad PPA. Deliberately a separate workflow from release.yml, and
+# triggered by its completion rather than by the tag push, so distro
+# publishing can never block or fail the GitHub release and only runs
+# once the release is actually out. Retry / manual path: dispatch with
+# the tag. Both jobs no-op gracefully when their secret is absent
+# (e.g. on forks).
+#
+# Secrets:
+#   COPR_WEBHOOK                  custom-webhook base URL (trailing /)
+#   LAUNCHPAD_GPG_PRIVATE_KEY     armored secret key registered on LP
+#   LAUNCHPAD_GPG_PASSPHRASE      its passphrase (empty if none)
+
+name: distros-publish
+
+on:
+  workflow_run:
+    workflows: [Release]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing vX.Y.Z tag to publish distro packages for
+        required: true
+
+# Tag-triggered release runs carry the tag name in head_branch, so this
+# filters out branch-based dry runs and rc validation runs.
+jobs:
+  copr:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       startsWith(github.event.workflow_run.head_branch, 'v'))
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger COPR package builds
+        env:
+          WEBHOOK: ${{ secrets.COPR_WEBHOOK }}
+        run: |
+          if [ -z "$WEBHOOK" ]; then
+            echo "COPR_WEBHOOK not set; skipping COPR trigger."
+            exit 0
+          fi
+          # COPR rebuilds the SCM packages from main's HEAD, which equals
+          # the tag once the release has landed.
+          curl -sf -X POST "${WEBHOOK}chan/"
+          curl -sf -X POST "${WEBHOOK}chan-desktop/"
+
+  # Source-package assembly compiles nothing (the vendored tarball is a
+  # git archive + prebuilt web bundles + cargo vendor); Launchpad builds
+  # offline from it on its own builders.
+  launchpad:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       startsWith(github.event.workflow_run.head_branch, 'v'))
+    runs-on: ubuntu-latest
+    env:
+      PPA_SERIES: "noble resolute"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # workflow_run checks out the default branch by default; pin the
+          # released commit (or the dispatched tag) instead.
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.event.workflow_run.head_sha }}
+
+      - name: Install packaging tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq debhelper devscripts dpkg-dev dput gnupg xz-utils
+          # Keeps CI origs shaped like local ones (non-Linux crate
+          # payloads pruned); mkdist falls back to plain vendor without it.
+          cargo install cargo-vendor-filterer --locked
+
+      - name: Build the vendored source tarball
+        run: make distros-tarball
+
+      - name: Import the signing key
+        env:
+          LP_KEY: ${{ secrets.LAUNCHPAD_GPG_PRIVATE_KEY }}
+          LP_PASS: ${{ secrets.LAUNCHPAD_GPG_PASSPHRASE }}
+        run: |
+          if [ -z "$LP_KEY" ]; then
+            echo "LAUNCHPAD_GPG_PRIVATE_KEY not set; skipping PPA upload."
+            echo "SKIP_PPA=1" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          GNUPGHOME=$(mktemp -d); chmod 700 "$GNUPGHOME"
+          echo "GNUPGHOME=$GNUPGHOME" >> "$GITHUB_ENV"
+          export GNUPGHOME
+          printf 'allow-loopback-pinentry\nallow-preset-passphrase\n' > "$GNUPGHOME/gpg-agent.conf"
+          echo "$LP_KEY" | gpg --batch --import
+          gpg-connect-agent /bye >/dev/null 2>&1 || true
+          KEYID=$(gpg --list-secret-keys --with-colons | awk -F: '/^sec:/{print $5; exit}')
+          echo "DEBSIGN_KEY=$KEYID" >> "$GITHUB_ENV"
+          if [ -n "$LP_PASS" ]; then
+            preset="$(gpgconf --list-dirs libexecdir)/gpg-preset-passphrase"
+            gpg --batch --with-colons --with-keygrip --list-secret-keys \
+              | awk -F: '/^grp:/{print $10}' \
+              | while read -r grip; do "$preset" --preset "$grip" <<<"$LP_PASS"; done
+          fi
+
+      - name: Build and sign the source packages
+        if: env.SKIP_PPA != '1'
+        run: packaging/distros/debian/build-source.sh
+
+      - name: Upload to the PPA
+        if: env.SKIP_PPA != '1'
+        run: packaging/distros/debian/upload.sh
