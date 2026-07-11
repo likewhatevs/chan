@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [v0.67.0] - 2026-07-11
 
 v0.67.0 brings live co-editing with named peer cursors to shared files, makes co-viewed windows converge live, gives every session participant a name, and narrates gateway devserver sign-in and connect failures in the launcher.
 
