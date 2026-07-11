@@ -34,8 +34,8 @@ v0.67.0 closes the live co-editing round plus the distro source-packaging work, 
 
 - rc1 (`5766ca49`): `publish=false` dry run `29074833072`, SUCCESS on every build job (macOS sign/notarize/staple included; publish/Pages correctly skipped). Artifacts archived (`Chan_0.67.0-rc1.dmg` codesign + staple + spctl verified, both linux musl arches).
 - rc2 (`7212681f`): `publish=false` dry run `29103350390`, SUCCESS on every build job (macOS + Windows signed, both linux arches, gateway packages, docker images; publish/Pages skipped). Artifacts archived (`Chan_0.67.0-rc2.dmg`, both linux musl arches).
-- GA pins (this commit): `make pre-push` required green, then a `publish=false` dry run on the exact GA state (now including the packaging commits) required green before the tag.
-- GA publish: annotated tag `v0.67.0` on the GA pin commit, pushed after the pre-tag gate and the GA dry run pass; the tag push runs `release.yml` with `publish=true`.
+- GA pins (`f1a9964f`): `make pre-push` green locally; `publish=false` dry run `29141148575` on the exact GA state (packaging included), SUCCESS on every build job (macOS sign/notarize/staple, Windows signed, both linux arches, gateway packages, docker images); publish/Pages correctly skipped. Artifacts stamped `0.67.0` (`Chan_0.67.0.dmg`, CLI reports `chan 0.67.0`).
+- GA publish: annotated tag `v0.67.0` on `f1a9964f`, pushed after the pre-tag gate and the GA dry run passed; publish run `29142592804`, SUCCESS (GitHub Release uploaded, `/dl` metadata regenerated to 0.67.0, Pages deployed, all four docker manifests pushed). `/dl/{cli,desktop}/latest.json` verified at 0.67.0.
 
 ## Known Limitations
 
