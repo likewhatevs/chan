@@ -8,7 +8,7 @@ License: Apache-2.0
 
 Files: vendor/*
 Copyright: various (per-crate)
-License: various (per-crate)
+License: various
 Comment:
  Vendored Rust crate dependencies (cargo vendor). Each crate keeps its
  upstream license/copyright files verbatim inside its directory under
