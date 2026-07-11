@@ -667,9 +667,20 @@ pub fn start_stable(socket_path: PathBuf, ctx: ControlSocketCtx) -> std::io::Res
 /// Own the takeover right for a stable socket path, or fail `AddrInUse` when
 /// a live server holds it. The flock releases on process death, so a crashed
 /// devserver never wedges its successor.
+///
+/// The takeover retries briefly before giving up: a dead server's flock can
+/// outlive it in any child it forked that has not exec'ed yet (the inherited
+/// fd shares the lock's open file description until exec closes it), and the
+/// server forks shell children constantly. A live server holds its flock for
+/// its whole lifetime, so retrying never clobbers one. Only a persistent
+/// `WouldBlock` means a live owner; any other lock failure propagates as
+/// itself rather than masquerading as one.
 #[cfg(unix)]
 fn take_stable_lock(socket_path: &Path) -> std::io::Result<std::fs::File> {
     use std::os::unix::fs::OpenOptionsExt;
+
+    const ATTEMPTS: u32 = 5;
+    const RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(25);
 
     let mut lock_path = socket_path.as_os_str().to_owned();
     lock_path.push(".lock");
@@ -679,15 +690,22 @@ fn take_stable_lock(socket_path: &Path) -> std::io::Result<std::fs::File> {
         .truncate(false)
         .mode(0o600)
         .open(PathBuf::from(lock_path))?;
+    for _ in 1..ATTEMPTS {
+        match lock.try_lock() {
+            Ok(()) => return Ok(lock),
+            Err(_) => std::thread::sleep(RETRY_DELAY),
+        }
+    }
     match lock.try_lock() {
         Ok(()) => Ok(lock),
-        Err(_) => Err(std::io::Error::new(
+        Err(std::fs::TryLockError::WouldBlock) => Err(std::io::Error::new(
             std::io::ErrorKind::AddrInUse,
             format!(
                 "control socket {} is owned by a live server",
                 socket_path.display()
             ),
         )),
+        Err(std::fs::TryLockError::Error(e)) => Err(e),
     }
 }
 
@@ -3682,6 +3700,40 @@ mod tests {
         assert_eq!(err.kind(), std::io::ErrorKind::AddrInUse);
 
         // The live server keeps serving on its socket.
+        assert!(matches!(
+            identify_round_trip(&path).await,
+            ControlResponse::Ok { .. }
+        ));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn stable_bind_absorbs_a_transient_lock_holder() {
+        // A dead server's flock can linger in a forked child until it execs
+        // (the inherited fd shares the open file description). A holder that
+        // vanishes within the takeover's retry budget must not fail the bind.
+        let dir = tempfile::tempdir().expect("socket dir");
+        let path = dir.path().join(stable_socket_name("lib-test", "/blog"));
+        let mut lock_path = path.as_os_str().to_owned();
+        lock_path.push(".lock");
+        let holder = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(PathBuf::from(lock_path))
+            .expect("open the lock sibling");
+        holder
+            .try_lock()
+            .expect("holder flocks before the takeover");
+        let released = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(25));
+            drop(holder);
+        });
+
+        let cell = Arc::new(RwLock::new(None));
+        let _handle = start_stable(path.clone(), test_ctx(cell, ControlTenant::Workspace))
+            .expect("takeover absorbs a holder that vanishes within the retry budget");
+        released.join().expect("holder thread");
         assert!(matches!(
             identify_round_trip(&path).await,
             ControlResponse::Ok { .. }
