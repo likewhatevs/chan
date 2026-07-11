@@ -1,0 +1,4 @@
+# Vendored crates ship their upstream test fixtures verbatim; the
+# libloading DLLs are never built or installed, and removing them would
+# break cargo's vendored-source checksums.
+chan-desktop source: source-contains-prebuilt-windows-binary [vendor/libloading*]

@@ -8,7 +8,7 @@ Homepage: https://chan.app
 Build-Depends: debhelper-compat (= 13),
  rustc-1.95 | rustc-1.93 | rustc-1.91 | rustc (>= 1.91),
  cargo-1.95 | cargo-1.93 | cargo-1.91 | cargo (>= 1.91),
- pkg-config,
+ pkgconf | pkg-config,
  libwebkit2gtk-4.1-dev,
  libgtk-3-dev,
  libsoup-3.0-dev,
