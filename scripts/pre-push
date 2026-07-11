@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
 # Pre-push gate. Keep the target list in the root Makefile so local
-# and CI entry points do not drift.
+# and CI entry points do not drift. The output tees to
+# target/pre-push.log so a red gate stays diagnosable after the push
+# process (and its terminal output) is gone.
 set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel)"
 
-exec make pre-push
+mkdir -p target
+make pre-push 2>&1 | tee target/pre-push.log
