@@ -25,7 +25,7 @@ COPR (`https://copr.fedorainfracloud.org`, project `fiorix/chan`, ID 245281):
 
 1. Create the project; enabled chroots: the latest stable Fedora + rawhide, x86_64 + aarch64.
 2. Add two packages, `chan` and `chan-desktop`, source type "SCM" pointed at the GitHub repo, build method "make srpm", Spec File `packaging/distros/fedora/<pkg>.spec` (COPR forwards it as `spec=` to `.copr/Makefile`), committish empty (builds main's HEAD).
-3. Release automation: `.github/workflows/copr-tag-build.yml` POSTs the project's **custom** webhook (Settings > Integrations, `webhooks/custom/<id>/<token>/<pkg>/`) for both packages on every `vX.Y.Z` tag push; the base URL lives in the `COPR_WEBHOOK` repo secret. Do not enable COPR's GitHub integration: it fires on every push, not just tags.
+3. Release automation: the `distros-publish` workflow (below) POSTs the project's **custom** webhook (Settings > Integrations, `webhooks/custom/<id>/<token>/<pkg>/`) for both packages; the base URL lives in the `COPR_WEBHOOK` repo secret. Do not enable COPR's GitHub integration: it fires on every push, not just tags.
 4. Local iteration without a tag: `make copr-srpm`, then `copr-cli build fiorix/chan target/distros/srpm/<pkg>-*.src.rpm` (token from the COPR API page in `~/.config/copr`), or `make copr-build`, or curl the custom webhook manually.
 5. If a stable chroot's rust trails the workspace MSRV, enable an external rust repo for that chroot in the project settings, or wait for the distro update; rawhide tracks upstream closely.
 
@@ -33,9 +33,16 @@ Launchpad (`ppa:fiorix/chan`):
 
 1. Host prerequisites for building/signing uploads: `devscripts`, `debhelper`, `dpkg-dev`, `dput`, and a GPG key (`debuild -S` runs `debian/rules clean`, which needs debhelper's `dh`).
 2. Create the PPA on the Launchpad account; enable arm64 in the PPA's processor settings if wanted (amd64 is on by default).
-3. Register the GPG key used by debsign with the Launchpad account, and set `DEBSIGN_KEY` (or rely on the debsign default key). Signing needs a tty pinentry: prime gpg-agent from a real terminal first (any one-off `gpg --clearsign`) when driving the build from an agent shell, or `debsign` the staged `*_source.changes` manually. PPA uploads stay manual/local by design; the key never goes to CI.
-4. `make distros-tarball && make ppa-source PPA_SERIES="noble resolute"` then `make ppa-upload`. Source-only uploads; each series gets `X.Y.Z-1~<series>1` while the orig tarball stays byte-identical across series (Launchpad requires this for one upstream version).
+3. Register the GPG key used by debsign with the Launchpad account, and set `DEBSIGN_KEY` (or rely on the debsign default key). Local signing needs a tty pinentry: prime gpg-agent from a real terminal first (any one-off `gpg --clearsign`) when driving the build from an agent shell, or `debsign` the staged `*_source.changes` manually.
+4. Local flow (re-uploads, pre-release testing): `make distros-tarball && make ppa-source PPA_SERIES="noble resolute"` then `make ppa-upload`. Source-only uploads; each series gets `X.Y.Z-1~<series>1` while the orig tarball stays byte-identical across series (Launchpad requires this for one upstream version). A packaging-only re-upload bumps `SERIESREV`, which switches debuild to `-sd` (Launchpad already has the orig).
 5. Default PPA quota is ~2 GiB; each upstream version stores the ~63 MB orig twice (one per source package). Delete superseded versions or request a quota bump as needed.
+
+## Release automation
+
+`.github/workflows/distros-publish.yml` runs when the Release workflow completes for a `vX.Y.Z` tag (workflow_run; branch dry runs are filtered out) and is deliberately separate from release.yml: a COPR or Launchpad failure can never block or fail the GitHub release. Retry with `workflow_dispatch` and the tag. Two independent jobs, each a no-op when its secret is absent:
+
+- `copr` curls the custom webhook for both packages.
+- `launchpad` rebuilds the vendored tarball at the released commit, imports `LAUNCHPAD_GPG_PRIVATE_KEY`/`LAUNCHPAD_GPG_PASSPHRASE` into an ephemeral loopback-pinentry keyring, and runs the same build-source.sh + upload.sh as the local flow.
 
 ## Toolchain note
 

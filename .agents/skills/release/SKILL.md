@@ -31,6 +31,7 @@ Solo and contributor modes run the same cycle; the only difference is the merge 
 5. **Iterate.** A blocker returns to the owner or to a contributor PR, or overflows to the next version. If fixes land, cut the next candidate by bumping the pins `X.Y.Z-rcN` to `X.Y.Z-rc(N+1)` and repeat the dry run. An rc is a pin state only; no rc tag is ever pushed (see Invariants).
 6. **GA close.** When no blockers remain, consolidate the accepted RC reports into `team/release-vX.Y.Z.md` and the CHANGELOG, then cut GA in one commit: strip `-rcN` from every pin AND rename the CHANGELOG `## [Unreleased]` section to `## [vX.Y.Z] - <date>` with a one-line summary. Fast-forward `main` to it. This GA commit is the last commit of the cycle.
 7. **Tag and publish.** Annotate and push the tag on the GA commit: `git tag -a vX.Y.Z -m "chan X.Y.Z"`, then `git push origin vX.Y.Z`. The tag push runs `release.yml` with `publish=true` and ships everything. Delete the RC branch, local and remote.
+8. **Distro packages.** When the Release run completes, the `distros-publish` workflow fires on its own (workflow_run; it cannot block or fail the release): it triggers the COPR builds and uploads the signed PPA sources. Verify both went green - COPR `fiorix/chan` (both packages, all chroots) and `ppa:fiorix/chan` (noble + resolute). It needs the `COPR_WEBHOOK`, `LAUNCHPAD_GPG_PRIVATE_KEY`, and `LAUNCHPAD_GPG_PASSPHRASE` repo secrets; retry via `workflow_dispatch` with the tag. See `packaging/distros/README.md`.
 
 ## RC report files
 
@@ -47,6 +48,8 @@ Every pin moves to the same `X.Y.Z` (or `X.Y.Z-rcN`) in one commit. Missing one 
 - The three regenerated lockfiles: `Cargo.lock` and `gateway/Cargo.lock` (each refreshed with `cargo update -w`, which moves only the workspace-member versions), and `web/package-lock.json` (refreshed with `npm install`).
 
 The marketing site reads the workspace version at build time, so it needs no separate bump; confirm nothing else has drifted.
+
+GA only (not rc pins): `packaging/distros/fedora/*.spec` carry `%global upstream_version` and a dated `%changelog` entry. They do not gate the tag (the build tooling rewrites the version), but bump both in the GA commit so the committed specs match the release.
 
 ## Invariants
 
