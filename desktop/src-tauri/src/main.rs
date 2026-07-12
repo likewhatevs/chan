@@ -4301,6 +4301,10 @@ fn main() {
                         auth::CallbackOutcome::Failed {
                             consumed_pending: false,
                         } => {}
+                        // Duplicate delivery for an already-settled sign-in
+                        // (e.g. the handoff page's fallback link after the
+                        // meta refresh landed): nothing to clear or resume.
+                        auth::CallbackOutcome::Ignored => {}
                     }
                 }
             });
@@ -4329,6 +4333,7 @@ fn main() {
                         auth::CallbackOutcome::Failed {
                             consumed_pending: false,
                         } => {}
+                        auth::CallbackOutcome::Ignored => {}
                     }
                 }
             }

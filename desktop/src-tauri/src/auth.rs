@@ -7,7 +7,9 @@
 //!      `https://id.chan.app/desktop/authorize?...&redirect_uri=chan://auth/callback&state=<nonce>`.
 //!   2. id.chan.app handles OAuth (passkeys, autofill, all native to
 //!      the user's real browser), mints a 30-day `tunnel` PAT, and
-//!      302s to the redirect_uri with the PAT in the URL fragment.
+//!      serves a handoff page that navigates to the redirect_uri
+//!      (zero-delay meta refresh, with a manual fallback link) with
+//!      the PAT in the URL fragment.
 //!   3. macOS routes the `chan://` URL to chan-desktop. The deep-link
 //!      plugin invokes `handle_callback`, which validates the state
 //!      nonce, persists the PAT to the OS keychain, and emits
@@ -262,23 +264,57 @@ pub enum CallbackOutcome {
     SignedIn { resume_devserver_id: Option<String> },
     /// The callback failed and AUTH_ERROR was emitted. `consumed_pending` is
     /// true when the failure popped the in-flight sign-in state; false means
-    /// the URL never matched a sign-in (malformed, or none in progress) and
-    /// any waiting sign-in is still live.
+    /// the URL itself was malformed and any waiting sign-in is still live.
     Failed { consumed_pending: bool },
+    /// A well-formed callback arrived with no sign-in pending: the handoff
+    /// page's fallback link re-clicked after the meta refresh already
+    /// delivered, or a stray delivery. Nothing stored, nothing emitted.
+    Ignored,
 }
 
 /// Handle a `chan://auth/callback#...` URL delivered by the deep-link
 /// plugin. Validates state, persists the PAT, and emits AUTH_CHANGED
-/// on success or AUTH_ERROR on any failure.
+/// on success or AUTH_ERROR on failure; a duplicate delivery for a
+/// sign-in that already settled is ignored without a banner.
 pub fn handle_callback(app: &AppHandle, raw: &str) -> CallbackOutcome {
-    match do_handle_callback(app, raw) {
-        Ok(resume_devserver_id) => CallbackOutcome::SignedIn {
+    let action = {
+        let mut pending = pending_state().lock().unwrap();
+        classify_callback(raw, &mut pending)
+    };
+    match action {
+        CallbackAction::SignIn {
+            pat,
+            account,
             resume_devserver_id,
-        },
-        Err((msg, consumed_pending)) => {
-            let _ = app.emit(AUTH_ERROR, &msg);
+        } => {
+            if let Err(e) = store_for(&account, &pat) {
+                let _ = app.emit(AUTH_ERROR, &e);
+                return CallbackOutcome::Failed {
+                    consumed_pending: true,
+                };
+            }
+            let status = AuthStatus {
+                is_signed_in: true,
+                label: Some(pat.label),
+                expires_at: if pat.expires_at.is_empty() {
+                    None
+                } else {
+                    Some(pat.expires_at)
+                },
+            };
+            let _ = app.emit(AUTH_CHANGED, &status);
+            CallbackOutcome::SignedIn {
+                resume_devserver_id,
+            }
+        }
+        CallbackAction::Fail {
+            message,
+            consumed_pending,
+        } => {
+            let _ = app.emit(AUTH_ERROR, &message);
             CallbackOutcome::Failed { consumed_pending }
         }
+        CallbackAction::Ignore => CallbackOutcome::Ignored,
     }
 }
 
@@ -295,14 +331,43 @@ fn signin_error_message(reason: &str) -> String {
     }
 }
 
-/// The error side carries the message plus whether the in-flight sign-in
-/// state was consumed (see [`CallbackOutcome::Failed`]).
-fn do_handle_callback(app: &AppHandle, raw: &str) -> Result<Option<String>, (String, bool)> {
-    let url = Url::parse(raw).map_err(|e| (format!("malformed callback URL: {e}"), false))?;
+/// What [`handle_callback`] should do with a delivered URL, decided
+/// before any I/O so the validation and dedup rules are unit-testable.
+#[derive(Debug)]
+enum CallbackAction {
+    /// Store the PAT and emit AUTH_CHANGED.
+    SignIn {
+        pat: StoredPat,
+        account: String,
+        resume_devserver_id: Option<String>,
+    },
+    /// Emit AUTH_ERROR. `consumed_pending` as on [`CallbackOutcome::Failed`].
+    Fail {
+        message: String,
+        consumed_pending: bool,
+    },
+    /// A well-formed callback with no sign-in pending (the handoff page's
+    /// fallback link after the meta refresh already delivered, or a stray
+    /// delivery). Nothing to store or emit.
+    Ignore,
+}
+
+/// Classify a delivered URL against the pending sign-in slot. Pops the
+/// slot only once the URL is a well-formed `chan://auth/callback` -- a
+/// malformed delivery must not kill a live browser leg.
+fn classify_callback(raw: &str, pending: &mut Option<PendingAuth>) -> CallbackAction {
+    let fail = |message: String, consumed_pending: bool| CallbackAction::Fail {
+        message,
+        consumed_pending,
+    };
+    let url = match Url::parse(raw) {
+        Ok(u) => u,
+        Err(e) => return fail(format!("malformed callback URL: {e}"), false),
+    };
     // Only accept our exact path. Anything else is a confused redirect
     // or a maliciously crafted chan:// URL.
     if url.scheme() != "chan" || url.host_str() != Some("auth") || url.path() != "/callback" {
-        return Err((format!("unexpected callback URL: {raw}"), false));
+        return fail(format!("unexpected callback URL: {raw}"), false);
     }
     let fragment = url.fragment().unwrap_or("");
     let params: std::collections::HashMap<String, String> =
@@ -310,27 +375,25 @@ fn do_handle_callback(app: &AppHandle, raw: &str) -> Result<Option<String>, (Str
             .into_owned()
             .collect();
 
-    // Pop the in-flight state regardless of outcome — a failed leg
+    // Pop the in-flight state regardless of outcome -- a failed leg
     // shouldn't leave a stale nonce around for a later callback to
-    // replay.
-    let expected = pending_state().lock().unwrap().take();
-    let consumed = expected.is_some();
+    // replay. With nothing pending, the sign-in already settled (or never
+    // existed): ignore the delivery rather than banner over a success.
+    let Some(expected) = pending.take() else {
+        return CallbackAction::Ignore;
+    };
 
     if let Some(err) = params.get("error") {
-        return Err((signin_error_message(err), consumed));
+        return fail(signin_error_message(err), true);
     }
 
     let got_state = params.get("state").cloned().unwrap_or_default();
-    let pending = match expected {
-        Some(p) if p.state == got_state => p,
-        Some(_) => {
-            return Err((
-                "sign-in state mismatch (stale browser tab?)".to_string(),
-                consumed,
-            ))
-        }
-        None => return Err(("no sign-in in progress".to_string(), consumed)),
-    };
+    if expected.state != got_state {
+        return fail(
+            "sign-in state mismatch (stale browser tab?)".to_string(),
+            true,
+        );
+    }
 
     let id = params.get("id").cloned().unwrap_or_default();
     let secret = params.get("secret").cloned().unwrap_or_default();
@@ -340,27 +403,19 @@ fn do_handle_callback(app: &AppHandle, raw: &str) -> Result<Option<String>, (Str
         .unwrap_or_else(|| format!("chan-desktop @ {}", hostname()));
     let expires_at = params.get("expires_at").cloned().unwrap_or_default();
     if id.is_empty() || secret.is_empty() {
-        return Err(("callback missing id or secret".to_string(), consumed));
+        return fail("callback missing id or secret".to_string(), true);
     }
 
-    let pat = StoredPat {
-        id,
-        secret,
-        label: label.clone(),
-        expires_at: expires_at.clone(),
-    };
-    store_for(&pending.account, &pat).map_err(|e| (e, consumed))?;
-    let status = AuthStatus {
-        is_signed_in: true,
-        label: Some(label),
-        expires_at: if expires_at.is_empty() {
-            None
-        } else {
-            Some(expires_at)
+    CallbackAction::SignIn {
+        pat: StoredPat {
+            id,
+            secret,
+            label,
+            expires_at,
         },
-    };
-    let _ = app.emit(AUTH_CHANGED, &status);
-    Ok(pending.resume_devserver_id)
+        account: expected.account,
+        resume_devserver_id: expected.resume_devserver_id,
+    }
 }
 
 /// Local sign-out. Clears the keychain entry. Server-side revoke is
@@ -407,5 +462,116 @@ mod tests {
             signin_error_message("quota_exceeded"),
             "sign-in failed in the browser: quota_exceeded"
         );
+    }
+
+    fn pending(state: &str) -> Option<PendingAuth> {
+        Some(PendingAuth {
+            state: state.to_string(),
+            account: "id.chan.app".to_string(),
+            resume_devserver_id: Some("ds-1".to_string()),
+        })
+    }
+
+    #[test]
+    fn classify_signs_in_on_a_matching_pending_state() {
+        let mut slot = pending("nonce-1");
+        let action = classify_callback(
+            "chan://auth/callback#id=t-1&secret=chan_pat_x&label=mbp&state=nonce-1",
+            &mut slot,
+        );
+        match action {
+            CallbackAction::SignIn {
+                pat,
+                account,
+                resume_devserver_id,
+            } => {
+                assert_eq!(pat.id, "t-1");
+                assert_eq!(pat.secret, "chan_pat_x");
+                assert_eq!(pat.label, "mbp");
+                assert_eq!(account, "id.chan.app");
+                assert_eq!(resume_devserver_id.as_deref(), Some("ds-1"));
+            }
+            other => panic!("expected SignIn, got {other:?}"),
+        }
+        assert!(slot.is_none(), "the pending slot is consumed");
+    }
+
+    #[test]
+    fn classify_ignores_duplicates_with_nothing_pending() {
+        // The handoff page keeps a live "Open chan-desktop" link after its
+        // meta refresh already delivered; a re-click must not banner over
+        // the completed sign-in. Same for a duplicate deny.
+        let mut slot = None;
+        for raw in [
+            "chan://auth/callback#id=t-1&secret=chan_pat_x&state=nonce-1",
+            "chan://auth/callback#error=user_cancelled&state=nonce-1",
+        ] {
+            assert!(
+                matches!(classify_callback(raw, &mut slot), CallbackAction::Ignore),
+                "{raw} should be ignored with no pending sign-in"
+            );
+        }
+    }
+
+    #[test]
+    fn classify_surfaces_a_deny_that_consumes_the_pending_leg() {
+        let mut slot = pending("nonce-1");
+        match classify_callback(
+            "chan://auth/callback#error=user_cancelled&state=nonce-1",
+            &mut slot,
+        ) {
+            CallbackAction::Fail {
+                message,
+                consumed_pending,
+            } => {
+                assert_eq!(message, "sign-in was cancelled in the browser");
+                assert!(consumed_pending);
+            }
+            other => panic!("expected Fail, got {other:?}"),
+        }
+        assert!(slot.is_none());
+    }
+
+    #[test]
+    fn classify_keeps_the_pending_leg_alive_on_a_malformed_url() {
+        // A malformed or foreign URL must not kill a live browser leg: the
+        // slot stays untouched so the real callback can still complete.
+        let mut slot = pending("nonce-1");
+        for raw in ["not a url", "chan://evil/callback#id=x&secret=y"] {
+            match classify_callback(raw, &mut slot) {
+                CallbackAction::Fail {
+                    consumed_pending, ..
+                } => assert!(!consumed_pending, "{raw}"),
+                other => panic!("expected Fail for {raw}, got {other:?}"),
+            }
+            assert!(slot.is_some(), "pending survives {raw}");
+        }
+    }
+
+    #[test]
+    fn classify_rejects_a_state_mismatch_and_missing_credentials() {
+        let mut slot = pending("nonce-1");
+        match classify_callback("chan://auth/callback#id=t&secret=s&state=WRONG", &mut slot) {
+            CallbackAction::Fail {
+                message,
+                consumed_pending,
+            } => {
+                assert!(message.contains("state mismatch"), "{message}");
+                assert!(consumed_pending);
+            }
+            other => panic!("expected Fail, got {other:?}"),
+        }
+
+        let mut slot = pending("nonce-1");
+        match classify_callback("chan://auth/callback#state=nonce-1", &mut slot) {
+            CallbackAction::Fail {
+                message,
+                consumed_pending,
+            } => {
+                assert!(message.contains("missing id or secret"), "{message}");
+                assert!(consumed_pending);
+            }
+            other => panic!("expected Fail, got {other:?}"),
+        }
     }
 }
