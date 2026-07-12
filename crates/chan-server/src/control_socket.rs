@@ -434,6 +434,12 @@ mod tenant_gate_tests {
                 name: Some("n".into()),
                 reset: false,
             },
+            // The bare whoami query rides the same tenant gate.
+            ControlRequest::SessionSelf {
+                window_id: "w".into(),
+                name: None,
+                reset: false,
+            },
             ControlRequest::SessionHandover {
                 window_id: "w".into(),
                 to: None,
@@ -2382,9 +2388,11 @@ fn handle_session_list(session_registry: &SessionRegistry) -> ControlResponse {
     )
 }
 
-/// `cs session self`: rename the calling window (`--name`) or clear its
-/// override back to gateway identity / the generated default (`--reset`),
-/// then rebroadcast the roster.
+/// `cs session self`: bare = report the calling window's own record (the
+/// whoami query, `{window_id, name, role, status, is_leader, identity?}` as
+/// JSON in `Ok.message`); `--name` renames it; `--reset` clears its override
+/// back to gateway identity / the generated default. Only the mutating forms
+/// rebroadcast the roster.
 fn handle_session_self(
     session_registry: &SessionRegistry,
     events_tx: &broadcast::Sender<String>,
@@ -2393,16 +2401,28 @@ fn handle_session_self(
     reset: bool,
 ) -> ControlResponse {
     let outcome = match (name, reset) {
+        // Bare `cs session self`: the whoami query. Read-only, no broadcast.
+        (None, false) => {
+            return match session_registry.whoami(&window_id, std::time::Instant::now()) {
+                Some(record) => into_response(
+                    serde_json::to_string(&record)
+                        .map_err(|e| format!("encoding session self: {e}")),
+                ),
+                None => ControlResponse::Error {
+                    message: format!("not a session participant: {window_id}"),
+                },
+            };
+        }
         (Some(name), false) => session_registry
             .rename(&window_id, &name)
             .map(|stored| format!("renamed to {stored}")),
         (None, true) => session_registry
             .reset_name(&window_id)
             .map(|effective| format!("name reset to {effective}")),
-        // clap enforces the exclusivity; refuse a hand-crafted request.
-        _ => {
+        // clap forbids the combination; refuse a hand-crafted request.
+        (Some(_), true) => {
             return ControlResponse::Error {
-                message: "exactly one of --name or --reset is required".into(),
+                message: "--name conflicts with --reset".into(),
             }
         }
     };
@@ -3508,6 +3528,78 @@ mod tests {
         let name = rows[0]["name"].as_str().expect("a generated default name");
         assert!(!name.trim().is_empty());
         assert_eq!(rows[1]["role"], "follower");
+    }
+
+    #[test]
+    fn session_self_bare_query_reports_the_calling_window() {
+        let registry = Arc::new(SessionRegistry::new());
+        let (events_tx, mut events_rx) = broadcast::channel(4);
+        let _leader = registry.join("w-a", true, None).guard;
+        let identity = crate::session_presence::ParticipantIdentity {
+            display_name: Some("Ada Lovelace".to_string()),
+            email: Some("ada@example.com".to_string()),
+        };
+        let _follower = registry.join("w-b", false, Some(identity)).guard;
+
+        let ControlResponse::Ok { message } =
+            handle_session_self(&registry, &events_tx, "w-b".into(), None, false)
+        else {
+            panic!("expected Ok record");
+        };
+        let record: serde_json::Value = serde_json::from_str(&message).expect("json record");
+        // Full-object equality pins the exact wire shape the CLI renderer
+        // reads (render_session_self_markdown keys off these literals): a
+        // renamed or added field fails here, never silently in the client.
+        assert_eq!(
+            record,
+            serde_json::json!({
+                "window_id": "w-b",
+                "name": "Ada Lovelace <ada@example.com>",
+                "role": "follower",
+                "status": "live",
+                "is_leader": false,
+                "identity": "Ada Lovelace <ada@example.com>",
+            })
+        );
+        // The query is read-only: no roster rebroadcast (rename does one).
+        assert!(events_rx.try_recv().is_err());
+
+        let ControlResponse::Ok { message } =
+            handle_session_self(&registry, &events_tx, "w-a".into(), None, false)
+        else {
+            panic!("expected Ok record");
+        };
+        let record: serde_json::Value = serde_json::from_str(&message).expect("json record");
+        assert_eq!(record["is_leader"], true);
+        assert!(
+            record.get("identity").is_none(),
+            "a loopback participant's record omits the identity key"
+        );
+    }
+
+    #[test]
+    fn session_self_query_for_a_non_participant_errors() {
+        let registry = Arc::new(SessionRegistry::new());
+        let (events_tx, _) = broadcast::channel(1);
+        let ControlResponse::Error { message } =
+            handle_session_self(&registry, &events_tx, "w-ghost".into(), None, false)
+        else {
+            panic!("expected Error");
+        };
+        assert!(message.contains("not a session participant"), "{message}");
+    }
+
+    #[test]
+    fn session_self_name_with_reset_is_refused() {
+        let registry = Arc::new(SessionRegistry::new());
+        let (events_tx, _) = broadcast::channel(1);
+        let _p = registry.join("w-a", true, None).guard;
+        let ControlResponse::Error { message } =
+            handle_session_self(&registry, &events_tx, "w-a".into(), Some("x".into()), true)
+        else {
+            panic!("expected Error");
+        };
+        assert_eq!(message, "--name conflicts with --reset");
     }
 
     #[tokio::test]

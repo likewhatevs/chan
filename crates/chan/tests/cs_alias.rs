@@ -71,6 +71,34 @@ fn cs_help_shows_shell_subcommands() {
 }
 
 #[test]
+fn cs_session_self_bare_is_a_query_not_a_usage_error() {
+    let (_dir, cs) = cs_symlink();
+    // Bare `cs session self` is the whoami query, so with no chan terminal
+    // env it fails on the missing $CHAN_WINDOW_ID -- NOT on a clap usage
+    // error demanding --name/--reset.
+    let output = Command::new(&cs)
+        .args(["session", "self"])
+        .env_remove("CHAN_CONTROL_SOCKET")
+        .env_remove("CHAN_WINDOW_ID")
+        .output()
+        .expect("run cs session self");
+
+    assert!(
+        !output.status.success(),
+        "cs session self should fail outside a chan session"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("CHAN_WINDOW_ID") || stderr.contains("CHAN_CONTROL_SOCKET"),
+        "expected the missing-session-env error (proving the bare form parses), got: {stderr}"
+    );
+    assert!(
+        !stderr.contains("required"),
+        "bare `cs session self` must not be a clap usage error: {stderr}"
+    );
+}
+
+#[test]
 fn plain_chan_rejects_terminal_subcommand() {
     // Control: WITHOUT the `cs` rewrite, `chan terminal` is unknown. This
     // is what makes the rewrite load-bearing.

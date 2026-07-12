@@ -176,10 +176,11 @@ pub enum ShellAction {
         action: WindowAction,
     },
     /// Manage this session's leader and followers. `cs session list` shows the
-    /// participants and the leader; `self --name=` renames you; `handover`
-    /// requests (or, as leader, answers) a handover; `takeover` claims
-    /// leadership when the leader is gone (`--force` seizes a live one).
-    /// Workspace windows only: standalone terminals have no shared session.
+    /// participants and the leader; bare `self` shows who you are and `self
+    /// --name=` renames you; `handover` requests (or, as leader, answers) a
+    /// handover; `takeover` claims leadership when the leader is gone
+    /// (`--force` seizes a live one). Workspace windows only: standalone
+    /// terminals have no shared session.
     #[command(infer_subcommands = true)]
     Session {
         #[command(subcommand)]
@@ -277,16 +278,26 @@ pub enum SessionAction {
         #[arg(long)]
         pretty: bool,
     },
-    /// Rename yourself in this session, or reset back to your default name.
+    /// Show who you are in this session (bare), rename yourself (`--name`),
+    /// or reset back to your default name (`--reset`). The bare query reports
+    /// your window, name, role, status, leadership, and gateway identity.
+    /// Markdown by default; `--json [--pretty]` for machine output.
     #[command(name = "self")]
     SelfCmd {
         /// The new display name for this client.
-        #[arg(long, conflicts_with = "reset", required_unless_present = "reset")]
+        #[arg(long, conflicts_with = "reset")]
         name: Option<String>,
         /// Clear your explicit name: fall back to your gateway identity or
         /// your generated default name.
         #[arg(long)]
         reset: bool,
+        /// Emit the raw JSON record instead of the markdown rendering.
+        /// Query form only.
+        #[arg(long, conflicts_with_all = ["name", "reset"])]
+        json: bool,
+        /// With --json, pretty-print (indent) the JSON. Ignored without --json.
+        #[arg(long)]
+        pretty: bool,
     },
     /// Request a leader handover (default), or accept/reject a pending request
     /// when you are the leader.
@@ -871,15 +882,12 @@ pub async fn dispatch(action: ShellAction) -> Result<()> {
         },
         ShellAction::Session { action } => match action {
             SessionAction::List { json, pretty } => cmd_session_list(json, pretty).await,
-            SessionAction::SelfCmd { name, reset } => {
-                let env = open_env()?;
-                cmd_session_op(ControlRequest::SessionSelf {
-                    window_id: env.window_id,
-                    name,
-                    reset,
-                })
-                .await
-            }
+            SessionAction::SelfCmd {
+                name,
+                reset,
+                json,
+                pretty,
+            } => cmd_session_self(name, reset, json, pretty).await,
             SessionAction::Handover {
                 to,
                 accept,
@@ -1017,7 +1025,7 @@ async fn cmd_session_list(json: bool, pretty: bool) -> Result<()> {
     Ok(())
 }
 
-/// `cs session <self|handover|takeover>`: send a session command and print the
+/// `cs session <handover|takeover>`: send a session command and print the
 /// server's reply. A `handover` request BLOCKS here until the leader accepts /
 /// rejects or the timeout elapses (the CLI exits 124 on timeout, like
 /// `cs window rm` blocking on the desktop dialog).
@@ -1025,6 +1033,46 @@ async fn cmd_session_op(req: ControlRequest) -> Result<()> {
     let socket = control_socket_env()?;
     let message = send_control_request(&socket, req).await?;
     println!("{message}");
+    Ok(())
+}
+
+/// `cs session self`: bare = the whoami query (who am I in this session),
+/// answered as one JSON record in `Ok.message` and rendered as a markdown
+/// field table (`--json [--pretty]` for machine output); `--name`/`--reset`
+/// print the server's plain confirmation line, like the other session ops.
+async fn cmd_session_self(
+    name: Option<String>,
+    reset: bool,
+    json: bool,
+    pretty: bool,
+) -> Result<()> {
+    let env = open_env()?;
+    let is_query = name.is_none() && !reset;
+    let raw = send_control_request(
+        &env.control_socket,
+        ControlRequest::SessionSelf {
+            window_id: env.window_id,
+            name,
+            reset,
+        },
+    )
+    .await?;
+    if !is_query {
+        println!("{raw}");
+    } else if json {
+        if pretty {
+            let value: serde_json::Value =
+                serde_json::from_str(&raw).context("parsing session self JSON")?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&value).context("formatting session self JSON")?
+            );
+        } else {
+            println!("{raw}");
+        }
+    } else {
+        print!("{}", render_session_self_markdown(&raw)?);
+    }
     Ok(())
 }
 
@@ -1050,6 +1098,33 @@ fn render_session_list_markdown(raw: &str) -> Result<String> {
         let role = row.get("role").and_then(|v| v.as_str()).unwrap_or("");
         let status = row.get("status").and_then(|v| v.as_str()).unwrap_or("");
         out.push_str(&format!("| {window} | {name} | {role} | {status} |\n"));
+    }
+    Ok(out)
+}
+
+/// Render the `cs session self` record (`{window_id, name, role, status,
+/// is_leader, identity?}`) as a two-column markdown field table -- the
+/// single-record analogue of the `cs session list` table. The `identity` row
+/// appears only when the gateway asserted one.
+fn render_session_self_markdown(raw: &str) -> Result<String> {
+    let value: serde_json::Value =
+        serde_json::from_str(raw).context("parsing session self JSON")?;
+    let field = |key: &str| value.get(key).and_then(|v| v.as_str()).unwrap_or("?");
+    let is_leader = value
+        .get("is_leader")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let mut out = String::from("| field | value |\n| --- | --- |\n");
+    out.push_str(&format!("| window | {} |\n", field("window_id")));
+    out.push_str(&format!("| name | {} |\n", field("name")));
+    out.push_str(&format!("| role | {} |\n", field("role")));
+    out.push_str(&format!("| status | {} |\n", field("status")));
+    out.push_str(&format!(
+        "| leader | {} |\n",
+        if is_leader { "yes" } else { "no" }
+    ));
+    if let Some(identity) = value.get("identity").and_then(|v| v.as_str()) {
+        out.push_str(&format!("| identity | {identity} |\n"));
     }
     Ok(out)
 }
@@ -2105,6 +2180,34 @@ mod tests {
     }
 
     #[test]
+    fn session_self_markdown_renders_the_field_table() {
+        let raw = r#"{"window_id":"w-abc","name":"ops","role":"follower","status":"live","is_leader":false,"identity":"Ada Lovelace <ada@example.com>"}"#;
+        let out = render_session_self_markdown(raw).expect("render");
+        assert!(
+            out.starts_with("| field | value |\n| --- | --- |\n"),
+            "{out}"
+        );
+        assert!(out.contains("| window | w-abc |"), "{out}");
+        assert!(out.contains("| name | ops |"), "{out}");
+        assert!(out.contains("| role | follower |"), "{out}");
+        assert!(out.contains("| status | live |"), "{out}");
+        assert!(out.contains("| leader | no |"), "{out}");
+        assert!(
+            out.contains("| identity | Ada Lovelace <ada@example.com> |"),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn session_self_markdown_omits_absent_identity_and_marks_leader() {
+        let raw =
+            r#"{"window_id":"w-a","name":"mbp","role":"leader","status":"live","is_leader":true}"#;
+        let out = render_session_self_markdown(raw).expect("render");
+        assert!(out.contains("| leader | yes |"), "{out}");
+        assert!(!out.contains("| identity |"), "{out}");
+    }
+
+    #[test]
     fn survey_timeout_flag_parses_and_defaults_to_600() {
         // Omitted: the baked-in default carries the window so the agent never
         // blocks forever, and default-vs-custom stays visible in the message.
@@ -2319,15 +2422,29 @@ mod tests {
     }
 
     #[test]
-    fn session_self_takes_exactly_one_of_name_or_reset() {
-        // `--name` and `--reset` are mutually exclusive and one is required;
-        // the server-side handler assumes clap enforced this.
+    fn session_self_bare_is_the_query_and_flags_stay_exclusive() {
+        // Bare `cs session self` is the whoami query; `--name`/`--reset` are
+        // mutually exclusive mutations, and `--json` is query-form only.
+        match CsCli::parse_from(["cs", "session", "self"]).action {
+            ShellAction::Session {
+                action:
+                    SessionAction::SelfCmd {
+                        name: None,
+                        reset: false,
+                        json: false,
+                        pretty: false,
+                    },
+            } => {}
+            other => panic!("unexpected parse for bare `cs session self`: {other:?}"),
+        }
         assert!(CsCli::try_parse_from(["cs", "session", "self", "--name", "x"]).is_ok());
         assert!(CsCli::try_parse_from(["cs", "session", "self", "--reset"]).is_ok());
-        assert!(CsCli::try_parse_from(["cs", "session", "self"]).is_err());
+        assert!(CsCli::try_parse_from(["cs", "session", "self", "--json", "--pretty"]).is_ok());
         assert!(
             CsCli::try_parse_from(["cs", "session", "self", "--name", "x", "--reset"]).is_err()
         );
+        assert!(CsCli::try_parse_from(["cs", "session", "self", "--name", "x", "--json"]).is_err());
+        assert!(CsCli::try_parse_from(["cs", "session", "self", "--reset", "--json"]).is_err());
     }
 
     #[test]

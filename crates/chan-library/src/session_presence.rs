@@ -128,6 +128,27 @@ pub struct SessionSnapshot {
     pub leader: Option<String>,
 }
 
+/// One participant's own view, for the bare `cs session self` query: the
+/// public row plus whether it holds the designated-owner slot and the gateway
+/// identity string when one was asserted at join.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct WhoamiInfo {
+    pub window_id: String,
+    /// The effective display name (rename -> identity -> default); never
+    /// empty, so no consumer needs an absent case.
+    pub name: String,
+    pub role: Role,
+    pub status: ParticipantState,
+    /// Whether this window holds the designated-owner slot, as opposed to the
+    /// origin-derived display `role` (a remote fallback owner reads follower
+    /// but leads).
+    pub is_leader: bool,
+    /// `Display Name <email>` from the gateway assertion; absent for a
+    /// loopback participant (or an identity with neither half).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub identity: Option<String>,
+}
+
 /// An at-most-one in-flight handover request, parked here so the leader's
 /// separate `cs session handover --accept/--reject` connection (or the overlay
 /// reply route) can resolve the request the requester's blocked CLI is awaiting.
@@ -573,6 +594,27 @@ impl SessionRegistry {
         }
     }
 
+    /// The calling window's own record (the bare `cs session self` query), or
+    /// `None` when it is not a participant. `now` resolves the grace-clock
+    /// state, like [`Self::snapshot`].
+    pub fn whoami(&self, window_id: &str, now: Instant) -> Option<WhoamiInfo> {
+        let inner = self.lock();
+        let p = inner.participants.get(window_id)?;
+        Some(WhoamiInfo {
+            window_id: window_id.to_string(),
+            name: p.effective_name(),
+            // Display role is origin-derived, like `snapshot()`.
+            role: if p.local {
+                Role::Leader
+            } else {
+                Role::Follower
+            },
+            status: p.computed_state(now),
+            is_leader: inner.leader.as_deref() == Some(window_id),
+            identity: p.identity.as_ref().and_then(|i| i.display_string()),
+        })
+    }
+
     /// Mint a fresh handover request id (`handover-{n}`), lifetime-unique.
     pub fn mint_handover_id(&self) -> String {
         let n = self.handover_counter.fetch_add(1, Ordering::Relaxed);
@@ -1010,6 +1052,61 @@ mod tests {
             Ok("Ada Lovelace <ada@example.com>".to_string())
         );
         assert_eq!(name_of(&reg), "Ada Lovelace <ada@example.com>");
+    }
+
+    #[test]
+    fn whoami_reports_role_status_owner_slot_and_identity() {
+        let reg = Arc::new(SessionRegistry::new());
+        let _a = reg.join("w-a", true, None).guard;
+        let identity = ParticipantIdentity {
+            display_name: Some("Ada Lovelace".to_string()),
+            email: Some("ada@example.com".to_string()),
+        };
+        let _b = reg.join("w-b", false, Some(identity)).guard;
+
+        let now = Instant::now();
+        let a = reg.whoami("w-a", now).expect("participant");
+        assert_eq!(a.window_id, "w-a");
+        assert_eq!(a.role, Role::Leader);
+        assert_eq!(a.status, ParticipantState::Live);
+        assert!(a.is_leader, "the local window holds the owner slot");
+        assert_eq!(a.identity, None, "loopback joins carry no identity");
+
+        let b = reg.whoami("w-b", now).expect("participant");
+        assert_eq!(b.role, Role::Follower);
+        assert!(!b.is_leader);
+        assert_eq!(
+            b.identity.as_deref(),
+            Some("Ada Lovelace <ada@example.com>")
+        );
+        assert_eq!(b.name, "Ada Lovelace <ada@example.com>");
+
+        assert_eq!(reg.whoami("w-ghost", now), None);
+    }
+
+    #[test]
+    fn whoami_name_follows_precedence_but_identity_stays() {
+        let reg = Arc::new(SessionRegistry::new());
+        let identity = ParticipantIdentity {
+            display_name: Some("Ada Lovelace".to_string()),
+            email: Some("ada@example.com".to_string()),
+        };
+        let _g = reg.join("w-a", false, Some(identity)).guard;
+
+        // A rename changes the effective name but the identity row keeps
+        // reporting the gateway assertion.
+        reg.rename("w-a", "ops").expect("accepted");
+        let me = reg.whoami("w-a", Instant::now()).expect("participant");
+        assert_eq!(me.name, "ops");
+        assert_eq!(
+            me.identity.as_deref(),
+            Some("Ada Lovelace <ada@example.com>")
+        );
+
+        // Reset: the name falls back to the identity string.
+        reg.reset_name("w-a").expect("accepted");
+        let me = reg.whoami("w-a", Instant::now()).expect("participant");
+        assert_eq!(me.name, "Ada Lovelace <ada@example.com>");
     }
 
     #[test]

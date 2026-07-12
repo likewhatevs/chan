@@ -191,11 +191,13 @@ pub enum ControlRequest {
     // in `Ok.message` for the CLI to render (like WindowList). Works on both
     // workspace and terminal tenants. Session-scoped: no window id.
     SessionList,
-    // `cs session self --name= / --reset`: rename the CALLING client, or clear
-    // its override back to gateway identity / the generated default. window_id
-    // is the caller's own ($CHAN_WINDOW_ID), supplied by the CLI via
-    // open_env(). Exactly one of `name` (rename) and `reset` is set: clap
-    // enforces it client-side, the handler refuses anything else.
+    // `cs session self`: with BOTH fields unset (the bare invocation) this is
+    // the whoami query -- the server answers with the caller's own record
+    // ({window_id, name, role, status, is_leader, identity?}) as JSON in
+    // `Ok.message`. `--name=` renames the CALLING client; `--reset` clears its
+    // override back to gateway identity / the generated default; clap forbids
+    // combining them and the handler refuses a hand-crafted both-set request.
+    // window_id is the caller's own ($CHAN_WINDOW_ID), supplied via open_env().
     SessionSelf {
         window_id: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1017,6 +1019,32 @@ mod survey_wire_tests {
             ControlRequest::SessionSelf {
                 name: None,
                 reset: true,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn session_self_bare_query_shape_round_trips() {
+        // The bare whoami query keeps the `session_self` tag and omits `name`
+        // entirely (skip_serializing_if); `reset` serializes as false.
+        let req = ControlRequest::SessionSelf {
+            window_id: "w".into(),
+            name: None,
+            reset: false,
+        };
+        let v: serde_json::Value = serde_json::to_value(&req).unwrap();
+        assert_eq!(v["type"], "session_self");
+        assert!(v.get("name").is_none());
+        // A minimal `{type, window_id}` line decodes to the query shape (the
+        // serde-default tolerance the server relies on).
+        let back: ControlRequest =
+            serde_json::from_str(r#"{"type":"session_self","window_id":"w"}"#).unwrap();
+        assert!(matches!(
+            back,
+            ControlRequest::SessionSelf {
+                name: None,
+                reset: false,
                 ..
             }
         ));
