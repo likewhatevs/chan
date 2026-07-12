@@ -8,7 +8,7 @@
 // A reactive map of markers keyed per item, each recording the desired
 // end-state (`target`) + a start timestamp (`ts`). A marker lives only until the
 // next reconcile sees the row's status move off its pre-click state (the backend
-// has begun the transition, so `status` takes over) — or a short backstop
+// has begun the transition, so `status` takes over) -- or a short backstop
 // elapses. It is in-memory only: a boot-restore re-mount reports `status:
 // starting` straight from the backend, so the spinner appears with no persisted
 // marker and no timer driving it.
@@ -30,13 +30,13 @@ const FROM_OF: Record<PendingTarget, string> = {
 
 interface PendingEntry {
   target: PendingTarget;
-  /** Epoch ms when the op began — drives the backstop. */
+  /** Epoch ms when the op began -- drives the backstop. */
   ts: number;
 }
 
 interface PendingState {
   /** Active markers keyed by `ws:{id}` / `served:{devserverId}:{prefix}` /
-   * `ds:{id}`. A plain object — deeply reactive under $state. */
+   * `ds:{id}`. A plain object -- deeply reactive under $state. */
   markers: Record<string, PendingEntry>;
 }
 

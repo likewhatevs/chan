@@ -2,7 +2,7 @@
 //!
 //! Why not a per-IP gate: every internal hop behind nginx sees one
 //! peer IP, so a "per-IP" bucket degenerates into a single global
-//! one — a noisy attacker can lock out legitimate handshakes while
+//! one -- a noisy attacker can lock out legitimate handshakes while
 //! real source-IP diversity stays invisible.
 //!
 //! The brute-force surface is the tunnel handshake. We can't easily

@@ -53,11 +53,11 @@ check:
 	cd src-tauri && cargo check
 
 # ---------------------------------------------------------------------------
-# Windows cross-compile check (cargo-xwin) — fast local Windows compile proof.
+# Windows cross-compile check (cargo-xwin) -- fast local Windows compile proof.
 # ---------------------------------------------------------------------------
 #
 # cargo-xwin cross-compiles to the MSVC target from macOS/Linux by downloading
-# the MSVC CRT + Windows SDK headers on demand (no Windows host, no Wine — Wine
+# the MSVC CRT + Windows SDK headers on demand (no Windows host, no Wine -- Wine
 # can't run WebView2 anyway). This is the team's FAST local proof that the
 # cfg(windows) arms compile. The AUTHORITATIVE Windows build + NSIS bundle +
 # headless smoke is the windows-latest job in
@@ -77,7 +77,7 @@ XWIN_CRATES ?= -p chan-server -p chan-shell -p chan-workspace
 # need `lld-link` from the `lld` package.
 #   macOS:  brew install llvm        (keg-only; bin auto-added to PATH below)
 #   Debian: sudo apt-get install -y llvm clang lld
-# CI's windows-latest needs none of this — it builds with native MSVC.
+# CI's windows-latest needs none of this -- it builds with native MSVC.
 #
 # On macOS Homebrew's llvm is keg-only (its bin is NOT on the default PATH), so
 # auto-prepend it: a plain `brew install llvm` is then enough, no manual PATH
@@ -87,7 +87,7 @@ XWIN_PATH := $(if $(LLVM_BIN),$(LLVM_BIN):$(PATH),$(PATH))
 
 # Install cargo-xwin + the Windows MSVC rust target on demand (same on-demand
 # posture as tauri-cli), and fail fast with install guidance when LLVM is
-# missing — cargo-xwin's own error is further down the build and less obvious.
+# missing -- cargo-xwin's own error is further down the build and less obvious.
 xwin-prereqs:
 	@PATH="$(XWIN_PATH)" command -v llvm-lib >/dev/null 2>&1 || { \
 	    echo "error: cargo-xwin needs the LLVM toolchain (llvm-lib / clang-cl) on PATH."; \

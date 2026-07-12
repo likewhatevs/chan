@@ -1,5 +1,5 @@
 //! Cross-stack resilience: spawn the real `chan` binary, signal it, and
-//! assert clean teardown — no hung process, no orphaned PTYs, no held flock,
+//! assert clean teardown -- no hung process, no orphaned PTYs, no held flock,
 //! intact on-disk config. Unit tests cover the pieces in-process; this suite
 //! drives the whole stack at the process boundary the way an operator and the
 //! desktop client do.
@@ -252,7 +252,7 @@ fn free_port() -> u16 {
         .port()
 }
 
-/// Send `signal` (e.g. `INT`, `TERM`) to `pid` via `kill(1)` — no signal
+/// Send `signal` (e.g. `INT`, `TERM`) to `pid` via `kill(1)` -- no signal
 /// crate dependency for a unix-only suite.
 fn send_signal(pid: u32, signal: &str) {
     let status = Command::new("kill")
@@ -367,7 +367,7 @@ async fn wait_devserver_down(client: &reqwest::Client, addr: SocketAddr) -> bool
     }
 }
 
-/// `POST /api/devserver/workspaces` — mount `root`, returning its prefix.
+/// `POST /api/devserver/workspaces` -- mount `root`, returning its prefix.
 async fn mount_workspace(
     client: &reqwest::Client,
     addr: SocketAddr,
@@ -408,7 +408,7 @@ async fn list_workspaces(
     serde_json::from_str(&text).expect("workspace list json")
 }
 
-/// `DELETE /api/devserver/workspaces<prefix>` — the prefix (which starts with
+/// `DELETE /api/devserver/workspaces<prefix>` -- the prefix (which starts with
 /// `/api/`) is appended verbatim to the route base.
 async fn forget_workspace(
     client: &reqwest::Client,
@@ -444,7 +444,7 @@ async fn list_library_windows(
     serde_json::from_str(&text).expect("library windows json")
 }
 
-/// `DELETE /api/library/windows/{window_id}` — discard a window by its id.
+/// `DELETE /api/library/windows/{window_id}` -- discard a window by its id.
 async fn discard_library_window(
     client: &reqwest::Client,
     addr: SocketAddr,
@@ -461,7 +461,7 @@ async fn discard_library_window(
         .status()
 }
 
-/// `POST <prefix>/api/terminals` on a mounted tenant — spawn a PTY running
+/// `POST <prefix>/api/terminals` on a mounted tenant -- spawn a PTY running
 /// `command` through the login shell (`$SHELL -lc`). Auth is the per-workspace
 /// token from the workspace list.
 async fn spawn_tenant_terminal(
@@ -550,7 +550,7 @@ async fn devserver_sigint_exits_clean() {
 }
 
 /// SIGTERM a `chan devserver`: it must shut down cleanly (exit 0) inside the
-/// grace budget — the same guarantee a service manager relies on. The
+/// grace budget -- the same guarantee a service manager relies on. The
 /// devserver routes SIGTERM through the shared graceful drain, so it does not
 /// fall through to the default-terminate disposition.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -835,7 +835,7 @@ async fn chan_service_status_clears_stale_pidfile() {
 /// gone once the process exits. This is the orphan-PTY guarantee reachable
 /// over the binary. (The synchronous disconnect/forget reap of a control
 /// terminal is `WorkspaceHost::close_terminal_tenant`, which the desktop calls
-/// in-process — there is no management route for it — so it is covered by
+/// in-process -- there is no management route for it -- so it is covered by
 /// `chan-server`'s unit tests and a hand-smoke, not here. The workspace-forget
 /// route reaps lazily via the idle pruner, so it makes no synchronous promise
 /// to assert.)
@@ -933,7 +933,7 @@ async fn devserver_sigkill_releases_flock_and_survives_config() {
 /// devserver provisions exactly one `kind=terminal` window so a plain client
 /// (a browser, not just the desktop) sees a window on connect. Discarding that
 /// window then restarting the devserver on the same HOME must come back with
-/// ZERO windows — the first-open marker persisted under `~/.chan/devserver/`,
+/// ZERO windows -- the first-open marker persisted under `~/.chan/devserver/`,
 /// so "closed it → reopening has no terminal" holds for the headless library
 /// exactly as for the desktop.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

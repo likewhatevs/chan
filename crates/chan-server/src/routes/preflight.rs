@@ -57,7 +57,7 @@ struct PreflightSnapshot {
     cs_link: Option<CsLink>,
     /// The per-library `cs_dismissed` editor pref, surfaced ON the snapshot
     /// (not only `/api/config` preferences) because the cs offer card renders
-    /// DURING preflight polling — before `workspace.info.preferences` exists, so
+    /// DURING preflight polling -- before `workspace.info.preferences` exists, so
     /// the SPA cannot gate the card from the prefs summary at that point. Always
     /// present so the card can be gated at preflight time; the WRITE stays
     /// `PATCH /api/config`. `build_snapshot` defaults it false; the route
@@ -268,7 +268,7 @@ fn cs_link_allowed(state: &AppState) -> bool {
 }
 
 /// The per-library `cs_dismissed` editor pref for the preflight snapshot.
-/// Degrades to `false` (offer shows) on a poisoned lock — a settings read must
+/// Degrades to `false` (offer shows) on a poisoned lock -- a settings read must
 /// never block or fail the boot snapshot.
 fn cs_dismissed_pref(state: &AppState) -> bool {
     state

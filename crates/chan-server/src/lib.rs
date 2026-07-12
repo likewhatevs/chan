@@ -345,14 +345,14 @@ fn format_index_progress(event: &ProgressEvent, verbose: bool) -> String {
 /// Resolution may shell out (`where pwsh`) with a blocking process spawn;
 /// resolving it lazily on the first terminal create would run that on a tokio
 /// worker and freeze the embedded SPA. Fire it on a blocking thread at
-/// server-build time — before the router accepts any request — so the
+/// server-build time -- before the router accepts any request -- so the
 /// command-builder cache read is instant. A no-op off Windows.
 fn prime_terminal_shell() {
     #[cfg(windows)]
     {
         // Detached on purpose: the blocking prime runs to completion on the
         // blocking pool regardless of the dropped handle (spawn_blocking is not
-        // cancellable), and we never need its result — the warm cache is read
+        // cancellable), and we never need its result -- the warm cache is read
         // later through the `OnceLock`. `drop` rather than `let _` keeps clippy's
         // `let_underscore_future` happy.
         drop(tokio::task::spawn_blocking(
@@ -769,7 +769,7 @@ async fn build_app(
 ///
 /// Deliberately omits the watcher, indexer, and MCP bridge: there is
 /// no workspace to watch / index / expose. It DOES start a control
-/// socket so `cs` works inside standalone terminals — terminal / pane
+/// socket so `cs` works inside standalone terminals -- terminal / pane
 /// / survey / window commands; workspace commands refuse with the
 /// terminal-only message. The terminal registry's PTY cwd is `$HOME`,
 /// so a new pane lands in the user's home directory rather than a
@@ -906,7 +906,7 @@ async fn build_terminal_app(
     // A durable layout store (the launcher's devserver terminal session dir)
     // means this tenant's window layouts live in `terminal_blob`. Wire the blob
     // reaper so an EXPLICIT window discard (cs window rm / a watcher reconcile)
-    // drops the window's saved layout too — the host's reap can't reach this
+    // drops the window's saved layout too -- the host's reap can't reach this
     // chan-server store directly. Ephemeral / control tenants (`None`) leave it
     // unset; their layout is in-memory and dies with the process.
     if let Some(dir) = session_dir.clone() {
@@ -1003,7 +1003,7 @@ async fn build_terminal_app(
 /// settings route is present (they all reach `state.workspace()` and
 /// would panic on the `None` cell), so a stray workspace-content
 /// request 404s. Auth + serve_static are layered identically to
-/// [`router`] so `/api/*` stays tokened — a PTY is shell access.
+/// [`router`] so `/api/*` stays tokened -- a PTY is shell access.
 fn terminal_router(state: Arc<AppState>) -> Router {
     let api = Router::new()
         .route("/api/terminal/ws", get(api_terminal_ws))
@@ -1133,8 +1133,8 @@ pub fn install_local_workspace_overlay(host: &WorkspaceHost) {
 /// Install the launcher SPA as the host's root fallback: the devserver/library
 /// root `/` then serves `web-launcher` (and its `/api/library/*` data surface)
 /// instead of 404ing. Both embedders call this once after wrapping the host in
-/// an `Arc` — chan-desktop's loopback (`embedded.rs`) and the headless devserver
-/// (`build_devserver_app`) — so the one launcher is reached on every surface
+/// an `Arc` -- chan-desktop's loopback (`embedded.rs`) and the headless devserver
+/// (`build_devserver_app`) -- so the one launcher is reached on every surface
 /// through the existing transparent proxy.
 ///
 /// `bearer` gates `/api/library/*`: the desktop loopback passes its per-window
@@ -1144,11 +1144,11 @@ pub fn install_local_workspace_overlay(host: &WorkspaceHost) {
 ///
 /// `serve_addr` is the read-only/full discriminator AND the mount enabler for
 /// workspace mutation (which is loopback-only):
-///   - `Some(cell)` — the loopback: workspace add/on/off/rm is served, and the
+///   - `Some(cell)` -- the loopback: workspace add/on/off/rm is served, and the
 ///     mount path reads the listen address from the `OnceLock`. The embedder
 ///     fills it AFTER it binds (the install happens before the bind), so it is
 ///     read at request time, not install time.
-///   - `None` — the tunnel-trust devserver/gateway surface: workspaces are
+///   - `None` -- the tunnel-trust devserver/gateway surface: workspaces are
 ///     read-only (mutation handlers answer 403, and the SPA shell is served with
 ///     a read-only hint so it hides those controls).
 pub fn install_launcher_root_fallback(
@@ -1693,7 +1693,7 @@ mod terminal_router_tests {
     use super::*;
 
     // Constructing the slim terminal router asserts its routes assemble without
-    // an axum conflict — in particular the standalone-transfer pair
+    // an axum conflict -- in particular the standalone-transfer pair
     // (`/api/files/upload` POST + `/api/files/{*path}` GET) coexisting on this
     // tenant. A conflict panics at build time, which would otherwise only
     // surface when a real standalone-terminal window opens.

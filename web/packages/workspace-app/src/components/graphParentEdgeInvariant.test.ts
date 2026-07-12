@@ -51,7 +51,7 @@ describe("parent-edge invariant", () => {
 
   test("folder-filter hiding still gates visibleNodeIds via hiddenFolderIds", () => {
     // The hiddenFolderIds gate stays in visibleNodeIds; what changed is its
-    // CONTENTS — it now excludes spine directories (spineFolderIds), so folder
+    // CONTENTS -- it now excludes spine directories (spineFolderIds), so folder
     // OFF hides only non-spine directory clutter, not the file→parent spine.
     expect(graph).toMatch(/if \(hiddenFolderIds\.has\(n\.id\)\) continue;/);
   });

@@ -2,9 +2,7 @@
 
 ## Cross-crate context
 
-`fetch-models` is a build-only helper binary (`publish = false`). It is not
-part of the runtime: it produces the embedded-model tarball consumed by
-chan-server, and then exits. Two crates bracket it:
+`fetch-models` is a build-only helper binary (`publish = false`). It is not part of the runtime: it produces the embedded-model tarball consumed by chan-server, and then exits. Two crates bracket it:
 
 - `chan-workspace` (its only non-trivial dependency, pulled with `features = ["embeddings"]`): fetch-models reuses `chan_workspace::index::embeddings::Embedder::open` and the `chan_workspace::DEFAULT_MODEL` constant so the helper downloads the exact model id and hf-hub cache layout the runtime embedder will later load. The model id has one definition, in chan-workspace, not a copy here.
 - `chan-server`: the consumer of the artifact. Its build script tracks the tarball for relink, and its embedded-model seed path bakes it into the binary with `include_bytes!` under the `embed-model` cargo feature. fetch-models writes the file; chan-server decides whether to embed it.
@@ -49,23 +47,9 @@ The left-to-bottom spine is build-time and runs once per release; the bottom edg
 
 fetch-models is intentionally a small two-stage helper with an idempotency gate between the stages.
 
-Stage one downloads through the same embedder the runtime uses, pointed at a
-stable staging cache. hf-hub populates that cache on a cold run and skips the
-network when it is already populated. Reusing the runtime embedder rather than a
-hand-rolled HTTP fetch is what guarantees the staged bytes land in the exact
-hf-hub cache layout the seeder later validates. Stage two strips the redundant
-blob store on the way into the tarball so the shipped archive contains only the
-runtime-resolvable model snapshot.
+Stage one downloads through the same embedder the runtime uses, pointed at a stable staging cache. hf-hub populates that cache on a cold run and skips the network when it is already populated. Reusing the runtime embedder rather than a hand-rolled HTTP fetch is what guarantees the staged bytes land in the exact hf-hub cache layout the seeder later validates. Stage two strips the redundant blob store on the way into the tarball so the shipped archive contains only the runtime-resolvable model snapshot.
 
-Stage two encodes. It walks the staging tree, tar-archives it through a zstd
-encoder at level 19, and atomically renames the temp file into place. Level 19
-is the max-ratio-for-reasonable-encode-time point for a one-shot blob of this
-size; higher levels buy roughly one percent for more than double the encode
-time. The walk drops hf-hub bookkeeping and the redundant blob subtree because
-tar follows the snapshot symlinks into the same bytes and keeping both would
-double the archive. The write is to a sibling temp file then `rename`, so a
-failed encode never leaves a half-written bundle that would confuse a subsequent
-`cargo build`.
+Stage two encodes. It walks the staging tree, tar-archives it through a zstd encoder at level 19, and atomically renames the temp file into place. Level 19 is the max-ratio-for-reasonable-encode-time point for a one-shot blob of this size; higher levels buy roughly one percent for more than double the encode time. The walk drops hf-hub bookkeeping and the redundant blob subtree because tar follows the snapshot symlinks into the same bytes and keeping both would double the archive. The write is to a sibling temp file then `rename`, so a failed encode never leaves a half-written bundle that would confuse a subsequent `cargo build`.
 
 Between the stages sits an mtime gate: if the existing bundle is newer than every non-skipped file under staging, the slow zstd-19 re-encode is skipped and the run is a no-op. The gate mirrors the same skip filter the encoder uses, so a freshly arrived lockfile or `blobs/` entry does not force a needless rebuild. Forcing a rebuild is a matter of deleting the bundle or running `cargo clean`.
 
@@ -73,19 +57,9 @@ Between the stages sits an mtime gate: if the existing bundle is newer than ever
 
 The artifact crosses into chan-server at two seams, and `embed-model` is the feature name that gates the real one.
 
-At compile time, the embedded-model seed code is gated on the `embed-model`
-feature. With the feature off (the default), the whole module compiles out, the
-file's bytes never enter the binary, and the runtime falls back to
-chan-workspace's model resolver plus on-demand download. With the feature on,
-the tarball is baked in. `embed-model` implies `embeddings`, because bundling a
-model is meaningless without the embedding code to use it.
+At compile time, the embedded-model seed code is gated on the `embed-model` feature. With the feature off (the default), the whole module compiles out, the file's bytes never enter the binary, and the runtime falls back to chan-workspace's model resolver plus on-demand download. With the feature on, the tarball is baked in. `embed-model` implies `embeddings`, because bundling a model is meaningless without the embedding code to use it.
 
-chan-server's build script does not embed anything; it makes the embed correct.
-When the bundle is absent, it writes an empty stub so that a feature-enabled
-build still compiles without a prior `make models`. It then pins the link step
-to the bundle's mtime so a later `make models` forces a relink instead of
-silently shipping a stale or empty bundle. The seeder treats an empty bundle as
-"no embedded model," so the stub is a valid, inert placeholder.
+chan-server's build script does not embed anything; it makes the embed correct. When the bundle is absent, it writes an empty stub so that a feature-enabled build still compiles without a prior `make models`. It then pins the link step to the bundle's mtime so a later `make models` forces a relink instead of silently shipping a stale or empty bundle. The seeder treats an empty bundle as "no embedded model," so the stub is a valid, inert placeholder.
 
 At runtime, `seed_models_from_bundle()` (also gated on `embed-model`) runs once on first server launch. It zstd-decodes and untars `MODEL_BUNDLE` into the per-machine model cache (`chan_workspace::index::embeddings::global_models_dir`), guarded by a content check that the default model's `refs/main` plus a complete `snapshots/<hash>/` (config, tokenizer, safetensors) are present, so subsequent launches skip the extraction. An empty bundle, a corrupt archive, or an extraction error never blocks startup: the path downgrades to the same HuggingFace fetch a dev build would use.
 

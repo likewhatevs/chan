@@ -114,14 +114,14 @@ describe("RichPrompt.svelte component", () => {
     expect(deliveredBranch).toContain("queueMicrotask(() => editor?.focusAt(0))");
     // Rejected/failed: clearing pending below un-greys; the text stays for a
     // retry; warn honestly.
-    expect(richPromptSrc).toMatch(/queue full — try again/);
-    expect(richPromptSrc).toMatch(/connection lost — message may still be queued/);
+    expect(richPromptSrc).toMatch(/queue full, try again/);
+    expect(richPromptSrc).toMatch(/connection lost, message may still be queued/);
   });
 
   test("the greyed read-only card: readOnly lock + caret hidden, reconciled by type-to-move-on", () => {
     // The read-only/greyed/caret-hidden card is applied via a lock
     // compartment, but reconciles back-to-back by exiting on the first keystroke
-    // (beforeinput move-on) rather than dropping the lock — so it never STICKS.
+    // (beforeinput move-on) rather than dropping the lock -- so it never STICKS.
     expect(richPromptSrc).toMatch(/lockCompartment/);
     expect(richPromptSrc).toMatch(/EditorState\.readOnly\.of\(locked\)/);
     expect(richPromptSrc).toMatch(/caret-color: transparent/);
@@ -139,7 +139,7 @@ describe("RichPrompt.svelte component", () => {
     // empty composer it restores the buffer. Both best-effort cancel.
     expect(richPromptSrc).toMatch(/if \(isPending\) \{[\s\S]{1,200}enterLocalEdit\(\);/);
     // The card-up recall MUST fold the readOnly->editable reconfigure into its
-    // own dispatch and DEFER focus to a microtask — same WKWebView flip the
+    // own dispatch and DEFER focus to a microtask -- same WKWebView flip the
     // delivered path folds. Leaning on the out-of-band lock $effect + a
     // synchronous focus leaves the card un-typeable until a remount (the
     // ArrowUp-stuck-read-only regression).
@@ -164,7 +164,7 @@ describe("RichPrompt.svelte component", () => {
   });
 
   test("fast-path grace + ack timeout constants gate the chip and the dead-socket fail", () => {
-    // 300ms: an idle agent drains within ~1 tick — no chip flash on routine
+    // 300ms: an idle agent drains within ~1 tick -- no chip flash on routine
     // submits. 5s: no ack means the socket is effectively dead.
     expect(richPromptSrc).toMatch(/PENDING_CHIP_GRACE_MS = 300/);
     expect(richPromptSrc).toMatch(/PROMPT_ACK_TIMEOUT_MS = 5000/);
@@ -173,7 +173,7 @@ describe("RichPrompt.svelte component", () => {
 
   test("label surfaces the queue depth (server + the local just-submitted) with the right affordance", () => {
     // queuedCount = max(server queueDepth, the local just-submitted message
-    // after the grace window) — so a teammate `cs terminal write` and the
+    // after the grace window) -- so a teammate `cs terminal write` and the
     // user's own queued messages both show.
     expect(richPromptSrc).toMatch(
       /Math\.max\(tab\.queueDepth \?\? 0, isPending && pendingChipVisible \? 1 : 0\)/,

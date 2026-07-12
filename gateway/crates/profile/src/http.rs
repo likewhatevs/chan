@@ -167,7 +167,7 @@ async fn auth(
     let ok = match bearer(&headers) {
         Some(t) => {
             // Both checks always run so a wrong token never short-
-            // circuits on the first byte — the admin token is
+            // circuits on the first byte -- the admin token is
             // privileged so anything the regular auth token can do,
             // the admin token can also do (lets the CLI hold one
             // secret instead of two).
@@ -472,7 +472,7 @@ async fn try_upsert_once(
         });
     }
 
-    // (b) and (c) require email — users.email is NOT NULL.
+    // (b) and (c) require email -- users.email is NOT NULL.
     let Some(email) = email else {
         return Err(Error::BadRequest(
             "provider returned no email; cannot create account".into(),
@@ -1192,7 +1192,7 @@ async fn list_owned_devservers(
 }
 
 /// Devservers shared *with* this user. Only includes claimed grants so a
-/// pending invite (email matched but no sign-in yet — shouldn't happen
+/// pending invite (email matched but no sign-in yet -- shouldn't happen
 /// for the caller themselves, but defensive) doesn't leak into the
 /// dashboard. The `label` joins from the parent devserver row.
 async fn list_incoming_shares(

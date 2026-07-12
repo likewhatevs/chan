@@ -46,7 +46,7 @@ pub struct DevserverInfo {
     /// This devserver library's stable identity (`lib-<16hex>`), the same id
     /// stamped on every window record. Sent at connect so the desktop can group
     /// the devserver's launcher feed (and emit its synthetic control record)
-    /// even before any window arrives — a devserver whose terminal was closed
+    /// even before any window arrives -- a devserver whose terminal was closed
     /// reconnects with zero windows, and a window record was the ONLY prior
     /// source of this id (Bug A).
     pub library_id: String,

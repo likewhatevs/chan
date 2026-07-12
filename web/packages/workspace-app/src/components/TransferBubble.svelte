@@ -1,7 +1,7 @@
 <script lang="ts">
   // The transfer bubble: the prominent surface for cs upload / cs download
   // progress, opened from the status-bar transfers entry. One row per transfer
-  // with a progress bar + a state-appropriate action — Cancel while active,
+  // with a progress bar + a state-appropriate action -- Cancel while active,
   // Retry for an interrupted/failed download, Dismiss for any finished row.
   // Bound to the live XHR progress + abort the API client exposes; the bar look
   // mirrors the SPA's download-progress idiom (adapted, not cross-imported).
@@ -156,7 +156,7 @@
   .tb-bar.done {
     background: var(--accent);
   }
-  /* Cancelled / failed / interrupted: a muted track, no fill — the row text
+  /* Cancelled / failed / interrupted: a muted track, no fill -- the row text
      carries the terminal reason. */
   .tb-bar.bad {
     background: var(--danger, #c0392b);

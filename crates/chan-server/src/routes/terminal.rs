@@ -26,7 +26,7 @@ const DEFAULT_ROWS: u16 = 24;
 const MAX_COLS: u16 = 500;
 const MAX_ROWS: u16 = 200;
 
-/// RIS (ESC c) — full terminal reset, sent to an attached xterm when its
+/// RIS (ESC c) -- full terminal reset, sent to an attached xterm when its
 /// session is restarted in place so the relaunched shell starts on a clean
 /// screen. A fresh SPA reattach gets a brand-new empty xterm; a server-side
 /// re-attach reuses the live one, so reset it here to match.
@@ -238,8 +238,8 @@ enum ServerFrame {
     },
     /// Ack for a tagged `prompt` frame, sent inline on the same socket.
     /// `queued` says whether the WHOLE message fit the queue
-    /// (all-or-nothing); `depth` is the message depth after the push — the
-    /// message's 1-based position — on accept, or the unchanged depth on
+    /// (all-or-nothing); `depth` is the message depth after the push -- the
+    /// message's 1-based position -- on accept, or the unchanged depth on
     /// reject.
     #[serde(rename = "prompt-ack")]
     PromptAck {
@@ -248,7 +248,7 @@ enum ServerFrame {
         depth: usize,
     },
     /// A tagged message's LAST write reached the PTY; `depth` is the
-    /// remaining message depth. Broadcast to every attached socket —
+    /// remaining message depth. Broadcast to every attached socket --
     /// non-owners ignore the unknown id but still read the depth.
     #[serde(rename = "prompt-delivered")]
     PromptDelivered { id: String, depth: usize },
@@ -260,7 +260,7 @@ enum ServerFrame {
     #[serde(rename = "prompt-cancelled")]
     PromptCancelled { id: String, removed: bool },
     /// MESSAGE depth of the shared write queue changed (an enqueue on either
-    /// path, or a message fully drained). Absolute count — idempotent under
+    /// path, or a message fully drained). Absolute count -- idempotent under
     /// duplicates, multi-window safe.
     #[serde(rename = "queue")]
     Queue { depth: usize },
@@ -904,7 +904,7 @@ async fn send_attach_prelude(
     }
     // Re-assert the live private-mode set (DECCKM + mouse + bracketed paste the
     // foreground program set but won't re-announce after a reattach), so a fresh
-    // client whose terminal came up at defaults regains them — otherwise arrows
+    // client whose terminal came up at defaults regains them -- otherwise arrows
     // stop navigating (DECCKM) and the wheel/clicks stop reaching the program
     // (mouse), the htop-after-reload bug. Empty for a plain shell. Sent after the
     // alt-screen prelude (alt buffer active first) and before the redraw nudge
@@ -1244,7 +1244,7 @@ mod tests {
             other => panic!("expected Prompt, got {other:?}"),
         }
         // agent and id omitted -> None (chord defaults to claude; no id
-        // means legacy fire-and-forget: no ack, no delivered event — the
+        // means legacy fire-and-forget: no ack, no delivered event -- the
         // team orchestrator's lead-identity prompt depends on this).
         let bare: ClientFrame = serde_json::from_str(r#"{"type":"prompt","data":"yo"}"#).unwrap();
         match bare {
@@ -1307,7 +1307,7 @@ mod tests {
             r#"{"type":"session","id":"abc","seq":7,"generation":3,"missed_bytes":0,"bytes_since_focus":0,"queue_depth":2,"queued_prompt_ids":["u-1","u-2"]}"#
         );
         // Empty list still serializes as `[]` (always present; the SPA can
-        // assume the field exists — pre-release, no back-compat).
+        // assume the field exists -- pre-release, no back-compat).
         let session_empty = ServerFrame::Session {
             id: "abc".into(),
             seq: 0,
@@ -1321,7 +1321,7 @@ mod tests {
             serde_json::to_string(&session_empty).unwrap(),
             r#"{"type":"session","id":"abc","seq":0,"generation":0,"missed_bytes":0,"bytes_since_focus":0,"queue_depth":0,"queued_prompt_ids":[]}"#
         );
-        // cancel-prompt decode (client→server) — pin the tag + field so a
+        // cancel-prompt decode (client→server) -- pin the tag + field so a
         // rename can't silently break the SPA wire with a green build.
         let cancel: ClientFrame =
             serde_json::from_str(r#"{"type":"cancel-prompt","id":"u-1"}"#).unwrap();
@@ -1720,14 +1720,14 @@ mod tests {
     /// Type `command` into a real shell and collect output until `end`
     /// appears (PROBE_BUDGET cap).
     ///
-    /// INVARIANT: `end` must NOT appear literally in `command` — build
+    /// INVARIANT: `end` must NOT appear literally in `command` -- build
     /// it in the shell instead (`printf '__X_%s__' END`). The `stty
     /// -echo` below is best-effort: its settle window is two short
     /// idle reads, and on a loaded runner the shell may not have
     /// executed it before `command` is typed, so the command ECHOES.
     /// A literal end marker then matches inside the echo and
     /// collect_until returns the echo alone, before the command ever
-    /// ran — the v0.31.0 tag-run flake in the tty probe.
+    /// ran -- the v0.31.0 tag-run flake in the tty probe.
     async fn run_shell_probe(command: &str, end: &str) -> String {
         assert!(
             !command.contains(end),

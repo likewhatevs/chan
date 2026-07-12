@@ -6,7 +6,7 @@ Not published; not user-facing. Has no binary.
 
 ## Role in the system
 
-The gateway services need the same plumbing in several places — calling profile-service and devserver-proxy admin, agreeing on public hostnames, validating usernames, signing / verifying the devserver-gate JWT, throttling token validates. This crate is the single home for that shared code so per-crate copies cannot drift.
+The gateway services need the same plumbing in several places -- calling profile-service and devserver-proxy admin, agreeing on public hostnames, validating usernames, signing / verifying the devserver-gate JWT, throttling token validates. This crate is the single home for that shared code so per-crate copies cannot drift.
 
 ## Build
 

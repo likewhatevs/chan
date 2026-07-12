@@ -66,7 +66,7 @@ describe("createValueSync undo boundary", () => {
     sync.applyExternal(view, "loaded", { focus: false });
     sync.applyExternal(view, "reloaded from disk", { focus: false });
     expect(view.state.doc.toString()).toBe("reloaded from disk");
-    // The reload is a separate undo step back to the prior content —
+    // The reload is a separate undo step back to the prior content --
     // pinned so the narrow fix cannot silently widen to this path.
     expect(undo(view)).toBe(true);
     expect(view.state.doc.toString()).toBe("loaded");

@@ -552,7 +552,7 @@ fn model_files_present(repo_dir: &Path) -> bool {
 ///
 /// Returns the repo directory under `global_models_dir()` when the
 /// model is laid out and ready (matches the same predicate
-/// `embed_seed.rs::default_model_present` uses on the seed path —
+/// `embed_seed.rs::default_model_present` uses on the seed path --
 /// either source can populate the cache). Returns
 /// `EmbedError::ModelNotDownloaded` otherwise; callers propagate it
 /// to the API / CLI surface so the user sees "model not downloaded;
@@ -735,7 +735,7 @@ mod tests {
     fn resolve_model_errors_when_snapshot_incomplete() {
         // Half-downloaded state: refs/main present, but the
         // snapshot is missing one of the trio. Rejecting this is
-        // load-bearing — a hf-hub download interrupted mid-flight
+        // load-bearing -- a hf-hub download interrupted mid-flight
         // can leave the dir in this shape, and we don't want the
         // embedder to open a partial model and crash mid-forward-
         // pass. ModelNotDownloaded is the right signal: the caller

@@ -132,7 +132,7 @@ impl Serve {
     }
 
     /// `serve` prints `chan is ready:\n<url>` to stderr only after its control
-    /// socket AND HTTP listener are up — so this is the readiness signal that
+    /// socket AND HTTP listener are up -- so this is the readiness signal that
     /// guarantees `close` can actually connect to the control socket (the
     /// `writer.lock` record alone is written earlier, during workspace open).
     fn wait_ready(&self, timeout: Duration) -> bool {
@@ -238,10 +238,10 @@ fn close_tears_down_the_separate_serve_process() {
     // graceful exit). Not this process; the separate serve we spawned.
     assert!(
         poll(EXIT_BUDGET, || serve.has_exited()),
-        "the serve process did not exit after `chan close` — the teardown signal never reached it"
+        "the serve process did not exit after `chan close`: the teardown signal never reached it"
     );
 
-    // Assert 2 — clean teardown, not a wedge: the writer flock is released, so a
+    // Assert 2 -- clean teardown, not a wedge: the writer flock is released, so a
     // FRESH serve acquires it and records ITS pid (a held flock would surface
     // WorkspaceLocked and the new serve would never write its record).
     let fresh = Serve::spawn(&sandbox, &ws);
@@ -257,7 +257,7 @@ fn close_tears_down_the_separate_serve_process() {
 
 /// `chan close --remove` on a registered-but-not-served workspace forgets it
 /// from the registry: the teardown is a no-op ("not served"), but --remove
-/// still unregisters — proving the forget runs independent of the close
+/// still unregisters -- proving the forget runs independent of the close
 /// outcome. (The teardown half of close is already proven above against a
 /// live serve; this covers the registry half without a process to tear down.)
 #[test]

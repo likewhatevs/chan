@@ -119,9 +119,9 @@
 
   /// Graph tabs carry six live scopeId prefixes today: workspace,
   /// `file:` / `dir:` (path lens), `tag:` (tag lens, centered on
-  /// the tag node), `contact:` (contact lens —
+  /// the tag node), `contact:` (contact lens --
   /// bidirectional BFS from the contact file picks up backlinks),
-  /// and `language:` (language lens — 1-hop neighbours).
+  /// and `language:` (language lens -- 1-hop neighbours).
   /// The wiped scope kinds (global, group, git_repo) are never
   /// produced for a graph, so this resolver only covers the live
   /// entry points; the dead kind-branches that used to handle the
@@ -485,7 +485,7 @@
   /// "Graph from here" spawns a NEW graph tab seeded at the clicked node
   /// (the nav contract: a from-here graph is always its own tab, never an
   /// in-place re-root of the current one). The new tab opens in semantic
-  /// mode — a directory scope pulls the `contains` spine plus every layer
+  /// mode -- a directory scope pulls the `contains` spine plus every layer
   /// (link / backlink / hashtag / contact / language) and supports
   /// double-click / depth-slider expansion, so the from-here graph stays
   /// rich. `pendingSelectId` lands the new graph already selected on the
@@ -523,7 +523,7 @@
   /// `group` is a synthetic edge kind: cytoscape-only, never emitted
   /// by chan-workspace's graph index. It exists to fan `group` edges
   /// from a synthetic hub node (id `SCOPE_HUB_ID`) to the files in a
-  /// multi-file `group` scope — but no graph scope kind produces a
+  /// multi-file `group` scope -- but no graph scope kind produces a
   /// group scope, so that synthesis is unreachable; the edge-kind +
   /// hub machinery is dead and awaits a follow-up cleanup.
   type RenderedEdgeKind = "link" | "tag" | "mention" | "contains" | "language" | "group";
@@ -542,7 +542,7 @@
   /// path classifies as image / directory, along with any edge
   /// touching one.
   /// `link` is intentionally absent from the user-facing
-  /// FilterKind — link edges always render (visibility is
+  /// FilterKind -- link edges always render (visibility is
   /// implicit via endpoint visibility). The `link` slot on
   /// `GraphFilters` (store.svelte.ts) stays for URL-hash
   /// back-compat but isn't consumed here.
@@ -616,7 +616,7 @@
   // pan/zoom transform and stop() discards the sim + node arrays, so
   // open={active} would kill pan/zoom/selection on every tab switch.
   // This IS $state (it feeds the `open` prop, so it must be reactive)
-  // and is written only inside the effect below — not a $derived — so
+  // and is written only inside the effect below -- not a $derived -- so
   // it stays clear of the state_unsafe_mutation guard. The companion
   // `paused={!active}` prop suspends the canvas rAF loop while hidden
   // so a latched-but-inactive graph does zero background paint.
@@ -835,7 +835,7 @@
   /// file nodes into their buckets. Mirrors
   /// `GraphCanvas.svelte`'s helper of the same name, plus
   /// `MARKDOWN_EXT_RE` + `SOURCE_EXT_RE`. The two helpers stay
-  /// separate copies — they're parallel SPA-side helpers with the
+  /// separate copies -- they're parallel SPA-side helpers with the
   /// same regex set; a future cleanup task could extract them
   /// into a shared module.
   const MEDIA_EXT_RE = /\.(png|jpe?g|gif|webp|svg|avif|bmp)$/i;
@@ -947,7 +947,7 @@
   // re-walking the graph.
 
   /// Set of node ids included by the current scope. `null` means
-  /// "no scope filter" — workspace scope (current behaviour) or the
+  /// "no scope filter" -- workspace scope (current behaviour) or the
   /// global scope (placeholder; once cross-workspace indexing lands
   /// it'll need its own logic, but treating it as "no filter"
   /// today returns the same set as workspace since chan only knows
@@ -1066,7 +1066,7 @@
     }
     // Tag scope: seed with the tag node itself; BFS expands across
     // every doc that references it (depth 1) and further along
-    // those docs' edges (depth 2+). No path resolution needed —
+    // those docs' edges (depth 2+). No path resolution needed --
     // the node id IS the seed.
     //
     // The backend emits tag edges as `source: <file>, target:
@@ -1184,7 +1184,7 @@
     // bubble (node id `language:<lang>`); the lens is always
     // 1-hop (depth doesn't apply to language) so
     // the visible set is the bubble plus every direct neighbour
-    // — which by construction is every file of that language
+    // -- which by construction is every file of that language
     // since the language node carries an edge to each.
     if (currentScope.kind === "language") {
       const seedId = `language:${currentScope.language}`;
@@ -1204,7 +1204,7 @@
     //   - filesystem mode bails at the top of the derivation.
     // File scope keeps the forward-BFS shape: "Graph from here" on a
     // single file means "expand N hops along outgoing edges from this
-    // file" — the hop semantic the chord users built intuition around.
+    // file" -- the hop semantic the chord users built intuition around.
     const seedPaths: string[] =
       currentScope.kind === "file" ? [currentScope.path] : [];
     const seedIds = new Set<string>();
@@ -1220,7 +1220,7 @@
     // hide the "depth slider reveals forward nodes" semantic.
     // Restricting to outgoing edges only makes the slider
     // read as "expand from the root in the direction edges point"
-    // — markdown links emanate from the root doc; contains edges
+    // -- markdown links emanate from the root doc; contains edges
     // emanate from the root directory toward its children; etc.
     for (let i = 0; i < graphState.depth; i++) {
       const next = new Set<string>();
@@ -1261,7 +1261,7 @@
   /// user-labeled "contact") so toggling it has the same shape as the
   /// img toggle: hide the nodes AND any edges touching them. Without
   /// the node hide, the user would just see the contact rectangles
-  /// floating with their mention edges gone — half a filter.
+  /// floating with their mention edges gone -- half a filter.
   const hiddenContactIds = $derived.by(() => {
     const ids = new Set<string>();
     if (show.mention) return ids;
@@ -1273,7 +1273,7 @@
 
   /// Directory ids on the file→root containment SPINE: every directory that is
   /// an ancestor (via `contains` edges) of an in-scope file. These anchor files
-  /// to the graph, so the folder chip must NOT hide them — hiding them is what
+  /// to the graph, so the folder chip must NOT hide them -- hiding them is what
   /// rendered file nodes "loose". Computed only when the folder chip is off
   /// (when on, nothing is hidden so the spine is moot). Seeds from in-scope
   /// files and walks `contains` upward, mirroring `pullContainsSpine`'s "no file
@@ -1315,7 +1315,7 @@
     return ids;
   });
 
-  /// Directory node ids hidden when the folder chip is off — directory-bubble
+  /// Directory node ids hidden when the folder chip is off -- directory-bubble
   /// CLUTTER only. Directories on the file→parent spine (`spineFolderIds`) stay
   /// visible so files keep their containment anchor; the folder chip declutters
   /// directory bubbles, it does not cut the spine. Only meaningful in filesystem
@@ -1386,7 +1386,7 @@
     // whole spine when the folder chip was off and made files render loose.
     if (kind === "contains") return true;
     if (kind === "group") return true;
-    // Link edges always render — a link filter doesn't make
+    // Link edges always render -- a link filter doesn't make
     // sense because link visibility
     // is implicit (an edge renders iff both endpoints render under
     // the current node-type filters + depth). The `link` slot on
@@ -1453,7 +1453,7 @@
   /// Counts are NODE counts, not edge counts. Tallying edges
   /// per kind would make the mention chip show mention-edge
   /// fan-in (thousands) across only a few dozen distinct contact
-  /// nodes — a ~40x over-tally.
+  /// nodes -- a ~40x over-tally.
   /// User reads the chip as "how many of THIS thing is in the
   /// graph", which is the node count. Edge counts are the
   /// rendered-edge population, which is a different concept and
@@ -1520,7 +1520,7 @@
   const selectedFsNode = $derived<FsGraphNode | null>(
     // The workspace-root directory has id="" (empty path = workspace root), so
     // `selectedId` is checked with `!== null` rather than a truthy
-    // test — otherwise clicking the root node silently no-op's the
+    // test -- otherwise clicking the root node silently no-op's the
     // inspector.
     filesystemMode && selectedId !== null
       ? (fsNodeById.get(selectedId) ?? null)
@@ -1528,7 +1528,7 @@
   );
 
   /// True when the graph claims the node is a real file but the
-  /// server's resolver couldn't find it on disk — i.e. a genuine
+  /// server's resolver couldn't find it on disk -- i.e. a genuine
   /// broken-link / deleted-file ghost. The server is the source of
   /// truth: its resolver covers all on-disk files
   /// (markdown + non-markdown). An SPA-side fallback that also
@@ -1608,7 +1608,7 @@
   /// Try to resolve a mention/contact label to a real .md file on
   /// disk: scan tree.entries for a contact-kind entry whose basename
   /// (sans .md) includes the mention label case-insensitively. Loose
-  /// match on purpose — `alice` should hit `Contacts/Alice Chen.md`
+  /// match on purpose -- `alice` should hit `Contacts/Alice Chen.md`
   /// without requiring an exact server-side resolution table on the
   /// frontend. Returns the first match; null when nothing fits.
   function resolveContactToPath(label: string): string | null {
@@ -1639,7 +1639,7 @@
   /// Mirrors FileTree's `openSelectionInFileBrowser`.
   ///
   /// The graph is a tab, not an overlay, so the File Browser opens as a
-  /// sibling tab and the graph persists — there is no overlay to
+  /// sibling tab and the graph persists -- there is no overlay to
   /// dismiss. This routes through the same tab-world primitive the File
   /// Browser's own "Open in File Browser" uses; an overlay-style
   /// `revealPathInBrowser(...)` + `close()` chain would run the
@@ -1737,7 +1737,7 @@
     } else if (currentScope.kind === "contact") {
       // Contact lens header opens the
       // contact's underlying file-node inspector. Same shape as
-      // the file branch above — the seed for the contact lens IS
+      // the file branch above -- the seed for the contact lens IS
       // a file node located by rel_path.
       const found = nodes.find(
         (n) => n.kind === "file" && n.path === currentScope.relPath,
@@ -1858,7 +1858,7 @@
   /// node by bare path, so seeding the fs spine under the semantic graph
   /// requires rewriting fs directory ids (and the dir endpoints of fs
   /// edges) to this form so a directory's fs-seeded node and its semantic
-  /// node collapse onto one id. Root (path "") stays "" — it aligns
+  /// node collapse onto one id. Root (path "") stays "" -- it aligns
   /// across both sources.
   function directoryNodeId(path: string): string {
     return path === "" ? "" : `directory:${path}`;
@@ -2356,9 +2356,9 @@
 
   /// Keep-alive load gating. A graph tab is now kept mounted while
   /// hidden, so this effect can no longer treat "visible" as "just
-  /// (re)mounted" — it must decide per activation whether a fetch is
+  /// (re)mounted" -- it must decide per activation whether a fetch is
   /// actually warranted:
-  ///   - HIDDEN: never fetch (the whole point — no background load).
+  ///   - HIDDEN: never fetch (the whole point -- no background load).
   ///     If the load key changed while hidden, mark dirty so the next
   ///     activation refetches once. (A hidden in-scope watcher edit
   ///     also sets graphDirty, in the watcher effect below.)
@@ -2498,7 +2498,7 @@
 
   /// Layer the index-derived graph in once indexing finishes. The load
   /// effect above tracks only `visible` + `loadKey`, and the watcher path
-  /// only fires on real file edits — neither covers the initial index of
+  /// only fires on real file edits -- neither covers the initial index of
   /// PRE-EXISTING files. A semantic-mode graph opened mid-index shows the
   /// always-available fs spine immediately (seeded in `load()`), so `nodes`
   /// is non-empty, but the link / tag / mention / language edges only
@@ -2575,7 +2575,7 @@
   }
 
   function graphSelectionLabel(id: string): string | null {
-    // FsGraphNode carries `name` directly — workspace root has
+    // FsGraphNode carries `name` directly -- workspace root has
     // name="" (empty path), so fall through to the semantic node
     // lookup before declaring no label.
     const fs = fsNodeById.get(id);
@@ -2609,7 +2609,7 @@
          the tab-strip click position via clampMenu.
          Row shape follows the standard
          hamburger-menu pattern from other tabs (TerminalTab /
-         FileEditorTab / FileBrowserSurface) — `<button class="mbtn">`
+         FileEditorTab / FileBrowserSurface) -- `<button class="mbtn">`
          rows with optional icon + label + chord on the right; filters
          render vertically, one row per kind, with the kind colour as
          a dot + on/off cue via the `.on` class. -->
@@ -2693,7 +2693,7 @@
         class:disabled={depthDisabled}
         class:shallow={depthShallow}
         title={depthShallow
-          ? "Scope is shallow — depth 1 already reveals everything forward-reachable"
+          ? "Scope is shallow: depth 1 already reveals everything forward-reachable"
           : null}
       >
         <span class="mbtn-icon" aria-hidden="true"></span>
@@ -3029,7 +3029,7 @@
 <style>
   /* Keep-alive contract, copied from .editor-tab / .terminal-tab: every
      graph tab in the pane stays mounted; inactive ones hide via
-     visibility (NEVER display:none — a display:none host reports 0x0,
+     visibility (NEVER display:none -- a display:none host reports 0x0,
      GraphCanvas.resize() then refits to nothing and pan/zoom is lost).
      visibility:hidden keeps real layout geometry while the rAF loop is
      paused, so a re-shown graph resumes its exact transform. No `flex:1`
@@ -3204,7 +3204,7 @@
   /* Inline ghost branch for nodes that exist in the graph but
      not in the tree (FileInfoBody can't render those). Mounted
      inside the shared `<Inspector>` wrapper, so we only style
-     the body — the title bar / close × comes from Inspector. */
+     the body -- the title bar / close × comes from Inspector. */
   .ghost-body {
     padding: 0.6rem 0.7rem 0.8rem 0.7rem;
     font-size: 12.5px;
@@ -3383,7 +3383,7 @@
     width: 1.6em;
     text-align: right;
   }
-  /* Graph hamburger header row — kind icon +
+  /* Graph hamburger header row -- kind icon +
      path label. Path fades at the right edge for long file
      paths so the menu width stays bounded; matches the
      Pane.svelte tab-name + FileTree.svelte fade

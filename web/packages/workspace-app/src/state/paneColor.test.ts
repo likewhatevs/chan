@@ -98,7 +98,7 @@ describe("applyLivePaneColor colour-watch apply", () => {
     applyLivePaneColor("#ABC");
     expect(document.documentElement.style.getPropertyValue(CSS_VAR)).toBe("#aabbcc");
   });
-  test("LEAVES a null frame as no-override (keeps the ?pane= seed — Bug A)", () => {
+  test("LEAVES a null frame as no-override (keeps the ?pane= seed -- Bug A)", () => {
     document.documentElement.style.setProperty(CSS_VAR, "#e58c4d");
     applyLivePaneColor(null);
     expect(document.documentElement.style.getPropertyValue(CSS_VAR)).toBe("#e58c4d");
@@ -114,7 +114,7 @@ describe("applyLivePaneColor colour-watch apply", () => {
   });
 });
 
-// Two or more windows of the same library (incl. split panes — the var is
+// Two or more windows of the same library (incl. split panes -- the var is
 // on the document root, so every pane in a window reads it) must converge on
 // the library's non-blue focus border and never fall back to default blue. The
 // per-call tests above lock each apply() in isolation; these lock the ORDERED
@@ -128,7 +128,7 @@ describe("multi-window live-apply consistency", () => {
   test("a seeded window keeps its colour through a reconnect's null push", () => {
     // Window opened with ?pane=orange; the watch reconnects and re-pushes the
     // library's current colour. A library with no PERSISTED colour pushes null
-    // on connect — that must not clobber the valid seed back to blue (Bug A).
+    // on connect -- that must not clobber the valid seed back to blue (Bug A).
     setSearch("?pane=%23f97316");
     applyInitialPaneColor();
     expect(get()).toBe("#f97316");
@@ -163,7 +163,7 @@ describe("multi-window live-apply consistency", () => {
 
   test("an explicit blue preset push IS applied (blue is a chosen colour, not a clear)", () => {
     // Picking the blue preset persists `#388bfd` (a valid hex), so the watch
-    // pushes the hex — distinct from the null "no colour set" frame. The window
+    // pushes the hex -- distinct from the null "no colour set" frame. The window
     // must show the chosen blue, proving null-no-clobber doesn't swallow a real
     // blue choice.
     setSearch("?pane=%23f97316");
@@ -228,7 +228,7 @@ describe("seedInitialFocusColor boot-seed", () => {
 
 // The live watch must sync the focus-colour menu (and thus
 // new split panes' `data-focus-color`) to a pushed colour, not just the CSS var
-// — else the checkmark + a fresh split disagree with the recoloured border.
+// -- else the checkmark + a fresh split disagree with the recoloured border.
 describe("syncLiveFocusColorMenu (live watch → menu)", () => {
   test("selects the named preset for a pushed preset hex", () => {
     const setColor = vi.fn();
@@ -272,7 +272,7 @@ describe("Pane.svelte doSetFocusColor persists + recolours per library", () => {
 });
 
 describe("api.setLocalColor PUTs the library local-color route", () => {
-  test("setLocalColor PUTs via requestRoot (ROOT path, not the tenant prefix) — C8", () => {
+  test("setLocalColor PUTs via requestRoot (ROOT path, not the tenant prefix) -- C8", () => {
     // MUST be `requestRoot`, NOT `req`/`request`: the local-color route lives only
     // on the root launcher router, so a window served under a tenant prefix would
     // 404 if the prefix were prepended (`apiPath`). See localColorRootPath.test.ts

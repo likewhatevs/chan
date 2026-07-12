@@ -146,7 +146,7 @@ pub enum ControlRequest {
         data: String,
     },
     TermList,
-    // Category 2: list the windows this tenant knows about — the same
+    // Category 2: list the windows this tenant knows about -- the same
     // `{id, connected, saved, title?, kind?}` rows as `GET /api/windows`
     // (saved session blobs ∪ live `/ws` presence, enriched with the
     // desktop-supplied OS title/kind), returned as JSON in `Ok.message`
@@ -182,7 +182,7 @@ pub enum ControlRequest {
         #[serde(default)]
         force: bool,
     },
-    // `cs window hide`: replicate the OS close button — bury (hide) the
+    // `cs window hide`: replicate the OS close button -- bury (hide) the
     // window, keeping its terminals and layout warm and reopenable.
     WindowHide {
         id: String,
@@ -363,12 +363,12 @@ pub enum ControlRequest {
     // `chan open <path>` of that root fires its own graceful shutdown (the
     // process exits, releasing the flock), while a multi-tenant host (a
     // `chan devserver` / chan-desktop) unmounts just that tenant and keeps
-    // running. The client carries no scope hint — the server knows its own
+    // running. The client carries no scope hint -- the server knows its own
     // kind. `path` is the canonical workspace root.
     //
     // `remove` carries the `--remove` intent through to a HOST so the host
     // also UNREGISTERS the workspace from its library + on/off overlay (the
-    // `DELETE /api/library/workspaces/{id}` equivalent) — without it, removing
+    // `DELETE /api/library/workspaces/{id}` equivalent) -- without it, removing
     // only the caller's local `config.toml` leaves a devserver-served workspace
     // lingering in the launcher and surviving a restart. A standalone serve
     // ignores it (it exits either way; the caller forgets the local registry).
@@ -852,7 +852,7 @@ mod survey_wire_tests {
     #[test]
     fn download_request_tag_window_id_and_path() {
         // `cs download`: wire tag `download`, a window_id + the absolutized
-        // path. is_dir is NOT on this wire — the server resolves it via stat
+        // path. is_dir is NOT on this wire -- the server resolves it via stat
         // before pushing the window_command.
         let req = ControlRequest::Download {
             window_id: "workspace-aa-0".into(),

@@ -74,7 +74,7 @@ pub struct UpsertByIdentity {
     pub provider_subject: String,
     /// Required to create a new user (users.email is NOT NULL).
     /// Absence is allowed when the call resolves to an existing
-    /// (provider, subject) — providers may stop returning email on
+    /// (provider, subject) -- providers may stop returning email on
     /// re-auth and we still want sign-in to succeed.
     pub email: Option<String>,
     pub display_name: Option<String>,

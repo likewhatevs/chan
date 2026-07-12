@@ -115,7 +115,7 @@ pub const DEFAULT_TOKEN_SCOPES: &[&str] = &["tunnel"];
 
 /// Request-scoped audit context recorded alongside token mutations.
 /// Extracted from the HTTP request headers (`http::request_meta`);
-/// both fields are best-effort and audit-only — never used for
+/// both fields are best-effort and audit-only -- never used for
 /// authorization.
 #[derive(Debug, Clone, Default)]
 pub struct RequestMeta {

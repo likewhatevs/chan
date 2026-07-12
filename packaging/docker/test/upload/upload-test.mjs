@@ -97,7 +97,7 @@ async function main() {
       if (st.size !== expected) fail(`on-disk size ${st.size} != ${expected} at ${landed}`);
       log(`on-disk confirmation: ${landed} (${st.size} bytes)`);
     } catch (e) {
-      log(`on-disk check skipped/failed (${landed}): ${e.message} — server response already proves the upload`);
+      log(`on-disk check skipped/failed (${landed}): ${e.message} -- server response already proves the upload`);
     }
 
     console.log(`PASS: browser upload landed (path=${parsed.path}, size=${parsed.size})`);

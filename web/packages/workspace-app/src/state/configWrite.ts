@@ -9,7 +9,7 @@ import type { Preferences } from "../api/types";
 //
 // This is a leaf module (depends only on the api client) so both
 // store.svelte.ts and editorTools.svelte.ts can import the SAME chain without
-// forming an import cycle — store.svelte.ts already imports editorTools, so
+// forming an import cycle -- store.svelte.ts already imports editorTools, so
 // editorTools must not import store back. Sharing one module-level chain is
 // what makes the serialization work across all writers.
 let configWriteInflight: Promise<void> = Promise.resolve();

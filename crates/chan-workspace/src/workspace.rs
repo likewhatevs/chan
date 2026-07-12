@@ -2362,7 +2362,7 @@ impl Workspace {
     }
 
     /// Apply `mutate` to the dashboard config and persist it only when the
-    /// closure reports a change (so the toggles stay idempotent — re-setting
+    /// closure reports a change (so the toggles stay idempotent -- re-setting
     /// the current value writes nothing). Last-writer-wins across concurrent
     /// callers; these are single-user UI actions, matching the prior
     /// `IndexConfig` setter behaviour.
@@ -2453,7 +2453,7 @@ impl Workspace {
     /// Idempotent on re-set. Enabling triggers a lazy
     /// initialization the next time `Workspace::report()` is called
     /// (no eager scan here so a flip from CLI returns fast);
-    /// disabling is destructive — drops the persisted
+    /// disabling is destructive -- drops the persisted
     /// `report.jsonl` so re-enabling later triggers a fresh
     /// scan. Mirrors `set_semantic_enabled`'s shape.
     pub fn set_reports_enabled(&self, enabled: bool) -> Result<()> {
@@ -2542,7 +2542,7 @@ impl Workspace {
 
     /// Flip the per-workspace screensaver-enabled flag.
     /// Idempotent. No filesystem side effects (unlike
-    /// `set_reports_enabled`'s jsonl drop) — the overlay state
+    /// `set_reports_enabled`'s jsonl drop) -- the overlay state
     /// lives entirely client-side; this just persists the toggle.
     pub fn set_screensaver_enabled(&self, enabled: bool) -> Result<()> {
         self.update_dashboard(|cfg| {
@@ -2592,7 +2592,7 @@ impl Workspace {
 
     /// Read the persisted PIN hash. `None` means no
     /// PIN is set. The hash bytes themselves NEVER leave the
-    /// server in plaintext — the `/api/screensaver/state` endpoint
+    /// server in plaintext -- the `/api/screensaver/state` endpoint
     /// reports `pin_set: bool` and the verify endpoint compares
     /// bytes server-side. This getter is for the chan-server route
     /// + tests only.
@@ -2617,7 +2617,7 @@ impl Workspace {
     /// `Workspace::open` to kick off the optional indexing layers
     /// (semantic + reports) per the persisted feature flags. The
     /// baseline BM25 + graph + watcher path runs regardless; this
-    /// is purely the optional-layer activation. Idempotent — a
+    /// is purely the optional-layer activation. Idempotent -- a
     /// second call is a no-op when the layers are already
     /// initialized. Errors during one layer don't block the
     /// other.
@@ -3665,14 +3665,14 @@ fn persist_rename_log(graph_dir: &std::path::Path, log: &HashMap<String, String>
 }
 
 /// True when a persisted session blob carries no PERSISTABLE window structure
-/// and is therefore a phantom "saved window with nothing in it" — safe to GC.
+/// and is therefore a phantom "saved window with nothing in it" -- safe to GC.
 ///
 /// The session schema is the host's (frontend's) concern and otherwise opaque
 /// to chan-workspace; this is the single place we peek, and only at the
 /// layout's node/tab shape. It mirrors the frontend's
 /// `layoutHasPersistableStructure` gate (`tabs.svelte.ts`): a window is worth
-/// keeping if its layout has a SPLIT (`"k":"s"`) — the pane structure restores
-/// even with empty/fresh panes — OR any TAB (a terminal tab respawns a fresh
+/// keeping if its layout has a SPLIT (`"k":"s"`) -- the pane structure restores
+/// even with empty/fresh panes -- OR any TAB (a terminal tab respawns a fresh
 /// shell on restart, which the frontend now persists deliberately). The
 /// phantoms are: a `null` body (the old `putSession(null)` path); a
 /// `treeExpanded`-only object (a folder toggled in an empty window); and a
@@ -3711,14 +3711,14 @@ fn session_blob_is_empty(bytes: &[u8]) -> bool {
 /// A split persists its pane structure even with empty/fresh panes; a leaf
 /// persists once it holds ANY tab (terminal tabs respawn fresh shells on
 /// restore). Only a single empty pane has nothing to keep. Unknown node shapes
-/// count as persistable — we never prune something we don't positively
+/// count as persistable -- we never prune something we don't positively
 /// understand.
 fn layout_is_persistable(node: &serde_json::Value) -> bool {
     let serde_json::Value::Object(map) = node else {
         return true; // unknown shape: be conservative.
     };
     match map.get("k").and_then(serde_json::Value::as_str) {
-        // A leaf persists once it holds any tab — front `t` or legacy Hybrid
+        // A leaf persists once it holds any tab -- front `t` or legacy Hybrid
         // back `bt`. An empty pane (no tabs) has nothing to keep.
         Some("l") => ["t", "bt"]
             .iter()
@@ -5755,7 +5755,7 @@ mod tests {
     // A second open of the same root in THIS process is refused: the writer
     // flock is held by our own pid, so it surfaces `WorkspaceAlreadyOpen` (this
     // chan already has it), not the cross-process `WorkspaceLocked`. The refusal
-    // — no second writer — is the load-bearing invariant; only the error type
+    // -- no second writer -- is the load-bearing invariant; only the error type
     // distinguishes our own process from a foreign holder (a separate process,
     // a different pid, still yields `WorkspaceLocked`). A fresh `Library` handle
     // has an empty live_workspaces map, so the open reaches the flock rather
@@ -6218,7 +6218,7 @@ mod tests {
             hits.hits
         );
 
-        // Graph DB should also have the file as a node — verified
+        // Graph DB should also have the file as a node -- verified
         // via the public files() listing (which the chan-server
         // graph route consumes).
         let graph = workspace.graph().unwrap();
@@ -6670,7 +6670,7 @@ mod tests {
         // returns bare `untitled`. After `untitled` exists the
         // picker returns `untitled-1`, then `untitled-2`, etc.
         // Gaps in the existing-set ARE filled (smallest unused,
-        // not always last+1) — the caller of create_draft_dir is
+        // not always last+1) -- the caller of create_draft_dir is
         // free to skip-number names by hand.
         let (_cfg, _root, workspace) = fixture();
         assert_eq!(workspace.next_untitled_draft_name().unwrap(), "untitled");
@@ -6828,7 +6828,7 @@ mod tests {
 
         // PERSISTABLE STRUCTURE is kept (mirrors layoutHasPersistableStructure;
         // supersedes 9862dfa1's prune-all-terminals rule): a terminal-only
-        // window persists so it restores with a fresh shell — even a single
+        // window persists so it restores with a fresh shell -- even a single
         // dead-terminal tab, the shape that used to be pruned.
         assert!(!session_blob_is_empty(
             br#"{"layout":{"k":"l","t":[{"k":"t","n":"Terminal-2","tsid":"56bd5182f75a4ba055f7fe7bed7676a3","a":1}],"f":1},"treeExpanded":{"":true}}"#
@@ -6892,7 +6892,7 @@ mod tests {
             .put_session("win-tree", br#"{"treeExpanded":{"":true}}"#)
             .unwrap();
         workspace.put_session("win-empty", b"").unwrap();
-        // A terminal-only window: now KEPT (mirrors the SPA persist gate — it
+        // A terminal-only window: now KEPT (mirrors the SPA persist gate -- it
         // restores with a fresh shell). Formerly pruned as a "dead-terminal
         // phantom"; superseded by the keep-the-structure rule (4412f64c).
         workspace

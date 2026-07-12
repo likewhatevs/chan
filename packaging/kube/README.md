@@ -11,14 +11,14 @@ The service env-var contract is `gateway/crates/*/packaging/*.env` and `gateway/
 
 ## Inter-service wiring
 
-| Edge                                   | Variable                  | Carried by |
-|----------------------------------------|---------------------------|------------|
-| identity -> profile (service API)      | `PROFILE_AUTH_TOKEN`      | Secret     |
-| devserver-proxy -> identity (validate) | `IDENTITY_INTERNAL_TOKEN` | Secret     |
-| identity mint / proxy verify (gate)    | `DEVSERVER_GATE_SECRET`   | Secret     |
-| identity + profile -> proxy admin      | `DEVSERVER_ADMIN_TOKEN`   | Secret     |
-| profile + identity -> Postgres         | `DATABASE_URL`            | Secret     |
-| public domain                          | `CHAN_DOMAIN`, `PUBLIC_SCHEME` | ConfigMap |
+| Edge                                   | Variable                       | Carried by |
+|----------------------------------------|--------------------------------|------------|
+| identity -> profile (service API)      | `PROFILE_AUTH_TOKEN`           | Secret     |
+| devserver-proxy -> identity (validate) | `IDENTITY_INTERNAL_TOKEN`      | Secret     |
+| identity mint / proxy verify (gate)    | `DEVSERVER_GATE_SECRET`        | Secret     |
+| identity + profile -> proxy admin      | `DEVSERVER_ADMIN_TOKEN`        | Secret     |
+| profile + identity -> Postgres         | `DATABASE_URL`                 | Secret     |
+| public domain                          | `CHAN_DOMAIN`, `PUBLIC_SCHEME` | ConfigMap  |
 
 `IDENTITY_INTERNAL_TOKEN` and `DEVSERVER_GATE_SECRET` MUST match across the two services that share them, or the tunnel handoff fails. identity refuses to start with no OAuth provider, so the Secret carries placeholder GitHub creds for boot.
 
@@ -35,7 +35,7 @@ packaging/docker/build.sh -t dev
 #    then docker push <registry-host>:5000/chan-gateway-identity:dev  (etc.)
 ```
 
-> NOTE (unverified on this host): the exact bridge from a locally-built OCI image to `sdme kube apply` (local registry vs `sdme fs import --oci-mode app` vs the OCI blob cache) was not run here — this host has no container engine and sdme needs root. Confirm the resolution path on the first privileged run and pin it in this section. This local-build path applies the sdme + test pods (`sdme/gateway-pod.yaml`, `test/upload-pod.yaml`), which stay on bare `:dev` image names + `imagePullPolicy: IfNotPresent`, so they are registry-agnostic; the three cluster service manifests instead pull `fiorix/<service>:<version>` from Docker Hub.
+> NOTE (unverified on this host): the exact bridge from a locally-built OCI image to `sdme kube apply` (local registry vs `sdme fs import --oci-mode app` vs the OCI blob cache) was not run here -- this host has no container engine and sdme needs root. Confirm the resolution path on the first privileged run and pin it in this section. This local-build path applies the sdme + test pods (`sdme/gateway-pod.yaml`, `test/upload-pod.yaml`), which stay on bare `:dev` image names + `imagePullPolicy: IfNotPresent`, so they are registry-agnostic; the three cluster service manifests instead pull `fiorix/<service>:<version>` from Docker Hub.
 
 ## D3: bring the stack up under sdme and prove it healthy
 

@@ -12,7 +12,7 @@ Layout follows the NSIS MUI conventions:
   - header (150x57): the page title text is drawn over the LEFT of the strip, so
     the logo sits on the RIGHT with a white background behind the title.
   - sidebar (164x314): the welcome/finish text is on the RIGHT of the page, so
-    the bitmap is a self-contained left column — logo centered on white.
+    the bitmap is a self-contained left column -- logo centered on white.
 
 Usage:
   python3 scripts/gen-nsis-images.py            # write the BMPs into icons/

@@ -55,7 +55,7 @@ impl DevserverWatcherStop {
     }
 }
 
-/// How a watched window opens its SPA — the only library-specific bit of the
+/// How a watched window opens its SPA -- the only library-specific bit of the
 /// otherwise surface-agnostic [`TauriNativeSurface`]. Local windows load the
 /// in-process loopback library; remote windows load a connected devserver's SPA
 /// at `host:port` (through the connecting screen, since the remote may be down).
@@ -128,8 +128,8 @@ impl WindowFeed for LocalWindowFeed {
     fn snapshot(&self) -> Vec<WindowRecord> {
         // LOCAL records only (`local_window_records`): the merged launcher set
         // includes devserver windows, but the LOCAL native watcher must only
-        // reconcile LOCAL windows — devserver windows are driven by their own
-        // per-devserver watcher — else the local reconcile would try to open
+        // reconcile LOCAL windows -- devserver windows are driven by their own
+        // per-devserver watcher -- else the local reconcile would try to open
         // remote records via the local opener (and trip its same-library assert).
         self.state
             .embedded()
@@ -149,7 +149,7 @@ struct TauriNativeSurface {
     app: AppHandle,
     opener: WindowOpener,
     /// Labels whose build was dispatched to the Tauri main thread but may not yet
-    /// be in `webview_windows()` — the build is async (`open` returns before
+    /// be in `webview_windows()` -- the build is async (`open` returns before
     /// `build_workspace_window`'s `run_on_main_thread` closure runs). Tracked and
     /// folded into `open_labels` so a reconcile in the dispatch→build gap treats
     /// the window as already open and does NOT double-`open` the same label (the
@@ -278,7 +278,7 @@ pub(crate) fn spawn_local_window_watcher(app: AppHandle, state: Arc<AppState>) {
     // through the watcher, then hand the same Arc to the loop.
     state.set_local_watcher_view(Arc::clone(&view));
     // The local library lives for the whole process, so the watcher is never
-    // cancelled — `cancel` is a future that only resolves at process exit
+    // cancelled -- `cancel` is a future that only resolves at process exit
     // (which drops the spawned task).
     tauri::async_runtime::spawn(watch_loop(
         Some(LOCAL_LIBRARY_ID),
@@ -464,10 +464,10 @@ async fn stream_window_feed(
 
 /// Subscribe to a connected devserver's pane-highlight COLOUR feed
 /// (`GET /api/library/local-color/watch`): on each `{ color }` push,
-/// refresh the launcher's per-devserver colour cache and — only on a real change
-/// — re-push the library feed, so a NEW window of this devserver reads the fresh
+/// refresh the launcher's per-devserver colour cache and -- only on a real change
+/// -- re-push the library feed, so a NEW window of this devserver reads the fresh
 /// `?pane=` colour at build. Push-based; replaces the old 5s colour poll (the
-/// workspace list stays polled — there is no `workspaces/watch`). Reconnects on a
+/// workspace list stays polled -- there is no `workspaces/watch`). Reconnects on a
 /// dropped socket until `cancel` flips true (disconnect), like the window feed.
 pub(crate) fn spawn_devserver_color_watch(
     state: Arc<AppState>,
@@ -559,14 +559,14 @@ async fn stream_color_feed(
 
 /// Spawn a connected devserver's window watcher: one [`watch_loop`] driven by the
 /// devserver's `/api/library/windows/watch` feed, opening windows as remote SPA
-/// webviews. Returns the `cancel` (a `watch::Sender`) — send
+/// webviews. Returns the `cancel` (a `watch::Sender`) -- send
 /// [`DevserverWatcherStop::CloseWindows`] on disconnect, or
 /// [`DevserverWatcherStop::RetireKeepWindows`] for token-rotation handoff.
 ///
 /// The `library_id` (`lib-<hex>`) is NOT needed up front: an EMPTY feed is valid
 /// (a devserver with no windows, or one the user emptied before disconnecting),
 /// so the watcher learns the id LAZILY from the first record (`watch_loop`). The
-/// initial seed is best-effort — an empty or failed fetch is fine; the `/watch`
+/// initial seed is best-effort -- an empty or failed fetch is fine; the `/watch`
 /// WS pushes the authoritative snapshot on connect.
 pub(crate) async fn spawn_devserver_window_watcher(
     app: AppHandle,
@@ -616,7 +616,7 @@ pub(crate) async fn spawn_devserver_window_watcher(
     // A handle on the view for the caller so the close handler can bury THIS
     // devserver's windows through it: a bury flips `should_show` false and
     // the reconcile CLOSES the webview (drops the `/ws`), so the launcher dot
-    // reflects hidden — unlike a bare `window.hide()`, which keeps the `/ws` live.
+    // reflects hidden -- unlike a bare `window.hide()`, which keeps the `/ws` live.
     let view_handle = Arc::clone(&view);
     let mut cancel_loop = cancel_rx;
     tauri::async_runtime::spawn(watch_loop(None, feed, surface, view, async move {

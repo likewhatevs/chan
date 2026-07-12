@@ -15,7 +15,7 @@ use sqlx::postgres::{PgPool, PgPoolOptions};
 
 /// Single-connection admin pool. `PgPool::connect` defaults to
 /// max_connections=10; multiplied by ~17 parallel tests (each
-/// opening admin pools twice — once on setup, once on cleanup)
+/// opening admin pools twice -- once on setup, once on cleanup)
 /// blows past a default Postgres `max_connections=100`. Capping
 /// admin to one keeps per-test peak demand well under that cap.
 async fn admin_pool(url: &str) -> PgPool {

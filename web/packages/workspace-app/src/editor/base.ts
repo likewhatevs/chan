@@ -258,7 +258,7 @@ export function createValueSync(): {
   // switches). Scope is deliberately the initial fill ONLY: a dedupe
   // on non-empty content (doc seeded at EditorState.create, e.g. mode
   // toggle remounts) also clears the flag, so every LATER external
-  // apply — file-watch reload, sibling mirror — stays undoable;
+  // apply -- file-watch reload, sibling mirror -- stays undoable;
   // whether reloads should also be non-undoable is an open product
   // question this helper does not decide.
   let initialFillPending = true;

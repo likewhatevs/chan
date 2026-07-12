@@ -3,8 +3,8 @@
 //! A standalone terminal window has no workspace dir, so its per-window
 //! session (pane/tab layout) blob can't ride the workspace `sessions/` store.
 //! For a *persisted* devserver terminal we want that layout to survive a
-//! devserver restart, so we mirror the workspace store — atomic tmp+rename,
-//! flat keys — at the launcher scope (`~/.chan/devserver/terminals/`). Keys
+//! devserver restart, so we mirror the workspace store -- atomic tmp+rename,
+//! flat keys -- at the launcher scope (`~/.chan/devserver/terminals/`). Keys
 //! are the `?w=<window-label>` ids; the blobs are opaque SPA layout bytes.
 //!
 //! A terminal tenant with no store dir keeps using the in-memory
@@ -159,7 +159,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let d = dir.path();
         // Separators, traversal, leading `.` (hidden file) / `-` (CLI-flag),
-        // empty, and illegal chars — mirrors chan_workspace::blob::validate_key.
+        // empty, and illegal chars -- mirrors chan_workspace::blob::validate_key.
         for bad in [
             "../escape",
             "a/b",

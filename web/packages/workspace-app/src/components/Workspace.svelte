@@ -57,7 +57,7 @@
       document.body.style.removeProperty("user-select");
       // Persist the new ratio. The layout-persistence effect only tracks
       // leaf nodes, so a divider drag (which mutates the split's ratio)
-      // never schedules a save on its own — the size is then lost on
+      // never schedules a save on its own -- the size is then lost on
       // reload, notably when an adjacent pane is empty and no other
       // activity triggers a save.
       schedulePersistStateToHash();

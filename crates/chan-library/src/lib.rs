@@ -1,7 +1,7 @@
 //! The chan library: the authoritative window / terminal / workspace
 //! lifecycle.
 //!
-//! This crate is the source of truth a chan deployment owns — the
+//! This crate is the source of truth a chan deployment owns -- the
 //! per-library standalone terminals and the persisted window/terminal
 //! lifecycle. Clients (native desktop windows, browser tabs, `cs`) are views
 //! that reconcile to its state; `chan-server` is the HTTP route layer over it.

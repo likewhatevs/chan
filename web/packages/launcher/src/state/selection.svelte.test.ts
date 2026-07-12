@@ -265,7 +265,7 @@ describe("ordered cross-kind bulk remove", () => {
     await confirmBulkDelete();
 
     // Served workspace forgotten (left the merged feed), devserver removed, and
-    // the local workspace removed — all three gone; selection cleared.
+    // the local workspace removed -- all three gone; selection cleared.
     expect(library.workspaces.some((w) => w.devserver_id === "ds-1" && w.prefix === "w/api")).toBe(false);
     expect(library.devservers.some((d) => d.id === mix.id)).toBe(false);
     expect(library.workspaces.some((w) => w.path === "/tmp/mix-local")).toBe(false);

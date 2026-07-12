@@ -2,7 +2,7 @@
 // while the row is still at its pre-click status and drops it once the backend
 // `status` moves off that (the transition began, so `status` drives the spinner),
 // the row is gone, or the backstop elapses; clear stops the spinner (the reject
-// path). No localStorage: the bridge is in-memory only — a boot-restore spinner
+// path). No localStorage: the bridge is in-memory only -- a boot-restore spinner
 // now comes from the backend `status:starting`, not a persisted marker.
 
 import { describe, it, expect, beforeEach } from "vitest";

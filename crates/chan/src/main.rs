@@ -4,7 +4,7 @@
 // library (`src/lib.rs`) so chan-desktop can dispatch `chan` in-process too;
 // this binary is a thin shim that owns the tokio runtime and runs the CLI
 // with the standalone personality (always-browser serve, CLI tarball
-// upgrade — never the desktop handoff/updater).
+// upgrade -- never the desktop handoff/updater).
 
 use anyhow::{Context, Result};
 use chan::Personality;

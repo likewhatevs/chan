@@ -31,7 +31,7 @@ Maintainers have the right and responsibility to remove, edit, or reject comment
 
 ## Scope
 
-This Code of Conduct applies within all community spaces — the repository (issues, pull requests, discussions), any official communication channels, and when an individual is officially representing the community in public spaces.
+This Code of Conduct applies within all community spaces -- the repository (issues, pull requests, discussions), any official communication channels, and when an individual is officially representing the community in public spaces.
 
 ## Enforcement
 

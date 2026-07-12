@@ -1,7 +1,7 @@
 //! Client side of the control socket: resolve the chan-terminal
 //! environment ($CHAN_WINDOW_ID / $CHAN_CONTROL_SOCKET), make paths
 //! absolute, and round-trip a [`ControlRequest`] to the chan-server the
-//! terminal belongs to — over a Unix-domain socket on unix, a Windows
+//! terminal belongs to -- over a Unix-domain socket on unix, a Windows
 //! named pipe on windows. Only the [`transport`] module is `#[cfg]`-split;
 //! the wire (one JSON request line, one JSON response line) is identical.
 
@@ -141,7 +141,7 @@ pub async fn send_control_request(socket: &Path, request: ControlRequest) -> Res
     }
 }
 
-/// The `cs` control client's transport module — the only `#[cfg]`-split
+/// The `cs` control client's transport module -- the only `#[cfg]`-split
 /// surface. unix connects a `UnixStream`; windows opens a
 /// `tokio::net::windows::named_pipe` client. Both yield read/write halves
 /// the line-framed round-trip above drives identically.

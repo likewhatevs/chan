@@ -4,7 +4,7 @@ import { Terminal } from "@xterm/xterm";
 // A2 (htop-after-reload): the backend re-asserts the live DEC private-mode set
 // (DECCKM + mouse + bracketed paste) on reattach. This proves the FIX REACHES
 // THE RENDERER: xterm.js natively honors those `\e[?…h/l` output sequences via
-// its core mode service, so no SPA-side (keymap.ts) mode tracking is needed —
+// its core mode service, so no SPA-side (keymap.ts) mode tracking is needed --
 // plain arrow keys are encoded by xterm.js from `applicationCursorKeysMode`, and
 // keymap.ts only intercepts Enter + Alt+arrows (verified: terminalMetaKeyBytes
 // returns null for a bare arrow). If a reattach drops the re-assert, these modes

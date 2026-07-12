@@ -3,13 +3,13 @@
 //! A workspace mounts at a KEYED PATHSPEC `/{slug}-{8hex}`: a legible basename
 //! slug plus 8 hex of the sha256 of the canonical root (the same hash that keys
 //! per-workspace metadata, [`chan_workspace::paths::canonical_root_hash8`]). It
-//! is deterministic — the same root always maps to the same route across
+//! is deterministic -- the same root always maps to the same route across
 //! restarts, and an OFF workspace has a stable prefix without a live tenant.
 //! The prefix IS the public path the gateway forwards
 //! (`{user}.devserver.chan.app/{slug}-{8hex}/`) unchanged, and the devserver
 //! routes the tenant by it. The hash suffix keys the prefix to the *root*, not
 //! just the basename, so two workspaces with the same basename under different
-//! parents (`foo/hello`, `bar/hello`) get DISTINCT prefixes and both mount —
+//! parents (`foo/hello`, `bar/hello`) get DISTINCT prefixes and both mount  --
 //! closing the same-basename collision that previously rejected the second at
 //! mount time. The window-record assembly on `WorkspaceHost` calls
 //! [`allocate_workspace_prefix`] for the off-workspace case; the devserver
@@ -24,7 +24,7 @@ use crate::Error;
 /// Allocate a workspace's mount prefix from its root: the keyed pathspec
 /// `/{slug}-{8hex}`, where `slug` is the sanitized last path segment and `8hex`
 /// is [`chan_workspace::paths::canonical_root_hash8`] of the canonical root.
-/// Deterministic so the same root always maps to the same route — the workspace
+/// Deterministic so the same root always maps to the same route -- the workspace
 /// re-mounts at the same prefix across a restart, and an OFF workspace has a
 /// stable prefix without a live tenant. The prefix is the PUBLIC path the
 /// gateway forwards; the hash suffix makes it unique per root, so two
@@ -103,7 +103,7 @@ mod tests {
 
     /// Two workspaces that share a basename but live under different
     /// parents key off the canonical root, so they get DISTINCT prefixes and
-    /// both mount — the old basename-only slug collided and rejected the
+    /// both mount -- the old basename-only slug collided and rejected the
     /// second.
     #[test]
     fn same_basename_distinct_roots_get_distinct_prefixes() {

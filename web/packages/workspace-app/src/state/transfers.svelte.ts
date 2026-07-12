@@ -7,7 +7,7 @@
 // handles) plus the bubble's shown/hidden flag persist to sessionStorage keyed
 // by sessionWindowId(), mirroring the layout-reload snapshot. A reload destroys
 // the in-flight XHR, so on restore an "active" record becomes "interrupted" (a
-// terminal state) rather than a frozen progress bar — never a "42% forever" lie.
+// terminal state) rather than a frozen progress bar -- never a "42% forever" lie.
 // A download can be retried from its persisted source; an upload cannot (the
 // File bytes do not survive the reload), so it restores Dismiss-only.
 
@@ -16,7 +16,7 @@ import { sessionWindowId } from "../api/client";
 export type TransferKind = "upload" | "download";
 
 /// active: in flight. done/cancelled/failed: terminal, this session.
-/// interrupted: was in flight when the window reloaded — the XHR is gone.
+/// interrupted: was in flight when the window reloaded -- the XHR is gone.
 export type TransferState =
   | "active"
   | "done"
@@ -104,7 +104,7 @@ function find(id: string): Transfer | undefined {
   return transfers.items.find((t) => t.id === id);
 }
 
-/// The count of in-flight transfers in THIS window — the per-window
+/// The count of in-flight transfers in THIS window -- the per-window
 /// active-transfer signal the desktop close guard queries (over /ws). A window
 /// with a non-zero count must not close silently.
 export function activeTransferCount(): number {
@@ -224,7 +224,7 @@ export function toggleTransfers(): void {
 /// Restore the persisted bubble on boot. Terminal states restore exactly; an
 /// "active" record (its XHR died with the reload) restores as "interrupted".
 /// `reconstructDownloadRetry` rebuilds the retry handle for an interrupted
-/// download from its source (uploads get none — the File is gone).
+/// download from its source (uploads get none -- the File is gone).
 export function restoreTransfers(
   reconstructDownloadRetry: (source: { path: string; isDir: boolean }) => () => void,
 ): void {

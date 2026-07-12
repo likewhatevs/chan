@@ -180,7 +180,7 @@ async function refreshWorkspaces(): Promise<void> {
 // snapshot on every window change, so bursts are coalesced: while a re-fetch
 // is in flight, a later push just flags one more run, and the in-flight call
 // re-runs once when it lands. No timer, so nothing leaks between tests, and a
-// transient list error is swallowed — the next push (or a manual reload) heals.
+// transient list error is swallowed -- the next push (or a manual reload) heals.
 let liveRefreshing = false;
 let liveRefreshPending = false;
 
@@ -373,10 +373,10 @@ export async function openWorkspaceWindow(path: string): Promise<void> {
 
 /** Toggle a window's visibility (the feed's SHOW/HIDE Eye): hide it if it is
  * visible, otherwise open (un-hide/focus) it. Keyed on the server-persisted
- * `hidden`, not socket liveness — the toggle stays a bridge op
+ * `hidden`, not socket liveness -- the toggle stays a bridge op
  * (`hideWindow`/`openWindow`); the desktop persists `hidden` at the bury/unbury
  * chokepoint, so the row moves between Open/Hidden on the feed round-trip. No
- * optimistic flip here — the feed reflects the live state after the watch push. */
+ * optimistic flip here -- the feed reflects the live state after the watch push. */
 export async function toggleWindow(w: WindowRecord): Promise<void> {
   if (w.hidden) await backend.openWindow(w.window_id);
   else await backend.hideWindow(w.window_id);

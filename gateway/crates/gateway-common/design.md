@@ -80,17 +80,13 @@ The audience value is host-based and canonicalized by the callers before encodin
 
 ### Static asset serving stays generic
 
-Each consumer owns its own embedded asset set; the shared crate cannot derive
-once and share the embedded bytes. The static handler stays generic so each
-service can supply its own bundle while sharing the SPA fallback behavior.
+Each consumer owns its own embedded asset set; the shared crate cannot derive once and share the embedded bytes. The static handler stays generic so each service can supply its own bundle while sharing the SPA fallback behavior.
 
 Only identity-service ships an SPA, so it is the module's only consumer; the module stays generic in case a future service grows a UI.
 
 ### Banners stay per-consumer
 
-Each consumer's "frontend not built" banner names the right build target.
-Parameterising the banner template would obscure that, so each consumer ships
-its own static banner.
+Each consumer's "frontend not built" banner names the right build target. Parameterising the banner template would obscure that, so each consumer ships its own static banner.
 
 ## Invariants
 

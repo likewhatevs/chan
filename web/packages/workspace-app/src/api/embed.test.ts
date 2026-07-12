@@ -7,7 +7,7 @@ import {
   isAllowedEmbedSrc,
 } from "./embed";
 
-describe("detectEmbed — YouTube", () => {
+describe("detectEmbed: YouTube", () => {
   test("youtu.be short link", () => {
     const e = detectEmbed("https://youtu.be/dQw4w9WgXcQ");
     expect(e).toEqual({
@@ -37,7 +37,7 @@ describe("detectEmbed — YouTube", () => {
   });
 });
 
-describe("detectEmbed — Google Maps", () => {
+describe("detectEmbed: Google Maps", () => {
   test("keyless share-embed (pb) form passes through", () => {
     const e = detectEmbed(
       "https://www.google.com/maps/embed?pb=!1m18!1m12!1m3",
@@ -68,7 +68,7 @@ describe("detectEmbed — Google Maps", () => {
   });
 });
 
-describe("detectEmbed — negatives", () => {
+describe("detectEmbed: negatives", () => {
   test("plain image and arbitrary hosts are not embeds", () => {
     expect(detectEmbed("https://example.com/cat.png")).toBeNull();
     expect(detectEmbed("./local.png")).toBeNull();

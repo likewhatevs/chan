@@ -164,7 +164,7 @@ describe("session persistence bootstrap guard", () => {
     expect(fetchSpy).toHaveBeenCalledTimes(1);
     expect(fetchSpy.mock.calls[0]![1]?.method).toBe("PUT");
 
-    // 2) User closes all tabs — layout serializes to null. Even though a
+    // 2) User closes all tabs -- layout serializes to null. Even though a
     //    folder is still expanded, the now-empty window must DELETE its
     //    blob (not write a treeExpanded-only / null payload) so it stops
     //    appearing as a saved window.
@@ -203,7 +203,7 @@ describe("session persistence bootstrap guard", () => {
     //    reattaches the surviving PTY on a close->reopen, so a terminal-only
     //    window IS durable now: it PUTs the on-disk blob (carrying the tsid)
     //    instead of deleting it. This is the standalone-terminal reconnect fix
-    //    — the old code deleted here, which is why reconnect spawned fresh shells.
+    //    -- the old code deleted here, which is why reconnect spawned fresh shells.
     const pane = activePane();
     pane.tabs = pane.tabs.filter((t) => t.kind === "terminal");
     pane.activeTabId = pane.tabs[0]?.id ?? null;
@@ -218,7 +218,7 @@ describe("session persistence bootstrap guard", () => {
     // 3) The terminal's session ends (tsid cleared): nothing to reattach, but
     //    the pane STRUCTURE is still worth keeping, so the window PUTs its blob
     //    (without session ids) and restores with a FRESH shell instead of coming
-    //    back empty. A truly empty window (no panes/tabs) still deletes — covered
+    //    back empty. A truly empty window (no panes/tabs) still deletes -- covered
     //    by the empty-window test above.
     const term = activePane().tabs[0] as TerminalTab;
     term.terminalSessionId = undefined;
@@ -249,7 +249,7 @@ describe("session persistence bootstrap guard", () => {
     fetchSpy.mockClear();
 
     // Discard intent: an immediate keepalive DELETE (the server's reap trigger)
-    // and the sessionStorage mirror cleared — no waiting on the debounce or a
+    // and the sessionStorage mirror cleared -- no waiting on the debounce or a
     // `pagehide` a buried window may never fire.
     discardWindowSession();
     const [url, init] = fetchSpy.mock.calls.at(-1)!;
@@ -276,7 +276,7 @@ describe("session persistence bootstrap guard", () => {
     __testSetBootstrapHydrated(true);
     setTerminalLayout({ terminalSessionId: "term_live" });
 
-    // Default discard: a plain DELETE — the server reaps the window's sessions.
+    // Default discard: a plain DELETE -- the server reaps the window's sessions.
     discardWindowSession();
     expect(String(fetchSpy.mock.calls.at(-1)![0])).not.toContain("moved=1");
     expect(fetchSpy.mock.calls.at(-1)![1]?.method).toBe("DELETE");
@@ -284,7 +284,7 @@ describe("session persistence bootstrap guard", () => {
     fetchSpy.mockClear();
 
     // Move-out discard: still DELETE the blob, but `&moved=1` tells the server
-    // NOT to reap — the terminal moved to another window and stays live there.
+    // NOT to reap -- the terminal moved to another window and stays live there.
     discardWindowSession({ reap: false });
     const [url, init] = fetchSpy.mock.calls.at(-1)!;
     expect(init?.method).toBe("DELETE");
@@ -306,7 +306,7 @@ describe("all-terminal reload reattach snapshot", () => {
     // 1) Terminal (live tsid) + dashboard. The on-disk blob is PUT (durable),
     //    AND because a reattachable terminal is present the layout is also
     //    mirrored into sessionStorage (with the tsid) as the race-free same-tab
-    //    Cmd+R fast path — the blob's keepalive PUT can race a fast reload's GET.
+    //    Cmd+R fast path -- the blob's keepalive PUT can race a fast reload's GET.
     setTerminalLayout({ terminalSessionId: "tsid-keepalive" });
     addDashboardTab();
     scheduleSessionSave();
@@ -327,7 +327,7 @@ describe("all-terminal reload reattach snapshot", () => {
 
     // 3) Replace with a durable window that has NO terminal (dashboard only).
     //    It reloads from the on-disk blob alone, so the sessionStorage mirror
-    //    is cleared — there is nothing to reattach race-free.
+    //    is cleared -- there is nothing to reattach race-free.
     const dashOnly: LeafNode = {
       kind: "leaf",
       id: "pane-dash-only",
@@ -346,14 +346,14 @@ describe("all-terminal reload reattach snapshot", () => {
     vi.useRealTimers();
   });
 
-  test("a tsid-less terminal (not yet connected) is NOT snapshotted — no stray PTY on restore", async () => {
+  test("a tsid-less terminal (not yet connected) is NOT snapshotted: no stray PTY on restore", async () => {
     vi.useFakeTimers();
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(null, { status: 204 }),
     );
     __testSetBootstrapHydrated(true);
 
-    // A terminal with NO session id — it hasn't connected / been assigned a
+    // A terminal with NO session id -- it hasn't connected / been assigned a
     // tsid yet. Nothing to reattach, so the reload snapshot must stay empty;
     // otherwise a reload would restore a tsid-less terminal and spawn a stray
     // fresh PTY.
@@ -408,7 +408,7 @@ describe("rich prompt recall + reload re-prove", () => {
     reproveRestoredPrompt(term, ["m0"]);
     expect(term.pendingPrompt).toBeUndefined();
 
-    // A terminal phase is the bubble's to resolve — reprove leaves it.
+    // A terminal phase is the bubble's to resolve -- reprove leaves it.
     term.pendingPrompt = { id: "d1", phase: "delivered" };
     reproveRestoredPrompt(term, []);
     expect(term.pendingPrompt?.phase).toBe("delivered");
@@ -758,7 +758,7 @@ describe("window commands", () => {
         path: "notes",
       });
       await vi.waitFor(() => expect(uploadSpy).toHaveBeenCalledTimes(1));
-      // Native branch only — never the gesture-less <input> click.
+      // Native branch only -- never the gesture-less <input> click.
       expect(clickSpy).not.toHaveBeenCalled();
       const [destDir, dropped] = uploadSpy.mock.calls[0]!;
       expect(destDir).toBe("notes");

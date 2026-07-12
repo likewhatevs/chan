@@ -26,7 +26,7 @@ use sha2::{Digest, Sha256};
 /// dir isn't user-writable.
 ///
 /// `CHAN_HOME` overrides this with the directory to use IN PLACE OF `~/.chan`
-/// (CARGO_HOME / GNUPGHOME semantics — the dir itself, not a parent): set
+/// (CARGO_HOME / GNUPGHOME semantics -- the dir itself, not a parent): set
 /// `CHAN_HOME=/tmp/x` and chan reads its registry, devservers, and config under
 /// `/tmp/x`, leaving the real `~/.chan` untouched (an isolated smoke instance).
 /// Checked FIRST, so every delegator (`state_dir`, `cache_dir`,
@@ -49,7 +49,7 @@ pub fn config_dir() -> PathBuf {
 }
 
 /// The `CHAN_HOME` override, if set to a non-empty value: the directory chan
-/// uses IN PLACE OF `~/.chan` (CARGO_HOME / GNUPGHOME semantics — the dir
+/// uses IN PLACE OF `~/.chan` (CARGO_HOME / GNUPGHOME semantics -- the dir
 /// itself). The SINGLE place the env is read, shared by [`config_dir`] and
 /// [`local_bin_dir`] so the two never drift. `var_os` (a path need not be
 /// UTF-8); an empty value is treated as unset so `CHAN_HOME=` does not collapse
@@ -66,7 +66,7 @@ fn chan_home_override() -> Option<PathBuf> {
 /// `$HOME/.local/bin`. `None` when neither `CHAN_HOME` nor `$HOME` resolves.
 ///
 /// NOTE: unlike [`config_dir`], the unset fallback is `$HOME/.local/bin`, NOT
-/// `$HOME/.chan/...` — it is the standard user bin dir, so it does NOT route
+/// `$HOME/.chan/...` -- it is the standard user bin dir, so it does NOT route
 /// through `config_dir`. The base is `CHAN_HOME`-or-`$HOME`, then `.local/bin`.
 pub fn local_bin_dir() -> Option<PathBuf> {
     chan_home_override()
@@ -377,7 +377,7 @@ mod tests {
     use super::*;
     use std::sync::Mutex;
 
-    /// Serializes every `CHAN_HOME`-mutating test — the env is process-global, so
+    /// Serializes every `CHAN_HOME`-mutating test -- the env is process-global, so
     /// two such tests running in parallel would corrupt each other.
     static CHAN_HOME_ENV_GUARD: Mutex<()> = Mutex::new(());
 
@@ -437,14 +437,14 @@ mod tests {
             .unwrap_or_else(|e| e.into_inner());
         let saved = std::env::var_os("CHAN_HOME");
 
-        // Set: CHAN_HOME/.local/bin — an isolated smoke instance's shims.
+        // Set: CHAN_HOME/.local/bin -- an isolated smoke instance's shims.
         std::env::set_var("CHAN_HOME", "/tmp/chan-home-test");
         assert_eq!(
             local_bin_dir(),
             Some(PathBuf::from("/tmp/chan-home-test/.local/bin"))
         );
 
-        // Unset: $HOME/.local/bin — the standard user bin dir, NOT under `.chan`
+        // Unset: $HOME/.local/bin -- the standard user bin dir, NOT under `.chan`
         // (deliberately different from config_dir's `~/.chan` fallback).
         std::env::remove_var("CHAN_HOME");
         let unset = local_bin_dir().expect("home resolves on the test host");

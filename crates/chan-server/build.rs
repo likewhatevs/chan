@@ -27,7 +27,7 @@ fn main() {
     // The launcher bundle (web-launcher/dist) is baked by `LauncherAssets`
     // exactly as `WebAssets` bakes web/dist; mirror the handling. It's a
     // gitignored build artifact, so a fresh clone / isolated gate worktree
-    // has none — create the empty dir so the rust-embed macro succeeds (it
+    // has none -- create the empty dir so the rust-embed macro succeeds (it
     // errors on a missing folder), and track it so a rebuilt launcher
     // relinks. The binary serves the launcher only once
     // `cd web-launcher && npm install && npm run build` has run.

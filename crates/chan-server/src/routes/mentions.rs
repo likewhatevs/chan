@@ -6,7 +6,7 @@
 //! exposes the broader corpus of `@@<Name>` references across
 //! all indexed markdown).
 //!
-//! Source: `chan_workspace::GraphView::mentions()` — runs a single
+//! Source: `chan_workspace::GraphView::mentions()` -- runs a single
 //! SQL aggregation over the graph's mention edges (parallel to
 //! `tags()`). Returns names sorted by count desc + label asc;
 //! this route filters by case-insensitive prefix + caps at the
@@ -46,7 +46,7 @@ pub struct MentionItem {
 const DEFAULT_LIMIT: u32 = 10;
 const MAX_LIMIT: u32 = 200;
 
-/// `GET /api/mentions` — return prefix-matched mention labels.
+/// `GET /api/mentions` -- return prefix-matched mention labels.
 pub async fn api_get_mentions(
     State(state): State<Arc<AppState>>,
     Query(params): Query<MentionsQuery>,

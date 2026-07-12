@@ -1,6 +1,6 @@
 //! Drafts route.
 //!
-//! * `POST /api/drafts/new` — Cmd+N from the SPA. Creates
+//! * `POST /api/drafts/new` -- Cmd+N from the SPA. Creates
 //!   `<drafts_dir>/<next-untitled>/draft.md` + indexes it + returns
 //!   the real in-root path. An optional JSON body picks the seed:
 //!   no body (or no `kind`) seeds a plain markdown draft,

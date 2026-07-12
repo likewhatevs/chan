@@ -164,7 +164,7 @@ pub(crate) fn pace_reindex_worker(cancel: Option<&std::sync::atomic::AtomicBool>
             // above all key off `snapshot()`. On Unix `snapshot()` is
             // always `Some`, so this arm is dead there. On non-Unix
             // (Windows) it is the ONLY arm, and without pacing the cold
-            // rebuild would monopolise the graph DB — the Windows
+            // rebuild would monopolise the graph DB -- the Windows
             // file-open hang. We can't measure fd pressure, so we fall
             // back to a coarse time-sliced yield (see
             // `pace_reindex_worker_timesliced`). Best-effort and
@@ -176,7 +176,7 @@ pub(crate) fn pace_reindex_worker(cancel: Option<&std::sync::atomic::AtomicBool>
 
 /// `None`-snapshot fallback for `pace_reindex_worker`. On Unix the probe
 /// is always available so this is never hit (and pacing without a probe
-/// would be wrong — Unix already has its fd-driven policy); on non-Unix
+/// would be wrong -- Unix already has its fd-driven policy); on non-Unix
 /// it dispatches to the time-sliced yield.
 #[cfg(unix)]
 fn pace_no_probe() -> u32 {
@@ -195,7 +195,7 @@ fn pace_no_probe() -> u32 {
 /// `REINDEX_BACKOFF_STEP`. That brief, periodic pause is enough for the
 /// graph writer's transaction window to drain and for queued inspector /
 /// backlinks / graph reads to acquire the DB, so the workspace window
-/// stays responsive while the first index builds — without any Win32
+/// stays responsive while the first index builds -- without any Win32
 /// FFI. The counter is thread-local so each reindex worker paces
 /// independently and there is no shared atomic on the hot per-file path.
 #[cfg(not(unix))]

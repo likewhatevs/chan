@@ -1,28 +1,13 @@
 # chan web frontend
 
-Design reference for the chan web frontend: first the two web SPAs and how each
-is served, then the frontend-only demo embed, then the color system all share.
-Update this file with changes to the frontend serving topology (including the
-marketing demo embed), palette variable model, editor theme contract, syntax
-highlight palette, or kind taxonomy.
+Design reference for the chan web frontend: first the two web SPAs and how each is served, then the frontend-only demo embed, then the color system all share. Update this file with changes to the frontend serving topology (including the marketing demo embed), palette variable model, editor theme contract, syntax highlight palette, or kind taxonomy.
 
 ## Two web frontends
 
-chan ships **two** Svelte 5 + Vite web SPAs, both embedded into chan-server as
-bundles and both built on the color system below:
+chan ships **two** Svelte 5 + Vite web SPAs, both embedded into chan-server as bundles and both built on the color system below:
 
-- **The main SPA** is served as the workspace tenant fallback. The server stamps
-  boot metadata for the URL mount prefix and whether Settings is disabled, so a
-  reverse-proxied instance builds correct `/api` URLs and can grey restricted
-  controls.
-- **The launcher SPA** is served at the host/library root `/` through the
-  `WorkspaceHost` root fallback. It reads `<meta chan-launcher-readonly>` to hide
-  mutation controls on read-only surfaces. The launcher is reached on **all three
-  surfaces** -- devserver/tunnel, gateway-proxied
-  (`{owner}.devserver.chan.app/`), and desktop loopback -- the same bundle
-  per-surface installed, with per-surface auth (None tunnel-trust / Some loopback
-  window token) and a read-only-gateway vs full-loopback workspace-mutation
-  split. Its serving and auth contract is documented in the launcher design doc.
+- **The main SPA** is served as the workspace tenant fallback. The server stamps boot metadata for the URL mount prefix and whether Settings is disabled, so a reverse-proxied instance builds correct `/api` URLs and can grey restricted controls.
+- **The launcher SPA** is served at the host/library root `/` through the `WorkspaceHost` root fallback. It reads `<meta chan-launcher-readonly>` to hide mutation controls on read-only surfaces. The launcher is reached on **all three surfaces** -- devserver/tunnel, gateway-proxied (`{owner}.devserver.chan.app/`), and desktop loopback -- the same bundle per-surface installed, with per-surface auth (None tunnel-trust / Some loopback window token) and a read-only-gateway vs full-loopback workspace-mutation split. Its serving and auth contract is documented in the launcher design doc.
 
 The two are complementary: the launcher is the cross-workspace registry (pick / add / toggle a workspace, mint a window), and opening a workspace window lands the user in the main SPA. Both honor the theme axes + canonical palette below, so a launcher served over a tunnel and the workspace UI on loopback read identically.
 
@@ -53,31 +38,11 @@ flowchart TB
 
 ## Frontend-only demo (marketing embed)
 
-Both SPAs also run with **no backend** on the public marketing site
-(`@chan/marketing`), so `chan.app` visitors get a live, interactive product tour
-instead of screenshots. This is a third serving path: not chan-server, but the
-static site embedding the *same* Svelte apps against in-memory mocks. Nothing is
-extracted or forked -- the terminal, editor, graph, and file browser stay in
-this package and are reused whole.
+Both SPAs also run with **no backend** on the public marketing site (`@chan/marketing`), so `chan.app` visitors get a live, interactive product tour instead of screenshots. This is a third serving path: not chan-server, but the static site embedding the *same* Svelte apps against in-memory mocks. Nothing is extracted or forked -- the terminal, editor, graph, and file browser stay in this package and are reused whole.
 
-The launcher demo came first: `@chan/launcher/demo` renders the real launcher
-`App` with `setBackend(createLauncherDemoApi())`, a backend-interface swap. The
-workspace app has no single backend interface (it hits `fetch` and WebSocket
-across ~65 endpoints and three sockets), so its demo swaps one level lower, at
-the **transport seam**: `api/transport.ts` routes every HTTP call through
-`chanFetch` and every socket through `createSocket`, both defaulting to the real
-`fetch` / `WebSocket`. A demo installs replacements before mount (`setFetchImpl`
-/ `setSocketFactory`); the in-memory mock lives in `src/demo/` (store, router,
-graph, search, fake PTY) and is seeded from `demo-workspace.json`, a build-time
-snapshot of a git repo. The default path is unchanged, so the two
-chan-server-embedded bundles above are byte-identical; only the demo installs a
-mock. `src/demo/graph.ts` reproduces chan-server's `/api/graph` node/edge id
-schemes and directory spine so the graph view cannot tell the sources apart.
+The launcher demo came first: `@chan/launcher/demo` renders the real launcher `App` with `setBackend(createLauncherDemoApi())`, a backend-interface swap. The workspace app has no single backend interface (it hits `fetch` and WebSocket across ~65 endpoints and three sockets), so its demo swaps one level lower, at the **transport seam**: `api/transport.ts` routes every HTTP call through `chanFetch` and every socket through `createSocket`, both defaulting to the real `fetch` / `WebSocket`. A demo installs replacements before mount (`setFetchImpl` / `setSocketFactory`); the in-memory mock lives in `src/demo/` (store, router, graph, search, fake PTY) and is seeded from `demo-workspace.json`, a build-time snapshot of a git repo. The default path is unchanged, so the two chan-server-embedded bundles above are byte-identical; only the demo installs a mock. `src/demo/graph.ts` reproduces chan-server's `/api/graph` node/edge id schemes and directory spine so the graph view cannot tell the sources apart.
 
-The workspace demo bundle (plus its multi-MB snapshot) is a **lazy chunk**: the
-landing page ships only the launcher; clicking any window tile dynamic-imports
-the workspace app and opens it in `WorkspaceDemoOverlay`. So the heavy editor /
-graph / terminal bundle never touches the marketing page load.
+The workspace demo bundle (plus its multi-MB snapshot) is a **lazy chunk**: the landing page ships only the launcher; clicking any window tile dynamic-imports the workspace app and opens it in `WorkspaceDemoOverlay`. So the heavy editor / graph / terminal bundle never touches the marketing page load.
 
 ```mermaid
 flowchart TB
@@ -114,28 +79,17 @@ The frontend has two independent theme dimensions. Both can change at runtime.
 
 The axes are orthogonal. Any combination of color scheme by editor theme is valid (6 combinations total). Only the color-scheme axis affects app chrome (panes, status bar, file tree, panels, modals); the editor-theme axis is scoped to the editor surface.
 
-A third, fixed dimension is the **syntax-highlight palette**. It is GitHub Primer
-(light or dark, branched off the color scheme) and is shared across all three
-editor themes, so a python snippet reads identically regardless of which document
-chrome is active. It paints fenced code blocks (per-language packs lazy-load) and
-whole files in Source mode. One deliberate Primer divergence is part of the
-contract: plain identifiers get no color because Primer's orange collides with
-chan's brand orange.
+A third, fixed dimension is the **syntax-highlight palette**. It is GitHub Primer (light or dark, branched off the color scheme) and is shared across all three editor themes, so a python snippet reads identically regardless of which document chrome is active. It paints fenced code blocks (per-language packs lazy-load) and whole files in Source mode. One deliberate Primer divergence is part of the contract: plain identifiers get no color because Primer's orange collides with chan's brand orange.
 
 ## Canonical semantic palette
 
 Each concept gets one hue across surfaces (graph node, file-tree row, info-pane accents, editor pill). Picking a hue per concept means the same item reads the same color whether you see it in the graph, the editor, or the inspector.
 
-Concept hues are stable across surfaces: document orange, media purple, tag
-green, contact/warning yellow, date/folder neutral grey, broken/error red,
-source royalblue, binary dark grey, language pink, and drafts yellow tint.
+Concept hues are stable across surfaces: document orange, media purple, tag green, contact/warning yellow, date/folder neutral grey, broken/error red, source royalblue, binary dark grey, language pink, and drafts yellow tint.
 
 ## Resolved values per surface
 
-Graph nodes, file-tree icons, and editor pills read from the same concept
-palette rather than inventing local hues. Some concepts have no representation
-on a given surface (for example tags do not have file-tree icons, and folders do
-not have editor pills).
+Graph nodes, file-tree icons, and editor pills read from the same concept palette rather than inventing local hues. Some concepts have no representation on a given surface (for example tags do not have file-tree icons, and folders do not have editor pills).
 
 There is no dedicated `--g-contact` token; the graph reads `--warn-text` directly for contact and mention nodes. Add one only if the graph ever needs to diverge from the warning hue.
 
@@ -145,8 +99,7 @@ Pill backgrounds (`--pill-*-bg`) are alpha tints of the concept hue (~0.15-0.20 
 
 ## Kind taxonomy
 
-The frontend defines one unified taxonomy used by every chip, tree icon, and
-inspector header glyph. Three families:
+The frontend defines one unified taxonomy used by every chip, tree icon, and inspector header glyph. Three families:
 
 - **FileKind**: things that exist as files in the workspace. `document` | `contact` | `text` | `media` | `binary` | `pending`.
 - **EntityKind**: graph-only entities (tokens extracted from markdown bodies, no file backing). `tag` | `mention` | `date`.
@@ -175,18 +128,11 @@ flowchart TD
 
 `classifyEntry(entry)` / `classifyFile(path, serverKind?)` is the single classifier. The server projects a `kind` discriminator on every regular file it lists, and that wire value wins whenever present. The path-only fallback runs only for bare paths held outside a tree listing (graph ghost rows, broken-link targets): images + PDFs are `media`, `.md` is `document`, `.txt` plus the source/config/shell extension set and well-known basenames (Makefile, LICENSE, ...) are `text`, everything else is `binary`. The extension sets mirror the server classifier and must be widened in lockstep. `pending` is a server-side state for unknown extensions awaiting the UTF-8 content sniff; it only reaches the SPA from the recursive whole-tree listing and renders neutrally.
 
-One chip component renders every kind. Inspector headers pass `block` (flex:1
-fill); the search results list passes `compact` (smaller font + fixed-width
-column). `ghost` and `dim` modify opacity for graph ghost rows and search
-filename-match rows respectively. Passing `onClick` renders the chip as a button
-(the "scope the graph to this file" affordance).
+One chip component renders every kind. Inspector headers pass `block` (flex:1 fill); the search results list passes `compact` (smaller font + fixed-width column). `ghost` and `dim` modify opacity for graph ghost rows and search filename-match rows respectively. Passing `onClick` renders the chip as a button (the "scope the graph to this file" affordance).
 
 ### Per-kind mapping
 
-Documents and source-like text share the document hue family but use different
-icons and labels. Contacts and mentions share the warning/contact palette; media,
-binary, tags, dates, and folders each use their corresponding concept hue and
-glyph.
+Documents and source-like text share the document hue family but use different icons and labels. Contacts and mentions share the warning/contact palette; media, binary, tags, dates, and folders each use their corresponding concept hue and glyph.
 
 `text` aliases the document orange in `colorVarFor` -- the two share the hue family and the visual distinction is icon + label, not color. The graph's source-file nodes use `--g-source` royalblue; the graph renderer owns that mapping, not the chip.
 
@@ -194,11 +140,7 @@ A `mention` shares the contact palette by design: a resolved mention points at a
 
 ## Functional and chrome variables
 
-The color-scheme axis owns app chrome: surfaces, text, lines, hover/selection
-states, functional colors, buttons, bubbles, shadows, and drafts tint. The
-editor-theme axis owns document chrome: body, headings, code, inline links, and
-block elements. Keep the axes separate so a color-scheme change does not imply a
-document-theme change.
+The color-scheme axis owns app chrome: surfaces, text, lines, hover/selection states, functional colors, buttons, bubbles, shadows, and drafts tint. The editor-theme axis owns document chrome: body, headings, code, inline links, and block elements. Keep the axes separate so a color-scheme change does not imply a document-theme change.
 
 ## Axis intersection
 
@@ -213,21 +155,14 @@ Slab bg and the H1/H2 hairline rule track the editor theme; the syntax palette o
 
 ## Adding a new editor theme
 
-1. Add a named editor-theme stylesheet. Override only the `--chan-editor-*`
-   tokens that should diverge from the neutral base; missing tokens fall through
-   to the color-scheme palette.
-2. Light goes under `:root[data-editor-theme="<name>"]`; dark goes under
-   `:root[data-editor-theme="<name>"][data-theme="dark"]` plus the descendant
-   `[data-theme="dark"]` form for per-surface overrides.
+1. Add a named editor-theme stylesheet. Override only the `--chan-editor-*` tokens that should diverge from the neutral base; missing tokens fall through to the color-scheme palette.
+2. Light goes under `:root[data-editor-theme="<name>"]`; dark goes under `:root[data-editor-theme="<name>"][data-theme="dark"]` plus the descendant `[data-theme="dark"]` form for per-surface overrides.
 3. Register the stylesheet with app startup.
-4. Add the value to the API type contract and register the option in the editor
-   config picker.
+4. Add the value to the API type contract and register the option in the editor config picker.
 5. Decide whether the theme wants the GitHub-style H1/H2 rule; opt in by setting `--chan-editor-h{1,2}-border-bottom` and `--chan-editor-h{1,2}-padding-bottom` (the neutral base defaults these to `none` / `0`).
 
 The new theme inherits the GitHub Primer syntax-highlight palette automatically; it is not part of the editor-theme contract.
 
 ## Change discipline
 
-Palette, editor-theme, syntax-highlight, serving-topology, and kind-taxonomy
-changes update this document in the same commit. When widening text/source
-extension handling, update the server classifier and frontend fallback together.
+Palette, editor-theme, syntax-highlight, serving-topology, and kind-taxonomy changes update this document in the same commit. When widening text/source extension handling, update the server classifier and frontend fallback together.

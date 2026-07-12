@@ -129,7 +129,7 @@ fn err_from_reset(e: &ResetError) -> Response {
 /// after taking the cell out, then poll `Arc::strong_count` until only
 /// our copy remains. Holding the write lock means no NEW handler can
 /// reborrow the workspace, so the count is monotonically non-increasing
-/// once the cell is gone — a `strong_count > 1` deadline expiry is a
+/// once the cell is gone -- a `strong_count > 1` deadline expiry is a
 /// genuine "an MCP session / detached task is still pinning the workspace".
 ///
 /// On Busy we restore the original `workspace_strong` as the cell (with

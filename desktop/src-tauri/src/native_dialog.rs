@@ -3,15 +3,15 @@
 //! Every desktop confirm used to go straight through `tauri_plugin_dialog`
 //! (rfd under the hood). The button ORDER is right, but rfd's async alert
 //! window never becomes *key*, so a Return keypress is never routed to the
-//! default button — the user must click. There is no plugin-level setter to
+//! default button -- the user must click. There is no plugin-level setter to
 //! fix it (traced to tauri-plugin-dialog 2.7.1 -> rfd 0.16.0).
 //!
 //! On macOS we therefore build an `NSAlert` directly, give its default
 //! (first/blue) button the Return key-equivalent, give the secondary button
 //! Escape, bring the app forward, and run it MODALLY. `runModal` makes the
 //! alert's window key and main and spins its own nested event loop, so Return
-//! reaches the default button and — unlike rfd's *blocking* show, which would
-//! wedge the outer event loop — it cannot deadlock the main thread (it pumps
+//! reaches the default button and -- unlike rfd's *blocking* show, which would
+//! wedge the outer event loop -- it cannot deadlock the main thread (it pumps
 //! itself, the same way `pdf.rs` pumps the run loop synchronously).
 //!
 //! Off macOS the plugin path is kept verbatim (rfd routes Return fine on
@@ -21,7 +21,7 @@
 //! `confirm` is callback-shaped like the old `.show(cb)` it replaces: the
 //! result callback runs on the main thread. On macOS the modal is scheduled
 //! via `run_on_main_thread`, so it fires on a fresh main-loop turn (after the
-//! calling window-close handler unwinds) — keeping the close path non-blocking
+//! calling window-close handler unwinds) -- keeping the close path non-blocking
 //! and the bury / destroy / hide side effects on the main thread exactly as
 //! before.
 
@@ -61,7 +61,7 @@ pub(crate) fn confirm(
         });
         if let Err(e) = scheduled {
             // Scheduling failed: the callback never runs, so a oneshot reply it
-            // captured drops and the caller maps that to an error — matching the
+            // captured drops and the caller maps that to an error -- matching the
             // old behaviour when `.show` could not be scheduled.
             tracing::warn!(error = %e, "scheduling native confirm dialog failed");
         }
@@ -123,7 +123,7 @@ fn run_native_alert(
     #[allow(deprecated)]
     NSApplication::sharedApplication(mtm).activateIgnoringOtherApps(true);
 
-    // Synchronous, self-pumping nested modal loop — safe on the main thread
+    // Synchronous, self-pumping nested modal loop -- safe on the main thread
     // (it does not depend on the outer event loop, so no deadlock).
     let response = alert.runModal();
     response == NSAlertFirstButtonReturn

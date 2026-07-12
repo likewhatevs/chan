@@ -504,7 +504,7 @@
     const hex = NAMED_PANE_HEX[color];
     document.documentElement.style.setProperty("--pane-highlight-color", hex);
     // Best-effort: a read-only / no-store serving surface answers 403/404.
-    // Swallow it — a failed persist must never break the menu or throw — but LOG
+    // Swallow it -- a failed persist must never break the menu or throw -- but LOG
     // the status so a persist FAILURE on a surface that DOES have a store (e.g. a
     // local desktop window whose per-tenant token is rejected by the launcher
     // bearer gate) is visible instead of silently lost.
@@ -1523,7 +1523,7 @@
         <!--
           File tabs are kept mounted for the same reason as terminals
           above: unmounting destroys the CM6 EditorView, and on remount
-          the decoration walker computes from a pre-layout viewport —
+          the decoration walker computes from a pre-layout viewport --
           on WKWebView the document then shows raw un-decorated
           markdown until a click, and scroll/caret/undo/FindBar state
           is rebuilt from scratch. Keeping the editor alive (hidden via

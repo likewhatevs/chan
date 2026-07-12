@@ -10,13 +10,13 @@
 // iframe src. The markdown sanitizer enforces this with a DOMPurify
 // hook (defense in depth against a raw <iframe> in user markdown), and
 // the Tauri WebView CSP `frame-src` lists the same hosts. Keep the list
-// minimal — every entry is an origin the app will frame.
+// minimal -- every entry is an origin the app will frame.
 
 export type EmbedKind = "youtube" | "maps";
 
 export interface EmbedInfo {
   kind: EmbedKind;
-  /// The iframe src — always https on an EMBED_IFRAME_HOSTS origin.
+  /// The iframe src -- always https on an EMBED_IFRAME_HOSTS origin.
   src: string;
   /// Human-readable iframe title (accessibility).
   title: string;

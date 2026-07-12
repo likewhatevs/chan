@@ -37,7 +37,7 @@ use tokio::sync::OnceCell;
 static HELD: OnceCell<HeldConn> = OnceCell::const_new();
 
 struct HeldConn {
-    // We never read from `_conn` — its job is to keep the underlying
+    // We never read from `_conn` -- its job is to keep the underlying
     // TCP session alive (and therefore one PG backend pinned) for
     // the lifetime of the test process. Naming with a leading
     // underscore so rustc / clippy don't flag the unused-field.

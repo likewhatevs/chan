@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# devserver-tunnel-e2e — cross-CONTAINER end-to-end for the chan devserver tunnel.
+# devserver-tunnel-e2e -- cross-CONTAINER end-to-end for the chan devserver tunnel.
 #
 # Stands up the REAL devserver-proxy-service and a REAL `chan devserver
 # --tunnel-url` in two SEPARATE sdme containers, then drives a request through
 # the proxy's PUBLIC surface, over the tunnel, into the devserver's mounted
 # workspace. A 200 carrying the workspace SPA (with the injected
-# <meta name="chan-prefix"> for the mounted prefix) is the proof — that request
+# <meta name="chan-prefix"> for the mounted prefix) is the proof -- that request
 # travelled host -> proxy:7002 -> (gate) -> tunnel -> chan devserver -> workspace.
 #
 # Topology (see zone-isolation-probe.sh + README for WHY one zone):
@@ -20,7 +20,7 @@
 #
 # Identity is a tiny stub on the proxy's loopback (the proxy validates the
 # tunnel PAT against it); the per-request gate cookie is self-minted with the
-# same DEVSERVER_GATE_SECRET. Both are auth shims — the binaries under test
+# same DEVSERVER_GATE_SECRET. Both are auth shims -- the binaries under test
 # (proxy + devserver + tunnel crates) are the real release builds.
 set -uo pipefail
 
@@ -70,7 +70,7 @@ say "preflight"
 [ -f "$STUB_PY" ] && [ -f "$MINT_PY" ] || die "missing helper scripts in $HERE"
 $SDME ps >/dev/null 2>&1 || die "sudo -n sdme not working"
 if ! $SDME fs ls 2>/dev/null | grep -qE "^${RFS}[[:space:]]"; then
-  info "runtime rootfs '$RFS' missing — building from $RFS_SDME (one-time)"
+  info "runtime rootfs '$RFS' missing -- building from $RFS_SDME (one-time)"
   ( cd "$HERE" && $SDME fs build -f "$RFS" "$(basename "$RFS_SDME")" ) >/tmp/e2e-rfs.log 2>&1 \
     || { tail -20 /tmp/e2e-rfs.log; die "rootfs build failed"; }
 fi

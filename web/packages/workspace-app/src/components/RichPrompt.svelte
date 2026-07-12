@@ -177,8 +177,8 @@
     } else {
       showTransientNote(
         phase === "rejected"
-          ? "queue full — try again"
-          : "connection lost — message may still be queued",
+          ? "queue full, try again"
+          : "connection lost, message may still be queued",
       );
     }
   }

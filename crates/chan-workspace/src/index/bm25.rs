@@ -105,7 +105,7 @@ impl Bm25Index {
         let writer = index.writer_with_options(writer_options)?;
         // Manual reload, not OnCommit*: `commit` below reloads the
         // reader synchronously itself, so tantivy's commit watcher is
-        // redundant — and on a long-lived multi-workspace process (the
+        // redundant -- and on a long-lived multi-workspace process (the
         // devserver) every OnCommit reader spins up a `MmapDirectory`
         // file_watcher holding an inotify fd, which accumulates across
         // mount/unmount churn until the process hits EMFILE. Manual keeps

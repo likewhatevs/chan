@@ -1,4 +1,4 @@
-//! GET /ws — bidirectional WebSocket pump.
+//! GET /ws -- bidirectional WebSocket pump.
 //!
 //! Server -> client: the global JSON-envelope broadcast (`watch`,
 //! `progress`, `window_command`, ...) plus this socket's per-scope `fs`
@@ -27,7 +27,7 @@ use crate::window_transfers::TransferGuard;
 /// same per-window id that keys the `/api/session` blob. Tagged
 /// sockets register with `WindowPresence` so `GET /api/windows` can
 /// report which windows are currently connected. Absent on untagged
-/// clients (tests, curl) — they simply don't appear in presence.
+/// clients (tests, curl) -- they simply don't appear in presence.
 #[derive(Deserialize)]
 pub struct WsQuery {
     w: Option<String>,
@@ -148,7 +148,7 @@ enum ClientFrame {
     Unsub {
         dir: String,
     },
-    /// `{ "type": "transfers", "active": <n> }` — this window's current
+    /// `{ "type": "transfers", "active": <n> }` -- this window's current
     /// in-flight transfer count. Applied to the socket's `TransferGuard`;
     /// ignored on an untagged socket (no `?w=`, hence no guard).
     Transfers {

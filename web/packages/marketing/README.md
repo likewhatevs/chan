@@ -1,8 +1,6 @@
 # @chan/marketing
 
-Source for the public `chan.app` static site, a member of the `./web`
-npm-workspaces monorepo. The publishable artifact is generated into `dist/`; do
-not publish the source tree directly.
+Source for the public `chan.app` static site, a member of the `./web` npm-workspaces monorepo. The publishable artifact is generated into `dist/`; do not publish the source tree directly.
 
 ## Layout
 
@@ -66,24 +64,17 @@ Then open `http://localhost:8080/`.
 
 ## Embedded Demo
 
-The site runs the launcher SPA frontend-only, with no backend, so the landing
-page can show a live launcher widget. The full workspace demo source remains in
-this package, but it is not wired into the public marketing build.
+The site runs the launcher SPA frontend-only, with no backend, so the landing page can show a live launcher widget. The full workspace demo source remains in this package, but it is not wired into the public marketing build.
 
-- The landing page eager-loads `launcher-demo.ts`, which mounts the real
-  launcher (`@chan/launcher/demo`) as the hero widget.
-- The launcher widget is mounted without an `onOpenWindow` hook, so clicking a
-  window row cannot open the workspace app demo.
-- `workspace-demo.ts` and `WorkspaceDemoOverlay.svelte` are retained as dormant
-  source files for a future re-enable.
+- The landing page eager-loads `launcher-demo.ts`, which mounts the real launcher (`@chan/launcher/demo`) as the hero widget.
+- The launcher widget is mounted without an `onOpenWindow` hook, so clicking a window row cannot open the workspace app demo.
+- `workspace-demo.ts` and `WorkspaceDemoOverlay.svelte` are retained as dormant source files for a future re-enable.
 
 `scripts/build.mjs` produces, under `dist/assets/`:
 
 - `launcher-demo.{js,css}` -- the eager launcher entry.
 
-The build serves the demo bundle from `base: "/assets/"` and scopes the
-launcher's global CSS to `.launcher-demo-frame` so it can never restyle the
-marketing page.
+The build serves the demo bundle from `base: "/assets/"` and scopes the launcher's global CSS to `.launcher-demo-frame` so it can never restyle the marketing page.
 
 ## Release verification
 
@@ -134,7 +125,4 @@ Desktop packages are downloaded directly as release artifacts. They are not inst
 
 ## Workspace boundary
 
-This site is a member of the `./web` npm-workspaces monorepo, but unlike the
-embedded SPAs it is not baked into any binary: it does not participate in `cargo
-build`, `cargo test`, or the embedded editor bundle, and it deploys to `chan.app`
-via the release/pages workflows.
+This site is a member of the `./web` npm-workspaces monorepo, but unlike the embedded SPAs it is not baked into any binary: it does not participate in `cargo build`, `cargo test`, or the embedded editor bundle, and it deploys to `chan.app` via the release/pages workflows.

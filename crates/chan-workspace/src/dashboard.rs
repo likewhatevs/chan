@@ -1,7 +1,7 @@
 //! Per-workspace dashboard config: the screensaver overlay plus the
 //! chan-report and semantic-search opt-ins. Persisted at
 //! `<workspace-metadata-root>/dashboard.toml`, separate from the search
-//! `IndexConfig` — these are workspace feature/presentation toggles, not
+//! `IndexConfig` -- these are workspace feature/presentation toggles, not
 //! search-index cache, so a search reindex or vector wipe must not reset them.
 //! The SPA reaches every field through dedicated chan-server endpoints
 //! (`/api/screensaver/state`, `/api/index/{reports,semantic}/state`) and the
@@ -56,7 +56,7 @@ pub struct DashboardConfig {
     #[serde(default)]
     pub screensaver_theme: ScreensaverTheme,
     /// Per-workspace PIN hash; `None` when no PIN is set (the overlay still
-    /// arms but auto-dismisses on any input). Stored verbatim — the SPA does
+    /// arms but auto-dismisses on any input). Stored verbatim -- the SPA does
     /// PBKDF2 client-side and the verify path is a byte-equality compare.
     /// NEVER serialized back over the wire in plaintext: the
     /// `/api/screensaver/state` endpoint reports `pin_set: bool` only.

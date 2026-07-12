@@ -74,7 +74,7 @@ impl EmbeddedServer {
             chan_server::route_builder(),
         ));
         // Register the host's self-handle so its per-tenant control sockets can
-        // reach it for teardown — otherwise the desktop's tenants report
+        // reach it for teardown -- otherwise the desktop's tenants report
         // `UnserveMode::Unsupported` and `chan close` fails. Parity with the
         // devserver path's `host.install_self()`.
         host.install_self();
@@ -83,11 +83,11 @@ impl EmbeddedServer {
         chan_server::install_local_window_registry(&host);
         // Install the local library's workspace on/off overlay
         // (~/.chan/workspaces.json), so the boot path re-serves what was on and
-        // toggles persist their on/off — the same store the devserver uses.
+        // toggles persist their on/off -- the same store the devserver uses.
         chan_server::install_local_workspace_overlay(&host);
         // Install the launcher's devserver registry over the desktop config so
         // the `/api/library/devservers` CRUD persists to the SAME config the
-        // desktop reads (the shared store handle) — mirror of the workspace
+        // desktop reads (the shared store handle) -- mirror of the workspace
         // overlay above. The headless devserver / plain `chan open` install
         // none (empty list, 404 mutation).
         host.install_devserver_registry(Arc::new(DevserverConfigRegistry::new(
@@ -113,7 +113,7 @@ impl EmbeddedServer {
         )));
         // Install the launcher SPA as the loopback's root fallback so the
         // desktop launcher loads the same web-launcher served at `/` on every
-        // surface — parity with the devserver's `build_devserver_app`. Without
+        // surface -- parity with the devserver's `build_devserver_app`. Without
         // it the root `/` 404s (`host_dispatch` only matches tenant prefixes).
         //
         // The loopback serves the FULL launcher surface, workspace mutation
@@ -197,15 +197,15 @@ impl EmbeddedServer {
     /// True when the window whose `?w=` session id is `window_id` has ≥1
     /// in-flight file transfer (upload/download). The transfer-close guard
     /// (serve.rs `CloseRequested`) queries it to prompt before closing a window
-    /// mid-transfer — the mirror of `workspace_window_has_live_shells`.
+    /// mid-transfer -- the mirror of `workspace_window_has_live_shells`.
     ///
     /// Keyed on the `?w=` window id (NOT the native window label: they diverge
     /// for watcher-opened windows, where the label is `{library_id}::{window_id}`
-    /// — serve.rs:750). The serving tenant's prefix isn't on the close handler
+    /// -- serve.rs:750). The serving tenant's prefix isn't on the close handler
     /// (`config_key` is empty for watcher windows), so resolve it from the live
     /// window records here. Local library only: a remote/devserver window's
     /// transfers live on that server, so it's absent from these records and reads
-    /// `false` — correct, it's not ours to guard.
+    /// `false` -- correct, it's not ours to guard.
     pub fn window_has_active_transfer(&self, window_id: &str) -> bool {
         let records = self.local_window_records();
         match tenant_prefix_for_window(&records, window_id) {
@@ -334,7 +334,7 @@ impl EmbeddedServer {
             return Ok(url.clone());
         }
         // Persist each standalone-terminal window's pane layout on disk (keyed
-        // by `?w=<window_id>`) so it restores across a desktop relaunch — with
+        // by `?w=<window_id>`) so it restores across a desktop relaunch -- with
         // fresh shells, since the PTYs don't survive. Best-effort: if the dir
         // can't be made the tenant falls back to its in-memory layout store.
         let session_dir = local_terminal_session_dir().await;
@@ -464,7 +464,7 @@ impl EmbeddedServer {
         self.host.assemble_window_records()
     }
 
-    /// The LOCAL library's window records only — the merged set
+    /// The LOCAL library's window records only -- the merged set
     /// ([`assemble_window_records`](Self::assemble_window_records)) minus
     /// connected devservers' rows. THE source for consumers that reason about
     /// local windows (the local native watcher, the active-transfer close guard,
@@ -482,7 +482,7 @@ impl EmbeddedServer {
 
     /// The aggregate window-set change signal (registry mint/discard +
     /// tenant on/off + presence) the watcher's feed awaits. NOT the raw
-    /// registry change signal — that misses tenant transitions.
+    /// registry change signal -- that misses tenant transitions.
     pub fn library_change_notify(&self) -> Arc<Notify> {
         self.host.library_change_notify()
     }
@@ -495,7 +495,7 @@ impl EmbeddedServer {
     }
 
     /// Fire the library-change signal so the launcher's window + workspace watch
-    /// feeds re-push — the desktop calls this when its devserver feed (window
+    /// feeds re-push -- the desktop calls this when its devserver feed (window
     /// snapshot or workspace cache) changes.
     pub fn signal_library_change(&self) {
         self.host.signal_library_change();
@@ -512,7 +512,7 @@ impl EmbeddedServer {
     }
 
     /// The pane-highlight colour for a window of `library_id`: the host
-    /// resolves the two sources behind one call — local (the installed
+    /// resolves the two sources behind one call -- local (the installed
     /// [`LocalColorStore`](chan_server::LocalColorStore)) vs a devserver
     /// (`DevserverEntry.color` matched by `library_id` in the devserver registry).
     /// `None` -> the editor falls back to the default accent. Injected as `?pane=`
@@ -530,7 +530,7 @@ impl EmbeddedServer {
 
     /// Mint a window into the local library registry and return its assembled
     /// record. The minted record fires the aggregate change signal, so the
-    /// window watcher's feed surfaces it and opens its native window — the
+    /// window watcher's feed surfaces it and opens its native window -- the
     /// registry is the sole window-creation authority (a minted window can
     /// never be double-opened). A workspace window resolves its live tenant
     /// (the workspace must be running) for a prefix/token to attach to.
@@ -561,7 +561,7 @@ impl EmbeddedServer {
     /// time this library is opened with an empty window registry, then persist a
     /// marker so it never re-mints. Returns the minted record, or `None` when
     /// nothing was minted (the registry already has windows, or the marker is set
-    /// — the user closed the only terminal, so reopening comes up with none). The
+    /// -- the user closed the only terminal, so reopening comes up with none). The
     /// minted record fires the aggregate change signal, so the watcher opens its
     /// native window. The boot path calls this instead of an unconditional mint.
     pub fn ensure_first_open_terminal(&self) -> Result<Option<WindowRecord>, String> {
@@ -616,9 +616,9 @@ fn map_open_error(key: &str, e: chan_server::Error) -> String {
 /// On-disk dir for the standalone `/terminal` tenant's per-window layout blobs
 /// (`~/.chan/terminal-sessions`, created on first use). Routed through
 /// `chan_workspace::paths::config_dir` (the single config-dir authority) so a
-/// `CHAN_HOME` override isolates a smoke instance — byte-identical to the old
+/// `CHAN_HOME` override isolates a smoke instance -- byte-identical to the old
 /// inlined `~/.chan/terminal-sessions` when `CHAN_HOME` is unset. `None` only if
-/// the dir can't be created — the tenant then keeps layout in-memory (it just
+/// the dir can't be created -- the tenant then keeps layout in-memory (it just
 /// won't persist across relaunch).
 async fn local_terminal_session_dir() -> Option<std::path::PathBuf> {
     let dir = chan_workspace::paths::config_dir().join("terminal-sessions");
@@ -704,7 +704,7 @@ mod tests {
     #[test]
     fn tenant_prefix_for_window_resolves_by_session_id_not_label() {
         // The active-transfer guard keys on the `?w=` window id, which diverges
-        // from the native `local::w-2` label — resolution is by window_id.
+        // from the native `local::w-2` label -- resolution is by window_id.
         let records = vec![rec("w-1", "/workspace-aaa"), rec("w-2", "/workspace-bbb")];
         assert_eq!(
             tenant_prefix_for_window(&records, "w-2").as_deref(),

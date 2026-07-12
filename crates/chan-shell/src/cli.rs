@@ -167,7 +167,7 @@ pub enum ShellAction {
         pretty: bool,
     },
     /// Window registry operations. `cs window list` (or `cs w l`) shows the
-    /// library's authoritative window set — every window across every tenant,
+    /// library's authoritative window set -- every window across every tenant,
     /// with its `connected` flag (a live event socket is tagged with it right
     /// now, including windows chan-desktop has hidden via the close button).
     #[command(infer_subcommands = true)]
@@ -2385,7 +2385,7 @@ mod tests {
 
     #[test]
     fn window_subcommand_prefixes_are_unambiguous() {
-        // `infer_subcommands` resolves each verb from a unique prefix — a
+        // `infer_subcommands` resolves each verb from a unique prefix -- a
         // regression here is a runtime break clap won't flag at compile
         // time. Note `hide` needs "hi": a bare "h" is ambiguous with the
         // auto-generated `help` subcommand, so it (correctly) does NOT

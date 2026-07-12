@@ -64,7 +64,7 @@
 
 *, *::before, *::after { box-sizing: border-box; }
 html, body { margin: 0; padding: 0; height: 100%; }
-/* App-shell layout: the window is a flex column — a non-scrolling
+/* App-shell layout: the window is a flex column -- a non-scrolling
    header (and the persistent banner above it) plus `main` as the
    single scroll container. This replaces the old dual-sticky setup
    (sticky header + sticky `th` at a hardcoded top:53px) that left a
@@ -504,12 +504,12 @@ table.workspaces tbody tr:hover { background: var(--hover-bg); }
    the first child of <body> (above the header) so it does not
    disappear with the next list re-render while the embedded host
    registers or forgets a workspace. As a non-scrolling flex child of
-   the body column it pins at the top on its own — no sticky needed. */
+   the body column it pins at the top on its own -- no sticky needed. */
 .status-banner.persistent {
   flex: 0 0 auto;
   font-weight: 500;
 }
-/* Toggle switch disabled state — the regular `disabled` attribute
+/* Toggle switch disabled state -- the regular `disabled` attribute
    on the inner checkbox only stops events; the slider is rendered
    from its sibling and needs explicit visual feedback. */
 .switch input[disabled] + .slider {
@@ -517,7 +517,7 @@ table.workspaces tbody tr:hover { background: var(--hover-bg); }
   opacity: 0.5;
 }
 
-/* Toggle switch — keeps the visual language of @chan/workspace-app's small
+/* Toggle switch -- keeps the visual language of @chan/workspace-app's small
    in-line controls (assistant on/off, etc.). */
 .switch {
   position: relative;

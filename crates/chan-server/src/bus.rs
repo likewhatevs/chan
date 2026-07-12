@@ -3,7 +3,7 @@
 //!
 //! Both producers fan into one channel; each frame carries a `type`
 //! discriminator so the frontend can route on it. Watcher events also
-//! get forwarded to the indexer's raw-event channel — the indexer
+//! get forwarded to the indexer's raw-event channel -- the indexer
 //! does NOT honor the self-write dedupe, since in-app saves must
 //! reindex.
 
@@ -106,7 +106,7 @@ pub struct SubId(u64);
 /// by first-degree directory match and delivers each frame only to the
 /// sockets subscribed to the matching scope. "Tearing down the
 /// watcher" maps here to "drop the scope's bookkeeping and stop
-/// emitting frames for it" — the lifecycle and the
+/// emitting frames for it" -- the lifecycle and the
 /// sub1/sub2/unsub1/unsub2 refcount are identical to the real-OS-watcher
 /// design, just without the inotify-watch-count pressure on big trees.
 ///

@@ -140,9 +140,9 @@ pub struct AppState {
     /// window closes and the tenant is torn down. Unused on workspace
     /// tenants, which take the disk path in the session handlers.
     pub ephemeral_sessions: Mutex<HashMap<String, Vec<u8>>>,
-    /// On-disk per-window session-blob store for a PERSISTED terminal tenant —
+    /// On-disk per-window session-blob store for a PERSISTED terminal tenant  --
     /// the desktop's standalone `/terminal` tenant and a standalone devserver
-    /// terminal — so its pane/tab layout survives a relaunch (with fresh shells;
+    /// terminal -- so its pane/tab layout survives a relaunch (with fresh shells;
     /// the PTYs themselves don't survive). `Some(dir)` ⇒ the session handlers
     /// read/write [`crate::terminal_blob`] at `dir`, keyed by the
     /// `?w=<window-label>`, instead of `ephemeral_sessions`; `None` ⇒ the
@@ -171,7 +171,7 @@ pub struct AppState {
     /// Random id minted when this tenant was built, exposed via
     /// `GET /api/health`. The SPA compares it across `/ws` reconnects:
     /// a CHANGED id means the process behind the window was restarted
-    /// (a remote `chan open` bounced) — its PTYs and in-memory state
+    /// (a remote `chan open` bounced) -- its PTYs and in-memory state
     /// are gone, so the SPA reloads itself instead of sitting on a
     /// stale view with stuck terminals until a manual Cmd+R.
     pub instance_id: String,

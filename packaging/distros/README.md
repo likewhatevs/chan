@@ -29,7 +29,7 @@ COPR (`https://copr.fedorainfracloud.org`, project `fiorix/chan`, ID 245281):
 - Local iteration without a release: `make copr-srpm`, then `copr-cli build fiorix/chan target/distros/srpm/<pkg>-*.src.rpm` (token from the COPR API page in `~/.config/copr`), or `make copr-build`, or curl the custom webhook manually.
 - If a stable chroot's rust trails the workspace MSRV, enable an external rust repo for that chroot in the project settings, or wait for the distro update; rawhide tracks upstream closely.
 
-Launchpad (`ppa:fiorix/chan`, processors amd64 + arm64 — Launchpad defaults to amd64 only; the checkbox is in the PPA's "Change details"):
+Launchpad (`ppa:fiorix/chan`, processors amd64 + arm64 -- Launchpad defaults to amd64 only; the checkbox is in the PPA's "Change details"):
 
 - The upload signing key is registered with the Launchpad account and lives in the repo secrets for CI (below); locally debsign uses `DEBSIGN_KEY` (or its default key). Local signing needs a tty pinentry: prime gpg-agent from a real terminal first (any one-off `gpg --clearsign`) when driving the build from an agent shell, or `debsign` the staged `*_source.changes` manually.
 - Host prerequisites for local build/sign/upload: `devscripts`, `debhelper`, `dpkg-dev`, `dput` (`debuild -S` runs `debian/rules clean`, which needs debhelper's `dh`).

@@ -3,12 +3,12 @@
 //! A standalone terminal (`kind=terminal`) has no workspace, so `cs upload` /
 //! `cs download` cannot anchor at a workspace root. Per the scope decision,
 //! transfers resolve against the terminal session's working directory with the
-//! reach of the shell's own uid — there is no extra sandbox wall, since the
+//! reach of the shell's own uid -- there is no extra sandbox wall, since the
 //! terminal already grants that filesystem access. The `cs` CLI absolutizes the
 //! path against its cwd (the session cwd) before it reaches the control socket;
 //! the control socket sends that absolute path with its leading `/` stripped so
 //! the SPA's existing transfer bubble builds clean `/api/files/...` URLs. These
-//! handlers — mounted only on the terminal tenant — re-root that path at `/` and
+//! handlers -- mounted only on the terminal tenant -- re-root that path at `/` and
 //! read or write it directly, so no SPA change is needed.
 //!
 //! Both directions pre-flight access before doing any work (fail fast, no
@@ -75,7 +75,7 @@ pub(crate) fn verify_readable_fs(abs: &Path) -> Result<(), String> {
 
 /// Pre-flight for upload: `dir` exists, is a directory, and accepts a new
 /// entry. The writability check probes with a temp file it removes immediately
-/// — the only check that also catches read-only mounts and ACLs a mode-bit test
+/// -- the only check that also catches read-only mounts and ACLs a mode-bit test
 /// misses, and the same operation `atomic_write` performs on every real write.
 /// On failure nothing is written, so the caller can bail before transferring.
 pub(crate) fn verify_writable_dir(dir: &Path) -> Result<(), String> {
@@ -94,7 +94,7 @@ pub(crate) fn verify_writable_dir(dir: &Path) -> Result<(), String> {
 /// A `std::io::Write` that forwards each tar chunk to a streaming HTTP body
 /// over an mpsc channel. `blocking_send` provides backpressure (it blocks until
 /// the response reader drains) and is also the cancel signal: once the client
-/// disconnects the receiver drops, the send fails, and the tar build stops —
+/// disconnects the receiver drops, the send fails, and the tar build stops --
 /// nothing is staged on disk, so a cancelled download leaves no trace.
 pub(crate) struct TarChannelWriter {
     tx: mpsc::Sender<std::io::Result<Bytes>>,
@@ -239,7 +239,7 @@ struct TerminalUploadResponse {
 }
 
 /// `POST /api/files/upload` on the terminal tenant: write the uploaded file into
-/// the cwd / uid-scoped `dir`. No replace (`path`) flow — the slim tenant has no
+/// the cwd / uid-scoped `dir`. No replace (`path`) flow -- the slim tenant has no
 /// file browser. Mounted only on the terminal router, so `dir` is absolute.
 pub async fn api_terminal_upload_file(mut multipart: Multipart) -> Response {
     let mut chosen: Option<(String, Vec<u8>)> = None;
@@ -326,7 +326,7 @@ mod tests {
             abs_from_terminal_path("home/u/proj/foo.txt"),
             PathBuf::from("/home/u/proj/foo.txt")
         );
-        // Defensive: a leading slash (shouldn't happen — the control socket
+        // Defensive: a leading slash (shouldn't happen -- the control socket
         // strips it) is tolerated, not doubled.
         assert_eq!(
             abs_from_terminal_path("/etc/hosts"),

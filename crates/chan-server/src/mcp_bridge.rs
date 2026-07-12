@@ -14,8 +14,8 @@
 //! stdin/stdout through it. No second workspace open, no flock contention.
 //!
 //! Transport: the bridge reuses the control socket's cross-platform
-//! [`transport`](crate::control_socket::transport) module — a Unix-domain
-//! socket on unix, a named pipe on Windows — so MCP is reachable on both.
+//! [`transport`](crate::control_socket::transport) module -- a Unix-domain
+//! socket on unix, a named pipe on Windows -- so MCP is reachable on both.
 //! `chan_llm::mcp::Server::serve_io` is generic over `AsyncRead + AsyncWrite`,
 //! so the platform-specific stream halves plug straight in with no chan-llm
 //! change.

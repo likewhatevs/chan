@@ -19,7 +19,7 @@ use axum::Router;
 use serde_json::{json, Value};
 use sqlx::postgres::{PgPool, PgPoolOptions};
 
-/// Single-connection admin pool — see profile-tests for the
+/// Single-connection admin pool -- see profile-tests for the
 /// rationale (default pool size * parallel tests blows past
 /// Postgres' max_connections).
 async fn admin_pool(url: &str) -> PgPool {
@@ -793,7 +793,7 @@ async fn share_landing_unauthed_stashes_redirect() {
     // Now log in. After the callback, the redirect target should be
     // the stashed share URL, not "/".
     let uid = fake_user_id();
-    // happy_login asserts location == "/" — bypass it and run the
+    // happy_login asserts location == "/" -- bypass it and run the
     // OAuth steps manually so we can inspect the real location.
     let (_, _, _, _) = c.send(Method::GET, "/auth/github", None).await;
     // Pull state by re-reading the redirect from a fresh /auth call:
@@ -919,7 +919,7 @@ async fn share_landing_root_unauthed_redirects_to_login() {
 async fn share_landing_root_owner_minted_jwt_redirect() {
     // Whole-devserver open is OWNER-ONLY this round: the owner opening their
     // OWN devserver (caller == owner) mints the entry JWT and redirects to
-    // the proxy ROOT, where the launcher is served — the per-workspace flow
+    // the proxy ROOT, where the launcher is served -- the per-workspace flow
     // minus the tenant path.
     let app = TestApp::new().await;
     let mut c = Client::new(&app);
@@ -958,7 +958,7 @@ async fn share_landing_root_owner_minted_jwt_redirect() {
         location.starts_with("https://owner-handle.devserver.chan.app/?t="),
         "got {location}"
     );
-    // Root open lands at the devserver ROOT — no `/{workspace}/` segment.
+    // Root open lands at the devserver ROOT -- no `/{workspace}/` segment.
     assert!(
         !location.contains("/photos/"),
         "root open must not carry a workspace segment: {location}"
@@ -969,7 +969,7 @@ async fn share_landing_root_owner_minted_jwt_redirect() {
 #[tokio::test]
 async fn share_landing_root_grantee_denied() {
     // Owner-only gate: a GRANTEE (caller != owner) does NOT get
-    // whole-devserver open — they keep the per-workspace share landing. 404
+    // whole-devserver open -- they keep the per-workspace share landing. 404
     // (same shape as unknown-handle) so it can't probe ownership. The gate
     // fires before any devserver lookup, so no live-devserver/access mocks.
     let app = TestApp::new().await;

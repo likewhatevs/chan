@@ -30,7 +30,7 @@ The primary security boundary in chan is the `chan-workspace` crate, which sandb
 * Non-regular files (FIFOs, sockets, devices, etc.) are refused.
 * Writes are atomic via tempfile + rename.
 
-Bugs that bypass this contract — letting a caller read, write, or otherwise access files outside the registered workspace root — are treated as high severity.
+Bugs that bypass this contract -- letting a caller read, write, or otherwise access files outside the registered workspace root -- are treated as high severity.
 
 Other in-scope areas:
 

@@ -952,7 +952,7 @@
           // terminal. Under Option A the dead tab vanishes automatically; if
           // the window is left with no durable content, the save below then
           // deletes its blob (terminal-only windows are ephemeral). Only
-          // `explicit` removes the tab — `idle`/`shutdown`/`workspace`/`error`
+          // `explicit` removes the tab -- `idle`/`shutdown`/`workspace`/`error`
           // keep it (reconnect safety), and `exit` keeps it behind the
           // "press Ctrl+D to read output" affordance below.
           removeExplicitlyClosedTerminalTab(tab.id);
@@ -1016,7 +1016,7 @@
       }
       if (status !== "exited") status = "closed";
       // Socket gone: any in-flight prompt can no longer observe its
-      // delivery — fail it (bubble unlocks, keeps text, labels honestly;
+      // delivery -- fail it (bubble unlocks, keeps text, labels honestly;
       // the message may still be queued server-side). The badge zeroes and
       // re-syncs from the session frame on reconnect.
       failPendingPrompt(tab);
@@ -1216,8 +1216,8 @@
   /// OS file dropped on this terminal: type the dropped files' absolute
   /// paths at the cursor, shell-escaped and space-separated (macOS
   /// Terminal behavior). The paths come from the desktop
-  /// `read_dropped_paths` IPC — the DOM File API never exposes OS
-  /// paths — so this is desktop-only by construction: in a plain
+  /// `read_dropped_paths` IPC -- the DOM File API never exposes OS
+  /// paths -- so this is desktop-only by construction: in a plain
   /// browser (or a window kind whose ACL refuses the IPC)
   /// readDroppedPaths() resolves to [] and the drop is a silent no-op.
   /// preventDefault always: with the handler owning the drop, the
@@ -1962,7 +1962,7 @@
   <!-- data-file-drop-zone exempts the terminal from the global drop
        guard's not-allowed cursor; onTerminalFileDrop owns the drop
        (path-print on desktop, silent no-op in a plain browser). The
-       div is xterm's mount, not an interactive control — xterm
+       div is xterm's mount, not an interactive control -- xterm
        manages its own accessibility tree inside. -->
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div

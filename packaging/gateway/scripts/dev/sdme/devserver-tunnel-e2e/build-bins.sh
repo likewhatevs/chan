@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Build the two release binaries the e2e needs — devserver-proxy-service and
-# chan — inside an sdme container that carries the rust+node toolchain
+# Build the two release binaries the e2e needs -- devserver-proxy-service and
+# chan -- inside an sdme container that carries the rust+node toolchain
 # (gateway-build rootfs), then copy them to the host. The binaries run in the
 # zone containers, which are Ubuntu, so building them in an Ubuntu container
 # keeps the glibc match (the host has no rust toolchain anyway).
@@ -64,4 +64,4 @@ echo "==> [6/6] copy binaries to ${OUT_DIR}"
 $SDME cp "${CONTAINER}:/root/chan/gateway/target/release/devserver-proxy-service" "${OUT_DIR}/"
 $SDME cp "${CONTAINER}:/root/chan/target/release/chan" "${OUT_DIR}/"
 ls -lh "$OUT_DIR"
-echo "==> done — now run ./run.sh"
+echo "==> done -- now run ./run.sh"

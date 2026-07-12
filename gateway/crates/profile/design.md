@@ -95,9 +95,7 @@ The router splits into three sub-routers:
 - `/v1/admin/*`: gated by `admin_auth` middleware. Only `PROFILE_ADMIN_TOKEN` admits.
 - `/healthz`: no auth.
 
-All bearer comparisons run through `subtle::ConstantTimeEq` via the shared
-`bearer_eq` helper. Both checks always run on the service API so a wrong token
-cannot oracle which leg matched first.
+All bearer comparisons run through `subtle::ConstantTimeEq` via the shared `bearer_eq` helper. Both checks always run on the service API so a wrong token cannot oracle which leg matched first.
 
 profile-service holds a `WorkspaceAdminClient` (from `gateway_common::workspace_admin_client`) when `DEVSERVER_ADMIN_URL` and `DEVSERVER_ADMIN_TOKEN` are set. The block flow fires `kill_user_tunnels` server-side at the same moment `blocked_at` is written, so live devserver-proxy registrations die without an extra hop from the operator CLI.
 
@@ -126,8 +124,7 @@ New users get `u<12 hex chars from the row id>` as a placeholder handle. identit
 
 ### Rename cap of 4
 
-`update_username` performs the compare-and-swap update and the "rename to current
-value" no-op case in one statement.
+`update_username` performs the compare-and-swap update and the "rename to current value" no-op case in one statement.
 
 When the CTE returns no rows the handler runs one follow-up SELECT to distinguish "user not found" (404) from "rename cap reached" (409). Collapsing the original two-statement diagnosis into the CTE closes the TOCTOU window where a concurrent rename could change state between the CAS UPDATE and the diagnostic SELECT. The unique index on `lower(username)` still raises `23505` on the rare name collision, which surfaces as 409 with the database's error message.
 

@@ -1185,7 +1185,7 @@
     // Keep-alive pause: a hidden graph's host sets `paused`. Bail before
     // any paint/fit work and null the handle so the loop is genuinely
     // stopped (the resume effect re-arms it via requestAnimationFrame,
-    // never start() — so the transform + sim are untouched).
+    // never start() -- so the transform + sim are untouched).
     if (paused) {
       rafId = null;
       return;
@@ -1583,7 +1583,7 @@
   /// flips false. The loop short-circuited itself to a stop while
   /// hidden (rafId nulled in loop()), and `open` stayed latched true so
   /// the open effect above never tore the sim down. Re-arm WITHOUT
-  /// start() — the pane may have resized while the tab was hidden, so
+  /// start() -- the pane may have resized while the tab was hidden, so
   /// resize() first to match the canvas backing store to the new size
   /// (it leaves the pan/zoom transform alone unless a first-fit is
   /// still pending), then restart the rAF loop. No transform reset, no

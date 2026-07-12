@@ -26,7 +26,7 @@
 //!
 //! v1 sign-out is local-only: we drop the keychain entry. Server-
 //! side revoke needs the id.chan.app session, which only the user's
-//! browser has — wiring that is a follow-up.
+//! browser has -- wiring that is a follow-up.
 
 use std::sync::{Mutex, OnceLock};
 
@@ -64,7 +64,7 @@ pub struct StoredPat {
 }
 
 /// Public view of the sign-in state. `secret` is intentionally never
-/// surfaced to the frontend — only `is_signed_in` and the metadata
+/// surfaced to the frontend -- only `is_signed_in` and the metadata
 /// the user can use to decide whether to re-mint.
 #[derive(Debug, Clone, Serialize)]
 pub struct AuthStatus {
@@ -419,7 +419,7 @@ fn classify_callback(raw: &str, pending: &mut Option<PendingAuth>) -> CallbackAc
 }
 
 /// Local sign-out. Clears the keychain entry. Server-side revoke is
-/// a follow-up — it needs the id.chan.app session which only the
+/// a follow-up -- it needs the id.chan.app session which only the
 /// user's browser has access to.
 #[tauri::command]
 pub fn signout(app: AppHandle) -> Result<AuthStatus, String> {

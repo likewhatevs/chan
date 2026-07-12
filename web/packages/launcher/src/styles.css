@@ -103,7 +103,7 @@ body {
   cursor: default;
 }
 
-/* Square icon button — the registry rows' per-action affordances (new window,
+/* Square icon button -- the registry rows' per-action affordances (new window,
    on/off, new terminal, edit, connect/disconnect, forget). `.on` tints it the
    accent (an active toggle); `.locked` flashes yellow for a foreign lock;
    `.lost` follows a broken connection state; `.danger` reddens it on hover

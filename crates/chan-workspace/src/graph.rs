@@ -76,7 +76,7 @@ const READER_POOL_SIZE: u32 = 4;
 /// and per-file staging), so the inspector/backlinks/graph reads a
 /// workspace window fires on file-open queue behind it. With the 30s
 /// default each of those reads parks for up to half a minute and the
-/// whole graph-reading surface of the window appears frozen — most
+/// whole graph-reading surface of the window appears frozen -- most
 /// visibly on Windows, where reindex pacing is otherwise a no-op (see
 /// `fd_budget::pace_reindex_worker`) so the rebuild runs flat-out and
 /// monopolises the DB. A short bound makes a contended read fail FAST;
@@ -725,8 +725,8 @@ impl GraphView {
     /// `@@<Name>` string) AND resolved mentions whose `dst` was
     /// rewritten to a contact file path by chan-server's graph
     /// route. Resolved mentions in the graph DB keep the raw
-    /// `@@<Name>` dst — the rewrite is per-call in chan-server,
-    /// not persisted — so the SQL filter on `kind = 'mention'`
+    /// `@@<Name>` dst -- the rewrite is per-call in chan-server,
+    /// not persisted -- so the SQL filter on `kind = 'mention'`
     /// captures every reference.
     pub fn mentions(&self) -> Result<Vec<Mention>> {
         tracing::debug!("graph::mentions");
@@ -1705,7 +1705,7 @@ mod tests {
     /// Reproduces the contention shape without a real reindex: hold
     /// every connection in the pool (the cold-rebuild equivalent of the
     /// DB being saturated) and then time a further checkout. With the
-    /// 30s default this call blocks for half a minute — the exact stall
+    /// 30s default this call blocks for half a minute -- the exact stall
     /// that froze the workspace window's inspector/backlinks/graph reads
     /// on file-open. With the explicit `READER_CHECKOUT_TIMEOUT` bound
     /// it returns an `Err` promptly. We assert it returns in well under
@@ -1722,7 +1722,7 @@ mod tests {
         // Hold every connection the pool can hand out. `min_idle ==
         // max_size` means the pool is fully provisioned, so this checks
         // out the entire capacity and leaves zero free for the next
-        // caller — the same dead-end a backlog of reindex-contended
+        // caller -- the same dead-end a backlog of reindex-contended
         // reads hits.
         let capacity = g.readers.max_size() as usize;
         let held: Vec<ReaderConn> = (0..capacity)
@@ -1745,7 +1745,7 @@ mod tests {
         assert!(
             elapsed < Duration::from_secs(10),
             "checkout took {elapsed:?}; expected ~{READER_CHECKOUT_TIMEOUT:?}, \
-             NOT the r2d2 30s default — connection_timeout was not applied",
+             NOT the r2d2 30s default: connection_timeout was not applied",
         );
         // And it actually waited for the bound rather than erroring
         // instantly, proving the timeout (not some other failure) is
@@ -1754,7 +1754,7 @@ mod tests {
         assert!(
             elapsed >= Duration::from_millis(1500),
             "checkout returned in {elapsed:?}, faster than the {READER_CHECKOUT_TIMEOUT:?} \
-             bound — the timeout did not gate the wait",
+             bound: the timeout did not gate the wait",
         );
 
         drop(held);

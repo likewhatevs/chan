@@ -10,8 +10,8 @@
 //! the headless devserver and plain `chan open` install none, so the accessor
 //! returns `None` and the routes serve an empty list and 404 mutation.
 //!
-//! The trait lives in chan-library because `WorkspaceHost` — which holds the
-//! handle — is a chan-library type, and the crate dependency only flows
+//! The trait lives in chan-library because `WorkspaceHost` -- which holds the
+//! handle -- is a chan-library type, and the crate dependency only flows
 //! chan-server -> chan-library, not the reverse. chan-server re-exports these so
 //! its routes name them as `chan_server::Devserver*`.
 //!
@@ -44,7 +44,7 @@ pub enum DevserverStatus {
 }
 
 /// One configured devserver, as the launcher lists it. The token is WRITE-ONLY:
-/// accepted on add/update, never serialized back — [`has_token`](Self::has_token)
+/// accepted on add/update, never serialized back -- [`has_token`](Self::has_token)
 /// reports its presence instead.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DevserverEntry {
@@ -113,7 +113,7 @@ pub struct DevserverEntry {
 }
 
 /// The add/update payload. `host` + `port` are required; the rest are optional.
-/// `token` is write-only — `Some` sets/replaces it; `None` on an update keeps
+/// `token` is write-only -- `Some` sets/replaces it; `None` on an update keeps
 /// the stored one unless `clear_token` is true. (No `color`: a devserver's
 /// pane-highlight colour is set from the focus-border menu and persisted per
 /// chan-library, not via this dialog.)

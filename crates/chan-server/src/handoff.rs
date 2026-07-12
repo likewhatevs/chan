@@ -97,7 +97,7 @@ pub enum Request {
         cli_version: String,
         check_only: bool,
     },
-    /// Ask the desktop to register a devserver by URL — the `chan open {url}`
+    /// Ask the desktop to register a devserver by URL -- the `chan open {url}`
     /// handoff. The desktop writes the `{url, name, script}` entry into the same
     /// config its launcher devserver registry reads; the launcher's Connect
     /// button drives the dial (the CLI does not auto-connect). The CLI sends
@@ -322,7 +322,7 @@ pub fn handoff_opt_out() -> bool {
 /// (on those platforms the shim re-execs the desktop binary, so the personality
 /// already carries the intent; on Windows the shim re-execs a separate
 /// `chan.exe`, which is always `Standalone`, so it needs this explicit signal).
-/// `CHAN_NO_DESKTOP_HANDOFF` still wins — the opt-out is checked at the handoff
+/// `CHAN_NO_DESKTOP_HANDOFF` still wins -- the opt-out is checked at the handoff
 /// itself. Any non-empty, non-"0" value counts as set.
 pub fn handoff_forced() -> bool {
     match std::env::var("CHAN_DESKTOP_HANDOFF") {
@@ -464,7 +464,7 @@ where
 
     let pipe_name = socket_path.as_os_str().to_owned();
     // `first_pipe_instance(true)` fails if another process already owns this
-    // name — the singleton / squatter guard, mirroring how the unix bind owns
+    // name -- the singleton / squatter guard, mirroring how the unix bind owns
     // its filesystem socket path.
     let mut next = ServerOptions::new()
         .first_pipe_instance(true)
@@ -667,7 +667,7 @@ pub async fn try_handoff(workspace_path: &Path) -> Outcome {
 }
 
 /// Windows: connect the well-known named pipe and round-trip one
-/// `OpenWorkspace`. A missing pipe (no desktop) maps to `NoDesktop` at once —
+/// `OpenWorkspace`. A missing pipe (no desktop) maps to `NoDesktop` at once --
 /// it must NOT hang the common no-desktop `chan open`; a momentarily-busy pipe
 /// (the desktop mid accept-swap) gets a short bounded retry. Same request /
 /// timed response / parse as the unix arm.
@@ -892,7 +892,7 @@ fn map_close_response(line: &str) -> Outcome {
 }
 
 /// Try to register a devserver by `url` with a running same-user
-/// desktop — the `chan open {url}` path. Connects the well-known socket, sends
+/// desktop -- the `chan open {url}` path. Connects the well-known socket, sends
 /// an `OpenDevserver` request, and maps the reply: `DevserverRegistered` ->
 /// `HandedOff`; a protocol skew -> `VersionSkew`; an `Error` -> `DesktopError`;
 /// any other reply / connect failure / stale socket / malformed line ->
@@ -1322,7 +1322,7 @@ mod tests {
 
     #[test]
     fn forced_parsing() {
-        // Pins the `CHAN_DESKTOP_HANDOFF` name — the desktop shim sets it to opt
+        // Pins the `CHAN_DESKTOP_HANDOFF` name -- the desktop shim sets it to opt
         // the bundled console chan.exe into the handoff; a rename here would
         // silently break that cross-crate contract. Snapshot + restore for
         // order-independence.

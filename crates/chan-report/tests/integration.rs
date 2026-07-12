@@ -159,7 +159,7 @@ fn gitignore_filters_during_scan_and_update() {
 fn dir_report_root_matches_all_scope() {
     // The maintained cache at the empty-string key must agree
     // with the O(N) snapshot(All) path on every aggregate field.
-    // This is the cache's load-bearing invariant — any drift
+    // This is the cache's load-bearing invariant -- any drift
     // here means the dir endpoint reports different numbers than
     // the existing prefix endpoint for the same set of files.
     let d = tempdir().unwrap();
@@ -296,7 +296,7 @@ fn incremental_insert_updates_ancestor_chain() {
 #[test]
 fn incremental_remove_clears_ancestor_chain_when_last_file_leaves() {
     // After the last file under a directory leaves, the dir
-    // entry is dropped — the cache mirrors "dirs that currently
+    // entry is dropped -- the cache mirrors "dirs that currently
     // contain tracked files". This prevents stale rows from
     // surfacing as ghost directories.
     let d = tempdir().unwrap();
@@ -343,7 +343,7 @@ fn incremental_update_applies_delta_to_ancestors() {
 
 #[test]
 fn incremental_update_unchanged_does_not_drift_ancestors() {
-    // An Unchanged update must not touch the cache at all — drift
+    // An Unchanged update must not touch the cache at all -- drift
     // here would compound over a session of no-op writes.
     let d = tempdir().unwrap();
     write(d.path(), "src/lib.rs", "fn x() {}\n");
@@ -404,7 +404,7 @@ fn deep_directory_chain_propagates() {
 
 #[test]
 fn dir_report_survives_jsonl_roundtrip() {
-    // load_jsonl must rebuild the dirs cache from the file rows —
+    // load_jsonl must rebuild the dirs cache from the file rows  --
     // we don't persist the cache. Round-trip equality on totals
     // is the load-bearing check.
     let d = tempdir().unwrap();
@@ -440,7 +440,7 @@ fn file_bucket_is_markdown_for_md_files() {
 
 #[test]
 fn file_bucket_is_source_code_for_known_languages() {
-    // Rust / Python / TypeScript / TOML — all source code from
+    // Rust / Python / TypeScript / TOML -- all source code from
     // tokei's perspective. The bucket carries the language name
     // through verbatim so consumers can group + display per-language
     // without re-parsing.

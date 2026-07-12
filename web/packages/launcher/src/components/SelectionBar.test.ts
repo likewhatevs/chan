@@ -1,8 +1,8 @@
 // Component test: the single global bulk bar. It shows while one or more rows of
 // ANY kind are selected, displays a COMBINED count across local workspaces,
 // served workspaces, and devservers, and exposes the global ops (Turn On / Turn
-// Off / Remove → confirm / Clear). Rendering reads only the selection state — no
-// backend — so this mounts the bar directly and drives the selection module;
+// Off / Remove → confirm / Clear). Rendering reads only the selection state -- no
+// backend -- so this mounts the bar directly and drives the selection module;
 // the bulk ops themselves are covered against the mock in selection.svelte.test.
 // Exercises the real Svelte 5 runtime (a static check misses a non-reactive bar).
 

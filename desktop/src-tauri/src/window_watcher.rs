@@ -1,4 +1,4 @@
-//! The desktop window watcher — chan-desktop as a pure view of the library.
+//! The desktop window watcher -- chan-desktop as a pure view of the library.
 //!
 //! Every native window is a reconciled reflection of the library's authoritative
 //! window set. A `LibraryWatcher` per connected library (the embedded
@@ -40,7 +40,7 @@ pub enum WatchLoopStop {
 /// The composite native-window key. `window_id` is unique only within its minting
 /// library (libraries mint independently; there is no global authority), so the
 /// globally-unique native key is `{library_id}::{window_id}`. This string IS the
-/// Tauri window label; the `?w=` value is the **bare** `window_id` (decoupled — the
+/// Tauri window label; the `?w=` value is the **bare** `window_id` (decoupled -- the
 /// per-library SPA/session/presence key). `library_id` ∈ {`local`, `lib-<hex>`} and
 /// `window_id` = `w-<hex>`, so `::` never appears inside either part.
 pub fn native_label(record: &WindowRecord) -> String {
@@ -52,7 +52,7 @@ pub fn native_label(record: &WindowRecord) -> String {
 /// the `AppHandle` + the renamed `remote_*` window builder).
 pub trait NativeSurface {
     /// Native window labels (`{library_id}::{window_id}`) currently open for
-    /// `library_id` — visible OR buried; the reconcile owns the bury filter.
+    /// `library_id` -- visible OR buried; the reconcile owns the bury filter.
     fn open_labels(&self, library_id: &str) -> HashSet<String>;
     /// Open (or rebuild-in-place at the same label) a native window for `record`:
     /// native label = [`native_label`]; the loaded tenant URL carries `?w=<window_id>`.
@@ -76,7 +76,7 @@ pub trait NativeSurface {
 /// the feed; the browser has no native windows, so it lives only in this
 /// process's `buried` set. The token gate IS the workspace on/off lifecycle: an
 /// off workspace's window carries an empty token (no tenant to attach to), so the
-/// reconcile CLOSES it while the library KEEPS the record — turning the workspace
+/// reconcile CLOSES it while the library KEEPS the record -- turning the workspace
 /// back on re-tokens it and the reconcile reopens it at the same window_id (the
 /// SPA restores its tabs). Discard is the library op (the record leaves the
 /// snapshot entirely).
@@ -91,7 +91,7 @@ fn should_show(record: &WindowRecord, buried: &HashSet<String>) -> bool {
 /// One idempotent reconcile pass for `library_id`: open every shown record that
 /// lacks a native window; close every native window no longer shown (the library
 /// discarded it, or it was buried locally). Re-applying the same snapshot is a
-/// no-op — which is *why* reconnect (resubscribe → same snapshot) can never spawn a
+/// no-op -- which is *why* reconnect (resubscribe → same snapshot) can never spawn a
 /// duplicate. A dropped watch frame self-heals on the next full snapshot.
 pub fn reconcile(
     library_id: &str,
@@ -111,7 +111,7 @@ pub fn reconcile(
     let actual = surface.open_labels(library_id);
 
     // Open every desired window that has no native surface yet (reattach reuses the
-    // existing label — the builder rebuilds in place, never a second window).
+    // existing label -- the builder rebuilds in place, never a second window).
     // Existing windows still get a refresh hook: a devserver restart can keep the
     // same stable label while rotating the per-window tenant token embedded in the
     // launch URL.
@@ -135,7 +135,7 @@ pub fn reconcile(
 /// **Why a `Notify`, not an `async fn changed()`:** tokio's `Notified` captures
 /// the `notify_waiters()` generation at CREATION (not at first poll), so a
 /// `Notified` created BEFORE the snapshot catches a change fired during the
-/// snapshot — the next poll sees the advanced generation. The hazard an opaque
+/// snapshot -- the next poll sees the advanced generation. The hazard an opaque
 /// `async fn changed()` would introduce is creating its `Notified` only when
 /// first polled (i.e. AFTER the snapshot), where a same-instant change could be
 /// missed. Handing the loop the raw `Notify` lets it guarantee
@@ -195,8 +195,8 @@ impl WatcherViewState {
 /// Correctness: both change `Notified`s are created BEFORE the snapshot. tokio
 /// captures the `notify_waiters()` generation at creation, so a change firing in
 /// the snapshot↔await window advances the generation and the first poll catches
-/// it — not missed. (Each is also `enable()`d to register the waiter eagerly;
-/// belt-and-suspenders — the generation capture is what's load-bearing here.)
+/// it -- not missed. (Each is also `enable()`d to register the waiter eagerly;
+/// belt-and-suspenders -- the generation capture is what's load-bearing here.)
 pub async fn watch_loop<F, S, C>(
     initial_library_id: Option<&str>,
     feed: F,
@@ -209,10 +209,10 @@ pub async fn watch_loop<F, S, C>(
     C: Future<Output = WatchLoopStop>,
 {
     // The library id is LAZY. A devserver whose feed is EMPTY (the user deleted
-    // every window before disconnecting — a valid state) has no record to read it
+    // every window before disconnecting -- a valid state) has no record to read it
     // from. Learn/refresh it from the feed records; the local library passes it
     // eagerly (its id is constant). While it is unknown there are NO windows, so
-    // reconcile is a no-op — skip it. Once learned it is REMEMBERED, so a feed
+    // reconcile is a no-op -- skip it. Once learned it is REMEMBERED, so a feed
     // that later empties still closes the library's windows.
     let mut library_id = initial_library_id.map(str::to_string);
     let feed_notify = feed.change_notify();
@@ -221,7 +221,7 @@ pub async fn watch_loop<F, S, C>(
         // Create both change futures BEFORE the snapshot so each captures the
         // current notify_waiters generation; a change during the snapshot then
         // advances it and the next poll catches it. (enable() arms the waiter
-        // eagerly too — harmless belt-and-suspenders.)
+        // eagerly too -- harmless belt-and-suspenders.)
         let feed_changed = feed_notify.notified();
         tokio::pin!(feed_changed);
         feed_changed.as_mut().enable();
@@ -243,7 +243,7 @@ pub async fn watch_loop<F, S, C>(
             stop = &mut cancel => {
                 if stop == WatchLoopStop::CloseWindows {
                     // Disconnect: reconcile to empty so the library's native
-                    // windows close (detach, NOT reap — the library keeps its set
+                    // windows close (detach, NOT reap -- the library keeps its set
                     // server-side, so a reconnect restores them). A no-op if
                     // nothing was opened.
                     if let Some(library_id) = &library_id {
@@ -342,7 +342,7 @@ mod tests {
     #[test]
     fn server_hidden_record_is_not_opened_and_is_closed() {
         // A record with the server-persisted `hidden` flag is NOT
-        // surfaced — `should_show` is false, so the reconcile neither opens it on
+        // surfaced -- `should_show` is false, so the reconcile neither opens it on
         // connect nor keeps a native window for it (the mirror: hidden last
         // session stays hidden). The local `buried` set is empty here, so `hidden`
         // alone gates it.
@@ -394,7 +394,7 @@ mod tests {
     fn off_workspace_window_is_closed_and_not_opened() {
         // A workspace turned OFF: its window record persists but carries an empty
         // token (no live tenant). The reconcile must NOT open it, and must CLOSE
-        // it if already open — the library keeps the record so a re-on reopens it
+        // it if already open -- the library keeps the record so a re-on reopens it
         // at the same window_id.
         let mut off = rec("local", "w-1", WindowKind::Workspace);
         off.token = String::new();
@@ -434,7 +434,7 @@ mod tests {
             let label = native_label(record);
             self.in_flight.borrow_mut().insert(label.clone());
             self.opens.borrow_mut().push(label);
-            // Deliberately NOT added to `built` — the build is async.
+            // Deliberately NOT added to `built` -- the build is async.
         }
         fn close(&self, label: &str) {
             self.built.borrow_mut().remove(label);
@@ -446,7 +446,7 @@ mod tests {
     fn reconcile_does_not_double_open_across_the_async_build_gap() {
         // Two reconcile passes fire before the dispatched build lands in the
         // surface (the multi-notify boot burst). The in-flight tracking must make
-        // the 2nd pass a no-op — otherwise both build the SAME label ("webview
+        // the 2nd pass a no-op -- otherwise both build the SAME label ("webview
         // label already exists" + a stuck/duplicate window).
         let s = AsyncGapSurface::default();
         let snap = vec![rec("local", "w-1", WindowKind::Terminal)];
@@ -506,13 +506,13 @@ mod tests {
 
     /// Guards the create-before-snapshot property against a REAL `notify_waiters()`
     /// (not the fake feed). The feed fires its change signal SYNCHRONOUSLY during
-    /// the first `snapshot()` — inside the snapshot↔await window — then returns the
+    /// the first `snapshot()` -- inside the snapshot↔await window -- then returns the
     /// window on the next snapshot. Because the change future is created before the
     /// snapshot, it captures the pre-fire generation; the fire advances it and the
     /// next poll catches it, so the loop re-reconciles and opens `w-1`. A loop that
     /// created its change future only AFTER the snapshot (e.g. an opaque
     /// `async fn changed()`) would capture the post-fire generation, block forever,
-    /// and never open `w-1` — so this assertion fails if that regression slips in.
+    /// and never open `w-1` -- so this assertion fails if that regression slips in.
     #[tokio::test]
     async fn watch_loop_catches_a_change_fired_in_the_snapshot_gap() {
         use std::sync::atomic::{AtomicUsize, Ordering};
@@ -540,7 +540,7 @@ mod tests {
         impl WindowFeed for GapFeed {
             fn snapshot(&self) -> Vec<WindowRecord> {
                 if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
-                    // Fire a change DURING the snapshot — the snapshot↔await gap.
+                    // Fire a change DURING the snapshot -- the snapshot↔await gap.
                     self.notify.notify_waiters();
                     Vec::new()
                 } else {
@@ -573,7 +573,7 @@ mod tests {
 
         // Give the loop time to run the gap iteration + the re-reconcile, then
         // capture the open set WHILE it is parked in select. Cancel now makes the
-        // loop reconcile its windows away (the disconnect semantics — the watcher
+        // loop reconcile its windows away (the disconnect semantics -- the watcher
         // is the sole driver of both open and close), so the gap-catch's open must
         // be observed BEFORE tearing the loop down, not after.
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
@@ -589,7 +589,7 @@ mod tests {
     }
 
     /// Disconnect semantics: flipping the loop's cancel makes it reconcile to an
-    /// EMPTY set, closing every window it opened (detach, NOT reap — the library
+    /// EMPTY set, closing every window it opened (detach, NOT reap -- the library
     /// keeps the records server-side, so a reconnect reopens them). The watcher
     /// being the sole driver of CLOSE is what lets `disconnect_devserver` just fire
     /// the cancel instead of reaching for the windows imperatively.

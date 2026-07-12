@@ -2,18 +2,18 @@
 //! window currently has in flight.
 //!
 //! Every SPA window opens one event socket and tags it with its window
-//! id (`/ws?w=<id>` — the same id `window_presence` keys on) and reports
+//! id (`/ws?w=<id>` -- the same id `window_presence` keys on) and reports
 //! its in-flight transfer count over it (`{ "type": "transfers", "active":
 //! <n> }`). The refcounted map below SUMS those counts per window id across
 //! its sockets, so the desktop's close handler can ask one synchronous
-//! question — [`WindowTransfers::window_has_active_transfer`] — before it
+//! question -- [`WindowTransfers::window_has_active_transfer`] -- before it
 //! lets a window close mid-transfer, the same hold/cancel guard a window
 //! with live terminal shells gets.
 //!
 //! Per-socket and RAII-cleared via [`TransferGuard`]: a reload drops the
 //! socket AND kills its in-flight XHRs, and the guard's Drop subtracts that
 //! socket's last-reported count, so a reloaded window reads inactive for
-//! free — no client message needed. Refcounted (a sum, not a boolean) so a
+//! free -- no client message needed. Refcounted (a sum, not a boolean) so a
 //! reload's brief overlap of the old and new socket of one window doesn't
 //! undercount.
 //!

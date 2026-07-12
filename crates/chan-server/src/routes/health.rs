@@ -28,7 +28,7 @@ pub async fn api_health(State(state): State<Arc<AppState>>) -> Response {
     // Health means "this process answers" on EVERY tenant. Erroring on
     // a missing indexer made the standalone terminal tenant 503 each
     // time a terminal window's instance probe ran on watch-socket
-    // connect — a tower-http ERROR line in the desktop log per
+    // connect -- a tower-http ERROR line in the desktop log per
     // Cmd+T / Cmd+Shift+N. The indexer block is diagnostics, not a
     // liveness gate; absent simply means "no indexer here right now".
     let indexer = state.try_indexer().ok().map(|ix| ix.health_snapshot());

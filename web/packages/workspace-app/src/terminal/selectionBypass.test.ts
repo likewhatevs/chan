@@ -14,7 +14,7 @@ describe("forceSelectionForShift", () => {
 
 describe("installShiftSelectionBypass", () => {
   // Mock shaped like the internal path the bypass wraps, with a macOS-style
-  // default that ignores Shift — the exact case the A1 fix repairs.
+  // default that ignores Shift -- the exact case the A1 fix repairs.
   test("adds Shift while preserving the platform default (macOS Option)", () => {
     const macDefault = (e: MouseEvent) => e.altKey; // Shift ignored, Option forces
     const selection = { shouldForceSelection: macDefault };
@@ -33,7 +33,7 @@ describe("installShiftSelectionBypass", () => {
 
   // Real-Terminal test: proves the bypass resolves the ACTUAL internal path
   // (`_core._selectionService.shouldForceSelection`) on an opened xterm.js v6
-  // and flips its behavior — closing the mock/reality gap. jsdom lacks
+  // and flips its behavior -- closing the mock/reality gap. jsdom lacks
   // `matchMedia` (xterm's renderer reads it during open), so we stub it.
   test("wires the real opened xterm.js SelectionService", () => {
     (window as { matchMedia?: unknown }).matchMedia ??= (query: string) => ({

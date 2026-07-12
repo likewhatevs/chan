@@ -115,7 +115,7 @@ pub(super) fn locale_selects_utf8(requested: &BTreeMap<String, String>) -> bool 
 /// `$SHELL` (when it points at an executable) → the passwd `pw_shell` →
 /// `/bin/sh`. Single-sources the resolution so no caller hardcodes a fallback
 /// shell. This is exactly `portable_pty`'s `new_default_prog().get_shell()`,
-/// which performs and validates that lookup — reuse it rather than hand-rolling
+/// which performs and validates that lookup -- reuse it rather than hand-rolling
 /// `getpwuid`. Unix-only: `get_shell` is unix-only, and the Windows terminal
 /// path is Git BASH, which never calls this.
 #[cfg(unix)]
@@ -137,7 +137,7 @@ pub(super) fn command_builder(command: Option<&str>) -> CommandBuilder {
             None => CommandBuilder::new_default_prog(),
             // One-shot: run it through a login shell so profile-exported PATH
             // (where `cs` lives) is in scope. The shell is resolved via
-            // `user_shell` ($SHELL → passwd → /bin/sh, validated) — single-sourced
+            // `user_shell` ($SHELL → passwd → /bin/sh, validated) -- single-sourced
             // with the interactive path above, never a hardcoded `/bin/sh`.
             Some(command) => {
                 let mut cmd = CommandBuilder::new(user_shell());
@@ -160,7 +160,7 @@ pub(super) struct WindowsShell {
 #[derive(Clone, Copy)]
 enum WinShellKind {
     /// `powershell.exe` / `pwsh.exe`: `-NoLogo` interactive, `-NoLogo -Command`
-    /// one-shot. No `-NoProfile` — we want the user's profile/PATH (the `-l`
+    /// one-shot. No `-NoProfile` -- we want the user's profile/PATH (the `-l`
     /// analog of the unix login shell).
     PowerShell,
     /// `cmd.exe`: no args interactive, `/C` one-shot.
@@ -198,7 +198,7 @@ impl WindowsShell {
 }
 
 /// Resolve the user's default Windows shell once and cache it for the process
-/// lifetime — resolution shells out (`where pwsh`), and a terminal spawn is on
+/// lifetime -- resolution shells out (`where pwsh`), and a terminal spawn is on
 /// the interactive path.
 #[cfg(windows)]
 pub(super) fn windows_shell() -> &'static WindowsShell {
@@ -208,9 +208,9 @@ pub(super) fn windows_shell() -> &'static WindowsShell {
 
 /// Force the [`windows_shell`] cache to resolve eagerly, off the async request
 /// path. Resolution may shell out (`where pwsh`) with blocking
-/// `std::process::Command`; resolving it lazily on the first terminal create —
+/// `std::process::Command`; resolving it lazily on the first terminal create  --
 /// which runs on a tokio worker (the embedded server hosts the SPA, API, and WS
-/// on one runtime) — would block that worker and freeze the SPA. The server
+/// on one runtime) -- would block that worker and freeze the SPA. The server
 /// primes this once on a blocking thread at startup, so [`windows_shell`] only
 /// ever reads the warm `OnceLock`.
 // `pub` (not `pub(crate)`) because chan-server's route layer calls it
@@ -282,7 +282,7 @@ fn resolve_windows_shell() -> WindowsShell {
         };
     }
 
-    // 4. %ComSpec% / cmd.exe — the last-resort default.
+    // 4. %ComSpec% / cmd.exe -- the last-resort default.
     let comspec = std::env::var_os("ComSpec")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(r"C:\Windows\System32\cmd.exe"));

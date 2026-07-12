@@ -126,8 +126,8 @@ impl Registry {
     /// Resolve the user's single live devserver registration (one
     /// devserver per user). Returns the registered devserver id (the
     /// registry's second key) paired with its entry, or `None` when the
-    /// user has no live tunnel. The proxy gate looks up by user alone —
-    /// the inbound `{user}` host label — and never peels a path segment;
+    /// user has no live tunnel. The proxy gate looks up by user alone --
+    /// the inbound `{user}` host label -- and never peels a path segment;
     /// the devserver id it returns is what the gate verifies the
     /// `devserver_gate` cookie's `drv` against.
     pub fn get_user_devserver(&self, username: &str) -> Option<(String, Entry)> {

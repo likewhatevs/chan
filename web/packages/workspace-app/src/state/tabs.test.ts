@@ -2814,7 +2814,7 @@ describe("toggleActiveFileTabMode source<->rendered gate (#3/#7)", () => {
     expect(activePane().tabs[0]).toMatchObject({ mode: "table" });
   });
 
-  test("plain-text source files (.rs) do NOT toggle — no invalid wysiwyg render", () => {
+  test("plain-text source files (.rs) do NOT toggle: no invalid wysiwyg render", () => {
     const tab = fileTab({ path: "src/lib.rs", fileKind: "text", mode: "source" });
     resetLayout([tab]);
     toggleActiveFileTabMode();

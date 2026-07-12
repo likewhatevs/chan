@@ -259,7 +259,7 @@ export const ui = $state<{
   terminalArmed: boolean;
   /// The control-terminal sub-mode (`kind=control`): a singleton terminal-only
   /// window running a devserver's connect script. Stricter than `terminalOnly`
-  /// — the tab strip / pane chrome are hidden and Cmd+T / pane splits are
+  /// -- the tab strip / pane chrome are hidden and Cmd+T / pane splits are
   /// disabled so it stays one PTY. Set once at bootstrap from the URL, never
   /// flipped. Implies `terminalOnly`.
   terminalControl: boolean;
@@ -385,7 +385,7 @@ export function clearHybridSurfaceTheme(kind: HybridSurfaceKind): void {
 
 // updateGlobalConfigSerial lives in ./configWrite (a leaf module with no store
 // dependency) so editorTools.svelte.ts can share the SAME write chain without
-// an import cycle — store imports editorTools, so editorTools must not import
+// an import cycle -- store imports editorTools, so editorTools must not import
 // store back. Re-exported here so existing call sites keep importing it from
 // the store barrel.
 export { updateGlobalConfigSerial };
@@ -1377,7 +1377,7 @@ export function raiseReplacePicker(targetPath: string): void {
 /// `File` objects, and hand them to the same `fileOps.uploadFilesTo` pipeline as
 /// the browser path. An empty result is a cancel (no-op); an ACL refusal /
 /// IPC failure surfaces as a status (an explicit `cs upload` should not fail
-/// silently — that silent no-op is the bug this fixes).
+/// silently -- that silent no-op is the bug this fixes).
 async function raiseDesktopUploadPicker(destDir: string): Promise<void> {
   let picked: Awaited<ReturnType<typeof pickUploadFiles>>;
   try {
@@ -1496,7 +1496,7 @@ async function handleWindowCommand(raw: unknown): Promise<void> {
     return;
   }
   if (frame.command === "upload" && typeof frame.path === "string") {
-    // `cs upload`: raise the SAME upload UI the Inspector pill uses — open a
+    // `cs upload`: raise the SAME upload UI the Inspector pill uses -- open a
     // file picker, then hand the picked files to fileOps.uploadFilesTo (which
     // drives the shared transfer-progress indicator). Reuse, not a parallel path.
     raiseUploadPicker(frame.path);
@@ -1667,7 +1667,7 @@ let serverInstance: string | null = null;
 /// random id minted at tenant build). Same id = a transient network
 /// blip; nothing to do. Different id = the process restarted: its PTYs
 /// and in-memory state are gone, and without a reload the window sits
-/// on a stale view with stuck terminals until a manual Cmd+R — the
+/// on a stale view with stuck terminals until a manual Cmd+R -- the
 /// reload is that Cmd+R, automated. Reported against outbound remotes
 /// (^C + re-run of `chan devserver`); health answers on every tenant
 /// (terminal-only included), so the check applies everywhere.
@@ -1900,7 +1900,7 @@ export async function bootstrap(): Promise<void> {
       if (!fresh) applyTreeExpandedReloadSnapshot();
       // Restore the transfer bubble: terminal rows as-is; an in-flight transfer
       // (its XHR died with the reload) becomes "interrupted", with a Retry that
-      // re-runs a download from its source (uploads cannot retry — the File is
+      // re-runs a download from its source (uploads cannot retry -- the File is
       // gone). Fresh windows start with no transfers.
       if (!fresh) {
         restoreTransfers(
@@ -2460,7 +2460,7 @@ function serializeSession(): SessionPayload | null {
       ...(Object.keys(treeMap).length > 0 ? { treeExpanded: treeMap } : {}),
     };
   }
-  // No durable content and no live PTY — a terminal-only or empty-split window
+  // No durable content and no live PTY -- a terminal-only or empty-split window
   // (e.g. after a restart, or a workspace off->on that killed its PTYs).
   // Persist the pane STRUCTURE so the layout survives, and recreate it with
   // FRESH shells: serialize WITHOUT session ids so restore spawns fresh PTYs
@@ -2657,13 +2657,13 @@ async function applyRemoteSessionBlob(): Promise<void> {
 /// server also reaps the window's live terminal sessions, keyed on the window
 /// label) and stop any pending or future save from re-persisting it. The caller
 /// closes the window afterward. Idempotent; fires a `keepalive` DELETE so the
-/// reap survives an immediate window destroy/unload — this is the explicit,
+/// reap survives an immediate window destroy/unload -- this is the explicit,
 /// synchronous discard signal that replaces the old reliance on a `pagehide`
 /// flush (which a hidden/buried WKWebView may never fire).
 ///
 /// `reap: false` (a cross-window terminal MOVE that emptied this window): still
 /// DELETE the blob so the window leaves `cs window list`, but mark it
-/// (`&moved=1`) so the server does NOT reap — the moved PTY lives on, re-bound
+/// (`&moved=1`) so the server does NOT reap -- the moved PTY lives on, re-bound
 /// to the target window. Without this the source's synchronous DELETE can beat
 /// the target's async re-attach and kill the just-moved terminal.
 export function discardWindowSession(opts?: { reap?: boolean }): void {
@@ -3905,13 +3905,13 @@ function applyTreeExpandedReloadSnapshot(): boolean {
 
 // ---- all-terminal reload reattach snapshot --------------------------------
 //
-// An all-terminal window (its only tabs are terminals — e.g. a terminal plus
+// An all-terminal window (its only tabs are terminals -- e.g. a terminal plus
 // the file-browser dock, which is not a layout tab) is NOT a durable saved
 // window: `serializeSession()` returns null so no on-disk session blob is
 // written (that is what stops it lingering as a `cs window list` phantom after
-// close — step-5). But Cmd+R must still RE-ATTACH the surviving server-side
+// close -- step-5). But Cmd+R must still RE-ATTACH the surviving server-side
 // PTYs, and the reload tsid graft (tabs.svelte.ts) sources tsids from the
-// server session blob — which is now absent. So we mirror the live layout
+// server session blob -- which is now absent. So we mirror the live layout
 // (WITH tsids, plus the rich-prompt pp/rpv) into sessionStorage, which
 // survives a reload but is cleared when the window/tab closes. Same channel as
 // the treeExpanded reload snapshot above: reload reattaches, a real close
@@ -3921,11 +3921,11 @@ const LAYOUT_RELOAD_KEY = "chan.layout.reload";
 /// Canonical per-window key. Deliberately NOT scoped by `workspace.info.root`:
 /// that loads async (bootstrap awaits `/api/workspace`), so an early save while
 /// `workspace.info` was still null wrote a SECOND key (`…:/`, the
-/// `location.pathname` fallback) carrying a tsid-LESS terminal — and a bootstrap
+/// `location.pathname` fallback) carrying a tsid-LESS terminal -- and a bootstrap
 /// restore from that key spawned a stray PTY (no `session=`). `sessionWindowId()`
 /// is stable from first paint and uniquely scopes the snapshot to this window
 /// (a window only ever reloads its own single workspace), so one key covers
-/// every save + the bootstrap read — no path-normalization mismatch.
+/// every save + the bootstrap read -- no path-normalization mismatch.
 function layoutReloadKey(): string {
   return `${LAYOUT_RELOAD_KEY}:${sessionWindowId()}`;
 }
@@ -3940,7 +3940,7 @@ function writeLayoutReloadSnapshot(layout: ReturnType<typeof serializeLayout>): 
     }
   } catch {
     // sessionStorage unavailable: an all-terminal window degrades to a fresh
-    // PTY on reload (durable windows are unaffected — they use the on-disk blob).
+    // PTY on reload (durable windows are unaffected -- they use the on-disk blob).
   }
 }
 
@@ -3967,7 +3967,7 @@ function readLayoutReloadSnapshot(): ReturnType<typeof serializeLayout> {
 /// The on-disk blob is the durable cross-load source (close→reopen, reconnect,
 /// and a Cmd+R once it has been written), but its `keepalive` PUT can race a
 /// fast reload's GET, so a reattachable-terminal layout is ALSO mirrored (with
-/// tsids) into sessionStorage — the same-tab reload reads that synchronously
+/// tsids) into sessionStorage -- the same-tab reload reads that synchronously
 /// and can never lose the surviving PTYs:
 ///   - layout WITH a reattachable tsid (terminal-only OR terminal+durable):
 ///     persist the snapshot, even when the blob is also PUT;
@@ -3976,7 +3976,7 @@ function readLayoutReloadSnapshot(): ReturnType<typeof serializeLayout> {
 ///   - truly empty window (no layout): nothing to reattach → clear;
 ///   - all-terminal layout with NO reattachable tsid (an early save before the
 ///     terminal's session frame, or a session that ended): leave any prior good
-///     snapshot intact — never persist a tsid-less terminal (restoring it would
+///     snapshot intact -- never persist a tsid-less terminal (restoring it would
 ///     spawn a stray fresh PTY).
 function syncLayoutReloadSnapshot(payload: SessionPayload | null): void {
   const layout = serializeLayout({ terminalSessions: true });

@@ -118,12 +118,12 @@ pub struct WindowRecord {
     pub connected: bool,
     /// A file transfer (upload or download) is in flight for this window right
     /// now. Volatile per-push state (the whole set is re-assembled each push), so
-    /// a client with no `/ws` view of the serving tenant — the desktop onto a
-    /// remote devserver — still learns a window is mid-transfer and can guard its
+    /// a client with no `/ws` view of the serving tenant -- the desktop onto a
+    /// remote devserver -- still learns a window is mid-transfer and can guard its
     /// close. `#[serde(default)]`: a record without the field reads `false`.
     #[serde(default)]
     pub active_transfer: bool,
-    /// This is a devserver's script-connection CONTROL terminal — the window
+    /// This is a devserver's script-connection CONTROL terminal -- the window
     /// running the connect script. The desktop surfaces it in that devserver's
     /// feed (tagged with the devserver's `library_id`), and the launcher renders
     /// it FIRST in the devserver's window list. Omitted from the wire when false
@@ -134,7 +134,7 @@ pub struct WindowRecord {
     /// desktop keeps it closed on connect; the launcher renders it as hidden).
     /// The server is the source of truth (set via `POST …/visibility`), so a
     /// desktop connect mirrors the saved layout instead of force-opening every
-    /// window. Omitted from the wire when false (the common case) — the launcher
+    /// window. Omitted from the wire when false (the common case) -- the launcher
     /// treats absent as visible.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub hidden: bool,
@@ -205,7 +205,7 @@ pub struct PersistedWindow {
     pub workspace_path: Option<String>,
     /// A devserver control terminal (runs the connect script). True only for the
     /// transient control row minted via [`WindowRegistry::create_control`]; it is
-    /// NEVER written to disk (see `WindowRegistry::save_best_effort`) — the
+    /// NEVER written to disk (see `WindowRegistry::save_best_effort`) -- the
     /// control terminal is per-connection, desktop-driven, and reaped on PTY
     /// exit. `skip_serializing_if` default keeps a normal row's on-disk shape
     /// unchanged.
@@ -216,7 +216,7 @@ pub struct PersistedWindow {
     /// `Some(id)` ⇒ a FOREIGN library_id, used by the control row: it is minted
     /// in the desktop's LOCAL embedded library but GROUPS under the remote
     /// devserver's `library_id`. (Local-vs-remote OPEN routing keys off
-    /// `control`, NOT this id — see the desktop opener.) `skip_serializing_if`
+    /// `control`, NOT this id -- see the desktop opener.) `skip_serializing_if`
     /// default keeps a normal row's on-disk shape unchanged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub library_id: Option<String>,
@@ -416,7 +416,7 @@ impl WindowRegistry {
     /// launcher's hide/open resolves straight to the live window. The session
     /// runs on a LOCAL control tenant; the assembly resolves its prefix/token
     /// from there (Local-vs-remote OPEN routing keys off `control`, not the
-    /// foreign id). NOT persisted to disk (per-connection; reaped on PTY exit) —
+    /// foreign id). NOT persisted to disk (per-connection; reaped on PTY exit)  --
     /// a re-connect under the same label replaces any stale row. Fires the
     /// change notification.
     pub fn create_control(&self, window_id: String, library_id: String) -> PersistedWindow {
@@ -486,7 +486,7 @@ impl WindowRegistry {
     }
 
     /// Set window `window_id`'s persisted visibility. Returns whether a
-    /// row MATCHED (so a route maps `false` to 404 — idempotent: setting the
+    /// row MATCHED (so a route maps `false` to 404 -- idempotent: setting the
     /// value it already holds still matches). Persists (durable rows; a control
     /// row stays in-memory via `Self::save_best_effort`) + fires the change
     /// notification only when the value actually changed.
@@ -778,7 +778,7 @@ mod tests {
             })
         );
         // `#[serde(default)]`: a record minted before this field existed (no
-        // `active_transfer` key) deserializes with the bit off — the desktop
+        // `active_transfer` key) deserializes with the bit off -- the desktop
         // simply sees no in-flight transfer until the next push carries one.
         let legacy = json!({
             "window_id": "w-99aa88bb77cc66dd",

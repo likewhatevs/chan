@@ -3,9 +3,9 @@
 //! The DOM File API never exposes OS paths (WebKit sanitizes
 //! `text/uri-list` for cross-app file drags), and enabling wry's
 //! native drag-drop handler would swallow ALL DOM drag events on
-//! macOS — wry only forwards a drag to WebKit when the installed
+//! macOS -- wry only forwards a drag to WebKit when the installed
 //! handler returns `false`, and tauri-runtime-wry's handler returns
-//! `true` unconditionally — killing the editor/file-browser drop
+//! `true` unconditionally -- killing the editor/file-browser drop
 //! zones and in-page tab-move DnD. So the native handler stays
 //! disabled (see `build_workspace_window`) and the SPA's terminal
 //! drop zone fetches the dropped paths through this command instead:

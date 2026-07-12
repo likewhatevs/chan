@@ -104,7 +104,7 @@ mod wire_tests {
 
     // Control frames cross the wire as JSON (`frame::encode_frame` uses
     // serde_json), so `to_value` pins the EXACT on-wire bytes. A field
-    // add/drop/rename is caught here — the gate-blind-wire hazard the
+    // add/drop/rename is caught here -- the gate-blind-wire hazard the
     // always-authenticated cut had to clear. The load-bearing pin is that
     // `Hello` carries NO `public` key after the cut.
     #[test]

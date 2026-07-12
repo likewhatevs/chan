@@ -537,7 +537,7 @@ pub fn build_fs_graph_paged(
 /// Verify that the parent of the joined request path resolves
 /// inside the workspace root. Catches `path=alias-to-outside/x.md`
 /// where `alias-to-outside` is an in-workspace symlink whose target
-/// escapes the workspace — `resolve_safe` is lexical and lets that
+/// escapes the workspace -- `resolve_safe` is lexical and lets that
 /// through, but the kernel will follow the intermediate symlink on
 /// `symlink_metadata` / `read_dir`. Workspace root requests skip the
 /// check (the request resolves to the workspace root itself; no parent
@@ -557,7 +557,7 @@ fn ensure_parent_inside_workspace(root: &Path, abs: &Path, rel: &str) -> Result<
         Ok(c) => c,
         // The workspace root must canonicalize. If it doesn't (deleted
         // out from under us, broken mount) we cannot serve the
-        // request safely — surface as 500 rather than silently
+        // request safely -- surface as 500 rather than silently
         // allowing the lexical check.
         Err(e) => {
             return Err(FsGraphError::new(
@@ -1002,7 +1002,7 @@ impl FsGraphWalker {
                 // only on the page that first descended into them, so a resume
                 // page carries parent-less edges. The DFS stack is a single
                 // nested path, so its deepest frame's rel encodes every
-                // ancestor — `emit_ancestor_chain` re-emits each as a node plus
+                // ancestor -- `emit_ancestor_chain` re-emits each as a node plus
                 // the `contains` edges between them. (Idempotent within the
                 // whole walk: nodes/edges dedup, so the union still equals
                 // `build_fs_graph`; this only makes each page self-describing,
@@ -1769,7 +1769,7 @@ mod tests {
     }
 
     /// Workspace-bootstrapped tests for the public `build_fs_graph` entry
-    /// point — the CLI's `chan graph --scope file|directory` now calls
+    /// point -- the CLI's `chan graph --scope file|directory` now calls
     /// this directly, so its rejection contract needs explicit
     /// coverage in addition to the walker-only tests above.
     fn open_workspace() -> (TempDir, TempDir, std::sync::Arc<chan_workspace::Workspace>) {
@@ -1865,7 +1865,7 @@ mod tests {
         // The mid-path guard must NOT reject when the LEAF itself is
         // an in-workspace symlink pointing outside the workspace. The walker
         // classifies that leaf via readlink and emits an outside-
-        // ghost node — that's the documented behavior, and it's the
+        // ghost node -- that's the documented behavior, and it's the
         // whole point of having a graph route over filesystems with
         // symlinks.
         let (_cfg, root, workspace) = open_workspace();
@@ -2042,7 +2042,7 @@ mod tests {
         // edge's parent (source) directory is a node IN THE SAME page. Before
         // the resume branch re-emitted the ancestor spine, resume pages whose
         // walk was mid-way down a directory (e.g. inside `dir0/sub`) carried
-        // edges like `dir0/sub -> deep.md` with no `dir0/sub` node — masked
+        // edges like `dir0/sub -> deep.md` with no `dir0/sub` node -- masked
         // only by the client's cumulative merge. The whole-tree walk at a tiny
         // batch forces several resume pages with deep in-progress frames.
         let (_cfg, _root, ws) = seed_paged_workspace();

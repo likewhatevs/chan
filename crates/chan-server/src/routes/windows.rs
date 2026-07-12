@@ -1,14 +1,14 @@
-//! `GET /api/windows` — enumerate the windows this tenant knows about.
+//! `GET /api/windows` -- enumerate the windows this tenant knows about.
 //!
 //! A "window" here is a per-window session id: the `?w=<id>` that keys
 //! the `/api/session` layout blob and tags the window's `/ws` socket.
 //! The response is the union of both sources:
 //!
 //!   * `saved`: a session blob exists (the window persisted a layout
-//!     at some point) — on disk for workspace tenants, in the
+//!     at some point) -- on disk for workspace tenants, in the
 //!     ephemeral map for terminal tenants.
 //!   * `connected`: a `/ws` socket tagged with this id is live RIGHT
-//!     NOW, somewhere — any browser tab or desktop webview. Note a
+//!     NOW, somewhere -- any browser tab or desktop webview. Note a
 //!     hidden (buried) chan-desktop window keeps its webview and
 //!     therefore stays `connected`; the server cannot distinguish
 //!     hidden from visible, so it deliberately doesn't claim to.
@@ -53,7 +53,7 @@ pub struct WindowInfo {
 /// Join saved blob keys and live socket ids into one sorted list.
 /// BTreeMap so the response order is deterministic (id-sorted).
 /// pub(crate): the `cs window list` control-socket handler serves the
-/// same rows. Rows carry no title/kind here — see
+/// same rows. Rows carry no title/kind here -- see
 /// [`join_windows_with_titles`] for the desktop-enriched variant.
 pub(crate) fn join_windows(saved: Vec<String>, connected: Vec<String>) -> Vec<WindowInfo> {
     let mut by_id: BTreeMap<String, (bool, bool)> = BTreeMap::new();
@@ -78,7 +78,7 @@ pub(crate) fn join_windows(saved: Vec<String>, connected: Vec<String>) -> Vec<Wi
 /// [`join_windows`], then stamp each row with the desktop's OS title and
 /// kind from `titles` (empty in browser/standalone mode, so this is a
 /// no-op there). Closed-but-`saved` rows whose window the desktop already
-/// dropped carry no title — correct, there is no live OS title for them.
+/// dropped carry no title -- correct, there is no live OS title for them.
 pub(crate) fn join_windows_with_titles(
     saved: Vec<String>,
     connected: Vec<String>,
@@ -95,7 +95,7 @@ pub(crate) fn join_windows_with_titles(
 }
 
 /// Enumerate this tenant's windows: saved session blobs ∪ live `/ws` presence,
-/// each stamped with the desktop's OS title/kind. Sync — `list_sessions` is
+/// each stamped with the desktop's OS title/kind. Sync -- `list_sessions` is
 /// blocking disk I/O, so an async caller wraps this in `spawn_blocking`. A
 /// failed saved-blob read degrades to "no saved windows" (graceful for an
 /// enumeration; the host aggregate must not fail wholesale on one tenant).

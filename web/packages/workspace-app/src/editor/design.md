@@ -1,7 +1,6 @@
 # chan editor (CM6) - design
 
-Load-bearing reference for the chan editor. Mirrors the workspace design doc's
-role for the editor surface.
+Load-bearing reference for the chan editor. Mirrors the workspace design doc's role for the editor surface.
 
 ## Model
 
@@ -82,12 +81,7 @@ flowchart TD
 
 ## Modes
 
-The file editor host owns a per-tab mode: `wysiwyg` | `source` | `pretty` |
-`table`. Markdown-class files (.md/.txt) pair WYSIWYG with source; JSON opens
-as a collapsible tree and CSV/TSV as an editable grid, each with source as the
-toggle. Any other text-kind file is source-only - source IS the sensible surface
-for a .py / .toml / Makefile. Source mode highlights by extension via the same
-lazy language packs.
+The file editor host owns a per-tab mode: `wysiwyg` | `source` | `pretty` | `table`. Markdown-class files (.md/.txt) pair WYSIWYG with source; JSON opens as a collapsible tree and CSV/TSV as an editable grid, each with source as the toggle. Any other text-kind file is source-only - source IS the sensible surface for a .py / .toml / Makefile. Source mode highlights by extension via the same lazy language packs.
 
 `FileEditorTab` picks the initial mode by file class, then toggles source against the single rendered surface each class pairs with; plain text is source-only.
 
@@ -162,10 +156,7 @@ sequenceDiagram
 
 ## Server contract
 
-The editor relies on three server contracts: file reads/writes with optimistic
-CAS, picker/classification lookups for links, contacts, tags, headings, and
-images, and a watch stream whose self-write filtering keeps autosave from
-reloading the buffer it just wrote.
+The editor relies on three server contracts: file reads/writes with optimistic CAS, picker/classification lookups for links, contacts, tags, headings, and images, and a watch stream whose self-write filtering keeps autosave from reloading the buffer it just wrote.
 
 ## Autosave and conflicts
 
@@ -202,8 +193,7 @@ sequenceDiagram
 
 ## Implementation notes
 
-- List continuation and indent/outdent match the current line with a regex, not
-  the syntax tree, so the edit stays cheap and local.
+- List continuation and indent/outdent match the current line with a regex, not the syntax tree, so the edit stays cheap and local.
 - Heavy or optional modules load lazily on first use: mermaid and mermaid-to-excalidraw + excalidraw (diagram render; excalidraw carries React, so both are dynamic-imported and code-split out of the eager editor bundle), turndown (HTML-paste -> markdown), HEIC -> WebP conversion before image upload, and the per-language code packs (one vite chunk each).
 
 ## Out of scope

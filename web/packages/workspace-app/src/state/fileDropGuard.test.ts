@@ -1,9 +1,9 @@
 // SPA-global file-drop guard: the no-takeover guarantee.
 //
 // The guard must act ONLY on OS file drags (dataTransfer.types
-// includes "Files") — in-page HTML5 drags (tab moves, tree moves,
+// includes "Files") -- in-page HTML5 drags (tab moves, tree moves,
 // image-atom moves) must pass through with their dropEffect semantics
-// untouched — and inside allowlisted zones it must leave the drop
+// untouched -- and inside allowlisted zones it must leave the drop
 // for the zone's own handlers while the bubble-phase net still
 // cancels anything left unhandled.
 import { afterEach, beforeEach, describe, expect, test } from "vitest";

@@ -2,18 +2,18 @@
 //!
 //! Endpoints under `/api/index/semantic/`:
 //!
-//! * `GET /state` — model + workspace preference snapshot.
+//! * `GET /state` -- model + workspace preference snapshot.
 //! * `GET /models` - curated model list + per-machine download
 //!   flags for the picker.
 //! * `PATCH /model` - persist the workspace's configured model.
-//! * `POST /download` — synchronously fetch the model into the
+//! * `POST /download` -- synchronously fetch the model into the
 //!   per-machine cache (hf-hub). v1 is blocking; progress-streaming
 //!   is a follow-up.
-//! * `POST /enable` — flip the workspace's `semantic_enabled` to true.
+//! * `POST /enable` -- flip the workspace's `semantic_enabled` to true.
 //!   Refuses with 409 if the model isn't on disk.
-//! * `POST /disable` — flip back to BM25-only.
+//! * `POST /disable` -- flip back to BM25-only.
 //!
-//! Whole module gated on `embeddings` — the surface is meaningless
+//! Whole module gated on `embeddings` -- the surface is meaningless
 //! without the candle stack. `lib.rs::router()` mirrors that gate
 //! when wiring the routes.
 //!
@@ -44,7 +44,7 @@ use crate::state::AppState;
 #[derive(Debug, Clone, Serialize)]
 pub struct SemanticState {
     /// "bm25" or "hybrid". Derived from the workspace's
-    /// `semantic_enabled` flag AND whether the model is on disk —
+    /// `semantic_enabled` flag AND whether the model is on disk --
     /// the field is "hybrid" only when BOTH are true.
     pub mode: &'static str,
     /// True when the model files are laid out at the resolver's
@@ -54,7 +54,7 @@ pub struct SemanticState {
     /// Workspace-configured model id (`IndexConfig::model`).
     pub model_name: String,
     /// Resolver's expected path under `global_models_dir()`. Stable
-    /// regardless of presence — useful for diagnostics ("look at X
+    /// regardless of presence -- useful for diagnostics ("look at X
     /// to confirm the download landed").
     pub model_path: String,
     /// Total bytes occupied by the model on disk. `None` when
@@ -149,7 +149,7 @@ fn build_state(
     };
     // Mode is "hybrid" only when both the user opted in AND the
     // model is downloaded. A flipped-on flag with no model on disk
-    // still serves bm25 (defensive — `enable` refuses to set this
+    // still serves bm25 (defensive -- `enable` refuses to set this
     // shape, but a model deleted out from under us would otherwise
     // mis-report).
     let mode = if semantic_enabled && model_present {
@@ -348,7 +348,7 @@ pub async fn api_semantic_disable(State(state): State<Arc<AppState>>) -> Respons
 ///
 /// v1 is blocking from the caller's perspective: the response
 /// arrives when the download completes (or fails). Progress-event
-/// streaming via the watcher channel is a follow-up — see the
+/// streaming via the watcher channel is a follow-up -- see the
 /// task tail's "deferred to follow-up" note. The blocking work
 /// runs on a Tokio blocking thread so it doesn't tie up the
 /// async runtime.

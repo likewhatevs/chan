@@ -1167,7 +1167,7 @@ impl Index {
 }
 
 // Cross-file embedding flush/commit cadence, in chunks (the default/Balanced
-// profile). This is NOT the forward-pass size — the embedder always runs in
+// profile). This is NOT the forward-pass size -- the embedder always runs in
 // `INFER_BATCH`-sized passes internally, so this value does not change device
 // utilization. What it controls is how often the drain loop FLUSHES: each
 // flush commits BM25 and writes the accumulated files' vectors, so a smaller

@@ -31,7 +31,7 @@ marked.use({
 
 // Allow the embed iframes through DOMPurify, but ONLY for the host
 // allowlist (embed.ts). The hook is the backstop: it drops any iframe
-// — including a raw `<iframe>` in user markdown — whose src is not an
+// -- including a raw `<iframe>` in user markdown -- whose src is not an
 // allowlisted embed origin, and forces the protective attributes on the
 // ones that survive. `ADD_TAGS`/`ADD_ATTR` are passed per-call
 // (SANITIZE_OPTS) so other DOMPurify callers keep stripping iframes.
@@ -81,8 +81,8 @@ export function renderMarkdown(input: string): string {
 
 /// Like `renderMarkdown` but with `breaks: true` so a SINGLE newline
 /// renders as a `<br>` (CommonMark soft-break = line break, not a space).
-/// For authored multi-line bodies where line breaks are intentional —
-/// e.g. a `cs terminal survey` prompt — without changing the global
+/// For authored multi-line bodies where line breaks are intentional --
+/// e.g. a `cs terminal survey` prompt -- without changing the global
 /// `breaks: false` (which preserves paragraph boundaries elsewhere). The
 /// per-call options merge over the instance defaults, so `gfm` stays on.
 export function renderMarkdownWithBreaks(input: string): string {

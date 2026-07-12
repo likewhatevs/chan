@@ -9,7 +9,7 @@
 //!
 //! The map is empty in standalone `chan open` / plain-browser mode (no
 //! desktop writes to it), so the server stays Tauri-free and those rows
-//! simply carry no title — the CLI renders a blank cell. Keeping it
+//! simply carry no title -- the CLI renders a blank cell. Keeping it
 //! always-present (rather than `Option`) means every tenant shares one
 //! uniform map with no per-call-site branch.
 
@@ -22,7 +22,7 @@ use std::sync::{Arc, Mutex};
 pub struct WindowMeta {
     /// The OS window title, e.g. `"Terminal Window 1"`.
     pub title: String,
-    /// `"terminal"` | `"workspace"` — the window's flavour, so the list
+    /// `"terminal"` | `"workspace"` -- the window's flavour, so the list
     /// can disambiguate the ephemeral-terminal rows from workspace rows.
     pub kind: Option<String>,
 }

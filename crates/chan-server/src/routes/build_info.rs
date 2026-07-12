@@ -1,4 +1,4 @@
-//! GET /api/build-info — compile-time identity for the running binary.
+//! GET /api/build-info -- compile-time identity for the running binary.
 
 use axum::response::{IntoResponse, Response};
 use axum::Json;

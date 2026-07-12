@@ -10,7 +10,7 @@ import { updateGlobalConfigSerial } from "./store.svelte";
 // PATCH /api/config is a whole-block replacement. Independent read-modify-write
 // chains (the old per-persister inflight model) can interleave: a terminal-config
 // autosave reads the config before a just-fired hybrid_surface_themes override
-// PATCH lands, then writes the block back without the override — so the override
+// PATCH lands, then writes the block back without the override -- so the override
 // resets on reload. updateGlobalConfigSerial funnels every write through one
 // chain so this can't happen.
 
@@ -75,7 +75,7 @@ describe("config write race (the latent hybrid-theme reset bug)", () => {
         },
       },
     });
-    // The override is gone — this is the reset users see on reload.
+    // The override is gone -- this is the reset users see on reload.
     expect(server.preferences.hybrid_surface_themes).toBeUndefined();
   });
 });

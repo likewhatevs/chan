@@ -9,7 +9,7 @@ import source from "./Source.svelte?raw";
 import wysiwyg from "./Wysiwyg.svelte?raw";
 
 // A file opened without an explicit caret (File Browser double-click,
-// `cs open <file>`) must still land with a usable, focused caret — not
+// `cs open <file>`) must still land with a usable, focused caret -- not
 // stay unfocused until the user clicks in. The Draft path (Cmd+N) works
 // because it passes initialSelection; plain opens omit it. The fix lives
 // in each editor's maybeRestoreCaret(): treat an absent caret as document
@@ -28,7 +28,7 @@ const rawEditors: Array<[string, string]> = [
 describe("new-file caret + focus (no persisted caret)", () => {
   for (const [name, src] of rawEditors) {
     test(`${name}: maybeRestoreCaret no longer bails when no caret is supplied`, () => {
-      // The early-return guard must NOT include the !caretPending bail —
+      // The early-return guard must NOT include the !caretPending bail --
       // that is what skipped caret placement + the focus re-claim for
       // plain opens.
       expect(src).not.toMatch(
@@ -129,7 +129,7 @@ function mountEditor(
 }
 
 // Insert one character at a time at the live caret, flushing the component's
-// value->doc $effect between keystrokes — exactly the loop that produced the
+// value->doc $effect between keystrokes -- exactly the loop that produced the
 // "elloH" reorder.
 function typeChars(view: EditorView, text: string): void {
   for (const ch of text) {

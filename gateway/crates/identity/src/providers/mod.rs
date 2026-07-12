@@ -6,7 +6,7 @@
 //!
 //! Wired providers: GitHub, Google, GitLab. Adding another provider
 //! is one new file plus wiring in `Config::from_env`. Microsoft and
-//! Apple are intentionally excluded — Microsoft because tenant
+//! Apple are intentionally excluded -- Microsoft because tenant
 //! admins can mint unverified-email accounts that would defeat our
 //! email-as-link key, Apple because the OAuth setup (signing key,
 //! team id, key id, JWT client secret rotation) is high-touch for

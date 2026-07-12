@@ -4,7 +4,7 @@
 //! would normally raise a hidden `<input type="file">` and `.click()` it. But
 //! WKWebView silently drops a programmatic file-input click made outside a user
 //! gesture (the same wall as the clipboard-paste quirk in `dropped_paths.rs` /
-//! `read_clipboard_text`), so no picker ever appears — the command looks
+//! `read_clipboard_text`), so no picker ever appears -- the command looks
 //! enqueued and nothing happens. On desktop the SPA instead invokes this
 //! command, which opens a NATIVE multi-file open panel (the sibling of the
 //! launcher's folder picker at `window_ops.rs`), reads the chosen files, and
@@ -25,7 +25,7 @@ use serde::Serialize;
 use tauri::AppHandle;
 
 /// One picked file: its base name and full bytes. Bytes cross the IPC bridge as
-/// a JSON number array (fine at notes scale; a very large pick is heavy — the
+/// a JSON number array (fine at notes scale; a very large pick is heavy -- the
 /// SPA caller wraps these straight into `File` objects without re-reading).
 #[derive(Serialize)]
 pub struct PickedUploadFile {

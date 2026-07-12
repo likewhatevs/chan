@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# zone-isolation-probe — demonstrate the ONE network fact that decides the e2e
+# zone-isolation-probe -- demonstrate the ONE network fact that decides the e2e
 # topology: a container can initiate TCP to a SAME-zone peer, but NOT to a
 # different-zone peer. The tunnel is `chan devserver` -> `devserver-proxy`
 # (client -> server), so the two must share a zone on this host.

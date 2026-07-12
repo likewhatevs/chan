@@ -21,20 +21,12 @@ Two public hostnames pointed at the same process:
   - `/healthz` -- liveness.
   - Anything else -- 404.
 
-- `*.devserver.chan.app` (wildcard): the devserver's own content -- the
-  launcher SPA at the root and tenant workspaces under `/{workspace}`. One
-  devserver per user; the `{workspace}` path segment is tenant routing, never
-  a gate key.
-  - `/` with no `devserver_gate` cookie and no `?t=` -- 302 to
-    `https://id.chan.app/workspaces` (the dashboard front door; the proxy
-    renders no UI of its own).
-  - `/` or `/?t=<jwt>` carrying a gate credential -- gated like a tenant path
-    and forwarded to the devserver root, where the launcher SPA is served.
-  - `/api/devserver/*` -- 404 (the devserver's local-only management API is
-    never proxied; the gateway carries tenant content only).
+- `*.devserver.chan.app` (wildcard): the devserver's own content -- the launcher SPA at the root and tenant workspaces under `/{workspace}`. One devserver per user; the `{workspace}` path segment is tenant routing, never a gate key.
+  - `/` with no `devserver_gate` cookie and no `?t=` -- 302 to `https://id.chan.app/workspaces` (the dashboard front door; the proxy renders no UI of its own).
+  - `/` or `/?t=<jwt>` carrying a gate credential -- gated like a tenant path and forwarded to the devserver root, where the launcher SPA is served.
+  - `/api/devserver/*` -- 404 (the devserver's local-only management API is never proxied; the gateway carries tenant content only).
   - `/{workspace}/?t=<jwt>` -- entry: validate the entry token, set the `devserver_gate` and `devserver_csrf` cookies, 303 to the clean URL.
-  - `/{workspace}/...` -- gate on the user's live devserver (drv + aud), then
-    forward the FULL path unchanged into the tunnel. Anything else -- 404.
+  - `/{workspace}/...` -- gate on the user's live devserver (drv + aud), then forward the FULL path unchanged into the tunnel. Anything else -- 404.
 
 A single axum router serves both apex and wildcard via a Host-keyed dispatch. The wildcard host's `{user}` is parsed out of the request's `Host` header; the prefix before `.devserver.chan.app` is the username, and it alone resolves the user's single devserver registration.
 
@@ -67,11 +59,7 @@ Host-keyed apex/wildcard dispatch, then the ordered auth gate on the wildcard pa
 
 The tunnel listener is unchanged: `chan-tunnel-server` runs raw h2 on `TUNNEL_BIND_ADDR`, with the validator chain `CapturingValidator -> ThrottlingValidator -> IdentityValidator`. On a successful handshake the registry caches `(username -> user_id)`.
 
-The `Registry` is the in-process map from `(username, devserver_id)` to the live
-`TunnelHandle` plus the username cache. The second key is the devserver id (the
-registration name), not a workspace slug. The proxy gate looks up the user's
-single registration by username alone (`get_user_devserver`). The admin tree
-reads from the same registry that the proxy handler reads.
+The `Registry` is the in-process map from `(username, devserver_id)` to the live `TunnelHandle` plus the username cache. The second key is the devserver id (the registration name), not a workspace slug. The proxy gate looks up the user's single registration by username alone (`get_user_devserver`). The admin tree reads from the same registry that the proxy handler reads.
 
 ## Devserver gate
 
@@ -92,10 +80,7 @@ Unsafe HTTP methods (`POST`, `PUT`, `PATCH`, `DELETE`) require `X-Chan-CSRF` to 
 
 ## Whole-devserver open (launcher)
 
-The owner opens their whole devserver -- landing on the launcher served at the
-devserver root -- through identity's `GET /s/{owner}`, which mints an entry token
-the same way the per-workspace landing does. The proxy exchanges it for the
-gate cookies and forwards `/` to the launcher:
+The owner opens their whole devserver -- landing on the launcher served at the devserver root -- through identity's `GET /s/{owner}`, which mints an entry token the same way the per-workspace landing does. The proxy exchanges it for the gate cookies and forwards `/` to the launcher:
 
 ```mermaid
 sequenceDiagram
@@ -163,13 +148,7 @@ Request bodies are wrapped in `http_body_util::Limited` at `MAX_REQUEST_BYTES` (
 
 ### Admin tree
 
-The admin tree supports live tunnel snapshots, per-user snapshots, evictions,
-bulk user evictions, and an SSE watch stream. All routes are bearer-gated by
-`DEVSERVER_ADMIN_TOKEN` and live on the apex hostname so tenant content cannot
-reach them via fetch. There is deliberately no per-IP rate limit on this tree:
-behind nginx every request arrives from one upstream IP, so a per-IP bucket
-degenerates into a single global one that an attacker could use to lock out the
-operator CLI; nginx is the rate-limit layer for this surface.
+The admin tree supports live tunnel snapshots, per-user snapshots, evictions, bulk user evictions, and an SSE watch stream. All routes are bearer-gated by `DEVSERVER_ADMIN_TOKEN` and live on the apex hostname so tenant content cannot reach them via fetch. There is deliberately no per-IP rate limit on this tree: behind nginx every request arrives from one upstream IP, so a per-IP bucket degenerates into a single global one that an attacker could use to lock out the operator CLI; nginx is the rate-limit layer for this surface.
 
 ## Key decisions
 

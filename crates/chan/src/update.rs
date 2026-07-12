@@ -879,7 +879,7 @@ pub async fn run_upgrade(opts: UpgradeOptions) -> Result<()> {
 /// (10%, 20%, …) as plain lines so a captured log still shows motion.
 /// Degrades gracefully when the server sends no Content-Length: shows
 /// bytes, elapsed, and average rate without a percent or ETA. No TUI,
-/// no extra deps — just stderr writes.
+/// no extra deps -- just stderr writes.
 struct DownloadProgress {
     /// Advertised total from Content-Length, if any (already capped).
     total: Option<u64>,
@@ -1445,7 +1445,7 @@ mod tests {
     #[test]
     fn eta_guards_are_deterministic() {
         // No ETA before any bytes land, or once the download is
-        // complete — the timing-dependent middle is intentionally not
+        // complete -- the timing-dependent middle is intentionally not
         // asserted (wall-clock).
         let mut p = DownloadProgress::new(Some(1000), false, false);
         assert_eq!(p.eta_secs(1000), None);

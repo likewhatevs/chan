@@ -2,7 +2,7 @@
 // theme toggle and the New-workspace button. Registry/feed rendering loads
 // asynchronously from the backend and is covered by the state + component
 // tests; this keeps the mount path itself green. Also covers the error banner's
-// dismiss [X] (clearError) — a real component mount, since a banner with no way
+// dismiss [X] (clearError) -- a real component mount, since a banner with no way
 // to clear it short of a reload was the reported bug.
 
 import { describe, it, expect, afterEach, vi } from "vitest";

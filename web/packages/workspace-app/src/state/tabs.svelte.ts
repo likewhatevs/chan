@@ -374,7 +374,7 @@ export type TerminalTab = {
   /// messages + `cs terminal write` teammate pokes share one FIFO; a gemini
   /// text+chord pair counts once). Drives the tab-strip badge and the idle
   /// prompt label. 0 is stored as undefined (truthiness renders like
-  /// terminalActivity); never persisted — every (re)attach re-syncs it from
+  /// terminalActivity); never persisted -- every (re)attach re-syncs it from
   /// the WS `session` frame.
   queueDepth?: number;
   /// The ONE in-flight Rich Prompt message (submit is a no-op while set).
@@ -384,9 +384,9 @@ export type TerminalTab = {
   /// 1-based position) -> "delivered" (last write hit the PTY) | "rejected"
   /// (queue full) | "failed" (WS close / ack timeout / session end). Cancel/
   /// recall adds two terminal phases the bubble consumes: "recalled" (the
-  /// `prompt-cancelled` ack removed a still-queued message — unlock + keep the
+  /// `prompt-cancelled` ack removed a still-queued message -- unlock + keep the
   /// draft text to edit + resubmit) | "drained" (the cancel raced a drain; the
-  /// message already hit the PTY — surface it, don't silently re-edit). The
+  /// message already hit the PTY -- surface it, don't silently re-edit). The
   /// bubble's $effect consumes terminal phases and clears this field.
   pendingPrompt?: {
     id: string;
@@ -1990,7 +1990,7 @@ export function resolvePendingPrompt(
 /// false` means it raced a drain and already delivered → phase "drained" (the
 /// bubble surfaces "already sent" rather than letting the user silently
 /// re-edit a delivered message). Stale/foreign ids no-op (same guard as
-/// `resolvePendingPrompt` — every attached socket sees acks it doesn't own).
+/// `resolvePendingPrompt` -- every attached socket sees acks it doesn't own).
 export function resolvePromptCancelled(tab: TerminalTab, id: string, removed: boolean): void {
   const pending = tab.pendingPrompt;
   if (!pending || pending.id !== id) return;
@@ -2009,7 +2009,7 @@ export function reproveRestoredPrompt(tab: TerminalTab, queuedIds: string[]): vo
   const pending = tab.pendingPrompt;
   if (!pending) return;
   // Only re-prove a "queued" message (the persisted/acked state). A live "sent"
-  // (just submitted, pre-ack) is the ack flow's to resolve — a reattach session
+  // (just submitted, pre-ack) is the ack flow's to resolve -- a reattach session
   // frame must not race-clear it before its prompt-ack arrives.
   if (pending.phase !== "queued") return;
   const idx = queuedIds.indexOf(pending.id);
@@ -2021,7 +2021,7 @@ export function reproveRestoredPrompt(tab: TerminalTab, queuedIds: string[]): vo
 }
 
 /// Fail the in-flight prompt unconditionally (WS close / session end / ack
-/// timeout — paths with no message id in hand). The bubble unlocks, keeps
+/// timeout -- paths with no message id in hand). The bubble unlocks, keeps
 /// the text, and labels honestly: the message may still be queued
 /// server-side, but this client can no longer observe its delivery.
 export function failPendingPrompt(tab: TerminalTab): void {
@@ -2109,14 +2109,14 @@ export function isTerminalMoving(tabId: string): boolean {
 
 /// Records whether the most recent terminal-tab close was a session-preserving
 /// cross-window MOVE (vs a real close). `closeTab` sets it just before it
-/// removes the tab — so the empty-window discard guard, which fires reactively
+/// removes the tab -- so the empty-window discard guard, which fires reactively
 /// right after, reads the LAST close's intent deterministically (set before the
 /// mutation, no effect-vs-teardown ordering race). A non-move close clears it.
 let lastTerminalCloseWasMoveOut = false;
 
 /// One-shot read for the window-discard guard: was the close that just emptied
 /// this window a terminal move-out? If so the source's discard must DELETE its
-/// blob but NOT reap — the moved PTY lives on, re-bound to the target window.
+/// blob but NOT reap -- the moved PTY lives on, re-bound to the target window.
 export function consumeLastCloseWasMoveOut(): boolean {
   const v = lastTerminalCloseWasMoveOut;
   lastTerminalCloseWasMoveOut = false;
@@ -2158,7 +2158,7 @@ export function registerTerminalPromptSink(
 /// terminal once its socket connects (the lead is a normal terminal now - no
 /// bubble - so its identity arrives through the same queue as every prompt).
 /// `id` tags the message for queue-visibility tracking (prompt-ack /
-/// prompt-delivered frames). Omitted = legacy fire-and-forget — the team
+/// prompt-delivered frames). Omitted = legacy fire-and-forget -- the team
 /// orchestrator's lead-identity prompt stays untagged on purpose.
 export function sendPromptToTerminal(
   tabId: string,
@@ -2525,7 +2525,7 @@ async function loadTabContent(
 
 /// Peek whether `path` opens as text without downloading it whole. Reuses the
 /// server's content gate (`read_text_with_stat`, shared with `cs open`): the
-/// stream read emits its meta for a plaintext file — we abort right after — and
+/// stream read emits its meta for a plaintext file -- we abort right after -- and
 /// fails with a 415 for a binary one. "error" (a real read failure, e.g. a
 /// missing file) lets the caller fall through to a normal open so the editor tab
 /// surfaces the actual cause.
@@ -2537,7 +2537,7 @@ async function probeOpenableAsText(
     await api.readStream(path, {
       signal: controller.signal,
       onMeta() {
-        // The server accepted it as text; stop the download here — the real
+        // The server accepted it as text; stop the download here -- the real
         // load re-reads it into the tab.
         controller.abort();
       },
@@ -2558,7 +2558,7 @@ export async function openInPane(
 ): Promise<void> {
   // The extension may not be editable, but the file can still be plaintext (an
   // odd suffix, no extension). Peek the content and let the server's gate
-  // decide — matching `cs open`. Editable-by-extension files skip the peek.
+  // decide -- matching `cs open`. Editable-by-extension files skip the peek.
   // A binary file is refused (it stays view-only in the browser/inspector); a
   // real read error falls through to a normal open so the tab shows the cause.
   if (!isEditableText(path) && (await probeOpenableAsText(path)) === "binary") {
@@ -2751,7 +2751,7 @@ export function openInActivePane(
 /// `note.txt` / `note`), so the pill renders as a valid link. But the
 /// click previously handed that raw stem straight to `openInActivePane`,
 /// and the file read route opens the path verbatim (no extension probe)
-/// — so it 404'd and the tab flashed a false "document not found" for a
+/// -- so it 404'd and the tab flashed a false "document not found" for a
 /// file that's right there on disk. Resolve through the SAME probe here
 /// so the click opens `note.md`. A failed resolve falls back to the raw
 /// target so a genuinely broken link still lands on the missing-file
@@ -2951,13 +2951,13 @@ async function closeTabAsync(
 }
 
 /// Remove a terminal tab whose session was EXPLICITLY closed server-side
-/// (the user / another window / `cs terminal close` deleted it — the
+/// (the user / another window / `cs terminal close` deleted it -- the
 /// `closed{reason:"explicit"}` frame in TerminalTab.svelte). Unlike
 /// `closeTab`, this skips the confirm prompt and the WS close sink: the
 /// session is already gone, so there is nothing to confirm or to tell the
 /// server. Drops the dead tab from its pane with the same active-tab /
 /// empty-pane bookkeeping as `closeTab` (no pane auto-collapse, not added to
-/// the reopen-closed list — the session can't be reattached). Under Option A
+/// the reopen-closed list -- the session can't be reattached). Under Option A
 /// a terminal-only window is ephemeral, so once the dead tab is gone the
 /// debounced session save deletes the window's blob if no durable content
 /// remains. No-op if the tab is no longer in the layout.
@@ -3320,7 +3320,7 @@ function cloneTab(src: Tab): Tab {
       // Carry the per-tab File Browser view state across a clone, the
       // same way the graph branch above carries its own. Without this a
       // split / move / reopen-closed (Cmd+Shift+T) drops the user's
-      // expanded directories, selection, scroll, and workspace toggle —
+      // expanded directories, selection, scroll, and workspace toggle --
       // the reopened tab snaps back to a collapsed root. Arrays are
       // copied (not aliased) so the clone and source don't share a
       // mutable reference.
@@ -3500,8 +3500,8 @@ export function cancelPaneMode(): void {
 /// spawns a shell (in terminal-only windows every staged split gets
 /// one automatically); just dropping the draft on Esc orphaned that
 /// shell in the registry until idle-prune. Run each staged terminal's
-/// registered close sink — the same explicit-close path `closeTab`
-/// uses (kills the session, discards the Rich Prompt draft) — BEFORE
+/// registered close sink -- the same explicit-close path `closeTab`
+/// uses (kills the session, discards the Rich Prompt draft) -- BEFORE
 /// the draft stops rendering, while the components and their sinks are
 /// still mounted. Committed tabs share ids with the live layout and
 /// are never staged, so moves/clones are naturally excluded.
@@ -4293,7 +4293,7 @@ export function setMode(tab: Tab, mode: Mode): void {
 /// HAVE a rendered surface: plain text (.rs/.py/.toml/Makefile) has only source
 /// mode, so the Mod+E chord is a NO-OP there instead of forcing an invalid
 /// wysiwyg render. `defaultModeForPath` yields the rendered mode for renderable
-/// files and "source" for source-only ones — the same split FileEditorTab uses
+/// files and "source" for source-only ones -- the same split FileEditorTab uses
 /// for rendered/source mode controls (`hasRenderedMode` / `renderedModeForTab`).
 /// Routed via the Mod+E chord and command launcher. Component-local mode buttons
 /// call FileEditorTab's `doToggleMode`; both paths remap the caret across the
@@ -4851,13 +4851,13 @@ export type SerTab = {
   /// re-show with position; drained → clear). Only the actionable in-flight
   /// phases ("sent"/"queued") are persisted. Per-window session payloads only.
   pp?: { id: string; ph: "sent" | "queued" };
-  /// Rich Prompt bubble was visible — reshow it on reload so a restored queued
+  /// Rich Prompt bubble was visible -- reshow it on reload so a restored queued
   /// message is actionable without re-toggling Cmd+Shift+P. Session payloads only.
   rpv?: 1;
   /// Team Work spawn-agents dialog config draft for a pending LEAD terminal, so
   /// a reload reopens the dialog with exactly what the user was editing. Stored
   /// verbatim (the session blob isn't size-constrained like the URL hash).
-  /// Per-window session payloads ONLY — kept out of the shareable URL hash since
+  /// Per-window session payloads ONLY -- kept out of the shareable URL hash since
   /// a member's `env` can carry secrets. See `TerminalTab.teamWorkPending`.
   twk?: TeamDialogConfig;
   /// Graph tab state.
@@ -5627,9 +5627,9 @@ export type ReconcileResult = "applied" | "diverged";
 /// Applied from remote: the pane tree (splits, directions, ratios), the
 /// tab set per pane side, pane A/B side visibility, per-Hybrid theme
 /// overrides, the window focus color, and terminal titles. Tabs are
-/// matched TREE-WIDE by stable identity — terminals by `tsid` (with an
+/// matched TREE-WIDE by stable identity -- terminals by `tsid` (with an
 /// ordinal fallback for structure-only blobs that omit session ids),
-/// files by path + ordinal, graph/browser/dashboard by kind + ordinal —
+/// files by path + ordinal, graph/browser/dashboard by kind + ordinal --
 /// so a matched live tab OBJECT moves to its remote position, including
 /// across panes (the keyed component salvage local drag-move relies on).
 /// Remote tabs with no live match are created via the restore
@@ -5938,8 +5938,8 @@ function reconcileLeafTabs(
 
 /// Map one side's remote tab list onto live objects: matched tabs move
 /// here (terminal titles ride along), unmatched ones are created via the
-/// restore constructors. A remote terminal without a `tsid` is skipped —
-/// a sync never spawns a PTY — and flags divergence so the local
+/// restore constructors. A remote terminal without a `tsid` is skipped --
+/// a sync never spawns a PTY -- and flags divergence so the local
 /// save-back keeps the peers converging. Legacy overlay kinds ("s"
 /// settings, "h" health) drop silently, as on restore.
 function materializeSide(
@@ -6049,7 +6049,7 @@ function serializedLeaves(node: SerNode | null, out: SerLeaf[] = []): SerLeaf[] 
   return out;
 }
 
-/// True when a serialized layout carries durable content — at least one
+/// True when a serialized layout carries durable content -- at least one
 /// non-terminal tab (a file/browser/graph/hybrid/dashboard surface).
 /// Terminal tabs (`k:"t"`) are ephemeral: the PTY dies on restart and a
 /// saved `tsid` only respawns a fresh shell, so a window whose tabs are ALL
@@ -6068,7 +6068,7 @@ export function layoutHasDurableContent(layout: SerNode | null): boolean {
 }
 
 /// True when a serialized layout has at least one terminal tab carrying a
-/// `tsid` — i.e. a live server-side PTY to RE-ATTACH on reload. A terminal
+/// `tsid` -- i.e. a live server-side PTY to RE-ATTACH on reload. A terminal
 /// without a tsid (not yet connected, or its session ended) has nothing to
 /// reattach, so persisting a reload snapshot of it would only spawn a stray
 /// fresh PTY when restored. Gates the all-terminal reload snapshot in
@@ -6085,7 +6085,7 @@ export function layoutHasReattachableTerminal(layout: SerNode | null): boolean {
 /// True when a serialized layout is worth persisting for its STRUCTURE alone,
 /// even with no durable content and no reattachable PTY: a split (more than one
 /// pane, so empty panes survive) or a terminal-only window. Restoring it
-/// recreates the panes and spawns FRESH shells for the terminals — the PTYs are
+/// recreates the panes and spawns FRESH shells for the terminals -- the PTYs are
 /// gone after a restart or a workspace off->on, and the layout is what we keep.
 /// Gates the on-disk session save (store.svelte.ts) so a terminal-only or
 /// empty-split window no longer restores blank. A single empty pane stays

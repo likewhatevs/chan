@@ -210,7 +210,7 @@
     flex: 1;
   }
 
-  /* Dismiss [X] — the icon-button posture, but transparent so it blends into the
+  /* Dismiss [X] -- the icon-button posture, but transparent so it blends into the
      danger banner and inherits its colour. */
   .banner-dismiss {
     flex-shrink: 0;

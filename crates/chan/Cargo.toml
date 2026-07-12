@@ -82,10 +82,10 @@ tempfile = { workspace = true }
 # macOS auto-wires candle's Metal backend so the default release
 # binary uses the GPU for embeddings without a feature flag. The
 # `metal` (GPU, opt-in at runtime) and `accelerate` (Apple Accelerate as
-# candle's CPU BLAS — the fast default-CPU embed path) are target-gated on
+# candle's CPU BLAS -- the fast default-CPU embed path) are target-gated on
 # chan-workspace; both pull Apple-only deps (objc2-metal / accelerate-src).
-# Declaring them here keeps Linux/Windows builds — incl. the static-musl
-# release binary — structurally unable to pull them in, while macOS gets
+# Declaring them here keeps Linux/Windows builds -- incl. the static-musl
+# release binary -- structurally unable to pull them in, while macOS gets
 # them transparently.
 [target.'cfg(target_os = "macos")'.dependencies]
 chan-workspace = { workspace = true, default-features = false, features = ["metal", "accelerate"] }

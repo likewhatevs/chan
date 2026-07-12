@@ -7,7 +7,7 @@ import type { Terminal } from "@xterm/xterm";
 // bypass mouse reporting and force a native selection. xterm.js v6 already does
 // this on Linux/Windows (`shouldForceSelection` returns `e.shiftKey`), but on
 // macOS it returns `e.altKey && macOptionClickForcesSelection` and IGNORES
-// Shift — so on the chan-desktop (macOS WKWebView) the resolved Shift gesture
+// Shift -- so on the chan-desktop (macOS WKWebView) the resolved Shift gesture
 // did nothing. We wrap `shouldForceSelection` to honor Shift on every platform.
 //
 // xterm.js exposes no public hook for the force-selection modifier, so this

@@ -149,7 +149,7 @@ describe("windowDragScope", () => {
   });
 
   // Rule 2: a workspace tab is accepted only within the SAME workspace AND the
-  // SAME chan-library. Differing EITHER dimension must not match — including the
+  // SAME chan-library. Differing EITHER dimension must not match -- including the
   // collision case where the workspace_key is identical but the library differs.
   test("workspaces match only on the same (library_id, workspace_key) pair", () => {
     const localA = windowDragScope({
@@ -184,7 +184,7 @@ describe("dragScopeMimeToken", () => {
   // The drag scope rides a DataTransfer MIME TYPE so it is readable at dragover.
   // The human-readable scope carries `:` and `|`, which WKWebView mangles in a
   // MIME type so the stamped type does not return byte-identically through
-  // `dataTransfer.types` — that broke the equality check for EVERY drop,
+  // `dataTransfer.types` -- that broke the equality check for EVERY drop,
   // intra-window pane moves included. The token must encode to a MIME-safe
   // alphabet so the round-trip is byte-stable.
 
@@ -206,7 +206,7 @@ describe("dragScopeMimeToken", () => {
       "lib:local|terminal",
       "lib:lib-abc123|terminal",
       "lib:local|workspace:wk-deadbeef",
-      // An absolute-root workspace key with `/` and mixed case — the latent
+      // An absolute-root workspace key with `/` and mixed case -- the latent
       // hazard the `|` tipped over.
       "lib:local|workspace:/Users/x/My Notes",
     ]) {
@@ -253,7 +253,7 @@ describe("dragScopeMimeToken", () => {
     expect(localWsA).toBe(localWsAgain);
     // Cross-library: rejected.
     expect(localTermA).not.toBe(remoteTerm);
-    // Same workspace key, DIFFERENT library — the collision case: rejected.
+    // Same workspace key, DIFFERENT library -- the collision case: rejected.
     expect(localWsA).not.toBe(remoteWsSameKey);
     // Different workspace: rejected.
     expect(localWsA).not.toBe(localWsOther);

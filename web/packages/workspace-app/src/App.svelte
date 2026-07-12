@@ -334,7 +334,7 @@
     // Live per-library focus-colour broadcast. Subscribe ONCE PER
     // WINDOW (the var is per-document; <Pane> is per leaf node, so per-pane would
     // open redundant sockets) to this library's colour watch and recolour
-    // `--pane-highlight-color` the instant ANY window of the library changes it —
+    // `--pane-highlight-color` the instant ANY window of the library changes it --
     // replacing the v1 "other windows pick it up on next mint" behaviour. Pushes
     // the current colour on connect, so this also reconciles with `?pane=`.
     // Apply the var (border) AND sync the menu/`data-focus-color` so a live push
@@ -1035,7 +1035,7 @@
     if (!ui.terminalOnly || !ui.terminalArmed) return;
     if (allTerminalTabs().length > 0) return;
     // Last terminal closed (^W / ^D / Cmd+W): the window is empty, which is a
-    // discard — delete its blob before the host destroys the window so it
+    // discard -- delete its blob before the host destroys the window so it
     // leaves nothing in `cs window list`. But if the window emptied because its
     // terminal MOVED to another window, suppress the reap: the moved PTY lives
     // on (re-bound to the target), and the source's synchronous DELETE could
@@ -1240,8 +1240,8 @@
       }
       // Explicit "close this window" (native Ctrl+Shift+W via KEY_BRIDGE_JS,
       // and the OS close button when a devserver is NOT connected). Discard
-      // intent: delete this window's saved blob now — the server reaps its
-      // terminal sessions — then ask the host to close the window. Distinct
+      // intent: delete this window's saved blob now -- the server reaps its
+      // terminal sessions -- then ask the host to close the window. Distinct
       // from a bury (connected close button), which keeps the blob so the
       // window can be re-surfaced.
       case "app.window.close":
@@ -1252,7 +1252,7 @@
       // The desktop OS red-dot on a LIVE window. The host prevented the close
       // and asked us. Two fast paths close straight away (no prompt): while the
       // reconnect overlay is up (ui.disconnectBlocking) there is nothing to keep
-      // interacting with, and an empty window (no tabs) must never be recorded —
+      // interacting with, and an empty window (no tabs) must never be recorded --
       // the discard cascade removes its row and DELETEs its session blob. Any
       // other window prompts Hide / Close / Cancel; the overlay owns the outcome.
       case "app.window.confirmClose":

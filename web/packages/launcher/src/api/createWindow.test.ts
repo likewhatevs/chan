@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { mockApi } from "./mock";
 
-describe("createWindow — terminal mint", () => {
+describe("createWindow: terminal mint", () => {
   it("mints a local terminal window and adds it to the feed", async () => {
     const before = await mockApi.listWindows();
     const rec = await mockApi.createWindow("terminal");

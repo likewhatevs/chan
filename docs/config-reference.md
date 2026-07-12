@@ -8,7 +8,7 @@ When adding a new persisted field: extend the relevant section here in the same 
 
 ## chan-server
 
-### `~/.chan/server.toml` — `ServerConfig`
+### `~/.chan/server.toml` -- `ServerConfig`
 
 Source: `crates/chan-server/src/config.rs`.
 
@@ -26,7 +26,7 @@ Source: `crates/chan-server/src/config.rs`.
 
 Legacy `[reports] enabled = ...` blocks in `server.toml` are ignored on load and omitted on the next save. Per-workspace `IndexConfig.reports_enabled` is the only reports toggle source.
 
-### `~/.chan/preferences.toml` — `EditorPrefs`
+### `~/.chan/preferences.toml` -- `EditorPrefs`
 
 Source: `crates/chan-server/src/preferences.rs`.
 
@@ -51,7 +51,7 @@ Source: `crates/chan-server/src/preferences.rs`.
 
 ## chan-workspace
 
-### `~/.chan/config.toml` — `Registry` (`KnownWorkspace[]`)
+### `~/.chan/config.toml` -- `Registry` (`KnownWorkspace[]`)
 
 Source: `crates/chan-workspace/src/registry.rs`.
 
@@ -76,7 +76,7 @@ Global registry fields (not per-workspace), persisted in the same `~/.chan/confi
 
 Both `index_excluded_dirs` and `drafts_dir` are hand-edited in the TOML and have no UI surface. `drafts_dir` names a real hidden directory at the workspace root (default `.Drafts/`) that holds Cmd+N scratch work as `<name>/draft.md` plus companions. It is created lazily on the first Cmd+N, so an untouched workspace has no such directory. Because it lives in-tree it participates in search, graph, and watch through the normal machinery; add `.Drafts/` to a `.gitignore` to keep drafts out of SCM.
 
-### `<state_dir>/index/<uuid>/config.toml` — `IndexConfig`
+### `<state_dir>/index/<uuid>/config.toml` -- `IndexConfig`
 
 Source: `crates/chan-workspace/src/index/config.rs`.
 
@@ -95,7 +95,7 @@ Source: `crates/chan-workspace/src/index/config.rs`.
 | `screensaver_theme` | `ScreensaverTheme` | `plain` | `PATCH /api/screensaver/state` | overlay scene |
 | `screensaver_pin_hash` | `Option<Vec<u8>>` | `None` | `POST /api/screensaver/pin` | overlay PIN gate; the wire only ever reports `pin_set: bool` |
 
-### `.Drafts/team-{name}/config.toml` — `TeamConfig`
+### `.Drafts/team-{name}/config.toml` -- `TeamConfig`
 
 Source: `crates/chan-workspace/src/teams.rs`.
 
@@ -150,13 +150,13 @@ CHAN_HOME=/tmp/chan-devserver-home \
 
 Per-workspace metadata lives under `~/.chan/workspaces/<metadata_key>/`, where `metadata_key` is a readable slug of the canonical workspace path plus an 8-hex hash suffix:
 
-* `sessions/` — session blobs (window/pane layout).
-* `index/` — tantivy search-index segments + `config.toml` (`IndexConfig` above).
-* `graph/` — graph DB (sqlite) + sidecar markers (`rebuild.inprogress`, `rename_log.json`).
-* `locks/` — per-workspace index-writer lockfile.
-* `tokens/` — chan-server bearer token (mode 0600).
-* `trash/` — soft-deleted files (lazy GC).
-* `report/report.jsonl` — chan-report state (lazy, created on reports opt-in).
+* `sessions/` -- session blobs (window/pane layout).
+* `index/` -- tantivy search-index segments + `config.toml` (`IndexConfig` above).
+* `graph/` -- graph DB (sqlite) + sidecar markers (`rebuild.inprogress`, `rename_log.json`).
+* `locks/` -- per-workspace index-writer lockfile.
+* `tokens/` -- chan-server bearer token (mode 0600).
+* `trash/` -- soft-deleted files (lazy GC).
+* `report/report.jsonl` -- chan-report state (lazy, created on reports opt-in).
 
 Drafts are NOT in this metadata tree. They live in-tree under the workspace root in the directory named by `Registry::drafts_dir` (default `.Drafts/`), holding regular drafts (`untitled-N/`) and team workspaces (`team-{name}/`).
 

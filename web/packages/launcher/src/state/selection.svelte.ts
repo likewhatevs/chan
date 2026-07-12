@@ -1,6 +1,6 @@
 // Gmail-style multi-select for the registry lists. ONE selection spans three
-// kinds — local workspaces, served (devserver-mounted) workspaces, and
-// devservers — feeding ONE global bulk bar (rendered App-level above the lists).
+// kinds -- local workspaces, served (devserver-mounted) workspaces, and
+// devservers -- feeding ONE global bulk bar (rendered App-level above the lists).
 // Bulk turn on/off loops the per-kind singular op (the ops are independent +
 // idempotent, so no bulk endpoints are needed); bulk remove runs an ORDERED
 // cross-kind delete (remove local -> forget served -> remove devservers).
@@ -40,7 +40,7 @@ interface SelectionState {
    * checkboxes. Entered/left from the top-bar Select toggle; leaving clears the
    * selection so no stale check or highlight lingers. */
   selectMode: boolean;
-  /** Selected rows across all kinds. A plain array — deeply reactive under
+  /** Selected rows across all kinds. A plain array -- deeply reactive under
    * $state (a bare Set would need svelte/reactivity's SvelteSet to track). */
   selected: SelItem[];
   /** A bulk action is running (disables the bar briefly). */
@@ -171,7 +171,7 @@ function bulkNote(
 
 /** Bulk turn on/off across every selected kind: a local workspace toggles its
  * tenant, a served workspace toggles on its owning devserver, a devserver
- * connects/disconnects. Bulk-off stays a fail-safe — an unforced off that 409s
+ * connects/disconnects. Bulk-off stays a fail-safe -- an unforced off that 409s
  * (live terminals) just counts as a failure; never a per-item confirm, never a
  * force-kill. The single-row Off confirm is where that
  * path lives. */
@@ -205,7 +205,7 @@ export function cancelBulkDelete(): void {
  *   1. Remove selected LOCAL workspaces.
  *   2. Forget every selected SERVED workspace while its devserver connection is
  *      still present.
- *   3. Remove selected DEVSERVERS — `reg.remove`'s `on_remove` hook reaps the
+ *   3. Remove selected DEVSERVERS -- `reg.remove`'s `on_remove` hook reaps the
  *      live connection + windows.
  * Succeeded rows drop from the selection; failures stay so the count reflects
  * what is left. */

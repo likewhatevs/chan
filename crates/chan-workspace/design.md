@@ -116,13 +116,7 @@ Behaviour by class:
 
 `rename`, `copy`, and `remove` operate on every class. Link rewriting in `rename_with_link_rewrite` only touches `EditableText` bodies (Text-class files, images, and other binaries have no markdown links to rewrite); the graph edge `dst` gets updated regardless of target class. `resolve_free_name` computes a collision-free destination name for copy / promote flows.
 
-Typed markdown frontmatter is resolved through a nested `chan.kind` registry.
-The only supported entry today is `contact`, which stamps a graph node as
-`Contact` and gives server/web callers the `contact` renderer hint; unknown
-kinds stay ordinary markdown files. Semantic reference tokens are markdown-only:
-`#tag` and `@@mention` graph edges are extracted from `.md` files and
-intentionally ignored in `.txt`, so plain notes remain searchable/editable
-without turning incidental prose into graph entities.
+Typed markdown frontmatter is resolved through a nested `chan.kind` registry. The only supported entry today is `contact`, which stamps a graph node as `Contact` and gives server/web callers the `contact` renderer hint; unknown kinds stay ordinary markdown files. Semantic reference tokens are markdown-only: `#tag` and `@@mention` graph edges are extracted from `.md` files and intentionally ignored in `.txt`, so plain notes remain searchable/editable without turning incidental prose into graph entities.
 
 Extension matching is ASCII case-insensitive. Files whose extension is unknown fall back to a basename check against well-known textual filenames (Makefile, Dockerfile, LICENSE, ...), then to the content sniff on the read/write path.
 
@@ -274,10 +268,7 @@ Each link target is either a file or a heading. Both carry the file path; file t
       rank 3  title contains q         (h1 / frontmatter title hit)
       rank 4  heading text contains q  (in-file anchor target)
 
-    Within a rank, files sort by `mtime DESC NULLS LAST,
-    rel_path ASC`; headings sort by `rel_path, ord`. Heading
-    hits are capped at `limit / 2` so a single TOC-heavy file
-    cannot drown out file matches.
+    Within a rank, files sort by `mtime DESC NULLS LAST, rel_path ASC`; headings sort by `rel_path, ord`. Heading hits are capped at `limit / 2` so a single TOC-heavy file cannot drown out file matches.
 
   - **Wildcard escaping**: `%`, `_`, and `\` in `q` are escaped against SQLite's LIKE engine so a filename "100%off.md" is not matched by a raw `%` query.
   - **Case folding**: ASCII only. SQLite's `LOWER` does not fold Unicode without ICU; non-ASCII queries match case-sensitively. Acceptable for a single-user picker; revisit if a Unicode-aware backend becomes a priority.
@@ -499,11 +490,7 @@ Anything chan-workspace-managed (registry, sessions, blob storage, graph control
 
 ### Locking model
 
-Registration and open operations coordinate through the registry mutex and the
-cross-process workspace lock. Reads avoid the cross-process lock and rely on
-safe path resolution plus reader-safe tantivy/sqlite handles. Writes use atomic
-replacement or the graph writer mutex, depending on whether the target is a
-filesystem entry or graph state.
+Registration and open operations coordinate through the registry mutex and the cross-process workspace lock. Reads avoid the cross-process lock and rely on safe path resolution plus reader-safe tantivy/sqlite handles. Writes use atomic replacement or the graph writer mutex, depending on whether the target is a filesystem entry or graph state.
 
 Two distinct concurrency primitives:
 
@@ -555,9 +542,7 @@ Notable variants:
 
   - **Vector shards**: each per-file file under `embeddings/` carries its own `FORMAT_VERSION` (currently 2; the format includes the `body_hash` checkpoint field for embed-phase skip on partial rebuilds). The version is checked per shard in `load_all`; a mismatch drops the shard silently and the next `build_all` re-embeds the file. This is intentionally independent of the schema-version wipe path: a shard-format bump should NOT invalidate BM25 segments or other shards, only the shards that actually need re-encoding.
 
-  - **Report JSONL**: `chan-report`'s `SCHEMA_VERSION` (currently
-    1) is checked on load; a mismatch (or any parse error) makes
-    chan-workspace discard the cache and rescan.
+  - **Report JSONL**: `chan-report`'s `SCHEMA_VERSION` (currently 1) is checked on load; a mismatch (or any parse error) makes chan-workspace discard the cache and rescan.
 
 A schema bump in any store is user-data-safe: only chan-managed cache is destroyed; the user's notes are untouched.
 

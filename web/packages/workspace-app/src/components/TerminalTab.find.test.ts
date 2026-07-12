@@ -4,7 +4,7 @@
 //
 // 1. The xterm Terminal is constructed with `allowProposedApi: true`.
 //    xterm gates registerDecoration behind that flag, and the search
-//    addon's decorated find throws without it — the find bar "matches
+//    addon's decorated find throws without it -- the find bar "matches
 //    nothing" because runFind dies mid-keystroke.
 // 2. The find command family (app.find.open / next / prev) reaches the
 //    focused terminal over the chan:command bus. On desktop the key

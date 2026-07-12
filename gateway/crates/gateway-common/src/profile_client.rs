@@ -202,7 +202,7 @@ impl ProfileClient {
 
     /// Send a request that is safe to replay: one retry after 100 ms
     /// on connect error, timeout, or 5xx. Only use for idempotent GETs
-    /// — never for POST/PATCH/DELETE — because a retry after a write
+    /// -- never for POST/PATCH/DELETE -- because a retry after a write
     /// that the network ate at response time would double-apply.
     /// Damps brief profile-service hiccups (restart, rolling deploy)
     /// for the dashboard and OAuth-callback read path.
@@ -548,7 +548,7 @@ impl ProfileClient {
         }
     }
 
-    /// Idempotent. 201 on insert, 200 on hit-existing — caller maps
+    /// Idempotent. 201 on insert, 200 on hit-existing -- caller maps
     /// both to "devserver now exists". `label` mirrors the PAT label;
     /// a blank label on a re-issue leaves the stored one untouched.
     pub async fn create_devserver(

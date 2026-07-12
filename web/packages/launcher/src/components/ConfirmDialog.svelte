@@ -1,6 +1,6 @@
 <script lang="ts">
   // The generic confirm dialog. Renders the in-SPA Modal (never a native
-  // window.confirm — WKWebView blocks those) with the request's message and a
+  // window.confirm -- WKWebView blocks those) with the request's message and a
   // Confirm / Cancel pair. Confirm runs the stored action then closes; Cancel
   // and the Modal's close (backdrop / × / Escape) dismiss without running it.
   // Mounted in App.svelte only while a request is open.

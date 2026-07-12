@@ -4,13 +4,13 @@ OCI images for chan and the chan-gateway services. Multi-stage builds: a builder
 
 ## Images
 
-| Image                            | Dockerfile / target               | Ports        |
-|----------------------------------|-----------------------------------|--------------|
-| `chan`                           | `chan.Dockerfile`                 | 8787         |
-| `chan-gateway-identity`          | `gateway.Dockerfile` `identity`   | 7000         |
-| `chan-gateway-profile`           | `gateway.Dockerfile` `profile`    | 7001         |
-| `chan-gateway-devserver-proxy`   | `gateway.Dockerfile` `devserver-proxy` | 7002, 7100 |
-| `chan-upload-test`               | `test/upload/Dockerfile`          | (test only)  |
+| Image                          | Dockerfile / target                    | Ports       |
+|--------------------------------|----------------------------------------|-------------|
+| `chan`                         | `chan.Dockerfile`                      | 8787        |
+| `chan-gateway-identity`        | `gateway.Dockerfile` `identity`        | 7000        |
+| `chan-gateway-profile`         | `gateway.Dockerfile` `profile`         | 7001        |
+| `chan-gateway-devserver-proxy` | `gateway.Dockerfile` `devserver-proxy` | 7002, 7100  |
+| `chan-upload-test`             | `test/upload/Dockerfile`               | (test only) |
 
 The three gateway services share one builder stage in `gateway.Dockerfile` (a single cargo build of all three crates); `--target` selects the runtime.
 
@@ -83,7 +83,7 @@ docker run --rm -e CHAN_TUNNEL_TOKEN=chan_pat_... chan:dev \
 
 The service binaries read configuration from environment variables (they do NOT source the systemd `EnvironmentFile`; that is a packaging concern). Each image sets only `BIND_ADDR=0.0.0.0:<port>` (the in-repo default is `127.0.0.1`, which is unreachable across containers). Everything else is injected at runtime; no secrets are baked in. The full variable contract is in `gateway/crates/*/packaging/*.env` and `gateway/README.md`.
 
-For orchestration (Postgres + the three services wired together) and the local sdme validation, use `packaging/kube/` — see `packaging/kube/README.md`.
+For orchestration (Postgres + the three services wired together) and the local sdme validation, use `packaging/kube/` -- see `packaging/kube/README.md`.
 
 ## Design notes
 

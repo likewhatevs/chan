@@ -2,7 +2,7 @@
 //! socket against this tenant.
 //!
 //! Every SPA window opens one event socket and tags it with its window
-//! id (`/ws?w=<id>` — the same id that keys the per-window session
+//! id (`/ws?w=<id>` -- the same id that keys the per-window session
 //! blob). The refcounted map below turns those sockets into a presence
 //! set the window lists read for `connected`: `GET /api/windows` and the
 //! library window feed (`GET /api/library/windows`), so a client can tell
@@ -17,7 +17,7 @@
 //! the call sites.
 //!
 //! Semantics note for consumers: "connected" means a live socket
-//! exists SOMEWHERE — a hidden (buried) chan-desktop window keeps its
+//! exists SOMEWHERE -- a hidden (buried) chan-desktop window keeps its
 //! webview and therefore its socket, so hidden-vs-visible is not
 //! distinguishable here. The honest vocabulary is connected / saved.
 

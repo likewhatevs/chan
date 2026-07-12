@@ -176,7 +176,7 @@ impl WatchHandle {
 /// Find which `WatchRoot` an absolute filesystem path falls
 /// under. Returns the root's index + the relative path beneath
 /// it (without prefix yet). When several roots could match (one
-/// nested inside another), the longer-path root wins — practical
+/// nested inside another), the longer-path root wins -- practical
 /// safeguard against drafts_dir being misconfigured under
 /// workspace_root.
 fn locate_root<'a>(roots: &'a [WatchRoot], abs: &Path) -> Option<(&'a WatchRoot, String)> {

@@ -9,8 +9,8 @@
 //! chan-library, because it serves a frontend bundle and the crate dependency
 //! only flows chan-server -> chan-library.
 //!
-//! ONE bundle, installed on BOTH surfaces — the headless devserver
-//! (`build_devserver_app`) and the desktop loopback (`embedded.rs`) — over the
+//! ONE bundle, installed on BOTH surfaces -- the headless devserver
+//! (`build_devserver_app`) and the desktop loopback (`embedded.rs`) -- over the
 //! shared [`WorkspaceHost`]. The window handlers used to live only in
 //! `build_devserver_app`, which the desktop loopback never got, so the desktop
 //! launcher would have been blind to its own windows; unifying them here fixes
@@ -43,11 +43,11 @@ use crate::{
 /// State shared by the `/api/library/workspaces` handlers: the library host plus
 /// the surface's serve address. `serve_addr` is the read-only/full discriminator
 /// AND the mount enabler:
-///   - `Some(cell)` — the desktop loopback (single-user, token-gated). Workspace
+///   - `Some(cell)` -- the desktop loopback (single-user, token-gated). Workspace
 ///     MUTATION (add/on/off/rm) is served; mounting needs the listen address,
 ///     which the embedder fills into the `OnceLock` after it binds (the install
 ///     happens before the bind, so the cell is read at request time).
-///   - `None` — the tunnel-trust devserver/gateway surface. Workspaces are
+///   - `None` -- the tunnel-trust devserver/gateway surface. Workspaces are
 ///     READ-ONLY: a grantee holding a `devserver_gate` cookie must not mutate the
 ///     owner's library, and `bearer=None` can't enforce role. The mutation
 ///     handlers answer 403 there.
@@ -62,7 +62,7 @@ struct LauncherState {
 /// leaks through URL logs and the SPA `fetch` can set the header).
 const WATCH_WS_PATH: &str = "/api/library/windows/watch";
 
-/// The local-colour watch WS path — the other `/api/library/*` route that
+/// The local-colour watch WS path -- the other `/api/library/*` route that
 /// accepts the bearer as `?t=` (a browser WebSocket can't set a header), same
 /// rationale as [`WATCH_WS_PATH`].
 const LOCAL_COLOR_WATCH_WS_PATH: &str = "/api/library/local-color/watch";
@@ -80,7 +80,7 @@ const LOCAL_THEME_WATCH_WS_PATH: &str = "/api/library/local-theme/watch";
 /// `Authorization: Bearer <token>` (the watch WS additionally accepts
 /// `?t=<token>`); `None` leaves the data surface public (tests / the
 /// tunnel-trust install). The static SPA shell is ALWAYS public so it can
-/// load before it holds the token — the SPA then reads `?t=` from its URL and
+/// load before it holds the token -- the SPA then reads `?t=` from its URL and
 /// presents it on every data call.
 pub fn launcher_router(
     host: Arc<WorkspaceHost>,
@@ -165,7 +165,7 @@ pub fn launcher_router(
             "/api/library/devservers/{id}/workspaces/forget",
             post(handle_forget_devserver_workspace),
         )
-        // Native folder picker — another desktop-bridge dispatch (the launcher's
+        // Native folder picker -- another desktop-bridge dispatch (the launcher's
         // New-Workspace "Browse…"), so it sits with the other bridge ops.
         .route("/api/library/fs/pick-folder", post(handle_pick_folder))
         .route_layer(middleware::from_fn(require_local_mutation))
@@ -195,7 +195,7 @@ pub fn launcher_router(
     // Library config: this library's own pane-highlight colour. GET + PUT on
     // EVERY surface (a no-store surface reports `null` = default accent / 404s the
     // PUT): a library's colour belongs to that library, set from a pane's
-    // focus-border menu on its own serving host — a devserver window sets ITS
+    // focus-border menu on its own serving host -- a devserver window sets ITS
     // devserver's colour. The bearer gate is the auth (no `require_mutable`: it
     // mutates the surface's own library, not someone else's).
     let config = Router::new()
@@ -241,7 +241,7 @@ pub fn launcher_router(
     // The launcher-management routes (windows / workspaces / devservers) stay
     // gated on the launcher token. The local-color (`config`) routes set the
     // surface's OWN cosmetic colour from a pane menu, called by whatever window
-    // is open — which carries a per-TENANT token, not the launcher token — so
+    // is open -- which carries a per-TENANT token, not the launcher token -- so
     // they get a relaxed SURFACE gate (launcher OR any valid tenant token). A
     // launcher-only gate 401'd every window's colour GET/PUT/watch.
     let launcher_api = windows.merge(workspaces).merge(devservers);
@@ -324,7 +324,7 @@ async fn require_launcher_bearer(token: String, req: Request<Body>, next: Next) 
 /// launcher token OR a live per-tenant/window token this host serves. Unlike
 /// [`require_launcher_bearer`] (launcher-MANAGEMENT routes), the local-color
 /// routes set the surface's OWN cosmetic library colour from a pane's
-/// focus-border menu — and a window is served with its per-TENANT token, not the
+/// focus-border menu -- and a window is served with its per-TENANT token, not the
 /// launcher token (`desktop/serve.rs` `?t={record.token}`). A launcher-only gate
 /// therefore hard-401s every real window's GET/PUT/watch, so the colour never
 /// persists and a fresh window seeds blue. Tunnel-origin requests already
@@ -636,7 +636,7 @@ async fn handle_hide_library_window(
 }
 
 /// `POST /api/library/devservers/{id}/connect`: connect a registered devserver
-/// through the desktop bridge — run its connect command in a control terminal,
+/// through the desktop bridge -- run its connect command in a control terminal,
 /// scrape the token, dial the URL, and open its window. The launcher's Connect
 /// button drives this; the desktop handles the `ConnectDevserver` op. 204 on
 /// success; 409 (`NO_DESKTOP`) on a surface with no desktop attached, so the
@@ -653,7 +653,7 @@ async fn handle_connect_devserver(
 }
 
 /// `POST /api/library/devservers/{id}/disconnect`: disconnect a connected
-/// devserver through the desktop bridge — drop its live connection and windows,
+/// devserver through the desktop bridge -- drop its live connection and windows,
 /// back to registered-but-offline. 204 on success; 409 (`NO_DESKTOP`) with no
 /// desktop attached.
 async fn handle_disconnect_devserver(
@@ -704,7 +704,7 @@ async fn handle_open_devserver_workspace(
 }
 
 /// Body of the workspace on/off/forget routes: the remote mount `prefix` to
-/// target. It rides the JSON body, not a path segment — a mount prefix can carry
+/// target. It rides the JSON body, not a path segment -- a mount prefix can carry
 /// characters axum's `Path` extractor and intervening proxies mangle (`%2F`), and
 /// the gateway-proxied path makes it worse. `force` is read only by `/off` (a
 /// destructive off of a workspace with live terminals); `on`/`forget` ignore it.
@@ -717,7 +717,7 @@ struct DevserverWorkspaceRef {
 
 /// Body of `POST /api/library/workspaces/{id}/off`: `force` overrides the
 /// live-terminal guard (a destructive off kills the workspace's terminals). The
-/// body is OPTIONAL — an absent/empty body reads `force: false` — so the field is
+/// body is OPTIONAL -- an absent/empty body reads `force: false` -- so the field is
 /// purely additive; the launcher sends `force: true` on the confirm-retry.
 #[derive(Deserialize, Default)]
 struct WorkspaceOff {
@@ -734,7 +734,7 @@ struct WorkspaceOff {
 /// with the workspace-off the desktop already drives over the devserver API.
 #[derive(Serialize)]
 struct LiveTerminalsRejection {
-    /// Discriminator the launcher matches on — always `"live_terminals"`.
+    /// Discriminator the launcher matches on -- always `"live_terminals"`.
     error: &'static str,
     /// Live terminal sessions the off would kill.
     active_terminals: usize,
@@ -806,7 +806,7 @@ async fn set_devserver_workspace_on(
 
 /// `POST /api/library/devservers/{id}/workspaces/forget` `{prefix}`: forget
 /// (unregister) a connected devserver's workspace (the remote mount `prefix`)
-/// through the desktop bridge. POST-with-body rather than DELETE — a DELETE body
+/// through the desktop bridge. POST-with-body rather than DELETE -- a DELETE body
 /// is poorly supported across clients/proxies. 204/409.
 async fn handle_forget_devserver_workspace(
     State(host): State<Arc<WorkspaceHost>>,
@@ -851,7 +851,7 @@ async fn handle_pick_folder(State(host): State<Arc<WorkspaceHost>>) -> Response 
 
 /// Dispatch a unit-reply desktop window op and map it to HTTP: `Ok(())` → 204,
 /// `Err(msg)` → 409 with the message (no desktop attached, or the manager is
-/// gone). 409 keeps these idempotent-ish view ops distinct from a 5xx — the
+/// gone). 409 keeps these idempotent-ish view ops distinct from a 5xx -- the
 /// caller can't drive a native window here, which the body explains.
 async fn dispatch_window_op(
     host: &WorkspaceHost,
@@ -868,10 +868,10 @@ async fn dispatch_window_op(
 // ---------------------------------------------------------------------------
 
 /// `GET /api/library/workspaces`: one row per registered library workspace (the
-/// set `chan list` shows, read live from the host library — the source of
+/// set `chan list` shows, read live from the host library -- the source of
 /// truth), each stamped with whether it is currently served. The on-state is
 /// resolved by canonical ROOT (`is_root_mounted`), not by a slug-prefix
-/// membership test, so it reads correctly on the desktop — which mounts tenants
+/// membership test, so it reads correctly on the desktop -- which mounts tenants
 /// at `workspace-<hash>`, a prefix the slug check would never match. Sorted by
 /// id for a stable list.
 async fn handle_list_workspaces(State(state): State<Arc<LauncherState>>) -> Response {
@@ -1087,7 +1087,7 @@ async fn handle_workspace_on(
 }
 
 /// `POST /api/library/workspaces/{id}/off`: unmount (release the per-workspace
-/// flock), keep the registration, persist off. Plain unmount — the
+/// flock), keep the registration, persist off. Plain unmount -- the
 /// confirm-before-off is a launcher-UI concern, not a wire 409. Loopback-only.
 async fn handle_workspace_off(
     State(state): State<Arc<LauncherState>>,
@@ -1097,7 +1097,7 @@ async fn handle_workspace_off(
     if let Err(resp) = require_mutable(&state) {
         return *resp;
     }
-    // Optional `{ force }` body (additive — absent/empty reads `force: false`).
+    // Optional `{ force }` body (additive -- absent/empty reads `force: false`).
     let force = serde_json::from_slice::<WorkspaceOff>(&body)
         .unwrap_or_default()
         .force;
@@ -1148,7 +1148,7 @@ async fn handle_remove_workspace(
 /// `GET /api/library/devservers`: every configured devserver (tokens elided).
 /// Served on ALL surfaces with NO `serve_addr` gate: a surface with no registry
 /// installed (the headless devserver/gateway) returns an empty list, which is
-/// exactly the spec — a devserver-served launcher has no other devservers to
+/// exactly the spec -- a devserver-served launcher has no other devservers to
 /// list. Infallible, mirroring the window feed.
 async fn handle_list_devservers(
     State(state): State<Arc<LauncherState>>,
@@ -1166,7 +1166,7 @@ async fn handle_list_devservers(
 /// devserver, returning the stored row with its assigned id (token elided).
 /// Loopback-only ([`require_mutable`] → 403 on the read-only surface). A registry
 /// rejection (a bad URL) maps to 400; no registry installed maps to 404
-/// (defensive — the desktop loopback always installs one).
+/// (defensive -- the desktop loopback always installs one).
 async fn handle_add_devserver(
     State(state): State<Arc<LauncherState>>,
     Json(input): Json<DevserverInput>,
@@ -1249,7 +1249,7 @@ async fn handle_get_local_color(State(state): State<Arc<LauncherState>>) -> Json
 /// `PUT /api/library/local-color` `{ color }`: set the library's own
 /// pane-highlight colour (`null` clears it to the default). Available on EVERY
 /// surface, NOT loopback-only: a library's colour belongs to that library and is
-/// set from a pane's focus-border menu on its OWN serving host — local windows
+/// set from a pane's focus-border menu on its OWN serving host -- local windows
 /// hit the desktop loopback, a devserver window hits that devserver. The bearer
 /// gate (the per-surface launcher token) is the auth; there is no `require_mutable`
 /// because this mutates the surface's OWN library, not someone else's. 204 on
@@ -1665,7 +1665,7 @@ mod devserver_route_tests {
     #[tokio::test]
     async fn list_without_registry_is_empty() {
         // The headless devserver/gateway installs no registry: GET returns `[]`
-        // (200) on every surface — no `serve_addr` gate.
+        // (200) on every surface -- no `serve_addr` gate.
         for mutable in [false, true] {
             let router = router_with(None, mutable);
             let (status, body) = request(&router, "GET", "/api/library/devservers", None).await;
@@ -1746,7 +1746,7 @@ mod devserver_route_tests {
 
     #[tokio::test]
     async fn mutation_without_registry_is_404() {
-        // Loopback (mutable) but no registry installed — defensive 404 (the
+        // Loopback (mutable) but no registry installed -- defensive 404 (the
         // desktop loopback always installs one).
         let router = router_with(None, true);
         let (status, _) = request(
@@ -2061,7 +2061,7 @@ mod window_op_route_tests {
     }
 
     /// Drive any method, optionally with a JSON body (sets the content-type so the
-    /// `Json` extractor accepts it — needed for `workspaces/open`).
+    /// `Json` extractor accepts it -- needed for `workspaces/open`).
     async fn send(
         router: &axum::Router,
         method: &str,
@@ -2293,7 +2293,7 @@ mod window_op_route_tests {
         let router = launcher_router(host.clone(), None, None);
 
         // Arm the colour-change waiter BEFORE the set (notify_waiters has no
-        // permit, so the waiter must exist first — same ordering the watch uses).
+        // permit, so the waiter must exist first -- same ordering the watch uses).
         let notify = host.local_color_notify();
         let notified = notify.notified();
         tokio::pin!(notified);
@@ -2331,12 +2331,12 @@ mod window_op_route_tests {
             assert_eq!(status, StatusCode::CONFLICT, "{verb}");
             assert_eq!(body, NO_DESKTOP, "{verb}");
         }
-        // Connect is inert without a desktop too — 409 NO_DESKTOP, so the
+        // Connect is inert without a desktop too -- 409 NO_DESKTOP, so the
         // launcher button is safe to show even where it can't act.
         let (status, body) = post(&router, "/api/library/devservers/ds1/connect").await;
         assert_eq!(status, StatusCode::CONFLICT, "connect");
         assert_eq!(body, NO_DESKTOP, "connect");
-        // The new devserver bridge ops are inert without a desktop too — 409
+        // The new devserver bridge ops are inert without a desktop too -- 409
         // NO_DESKTOP, so the launcher's row buttons are safe to show everywhere.
         for uri in [
             "/api/library/devservers/ds1/disconnect",
@@ -2364,7 +2364,7 @@ mod window_op_route_tests {
             assert_eq!(status, StatusCode::CONFLICT, "{uri}");
             assert_eq!(body, NO_DESKTOP, "{uri}");
         }
-        // Pick-folder is inert without a desktop too — 409 NO_DESKTOP, so the
+        // Pick-folder is inert without a desktop too -- 409 NO_DESKTOP, so the
         // launcher falls back to plain text entry.
         let (status, body) = post(&router, "/api/library/fs/pick-folder").await;
         assert_eq!(status, StatusCode::CONFLICT, "pick-folder");

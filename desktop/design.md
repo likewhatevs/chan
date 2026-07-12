@@ -142,9 +142,7 @@ The desktop avoids inventing durable validation rules. It defers to chan-workspa
 
 ## 5. Self-contained runtime
 
-chan-desktop is self-contained. It links `chan-workspace` and `chan-server`
-directly and embeds the web bundle at build time. No `chan` binary is shipped in
-the app bundle, and none is required at runtime.
+chan-desktop is self-contained. It links `chan-workspace` and `chan-server` directly and embeds the web bundle at build time. No `chan` binary is shipped in the app bundle, and none is required at runtime.
 
 Local workspaces open through the embedded chan-server `WorkspaceHost`, which owns a single `chan_workspace::Library`. Every registry mutation runs in-process against that `Library`.
 
@@ -227,22 +225,11 @@ Non-goal: chan-desktop installation should be "drag Chan.app to /Applications". 
 
 chan-desktop is also the `chan` / `cs` command line: on boot it owns `~/.local/bin/{chan,cs}` shims that resolve to the running desktop binary, so a desktop install gives you `chan open` and the shell-first workflows with nothing extra to download. A standalone `chan` (the `chan.app/install.sh` installer or a release tarball) is still available and independent; the two share the same `~/.chan` registry, so a workspace added by one shows up in the other.
 
-The shims are installed on boot per package kind: a macOS `.app` or Linux
-deb/rpm gets real symlinks to the installed binary; a Linux AppImage gets tiny
-`exec -a` wrapper scripts, because `current_exe()` inside an AppImage is the
-ephemeral mount. Both names resolve to the same binary, and the argv[0] stem
-dispatch (`chan_shell::invoked_arg0`, which prefers `$ARGV0` over `argv[0]` so
-an AppImage that lost argv[0] to `AppRun` still reaches the inner CLI instead of
-the GUI) selects the CLI / control-client / GUI path. Best-effort, idempotent,
-and self-healing: a shim we wrote is re-pointed or rewritten on the next launch
-when it goes stale (the binary moved, the AppImage updated), and a `chan` / `cs`
-the user installed themselves is never clobbered.
+The shims are installed on boot per package kind: a macOS `.app` or Linux deb/rpm gets real symlinks to the installed binary; a Linux AppImage gets tiny `exec -a` wrapper scripts, because `current_exe()` inside an AppImage is the ephemeral mount. Both names resolve to the same binary, and the argv[0] stem dispatch (`chan_shell::invoked_arg0`, which prefers `$ARGV0` over `argv[0]` so an AppImage that lost argv[0] to `AppRun` still reaches the inner CLI instead of the GUI) selects the CLI / control-client / GUI path. Best-effort, idempotent, and self-healing: a shim we wrote is re-pointed or rewritten on the next launch when it goes stale (the binary moved, the AppImage updated), and a `chan` / `cs` the user installed themselves is never clobbered.
 
 ## 8. Distribution
 
-The download entry point is https://chan.app/install. Desktop artifacts are
-built by the release workflow; the branch dry-run lane exercises the same
-artifact matrix:
+The download entry point is https://chan.app/install. Desktop artifacts are built by the release workflow; the branch dry-run lane exercises the same artifact matrix:
 
 - macOS arm64: notarised DMG containing `Chan.app`. Drag to /Applications. Signed and notarised in CI with the Developer ID identity imported from secrets.
 - Linux: `.AppImage` plus distro packages (`.deb`, `.rpm`), unsigned.
@@ -255,8 +242,7 @@ Cargo install (`cargo install chan-desktop`) builds the self-contained desktop f
 
 The AppImage bundles its own GUI stack (libgtk-3, libwebkit2gtk-4.1) and the GL/EGL/gbm libraries `linuxdeploy-plugin-gtk` pulls in, built on the Ubuntu CI runner. On a host whose Mesa is newer than the bundle (rolling distros such as CachyOS / Arch on an AMD radeonsi iGPU), the bundled libgtk cannot create an EGL display against the host Mesa and the webview aborts at creation with `EGL_BAD_PARAMETER`. No single bundled GTK/Mesa works across every distro indefinitely; the host's GTK and Mesa are always built against each other.
 
-The Linux GUI-stack bootstrap runs before webview creation. It prefers the host
-GUI stack, falling back to the bundle:
+The Linux GUI-stack bootstrap runs before webview creation. It prefers the host GUI stack, falling back to the bundle:
 
 - It runs only inside an AppImage (keyed on `cs_install::appimage_path()`) and is a no-op on macOS / Windows / `.deb` / `.rpm` / `cargo run`.
 - Presence gate: only when BOTH `libgtk-3.so.0` AND `libwebkit2gtk-4.1.so.0` resolve in the host `ldconfig -p` cache does it shadow the bundle (a partial shadow is worse than either stack alone).

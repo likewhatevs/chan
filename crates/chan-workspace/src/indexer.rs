@@ -483,7 +483,7 @@ mod tests {
         // so the watcher's notify backend is the trigger end-to-
         // end. Brief sleep between the two operations so macOS
         // FSEvents doesn't coalesce them into a single Created
-        // event for the parent dir — without the separation,
+        // event for the parent dir -- without the separation,
         // ~3/5 local runs miss the file-write delivery.
         let draft = workspace.create_draft_dir("untitled-1").unwrap();
         std::thread::sleep(Duration::from_millis(200));

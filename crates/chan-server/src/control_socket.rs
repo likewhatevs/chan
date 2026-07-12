@@ -605,7 +605,7 @@ mod tenant_gate_tests {
 
 // `UnserveScope` lives in chan-library; its `Host` variant carries a
 // `Weak<dyn HostControl>`, so the control socket reaches the host (unserve)
-// without naming the concrete `WorkspaceHost` — the handler upgrades the weak
+// without naming the concrete `WorkspaceHost` -- the handler upgrades the weak
 // and calls the trait-object method directly.
 use chan_library::UnserveScope;
 
@@ -734,7 +734,7 @@ fn spawn_accept_loop(mut listener: transport::Listener, ctx: ControlSocketCtx) -
 
 /// Frame one accepted control connection: read a single line-framed JSON
 /// `ControlRequest`, dispatch it, and write the JSON `ControlResponse` line
-/// back. Platform-neutral — it works over whatever read/write halves the
+/// back. Platform-neutral -- it works over whatever read/write halves the
 /// active `transport::Conn` yields (a unix stream or a windows named pipe).
 async fn serve_connection(conn: transport::Conn, ctx: ControlSocketCtx) {
     let (read, mut write) = conn.into_split();
@@ -849,7 +849,7 @@ pub(crate) mod transport {
         pub fn bind(path: &Path) -> std::io::Result<Listener> {
             let pipe_name = path.as_os_str().to_owned();
             // `first_pipe_instance(true)` makes the create fail if another
-            // process already owns this name — a squatter guard, mirroring
+            // process already owns this name -- a squatter guard, mirroring
             // how the unix bind owns its filesystem path.
             let next = ServerOptions::new()
                 .first_pipe_instance(true)
@@ -866,7 +866,7 @@ pub(crate) mod transport {
             pub async fn accept(&mut self) -> std::io::Result<Conn> {
                 // Wait for a client on the idle instance, then swap in a
                 // fresh instance for the next client BEFORE handing this one
-                // back — so a client that connects during the swap still
+                // back -- so a client that connects during the swap still
                 // finds a server instance (the canonical tokio multi-client
                 // loop; otherwise the next client races to `NotFound`).
                 self.next.connect().await?;
@@ -1078,7 +1078,7 @@ async fn handle_request(req: ControlRequest, ctx: &ControlSocketCtx) -> ControlR
             // Resolve the library window set (the same source `WindowList` reads)
             // so the listing can name each session's owning window + kind +
             // liveness. A standalone serve has no host, so the set is empty and
-            // every session reads back `orphaned` — honest, not wrong.
+            // every session reads back `orphaned` -- honest, not wrong.
             let windows = match unserve {
                 UnserveScope::Host(weak) => weak
                     .upgrade()
@@ -1131,7 +1131,7 @@ async fn handle_request(req: ControlRequest, ctx: &ControlSocketCtx) -> ControlR
             // assembly (`assemble_window_records`) the desktop watcher, the
             // launcher, and `cs window list` all reconcile to, so they never
             // disagree. A standalone `chan open` serve has no host and thus no
-            // library window set — the honest answer is empty.
+            // library window set -- the honest answer is empty.
             let records = match unserve {
                 UnserveScope::Host(weak) => weak
                     .upgrade()
@@ -1320,7 +1320,7 @@ async fn handle_request(req: ControlRequest, ctx: &ControlSocketCtx) -> ControlR
 /// `remove` carries `chan close --remove` (and `chan workspace rm`) through to
 /// a HOST: it then also UNREGISTERS the workspace from its library + overlay
 /// (so a devserver-served workspace disappears from the launcher and does not
-/// survive a restart), not just unmounts it. A standalone serve ignores it —
+/// survive a restart), not just unmounts it. A standalone serve ignores it --
 /// it exits either way, and the caller forgets the local registry.
 fn live_terminals_body(active_terminals: usize) -> String {
     format!(r#"{{"error":"live_terminals","active_terminals":{active_terminals}}}"#)
@@ -1604,7 +1604,7 @@ struct TeamSpawn {
 fn resolve_team_group(registry: &TerminalRegistry, base: &str) -> String {
     // Group resolution needs only the live tab_groups, so use the cwd-free
     // `roster()` rather than `session_summaries()` (which shells `lsof` per
-    // session) — no point probing every PTY's cwd just to dedup a group name.
+    // session) -- no point probing every PTY's cwd just to dedup a group name.
     let live: std::collections::HashSet<String> =
         registry.roster().into_iter().map(|s| s.tab_group).collect();
     if !live.contains(base) {
@@ -2597,7 +2597,7 @@ fn handover_error_message(error: HandoverError) -> String {
 }
 
 /// `cs window new`: ask the desktop to spawn a window whose kind is
-/// derived from the calling tenant — a terminal tenant spawns a terminal
+/// derived from the calling tenant -- a terminal tenant spawns a terminal
 /// window, a workspace tenant spawns another window of that workspace.
 /// Replies with the new window id. Refuses ([`crate::NO_DESKTOP`]) when
 /// no desktop is attached.
@@ -2630,7 +2630,7 @@ async fn handle_window_new(
 
 /// `cs window rm`: authoritatively remove the window. The host weak drops the
 /// persisted registry row, reaps its terminal sessions + layout blob, and fires
-/// the window watch so any live native window closes — so an offline/dead row is
+/// the window watch so any live native window closes -- so an offline/dead row is
 /// removable even with no desktop attached. Live shells are guarded server-side:
 /// without `force`, a window with live terminals is refused, so a removal never
 /// kills a running agent by surprise. A stale saved layout with no row is still
@@ -2646,7 +2646,7 @@ async fn handle_window_close(
     use crate::desktop_window_ops::DesktopWindowOp;
 
     // The host weak is the only authority that can drop a persisted window row
-    // (and reap its PTYs + layout blob) — even an offline/dead row with no live
+    // (and reap its PTYs + layout blob) -- even an offline/dead row with no live
     // native window, which is the whole point of `cs window rm`.
     let host = match unserve {
         UnserveScope::Host(weak) => weak.upgrade(),
@@ -2694,7 +2694,7 @@ async fn handle_window_close(
 
     // Fallback only when nothing was discarded: a stale saved layout blob with no
     // feed row (discard_window already deletes the blob of any row it owns).
-    // Current workspace tenant only — a terminal tenant has no on-disk blob and a
+    // Current workspace tenant only -- a terminal tenant has no on-disk blob and a
     // foreign workspace's blob is unreachable from here (a known limitation).
     let had_blob = if !discarded && tenant == ControlTenant::Workspace {
         match workspace_from_cell(workspace_cell) {
@@ -2928,7 +2928,7 @@ fn open_term_new(
 
 /// Category 1, workspace-less: open a new terminal tab in a standalone
 /// terminal window. There is no workspace to resolve a cwd against, so the
-/// command carries no cwd — pure window routing, the same shape as
+/// command carries no cwd -- pure window routing, the same shape as
 /// `open_dashboard`. The caller has already rejected any `--path`.
 fn open_term_new_standalone(
     window_id: &str,
@@ -3037,7 +3037,7 @@ fn download_path(
 /// directory, else its parent) and signal the window. The path is sent with its
 /// leading `/` stripped so the SPA's transfer bubble builds a clean
 /// `/api/files/upload` request; the terminal-tenant route re-roots it and
-/// pre-flights writability. No workspace wall — the reach is the shell's uid.
+/// pre-flights writability. No workspace wall -- the reach is the shell's uid.
 fn upload_path_standalone(
     window_id: &str,
     requested: &Path,
@@ -3284,7 +3284,7 @@ fn open_path(
                 enter: true,
             }
         } else if chan_workspace::fs_ops::is_editable_text(&rel) || workspace.sniff_is_text(&rel) {
-            // Content-aware text gate — the same judgment the editor's read
+            // Content-aware text gate -- the same judgment the editor's read
             // route applies (the extension fast-path OR an 8 KiB content
             // sniff), so `cs open` and the editor never disagree about what is
             // openable text. An extensionless / odd-suffix text file opens;
@@ -3297,7 +3297,7 @@ fn open_path(
     } else {
         // Nonexistent path: create it empty and open it, for ANY name (not
         // just `.md`). `write_text`'s own editable-text gate bounds what may
-        // be created — a known-text name (.txt/.py/.log/...) succeeds, a
+        // be created -- a known-text name (.txt/.py/.log/...) succeeds, a
         // binary-class name is refused there. Note the write before it lands
         // so the watcher's Created event is in the suppression set before it
         // can fire (see files.rs::api_write_file).
@@ -3858,7 +3858,7 @@ mod tests {
         let err = abs_to_workspace_rel(root.path(), &outside.path().join("secret")).unwrap_err();
         assert!(err.contains("escapes workspace root"), "{err}");
 
-        // A relative path is refused — the CLI always absolutizes first.
+        // A relative path is refused -- the CLI always absolutizes first.
         assert!(abs_to_workspace_rel(root.path(), std::path::Path::new("notes/a.md")).is_err());
     }
 
@@ -4017,7 +4017,7 @@ mod tests {
         // The library owns the window set; `cs window list` reads it through
         // the host handle (`assemble_window_records`). A control socket with
         // no host (a standalone serve, or any host-less tenant) has no library
-        // window set, so the honest answer is an empty array — not a refusal.
+        // window set, so the honest answer is an empty array -- not a refusal.
         let workspace_cell: Arc<RwLock<Option<WorkspaceCell>>> = Arc::new(RwLock::new(None));
         let ctx = test_ctx(workspace_cell, ControlTenant::TerminalOnly);
 

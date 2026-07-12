@@ -4,7 +4,7 @@ import store from "./store.svelte.ts?raw";
 
 // First-boot File Browser UX: App.svelte does NOT spawn an FB tab on an
 // empty layout, AND the docked File Browser defaults to off on both
-// sides — a new workspace opens with just the empty pane. chan-server's
+// sides -- a new workspace opens with just the empty pane. chan-server's
 // BrowserSidePanes::default() mirrors this so a fresh preferences.toml
 // lands with left: false; existing user preferences override it via the
 // normal load path.

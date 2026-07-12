@@ -82,7 +82,7 @@ export function apiPath(path: string): string {
 
 /// Resolve an in-app path to the ROOT origin, IGNORING the tenant `chan-prefix`.
 /// For surface-level resources mounted ONLY on the root launcher router, not
-/// under tenant prefixes — the library's own pane-highlight colour
+/// under tenant prefixes -- the library's own pane-highlight colour
 /// (`/api/library/local-color`). A window served under a prefix
 /// (`serve.rs` mints `{prefix}/index.html`) would otherwise have `apiPath`
 /// prepend that prefix and 404 the route. The bearer still travels (the
@@ -515,12 +515,12 @@ interface LocalColorFrame {
 
 /// Open the per-library focus-colour watch. A dedicated, self-contained
 /// WebSocket to `/api/library/local-color/watch` (bearer via `?t=`) that calls
-/// `onColor` with each pushed colour (hex or null) — push-on-connect + on change.
+/// `onColor` with each pushed colour (hex or null) -- push-on-connect + on change.
 /// Auto-reconnects with the same capped backoff as `openWatch` (500 ms → 8 s).
 ///
 /// Deliberately NOT built on the `/ws` watcher: this channel carries none of its
 /// windowId/scope machinery, and keeping it separate leaves the load-bearing
-/// window watcher untouched. Best-effort — no status callback (it never drives a
+/// window watcher untouched. Best-effort -- no status callback (it never drives a
 /// disconnect overlay). Returns a disposer that closes the socket and stops
 /// reconnecting; the disposer defuses the handlers before `close()` so a queued
 /// `onclose` can't schedule a reconnect after disposal.
@@ -638,7 +638,7 @@ export function openLocalThemeWatch(
       try {
         w.close();
       } catch {
-        // close() can throw if the socket is already CLOSED — the desired end
+        // close() can throw if the socket is already CLOSED -- the desired end
         // state, so swallow it.
       }
     }

@@ -906,8 +906,8 @@ fn contains_edge_key(source: &str, target: &str) -> (String, String, &'static st
 
 /// Accumulators plus the read-only inputs threaded through the
 /// unified tree layer. `edge_set` is owned: it is seeded from the
-/// edges accumulated so far — so the contains-edge dedup sees the
-/// filesystem-layer edges pushed before the tree pass — and dies
+/// edges accumulated so far -- so the contains-edge dedup sees the
+/// filesystem-layer edges pushed before the tree pass -- and dies
 /// with the ctx.
 struct TreeMergeCtx<'a> {
     workspace: &'a chan_workspace::Workspace,
@@ -1072,13 +1072,13 @@ fn merge_unified_tree_layer(
     // Anchor every included file to its folder ancestors. In directory/file
     // scope the file NODES are seeded workspace-wide (a node per indexed file,
     // plus referenced on-disk targets), but the tree walk above is
-    // PREFIX-scoped — so any file outside the scoped subtree gets a node with
+    // PREFIX-scoped -- so any file outside the scoped subtree gets a node with
     // no `contains` ancestor chain and the frontend renders it edgeless. Spine
     // each remaining non-missing file to its parent directory chain so
     // directory scope keeps the "no file renders edgeless" invariant Workspace
     // scope already has. This mirrors the Workspace-scope walk (which spines
     // the whole tree); the extra out-of-prefix folder bubbles are
-    // declutterable via the folder chip. No directory is special-cased — a
+    // declutterable via the folder chip. No directory is special-cased -- a
     // draft's `.Drafts` parent is anchored exactly like any other live
     // directory. The spine ops are idempotent (`edge_set`/`merge_directory_node`
     // dedup), so an in-scope file already spined by the prefix walk is a no-op.
@@ -1256,7 +1256,7 @@ fn merge_language_layer(
     // edges directly so the language lens (1-hop BFS in GraphPanel)
     // splays out to EVERY file of that language. The prior shape
     // went through `build_language_graph`, which aggregates files
-    // into per-directory edges with a depth-bounded top-N rank —
+    // into per-directory edges with a depth-bounded top-N rank --
     // fine for the /api/graph/languages overview surface but it had
     // the workspace lens showing only the top dir per language
     // (clicking a language surfaced a single directory out of
@@ -2589,7 +2589,7 @@ mod tests {
     #[test]
     fn drafts_dir_appears_as_natural_directory() {
         // Drafts are now real in-root files under the configured drafts dir
-        // and are no longer special-cased — the drafts directory is just
+        // and are no longer special-cased -- the drafts directory is just
         // another live directory. It arrives as a normal `directory:.Drafts`
         // node anchored by a real `contains` edge from root via the
         // filesystem / tree layers (no synthetic edge kind), and an indexed
@@ -2681,7 +2681,7 @@ mod tests {
     #[test]
     fn directory_scope_anchors_every_out_of_prefix_file_no_loose_nodes() {
         // Folder-ON (directory scope) seeds a file node for every indexed file
-        // workspace-wide, but the tree spine is prefix-scoped — so before the
+        // workspace-wide, but the tree spine is prefix-scoped -- so before the
         // backfill every file OUTSIDE the scoped subtree had a node with no
         // `contains` ancestor chain and the frontend rendered it edgeless.
         // The backfill anchors every included file to its folder ancestors
@@ -2694,7 +2694,7 @@ mod tests {
         workspace
             .write_text("gateway/deep/ref.md", "# Ref\n")
             .unwrap();
-        // An UNREFERENCED file in yet another subtree — anchored all the same.
+        // An UNREFERENCED file in yet another subtree -- anchored all the same.
         workspace
             .write_text("other/orphan.md", "# Orphan\n")
             .unwrap();
@@ -2734,7 +2734,7 @@ mod tests {
                 "missing `contains` spine edge {source:?} -> {target:?} (out-of-prefix file renders loose)"
             );
         }
-        // The unreferenced file is anchored too — anchoring is not gated on
+        // The unreferenced file is anchored too -- anchoring is not gated on
         // being a link/mention/tag target.
         assert!(
             dir.edges

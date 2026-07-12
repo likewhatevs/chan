@@ -134,7 +134,7 @@ pub struct WindowConfig {
     pub key: String,
     /// Tauri window label this config was last bound to. The label
     /// is hash-prefixed (`workspace-<16hex>-<seq>`) so it implicitly
-    /// encodes the workspace identity too — reusing it produces the
+    /// encodes the workspace identity too -- reusing it produces the
     /// same prefix and the per-workspace close-on-exit cleanup walker
     /// still matches.
     pub window_label: String,
@@ -227,13 +227,13 @@ pub struct WindowGeometry {
 /// Desktop-owned OS window geometry for one window, with a small
 /// per-monitor-signature LRU so a machine that flips monitor layout and back
 /// restores each layout's own size + position. Keyed by the (stable across a
-/// bury / reopen) native window label — sibling to [`WindowConfig`], which holds
+/// bury / reopen) native window label -- sibling to [`WindowConfig`], which holds
 /// SPA restore state for outbound windows only. Geometry lives here for ALL
 /// window classes (local / devserver / outbound) because only chan-desktop can
-/// read / set OS window pixels — even when the SPA session itself is server-owned.
+/// read / set OS window pixels -- even when the SPA session itself is server-owned.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WindowGeometryRecord {
-    /// Native Tauri window label — the join key. Stable across a bury / reopen:
+    /// Native Tauri window label -- the join key. Stable across a bury / reopen:
     /// outbound windows reuse their label; watcher windows reopen at the same
     /// `{library_id}::{window_id}`.
     pub window_label: String,
@@ -250,7 +250,7 @@ pub struct WindowGeometryRecord {
 /// signature ([`lookup_window_geometry`]).
 #[derive(Debug, Clone, PartialEq)]
 pub enum GeometryMatch {
-    /// Signature matched (same monitor hardware): high confidence — restore the
+    /// Signature matched (same monitor hardware): high confidence -- restore the
     /// stored position + size.
     Exact(WindowGeometry),
     /// No signature match (monitor layout changed): lower confidence, but still
@@ -341,17 +341,17 @@ impl ConfigStore {
 /// [`remove`](DevserverRegistry::remove) (the HTTP `DELETE` path), so that path
 /// reaps a live connection/windows (the desktop's `teardown_devserver_connection`).
 /// Set once, after the Tauri `AppHandle` exists (the registry installs before it),
-/// via the shared [`OnceLock`] cell — the chan-server-side registry can't see
+/// via the shared [`OnceLock`] cell -- the chan-server-side registry can't see
 /// the `AppHandle` directly, so the desktop injects the teardown as a closure.
 /// A no-op when nothing is live (removing a not-connected devserver).
 pub type DevserverRemoveHook = Arc<dyn Fn(&str) + Send + Sync>;
 
-/// chan-desktop's [`DevserverRegistry`] implementation — the bridge the
+/// chan-desktop's [`DevserverRegistry`] implementation -- the bridge the
 /// launcher's `/api/library/devservers` routes reach through
 /// [`WorkspaceHost::devserver_registry`](chan_server::WorkspaceHost::devserver_registry).
 /// It wraps the SHARED [`ConfigStore`] handle (the same `Arc<Mutex<ConfigStore>>`
 /// the desktop's own commands and the window-config LRU use), so every config
-/// write — devserver CRUD, window stack, outbound attachments — serializes
+/// write -- devserver CRUD, window stack, outbound attachments -- serializes
 /// through one lock and can't lose an update to a concurrent full-file rewrite.
 ///
 /// The token is write-only: `add`/`update` accept it, `list` and the returned
@@ -362,10 +362,10 @@ pub struct DevserverConfigRegistry {
     /// Filled (once the `AppHandle` exists) with the live-connection teardown;
     /// `remove` fires it after dropping a row so the HTTP `DELETE` reaps the
     /// same connection/windows the Tauri command does. Empty until then (and on
-    /// headless surfaces) — `remove` then only drops the config row.
+    /// headless surfaces) -- `remove` then only drops the config row.
     on_remove: Arc<OnceLock<DevserverRemoveHook>>,
     /// The live connection map (shared with `AppState.devservers`), so `list`
-    /// reports each row's [`DevserverEntry::status`] — the launcher shows
+    /// reports each row's [`DevserverEntry::status`] -- the launcher shows
     /// Connect vs Disconnect + gates Edit read-only off it.
     conns: Arc<DevserverConns>,
     /// Devservers with a connect request currently in flight. Shared with
@@ -649,7 +649,7 @@ impl DevserverRegistry for DevserverConfigRegistry {
         }
         // Row dropped: reap any live connection/windows so the HTTP DELETE
         // matches the Tauri command's teardown. The store lock is released
-        // above first — the teardown locks the other AppState maps, never the
+        // above first -- the teardown locks the other AppState maps, never the
         // store. A no-op when the devserver wasn't connected.
         if let Some(hook) = self.on_remove.get() {
             hook(id);
@@ -693,7 +693,7 @@ pub fn push_window_config(cfg: &mut Config, mut entry: WindowConfig) {
 /// is still a live webview AND has a fresh stack entry captured at
 /// bury time. A new same-workspace window must neither reuse that
 /// label (Tauri labels are unique per process) nor pop-and-discard the
-/// entry — the buried window still needs it if the app quits before an
+/// entry -- the buried window still needs it if the app quits before an
 /// unbury. Skipping live-label entries leaves them in place; across an
 /// app restart nothing is live and the stack pops normally.
 pub fn pop_window_config(
@@ -797,7 +797,7 @@ fn intersect_area(a: (i32, i32, u32, u32), b: (i32, i32, u32, u32)) -> i64 {
 
 /// Index of the monitor a stored window rect belongs to: the one whose FULL
 /// bounds overlap the rect the most. `None` when the rect overlaps no monitor
-/// (stored fully off every current screen — the caller then falls back to the
+/// (stored fully off every current screen -- the caller then falls back to the
 /// union box). Identifies "which screen is this window on" so the restore clamps
 /// to THAT monitor's work area instead of the primary's.
 pub fn monitor_for_rect(mons: &[MonitorDesc], x: i32, y: i32, w: u32, h: u32) -> Option<usize> {
@@ -879,7 +879,7 @@ pub fn current_millis() -> u64 {
     now_millis()
 }
 
-/// chan-desktop keeps its config under `~/.chan/desktop/` — the same
+/// chan-desktop keeps its config under `~/.chan/desktop/` -- the same
 /// `~/.chan` home as the CLI registry (`config.toml`), not a separate
 /// OS app-data directory. On Windows that resolves to
 /// `%USERPROFILE%\.chan\desktop\config.json`.
@@ -1328,7 +1328,7 @@ mod tests {
     }
 
     /// `remove` fires the teardown hook ONLY when a row was actually dropped,
-    /// with that id — so the HTTP DELETE reaps the live connection, and a
+    /// with that id -- so the HTTP DELETE reaps the live connection, and a
     /// missing-id remove (or a not-found) doesn't fire a spurious teardown.
     #[test]
     fn registry_remove_fires_hook_only_when_a_row_was_removed() {
@@ -1564,7 +1564,7 @@ mod tests {
     fn monitor_for_rect_picks_the_containing_monitor() {
         // External (LG 4K) as the main display at origin, laptop BELOW it (the
         // host's layout). A window stored on the laptop maps to the laptop, not
-        // the external — so the restore clamps to the laptop's work area.
+        // the external -- so the restore clamps to the laptop's work area.
         let external = mon(0, 0, 3840, 2160, 2.0);
         let laptop = mon(0, 2160, 3024, 1964, 2.0);
         let mons = [external, laptop];

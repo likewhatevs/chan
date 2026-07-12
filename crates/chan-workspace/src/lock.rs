@@ -9,8 +9,8 @@
 // open in writer mode. Reading callers don't take any lock; tantivy
 // and sqlite handle their own multi-reader concurrency.
 //
-// The lock file body carries a JSON [`LockRecord`] — the holder's pid,
-// canonical path, and start time — written right after the advisory
+// The lock file body carries a JSON [`LockRecord`] -- the holder's pid,
+// canonical path, and start time -- written right after the advisory
 // lock is won. It serves two jobs: a contender can tell a live holder
 // (refuse) from a stale record a dead one left behind (steal), and
 // `chan close` reads it to find the process serving a path. The
@@ -60,17 +60,17 @@ impl WorkspaceLock {
     ///
     /// Contended path: the OS lock is held. We read the record. When it
     /// names THIS process (our own pid, same workspace root) the lock is
-    /// held by us — a live `Workspace` handle, or a mount in flight on
-    /// another task — so we return [`ChanError::WorkspaceAlreadyOpen`],
+    /// held by us -- a live `Workspace` handle, or a mount in flight on
+    /// another task -- so we return [`ChanError::WorkspaceAlreadyOpen`],
     /// never the cross-process [`ChanError::WorkspaceLocked`]: a turn-on
     /// racing chan's own in-flight mount must not read as a foreign lock.
     /// Otherwise we only **steal** when the recorded holder is **provably
     /// dead** (its pid no longer exists) and the record names this same
-    /// workspace — the case where a dead `chan open`'s lock fd was
+    /// workspace -- the case where a dead `chan open`'s lock fd was
     /// inherited by a still-living child and pins the flock with no real
-    /// writer behind it. In every uncertain case — record missing,
+    /// writer behind it. In every uncertain case -- record missing,
     /// unparseable, for a different path, a FOREIGN holder alive, or
-    /// liveness indeterminate — we refuse with
+    /// liveness indeterminate -- we refuse with
     /// [`ChanError::WorkspaceLocked`] rather than risk two writers
     /// corrupting the index.
     ///
@@ -105,7 +105,7 @@ impl WorkspaceLock {
         // The contended lock is held by US (our own pid, this workspace): a
         // live handle elsewhere in this process, or a mount in flight on
         // another task. That is `WorkspaceAlreadyOpen`, not the cross-process
-        // `WorkspaceLocked` — the holder is this chan, so the "open in another
+        // `WorkspaceLocked` -- the holder is this chan, so the "open in another
         // process" path must not fire. (A coincidental stale record with our
         // pid can't reach here: a dead holder's flock is free, so we'd be on
         // the fast path, not contended.)
@@ -164,7 +164,7 @@ pub fn read_lock_record(lock_dir: &Path) -> Option<LockRecord> {
 
 /// Probe whether the writer lock for `lock_dir` is currently free,
 /// without taking it or touching the record. `false` means some open
-/// file description still holds it — including an in-flight
+/// file description still holds it -- including an in-flight
 /// `Workspace::drop` whose flock release has not completed yet.
 ///
 /// The close→reopen handoff uses this to confirm the prior holder's
@@ -285,7 +285,7 @@ pub enum ProcessLiveness {
 /// live process as gone. The writer-lock steal path keys on `Dead`; the
 /// devserver Windows supervisor reuses it (alongside a creation-time guard)
 /// before signalling a recorded pid. Dependency-free: `rustix` on unix,
-/// `windows-sys` on Windows — both already chan-workspace deps.
+/// `windows-sys` on Windows -- both already chan-workspace deps.
 pub fn process_alive(pid: u32) -> ProcessLiveness {
     #[cfg(unix)]
     {
@@ -353,7 +353,7 @@ pub fn process_alive(pid: u32) -> ProcessLiveness {
 /// Did `try_lock_exclusive` fail because the lock is already held?
 /// On Unix fs4 surfaces `WouldBlock`; on Windows it returns
 /// `ERROR_LOCK_VIOLATION` / `ERROR_SHARING_VIOLATION`, which std does
-/// not decode to `WouldBlock` — the historical "Windows lock-contract
+/// not decode to `WouldBlock` -- the historical "Windows lock-contract
 /// gap". Match both so contention maps to `WorkspaceLocked` uniformly.
 pub(crate) fn is_contended(e: &std::io::Error) -> bool {
     if e.kind() == std::io::ErrorKind::WouldBlock {
@@ -445,7 +445,7 @@ mod tests {
     fn live_holder_is_never_stolen() {
         // The held lock records OUR (alive) pid; a second acquire must
         // refuse rather than steal. Stealing a live holder would corrupt
-        // the index — the highest-risk failure this module guards. Our own
+        // the index -- the highest-risk failure this module guards. Our own
         // pid reads as `WorkspaceAlreadyOpen`; either way the lock is NOT
         // stolen (the record still names the original holder).
         let tmp = TempDir::new().unwrap();

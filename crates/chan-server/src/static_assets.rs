@@ -30,7 +30,7 @@ use crate::state::AppState;
 struct WebAssets;
 
 /// Launcher bundle baked at compile time, mirroring [`WebAssets`] but for
-/// `web-launcher/dist/` — the pure `/api/library/*` HTTP client served at the
+/// `web-launcher/dist/` -- the pure `/api/library/*` HTTP client served at the
 /// devserver/library root `/` (the desktop launcher SPA and the gateway's
 /// "Open devserver" both reach it through the transparent proxy). Same
 /// debug-reads-from-disk / release-embeds behavior as `WebAssets`; build.rs

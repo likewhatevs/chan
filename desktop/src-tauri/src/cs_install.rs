@@ -1,5 +1,5 @@
 //! First-run install of the `chan` and `cs` bin shims into `~/.local/bin`
-//! (`$CHAN_HOME/.local/bin` when `CHAN_HOME` is set — resolved via
+//! (`$CHAN_HOME/.local/bin` when `CHAN_HOME` is set -- resolved via
 //! `chan_workspace::paths::local_bin_dir`, so a smoke instance stays isolated),
 //! so a chan-desktop install also gives you the `chan` / `cs` command line with
 //! nothing extra to download. Both names resolve to the running chan-desktop
@@ -23,7 +23,7 @@
 //! Posture: best-effort + idempotent + self-healing. A failure is logged, never
 //! fatal. A shim WE wrote self-heals on the next launch when it goes stale (the
 //! binary moved, the AppImage updated). A `chan` / `cs` the user installed
-//! themselves — a real binary from install.sh, a hand-made symlink — is never
+//! themselves -- a real binary from install.sh, a hand-made symlink -- is never
 //! clobbered.
 
 #[cfg(unix)]
@@ -73,7 +73,7 @@ pub fn appimage_path() -> Option<PathBuf> {
 enum InstallKind {
     /// Linux AppImage: write wrapper scripts re-execing this `$APPIMAGE`.
     AppImage(PathBuf),
-    /// A stable on-disk binary we can symlink to directly — a macOS `.app`
+    /// A stable on-disk binary we can symlink to directly -- a macOS `.app`
     /// bundle binary or a Linux deb/rpm `/usr/bin/chan-desktop`.
     Symlink(PathBuf),
     /// Dev build / unrecognized layout: do nothing.
@@ -269,8 +269,8 @@ fn install_one(kind: &InstallKind, bin_dir: &Path, name: &str) -> std::io::Resul
     }
 }
 
-/// The directory the unix shim install resolves to — `local_bin_dir()`, which is
-/// CHAN_HOME-aware (`$CHAN_HOME/.local/bin` when set, else `$HOME/.local/bin`) — so
+/// The directory the unix shim install resolves to -- `local_bin_dir()`, which is
+/// CHAN_HOME-aware (`$CHAN_HOME/.local/bin` when set, else `$HOME/.local/bin`) -- so
 /// the boot install log can name the path it ACTUALLY wrote to instead of a hardcoded
 /// `~/.local/bin` (which misleads under a `CHAN_HOME` smoke instance). `None` off unix:
 /// the Windows shims live under a different `%LOCALAPPDATA%` dir, so the log omits the
@@ -300,7 +300,7 @@ pub fn install_bin_shims() -> std::io::Result<u32> {
     }
     // CHAN_HOME-aware: `$CHAN_HOME/.local/bin` when CHAN_HOME is set, else
     // `$HOME/.local/bin` (byte-identical to the old inlined path when unset). `None`
-    // only when neither base resolves — then there's nowhere to install, so no-op.
+    // only when neither base resolves -- then there's nowhere to install, so no-op.
     let Some(bin_dir) = chan_workspace::paths::local_bin_dir() else {
         return Ok(0);
     };
@@ -321,7 +321,7 @@ pub fn install_bin_shims() -> std::io::Result<u32> {
 /// that set `ARGV0=<name>` before re-execing the installed chan-desktop.exe.
 /// `chan_shell::invoked_arg0()` reads `$ARGV0` ahead of `argv[0]`, so the
 /// `chan` / `cs` stem dispatch fires (CLI / control client) instead of the GUI
-/// — the same mechanism the Linux AppImage uses via `exec -a` exporting
+/// -- the same mechanism the Linux AppImage uses via `exec -a` exporting
 /// `$ARGV0`. Best-effort: also append the bin dir to the per-user `Path` so a
 /// fresh shell resolves `chan` / `cs`.
 #[cfg(windows)]
@@ -432,8 +432,8 @@ mod windows_shim {
     /// bundled console-subsystem `chan.exe` (a real CLI: `chan devserver` from a
     /// terminal then BLOCKS and takes Ctrl-C, unlike the GUI-subsystem
     /// chan-desktop.exe, which detaches when launched from PowerShell). Probe
-    /// the layouts the Windows bundle may place it in — a sibling of
-    /// chan-desktop.exe, or a `resources\` subdir — and fall back to the desktop
+    /// the layouts the Windows bundle may place it in -- a sibling of
+    /// chan-desktop.exe, or a `resources\` subdir -- and fall back to the desktop
     /// exe itself when absent (a desktop-only build / older install), so the
     /// shims always point at SOMETHING that dispatches the CLI via `$ARGV0`.
     pub(super) fn resolve_cli_target(desktop_exe: &Path) -> PathBuf {
@@ -477,7 +477,7 @@ mod windows_shim {
     /// client dispatch fires before any GUI init. `set "CHAN_DESKTOP_HANDOFF=1"`
     /// opts the bundled console `chan.exe` (a `Standalone`-personality binary)
     /// into the CLI-to-desktop handoff, so `chan open <ws>` hands off to the
-    /// running desktop instead of binding its own port — matching the
+    /// running desktop instead of binding its own port -- matching the
     /// macOS/Linux desktop shim (which re-execs the desktop binary directly).
     /// `%*` forwards the args; `exit /b` propagates the child's exit code. CRLF
     /// endings for `cmd.exe`.
@@ -497,8 +497,8 @@ mod windows_shim {
     /// The extensionless POSIX shim that a POSIX shell (a user's own
     /// `bash`/`sh`) runs for a bare `chan` / `cs`, since such shells do not
     /// consult `PATHEXT` and so will not run `chan.cmd` as `chan`. Exports
-    /// `ARGV0=<name>` — `chan_shell::invoked_arg0()` reads it ahead of
-    /// `argv[0]` — and `CHAN_DESKTOP_HANDOFF=1` so `chan open` hands off to the
+    /// `ARGV0=<name>` -- `chan_shell::invoked_arg0()` reads it ahead of
+    /// `argv[0]` -- and `CHAN_DESKTOP_HANDOFF=1` so `chan open` hands off to the
     /// running desktop (see [`wrapper_script`]), then execs the target. Same
     /// ARGV0 mechanism as the Linux AppImage wrapper. Forward-slash target so
     /// MSYS parses the path (backslashes are sh escapes); LF endings.
@@ -524,7 +524,7 @@ mod windows_shim {
 
     /// Decide whether to (re)write a shim file given its current contents:
     /// write when absent or ours-but-stale; skip a foreign file (no `owns`
-    /// marker) or one already current. Pure for testing — shared by the
+    /// marker) or one already current. Pure for testing -- shared by the
     /// `.cmd` and POSIX shims.
     pub(super) fn plan_shim(desired: &str, owns: &str, existing: Option<&str>) -> WrapperPlan {
         match existing {
@@ -595,7 +595,7 @@ mod windows_shim {
     }
 
     /// Best-effort append of `dir` to the per-user `Path` (HKCU\Environment) via
-    /// `reg.exe` — no extra crate dependency for the write itself, mirroring how
+    /// `reg.exe` -- no extra crate dependency for the write itself, mirroring how
     /// `linux_gui_stack` shells out to `ldconfig`. Reads the current value +
     /// type, appends only when missing, and writes it back preserving the
     /// registry type. After a successful write it broadcasts `WM_SETTINGCHANGE`

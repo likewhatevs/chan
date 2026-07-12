@@ -4,11 +4,11 @@
 // makes the webview navigate into a bare file view with no way back
 // (chan-desktop builds with Tauri's drag-drop handler DISABLED so DOM
 // DnD keeps working; WKWebView's default drop-navigation then fires on
-// any unhandled drop — and a plain browser tab behaves the same).
+// any unhandled drop -- and a plain browser tab behaves the same).
 //
 // Design: the guard acts ONLY on OS file drags (`dataTransfer.types`
-// includes "Files"). In-page HTML5 drags — pane tab moves, the file
-// tree's row moves, the editor's image-atom move — never carry the
+// includes "Files"). In-page HTML5 drags -- pane tab moves, the file
+// tree's row moves, the editor's image-atom move -- never carry the
 // Files type, so their dragover/dropEffect semantics are untouched.
 //
 // For Files drags:
@@ -16,7 +16,7 @@
 //     uncancelled dragover makes the release navigate); outside the
 //     allowlisted drop zones additionally set `dropEffect = "none"` so
 //     the cursor honestly shows not-allowed and no drop fires there.
-//   - window `drop` (capture): preventDefault outside the zones —
+//   - window `drop` (capture): preventDefault outside the zones --
 //     belt for browsers that fire a drop despite the none effect.
 //     Inside a zone the guard does nothing: the zone's own handlers
 //     (editor image embed, CodeMirror's native text-file insert, the
@@ -42,7 +42,7 @@ export function isOsFileDrag(e: DragEvent): boolean {
   if (!types) return false;
   // DataTransfer.types is a frozen array in modern browsers but a
   // DOMStringList in older WebKit; Array.prototype.includes works on
-  // both via indexOf semantics — normalise defensively.
+  // both via indexOf semantics -- normalise defensively.
   return Array.from(types).includes("Files");
 }
 
@@ -89,7 +89,7 @@ export function installFileDropGuard(win: Window = window): () => void {
 // File API never exposes OS paths) and types them into the PTY.
 // Escaping is POSIX single-quote: wrap in '…', embedded ' becomes
 // '\'' (close quote, escaped literal quote, reopen). Multiple paths
-// are space-separated with a single trailing space — Terminal.app
+// are space-separated with a single trailing space -- Terminal.app
 // behavior, so the user can keep typing flags right after.
 
 /// POSIX single-quote escape of one path.

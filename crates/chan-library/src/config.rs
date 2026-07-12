@@ -32,7 +32,7 @@ pub struct TerminalConfig {
     #[serde(default = "default_terminal_default_term")]
     pub default_term: String,
     /// User's terminal-font preference.
-    /// Default is `os-default` (per-OS native mono — SF Mono on
+    /// Default is `os-default` (per-OS native mono -- SF Mono on
     /// macOS, Cascadia on Windows, DejaVu on Linux). Opt-in
     /// `source-code-pro` activates Source Code Pro by reordering
     /// xterm.js's fontFamily chain to put SCP first. Selecting SCP

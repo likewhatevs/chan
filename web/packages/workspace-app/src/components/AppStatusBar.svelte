@@ -9,7 +9,7 @@
   //                when nothing's happening.
   //   - import   : long-running import progress (contacts today;
   //                others slot in via the same `importStatus` store).
-  //   - transfers: a launcher for the transfer bubble — file uploads
+  //   - transfers: a launcher for the transfer bubble -- file uploads
   //                and downloads (progress + cancel) live in the bubble,
   //                not as inline status text.
   //   - status   : transient `ui.status` messages (move/rename/delete

@@ -76,20 +76,20 @@ const ALT_SCREEN_TAIL_BYTES: usize = ALT_SCREEN_ENTER.len() - 1;
 const REDRAW_WOBBLE_DELAY: Duration = Duration::from_millis(50);
 pub const ALT_SCREEN_ATTACH_PRELUDE: &[u8] = b"\x1b[?1049h\x1b[2J\x1b[H";
 
-/// DEC private modes whose loss on a fresh client's reattach breaks INPUT —
-/// key encoding (DECCKM) and mouse-event delivery/encoding — because the live
+/// DEC private modes whose loss on a fresh client's reattach breaks INPUT  --
+/// key encoding (DECCKM) and mouse-event delivery/encoding -- because the live
 /// foreground program set them once at startup and will NOT re-announce after
 /// a reattach. Reattaching in alt-screen replays no scrollback, so the original
 /// set sequences are gone and the fresh terminal comes up at defaults: arrows
 /// stop navigating (DECCKM) and the wheel/clicks stop reaching the program
 /// (mouse). We track the set currently on (scanned from PTY output by
-/// [`Session::update_private_modes`]) and re-assert it in the attach prelude —
+/// [`Session::update_private_modes`]) and re-assert it in the attach prelude  --
 /// generalizing the single-bool alt-screen restore. Screen-rendering modes
 /// (autowrap, cursor visibility) are deliberately NOT tracked: the program's
 /// post-attach redraw re-establishes them. Alt-screen (1049/1047/47) is NOT
-/// here either — it is handled by [`ALT_SCREEN_ATTACH_PRELUDE`].
+/// here either -- it is handled by [`ALT_SCREEN_ATTACH_PRELUDE`].
 const TRACKED_PRIVATE_MODES: &[u16] = &[
-    1,    // DECCKM — application cursor keys (arrow encoding: \e[A vs \eOA)
+    1,    // DECCKM -- application cursor keys (arrow encoding: \e[A vs \eOA)
     1000, // mouse: normal button (press/release) tracking
     1002, // mouse: button-event (drag) tracking
     1003, // mouse: any-event (motion) tracking
@@ -137,18 +137,18 @@ pub struct Registry {
     /// /api/session?w=W` marks W persisted, a `DELETE` forgets it. Drives the
     /// persistence-based session lifetime (see [`Registry::prune_idle_at`]): a
     /// persisted window's detached sessions survive a client disconnect
-    /// indefinitely (browser-tab semantics — reattach on reconnect), while a
+    /// indefinitely (browser-tab semantics -- reattach on reconnect), while a
     /// window with no durable blob is an orphan and its detached sessions are
     /// reaped after a grace. The durable blob store is the source of truth;
     /// this set is the in-process cache the pruner consults without touching
-    /// disk. It tracks marks for THIS process's lifetime — sessions never
+    /// disk. It tracks marks for THIS process's lifetime -- sessions never
     /// outlive the process (PTYs die with it), so it needs no startup seed.
     persisted_windows: Mutex<HashSet<String>>,
     /// Optional hook fired when [`reap_exited`](Self::reap_exited) reaps a
     /// session that owns a window: the host installs it (on the SHARED terminal
     /// tenant only) to drop the standalone terminal's window-feed row when its
     /// PTY exits, so it does not linger. A workspace tenant
-    /// leaves this unset — a pane's death must never close its workspace window.
+    /// leaves this unset -- a pane's death must never close its workspace window.
     window_reaper: Mutex<Option<WindowReaper>>,
     /// Optional hook fired on an EXPLICIT window discard (via
     /// [`reap_window_layout`](Self::reap_window_layout)) to delete the standalone
@@ -566,7 +566,7 @@ pub enum SessionEvent {
     /// SAME session id (the roster keeps the id). Broadcast on the OLD
     /// session's channel just before it is killed, so an attached `/ws` reader
     /// re-attaches to the relaunched session instead of tearing the socket
-    /// down — the SPA tab stays put and transparently shows the new shell (no
+    /// down -- the SPA tab stays put and transparently shows the new shell (no
     /// `Closed`/`Exit`, so it is never dropped). Consumed server-side in the
     /// `/ws` loop; never serialized to a client frame.
     Restarted,
@@ -844,7 +844,7 @@ impl Registry {
     /// The exit state of any PTY in this registry that has exited, or `None`
     /// while they all run. For the desktop's control-terminal connect flow:
     /// the control tenant runs exactly one PTY (the connect script), so
-    /// `Some(exit)` means that script exited — the token will never come, so
+    /// `Some(exit)` means that script exited -- the token will never come, so
     /// the desktop can stop the scrape early (instead of the full timeout) and
     /// survey on a failing connect instead of stranding an empty window.
     /// The registry-level copy is sticky after a session has been removed by
@@ -883,7 +883,7 @@ impl Registry {
         // `session_cap` slot against a re-spawn under the same name. See
         // [`reap_exited`].
         self.reap_exited();
-        // Global pre-spawn gate (fd pressure — an fd_snapshot read_dir): does
+        // Global pre-spawn gate (fd pressure -- an fd_snapshot read_dir): does
         // not need the sessions lock, so run it before taking it, keeping that
         // blocking I/O off the registry lock.
         reject_terminal_spawn_if_fd_pressure()?;
@@ -929,7 +929,7 @@ impl Registry {
         .map_err(CreateError::Spawn)?;
         let mut sessions = self.sessions.lock().expect("terminal registry poisoned");
         // Re-check under the re-acquired lock: a concurrent create may have
-        // filled the cap (or — astronomically — taken the random id) while we
+        // filled the cap (or -- astronomically -- taken the random id) while we
         // spawned. If so, reap the orphan PTY before dropping it (no Drop).
         if sessions.len() >= self.config.terminal.session_cap || sessions.contains_key(&id) {
             drop(sessions);
@@ -1007,7 +1007,7 @@ impl Registry {
             }
             // A concurrent op replaced or removed the session while we spawned;
             // the freshly-spawned `session` was never inserted, so reap its PTY
-            // before dropping it (Session has no Drop) — else the orphan child +
+            // before dropping it (Session has no Drop) -- else the orphan child +
             // fds leak.
             Some(_) | None => {
                 session.close(CloseReason::Shutdown);
@@ -1073,7 +1073,7 @@ impl Registry {
                 // Move invariant: re-home the session to the attaching window.
                 // A cross-window terminal move re-binds it here, so a later
                 // `close_for_window(source)` reaps only sessions still bound to
-                // the source — not the one that just moved away.
+                // the source -- not the one that just moved away.
                 self.rebind_session_window(id, opts.window_id.clone());
                 self.bind_session_pane_tab(id, pane_id, tab_id);
                 return Ok(handle);
@@ -1220,7 +1220,7 @@ impl Registry {
         closed
     }
 
-    /// How many LIVE sessions window `window_id` owns — the read-only twin of
+    /// How many LIVE sessions window `window_id` owns -- the read-only twin of
     /// [`close_for_window`](Self::close_for_window), for the `cs window rm`
     /// `--force` guard. Counts only sessions not yet marked closed.
     pub fn count_for_window(&self, window_id: &str) -> usize {
@@ -1232,7 +1232,7 @@ impl Registry {
             .count()
     }
 
-    /// A window was DISCARDED (its layout blob was DELETEd — `^W` to empty,
+    /// A window was DISCARDED (its layout blob was DELETEd -- `^W` to empty,
     /// `^D`, `Ctrl+Shift+W`, or an empty window). Drop it from the persisted
     /// set and immediately reap its terminal sessions. This is what frees a
     /// busy detached session the idle pruner deliberately keeps alive, and so
@@ -1265,7 +1265,7 @@ impl Registry {
         // Snapshot the live sessions under the lock, then read each cwd AFTER
         // releasing it. `cwd()` shells `lsof` on macOS, so computing it under
         // the sessions mutex made a multi-session `cs term list` serialize N
-        // lsof probes while holding the registry lock — stalling every other
+        // lsof probes while holding the registry lock -- stalling every other
         // terminal op. The snapshot keeps the lock hold to a cheap Arc clone.
         let live: Vec<Arc<Session>> = {
             let sessions = self.sessions.lock().expect("terminal registry poisoned");
@@ -1504,7 +1504,7 @@ impl Registry {
     /// Close every live session matching the given tab name and/or group, for
     /// `cs terminal close`. Same selector semantics as `restart_matching` (a
     /// `None` axis matches all; both narrow to the intersection). Closes the
-    /// PTY and removes the registry entry — the explicit teardown that was
+    /// PTY and removes the registry entry -- the explicit teardown that was
     /// missing (killing the pid out-of-band left the entry to linger and hold
     /// its tab name). Returns how many sessions were closed.
     pub fn close_matching(&self, tab_name: Option<&str>, tab_group: Option<&str>) -> usize {
@@ -1598,8 +1598,8 @@ impl Registry {
     }
 
     /// Reap sessions whose child PROCESS has exited and that have no client
-    /// attached. A dead, unviewed session is a pure ghost — no process, no
-    /// viewer — so keeping it only leaks the slot and HOLDS its tab name,
+    /// attached. A dead, unviewed session is a pure ghost -- no process, no
+    /// viewer -- so keeping it only leaks the slot and HOLDS its tab name,
     /// making a re-spawn under the same name collide and come up renamed (the
     /// `cs terminal restart` ghost-tab regression: a killed agent's entry lingered
     /// because the controller thread records `exit` on exit but never
@@ -1608,7 +1608,7 @@ impl Registry {
     /// a dead process can't be reattached, only re-spawned, so a persisted
     /// window comes back fresh on reconnect rather than stranding the ghost.
     /// An attached dead session is KEPT (a client is still viewing its final
-    /// output — no natural-`exit`-vanishes regression). Returns how many were
+    /// output -- no natural-`exit`-vanishes regression). Returns how many were
     /// reaped. Run before every [`create`](Self::create) and on the pruner tick.
     pub fn reap_exited(&self) -> usize {
         // Capture each reaped session's owning window_id alongside its id: a
@@ -1659,16 +1659,16 @@ impl Registry {
     /// every output byte, so the old activity timer kept htop / a `for` loop
     /// immortal). The rule:
     ///
-    /// - **attached** (`attach_count > 0`) — keep; a client is live on it.
+    /// - **attached** (`attach_count > 0`) -- keep; a client is live on it.
     /// - **detached, window persisted** (a durable layout blob exists, tracked
-    ///   in `persisted_windows`) — keep indefinitely; the window survives a
+    ///   in `persisted_windows`) -- keep indefinitely; the window survives a
     ///   client disconnect and reattaches on reconnect (browser-tab / devserver
     ///   semantics). Discard reaps it explicitly via [`Registry::forget_window`].
     /// - **detached, window NOT persisted** (browser window that never saved a
-    ///   blob — a hard client crash before any save) — orphan; reap once it has
+    ///   blob -- a hard client crash before any save) -- orphan; reap once it has
     ///   been detached longer than the grace.
     /// - **detached, no `window_id`** (a headless `cs terminal new` from a
-    ///   native terminal) — unchanged activity-idle cleanup, timed off
+    ///   native terminal) -- unchanged activity-idle cleanup, timed off
     ///   `last_activity`; these are intentional, not browser-window orphans.
     ///
     /// The detach/idle grace reuses `terminal.idle_timeout_secs`.
@@ -1894,7 +1894,7 @@ struct QueuedWrite {
 
 /// Message depth of a write queue: the count of TAIL entries. A multi-write
 /// message contributes exactly one tail, so this counts messages, not raw
-/// writes — a queued gemini text+chord pair reads as ONE pending message.
+/// writes -- a queued gemini text+chord pair reads as ONE pending message.
 fn msg_depth(q: &VecDeque<QueuedWrite>) -> usize {
     q.iter().filter(|w| w.tail).count()
 }
@@ -1936,12 +1936,12 @@ struct Session {
     /// bumps on input). The `cs terminal write` queue drains only when this
     /// has been quiet for `WRITE_QUEUE_QUIET_MS` (the agent is idle).
     last_output_at: AtomicI64,
-    /// FIFO of pending writes for this session — `cs terminal write` pokes
-    /// and Rich Prompt messages share it — drained one entry at a time when
+    /// FIFO of pending writes for this session -- `cs terminal write` pokes
+    /// and Rich Prompt messages share it -- drained one entry at a time when
     /// the agent is idle. Each entry carries raw PTY bytes plus message
     /// tagging (see [`QueuedWrite`]). Bounded at `WRITE_QUEUE_CAP` raw
     /// entries; dropped on session recycle (the session, and this queue with
-    /// it, is replaced on restart/close — attached clients get Closed/Exit
+    /// it, is replaced on restart/close -- attached clients get Closed/Exit
     /// and re-sync their queue depth from the next attach's session frame).
     write_queue: Mutex<VecDeque<QueuedWrite>>,
     /// Millis of the drainer's last delivery (0 when nothing is pending), to
@@ -1953,7 +1953,7 @@ struct Session {
     attach_count: AtomicUsize,
     /// Unix seconds when `attach_count` last fell to 0 (every client detached).
     /// Seeded at spawn. The orphan-grace pruner times a detached session from
-    /// THIS, not `last_activity` — a busy detached session (htop, a `for` loop)
+    /// THIS, not `last_activity` -- a busy detached session (htop, a `for` loop)
     /// keeps `last_activity` fresh forever, so timing the grace off output kept
     /// it immortal (the FD leak). Meaningless while `attach_count > 0`.
     detached_at: AtomicI64,
@@ -1984,7 +1984,7 @@ struct Session {
     fdstore_preserve_on_shutdown: AtomicBool,
     /// The PTY's exit state, set once its child process exits (the same value
     /// broadcast as [`SessionEvent::Exit`]). `None` while the process runs.
-    /// Stored — not only broadcast — so a poller (the desktop's control-script
+    /// Stored -- not only broadcast -- so a poller (the desktop's control-script
     /// scrape) can see the script died without subscribing to the event
     /// stream. Retained on the still-mapped session after a natural exit.
     exit: Mutex<Option<TerminalExit>>,
@@ -2016,7 +2016,7 @@ impl Session {
         // Prepend the chan bin dir (`%LOCALAPPDATA%\chan\bin`) so the `chan` /
         // `cs` shims resolve. The shim dir is only ever added to the HKCU PATH
         // registry by `cs_install::ensure_on_user_path`, which never reaches
-        // this already-running process's inherited env — so prepend it here,
+        // this already-running process's inherited env -- so prepend it here,
         // independent of registry propagation. Must match `cs_install`'s
         // `shim_bin_dir` (`dirs::data_local_dir().join("chan").join("bin")`).
         // Layered over any per-session PATH override, then the inherited PATH.
@@ -2074,7 +2074,7 @@ impl Session {
             cmd.env("CHAN_TAB_NAME", tab_name);
         }
         // Every terminal has a well-defined group, so $CHAN_TAB_GROUP is
-        // always set (default when unset) — an agent can read it
+        // always set (default when unset) -- an agent can read it
         // unconditionally to learn its broadcast group.
         let tab_group = opts.tab_group;
         cmd.env(
@@ -2169,8 +2169,8 @@ impl Session {
 
         // A single-purpose / devserver CONTROL tenant echoes a banner naming
         // the command it is about to run, so the user sees the launch command
-        // before its output. Recorded into the replay ring HERE — after the
-        // session exists but BEFORE the reader thread starts — so the banner is
+        // before its output. Recorded into the replay ring HERE -- after the
+        // session exists but BEFORE the reader thread starts -- so the banner is
         // the first ring bytes (precedes the child's output) and survives
         // scrollback replay on reload. Display-only: the executed command
         // (`command_builder` above) is untouched; this never wraps or re-quotes
@@ -2595,7 +2595,7 @@ impl Session {
     /// untagged single-write message. Returns the RAW queue length after the
     /// push (the caller's position), or `None` when the queue is already at
     /// `WRITE_QUEUE_CAP` (the write is dropped). The return value is raw
-    /// entries while the SPA's queue depth counts messages — a deliberate
+    /// entries while the SPA's queue depth counts messages -- a deliberate
     /// divergence that keeps the CLI's stdout contract byte-for-byte stable.
     fn enqueue_write(&self, data: &[u8]) -> Option<usize> {
         let (len, depth) = {
@@ -2626,7 +2626,7 @@ impl Session {
     /// enqueued as ONE message: all-or-nothing at the cap (a partial push
     /// could deliver a body whose submit chord was silently dropped),
     /// `prompt_id` on every entry, `tail` on the last. Returns the message
-    /// depth after the push — the message's 1-based queue position — or
+    /// depth after the push -- the message's 1-based queue position -- or
     /// `None` when the whole message does not fit (queue unchanged).
     fn enqueue_prompt(&self, writes: &[Vec<u8>], prompt_id: Option<String>) -> Option<usize> {
         let depth = {
@@ -2653,14 +2653,14 @@ impl Session {
     /// Recall a still-queued Rich Prompt message: drop EVERY queued write
     /// sharing `prompt_id` (body + tail) atomically under the queue lock, so
     /// the multi-write all-or-nothing invariant + `msg_depth` (tail count)
-    /// stay consistent — never a partial removal. Returns whether anything was
+    /// stay consistent -- never a partial removal. Returns whether anything was
     /// removed; on a removal, re-emit `QueueDepth` so every attached socket
     /// re-syncs its badge.
     ///
     /// The in-flight message is `pop_front`'ed before delivery
     /// (`try_drain_one`), so it is NOT in `write_queue`: the retain-filter can
     /// never touch or reorder the message currently being delivered. The
-    /// cancel-vs-drain race is resolved here under the lock — if the message
+    /// cancel-vs-drain race is resolved here under the lock -- if the message
     /// drained the same tick, `removed` is `false` and the caller acks that so
     /// the UI does not claim to recall a message that already hit the PTY.
     fn cancel_prompt(&self, prompt_id: &str) -> bool {
@@ -2680,7 +2680,7 @@ impl Session {
     }
 
     /// The `prompt_id`s of the tail-bearing messages still queued, in FIFO
-    /// order — one id per Rich Prompt message. `cs terminal write` pokes carry
+    /// order -- one id per Rich Prompt message. `cs terminal write` pokes carry
     /// no `prompt_id` and are skipped, so membership is exact (a restored
     /// pending id is in the list iff still queued).
     fn queued_prompt_ids(&self) -> Vec<String> {
@@ -2820,7 +2820,7 @@ impl Session {
     }
 
     /// Rebind the owning window on reattach. A `None`
-    /// (windowless) reattach does NOT clear an existing binding — only a real
+    /// (windowless) reattach does NOT clear an existing binding -- only a real
     /// attaching window re-homes the session.
     fn set_window_id(&self, window_id: Option<String>) {
         if window_id.is_none() {
@@ -2956,7 +2956,7 @@ impl Session {
     }
 
     /// Track the live [`TRACKED_PRIVATE_MODES`] set by parsing DEC private-mode
-    /// CSIs — `ESC [ ? <;-joined decimal params> (h|l)` — out of PTY output.
+    /// CSIs -- `ESC [ ? <;-joined decimal params> (h|l)` -- out of PTY output.
     /// `h` adds each tracked param to the set, `l` removes it; a sequence split
     /// across reads is carried in `private_mode_tail`. Non-`h`/`l` finals (a
     /// DECRQM `$p` query, a report, …) are skipped without toggling. Sequences
@@ -2980,7 +2980,7 @@ impl Session {
                 continue;
             }
             // A private-mode CSI begins ESC '[' '?'. Fewer than 3 trailing bytes
-            // could still grow into one on the next read — carry from the ESC.
+            // could still grow into one on the next read -- carry from the ESC.
             if n - i < 3 {
                 if n - i <= PRIVATE_MODE_TAIL_CAP {
                     tail.extend_from_slice(&scan[i..]);
@@ -2997,7 +2997,7 @@ impl Session {
                 j += 1;
             }
             if j == n {
-                // Params not yet terminated — carry the partial (bounded).
+                // Params not yet terminated -- carry the partial (bounded).
                 if n - i <= PRIVATE_MODE_TAIL_CAP {
                     tail.extend_from_slice(&scan[i..]);
                 }
@@ -3034,7 +3034,7 @@ impl Session {
         }
     }
 
-    /// Bytes that re-assert the live tracked private-mode set on reattach —
+    /// Bytes that re-assert the live tracked private-mode set on reattach  --
     /// `ESC [ ? <n> h` per mode currently on, in mode-number order. Empty when
     /// none are on (a plain shell never bloats the prelude).
     fn private_mode_prelude(&self) -> Vec<u8> {
@@ -3529,7 +3529,7 @@ mod tests {
 
         let mut rx = session.output_tx.subscribe();
         // Cancel the gemini message: BOTH its raw writes (body + tail) go
-        // together — never a partial removal.
+        // together -- never a partial removal.
         assert!(session.cancel_prompt("m2"), "m2 was still queued");
         match rx.try_recv() {
             Ok(SessionEvent::QueueDepth(depth)) => assert_eq!(depth, 2, "depth re-emitted"),
@@ -3731,7 +3731,7 @@ mod tests {
     /// in alt-screen replays no scrollback, so the prelude is the ONLY chance to
     /// restore those modes. Before the fix the prelude re-asserted ONLY alt-screen,
     /// so arrows (DECCKM) and wheel/clicks (mouse) died. The reattach must now
-    /// re-assert the live INPUT modes — and NOT alt-screen (handled separately).
+    /// re-assert the live INPUT modes -- and NOT alt-screen (handled separately).
     #[test]
     fn reattach_reasserts_htop_input_modes() {
         let session = test_session_with_ring(4096);
@@ -3788,7 +3788,7 @@ mod tests {
 
     #[test]
     fn plain_shell_has_empty_mode_reassert() {
-        // A session that never set a tracked mode re-asserts nothing — a plain
+        // A session that never set a tracked mode re-asserts nothing -- a plain
         // shell must not bloat the prelude.
         let session = test_session_with_ring(1024);
         session.record_output(b"$ echo hi\r\nhi\r\n");
@@ -4033,7 +4033,7 @@ mod tests {
         drop(handle); // every client detached
         registry.mark_window_persisted("win-keep");
         let now = now_unix_secs() as i64;
-        // Far past the idle grace — a persisted window is never idle-reaped.
+        // Far past the idle grace -- a persisted window is never idle-reaped.
         assert_eq!(registry.prune_idle_at(now + 100_000), 0);
         assert_eq!(registry.len(), 1);
         assert!(registry.attach(&id, None).is_some());
@@ -4163,7 +4163,7 @@ mod tests {
     #[test]
     fn reap_exited_keeps_a_live_detached_session() {
         // Detached but the process is still running (a busy background agent):
-        // NOT a ghost — kept. Process-death is the reap axis, not detach.
+        // NOT a ghost -- kept. Process-death is the reap axis, not detach.
         let registry = Registry::new(test_config(1024, 4, 10));
         let handle = registry.create(opts_with_window("win-live")).unwrap();
         drop(handle); // detached, but exit stays None (still running)
@@ -4426,7 +4426,7 @@ mod tests {
     fn cross_window_move_rebinds_window_and_survives_source_discard() {
         // Move invariant: a terminal dragged from window A to window B must
         // re-home to B on reattach, so A's discard (it emptied out) does NOT
-        // reap the moved session — only sessions STILL bound to A.
+        // reap the moved session -- only sessions STILL bound to A.
         let registry = Registry::new(test_config(1024, 4, 10));
         // Opened in window A...
         let handle = registry.create(opts_with_window("win-a")).unwrap();
@@ -4451,7 +4451,7 @@ mod tests {
         );
         drop(reattached);
 
-        // The SOURCE window A discards. It must reap nothing — the session
+        // The SOURCE window A discards. It must reap nothing -- the session
         // moved to B.
         assert_eq!(
             registry.forget_window("win-a"),
@@ -4685,7 +4685,7 @@ mod tests {
     fn control_tenant_session_echoes_command_banner_first() {
         // A session that inherits the TENANT default command (the devserver
         // control / single-purpose tenant) writes the bare `{command}\r\n` as the
-        // FIRST ring bytes — before the child's output and so durable across a
+        // FIRST ring bytes -- before the child's output and so durable across a
         // scrollback replay. The banner is the bare script + newline (no prefix)
         // so the command's own output begins on the next line.
         let registry = Registry::new(test_config(4096, 4, 60));
@@ -4708,7 +4708,7 @@ mod tests {
     #[test]
     fn shared_tenant_session_has_no_command_banner() {
         // The shared interactive tenant has no default command, so its session
-        // runs the user's shell and gets NO banner — the announce path never
+        // runs the user's shell and gets NO banner -- the announce path never
         // fires, so the ring never leads with an injected `{command}\r\n` line
         // (a degenerate empty banner would lead with `\r\n`).
         let registry = Registry::new(test_config(4096, 4, 60));
@@ -4725,7 +4725,7 @@ mod tests {
     #[test]
     fn per_session_command_has_no_command_banner() {
         // A per-session command (a team agent terminal spawned via
-        // `POST /api/terminals`) is NOT a single-purpose tenant — the command did
+        // `POST /api/terminals`) is NOT a single-purpose tenant -- the command did
         // not come from the tenant default, so it gets NO banner: the ring must
         // not lead with the bare `printf agent\r\n` echo a control tenant would
         // inject.

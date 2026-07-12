@@ -59,11 +59,11 @@ export async function tauriInvoke<T = unknown>(
 /// opt-out). So on desktop we read it natively in Rust through the
 /// `read_clipboard_text` IPC, which goes straight to the OS clipboard
 /// and never shows the button. On web `navigator.clipboard.readText()`
-/// is fine — it is gesture-permitted and shows no persistent button in
+/// is fine -- it is gesture-permitted and shows no persistent button in
 /// Chrome. Returns "" when the clipboard holds no text or the read fails
 /// (the caller treats empty as "nothing to paste"). Note Cmd+V does NOT
 /// use this: it rides xterm's native paste event (the user's own paste
-/// gesture), which is buttonless everywhere — this is only for the
+/// gesture), which is buttonless everywhere -- this is only for the
 /// right-click menu's "Paste", where no paste gesture exists.
 export async function readClipboardText(): Promise<string> {
   if (isTauriDesktop()) {
@@ -83,7 +83,7 @@ export async function readClipboardText(): Promise<string> {
 /// `navigator.clipboard.writeText()`. So on desktop we write it natively in
 /// Rust through the `write_clipboard_text` IPC, which goes straight to the OS
 /// clipboard and never needs a gesture. On web `navigator.clipboard.writeText()`
-/// is the only option — it is gesture-permitted in a foreground tab, which is
+/// is the only option -- it is gesture-permitted in a foreground tab, which is
 /// where the terminal lives. Best-effort: a failed native IPC logs and falls
 /// back to the web API so the copy still has a chance to land.
 export async function writeClipboardText(text: string): Promise<void> {
@@ -133,11 +133,11 @@ export async function readClipboardHtml(): Promise<string | null> {
 
 /// Absolute paths of the OS files currently on the macOS drag
 /// pasteboard (the `read_dropped_paths` IPC). Only meaningful when
-/// called from inside a `drop` event handler — the drag pasteboard
+/// called from inside a `drop` event handler -- the drag pasteboard
 /// persists until the next drag starts. Returns `[]` in a plain
 /// browser, on non-macOS desktops, when the pasteboard holds no file
 /// items, or when the ACL refuses the command (remote-served window
-/// kinds don't get it) — every failure degrades to a silent no-op so
+/// kinds don't get it) -- every failure degrades to a silent no-op so
 /// the drop guard's no-takeover guarantee is all that remains.
 export async function readDroppedPaths(): Promise<string[]> {
   if (!isTauriDesktop()) return [];
@@ -159,11 +159,11 @@ export interface PickedUploadFile {
 /// Raise chan-desktop's NATIVE multi-file open picker (the `pick_upload_files`
 /// IPC) and return the chosen files' bytes. `cs upload` cannot raise the SPA's
 /// programmatic `<input type=file>` click on WKWebView (no user gesture, so the
-/// click is silently dropped — the same wall as the clipboard-paste quirk), so
+/// click is silently dropped -- the same wall as the clipboard-paste quirk), so
 /// on desktop we open a native panel in Rust instead; the caller wraps the
 /// results in `File` objects and feeds the same upload pipeline the Inspector
 /// pill uses. `[]` = the user cancelled. THROWS on ACL refusal (remote-served
-/// `outbound-*` windows don't get it) or IPC failure — an explicit `cs upload`
+/// `outbound-*` windows don't get it) or IPC failure -- an explicit `cs upload`
 /// deserves a visible error, not a silent no-op (which is the bug we're fixing).
 export async function pickUploadFiles(): Promise<PickedUploadFile[]> {
   return tauriInvoke<PickedUploadFile[]>("pick_upload_files");

@@ -696,7 +696,7 @@ describe("Pane cross-kind / cross-workspace tab DnD guard", () => {
     // The human-readable scope carries `:`/`|`, which WKWebView mangles in a MIME
     // type; the scopeMime boundary hex-encodes via dragScopeMimeToken so the
     // stamped type comes back byte-identically at dragover (the intra-window-drag
-    // regression fix — without this, EVERY drop is rejected).
+    // regression fix -- without this, EVERY drop is rejected).
     expect(paneSource).toMatch(
       /const scopeMime = \(scope: string\): string =>\s*SCOPE_DRAG_MIME_PREFIX \+ dragScopeMimeToken\(scope\)/,
     );

@@ -24,7 +24,7 @@ export function installTerminalReportGuards(term: Terminal): void {
 /// Honour an OSC 52 copy sequence: decode its base64 payload and write it to
 /// the system clipboard. `@xterm/xterm` v6 has no built-in OSC 52 path, so
 /// without this the embedded agent's copy sequences are silently dropped. The
-/// read/query form (`?`) is consumed but never echoed — replying would leak the
+/// read/query form (`?`) is consumed but never echoed -- replying would leak the
 /// clipboard back into the PTY. Returns `true` synchronously to mark the
 /// sequence handled; the actual write is fire-and-forget because returning the
 /// Promise would stall xterm's parser until the clipboard settles.

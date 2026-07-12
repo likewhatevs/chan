@@ -64,12 +64,7 @@ Update outcomes distinguish real changes from no-ops; chan-workspace uses that s
 
 ### Subdirectory and per-file queries
 
-A prefix scope rolls up every file under that relative prefix; an explicit-file
-scope rolls up only the listed files. Both go through the same `snapshot` path
-so the same `Report` structure is returned regardless of scope, and the
-`by_language` / `totals` / `cocomo` fields reflect only the scoped subset.
-`Index::file(rel)` returns the raw `FileStats` for one file with no roll-up
-cost.
+A prefix scope rolls up every file under that relative prefix; an explicit-file scope rolls up only the listed files. Both go through the same `snapshot` path so the same `Report` structure is returned regardless of scope, and the `by_language` / `totals` / `cocomo` fields reflect only the scoped subset. `Index::file(rel)` returns the raw `FileStats` for one file with no roll-up cost.
 
 `Index::dir_report(dir, params)` is the O(1) read side of a maintained per-directory aggregation: every file's stats contribute to each ancestor directory up to the root (key `""`), updated on each `update` / `remove` / `rename` with an O(depth) ancestor walk. The returned `Report` carries the directory's totals, per-language roll-up (same ordering as the whole-tree roll-up), and a COCOMO over the directory's code total; `files` stays empty because directory inspectors only render the summary. `None` means no tracked file lives at or under the directory. The cache is never persisted; `scan` and `load_jsonl` rebuild it from the file rows.
 
@@ -128,11 +123,7 @@ Files larger than 16 MiB skip the in-memory read: tokei still counts them via it
 
 ## 8. COCOMO
 
-Basic COCOMO is computed from total SLOC (sum of `code` across all included
-files). The supported modes are Organic (default), Semi-Detached, and Embedded;
-each mode supplies the standard Basic COCOMO coefficients for effort and
-schedule. The cost estimate multiplies effort by the configured average monthly
-salary and overhead multiplier.
+Basic COCOMO is computed from total SLOC (sum of `code` across all included files). The supported modes are Organic (default), Semi-Detached, and Embedded; each mode supplies the standard Basic COCOMO coefficients for effort and schedule. The cost estimate multiplies effort by the configured average monthly salary and overhead multiplier.
 
 `CocomoParams` defaults:
 

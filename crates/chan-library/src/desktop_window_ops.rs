@@ -9,7 +9,7 @@
 //! mpsc channel the control socket sends [`DesktopWindowOp`]s down, plus
 //! the shared title map (see [`crate::window_titles`]). Each op carries a
 //! `oneshot` the desktop completes, so the control handler can `await` a
-//! result exactly like the existing window-bus round-trips — but without
+//! result exactly like the existing window-bus round-trips -- but without
 //! bouncing through the SPA.
 //!
 //! In standalone `chan open` the channel is absent ([`DesktopBridge`]'s
@@ -22,8 +22,8 @@ use tokio::sync::{mpsc, oneshot};
 use crate::window_titles::SharedWindowTitles;
 
 /// Which kind of window `cs window new` spawns. The control socket fills
-/// this in from the calling tenant — a terminal tenant spawns a terminal
-/// window, a workspace tenant spawns another window of that workspace —
+/// this in from the calling tenant -- a terminal tenant spawns a terminal
+/// window, a workspace tenant spawns another window of that workspace  --
 /// so the CLI never has to name the kind.
 #[derive(Debug)]
 pub enum NewWindowKind {
@@ -41,7 +41,7 @@ pub enum NewWindowKind {
 ///
 /// Richer than the plain `Result<(), String>` the other ops reply with: the live
 /// terminal COUNT has to round-trip the bridge so the launcher shows it in the
-/// confirm prompt and retries with `force: true` — parity with the local/remote
+/// confirm prompt and retries with `force: true` -- parity with the local/remote
 /// workspace-off confirm flow.
 #[derive(Debug)]
 pub enum SetWorkspaceOnOutcome {
@@ -77,7 +77,7 @@ pub enum DesktopWindowOp {
         force: bool,
         reply: oneshot::Sender<Result<bool, String>>,
     },
-    /// Bury (hide) a window — the OS close-button behaviour.
+    /// Bury (hide) a window -- the OS close-button behaviour.
     Hide {
         id: String,
         reply: oneshot::Sender<Result<(), String>>,
@@ -86,7 +86,7 @@ pub enum DesktopWindowOp {
     /// control terminal, scrape the token, dial the URL, and open its
     /// window. The launcher's Connect button drives this over the bridge;
     /// the reply is `Ok(())` once the connect flow is under way (or the
-    /// error string when it fails). Inert without a desktop attached — the
+    /// error string when it fails). Inert without a desktop attached -- the
     /// route then answers [`NO_DESKTOP`], like the other window ops.
     ConnectDevserver {
         id: String,
@@ -95,7 +95,7 @@ pub enum DesktopWindowOp {
     /// Disconnect a connected devserver by id: drop the live connection and its
     /// windows, returning it to the registered-but-offline state. The launcher's
     /// Disconnect button drives this over the bridge; the reply is `Ok(())` once
-    /// torn down. Inert without a desktop attached — the route then answers
+    /// torn down. Inert without a desktop attached -- the route then answers
     /// [`NO_DESKTOP`], like the other devserver ops.
     DisconnectDevserver {
         id: String,
@@ -103,7 +103,7 @@ pub enum DesktopWindowOp {
     },
     /// Open a fresh standalone-terminal window on a connected devserver by id.
     /// The launcher's per-devserver New-Terminal button drives this; the reply is
-    /// `Ok(())` once the window is spawning. Inert without a desktop attached —
+    /// `Ok(())` once the window is spawning. Inert without a desktop attached  --
     /// the route then answers [`NO_DESKTOP`].
     OpenDevserverTerminal {
         id: String,
@@ -112,7 +112,7 @@ pub enum DesktopWindowOp {
     /// Open (or focus) a workspace window on a connected devserver by id, rooted
     /// at the remote workspace `path`. The launcher's devserver-workspace Open
     /// button drives this; the reply is `Ok(())` once the window is spawning.
-    /// Inert without a desktop attached — the route then answers [`NO_DESKTOP`].
+    /// Inert without a desktop attached -- the route then answers [`NO_DESKTOP`].
     OpenDevserverWorkspace {
         id: String,
         path: String,
@@ -124,7 +124,7 @@ pub enum DesktopWindowOp {
     /// workspace with live terminals replies [`SetWorkspaceOnOutcome::NeedsForce`]
     /// (carrying the count) so the launcher confirms-then-retries with
     /// `force: true`; an on, or a forced off, replies
-    /// [`SetWorkspaceOnOutcome::Done`]. Inert without a desktop attached — the
+    /// [`SetWorkspaceOnOutcome::Done`]. Inert without a desktop attached -- the
     /// route then answers [`NO_DESKTOP`].
     SetDevserverWorkspaceOn {
         id: String,
@@ -136,7 +136,7 @@ pub enum DesktopWindowOp {
     /// Forget (unregister) a connected devserver's workspace, keyed by
     /// `(id, prefix)`. The launcher's devserver-workspace Remove button drives
     /// this; the reply is `Ok(())` once the remote registry drops it. Inert
-    /// without a desktop attached — the route then answers [`NO_DESKTOP`].
+    /// without a desktop attached -- the route then answers [`NO_DESKTOP`].
     ForgetDevserverWorkspace {
         id: String,
         prefix: String,
@@ -147,7 +147,7 @@ pub enum DesktopWindowOp {
     /// directory, or `None` when the user cancels. The launcher's
     /// New-Workspace dialog drives this over the bridge so the Folder field
     /// gets a real "Browse…" affordance instead of typing an absolute path.
-    /// Inert without a desktop attached — the route then answers
+    /// Inert without a desktop attached -- the route then answers
     /// [`NO_DESKTOP`], so a plain browser keeps the text-entry fallback.
     PickFolder {
         reply: oneshot::Sender<Result<Option<String>, String>>,

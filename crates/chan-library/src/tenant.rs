@@ -3,11 +3,11 @@
 //! Two traits keep `chan-server → chan-library` acyclic while the host and the
 //! control socket live here:
 //!
-//! - [`WorkspaceCellHandle`] — how the host and the control socket reach a
+//! - [`WorkspaceCellHandle`] -- how the host and the control socket reach a
 //!   tenant's live workspace + its indexer, without naming `chan-server`'s
 //!   `WorkspaceCell` / `Indexer` (which stay in the route layer). The route
 //!   layer hands back an `Arc<dyn WorkspaceCellHandle>` over the shared cell.
-//! - [`HostControl`] — the slice of the host a control-socket connection
+//! - [`HostControl`] -- the slice of the host a control-socket connection
 //!   reaches through a `Weak` back-reference: unmount a tenant (`chan close`)
 //!   and read the library window set (`cs window list`). Lets the control
 //!   socket hold `Weak<dyn HostControl>` instead of a concrete `WorkspaceHost`.
@@ -40,8 +40,8 @@ pub trait WorkspaceCellHandle: Send + Sync {
     /// Cancel any in-flight reindex (host shutdown / `cancel_all_reindex`).
     fn cancel_reindex(&self);
 
-    /// Tear the cell down — cancel the indexer, drop the watcher + the strong
-    /// `Arc<Workspace>` — and return a `Weak` to the workspace plus its lock
+    /// Tear the cell down -- cancel the indexer, drop the watcher + the strong
+    /// `Arc<Workspace>` -- and return a `Weak` to the workspace plus its lock
     /// directory so the host can wait for the per-workspace flock to release
     /// before an immediate reopen. `None` when the cell was already cleared.
     fn clear(&self) -> Option<(Weak<Workspace>, PathBuf)>;
@@ -61,7 +61,7 @@ pub trait HostControl: Send + Sync {
     ) -> Result<WorkspaceLifecycleOutcome, Error>;
 
     /// Remove the workspace at `root` from this host: unmount it, UNREGISTER it
-    /// from the host library, and forget it from the on/off overlay — the
+    /// from the host library, and forget it from the on/off overlay -- the
     /// over-the-control-socket equivalent of the launcher's `DELETE
     /// /api/library/workspaces/{id}` (`chan close --remove` / `chan workspace
     /// rm` of a workspace this host serves). Runs IN the host process so the
@@ -74,7 +74,7 @@ pub trait HostControl: Send + Sync {
         force: bool,
     ) -> Result<WorkspaceLifecycleOutcome, Error>;
 
-    /// The full library window set — every window across every tenant, as the
+    /// The full library window set -- every window across every tenant, as the
     /// authoritative records `cs window list` and the launcher render. Assembled
     /// from the window registry + live tenant + presence state.
     fn assemble_window_records(&self) -> Vec<WindowRecord>;
@@ -88,13 +88,13 @@ pub trait HostControl: Send + Sync {
     fn discard_window(&self, window_id: &str) -> Result<bool, Error>;
 
     /// How many LIVE terminal sessions window `window_id` owns across this host's
-    /// tenants — the read-only count behind the `cs window rm` `--force` guard, so
+    /// tenants -- the read-only count behind the `cs window rm` `--force` guard, so
     /// a removal that would kill running shells is refused unless forced.
     fn live_terminal_count(&self, window_id: &str) -> usize;
 }
 
 /// How a control socket's process tears down the workspace named by a
-/// `ControlRequest::Close` — the server-decides-scope half of `chan close`.
+/// `ControlRequest::Close` -- the server-decides-scope half of `chan close`.
 /// The route layer's tenant builder builds it from an [`UnserveMode`] the
 /// embedder picks, and it rides in the control socket's context.
 #[derive(Clone)]
@@ -128,7 +128,7 @@ pub enum UnserveMode {
     Unsupported,
 }
 
-/// What the route layer hands back per mounted tenant — everything the host
+/// What the route layer hands back per mounted tenant -- everything the host
 /// needs to route to it, reconcile its windows, and tear it down. The
 /// router-construction boundary: the host owns these; the route layer builds them
 /// via [`TenantBuilder`]. This is the ex-`AppArtifacts`, reduced to the
@@ -148,7 +148,7 @@ pub struct TenantArtifacts {
     /// SPA-facing URL prefix (tunnel mode swaps it on Connected). Shared Arc
     /// with the tenant's `AppState`.
     pub prefix: Arc<RwLock<String>>,
-    /// Which window ids hold a live `/ws` socket — the `connected` source for
+    /// Which window ids hold a live `/ws` socket -- the `connected` source for
     /// the window-record assembly.
     pub window_presence: Arc<WindowPresence>,
     /// The tenant's session registry (leader + followers). The host reads its
@@ -162,7 +162,7 @@ pub struct TenantArtifacts {
     /// own socket learns its record was torn down and shows the leader-close
     /// overlay (a native desktop window is reconciled away instead).
     pub events_tx: broadcast::Sender<String>,
-    /// Per-window in-flight transfer count — the desktop close handler's
+    /// Per-window in-flight transfer count -- the desktop close handler's
     /// "is a transfer running?" query (`tenant_has_active_transfer`).
     pub window_transfers: Arc<WindowTransfers>,
     /// Reach the tenant's live workspace + drive teardown/reindex-cancel

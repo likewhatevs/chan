@@ -23,7 +23,7 @@
 
 /// Prefer the host GUI stack on a Linux AppImage launch, re-exec'ing once.
 /// No-op off Linux (macOS and Windows have no AppImage / bundle-first loader
-/// order to correct — the body compiles to nothing there), off an AppImage, or
+/// order to correct -- the body compiles to nothing there), off an AppImage, or
 /// once already applied. The `linux` module below is `#[cfg(target_os =
 /// "linux")]`, so nothing in it is compiled for the Windows target.
 pub fn prefer_system_gui_stack() {

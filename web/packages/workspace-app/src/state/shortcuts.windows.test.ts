@@ -7,7 +7,7 @@ import {
 } from "./shortcuts";
 
 // Confirm the Windows shortcut set is Ctrl-based and
-// Linux-like — no chord LABEL should render "Cmd" under Windows
+// Linux-like -- no chord LABEL should render "Cmd" under Windows
 // (Windows keyboards have no Command key; Win-key-as-Cmd is ruled out).
 
 function windowsLabels(platform: Platform): { id: string; label: string }[] {

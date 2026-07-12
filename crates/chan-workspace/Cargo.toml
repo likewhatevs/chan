@@ -132,7 +132,7 @@ metal = [
 # backend. The embed default is CPU (Metal hangs on large workspaces, so
 # GPU is opt-in via CHAN_ENABLE_GPU). Routing the bge-small matmuls through
 # Accelerate's sgemm gives a measured ~1.5-2x cold-reindex speedup over
-# candle's default CPU path with no GPU-memory risk — modest because that
+# candle's default CPU path with no GPU-memory risk -- modest because that
 # default is already the SIMD-threaded `gemm` crate, not naive. Pulls
 # `accelerate-src` (Apple-only). The chan binary forwards this automatically
 # on macOS targets via target-conditional wiring; enabling it on

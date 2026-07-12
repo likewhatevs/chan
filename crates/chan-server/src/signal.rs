@@ -139,7 +139,7 @@ async fn graceful_serve_with_grace(
 /// On Windows, returning here only drops the `axum::serve` future; under a
 /// still-running runtime (the tunnel / reindex side tasks, a wedged ConPTY
 /// read) the OS does not always release the listen socket synchronously, so the
-/// port keeps answering after the deadline — and there is no SIGTERM to force a
+/// port keeps answering after the deadline -- and there is no SIGTERM to force a
 /// second teardown as on unix. Make the "forcing exit" promise literal. Safe:
 /// HTTP already drained via axum's graceful shutdown, the control socket is a
 /// named pipe the OS reclaims, and the unix `Drop`-unlinks are `#[cfg(unix)]`.
@@ -149,7 +149,7 @@ fn force_exit_after_grace() -> std::io::Result<()> {
 }
 
 /// On unix the runtime teardown on return already releases the listener, and a
-/// second SIGINT/SIGTERM force-kills if anything wedges — so just return.
+/// second SIGINT/SIGTERM force-kills if anything wedges -- so just return.
 #[cfg(not(windows))]
 fn force_exit_after_grace() -> std::io::Result<()> {
     Ok(())
@@ -157,8 +157,8 @@ fn force_exit_after_grace() -> std::io::Result<()> {
 
 /// Install the shutdown-signal watcher and block until the first signal fires,
 /// for a foreground server with NO local TCP listener (the tunnel-only
-/// `chan devserver`). There is nothing to drain — the tunnel task races its own
-/// reconnect loop against the same `signal_tx` and stops when it flips — so this
+/// `chan devserver`). There is nothing to drain -- the tunnel task races its own
+/// reconnect loop against the same `signal_tx` and stops when it flips -- so this
 /// just spawns the watcher and awaits it. Callers that spawn a tunnel /
 /// reindex-cancel side task on `signal_tx` do so before calling this.
 pub async fn graceful_wait(signal_tx: Arc<tokio::sync::watch::Sender<bool>>) {
@@ -220,7 +220,7 @@ mod tests {
     ///
     /// Unix-only: on Windows the deadline arm calls `std::process::exit(0)`
     /// ([`force_exit_after_grace`]), which would terminate the whole test
-    /// binary rather than return — so the "returns Ok after the grace"
+    /// binary rather than return -- so the "returns Ok after the grace"
     /// assertion is meaningless there.
     #[cfg(not(windows))]
     #[tokio::test]

@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 
 // `reconcileLayout` applies a co-viewer's persisted layout snapshot onto
-// the live tree in place (never remounting tabs), and refuses — as one
-// atomic no-op — anything structurally diverged. These tests pin both
+// the live tree in place (never remounting tabs), and refuses -- as one
+// atomic no-op -- anything structurally diverged. These tests pin both
 // halves plus the contracts the session-sync handler builds on:
 // idempotence and echo round-trips.
 
@@ -66,7 +66,7 @@ function terminalTab(partial: Partial<TerminalTab> = {}): TerminalTab {
 
 // Both reset helpers return the LIVE nodes read back from `layout.nodes`:
 // a tab or pane object pushed into `$state` is only observable through its
-// Svelte proxy — in-place mutations never land on the raw pre-push object
+// Svelte proxy -- in-place mutations never land on the raw pre-push object
 // (see the applyGlobalTerminalName note in tabs.svelte.ts).
 function resetLayout(tabs: Tab[], partial: Partial<LeafNode> = {}): LeafNode {
   const pane: LeafNode = {

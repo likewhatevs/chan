@@ -9,7 +9,7 @@ import {
   type TerminalTab,
 } from "./tabs.svelte";
 
-// Rich Prompt queue visibility — the tab-level state machine the WS frame
+// Rich Prompt queue visibility -- the tab-level state machine the WS frame
 // handler (TerminalTab.svelte) and the bubble (RichPrompt.svelte) share.
 // The wire/markup shape is pinned in richPromptTerminalWiring.test.ts and
 // richPromptComponent.test.ts; this exercises the store transitions.

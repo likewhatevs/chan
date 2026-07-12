@@ -43,7 +43,7 @@
     ],
     "category": "Productivity",
     "shortDescription": "Chan Desktop markdown editor",
-    "longDescription": "Chan Desktop — markdown editor with local workspaces.",
+    "longDescription": "Chan Desktop - markdown editor with local workspaces.",
     "macOS": {
       "minimumSystemVersion": "11.0",
       "signingIdentity": "Developer ID Application: Alexandre Fiori (W73XV5CK3N)"

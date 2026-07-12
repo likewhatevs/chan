@@ -182,7 +182,7 @@ web-launcher: ## Build the embedded launcher bundle (web-launcher/dist).
 	# (WebAssets) and web-launcher/dist (LauncherAssets, the devserver/library
 	# root SPA). web-launcher/dist is a gitignored build artifact, so every
 	# path that builds web/dist before the cargo/rust-embed step must build
-	# this too — wired as a prerequisite of `web`/`web-check` so the single
+	# this too -- wired as a prerequisite of `web`/`web-check` so the single
 	# `make web` funnel (root `chan`, desktop/Makefile, packaging/linux,
 	# release.yml) builds both with no per-consumer edit.
 	cd web && $(NPM) install && $(NPM) run build -w @chan/launcher

@@ -132,7 +132,7 @@
   // carries reload + inspector.
 
   // Keep-alive: Pane.svelte keeps every file tab mounted (terminal
-  // precedent) and flips `active` — true only when this tab is the
+  // precedent) and flips `active` -- true only when this tab is the
   // pane's selected, front-facing, non-pane-mode tab. It drives the
   // visibility CSS on the root below. `focused` additionally requires
   // the pane to be the active pane; it gates the focus effect below so
@@ -1253,7 +1253,7 @@
             // target in the active pane. `args.target` is the raw
             // link target (a `[[note]]` stem carries no extension),
             // so resolve it through the same `.md`/`.txt`/bare probe
-            // the pill used before opening — otherwise an
+            // the pill used before opening -- otherwise an
             // extension-less stem 404s and flashes a false
             // "document not found" for a file that's on disk.
             void openLinkTarget(args.target);

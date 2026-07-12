@@ -30,7 +30,7 @@ export const NAMED_PANE_HEX: Record<FocusColor, string> = {
 /// `#rrggbb`), return the matching preset name, or null when it is not one of
 /// the four presets. Used by the boot-seed to set the menu checkmark to match
 /// the library colour the window opened with; a custom (non-preset) colour
-/// leaves the checkmark unset, which is correct — no preset is "selected".
+/// leaves the checkmark unset, which is correct -- no preset is "selected".
 export function namedForPaneHex(hex: string | null | undefined): FocusColor | null {
   const norm = normalizeHexColor(hex);
   if (!norm) return null;
@@ -87,7 +87,7 @@ export function applyInitialPaneColor(): void {
 /// A null / absent / invalid colour is treated as "no override": the current
 /// value is LEFT IN PLACE, never cleared. The watch pushes the current colour on
 /// connect, so a library with no persisted colour pushes `{ color: null }` right
-/// after boot — clearing the var there would clobber the `?pane=` boot seed back
+/// after boot -- clearing the var there would clobber the `?pane=` boot seed back
 /// to the default accent (Bug A). Same validation as the `?pane=` path, so a
 /// watch frame can never inject arbitrary CSS.
 export function applyLivePaneColor(color: string | null): void {
@@ -101,7 +101,7 @@ export function applyLivePaneColor(color: string | null): void {
 /// four preset hexes, invoke `setColor` with that named preset so
 /// `focusColorForWindow()` (the menu checkmark) agrees with the colour the
 /// active pane is actually showing. A non-preset (custom) hex, an absent
-/// param, or a non-browser/test context is a no-op — the menu keeps its
+/// param, or a non-browser/test context is a no-op -- the menu keeps its
 /// default and no preset reads as "selected". Takes the setter as a callback
 /// to stay free of the tabs state module (no import cycle, trivially
 /// testable).
@@ -116,7 +116,7 @@ export function seedInitialFocusColor(
 /// Sync the per-window focus-colour MENU to a colour pushed by the live watch.
 /// `applyLivePaneColor` recolours the active border (the doc-root var, which
 /// overrides `data-focus-color`), but the menu checkmark + any NEW split pane's
-/// `data-focus-color` read `focusColorForWindow()` (`layout.focusColor`) — left
+/// `data-focus-color` read `focusColorForWindow()` (`layout.focusColor`) -- left
 /// stale, they disagree with the border the window is actually showing. So when
 /// a pushed colour maps to one of the four presets, select it; a custom (non-
 /// preset), null, or invalid colour leaves the menu as-is (no preset reads as

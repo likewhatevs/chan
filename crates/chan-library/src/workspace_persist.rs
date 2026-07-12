@@ -2,7 +2,7 @@
 //! deployment.
 //!
 //! A chan-library's existence source is its registry (`chan workspace ls` /
-//! `Library::list_workspaces`) — the set of workspaces it owns. What the
+//! `Library::list_workspaces`) -- the set of workspaces it owns. What the
 //! registry does NOT record is which of those a given deployment had MOUNTED
 //! (`on`) versus registered-but-unmounted (`off`) at its last save. That on/off
 //! state is this overlay: a [`PersistedWorkspace`] row keyed by path, owned by
@@ -10,14 +10,14 @@
 //! window registry (local `~/.chan/workspaces.json`, devserver
 //! `~/.chan/devserver/workspaces.json`) so a restart comes back serving exactly
 //! what was on. Both the desktop-local boot and the headless `run_devserver`
-//! restore route through the same store — one implementation in the library.
+//! restore route through the same store -- one implementation in the library.
 //!
 //! The route `prefix` a workspace mounts at is deliberately NOT persisted: it is
 //! a pure function of the root path, derived per library by that library's own
 //! scheme (the devserver's gateway-legible slug via
 //! [`allocate_workspace_prefix`](crate::allocate_workspace_prefix); a hashed
 //! window label for the local desktop). Persisting it would pin one library's
-//! scheme into a shape the other reads — so each library re-derives its own
+//! scheme into a shape the other reads -- so each library re-derives its own
 //! prefix at restore.
 
 use std::path::{Path, PathBuf};
@@ -28,7 +28,7 @@ use serde::{Deserialize, Serialize};
 /// One workspace's persisted on/off state: the `path` that identifies it (the
 /// registry key) and whether it was mounted (`on`) at the last save. The
 /// registry is the existence source; this is the on/off overlay over it. A row
-/// absent from the overlay defaults to off — the registry still surfaces it.
+/// absent from the overlay defaults to off -- the registry still surfaces it.
 /// The mount prefix is re-derived per library at restore, not stored here.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PersistedWorkspace {
@@ -169,7 +169,7 @@ fn save_atomic<T: Serialize>(path: &Path, value: &T) -> std::io::Result<()> {
 /// at `store_path` co-located with the window registry + workspace overlay (the
 /// devserver's `~/.chan/devserver/color.json`). Implements
 /// [`LocalColorStore`](crate::LocalColorStore) so the headless devserver serves
-/// the launcher's `local-color` route over a durable file — each devserver
+/// the launcher's `local-color` route over a durable file -- each devserver
 /// "sticks" to its own colour across restarts, and the desktop caches it for the
 /// pane-highlight inject. Mirrors [`WorkspaceOverlay`]'s degrade-to-default open
 /// + atomic save.

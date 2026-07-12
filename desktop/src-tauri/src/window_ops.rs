@@ -152,8 +152,8 @@ async fn new_workspace_window(state: &Arc<AppState>, key: &str) -> Result<String
 
 /// `cs window hide` / the launcher status-dot hide: route through the OS
 /// close-button path so the existing bury handler (which knows this window's
-/// restore key) runs. `close()` requests a close — the handler hides SPA
-/// windows — unlike `destroy()`, which `rm` uses to truly remove. Resolves the
+/// restore key) runs. `close()` requests a close -- the handler hides SPA
+/// windows -- unlike `destroy()`, which `rm` uses to truly remove. Resolves the
 /// launcher's bare `window_id` to the composite native label first (see
 /// [`serve::resolve_window_label`]).
 fn hide_window(app: &AppHandle, id: &str) -> Result<(), String> {
@@ -168,7 +168,7 @@ fn hide_window(app: &AppHandle, id: &str) -> Result<(), String> {
             w.close().map_err(|e| format!("hiding {id}: {e}"))
         }
         // A reaped / already-gone native window is an idempotent
-        // silent no-op — reply Ok(()) so the route returns 204, NOT Err (which maps
+        // silent no-op -- reply Ok(()) so the route returns 204, NOT Err (which maps
         // to 409 and floods the launcher's eye-handler console). Reaping a
         // standalone terminal's feed row on PTY exit; a client still holding the
         // just-removed row can click its eye, and that hide must land cleanly. Err
@@ -180,7 +180,7 @@ fn hide_window(app: &AppHandle, id: &str) -> Result<(), String> {
 
 /// `cs window rm`: truly destroy the window. When it still has live
 /// terminal shells and `force` is unset, prompt first and only destroy on
-/// confirm — the reply (and thus the blocked CLI) waits for the dialog.
+/// confirm -- the reply (and thus the blocked CLI) waits for the dialog.
 /// Reply: `Ok(true)` destroyed, `Ok(false)` no live window (the server
 /// then deletes any saved layout), `Err("cancelled")` declined.
 async fn close_window(
@@ -244,7 +244,7 @@ async fn close_window(
                         .unwrap_or(false);
                     let _ = reply.send(Ok(destroyed));
                 } else {
-                    let _ = reply.send(Err("cancelled — window not removed".to_string()));
+                    let _ = reply.send(Err("cancelled; window not removed".to_string()));
                 }
             },
         );

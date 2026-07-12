@@ -47,7 +47,7 @@ pub struct HostedWorkspace {
 }
 
 /// The launcher's workspace row: one registered workspace as the launcher lists
-/// it. `workspace_id` is the route prefix without its leading slash — a single
+/// it. `workspace_id` is the route prefix without its leading slash -- a single
 /// legible segment the launcher addresses by and treats as opaque. `on` =
 /// currently mounted/served. No token: the launcher opens a workspace's tenant
 /// separately (which carries its own per-tenant token).
@@ -111,7 +111,7 @@ impl WorkspaceLifecycleOutcome {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LauncherWorkspace {
-    /// Route prefix without its leading slash — the launcher's opaque local key.
+    /// Route prefix without its leading slash -- the launcher's opaque local key.
     pub workspace_id: String,
     /// Absolute workspace root path (display + the add/open argument).
     pub path: String,
@@ -130,7 +130,7 @@ pub struct LauncherWorkspace {
     #[serde(default)]
     pub devserver_id: Option<String>,
     /// The mounted route prefix, ALWAYS the slash-free slug (leading slash
-    /// stripped) — local AND devserver rows alike. For local rows it equals
+    /// stripped) -- local AND devserver rows alike. For local rows it equals
     /// `workspace_id`; for devserver rows the feed must strip the remote prefix's
     /// leading slash before tagging so the on/off/forget ops carry a clean slug.
     /// (Prefixes are single-segment `[a-z0-9-]` slugs, so `%2F` never arises;
@@ -157,7 +157,7 @@ pub struct LauncherWorkspace {
 /// [`WorkspaceOverlay`]: the connection state lives in chan-desktop (invisible
 /// from chan-library), so the desktop installs an `Arc<dyn DevserverFeedSource>`
 /// and the host reads it at assembly time. A host that installs none (the
-/// headless devserver / plain `chan open`) merges nothing — its launcher is
+/// headless devserver / plain `chan open`) merges nothing -- its launcher is
 /// local-only. The desktop fires [`WorkspaceHost::signal_library_change`] when
 /// its feed changes so the watch feed re-pushes.
 pub trait DevserverFeedSource: Send + Sync {
@@ -172,7 +172,7 @@ pub trait DevserverFeedSource: Send + Sync {
     /// a clean single segment.
     fn workspaces(&self) -> Vec<LauncherWorkspace>;
     /// The pane-highlight colour of the connected devserver whose library is
-    /// `library_id` — its own `LocalColorStore` value, fetched from the devserver
+    /// `library_id` -- its own `LocalColorStore` value, fetched from the devserver
     /// (`GET /api/library/local-color`) and cached desktop-side. `None` when no
     /// such devserver is connected or it has no colour set (default accent).
     /// [`WorkspaceHost::pane_color`] resolves a `lib-<hex>` window through this.
@@ -184,7 +184,7 @@ pub trait DevserverFeedSource: Send + Sync {
 /// (`~/.chan/desktop`, invisible from chan-library), so the desktop installs an
 /// `Arc<dyn LocalColorStore>` and the launcher's local-color routes read/write it
 /// through the host. A host that installs none (the headless devserver / plain
-/// `chan open`) reports `None` (the default accent) and ignores writes — the
+/// `chan open`) reports `None` (the default accent) and ignores writes -- the
 /// local colour belongs to the desktop's own library.
 ///
 /// The colour is a hex string (`#rrggbb`); `None` is the default accent. The
@@ -245,13 +245,13 @@ pub struct WorkspaceHost {
     /// `Unserve` with an "unsupported" message (correct for chan-desktop,
     /// which tears workspaces down in-process).
     self_weak: OnceLock<Weak<dyn HostControl>>,
-    /// The library's persisted window registry — the source of truth for which
+    /// The library's persisted window registry -- the source of truth for which
     /// windows exist. Installed once via
     /// [`install_window_registry`](Self::install_window_registry); the window
     /// feed (`assemble_window_records`) reads it. Empty on a host that never
     /// installs one (its window set is empty).
     window_registry: OnceLock<Arc<WindowRegistry>>,
-    /// The library's persisted workspace on/off overlay — which registered
+    /// The library's persisted workspace on/off overlay -- which registered
     /// workspaces were mounted (`on`) at the last save. Installed once via
     /// [`install_workspace_overlay`](Self::install_workspace_overlay); the boot/
     /// restore path reads it to re-serve, toggles write it. The registry stays
@@ -262,7 +262,7 @@ pub struct WorkspaceHost {
     /// [`workspace_overlay`](Self::workspace_overlay): the devserver set lives in
     /// chan-desktop's config (invisible from chan-library), so the embedder
     /// installs an `Arc<dyn DevserverRegistry>` and the launcher routes read it at
-    /// request time. Empty on the headless devserver / plain `chan open` — the
+    /// request time. Empty on the headless devserver / plain `chan open` -- the
     /// routes then serve an empty devserver list and 404 mutation.
     devserver_registry: OnceLock<Arc<dyn DevserverRegistry>>,
     /// The launcher's connected-devserver feed, inverted like
@@ -270,14 +270,14 @@ pub struct WorkspaceHost {
     /// `Arc<dyn DevserverFeedSource>` over its live connections, and
     /// [`assemble_window_records`](Self::assemble_window_records) + the
     /// list-workspaces route merge its windows/workspaces into the local launcher
-    /// surface. Empty on the headless devserver / plain `chan open` — the launcher
+    /// surface. Empty on the headless devserver / plain `chan open` -- the launcher
     /// is then local-only.
     devserver_feed: OnceLock<Arc<dyn DevserverFeedSource>>,
     /// The local library's pane-highlight colour store, inverted like
     /// [`devserver_registry`](Self::devserver_registry): the value lives in
     /// chan-desktop's config, so the embedder installs an `Arc<dyn
     /// LocalColorStore>` and the launcher's local-color routes read/write it.
-    /// Empty on the headless devserver / plain `chan open` — the local colour is
+    /// Empty on the headless devserver / plain `chan open` -- the local colour is
     /// then the default accent and writes are ignored.
     local_color: OnceLock<Arc<dyn LocalColorStore>>,
     /// The local machine's launcher theme store, an analogue of
@@ -299,7 +299,7 @@ pub struct WorkspaceHost {
     /// restart. Unset on window-spawned servers (desktop, `chan open`),
     /// whose sockets SHOULD die with the process.
     control_identity: OnceLock<String>,
-    /// Route prefix of this library's shared terminal tenant — the one
+    /// Route prefix of this library's shared terminal tenant -- the one
     /// standalone-terminal tenant mounted via [`open_terminal_session`](
     /// Self::open_terminal_session) that every terminal window attaches to.
     /// Recorded on first mount so [`window_live_state`](Self::window_live_state)
@@ -314,8 +314,8 @@ pub struct WorkspaceHost {
     /// [`reap_control_window`](Self::reap_control_window). In-memory only (the
     /// control row is per-connection).
     control_tenants: RwLock<HashMap<String, String>>,
-    /// Fires on any change that affects the window set — registry mint/discard,
-    /// `WindowPresence` connect/disconnect, tenant on/off — so the watch feed
+    /// Fires on any change that affects the window set -- registry mint/discard,
+    /// `WindowPresence` connect/disconnect, tenant on/off -- so the watch feed
     /// pushes a fresh snapshot. The aggregate every client's reconcile awaits.
     library_change_notify: Arc<Notify>,
     /// Fires ONLY when the library's pane-highlight colour changes, so
@@ -332,7 +332,7 @@ pub struct WorkspaceHost {
     /// Installed once via [`install_root_fallback`](Self::install_root_fallback);
     /// chan-library cannot depend on chan-server, so the embedder (devserver /
     /// desktop loopback) builds the launcher router in chan-server and hands it
-    /// in. Empty on a host with no root surface — the root `/` then 404s, the
+    /// in. Empty on a host with no root surface -- the root `/` then 404s, the
     /// prior behavior.
     root_fallback: OnceLock<Router>,
     /// Transient mount-lifecycle overlay keyed by canonical workspace root: a
@@ -401,7 +401,7 @@ impl WorkspaceHost {
         Self::with_desktop_bridge(library, DesktopBridge::default(), builder)
     }
 
-    /// Create a host whose tenants share `desktop` — chan-desktop passes a
+    /// Create a host whose tenants share `desktop` -- chan-desktop passes a
     /// bridge carrying the window-ops channel and the title map so
     /// `cs window <op>` reaches the Tauri app and `cs window list` shows
     /// real titles. `builder` is the route layer's tenant constructor
@@ -515,7 +515,7 @@ impl WorkspaceHost {
     /// calls this once (next to [`install_workspace_overlay`](
     /// Self::install_workspace_overlay)) with an impl over its config. A host that
     /// never installs one answers [`devserver_registry`](Self::devserver_registry)
-    /// with `None` — the headless devserver / plain `chan open`.
+    /// with `None` -- the headless devserver / plain `chan open`.
     pub fn install_devserver_registry(&self, registry: Arc<dyn DevserverRegistry>) {
         let _ = self.devserver_registry.set(registry);
     }
@@ -536,7 +536,7 @@ impl WorkspaceHost {
     }
 
     /// The launcher's connected-devserver feed, once installed. `None` on a host
-    /// whose embedder installed none — the launcher is then local-only.
+    /// whose embedder installed none -- the launcher is then local-only.
     pub fn devserver_feed(&self) -> Option<&Arc<dyn DevserverFeedSource>> {
         self.devserver_feed.get()
     }
@@ -550,7 +550,7 @@ impl WorkspaceHost {
 
     /// The local library's pane-highlight colour store, once installed. `None` on
     /// a host whose embedder installed none (headless devserver / plain
-    /// `chan open`) — the local colour is then the default accent.
+    /// `chan open`) -- the local colour is then the default accent.
     pub fn local_color_store(&self) -> Option<&Arc<dyn LocalColorStore>> {
         self.local_color.get()
     }
@@ -574,11 +574,11 @@ impl WorkspaceHost {
     /// mint time without knowing where each colour lives. `"local"` resolves to
     /// the local-library colour (the installed [`local_color_store`](
     /// Self::local_color_store)); a `lib-<hex>` id resolves to that connected
-    /// devserver's own colour — its remote `LocalColorStore`, fetched + cached by
+    /// devserver's own colour -- its remote `LocalColorStore`, fetched + cached by
     /// the desktop and surfaced through [`DevserverFeedSource::pane_color`]. (Each
     /// library's colour lives in THAT library's host, set from a pane's
-    /// focus-border menu; there is no desktop-side per-devserver colour.) `None` —
-    /// no source installed, no matching devserver, or an unset colour — means the
+    /// focus-border menu; there is no desktop-side per-devserver colour.) `None`  --
+    /// no source installed, no matching devserver, or an unset colour -- means the
     /// editor falls back to the default accent.
     pub fn pane_color(&self, library_id: &str) -> Option<String> {
         if library_id == "local" {
@@ -587,7 +587,7 @@ impl WorkspaceHost {
         self.devserver_feed()?.pane_color(library_id)
     }
 
-    /// Install the library root's fallback router — served by `host_dispatch`
+    /// Install the library root's fallback router -- served by `host_dispatch`
     /// when no tenant prefix matches (the launcher SPA + its `/api/library/*`
     /// surface). Idempotent set-once; the embedder (devserver / desktop
     /// loopback) builds the launcher router in chan-server and calls this once
@@ -622,7 +622,7 @@ impl WorkspaceHost {
         self.local_color_notify.clone()
     }
 
-    /// Fire the colour-change signal — called after the local-colour store is
+    /// Fire the colour-change signal -- called after the local-colour store is
     /// written (`handle_set_local_color`), so every `local-color/watch`
     /// subscriber re-reads + re-applies the new colour.
     pub fn notify_local_color_change(&self) {
@@ -644,7 +644,7 @@ impl WorkspaceHost {
     /// Fire the aggregate library-change signal so the window-set watch feed
     /// re-pushes a fresh snapshot. The public entry point chan-desktop calls when
     /// its connected-devserver feed or workspace cache changes (a devserver
-    /// connects/disconnects, a remote window appears) — the merged-in windows and
+    /// connects/disconnects, a remote window appears) -- the merged-in windows and
     /// workspaces shift without any local registry event to drive the push.
     pub fn signal_library_change(&self) {
         self.library_change_notify.notify_waiters();
@@ -654,14 +654,14 @@ impl WorkspaceHost {
     /// for a `chan close` of a hosted path. Idempotent; an embedder that
     /// wants control-socket unserve of hosted workspaces calls this once after
     /// wrapping the host in an `Arc` (the devserver does). A host that never
-    /// calls it answers `Unserve` with an "unsupported" message — correct for
+    /// calls it answers `Unserve` with an "unsupported" message -- correct for
     /// chan-desktop, which tears workspaces down in-process, not over the
     /// control socket.
     pub fn install_self(self: &Arc<Self>) {
         // Unsize the concrete `Weak<WorkspaceHost>` to `Weak<dyn HostControl>`
         // (WorkspaceHost impls HostControl) so the control socket reaches the
         // host without naming the concrete type. Downgrade concretely first,
-        // then coerce — inferring the trait object from `set`'s type would make
+        // then coerce -- inferring the trait object from `set`'s type would make
         // `downgrade` expect `&Arc<dyn HostControl>` and fail.
         let weak_self: Weak<WorkspaceHost> = Arc::downgrade(self);
         let _ = self.self_weak.set(weak_self);
@@ -703,8 +703,8 @@ impl WorkspaceHost {
         // Mark the mount in flight (status `starting`) and fire the watch feed
         // so the launcher spins this row before the (possibly slow) tenant build
         // completes. This is the SHARED inner mount every entry point funnels
-        // through — the `open_or_get` wrapper, the desktop's direct boot-restore
-        // (embedded.rs), the devserver `mount_at` — so all of them surface
+        // through -- the `open_or_get` wrapper, the desktop's direct boot-restore
+        // (embedded.rs), the devserver `mount_at` -- so all of them surface
         // `starting`/`error` without each routing the lifecycle themselves.
         self.mark_mount_starting(root);
         let result = self.open_registered_workspace_inner(root, config).await;
@@ -863,11 +863,11 @@ impl WorkspaceHost {
     ) -> Result<HostedWorkspace, Error> {
         // This is THE library's shared terminal tenant (every standalone
         // terminal window attaches here, sharing its prefix+token). Record its
-        // sanitized prefix — matching the `workspaces` map key — so
+        // sanitized prefix -- matching the `workspaces` map key -- so
         // `window_live_state(Terminal)` resolves terminal windows to it. With
         // `session_dir = Some(dir)` the tenant persists each window's pane
         // layout on disk, so a standalone terminal window restores its layout on
-        // relaunch (with fresh shells — the PTYs don't survive); `None` keeps
+        // relaunch (with fresh shells -- the PTYs don't survive); `None` keeps
         // layout in-memory (`ephemeral_sessions`). Either way the terminal
         // WINDOWS persist as registry rows. Set-once: the shared tenant mounts
         // once per library.
@@ -1047,8 +1047,8 @@ impl WorkspaceHost {
     /// True when the tenant mounted at `prefix` has at least one file
     /// transfer (upload / download) in flight for `window_id`.
     ///
-    /// chan-desktop's close handler asks this — alongside
-    /// [`Self::tenant_has_window_sessions`] — before letting a window close:
+    /// chan-desktop's close handler asks this -- alongside
+    /// [`Self::tenant_has_window_sessions`] -- before letting a window close:
     /// a window with a transfer running gets a hold/cancel prompt instead of
     /// closing out from under the transfer. The count is reported by the SPA
     /// over `/ws` and RAII-cleared when the socket drops, so a reloaded
@@ -1281,11 +1281,11 @@ impl WorkspaceHost {
     }
 
     /// Whether `accept` matches SOME live tenant's bearer token (workspace,
-    /// terminal, or control tenant — every tenant carries its mint token in its
+    /// terminal, or control tenant -- every tenant carries its mint token in its
     /// `ServeHandle`). The caller supplies the comparison so the constant-time
     /// primitive stays in chan-server (where the launcher gate lives) and no
     /// token is cloned out of the host. Used by the local-color routes to admit
-    /// a window's OWN per-tenant token (not just the launcher token) — a window
+    /// a window's OWN per-tenant token (not just the launcher token) -- a window
     /// is served with its tenant token, so a launcher-only gate would 401 every
     /// window's colour GET/PUT/watch.
     pub fn any_tenant_token(&self, accept: impl Fn(&str) -> bool) -> bool {
@@ -1315,7 +1315,7 @@ impl WorkspaceHost {
     /// and the desktop watcher reconcile to. Joins each persisted registry row
     /// with its serving tenant's live state (prefix/token/`connected`), and
     /// includes a workspace window only while its workspace is mounted (an off
-    /// workspace's records are filtered out — preserved on disk, hidden from the
+    /// workspace's records are filtered out -- preserved on disk, hidden from the
     /// live feed; see `window_in_live_feed`). Empty
     /// when no registry is installed (a host that never opened one has no windows).
     pub fn assemble_window_records(&self) -> Vec<WindowRecord> {
@@ -1332,7 +1332,7 @@ impl WorkspaceHost {
             .snapshot()
             .into_iter()
             // An OFF workspace's window records stay on disk (so turning it back
-            // ON restores them) but are filtered OUT of the live feed — they must
+            // ON restores them) but are filtered OUT of the live feed -- they must
             // not show as ghosts pointing at an unmounted workspace.
             .filter(|row| self.window_in_live_feed(row))
             .map(|row| {
@@ -1445,10 +1445,10 @@ impl WorkspaceHost {
         let row = registry.create_with_origin(kind, workspace_path, origin);
         // A Terminal window's session lives in the shared terminal tenant and is
         // auto-opened by the watcher, so the SPA never PUTs a layout blob to
-        // persist it — without a durable blob it would be orphan-reaped on the
+        // persist it -- without a durable blob it would be orphan-reaped on the
         // first client disconnect (the window shows but loses its session on
         // reconnect). Mark every Terminal window persisted in the shared terminal
-        // tenant so the pruner spares its session — uniformly across libraries
+        // tenant so the pruner spares its session -- uniformly across libraries
         // (local and devserver both mount the shared terminal tenant). A no-op
         // until that tenant is mounted (its prefix OnceLock is still unset). A
         // workspace window persists through its own workspace tenant's PUT, not
@@ -1623,7 +1623,7 @@ impl WorkspaceHost {
         }
     }
 
-    /// Discard every persisted window rooted at `root` — a workspace turned OFF
+    /// Discard every persisted window rooted at `root` -- a workspace turned OFF
     /// or FORGOTTEN must not leave ghost windows in the launcher feed (the windows
     /// persist in the registry, so without this they survive the unmount and, on a
     /// devserver, a disconnect→reconnect). Matches a window's `workspace_path` to
@@ -1657,7 +1657,7 @@ impl WorkspaceHost {
     }
 
     /// Reap all state a discarded `window_id` owns across mounted tenants, so a
-    /// registry discard is the SINGLE authoritative cleanup — even a non-SPA
+    /// registry discard is the SINGLE authoritative cleanup -- even a non-SPA
     /// discard (cs-driven, a watcher reconcile, a crashed client) that never
     /// sends the SPA `DELETE /api/session`: the terminal sessions (PTYs + fds)
     /// AND the durable workspace session/layout blob
@@ -1729,7 +1729,7 @@ impl WorkspaceHost {
     /// [`workspace_window_live`](Self::workspace_window_live).
     fn window_live_state(&self, row: &PersistedWindow) -> (String, String, bool) {
         // A control row's session is its OWN command tenant, not the shared
-        // terminal tenant — resolve it through the control-tenant map. (`kind` is
+        // terminal tenant -- resolve it through the control-tenant map. (`kind` is
         // still Terminal, so this must precede the kind match.)
         if row.control {
             return self.control_window_live(&row.window_id);
@@ -1779,7 +1779,7 @@ impl WorkspaceHost {
     /// shared terminal tenant, once mounted. Every terminal window attaches to
     /// the one tenant, so they all share its prefix+token; `connected` reflects
     /// this `window_id`'s live `/ws` presence. Empty until the tenant is mounted
-    /// — boot ordering mounts it before the watcher reconciles persisted
+    /// -- boot ordering mounts it before the watcher reconciles persisted
     /// terminal windows, so they resolve and reopen on relaunch.
     fn terminal_window_live(&self, window_id: &str) -> (String, String, bool) {
         let Some(prefix) = self.terminal_tenant_prefix.get() else {
@@ -1862,7 +1862,7 @@ impl WorkspaceHost {
     /// script once its PTY has exited, or `None` while it runs / when no tenant
     /// is mounted there. Sibling to [`terminal_tenant_scrollback`](
     /// Self::terminal_tenant_scrollback): the desktop polls BOTH while scraping
-    /// a control terminal — a token in the scrollback means connected, a
+    /// a control terminal -- a token in the scrollback means connected, a
     /// `Some(exit)` here means the script died, so the scrape can stop at once
     /// (instead of waiting out the full timeout) and a tab closed mid-connect
     /// can survey on a real failure instead of stranding an empty window.
@@ -1957,7 +1957,7 @@ impl WorkspaceHost {
     /// over-the-control-socket equivalent of the launcher's `DELETE
     /// /api/library/workspaces/{id}` (`handle_remove_workspace`), so `chan close
     /// --remove` / `chan workspace rm` of a workspace this host serves removes
-    /// it everywhere — not just from the caller's local `config.toml`. Runs in
+    /// it everywhere -- not just from the caller's local `config.toml`. Runs in
     /// the host process so the host's in-memory library + the persisted overlay
     /// stay consistent (a CLI-side `config.toml` edit alone would leave them
     /// stale, so the workspace lingers in the launcher and survives a restart).
@@ -1984,7 +1984,7 @@ impl WorkspaceHost {
         }
         // FORGET is the ONLY path that purges the window records: the workspace is
         // gone for good, so drop its layout too. (OFF, by contrast, just unmounts
-        // and leaves the records — filtered from the live feed until ON restores
+        // and leaves the records -- filtered from the live feed until ON restores
         // them.) A no-op when the workspace had no windows.
         self.discard_workspace_windows(root);
         self.clear_mount_state(root);
@@ -2008,7 +2008,7 @@ impl WorkspaceHost {
     /// signal lets the per-tenant prune task close them on its own schedule.
     /// That is fine for a workspace tenant (the devserver only mounts
     /// workspaces through this), but a terminal-only tenant whose PTY must
-    /// stop at once — a control terminal running a connect script — should be
+    /// stop at once -- a control terminal running a connect script -- should be
     /// closed with [`close_terminal_tenant`](Self::close_terminal_tenant).
     pub fn close_workspace(
         &self,
@@ -2057,7 +2057,7 @@ impl WorkspaceHost {
         let released = runtime.shutdown();
         // A running workspace carries no transient lifecycle state, but clear
         // defensively so a leftover `error`/`starting` can never outlive a
-        // close. No feed push here — the `notify_window_change` below covers it.
+        // close. No feed push here -- the `notify_window_change` below covers it.
         self.clear_mount_state(&runtime.root);
         drop(runtime);
         if let Some((weak, lock_dir)) = released {
@@ -2077,8 +2077,8 @@ impl WorkspaceHost {
     /// outlives the window that drove it.
     ///
     /// This explicitly `close_all`s the tenant's terminal registry so every
-    /// PTY child is sent its `Kill` synchronously — the script process is
-    /// gone by the time this returns — rather than leaning on the per-tenant
+    /// PTY child is sent its `Kill` synchronously -- the script process is
+    /// gone by the time this returns -- rather than leaning on the per-tenant
     /// prune task to later observe the shutdown signal. The shared shutdown
     /// signal then stops the accept loops and background tasks before the
     /// runtime drops. The flock-release tail mirrors
@@ -2177,7 +2177,7 @@ impl WorkspaceHost {
 
     /// True iff a workspace with this canonical root is mounted (under ANY
     /// prefix). The launcher's `on` state reads this so it reflects the real
-    /// mount regardless of the prefix scheme that mounted it — the desktop
+    /// mount regardless of the prefix scheme that mounted it -- the desktop
     /// mounts at `workspace-<hash>` while the devserver mounts at the slug, so a
     /// slug-prefix membership check reads `off` on the desktop.
     pub fn is_root_mounted(&self, root: &Path) -> bool {
@@ -2258,7 +2258,7 @@ impl WorkspaceHost {
     /// watch feed so the launcher spins the row before the (possibly slow)
     /// tenant build completes. No-op when the root is already mounted (`running`
     /// wins), so a retry of an already-served workspace never spuriously flips
-    /// it to `starting`. Overwrites a prior `error` — a fresh attempt clears it.
+    /// it to `starting`. Overwrites a prior `error` -- a fresh attempt clears it.
     fn mark_mount_starting(&self, root: &Path) {
         if self.is_root_mounted(root) {
             return;
@@ -2314,7 +2314,7 @@ impl WorkspaceHost {
 
     /// Project a finished mount onto the lifecycle overlay: clear on success
     /// (the `workspaces` map now reports `running`); leave `starting` on our own
-    /// in-flight contention (`WorkspaceAlreadyOpen` — a concurrent task of THIS
+    /// in-flight contention (`WorkspaceAlreadyOpen` -- a concurrent task of THIS
     /// process is mounting the same root and will settle it, so it is not a
     /// failure); clear to the live lock probe on a foreign writer lock; record
     /// `error` for a real open failure.
@@ -2342,7 +2342,7 @@ impl WorkspaceHost {
     /// If `path` is exactly a mounted tenant prefix `/{prefix}` or its trailing-
     /// slash form `/{prefix}/`, return the bare prefix. `host_dispatch` uses it
     /// to canonicalize the tenant root (axum's nest 404s the exact `/{prefix}/`).
-    /// The empty (root) prefix is excluded — it serves at `/`, no slash dance.
+    /// The empty (root) prefix is excluded -- it serves at `/`, no slash dance.
     fn exact_tenant_root(&self, path: &str) -> Option<String> {
         let bare = path.strip_suffix('/').unwrap_or(path);
         if bare.is_empty() {
@@ -2759,7 +2759,7 @@ mod tests {
     #[tokio::test]
     async fn host_canonicalizes_tenant_root_trailing_slash() {
         // The §7.3-smoke bug: a tenant nests at its slug, and axum's nest serves
-        // `/blog` and `/blog/<rest>` but 404s the EXACT `/blog/` — yet `/blog/`
+        // `/blog` and `/blog/<rest>` but 404s the EXACT `/blog/` -- yet `/blog/`
         // is the canonical open URL (the SPA's `base: "./"` needs the trailing
         // slash). host_dispatch fixes it: `/blog/` serves the root, `/blog`
         // 308s to `/blog/`.
@@ -2810,7 +2810,7 @@ mod tests {
         assert_eq!(bare_q.headers()["location"], "/blog/?t=tok");
 
         // `/blog/` with a query is rewritten to the bare prefix (keeping query)
-        // so the nest serves the root — still 200, not a 404.
+        // so the nest serves the root -- still 200, not a 404.
         assert_eq!(status("/blog/?t=tok").await.status(), StatusCode::OK);
 
         // An unmounted path still 404s (no tenant owns it).
@@ -2990,7 +2990,7 @@ mod tests {
     #[tokio::test]
     async fn host_workspace_status_surfaces_starting_and_error() {
         // The transient overlay drives `starting` (mount in flight) and `error`
-        // (last mount failed) — the two states the running `workspaces` map
+        // (last mount failed) -- the two states the running `workspaces` map
         // can't express. A turn-off clears a non-mounted errored row to stopped.
         let cfg = tempfile::tempdir().expect("config dir");
         let root = tempfile::tempdir().expect("workspace");
@@ -3196,7 +3196,7 @@ mod tests {
 
     #[tokio::test]
     async fn forget_purges_the_workspaces_windows() {
-        // FORGET (remove) is the only path that purges the records — unlike OFF,
+        // FORGET (remove) is the only path that purges the records -- unlike OFF,
         // they do not come back.
         let cfg = tempfile::tempdir().expect("config dir");
         let root = tempfile::tempdir().expect("workspace");
@@ -3423,7 +3423,7 @@ mod tests {
             Some(mount_prefix)
         );
 
-        // An unknown root is not mounted (no panic) — the launcher shows `off`.
+        // An unknown root is not mounted (no panic) -- the launcher shows `off`.
         let other = tempfile::tempdir().expect("other dir");
         assert!(!host.is_root_mounted(other.path()));
         assert!(host.mounted_prefix_for_root(other.path()).is_none());
@@ -3564,7 +3564,7 @@ mod tests {
         // reachable. `build-info` is state-free, so it serves 200 even
         // with no workspace cell. (`/api/health` is mounted too but
         // reports 503 on a terminal tenant since it snapshots the
-        // absent indexer — mounted, but workspace-dependent.)
+        // absent indexer -- mounted, but workspace-dependent.)
         let build_info = app
             .clone()
             .oneshot(
@@ -4017,7 +4017,7 @@ mod tests {
         // The terminal row is stamped with the library id and persisted. No
         // terminal tenant is mounted here, so it has no live prefix/token and is
         // not connected; durable fields carry through. (When the shared tenant IS
-        // mounted it resolves — see
+        // mounted it resolves -- see
         // `assemble_resolves_a_terminal_window_to_the_shared_tenant`.)
         assert!(records
             .iter()
@@ -4114,8 +4114,8 @@ mod tests {
         let term = registry.create(WindowKind::Terminal, None);
         host.install_window_registry(registry, "local".into());
 
-        // The terminal window now resolves to the shared tenant's prefix — the
-        // old empty stub is gone — so the desktop watcher can open it. (token is
+        // The terminal window now resolves to the shared tenant's prefix -- the
+        // old empty stub is gone -- so the desktop watcher can open it. (token is
         // empty here only because the test serve_config sets no_token; in
         // production the tenant carries a token so should_show opens the window.)
         let records = host.assemble_window_records();
@@ -4177,7 +4177,7 @@ mod tests {
         assert!(!host.discard_window("w-doesnotexist0000").expect("unknown"));
 
         // Feed now empty: the terminal is discarded and the off workspace window
-        // is still filtered. Its record nonetheless persists — discarding it
+        // is still filtered. Its record nonetheless persists -- discarding it
         // (the FORGET-style explicit discard) returns true the first time.
         assert!(host.assemble_window_records().is_empty());
         assert!(host.discard_window(&ws.window_id).expect("discard ws"));
@@ -4285,7 +4285,7 @@ mod tests {
 
     #[tokio::test]
     async fn discard_window_deletes_the_durable_workspace_session_blob() {
-        // P1a: a registry discard is the single authoritative cleanup — it also
+        // P1a: a registry discard is the single authoritative cleanup -- it also
         // deletes the durable workspace session/layout blob, so a non-SPA
         // discard (one that never sends `DELETE /api/session`) never orphans
         // `<workspace>/.chan/sessions/<id>` on disk.
@@ -4348,7 +4348,7 @@ mod tests {
     async fn discard_window_fires_the_terminal_blob_reaper() {
         // P1b: discard runs the installed blob reaper so a discarded terminal
         // window's durable layout blob (the chan-server `terminal_blob`, which
-        // the host cannot reach directly) is dropped too — the standalone-
+        // the host cannot reach directly) is dropped too -- the standalone-
         // terminal analogue of the workspace session-blob delete above.
         let cfg = tempfile::tempdir().expect("config dir");
         let lib = Library::open_at(cfg.path().join("config.toml")).expect("library");
@@ -4462,7 +4462,7 @@ mod tests {
     async fn terminal_window_persists_in_shared_tenant_uniformly() {
         // A Terminal window's session lives in the shared terminal tenant and is
         // auto-opened (it never PUTs a layout blob), so every library marks it
-        // persisted at mint — local and devserver alike, no library_id branch —
+        // persisted at mint -- local and devserver alike, no library_id branch  --
         // and the orphan-grace pruner spares its session on a disconnect. Returns
         // whether the minted terminal window is persisted in the shared tenant.
         async fn mint_terminal_marks_persisted(library_id: &str) -> bool {

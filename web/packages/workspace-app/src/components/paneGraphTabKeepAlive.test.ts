@@ -7,11 +7,11 @@ import graphCanvas from "./GraphCanvas.svelte?raw";
 // (see paneTerminalMount / paneFileTabKeepAlive): Pane.svelte renders
 // every graph tab from an all-pane each-block and flips an
 // `active` prop; inactive graphs hide via the visibility:hidden
-// contract (never display:none — a display:none host reports 0x0,
+// contract (never display:none -- a display:none host reports 0x0,
 // GraphCanvas.resize() refits to nothing and pan/zoom is lost). Before
 // this, GraphPanel mounted only the active graph from the if-chain, so
 // every switch remounted it and GraphCanvas.start() refetched +
-// re-laid-out from scratch — the full redraw on activation. These pins
+// re-laid-out from scratch -- the full redraw on activation. These pins
 // catch any regression back to that.
 
 describe("graph tabs survive tab switches (keep-alive)", () => {
@@ -80,7 +80,7 @@ describe("GraphPanel threads active + gates load on visibility", () => {
 
   test("a hidden graph marks dirty on an in-scope edit instead of reloading", () => {
     // The watcher effect, after the in-scope filter, must NOT reload a
-    // hidden graph — it sets graphDirty for a one-shot reload on the
+    // hidden graph -- it sets graphDirty for a one-shot reload on the
     // next activation.
     expect(graphPanel).toMatch(
       /if \(!visible\) \{\s*\/\/[\s\S]{1,400}graphDirty = true;\s*return;\s*\}/,
@@ -106,7 +106,7 @@ describe("GraphPanel threads active + gates load on visibility", () => {
 
   test("GraphCanvas open LATCHES via canvasEverShown + paused tracks !active", () => {
     // open={active} would reset pan/zoom on every switch (start() resets
-    // the transform, stop() discards the sim) — open MUST latch.
+    // the transform, stop() discards the sim) -- open MUST latch.
     expect(graphPanel).toMatch(/let canvasEverShown = \$state\(false\);/);
     expect(graphPanel).toMatch(
       /\$effect\(\(\) => \{\s*if \(active\) canvasEverShown = true;\s*\}\);/,
@@ -135,7 +135,7 @@ describe("GraphCanvas pauses instead of tearing down when hidden", () => {
   test("resume effect re-arms the loop with resize(), never start()", () => {
     // On un-pause with a live sim and a stopped loop: resize() (the pane
     // may have resized while hidden) then requestAnimationFrame(loop).
-    // No start() — that would reset the transform.
+    // No start() -- that would reset the transform.
     expect(graphCanvas).toMatch(
       /if \(paused\) return;\s*if \(!sim \|\| rafId !== null\) return;\s*resize\(\);\s*rafId = requestAnimationFrame\(loop\);/,
     );

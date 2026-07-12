@@ -307,7 +307,7 @@ fn read_file_sync(
     // pointing at this route, so they come back as raw bytes with an
     // image content-type REGARDLESS of what their content looks like.
     // Without this gate an SVG (XML text) passes the editable-text
-    // content sniff below and ships as the editor's JSON envelope —
+    // content sniff below and ships as the editor's JSON envelope --
     // making every `<img src=.../api/files/x.svg>` render broken
     // while binary formats (png/jpg) work fine. FileClass::Image's
     // own contract is read-only via `read` / `write_bytes`.

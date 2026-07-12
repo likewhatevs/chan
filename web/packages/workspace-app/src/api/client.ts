@@ -186,7 +186,7 @@ export function windowDragScope(scope: {
 /// are readable during `dragover`. But `windowDragScope` is human-readable and
 /// carries `:` and `|`, which are not MIME-type token characters; WKWebView
 /// normalizes/mangles such a type, so the string the source stamps does NOT come
-/// back byte-identically through `dataTransfer.types` at dragover — the equality
+/// back byte-identically through `dataTransfer.types` at dragover -- the equality
 /// check then fails for EVERY drop, intra-window pane moves included. Hex-encoding
 /// the UTF-8 bytes yields only `[0-9a-f]`, which survives normalization unchanged,
 /// so the source's stamped type equals the target's recomputed one for the same
@@ -1330,12 +1330,12 @@ export const api = {
   /// Persist the pane-highlight colour for the library this window is served
   /// from. ROOT path (`requestRoot`, NOT prefixed): the local-color route is
   /// mounted ONLY on the root launcher router, but a workspace/terminal/devserver
-  /// window loads under a tenant prefix — `apiPath` would prepend it and the PUT
+  /// window loads under a tenant prefix -- `apiPath` would prepend it and the PUT
   /// would 404 before reaching the route (the C8 cut-blocker). The window's `?t=`
   /// bearer still travels (Authorization header), so the surface authenticates as
   /// its tenant and `require_surface_bearer` (W9) accepts it. Reaches the window's
   /// own serving origin (the desktop for local windows, that devserver for
-  /// devserver windows) — i.e. the library that minted the window. The store
+  /// devserver windows) -- i.e. the library that minted the window. The store
   /// returns 204; surfaces without a writable color store answer 403
   /// (read-only) or 404 (no store). Callers treat this as best-effort: the
   /// menu must not break when the route is absent, so they catch + swallow.

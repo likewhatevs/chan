@@ -176,7 +176,7 @@ async fn delete_session_response(state: &Arc<AppState>, key: String, moved: bool
     // A DELETE either DISCARDS the window or signals a cross-window MOVE-OUT:
     // - `?w=W` (discard: ^W to empty / ^D / Ctrl+Shift+W / an empty window):
     //   drop it from the persisted set AND reap its sessions (kill the PTYs,
-    //   release the fds) — the "discard ⇒ reap" half that frees a busy detached
+    //   release the fds) -- the "discard ⇒ reap" half that frees a busy detached
     //   session the pruner keeps alive.
     // - `?w=W&moved=1`: the source window emptied because its tab
     //   moved to another window. Drop the blob + unpersist so it leaves

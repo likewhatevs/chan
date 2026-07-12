@@ -342,9 +342,9 @@ impl Library {
         use crate::progress::{ProgressEvent, ProgressStage};
         // In-process pre-check: a buggy caller might hold a Workspace
         // and call reset_workspace from another thread, expecting the
-        // flock to serialize. It does — and `WorkspaceLock::acquire`
+        // flock to serialize. It does -- and `WorkspaceLock::acquire`
         // below now also reports `WorkspaceAlreadyOpen` for a lock held
-        // by our own pid, so the two agree — but the pre-check
+        // by our own pid, so the two agree -- but the pre-check
         // short-circuits before touching the flock and names the clash
         // precisely. Cross-process safety (a foreign holder ⇒
         // `WorkspaceLocked`) still rides on the flock.
@@ -1076,7 +1076,7 @@ mod tests {
     // A second Library handle on the same config has its own live_workspaces
     // map, so reset's in-process pre-check doesn't fire and it reaches the
     // flock. The flock is held by our OWN pid (this OS process), so reset
-    // refuses with `WorkspaceAlreadyOpen` — this chan already has it — not the
+    // refuses with `WorkspaceAlreadyOpen` -- this chan already has it -- not the
     // cross-process `WorkspaceLocked`. The refusal protects the index either
     // way; a genuinely foreign holder (a separate process, a different pid)
     // still yields `WorkspaceLocked` (see lock.rs

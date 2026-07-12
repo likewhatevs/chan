@@ -58,7 +58,7 @@
   // server's `cs_link`) IS that signal: the server sets it only when its
   // `cs_on_path()` scan finds no `cs`, and chan-desktop now resolves the user's
   // real interactive PATH before the embedded server starts, so the scan is
-  // accurate even on a macOS GUI launch. So the gate is purely `csOffer` — host
+  // accurate even on a macOS GUI launch. So the gate is purely `csOffer` -- host
   // type is the wrong axis (a desktop user who genuinely lacks `cs` should still
   // get the offer).
   const showCsCard = $derived(!!csOffer && !locked && !csDismissed);
@@ -134,7 +134,7 @@
     }
   });
   // First-boot gate: show the onboarding nudge only while the workspace has NO
-  // data yet — nothing indexed and neither optional layer on. Once it has any
+  // data yet -- nothing indexed and neither optional layer on. Once it has any
   // data (indexed content, semantic, or reports) the nudge never shows again,
   // on any client or boot. The fields are server-derived, so the gate holds
   // identically for local and devserver workspaces. The localStorage dismiss

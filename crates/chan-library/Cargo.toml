@@ -20,7 +20,7 @@ test-util = []
 
 [dependencies]
 # The filesystem/registry core. default-features off (no embeddings: the host
-# owns lifecycle, not search — chan-server forwards embeddings through its own
+# owns lifecycle, not search -- chan-server forwards embeddings through its own
 # feature when it builds chan-workspace).
 chan-workspace = { workspace = true, default-features = false }
 # Control-socket wire types (`ControlRequest`/`ControlResponse`); default-features

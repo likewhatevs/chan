@@ -69,7 +69,7 @@ export const RefAwareLink: MarkdownConfig = {
             break;
           }
         }
-        if (!enclosingOpen) return -1; // standalone shortcut ref — leave as-is
+        if (!enclosingOpen) return -1; // standalone shortcut ref -- leave as-is
 
         // Suppress the inner shortcut ref so the enclosing link forms.
         parts[innerIdx] = null;

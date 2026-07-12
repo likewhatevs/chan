@@ -70,7 +70,7 @@ pub fn chan_fonts_user_dir() -> Option<PathBuf> {
 /// `POST /api/fonts/source-code-pro/download`. The response arrives
 /// when the download completes (matches `api_semantic_download`'s
 /// caller-visible shape).
-/// Idempotent — if the target files already exist + have non-zero
+/// Idempotent -- if the target files already exist + have non-zero
 /// size the endpoint short-circuits without re-fetching. Network and
 /// filesystem work use async APIs so the route doesn't tie up the
 /// Tokio runtime worker while waiting on I/O.

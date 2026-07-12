@@ -56,7 +56,7 @@ pub struct AppState {
     /// Shared config handle. An `Arc<Mutex<…>>` (not a bare `Mutex`) so the
     /// launcher's [`DevserverConfigRegistry`](config::DevserverConfigRegistry),
     /// installed into the embedded host, writes the SAME config the desktop's
-    /// own commands and the window-config LRU do — every full-file rewrite
+    /// own commands and the window-config LRU do -- every full-file rewrite
     /// serializes through one lock, so a devserver CRUD can't lose an update to
     /// a concurrent window-config save.
     store: Arc<Mutex<ConfigStore>>,
@@ -85,7 +85,7 @@ pub struct AppState {
     /// share a base title (two windows on the same workspace, several
     /// standalone terminals). `N` is the lowest free number among live
     /// windows with the SAME base title, so a number freed by a closed
-    /// window gets reused — mirroring `Registry::next_terminal_name`'s
+    /// window gets reused -- mirroring `Registry::next_terminal_name`'s
     /// lowest-free `Terminal-N` scheme. Freed on window destroy; a
     /// BURIED (hidden) window keeps its number so its Window-menu entry
     /// and title stay stable across the hide/reopen cycle.
@@ -98,7 +98,7 @@ pub struct AppState {
     pub window_title_overrides: Mutex<HashMap<String, String>>,
     /// Windows hidden ("buried") by the OS close button instead of
     /// destroyed, in bury order (most recent last). The webview stays
-    /// alive — live terminals keep running, layout state stays warm —
+    /// alive -- live terminals keep running, layout state stays warm  --
     /// and the Window menu lists each entry for reopening (also
     /// Cmd/Ctrl+Shift+N, which unburies the most recent of the focused
     /// family). Entries leave the list on unbury or window destroy.
@@ -106,7 +106,7 @@ pub struct AppState {
     /// Native labels whose NEXT `CloseRequested`-bury should skip the
     /// "was hidden, not closed" teaching notice. The launcher status-dot hide
     /// routes through the OS close path (so the bury handler runs) but is an
-    /// explicit hide gesture of its own — the notice teaches the red-button
+    /// explicit hide gesture of its own -- the notice teaches the red-button
     /// gesture, so we suppress it here. One-shot: the close handler consumes the
     /// label, so a later genuine red-button close still shows the notice.
     pub silent_hides: Mutex<std::collections::HashSet<String>>,
@@ -233,9 +233,9 @@ pub struct RemoteReopen {
 /// `RemoteReopen`): which devserver owns it and how to re-create + track it.
 #[derive(Debug, Clone)]
 pub struct DevserverReopen {
-    /// Devserver id — the teardown key (a disconnect closes this window).
+    /// Devserver id -- the teardown key (a disconnect closes this window).
     pub id: String,
-    /// Tenant route prefix — the tracking `window_id` for a workspace window.
+    /// Tenant route prefix -- the tracking `window_id` for a workspace window.
     pub prefix: String,
 }
 
@@ -246,7 +246,7 @@ pub struct BuriedWindow {
     /// outbound). Also the Window-menu item id suffix.
     pub label: String,
     /// OS display title at bury time ("🏠 /path Window 2",
-    /// "Terminal Window 1") — shown verbatim in the Window menu.
+    /// "Terminal Window 1") -- shown verbatim in the Window menu.
     pub title: String,
     /// Wall-clock millis at bury time; diagnostics only (the Vec's
     /// push order is the recency authority).
@@ -359,7 +359,7 @@ impl AppState {
 
     /// Refresh the active-transfer labels for one devserver library from a feed
     /// snapshot: drop this library's stale slice and re-add the labels the push
-    /// marks `active_transfer`. Volatile per-push state — the windows feed
+    /// marks `active_transfer`. Volatile per-push state -- the windows feed
     /// re-reports the bit on every change, so each push fully refreshes the slice.
     pub(crate) fn refresh_devserver_active_transfers(
         &self,
@@ -466,7 +466,7 @@ impl AppState {
     /// windows that share the same base title, record it under
     /// `label`, and return it. The first window of a given base is
     /// `1`; a number freed by `release_window_number` is handed back
-    /// out on the next assign — mirroring the lowest-free reuse of
+    /// out on the next assign -- mirroring the lowest-free reuse of
     /// `Registry::next_terminal_name`. Re-assigning the same `label`
     /// (a defensive double-build) refreshes its slot.
     pub fn assign_window_number(&self, label: &str, base: &str) -> u64 {
@@ -531,7 +531,7 @@ impl AppState {
     }
 
     /// Consume the silent-hide flag for `label`: returns whether this bury was
-    /// launcher-initiated (so the notice is skipped). One-shot — a later
+    /// launcher-initiated (so the notice is skipped). One-shot -- a later
     /// red-button close finds no flag and shows the notice as usual.
     pub fn take_silent_hide(&self, label: &str) -> bool {
         self.silent_hides.lock().unwrap().remove(label)
@@ -584,7 +584,7 @@ pub struct DevserverFeed {
     os: Mutex<HashMap<String, (String, Option<String>)>>,
     /// Native labels of devserver windows the desktop has LOCALLY buried.
     /// `windows()` overrides their `connected` to false so the launcher dot
-    /// reflects hidden the moment they're hidden — the desktop's bury state is the
+    /// reflects hidden the moment they're hidden -- the desktop's bury state is the
     /// truth for the dot (a workspace window's remote `/ws` push agrees, but a
     /// standalone terminal on the shared `/terminal` tenant never pushes
     /// `connected:false`, so its dot hung without this).
@@ -680,7 +680,7 @@ impl DevserverFeed {
 
     /// The remote `library_id` of a connected devserver. Learned from the live
     /// window snapshot and cached: on reconnect the snapshot can be empty for
-    /// a moment (no windows yet), so fall back to the cached value — otherwise the
+    /// a moment (no windows yet), so fall back to the cached value -- otherwise the
     /// control record (which needs the library_id) wouldn't emit until a later
     /// window arrives.
     fn library_id_of(&self, id: &str) -> Option<String> {
@@ -794,7 +794,7 @@ impl chan_server::DevserverFeedSource for DevserverFeed {
             .flat_map(|(_, snapshot)| snapshot.lock().unwrap().clone())
             .collect();
         // Override `connected` for windows the desktop has LOCALLY buried so
-        // the launcher dot reflects hidden immediately — the desktop's bury state
+        // the launcher dot reflects hidden immediately -- the desktop's bury state
         // is the truth for the dot. A workspace window's remote `/ws` drop agrees,
         // but a standalone terminal on the shared `/terminal` tenant never pushes
         // `connected:false`, so its dot hung without this.
@@ -811,7 +811,7 @@ impl chan_server::DevserverFeedSource for DevserverFeed {
         // The control terminal is no longer synthesized here: it is a
         // real chan-library registry row (minted by `mint_control_window` under the
         // devserver's `library_id`, `control:true`), so it already rides the
-        // registry snapshot that `assemble_window_records` merges — no desktop-side
+        // registry snapshot that `assemble_window_records` merges -- no desktop-side
         // append.
         records
     }
@@ -831,7 +831,7 @@ impl chan_server::DevserverFeedSource for DevserverFeed {
     }
 
     fn pane_color(&self, library_id: &str) -> Option<String> {
-        // The colour of the connected devserver owning `library_id` — its own
+        // The colour of the connected devserver owning `library_id` -- its own
         // cached `LocalColorStore` value. `WorkspaceHost::pane_color` delegates
         // here for `lib-<hex>` ids; `None` -> the editor's default accent.
         let id = self.devserver_id_for_library(library_id)?;
@@ -1187,7 +1187,7 @@ async fn set_workspace_on(
 
 /// Snapshot every currently-mounted local workspace into the library-owned
 /// workspace overlay (`~/.chan/workspaces.json`) as `on` rows, so the next boot
-/// re-serves them (the boot matrix). Off workspaces are simply absent — the CLI
+/// re-serves them (the boot matrix). Off workspaces are simply absent -- the CLI
 /// registry surfaces them off. Called after each on/off toggle and on clean
 /// shutdown. Best-effort: a no-op when the embedded host / overlay is
 /// unavailable, never fatal to the toggle or the exit.
@@ -1557,9 +1557,9 @@ fn close_devserver_control_terminal(app: &tauri::AppHandle, state: &AppState, id
 
 /// Persist a window's `hidden` visibility to its OWNING
 /// registry, routed by the native label's library. Called at the bury
-/// (`hidden=true`) and unbury (`hidden=false`) chokepoints — BOTH the native
+/// (`hidden=true`) and unbury (`hidden=false`) chokepoints -- BOTH the native
 /// red-dot close AND the SPA SHOW/HIDE toggle (bridge `/hide`+`/open`) funnel
-/// through them — so a connect MIRRORS the persisted layout (HIDE-PERSIST
+/// through them -- so a connect MIRRORS the persisted layout (HIDE-PERSIST
 /// Option A). The in-memory `buried` set stays the transient local view; this
 /// makes the visibility durable + server-shared.
 fn persist_window_hidden(state: &AppState, label: &str, hidden: bool) {
@@ -1702,7 +1702,7 @@ async fn scrape_control_terminal_token(
             )));
         }
         // The user closed the control terminal (^W / red button) before it
-        // connected. A window close does NOT reap the tenant — the PTY outlives
+        // connected. A window close does NOT reap the tenant -- the PTY outlives
         // it (client WS detach keeps it warm), so `control_terminal_exit` above
         // stays None and we'd otherwise strand on "connecting" until the budget
         // runs out. Abort so the SAME failure survey fires at once. Gated on
@@ -1804,7 +1804,7 @@ fn ensure_control_run_live(
 ///
 /// Stops without firing once this watcher's control terminal is no longer the
 /// devserver's current one: a disconnect/forget removes the prefix (and reaps
-/// the tenant), and a fresh connect replaces it — either way that exit is not a
+/// the tenant), and a fresh connect replaces it -- either way that exit is not a
 /// surprise THIS watcher owns, so it must not double-emit or fire against a
 /// reconnected session.
 fn spawn_control_terminal_exit_watcher(
@@ -1911,7 +1911,7 @@ fn spawn_control_terminal_exit_watcher(
 ///
 /// Driven over the desktop bridge: the launcher's Connect button fires
 /// `POST /api/library/devservers/{id}/connect` → `DesktopWindowOp::ConnectDevserver`
-/// → `window_ops`, which calls this. There is no `#[tauri::command]` wrapper —
+/// → `window_ops`, which calls this. There is no `#[tauri::command]` wrapper  --
 /// the launcher is pure HTTP, never a Tauri invoke.
 async fn connect_devserver_impl(
     app: tauri::AppHandle,
@@ -2454,7 +2454,7 @@ async fn connect_devserver_impl_inner(
     // keyed by devserver id and read through `pane_color` at mint time; the watch
     // keeps it live for later changes. Best-effort: a fetch failure just leaves the
     // cache cold (the watch fills it shortly), so connect must NOT fail on it. (The
-    // local library needs no analog — its `pane_color("local")` reads the persisted
+    // local library needs no analog -- its `pane_color("local")` reads the persisted
     // desktop config directly, always fresh.)
     match devserver::fetch_local_color(&conn).await {
         Ok(color) => {
@@ -2539,7 +2539,7 @@ async fn connect_devserver_impl_inner(
     }
     // Re-push the launcher feed now so the control-terminal record appears
     // immediately. On a FRESH connect the boot terminal's feed push would
-    // trigger this, but on RECONNECT the feed can be empty for a beat — the cached
+    // trigger this, but on RECONNECT the feed can be empty for a beat -- the cached
     // library_id (`library_id_of`) lets `windows()` emit the control record, and
     // this signal makes the launcher pick it up without waiting for a later window.
     if let Some(embedded) = state.embedded() {
@@ -2567,7 +2567,7 @@ async fn list_devserver_workspaces(
 /// (`POST /api/library/windows {Workspace, path}`). The window watcher then
 /// reconciles the new record open, so the window is feed-driven: it persists
 /// server-side and reopens on reconnect, and disconnect closes it via the
-/// watcher's reconcile-to-empty — unlike the old imperative `outbound-` spawn,
+/// watcher's reconcile-to-empty -- unlike the old imperative `outbound-` spawn,
 /// which lived outside the feed and vanished on reconnect. The SPA Open button
 /// turns the workspace ON first, so the minted record resolves a live token (an
 /// off workspace mints an empty token the watcher skips). Reached over the
@@ -2588,7 +2588,7 @@ pub(crate) async fn open_devserver_workspace_impl(
 /// Mint a standalone terminal window on a connected devserver's library (the
 /// launcher's per-devserver New Terminal button). The library assigns the window
 /// id, persists the record, and fires the watch, so the desktop's window watcher
-/// opens it as a `lib-` terminal on the devserver's shared `/terminal` tenant —
+/// opens it as a `lib-` terminal on the devserver's shared `/terminal` tenant  --
 /// the same terminal family as the connect-time boot terminal, not an isolated
 /// per-window tenant. Reached over the desktop bridge from the launcher's
 /// per-devserver `terminal` route.
@@ -2698,7 +2698,7 @@ async fn reconnect_devserver(
             if rotated {
                 // A rotated token means the devserver restarted: its old tenants
                 // are gone AND the running watcher's feed task can't auth with
-                // the stale token. RESPAWN the watcher on the fresh conn — cancel
+                // the stale token. RESPAWN the watcher on the fresh conn -- cancel
                 // the old subscription without closing its windows, then spawn
                 // anew so its first snapshot refreshes the restarted devserver's
                 // persisted set in place.
@@ -2779,7 +2779,7 @@ pub(crate) async fn forget_devserver_workspace_impl(
 }
 
 /// Set a registered devserver workspace on (mount + mint a fresh tenant token)
-/// or off (unmount, keep registered) — the on/off toggle on a devserver row,
+/// or off (unmount, keep registered) -- the on/off toggle on a devserver row,
 /// distinct from Forget ([`forget_devserver_workspace_impl`]). Reached over the
 /// desktop bridge from the launcher's `workspaces/on|off` routes.
 /// An unforced off of a workspace with live terminals is NOT an error: it
@@ -3143,7 +3143,7 @@ async fn desktop_handle_upgrade(
 
 /// On-launch background self-update check. The desktop registers
 /// `tauri-plugin-updater`, but only the hand `chan upgrade` (the hand-off
-/// `desktop_handle_upgrade` path) drives it — a running desktop never checks on
+/// `desktop_handle_upgrade` path) drives it -- a running desktop never checks on
 /// its own, so it stays on its installed version until the user upgrades by
 /// hand. Spawn a background check on launch so a stale desktop updates itself.
 ///
@@ -3457,7 +3457,7 @@ fn home_dir() -> String {
 /// Linux: default file manager, Windows: Explorer. Used by the
 /// Workspaces window's path cell so users can jump to the workspace folder
 /// from the row. Trusts the caller to pass a path the user just saw
-/// in the list — paths come from `list_workspaces`, which sources from
+/// in the list -- paths come from `list_workspaces`, which sources from
 /// the chan registry; no shell interpolation, args are passed as
 /// argv to the OS open command.
 #[tauri::command]
@@ -3561,8 +3561,8 @@ fn open_devtools(window: tauri::WebviewWindow) {
 
 /// Close-cascade tail. The SPA
 /// invokes this when the last tab and then the last empty pane of a
-/// workspace window are closed: close the window, and — only if this
-/// was the LAST chan SPA window — bring the launcher (the
+/// workspace window are closed: close the window, and -- only if this
+/// was the LAST chan SPA window -- bring the launcher (the
 /// native-desktop workspace list) back to the foreground so the user
 /// isn't left with no window. The launcher's CloseRequested handler
 /// hides rather than destroys it (see the setup hook), so re-showing
@@ -3572,7 +3572,7 @@ fn open_devtools(window: tauri::WebviewWindow) {
 /// cross-window terminal MOVE empties (and thus closes) the source
 /// window, and unconditionally focusing the launcher there stole focus
 /// from the drop-target window. Leaving the launcher alone lets the OS
-/// keep focus on the frontmost remaining window — the window the user
+/// keep focus on the frontmost remaining window -- the window the user
 /// just dropped the terminal into.
 #[tauri::command]
 fn request_close_window(app: tauri::AppHandle, window: tauri::WebviewWindow) -> Result<(), String> {
@@ -3596,8 +3596,8 @@ fn request_close_window(app: tauri::AppHandle, window: tauri::WebviewWindow) -> 
         let _ = show_window(&app, "main");
     }
     // A watcher-managed local window (`local::<window_id>`) emptied (last
-    // pane/tab closed, ^W/^D/Cmd+W): DISCARD its registry record — which reaps
-    // its sessions and fires the feed — so the watcher reconciles the native
+    // pane/tab closed, ^W/^D/Cmd+W): DISCARD its registry record -- which reaps
+    // its sessions and fires the feed -- so the watcher reconciles the native
     // window closed. The record is gone, so it can NEVER reopen (the boomerang
     // bug a bare destroy hit: the record stayed live and reconcile reopened it).
     if let Some(window_id) = closing.strip_prefix("local::") {
@@ -3611,7 +3611,7 @@ fn request_close_window(app: tauri::AppHandle, window: tauri::WebviewWindow) -> 
         }
     }
     // A watcher-managed DEVSERVER window (`lib-<library_id>::<window_id>`) emptied:
-    // discard its record on the owning devserver — the async analog of the
+    // discard its record on the owning devserver -- the async analog of the
     // `local::` discard above. The server drops + PERSISTS the removal and fires
     // the watch, so the close survives a restart instead of the record reopening
     // empty. The DELETE is an HTTP round-trip, so fire-and-forget it (logging a
@@ -3627,7 +3627,7 @@ fn request_close_window(app: tauri::AppHandle, window: tauri::WebviewWindow) -> 
         return window.destroy().map_err(err);
     }
     // `destroy()`, not `close()`: this is the SPA's DELIBERATE close-cascade
-    // (last tab, then last pane, just closed — the window is empty). `close()`
+    // (last tab, then last pane, just closed -- the window is empty). `close()`
     // would fire `CloseRequested`, where the close-on-red-dot handler prompts
     // instead of closing SPA windows; an empty window is worthless buried.
     // Destroy skips the request phase and goes straight to `Destroyed` cleanup.
@@ -3803,7 +3803,7 @@ fn init_tracing() {
 /// `<exe> __mcp-proxy <socket>` (the `cs` / `chan` MCP discovery hands this
 /// off), bridge stdio to the chan-server MCP socket and EXIT instead of
 /// launching the GUI. The transport underneath (`run_mcp_stdio_proxy`) is
-/// cross-platform — a Unix-domain socket on unix, a named pipe on Windows — so
+/// cross-platform -- a Unix-domain socket on unix, a named pipe on Windows -- so
 /// the desktop carries MCP on every platform. Returns `Ok(true)` when it
 /// handled the invocation, `Ok(false)` for a normal GUI launch.
 fn run_hidden_mcp_proxy_if_requested() -> Result<bool, String> {
@@ -3898,7 +3898,7 @@ async fn run_mcp_proxy(socket: PathBuf) -> Result<(), String> {
 /// when the SAME exe is invoked through a `chan` / `cs` shim from a terminal and
 /// runs as a CLI (see `run_as_chan_if_requested` / `run_as_cs_if_requested`),
 /// the process starts with NO console and its standard handles are null, so
-/// every `println!` is silently discarded — `chan --version` "returns empty".
+/// every `println!` is silently discarded -- `chan --version` "returns empty".
 /// Re-attaching to the parent shell's console (and binding any null std handle
 /// to it) is what routes the CLI output back to the terminal.
 ///
@@ -3940,7 +3940,7 @@ mod win_console {
         // that outlive the synchronous CreateFileW call.
         unsafe {
             if AttachConsole(ATTACH_PARENT_PROCESS) == 0 {
-                return; // no parent console — a normal GUI launch
+                return; // no parent console -- a normal GUI launch
             }
             bind(STD_OUTPUT_HANDLE, "CONOUT$", GENERIC_WRITE);
             bind(STD_ERROR_HANDLE, "CONOUT$", GENERIC_WRITE);
@@ -3949,8 +3949,8 @@ mod win_console {
     }
 
     /// Bind one standard handle to the console device `dev` (`CONOUT$` /
-    /// `CONIN$`) when it is currently unset (null / invalid). A valid handle — a
-    /// shell redirection, or one AttachConsole already populated — is left
+    /// `CONIN$`) when it is currently unset (null / invalid). A valid handle -- a
+    /// shell redirection, or one AttachConsole already populated -- is left
     /// untouched so redirection to a file/pipe still works. Best-effort: a
     /// CreateFileW / SetStdHandle failure is ignored (nothing more we can do).
     unsafe fn bind(std_id: STD_HANDLE, dev: &str, access: u32) {
@@ -3979,7 +3979,7 @@ mod win_console {
 /// `/opt/homebrew/bin`, and custom dirs). Resolve the login+interactive shell's
 /// `$PATH` and merge it into this process's `$PATH`, so in-process checks (the
 /// `cs` alias detection, which scans `$PATH`) and spawned subprocesses
-/// (terminals) see binaries wherever the user actually has them — the general
+/// (terminals) see binaries wherever the user actually has them -- the general
 /// fix for the launchd restricted-PATH gotcha, not `cs`-specific. Best-effort:
 /// any failure leaves the inherited PATH untouched (status quo, no regression).
 #[cfg(target_os = "macos")]
@@ -3995,7 +3995,7 @@ fn fix_macos_login_path() {
 }
 
 /// Keep the interactive shell PATH first, then any inherited (launchd) dirs not
-/// already present — deduped, order-stable, empty segments dropped.
+/// already present -- deduped, order-stable, empty segments dropped.
 #[cfg(target_os = "macos")]
 fn merge_path_dirs(shell_path: &str, inherited: &str) -> String {
     let mut seen = std::collections::HashSet::new();
@@ -4008,7 +4008,7 @@ fn merge_path_dirs(shell_path: &str, inherited: &str) -> String {
 }
 
 /// Run the user's login shell (`$SHELL`) as a login + interactive shell to
-/// capture the `$PATH` it exports — the dirs the user has on their REAL
+/// capture the `$PATH` it exports -- the dirs the user has on their REAL
 /// interactive PATH (their profile / rc files), which the GUI launchd PATH
 /// lacks. Markers delimit the value so a chatty rc (banners) can't corrupt it;
 /// stdin is `/dev/null` so an interactive shell can't block on input, and
@@ -4022,7 +4022,7 @@ fn resolve_login_shell_path() -> Option<String> {
     const MARK: &str = "__CHAN_PATH__";
     const TIMEOUT: Duration = Duration::from_secs(3);
     // Single-source the shell with the interactive terminal: $SHELL, then the
-    // passwd entry (pw_shell), then /bin/sh — validated. Replaces the old hardcoded
+    // passwd entry (pw_shell), then /bin/sh -- validated. Replaces the old hardcoded
     // `/bin/zsh` guess so the PATH-harvest fallback consults the shell the user
     // actually logs in with. `cfg(target_os = "macos")` ⊂ `cfg(unix)`, so the
     // unix-gated symbol is in scope.
@@ -4129,7 +4129,7 @@ fn main() {
     match cs_install::install_bin_shims() {
         Ok(0) => {}
         // Log the dir we ACTUALLY wrote to (CHAN_HOME-aware), not a hardcoded
-        // `~/.local/bin` — the literal misled a `CHAN_HOME` smoke run. Off unix the
+        // `~/.local/bin` -- the literal misled a `CHAN_HOME` smoke run. Off unix the
         // dir is omitted rather than named wrong.
         Ok(n) => match cs_install::shim_install_dir() {
             Some(dir) => {
@@ -4558,7 +4558,7 @@ fn main() {
                     "restoring the on workspaces from the overlay"
                 );
                 for key in enabled {
-                    // BOOT re-serve: RESTORE the persisted windows only — do NOT
+                    // BOOT re-serve: RESTORE the persisted windows only -- do NOT
                     // mint (mint_first_window=false). A workspace whose windows were
                     // all closed has no record; minting would re-open a closed
                     // window. The watcher restores existing records honoring
@@ -4582,7 +4582,7 @@ fn main() {
                 // First-open rule (library-owned): the very first time this local
                 // library is opened with an empty registry, mint one boot terminal
                 // and persist a marker. Once set, an emptied registry never
-                // re-mints — the user who closed their only terminal reopens to
+                // re-mints -- the user who closed their only terminal reopens to
                 // none. Persisted windows restore via the watcher independently.
                 if let Some(embedded) = state_for_restore.embedded() {
                     if let Err(e) = embedded.ensure_first_open_terminal() {
@@ -4624,7 +4624,7 @@ fn main() {
             // Registered on every platform; returns [] off macOS so the
             // SPA's terminal drop handler needs no platform branching.
             // ACL-scoped to locally-served windows (capabilities/
-            // local-drop.json) — the drag pasteboard is system-wide.
+            // local-drop.json) -- the drag pasteboard is system-wide.
             dropped_paths::read_dropped_paths,
             // Native upload picker for `cs upload` (WKWebView blocks the SPA's
             // gesture-less file-input click). ACL-scoped to locally-served and
@@ -4749,7 +4749,7 @@ fn install_app_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
     // connection (open_new_window_for_focused_workspace): local
     // workspace or outbound remote, or another standalone
     // terminal window; with the launcher (or nothing) focused it opens
-    // a standalone terminal window — the launcher itself is a
+    // a standalone terminal window -- the launcher itself is a
     // singleton and is never multiplied. Convention for future
     // chan-desktop shortcuts: declare a MenuItemBuilder here with the
     // `CmdOrCtrl+<key>` accelerator, add it to the Window submenu, and
@@ -5041,9 +5041,9 @@ fn window_submenu(app: &tauri::AppHandle) -> Option<Submenu<tauri::Wry>> {
 
 /// Re-sync the Window submenu's dynamic tail: remove every
 /// previously-appended `buried:*` / `remote:*` entry (and the section
-/// headers), then append the current snapshots — buried windows most
+/// headers), then append the current snapshots -- buried windows most
 /// recent first, then reopenable remote windows sorted by title. Runs
-/// on the main thread — muda requires menu mutation there on macOS —
+/// on the main thread -- muda requires menu mutation there on macOS  --
 /// and is best-effort throughout: a menu glitch must never take down a
 /// close/destroy handler.
 pub fn rebuild_window_menu(app: &tauri::AppHandle) {
@@ -5125,7 +5125,7 @@ pub fn rebuild_window_menu(app: &tauri::AppHandle) {
         devservers.sort_by(|a, b| a.1.cmp(&b.1));
 
         // Currently-OPEN (visible) windows, so the Window menu can RAISE a live
-        // window — not just reopen a hidden or remote one. The library's own
+        // window -- not just reopen a hidden or remote one. The library's own
         // window set is the source of truth (local rows now; each connected
         // devserver's rows once its feed merges in via `DevserverFeedSource`). A
         // row counts as open when its native webview is alive AND visible: a
@@ -5316,7 +5316,7 @@ pub fn refresh_remote_windows_menu(app: &tauri::AppHandle) {
                         url: conn.url.clone(),
                         base_title: conn.base_title.clone(),
                         menu_title: format!(
-                            "{} — {}",
+                            "{} - {}",
                             conn.base_title,
                             remote_window_tail(&row.id)
                         ),
@@ -5331,7 +5331,7 @@ pub fn refresh_remote_windows_menu(app: &tauri::AppHandle) {
         // (`saved && !connected`) are reopenable from the Window menu. The URL
         // is re-minted with the devserver's CURRENT per-mount token
         // (`assemble_tenant_url`); an OFF tenant (empty token) is not
-        // menu-reopenable here — its launcher row turns it back on. The reopen
+        // menu-reopenable here -- its launcher row turns it back on. The reopen
         // (`open_remote_window_from_menu`) re-creates AND re-tracks the window so
         // a later disconnect tears it down.
         for (id, display, conn) in devserver_targets {
@@ -5367,7 +5367,7 @@ pub fn refresh_remote_windows_menu(app: &tauri::AppHandle) {
                     RemoteReopen {
                         url,
                         base_title: row.title.unwrap_or_else(|| display.clone()),
-                        menu_title: format!("{display} — {tail}"),
+                        menu_title: format!("{display} - {tail}"),
                         config_key: config::remote_window_key(&row.prefix),
                         // Workspace reopen routes through the connecting screen,
                         // like the reconnect path.
@@ -5397,7 +5397,7 @@ struct RemoteWindowRow {
 
 /// GET `<base>/api/windows` preserving the base URL's query (`?t=`
 /// token rides there for outbound attachments). `None` on any failure
-/// — the caller skips that connection for this refresh round.
+/// -- the caller skips that connection for this refresh round.
 async fn fetch_remote_windows(
     client: &reqwest::Client,
     base: &str,
@@ -5476,14 +5476,14 @@ pub fn unbury_window(app: &tauri::AppHandle, label: &str) -> bool {
     persist_window_hidden(&state, label, false);
     // A watcher-managed local window: un-bury through the view state. The bury
     // destroyed the native window (the reconcile closed it), so there is nothing
-    // to show() — the reconcile reopens it at its window_id. Counts as shown.
+    // to show() -- the reconcile reopens it at its window_id. Counts as shown.
     if label.starts_with("local::") {
         if let Some(view) = state.local_watcher_view() {
             view.unbury(label);
         }
         // FOCUS on an ALREADY-VISIBLE watcher window: `view.unbury` is a no-op
         // (its webview is alive, not buried), and the early return below skips
-        // the show()/set_focus() the final branch does — so raise + focus the
+        // the show()/set_focus() the final branch does -- so raise + focus the
         // live webview here. A BURIED window's webview was destroyed
         // (`get_webview_window` is None → no-op), and the reconcile reopens it
         // focused (the window builder focuses by default).
@@ -5498,7 +5498,7 @@ pub fn unbury_window(app: &tauri::AppHandle, label: &str) -> bool {
     }
     // A watcher-managed DEVSERVER window: un-bury through ITS devserver view.
     // The bury destroyed the webview (the reconcile closed it), so there's nothing
-    // to show() — un-burying lets the reconcile reopen it at its window_id.
+    // to show() -- un-burying lets the reconcile reopen it at its window_id.
     if label.starts_with("lib-") {
         let library_id = label.split("::").next().unwrap_or(label);
         if let Some(ds_id) = state.devserver_feed.devserver_id_for_library(library_id) {
@@ -5536,7 +5536,7 @@ pub fn unbury_window(app: &tauri::AppHandle, label: &str) -> bool {
         None => false,
     };
     // The control terminal's launcher dot now reflects PTY-alive (resolved at read
-    // time from its chan-library control tenant), uniform with all windows — no
+    // time from its chan-library control tenant), uniform with all windows -- no
     // desktop-side shown/hidden flip; shown/hidden returns uniformly through the
     // server-persisted hidden path.
     if removed {
@@ -5585,7 +5585,7 @@ fn open_about_window(app: &tauri::AppHandle) -> Result<(), String> {
     .map_err(|e| format!("building about window: {e}"))?;
     // Off macOS the app menu renders as a per-window GTK menubar, and a
     // File/Edit/Window bar on a fixed-size About dialog is noise (and
-    // eats its height). macOS keeps the global menubar — nothing to
+    // eats its height). macOS keeps the global menubar -- nothing to
     // remove there. Best-effort: a failure just leaves the bar.
     #[cfg(not(target_os = "macos"))]
     let _ = win.remove_menu();
@@ -5607,7 +5607,7 @@ fn open_about_window(app: &tauri::AppHandle) -> Result<(), String> {
 /// SAME remote (the connection is recovered from the label's hash
 /// prefix against the outbound attachments). With the
 /// launcher (or nothing) focused, Cmd/Ctrl+Shift+N opens a standalone
-/// terminal window instead — the launcher is a singleton, never
+/// terminal window instead -- the launcher is a singleton, never
 /// multiplied. The "Workspaces" picker stays reachable via the
 /// `win-main` menu item, which is also the fallback surface when a
 /// focused window's backing connection can't be resolved (stale
@@ -5656,7 +5656,7 @@ fn open_new_window_for_focused_workspace(app: &tauri::AppHandle) -> Result<(), S
     // Buried workspace-/outbound- windows take precedence in their family:
     // Cmd+Shift+N on a window whose family has a hidden sibling REOPENS that
     // sibling (most recent first) instead of spawning a fresh window. Local
-    // `local::` windows are independent registry records — no family unbury;
+    // `local::` windows are independent registry records -- no family unbury;
     // a focused one mints/opens a fresh window (branched on kind below), and a
     // focused launcher (or nothing) opens a standalone terminal.
     let Some(focused) = app
@@ -5675,8 +5675,8 @@ fn open_new_window_for_focused_workspace(app: &tauri::AppHandle) -> Result<(), S
     // workspace mints another window for the same workspace (the watcher opens
     // it). Each minted window is an independent registry record, so there is no
     // `<kind>-<hash>-<seq>` family to unbury (unlike the schemes below).
-    // (A Terminal record carries no `workspace_path`, so keying on that — the
-    // old code — fell through to the launcher: the #2 bug.)
+    // (A Terminal record carries no `workspace_path`, so keying on that -- the
+    // old code -- fell through to the launcher: the #2 bug.)
     if focused_label.starts_with("local::") {
         let record = state.embedded().and_then(|embedded| {
             embedded
@@ -5703,9 +5703,9 @@ fn open_new_window_for_focused_workspace(app: &tauri::AppHandle) -> Result<(), S
     // another window for its workspace). There is no stored library_id->devserver
     // map, so the async helper matches the focused label against each connected
     // devserver's feed (which hands back the focused window's kind +
-    // workspace_path). It is an HTTP round-trip, so fire-and-forget — a failure
+    // workspace_path). It is an HTTP round-trip, so fire-and-forget -- a failure
     // surfaces as a warning, not a blocked menu handler. (Without this a `lib-`
-    // label matches no branch below and falls through to `show_window("main")` —
+    // label matches no branch below and falls through to `show_window("main")`  --
     // Cmd+Shift+N on a devserver window jumps focus back to the launcher.)
     if focused_label.starts_with("lib-") {
         let app = app.clone();
@@ -5764,8 +5764,8 @@ fn open_new_window_for_focused_workspace(app: &tauri::AppHandle) -> Result<(), S
 /// (a `lib-<library_id>::<window_id>` watcher window), for Cmd+Shift+N. No stored
 /// `library_id -> devserver` map exists, so match the focused label against each
 /// connected devserver's library feed; the matching record yields the conn AND
-/// the focused window's kind + `workspace_path`. Mint the SAME kind on that conn —
-/// the watcher opens it — mirroring the `local::` New-Window behavior. A stale
+/// the focused window's kind + `workspace_path`. Mint the SAME kind on that conn  --
+/// the watcher opens it -- mirroring the `local::` New-Window behavior. A stale
 /// window whose devserver is gone falls back to the picker.
 async fn mint_another_devserver_window(
     app: &tauri::AppHandle,
@@ -5805,7 +5805,7 @@ async fn mint_another_devserver_window(
     show_window(app, "main")
 }
 
-/// Discard a closed devserver window's record on its owning devserver — the
+/// Discard a closed devserver window's record on its owning devserver -- the
 /// `DELETE` the empty-window close-cascade sends for `lib-` windows (the
 /// devserver analog of `embedded.discard_window`). There is no stored
 /// library_id->devserver map, so feed-match the focused/closing label to find the
@@ -5835,7 +5835,7 @@ async fn discard_devserver_window(app: &tauri::AppHandle, label: &str) -> Result
 }
 
 /// Like [`discard_devserver_window`] but matched by the BARE `window_id` (what
-/// `cs window rm` sends) instead of the composite native label — the cross-host
+/// `cs window rm` sends) instead of the composite native label -- the cross-host
 /// path where a local terminal removes a connected devserver's window, whose
 /// registry row lives remote-side and so cannot be reached by the embedded
 /// host's own `discard_window`. Returns whether a connected devserver owned the
@@ -5909,7 +5909,7 @@ const LAUNCHER_RELOAD_BRIDGE_JS: &str = r#"
 })();
 "#;
 
-/// Quit, asking first while ANY SPA window is alive — visible or
+/// Quit, asking first while ANY SPA window is alive -- visible or
 /// buried (a buried window is a live hidden webview, so one
 /// `webview_windows()` scan covers both): quitting silently kills
 /// standalone-terminal shells and stops local workspaces. A bare
@@ -6443,7 +6443,7 @@ mod tests {
         // devserver's library_id (from `wait_for_devserver`'s info) before any
         // window snapshot exists. Seeding it must make `library_id_of` resolve
         // immediately so the launcher's `DevserverEntry` carries the real id from
-        // the FIRST render and groups the control row under its parent devserver —
+        // the FIRST render and groups the control row under its parent devserver  --
         // instead of a blank `↗` until a later window syncs the mapping.
         let feed = DevserverFeed::default();
         // No window snapshot yet → unresolvable without the seed.
@@ -6533,7 +6533,7 @@ mod tests {
         feed.set_color("ds-1".to_string(), Some("#ff8800".to_string()));
         assert_eq!(feed.pane_color(lib), Some("#ff8800".to_string()));
         // A genuine clear (the devserver dropped its colour) still
-        // propagates — a null push removes the cache so new windows fall back to the
+        // propagates -- a null push removes the cache so new windows fall back to the
         // accent. (The null-no-clobber invariant lives on the WEB live-apply side,
         // which f407f2eb already fixed; the desktop cache must still reflect a real
         // clear, so the eager seed mustn't blanket-ignore nulls.)
@@ -6745,7 +6745,7 @@ mod tests {
             most_recent_buried_with_prefix(&buried, "workspace-aa-"),
             Some("workspace-aa-0"),
         );
-        // A family with nothing buried finds nothing — and a family
+        // A family with nothing buried finds nothing -- and a family
         // prefix never matches another family's labels.
         assert_eq!(
             most_recent_buried_with_prefix(&buried, "workspace-bb-"),
