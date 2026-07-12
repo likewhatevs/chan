@@ -371,6 +371,11 @@ async fn run_devserver_window_feed(
     mut cancel: watch::Receiver<DevserverWatcherStop>,
 ) {
     const RECONNECT_BACKOFF: Duration = Duration::from_secs(2);
+    // One WARN per outage window, DEBUG in between: an offline devserver is a
+    // routine long-lived state, and this loop retries every 2s for the app's
+    // lifetime -- unthrottled WARNs would flood stderr while saying nothing new.
+    const WARN_EVERY: Duration = Duration::from_secs(5 * 60);
+    let mut last_warn: Option<std::time::Instant> = None;
     loop {
         // A `watch` (not a `Notify`) so the cancel PERSISTS: a disconnect that
         // flips it while we are between selects is still seen here, not missed.
@@ -381,11 +386,24 @@ async fn run_devserver_window_feed(
             _ = cancel.changed() => return,
             result = stream_window_feed(&conn, &snapshot, &change, &state) => {
                 if let Err(e) = result {
-                    tracing::debug!(
-                        host = %conn.host,
-                        error = %e,
-                        "devserver window feed disconnected; reconnecting",
-                    );
+                    // WARN (rate-limited), not debug: a dead feed means no
+                    // devserver window ever materializes and the launcher
+                    // list goes stale -- the whole devserver surface is dark
+                    // while this loops.
+                    if last_warn.is_none_or(|t| t.elapsed() >= WARN_EVERY) {
+                        last_warn = Some(std::time::Instant::now());
+                        tracing::warn!(
+                            host = %conn.host,
+                            error = %e,
+                            "devserver window feed disconnected; reconnecting",
+                        );
+                    } else {
+                        tracing::debug!(
+                            host = %conn.host,
+                            error = %e,
+                            "devserver window feed disconnected; reconnecting",
+                        );
+                    }
                 }
             }
         }
@@ -433,6 +451,10 @@ async fn stream_window_feed(
         if let Message::Text(text) = message.map_err(|e| format!("watch stream: {e}"))? {
             if let Ok(set) = serde_json::from_str::<WindowSet>(&text) {
                 let mut windows = set.windows;
+                // `?` on the ALL-mints-failed case only (identity/transport
+                // outage): abort before the snapshot commit below so open
+                // webviews keep their last-good tokens and the reconnect loop
+                // retries. Per-row failures were already absorbed inside.
                 crate::devserver::rewrite_gateway_window_tokens(conn, &mut windows).await?;
                 // Refresh this library's active-transfer cache so the desktop
                 // close guard can see a remote window's in-flight transfer (the

@@ -14,6 +14,14 @@ External `chan open` processes are still supported as explicit remote attachment
 
 There is no `chan-bin` Makefile step, no `bundle.macOS.files` entry, and no `bundle.externalBin`. `make dev` / `make build` / `make app-signed` / `make app-notarized` depend only on the `web` bundle (the rust-embed input) and the tauri CLI. The single codesigned + notarized artifact is the chan-desktop `.app` itself; Tauri's signing pass covers it directly, with no second binary to sign. This removed the v0.11.2-era universal2 / externalBin machinery entirely; multi-arch distribution is now purely a matter of how the `.app` itself is built and merged.
 
+## Debugging
+
+Logs go to stderr only; no file is written. The env var is `CHAN_LOG` (NOT `RUST_LOG`, which is ignored), default filter `warn,chan_desktop=info`. Launching the `.app` from Finder discards stderr, so see logs by launching the bundle binary from a terminal: `CHAN_LOG=chan_desktop=debug,warn /Applications/Chan.app/Contents/MacOS/chan-desktop`.
+
+WebView DevTools ships in release builds (the `devtools` Tauri feature). Cmd+Opt+I works in workspace windows via the key bridge but is NOT wired on the launcher window; inspect the launcher via right-click -> Inspect Element, or Safari -> Develop -> the machine's Chan webview. The launcher's loopback library API is curl-able with the values from that console: `location.origin` is the ephemeral port, the `?t=` query param is the bearer for `Authorization: Bearer`, and `GET /api/library/windows` dumps the exact records the window watcher reconciles (`origin`, `hidden`, `token`).
+
+A `devserver window feed disconnected; reconnecting` WARN means that devserver's whole window surface is dark: the desktop learns about remote windows only through the `/watch` feed, so while it loops no remote window opens and the launcher list goes stale.
+
 ## Window geometry
 
 Watcher-managed workspace (`local::*`) and devserver (`lib-*::*`) windows are destroyed when hidden and rebuilt when shown, so their OS size and position are desktop-owned state. `capture_window_geometry` records a window's rect on every bury, and `resolve_geometry_plan` + `apply_geometry_plan` reapply it when the window is rebuilt (`serve.rs`), keyed by the native label under a monitor signature (a small per-signature LRU in `config.rs`). The launcher restores the same way once at boot; standalone terminals keep their native window and let the OS hold the geometry.

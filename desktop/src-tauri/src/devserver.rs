@@ -793,6 +793,25 @@ fn gateway_entry_token(entry_url: &str) -> Result<Option<String>, String> {
         .find_map(|(k, v)| (k == "t").then(|| v.into_owned())))
 }
 
+/// Entry path for a tenant window: the prefix is normalized to exactly one
+/// leading slash. `WindowRecord.prefix` carries an absolute route path
+/// (`/api/notes-1a2b3c`), and identity's entry-path validator rejects a
+/// `//`-prefixed path as protocol-relative.
+fn window_entry_path(prefix: &str) -> String {
+    format!("/{}/index.html", prefix.trim_start_matches('/'))
+}
+
+/// Swap each window's devserver-local token for a gateway entry token, so the
+/// webview URL passes the proxy's gate.
+///
+/// A row whose entry mint fails gets its token CLEARED and is skipped -- an
+/// empty token makes the watcher's `should_show` hold back exactly that
+/// window (a devserver-local token would open a webview the proxy rejects),
+/// while the rest of the feed stays live. But when EVERY mint in the pass
+/// fails, that is an identity/transport outage, not a poisoned row: return
+/// `Err` so the feed caller aborts WITHOUT committing the token-less snapshot
+/// (open webviews keep riding their last-good tokens) and its reconnect loop
+/// keeps retrying until the mint recovers.
 pub async fn rewrite_gateway_window_tokens(
     conn: &DevserverConn,
     rows: &mut [chan_server::WindowRecord],
@@ -800,14 +819,56 @@ pub async fn rewrite_gateway_window_tokens(
     if conn.gateway.is_none() {
         return Ok(());
     }
-    for row in rows {
+    let mut attempted = 0usize;
+    let mut minted = 0usize;
+    let mut last_error = String::new();
+    for row in rows.iter_mut() {
         if row.prefix.is_empty() {
             continue;
         }
-        let entry_url = gateway_entry_url(conn, &format!("/{}/index.html", row.prefix)).await?;
-        if let Some(token) = gateway_entry_token(&entry_url)? {
-            row.token = token;
+        attempted += 1;
+        match gateway_entry_url(conn, &window_entry_path(&row.prefix)).await {
+            Ok(entry_url) => match gateway_entry_token(&entry_url) {
+                Ok(Some(token)) => {
+                    row.token = token;
+                    minted += 1;
+                }
+                Ok(None) => {
+                    tracing::warn!(
+                        host = %conn.host,
+                        prefix = %row.prefix,
+                        "gateway entry URL carried no token; hiding the window",
+                    );
+                    row.token = String::new();
+                    last_error = "gateway entry URL carried no token".to_string();
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        host = %conn.host,
+                        prefix = %row.prefix,
+                        error = %e,
+                        "parsing gateway entry URL failed; hiding the window",
+                    );
+                    row.token = String::new();
+                    last_error = e;
+                }
+            },
+            Err(e) => {
+                tracing::warn!(
+                    host = %conn.host,
+                    prefix = %row.prefix,
+                    error = %e,
+                    "minting gateway entry for a window failed; hiding the window",
+                );
+                row.token = String::new();
+                last_error = e;
+            }
         }
+    }
+    if attempted > 0 && minted == 0 {
+        return Err(format!(
+            "no gateway entry minted for any of {attempted} windows (last error: {last_error})"
+        ));
     }
     Ok(())
 }
@@ -1838,6 +1899,109 @@ mod tests {
         .await
         .expect("row conversion should not call desktop_entry_url");
         assert_eq!(row.url, "https://alice.devserver.chan.app/notes/index.html");
+    }
+
+    #[test]
+    fn window_entry_path_normalizes_to_one_leading_slash() {
+        // WindowRecord.prefix is absolute (`/api/notes-1a2b3c`); identity's
+        // entry-path validator rejects "" / non-"/"-leading / "//"-leading /
+        // "://"-containing paths, so both prefix shapes must land on exactly
+        // one leading slash.
+        assert_eq!(window_entry_path("/api/x"), "/api/x/index.html");
+        assert_eq!(window_entry_path("api/x"), "/api/x/index.html");
+        for p in ["/api/x", "api/x", "//api/x"] {
+            assert!(!window_entry_path(p).starts_with("//"), "{p}");
+        }
+    }
+
+    fn gateway_test_conn(entry_url: String) -> DevserverConn {
+        DevserverConn {
+            host: "alice.devserver.chan.app".into(),
+            port: 443,
+            token: String::new(),
+            name: "alice".into(),
+            gateway: Some(GatewayConn::new(
+                "https://id.chan.app".into(),
+                entry_url,
+                "https://alice.devserver.chan.app".into(),
+                "pat".into(),
+            )),
+        }
+    }
+
+    fn window_row(window_id: &str, prefix: &str, token: &str) -> chan_server::WindowRecord {
+        chan_server::WindowRecord {
+            window_id: window_id.into(),
+            library_id: "lib-1".into(),
+            kind: chan_server::WindowKind::Terminal,
+            title: "Terminal Window 1".into(),
+            ordinal: 1,
+            workspace_path: None,
+            prefix: prefix.into(),
+            token: token.into(),
+            persisted: true,
+            connected: false,
+            active_transfer: false,
+            control: false,
+            hidden: false,
+            origin: chan_server::WindowOrigin::default(),
+        }
+    }
+
+    #[tokio::test]
+    async fn rewrite_errors_when_every_mint_fails() {
+        // The entry endpoint is unreachable (port 9): every mint fails. That
+        // is an identity/transport outage, so the rewrite must return Err so
+        // the feed caller aborts WITHOUT committing a token-less snapshot
+        // (open webviews keep their last-good tokens) and retries.
+        let conn = gateway_test_conn("http://127.0.0.1:9/desktop/v1/devserver/entry".into());
+        let mut rows = vec![
+            window_row("w-1", "/api/notes-1a2b3c", "tok_local_1"),
+            window_row("w-2", "term-2", "tok_local_2"),
+            window_row("w-3", "", "tok_keep"),
+        ];
+        let result = rewrite_gateway_window_tokens(&conn, &mut rows).await;
+        assert!(result.is_err(), "total mint failure must surface as Err");
+        assert_eq!(rows[2].token, "tok_keep", "empty prefix rows are skipped");
+    }
+
+    #[tokio::test]
+    async fn rewrite_skips_a_failed_row_when_others_mint() {
+        // One-shot mock entry endpoint: first mint succeeds, second gets a
+        // 400. A partial failure must NOT kill the pass (that would take the
+        // whole feed down with it): the good row carries the gateway token,
+        // the bad row's devserver-local token is cleared so `should_show`
+        // holds exactly that window back.
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let body = r#"{"proxy_origin":"https://alice.devserver.chan.app","entry_url":"https://alice.devserver.chan.app/notes-1a2b3c/index.html?t=tok_gw_1"}"#;
+            let responses = [
+                format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                    body.len()
+                ),
+                "HTTP/1.1 400 Bad Request\r\ncontent-length: 0\r\nconnection: close\r\n\r\n"
+                    .to_string(),
+            ];
+            for response in responses {
+                let (mut sock, _) = listener.accept().await.unwrap();
+                let mut buf = [0u8; 4096];
+                let _ = sock.read(&mut buf).await;
+                let _ = sock.write_all(response.as_bytes()).await;
+            }
+        });
+        let conn = gateway_test_conn(format!("http://{addr}/desktop/v1/devserver/entry"));
+        let mut rows = vec![
+            window_row("w-1", "/notes-1a2b3c", "tok_local_1"),
+            window_row("w-2", "term-2", "tok_local_2"),
+        ];
+        rewrite_gateway_window_tokens(&conn, &mut rows)
+            .await
+            .expect("a partial failure keeps the pass alive");
+        assert_eq!(rows[0].token, "tok_gw_1", "minted token replaces local");
+        assert_eq!(rows[1].token, "", "failed mint clears the token");
     }
 
     #[test]

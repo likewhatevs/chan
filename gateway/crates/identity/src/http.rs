@@ -1624,3 +1624,45 @@ pub(crate) fn user_agent(headers: &HeaderMap) -> Option<String> {
             }
         })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn desktop_entry_path_accepts_single_slash_paths() {
+        // The desktop's window-entry mint sends `/{prefix}/index.html` with
+        // the prefix normalized to exactly one leading slash
+        // (chan-desktop `window_entry_path`); this pins the accept side of
+        // that contract.
+        for ok in ["/", "/api/x/index.html", "/notes/index.html?w=abc"] {
+            assert_eq!(
+                validate_desktop_entry_path(Some(ok)).unwrap(),
+                ok,
+                "{ok} should validate"
+            );
+        }
+        // An omitted path defaults to the devserver root, and surrounding
+        // whitespace is trimmed before validation (the trimmed value is
+        // what the entry URL is built from).
+        assert_eq!(validate_desktop_entry_path(None).unwrap(), "/");
+        assert_eq!(validate_desktop_entry_path(Some(" /x \n")).unwrap(), "/x");
+    }
+
+    #[test]
+    fn desktop_entry_path_rejects_relative_and_url_shaped_paths() {
+        for bad in [
+            "",
+            "  ",
+            "api/x/index.html",
+            "//evil.example/x",
+            "https://evil.example/x",
+            "/x\r\nHeader: y",
+        ] {
+            assert!(
+                validate_desktop_entry_path(Some(bad)).is_err(),
+                "{bad:?} should be rejected"
+            );
+        }
+    }
+}
