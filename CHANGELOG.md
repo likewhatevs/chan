@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v0.67.2] - 2026-07-12
+
+v0.67.2 makes gateway devserver windows actually open in chan-desktop and keeps the devserver window feed alive through per-window failures.
+
+### Fixed
+
+- **Gateway devserver windows open natively.** chan-desktop built each window's gateway entry path with a doubled leading slash, which id.chan.app correctly rejected; the failed mint then silently tore down the devserver window feed, so clicking a terminal or workspace under a connected devserver created the window remotely but never opened it on the desktop, and the launcher's window list went stale. The entry path is now normalized, one window's failed entry mint no longer takes the whole feed down (that window is held back and named in a warning instead), an identity outage no longer closes windows that are already open, and a dead feed now logs a rate-limited warning instead of looping invisibly at debug level.
+
 ## [v0.67.1] - 2026-07-12
 
 v0.67.1 fixes the chan-desktop gateway sign-in that Chrome's CSP blocked at the Authorize click, restyles the id.chan.app consent flow to match the site, and teaches bare `cs session self` to report who you are.
