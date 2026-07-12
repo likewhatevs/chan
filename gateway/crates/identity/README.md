@@ -129,11 +129,11 @@ Public share landing (no auth at the door):
 
 Desktop authorize (PAT mint for chan-desktop; consent is session-gated, entry bounces through sign-in when needed):
 
-| Method | Path                           | Purpose                        |
-|--------|--------------------------------|--------------------------------|
-| GET    | `/desktop/authorize`           | validate query, stash, bounce  |
-| GET    | `/desktop/authorize/consent`   | server-rendered consent page   |
-| POST   | `/desktop/authorize/confirm`   | allow / deny -> `chan://` redirect |
+| Method | Path                         | Purpose                            |
+|--------|------------------------------|------------------------------------|
+| GET    | `/desktop/authorize`         | validate query, stash, bounce      |
+| GET    | `/desktop/authorize/consent` | consent page (SPA-styled)          |
+| POST   | `/desktop/authorize/confirm` | allow/deny -> handoff -> `chan://` |
 
 Desktop devserver entry (Bearer PAT with the `desktop.connect` scope):
 

@@ -7,7 +7,8 @@
 //!   * unauthenticated bounce → `/`
 //!   * OAuth completion → `/desktop/authorize/consent`
 //!   * consent page render (CSRF nonce, security headers)
-//!   * allow / deny POST → `chan://auth/callback#...`
+//!   * allow / deny POST → 200 handoff page embedding
+//!     `chan://auth/callback#...` (meta refresh + fallback link)
 //!   * audit row records `created_via_desktop`
 
 #[path = "../../../tests-shared/pg_reaper.rs"]
@@ -311,6 +312,25 @@ fn extract_csrf(html: &str) -> String {
     after[..end].to_string()
 }
 
+/// Pull the `chan://` target out of the handoff page HTML and assert
+/// it appears exactly twice (the meta refresh + the fallback link).
+/// The attribute-escaped URL can only contain `&amp;` entities
+/// (percent-encoding covers every other breaker), so unescaping is a
+/// single replace.
+fn extract_handoff_url(html: &str) -> String {
+    let needle = r#"href="chan://"#;
+    let start = html.find(needle).expect("handoff link present");
+    let after = &html[start + r#"href=""#.len()..];
+    let end = after.find('"').expect("href value closes");
+    let escaped = &after[..end];
+    assert_eq!(
+        html.matches(escaped).count(),
+        2,
+        "the target rides the meta refresh AND the link: {html}"
+    );
+    escaped.replace("&amp;", "&")
+}
+
 /// Workspace an end-to-end OAuth callback so the test client ends up
 /// holding an authenticated session cookie tied to `user_id`.
 async fn happy_login(app: &TestApp, c: &mut Client<'_>, user_id: Uuid, email: &str) {
@@ -378,6 +398,27 @@ async fn happy_login(app: &TestApp, c: &mut Client<'_>, user_id: Uuid, email: &s
 /// the consent / confirm handlers can look the user up. `blocked`
 /// controls the response shape: blocked sets `blocked_at` to now.
 async fn mock_get_user(app: &TestApp, user_id: Uuid, email: &str, blocked: bool) {
+    Mock::given(method("GET"))
+        .and(path(format!("/v1/users/{user_id}")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(user_json(user_id, email, blocked)))
+        .mount(&app.profile)
+        .await;
+}
+
+/// [`mock_get_user`] capped at `n` responses; once exhausted the next
+/// matching mock serves, so a test can flip the user's blocked state
+/// mid-flow without depending on wiremock mount precedence.
+async fn mock_get_user_up_to(app: &TestApp, user_id: Uuid, email: &str, blocked: bool, n: u64) {
+    Mock::given(method("GET"))
+        .and(path(format!("/v1/users/{user_id}")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(user_json(user_id, email, blocked)))
+        .up_to_n_times(n)
+        .mount(&app.profile)
+        .await;
+}
+
+/// The profile-service user body both `mock_get_user*` helpers serve.
+fn user_json(user_id: Uuid, email: &str, blocked: bool) -> serde_json::Value {
     let now = chrono::Utc::now().to_rfc3339();
     let mut body = json!({
         "id": user_id,
@@ -392,11 +433,7 @@ async fn mock_get_user(app: &TestApp, user_id: Uuid, email: &str, blocked: bool)
         body["blocked_at"] = json!(chrono::Utc::now().to_rfc3339());
         body["block_reason"] = json!("admin action");
     }
-    Mock::given(method("GET"))
-        .and(path(format!("/v1/users/{user_id}")))
-        .respond_with(ResponseTemplate::new(200).set_body_json(body))
-        .mount(&app.profile)
-        .await;
+    body
 }
 
 const AUTH_URI: &str = "/desktop/authorize?\
@@ -442,7 +479,7 @@ async fn oauth_bounce_lands_on_consent() {
     app.insert_user(uid, "octo@example.com").await;
 
     // First: hit /desktop/authorize unauthenticated. Stashes params
-    // and 302s to /. The session cookie now carries the pending
+    // and 303s to /. The session cookie now carries the pending
     // authorize, which auth_callback will pick up.
     let resp = c.get(AUTH_URI).await;
     assert_eq!(resp.status, StatusCode::SEE_OTHER);
@@ -460,7 +497,7 @@ async fn full_flow_mints_pat_with_desktop_audit_action() {
     app.insert_user(uid, "octo@example.com").await;
 
     happy_login(&app, &mut c, uid, "octo@example.com").await;
-    // Authed GET /desktop/authorize -> 302 /desktop/authorize/consent
+    // Authed GET /desktop/authorize -> 303 /desktop/authorize/consent
     mock_get_user(&app, uid, "octo@example.com", false).await;
     let resp = c.get(AUTH_URI).await;
     assert_eq!(resp.status, StatusCode::SEE_OTHER);
@@ -474,21 +511,32 @@ async fn full_flow_mints_pat_with_desktop_audit_action() {
     assert!(!csrf.is_empty(), "csrf token present");
     assert_eq!(resp.header("x-frame-options"), Some("DENY"));
     assert_eq!(resp.header("cache-control"), Some("no-store"));
-    assert!(resp
-        .header("content-security-policy")
-        .unwrap()
-        .contains("frame-ancestors 'none'"));
+    let csp = resp.header("content-security-policy").unwrap();
+    assert!(csp.contains("frame-ancestors 'none'"), "{csp}");
+    assert!(csp.contains("img-src 'self'"), "{csp}");
 
-    // Authorize.
+    // Authorize: a 200 handoff page, NOT a redirect (a 3xx off this
+    // form POST would put the chan:// hop under form-action).
     let resp = c
         .post_form(
             "/desktop/authorize/confirm",
             &[("csrf", &csrf), ("action", "allow")],
         )
         .await;
-    assert_eq!(resp.status, StatusCode::SEE_OTHER);
-    let frag = parse_chan_fragment(&resp.location);
-    assert!(resp.location.starts_with("chan://auth/callback#"));
+    assert_eq!(resp.status, StatusCode::OK);
+    assert!(
+        resp.location.is_empty(),
+        "no Location header on the handoff"
+    );
+    assert_eq!(resp.header("x-frame-options"), Some("DENY"));
+    assert_eq!(resp.header("cache-control"), Some("no-store"));
+    assert_eq!(resp.header("referrer-policy"), Some("no-referrer"));
+    let csp = resp.header("content-security-policy").unwrap();
+    assert!(csp.contains("frame-ancestors 'none'"), "{csp}");
+    assert!(csp.contains("img-src 'self'"), "{csp}");
+    let url = extract_handoff_url(resp.body_str());
+    let frag = parse_chan_fragment(&url);
+    assert!(url.starts_with("chan://auth/callback#"));
     assert!(frag.get("secret").unwrap().starts_with("chan_pat_"));
     assert_eq!(
         frag.get("state").map(String::as_str),
@@ -532,8 +580,10 @@ async fn deny_returns_user_cancelled_and_does_not_mint() {
             &[("csrf", &csrf), ("action", "deny")],
         )
         .await;
-    assert_eq!(resp.status, StatusCode::SEE_OTHER);
-    let frag = parse_chan_fragment(&resp.location);
+    assert_eq!(resp.status, StatusCode::OK);
+    assert!(resp.body_str().contains("Request cancelled"), "deny copy");
+    let url = extract_handoff_url(resp.body_str());
+    let frag = parse_chan_fragment(&url);
     assert_eq!(
         frag.get("error").map(String::as_str),
         Some("user_cancelled")
@@ -545,6 +595,46 @@ async fn deny_returns_user_cancelled_and_does_not_mint() {
     // No PAT rows for this user.
     let pool = app.api_tokens.list(uid).await.expect("list");
     assert!(pool.is_empty(), "deny must not mint a token");
+    app.cleanup().await;
+}
+
+#[tokio::test]
+async fn blocked_on_confirm_renders_error_handoff() {
+    let app = TestApp::new().await;
+    let mut c = Client::new(&app);
+    let uid = Uuid::new_v4();
+    app.insert_user(uid, "octo@example.com").await;
+    happy_login(&app, &mut c, uid, "octo@example.com").await;
+
+    // The user is unblocked through authorize + consent (two lookups),
+    // then blocked by the time they click Authorize. Exhaustion (not
+    // mount order) hands the third lookup to the blocked mock.
+    mock_get_user_up_to(&app, uid, "octo@example.com", false, 2).await;
+    mock_get_user(&app, uid, "octo@example.com", true).await;
+
+    let resp = c.get(AUTH_URI).await;
+    assert_eq!(resp.status, StatusCode::SEE_OTHER);
+    let resp = c.get("/desktop/authorize/consent").await;
+    assert_eq!(resp.status, StatusCode::OK);
+    let csrf = extract_csrf(resp.body_str());
+
+    let resp = c
+        .post_form(
+            "/desktop/authorize/confirm",
+            &[("csrf", &csrf), ("action", "allow")],
+        )
+        .await;
+    assert_eq!(resp.status, StatusCode::OK);
+    assert!(resp.body_str().contains("Sign-in failed"), "error copy");
+    let url = extract_handoff_url(resp.body_str());
+    let frag = parse_chan_fragment(&url);
+    assert_eq!(
+        frag.get("error").map(String::as_str),
+        Some("account_blocked")
+    );
+    // No PAT was minted for the blocked user.
+    let tokens = app.api_tokens.list(uid).await.expect("list");
+    assert!(tokens.is_empty(), "blocked allow must not mint a token");
     app.cleanup().await;
 }
 

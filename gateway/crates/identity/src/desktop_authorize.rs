@@ -2,25 +2,38 @@
 //!
 //! Three routes:
 //!
-//!   * `GET  /desktop/authorize?<query>` — entry point. Validates the
+//!   * `GET  /desktop/authorize?<query>` -- entry point. Validates the
 //!     query, stashes a [`AuthorizeParams`] struct in the session, and
 //!     redirects: to `/` if unauthenticated (SPA sign-in renders, then
 //!     `auth_callback` bounces back here), or straight to
 //!     `/desktop/authorize/consent` if authenticated.
-//!   * `GET  /desktop/authorize/consent` — renders a server-side HTML
+//!   * `GET  /desktop/authorize/consent` -- renders a server-side HTML
 //!     consent page showing the requesting client, label, scopes, and
 //!     expiry. Includes a hidden CSRF nonce stored alongside the
-//!     pending params. Responds with `X-Frame-Options: DENY` and CSP
-//!     `frame-ancestors 'none'` so a malicious page cannot iframe the
-//!     consent and trick a user into approving via clickjack.
-//!   * `POST /desktop/authorize/confirm` — handles the `Authorize` /
+//!     pending params.
+//!   * `POST /desktop/authorize/confirm` -- handles the `Authorize` /
 //!     `Cancel` action. Consumes the pending params + CSRF; on
 //!     `allow` mints a PAT through [`ApiTokenService::create`] with
-//!     [`TokenOrigin::Desktop`] and 302s to
+//!     [`TokenOrigin::Desktop`]. Every outcome answers 200 with a
+//!     handoff page that navigates the browser to
 //!     `chan://auth/callback#id=&secret=&label=&expires_at=&state=`
-//!     (fragment, not query: secrets never reach access logs along
-//!     the redirect chain). On `deny`, 302s to
-//!     `chan://...#error=user_cancelled&state=`.
+//!     (`deny` / blocked carry `#error=&state=` instead) via a
+//!     zero-delay meta refresh plus a manual "Open chan-desktop"
+//!     fallback link. A 3xx answering the form POST would put the
+//!     `chan://` hop inside the form submission's redirect chain,
+//!     which Chrome subjects to the page's `form-action` CSP; the
+//!     handoff page keeps the custom-scheme navigation out of any
+//!     form chain entirely. The PAT secret rides only in the URL
+//!     fragment (never a query string), so it cannot reach an access
+//!     log; the page itself is `no-store` / `no-referrer`.
+//!
+//! Both HTML pages render in the shared [`crate::pages`] shell (SPA
+//! palette, inline CSS) under one strict CSP ([`crate::pages::CSP`]):
+//! `default-src 'none'` with carve-outs for the inline styles, the
+//! same-origin logo mask, and the consent form's same-origin POST.
+//! `X-Frame-Options: DENY` + `frame-ancestors 'none'` keep a
+//! malicious page from iframing the consent and clickjacking an
+//! approval.
 //!
 //! Hardening posture:
 //!   * `redirect_uri` exact-match against [`EXPECTED_REDIRECT_URI`].
@@ -43,14 +56,23 @@
 //!     (not `created`) so operators and users can tell the desktop
 //!     flow apart from SPA mints.
 //!
-//! Known limitation:
+//! Known limitations:
 //!   * No per-session rate limit. A signed-in user spam-clicking
 //!     `Authorize` mints PATs into their own table; audit-visible and
 //!     bounded by the user's own account, so there is no server-side
-//!     limit — the audit log is the watch surface.
+//!     limit -- the audit log is the watch surface.
+//!   * The handoff page keeps the chan:// URL (secret included) in its
+//!     DOM until the user closes the tab: a custom-scheme navigation
+//!     never unloads the document, and the script-free CSP rules out
+//!     self-blanking. `no-store` / `no-referrer` / `nosniff` plus the
+//!     fragment-only secret bound the exposure to the open tab itself
+//!     (visible to anyone at the machine or an extension with
+//!     content-script access there). Handing off a one-time redemption
+//!     code instead of the raw secret would remove this and is the
+//!     noted follow-up.
 
 use axum::extract::{Form, Query, State};
-use axum::http::{header, HeaderMap, HeaderName, HeaderValue};
+use axum::http::HeaderMap;
 use axum::response::{Html, IntoResponse, Redirect, Response};
 use base64::Engine;
 use chrono::{DateTime, Utc};
@@ -64,6 +86,7 @@ use url::form_urlencoded::byte_serialize;
 use crate::api_tokens::{ApiToken, CreatedToken, NewToken, TokenOrigin};
 use crate::error::{Error, Result};
 use crate::http::{current_user_id, current_user_id_optional, request_meta, AppState};
+use crate::pages;
 use crate::profile_client::User;
 
 /// Session key under which `/desktop/authorize` stashes a pending
@@ -247,6 +270,72 @@ fn generate_csrf() -> String {
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
 }
 
+/// Which handoff variant `confirm` renders: the copy differs, the
+/// mechanics (meta refresh + manual link to the `chan://` target) do
+/// not.
+enum Handoff {
+    /// PAT minted; the target carries `#id=&secret=…`.
+    Success,
+    /// The user clicked Cancel; the target carries `#error=user_cancelled`.
+    Cancelled,
+    /// The account is blocked; the target carries `#error=account_blocked`.
+    Error,
+}
+
+impl Handoff {
+    /// `(title, blurb)` for the card. The title doubles as the `<h1>`.
+    fn copy(&self) -> (&'static str, &'static str) {
+        match self {
+            Handoff::Success => ("Authorized", "Returning you to chan-desktop\u{2026}"),
+            Handoff::Cancelled => (
+                "Request cancelled",
+                "No token was issued. Returning you to chan-desktop\u{2026}",
+            ),
+            Handoff::Error => (
+                "Sign-in failed",
+                "Returning you to chan-desktop with the details\u{2026}",
+            ),
+        }
+    }
+}
+
+/// Render the handoff page `confirm` answers with: a zero-delay meta
+/// refresh to the `chan://` target plus a manual fallback link, so the
+/// custom-scheme navigation never rides a form-POST redirect chain
+/// (see the module doc). The target appears exactly twice, both times
+/// attribute-escaped; its only user-influenced parts are percent-
+/// encoded by [`success_url`] / [`error_url`].
+fn render_handoff_html(kind: &Handoff, target: &str) -> String {
+    let (title, blurb) = kind.copy();
+    let url = pages::html_escape(target);
+    let head_extra = format!("<meta http-equiv=\"refresh\" content=\"0;url={url}\">\n  ");
+    let body = format!(
+        r#"
+    <span class="mark" aria-hidden="true"></span>
+    <h1>{title}</h1>
+    <p class="muted">{blurb}</p>
+    <a class="btn primary" href="{url}">Open chan-desktop</a>
+    <p class="muted small">You can close this tab.</p>
+  "#,
+    );
+    pages::render(&pages::Page {
+        title,
+        head_extra: &head_extra,
+        body: &body,
+    })
+}
+
+/// The 200 response wrapping [`render_handoff_html`], with the shared
+/// security headers (the page embeds a PAT secret on the success
+/// path: `no-store`, `no-referrer`, `nosniff`).
+fn handoff_response(kind: &Handoff, target: &str) -> Response {
+    (
+        pages::security_headers(),
+        Html(render_handoff_html(kind, target)),
+    )
+        .into_response()
+}
+
 /// Mint the PAT and return the chan:// success URL. Called by the
 /// confirm POST when the user clicks Authorize.
 async fn complete(
@@ -254,7 +343,7 @@ async fn complete(
     headers: &HeaderMap,
     params: &AuthorizeParams,
     user: &User,
-) -> Result<Redirect> {
+) -> Result<String> {
     let expires_at: DateTime<Utc> = Utc::now() + chrono::Duration::seconds(params.expires_in_secs);
     let CreatedToken { token, secret } = state
         .api_tokens
@@ -273,12 +362,11 @@ async fn complete(
             tracing::warn!(error = ?e, user = %user.username, "desktop authorize mint failed");
             e
         })?;
-    let url = success_url(params, &token, &secret);
-    Ok(Redirect::to(&url))
+    Ok(success_url(params, &token, &secret))
 }
 
 /// `GET /desktop/authorize` entry. Validates the query, stashes
-/// params, and bounces — to `/` for unauthenticated sessions (the SPA
+/// params, and bounces -- to `/` for unauthenticated sessions (the SPA
 /// renders sign-in), or straight to the consent page otherwise.
 pub async fn authorize(
     State(state): State<AppState>,
@@ -315,7 +403,7 @@ pub async fn authorize(
     Ok(Redirect::to(CONSENT_PATH))
 }
 
-/// `GET /desktop/authorize/consent` — renders the consent HTML.
+/// `GET /desktop/authorize/consent` -- renders the consent HTML.
 pub async fn consent(State(state): State<AppState>, session: Session) -> Result<Response> {
     let uid = current_user_id(&session).await?;
     let Some(params) = peek_pending(&session).await? else {
@@ -343,30 +431,7 @@ pub async fn consent(State(state): State<AppState>, session: Session) -> Result<
         .map_err(|e| Error::Anyhow(anyhow::anyhow!("session insert desktop_csrf: {e}")))?;
 
     let html = render_consent_html(&params, &user, &csrf);
-    let headers = [
-        // Clickjacking belt: block all framing of the consent page.
-        // X-Frame-Options is legacy but still respected by older
-        // browsers; the CSP covers modern ones.
-        (
-            HeaderName::from_static("x-frame-options"),
-            HeaderValue::from_static("DENY"),
-        ),
-        (
-            header::CONTENT_SECURITY_POLICY,
-            HeaderValue::from_static(
-                "default-src 'none'; style-src 'unsafe-inline'; \
-                 form-action 'self'; frame-ancestors 'none'",
-            ),
-        ),
-        // The CSRF nonce is in the page; never let an intermediate
-        // cache hand it to another user.
-        (header::CACHE_CONTROL, HeaderValue::from_static("no-store")),
-        (
-            header::REFERRER_POLICY,
-            HeaderValue::from_static("no-referrer"),
-        ),
-    ];
-    Ok((headers, Html(html)).into_response())
+    Ok((pages::security_headers(), Html(html)).into_response())
 }
 
 #[derive(Debug, Deserialize)]
@@ -378,13 +443,15 @@ pub struct ConfirmForm {
     csrf: String,
 }
 
-/// `POST /desktop/authorize/confirm` — handles allow / deny.
+/// `POST /desktop/authorize/confirm` -- handles allow / deny. Every
+/// outcome answers 200 with a [`Handoff`] page (see the module doc
+/// for why this is not a redirect).
 pub async fn confirm(
     State(state): State<AppState>,
     session: Session,
     headers: HeaderMap,
     Form(form): Form<ConfirmForm>,
-) -> Result<Redirect> {
+) -> Result<Response> {
     let uid = current_user_id(&session).await?;
 
     // Consume CSRF first so a replay of an old form fails even if
@@ -415,35 +482,26 @@ pub async fn confirm(
                 .await?
                 .ok_or(Error::Unauthorized)?;
             if user.is_blocked() {
-                return Ok(Redirect::to(&error_url(&params, "account_blocked")));
+                return Ok(handoff_response(
+                    &Handoff::Error,
+                    &error_url(&params, "account_blocked"),
+                ));
             }
-            complete(&state, &headers, &params, &user).await
+            let url = complete(&state, &headers, &params, &user).await?;
+            Ok(handoff_response(&Handoff::Success, &url))
         }
-        "deny" => Ok(Redirect::to(&error_url(&params, "user_cancelled"))),
+        "deny" => Ok(handoff_response(
+            &Handoff::Cancelled,
+            &error_url(&params, "user_cancelled"),
+        )),
         _ => Err(Error::BadRequest("invalid action".into())),
     }
 }
 
-/// Minimal HTML escape: covers the five characters that matter for
-/// attribute + text contexts. We never render unescaped user input
-/// into a `<script>` or `style` block, so this list is sufficient.
-fn html_escape(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for c in s.chars() {
-        match c {
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '"' => out.push_str("&quot;"),
-            '\'' => out.push_str("&#39;"),
-            _ => out.push(c),
-        }
-    }
-    out
-}
-
-/// Render the consent page. Inline CSS keeps the page self-contained
-/// (CSP blocks external resources via `default-src 'none'`).
+/// Render the consent page in the shared [`crate::pages`] shell (the
+/// SPA card look). Every interpolated value is escaped; the form's
+/// `csrf` / `action` fields are the wire contract the confirm POST
+/// (and the integration tests) read.
 fn render_consent_html(params: &AuthorizeParams, user: &User, csrf: &str) -> String {
     let display = user
         .display_name
@@ -452,58 +510,36 @@ fn render_consent_html(params: &AuthorizeParams, user: &User, csrf: &str) -> Str
         .unwrap_or(&user.username);
     let scopes = params.scopes.join(", ");
     let expires_phrase = humanize_expires(params.expires_in_secs);
-    format!(
-        r#"<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Authorize chan-desktop</title>
-  <style>
-    body {{ font: 16px/1.5 system-ui, sans-serif; max-width: 32rem;
-            margin: 4rem auto; padding: 0 1rem; color: #111; }}
-    h1   {{ font-size: 1.4rem; margin: 0 0 1rem; }}
-    .who {{ color: #555; margin-bottom: 1.25rem; }}
-    .card {{ border: 1px solid #ddd; border-radius: 6px;
-             padding: 1rem 1.25rem; margin-bottom: 1.5rem; }}
-    .row  {{ display: flex; justify-content: space-between; gap: 1rem;
-             margin: 0.25rem 0; }}
-    .k    {{ color: #555; }}
-    .v    {{ font-weight: 600; word-break: break-word; }}
-    form  {{ display: flex; gap: 0.75rem; }}
-    button {{ flex: 1; padding: 0.6rem 1rem; font: inherit;
-              border-radius: 6px; cursor: pointer; border: 1px solid #ccc; }}
-    button[name=action][value=allow] {{ background: #111; color: #fff;
-                                         border-color: #111; }}
-  </style>
-</head>
-<body>
-  <main>
+    let body = format!(
+        r#"
+    <span class="mark" aria-hidden="true"></span>
     <h1>Authorize chan-desktop?</h1>
-    <p class="who">Signed in as <strong>{display}</strong>.</p>
-    <div class="card">
+    <p class="muted">Signed in as <strong>{display}</strong>.</p>
+    <div class="details">
       <div class="row"><span class="k">Label</span><span class="v">{label}</span></div>
       <div class="row"><span class="k">Scopes</span><span class="v">{scopes}</span></div>
       <div class="row"><span class="k">Expires in</span><span class="v">{expires_phrase}</span></div>
     </div>
     <form method="post" action="/desktop/authorize/confirm">
       <input type="hidden" name="csrf" value="{csrf}">
-      <button type="submit" name="action" value="deny">Cancel</button>
-      <button type="submit" name="action" value="allow">Authorize</button>
+      <button class="btn" type="submit" name="action" value="deny">Cancel</button>
+      <button class="btn primary" type="submit" name="action" value="allow">Authorize</button>
     </form>
-  </main>
-</body>
-</html>
-"#,
-        display = html_escape(display),
-        label = html_escape(&params.label),
-        scopes = html_escape(&scopes),
-        expires_phrase = html_escape(&expires_phrase),
-        csrf = html_escape(csrf),
-    )
+  "#,
+        display = pages::html_escape(display),
+        label = pages::html_escape(&params.label),
+        scopes = pages::html_escape(&scopes),
+        expires_phrase = pages::html_escape(&expires_phrase),
+        csrf = pages::html_escape(csrf),
+    );
+    pages::render(&pages::Page {
+        title: "Authorize chan-desktop",
+        head_extra: "",
+        body: &body,
+    })
 }
 
-/// Best-effort coarse phrasing. "30 days", "2 hours" — never tries
+/// Best-effort coarse phrasing. "30 days", "2 hours" -- never tries
 /// to mix units. Falls back to seconds for sub-minute values.
 fn humanize_expires(secs: i64) -> String {
     const MIN: i64 = 60;
@@ -687,13 +723,59 @@ mod tests {
     }
 
     #[test]
-    fn html_escape_covers_attr_breakers() {
-        let in_ = r#"<script>alert("xss & ' end")</script>"#;
-        let out = html_escape(in_);
+    fn chan_urls_contain_no_html_attr_breakers() {
+        // The property that makes embedding the URL in the handoff
+        // page's attributes safe: byte_serialize percent-encodes every
+        // attribute breaker, so the only entity the escaped URL can
+        // contain is `&amp;`.
+        let mut p = params();
+        p.label = r#"a"b<c>'d e"#.into();
+        p.state = r#""onmouseover='x' "#.into();
+        let token = dummy_token(Uuid::nil(), &p.label, None);
+        for url in [
+            success_url(&p, &token, "chan_pat_AAAA"),
+            error_url(&p, "user_cancelled"),
+        ] {
+            for breaker in ['"', '<', '>', '\'', ' '] {
+                assert!(!url.contains(breaker), "{breaker:?} leaked into {url}");
+            }
+        }
+    }
+
+    #[test]
+    fn handoff_html_embeds_target_twice_and_escapes() {
+        let token = dummy_token(Uuid::nil(), "chan-desktop @ box", None);
+        let url = success_url(&params(), &token, "chan_pat_AAAA");
+        let html = render_handoff_html(&Handoff::Success, &url);
+        // Exactly twice: the meta refresh and the manual fallback link.
+        let escaped = pages::html_escape(&url);
         assert_eq!(
-            out,
-            "&lt;script&gt;alert(&quot;xss &amp; &#39; end&quot;)&lt;/script&gt;"
+            html.matches(&escaped).count(),
+            2,
+            "meta + link, got: {html}"
         );
+        assert!(
+            html.contains(&format!(
+                "<meta http-equiv=\"refresh\" content=\"0;url={escaped}\">"
+            )),
+            "{html}"
+        );
+        assert!(
+            html.contains(&format!("<a class=\"btn primary\" href=\"{escaped}\">")),
+            "{html}"
+        );
+        assert!(html.contains("Open chan-desktop"), "{html}");
+        assert!(html.contains("You can close this tab."), "{html}");
+        assert!(html.contains("<h1>Authorized</h1>"), "{html}");
+    }
+
+    #[test]
+    fn handoff_cancelled_variant_carries_error_url() {
+        let url = error_url(&params(), "user_cancelled");
+        let html = render_handoff_html(&Handoff::Cancelled, &url);
+        assert!(html.contains("error=user_cancelled"), "{html}");
+        assert!(html.contains("<h1>Request cancelled</h1>"), "{html}");
+        assert!(html.contains("No token was issued."), "{html}");
     }
 
     #[test]
@@ -720,6 +802,8 @@ mod tests {
         // Two action buttons.
         assert!(html.contains(r#"name="action" value="allow""#));
         assert!(html.contains(r#"name="action" value="deny""#));
+        // The shared shell renders the card + logo mark.
+        assert!(html.contains(r#"class="mark""#), "{html}");
         // No raw <script>, <img onerror=, or unescaped quote in user fields.
         assert!(!html.contains("<script>"));
         assert!(!html.contains("<img src=x"));

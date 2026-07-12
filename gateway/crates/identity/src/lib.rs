@@ -11,6 +11,7 @@ pub mod config;
 pub mod desktop_authorize;
 pub mod error;
 pub mod http;
+pub mod pages;
 pub mod profile_client;
 pub mod providers;
 pub mod static_files;
