@@ -4,6 +4,23 @@ All notable changes to this project will be documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v0.67.1] - 2026-07-12
+
+v0.67.1 fixes the chan-desktop gateway sign-in that Chrome's CSP blocked at the Authorize click, restyles the id.chan.app consent flow to match the site, and teaches bare `cs session self` to report who you are.
+
+### Added
+
+- **`cs session self` shows who you are.** Bare invocation (previously a usage error) reports your window, effective name, role, status, whether you hold the leader slot, and your gateway identity when one exists, rendered as a field table; `--json [--pretty]` emits the raw record. `--name` and `--reset` behave as before, and the wire shape is unchanged, so mixed client/server versions degrade cleanly.
+
+### Fixed
+
+- **Desktop OAuth sign-in completes in Chrome.** The consent page's `form-action` CSP blocked the redirect to `chan://auth/callback`, so clicking Authorize did nothing. The confirm POST now answers with a handoff page (auto-continue plus an "Open chan-desktop" fallback link, and a note that the tab can be closed) that carries the callback outside any form redirect chain; deny and blocked outcomes ride the same page. The fix is server-side: existing desktops work as soon as the gateway deploys.
+- **No spurious sign-in error after the handoff.** Re-clicking the handoff page's link after sign-in already completed used to banner "no sign-in in progress" over a successful sign-in; duplicate callbacks are now ignored.
+
+### Changed
+
+- **id.chan.app consent and handoff pages match the site.** Both server-rendered pages share the SPA's dark card look (chan mark, brand-orange primary action) instead of the previous unstyled light page.
+
 ## [v0.67.0] - 2026-07-11
 
 v0.67.0 brings live co-editing with named peer cursors to shared files, makes co-viewed windows converge live, gives every session participant a name, and narrates gateway devserver sign-in and connect failures in the launcher.
