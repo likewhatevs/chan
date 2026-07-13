@@ -3538,11 +3538,36 @@ fn reload_devserver_window_from_feed(
     let Some(conn) = state.devservers.get(&devserver_id) else {
         return Ok(false);
     };
-    let base_origin = devserver::conn_base_origin(&conn);
-    if serve::retarget_watched_remote_window(app, &base_origin, &record)? {
-        return Ok(true);
-    }
-    serve::open_watched_remote_window(app, &base_origin, &conn.name, &record)?;
+    // Resolving the navigation URL can be a network round trip (a gateway
+    // entry mint), so the reload is fire-and-forget: the command returns
+    // "handled" and the task navigates when the URL lands.
+    let app = app.clone();
+    let record = record.clone();
+    tauri::async_runtime::spawn(async move {
+        let url = match devserver::window_navigation_url(&conn, &record).await {
+            Ok(url) => url,
+            Err(e) => {
+                tracing::warn!(
+                    window = %record.window_id,
+                    error = %e,
+                    "reload: resolving devserver window URL failed",
+                );
+                return;
+            }
+        };
+        let result = match serve::retarget_watched_remote_window(&app, &url, &record) {
+            Ok(true) => Ok(()),
+            Ok(false) => serve::open_watched_remote_window(&app, &url, &conn.name, &record),
+            Err(e) => Err(e),
+        };
+        if let Err(e) = result {
+            tracing::warn!(
+                window = %record.window_id,
+                error = %e,
+                "reload: navigating devserver window failed",
+            );
+        }
+    });
     Ok(true)
 }
 

@@ -334,16 +334,11 @@ pub(crate) fn open_watched_local_window(
 /// library owns persistence (the layout blob is keyed by `window_id`).
 pub(crate) fn open_watched_remote_window(
     app: &AppHandle,
-    base_origin: &str,
+    url: &str,
     devserver_name: &str,
     record: &WindowRecord,
 ) -> Result<(), String> {
     let label = crate::window_watcher::native_label(record);
-    let url = crate::devserver::assemble_tenant_url_from_base(
-        base_origin,
-        &record.prefix,
-        &record.token,
-    )?;
     let title = devserver_window_title(devserver_name, record);
     let kind = match record.kind {
         WindowKind::Terminal => Some("terminal"),
@@ -357,11 +352,11 @@ pub(crate) fn open_watched_remote_window(
             library_id: &record.library_id,
             title: &title,
             ordinal: Some(record.ordinal),
-            url: &url,
+            url,
             url_hash_seed: "",
             config_key: String::new(),
             zoom_seed: 1.0,
-            connecting: Some(url.as_str()),
+            connecting: Some(url),
             kind,
         },
     )
@@ -373,18 +368,13 @@ pub(crate) fn open_watched_remote_window(
 /// the webview and rebuilding it under the same label.
 pub(crate) fn retarget_watched_remote_window(
     app: &AppHandle,
-    base_origin: &str,
+    url: &str,
     record: &WindowRecord,
 ) -> Result<bool, String> {
     let label = crate::window_watcher::native_label(record);
     let Some(window) = app.get_webview_window(&label) else {
         return Ok(false);
     };
-    let url = crate::devserver::assemble_tenant_url_from_base(
-        base_origin,
-        &record.prefix,
-        &record.token,
-    )?;
     let kind = match record.kind {
         WindowKind::Terminal => Some("terminal"),
         WindowKind::Workspace => None,
@@ -394,7 +384,7 @@ pub(crate) fn retarget_watched_remote_window(
         &label,
         &record.window_id,
         &record.library_id,
-        &url,
+        url,
         "",
         kind,
     )?;
@@ -2360,6 +2350,11 @@ mod tests {
             "retarget must not destroy the reconnecting webview",
         );
 
+        // The refresh path routes through the async navigator, which
+        // retargets in place; a vanished webview mid-gap means a close raced
+        // the retarget, so that arm BAILS (rebuilding would resurrect a
+        // window the user just closed) and leaves reopening to the nudged
+        // reconcile.
         let refresh = WIRING_RS
             .split("fn refresh(&self, record")
             .nth(1)
@@ -2367,8 +2362,51 @@ mod tests {
             .split("fn close(&self, label")
             .next()
             .expect("refresh section ends before close");
-        assert!(refresh.contains("opener.retarget"));
-        assert!(refresh.contains("Ok(false) => self.open(record)"));
+        assert!(refresh.contains("navigate_remote(record, true)"));
+        let navigator = WIRING_RS
+            .split("fn navigate_remote(&self, record")
+            .nth(1)
+            .expect("navigate_remote exists")
+            .split("impl NativeSurface")
+            .next()
+            .expect("navigate_remote section ends before the surface impl");
+        assert!(navigator.contains("retarget_watched_remote_window"));
+        // Dispatch-time remember: reconciles during the mint gap see the
+        // intended key and do not spawn duplicate navigate tasks.
+        let pre_spawn = navigator
+            .split("async_runtime::spawn")
+            .next()
+            .expect("navigator has a pre-spawn section");
+        assert!(pre_spawn.contains("RemoteLaunchKey::from_record"));
+        // Open-path cancellation: a close() during the mint removes the
+        // in-flight marker and the task must bail instead of building.
+        assert!(navigator.contains("if !in_flight.lock().unwrap().contains(&label)"));
+        // Vanished-retarget arm bails without a rebuild.
+        let vanished = navigator
+            .split("Ok(false) => {")
+            .nth(1)
+            .expect("vanished-retarget arm exists")
+            .split("Ok(true)")
+            .next()
+            .expect("vanished arm ends before Ok(true)");
+        assert!(vanished.contains("return;"));
+        assert!(
+            !vanished.contains("open_watched_remote_window"),
+            "a vanished retarget must not rebuild (resurrects closed windows)",
+        );
+
+        // The Cmd+R / tab-Reload path resolves its navigation URL the same
+        // way (a fresh gateway mint), never a bare origin.
+        const MAIN_RS: &str = include_str!("main.rs");
+        let reload = MAIN_RS
+            .split("fn reload_devserver_window_from_feed")
+            .nth(1)
+            .expect("reload_devserver_window_from_feed exists")
+            .split("fn open_devtools")
+            .next()
+            .expect("reload section ends before open_devtools");
+        assert!(reload.contains("window_navigation_url"));
+        assert!(!reload.contains("conn_base_origin"));
     }
 
     #[test]

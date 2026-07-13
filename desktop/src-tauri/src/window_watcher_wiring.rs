@@ -64,40 +64,31 @@ enum WindowOpener {
         addr: SocketAddr,
     },
     Remote {
-        base_origin: String,
-        /// Devserver display name for the window title (see `DevserverConn.name`).
-        devserver_name: String,
+        /// The devserver this watcher serves; navigation URLs resolve through
+        /// it at open/retarget time (`devserver::window_navigation_url`).
+        conn: crate::devserver::DevserverConn,
     },
 }
 
 impl WindowOpener {
-    fn open(&self, app: &AppHandle, record: &WindowRecord) -> Result<(), String> {
-        match self {
-            WindowOpener::Local { addr } => serve::open_watched_local_window(app, *addr, record),
-            WindowOpener::Remote {
-                base_origin,
-                devserver_name,
-            } => serve::open_watched_remote_window(app, base_origin, devserver_name, record),
-        }
-    }
-
     fn is_remote(&self) -> bool {
         matches!(self, WindowOpener::Remote { .. })
     }
 
-    fn retarget(&self, app: &AppHandle, record: &WindowRecord) -> Result<bool, String> {
-        match self {
-            WindowOpener::Local { .. } => Ok(false),
-            WindowOpener::Remote { base_origin, .. } => {
-                serve::retarget_watched_remote_window(app, base_origin, record)
-            }
-        }
+    fn is_gateway(&self) -> bool {
+        matches!(self, WindowOpener::Remote { conn } if conn.gateway.is_some())
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct RemoteLaunchKey {
     prefix: String,
+    /// Raw-tunnel devservers only: their per-tenant token is stable, and a
+    /// rotation (devserver restart) invalidates the loaded page, so it forces
+    /// a retarget. Gateway windows blank this field -- their `?t=` is a
+    /// single-use 30s entry credential minted fresh per navigation, and the
+    /// page's standing auth is the devserver-gate cookie, so a re-mint must
+    /// NOT retarget (that churn was a per-feed-push reload loop).
     token: String,
     kind: chan_server::WindowKind,
     workspace_path: Option<String>,
@@ -105,10 +96,14 @@ struct RemoteLaunchKey {
 }
 
 impl RemoteLaunchKey {
-    fn from_record(record: &WindowRecord) -> Self {
+    fn from_record(record: &WindowRecord, gateway: bool) -> Self {
         Self {
             prefix: record.prefix.clone(),
-            token: record.token.clone(),
+            token: if gateway {
+                String::new()
+            } else {
+                record.token.clone()
+            },
             kind: record.kind,
             workspace_path: record.workspace_path.clone(),
             ordinal: record.ordinal,
@@ -162,16 +157,108 @@ struct TauriNativeSurface {
     /// tenant token in the URL, so an existing webview may need an in-place
     /// rebuild even though it is already "open" to the reconciler.
     remote_launches: Arc<Mutex<HashMap<String, RemoteLaunchKey>>>,
+    /// The watch loop's change signal (remote watchers only): settled
+    /// navigation tasks nudge it so a follow-up reconcile validates their
+    /// outcome, and failed ones nudge it after a delay as a bounded retry
+    /// driver. `None` for the local watcher, whose opens have no async gap.
+    nudge: Option<Arc<Notify>>,
 }
 
 impl TauriNativeSurface {
-    fn remember_remote_launch(&self, label: &str, record: &WindowRecord) {
-        if self.opener.is_remote() {
-            self.remote_launches
-                .lock()
-                .unwrap()
-                .insert(label.to_string(), RemoteLaunchKey::from_record(record));
-        }
+    /// Open or retarget a remote window: resolve the navigation URL (a fresh
+    /// gateway entry mint, or the raw tenant URL) off the reconcile path, then
+    /// build/navigate.
+    ///
+    /// Bookkeeping is settled around the async gap so racing reconciles stay
+    /// coherent: the launch key is remembered at DISPATCH time (a reconcile
+    /// during the mint sees the intended key and does not spawn a duplicate
+    /// task) and rolled back on failure; the open path's in-flight marker
+    /// doubles as a cancellation token (a `close()` during the mint removes
+    /// it, and the task re-checks it before building, so a closed or
+    /// disconnected window is never resurrected by a late build); a retarget
+    /// whose webview vanished mid-gap BAILS instead of rebuilding (the close
+    /// was deliberate -- reconcile owns reopening). Every settled task nudges
+    /// the watch loop: immediately on success (one cheap idempotent reconcile
+    /// validates the outcome against the current snapshot) and after a delay
+    /// on failure (a bounded retry driver for transient mint failures, since
+    /// the feed only pushes on real changes).
+    fn navigate_remote(&self, record: &WindowRecord, retarget: bool) {
+        const RETRY_NUDGE: Duration = Duration::from_secs(15);
+        let WindowOpener::Remote { conn } = &self.opener else {
+            return;
+        };
+        let app = self.app.clone();
+        let conn = conn.clone();
+        let record = record.clone();
+        let gateway = self.opener.is_gateway();
+        let in_flight = Arc::clone(&self.in_flight);
+        let remote_launches = Arc::clone(&self.remote_launches);
+        let nudge = self.nudge.clone();
+        let label = native_label(&record);
+        // Dispatch-time remember: refreshes during the gap compare equal and
+        // skip; rolled back on failure so a retry pass can fire again.
+        remote_launches.lock().unwrap().insert(
+            label.clone(),
+            RemoteLaunchKey::from_record(&record, gateway),
+        );
+        tauri::async_runtime::spawn(async move {
+            let fail = |e: String| {
+                remote_launches.lock().unwrap().remove(&label);
+                if !retarget {
+                    // Only the open path owns an in-flight marker; a failed
+                    // retarget must not strip a concurrent open's marker.
+                    in_flight.lock().unwrap().remove(&label);
+                }
+                tracing::warn!(
+                    window = %record.window_id,
+                    error = %e,
+                    "window watcher: opening a window failed",
+                );
+                if let Some(nudge) = nudge.clone() {
+                    tauri::async_runtime::spawn(async move {
+                        tokio::time::sleep(RETRY_NUDGE).await;
+                        nudge.notify_one();
+                    });
+                }
+            };
+            let url = match crate::devserver::window_navigation_url(&conn, &record).await {
+                Ok(url) => url,
+                Err(e) => return fail(e),
+            };
+            let result = if retarget {
+                match serve::retarget_watched_remote_window(&app, &url, &record) {
+                    // The webview vanished mid-gap: a close raced this
+                    // retarget. Do NOT rebuild here -- if the record still
+                    // wants a window, the nudged reconcile below reopens it.
+                    Ok(false) => {
+                        remote_launches.lock().unwrap().remove(&label);
+                        if let Some(nudge) = &nudge {
+                            nudge.notify_one();
+                        }
+                        return;
+                    }
+                    Ok(true) => Ok(()),
+                    Err(e) => Err(e),
+                }
+            } else {
+                // Cancellation check: a close()/disconnect during the mint
+                // removed the marker; building now would resurrect a window
+                // the user just closed.
+                if !in_flight.lock().unwrap().contains(&label) {
+                    remote_launches.lock().unwrap().remove(&label);
+                    return;
+                }
+                serve::open_watched_remote_window(&app, &url, &conn.name, &record)
+            };
+            match result {
+                Ok(()) => {
+                    if let Some(nudge) = &nudge {
+                        nudge.notify_one();
+                    }
+                }
+                Err(e) => fail(e),
+            }
+        });
     }
 }
 
@@ -198,17 +285,23 @@ impl NativeSurface for TauriNativeSurface {
         // reconcile that runs before the build lands won't re-open it.
         let label = native_label(record);
         self.in_flight.lock().unwrap().insert(label.clone());
-        // The opener dispatches the actual build to the Tauri main thread
-        // internally (local or remote builder), so this returns promptly.
-        if let Err(e) = self.opener.open(&self.app, record) {
-            self.in_flight.lock().unwrap().remove(&label);
-            tracing::warn!(
-                window = %record.window_id,
-                error = %e,
-                "window watcher: opening a window failed",
-            );
-        } else {
-            self.remember_remote_launch(&label, record);
+        match &self.opener {
+            // The local builder dispatches to the Tauri main thread
+            // internally, so this returns promptly.
+            WindowOpener::Local { addr } => {
+                if let Err(e) = serve::open_watched_local_window(&self.app, *addr, record) {
+                    self.in_flight.lock().unwrap().remove(&label);
+                    tracing::warn!(
+                        window = %record.window_id,
+                        error = %e,
+                        "window watcher: opening a window failed",
+                    );
+                }
+            }
+            // Remote builds resolve their navigation URL asynchronously
+            // first (a gateway mint is an HTTP round trip); the in-flight
+            // marker covers the whole gap.
+            WindowOpener::Remote { .. } => self.navigate_remote(record, false),
         }
     }
 
@@ -217,21 +310,10 @@ impl NativeSurface for TauriNativeSurface {
             return;
         }
         let label = native_label(record);
-        let next = RemoteLaunchKey::from_record(record);
+        let next = RemoteLaunchKey::from_record(record, self.opener.is_gateway());
         let current = self.remote_launches.lock().unwrap().get(&label).cloned();
         if current.as_ref() != Some(&next) {
-            match self.opener.retarget(&self.app, record) {
-                Ok(true) => self.remember_remote_launch(&label, record),
-                Ok(false) => self.open(record),
-                Err(e) => {
-                    tracing::warn!(
-                        window = %record.window_id,
-                        error = %e,
-                        "window watcher: retargeting a devserver window failed; rebuilding",
-                    );
-                    self.open(record);
-                }
-            }
+            self.navigate_remote(record, true);
         }
     }
 
@@ -272,6 +354,7 @@ pub(crate) fn spawn_local_window_watcher(app: AppHandle, state: Arc<AppState>) {
         opener: WindowOpener::Local { addr },
         in_flight: Arc::new(Mutex::new(HashSet::new())),
         remote_launches: Arc::new(Mutex::new(HashMap::new())),
+        nudge: None,
     };
     let view = Arc::new(WatcherViewState::default());
     // Share the view state so the desktop close handlers can bury/unbury
@@ -450,12 +533,12 @@ async fn stream_window_feed(
     while let Some(message) = ws.next().await {
         if let Message::Text(text) = message.map_err(|e| format!("watch stream: {e}"))? {
             if let Ok(set) = serde_json::from_str::<WindowSet>(&text) {
-                let mut windows = set.windows;
-                // `?` on the ALL-mints-failed case only (identity/transport
-                // outage): abort before the snapshot commit below so open
-                // webviews keep their last-good tokens and the reconnect loop
-                // retries. Per-row failures were already absorbed inside.
-                crate::devserver::rewrite_gateway_window_tokens(conn, &mut windows).await?;
+                // Rows keep their devserver-local tokens: `should_show` reads
+                // token emptiness as the tenant on/off signal, and gateway
+                // navigation credentials are minted at open/retarget time
+                // (`devserver::window_navigation_url`), never stamped into
+                // the feed.
+                let windows = set.windows;
                 // Refresh this library's active-transfer cache so the desktop
                 // close guard can see a remote window's in-flight transfer (the
                 // desktop sees no remote `/ws`; the feed bit is its only signal).
@@ -610,15 +693,13 @@ pub(crate) async fn spawn_devserver_window_watcher(
     let snapshot_handle = Arc::clone(&snapshot);
     let change = Arc::new(Notify::new());
     let (cancel_tx, cancel_rx) = watch::channel(DevserverWatcherStop::Running);
-    let base_origin = crate::devserver::conn_base_origin(&conn);
-    let devserver_name = conn.name.clone();
     // Shared state so the feed task can refresh the active-transfer cache the
     // close guard reads for this devserver's windows.
     let state = Arc::clone(app.state::<Arc<AppState>>().inner());
-    // The WS feed task owns `conn`, pushes changes into `snapshot` + wakes
-    // `change`, and stops when `cancel` flips true.
+    // The WS feed task owns a `conn` clone, pushes changes into `snapshot` +
+    // wakes `change`, and stops when `cancel` flips true.
     tauri::async_runtime::spawn(run_devserver_window_feed(
-        conn,
+        conn.clone(),
         Arc::clone(&snapshot),
         Arc::clone(&change),
         state,
@@ -626,12 +707,10 @@ pub(crate) async fn spawn_devserver_window_watcher(
     ));
     let surface = TauriNativeSurface {
         app,
-        opener: WindowOpener::Remote {
-            base_origin,
-            devserver_name,
-        },
+        opener: WindowOpener::Remote { conn },
         in_flight: Arc::new(Mutex::new(HashSet::new())),
         remote_launches: Arc::new(Mutex::new(HashMap::new())),
+        nudge: Some(Arc::clone(&change)),
     };
     let feed = DevserverWindowFeed { snapshot, change };
     let view = Arc::new(WatcherViewState::default());
@@ -687,10 +766,12 @@ mod tests {
         b.control = true;
         b.hidden = true;
 
-        assert_eq!(
-            RemoteLaunchKey::from_record(&a),
-            RemoteLaunchKey::from_record(&b)
-        );
+        for gateway in [false, true] {
+            assert_eq!(
+                RemoteLaunchKey::from_record(&a, gateway),
+                RemoteLaunchKey::from_record(&b, gateway)
+            );
+        }
     }
 
     #[test]
@@ -699,24 +780,49 @@ mod tests {
 
         let mut token = base.clone();
         token.token = "tok-2".into();
+        // A raw devserver's token is the stable tenant bearer: rotation means
+        // the loaded page's auth died, so it must retarget.
         assert_ne!(
-            RemoteLaunchKey::from_record(&base),
-            RemoteLaunchKey::from_record(&token)
+            RemoteLaunchKey::from_record(&base, false),
+            RemoteLaunchKey::from_record(&token, false)
         );
 
         let mut prefix = base.clone();
         prefix.prefix = "/other".into();
         assert_ne!(
-            RemoteLaunchKey::from_record(&base),
-            RemoteLaunchKey::from_record(&prefix)
+            RemoteLaunchKey::from_record(&base, false),
+            RemoteLaunchKey::from_record(&prefix, false)
         );
 
         let mut workspace = base.clone();
         workspace.kind = chan_server::WindowKind::Workspace;
         workspace.workspace_path = Some("/repo".into());
         assert_ne!(
-            RemoteLaunchKey::from_record(&base),
-            RemoteLaunchKey::from_record(&workspace)
+            RemoteLaunchKey::from_record(&base, false),
+            RemoteLaunchKey::from_record(&workspace, false)
+        );
+    }
+
+    #[test]
+    fn remote_launch_key_ignores_token_churn_for_gateway_windows() {
+        // A gateway window's `?t=` is a single-use 30s entry credential
+        // minted fresh per navigation; the page's standing auth is the
+        // devserver-gate cookie. A re-mint therefore must NOT change the
+        // launch key -- keying on it made every feed push retarget every
+        // open window into a reload loop.
+        let base = rec();
+        let mut token = base.clone();
+        token.token = "tok-2".into();
+        assert_eq!(
+            RemoteLaunchKey::from_record(&base, true),
+            RemoteLaunchKey::from_record(&token, true)
+        );
+        // Real shape changes still retarget.
+        let mut prefix = base.clone();
+        prefix.prefix = "/other".into();
+        assert_ne!(
+            RemoteLaunchKey::from_record(&base, true),
+            RemoteLaunchKey::from_record(&prefix, true)
         );
     }
 }

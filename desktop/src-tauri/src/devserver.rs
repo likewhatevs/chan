@@ -785,14 +785,6 @@ pub async fn gateway_entry_url(conn: &DevserverConn, path: &str) -> Result<Strin
         .map_err(String::from)
 }
 
-fn gateway_entry_token(entry_url: &str) -> Result<Option<String>, String> {
-    let parsed =
-        url::Url::parse(entry_url).map_err(|e| format!("bad gateway window entry URL: {e}"))?;
-    Ok(parsed
-        .query_pairs()
-        .find_map(|(k, v)| (k == "t").then(|| v.into_owned())))
-}
-
 /// Entry path for a tenant window: the prefix is normalized to exactly one
 /// leading slash. `WindowRecord.prefix` carries an absolute route path
 /// (`/api/notes-1a2b3c`), and identity's entry-path validator rejects a
@@ -801,76 +793,22 @@ fn window_entry_path(prefix: &str) -> String {
     format!("/{}/index.html", prefix.trim_start_matches('/'))
 }
 
-/// Swap each window's devserver-local token for a gateway entry token, so the
-/// webview URL passes the proxy's gate.
-///
-/// A row whose entry mint fails gets its token CLEARED and is skipped -- an
-/// empty token makes the watcher's `should_show` hold back exactly that
-/// window (a devserver-local token would open a webview the proxy rejects),
-/// while the rest of the feed stays live. But when EVERY mint in the pass
-/// fails, that is an identity/transport outage, not a poisoned row: return
-/// `Err` so the feed caller aborts WITHOUT committing the token-less snapshot
-/// (open webviews keep riding their last-good tokens) and its reconnect loop
-/// keeps retrying until the mint recovers.
-pub async fn rewrite_gateway_window_tokens(
+/// The URL a devserver window's webview navigates to, resolved AT NAVIGATION
+/// TIME. Raw-tunnel devservers assemble the tenant URL from the row's stable
+/// per-tenant token. Gateway devservers mint a fresh 30-second entry URL for
+/// this navigation: entry tokens are single-use credentials, so they are never
+/// stamped into the window feed's rows (a fresh mint per feed push would make
+/// every push retarget every open window into a reload loop -- the page's
+/// standing auth is the devserver-gate cookie, not the `?t=` it arrived with).
+pub async fn window_navigation_url(
     conn: &DevserverConn,
-    rows: &mut [chan_server::WindowRecord],
-) -> Result<(), String> {
-    if conn.gateway.is_none() {
-        return Ok(());
+    record: &chan_server::WindowRecord,
+) -> Result<String, String> {
+    if conn.gateway.is_some() {
+        gateway_entry_url(conn, &window_entry_path(&record.prefix)).await
+    } else {
+        assemble_tenant_url_from_base(&conn_base_origin(conn), &record.prefix, &record.token)
     }
-    let mut attempted = 0usize;
-    let mut minted = 0usize;
-    let mut last_error = String::new();
-    for row in rows.iter_mut() {
-        if row.prefix.is_empty() {
-            continue;
-        }
-        attempted += 1;
-        match gateway_entry_url(conn, &window_entry_path(&row.prefix)).await {
-            Ok(entry_url) => match gateway_entry_token(&entry_url) {
-                Ok(Some(token)) => {
-                    row.token = token;
-                    minted += 1;
-                }
-                Ok(None) => {
-                    tracing::warn!(
-                        host = %conn.host,
-                        prefix = %row.prefix,
-                        "gateway entry URL carried no token; hiding the window",
-                    );
-                    row.token = String::new();
-                    last_error = "gateway entry URL carried no token".to_string();
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        host = %conn.host,
-                        prefix = %row.prefix,
-                        error = %e,
-                        "parsing gateway entry URL failed; hiding the window",
-                    );
-                    row.token = String::new();
-                    last_error = e;
-                }
-            },
-            Err(e) => {
-                tracing::warn!(
-                    host = %conn.host,
-                    prefix = %row.prefix,
-                    error = %e,
-                    "minting gateway entry for a window failed; hiding the window",
-                );
-                row.token = String::new();
-                last_error = e;
-            }
-        }
-    }
-    if attempted > 0 && minted == 0 {
-        return Err(format!(
-            "no gateway entry minted for any of {attempted} windows (last error: {last_error})"
-        ));
-    }
-    Ok(())
 }
 
 /// Assemble the tenant URL the desktop opens for a devserver tenant:
@@ -1196,11 +1134,10 @@ pub async fn fetch_library_windows(
                 resp.status()
             ));
         }
-        let mut rows = resp
+        let rows = resp
             .json::<Vec<chan_server::WindowRecord>>()
             .await
             .map_err(|e| format!("decoding gateway library windows: {e}"))?;
-        rewrite_gateway_window_tokens(conn, &mut rows).await?;
         return Ok(rows);
     }
     let url = format!("{}/api/library/windows", base_origin(&conn.host, conn.port));
@@ -1949,59 +1886,64 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn rewrite_errors_when_every_mint_fails() {
-        // The entry endpoint is unreachable (port 9): every mint fails. That
-        // is an identity/transport outage, so the rewrite must return Err so
-        // the feed caller aborts WITHOUT committing a token-less snapshot
-        // (open webviews keep their last-good tokens) and retries.
-        let conn = gateway_test_conn("http://127.0.0.1:9/desktop/v1/devserver/entry".into());
-        let mut rows = vec![
-            window_row("w-1", "/api/notes-1a2b3c", "tok_local_1"),
-            window_row("w-2", "term-2", "tok_local_2"),
-            window_row("w-3", "", "tok_keep"),
-        ];
-        let result = rewrite_gateway_window_tokens(&conn, &mut rows).await;
-        assert!(result.is_err(), "total mint failure must surface as Err");
-        assert_eq!(rows[2].token, "tok_keep", "empty prefix rows are skipped");
-    }
-
-    #[tokio::test]
-    async fn rewrite_skips_a_failed_row_when_others_mint() {
-        // One-shot mock entry endpoint: first mint succeeds, second gets a
-        // 400. A partial failure must NOT kill the pass (that would take the
-        // whole feed down with it): the good row carries the gateway token,
-        // the bad row's devserver-local token is cleared so `should_show`
-        // holds exactly that window back.
+    async fn navigation_url_mints_a_fresh_entry_for_a_gateway_window() {
+        // One-shot mock entry endpoint: the gateway path resolves the
+        // navigation target by minting an entry URL at navigation time (the
+        // feed rows keep their devserver-local tokens untouched).
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         tokio::spawn(async move {
-            let body = r#"{"proxy_origin":"https://alice.devserver.chan.app","entry_url":"https://alice.devserver.chan.app/notes-1a2b3c/index.html?t=tok_gw_1"}"#;
-            let responses = [
-                format!(
-                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
-                    body.len()
-                ),
-                "HTTP/1.1 400 Bad Request\r\ncontent-length: 0\r\nconnection: close\r\n\r\n"
-                    .to_string(),
-            ];
-            for response in responses {
-                let (mut sock, _) = listener.accept().await.unwrap();
-                let mut buf = [0u8; 4096];
-                let _ = sock.read(&mut buf).await;
-                let _ = sock.write_all(response.as_bytes()).await;
-            }
+            let body = r#"{"proxy_origin":"https://alice.devserver.chan.app","entry_url":"https://alice.devserver.chan.app/notes-1a2b3c/index.html?t=tok_entry_1"}"#;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut buf = [0u8; 4096];
+            let _ = sock.read(&mut buf).await;
+            let _ = sock.write_all(response.as_bytes()).await;
         });
         let conn = gateway_test_conn(format!("http://{addr}/desktop/v1/devserver/entry"));
-        let mut rows = vec![
-            window_row("w-1", "/notes-1a2b3c", "tok_local_1"),
-            window_row("w-2", "term-2", "tok_local_2"),
-        ];
-        rewrite_gateway_window_tokens(&conn, &mut rows)
+        let record = window_row("w-1", "/notes-1a2b3c", "tok_local_1");
+        let url = window_navigation_url(&conn, &record)
             .await
-            .expect("a partial failure keeps the pass alive");
-        assert_eq!(rows[0].token, "tok_gw_1", "minted token replaces local");
-        assert_eq!(rows[1].token, "", "failed mint clears the token");
+            .expect("gateway navigation URL mints");
+        assert_eq!(
+            url,
+            "https://alice.devserver.chan.app/notes-1a2b3c/index.html?t=tok_entry_1"
+        );
+        assert_eq!(record.token, "tok_local_1", "the row's token is untouched");
+    }
+
+    #[tokio::test]
+    async fn navigation_url_mint_failure_surfaces_as_err() {
+        // Unreachable entry endpoint (port 9): the open/retarget caller gets
+        // an Err to warn on and retry later; nothing else is affected.
+        let conn = gateway_test_conn("http://127.0.0.1:9/desktop/v1/devserver/entry".into());
+        let record = window_row("w-1", "/notes-1a2b3c", "tok_local_1");
+        assert!(window_navigation_url(&conn, &record).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn navigation_url_uses_the_stable_token_for_raw_devservers() {
+        // No gateway: the URL is assembled from the row's own tenant token,
+        // no network involved.
+        let conn = DevserverConn {
+            host: "box.example.net".into(),
+            port: 8787,
+            token: String::new(),
+            name: "box".into(),
+            gateway: None,
+        };
+        let record = window_row("w-1", "/notes-1a2b3c", "tok_tenant");
+        let url = window_navigation_url(&conn, &record)
+            .await
+            .expect("raw navigation URL assembles");
+        assert_eq!(
+            url,
+            "http://box.example.net:8787/notes-1a2b3c/index.html?t=tok_tenant"
+        );
     }
 
     #[test]

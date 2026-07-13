@@ -398,8 +398,12 @@
     // Fire-and-forget load of the per-workspace screensaver state.
     // Populates the singleton with the server-side enabled/timeout/
     // pin_set view. Failure is non-fatal (the singleton stays in its
-    // default disarmed state).
-    void loadScreensaverState();
+    // default disarmed state). Terminal-only windows skip it: the slim
+    // terminal tenant has no workspace to hold screensaver config and
+    // mounts no /api/screensaver routes, so the tracker stays disarmed.
+    if (!ui.terminalOnly) {
+      void loadScreensaverState();
+    }
     // Visibility-change resume hook. Browsers throttle / suspend
     // backgrounded tabs and the WebSocket reconnect can stretch
     // to seconds before the user returns; a manual nudge here
@@ -1470,7 +1474,12 @@
      SPA shell without the launch token, so /api 401s and the app
      is unusable until they reopen the original URL. -->
 <MissingTokenOverlay />
-<PreflightOverlay />
+<!-- Preflight is workspace onboarding (index, model, cs link); terminal-only
+     windows are served by the slim terminal tenant, which has no workspace
+     and mounts no /api/preflight route. -->
+{#if !ui.terminalOnly}
+  <PreflightOverlay />
+{/if}
 <!-- Survey overlay, WINDOW-WIDE FALLBACK: renders a survey raised by
      `cs terminal survey` with no resolvable target terminal (a --tab-group
      broadcast, an unmatched --tab-name, or a frame without
