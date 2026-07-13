@@ -4,6 +4,15 @@ All notable changes to this project will be documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v0.67.3] - 2026-07-13
+
+v0.67.3 stops gateway devserver windows from reload-looping so their shells finally attach, and quiets two boot-time 404s on terminal windows.
+
+### Fixed
+
+- **Gateway devserver windows hold steady and shells attach.** Every window-feed push re-minted the short-lived gateway entry credential into the window's launch identity, so each push renavigated every open devserver window: the page reloaded, the reload changed window state, the change pushed the feed, and the loop sustained itself before a terminal could attach. Navigation credentials are now minted only when a window actually opens, retargets, or reloads, and a re-mint no longer counts as a change. The open path also closes several lifecycle races: a window closed or disconnected during a slow mint stays closed, transient mint failures retry on a bounded cadence, and Cmd+R on a devserver window resolves a fresh entry URL instead of landing on the bare origin.
+- **Terminal windows no longer log two 404s at boot.** Terminal-only windows skip the workspace-onboarding preflight poll and the screensaver-state load; the slim terminal tenant has no workspace and never served either endpoint.
+
 ## [v0.67.2] - 2026-07-12
 
 v0.67.2 makes gateway devserver windows actually open in chan-desktop and keeps the devserver window feed alive through per-window failures.

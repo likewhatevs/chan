@@ -1,6 +1,6 @@
 {
   "name": "@chan/profile",
-  "version": "0.67.2",
+  "version": "0.67.3",
   "private": true,
   "type": "module",
   "scripts": {
