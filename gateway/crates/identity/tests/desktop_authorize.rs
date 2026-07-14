@@ -8,8 +8,10 @@
 //!   * OAuth completion → `/desktop/authorize/consent`
 //!   * consent page render (CSRF nonce, security headers)
 //!   * allow / deny POST → 200 handoff page embedding
-//!     `chan://auth/callback#...` (meta refresh + fallback link)
-//!   * audit row records `created_via_desktop`
+//!     `chan://auth/callback#code=...` (meta refresh + fallback link);
+//!     neither the fragment nor the page ever carries the PAT secret
+//!   * redeem: one-time code → PAT once, replayed / unknown → 410
+//!   * audit rows record `created_via_desktop` + `desktop.redeem`
 
 #[path = "../../../tests-shared/pg_reaper.rs"]
 mod pg_reaper;
@@ -28,7 +30,7 @@ use uuid::Uuid;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-use identity::api_tokens::ApiTokenService;
+use identity::api_tokens::{ApiTokenService, RequestMeta};
 use identity::config::Config;
 use identity::http;
 use identity::profile_client::ProfileClient;
@@ -261,6 +263,16 @@ impl<'a> Client<'a> {
             uri,
             Some("application/x-www-form-urlencoded"),
             Body::from(encoded),
+        )
+        .await
+    }
+
+    async fn post_json(&mut self, uri: &str, body: &serde_json::Value) -> Sent {
+        self.send(
+            Method::POST,
+            uri,
+            Some("application/json"),
+            Body::from(body.to_string()),
         )
         .await
     }
@@ -537,7 +549,6 @@ async fn full_flow_mints_pat_with_desktop_audit_action() {
     let url = extract_handoff_url(resp.body_str());
     let frag = parse_chan_fragment(&url);
     assert!(url.starts_with("chan://auth/callback#"));
-    assert!(frag.get("secret").unwrap().starts_with("chan_pat_"));
     assert_eq!(
         frag.get("state").map(String::as_str),
         Some("desktop-nonce-1")
@@ -547,16 +558,77 @@ async fn full_flow_mints_pat_with_desktop_audit_action() {
         Some("chan-desktop @ host")
     );
 
-    // Audit row carries the desktop-specific action.
-    let token_id: Uuid = frag.get("id").unwrap().parse().expect("uuid id");
+    // The fragment carries a one-time code and NEVER the credential;
+    // the handoff page as a whole is grep-clean of the secret.
+    assert!(!frag.contains_key("secret"), "no secret key: {url}");
+    assert!(!frag.contains_key("id"), "no id key: {url}");
+    let code = frag.get("code").expect("code in fragment").clone();
+    assert!(!code.is_empty());
+    let html = resp.body_str();
+    assert!(!html.contains("chan_pat_"), "PAT leaked into the handoff");
+    assert!(!html.contains("secret="), "secret key in the handoff");
+
+    // Redeem the code: 200 exactly once, with the working PAT.
+    let resp = c
+        .post_json("/desktop/authorize/redeem", &json!({ "code": code }))
+        .await;
+    assert_eq!(resp.status, StatusCode::OK);
+    let redeemed: serde_json::Value = serde_json::from_slice(&resp.body).expect("redeem json");
+    let secret = redeemed["secret"].as_str().expect("secret string");
+    assert!(secret.starts_with("chan_pat_"), "{redeemed}");
+    assert_eq!(redeemed["label"], "chan-desktop @ host");
+    assert!(
+        redeemed["expires_at"].is_string(),
+        "expires_in was requested, so the key carries a timestamp: {redeemed}"
+    );
+    let token_id: Uuid = redeemed["id"].as_str().unwrap().parse().expect("uuid id");
+
+    // The redeemed PAT works through the normal validation path.
+    let validated = app
+        .api_tokens
+        .validate(secret, &RequestMeta::default())
+        .await
+        .expect("redeemed PAT validates");
+    assert_eq!(validated.user_id, uid);
+    assert_eq!(validated.token_id, token_id);
+
+    // A replay of the same code is 410 with an error body.
+    let resp = c
+        .post_json("/desktop/authorize/redeem", &json!({ "code": code }))
+        .await;
+    assert_eq!(resp.status, StatusCode::GONE);
+    let body: serde_json::Value = serde_json::from_slice(&resp.body).expect("error json");
+    assert!(body["error"].is_string(), "{body}");
+
+    // Audit trail: the desktop mint, the redemption, the validate.
     let entries = app
         .api_tokens
         .audit(uid, token_id, 10)
         .await
         .expect("audit");
-    let actions: Vec<_> = entries.iter().map(|e| e.action.as_str()).collect();
-    assert_eq!(actions, vec!["created_via_desktop"]);
+    let mut actions: Vec<_> = entries.iter().map(|e| e.action.as_str()).collect();
+    actions.sort_unstable();
+    assert_eq!(
+        actions,
+        vec!["created_via_desktop", "desktop.redeem", "used"]
+    );
 
+    app.cleanup().await;
+}
+
+#[tokio::test]
+async fn redeem_unknown_code_is_410() {
+    let app = TestApp::new().await;
+    let mut c = Client::new(&app);
+    let resp = c
+        .post_json(
+            "/desktop/authorize/redeem",
+            &json!({ "code": "no-such-code" }),
+        )
+        .await;
+    assert_eq!(resp.status, StatusCode::GONE);
+    let body: serde_json::Value = serde_json::from_slice(&resp.body).expect("error json");
+    assert!(body["error"].is_string(), "{body}");
     app.cleanup().await;
 }
 

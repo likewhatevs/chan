@@ -1,6 +1,6 @@
 //! OAuth-style PAT mint for chan-desktop.
 //!
-//! Three routes:
+//! Four routes:
 //!
 //!   * `GET  /desktop/authorize?<query>` -- entry point. Validates the
 //!     query, stashes a [`AuthorizeParams`] struct in the session, and
@@ -14,18 +14,23 @@
 //!   * `POST /desktop/authorize/confirm` -- handles the `Authorize` /
 //!     `Cancel` action. Consumes the pending params + CSRF; on
 //!     `allow` mints a PAT through [`ApiTokenService::create`] with
-//!     [`TokenOrigin::Desktop`]. Every outcome answers 200 with a
-//!     handoff page that navigates the browser to
-//!     `chan://auth/callback#id=&secret=&label=&expires_at=&state=`
+//!     [`TokenOrigin::Desktop`], stashes it in the
+//!     [`RedemptionStore`] under a one-time code, and answers 200
+//!     with a handoff page that navigates the browser to
+//!     `chan://auth/callback#code=&label=[&expires_at=]&state=`
 //!     (`deny` / blocked carry `#error=&state=` instead) via a
 //!     zero-delay meta refresh plus a manual "Open chan-desktop"
 //!     fallback link. A 3xx answering the form POST would put the
 //!     `chan://` hop inside the form submission's redirect chain,
 //!     which Chrome subjects to the page's `form-action` CSP; the
 //!     handoff page keeps the custom-scheme navigation out of any
-//!     form chain entirely. The PAT secret rides only in the URL
-//!     fragment (never a query string), so it cannot reach an access
-//!     log; the page itself is `no-store` / `no-referrer`.
+//!     form chain entirely. The PAT secret never appears in the
+//!     fragment or the page: only the redemption code does, and the
+//!     page itself is `no-store` / `no-referrer`.
+//!   * `POST /desktop/authorize/redeem` -- swaps a one-time code for
+//!     the minted PAT (`{"code": ...}` -> `{id, secret, label,
+//!     expires_at}`). Single-use with a [`REDEEM_TTL`] lifetime;
+//!     unknown, expired, and replayed codes all answer 410.
 //!
 //! Both HTML pages render in the shared [`crate::pages`] shell (SPA
 //! palette, inline CSS) under one strict CSP ([`crate::pages::CSP`]):
@@ -53,27 +58,35 @@
 //!     depth and proves the user passed through the rendered consent
 //!     page rather than POSTing directly.
 //!   * The audit row for the resulting PAT is `created_via_desktop`
-//!     (not `created`) so operators and users can tell the desktop
-//!     flow apart from SPA mints.
+//!     (not `created`), and each redemption writes a `desktop.redeem`
+//!     row, so operators and users can tell the desktop flow apart
+//!     from SPA mints and see when the code was cashed in.
+//!   * The redeem route has no session auth: possession of the code
+//!     is the credential (TLS assumed). The code is 256-bit random,
+//!     single-use, and dies after [`REDEEM_TTL`], so the handoff
+//!     page's DOM (which keeps the chan:// URL until the tab closes;
+//!     a custom-scheme navigation never unloads the document) holds
+//!     nothing durably sensitive.
 //!
 //! Known limitations:
 //!   * No per-session rate limit. A signed-in user spam-clicking
 //!     `Authorize` mints PATs into their own table; audit-visible and
 //!     bounded by the user's own account, so there is no server-side
 //!     limit -- the audit log is the watch surface.
-//!   * The handoff page keeps the chan:// URL (secret included) in its
-//!     DOM until the user closes the tab: a custom-scheme navigation
-//!     never unloads the document, and the script-free CSP rules out
-//!     self-blanking. `no-store` / `no-referrer` / `nosniff` plus the
-//!     fragment-only secret bound the exposure to the open tab itself
-//!     (visible to anyone at the machine or an extension with
-//!     content-script access there). Handing off a one-time redemption
-//!     code instead of the raw secret would remove this and is the
-//!     noted follow-up.
+//!   * The redemption store is in-process memory. A single identity
+//!     instance is an existing deployment assumption (the consent
+//!     flow already stashes pending state server-side in-process); a
+//!     multi-replica deployment would need a shared store, and a
+//!     restart during the redemption window just forces a re-auth.
+
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use axum::extract::{Form, Query, State};
 use axum::http::HeaderMap;
 use axum::response::{Html, IntoResponse, Redirect, Response};
+use axum::Json;
 use base64::Engine;
 use chrono::{DateTime, Utc};
 use rand::rngs::OsRng;
@@ -82,8 +95,9 @@ use serde::{Deserialize, Serialize};
 use subtle::ConstantTimeEq;
 use tower_sessions::Session;
 use url::form_urlencoded::byte_serialize;
+use uuid::Uuid;
 
-use crate::api_tokens::{ApiToken, CreatedToken, NewToken, TokenOrigin};
+use crate::api_tokens::{ApiToken, CreatedToken, NewToken, TokenOrigin, ACTION_DESKTOP_REDEEM};
 use crate::error::{Error, Result};
 use crate::http::{current_user_id, current_user_id_optional, request_meta, AppState};
 use crate::pages;
@@ -126,6 +140,90 @@ const DEFAULT_SCOPES: &[&str] = &["tunnel"];
 /// Path the consent page lives at. Exported so other modules (today
 /// `auth_callback`) can build a redirect without restating the literal.
 pub const CONSENT_PATH: &str = "/desktop/authorize/consent";
+
+/// Lifetime of a one-time redemption code: long enough for the OS to
+/// route the chan:// URL and the desktop to call back, short enough
+/// that a code lifted from an open handoff tab is stale before anyone
+/// could plausibly exfiltrate and replay it.
+const REDEEM_TTL: Duration = Duration::from_secs(120);
+
+/// What `/desktop/authorize/redeem` answers with, exactly once per
+/// code. Besides `POST /api/tokens`, this is the only response that
+/// ever carries a PAT secret.
+#[derive(Debug, Clone, Serialize)]
+pub struct RedeemPayload {
+    pub id: Uuid,
+    pub secret: String,
+    pub label: String,
+    /// Always present on the wire (`null` for a token that never
+    /// expires); the desktop contract reads the key unconditionally.
+    pub expires_at: Option<DateTime<Utc>>,
+}
+
+/// Devserver pick carried on the callback fragment as the optional
+/// `devserver_owner` / `devserver_id` / `devserver_label` keys.
+/// `None` renders a fragment without the keys (the user picked
+/// nothing or has no devservers); the desktop passes a present pick
+/// through to its connect flow.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DevserverSelection {
+    pub owner: String,
+    pub devserver_id: String,
+    pub label: String,
+}
+
+/// In-process single-use store for pending redemptions, shared via
+/// `AppState`. Expired entries are swept on every insert and lookup,
+/// so the map never outgrows the codes minted inside one TTL window.
+#[derive(Clone, Default)]
+pub struct RedemptionStore {
+    inner: Arc<Mutex<HashMap<String, StoredRedemption>>>,
+}
+
+#[derive(Debug)]
+struct StoredRedemption {
+    payload: RedeemPayload,
+    expires_at: Instant,
+}
+
+impl RedemptionStore {
+    /// Stash `payload` under a fresh 256-bit code and return the code.
+    pub fn insert(&self, payload: RedeemPayload) -> String {
+        self.insert_with_ttl(payload, REDEEM_TTL)
+    }
+
+    fn insert_with_ttl(&self, payload: RedeemPayload, ttl: Duration) -> String {
+        let code = generate_code();
+        let now = Instant::now();
+        let mut map = self.inner.lock().unwrap();
+        map.retain(|_, v| v.expires_at > now);
+        map.insert(
+            code.clone(),
+            StoredRedemption {
+                payload,
+                expires_at: now + ttl,
+            },
+        );
+        code
+    }
+
+    /// Single-use lookup: the first take wins; every later take, and
+    /// any take past the TTL, gets `None`.
+    fn take(&self, code: &str) -> Option<RedeemPayload> {
+        let now = Instant::now();
+        let mut map = self.inner.lock().unwrap();
+        map.retain(|_, v| v.expires_at > now);
+        map.remove(code).map(|s| s.payload)
+    }
+}
+
+/// 32 random bytes, base64url: same entropy class as the PAT secret
+/// the code stands in for.
+fn generate_code() -> String {
+    let mut bytes = [0u8; 32];
+    OsRng.fill_bytes(&mut bytes);
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
+}
 
 /// Query shape parsed from the request URL.
 #[derive(Debug, Deserialize)]
@@ -205,18 +303,29 @@ fn validate(q: AuthorizeQuery) -> Result<AuthorizeParams> {
     })
 }
 
-/// Build the success redirect target. Secret rides in the URL
-/// fragment so it does not appear in any access log along the
-/// redirect chain (browsers do not send the fragment to servers).
-pub fn success_url(params: &AuthorizeParams, token: &ApiToken, secret: &str) -> String {
+/// Build the success redirect target. The fragment carries the
+/// one-time redemption code -- never the PAT secret -- plus the token
+/// metadata the desktop shows while it redeems. Fragment (not query)
+/// keeps it out of any access log along the redirect chain (browsers
+/// do not send the fragment to servers).
+pub fn success_url(
+    params: &AuthorizeParams,
+    code: &str,
+    token: &ApiToken,
+    devserver: Option<&DevserverSelection>,
+) -> String {
     let mut frag = String::new();
-    push_pair(&mut frag, "id", &token.id.to_string());
-    push_pair(&mut frag, "secret", secret);
+    push_pair(&mut frag, "code", code);
     push_pair(&mut frag, "label", &token.label);
     if let Some(exp) = token.expires_at {
         push_pair(&mut frag, "expires_at", &exp.to_rfc3339());
     }
     push_pair(&mut frag, "state", &params.state);
+    if let Some(d) = devserver {
+        push_pair(&mut frag, "devserver_owner", &d.owner);
+        push_pair(&mut frag, "devserver_id", &d.devserver_id);
+        push_pair(&mut frag, "devserver_label", &d.label);
+    }
     format!("{}#{}", params.redirect_uri, frag)
 }
 
@@ -336,7 +445,8 @@ fn handoff_response(kind: &Handoff, target: &str) -> Response {
         .into_response()
 }
 
-/// Mint the PAT and return the chan:// success URL. Called by the
+/// Mint the PAT, stash it under a one-time redemption code, and
+/// return the chan:// success URL carrying the code. Called by the
 /// confirm POST when the user clicks Authorize.
 async fn complete(
     state: &AppState,
@@ -362,7 +472,40 @@ async fn complete(
             tracing::warn!(error = ?e, user = %user.username, "desktop authorize mint failed");
             e
         })?;
-    Ok(success_url(params, &token, &secret))
+    let code = state.desktop_redemptions.insert(RedeemPayload {
+        id: token.id,
+        secret,
+        label: token.label.clone(),
+        expires_at: token.expires_at,
+    });
+    Ok(success_url(params, &code, &token, None))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RedeemRequest {
+    code: String,
+}
+
+/// `POST /desktop/authorize/redeem` -- swap a one-time code for the
+/// minted PAT. No session auth: possession of the code is the
+/// credential (see the module doc's hardening notes). Unknown,
+/// expired, and replayed codes share one 410 so an off-path caller
+/// cannot probe code state.
+pub async fn redeem(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<RedeemRequest>,
+) -> Result<Json<RedeemPayload>> {
+    let Some(payload) = state.desktop_redemptions.take(&req.code) else {
+        return Err(Error::Gone(
+            "unknown, expired, or already-redeemed code".into(),
+        ));
+    };
+    state
+        .api_tokens
+        .write_audit(payload.id, ACTION_DESKTOP_REDEEM, &request_meta(&headers))
+        .await?;
+    Ok(Json(payload))
 }
 
 /// `GET /desktop/authorize` entry. Validates the query, stashes
@@ -697,21 +840,103 @@ mod tests {
             "chan-desktop @ box",
             Some(Utc.with_ymd_and_hms(2030, 1, 2, 3, 4, 5).unwrap()),
         );
-        let url = success_url(&params(), &token, "chan_pat_AAAA");
+        let url = success_url(&params(), "the-code", &token, None);
         assert!(url.starts_with("chan://auth/callback#"), "got {url}");
         assert!(!url.contains('?'));
+        assert!(url.contains("code=the-code"), "got {url}");
         assert!(url.contains("label=chan-desktop+%40+box"), "got {url}");
         assert!(url.contains("state=abc+xyz"), "got {url}");
         assert!(url.contains("expires_at=2030-01-02T03%3A04%3A05%2B00%3A00"));
-        assert!(url.contains("secret=chan_pat_AAAA"));
-        assert!(url.contains("id=00000000-0000-0000-0000-000000000000"));
+    }
+
+    #[test]
+    fn success_url_never_carries_credentials() {
+        // The one-time code REPLACES id + secret in the fragment; the
+        // secret only ever leaves through the redeem response.
+        let token = dummy_token(
+            Uuid::nil(),
+            "box",
+            Some(Utc.with_ymd_and_hms(2030, 1, 2, 3, 4, 5).unwrap()),
+        );
+        let url = success_url(&params(), "the-code", &token, None);
+        assert!(!url.contains("secret="), "got {url}");
+        assert!(!url.contains("chan_pat_"), "got {url}");
+        assert!(!url.contains("id="), "got {url}");
     }
 
     #[test]
     fn success_url_omits_expires_at_when_token_has_none() {
         let token = dummy_token(Uuid::nil(), "x", None);
-        let url = success_url(&params(), &token, "chan_pat_AAAA");
+        let url = success_url(&params(), "the-code", &token, None);
         assert!(!url.contains("expires_at="), "got {url}");
+    }
+
+    #[test]
+    fn success_url_devserver_keys_are_optional() {
+        let token = dummy_token(Uuid::nil(), "x", None);
+        let url = success_url(&params(), "the-code", &token, None);
+        assert!(!url.contains("devserver_"), "got {url}");
+
+        let pick = DevserverSelection {
+            owner: "alice".into(),
+            devserver_id: "ab".repeat(32),
+            label: "work box".into(),
+        };
+        let url = success_url(&params(), "the-code", &token, Some(&pick));
+        assert!(url.contains("devserver_owner=alice"), "got {url}");
+        assert!(
+            url.contains(&format!("devserver_id={}", "ab".repeat(32))),
+            "got {url}"
+        );
+        assert!(url.contains("devserver_label=work+box"), "got {url}");
+    }
+
+    #[test]
+    fn redemption_store_is_single_use() {
+        let store = RedemptionStore::default();
+        let code = store.insert(RedeemPayload {
+            id: Uuid::nil(),
+            secret: "chan_pat_AAAA".into(),
+            label: "box".into(),
+            expires_at: None,
+        });
+        let first = store.take(&code).expect("first take wins");
+        assert_eq!(first.secret, "chan_pat_AAAA");
+        assert!(store.take(&code).is_none(), "replay must miss");
+        assert!(store.take("no-such-code").is_none());
+    }
+
+    #[test]
+    fn redemption_store_expires_codes() {
+        let store = RedemptionStore::default();
+        let code = store.insert_with_ttl(
+            RedeemPayload {
+                id: Uuid::nil(),
+                secret: "chan_pat_AAAA".into(),
+                label: "box".into(),
+                expires_at: None,
+            },
+            Duration::ZERO,
+        );
+        assert!(store.take(&code).is_none(), "expired take must miss");
+        // The sweep also evicted the entry outright.
+        assert!(store.inner.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn redeem_payload_serializes_null_expires_at() {
+        // The desktop reads `expires_at` unconditionally: null, not
+        // absent, for a token without an expiry.
+        let j = serde_json::to_value(RedeemPayload {
+            id: Uuid::nil(),
+            secret: "chan_pat_AAAA".into(),
+            label: "box".into(),
+            expires_at: None,
+        })
+        .unwrap();
+        assert!(j.get("expires_at").is_some_and(|v| v.is_null()), "{j}");
+        assert_eq!(j["secret"], "chan_pat_AAAA");
+        assert_eq!(j["id"], "00000000-0000-0000-0000-000000000000");
     }
 
     #[test]
@@ -732,8 +957,13 @@ mod tests {
         p.label = r#"a"b<c>'d e"#.into();
         p.state = r#""onmouseover='x' "#.into();
         let token = dummy_token(Uuid::nil(), &p.label, None);
+        let pick = DevserverSelection {
+            owner: "alice".into(),
+            devserver_id: "ab".repeat(32),
+            label: r#"box "with' <breakers>"#.into(),
+        };
         for url in [
-            success_url(&p, &token, "chan_pat_AAAA"),
+            success_url(&p, "the-code", &token, Some(&pick)),
             error_url(&p, "user_cancelled"),
         ] {
             for breaker in ['"', '<', '>', '\'', ' '] {
@@ -745,7 +975,7 @@ mod tests {
     #[test]
     fn handoff_html_embeds_target_twice_and_escapes() {
         let token = dummy_token(Uuid::nil(), "chan-desktop @ box", None);
-        let url = success_url(&params(), &token, "chan_pat_AAAA");
+        let url = success_url(&params(), "the-code", &token, None);
         let html = render_handoff_html(&Handoff::Success, &url);
         // Exactly twice: the meta refresh and the manual fallback link.
         let escaped = pages::html_escape(&url);

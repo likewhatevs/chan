@@ -12,7 +12,8 @@
 //!
 //! Every state change writes one row to `api_token_audit`. Actions:
 //! `created` (SPA mint), `created_via_desktop` (desktop-authorize
-//! mint), `used` (validate succeeded), `revoked`.
+//! mint), `desktop.redeem` (one-time desktop code cashed in), `used`
+//! (validate succeeded), `revoked`.
 
 use base64::Engine;
 use chrono::{DateTime, Utc};
@@ -31,6 +32,7 @@ const TOKEN_PREFIX: &str = "chan_pat_";
 /// the set ever grows we can add a CHECK constraint.
 pub const ACTION_CREATED: &str = "created";
 pub const ACTION_CREATED_DESKTOP: &str = "created_via_desktop";
+pub const ACTION_DESKTOP_REDEEM: &str = "desktop.redeem";
 pub const ACTION_USED: &str = "used";
 pub const ACTION_REVOKED: &str = "revoked";
 
@@ -302,7 +304,14 @@ impl ApiTokenService {
         })
     }
 
-    async fn write_audit(&self, token_id: Uuid, action: &str, meta: &RequestMeta) -> Result<()> {
+    /// `pub(crate)` so the desktop-authorize redeem handler can record
+    /// its `desktop.redeem` row without a second audit path.
+    pub(crate) async fn write_audit(
+        &self,
+        token_id: Uuid,
+        action: &str,
+        meta: &RequestMeta,
+    ) -> Result<()> {
         sqlx::query(
             "INSERT INTO api_token_audit (token_id, action, ip, user_agent) \
              VALUES ($1, $2, $3, $4)",

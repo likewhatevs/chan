@@ -38,6 +38,11 @@ pub enum Error {
         label: Option<String>,
     },
 
+    /// 410 for a consumed or expired one-time artifact (today: the
+    /// desktop-authorize redemption code).
+    #[error("gone: {0}")]
+    Gone(String),
+
     #[error("conflict: {0}")]
     Conflict(String),
 
@@ -105,6 +110,7 @@ impl IntoResponse for Error {
                 }
                 (StatusCode::NOT_FOUND, body)
             }
+            Error::Gone(m) => (StatusCode::GONE, error_body(m)),
             Error::Conflict(m) => (StatusCode::CONFLICT, error_body(m)),
             // Upstream detail (oauth2 RequestTokenError, profile-service body,
             // devserver-proxy admin response) stays in the server log; the public

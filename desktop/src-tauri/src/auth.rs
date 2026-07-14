@@ -8,16 +8,22 @@
 //!   2. id.chan.app handles OAuth (passkeys, autofill, all native to
 //!      the user's real browser), mints a 30-day `tunnel` PAT, and
 //!      serves a handoff page that navigates to the redirect_uri
-//!      (zero-delay meta refresh, with a manual fallback link) with
-//!      the PAT in the URL fragment.
+//!      (zero-delay meta refresh, with a manual fallback link) with a
+//!      short-lived one-time redemption code in the URL fragment --
+//!      never the PAT secret.
 //!   3. macOS routes the `chan://` URL to chan-desktop. The deep-link
 //!      plugin invokes `handle_callback`, which validates the state
-//!      nonce, persists the PAT to the OS keychain, and emits
-//!      `auth-changed`. Errors emit `auth-error` with a string body.
+//!      nonce, swaps the code for the PAT (`POST
+//!      /desktop/authorize/redeem` against the identity origin that
+//!      served the authorize page), persists the PAT to the OS
+//!      keychain, and emits `auth-changed`. Errors emit `auth-error`
+//!      with a string body.
 //!
-//! Fragments, not query: the secret lives in `#…` so it never appears
+//! Fragments, not query: the code lives in `#…` so it never appears
 //! in any intermediate http log or referer. The browser hands the
-//! whole URL (fragment included) to the OS URL handler.
+//! whole URL (fragment included) to the OS URL handler. The code is
+//! single-use with a short server-side TTL, so a handoff tab left
+//! open holds nothing durably sensitive.
 //!
 //! Keychain layout: service `chan-desktop`, account `id.chan.app`.
 //! Value is JSON `{id, secret, label, expires_at}` so sign-out can
@@ -47,11 +53,18 @@ pub const AUTH_ERROR: &str = "auth-error";
 
 const KEYCHAIN_SERVICE: &str = "chan-desktop";
 const KEYCHAIN_ACCOUNT: &str = "id.chan.app";
+/// Origin serving `/desktop/authorize` for the hosted id.chan.app
+/// flow; also what `handle_callback` redeems that flow's code against.
+const IDENTITY_ORIGIN: &str = "https://id.chan.app";
 const AUTHORIZE_URL: &str = "https://id.chan.app/desktop/authorize";
 const REDIRECT_URI: &str = "chan://auth/callback";
 const SCOPES: &str = "tunnel";
 const DESKTOP_CONNECT_SCOPES: &str = "desktop.connect";
 const EXPIRES_IN_SECONDS: u64 = 30 * 24 * 60 * 60;
+/// Bound on the redeem round trip. The deep-link caller blocks while
+/// we redeem, so fail fast enough to keep the app responsive; the
+/// code's server-side TTL comfortably outlives one retry.
+const REDEEM_TIMEOUT_SECS: u64 = 15;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StoredPat {
@@ -127,6 +140,10 @@ pub fn hostname() -> String {
 struct PendingAuth {
     state: String,
     account: String,
+    /// Origin that served the authorize page. `handle_callback`
+    /// redeems the callback's one-time code against this exact origin,
+    /// never one named by the callback URL itself.
+    identity_origin: String,
     resume_devserver_id: Option<String>,
 }
 
@@ -174,6 +191,7 @@ pub fn open_signin(app: AppHandle) -> Result<(), String> {
     *pending_state().lock().unwrap() = Some(PendingAuth {
         state: state.clone(),
         account: KEYCHAIN_ACCOUNT.to_string(),
+        identity_origin: IDENTITY_ORIGIN.to_string(),
         resume_devserver_id: None,
     });
 
@@ -232,6 +250,7 @@ pub fn open_gateway_signin(
     *pending_state().lock().unwrap() = Some(PendingAuth {
         state: state.clone(),
         account: gateway_account(identity_origin),
+        identity_origin: identity_origin.to_string(),
         resume_devserver_id: Some(devserver_id.to_string()),
     });
     let label = format!("chan-desktop @ {}", hostname());
@@ -261,7 +280,13 @@ pub fn open_gateway_signin(
 pub enum CallbackOutcome {
     /// The PAT was stored and AUTH_CHANGED emitted. `resume_devserver_id`
     /// names the devserver whose connect launched this sign-in, if any.
-    SignedIn { resume_devserver_id: Option<String> },
+    SignedIn {
+        resume_devserver_id: Option<String>,
+        /// Devserver pick from the gateway consent page, passed
+        /// through for the connect flow to record. `None` when the
+        /// page offered no picker or the user picked nothing.
+        devserver: Option<GatewaySelection>,
+    },
     /// The callback failed and AUTH_ERROR was emitted. `consumed_pending` is
     /// true when the failure popped the in-flight sign-in state; false means
     /// the URL itself was malformed and any waiting sign-in is still live.
@@ -282,11 +307,28 @@ pub fn handle_callback(app: &AppHandle, raw: &str) -> CallbackOutcome {
         classify_callback(raw, &mut pending)
     };
     match action {
-        CallbackAction::SignIn {
-            pat,
+        CallbackAction::Redeem {
+            code,
+            identity_origin,
             account,
             resume_devserver_id,
+            devserver,
         } => {
+            let redeemed = match redeem_code(&identity_origin, &code) {
+                Ok(r) => r,
+                Err(e) => {
+                    let _ = app.emit(AUTH_ERROR, &e);
+                    return CallbackOutcome::Failed {
+                        consumed_pending: true,
+                    };
+                }
+            };
+            let pat = StoredPat {
+                id: redeemed.id,
+                secret: redeemed.secret,
+                label: redeemed.label,
+                expires_at: redeemed.expires_at.unwrap_or_default(),
+            };
             if let Err(e) = store_for(&account, &pat) {
                 let _ = app.emit(AUTH_ERROR, &e);
                 return CallbackOutcome::Failed {
@@ -305,6 +347,7 @@ pub fn handle_callback(app: &AppHandle, raw: &str) -> CallbackOutcome {
             let _ = app.emit(AUTH_CHANGED, &status);
             CallbackOutcome::SignedIn {
                 resume_devserver_id,
+                devserver,
             }
         }
         CallbackAction::Fail {
@@ -316,6 +359,77 @@ pub fn handle_callback(app: &AppHandle, raw: &str) -> CallbackOutcome {
         }
         CallbackAction::Ignore => CallbackOutcome::Ignored,
     }
+}
+
+/// Devserver pick delivered on the callback fragment as the optional
+/// `devserver_owner` / `devserver_id` / `devserver_label` keys, minted
+/// by the gateway consent page's picker.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GatewaySelection {
+    pub owner: String,
+    pub devserver_id: String,
+    pub label: String,
+}
+
+/// What the redeem endpoint answers with, exactly once per code.
+#[derive(Debug, Deserialize)]
+struct RedeemedPat {
+    id: String,
+    secret: String,
+    label: String,
+    /// RFC3339 timestamp; `null` on the wire for a token that never
+    /// expires.
+    #[serde(default)]
+    expires_at: Option<String>,
+}
+
+/// Swap the one-time redemption code for the PAT at the identity
+/// origin that issued it. The HTTP round trip runs on a dedicated
+/// thread with its own single-thread runtime: callers sit on the main
+/// event loop (the deep-link handler and the cold-start URL scan),
+/// which is not a tokio context and must not become one.
+fn redeem_code(identity_origin: &str, code: &str) -> Result<RedeemedPat, String> {
+    let url = format!(
+        "{}/desktop/authorize/redeem",
+        identity_origin.trim_end_matches('/')
+    );
+    let body = serde_json::json!({ "code": code });
+    let worker = std::thread::spawn(move || -> Result<RedeemedPat, String> {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| format!("redeem runtime: {e}"))?;
+        rt.block_on(async move {
+            let client = reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(REDEEM_TIMEOUT_SECS))
+                .build()
+                .map_err(|e| format!("building redeem http client: {e}"))?;
+            let resp = client
+                .post(&url)
+                .json(&body)
+                .send()
+                .await
+                .map_err(|e| format!("redeeming sign-in code: {e}"))?;
+            let status = resp.status();
+            if status == reqwest::StatusCode::GONE {
+                return Err(
+                    "the sign-in link expired or was already used; try signing in again"
+                        .to_string(),
+                );
+            }
+            if !status.is_success() {
+                return Err(format!(
+                    "redeeming sign-in code: the gateway answered HTTP {status}"
+                ));
+            }
+            resp.json::<RedeemedPat>()
+                .await
+                .map_err(|e| format!("decoding redeemed token: {e}"))
+        })
+    });
+    worker
+        .join()
+        .map_err(|_| "redeem worker thread panicked".to_string())?
 }
 
 /// Map an id.chan.app `#error=` reason token to the banner string. The
@@ -335,11 +449,14 @@ fn signin_error_message(reason: &str) -> String {
 /// before any I/O so the validation and dedup rules are unit-testable.
 #[derive(Debug)]
 enum CallbackAction {
-    /// Store the PAT and emit AUTH_CHANGED.
-    SignIn {
-        pat: StoredPat,
+    /// Swap the one-time code for the PAT, store it, and emit
+    /// AUTH_CHANGED.
+    Redeem {
+        code: String,
+        identity_origin: String,
         account: String,
         resume_devserver_id: Option<String>,
+        devserver: Option<GatewaySelection>,
     },
     /// Emit AUTH_ERROR. `consumed_pending` as on [`CallbackOutcome::Failed`].
     Fail {
@@ -395,26 +512,30 @@ fn classify_callback(raw: &str, pending: &mut Option<PendingAuth>) -> CallbackAc
         );
     }
 
-    let id = params.get("id").cloned().unwrap_or_default();
-    let secret = params.get("secret").cloned().unwrap_or_default();
-    let label = params
-        .get("label")
-        .cloned()
-        .unwrap_or_else(|| format!("chan-desktop @ {}", hostname()));
-    let expires_at = params.get("expires_at").cloned().unwrap_or_default();
-    if id.is_empty() || secret.is_empty() {
-        return fail("callback missing id or secret".to_string(), true);
+    let code = params.get("code").cloned().unwrap_or_default();
+    if code.is_empty() {
+        return fail(
+            "callback missing redemption code (gateway older than v0.68?)".to_string(),
+            true,
+        );
     }
+    // The pick is optional and all-or-nothing: a fragment carrying
+    // only part of it redeems fine but drops the pick.
+    let devserver = match (params.get("devserver_owner"), params.get("devserver_id")) {
+        (Some(owner), Some(id)) if !owner.is_empty() && !id.is_empty() => Some(GatewaySelection {
+            owner: owner.clone(),
+            devserver_id: id.clone(),
+            label: params.get("devserver_label").cloned().unwrap_or_default(),
+        }),
+        _ => None,
+    };
 
-    CallbackAction::SignIn {
-        pat: StoredPat {
-            id,
-            secret,
-            label,
-            expires_at,
-        },
+    CallbackAction::Redeem {
+        code,
+        identity_origin: expected.identity_origin,
         account: expected.account,
         resume_devserver_id: expected.resume_devserver_id,
+        devserver,
     }
 }
 
@@ -468,32 +589,73 @@ mod tests {
         Some(PendingAuth {
             state: state.to_string(),
             account: "id.chan.app".to_string(),
+            identity_origin: "https://id.example".to_string(),
             resume_devserver_id: Some("ds-1".to_string()),
         })
     }
 
     #[test]
-    fn classify_signs_in_on_a_matching_pending_state() {
+    fn classify_redeems_on_a_matching_pending_state() {
         let mut slot = pending("nonce-1");
         let action = classify_callback(
-            "chan://auth/callback#id=t-1&secret=chan_pat_x&label=mbp&state=nonce-1",
+            "chan://auth/callback#code=one-time-abc&label=mbp&state=nonce-1",
             &mut slot,
         );
         match action {
-            CallbackAction::SignIn {
-                pat,
+            CallbackAction::Redeem {
+                code,
+                identity_origin,
                 account,
                 resume_devserver_id,
+                devserver,
             } => {
-                assert_eq!(pat.id, "t-1");
-                assert_eq!(pat.secret, "chan_pat_x");
-                assert_eq!(pat.label, "mbp");
+                assert_eq!(code, "one-time-abc");
+                assert_eq!(identity_origin, "https://id.example");
                 assert_eq!(account, "id.chan.app");
                 assert_eq!(resume_devserver_id.as_deref(), Some("ds-1"));
+                assert_eq!(devserver, None);
             }
-            other => panic!("expected SignIn, got {other:?}"),
+            other => panic!("expected Redeem, got {other:?}"),
         }
         assert!(slot.is_none(), "the pending slot is consumed");
+    }
+
+    #[test]
+    fn classify_passes_a_devserver_pick_through() {
+        let mut slot = pending("nonce-1");
+        let id64 = "ab".repeat(32);
+        let raw = format!(
+            "chan://auth/callback#code=c1&state=nonce-1&\
+             devserver_owner=alice&devserver_id={id64}&devserver_label=work+box"
+        );
+        match classify_callback(&raw, &mut slot) {
+            CallbackAction::Redeem { devserver, .. } => {
+                let d = devserver.expect("pick present");
+                assert_eq!(d.owner, "alice");
+                assert_eq!(d.devserver_id, id64);
+                assert_eq!(d.label, "work box");
+            }
+            other => panic!("expected Redeem, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn classify_drops_a_partial_devserver_pick() {
+        // The pick is all-or-nothing: a fragment carrying only part of
+        // it still redeems, but no selection passes through.
+        for frag in [
+            "code=c1&state=nonce-1&devserver_owner=alice",
+            "code=c1&state=nonce-1&devserver_id=abc",
+            "code=c1&state=nonce-1&devserver_owner=&devserver_id=abc",
+        ] {
+            let mut slot = pending("nonce-1");
+            match classify_callback(&format!("chan://auth/callback#{frag}"), &mut slot) {
+                CallbackAction::Redeem { devserver, .. } => {
+                    assert_eq!(devserver, None, "{frag}")
+                }
+                other => panic!("expected Redeem for {frag}, got {other:?}"),
+            }
+        }
     }
 
     #[test]
@@ -503,7 +665,7 @@ mod tests {
         // the completed sign-in. Same for a duplicate deny.
         let mut slot = None;
         for raw in [
-            "chan://auth/callback#id=t-1&secret=chan_pat_x&state=nonce-1",
+            "chan://auth/callback#code=one-time-abc&state=nonce-1",
             "chan://auth/callback#error=user_cancelled&state=nonce-1",
         ] {
             assert!(
@@ -537,7 +699,7 @@ mod tests {
         // A malformed or foreign URL must not kill a live browser leg: the
         // slot stays untouched so the real callback can still complete.
         let mut slot = pending("nonce-1");
-        for raw in ["not a url", "chan://evil/callback#id=x&secret=y"] {
+        for raw in ["not a url", "chan://evil/callback#code=x"] {
             match classify_callback(raw, &mut slot) {
                 CallbackAction::Fail {
                     consumed_pending, ..
@@ -549,9 +711,9 @@ mod tests {
     }
 
     #[test]
-    fn classify_rejects_a_state_mismatch_and_missing_credentials() {
+    fn classify_rejects_a_state_mismatch_and_a_missing_code() {
         let mut slot = pending("nonce-1");
-        match classify_callback("chan://auth/callback#id=t&secret=s&state=WRONG", &mut slot) {
+        match classify_callback("chan://auth/callback#code=c1&state=WRONG", &mut slot) {
             CallbackAction::Fail {
                 message,
                 consumed_pending,
@@ -568,10 +730,85 @@ mod tests {
                 message,
                 consumed_pending,
             } => {
-                assert!(message.contains("missing id or secret"), "{message}");
+                assert!(message.contains("missing redemption code"), "{message}");
                 assert!(consumed_pending);
             }
             other => panic!("expected Fail, got {other:?}"),
         }
+    }
+
+    /// One-shot HTTP stub: accepts a single connection, answers with a
+    /// canned response, and hands back the raw request it read.
+    fn stub_identity(
+        status_line: &'static str,
+        body: &'static str,
+    ) -> (String, std::thread::JoinHandle<String>) {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind stub");
+        let origin = format!("http://{}", listener.local_addr().unwrap());
+        let handle = std::thread::spawn(move || {
+            let (mut sock, _) = listener.accept().expect("accept");
+            sock.set_read_timeout(Some(std::time::Duration::from_secs(5)))
+                .expect("read timeout");
+            let mut data = Vec::new();
+            let mut buf = [0u8; 4096];
+            loop {
+                match sock.read(&mut buf) {
+                    // The request body is JSON, so a complete request
+                    // ends with the object's closing brace.
+                    Ok(n) if n > 0 => {
+                        data.extend_from_slice(&buf[..n]);
+                        if data.ends_with(b"}") {
+                            break;
+                        }
+                    }
+                    _ => break,
+                }
+            }
+            let resp = format!(
+                "HTTP/1.1 {status_line}\r\ncontent-type: application/json\r\n\
+                 content-length: {}\r\nconnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            sock.write_all(resp.as_bytes()).expect("write response");
+            String::from_utf8_lossy(&data).into_owned()
+        });
+        (origin, handle)
+    }
+
+    #[test]
+    fn redeem_code_parses_a_successful_redemption() {
+        let (origin, stub) = stub_identity(
+            "200 OK",
+            r#"{"id":"t-1","secret":"chan_pat_x","label":"mbp","expires_at":null}"#,
+        );
+        let pat = redeem_code(&origin, "one-time-abc").expect("redeem ok");
+        assert_eq!(pat.id, "t-1");
+        assert_eq!(pat.secret, "chan_pat_x");
+        assert_eq!(pat.label, "mbp");
+        assert_eq!(pat.expires_at, None);
+        let request = stub.join().expect("stub thread");
+        assert!(
+            request.starts_with("POST /desktop/authorize/redeem HTTP/1.1"),
+            "{request}"
+        );
+        assert!(request.contains(r#"{"code":"one-time-abc"}"#), "{request}");
+    }
+
+    #[test]
+    fn redeem_code_maps_410_to_a_replay_message() {
+        let (origin, _stub) = stub_identity(
+            "410 Gone",
+            r#"{"error":"unknown, expired, or already-redeemed code"}"#,
+        );
+        let err = redeem_code(&origin, "stale").expect_err("410 is an error");
+        assert!(err.contains("expired or was already used"), "{err}");
+    }
+
+    #[test]
+    fn redeem_code_surfaces_other_http_failures() {
+        let (origin, _stub) = stub_identity("500 Internal Server Error", "{}");
+        let err = redeem_code(&origin, "c1").expect_err("500 is an error");
+        assert!(err.contains("HTTP 500"), "{err}");
     }
 }

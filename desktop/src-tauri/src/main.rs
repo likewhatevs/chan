@@ -4298,7 +4298,7 @@ fn main() {
             app.deep_link().on_open_url(move |event| {
                 for url in event.urls() {
                     match auth::handle_callback(&app_for_links, url.as_str()) {
-                        auth::CallbackOutcome::SignedIn { resume_devserver_id } => {
+                        auth::CallbackOutcome::SignedIn { resume_devserver_id, .. } => {
                             // Any processed callback pops the single pending-
                             // auth slot, so every waiting row's browser leg is
                             // settled: clear them all, then resume the winner.
@@ -4336,7 +4336,7 @@ fn main() {
             if let Ok(Some(urls)) = app.deep_link().get_current() {
                 for url in urls {
                     match auth::handle_callback(app.handle(), url.as_str()) {
-                        auth::CallbackOutcome::SignedIn { resume_devserver_id } => {
+                        auth::CallbackOutcome::SignedIn { resume_devserver_id, .. } => {
                             clear_all_awaiting_signin(app.handle(), &state_for_setup);
                             if let Some(id) = resume_devserver_id {
                                 let app_handle = app.handle().clone();
