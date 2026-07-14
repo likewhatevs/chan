@@ -40,6 +40,9 @@ mod indexer;
 mod mcp_bridge;
 mod preferences;
 mod routes;
+// The pure scene core; its unit tests are the only callers.
+#[allow(dead_code)]
+mod scene_sessions;
 mod self_writes;
 mod session_roster;
 mod signal;
