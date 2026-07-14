@@ -59,11 +59,14 @@ Optional:
 | `WILDCARD_SUFFIX`          | `.devserver.<domain>`    | wildcard override    |
 | `DASHBOARD_URL`            | `<scheme>://id.<domain>/workspaces` | sign-in redirect |
 | `DEVSERVER_ADMIN_TOKEN`    | unset                    | enables `/admin/v1/*`|
-| `MAX_WORKSPACES_PER_USER`  | `0` (unlimited)          | concurrent tunnels   |
+| `MAX_DEVSERVERS_PER_USER`  | `100` (`0` = unlimited)  | per-user devserver cap |
 | `MAX_RESPONSE_BYTES`       | `100 MiB` (`0` disables) | response body cap    |
 | `MAX_REQUEST_BYTES`        | `100 MiB` (`0` disables) | request body cap     |
 | `REQUEST_TIMEOUT_SECS`     | `60` (`0` disables)      | end-to-end timeout   |
 | `FORWARDED_PROTO`          | `https`                  | `X-Forwarded-Proto`  |
+
+The legacy `MAX_WORKSPACES_PER_USER` name is honored when
+`MAX_DEVSERVERS_PER_USER` is unset.
 
 ## Routes
 

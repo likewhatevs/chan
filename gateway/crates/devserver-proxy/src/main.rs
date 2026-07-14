@@ -36,7 +36,7 @@ async fn run() -> anyhow::Result<()> {
         apex = %cfg.apex_host,
         wildcard = %cfg.wildcard_suffix,
         identity = %cfg.identity_url,
-        max_workspaces_per_user = cfg.max_workspaces_per_user,
+        max_devservers_per_user = cfg.max_devservers_per_user,
         "starting devserver-proxy-service",
     );
 
@@ -91,10 +91,10 @@ async fn run() -> anyhow::Result<()> {
     let mut tunnel = {
         let validator = validator.clone();
         let tunnels = registry.tunnels();
-        let max_workspaces = cfg.max_workspaces_per_user;
+        let max_devservers = cfg.max_devservers_per_user;
         tokio::spawn(async move {
             tokio::select! {
-                r = serve_tunnel_listener(tunnel_listener, validator, tunnels, max_workspaces) => r,
+                r = serve_tunnel_listener(tunnel_listener, validator, tunnels, max_devservers) => r,
                 _ = tunnel_shutdown.notified() => {
                     tracing::info!("tunnel listener received shutdown");
                     Ok(())

@@ -103,10 +103,10 @@ struct TestApp {
 
 impl TestApp {
     async fn new() -> Self {
-        Self::new_with_max_workspaces(0).await
+        Self::new_with_max_devservers(0).await
     }
 
-    async fn new_with_max_workspaces(max_workspaces_per_user: usize) -> Self {
+    async fn new_with_max_devservers(max_devservers_per_user: usize) -> Self {
         let registry = Registry::new();
 
         let cfg = Arc::new(Config {
@@ -118,7 +118,7 @@ impl TestApp {
             identity_auth_token: "unused-in-tests".into(),
             dashboard_url: "https://id.chan.app/workspaces".into(),
             workspace_gate_secret: std::str::from_utf8(DEVSERVER_GATE_SECRET).unwrap().into(),
-            max_workspaces_per_user,
+            max_devservers_per_user,
             admin_token: Some(ADMIN_TOKEN.to_string()),
             max_response_bytes: None,
             max_request_bytes: None,
@@ -142,7 +142,7 @@ impl TestApp {
                     tunnel_listener,
                     validator,
                     tunnels,
-                    max_workspaces_per_user,
+                    max_devservers_per_user,
                 )
                 .await;
             });
@@ -1332,7 +1332,7 @@ async fn try_register_tunnel(
 
 #[tokio::test]
 async fn tunnel_rejects_third_workspace_when_limit_is_two() {
-    let app = TestApp::new_with_max_workspaces(2).await;
+    let app = TestApp::new_with_max_devservers(2).await;
     let uid = Uuid::new_v4();
     app.register_tunnel("alice", "a", uid, Router::new()).await;
     app.register_tunnel("alice", "b", uid, Router::new()).await;
@@ -1357,7 +1357,7 @@ async fn tunnel_rejects_third_workspace_when_limit_is_two() {
 
 #[tokio::test]
 async fn tunnel_allows_reconnect_of_existing_workspace_at_limit() {
-    let app = TestApp::new_with_max_workspaces(2).await;
+    let app = TestApp::new_with_max_devservers(2).await;
     let uid = Uuid::new_v4();
     app.register_tunnel("alice", "a", uid, Router::new()).await;
     app.register_tunnel("alice", "b", uid, Router::new()).await;
@@ -1371,7 +1371,7 @@ async fn tunnel_allows_reconnect_of_existing_workspace_at_limit() {
 
 #[tokio::test]
 async fn tunnel_unlimited_when_max_is_zero() {
-    let app = TestApp::new_with_max_workspaces(0).await;
+    let app = TestApp::new_with_max_devservers(0).await;
     let uid = Uuid::new_v4();
     for d in ["a", "b", "c", "d"] {
         app.register_tunnel("alice", d, uid, Router::new()).await;

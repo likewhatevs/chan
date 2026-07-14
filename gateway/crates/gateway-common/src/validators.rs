@@ -14,10 +14,13 @@
 pub const MAX_USERNAME_EDITS: i32 = 4;
 
 /// 3-32 chars, lowercase ascii alnum plus `-`, must not start or end
-/// with a hyphen. Equivalent to
-/// `^[a-z0-9][a-z0-9-]{1,30}[a-z0-9]$` without pulling regex in for
-/// one pattern. Used as the universal "is this a syntactically
-/// well-formed username" gate.
+/// with a hyphen, and must not contain `--`: the double hyphen is
+/// reserved as the `{user}--{disc}` separator in devserver wildcard
+/// hosts, so a username carrying it would make host parsing
+/// ambiguous. Equivalent to
+/// `^[a-z0-9][a-z0-9-]{1,30}[a-z0-9]$` minus any `--`, without
+/// pulling regex in for one pattern. Used as the universal "is this
+/// a syntactically well-formed username" gate.
 pub fn valid_username(s: &str) -> bool {
     let len = s.len();
     if !(3..=32).contains(&len) {
@@ -26,6 +29,9 @@ pub fn valid_username(s: &str) -> bool {
     let b = s.as_bytes();
     let alnum = |c: u8| c.is_ascii_lowercase() || c.is_ascii_digit();
     if !alnum(b[0]) || !alnum(b[len - 1]) {
+        return false;
+    }
+    if s.contains("--") {
         return false;
     }
     b.iter().all(|&c| alnum(c) || c == b'-')
@@ -47,6 +53,17 @@ mod tests {
         assert!(!valid_username(&"x".repeat(33)));
         assert!(!valid_username("-abc"));
         assert!(!valid_username("abc-"));
+    }
+
+    #[test]
+    fn rejects_double_hyphen_accepts_single() {
+        // `--` is the reserved user/disc separator in devserver
+        // wildcard hosts ({user}--{disc}.devserver.<base>).
+        assert!(!valid_username("ab--cd"));
+        assert!(!valid_username("a--b"));
+        assert!(!valid_username("x--y--z"));
+        assert!(valid_username("ab-cd"));
+        assert!(valid_username("a-b-c"));
     }
 
     #[test]

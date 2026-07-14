@@ -44,11 +44,13 @@ pub struct Config {
     /// secret), so the field tracks the var rather than the cookie.
     /// Required.
     pub workspace_gate_secret: String,
-    /// Maximum number of distinct workspaces a single user can have
+    /// Maximum number of distinct devservers a single user can have
     /// registered concurrently. `0` disables the cap. Reconnects of
-    /// an already-registered workspace are always allowed (last-writer-
-    /// wins eviction in the tunnel registry handles that).
-    pub max_workspaces_per_user: usize,
+    /// an already-registered devserver are always allowed (last-writer-
+    /// wins eviction in the tunnel registry handles that). Sourced
+    /// from `MAX_DEVSERVERS_PER_USER` (legacy alias
+    /// `MAX_WORKSPACES_PER_USER` when unset); defaults to 100.
+    pub max_devservers_per_user: usize,
     /// Bearer for the `/admin/v1/*` tree. `None` makes every admin
     /// route 401, which is the safe default if the env var is
     /// missing on a fresh deploy.
@@ -149,13 +151,10 @@ impl Config {
             _ => format!("{public_scheme}://{}/workspaces", domains.id_host),
         };
 
-        let max_workspaces_per_user: usize = match std::env::var("MAX_WORKSPACES_PER_USER") {
-            Ok(v) => v
-                .trim()
-                .parse()
-                .context("MAX_WORKSPACES_PER_USER must be a non-negative integer")?,
-            Err(_) => 0,
-        };
+        let max_devservers_per_user = parse_devserver_cap(
+            std::env::var("MAX_DEVSERVERS_PER_USER").ok(),
+            std::env::var("MAX_WORKSPACES_PER_USER").ok(),
+        )?;
 
         let admin_token = std::env::var("DEVSERVER_ADMIN_TOKEN")
             .ok()
@@ -197,7 +196,7 @@ impl Config {
             identity_auth_token,
             dashboard_url,
             workspace_gate_secret,
-            max_workspaces_per_user,
+            max_devservers_per_user,
             admin_token,
             max_response_bytes,
             max_request_bytes,
@@ -265,6 +264,29 @@ fn read_public_scheme() -> anyhow::Result<String> {
     Ok(scheme)
 }
 
+/// Resolve the per-user devserver cap from the env pair. The new
+/// `MAX_DEVSERVERS_PER_USER` name wins; the legacy
+/// `MAX_WORKSPACES_PER_USER` alias applies only when the new name is
+/// unset. Unset entirely defaults to 100; `0` disables the cap.
+fn parse_devserver_cap(
+    new_var: Option<String>,
+    legacy_var: Option<String>,
+) -> anyhow::Result<usize> {
+    if let Some(v) = new_var {
+        return v
+            .trim()
+            .parse()
+            .context("MAX_DEVSERVERS_PER_USER must be a non-negative integer");
+    }
+    if let Some(v) = legacy_var {
+        return v
+            .trim()
+            .parse()
+            .context("MAX_WORKSPACES_PER_USER must be a non-negative integer");
+    }
+    Ok(100)
+}
+
 fn parse_byte_cap(name: &str, default: Option<usize>) -> anyhow::Result<Option<usize>> {
     match std::env::var(name) {
         Ok(v) => {
@@ -292,13 +314,26 @@ mod tests {
             identity_auth_token: "x".into(),
             dashboard_url: "https://id.chan.app/workspaces".into(),
             workspace_gate_secret: "x".into(),
-            max_workspaces_per_user: 0,
+            max_devservers_per_user: 0,
             admin_token: None,
             max_response_bytes: None,
             max_request_bytes: None,
             request_timeout: None,
             forwarded_proto: "https".into(),
         }
+    }
+
+    #[test]
+    fn devserver_cap_new_var_wins_legacy_falls_back_default_100() {
+        assert_eq!(
+            parse_devserver_cap(Some("5".into()), Some("9".into())).unwrap(),
+            5
+        );
+        assert_eq!(parse_devserver_cap(None, Some("9".into())).unwrap(), 9);
+        assert_eq!(parse_devserver_cap(None, None).unwrap(), 100);
+        assert_eq!(parse_devserver_cap(Some("0".into()), None).unwrap(), 0);
+        assert!(parse_devserver_cap(Some("x".into()), None).is_err());
+        assert!(parse_devserver_cap(None, Some("x".into())).is_err());
     }
 
     #[test]
