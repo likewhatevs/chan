@@ -685,6 +685,10 @@ mod tests {
                 },
             )
             .await;
+        // Absence corroborates across two observations before the
+        // removal fans.
+        session.test_backdate_pending_removal();
+        registry.reconcile_pending(&workspace).await;
         let frames = a.drain();
         assert!(types(&frames).contains(&"removed"), "{frames:?}");
         assert_eq!(session.token(), None);

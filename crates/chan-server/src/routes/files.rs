@@ -2648,6 +2648,9 @@ mod doc_divert_tests {
                 },
             )
             .await;
+        // Absence corroborates across two observations.
+        session.test_backdate_pending_removal();
+        state.doc_sessions.reconcile_pending(&workspace).await;
         assert_eq!(session.token(), None, "removed state");
 
         // Equal content, no CAS token: must recreate on disk, not 200
@@ -2865,6 +2868,9 @@ mod scene_divert_tests {
                 },
             )
             .await;
+        // Absence corroborates across two observations.
+        session.test_backdate_pending_removal();
+        state.scene_sessions.reconcile_pending(&workspace).await;
         assert_eq!(session.token(), None, "removed state");
         while frames.try_recv().is_ok() {}
 
