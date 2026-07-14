@@ -122,16 +122,45 @@
     void loadGrants(devserverId);
   }
 
-  // Open the whole devserver: hand off to the identity `/s/{owner}` route,
-  // which mints a `devserver_gate` entry token and redirects through the
-  // proxy to the launcher served at the devserver root. These are the
-  // signed-in user's OWN devservers, so the owner is always us. Only
-  // offered for an online devserver (an offline one has no live tunnel to
-  // open). Same-origin navigation, so a relative path is enough.
-  function openDevserver() {
+  // The `?d=` selector for a devserver: the first 12 hex chars of its
+  // id (the disc that also names its `{user}--{disc}` wildcard host).
+  function discOf(devserverId: string): string {
+    return devserverId.slice(0, 12);
+  }
+
+  // Open one devserver: hand off to the identity `/s/{owner}?d=<disc>`
+  // route, which mints a `devserver_gate` entry token and redirects
+  // through the proxy to the launcher served at the devserver root.
+  // These are the signed-in user's OWN devservers, so the owner is
+  // always us. Only offered for an online devserver (an offline one
+  // has no live tunnel to open). Same-origin navigation, so a
+  // relative path is enough.
+  function openDevserver(devserverId: string) {
     const username = meStore.me?.user.username;
     if (!username) return;
-    window.location.href = `/s/${encodeURIComponent(username)}`;
+    window.location.href =
+      `/s/${encodeURIComponent(username)}?d=${discOf(devserverId)}`;
+  }
+
+  // Copy an absolute `?d=`-qualified open link for one devserver.
+  // The link runs the same access check server-side, so it is safe to
+  // hand to a grantee (they land only if a grant admits them).
+  let copied = $state<string | null>(null);
+  async function copyDevserverLink(devserverId: string) {
+    const username = meStore.me?.user.username;
+    if (!username) return;
+    const url =
+      `${window.location.origin}/s/${encodeURIComponent(username)}?d=${discOf(devserverId)}`;
+    try {
+      await navigator.clipboard.writeText(url);
+      copied = devserverId;
+      setTimeout(() => {
+        if (copied === devserverId) copied = null;
+      }, 1500);
+    } catch {
+      // Clipboard denied (permissions/insecure context): leave the
+      // button label unchanged rather than surfacing an error row.
+    }
   }
 
   // Client-side email shape check; stricter than the backend's lax
@@ -234,8 +263,15 @@
                   {d.online ? "online" : "offline"}
                 </span>
                 {#if d.online}
-                  <button type="button" class="ghost" onclick={openDevserver}>
+                  <button type="button" class="ghost" onclick={() => openDevserver(d.id)}>
                     Open
+                  </button>
+                  <button
+                    type="button"
+                    class="ghost"
+                    onclick={() => copyDevserverLink(d.id)}
+                  >
+                    {copied === d.id ? "Copied" : "Copy link"}
                   </button>
                 {/if}
                 <button

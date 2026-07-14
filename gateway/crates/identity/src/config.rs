@@ -225,14 +225,27 @@ impl Config {
         u
     }
 
-    /// Build the wildcard host for a username:
-    /// `{user}{devserver_wildcard_suffix}` (e.g. `alice.devserver.chan.app`).
-    pub fn devserver_host_for(&self, username: &str) -> String {
+    /// Build the disc wildcard host addressing one devserver:
+    /// `{user}--{disc}{devserver_wildcard_suffix}` (e.g.
+    /// `alice--0123456789ab.devserver.chan.app`), where `disc` is the
+    /// first 12 chars of the devserver id. Both parts are lowercased
+    /// explicitly: devserver-proxy lowercases the label on ingest and
+    /// requires the disc to be lowercase hex, and the minted host
+    /// must equal the canonical `aud` the proxy verifies. Ids shorter
+    /// than 12 chars (test fixtures) are used whole; production ids
+    /// are 64 hex chars.
+    pub fn devserver_host_for(&self, username: &str, devserver_id: &str) -> String {
+        let disc: String = devserver_id.chars().take(12).collect();
         // `.devserver.chan.app` already starts with a dot; the dot is
-        // the separator between the username and the suffix.
-        format!("{username}{}", &self.devserver_wildcard_suffix[..])
-            .trim_start_matches('.')
-            .to_string()
+        // the separator between the label and the suffix.
+        format!(
+            "{}--{}{}",
+            username.to_ascii_lowercase(),
+            disc.to_ascii_lowercase(),
+            &self.devserver_wildcard_suffix[..]
+        )
+        .trim_start_matches('.')
+        .to_string()
     }
 }
 
@@ -281,10 +294,20 @@ mod tests {
             workspace_gate_secret: "x".into(),
             providers: vec![],
         };
-        assert_eq!(cfg.devserver_host_for("alice"), "alice.devserver.chan.app");
         assert_eq!(
-            cfg.devserver_host_for("USER-1"),
-            "USER-1.devserver.chan.app"
+            cfg.devserver_host_for("alice", "0123456789abcdef0123456789abcdef"),
+            "alice--0123456789ab.devserver.chan.app"
+        );
+        // Lowercased explicitly on both parts: the proxy's host parse
+        // and the canonical aud are lowercase.
+        assert_eq!(
+            cfg.devserver_host_for("USER-1", "ABCDEFABCDEFABCDEF"),
+            "user-1--abcdefabcdef.devserver.chan.app"
+        );
+        // Short (test-fixture) ids are used whole.
+        assert_eq!(
+            cfg.devserver_host_for("alice", "abc123"),
+            "alice--abc123.devserver.chan.app"
         );
     }
 }

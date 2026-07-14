@@ -105,10 +105,10 @@ PAT shape: `chan_pat_<32 random bytes, base64url, no pad>`.
 
 1. Resolve `user_id` from the session.
 2. `profile.get_user(uid)`. Flush session and 401 if the user is gone underneath the cookie.
-3. Call devserver-proxy admin `GET /admin/v1/users/{username}/tunnels` for the live-devserver list (one devserver per user). Empty for blocked users, and empty (with a log line, not a 500) on a devserver-proxy outage so the rest of the dashboard still loads from profile.
+3. Call devserver-proxy admin `GET /admin/v1/users/{username}/tunnels` for the live-devserver list (one row per live devserver; a user can hold several). Empty for blocked users, and empty (with a log line, not a 500) on a devserver-proxy outage so the rest of the dashboard still loads from profile.
 4. Return `{user, devservers: [{devserver_id, status}], flags}`, where `flags` is the per-user resolved feature-flag map.
 
-The dashboard renders one card per devserver and flips it online/offline against that list. The card's "Open" navigates to `/s/{username}` (the whole-devserver share landing, below); the entry token is minted server-side at click time, not at page render, so a short-exp token can't go stale before the click.
+The dashboard renders one card per devserver and flips it online/offline against that list. The card's "Open" navigates to `/s/{username}?d=<disc>` (the whole-devserver share landing, below, qualified with the card's devserver); the entry token is minted server-side at click time, not at page render, so a short-exp token can't go stale before the click.
 
 ### Devserver-gate mint
 
@@ -156,13 +156,13 @@ devserver-proxy verifies the JWT, mints its own 24h session-shape JWT, sets it a
 
 `GET /s/{owner}/{workspace}` is the public entry for copied share links. It is intentionally unauthenticated at the door so the owner can mint a URL that works for any recipient.
 
-1. Validate `owner` (username shape) and `workspace` (1-64 lowercase alnum + `[._-]`); malformed values 404.
-2. No session: stash `/s/{owner}/{workspace}` under `post_login_redirect` and 303 to `/`. The SPA renders the OAuth picker; on callback, the stash is consumed and the user lands back here with a fresh session.
-3. With a session: resolve owner -> profile access check -> mint entry JWT -> 303 to devserver-proxy. This is the devserver-gate mint above; the `{workspace}` is only the redirect path, not part of the access check.
+1. Validate `owner` (username shape) and `workspace` (1-64 lowercase alnum + `[._-]`); malformed values 404. An optional `?d=<disc-or-full-id>` (lowercase hex) picks one of the owner's devservers; malformed selectors 404.
+2. No session: stash `/s/{owner}/{workspace}` (with the sanitized `?d=` when present) under `post_login_redirect` and 303 to `/`. The SPA renders the OAuth picker; on callback, the stash is consumed and the user lands back here with a fresh session.
+3. With a session: resolve owner -> pick the target devserver (`?d=` match, single live, or the first live one the caller can access) -> profile access check -> mint entry JWT -> 303 to devserver-proxy on the `{owner}--{disc}` host. This is the devserver-gate mint above; the `{workspace}` is only the redirect path, not part of the access check.
 
 The post-login redirect is validated to start with a single `/` and to contain no `:` or `//` prefix, so a hostile stash cannot point the callback at another origin.
 
-`GET /s/{owner}` is the whole-devserver open: it lands the caller on the launcher served at the devserver root instead of a single workspace. Same shape as the per-workspace landing -- validate `owner`, stash + login if unauthenticated, then resolve the owner's live devserver, mint a 30s entry JWT (`drv` = that devserver id, `aud` = `{owner}.devserver.chan.app`), and 303 to the proxy root `…/?t=<jwt>`. It is restricted to the **owner**: the caller must equal `{owner}`, otherwise 404 (the same shape as an unknown handle, so it does not reveal ownership). The launcher's `/api/library/*` surface is gated only at the proxy edge and carries no per-caller role on the gateway surface, so a grantee opening the root would get full library mutation; whole-devserver open is therefore owner-only, and grantees use the per-workspace landing (`/s/{owner}/{workspace}`).
+`GET /s/{owner}` is the whole-devserver open: it lands the caller on the launcher served at the devserver root instead of a single workspace. Same shape as the per-workspace landing -- validate `owner`, stash + login if unauthenticated, then pick the target devserver (`?d=` or single/first-accessible live), mint a 30s entry JWT (`drv` = that devserver id, `aud` = the `{owner}--{disc}` host), and 303 to the proxy root `…/?t=<jwt>`. It is restricted to the **owner**: the caller must equal `{owner}`, otherwise 404 (the same shape as an unknown handle, so it does not reveal ownership). The launcher's `/api/library/*` surface is gated only at the proxy edge and carries no per-caller role on the gateway surface, so a grantee opening the root would get full library mutation; whole-devserver open is therefore owner-only, and grantees use the per-workspace landing (`/s/{owner}/{workspace}`).
 
 ### Devserver sharing grants (SPA surface)
 
@@ -195,7 +195,7 @@ OAuth-style consent flow at `/desktop/authorize` (entry, validates the query and
 
 ### Desktop devserver entry
 
-`POST /desktop/v1/devserver/entry` (Bearer PAT with the `desktop.connect` scope) is how chan-desktop opens the caller's own devserver through the gateway: resolve the caller's single live devserver from the proxy-admin tunnel list, run the same `devserver_access` check as the share landings, and return `{username, devserver_id, proxy_origin, entry_url, expires_at}` where `entry_url` carries a fresh 30s entry JWT (identity claims attached best-effort, as in the share-landing mint).
+`POST /desktop/v1/devserver/entry` (Bearer PAT with the `desktop.connect` scope) is how chan-desktop opens a devserver through the gateway. The body optionally carries `{owner, devserver_id}` to target an explicit devserver (its owner's, or one shared with the caller); absent, the caller's own live list resolves as in the share landings (single live, else first accessible). It runs the same `devserver_access` check and returns `{username, devserver_id, proxy_origin, entry_url, expires_at}` -- `username` is the devserver OWNER, `proxy_origin`/`entry_url` are on the `{owner}--{disc}` host, and `entry_url` carries a fresh 30s entry JWT (identity claims attached best-effort, as in the share-landing mint). An explicit target that is not live 404s with reason `devserver_offline`; a target the caller cannot access 404s with reason `access_denied`.
 
 Failures keep HTTP 404 but the body is a superset of the plain `{"error": msg}` shape: `{"error": "not found", "reason": <token>, "username": <caller>, "label": <owned label>}` with `label` present only for `devserver_offline`. The reason tokens are a stable desktop-facing contract (like the `desktop_authorize` `#error=` reasons): `no_devserver` (nothing registered), `devserver_offline` (registered, no live tunnel; `label` is the first owned row's), `access_denied` (`devserver_access` refused). Classification is best-effort: a profile failure on the owned-devserver lookup degrades to the plain 404 body. This narration is safe because the surface is self-scoped (a PAT-authenticated caller asking about their own account); the cross-user share-landing 404s stay uniform on purpose.
 
@@ -230,6 +230,7 @@ Handled by profile-service's `upsert_by_identity`. identity passes the email alo
 - 3-32 chars total
 - first and last char in `[a-z0-9]`
 - inner chars in `[a-z0-9-]`
+- no `--` anywhere (reserved as the `{user}--{disc}` separator in devserver wildcard hosts)
 
 Additional username guards:
 

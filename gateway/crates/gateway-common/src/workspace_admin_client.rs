@@ -42,9 +42,9 @@ pub type WorkspaceAdminResult<T> = Result<T, WorkspaceAdminError>;
 #[derive(Debug, Clone, Deserialize)]
 pub struct TunnelView {
     pub user: String,
-    /// The registration's second key: the owner's live devserver id
-    /// (one devserver per user). Pinned to the producer's JSON field
-    /// name (`devserver_id`).
+    /// The registration's second key: one of the owner's live
+    /// devserver ids (a user can hold several). Pinned to the
+    /// producer's JSON field name (`devserver_id`).
     pub devserver_id: String,
     pub peer_addr: Option<String>,
     pub connected_at: DateTime<Utc>,

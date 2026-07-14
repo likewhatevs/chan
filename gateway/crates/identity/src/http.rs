@@ -48,6 +48,9 @@ pub struct AppState {
     /// identity directly. Throttled requests come back as 401 so
     /// they are indistinguishable from "unknown token" on the wire.
     pub token_throttle: TokenThrottle,
+    /// One-time desktop-authorize redemption codes; written by the
+    /// confirm handler, consumed by `/desktop/authorize/redeem`.
+    pub desktop_redemptions: crate::desktop_authorize::RedemptionStore,
 }
 
 /// Reserved usernames. Anything that could collide with an existing
@@ -123,6 +126,7 @@ pub fn router(
         cfg,
         api_tokens,
         token_throttle,
+        desktop_redemptions: Default::default(),
     };
 
     // /internal/* is gated by IDENTITY_INTERNAL_TOKEN (distinct from
@@ -178,6 +182,10 @@ pub fn router(
         .route(
             "/desktop/authorize/confirm",
             post(crate::desktop_authorize::confirm),
+        )
+        .route(
+            "/desktop/authorize/redeem",
+            post(crate::desktop_authorize::redeem),
         )
         .route("/desktop/v1/devserver/entry", post(desktop_devserver_entry))
         .merge(internal)
@@ -586,9 +594,9 @@ async fn current_active_user(state: &AppState, session: &Session) -> Result<User
 
 #[derive(Serialize)]
 struct DevserverView {
-    /// The owner's live devserver id (registry 2nd key). One devserver
-    /// per user. The dashboard pairs this with the profile-backed owned
-    /// list (which carries the label) to flip online/offline.
+    /// One live devserver id (registry 2nd key); a user can hold
+    /// several. The dashboard pairs this with the profile-backed
+    /// owned list (which carries the label) to flip online/offline.
     devserver_id: String,
     /// "online" while the tunnel registration is live.
     status: &'static str,
@@ -598,12 +606,12 @@ struct DevserverView {
 struct MeResponse {
     user: User,
     /// Live devserver snapshot for this user, sourced from the proxy
-    /// admin tunnel list (one devserver per user). Empty when nothing is
-    /// connected (or the user is blocked, or the proxy is unreachable; in
-    /// the unreachable case we log and serve an empty list so the
-    /// dashboard renders). Per-workspace online state is NOT here: it
-    /// comes from the devserver's own API over the owner's direct
-    /// connection (design 4.1).
+    /// admin tunnel list (one row per live devserver). Empty when
+    /// nothing is connected (or the user is blocked, or the proxy is
+    /// unreachable; in the unreachable case we log and serve an empty
+    /// list so the dashboard renders). Per-workspace online state is
+    /// NOT here: it comes from the devserver's own API over the
+    /// owner's direct connection (design 4.1).
     devservers: Vec<DevserverView>,
     /// Resolved feature flags for this user. Map of flag_key -> bool.
     /// Sourced from profile each call (no caching) so a gradual
@@ -1141,8 +1149,98 @@ async fn entry_caller_identity(
     }
 }
 
+/// Optional devserver selector on the share landings: a full
+/// devserver id or a hex prefix of one (the 12-hex disc form in
+/// practice).
+#[derive(Debug, Deserialize)]
+struct ShareQuery {
+    #[serde(default)]
+    d: Option<String>,
+}
+
+/// Validate a devserver selector (`?d=` / desktop entry body): a full
+/// 64-hex id or any hex prefix of one. Returns the lowercased
+/// selector, or `None` for shapes that cannot match an id.
+fn sanitize_disc_selector(raw: &str) -> Option<String> {
+    let s = raw.trim().to_ascii_lowercase();
+    if s.is_empty() || s.len() > 64 {
+        return None;
+    }
+    s.bytes()
+        .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
+        .then_some(s)
+}
+
+/// Outcome of picking one of an owner's live devservers for an
+/// entry-token mint.
+enum EntryTarget {
+    Ok {
+        devserver_id: String,
+        role: String,
+    },
+    /// No live tunnel matches: none at all, none matching the
+    /// selector, or an ambiguous disc prefix.
+    Offline,
+    /// Live target(s) exist but the caller holds no grant on any.
+    Denied,
+}
+
+/// Pick which of the owner's live devservers an entry mint targets,
+/// plus the caller's role on it.
+///
+/// `selector` is an explicit devserver id or a hex prefix of one (the
+/// share landings' `?d=`, the desktop entry body's `devserver_id`);
+/// it must match exactly one live id. Without a selector, a single
+/// live devserver wins outright, and several live devservers resolve
+/// to the first (sorted) one the caller can access, so pre-disc
+/// clients keep a deterministic target. The access check runs per
+/// candidate; the loop is bounded by the owner's live set (itself
+/// bounded by the proxy's devserver cap).
+async fn resolve_entry_target(
+    state: &AppState,
+    owner_id: Uuid,
+    owner_username: &str,
+    caller: Uuid,
+    selector: Option<&str>,
+) -> Result<EntryTarget> {
+    let client =
+        state.cfg.workspace_admin.as_ref().ok_or_else(|| {
+            Error::Anyhow(anyhow::anyhow!("workspace admin client not configured"))
+        })?;
+    let mut ids: Vec<String> = client
+        .list_user_tunnels(owner_username)
+        .await?
+        .into_iter()
+        .map(|t| t.devserver_id)
+        .collect();
+    if let Some(sel) = selector {
+        ids.retain(|id| id.starts_with(sel));
+        if ids.len() > 1 {
+            return Ok(EntryTarget::Offline);
+        }
+    }
+    if ids.is_empty() {
+        return Ok(EntryTarget::Offline);
+    }
+    for id in ids {
+        if let Some(access) = state
+            .cfg
+            .profile_client
+            .devserver_access(owner_id, &id, caller)
+            .await?
+        {
+            return Ok(EntryTarget::Ok {
+                devserver_id: id,
+                role: access.role,
+            });
+        }
+    }
+    Ok(EntryTarget::Denied)
+}
+
 /// Public entry point for a copied per-tenant share link
-/// (`/s/{owner}/{workspace}`).
+/// (`/s/{owner}/{workspace}`), optionally `?d=`-qualified to pick one
+/// of the owner's devservers.
 ///
 /// Flow:
 ///   1. If the caller has no session, stash the path and 303 to `/` so
@@ -1160,12 +1258,19 @@ async fn share_landing(
     State(state): State<AppState>,
     session: Session,
     Path((owner, workspace)): Path<(String, String)>,
+    Query(query): Query<ShareQuery>,
 ) -> Result<Redirect> {
     let owner = owner.trim().to_ascii_lowercase();
     let workspace = workspace.trim().to_ascii_lowercase();
     if !valid_username(&owner) || !is_workspace_name_shape(&workspace) {
         return Err(Error::NotFound);
     }
+    // An explicit selector that cannot match any id is a dead link:
+    // same 404 shape as unknown/no-access below.
+    let selector = match query.d.as_deref() {
+        None => None,
+        Some(raw) => Some(sanitize_disc_selector(raw).ok_or(Error::NotFound)?),
+    };
 
     // Unauthenticated: stash + send to login. Use a 303 (See Other)
     // so a refresh on the SPA root doesn't re-trigger the share flow.
@@ -1174,7 +1279,13 @@ async fn share_landing(
         .await
         .map_err(|e| Error::Anyhow(anyhow::anyhow!("session get: {e}")))?;
     let Some(uid) = uid else {
-        let dest = format!("/s/{owner}/{workspace}");
+        // The sanitized selector rides the stash so a `?d=`-qualified
+        // link survives the sign-in round trip (hex only, safe to
+        // embed).
+        let dest = match &selector {
+            Some(d) => format!("/s/{owner}/{workspace}?d={d}"),
+            None => format!("/s/{owner}/{workspace}"),
+        };
         session
             .insert(KEY_POST_LOGIN_REDIRECT, &dest)
             .await
@@ -1191,35 +1302,33 @@ async fn share_landing(
         .await?
         .ok_or(Error::NotFound)?;
 
-    // Resolve the owner's LIVE devserver (one per user); its id is the
-    // drv claim. No admin client or no live devserver -> 404, the same
-    // shape as no-access, so a probe cannot tell the cases apart.
-    let client =
-        state.cfg.workspace_admin.as_ref().ok_or_else(|| {
-            Error::Anyhow(anyhow::anyhow!("workspace admin client not configured"))
-        })?;
-    let live = client.list_user_tunnels(&owner_user.username).await?;
-    let devserver_id = match live.first().map(|t| t.devserver_id.clone()) {
-        Some(id) => id,
-        None => {
+    // Pick the target devserver (selector, single live, or first
+    // accessible). Offline, ambiguous, and no-access all collapse to
+    // 404 so a probe cannot tell the cases apart.
+    let target = resolve_entry_target(
+        &state,
+        owner_user.id,
+        &owner_user.username,
+        uid,
+        selector.as_deref(),
+    )
+    .await?;
+    let (devserver_id, role) = match target {
+        EntryTarget::Ok { devserver_id, role } => (devserver_id, role),
+        EntryTarget::Offline | EntryTarget::Denied => {
             tracing::info!(
                 owner = %owner_user.username,
                 workspace = %workspace,
                 caller = %uid,
-                "share landing: no live tunnel",
+                "share landing: no accessible live devserver target",
             );
             return Err(Error::NotFound);
         }
     };
 
-    let access = state
+    let host = state
         .cfg
-        .profile_client
-        .devserver_access(owner_user.id, &devserver_id, uid)
-        .await?
-        .ok_or(Error::NotFound)?;
-
-    let host = state.cfg.devserver_host_for(&owner_user.username);
+        .devserver_host_for(&owner_user.username, &devserver_id);
     let aud = chan_tunnel_proto::gateway_assertion::canonical_audience(&format!(
         "{host}{}",
         state.cfg.workspace_public_port
@@ -1227,7 +1336,7 @@ async fn share_landing(
     let token = gateway_common::devserver_gate::encode_entry(
         state.cfg.workspace_gate_secret.as_bytes(),
         uid,
-        &access.role,
+        &role,
         &devserver_id,
         &aud,
         entry_caller_identity(&state, uid).await,
@@ -1238,7 +1347,8 @@ async fn share_landing(
         owner = %owner_user.username,
         workspace = %workspace,
         caller = %uid,
-        role = %access.role,
+        role = %role,
+        devserver_id = %devserver_id,
         "share landing: minting entry token",
     );
 
@@ -1261,11 +1371,16 @@ async fn share_landing_root(
     State(state): State<AppState>,
     session: Session,
     Path(owner): Path<String>,
+    Query(query): Query<ShareQuery>,
 ) -> Result<Redirect> {
     let owner = owner.trim().to_ascii_lowercase();
     if !valid_username(&owner) {
         return Err(Error::NotFound);
     }
+    let selector = match query.d.as_deref() {
+        None => None,
+        Some(raw) => Some(sanitize_disc_selector(raw).ok_or(Error::NotFound)?),
+    };
 
     // Unauthenticated: stash + send to login. 303 so a refresh on the SPA
     // root doesn't re-trigger the open flow.
@@ -1274,7 +1389,10 @@ async fn share_landing_root(
         .await
         .map_err(|e| Error::Anyhow(anyhow::anyhow!("session get: {e}")))?;
     let Some(uid) = uid else {
-        let dest = format!("/s/{owner}");
+        let dest = match &selector {
+            Some(d) => format!("/s/{owner}?d={d}"),
+            None => format!("/s/{owner}"),
+        };
         session
             .insert(KEY_POST_LOGIN_REDIRECT, &dest)
             .await
@@ -1297,33 +1415,32 @@ async fn share_landing_root(
         return Err(Error::NotFound);
     }
 
-    // The owner's LIVE devserver (one per user); its id is the drv claim.
-    // No admin client / no live devserver -> 404 (same shape as no-access).
-    let client =
-        state.cfg.workspace_admin.as_ref().ok_or_else(|| {
-            Error::Anyhow(anyhow::anyhow!("workspace admin client not configured"))
-        })?;
-    let live = client.list_user_tunnels(&owner_user.username).await?;
-    let devserver_id = match live.first().map(|t| t.devserver_id.clone()) {
-        Some(id) => id,
-        None => {
+    // Pick the target devserver (selector, single live, or first
+    // accessible); its id is the drv claim. Offline and ambiguous
+    // collapse to 404 (same shape as no-access).
+    let target = resolve_entry_target(
+        &state,
+        owner_user.id,
+        &owner_user.username,
+        uid,
+        selector.as_deref(),
+    )
+    .await?;
+    let (devserver_id, role) = match target {
+        EntryTarget::Ok { devserver_id, role } => (devserver_id, role),
+        EntryTarget::Offline | EntryTarget::Denied => {
             tracing::info!(
                 owner = %owner_user.username,
                 caller = %uid,
-                "whole-devserver landing: no live tunnel",
+                "whole-devserver landing: no accessible live devserver target",
             );
             return Err(Error::NotFound);
         }
     };
 
-    let access = state
+    let host = state
         .cfg
-        .profile_client
-        .devserver_access(owner_user.id, &devserver_id, uid)
-        .await?
-        .ok_or(Error::NotFound)?;
-
-    let host = state.cfg.devserver_host_for(&owner_user.username);
+        .devserver_host_for(&owner_user.username, &devserver_id);
     let aud = chan_tunnel_proto::gateway_assertion::canonical_audience(&format!(
         "{host}{}",
         state.cfg.workspace_public_port
@@ -1331,7 +1448,7 @@ async fn share_landing_root(
     let token = gateway_common::devserver_gate::encode_entry(
         state.cfg.workspace_gate_secret.as_bytes(),
         uid,
-        &access.role,
+        &role,
         &devserver_id,
         &aud,
         entry_caller_identity(&state, uid).await,
@@ -1341,7 +1458,8 @@ async fn share_landing_root(
     tracing::info!(
         owner = %owner_user.username,
         caller = %uid,
-        role = %access.role,
+        role = %role,
+        devserver_id = %devserver_id,
         "whole-devserver landing: minting entry token",
     );
 
@@ -1367,8 +1485,19 @@ const ENTRY_REASON_ACCESS_DENIED: &str = "access_denied";
 struct DesktopEntryBody {
     #[serde(default)]
     path: Option<String>,
+    /// Optional explicit target, recorded by chan-desktop from the
+    /// authorize callback's devserver pick: the devserver owner's
+    /// username (absent = the caller's own devservers) and the full
+    /// devserver id. Absent both = first-accessible-live fallback.
+    #[serde(default)]
+    owner: Option<String>,
+    #[serde(default)]
+    devserver_id: Option<String>,
 }
 
+/// Answers for ONE connection, so the fields stay singular. `username`
+/// names the devserver's OWNER (the wildcard host label); it equals
+/// the caller except for shared devservers targeted via `owner`.
 #[derive(Debug, Serialize)]
 struct DesktopEntryResponse {
     username: String,
@@ -1400,35 +1529,87 @@ async fn desktop_devserver_entry(
         return Err(Error::Unauthorized);
     }
 
-    let client =
-        state.cfg.workspace_admin.as_ref().ok_or_else(|| {
-            Error::Anyhow(anyhow::anyhow!("workspace admin client not configured"))
-        })?;
-    let live = client.list_user_tunnels(&validated.username).await?;
-    let devserver_id = match live.first().map(|t| t.devserver_id.clone()) {
-        Some(id) => id,
-        None => {
+    // Resolve the target owner: an explicit `owner` names a devserver
+    // shared with the caller; absent = the caller's own. Unknown
+    // owner reads as access_denied so the desktop clears its stored
+    // selection without learning whether the handle exists.
+    let explicit_target = body.owner.is_some() || body.devserver_id.is_some();
+    let (owner_id, owner_username) = match body.owner.as_deref() {
+        None => (validated.user_id, validated.username.clone()),
+        Some(raw) => {
+            let owner = raw.trim().to_ascii_lowercase();
+            if owner == validated.username {
+                (validated.user_id, validated.username.clone())
+            } else {
+                if !valid_username(&owner) {
+                    return Err(Error::DesktopEntryNotFound {
+                        reason: ENTRY_REASON_ACCESS_DENIED,
+                        username: owner,
+                        label: None,
+                    });
+                }
+                let owner_user = state
+                    .cfg
+                    .profile_client
+                    .find_user_by_username(&owner)
+                    .await?
+                    .ok_or_else(|| Error::DesktopEntryNotFound {
+                        reason: ENTRY_REASON_ACCESS_DENIED,
+                        username: owner.clone(),
+                        label: None,
+                    })?;
+                (owner_user.id, owner_user.username)
+            }
+        }
+    };
+    let selector = match body.devserver_id.as_deref() {
+        None => None,
+        Some(raw) => {
+            Some(
+                sanitize_disc_selector(raw).ok_or_else(|| Error::DesktopEntryNotFound {
+                    reason: ENTRY_REASON_DEVSERVER_OFFLINE,
+                    username: owner_username.clone(),
+                    label: None,
+                })?,
+            )
+        }
+    };
+
+    let target = resolve_entry_target(
+        &state,
+        owner_id,
+        &owner_username,
+        validated.user_id,
+        selector.as_deref(),
+    )
+    .await?;
+    let (devserver_id, role) = match target {
+        EntryTarget::Ok { devserver_id, role } => (devserver_id, role),
+        EntryTarget::Offline if explicit_target => {
+            return Err(Error::DesktopEntryNotFound {
+                reason: ENTRY_REASON_DEVSERVER_OFFLINE,
+                username: owner_username,
+                label: None,
+            });
+        }
+        EntryTarget::Offline => {
             tracing::info!(
                 user = %validated.username,
                 "desktop entry: no live tunnel",
             );
             return Err(desktop_entry_no_tunnel(&state, &validated).await);
         }
+        EntryTarget::Denied => {
+            return Err(Error::DesktopEntryNotFound {
+                reason: ENTRY_REASON_ACCESS_DENIED,
+                username: owner_username,
+                label: None,
+            });
+        }
     };
 
-    let access = state
-        .cfg
-        .profile_client
-        .devserver_access(validated.user_id, &devserver_id, validated.user_id)
-        .await?
-        .ok_or_else(|| Error::DesktopEntryNotFound {
-            reason: ENTRY_REASON_ACCESS_DENIED,
-            username: validated.username.clone(),
-            label: None,
-        })?;
-
     let path = validate_desktop_entry_path(body.path.as_deref())?;
-    let host = state.cfg.devserver_host_for(&validated.username);
+    let host = state.cfg.devserver_host_for(&owner_username, &devserver_id);
     let aud = chan_tunnel_proto::gateway_assertion::canonical_audience(&format!(
         "{host}{}",
         state.cfg.workspace_public_port
@@ -1436,7 +1617,7 @@ async fn desktop_devserver_entry(
     let entry_token = gateway_common::devserver_gate::encode_entry(
         state.cfg.workspace_gate_secret.as_bytes(),
         validated.user_id,
-        &access.role,
+        &role,
         &devserver_id,
         &aud,
         entry_caller_identity(&state, validated.user_id).await,
@@ -1451,13 +1632,14 @@ async fn desktop_devserver_entry(
     let entry_url = format!("{proxy_origin}{path}{sep}t={entry_token}");
     tracing::info!(
         user = %validated.username,
+        owner = %owner_username,
         devserver_id = %devserver_id,
         path = %path,
-        role = %access.role,
+        role = %role,
         "desktop entry: minted entry URL",
     );
     Ok(Json(DesktopEntryResponse {
-        username: validated.username,
+        username: owner_username,
         devserver_id,
         proxy_origin,
         entry_url,

@@ -199,12 +199,16 @@ async fn mock_tunnels(app: &TestApp, username: &str, devserver_ids: &[&str]) {
 }
 
 async fn post_entry(app: &TestApp, pat: &str) -> (StatusCode, Value) {
+    post_entry_body(app, pat, json!({})).await
+}
+
+async fn post_entry_body(app: &TestApp, pat: &str, body: Value) -> (StatusCode, Value) {
     let req = Request::builder()
         .method(Method::POST)
         .uri("/desktop/v1/devserver/entry")
         .header(header::CONTENT_TYPE, "application/json")
         .header(header::AUTHORIZATION, format!("Bearer {pat}"))
-        .body(Body::from(serde_json::to_vec(&json!({})).unwrap()))
+        .body(Body::from(serde_json::to_vec(&body).unwrap()))
         .unwrap();
     let res = app.router.clone().oneshot(req).await.unwrap();
     let status = res.status();
@@ -215,6 +219,11 @@ async fn post_entry(app: &TestApp, pat: &str) -> (StatusCode, Value) {
         serde_json::from_slice(&bytes).unwrap_or(Value::Null)
     };
     (status, v)
+}
+
+/// The disc wildcard host identity mints for `(username, dsid)`.
+fn disc_host(username: &str, dsid: &str) -> String {
+    format!("{username}--{}.devserver.chan.app", &dsid[..12])
 }
 
 #[tokio::test]
@@ -331,14 +340,15 @@ async fn mock_get_user(app: &TestApp, uid: Uuid, display_name: Option<&str>, ema
         .await;
 }
 
-/// Decode the `?t=` entry token off a minted entry_url.
+/// Decode the `?t=` entry token off a minted entry_url. The aud is
+/// the disc host the mint targeted.
 fn decode_entry_url(entry_url: &str, username: &str, dsid: &str) -> devserver_gate::Claims {
     let token = entry_url.split("?t=").nth(1).expect("t= in entry_url");
     devserver_gate::decode(
         b"test-workspace-gate-secret-32-bytes-aa",
         token,
         devserver_gate::TokenType::Entry,
-        &format!("{username}.devserver.chan.app"),
+        &disc_host(username, dsid),
         dsid,
     )
     .expect("entry token decodes")
@@ -417,12 +427,142 @@ async fn entry_mints_url_with_live_tunnel_and_access() {
     assert_eq!(s, StatusCode::OK, "got {body}");
     assert_eq!(body["username"], username);
     assert_eq!(body["devserver_id"], dsid);
-    let origin = format!("https://{username}.devserver.chan.app");
+    let origin = format!("https://{}", disc_host(&username, &dsid));
     assert_eq!(body["proxy_origin"], origin);
     let entry_url = body["entry_url"].as_str().expect("entry_url");
     assert!(
         entry_url.starts_with(&format!("{origin}/?t=")),
         "got {entry_url}"
+    );
+    app.cleanup().await;
+}
+
+/// Mock `GET /v1/users/by-username` resolving to a fixed user row.
+async fn mock_user_by_username(app: &TestApp, uid: Uuid, username: &str) {
+    let now = chrono::Utc::now().to_rfc3339();
+    Mock::given(method("GET"))
+        .and(path("/v1/users/by-username"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id": uid,
+            "email": format!("{username}@example.com"),
+            "display_name": null,
+            "username": username,
+            "username_edits": 0,
+            "created_at": now,
+            "updated_at": now,
+        })))
+        .mount(&app.profile)
+        .await;
+}
+
+#[tokio::test]
+async fn entry_explicit_target_shared_devserver_mints_owner_disc_host() {
+    let app = TestApp::new().await;
+    let uid = app.insert_user().await;
+    let pat = app.desktop_pat(uid).await;
+
+    // The devserver belongs to another user who shared it with the
+    // caller; the entry body carries the recorded selection.
+    let owner_uid = Uuid::new_v4();
+    let owner = "owner-handle";
+    let dsid = "1".repeat(64);
+    mock_user_by_username(&app, owner_uid, owner).await;
+    mock_tunnels(&app, owner, &[&dsid]).await;
+    Mock::given(method("GET"))
+        .and(path(format!(
+            "/v1/users/{owner_uid}/devservers/{dsid}/access"
+        )))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"role": "editor"})))
+        .mount(&app.profile)
+        .await;
+
+    let (s, body) =
+        post_entry_body(&app, &pat, json!({"owner": owner, "devserver_id": dsid})).await;
+    assert_eq!(s, StatusCode::OK, "got {body}");
+    assert_eq!(body["username"], owner, "response names the OWNER");
+    assert_eq!(body["devserver_id"], dsid);
+    let origin = format!("https://{}", disc_host(owner, &dsid));
+    assert_eq!(body["proxy_origin"], origin);
+    let claims = decode_entry_url(body["entry_url"].as_str().unwrap(), owner, &dsid);
+    assert_eq!(claims.sub, uid, "sub is the caller, not the owner");
+    assert_eq!(claims.role, "editor");
+    app.cleanup().await;
+}
+
+#[tokio::test]
+async fn entry_explicit_target_not_live_is_devserver_offline() {
+    let app = TestApp::new().await;
+    let uid = app.insert_user().await;
+    let username = placeholder_username(uid);
+    let pat = app.desktop_pat(uid).await;
+
+    // One devserver live, but the recorded selection names another.
+    mock_tunnels(&app, &username, &[&"a".repeat(64)]).await;
+    let (s, body) = post_entry_body(&app, &pat, json!({"devserver_id": "b".repeat(64)})).await;
+    assert_eq!(s, StatusCode::NOT_FOUND);
+    assert_eq!(body["reason"], "devserver_offline");
+    assert_eq!(body["username"], username);
+    app.cleanup().await;
+}
+
+#[tokio::test]
+async fn entry_explicit_target_no_access_is_access_denied() {
+    let app = TestApp::new().await;
+    let uid = app.insert_user().await;
+    let pat = app.desktop_pat(uid).await;
+
+    let owner_uid = Uuid::new_v4();
+    let owner = "owner-handle";
+    let dsid = "2".repeat(64);
+    mock_user_by_username(&app, owner_uid, owner).await;
+    mock_tunnels(&app, owner, &[&dsid]).await;
+    // Grant revoked since the desktop recorded the selection.
+    Mock::given(method("GET"))
+        .and(path(format!(
+            "/v1/users/{owner_uid}/devservers/{dsid}/access"
+        )))
+        .respond_with(ResponseTemplate::new(404).set_body_json(json!({"error": "not found"})))
+        .mount(&app.profile)
+        .await;
+
+    let (s, body) =
+        post_entry_body(&app, &pat, json!({"owner": owner, "devserver_id": dsid})).await;
+    assert_eq!(s, StatusCode::NOT_FOUND);
+    assert_eq!(body["reason"], "access_denied");
+    assert_eq!(body["username"], owner);
+    app.cleanup().await;
+}
+
+#[tokio::test]
+async fn entry_two_live_no_selector_falls_back_to_first_accessible() {
+    let app = TestApp::new().await;
+    let uid = app.insert_user().await;
+    let username = placeholder_username(uid);
+    let pat = app.desktop_pat(uid).await;
+
+    // Two live devservers, no recorded selection (pre-disc desktop).
+    // The first (sorted) accessible one wins deterministically; here
+    // access on the first fails, so the second is picked.
+    let ds1 = "3".repeat(64);
+    let ds2 = "4".repeat(64);
+    mock_tunnels(&app, &username, &[&ds1, &ds2]).await;
+    Mock::given(method("GET"))
+        .and(path(format!("/v1/users/{uid}/devservers/{ds1}/access")))
+        .respond_with(ResponseTemplate::new(404).set_body_json(json!({"error": "not found"})))
+        .mount(&app.profile)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/v1/users/{uid}/devservers/{ds2}/access")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"role": "owner"})))
+        .mount(&app.profile)
+        .await;
+
+    let (s, body) = post_entry(&app, &pat).await;
+    assert_eq!(s, StatusCode::OK, "got {body}");
+    assert_eq!(body["devserver_id"], ds2);
+    assert_eq!(
+        body["proxy_origin"],
+        format!("https://{}", disc_host(&username, &ds2))
     );
     app.cleanup().await;
 }

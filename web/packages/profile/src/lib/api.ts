@@ -17,10 +17,11 @@ export type User = {
 };
 
 export type Devserver = {
-  /// The owner's live devserver id (lowercase hex SHA-256 of the PAT;
-  /// the registry's 2nd key). One devserver per user. The dashboard
+  /// One live devserver id (lowercase hex SHA-256 of the PAT; the
+  /// registry's 2nd key). A user can hold several. The dashboard
   /// pairs this with the owned list (which carries the label) to flip
-  /// online/offline.
+  /// online/offline, and derives the `?d=` disc (first 12 hex chars)
+  /// for open/copy links.
   devserver_id: string;
   /// "online" while the tunnel registration is live. The proxy admin
   /// only reports live devservers, so this is the only value.
@@ -30,7 +31,7 @@ export type Devserver = {
 export type Me = {
   user: User;
   /// Live devserver snapshot for the signed-in user, sourced from the
-  /// proxy admin tunnel list (one devserver per user). Empty when
+  /// proxy admin tunnel list (one row per live devserver). Empty when
   /// nothing is connected.
   devservers: Devserver[];
   /// Resolved feature flags for this user. Map of flag key -> bool.

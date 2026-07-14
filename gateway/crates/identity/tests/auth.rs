@@ -684,17 +684,33 @@ fn grant_body(
 /// devserver. The open routes read the live devserver_id from here to
 /// mint the gate `drv`.
 async fn mock_live_devserver(app: &TestApp, username: &str, devserver_id: &str) {
+    mock_live_devservers(app, username, &[devserver_id]).await;
+}
+
+/// Same, with several live devservers.
+async fn mock_live_devservers(app: &TestApp, username: &str, devserver_ids: &[&str]) {
     let now = chrono::Utc::now().to_rfc3339();
+    let rows: Vec<serde_json::Value> = devserver_ids
+        .iter()
+        .map(|id| {
+            json!({
+                "user": username,
+                "devserver_id": id,
+                "peer_addr": null,
+                "connected_at": now,
+            })
+        })
+        .collect();
     Mock::given(method("GET"))
         .and(path(format!("/admin/v1/users/{username}/tunnels")))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!([{
-            "user": username,
-            "devserver_id": devserver_id,
-            "peer_addr": null,
-            "connected_at": now,
-        }])))
+        .respond_with(ResponseTemplate::new(200).set_body_json(rows))
         .mount(&app.profile)
         .await;
+}
+
+/// The disc wildcard host identity mints for `(username, dsid)`.
+fn disc_host(username: &str, dsid: &str) -> String {
+    format!("{username}--{}.devserver.chan.app", &dsid[..12])
 }
 
 #[tokio::test]
@@ -897,7 +913,10 @@ async fn share_landing_grantee_minted_jwt_redirect() {
     let (s, _, _, location) = c.send(Method::GET, "/s/owner-handle/photos", None).await;
     assert_eq!(s, StatusCode::SEE_OTHER);
     assert!(
-        location.starts_with("https://owner-handle.devserver.chan.app/photos/?t="),
+        location.starts_with(&format!(
+            "https://{}/photos/?t=",
+            disc_host("owner-handle", &dsid)
+        )),
         "got {location}"
     );
     app.cleanup().await;
@@ -955,13 +974,169 @@ async fn share_landing_root_owner_minted_jwt_redirect() {
     let (s, _, _, location) = c.send(Method::GET, "/s/owner-handle", None).await;
     assert_eq!(s, StatusCode::SEE_OTHER);
     assert!(
-        location.starts_with("https://owner-handle.devserver.chan.app/?t="),
+        location.starts_with(&format!("https://{}/?t=", disc_host("owner-handle", &dsid))),
         "got {location}"
     );
     // Root open lands at the devserver ROOT -- no `/{workspace}/` segment.
     assert!(
         !location.contains("/photos/"),
         "root open must not carry a workspace segment: {location}"
+    );
+    app.cleanup().await;
+}
+
+#[tokio::test]
+async fn share_landing_d_selector_picks_devserver() {
+    // Two live devservers; `?d=` (the 12-hex disc) picks the second.
+    let app = TestApp::new().await;
+    let mut c = Client::new(&app);
+    let caller_uid = fake_user_id();
+    happy_login(&app, &mut c, caller_uid, "alice@x.com").await;
+    Mock::given(method("GET"))
+        .and(path(format!("/v1/users/{caller_uid}")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(live_user_body(
+            caller_uid,
+            "alice@x.com",
+            "alice",
+        )))
+        .mount(&app.profile)
+        .await;
+    let owner_uid = Uuid::new_v4();
+    Mock::given(method("GET"))
+        .and(path("/v1/users/by-username"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(live_user_body(
+            owner_uid,
+            "owner@x.com",
+            "owner-handle",
+        )))
+        .mount(&app.profile)
+        .await;
+    let ds1 = "a".repeat(64);
+    let ds2 = "b".repeat(64);
+    mock_live_devservers(&app, "owner-handle", &[&ds1, &ds2]).await;
+    Mock::given(method("GET"))
+        .and(path(format!(
+            "/v1/users/{owner_uid}/devservers/{ds2}/access"
+        )))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"role": "editor"})))
+        .mount(&app.profile)
+        .await;
+
+    let (s, _, _, location) = c
+        .send(
+            Method::GET,
+            &format!("/s/owner-handle/photos?d={}", &ds2[..12]),
+            None,
+        )
+        .await;
+    assert_eq!(s, StatusCode::SEE_OTHER);
+    assert!(
+        location.starts_with(&format!(
+            "https://{}/photos/?t=",
+            disc_host("owner-handle", &ds2)
+        )),
+        "got {location}"
+    );
+    app.cleanup().await;
+}
+
+#[tokio::test]
+async fn share_landing_unknown_or_malformed_d_is_404() {
+    let app = TestApp::new().await;
+    let mut c = Client::new(&app);
+    let caller_uid = fake_user_id();
+    happy_login(&app, &mut c, caller_uid, "alice@x.com").await;
+    Mock::given(method("GET"))
+        .and(path(format!("/v1/users/{caller_uid}")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(live_user_body(
+            caller_uid,
+            "alice@x.com",
+            "alice",
+        )))
+        .mount(&app.profile)
+        .await;
+    let owner_uid = Uuid::new_v4();
+    Mock::given(method("GET"))
+        .and(path("/v1/users/by-username"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(live_user_body(
+            owner_uid,
+            "owner@x.com",
+            "owner-handle",
+        )))
+        .mount(&app.profile)
+        .await;
+    mock_live_devserver(&app, "owner-handle", &"a".repeat(64)).await;
+
+    // Well-formed selector that matches no live devserver.
+    let (s, _, _, _) = c
+        .send(
+            Method::GET,
+            &format!("/s/owner-handle/photos?d={}", "f".repeat(12)),
+            None,
+        )
+        .await;
+    assert_eq!(s, StatusCode::NOT_FOUND);
+    // Malformed selector (non-hex): dead link, same 404 shape.
+    let (s, _, _, _) = c
+        .send(Method::GET, "/s/owner-handle/photos?d=not-hex", None)
+        .await;
+    assert_eq!(s, StatusCode::NOT_FOUND);
+    app.cleanup().await;
+}
+
+#[tokio::test]
+async fn share_landing_multi_live_falls_back_to_first_accessible() {
+    // No selector, two live devservers: the caller lands on the first
+    // (sorted) one they can access -- here the grant is on the second.
+    let app = TestApp::new().await;
+    let mut c = Client::new(&app);
+    let caller_uid = fake_user_id();
+    happy_login(&app, &mut c, caller_uid, "alice@x.com").await;
+    Mock::given(method("GET"))
+        .and(path(format!("/v1/users/{caller_uid}")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(live_user_body(
+            caller_uid,
+            "alice@x.com",
+            "alice",
+        )))
+        .mount(&app.profile)
+        .await;
+    let owner_uid = Uuid::new_v4();
+    Mock::given(method("GET"))
+        .and(path("/v1/users/by-username"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(live_user_body(
+            owner_uid,
+            "owner@x.com",
+            "owner-handle",
+        )))
+        .mount(&app.profile)
+        .await;
+    let ds1 = "a".repeat(64);
+    let ds2 = "b".repeat(64);
+    mock_live_devservers(&app, "owner-handle", &[&ds1, &ds2]).await;
+    Mock::given(method("GET"))
+        .and(path(format!(
+            "/v1/users/{owner_uid}/devservers/{ds1}/access"
+        )))
+        .respond_with(ResponseTemplate::new(404).set_body_json(json!({"error": "not found"})))
+        .mount(&app.profile)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!(
+            "/v1/users/{owner_uid}/devservers/{ds2}/access"
+        )))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"role": "viewer"})))
+        .mount(&app.profile)
+        .await;
+
+    let (s, _, _, location) = c.send(Method::GET, "/s/owner-handle/photos", None).await;
+    assert_eq!(s, StatusCode::SEE_OTHER);
+    assert!(
+        location.starts_with(&format!(
+            "https://{}/photos/?t=",
+            disc_host("owner-handle", &ds2)
+        )),
+        "got {location}"
     );
     app.cleanup().await;
 }
