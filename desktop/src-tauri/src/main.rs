@@ -2092,6 +2092,21 @@ fn clear_awaiting_signin(app: &tauri::AppHandle, state: &Arc<AppState>, id: &str
     }
 }
 
+/// Persist the consent page's devserver pick onto the resuming row
+/// BEFORE its connect runs, so the entry mint targets the picked
+/// devserver. A callback with no pick leaves any stored selection
+/// alone (the user simply clicked Authorize; the recorded target
+/// keeps working). Best-effort: a config-write failure downgrades the
+/// connect to the gateway's first-accessible-live fallback.
+fn record_gateway_pick(state: &Arc<AppState>, id: &str, pick: Option<&auth::GatewaySelection>) {
+    let Some(sel) = pick else { return };
+    if let Err(e) =
+        config::set_gateway_selection(&state.store, id, Some((&sel.owner, &sel.devserver_id)))
+    {
+        tracing::warn!(error = %e, devserver = %id, "recording devserver pick failed");
+    }
+}
+
 /// Drop EVERY waiting-on-sign-in mark. `PendingAuth` is a single slot popped
 /// by any processed deep-link callback, so once a callback is consumed no
 /// waiting row's browser leg can complete anymore; the winner's connect
@@ -2125,6 +2140,7 @@ async fn connect_gateway_devserver(
     url: String,
     configured_label: String,
     discovery: devserver::GatewayDiscovery,
+    gateway_target: Option<(String, String)>,
 ) -> Result<(), ConnectDevserverError> {
     let Some(pat) = auth::load_gateway_pat(&discovery.identity_origin)? else {
         // No PAT: hand off to the browser and mark the row waiting so the
@@ -2144,7 +2160,8 @@ async fn connect_gateway_devserver(
     // A PAT-backed connect is running: any waiting mark is stale (this IS the
     // resume, or a manual connect superseded it).
     clear_awaiting_signin(&app, &state, &id);
-    let gateway = match devserver::gateway_conn(&discovery, pat.secret).await {
+    let had_target = gateway_target.is_some();
+    let gateway = match devserver::gateway_conn(&discovery, pat.secret, gateway_target).await {
         Ok(gateway) => gateway,
         Err(devserver::GatewayEntryError::Unauthorized) => {
             // The stored PAT is revoked/expired (taxonomy row ii): drop it and
@@ -2159,6 +2176,20 @@ async fn connect_gateway_devserver(
             )?;
             begin_awaiting_signin(&app, &state, &id);
             return Ok(());
+        }
+        Err(devserver::GatewayEntryError::AccessDenied) if had_target => {
+            // The recorded pick no longer admits (the grant was revoked
+            // or the devserver was rotated away): clear it so the next
+            // connect falls back to first-accessible-live instead of
+            // dead-ending on the same denial.
+            if let Err(e) = config::set_gateway_selection(&state.store, &id, None) {
+                tracing::warn!(error = %e, devserver = %id, "clearing revoked gateway pick failed");
+            }
+            return Err(
+                "the grant for the picked devserver was revoked - reconnect to pick again"
+                    .to_string()
+                    .into(),
+            );
         }
         // Known reasons (no devserver, offline, denied) surface their own
         // banner strings; Other keeps the raw message. No prefix here: the
@@ -2238,7 +2269,7 @@ async fn connect_devserver_impl_inner(
     state: Arc<AppState>,
     id: String,
 ) -> Result<(), ConnectDevserverError> {
-    let (url, script, stored_token, configured_label, auto_hide_control) = {
+    let (url, script, stored_token, configured_label, auto_hide_control, gateway_target) = {
         let cfg = state.store.lock().unwrap().get().map_err(err)?;
         let ds = cfg
             .devservers
@@ -2251,12 +2282,24 @@ async fn connect_devserver_impl_inner(
             ds.token.trim().to_string(),
             ds.label.trim().to_string(),
             ds.auto_hide_control,
+            match (&ds.gateway_owner, &ds.gateway_devserver_id) {
+                (Some(owner), Some(dsid)) => Some((owner.clone(), dsid.clone())),
+                _ => None,
+            },
         )
     };
     match devserver::discover_gateway(&url).await {
         Ok(discovery) => {
-            return connect_gateway_devserver(app, state, id, url, configured_label, discovery)
-                .await;
+            return connect_gateway_devserver(
+                app,
+                state,
+                id,
+                url,
+                configured_label,
+                discovery,
+                gateway_target,
+            )
+            .await;
         }
         Err(e) => {
             tracing::debug!(
@@ -4298,12 +4341,13 @@ fn main() {
             app.deep_link().on_open_url(move |event| {
                 for url in event.urls() {
                     match auth::handle_callback(&app_for_links, url.as_str()) {
-                        auth::CallbackOutcome::SignedIn { resume_devserver_id, .. } => {
+                        auth::CallbackOutcome::SignedIn { resume_devserver_id, devserver } => {
                             // Any processed callback pops the single pending-
                             // auth slot, so every waiting row's browser leg is
                             // settled: clear them all, then resume the winner.
                             clear_all_awaiting_signin(&app_for_links, &state_for_links);
                             if let Some(id) = resume_devserver_id {
+                                record_gateway_pick(&state_for_links, &id, devserver.as_ref());
                                 let app = app_for_links.clone();
                                 let state = Arc::clone(&state_for_links);
                                 tauri::async_runtime::spawn(async move {
@@ -4336,9 +4380,10 @@ fn main() {
             if let Ok(Some(urls)) = app.deep_link().get_current() {
                 for url in urls {
                     match auth::handle_callback(app.handle(), url.as_str()) {
-                        auth::CallbackOutcome::SignedIn { resume_devserver_id, .. } => {
+                        auth::CallbackOutcome::SignedIn { resume_devserver_id, devserver } => {
                             clear_all_awaiting_signin(app.handle(), &state_for_setup);
                             if let Some(id) = resume_devserver_id {
+                                record_gateway_pick(&state_for_setup, &id, devserver.as_ref());
                                 let app_handle = app.handle().clone();
                                 let state = Arc::clone(&state_for_setup);
                                 tauri::async_runtime::spawn(async move {

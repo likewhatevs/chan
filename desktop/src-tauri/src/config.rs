@@ -114,6 +114,16 @@ pub struct Devserver {
     /// bury notice) once connected.
     #[serde(default)]
     pub auto_hide_control: bool,
+    /// Gateway devserver selection recorded from the sign-in callback's
+    /// consent pick: the devserver OWNER's username plus the full
+    /// devserver id. Rides the desktop entry request so the gateway
+    /// mints for this exact devserver (own or shared). Absent on rows
+    /// predating the picker or after a revoked grant cleared it; the
+    /// gateway then falls back to the first accessible live devserver.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gateway_owner: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gateway_devserver_id: Option<String>,
 }
 
 /// Per-window layout snapshot pushed when a workspace webview closes,
@@ -404,6 +414,34 @@ impl DevserverConfigRegistry {
     }
 }
 
+/// Persist (or clear) the gateway devserver selection on a config row.
+/// Recorded from the sign-in callback's consent pick before the connect
+/// resumes; cleared when the gateway answers `access_denied` for it
+/// (the grant was revoked). A missing row (deleted meanwhile) is a
+/// no-op: there is nothing left to record onto.
+pub fn set_gateway_selection(
+    store: &Arc<Mutex<ConfigStore>>,
+    id: &str,
+    selection: Option<(&str, &str)>,
+) -> Result<(), String> {
+    let mut guard = store.lock().unwrap();
+    let mut cfg = guard.get().map_err(|e| e.to_string())?;
+    let Some(ds) = cfg.devservers.iter_mut().find(|d| d.id == id) else {
+        return Ok(());
+    };
+    match selection {
+        Some((owner, devserver_id)) => {
+            ds.gateway_owner = Some(owner.to_string());
+            ds.gateway_devserver_id = Some(devserver_id.to_string());
+        }
+        None => {
+            ds.gateway_owner = None;
+            ds.gateway_devserver_id = None;
+        }
+    }
+    guard.save(&cfg).map_err(|e| e.to_string())
+}
+
 /// chan-desktop's [`LocalColorStore`](chan_server::LocalColorStore): the local
 /// library's pane-highlight colour persisted in the desktop config
 /// (`~/.chan/desktop`, the same shared store the devserver registry + window LRU
@@ -586,6 +624,8 @@ impl DevserverRegistry for DevserverConfigRegistry {
             token,
             added_at: now_millis(),
             auto_hide_control: input.auto_hide_control,
+            gateway_owner: None,
+            gateway_devserver_id: None,
         };
         cfg.devservers.push(entry.clone());
         store.save(&cfg).map_err(|e| e.to_string())?;
@@ -1086,6 +1126,8 @@ mod tests {
                 token: "tok_secret".into(),
                 added_at: 42,
                 auto_hide_control: true,
+                gateway_owner: Some("alice".into()),
+                gateway_devserver_id: Some("a".repeat(64)),
             }],
             ..Default::default()
         };
@@ -1097,7 +1139,8 @@ mod tests {
     #[test]
     fn devserver_optional_fields_default() {
         // Only the connection essentials are required; script/label/
-        // added_at default so a hand-written config stays loadable.
+        // added_at/gateway selection default so a hand-written (or
+        // pre-picker) config stays loadable.
         let raw = r#"{
             "id": "ds-1",
             "url": "http://127.0.0.1:8787"
@@ -1109,6 +1152,54 @@ mod tests {
         assert_eq!(ds.label, "");
         assert_eq!(ds.token, "");
         assert_eq!(ds.added_at, 0);
+        assert_eq!(ds.gateway_owner, None);
+        assert_eq!(ds.gateway_devserver_id, None);
+    }
+
+    #[test]
+    fn gateway_selection_persists_and_clears() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(Mutex::new(ConfigStore {
+            path: dir.path().join("config.json"),
+        }));
+        let reg = DevserverConfigRegistry::new(
+            Arc::clone(&store),
+            Arc::new(OnceLock::new()),
+            Arc::new(crate::devserver::DevserverConns::default()),
+            empty_connecting(),
+            empty_awaiting(),
+            Arc::new(crate::DevserverFeed::default()),
+        );
+        let added = reg
+            .add(DevserverInput {
+                url: None,
+                host: "box.example.com".into(),
+                port: 8787,
+                label: None,
+                script: None,
+                token: None,
+                clear_token: false,
+                auto_hide_control: false,
+            })
+            .expect("add");
+
+        set_gateway_selection(&store, &added.id, Some(("alice", "abc123")))
+            .expect("record selection");
+        let cfg = store.lock().unwrap().get().unwrap();
+        assert_eq!(cfg.devservers[0].gateway_owner.as_deref(), Some("alice"));
+        assert_eq!(
+            cfg.devservers[0].gateway_devserver_id.as_deref(),
+            Some("abc123")
+        );
+
+        // Revoked-grant path: clearing writes both fields back to None.
+        set_gateway_selection(&store, &added.id, None).expect("clear selection");
+        let cfg = store.lock().unwrap().get().unwrap();
+        assert_eq!(cfg.devservers[0].gateway_owner, None);
+        assert_eq!(cfg.devservers[0].gateway_devserver_id, None);
+
+        // Unknown row (deleted meanwhile): a no-op, not an error.
+        set_gateway_selection(&store, "ghost", Some(("bob", "fff"))).expect("ghost no-op");
     }
 
     /// The registry projects a stored `Devserver` to a wire `DevserverEntry`

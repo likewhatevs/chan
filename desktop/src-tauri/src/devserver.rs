@@ -54,6 +54,11 @@ pub struct GatewayConn {
     pub desktop_entry_url: String,
     pub proxy_origin: String,
     pub pat: String,
+    /// Explicit devserver target recorded from the consent pick
+    /// (`(owner_username, devserver_id)`), included in every entry
+    /// request so the gateway mints for this exact devserver (own or
+    /// shared). `None` = the gateway's first-accessible-live fallback.
+    pub entry_target: Option<(String, String)>,
     session: Arc<Mutex<Option<GatewaySession>>>,
 }
 
@@ -69,8 +74,15 @@ impl GatewayConn {
             desktop_entry_url,
             proxy_origin,
             pat,
+            entry_target: None,
             session: Arc::new(Mutex::new(None)),
         }
+    }
+
+    /// Attach the recorded devserver selection to every entry mint.
+    pub fn with_entry_target(mut self, target: Option<(String, String)>) -> Self {
+        self.entry_target = target;
+        self
     }
 }
 
@@ -426,6 +438,13 @@ pub async fn discover_gateway(url: &str) -> Result<GatewayDiscovery, String> {
 #[derive(Serialize)]
 struct GatewayEntryRequest<'a> {
     path: &'a str,
+    /// Explicit devserver target from the recorded consent pick; the
+    /// keys stay off the wire when absent so an older gateway parses
+    /// the request unchanged.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    owner: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    devserver_id: Option<&'a str>,
 }
 
 #[derive(Deserialize)]
@@ -552,7 +571,11 @@ async fn gateway_entry(
         .map_err(GatewayEntryError::Other)?
         .post(&gw.desktop_entry_url)
         .bearer_auth(&gw.pat)
-        .json(&GatewayEntryRequest { path })
+        .json(&GatewayEntryRequest {
+            path,
+            owner: gw.entry_target.as_ref().map(|(o, _)| o.as_str()),
+            devserver_id: gw.entry_target.as_ref().map(|(_, d)| d.as_str()),
+        })
         .send()
         .await
         .map_err(|e| GatewayEntryError::Other(format!("minting gateway entry URL: {e}")))?;
@@ -569,13 +592,15 @@ async fn gateway_entry(
 pub async fn gateway_conn(
     discovery: &GatewayDiscovery,
     pat: String,
+    entry_target: Option<(String, String)>,
 ) -> Result<GatewayConn, GatewayEntryError> {
     let probe = GatewayConn::new(
         discovery.identity_origin.clone(),
         discovery.desktop_entry_url.clone(),
         discovery.devserver_proxy_origin.clone(),
         pat,
-    );
+    )
+    .with_entry_target(entry_target);
     let entry = gateway_entry(&probe, "/").await?;
     let proxy_origin = if entry.proxy_origin.trim().is_empty() {
         discovery.devserver_proxy_origin.clone()
@@ -587,7 +612,8 @@ pub async fn gateway_conn(
         discovery.desktop_entry_url.clone(),
         proxy_origin,
         probe.pat,
-    );
+    )
+    .with_entry_target(probe.entry_target);
     establish_gateway_session_from_entry(&gw, &entry.entry_url)
         .await
         .map_err(GatewayEntryError::Other)?;
@@ -1533,6 +1559,32 @@ mod tests {
         };
         validate_gateway_discovery("http://localhost:7000", d)
             .expect("loopback http is explicit dev use");
+    }
+
+    #[test]
+    fn entry_request_carries_target_only_when_recorded() {
+        // No recorded pick: the wire body stays exactly `{"path":...}`
+        // so an older gateway parses it unchanged.
+        let bare = serde_json::to_value(GatewayEntryRequest {
+            path: "/",
+            owner: None,
+            devserver_id: None,
+        })
+        .unwrap();
+        assert_eq!(bare, serde_json::json!({"path": "/"}));
+
+        // A recorded pick rides as the optional owner + devserver_id
+        // fields the gateway resolves the explicit target from.
+        let targeted = serde_json::to_value(GatewayEntryRequest {
+            path: "/",
+            owner: Some("alice"),
+            devserver_id: Some("abc123"),
+        })
+        .unwrap();
+        assert_eq!(
+            targeted,
+            serde_json::json!({"path": "/", "owner": "alice", "devserver_id": "abc123"})
+        );
     }
 
     #[test]
