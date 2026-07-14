@@ -1,21 +1,27 @@
 //! Reverse proxy for `*.devserver.chan.app/{workspace}/...` into the
 //! `chan devserver` peer behind the registered tunnel.
 //!
-//! `{user}` is parsed out of the wildcard `Host` header by
-//! `http::dispatch` and handed in. The gate is per-DEVSERVER: there is
-//! one devserver per user, and the `{workspace}` path segment is tenant
-//! routing only, never a gate key. It is forwarded into the tunnel
-//! unchanged and the devserver routes the tenant internally.
+//! `{user}` and the optional `{disc}` (first 12 hex chars of a
+//! devserver id, in the `{user}--{disc}` host form) are parsed out of
+//! the wildcard `Host` header by `http::dispatch` and handed in. A
+//! user can hold many live devservers; a disc host addresses one of
+//! them by id prefix, and a bare `{user}` host resolves through the
+//! gate credential's `drv` claim (single live devserver: the pre-disc
+//! behavior). The gate is per-DEVSERVER: the `{workspace}` path
+//! segment is tenant routing only, never a gate key. It is forwarded
+//! into the tunnel unchanged and the devserver routes the tenant
+//! internally.
 //!
 //! Auth gate, in this order:
 //!
-//!   * no live devserver registration for `{user}` -> 404
+//!   * no live devserver registration matching the host (`{user}`,
+//!     and the `{disc}` prefix when present) -> 404
 //!   * `/api/devserver/*` (the local-only management API) -> 404
 //!   * request has `?t=<entry-jwt>`:
-//!     * verify HS256 + exp + aud (Host) + drv (devserver id) -> mint a
-//!       session JWT carrying the entry's `sub`, set host-only
-//!       `devserver_gate` and `devserver_csrf` cookies scoped to `Path=/`,
-//!       303 to the clean URL
+//!     * verify HS256 + exp + aud (Host) + drv (a resolved devserver
+//!       id) -> mint a session JWT carrying the entry's `sub`, set
+//!       host-only `devserver_gate` and `devserver_csrf` cookies scoped
+//!       to `Path=/`, 303 to the clean URL
 //!     * any failure -> 404
 //!   * request has a valid `devserver_gate` cookie (signature + aud + drv)
 //!     -> pass through
@@ -70,6 +76,7 @@ use uuid::Uuid;
 
 use crate::error::{Error, Result};
 use crate::http::AppState;
+use crate::registry::Entry;
 
 /// Wraps a response body with a hard deadline shared with the
 /// `proxy_http` send_request timeout. If the upstream goes silent or
@@ -193,18 +200,41 @@ fn connection_listed_headers(headers: &HeaderMap) -> Vec<HeaderName> {
         .collect()
 }
 
-/// Entry point from `http::dispatch`. `user` came out of the wildcard
-/// Host header. The gate is per-DEVSERVER: it resolves the user's single
-/// devserver registration and verifies the `devserver_gate` cookie's
-/// `drv` against that devserver id. It does NOT peel a path segment.
-/// The `{workspace}` path segment is tenant routing only and is
-/// forwarded into the tunnel unchanged. axum's extractors are not used
-/// at this level because the dispatcher already consumed `Host`.
-pub async fn handle(state: AppState, user: String, req: Request) -> Response {
-    // One devserver per user: look up by the host's {user} label alone.
-    let Some((devserver_id, entry)) = state.registry.get_user_devserver(&user) else {
-        return not_found_response(req.headers());
+/// Entry point from `http::dispatch`. `user` and `disc` came out of
+/// the wildcard Host header. The gate is per-DEVSERVER: the request
+/// resolves to one of the user's live registrations and the gate
+/// verifies the credential's `drv` claim against that devserver id.
+/// It does NOT peel a path segment. The `{workspace}` path segment is
+/// tenant routing only and is forwarded into the tunnel unchanged.
+/// axum's extractors are not used at this level because the
+/// dispatcher already consumed `Host`.
+///
+/// Devserver resolution:
+///
+///   * disc host (`{user}--{disc}`): the unique live devserver id
+///     with that 12-hex prefix; zero or ambiguous matches -> 404.
+///   * bare host (`{user}`): every live devserver is a candidate and
+///     the gate picks the one the request's credential was minted
+///     for (the signed `drv` claim), bounded by the user's live set.
+///     A single live devserver keeps the pre-disc behavior; no
+///     verifying credential -> 404.
+pub async fn handle(state: AppState, user: String, disc: Option<String>, req: Request) -> Response {
+    let candidates: Vec<(String, Entry)> = match &disc {
+        Some(d) => state
+            .registry
+            .get_user_devserver_by_prefix(&user, d)
+            .into_iter()
+            .collect(),
+        None => state
+            .registry
+            .live_devserver_ids(&user)
+            .into_iter()
+            .filter_map(|id| state.registry.get(&user, &id).map(|entry| (id, entry)))
+            .collect(),
     };
+    if candidates.is_empty() {
+        return not_found_response(req.headers());
+    }
 
     // The management API is local-only; the proxy carries tenant content
     // only and never proxies `/api/devserver/*` on the public wildcard.
@@ -213,14 +243,30 @@ pub async fn handle(state: AppState, user: String, req: Request) -> Response {
     }
 
     // The audience is the inbound Host. Tokens minted for one
-    // subdomain do not validate on another.
+    // subdomain do not validate on another, so a credential for
+    // another user's devserver never verifies here regardless of
+    // which candidate it is tried against.
     let aud = host_header(req.headers()).unwrap_or_default();
 
     let is_ws = is_websocket_upgrade(req.headers());
 
     // The gate always runs: every devserver tunnel is authenticated,
-    // there is no un-gated pass-through.
-    let caller = match resolve_gate(&state, &req, &devserver_id, &aud) {
+    // there is no un-gated pass-through. The first candidate whose
+    // credential verifies under (aud, drv) wins.
+    let mut resolved = None;
+    for (devserver_id, entry) in candidates {
+        match resolve_gate(&state, &req, &devserver_id, &aud) {
+            Gate::Reject => continue,
+            gate => {
+                resolved = Some((devserver_id, entry, gate));
+                break;
+            }
+        }
+    }
+    let Some((devserver_id, entry, gate)) = resolved else {
+        return not_found_response(req.headers());
+    };
+    let caller = match gate {
         Gate::Pass {
             sub,
             role,
@@ -245,6 +291,7 @@ pub async fn handle(state: AppState, user: String, req: Request) -> Response {
                 req.uri(),
             );
         }
+        // The loop above filtered rejects; kept as the safe default.
         Gate::Reject => return not_found_response(req.headers()),
     };
     if requires_csrf(req.method()) && !csrf_header_matches_cookie(req.headers()) {

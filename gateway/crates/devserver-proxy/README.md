@@ -71,7 +71,7 @@ The legacy `MAX_WORKSPACES_PER_USER` name is honored when
 ## Routes
 
 - Apex (`devserver.<domain>`): `POST /v1/tunnel` (raw h2c, on the tunnel listener), the Bearer-gated `/admin/v1/*` tree, and `/healthz`.
-- Wildcard (`{user}.devserver.<domain>`): the per-devserver reverse proxy. The gate runs on the user's single live devserver (`?t=` entry token / `devserver_gate` cookie); on pass the full `/{workspace}/...` path is forwarded into the tunnel (segment-preserving) and the devserver routes the tenant. `/api/devserver/*` (the local-only management API) is 404'd here.
+- Wildcard (`{user}--{disc}.devserver.<domain>` addressing one devserver by the first 12 hex chars of its id, or bare `{user}.devserver.<domain>` resolved via the gate credential): the per-devserver reverse proxy. The gate runs on the resolved devserver (`?t=` entry token / `devserver_gate` cookie); on pass the full `/{workspace}/...` path is forwarded into the tunnel (segment-preserving) and the devserver routes the tenant. `/api/devserver/*` (the local-only management API) is 404'd here.
 
 See [`design.md`](design.md) for the authoritative route list, the auth-gate order, and the reverse-proxy hygiene rules.
 

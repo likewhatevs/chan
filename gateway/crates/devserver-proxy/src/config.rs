@@ -205,17 +205,28 @@ impl Config {
         })
     }
 
-    /// Parse `{user}` out of a Host header, or `None` if the Host is
-    /// the apex (no user prefix) or doesn't match this gateway's
-    /// hostnames. The strip trims any optional `:port` suffix so
-    /// dev lookups against `127.0.0.1:7002` still work.
+    /// Parse `(user, disc)` out of a Host header, or `None` if the
+    /// Host is the apex (no user prefix) or doesn't match this
+    /// gateway's hostnames. The strip trims any optional `:port`
+    /// suffix so dev lookups against `127.0.0.1:7002` still work.
     ///
-    /// The prefix must be a single DNS label: lowercase ASCII
-    /// alphanumerics plus `-`, no internal dots. Multi-label
-    /// prefixes (e.g. `evil.alice` against `*.devserver.chan.app`) and
-    /// non-label characters are rejected so the resulting "username"
-    /// matches the shape username validators downstream accept.
-    pub fn parse_wildcard_user(&self, host: &str) -> Option<String> {
+    /// Two wildcard forms share one DNS label:
+    ///
+    ///   * `{user}.devserver.<base>` -> `(user, None)`. Bare host;
+    ///     the proxy resolves the devserver from the user's live set.
+    ///   * `{user}--{disc}.devserver.<base>` -> `(user, Some(disc))`.
+    ///     `disc` is the first 12 hex chars of the devserver id. The
+    ///     double hyphen is unambiguous because `valid_username`
+    ///     rejects usernames containing `--`.
+    ///
+    /// The label is lowercased on ingest (DNS names are case-
+    /// insensitive; devserver ids are stored lowercase). A label with
+    /// more than one `--`, a disc tail that is not exactly 12
+    /// lowercase hex chars, a multi-label prefix (e.g. `evil.alice`
+    /// against `*.devserver.chan.app`), and non-label characters are
+    /// all rejected so the resulting username matches the shape the
+    /// downstream validators accept.
+    pub fn parse_wildcard_host(&self, host: &str) -> Option<(String, Option<String>)> {
         let host = host.split(':').next()?;
         if host.eq_ignore_ascii_case(&self.apex_host) {
             return None;
@@ -237,7 +248,22 @@ impl Config {
         {
             return None;
         }
-        Some(prefix.to_ascii_lowercase())
+        let label = prefix.to_ascii_lowercase();
+        match label.match_indices("--").count() {
+            0 => Some((label, None)),
+            1 => {
+                let (user, disc) = label.split_once("--").expect("counted one occurrence");
+                if user.is_empty() {
+                    return None;
+                }
+                let is_lower_hex = |c: u8| c.is_ascii_digit() || (b'a'..=b'f').contains(&c);
+                if disc.len() != 12 || !disc.bytes().all(is_lower_hex) {
+                    return None;
+                }
+                Some((user.to_string(), Some(disc.to_string())))
+            }
+            _ => None,
+        }
     }
 
     /// True when the Host header names this gateway's apex.
@@ -339,35 +365,94 @@ mod tests {
     #[test]
     fn apex_returns_none() {
         let c = cfg();
-        assert_eq!(c.parse_wildcard_user("devserver.chan.app"), None);
-        assert_eq!(c.parse_wildcard_user("DEVSERVER.chan.app"), None);
-        assert_eq!(c.parse_wildcard_user("devserver.chan.app:7002"), None);
+        assert_eq!(c.parse_wildcard_host("devserver.chan.app"), None);
+        assert_eq!(c.parse_wildcard_host("DEVSERVER.chan.app"), None);
+        assert_eq!(c.parse_wildcard_host("devserver.chan.app:7002"), None);
     }
 
     #[test]
-    fn wildcard_extracts_user() {
+    fn bare_wildcard_extracts_user_without_disc() {
         let c = cfg();
         assert_eq!(
-            c.parse_wildcard_user("alice.devserver.chan.app").as_deref(),
-            Some("alice"),
+            c.parse_wildcard_host("alice.devserver.chan.app"),
+            Some(("alice".into(), None)),
         );
         assert_eq!(
-            c.parse_wildcard_user("Alice.Devserver.Chan.App").as_deref(),
-            Some("alice"),
+            c.parse_wildcard_host("Alice.Devserver.Chan.App"),
+            Some(("alice".into(), None)),
         );
         assert_eq!(
-            c.parse_wildcard_user("alice.devserver.chan.app:7002")
-                .as_deref(),
-            Some("alice"),
+            c.parse_wildcard_host("alice.devserver.chan.app:7002"),
+            Some(("alice".into(), None)),
+        );
+        // Single interior hyphens stay part of the username.
+        assert_eq!(
+            c.parse_wildcard_host("a-b-c.devserver.chan.app"),
+            Some(("a-b-c".into(), None)),
+        );
+    }
+
+    #[test]
+    fn disc_wildcard_extracts_user_and_disc() {
+        let c = cfg();
+        assert_eq!(
+            c.parse_wildcard_host("alice--0123456789ab.devserver.chan.app"),
+            Some(("alice".into(), Some("0123456789ab".into()))),
+        );
+        // The whole label is lowercased on ingest, disc included.
+        assert_eq!(
+            c.parse_wildcard_host("Alice--0123456789AB.devserver.chan.app"),
+            Some(("alice".into(), Some("0123456789ab".into()))),
+        );
+        assert_eq!(
+            c.parse_wildcard_host("a-b--abcdefabcdef.devserver.chan.app:7002"),
+            Some(("a-b".into(), Some("abcdefabcdef".into()))),
+        );
+    }
+
+    #[test]
+    fn malformed_disc_rejected() {
+        let c = cfg();
+        // Tail must be exactly 12 hex chars.
+        assert_eq!(
+            c.parse_wildcard_host("alice--0123456789a.devserver.chan.app"),
+            None
+        );
+        assert_eq!(
+            c.parse_wildcard_host("alice--0123456789abc.devserver.chan.app"),
+            None
+        );
+        assert_eq!(
+            c.parse_wildcard_host("alice--0123456789xy.devserver.chan.app"),
+            None
+        );
+        // More than one `--` cannot come from a valid username.
+        assert_eq!(
+            c.parse_wildcard_host("a--b--0123456789ab.devserver.chan.app"),
+            None
+        );
+        assert_eq!(
+            c.parse_wildcard_host("a----0123456789ab.devserver.chan.app"),
+            None
+        );
+        // A triple hyphen leaves a `-` in the disc tail.
+        assert_eq!(
+            c.parse_wildcard_host("a---0123456789ab.devserver.chan.app"),
+            None
+        );
+        // Empty user before the separator.
+        assert_eq!(
+            c.parse_wildcard_host("--0123456789ab.devserver.chan.app"),
+            None
         );
     }
 
     #[test]
     fn unknown_host_returns_none() {
         let c = cfg();
-        assert_eq!(c.parse_wildcard_user("example.com"), None);
-        assert_eq!(c.parse_wildcard_user(""), None);
-        assert_eq!(c.parse_wildcard_user(".devserver.chan.app"), None);
+        assert_eq!(c.parse_wildcard_host("example.com"), None);
+        assert_eq!(c.parse_wildcard_host(""), None);
+        assert_eq!(c.parse_wildcard_host(".devserver.chan.app"), None);
     }
 
     #[test]
@@ -376,12 +461,12 @@ mod tests {
         // but must NOT resolve to username "evil.alice": the prefix
         // is required to be a single DNS label.
         let c = cfg();
-        assert_eq!(c.parse_wildcard_user("evil.alice.devserver.chan.app"), None);
+        assert_eq!(c.parse_wildcard_host("evil.alice.devserver.chan.app"), None);
         // Leading dot was already excluded by the substring length
         // check + emptiness guard, but tighten the boundary explicitly.
-        assert_eq!(c.parse_wildcard_user("..devserver.chan.app"), None);
+        assert_eq!(c.parse_wildcard_host("..devserver.chan.app"), None);
         // Underscores aren't legal DNS hostname chars and are not in
         // the username alphabet either.
-        assert_eq!(c.parse_wildcard_user("a_b.devserver.chan.app"), None);
+        assert_eq!(c.parse_wildcard_host("a_b.devserver.chan.app"), None);
     }
 }

@@ -166,6 +166,32 @@ impl TestApp {
             .await;
     }
 
+    /// Register a tunnel whose token-resolved devserver id differs
+    /// from the client's Hello workspace name. Production-shaped ids
+    /// are 64 hex chars, which `is_valid_workspace_name` (max 32)
+    /// rejects on the client dial; the registry keys on the
+    /// token-resolved id regardless, so the Hello name is a short
+    /// advisory slug here.
+    async fn register_tunnel_hello(
+        &self,
+        username: &str,
+        devserver_id: &str,
+        hello: &str,
+        uid: Uuid,
+        router: Router,
+    ) {
+        let token = format!("tok-{}", Uuid::new_v4().simple());
+        self.stub.add(&token, uid, username, devserver_id);
+        spawn_tunnel_client(self.tunnel_addr, &token, hello, router).await;
+        for _ in 0..50 {
+            if self.registry.get(username, devserver_id).is_some() {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        panic!("tunnel for {username}/{devserver_id} did not register");
+    }
+
     async fn register_tunnel_with_token(
         &self,
         token: &str,
@@ -335,6 +361,18 @@ fn mint_identity(
 fn host_for(user: &str) -> String {
     format!("{user}{WILDCARD_SUFFIX}")
 }
+
+/// Disc host for a devserver: `{user}--{first 12 hex of id}.<suffix>`.
+fn disc_host_for(user: &str, devserver_id: &str) -> String {
+    format!("{user}--{}{WILDCARD_SUFFIX}", &devserver_id[..12])
+}
+
+// 64-hex devserver ids with distinct 12-char prefixes, plus a pair
+// sharing one prefix for the ambiguity case.
+const DS_A: &str = "aaaa1111bbbb2222cccc3333dddd4444eeee5555ffff6666aaaa7777bbbb8888";
+const DS_B: &str = "bbbb1111cccc2222dddd3333eeee4444ffff5555aaaa6666bbbb7777cccc8888";
+const DS_AMB1: &str = "9999aaaa88881111111111111111111111111111111111111111111111111111";
+const DS_AMB2: &str = "9999aaaa88882222222222222222222222222222222222222222222222222222";
 
 /// A `Cookie` header value carrying a valid session token for
 /// `(sub, workspace)` on `host`. Every reverse-proxy request must pass
@@ -1377,6 +1415,234 @@ async fn tunnel_unlimited_when_max_is_zero() {
         app.register_tunnel("alice", d, uid, Router::new()).await;
     }
     assert_eq!(app.registry.list_for("alice").len(), 4);
+    app.cleanup().await;
+}
+
+#[tokio::test]
+async fn tunnel_rejects_second_devserver_when_limit_is_one() {
+    let app = TestApp::new_with_max_devservers(1).await;
+    let uid = Uuid::new_v4();
+    app.register_tunnel("alice", "a", uid, Router::new()).await;
+
+    let token = format!("tok-{}", Uuid::new_v4().simple());
+    app.stub.add(&token, uid, "alice", "b");
+    let result = try_register_tunnel(app.tunnel_addr, &token, "b", Router::new()).await;
+    assert!(
+        result.is_err(),
+        "second devserver should be rejected at limit 1: {result:?}"
+    );
+    app.cleanup().await;
+}
+
+// ---------------------------------------------------------------
+// Multi-devserver routing (disc hosts + bare-host compat)
+// ---------------------------------------------------------------
+
+#[tokio::test]
+async fn disc_hosts_route_to_their_devservers() {
+    let app = TestApp::new().await;
+    let uid = Uuid::new_v4();
+    let up_a = Router::new().fallback(|| async { "ds-a" });
+    let up_b = Router::new().fallback(|| async { "ds-b" });
+    app.register_tunnel_hello("alice", DS_A, "ws-a", uid, up_a)
+        .await;
+    app.register_tunnel_hello("alice", DS_B, "ws-b", uid, up_b)
+        .await;
+
+    let proxy_addr = serve_router_real(app.router.clone()).await;
+    for (id, body) in [(DS_A, "ds-a"), (DS_B, "ds-b")] {
+        let host = disc_host_for("alice", id);
+        let session = mint(devserver_gate::TokenType::Session, uid, id, &host);
+        let res = reqwest::Client::new()
+            .get(format!("http://{proxy_addr}/blog/"))
+            .header(header::HOST, &host)
+            .header(header::COOKIE, format!("devserver_gate={session}"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(res.status(), 200);
+        assert_eq!(res.text().await.unwrap(), body);
+    }
+    app.cleanup().await;
+}
+
+#[tokio::test]
+async fn bare_host_with_two_live_routes_by_credential() {
+    let app = TestApp::new().await;
+    let uid = Uuid::new_v4();
+    let up_a = Router::new().fallback(|| async { "ds-a" });
+    let up_b = Router::new().fallback(|| async { "ds-b" });
+    app.register_tunnel_hello("alice", DS_A, "ws-a", uid, up_a)
+        .await;
+    app.register_tunnel_hello("alice", DS_B, "ws-b", uid, up_b)
+        .await;
+
+    // Same bare host both times; the session's drv claim picks the
+    // devserver.
+    let host = host_for("alice");
+    let proxy_addr = serve_router_real(app.router.clone()).await;
+    for (id, body) in [(DS_A, "ds-a"), (DS_B, "ds-b")] {
+        let session = mint(devserver_gate::TokenType::Session, uid, id, &host);
+        let res = reqwest::Client::new()
+            .get(format!("http://{proxy_addr}/blog/"))
+            .header(header::HOST, &host)
+            .header(header::COOKIE, format!("devserver_gate={session}"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(res.status(), 200);
+        assert_eq!(res.text().await.unwrap(), body);
+    }
+    app.cleanup().await;
+}
+
+#[tokio::test]
+async fn bare_host_with_two_live_and_no_credential_is_404() {
+    let app = TestApp::new().await;
+    let uid = Uuid::new_v4();
+    app.register_tunnel_hello("alice", DS_A, "ws-a", uid, Router::new())
+        .await;
+    app.register_tunnel_hello("alice", DS_B, "ws-b", uid, Router::new())
+        .await;
+
+    let (s, _, _) = send_host(&app.router, Method::GET, &host_for("alice"), "/blog/", &[]).await;
+    assert_eq!(s, StatusCode::NOT_FOUND);
+    app.cleanup().await;
+}
+
+#[tokio::test]
+async fn bare_host_entry_token_mints_session_for_its_devserver() {
+    let app = TestApp::new().await;
+    let uid = Uuid::new_v4();
+    app.register_tunnel_hello("alice", DS_A, "ws-a", uid, Router::new())
+        .await;
+    app.register_tunnel_hello("alice", DS_B, "ws-b", uid, Router::new())
+        .await;
+
+    let host = host_for("alice");
+    let entry = mint(devserver_gate::TokenType::Entry, uid, DS_B, &host);
+    let (s, hdrs, _) = send_host(
+        &app.router,
+        Method::GET,
+        &host,
+        &format!("/blog/?t={entry}"),
+        &[],
+    )
+    .await;
+    assert_eq!(s, StatusCode::SEE_OTHER);
+    let set = hdrs.get(header::SET_COOKIE).unwrap().to_str().unwrap();
+    let cookie = set
+        .strip_prefix("devserver_gate=")
+        .and_then(|s| s.split(';').next())
+        .unwrap();
+    // The minted session is bound to the entry's devserver, not to
+    // whichever live registration happens to sort first.
+    devserver_gate::decode(
+        DEVSERVER_GATE_SECRET,
+        cookie,
+        devserver_gate::TokenType::Session,
+        &host,
+        DS_B,
+    )
+    .expect("session should be bound to the entry's devserver");
+    app.cleanup().await;
+}
+
+#[tokio::test]
+async fn ambiguous_disc_is_404() {
+    let app = TestApp::new().await;
+    let uid = Uuid::new_v4();
+    // Two live devservers sharing the same 12-hex prefix: the disc
+    // host cannot pick one, even with a valid credential.
+    app.register_tunnel_hello("alice", DS_AMB1, "ws-1", uid, Router::new())
+        .await;
+    app.register_tunnel_hello("alice", DS_AMB2, "ws-2", uid, Router::new())
+        .await;
+
+    let host = disc_host_for("alice", DS_AMB1);
+    let session = mint(devserver_gate::TokenType::Session, uid, DS_AMB1, &host);
+    let (s, _, _) = send_host(
+        &app.router,
+        Method::GET,
+        &host,
+        "/blog/",
+        &[("cookie", &format!("devserver_gate={session}"))],
+    )
+    .await;
+    assert_eq!(s, StatusCode::NOT_FOUND);
+    app.cleanup().await;
+}
+
+#[tokio::test]
+async fn unknown_disc_is_404() {
+    let app = TestApp::new().await;
+    let uid = Uuid::new_v4();
+    app.register_tunnel_hello("alice", DS_A, "ws-a", uid, Router::new())
+        .await;
+
+    // Well-formed disc host naming a devserver that is not live.
+    let host = disc_host_for("alice", DS_B);
+    let session = mint(devserver_gate::TokenType::Session, uid, DS_A, &host);
+    let (s, _, _) = send_host(
+        &app.router,
+        Method::GET,
+        &host,
+        "/blog/",
+        &[("cookie", &format!("devserver_gate={session}"))],
+    )
+    .await;
+    assert_eq!(s, StatusCode::NOT_FOUND);
+    app.cleanup().await;
+}
+
+#[tokio::test]
+async fn credential_for_other_users_devserver_never_routes() {
+    let app = TestApp::new().await;
+    let alice = Uuid::new_v4();
+    let bob = Uuid::new_v4();
+    app.register_tunnel_hello("alice", DS_A, "ws-a", alice, Router::new())
+        .await;
+    app.register_tunnel_hello("bob", DS_B, "ws-b", bob, Router::new())
+        .await;
+
+    // A session minted for bob's devserver on bob's host: replaying
+    // it on alice's hosts (bare and disc) must 404. The aud claim
+    // binds the credential to bob's host, so the bare-host drv loop
+    // over alice's live set can never verify it.
+    let session = mint(
+        devserver_gate::TokenType::Session,
+        bob,
+        DS_B,
+        &host_for("bob"),
+    );
+    for host in [host_for("alice"), disc_host_for("alice", DS_A)] {
+        let (s, _, _) = send_host(
+            &app.router,
+            Method::GET,
+            &host,
+            "/blog/",
+            &[("cookie", &format!("devserver_gate={session}"))],
+        )
+        .await;
+        assert_eq!(s, StatusCode::NOT_FOUND, "host {host}");
+    }
+    app.cleanup().await;
+}
+
+#[tokio::test]
+async fn disc_wildcard_root_redirects_to_dashboard() {
+    let app = TestApp::new().await;
+    let (s, hdrs, _) = send_host(
+        &app.router,
+        Method::GET,
+        &disc_host_for("alice", DS_A),
+        "/",
+        &[],
+    )
+    .await;
+    assert!(s.is_redirection(), "got {s}");
+    let loc = hdrs.get(header::LOCATION).unwrap().to_str().unwrap();
+    assert_eq!(loc, "https://id.chan.app/workspaces");
     app.cleanup().await;
 }
 

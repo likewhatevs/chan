@@ -123,22 +123,41 @@ impl Registry {
         Some(Entry { handle, owner_id })
     }
 
-    /// Resolve the user's single live devserver registration (one
-    /// devserver per user). Returns the registered devserver id (the
-    /// registry's second key) paired with its entry, or `None` when the
-    /// user has no live tunnel. The proxy gate looks up by user alone --
-    /// the inbound `{user}` host label -- and never peels a path segment;
-    /// the devserver id it returns is what the gate verifies the
-    /// `devserver_gate` cookie's `drv` against.
-    pub fn get_user_devserver(&self, username: &str) -> Option<(String, Entry)> {
-        let info = self
+    /// Resolve a devserver by host disc: the unique live devserver id
+    /// of `username` that starts with `disc` (the first 12 hex chars
+    /// of the id, carried in the `{user}--{disc}` host form). Returns
+    /// the full devserver id paired with its entry. Zero matches and
+    /// ambiguous prefixes both return `None`; the proxy maps either
+    /// to 404 so a probe cannot tell them apart.
+    pub fn get_user_devserver_by_prefix(
+        &self,
+        username: &str,
+        disc: &str,
+    ) -> Option<(String, Entry)> {
+        let mut matches = self
             .tunnels
             .list_workspaces_for(username)
             .into_iter()
-            .next()?;
-        let devserver_id = info.workspace.as_ref().to_string();
+            .map(|info| info.workspace.as_ref().to_string())
+            .filter(|id| id.starts_with(disc));
+        let devserver_id = matches.next()?;
+        if matches.next().is_some() {
+            return None;
+        }
         let entry = self.get(username, &devserver_id)?;
         Some((devserver_id, entry))
+    }
+
+    /// Live devserver ids registered for `username`, sorted by id.
+    /// The proxy's bare-host path iterates these to find the
+    /// registration a request's gate credential (`drv` claim) was
+    /// minted for; the sort keeps that iteration deterministic.
+    pub fn live_devserver_ids(&self, username: &str) -> Vec<String> {
+        self.tunnels
+            .list_workspaces_for(username)
+            .into_iter()
+            .map(|info| info.workspace.as_ref().to_string())
+            .collect()
     }
 
     /// Snapshot every registered tunnel for the admin `tunnel ps`

@@ -68,10 +68,11 @@ async fn dispatch(State(state): State<AppState>, req: Request) -> Response {
     if cfg.is_apex(&host) {
         return (StatusCode::NOT_FOUND, "not found").into_response();
     }
-    let Some(user) = cfg.parse_wildcard_user(&host) else {
+    let Some((user, disc)) = cfg.parse_wildcard_host(&host) else {
         // Host header that is neither the apex nor a recognized
-        // wildcard subdomain. Reject so a misrouted public listener
-        // doesn't expose the proxy by accident.
+        // wildcard subdomain (a malformed `--` disc form included).
+        // Reject so a misrouted public listener doesn't expose the
+        // proxy by accident.
         return (StatusCode::NOT_FOUND, "not found").into_response();
     };
 
@@ -93,9 +94,9 @@ async fn dispatch(State(state): State<AppState>, req: Request) -> Response {
         return Redirect::to(&cfg.dashboard_url).into_response();
     }
 
-    // Otherwise hand off to the proxy module. It parses the
-    // `/{workspace}` (or `/{workspace}/...`) prefix and applies the gate.
-    crate::proxy::handle(state.clone(), user, req).await
+    // Otherwise hand off to the proxy module. It resolves the
+    // devserver (disc prefix or gate credential) and applies the gate.
+    crate::proxy::handle(state.clone(), user, disc, req).await
 }
 
 // dashboard_url derivation lives in Config::from_env; the

@@ -21,14 +21,14 @@ Two public hostnames pointed at the same process:
   - `/healthz` -- liveness.
   - Anything else -- 404.
 
-- `*.devserver.chan.app` (wildcard): the devserver's own content -- the launcher SPA at the root and tenant workspaces under `/{workspace}`. One devserver per user; the `{workspace}` path segment is tenant routing, never a gate key.
+- `*.devserver.chan.app` (wildcard): the devserver's own content -- the launcher SPA at the root and tenant workspaces under `/{workspace}`. A user can hold many live devservers (capped by `MAX_DEVSERVERS_PER_USER`); `{user}--{disc}.devserver.chan.app` addresses one by the first 12 hex chars of its devserver id, and the bare `{user}` host resolves through the gate credential. The `{workspace}` path segment is tenant routing, never a gate key.
   - `/` with no `devserver_gate` cookie and no `?t=` -- 302 to `https://id.chan.app/workspaces` (the dashboard front door; the proxy renders no UI of its own).
   - `/` or `/?t=<jwt>` carrying a gate credential -- gated like a tenant path and forwarded to the devserver root, where the launcher SPA is served.
   - `/api/devserver/*` -- 404 (the devserver's local-only management API is never proxied; the gateway carries tenant content only).
   - `/{workspace}/?t=<jwt>` -- entry: validate the entry token, set the `devserver_gate` and `devserver_csrf` cookies, 303 to the clean URL.
-  - `/{workspace}/...` -- gate on the user's live devserver (drv + aud), then forward the FULL path unchanged into the tunnel. Anything else -- 404.
+  - `/{workspace}/...` -- gate on the resolved devserver (drv + aud), then forward the FULL path unchanged into the tunnel. Anything else -- 404.
 
-A single axum router serves both apex and wildcard via a Host-keyed dispatch. The wildcard host's `{user}` is parsed out of the request's `Host` header; the prefix before `.devserver.chan.app` is the username, and it alone resolves the user's single devserver registration.
+A single axum router serves both apex and wildcard via a Host-keyed dispatch. The wildcard label before `.devserver.chan.app` is parsed out of the request's `Host` header as `{user}` or `{user}--{disc}` (`--` cannot appear in a valid username, so the split is unambiguous; a disc tail that is not exactly 12 lowercase hex chars 404s). A disc host resolves the unique live devserver id with that prefix (zero or ambiguous -- 404). A bare host with one live devserver resolves to it; with several, the gate tries each live id as the credential's `drv` and routes to the one that verifies, so pre-disc links and cookies keep working.
 
 ```mermaid
 flowchart TD
@@ -59,13 +59,13 @@ Host-keyed apex/wildcard dispatch, then the ordered auth gate on the wildcard pa
 
 The tunnel listener is unchanged: `chan-tunnel-server` runs raw h2 on `TUNNEL_BIND_ADDR`, with the validator chain `CapturingValidator -> ThrottlingValidator -> IdentityValidator`. On a successful handshake the registry caches `(username -> user_id)`.
 
-The `Registry` is the in-process map from `(username, devserver_id)` to the live `TunnelHandle` plus the username cache. The second key is the devserver id (the registration name), not a workspace slug. The proxy gate looks up the user's single registration by username alone (`get_user_devserver`). The admin tree reads from the same registry that the proxy handler reads.
+The `Registry` is the in-process map from `(username, devserver_id)` to the live `TunnelHandle` plus the username cache. The second key is the devserver id (the registration name), not a workspace slug. The proxy resolves a disc host through `get_user_devserver_by_prefix` (unique 12-hex-prefix match over the user's live ids) and a bare host by iterating `live_devserver_ids` against the gate credential's `drv` claim. The admin tree reads from the same registry that the proxy handler reads.
 
 ## Devserver gate
 
 devserver-proxy reads no `tower_sessions` cookie. Authentication for the proxy path uses a JWT minted by identity-service, signed with `DEVSERVER_GATE_SECRET` (HMAC-SHA256). The secret is shared between identity (mints both shapes) and devserver-proxy (verifies, mints the session shape).
 
-The gate is per-DEVSERVER: there is one devserver per user, one host (`{user}.devserver.chan.app`), one access check. A grant gives the whole devserver, so the `{workspace}` path segment never gates. Two tokens are involved:
+The gate is per-DEVSERVER: one devserver, one access check, addressed by its disc host (`{user}--{disc}.devserver.chan.app`) or resolved from the bare `{user}` host via the credential's `drv` claim. A grant gives the whole devserver, so the `{workspace}` path segment never gates. Two tokens are involved:
 
 - **Entry token**: 30s exp, carried in `?t=` on the first hit. Issued by identity after a `devserver_access(owner, devserver, caller)` check. Claims: `{iss: "id.chan.app", sub: user_id, drv: <devserver id>, aud: "<host>", typ: "entry", iat, exp}` plus optional `name` / `email` identity claims (see Auth gate trust model).
 
@@ -184,7 +184,9 @@ The tunnel validator returns `(user_id, username)`. `CapturingValidator` records
 
 The auth assertion on the wildcard path is the entry JWT, not "sub matches owner". identity-service calls `profile.devserver_access(owner, devserver, caller)` before minting any entry token, so a valid signature plus the right `aud` (= the inbound host, which is `{owner}.devserver.chan.app`) plus the right `drv` (= the live devserver id) proves the caller was authorized at mint time. identity owns the access-control policy; devserver-proxy verifies the signed assertion. The session cookie minted on entry-token validation carries the entry's `sub` unchanged so the upstream attribution chain knows whether the request belongs to the owner or a grantee. The entry's optional identity claims (`name`, `email`, resolved by identity at mint) propagate the same way, session cookie included, and are copied into every per-request gateway assertion so the devserver can render participant display strings; the proxy never looks them up itself and they are never an authorization input. Tokens minted without them (older gateways) decode to `None` and the assertion simply omits them.
 
-User-to-user isolation is enforced by `aud`. A token minted for one subdomain (`alice.devserver.chan.app`) cannot be replayed on another (`bob.devserver.chan.app`) because `decode` rejects on `aud` mismatch. The canonical audience is the lowercase host with default ports stripped; explicit non-default ports remain for local/dev deployments. The `drv` claim binds the token to one devserver: a cookie minted for a rotated/old devserver id no longer matches the user's live registration and 404s (re-share required after rotation). There is no separate "this user is the owner" check, and intentionally so: requiring it would prevent accepted grantees from reaching the devserver they have been granted.
+User-to-user isolation is enforced by `aud`. A token minted for one subdomain (`alice.devserver.chan.app`, disc hosts included) cannot be replayed on another (`bob.devserver.chan.app`) because `decode` rejects on `aud` mismatch. The canonical audience is the lowercase host with default ports stripped; explicit non-default ports remain for local/dev deployments. The `drv` claim binds the token to one devserver: a cookie minted for a rotated/old devserver id no longer matches any of the user's live registrations and 404s (re-share required after rotation). On a bare host with several live devservers the gate tries each live id as `drv`, so the loop is bounded by the user's live set (itself bounded by `MAX_DEVSERVERS_PER_USER`). There is no separate "this user is the owner" check, and intentionally so: requiring it would prevent accepted grantees from reaching the devserver they have been granted.
+
+Known collateral, accepted for now: PAT revoke drops ALL of a user's tunnels (`kill_user_tunnels`; the tunnel server does not track token-to-tunnel). Devservers on non-revoked PATs reconnect on their own. A per-devserver kill is a named follow-up.
 
 ### Tunnel handshake throttles by token fingerprint
 

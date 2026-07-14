@@ -48,7 +48,7 @@ flowchart TD
     driver["workspace_tunnel: per-tunnel task owns yamux Connection"]
     registry[("Registry: user -> devserver_id -> handle")]
     proxy["devserver-proxy public request"]
-    get["registry.get_user_devserver -> TunnelHandle"]
+    get["registry devserver resolution -> TunnelHandle"]
     open["TunnelHandle.open() -> yamux substream"]
     h1["hyper h1 send_request over substream"]
 
