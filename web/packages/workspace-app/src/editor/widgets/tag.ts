@@ -43,6 +43,8 @@ const SKIP_INSIDE = new Set<string>([
   "CodeInfo",
   "URL",
   "WikiLinkBody", // inside `[[...]]`, `#` is an anchor delimiter
+  "Link", // inside `[...](...)`, `#` is literal label text and the link owns the click
+  "Image", // inside `![...](...)`, `#` is literal alt text
 ]);
 
 export interface TagOptions {
