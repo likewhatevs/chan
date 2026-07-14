@@ -1,0 +1,210 @@
+#!/usr/bin/env bash
+# chan-devserver-provision -- baked into the chan-devserver rootfs (see
+# chan-devserver.sdme) at /usr/local/bin. Run it ONCE inside a booted container
+# to stand up one tunnel-publishing `chan devserver` as a lingering
+# systemd --user service.
+#
+# The rootfs ships `chan` from ppa:fiorix/chan plus dbus-user-session (the
+# per-user D-Bus bus `systemctl --user` needs) and dialog (the token prompt).
+# This script does the per-tenant part that cannot be baked because it carries
+# a secret: it creates a regular user, turns on linger so their user manager
+# runs with nobody logged in, writes ~/.config/systemd/user/chan-devserver.service
+# carrying the CHAN_TUNNEL_TOKEN, and enables + starts it. That home unit shadows
+# the bare, local-only one the `chan` package ships at /usr/lib/systemd/user/
+# (systemd's user-unit search order prefers ~/.config), so the only difference
+# is the token env that flips the devserver into tunnel mode. Re-running is
+# idempotent: it rewrites the unit with the current token and restarts.
+#
+# Usage:
+#   chan-devserver-provision [--user NAME] [--token chan_pat_...] [--tunnel-url URL]
+#
+# Flags win over env; when stdin is a terminal, `dialog` prompts for the token
+# if it is still unset (reach this via `sdme join`). Non-interactively (e.g.
+# `sdme exec`), every required value must arrive by flag or env, or the script
+# errors instead of hanging.
+#
+#   --user NAME        Linux user to own the service   (env CHAN_DEVSERVER_USER,
+#                      default: devserver)
+#   --token TOKEN      chan_pat_* PAT from id.chan.app  (env CHAN_TUNNEL_TOKEN)
+#   --tunnel-url URL   override the gateway endpoint     (env CHAN_TUNNEL_URL;
+#                      default: chan's built-in https://devserver.chan.app/v1/tunnel)
+#
+# The published host is resolved backend-side from the token, so it is the
+# token owner's handle -- {handle}.devserver.chan.app -- independent of --user.
+
+set -euo pipefail
+
+die() { printf 'chan-devserver-provision: %s\n' "$*" >&2; exit 1; }
+
+usage() { sed -n '18,33p' "$0" | sed 's/^# \{0,1\}//'; }
+
+USER_NAME="${CHAN_DEVSERVER_USER:-devserver}"
+TOKEN="${CHAN_TUNNEL_TOKEN:-}"
+TUNNEL_URL="${CHAN_TUNNEL_URL:-}"
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --user)         USER_NAME="${2:?--user needs a value}"; shift 2 ;;
+    --user=*)       USER_NAME="${1#*=}"; shift ;;
+    --token)        TOKEN="${2:?--token needs a value}"; shift 2 ;;
+    --token=*)      TOKEN="${1#*=}"; shift ;;
+    --tunnel-url)   TUNNEL_URL="${2:?--tunnel-url needs a value}"; shift 2 ;;
+    --tunnel-url=*) TUNNEL_URL="${1#*=}"; shift ;;
+    -h|--help)      usage; exit 0 ;;
+    *)              die "unknown argument: $1 (try --help)" ;;
+  esac
+done
+
+[ "$(id -u)" -eq 0 ] || die "must run as root (it creates a user and enables linger)"
+
+# dialog fills the token if it is still unset, but only with a real terminal.
+if [ -z "$TOKEN" ] && [ -t 0 ] && command -v dialog >/dev/null 2>&1; then
+  TOKEN="$(dialog --stdout --insecure --passwordbox \
+    "chan_pat_ tunnel token for user '$USER_NAME' (from id.chan.app):" 8 64)" \
+    || die "cancelled"
+  clear 2>/dev/null || true
+fi
+
+[ -n "$USER_NAME" ] || die "no --user / CHAN_DEVSERVER_USER"
+[ -n "$TOKEN" ]     || die "no --token / CHAN_TUNNEL_TOKEN (and no terminal for a dialog prompt)"
+case "$TOKEN" in
+  chan_pat_*) : ;;
+  *) die "token does not look like a chan_pat_ PAT" ;;
+esac
+
+# 1. The user. systemd --user refuses to run for root, so this must be a
+#    regular login user. The running devserver hands logged-in users this
+#    shell, so make it usable: install + configure sudo, add them to the sudo
+#    group with a NOPASSWD rule, and set up ~/.local/bin plus the user-session
+#    env in their shell rc.
+if ! id -u "$USER_NAME" >/dev/null 2>&1; then
+  useradd -m -s /bin/bash "$USER_NAME"
+fi
+UID_N="$(id -u "$USER_NAME")"
+HOME_DIR="$(getent passwd "$USER_NAME" | cut -d: -f6)"
+[ -n "$HOME_DIR" ] || die "no home directory for $USER_NAME"
+
+# sudo is installed HERE, not baked into the rootfs: the runtime overlay path
+# drops its setuid bit and sudo then refuses to run ("must be owned by uid 0
+# and have the setuid bit set"). Installing at runtime lets dpkg set setuid in
+# the live filesystem; re-assert it defensively on the resolved alternatives
+# target (Ubuntu 26.04 routes /usr/bin/sudo -> /etc/alternatives -> sudo.ws).
+if ! command -v sudo >/dev/null 2>&1; then
+  export DEBIAN_FRONTEND=noninteractive
+  apt-get update -qq && apt-get install -y --no-install-recommends sudo \
+    || die "installing sudo failed (no network to the Ubuntu archive?)"
+fi
+SUDO_BIN="$(readlink -f "$(command -v sudo)" 2>/dev/null || true)"
+if [ -n "$SUDO_BIN" ] && [ -f "$SUDO_BIN" ]; then
+  chown root:root "$SUDO_BIN"
+  chmod u+s "$SUDO_BIN"
+fi
+
+adduser "$USER_NAME" sudo >/dev/null
+
+# Passwordless sudo via a drop-in. Validate with visudo BEFORE installing so a
+# malformed line can never wedge sudo, and use a dot-free filename (sudo skips
+# sudoers.d entries containing '.'). 0440 root:root is what sudo requires.
+SUDOERS="/etc/sudoers.d/chan-devserver-$USER_NAME"
+SUDOERS_TMP="$(mktemp)"
+printf '%s ALL=(ALL:ALL) NOPASSWD:ALL\n' "$USER_NAME" > "$SUDOERS_TMP"
+if visudo -cf "$SUDOERS_TMP" >/dev/null; then
+  install -m 0440 -o root -g root "$SUDOERS_TMP" "$SUDOERS"
+  rm -f "$SUDOERS_TMP"
+else
+  rm -f "$SUDOERS_TMP"
+  die "generated sudoers drop-in for $USER_NAME failed visudo validation"
+fi
+
+# Make the user's interactive shells usable out of the box: ~/.local/bin on
+# PATH, and the user-session env so `systemctl --user` works without the caller
+# exporting it. The devserver-spawned shell and a plain `su`/`sudo -u` get no
+# login session, so XDG_RUNTIME_DIR/DBUS_SESSION_BUS_ADDRESS are otherwise
+# unset; :=default only fills them when a real login session has not. The stock
+# ~/.profile also adds ~/.local/bin for LOGIN shells once the dir exists.
+install -d -o "$USER_NAME" -g "$USER_NAME" -m 755 "$HOME_DIR/.local/bin"
+BASHRC="$HOME_DIR/.bashrc"
+if [ ! -e "$BASHRC" ] || ! grep -qF 'chan-devserver: shell setup' "$BASHRC"; then
+  cat >> "$BASHRC" <<'EOF'
+
+# chan-devserver: shell setup (PATH + user-session env for systemctl --user)
+: "${XDG_RUNTIME_DIR:=/run/user/$(id -u)}"; export XDG_RUNTIME_DIR
+: "${DBUS_SESSION_BUS_ADDRESS:=unix:path=${XDG_RUNTIME_DIR}/bus}"; export DBUS_SESSION_BUS_ADDRESS
+case ":$PATH:" in
+  *":$HOME/.local/bin:"*) ;;
+  *) export PATH="$HOME/.local/bin:$PATH" ;;
+esac
+EOF
+  chown "$USER_NAME:$USER_NAME" "$BASHRC"
+fi
+
+# 2. Linger: start user@$UID_N.service now and on every boot, so the user
+#    manager (and its /run/user/$UID_N D-Bus socket) exists with nobody
+#    logged in -- the whole point of a headless container.
+loginctl enable-linger "$USER_NAME"
+
+# Run a command against the user's own `systemctl --user` manager. su as root
+# needs no setuid and no login session; export the runtime dir + bus so
+# `systemctl --user` resolves the manager (a plain su/sudo shell has neither).
+as_user() {
+  su -s /bin/sh -c \
+    "export XDG_RUNTIME_DIR='/run/user/$UID_N' \
+       DBUS_SESSION_BUS_ADDRESS='unix:path=/run/user/$UID_N/bus'; $1" \
+    "$USER_NAME"
+}
+
+# Linger brings the manager up asynchronously; wait for its bus to answer.
+ready=""
+for _ in $(seq 1 60); do
+  if as_user "systemctl --user show --property=Version" >/dev/null 2>&1; then
+    ready=1; break
+  fi
+  sleep 0.5
+done
+[ -n "$ready" ] || die "user manager for $USER_NAME did not come up (linger/dbus-user-session?)"
+
+# 3. The unit, carrying the token. Mode 600: the PAT is a secret and the unit
+#    embeds it verbatim via Environment=.
+UNIT_DIR="$HOME_DIR/.config/systemd/user"
+UNIT="$UNIT_DIR/chan-devserver.service"
+install -d -o "$USER_NAME" -g "$USER_NAME" -m 700 "$UNIT_DIR"
+
+EXEC="/usr/bin/chan devserver"
+[ -n "$TUNNEL_URL" ] && EXEC="$EXEC --tunnel-url=$TUNNEL_URL"
+
+( umask 077; cat > "$UNIT" <<EOF
+[Unit]
+Description=chan devserver
+After=network.target
+
+[Service]
+Type=notify
+NotifyAccess=main
+FileDescriptorStoreMax=512
+KillMode=process
+Environment="CHAN_TUNNEL_TOKEN=$TOKEN"
+ExecStart=$EXEC
+Restart=on-failure
+
+[Install]
+WantedBy=default.target
+EOF
+)
+chown "$USER_NAME:$USER_NAME" "$UNIT"
+chmod 600 "$UNIT"
+
+# 4. Reload, enable on boot, and (re)start so a re-run picks up the new token.
+as_user "systemctl --user daemon-reload"
+as_user "systemctl --user enable chan-devserver.service"
+if ! as_user "systemctl --user restart chan-devserver.service"; then
+  as_user "systemctl --user status --no-pager chan-devserver.service" || true
+  die "chan-devserver.service failed to start (see status above)"
+fi
+
+printf '\nchan devserver provisioned for user %s and started.\n' "$USER_NAME"
+printf '  unit:  %s\n' "$UNIT"
+printf '  check: su - %s      # interactive login shell has the session env, then:\n' "$USER_NAME"
+printf '           systemctl --user status chan-devserver\n'
+printf '           journalctl --user -u chan-devserver -f\n'
+printf '\nMounted workspaces publish at https://<handle>.devserver.chan.app/<workspace>/\n'
+printf '(<handle> is resolved from the token, not the Linux user name).\n'

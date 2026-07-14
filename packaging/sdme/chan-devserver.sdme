@@ -1,0 +1,53 @@
+# chan-devserver: an Ubuntu rootfs that runs one or more chan devservers as
+# lingering systemd --user services, each publishing its mounted workspaces
+# over the gateway tunnel at {handle}.devserver.chan.app. Unlike the sibling
+# chan-desktop-*.sdme templates (which bake a build toolchain), this is a
+# RUNTIME rootfs: it installs the released `chan` from ppa:fiorix/chan and the
+# bits its systemd --user devserver path needs, nothing to compile.
+#
+# Build (run from this directory, as the desktop templates are):
+#   sudo sdme fs build chan-devserver chan-devserver.sdme   (-f to rebuild)
+#
+# Provision + run, once the container is up:
+#   sudo sdme new chan-ds -r chan-devserver && sudo sdme start chan-ds
+#   sudo sdme join chan-ds            # interactive: dialog prompts for the token
+#   # or non-interactively:
+#   sudo sdme exec chan-ds -- chan-devserver-provision \
+#       --user alice --token chan_pat_XXX
+# chan-devserver-provision (baked below) creates the user, enables linger,
+# writes ~/.config/systemd/user/chan-devserver.service carrying the token, and
+# starts it. See that script's header for the full contract.
+
+FROM ubuntu
+
+# First install the base tools, then enable ppa:fiorix/chan and install chan.
+# software-properties-common provides add-apt-repository, gnupg lets it import
+# the PPA signing key, and ca-certificates is required before add-apt-repository
+# (it fetches the key from Launchpad over HTTPS). The rest are the devserver's
+# runtime deps, none of which come from the PPA:
+#   dialog             the interactive token prompt in chan-devserver-provision
+#   dbus-user-session  the per-user D-Bus session bus `systemctl --user` needs;
+#                      without it a lingering user's manager has no bus to reach
+#   curl               token/health probes from inside the container
+#
+# sudo is deliberately NOT installed here: the runtime overlay path drops its
+# setuid bit, and sudo then refuses to run ("must be owned by uid 0 and have
+# the setuid bit set"). chan-devserver-provision apt-installs it at RUNTIME,
+# where dpkg sets setuid in the live filesystem, and configures it there.
+#
+# Only `chan` itself comes from the PPA. --no-install-recommends keeps the base
+# lean; the `chan` package Recommends systemd, which the booting base provides.
+RUN apt-get update && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        software-properties-common gnupg ca-certificates dialog \
+        curl dbus-user-session && \
+    add-apt-repository -y ppa:fiorix/chan && \
+    apt-get update && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        chan && \
+    rm -rf /var/lib/apt/lists/*
+
+# The runtime provisioning helper (see its header). COPY resolves the source
+# relative to this template's directory, which is the build cwd.
+COPY ./chan-devserver-provision.sh /usr/local/bin/chan-devserver-provision
+RUN chmod 0755 /usr/local/bin/chan-devserver-provision
