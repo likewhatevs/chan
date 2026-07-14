@@ -133,7 +133,12 @@
   import { applyEditorTheme, DEFAULT_EDITOR_THEME } from "./state/editorTheme";
   import { flushPendingBufferWrites, pruneEditorBuffers } from "./state/editorBuffer";
   import { pruneTerminalSnapshots } from "./terminal/snapshotCache";
-  import { isTauriDesktop, reloadWindow, requestCloseWindow } from "./api/desktop";
+  import {
+    hideWindowFromCloseConfirm,
+    isTauriDesktop,
+    reloadWindow,
+    requestCloseWindow,
+  } from "./api/desktop";
   import { activeTransferCount } from "./state/transfers.svelte";
   import { chordFromEvent, currentOS } from "./state/shortcuts";
   import { allCommands, commandContext } from "./state/commands";
@@ -927,6 +932,24 @@
       void reloadWindow();
       return;
     }
+    // Hide window (registry app.window.hide = native Mod+Shift+H): the
+    // close-confirm overlay's Hide answer without the prompt -- bury this
+    // window via the desktop IPC (sessions stay warm, the record persists
+    // hidden and reopens from the launcher). Desktop-only: the IPC is an
+    // explicit no-op in a plain browser, so no web chord is claimed.
+    // Cmd+Shift+H on macOS, Ctrl+Shift+H on Linux / Windows.
+    if (e.code === "KeyH" && isTauriDesktop()) {
+      const hideChord =
+        (currentOS() === "mac"
+          ? e.metaKey && !e.ctrlKey && !e.altKey && e.shiftKey
+          : e.ctrlKey && !e.metaKey && !e.altKey && e.shiftKey) &&
+        !builtInChordSuperseded("app.window.hide");
+      if (hideChord) {
+        e.preventDefault();
+        void hideWindowFromCloseConfirm();
+        return;
+      }
+    }
     // Mod+E (Obsidian-style "Show Source Code") flips the active file tab
     // between source and rendered views. No-op when no file tab is active.
     // Split per-OS so Ctrl+E reaches it off macOS (registry
@@ -1266,6 +1289,14 @@
           return;
         }
         void uiCloseConfirm();
+        return;
+      // The "Hide window" command (launcher row / Mod+Shift+H / host bridge):
+      // the close-confirm overlay's Hide answer without the prompt -- invoking
+      // the command already expresses the intent the overlay asks for. The
+      // bury IPC is an explicit no-op off desktop, where the launcher entry is
+      // not offered.
+      case "app.window.hide":
+        void hideWindowFromCloseConfirm();
         return;
       // `app.save` is intentionally absent: autosave covers the write path.
       case "app.file.new":

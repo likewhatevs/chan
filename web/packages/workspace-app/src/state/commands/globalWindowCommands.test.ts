@@ -52,4 +52,22 @@ describe("Global window commands", () => {
     (window as TauriWindow).__TAURI__ = {};
     expect(idsIn(ctx()).has("app.window.devtools")).toBe(true);
   });
+
+  it("registers Hide window under Global, gated to the desktop shell", () => {
+    expect(categoryOf("app.window.hide")).toBe("Global");
+    // Web: the bury IPC is an explicit no-op, so the entry is not offered.
+    expect(idsIn(ctx()).has("app.window.hide")).toBe(false);
+    (window as TauriWindow).__TAURI__ = {};
+    expect(idsIn(ctx()).has("app.window.hide")).toBe(true);
+  });
+
+  it("offers Hide window in a standalone terminal window on desktop", () => {
+    // A terminal-only window is a library window with the same red-dot hide
+    // semantics; the entry ignores the window mode (the id is also in
+    // TERMINAL_ONLY_COMMANDS, so the chan:command bridge agrees).
+    (window as TauriWindow).__TAURI__ = {};
+    expect(
+      idsIn({ ...ctx(), terminalOnly: true }).has("app.window.hide"),
+    ).toBe(true);
+  });
 });

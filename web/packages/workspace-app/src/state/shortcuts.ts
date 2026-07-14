@@ -233,6 +233,20 @@ export const SHORTCUTS: readonly Shortcut[] = [
     note: "discard an empty / terminal window; buries when devserver-connected",
     escapeTerminal: true,
   },
+  // The explicit "hide this window" action: the close-confirm overlay's Hide
+  // answer without the prompt. Buries the window via the desktop IPC --
+  // sessions stay warm, the record persists hidden and reopens from the
+  // launcher. Desktop-only like Close window: the bury IPC is an explicit
+  // no-op in a plain browser, so no web chord is minted. The stored Mod
+  // renders Cmd+Shift+H on macOS and Ctrl+Shift+H on Linux / Windows.
+  {
+    id: "app.window.hide",
+    label: "Hide window",
+    native: "Mod+Shift+H",
+    group: "App",
+    note: "bury this window; reopen it from the launcher",
+    escapeTerminal: true,
+  },
   {
     id: "ui.overlay.dismiss",
     label: "Dismiss overlay",

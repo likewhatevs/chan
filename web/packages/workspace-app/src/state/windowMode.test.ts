@@ -21,6 +21,20 @@ describe("terminal-only command gate", () => {
     ).toBe(true);
   });
 
+  test("allows the window hide/close family in terminal-only and control windows", () => {
+    // Standalone terminal (and control) windows are library windows with a
+    // red-dot close prompt, so the self-hide command stays live there like
+    // close/confirmClose.
+    expect(TERMINAL_ONLY_COMMANDS.has("app.window.close")).toBe(true);
+    expect(TERMINAL_ONLY_COMMANDS.has("app.window.hide")).toBe(true);
+    expect(
+      windowModeAllowsCommand("app.window.hide", {
+        terminalOnly: true,
+        terminalControl: true,
+      }),
+    ).toBe(true);
+  });
+
   test("still blocks workspace-only commands in terminal-only windows", () => {
     expect(
       windowModeAllowsCommand("app.graph.toggle", {

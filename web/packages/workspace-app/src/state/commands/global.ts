@@ -1,11 +1,11 @@
 // Net-new Global commands: theme (system / light / dark), the screen-lock
 // family (enable / disable / test / set pin / theme), and the window
-// controls (Reload, Open Inspector) that mirror the WebView native menu.
-// The reuse-existing Global entries live in core.ts; these need a new
-// action or an in-app prompt. Theme, screen lock, and Reload are
-// machine-global; Open Inspector is desktop-only. Register with
-// registerCommands. See state/commands.ts for the Command shape and
-// helpers.
+// controls (Reload, Open Inspector, Hide window) that mirror the WebView
+// native menu. The reuse-existing Global entries live in core.ts; these
+// need a new action or an in-app prompt. Theme, screen lock, and Reload
+// are machine-global; Open Inspector and Hide window are desktop-only.
+// Register with registerCommands. See state/commands.ts for the Command
+// shape and helpers.
 
 import { registerCommands } from "../commands";
 import {
@@ -18,6 +18,7 @@ import { loadScreensaverState, lockNow } from "../screensaver.svelte";
 import { hashPin } from "../screensaver";
 import { api } from "../../api/client";
 import {
+  hideWindowFromCloseConfirm,
   isTauriDesktop,
   openWebInspector,
   reloadWindow,
@@ -179,5 +180,18 @@ registerCommands([
     keywords: ["devtools", "inspector", "console", "javascript", "debug"],
     available: () => isTauriDesktop(),
     run: () => void openWebInspector(),
+  },
+  {
+    // The close-confirm overlay's Hide answer without the prompt: bury THIS
+    // window (sessions stay warm, the record persists hidden and reopens from
+    // the launcher). Shares the SHORTCUTS id so the row renders its chord.
+    // Desktop-only: the bury IPC is an explicit no-op in a plain browser, so
+    // the entry is not offered there.
+    id: "app.window.hide",
+    title: "Hide window",
+    category: "Global",
+    keywords: ["hide", "window", "bury", "minimize"],
+    available: () => isTauriDesktop(),
+    run: () => void hideWindowFromCloseConfirm(),
   },
 ]);

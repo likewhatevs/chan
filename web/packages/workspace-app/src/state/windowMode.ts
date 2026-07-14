@@ -34,6 +34,7 @@ export const TERMINAL_ONLY_COMMANDS: ReadonlySet<string> = new Set<string>([
   "app.tab.sendToB",
   "app.window.close",
   "app.window.confirmClose",
+  "app.window.hide",
   "app.find.open",
   "app.find.next",
   "app.find.prev",
