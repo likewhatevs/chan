@@ -165,6 +165,10 @@ CHAN_BIN="${E2E_CHAN_BIN:-$REPO/target/debug/chan}"
 for b in identity-service profile-service devserver-proxy-service; do
     [ -x "$GW_BIN/$b" ] || (cd "$REPO/gateway" && cargo build -p "${b%-service}" >/dev/null) || exit 2
 done
+# The operator CLI (package `admin`) seeds the PATs below through
+# identity's /admin/v1/tokens surface.
+[ -x "$GW_BIN/chan-gateway-admin" ] ||
+    (cd "$REPO/gateway" && cargo build -p admin >/dev/null) || exit 2
 # --no-default-features drops the ML/embeddings deps; the devserver
 # serves workspaces without them (same shape the pre-push no-default
 # build checks).
@@ -226,6 +230,7 @@ spawn identity env \
     PROFILE_SERVICE_URL="http://127.0.0.1:$PROFILE_PORT" \
     PROFILE_AUTH_TOKEN="$TOK_PROFILE" \
     IDENTITY_INTERNAL_TOKEN="$TOK_INTERNAL" \
+    IDENTITY_ADMIN_TOKEN="$TOK_ADMIN" \
     DEVSERVER_GATE_SECRET="$GATE_SECRET" \
     DEVSERVER_ADMIN_TOKEN="$TOK_ADMIN" \
     DEVSERVER_ADMIN_URL="http://127.0.0.1:$PROXY_PORT" \
@@ -278,18 +283,24 @@ log "stack is up"
 # ---------------------------------------------------------------
 # Seed: one user, three PATs (A/B live devservers, C for the cap)
 # ---------------------------------------------------------------
-# PAT shape mirrors identity::api_tokens::generate_token: secret =
-# chan_pat_<base64url(32B)>, stored hash = base64url(sha256(secret)),
-# devserver id = lowercase hex sha256(secret). Once chan-gateway-admin
-# grows `token create` (v0.68 item 8), this seeding should switch to
-# it and drop the direct INSERTs.
+# PATs mint through the operator surface (`chan-gateway-admin token
+# create` -> identity /admin/v1/tokens), so the harness exercises the
+# same path an operator provisioning a user does; the devserver row
+# registers as a side effect of the mint (label = PAT label). The
+# devserver id stays derivable client-side: lowercase hex
+# sha256(secret), the api_tokens cross-service contract.
 
-mint_pat() { # mint_pat -> "secret hash dsid"
-    local secret hash dsid
-    secret="chan_pat_$(openssl rand 32 | basenc --base64url -w0 | tr -d '=')"
-    hash="$(printf %s "$secret" | openssl dgst -sha256 -binary | basenc --base64url -w0 | tr -d '=')"
+admin_mint() { # admin_mint <label> -> "secret dsid"
+    local out secret dsid
+    out="$("$GW_BIN/chan-gateway-admin" \
+        --identity-url "http://127.0.0.1:$ID_PORT" --token "$TOK_ADMIN" --json \
+        token create "$ALICE_EMAIL" \
+        --scope tunnel --scope desktop.connect --label "$1" \
+        2>> "$LOGS/admin-mint.log")" || return 1
+    secret="$(printf %s "$out" | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{console.log(JSON.parse(d).secret||"")}catch{console.log("")}})')"
+    case "$secret" in chan_pat_*) ;; *) return 1 ;; esac
     dsid="$(printf %s "$secret" | sha256sum | awk '{print $1}')"
-    echo "$secret $hash $dsid"
+    echo "$secret $dsid"
 }
 
 # The browser phase signs in through the stub OAuth with this email;
@@ -307,18 +318,40 @@ ALICE_USER="$(sql "$E2E_DATABASE_URL" \
     "SET search_path TO $E2E_SCHEMA; SELECT username FROM users WHERE id = '$ALICE_ID';")"
 log "seeded user $ALICE_USER ($ALICE_ID)"
 
-read -r PAT_A HASH_A DS_A <<< "$(mint_pat)"
-read -r PAT_B HASH_B DS_B <<< "$(mint_pat)"
-read -r PAT_C HASH_C DS_C <<< "$(mint_pat)"
-for row in "$HASH_A e2e-a $DS_A" "$HASH_B e2e-b $DS_B" "$HASH_C e2e-c $DS_C"; do
-    read -r hash label dsid <<< "$row"
-    sql "$E2E_DATABASE_URL" "SET search_path TO $E2E_SCHEMA;
-        INSERT INTO api_tokens (user_id, label, token_hash, scopes)
-        VALUES ('$ALICE_ID', '$label', '$hash',
-                ARRAY['tunnel','desktop.connect']);
-        INSERT INTO devservers (owner_user_id, devserver_id, label)
-        VALUES ('$ALICE_ID', '$dsid', '$label');" || exit 2
-done
+# The mint IS an assertion (v0.68 item 8: admin token create end to
+# end); everything downstream then proves the minted PATs actually
+# dial, route, and gate.
+if read -r PAT_A DS_A <<< "$(admin_mint e2e-a)" &&
+    read -r PAT_B DS_B <<< "$(admin_mint e2e-b)" &&
+    read -r PAT_C DS_C <<< "$(admin_mint e2e-c)"; then
+    assert_pass "admin mint: token create provisioned 3 PATs via /admin/v1/tokens"
+else
+    assert_fail "admin mint: chan-gateway-admin token create failed (logs/admin-mint.log)"
+    log "cannot seed PATs; aborting"
+    exit 1
+fi
+# Guard probes: the surface refuses a wrong bearer outright and
+# answers an unknown email with the same 404 the CLI narrates.
+guard_status="$(curl -sS -o /dev/null -w '%{http_code}' \
+    -X POST "http://127.0.0.1:$ID_PORT/admin/v1/tokens" \
+    -H "authorization: Bearer wrong-$TOK_ADMIN" \
+    -H "content-type: application/json" \
+    -d "{\"email\":\"$ALICE_EMAIL\"}")"
+if [ "$guard_status" = "401" ]; then
+    assert_pass "admin mint: wrong bearer refused (401)"
+else
+    assert_fail "admin mint: wrong bearer expected 401, got $guard_status"
+fi
+unknown_status="$(curl -sS -o /dev/null -w '%{http_code}' \
+    -X POST "http://127.0.0.1:$ID_PORT/admin/v1/tokens" \
+    -H "authorization: Bearer $TOK_ADMIN" \
+    -H "content-type: application/json" \
+    -d '{"email":"e2e-nobody@example.com"}')"
+if [ "$unknown_status" = "404" ]; then
+    assert_pass "admin mint: unknown email is 404"
+else
+    assert_fail "admin mint: unknown email expected 404, got $unknown_status"
+fi
 disc() { printf %s "${1:0:12}"; }
 log "devservers: A=$(disc "$DS_A") B=$(disc "$DS_B") C=$(disc "$DS_C") (cap candidate)"
 
@@ -638,12 +671,6 @@ if [ -x "$CHROME_BIN" ]; then
 else
     assert_fail "consent: headless Chrome not found (set E2E_CHROME_BIN)"
 fi
-
-# ---------------------------------------------------------------
-# Extension seams (assert here as the round lands them):
-#   - item 8: mint the PATs above via `chan-gateway-admin token
-#     create` instead of SQL (owner: @@Tokens).
-# ---------------------------------------------------------------
 
 log ""
 log "==== assertion summary ($ASSERT_LOG) ===="
