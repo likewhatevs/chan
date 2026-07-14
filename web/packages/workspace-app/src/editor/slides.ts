@@ -20,7 +20,10 @@ export type SlidePage = {
 const SUPPORTED_ASPECT_RATIOS = new Set<string>(["16:9", "4:3"]);
 const DEFAULT_SLIDE_ASPECT_RATIO: SlideAspectRatio = "16:9";
 const DEFAULT_SLIDE_ZOOM_FACTOR = 2;
-const PAGE_BREAK_RE =
+/// A source line that forces a page break: the literal page-break hr or
+/// the @pagebreak shorthand. Deck splitting and document PDF pagination
+/// share this definition.
+export const PAGE_BREAK_RE =
   /^\s*(?:<hr\b(?=[^>]*\bclass=(["'])chan-page-break\1)[^>]*\/?>|@pagebreak)\s*$/i;
 
 export function parseSlidesSpec(source: string): SlidesSpec | null {
