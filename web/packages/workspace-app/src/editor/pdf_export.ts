@@ -188,10 +188,11 @@ async function runExportJob(
 }
 
 /// Write the export output through the workspace upload route (all
-/// writes stay inside the Workspace sandbox). The replace path requires
-/// an existing target, so a fresh out file is created first when the
-/// replace rejects it; the original error surfaces if creation cannot
-/// repair it.
+/// writes stay inside the Workspace sandbox). The replace mode requires
+/// an existing target, so a fresh out file falls back to the plain
+/// upload mode (multipart is the binary-safe write; the JSON create
+/// route refuses non-text paths). Upload picks a free name on
+/// collision, so a raced-in target is replaced and the stray removed.
 async function uploadExportBytes(
   bytes: Uint8Array,
   out: string,
@@ -201,13 +202,19 @@ async function uploadExportBytes(
   const file = new File([bytes as BlobPart], filename, { type: mime });
   try {
     await api.replaceFile(file, out);
+    return;
   } catch (replaceErr) {
+    let uploaded: { path: string };
     try {
-      await api.create(out, false);
+      const dir = out.split("/").slice(0, -1).join("/");
+      uploaded = await api.uploadFile(file, dir);
     } catch {
       throw replaceErr;
     }
-    await api.replaceFile(file, out);
+    if (uploaded.path !== out) {
+      await api.replaceFile(file, out);
+      void api.remove(uploaded.path).catch(() => {});
+    }
   }
 }
 
