@@ -1347,12 +1347,13 @@
         {visibleSide.toUpperCase()}
       </button>
       <!-- Pane chrome menu: command launcher and Hybrid Nav, the Apps
-           spawn rows, then pane-local focus border colour last. -->
+           spawn rows, pane-local focus border colour, then Close pane
+           last (launcher parity). -->
       <HamburgerMenu
         bind:this={paneMenu}
         bind:open={paneMenuOpen}
         width={250}
-        height={470}
+        height={505}
         onBeforeOpen={closePaneContextMenus}
       >
         <li>
@@ -1401,6 +1402,14 @@
             </button>
           </li>
         {/each}
+        <li class="sep" role="separator"></li>
+        <li>
+          <button role="menuitem" onclick={() => { dispatchCommand("app.pane.kill"); closePaneHamburgerMenu(); }}>
+            <X size={16} strokeWidth={1.75} aria-hidden="true" />
+            <span class="menu-row-label">Close pane</span>
+            <span class="menu-row-chord">{chordLabel("app.pane.kill")}</span>
+          </button>
+        </li>
       </HamburgerMenu>
       <HamburgerMenu
         bind:this={paneContextMenu}

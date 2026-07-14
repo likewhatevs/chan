@@ -154,7 +154,8 @@ describe("Pane terminal tab activity marker", () => {
 });
 
 // Every hamburger row in menu order: Commands / Hybrid Nav, the eight
-// Apps spawn rows (alphabetical by title), then the focus colours.
+// Apps spawn rows (alphabetical by title), the focus colours, then
+// Close pane last (launcher parity).
 const HAMBURGER_LABELS = [
   "Commands",
   "Hybrid Nav",
@@ -170,6 +171,7 @@ const HAMBURGER_LABELS = [
   "orange",
   "green",
   "pink",
+  "Close pane",
 ];
 
 describe("Pane right-click menus", () => {
@@ -226,7 +228,6 @@ describe("Pane right-click menus", () => {
       "Previous pane",
       "Close all tabs",
       "Kill pane",
-      "Close pane",
     ]) {
       expect(labels).not.toContain(label);
     }
@@ -245,12 +246,13 @@ describe("Pane right-click menus", () => {
     await tick();
 
     // Menu structure: Commands / Hybrid Nav, separator, the eight Apps
-    // rows, separator, then the Focus border colour section last.
+    // rows, separator, the Focus border colour section, separator, then
+    // the Close pane row last.
     const items = [...document.body.querySelectorAll(".hamburger-menu li")];
     const sepIdx = items
       .map((li, i) => (li.classList.contains("sep") ? i : -1))
       .filter((i) => i >= 0);
-    expect(sepIdx).toHaveLength(2);
+    expect(sepIdx).toHaveLength(3);
     const between = items
       .slice(sepIdx[0]! + 1, sepIdx[1]!)
       .map((li) => li.querySelector(".menu-row-label")?.textContent?.trim());
@@ -273,6 +275,50 @@ describe("Pane right-click menus", () => {
     expect(
       items[sepIdx[1]! + 1]?.classList.contains("menu-label"),
     ).toBe(true);
+    // The Close pane row follows the third separator and closes the menu.
+    const closeRow = items[sepIdx[2]! + 1];
+    expect(
+      closeRow?.querySelector(".menu-row-label")?.textContent?.trim(),
+    ).toBe("Close pane");
+    expect(closeRow).toBe(items[items.length - 1]);
+  });
+
+  test("Close pane row dispatches app.pane.kill and closes the menu", async () => {
+    const pane: LeafNode = {
+      kind: "leaf",
+      id: "pane-close-row",
+      tabs: [terminalTab()],
+      activeTabId: "term-1",
+    };
+    const target = await renderPane(pane, { paneMode: false });
+
+    target.querySelector<HTMLButtonElement>(".hamburger-trigger")?.click();
+    await tick();
+
+    const dispatched: string[] = [];
+    const onCommand = (e: Event): void => {
+      dispatched.push((e as CustomEvent<{ name: string }>).detail.name);
+    };
+    window.addEventListener("chan:command", onCommand);
+    try {
+      const closeRow = [...document.body.querySelectorAll<HTMLButtonElement>(
+        ".hamburger-menu button",
+      )].find(
+        (button) =>
+          button.querySelector(".menu-row-label")?.textContent?.trim() ===
+          "Close pane",
+      );
+      expect(closeRow).not.toBeUndefined();
+      closeRow!.click();
+      await tick();
+    } finally {
+      window.removeEventListener("chan:command", onCommand);
+    }
+
+    expect(dispatched).toEqual(["app.pane.kill"]);
+    // The row closes the menu after dispatching (the popover node only
+    // exists while open).
+    expect(document.body.querySelector(".hamburger-menu")).toBeNull();
   });
 
   test("pane hamburger shows the launcher chord", async () => {
