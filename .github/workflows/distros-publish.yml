@@ -11,6 +11,10 @@
 #   COPR_WEBHOOK                  custom-webhook base URL (trailing /)
 #   LAUNCHPAD_GPG_PRIVATE_KEY     armored secret key registered on LP
 #   LAUNCHPAD_GPG_PASSPHRASE      its passphrase (empty if none)
+#   LAUNCHPAD_SSH_PRIVATE_KEY     optional SSH key registered on LP;
+#                                 when present, dput switches from ftp
+#                                 to sftp (authenticated, no anonymous
+#                                 FTP flakiness); absent keeps ftp
 
 name: distros-publish
 
@@ -68,7 +72,7 @@ jobs:
       - name: Install packaging tools
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq debhelper devscripts dpkg-dev dput gnupg xz-utils
+          sudo apt-get install -y -qq debhelper devscripts dpkg-dev dput gnupg jq xz-utils
           # Keeps CI origs shaped like local ones (non-Linux crate
           # payloads pruned); mkdist falls back to plain vendor without it.
           cargo install cargo-vendor-filterer --locked
@@ -104,6 +108,44 @@ jobs:
       - name: Build and sign the source packages
         if: env.SKIP_PPA != '1'
         run: packaging/distros/debian/build-source.sh
+
+      # Optional sftp transport: with an SSH key provisioned, dput's
+      # [ppa] host flips from anonymous ftp (the transient-550 path
+      # that has needed manual re-runs) to authenticated sftp. With
+      # the secret absent this step configures nothing and the stock
+      # ftp stanza stays in effect; upload.sh's skip/retry logic
+      # covers both transports.
+      - name: Configure dput sftp
+        if: env.SKIP_PPA != '1'
+        env:
+          LP_SSH_KEY: ${{ secrets.LAUNCHPAD_SSH_PRIVATE_KEY }}
+        run: |
+          if [ -z "$LP_SSH_KEY" ]; then
+            echo "LAUNCHPAD_SSH_PRIVATE_KEY not set; dput keeps the ftp default."
+            exit 0
+          fi
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "$LP_SSH_KEY" > ~/.ssh/launchpad
+          chmod 600 ~/.ssh/launchpad
+          ssh-keyscan -H ppa.launchpad.net >> ~/.ssh/known_hosts 2>/dev/null
+          cat >> ~/.ssh/config <<'SSHEOF'
+          Host ppa.launchpad.net
+            User fiorix
+            IdentityFile ~/.ssh/launchpad
+            IdentitiesOnly yes
+          SSHEOF
+          # Overrides the stock [ppa] stanza (method = ftp) host-wide;
+          # dput resolves ppa:owner/name through this section.
+          cat > ~/.dput.cf <<'DPUTEOF'
+          [ppa]
+          fqdn = ppa.launchpad.net
+          method = sftp
+          incoming = ~%(ppa)s/ubuntu
+          login = fiorix
+          allow_unsigned_uploads = 0
+          DPUTEOF
+          echo "dput will use sftp for the [ppa] host."
 
       - name: Upload to the PPA
         if: env.SKIP_PPA != '1'
