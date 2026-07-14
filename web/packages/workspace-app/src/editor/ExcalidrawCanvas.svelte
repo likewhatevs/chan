@@ -105,11 +105,13 @@
   /// File ids the authority already knows (pushed by us or fanned in).
   const knownFiles = new Set<string>();
   /// Cleaned appState from the latest serialize, plus the JSON of the
-  /// last version the authority holds; a difference rides the next push
-  /// (whole-object LWW server-side).
+  /// appState the authority is known to hold (from our last push OR any
+  /// adopted snapshot/update). Only a divergence from that baseline
+  /// rides a push: adopting an incoming appState must move the baseline
+  /// too, or the echo would re-push forever between two live canvases.
   let cleanedAppState: WireAppState = {};
   let cleanedAppStateJson = "";
-  let lastPushedAppStateJson = "";
+  let lastAuthorityAppStateJson = "";
 
   /// Literal colors for the collaborator layer, resolved from the shared
   /// --peer-c0..7 vars so canvas pointers match editor carets; the
@@ -153,7 +155,6 @@
     elements: WireElement[],
     appState: WireAppState | undefined,
     files: WireFiles | undefined,
-    isSnapshot: boolean,
   ): void {
     if (!api || !ex) return;
     const reconciled = ex.reconcileElements(
@@ -177,10 +178,10 @@
       }
       for (const k of Object.keys(files)) knownFiles.add(k);
     }
-    if (isSnapshot && appState !== undefined) {
-      // The snapshot appState is the authority baseline; only later
-      // local changes should ride a push.
-      lastPushedAppStateJson = JSON.stringify(appState);
+    if (appState !== undefined) {
+      // Any adopted appState is the new authority baseline; only later
+      // local divergence should ride a push.
+      lastAuthorityAppStateJson = JSON.stringify(appState);
     }
   }
 
@@ -195,14 +196,14 @@
       if (!knownFiles.has(k)) newFiles[k] = v as WireFiles[string];
     }
     const appState =
-      cleanedAppStateJson !== "" && cleanedAppStateJson !== lastPushedAppStateJson
+      cleanedAppStateJson !== "" && cleanedAppStateJson !== lastAuthorityAppStateJson
         ? cleanedAppState
         : undefined;
     const hasFiles = Object.keys(newFiles).length > 0;
     if (deltas.length === 0 && appState === undefined && !hasFiles) return;
     noteVersions(lastBroadcast, deltas);
     for (const k of Object.keys(newFiles)) knownFiles.add(k);
-    if (appState !== undefined) lastPushedAppStateJson = cleanedAppStateJson;
+    if (appState !== undefined) lastAuthorityAppStateJson = cleanedAppStateJson;
     session.pushScene(
       deltas as WireElement[],
       appState,
@@ -212,10 +213,10 @@
 
   const binding: SceneCanvasBinding = {
     applySnapshot(elements, appState, files) {
-      applyRemote(elements, appState, files, true);
+      applyRemote(elements, appState, files);
     },
     applyUpdate(f) {
-      applyRemote(f.elements, f.appState, f.files, false);
+      applyRemote(f.elements, f.appState, f.files);
     },
     collaboratorsChanged() {
       if (!api || !session) return;

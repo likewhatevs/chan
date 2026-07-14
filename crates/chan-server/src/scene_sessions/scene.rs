@@ -281,7 +281,11 @@ impl Scene {
     /// Merge one client push. All-or-nothing: validation or the growth
     /// cap failing leaves the scene untouched. Elements are resolved
     /// in push order against the evolving state, so a batch carrying
-    /// the same id twice converges like two sequential pushes.
+    /// the same id twice converges like two sequential pushes. An
+    /// appState equal to the stored object is treated as not carried:
+    /// a client echoing the authority's own appState back must never
+    /// bump the version or re-fan, or two live canvases ping-pong the
+    /// object forever.
     pub fn apply_push(
         &mut self,
         elements: Vec<Value>,
@@ -299,7 +303,7 @@ impl Scene {
             accepted.push(el.value.clone());
             staged.insert(id, el);
         }
-        let staged_app_state = Self::stage_app_state(app_state)?;
+        let staged_app_state = Self::stage_app_state(app_state)?.filter(|o| *o != self.app_state);
         let new_files = self.stage_new_files(files)?;
 
         let elements_delta: i64 = staged
@@ -705,6 +709,14 @@ mod tests {
         let applied = s.apply_push(vec![], Some(Value::Null), None).unwrap();
         assert!(applied.app_state.is_none());
         assert_eq!(s.app_state().len(), 1);
+
+        // Echoing the stored appState back is not a mutation: nothing
+        // fans, so two live canvases can never ping-pong the object.
+        let applied = s
+            .apply_push(vec![], Some(json!({"gridSize": 40})), None)
+            .unwrap();
+        assert!(applied.app_state.is_none(), "equal appState never re-fans");
+        assert!(applied.is_empty());
 
         // Files: a known id is immutable; only new entries land + fan.
         let f1 = json!({"mimeType": "image/png", "dataURL": "data:image/png;base64,AAAA"});

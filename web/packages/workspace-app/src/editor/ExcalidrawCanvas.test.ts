@@ -29,7 +29,16 @@ vi.mock("react", () => ({
 }));
 vi.mock("@excalidraw/excalidraw", () => ({
   Excalidraw: () => null,
-  serializeAsJSON: () => "{}",
+  // Mimics the real cleaner's shape: elements + a cleaned appState
+  // (selection dropped) so the appState-baseline logic is testable.
+  serializeAsJSON: (elements: unknown, appState: Record<string, unknown>) =>
+    JSON.stringify({
+      elements,
+      appState: Object.fromEntries(
+        Object.entries(appState).filter(([k]) => k !== "selectedElementIds"),
+      ),
+      files: {},
+    }),
   CaptureUpdateAction: { IMMEDIATELY: "IMMEDIATELY", EVENTUALLY: "EVENTUALLY", NEVER: "NEVER" },
   // Test double of the vendored LWW reconcile, id-keyed with the
   // version core of the real rule (the exact rule is pinned by the
@@ -171,22 +180,30 @@ type FakeApi = {
   addFiles: ReturnType<typeof vi.fn>;
   updateScene: ReturnType<typeof vi.fn>;
   setElements: (next: Record<string, unknown>[]) => void;
+  setAppState: (patch: Record<string, unknown>) => void;
 };
 
 function fakeApi(initial: WireElement[] = []): FakeApi {
   let elements: Record<string, unknown>[] = [...initial];
+  let appState: Record<string, unknown> = { selectedElementIds: {} };
   const updateScene = vi.fn((s: Record<string, unknown>) => {
     if (Array.isArray(s.elements)) elements = s.elements as Record<string, unknown>[];
+    if (s.appState && typeof s.appState === "object") {
+      appState = { ...appState, ...(s.appState as Record<string, unknown>) };
+    }
   });
   return {
     getSceneElementsIncludingDeleted: () => elements,
     getSceneElements: () => elements.filter((e) => e.isDeleted !== true),
-    getAppState: () => ({ selectedElementIds: {} }),
+    getAppState: () => appState,
     getFiles: () => ({}),
     addFiles: vi.fn(),
     updateScene,
     setElements(next) {
       elements = next;
+    },
+    setAppState(patch) {
+      appState = { ...appState, ...patch };
     },
   };
 }
@@ -291,6 +308,30 @@ describe("scene session binding loop safety", () => {
     expect(peer.username).toBe("win-peer");
     expect(peer.pointer).toEqual({ x: 1.5, y: 2, tool: "pointer" });
     expect((peer.color as { background: string }).background).toMatch(/^#/);
+  });
+
+  test("an adopted appState moves the baseline and never re-pushes", async () => {
+    vi.useFakeTimers();
+    const { api, session, binding } = await mountBound([]);
+    const rendered = renderMock.mock.calls.at(-1)![0] as {
+      props: { onChange: () => void };
+    };
+
+    // The authority fans an appState; adopting it must not echo back.
+    binding.applyUpdate({ elements: [], appState: { gridSize: 5 } });
+    rendered.props.onChange();
+    vi.advanceTimersByTime(300);
+    expect(session.pushScene).not.toHaveBeenCalled();
+
+    // A genuine local appState change pushes exactly once.
+    api.setAppState({ gridSize: 9 });
+    rendered.props.onChange();
+    vi.advanceTimersByTime(300);
+    expect(session.pushScene).toHaveBeenCalledTimes(1);
+    rendered.props.onChange();
+    vi.advanceTimersByTime(300);
+    expect(session.pushScene).toHaveBeenCalledTimes(1);
+    vi.useRealTimers();
   });
 
   test("unmounting unbinds the session", async () => {
