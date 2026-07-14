@@ -4484,11 +4484,13 @@ export async function overwriteConflictedTab(): Promise<void> {
   await performSave(found.tab);
 }
 
-// ---- live doc-session integration (state/docSync.svelte.ts) ---------------
-// The doc-sync module registers these hooks at ITS module load; tabs never
-// imports docSync (the import edge points docSync -> tabs), so the classic
-// save path below runs unchanged when the module is absent (unit tests
-// that never import it, minimal bundles).
+// ---- live session integration (docSync / sceneSync .svelte.ts) ------------
+// Each sync module registers these hooks at ITS module load; tabs never
+// imports either (the import edge points sync module -> tabs), so the
+// classic save path below runs unchanged when no module is present (unit
+// tests that never import one, minimal bundles). The slots are arrays: a
+// tab holds at most one live session KIND, so consumers iterate in
+// registration order and the first non-classic answer wins.
 
 /// Save-funnel delegate: "saved" consumed the save (every local edit is
 /// confirmed and the authority flushed to disk); "degraded" and
@@ -4496,32 +4498,33 @@ export async function overwriteConflictedTab(): Promise<void> {
 export type DocSaveDelegate = (
   t: FileTab,
 ) => Promise<"saved" | "degraded" | "classic">;
-let docSaveDelegate: DocSaveDelegate | null = null;
+const docSaveDelegates: DocSaveDelegate[] = [];
 export function registerDocSaveDelegate(fn: DocSaveDelegate): void {
-  docSaveDelegate = fn;
+  docSaveDelegates.push(fn);
 }
 
-let docReleaseHook: ((tabId: string, immediate: boolean) => void) | null = null;
+const docReleaseHooks: ((tabId: string, immediate: boolean) => void)[] = [];
 export function registerDocReleaseHook(
   fn: (tabId: string, immediate: boolean) => void,
 ): void {
-  docReleaseHook = fn;
+  docReleaseHooks.push(fn);
 }
 
-/// Query: is `tabId`'s doc session degraded by a still-retrying CONNECTION
+/// Query: is `tabId`'s live session degraded by a still-retrying CONNECTION
 /// outage (dead server)? When true the classic autosave PUT is doomed and
 /// its `tab.error` would unmount the editor, so the save path stays quiet
 /// and leaves the buffer for the reattach diff-push.
-let docSavePausedQuery: ((tabId: string) => boolean) | null = null;
+const docSavePausedQueries: ((tabId: string) => boolean)[] = [];
 export function registerDocSavePausedQuery(fn: (tabId: string) => boolean): void {
-  docSavePausedQuery = fn;
+  docSavePausedQueries.push(fn);
 }
 
-/// Release a tab's live doc session, if any. `immediate` skips the
-/// editor-remount linger: tab close, rename rekey, and file discard must
-/// detach now (a detach also asks the server for a prompt flush).
+/// Release a tab's live session, if any. Every registered hook runs (a
+/// session module ignores tab ids it does not own). `immediate` skips the
+/// remount linger: tab close, rename rekey, and file discard must detach
+/// now (a detach also asks the server for a prompt flush).
 export function releaseDocSessionForTab(tabId: string, immediate = false): void {
-  docReleaseHook?.(tabId, immediate);
+  for (const hook of docReleaseHooks) hook(tabId, immediate);
 }
 
 /// True while a live doc session owns this tab's saves: attached, or in
@@ -4546,7 +4549,7 @@ export function isDocAttached(t: FileTab): boolean {
 export function isDocSavePaused(t: FileTab): boolean {
   if (isDocAttached(t)) return true;
   if (t.doc?.state !== "degraded") return false;
-  return docSavePausedQuery?.(t.id) ?? false;
+  return docSavePausedQueries.some((q) => q(t.id));
 }
 
 /// Mirror mutator for docSync's status/peers writes. Called from socket
@@ -4594,16 +4597,22 @@ async function performSaveOnce(t: FileTab): Promise<void> {
     t.error = "file is still loading";
     return;
   }
-  // A live doc session owns this tab's saves: confirmed edits are
-  // already on the authority, so "save" means "flush to disk", never a
-  // PUT (the ConflictModal is unreachable while attached). A flush
-  // failure degrades the session and falls through to the classic path
-  // below with the last flush frame's CAS token already stamped.
-  if (docSaveDelegate && isDocAttached(t)) {
-    const r = await docSaveDelegate(t);
-    if (r === "saved") {
-      t.error = null;
-      return;
+  // A live session owns this tab's saves: confirmed edits are already
+  // on the authority, so "save" means "flush to disk", never a PUT
+  // (the ConflictModal is unreachable while attached). Delegates run in
+  // registration order; "classic" means "not my session, ask the next
+  // one". A flush failure degrades the owning session and falls through
+  // to the classic path below with the last flush frame's CAS token
+  // already stamped.
+  if (isDocAttached(t)) {
+    for (const delegate of docSaveDelegates) {
+      const r = await delegate(t);
+      if (r === "classic") continue;
+      if (r === "saved") {
+        t.error = null;
+        return;
+      }
+      break;
     }
   }
   // Connection-outage suppression: the session is degraded by a still-
