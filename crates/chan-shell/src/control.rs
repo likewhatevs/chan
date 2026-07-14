@@ -138,6 +138,9 @@ pub async fn send_control_request(socket: &Path, request: ControlRequest) -> Res
         // flooded target). A plain error: nothing was delivered and nothing
         // waits server-side, so the caller may simply retry later.
         ControlResponse::QueueFull { message } => anyhow::bail!("{message}"),
+        // `cs export`'s typed success: the final workspace-relative output
+        // path rides its own variant, and it IS the message the CLI prints.
+        ControlResponse::Export { out_path } => Ok(out_path),
     }
 }
 

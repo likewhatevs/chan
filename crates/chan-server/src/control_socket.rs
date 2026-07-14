@@ -18,7 +18,7 @@ use tokio::task::JoinHandle;
 
 use crate::desktop_window_ops::DesktopWindowOp;
 use crate::handover_bus::{HandoverBus, HandoverReply};
-use crate::session_presence::{HandoverError, RenameError, SessionRegistry};
+use crate::session_presence::{HandoverError, ParticipantState, RenameError, SessionRegistry};
 use crate::state::WorkspaceCell;
 use crate::terminal_sessions::CreateOptions;
 use crate::terminal_sessions::Registry as TerminalRegistry;
@@ -162,6 +162,23 @@ enum WindowCommand {
         from_window_id: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         from_name: Option<String>,
+    },
+    // `cs export`: ask the window to render `path` to `format` and write the
+    // result back into the workspace. The SPA renders through its
+    // `format -> exporter` registry, uploads the bytes with the existing
+    // `POST /api/files/upload` (`replace_path` = `out`), then POSTs
+    // `{ ok: true, out }` / `{ ok: false, error }` to `POST /api/window/reply`
+    // echoing this frame's `id`, which fires the parked window-bus oneshot.
+    // The `export-job` tag and the `id` payload key (not `request_id`) are
+    // the frozen frame contract the SPA matches on; both paths are
+    // workspace-relative and `out` is always the FINAL output path (the
+    // server resolves the default before dispatch).
+    #[serde(rename = "export-job")]
+    ExportJob {
+        id: String,
+        path: String,
+        format: String,
+        out: String,
     },
     // `cs copy`: ask the window to write `data_b64` (base64 of the terminal's
     // stdin) onto the clipboard as `mime`. The SPA decodes it, writes via
@@ -369,6 +386,7 @@ fn terminal_tenant_refusal(req: &ControlRequest, tenant: ControlTenant) -> Optio
         )),
         ControlRequest::OpenGraph { .. } => Some(workspace_only_refusal("graph", None)),
         ControlRequest::Search { .. } => Some(workspace_only_refusal("search", None)),
+        ControlRequest::Export { .. } => Some(workspace_only_refusal("export", None)),
         ControlRequest::OpenTermNew { path: Some(_), .. } => Some(workspace_only_refusal(
             "terminal new --path",
             Some("Drop --path to open a terminal here."),
@@ -1209,6 +1227,9 @@ async fn handle_request(req: ControlRequest, ctx: &ControlSocketCtx) -> ControlR
                 Err(message) => return ControlResponse::Error { message },
             };
             into_response(search_workspace(&workspace, &query, limit))
+        }
+        ControlRequest::Export { path, format, out } => {
+            handle_export(path, format, out, session_registry, events_tx, window_bus).await
         }
         ControlRequest::TermSurvey {
             tab_name,
@@ -2157,6 +2178,146 @@ async fn handle_pane_exec(
         window_bus,
     )
     .await
+}
+
+/// How long a `cs export` round-trip waits for the renderer's reply. Far
+/// past the pane query's 5s: the SPA rasterizes a document page by page
+/// (mermaid + excalidraw renders included) before it can upload and reply.
+const EXPORT_REPLY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(90);
+
+/// The `cs export` no-renderer refusal. Only a live SPA window can run an
+/// export job (the `format -> exporter` registry lives in the frontend).
+const EXPORT_NO_RENDERER: &str =
+    "no connected renderer: open the workspace in a browser or chan-desktop";
+
+/// Resolve the export target: the most recently active live workspace
+/// window, approximated as the LATEST-JOINED live `/ws` participant (the
+/// registry tracks liveness and join order, not focus). With one window
+/// open (the common case) that is simply the open window.
+fn resolve_export_window(session_registry: &SessionRegistry) -> Result<String, String> {
+    let snapshot = session_registry.snapshot(std::time::Instant::now());
+    snapshot
+        .participants
+        .iter()
+        // `snapshot` orders by join sequence; scan latest-joined first.
+        .rev()
+        .find(|p| p.status == ParticipantState::Live)
+        .map(|p| p.window_id.clone())
+        .ok_or_else(|| EXPORT_NO_RENDERER.to_string())
+}
+
+/// The default `cs export` output path: the source with its extension
+/// swapped for the format string (`notes/doc.md` + `pdf` ->
+/// `notes/doc.pdf`). Only the final component's extension changes, so the
+/// workspace-relative directory part passes through untouched.
+fn default_export_out(path: &str, format: &str) -> String {
+    std::path::Path::new(path)
+        .with_extension(format)
+        .to_string_lossy()
+        .into_owned()
+}
+
+/// `cs export`: validate, resolve the FINAL output path (Contract: the
+/// frame never carries an unresolved default), pick the renderer window,
+/// and run the round-trip.
+async fn handle_export(
+    path: String,
+    format: String,
+    out: Option<String>,
+    session_registry: &Arc<SessionRegistry>,
+    events_tx: &broadcast::Sender<String>,
+    window_bus: &Arc<crate::window_bus::WindowBus>,
+) -> ControlResponse {
+    let path = path.trim().to_string();
+    if path.is_empty() {
+        return ControlResponse::Error {
+            message: "export needs a source path".into(),
+        };
+    }
+    let format = format.trim().to_string();
+    if format.is_empty() {
+        return ControlResponse::Error {
+            message: "export needs a format".into(),
+        };
+    }
+    let out = out
+        .map(|o| o.trim().to_string())
+        .filter(|o| !o.is_empty())
+        .unwrap_or_else(|| default_export_out(&path, &format));
+    let target = match resolve_export_window(session_registry) {
+        Ok(target) => target,
+        Err(message) => return ControlResponse::Error { message },
+    };
+    export_round_trip(&target, path, format, out, events_tx, window_bus).await
+}
+
+/// The `cs export` round-trip, mirroring [`pane_round_trip`]: park the
+/// oneshot BEFORE pushing the `export-job` command so a fast reply cannot
+/// beat the registration, then await the renderer's `{ ok, out }` /
+/// `{ ok: false, error }` payload from `POST /api/window/reply`.
+async fn export_round_trip(
+    window_id: &str,
+    path: String,
+    format: String,
+    out: String,
+    events_tx: &broadcast::Sender<String>,
+    window_bus: &Arc<crate::window_bus::WindowBus>,
+) -> ControlResponse {
+    let (request_id, rx) = window_bus.register();
+    let command = WindowCommand::ExportJob {
+        id: request_id.clone(),
+        path,
+        format,
+        out,
+    };
+    if let Err(message) = send_window_command(window_id, command, events_tx) {
+        window_bus.cancel(&request_id);
+        return ControlResponse::Error { message };
+    }
+    match tokio::time::timeout(EXPORT_REPLY_TIMEOUT, rx).await {
+        Ok(Ok(payload)) => export_reply_response(&payload),
+        Ok(Err(_)) => {
+            window_bus.cancel(&request_id);
+            ControlResponse::Error {
+                message: "export request cancelled before a reply".into(),
+            }
+        }
+        Err(_elapsed) => {
+            window_bus.cancel(&request_id);
+            ControlResponse::Error {
+                message: format!(
+                    "no reply from the renderer within {}s",
+                    EXPORT_REPLY_TIMEOUT.as_secs()
+                ),
+            }
+        }
+    }
+}
+
+/// Interpret the renderer's export reply payload: `{ ok: true, out }` is
+/// the dedicated Export success carrying the final output path; `{ ok:
+/// false, error }` (and anything malformed) is an error, with the
+/// renderer's own message when it sent one.
+fn export_reply_response(payload: &serde_json::Value) -> ControlResponse {
+    if payload.get("ok").and_then(serde_json::Value::as_bool) == Some(true) {
+        let out_path = payload
+            .get("out")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        if out_path.is_empty() {
+            return ControlResponse::Error {
+                message: "renderer reply missing `out`".into(),
+            };
+        }
+        return ControlResponse::Export { out_path };
+    }
+    let message = payload
+        .get("error")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("export failed in the renderer")
+        .to_string();
+    ControlResponse::Error { message }
 }
 
 /// How long a `cs copy` / `cs paste` round-trip waits for the SPA's reply.
@@ -3481,6 +3642,139 @@ mod tests {
             s.starts_with(r#"{"type":"window_command","window_id":"workspace-aa-0","#),
             "frame prefix drifted: {s}"
         );
+    }
+
+    #[test]
+    fn export_job_frame_pins_the_frozen_contract() {
+        // Contract B: `command: "export-job"` (hyphenated, via the explicit
+        // serde rename) with payload keys `id` / `path` / `format` / `out`.
+        // The SPA's window-command listener matches these exact strings.
+        let frame = WindowCommandFrame {
+            frame_type: "window_command",
+            window_id: "w-1".to_string(),
+            command: WindowCommand::ExportJob {
+                id: "win-r1".into(),
+                path: "notes/doc.md".into(),
+                format: "pdf".into(),
+                out: "notes/doc.pdf".into(),
+            },
+        };
+        let v = serde_json::to_value(&frame).unwrap();
+        assert_eq!(
+            v,
+            serde_json::json!({
+                "type": "window_command",
+                "window_id": "w-1",
+                "command": "export-job",
+                "id": "win-r1",
+                "path": "notes/doc.md",
+                "format": "pdf",
+                "out": "notes/doc.pdf",
+            })
+        );
+    }
+
+    #[test]
+    fn default_export_out_swaps_the_extension_in_place() {
+        assert_eq!(default_export_out("notes/doc.md", "pdf"), "notes/doc.pdf");
+        assert_eq!(default_export_out("doc", "pdf"), "doc.pdf");
+        // Only the last extension swaps; the directory part is untouched.
+        assert_eq!(default_export_out("a/b.tar.gz", "pdf"), "a/b.tar.pdf");
+    }
+
+    #[test]
+    fn resolve_export_window_picks_the_latest_live_participant() {
+        let registry = SessionRegistry::new();
+        assert_eq!(
+            resolve_export_window(&registry).unwrap_err(),
+            EXPORT_NO_RENDERER
+        );
+
+        let registry = Arc::new(SessionRegistry::new());
+        let _a = registry.join("w-a", true, None).guard;
+        let b = registry.join("w-b", true, None).guard;
+        assert_eq!(resolve_export_window(&registry).unwrap(), "w-b");
+
+        // w-b's socket drops: it leaves Live (grace clock) and the latest
+        // remaining LIVE participant wins.
+        drop(b);
+        assert_eq!(resolve_export_window(&registry).unwrap(), "w-a");
+    }
+
+    #[tokio::test]
+    async fn export_with_no_live_window_answers_the_no_renderer_error() {
+        let (events_tx, _rx) = broadcast::channel(1);
+        let window_bus = Arc::new(crate::window_bus::WindowBus::new());
+        let registry = Arc::new(SessionRegistry::new());
+        let resp = handle_export(
+            "notes/doc.md".into(),
+            "pdf".into(),
+            None,
+            &registry,
+            &events_tx,
+            &window_bus,
+        )
+        .await;
+        match resp {
+            ControlResponse::Error { message } => assert_eq!(message, EXPORT_NO_RENDERER),
+            other => panic!("expected Error, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn export_round_trip_completes_with_the_renderer_reply() {
+        let (events_tx, mut events_rx) = broadcast::channel(4);
+        let window_bus = Arc::new(crate::window_bus::WindowBus::new());
+        let bus = Arc::clone(&window_bus);
+        let round_trip = tokio::spawn(async move {
+            export_round_trip(
+                "w-1",
+                "notes/doc.md".into(),
+                "pdf".into(),
+                "notes/doc.pdf".into(),
+                &events_tx,
+                &bus,
+            )
+            .await
+        });
+        // The pushed frame carries the bus id under `id` (frozen contract);
+        // completing that id unblocks the round-trip with the reply payload.
+        let raw = events_rx.recv().await.expect("frame on /ws broadcast");
+        let frame: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(frame["command"], "export-job");
+        assert_eq!(frame["window_id"], "w-1");
+        assert_eq!(frame["path"], "notes/doc.md");
+        assert_eq!(frame["out"], "notes/doc.pdf");
+        let id = frame["id"].as_str().expect("id key").to_string();
+        assert!(window_bus.complete(
+            &id,
+            serde_json::json!({ "ok": true, "out": "notes/doc.pdf" })
+        ));
+        match round_trip.await.unwrap() {
+            ControlResponse::Export { out_path } => assert_eq!(out_path, "notes/doc.pdf"),
+            other => panic!("expected Export, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn export_reply_maps_failures_to_errors() {
+        // The renderer's own message wins when it sent one.
+        match export_reply_response(
+            &serde_json::json!({ "ok": false, "error": "unknown format: docx" }),
+        ) {
+            ControlResponse::Error { message } => assert_eq!(message, "unknown format: docx"),
+            other => panic!("expected Error, got {other:?}"),
+        }
+        // Malformed replies (no `ok`, or ok without `out`) are errors, never
+        // a silent success: the CLI prints `out_path` verbatim.
+        assert!(matches!(
+            export_reply_response(&serde_json::json!({})),
+            ControlResponse::Error { .. }
+        ));
+        assert!(matches!(
+            export_reply_response(&serde_json::json!({ "ok": true })),
+            ControlResponse::Error { .. }
+        ));
     }
 
     /// Fresh ControlSocketCtx around the given workspace cell: empty

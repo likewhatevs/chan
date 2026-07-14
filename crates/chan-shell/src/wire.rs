@@ -292,6 +292,26 @@ pub enum ControlRequest {
         tab_name: Option<String>,
         op: PaneOp,
     },
+    // Category 3 (blocking round-trip): render a workspace file to `format`
+    // in a live renderer window and write the result back into the
+    // workspace (`cs export`). No window_id: only the SPA can render (the
+    // `format -> exporter` registry lives there), so the server targets the
+    // most recently active live workspace window. The server resolves the
+    // default `out` (the source with its extension swapped for the format,
+    // `notes/doc.md` -> `notes/doc.pdf`) BEFORE dispatch, pushes an
+    // `export-job` window_command, parks a oneshot on the window bus, and
+    // BLOCKS until the SPA uploads the bytes and replies; success rides the
+    // dedicated [`ControlResponse::Export`] carrying the final
+    // workspace-relative output path. Both paths are workspace-relative
+    // strings end to end; `format` is an opaque string (`pdf` is the only
+    // registered format today) and an unknown one fails in the renderer
+    // with a clear error.
+    Export {
+        path: String,
+        format: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        out: Option<String>,
+    },
     // Category 2 (blocking): raise a survey overlay on the SPA window(s)
     // that own the matching terminal tab(s) and BLOCK until the user
     // answers. The server resolves the selector to those windows, mints
@@ -1297,6 +1317,55 @@ mod survey_wire_tests {
             serde_json::json!("desktop")
         );
     }
+
+    #[test]
+    fn export_request_and_response_wire_shapes() {
+        // `cs export` request: `out` omitted when None (the server resolves
+        // the default before dispatch), present when the caller chose one.
+        let v = serde_json::to_value(ControlRequest::Export {
+            path: "notes/doc.md".into(),
+            format: "pdf".into(),
+            out: None,
+        })
+        .unwrap();
+        assert_eq!(
+            v,
+            serde_json::json!({ "type": "export", "path": "notes/doc.md", "format": "pdf" })
+        );
+        let v = serde_json::to_value(ControlRequest::Export {
+            path: "notes/doc.md".into(),
+            format: "pdf".into(),
+            out: Some("out/render.pdf".into()),
+        })
+        .unwrap();
+        assert_eq!(
+            v,
+            serde_json::json!({
+                "type": "export",
+                "path": "notes/doc.md",
+                "format": "pdf",
+                "out": "out/render.pdf",
+            })
+        );
+        // Decode tolerates an omitted `out`.
+        assert!(matches!(
+            serde_json::from_str::<ControlRequest>(
+                r#"{"type":"export","path":"a.md","format":"pdf"}"#
+            )
+            .unwrap(),
+            ControlRequest::Export { out: None, .. }
+        ));
+
+        // The dedicated success response: `status: export` + `out_path`.
+        let v = serde_json::to_value(ControlResponse::Export {
+            out_path: "notes/doc.pdf".into(),
+        })
+        .unwrap();
+        assert_eq!(
+            v,
+            serde_json::json!({ "status": "export", "out_path": "notes/doc.pdf" })
+        );
+    }
 }
 
 /// The single-line reply the server writes back on the control socket.
@@ -1327,6 +1396,12 @@ pub enum ControlResponse {
     /// `message` is the queue-full line the CLI prints.
     QueueFull {
         message: String,
+    },
+    /// `cs export`'s success: the final workspace-relative output path the
+    /// renderer wrote. A dedicated variant (not JSON in `Ok.message`)
+    /// because the path is the whole result and the CLI prints it verbatim.
+    Export {
+        out_path: String,
     },
 }
 

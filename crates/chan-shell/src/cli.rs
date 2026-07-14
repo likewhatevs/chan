@@ -146,6 +146,24 @@ pub enum ShellAction {
         #[command(subcommand)]
         action: TerminalAction,
     },
+    /// Export a workspace file through a live renderer window (a connected
+    /// browser or chan-desktop) and write the result back into the
+    /// workspace. `cs export doc.md` renders doc.md to PDF and writes
+    /// doc.pdf next to it; the final workspace-relative output path prints
+    /// on stdout. Blocks until the renderer replies. Workspace windows
+    /// only, and a window must be open: the renderer does the rendering.
+    Export {
+        /// Workspace-relative source path (e.g. notes/doc.md).
+        #[arg(value_hint = clap::ValueHint::AnyPath)]
+        path: String,
+        /// Output format. `pdf` is the only registered format today.
+        #[arg(long, default_value = "pdf")]
+        format: String,
+        /// Workspace-relative output path. Defaults to the source with its
+        /// extension swapped for the format (notes/doc.md -> notes/doc.pdf).
+        #[arg(long)]
+        out: Option<String>,
+    },
     /// Run the same content search the UI does, against the running
     /// window's workspace. Prints a markdown table by default; `--json`
     /// emits compact machine output and `--json --pretty` indents it.
@@ -913,6 +931,7 @@ pub async fn dispatch(action: ShellAction) -> Result<()> {
                 .await
             }
         },
+        ShellAction::Export { path, format, out } => cmd_shell_export(path, format, out).await,
         ShellAction::Search {
             query,
             limit,
@@ -1127,6 +1146,19 @@ fn render_session_self_markdown(raw: &str) -> Result<String> {
         out.push_str(&format!("| identity | {identity} |\n"));
     }
     Ok(out)
+}
+
+/// `cs export <path>`: render a workspace file to `format` in a live
+/// renderer window (the SPA owns the format registry) and write the bytes
+/// back into the workspace. Session-scoped like `cs search` (no window id:
+/// the server picks the renderer window); blocks until the renderer
+/// replies, then prints the final workspace-relative output path.
+async fn cmd_shell_export(path: String, format: String, out: Option<String>) -> Result<()> {
+    let socket = control_socket_env()?;
+    let out_path =
+        send_control_request(&socket, ControlRequest::Export { path, format, out }).await?;
+    println!("{out_path}");
+    Ok(())
 }
 
 /// `cs search <query>`: run the workspace content search on the running
