@@ -12,7 +12,8 @@
 //!
 //! Every state change writes one row to `api_token_audit`. Actions:
 //! `created` (SPA mint), `created_via_desktop` (desktop-authorize
-//! mint), `desktop.redeem` (one-time desktop code cashed in), `used`
+//! mint), `created_via_admin` (chan-gateway-admin mint),
+//! `desktop.redeem` (one-time desktop code cashed in), `used`
 //! (validate succeeded), `revoked`.
 
 use base64::Engine;
@@ -32,19 +33,21 @@ const TOKEN_PREFIX: &str = "chan_pat_";
 /// the set ever grows we can add a CHECK constraint.
 pub const ACTION_CREATED: &str = "created";
 pub const ACTION_CREATED_DESKTOP: &str = "created_via_desktop";
+pub const ACTION_CREATED_ADMIN: &str = "created_via_admin";
 pub const ACTION_DESKTOP_REDEEM: &str = "desktop.redeem";
 pub const ACTION_USED: &str = "used";
 pub const ACTION_REVOKED: &str = "revoked";
 
-/// Where a `create()` call came from. The desktop-authorize flow
-/// records a distinct audit action so operators (and the user
-/// themselves) can tell apart tokens minted by the SPA's "create
-/// token" button from tokens minted by chan-desktop bouncing through
-/// `/desktop/authorize`.
+/// Where a `create()` call came from. Each origin records a distinct
+/// audit action so operators (and the user themselves) can tell apart
+/// tokens minted by the SPA's "create token" button, by chan-desktop
+/// bouncing through `/desktop/authorize`, and by an operator running
+/// `chan-gateway-admin token create`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TokenOrigin {
     Spa,
     Desktop,
+    Admin,
 }
 
 impl TokenOrigin {
@@ -52,6 +55,7 @@ impl TokenOrigin {
         match self {
             Self::Spa => ACTION_CREATED,
             Self::Desktop => ACTION_CREATED_DESKTOP,
+            Self::Admin => ACTION_CREATED_ADMIN,
         }
     }
 }
@@ -189,6 +193,18 @@ impl ApiTokenService {
             .await?;
 
         Ok(CreatedToken { token, secret })
+    }
+
+    /// Case-insensitive email -> user id, on the shared DB (identity
+    /// and profile share one Postgres; the users table is reachable
+    /// here the same way `validate()` joins it). `None` for an
+    /// unknown email.
+    pub async fn user_id_by_email(&self, email: &str) -> Result<Option<Uuid>> {
+        sqlx::query_scalar::<_, Uuid>("SELECT id FROM users WHERE lower(email) = lower($1)")
+            .bind(email)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(map_db)
     }
 
     pub async fn list(&self, user_id: Uuid) -> Result<Vec<ApiToken>> {

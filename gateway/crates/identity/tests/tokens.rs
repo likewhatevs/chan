@@ -119,6 +119,7 @@ impl TestEnv {
             cookie_secure: false,
             profile_client,
             internal_auth_token: "test-internal".to_string(),
+            identity_admin_token: String::new(),
             devserver_wildcard_suffix: ".devserver.chan.app".to_string(),
             workspace_public_scheme: "https".to_string(),
             workspace_public_port: String::new(),

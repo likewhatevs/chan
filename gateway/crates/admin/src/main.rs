@@ -1,10 +1,12 @@
 //! chan-gateway-admin: command-line admin for the chan.app gateway.
 //!
 //! Talks to profile-service's `/v1/admin/*` tree (plus the non-admin
-//! routes used for cross-service reads) and devserver-proxy's
-//! `/admin/v1/*` tree (tunnel ps / kill / watch). Authenticates with
-//! `CHAN_ADMIN_TOKEN`, which must match `PROFILE_ADMIN_TOKEN` on
-//! profile-service and `DEVSERVER_ADMIN_TOKEN` on devserver-proxy.
+//! routes used for cross-service reads), devserver-proxy's
+//! `/admin/v1/*` tree (tunnel ps / kill / watch), and
+//! identity-service's `/admin/v1/tokens` (PAT mint). Authenticates
+//! with `CHAN_ADMIN_TOKEN`, which must match `PROFILE_ADMIN_TOKEN` on
+//! profile-service, `DEVSERVER_ADMIN_TOKEN` on devserver-proxy, and
+//! `IDENTITY_ADMIN_TOKEN` on identity-service.
 //!
 //! Output is shell-friendly: human-readable tables on a TTY,
 //! `--json` everywhere for piping into jq. Exit codes:
@@ -44,6 +46,11 @@ struct Cli {
     /// Defaults to CHAN_ADMIN_WORKSPACE_URL or http://127.0.0.1:7002.
     #[arg(long, global = true, env = "CHAN_ADMIN_WORKSPACE_URL")]
     workspace_url: Option<String>,
+
+    /// HTTP URL of identity-service (used by `token create`).
+    /// Defaults to CHAN_ADMIN_IDENTITY_URL or http://127.0.0.1:7000.
+    #[arg(long, global = true, env = "CHAN_ADMIN_IDENTITY_URL")]
+    identity_url: Option<String>,
 
     /// Bearer matching profile-service's PROFILE_ADMIN_TOKEN and
     /// devserver-proxy's DEVSERVER_ADMIN_TOKEN. Single-token deployments
@@ -227,6 +234,24 @@ struct UserListArgs {
 
 #[derive(Subcommand)]
 enum TokenCmd {
+    /// Mint a PAT for a user by email, without a browser flow. Goes
+    /// to identity-service's /admin/v1/tokens, which is enabled only
+    /// where IDENTITY_ADMIN_TOKEN is set (CHAN_ADMIN_TOKEN must match
+    /// it). The secret prints exactly once.
+    Create {
+        email: String,
+        /// Scope to grant; repeat the flag for several. Defaults to
+        /// `tunnel`.
+        #[arg(long = "scope")]
+        scopes: Vec<String>,
+        /// Token label shown in the owner's token list. Defaults
+        /// server-side to "admin mint".
+        #[arg(long)]
+        label: Option<String>,
+        /// Lifetime in days. Omitted = the token never expires.
+        #[arg(long)]
+        expires_days: Option<u32>,
+    },
     /// List tokens for a user.
     List { ident: String },
     /// Revoke a token by id.
@@ -306,6 +331,24 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             let client = build_profile_client(cli.profile_url.as_deref(), &token)?;
             user(&client, json, cmd).await
         }
+        Cmd::Token {
+            cmd:
+                TokenCmd::Create {
+                    email,
+                    scopes,
+                    label,
+                    expires_days,
+                },
+        } => {
+            // Minting goes to identity-service (the token issuer);
+            // every other token op reads/writes through profile.
+            let client = build_identity_client(cli.identity_url.as_deref(), &token)?;
+            let minted = client
+                .create_token(&email, &scopes, label.as_deref(), expires_days)
+                .await?;
+            render_minted_token(&minted, json);
+            Ok(())
+        }
         Cmd::Token { cmd } => {
             let client = build_profile_client(cli.profile_url.as_deref(), &token)?;
             token_cmd(&client, json, cmd).await
@@ -333,6 +376,13 @@ fn build_workspace_client(url: Option<&str>, token: &str) -> anyhow::Result<Work
         .map(|s| s.to_string())
         .unwrap_or_else(|| "http://127.0.0.1:7002".to_string());
     WorkspaceClient::new(url, token.to_string()).context("build workspace admin client")
+}
+
+fn build_identity_client(url: Option<&str>, token: &str) -> anyhow::Result<IdentityClient> {
+    let url = url
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| "http://127.0.0.1:7000".to_string());
+    IdentityClient::new(url, token.to_string()).context("build identity admin client")
 }
 
 // ---------------------------------------------------------------------------
@@ -496,6 +546,13 @@ async fn flag_cmd(c: &AdminClient, json: bool, cmd: FlagCmd) -> anyhow::Result<(
 
 async fn token_cmd(c: &AdminClient, json: bool, cmd: TokenCmd) -> anyhow::Result<()> {
     match cmd {
+        TokenCmd::Create { .. } => {
+            // Handled in `run` so it can use the identity client (the
+            // token issuer) instead of the profile client. Reaching
+            // this arm means the dispatch forgot to intercept; fail
+            // loudly.
+            unreachable!("TokenCmd::Create must be intercepted in run()");
+        }
         TokenCmd::List { ident } => {
             let u = c.resolve_user(&ident).await?;
             let tokens = c.user_tokens(u.id).await?;
@@ -894,6 +951,93 @@ async fn read_body(res: reqwest::Response) -> String {
     res.text()
         .await
         .unwrap_or_else(|e| format!("<read error: {e}>"))
+}
+
+// ---------------------------------------------------------------------------
+// Identity admin client (PAT mint)
+// ---------------------------------------------------------------------------
+
+#[derive(Clone)]
+struct IdentityClient {
+    base: url::Url,
+    http: Client,
+    token: String,
+}
+
+impl IdentityClient {
+    fn new(base_url: String, token: String) -> anyhow::Result<Self> {
+        let base = url::Url::parse(&base_url)
+            .with_context(|| format!("parse identity url: {base_url}"))?;
+        let http = Client::builder()
+            .timeout(std::time::Duration::from_secs(15))
+            .connect_timeout(std::time::Duration::from_secs(2))
+            .user_agent(concat!("chan-gateway-admin/", env!("CARGO_PKG_VERSION")))
+            .build()?;
+        Ok(Self { base, http, token })
+    }
+
+    fn url(&self, path: &str) -> url::Url {
+        let mut u = self.base.clone();
+        u.set_path(path);
+        u.set_query(None);
+        u
+    }
+
+    async fn create_token(
+        &self,
+        email: &str,
+        scopes: &[String],
+        label: Option<&str>,
+        expires_days: Option<u32>,
+    ) -> anyhow::Result<MintedToken> {
+        let mut body = serde_json::json!({ "email": email });
+        if !scopes.is_empty() {
+            body["scopes"] = serde_json::json!(scopes);
+        }
+        if let Some(l) = label {
+            body["label"] = serde_json::json!(l);
+        }
+        if let Some(d) = expires_days {
+            body["expires_days"] = serde_json::json!(d);
+        }
+        let res = self
+            .http
+            .request(Method::POST, self.url("/admin/v1/tokens"))
+            .header(header::AUTHORIZATION, format!("Bearer {}", self.token))
+            .json(&body)
+            .send()
+            .await?;
+        match res.status() {
+            StatusCode::CREATED => Ok(res.json().await?),
+            // Unknown email and a disabled surface share the 404 on
+            // purpose (identity keeps the disabled surface shaped like
+            // a missing route); name both causes for the operator.
+            StatusCode::NOT_FOUND => Err(anyhow::Error::from(ClientError::NotFound).context(
+                "no user with that email, or the identity admin surface is \
+                 disabled (set IDENTITY_ADMIN_TOKEN on identity-service)",
+            )),
+            StatusCode::UNAUTHORIZED => Err(anyhow!(
+                "identity rejected the admin bearer; CHAN_ADMIN_TOKEN must \
+                 match identity-service's IDENTITY_ADMIN_TOKEN"
+            )),
+            StatusCode::BAD_REQUEST => Err(ClientError::BadInput(read_body(res).await).into()),
+            s => Err(upstream(s, res).await.into()),
+        }
+    }
+}
+
+/// One-shot mint response from identity: the SPA token view plus the
+/// plaintext secret. The only place the secret ever appears.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+struct MintedToken {
+    id: Uuid,
+    label: String,
+    #[serde(default)]
+    expires_at: Option<DateTime<Utc>>,
+    created_at: DateTime<Utc>,
+    #[serde(default)]
+    scopes: Vec<String>,
+    secret: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -1359,6 +1503,28 @@ fn render_overrides(rows: &[FeatureFlagOverride], json: bool) {
         ]);
     }
     println!("{t}");
+}
+
+/// Table + secret for `token create`. Human mode prints the secret as
+/// the last stdout line (pipeline-friendly) with the warning on
+/// stderr; --json emits the full response, secret included.
+fn render_minted_token(t: &MintedToken, json: bool) {
+    if json {
+        print_json(t);
+        return;
+    }
+    let mut tab = make_table();
+    tab.set_header(["ID", "LABEL", "SCOPES", "EXPIRES", "CREATED"]);
+    tab.add_row([
+        Cell::new(short_uuid(&t.id)),
+        Cell::new(&t.label),
+        Cell::new(t.scopes.join(",")),
+        Cell::new(fmt_dt_opt(t.expires_at)),
+        Cell::new(t.created_at.format("%Y-%m-%d").to_string()),
+    ]);
+    println!("{tab}");
+    eprintln!("secret (shown once, never retrievable again; store it now):");
+    println!("{}", t.secret);
 }
 
 fn render_token_audit(rows: &[TokenAudit], json: bool) {

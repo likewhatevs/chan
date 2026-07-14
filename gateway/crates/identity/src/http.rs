@@ -146,6 +146,14 @@ pub fn router(
         .route("/internal/v1/tokens/validate", post(validate_token))
         .route_layer(middleware::from_fn_with_state(state.clone(), internal_auth));
 
+    // /admin/v1/* is the operator surface for chan-gateway-admin,
+    // gated by IDENTITY_ADMIN_TOKEN (empty = the routes answer 404 as
+    // if absent; see admin_auth). Same sub-router shape as /internal
+    // for the same session-layer reason.
+    let admin = Router::new()
+        .route("/admin/v1/tokens", post(admin_tokens_create))
+        .route_layer(middleware::from_fn_with_state(state.clone(), admin_auth));
+
     Router::new()
         .route("/healthz", get(healthz))
         .route("/.well-known/chan-gateway", get(gateway_discovery))
@@ -189,6 +197,7 @@ pub fn router(
         )
         .route("/desktop/v1/devserver/entry", post(desktop_devserver_entry))
         .merge(internal)
+        .merge(admin)
         .fallback(static_files::handler)
         .with_state(state)
         .layer(session_layer)
@@ -1715,6 +1724,109 @@ async fn internal_auth(
         Some(t) if ct_eq(t, &state.cfg.internal_auth_token) => Ok(next.run(request).await),
         _ => Err(Error::Unauthorized),
     }
+}
+
+/// Gate for the /admin/v1/* operator surface. An empty
+/// IDENTITY_ADMIN_TOKEN disables the surface outright: 404, exactly
+/// what an unknown route answers, so a probe cannot tell a disabled
+/// deployment from one without the routes. With the surface enabled,
+/// a wrong or missing bearer is a plain 401.
+async fn admin_auth(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    request: axum::extract::Request,
+    next: Next,
+) -> std::result::Result<Response, Error> {
+    let expected = &state.cfg.identity_admin_token;
+    if expected.is_empty() {
+        return Err(Error::NotFound);
+    }
+    let provided = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "));
+    match provided {
+        Some(t) if ct_eq(t, expected) => Ok(next.run(request).await),
+        _ => Err(Error::Unauthorized),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct AdminCreateTokenBody {
+    email: String,
+    /// Scopes to grant. Absent/empty falls back to
+    /// `DEFAULT_TOKEN_SCOPES` (`["tunnel"]`), matching the SPA mint;
+    /// shape validation (blank / oversized / duplicate entries) is
+    /// the same `ApiTokenService::create` pass the SPA path runs.
+    #[serde(default)]
+    scopes: Option<Vec<String>>,
+    #[serde(default)]
+    label: Option<String>,
+    /// Lifetime in days. Absent = the token never expires (operator
+    /// surface; the browser-flow clamp does not apply).
+    #[serde(default)]
+    expires_days: Option<u32>,
+}
+
+/// `POST /admin/v1/tokens` -- mint a PAT for a user by email, without
+/// a browser flow. Provisioning surface for chan-gateway-admin; the
+/// response is the same one-time `CreatedTokenView` the SPA mint
+/// answers, secret included.
+async fn admin_tokens_create(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<AdminCreateTokenBody>,
+) -> Result<(StatusCode, Json<CreatedTokenView>)> {
+    let uid = state
+        .api_tokens
+        .user_id_by_email(&body.email)
+        .await?
+        .ok_or(Error::NotFound)?;
+    let scopes: Vec<String> = match body.scopes {
+        Some(ref s) if !s.is_empty() => s.clone(),
+        _ => DEFAULT_TOKEN_SCOPES
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect(),
+    };
+    let label = body.label.as_deref().unwrap_or("admin mint");
+    let expires_at = body
+        .expires_days
+        .filter(|d| *d > 0)
+        .map(|d| Utc::now() + chrono::Duration::days(i64::from(d)));
+    let CreatedToken { token, secret } = state
+        .api_tokens
+        .create(
+            NewToken {
+                user_id: uid,
+                label,
+                expires_at,
+                scopes: &scopes,
+                origin: TokenOrigin::Admin,
+            },
+            &request_meta(&headers),
+        )
+        .await?;
+
+    // Same parity call the SPA mint makes: the PAT IS a devserver, so
+    // register the row best-effort (see tokens_create).
+    let devserver_id = crate::api_tokens::devserver_id_from_pat(&secret);
+    if let Err(e) = state
+        .cfg
+        .profile_client
+        .create_devserver(uid, &devserver_id, label)
+        .await
+    {
+        tracing::warn!(error = ?e, user = %uid, "register devserver after admin PAT mint failed");
+    }
+
+    Ok((
+        StatusCode::CREATED,
+        Json(CreatedTokenView {
+            token: token.into(),
+            secret,
+        }),
+    ))
 }
 
 #[derive(Debug, Deserialize)]

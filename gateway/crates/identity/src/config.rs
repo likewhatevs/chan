@@ -22,6 +22,11 @@ pub struct Config {
     /// Required and distinct from PROFILE_AUTH_TOKEN; rotating one
     /// does not rotate the other.
     pub internal_auth_token: String,
+    /// Bearer gating the operator surface under /admin/v1/*. Empty
+    /// (the default) disables the surface outright: the routes answer
+    /// 404 as if they did not exist. chan-gateway-admin presents this
+    /// via CHAN_ADMIN_TOKEN.
+    pub identity_admin_token: String,
     /// Wildcard suffix used to mint devserver-gate entry tokens. Each
     /// tenant opens at `{user}{wildcard_suffix}/{workspace}/`, e.g.
     /// `alice.devserver.chan.app/blog/`, where `{user}` is the devserver
@@ -98,6 +103,11 @@ impl Config {
         if internal_auth_token.is_empty() {
             anyhow::bail!("IDENTITY_INTERNAL_TOKEN must not be empty");
         }
+
+        // Optional on purpose: most deployments never mint PATs from
+        // the CLI, and an unset/empty token keeps the admin surface
+        // disabled rather than guarded by an empty string.
+        let identity_admin_token = std::env::var("IDENTITY_ADMIN_TOKEN").unwrap_or_default();
 
         // Wildcard suffix used to stitch the entry-token's `aud`
         // claim and the redirect Location. Defaults to the derived
@@ -204,6 +214,7 @@ impl Config {
             cookie_secure,
             profile_client,
             internal_auth_token,
+            identity_admin_token,
             devserver_wildcard_suffix,
             workspace_public_scheme,
             workspace_public_port,
@@ -287,6 +298,7 @@ mod tests {
             cookie_secure: false,
             profile_client: ProfileClient::new("http://x/".parse().unwrap(), "x".into()).unwrap(),
             internal_auth_token: "x".into(),
+            identity_admin_token: String::new(),
             devserver_wildcard_suffix: ".devserver.chan.app".into(),
             workspace_public_scheme: "https".into(),
             workspace_public_port: String::new(),
