@@ -182,12 +182,36 @@ impl Config {
             anyhow::bail!("DEVSERVER_GATE_SECRET must not be empty");
         }
 
+        // IDENTITY_OAUTH_ENDPOINTS_BASE points the GitHub provider's
+        // OAuth + API endpoints at an alternate origin so a local
+        // test harness can stub the sign-in flow end to end
+        // (scripts/e2e/gateway-zone.sh). Absent = the stock
+        // github.com / api.github.com endpoints; nothing but the
+        // endpoint URLs changes. Never set this in production.
+        let oauth_endpoints_base = std::env::var("IDENTITY_OAUTH_ENDPOINTS_BASE")
+            .ok()
+            .map(|s| s.trim().trim_end_matches('/').to_string())
+            .filter(|s| !s.is_empty());
+
         let mut providers: Vec<Arc<dyn Provider>> = Vec::new();
         if let (Ok(id), Ok(secret)) = (
             std::env::var("GITHUB_CLIENT_ID"),
             std::env::var("GITHUB_CLIENT_SECRET"),
         ) {
-            providers.push(Arc::new(GitHubProvider::new(id, secret)?));
+            let github = match &oauth_endpoints_base {
+                Some(base) => GitHubProvider::with_endpoints(
+                    id,
+                    secret,
+                    crate::providers::github::GitHubEndpoints {
+                        auth: format!("{base}/login/oauth/authorize"),
+                        token: format!("{base}/login/oauth/access_token"),
+                        user: format!("{base}/user"),
+                        emails: format!("{base}/user/emails"),
+                    },
+                )?,
+                None => GitHubProvider::new(id, secret)?,
+            };
+            providers.push(Arc::new(github));
         }
         if let (Ok(id), Ok(secret)) = (
             std::env::var("GOOGLE_CLIENT_ID"),

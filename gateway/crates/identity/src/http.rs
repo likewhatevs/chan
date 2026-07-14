@@ -1480,7 +1480,7 @@ async fn share_landing_root(
     Ok(Redirect::to(&url))
 }
 
-const DESKTOP_CONNECT_SCOPE: &str = "desktop.connect";
+pub(crate) const DESKTOP_CONNECT_SCOPE: &str = "desktop.connect";
 
 /// Stable failure-reason tokens for the desktop entry 404 body. A
 /// de-facto desktop API like the `desktop_authorize` `#error=` reasons:

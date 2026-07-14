@@ -803,3 +803,206 @@ async fn happy_login_resume(app: &TestApp, c: &mut Client<'_>, user_id: Uuid, em
     // The hook in auth_callback redirects to the consent page, not /.
     assert_eq!(resp.location, "/desktop/authorize/consent");
 }
+
+// ---------------------------------------------------------------
+// Consent devserver picker
+// ---------------------------------------------------------------
+
+/// AUTH query whose scopes include desktop.connect, which is what
+/// makes the consent page render the devserver picker.
+const AUTH_URI_CONNECT: &str = "/desktop/authorize?\
+                                redirect_uri=chan%3A%2F%2Fauth%2Fcallback&\
+                                state=desktop-nonce-2&\
+                                label=chan-desktop+%40+host&\
+                                scopes=tunnel%2Cdesktop.connect&\
+                                expires_in=2592000";
+
+/// Mock the owned + incoming devserver lists the picker fetches.
+async fn mock_devserver_lists(
+    app: &TestApp,
+    user_id: Uuid,
+    owned: serde_json::Value,
+    incoming: serde_json::Value,
+) {
+    Mock::given(method("GET"))
+        .and(path(format!("/v1/users/{user_id}/grants/owned")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(owned))
+        .mount(&app.profile)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/v1/users/{user_id}/grants/incoming")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(incoming))
+        .mount(&app.profile)
+        .await;
+}
+
+fn incoming_share_json(owner: &str, devserver_id: &str, label: &str) -> serde_json::Value {
+    let now = chrono::Utc::now().to_rfc3339();
+    json!({
+        "grant_id": Uuid::new_v4(),
+        "owner_user_id": Uuid::new_v4(),
+        "owner_username": owner,
+        "owner_display_name": null,
+        "owner_avatar_url": null,
+        "devserver_id": devserver_id,
+        "label": label,
+        "role": "editor",
+        "accepted_at": now,
+    })
+}
+
+#[tokio::test]
+async fn consent_lists_devservers_and_pick_rides_the_fragment() {
+    let app = TestApp::new().await;
+    let mut c = Client::new(&app);
+    let uid = Uuid::new_v4();
+    app.insert_user(uid, "octo@example.com").await;
+    happy_login(&app, &mut c, uid, "octo@example.com").await;
+    mock_get_user(&app, uid, "octo@example.com", false).await;
+
+    let own_id = "a".repeat(64);
+    let shared_id = "b".repeat(64);
+    mock_devserver_lists(
+        &app,
+        uid,
+        json!([{"devserver_id": own_id, "label": "laptop", "grant_count": 0}]),
+        json!([incoming_share_json("bob-handle", &shared_id, "bob-box")]),
+    )
+    .await;
+
+    let resp = c.get(AUTH_URI_CONNECT).await;
+    assert_eq!(resp.status, StatusCode::SEE_OTHER);
+    let resp = c.get("/desktop/authorize/consent").await;
+    assert_eq!(resp.status, StatusCode::OK);
+    let html = resp.body_str().to_string();
+    let csrf = extract_csrf(&html);
+    let username = format!("u{}", &uid.simple().to_string()[..12]);
+    // Own row + shared row render as radios keyed <owner>:<id>.
+    assert!(html.contains("laptop"), "{html}");
+    assert!(
+        html.contains(&format!(r#"value="{username}:{own_id}""#)),
+        "{html}"
+    );
+    assert!(html.contains("bob-box"), "{html}");
+    assert!(html.contains("from @bob-handle"), "{html}");
+    assert!(
+        html.contains(&format!(r#"value="bob-handle:{shared_id}""#)),
+        "{html}"
+    );
+
+    // Pick the SHARED devserver; the pick rides the callback fragment
+    // as the devserver_* keys next to the one-time code.
+    let resp = c
+        .post_form(
+            "/desktop/authorize/confirm",
+            &[
+                ("csrf", &csrf),
+                ("action", "allow"),
+                ("devserver", &format!("bob-handle:{shared_id}")),
+            ],
+        )
+        .await;
+    assert_eq!(resp.status, StatusCode::OK);
+    let url = extract_handoff_url(resp.body_str());
+    let frag = parse_chan_fragment(&url);
+    assert!(frag.contains_key("code"), "{url}");
+    assert_eq!(
+        frag.get("devserver_owner").map(String::as_str),
+        Some("bob-handle"),
+        "{url}"
+    );
+    assert_eq!(
+        frag.get("devserver_id").map(String::as_str),
+        Some(shared_id.as_str()),
+        "{url}"
+    );
+    assert_eq!(
+        frag.get("devserver_label").map(String::as_str),
+        Some("bob-box"),
+        "{url}"
+    );
+    app.cleanup().await;
+}
+
+#[tokio::test]
+async fn consent_zero_state_still_mints_without_devserver_keys() {
+    let app = TestApp::new().await;
+    let mut c = Client::new(&app);
+    let uid = Uuid::new_v4();
+    app.insert_user(uid, "octo@example.com").await;
+    happy_login(&app, &mut c, uid, "octo@example.com").await;
+    mock_get_user(&app, uid, "octo@example.com", false).await;
+    mock_devserver_lists(&app, uid, json!([]), json!([])).await;
+
+    let resp = c.get(AUTH_URI_CONNECT).await;
+    assert_eq!(resp.status, StatusCode::SEE_OTHER);
+    let resp = c.get("/desktop/authorize/consent").await;
+    assert_eq!(resp.status, StatusCode::OK);
+    let html = resp.body_str().to_string();
+    let csrf = extract_csrf(&html);
+    assert!(html.contains("No devservers yet"), "{html}");
+    assert!(!html.contains(r#"type="radio""#), "{html}");
+
+    // Authorize still mints; the fragment simply has no devserver_*.
+    let resp = c
+        .post_form(
+            "/desktop/authorize/confirm",
+            &[("csrf", &csrf), ("action", "allow")],
+        )
+        .await;
+    assert_eq!(resp.status, StatusCode::OK);
+    let url = extract_handoff_url(resp.body_str());
+    let frag = parse_chan_fragment(&url);
+    assert!(frag.contains_key("code"), "{url}");
+    assert!(!frag.contains_key("devserver_owner"), "{url}");
+    assert!(!frag.contains_key("devserver_id"), "{url}");
+    app.cleanup().await;
+}
+
+#[tokio::test]
+async fn confirm_rejects_pick_not_in_lists() {
+    let app = TestApp::new().await;
+    let mut c = Client::new(&app);
+    let uid = Uuid::new_v4();
+    app.insert_user(uid, "octo@example.com").await;
+    happy_login(&app, &mut c, uid, "octo@example.com").await;
+    mock_get_user(&app, uid, "octo@example.com", false).await;
+    mock_devserver_lists(
+        &app,
+        uid,
+        json!([{"devserver_id": "a".repeat(64), "label": "laptop", "grant_count": 0}]),
+        json!([]),
+    )
+    .await;
+
+    // A pick that is in neither fresh list (revoked / fabricated).
+    let resp = c.get(AUTH_URI_CONNECT).await;
+    assert_eq!(resp.status, StatusCode::SEE_OTHER);
+    let resp = c.get("/desktop/authorize/consent").await;
+    let csrf = extract_csrf(resp.body_str());
+    let resp = c
+        .post_form(
+            "/desktop/authorize/confirm",
+            &[
+                ("csrf", &csrf),
+                ("action", "allow"),
+                ("devserver", &format!("mallory:{}", "f".repeat(64))),
+            ],
+        )
+        .await;
+    assert_eq!(resp.status, StatusCode::BAD_REQUEST);
+
+    // Malformed pick (no owner:id separator): fresh flow, same 400.
+    let resp = c.get(AUTH_URI_CONNECT).await;
+    assert_eq!(resp.status, StatusCode::SEE_OTHER);
+    let resp = c.get("/desktop/authorize/consent").await;
+    let csrf = extract_csrf(resp.body_str());
+    let resp = c
+        .post_form(
+            "/desktop/authorize/confirm",
+            &[("csrf", &csrf), ("action", "allow"), ("devserver", "junk")],
+        )
+        .await;
+    assert_eq!(resp.status, StatusCode::BAD_REQUEST);
+    app.cleanup().await;
+}

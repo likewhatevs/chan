@@ -44,7 +44,13 @@ ID_PORT="${E2E_ID_PORT:-17800}"
 PROFILE_PORT="${E2E_PROFILE_PORT:-17801}"
 PROXY_PORT="${E2E_PROXY_PORT:-17802}"
 TUNNEL_PORT="${E2E_TUNNEL_PORT:-17810}"
+OAUTH_PORT="${E2E_OAUTH_PORT:-17830}"
 DS_PORTS=(17821 17822 17823)
+
+# Headless Chrome for the consent-flow asserts (the puppeteer cache
+# layout, overridable).
+CHROME_BIN="${E2E_CHROME_BIN:-$(ls -d "$HOME"/.cache/puppeteer/chrome/linux-*/chrome-linux64/chrome 2>/dev/null | head -1)}"
+ALICE_EMAIL="e2e-alice@example.com"
 
 DOMAIN=localtest.me
 ID_HOST="id.$DOMAIN:$ID_PORT"
@@ -107,11 +113,27 @@ for f in "$WORK"/pids/*.pid; do
     rm -f "$f"
 done
 
-# SQL helper: node + pg, self-installed into the work dir once.
-if [ ! -d "$WORK/node_modules/pg" ]; then
-    log "installing pg client into $WORK (once)"
-    (cd "$WORK" && npm install --no-fund --no-audit --loglevel=error pg >/dev/null) || {
-        log "npm install pg failed"
+# Belt and braces: free every port the run binds. A stray listener
+# (e.g. a hand-started debug service) would otherwise swallow the
+# traffic while our own spawn dies on the bind conflict.
+free_port() { # free_port <port>
+    local pids
+    pids="$(ss -ltnp 2>/dev/null | grep ":$1 " | grep -oP 'pid=\K[0-9]+' | sort -u)"
+    local pid
+    for pid in $pids; do
+        kill "$pid" 2>/dev/null && log "freed port $1 (killed stray pid $pid)"
+    done
+}
+for p in "$ID_PORT" "$PROFILE_PORT" "$PROXY_PORT" "$TUNNEL_PORT" "$OAUTH_PORT" "${DS_PORTS[@]}"; do
+    free_port "$p"
+done
+
+# SQL + browser helpers: node deps self-installed into the work dir
+# once (pg for seeding, puppeteer-core to drive the host Chrome).
+if [ ! -d "$WORK/node_modules/pg" ] || [ ! -d "$WORK/node_modules/puppeteer-core" ]; then
+    log "installing pg + puppeteer-core into $WORK (once)"
+    (cd "$WORK" && npm install --no-fund --no-audit --loglevel=error pg puppeteer-core >/dev/null) || {
+        log "npm install pg puppeteer-core failed"
         exit 2
     }
 fi
@@ -184,6 +206,10 @@ wait_http() { # wait_http <name> <url> [tries]
     return 1
 }
 
+# Stub GitHub: identity's provider endpoints point here so the
+# browser phase can sign in without real OAuth.
+spawn stub-oauth node "$REPO/scripts/e2e/stub-oauth.mjs" "$OAUTH_PORT" "$ALICE_EMAIL"
+
 spawn profile env \
     BIND_ADDR="127.0.0.1:$PROFILE_PORT" \
     DATABASE_URL="$DB_URL" \
@@ -209,6 +235,7 @@ spawn identity env \
     DEVSERVER_PUBLIC_PORT=":$PROXY_PORT" \
     GITHUB_CLIENT_ID=e2e-dummy \
     GITHUB_CLIENT_SECRET=e2e-dummy \
+    IDENTITY_OAUTH_ENDPOINTS_BASE="http://127.0.0.1:$OAUTH_PORT" \
     RUST_LOG=info \
     "$GW_BIN/identity-service"
 
@@ -230,6 +257,22 @@ spawn proxy env \
 wait_http profile "http://127.0.0.1:$PROFILE_PORT/healthz" || exit 2
 wait_http identity "http://127.0.0.1:$ID_PORT/healthz" || exit 2
 wait_http proxy "http://127.0.0.1:$PROXY_PORT/healthz" || exit 2
+
+# healthz answering is not enough: a stray listener could serve it
+# while our own spawn died on the bind conflict. The spawned pid
+# itself must still be alive.
+require_alive() { # require_alive <name>
+    local pid
+    pid="$(cat "$WORK/pids/$1.pid")"
+    if ! kill -0 "$pid" 2>/dev/null; then
+        log "$1 (pid $pid) died at startup; log tail:"
+        tail -5 "$LOGS/$1.log" || true
+        exit 2
+    fi
+}
+for svc in stub-oauth profile identity proxy; do
+    require_alive "$svc"
+done
 log "stack is up"
 
 # ---------------------------------------------------------------
@@ -249,9 +292,15 @@ mint_pat() { # mint_pat -> "secret hash dsid"
     echo "$secret $hash $dsid"
 }
 
+# The browser phase signs in through the stub OAuth with this email;
+# profile's upsert-by-identity attaches the github identity to this
+# pre-seeded row by email match. oauth_login gates the callback and
+# ships default-off, so the e2e schema flips the default.
+sql "$E2E_DATABASE_URL" "SET search_path TO $E2E_SCHEMA;
+    UPDATE feature_flags SET default_enabled = true WHERE key = 'oauth_login';" || exit 2
 ALICE_ID="$(sql "$E2E_DATABASE_URL" "SET search_path TO $E2E_SCHEMA;
     INSERT INTO users (id, email, username)
-    VALUES (gen_random_uuid(), 'e2e-alice@example.com',
+    VALUES (gen_random_uuid(), '$ALICE_EMAIL',
             'u' || substr(md5(random()::text), 1, 12))
     RETURNING id;")"
 ALICE_USER="$(sql "$E2E_DATABASE_URL" \
@@ -272,6 +321,24 @@ for row in "$HASH_A e2e-a $DS_A" "$HASH_B e2e-b $DS_B" "$HASH_C e2e-c $DS_C"; do
 done
 disc() { printf %s "${1:0:12}"; }
 log "devservers: A=$(disc "$DS_A") B=$(disc "$DS_B") C=$(disc "$DS_C") (cap candidate)"
+
+# Bob shares a devserver with alice (claimed grant): the consent
+# picker's "shared with you" row. Bob's devserver never dials in, so
+# it renders offline; the pick list does not require liveness.
+DS_BOB="$(openssl rand -hex 32)"
+BOB_ID="$(sql "$E2E_DATABASE_URL" "SET search_path TO $E2E_SCHEMA;
+    INSERT INTO users (id, email, username)
+    VALUES (gen_random_uuid(), 'e2e-bob@example.com', 'e2ebobhandle')
+    RETURNING id;")"
+BOB_USER="$(sql "$E2E_DATABASE_URL" \
+    "SET search_path TO $E2E_SCHEMA; SELECT username FROM users WHERE id = '$BOB_ID';")"
+sql "$E2E_DATABASE_URL" "SET search_path TO $E2E_SCHEMA;
+    INSERT INTO devservers (owner_user_id, devserver_id, label)
+    VALUES ('$BOB_ID', '$DS_BOB', 'bob-box');
+    INSERT INTO devserver_grants
+        (owner_user_id, devserver_id, grantee_email, grantee_user_id, role, accepted_at)
+    VALUES ('$BOB_ID', '$DS_BOB', '$ALICE_EMAIL', '$ALICE_ID', 'editor', now());" || exit 2
+log "seeded bob ($BOB_USER) sharing $(disc "$DS_BOB") with alice"
 
 # ---------------------------------------------------------------
 # Devservers (host-local foreground processes)
@@ -489,13 +556,93 @@ else
 fi
 
 # ---------------------------------------------------------------
+# I: consent flow in headless Chrome: sign in via the stub OAuth,
+# assert the picker lists own + shared devservers, pick one, and read
+# the chan:// handoff fragment.
+# ---------------------------------------------------------------
+
+frag_get() { # frag_get <url> <key> -> percent-decoded value
+    node -e 'const [u,k]=process.argv.slice(1);const h=u.split("#")[1]||"";
+        for(const p of h.split("&")){const [a,...r]=p.split("=");
+        if(a===k){console.log(decodeURIComponent(r.join("=").replace(/\+/g," ")));break}}' \
+        "$1" "$2"
+}
+
+AUTH_PATH="/desktop/authorize?redirect_uri=chan%3A%2F%2Fauth%2Fcallback&state=e2e-nonce&label=chan-desktop+%40+e2e&scopes=tunnel%2Cdesktop.connect&expires_in=2592000"
+PICK_VALUE="$ALICE_USER:$DS_A"
+if [ -x "$CHROME_BIN" ]; then
+    # Run from a copy inside the work dir: ESM resolves node_modules
+    # (puppeteer-core) relative to the script's own location.
+    cp "$REPO/scripts/e2e/gateway-zone-browser.mjs" "$WORK/"
+    browser_json="$(CHROME_BIN="$CHROME_BIN" ID_ORIGIN="http://$ID_HOST" \
+        AUTH_PATH="$AUTH_PATH" PICK="$PICK_VALUE" \
+        node "$WORK/gateway-zone-browser.mjs" 2> "$LOGS/browser.log")" || browser_json=""
+    if [ -z "$browser_json" ]; then
+        assert_fail "consent: browser run produced no output (see logs/browser.log)"
+    else
+        radios="$(printf %s "$browser_json" | json_get radios)"
+        handoff="$(printf %s "$browser_json" | json_get handoff_url)"
+        for want in "$ALICE_USER:$DS_A" "$ALICE_USER:$DS_B" "$BOB_USER:$DS_BOB"; do
+            if printf %s "$radios" | grep -q "$want"; then
+                assert_pass "consent: picker lists $want"
+            else
+                assert_fail "consent: picker missing $want in: $radios"
+            fi
+        done
+        if [ "$(frag_get "$handoff" devserver_owner)" = "$ALICE_USER" ] &&
+            [ "$(frag_get "$handoff" devserver_id)" = "$DS_A" ]; then
+            assert_pass "consent: the pick rides the callback fragment"
+        else
+            assert_fail "consent: fragment lacks the pick: $handoff"
+        fi
+
+        # Redeem the one-time code: 200 exactly once, 410 on replay,
+        # and the redeemed PAT drives a desktop entry for the picked
+        # devserver end to end.
+        code="$(frag_get "$handoff" code)"
+        redeem1="$(curl -sS -o "$WORK/redeem.json" -w '%{http_code}' \
+            -X POST "http://127.0.0.1:$ID_PORT/desktop/authorize/redeem" \
+            -H "content-type: application/json" -d "{\"code\":\"$code\"}")"
+        redeem2="$(curl -sS -o /dev/null -w '%{http_code}' \
+            -X POST "http://127.0.0.1:$ID_PORT/desktop/authorize/redeem" \
+            -H "content-type: application/json" -d "{\"code\":\"$code\"}")"
+        if [ "$redeem1" = "200" ] && [ "$redeem2" = "410" ]; then
+            assert_pass "redeem: one-time code answers 200 once, 410 on replay"
+        else
+            assert_fail "redeem: expected 200 then 410, got $redeem1 then $redeem2"
+        fi
+        browser_pat="$(json_get secret < "$WORK/redeem.json")"
+        entry_body="$(entry_for "$browser_pat" "{\"owner\":\"$ALICE_USER\",\"devserver_id\":\"$DS_A\"}")"
+        entry_url="$(printf %s "$entry_body" | json_get entry_url)"
+        if [ -n "$entry_url" ]; then
+            # Same two-hop shape as check_entry_routes: capture the
+            # Secure cookie ourselves and replay it explicitly.
+            hdrs="$WORK/hdrs-browser.txt"
+            hop1="$(curl_host "$HOST_A" -o /dev/null -w '%{http_code}' -D "$hdrs" "$entry_url")"
+            bcookie="$(sed -n 's/^[Ss]et-[Cc]ookie: \(devserver_gate=[^;]*\).*/\1/p' "$hdrs" | head -1)"
+            hop2=""
+            if [ "$hop1" = "303" ] && [ -n "$bcookie" ]; then
+                hop2="$(curl_host "$HOST_A" -o "$WORK/root-browser.html" -w '%{http_code}' \
+                    -H "Cookie: $bcookie" "http://$HOST_A:$PROXY_PORT/")"
+            fi
+            if [ "$hop2" = "200" ] ||
+                { [ -n "$hop2" ] && grep -qi "bundle not built" "$WORK/root-browser.html"; }; then
+                assert_pass "redeem: redeemed PAT opens the picked devserver ($hop2)"
+            else
+                assert_fail "redeem: entry hops expected 303 then devserver answer, got $hop1/$hop2"
+            fi
+        else
+            assert_fail "redeem: desktop entry with the redeemed PAT failed: $entry_body"
+        fi
+    fi
+else
+    assert_fail "consent: headless Chrome not found (set E2E_CHROME_BIN)"
+fi
+
+# ---------------------------------------------------------------
 # Extension seams (assert here as the round lands them):
-#   - item 2: consent -> confirm via headless Chrome; fragment
-#     extraction; redeem once 200 / replay 410 (owner: @@Tokens).
 #   - item 8: mint the PATs above via `chan-gateway-admin token
 #     create` instead of SQL (owner: @@Tokens).
-#   - item 4: consent page lists own + shared devservers and the pick
-#     rides the callback fragment (owner: @@Devserver, post-HOLD).
 # ---------------------------------------------------------------
 
 log ""

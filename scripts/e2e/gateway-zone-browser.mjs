@@ -1,0 +1,72 @@
+// Headless-Chrome half of the gateway-zone e2e: sign in through the
+// stubbed OAuth, walk the desktop-authorize consent flow, pick a
+// devserver, and hand the chan:// callback URL back to the harness.
+//
+// Env: CHROME_BIN, ID_ORIGIN (http://id.localtest.me:PORT),
+// AUTH_PATH (the /desktop/authorize?... query), PICK (the radio value
+// to select). Prints one JSON object on stdout:
+//   { radios: [values...], checked: value|null, handoff_url: "chan://..." }
+// Exits nonzero on navigation/shape failures; content assertions stay
+// in the harness so the log reads as one assert list.
+import puppeteer from "puppeteer-core";
+
+const { CHROME_BIN, ID_ORIGIN, AUTH_PATH, PICK } = process.env;
+if (!CHROME_BIN || !ID_ORIGIN || !AUTH_PATH || !PICK) {
+    console.error("missing CHROME_BIN / ID_ORIGIN / AUTH_PATH / PICK");
+    process.exit(2);
+}
+
+const browser = await puppeteer.launch({
+    executablePath: CHROME_BIN,
+    headless: "new",
+    args: [
+        "--no-sandbox",
+        "--disable-dev-shm-usage",
+        // The wildcard + id hosts must hit the loopback listeners even
+        // if the sandbox resolver prefers AAAA records.
+        "--host-resolver-rules=MAP *.localtest.me 127.0.0.1",
+    ],
+});
+
+try {
+    const page = await browser.newPage();
+
+    // Stash the pending authorize (unauthenticated: bounces to /).
+    await page.goto(`${ID_ORIGIN}${AUTH_PATH}`, { waitUntil: "networkidle2" });
+
+    // Sign in via the stubbed provider; auth_callback resumes the
+    // stashed authorize and lands on the consent page.
+    await page.goto(`${ID_ORIGIN}/auth/github`, { waitUntil: "networkidle2" });
+    if (!page.url().includes("/desktop/authorize/consent")) {
+        console.error(`expected the consent page, got ${page.url()}`);
+        process.exit(3);
+    }
+
+    const radios = await page.$$eval('input[name="devserver"]', (els) =>
+        els.map((el) => ({ value: el.value, checked: el.checked })),
+    );
+
+    // Pick and authorize. The handoff answers the form POST as a 200
+    // page whose primary button carries the chan:// URL (the meta
+    // refresh to a custom scheme is a no-op in headless Chrome).
+    await page.click(`input[name="devserver"][value="${PICK}"]`);
+    await Promise.all([
+        page.waitForNavigation({ waitUntil: "networkidle2" }),
+        page.click('button[name="action"][value="allow"]'),
+    ]);
+    const handoff = await page.$eval("a.btn.primary", (a) => a.getAttribute("href"));
+    if (!handoff || !handoff.startsWith("chan://auth/callback#")) {
+        console.error(`expected a chan:// handoff link, got ${handoff}`);
+        process.exit(3);
+    }
+
+    console.log(
+        JSON.stringify({
+            radios: radios.map((r) => r.value),
+            checked: radios.find((r) => r.checked)?.value ?? null,
+            handoff_url: handoff,
+        }),
+    );
+} finally {
+    await browser.close();
+}

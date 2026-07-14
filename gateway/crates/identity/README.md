@@ -89,6 +89,7 @@ Optional knobs:
 | `DEVSERVER_ADMIN_URL`      | unset                     | devserver-proxy admin base |
 | `DEVSERVER_ADMIN_TOKEN`    | unset                     | enables tunnel evict on revoke / delete |
 | `RUSTRICT_ALLOWLIST`       | unset                     | comma-separated usernames exempt from the profanity filter |
+| `IDENTITY_OAUTH_ENDPOINTS_BASE` | unset (stock github.com) | GitHub OAuth/API endpoint origin override for local e2e stubs; never set in production |
 
 ## Routes
 

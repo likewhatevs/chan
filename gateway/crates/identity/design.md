@@ -62,6 +62,8 @@ sequenceDiagram
 
 *Sign-in flow: stash `pending_oauth`, consume it on callback, constant-time state check and the `oauth_login` gate run before `cycle_id`, then upsert and claim grants.*
 
+`IDENTITY_OAUTH_ENDPOINTS_BASE` (env, unset in production) points the GitHub provider's OAuth + API endpoints at an alternate origin so a local test harness can stub the sign-in flow end to end; absent means the stock github.com / api.github.com endpoints (unit-test pinned) and nothing but the endpoint URLs ever changes.
+
 `/auth/{provider}` (GET):
 
 1. Look up the provider config. Unknown provider returns 404.

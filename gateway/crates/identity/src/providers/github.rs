@@ -189,3 +189,20 @@ struct GhEmail {
     primary: bool,
     verified: bool,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_endpoints_are_stock_github() {
+        // IDENTITY_OAUTH_ENDPOINTS_BASE absent must mean exactly
+        // these origins; the config override is for test harnesses
+        // only and silence keeps production on the real GitHub.
+        let e = GitHubEndpoints::default();
+        assert_eq!(e.auth, "https://github.com/login/oauth/authorize");
+        assert_eq!(e.token, "https://github.com/login/oauth/access_token");
+        assert_eq!(e.user, "https://api.github.com/user");
+        assert_eq!(e.emails, "https://api.github.com/user/emails");
+    }
+}
