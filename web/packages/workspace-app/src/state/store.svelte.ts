@@ -807,10 +807,11 @@ export function onWatchEvent(e: unknown): void {
   // Two reactions:
   //   1. Refresh the tree + workspace payload (file set / preferences
   //      may have changed).
-  //   2. Refresh the buffer of any open tab pointing at the changed
-  //      path so the editor view doesn't drift behind disk. Dirty
-  //      buffers are left alone; the next save's CAS check surfaces
-  //      the conflict via ConflictModal.
+  //   2. Flag the external change on any open tab pointing at the
+  //      changed path (the dismissable "changed on disk" banner).
+  //      The buffer is never silently reloaded: that would replace
+  //      the doc and snap the caret mid-edit, and the next save's CAS
+  //      check surfaces real conflicts via ConflictModal anyway.
   // Scope the FB tree refresh to the path that changed instead of
   // re-fetching the root listing on every event. Each FB instance
   // contributes a scope (from its selection); we touch the tree
