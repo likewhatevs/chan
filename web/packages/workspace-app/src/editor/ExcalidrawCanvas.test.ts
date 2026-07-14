@@ -3,9 +3,14 @@
 import { mount, unmount } from "svelte";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
-import ExcalidrawCanvas from "./ExcalidrawCanvas.svelte";
+import ExcalidrawCanvas, { noteVersions, sceneDeltas } from "./ExcalidrawCanvas.svelte";
 import canvasSrc from "./ExcalidrawCanvas.svelte?raw";
 import fileEditorSrc from "../components/FileEditorTab.svelte?raw";
+import type {
+  SceneCanvasBinding,
+  SceneSession,
+  WireElement,
+} from "../state/sceneSync.svelte";
 
 // Excalidraw + React are heavy; mock the three runtime modules the wrapper
 // dynamic-imports so mounting the island in jsdom never pulls the real
@@ -25,6 +30,24 @@ vi.mock("react", () => ({
 vi.mock("@excalidraw/excalidraw", () => ({
   Excalidraw: () => null,
   serializeAsJSON: () => "{}",
+  CaptureUpdateAction: { IMMEDIATELY: "IMMEDIATELY", EVENTUALLY: "EVENTUALLY", NEVER: "NEVER" },
+  // Test double of the vendored LWW reconcile, id-keyed with the
+  // version core of the real rule (the exact rule is pinned by the
+  // server port and its tests); enough to observe which side survives.
+  reconcileElements: (
+    local: readonly Record<string, unknown>[],
+    remote: readonly Record<string, unknown>[],
+  ) => {
+    const out = new Map<string, Record<string, unknown>>();
+    for (const el of local) out.set(el.id as string, el);
+    for (const el of remote) {
+      const mine = out.get(el.id as string);
+      if (!mine || (mine.version as number) <= (el.version as number)) {
+        out.set(el.id as string, el);
+      }
+    }
+    return [...out.values()];
+  },
 }));
 
 const mounted: Array<Record<string, unknown>> = [];
@@ -131,5 +154,167 @@ describe("excalidraw stays out of the eager bundle", () => {
   test("FileEditorTab reaches the wrapper only via dynamic import", () => {
     expect(fileEditorSrc).toMatch(/import\("\.\.\/editor\/ExcalidrawCanvas\.svelte"\)/);
     expect(fileEditorSrc).not.toMatch(/from "\.\.\/editor\/ExcalidrawCanvas\.svelte"/);
+  });
+});
+
+// ---- live scene session binding ---------------------------------------------
+
+function wireEl(id: string, version: number, extra: Record<string, unknown> = {}): WireElement {
+  return { id, type: "rectangle", version, versionNonce: 1, isDeleted: false, ...extra };
+}
+
+type FakeApi = {
+  getSceneElementsIncludingDeleted: () => Record<string, unknown>[];
+  getSceneElements: () => Record<string, unknown>[];
+  getAppState: () => Record<string, unknown>;
+  getFiles: () => Record<string, unknown>;
+  addFiles: ReturnType<typeof vi.fn>;
+  updateScene: ReturnType<typeof vi.fn>;
+  setElements: (next: Record<string, unknown>[]) => void;
+};
+
+function fakeApi(initial: WireElement[] = []): FakeApi {
+  let elements: Record<string, unknown>[] = [...initial];
+  const updateScene = vi.fn((s: Record<string, unknown>) => {
+    if (Array.isArray(s.elements)) elements = s.elements as Record<string, unknown>[];
+  });
+  return {
+    getSceneElementsIncludingDeleted: () => elements,
+    getSceneElements: () => elements.filter((e) => e.isDeleted !== true),
+    getAppState: () => ({ selectedElementIds: {} }),
+    getFiles: () => ({}),
+    addFiles: vi.fn(),
+    updateScene,
+    setElements(next) {
+      elements = next;
+    },
+  };
+}
+
+type SessionStub = {
+  bindCanvas: ReturnType<typeof vi.fn>;
+  unbindCanvas: ReturnType<typeof vi.fn>;
+  pushScene: ReturnType<typeof vi.fn>;
+  sendCursor: ReturnType<typeof vi.fn>;
+  peerCursorSnapshot: () => Map<number, { w: string; x: number; y: number }>;
+};
+
+/// Mount the island with a stubbed session, hand it a fake imperative
+/// API, and wait for the bind effect to hand the binding back.
+async function mountBound(
+  initial: WireElement[] = [],
+): Promise<{ api: FakeApi; session: SessionStub; binding: SceneCanvasBinding }> {
+  const target = document.createElement("div");
+  document.body.append(target);
+  let bound: SceneCanvasBinding | null = null;
+  const session: SessionStub = {
+    bindCanvas: vi.fn((b: SceneCanvasBinding) => {
+      bound = b;
+    }),
+    unbindCanvas: vi.fn(),
+    pushScene: vi.fn(),
+    sendCursor: vi.fn(),
+    peerCursorSnapshot: () => new Map([[7, { w: "win-peer", x: 1.5, y: 2 }]]),
+  };
+  mounted.push(
+    mount(ExcalidrawCanvas, {
+      target,
+      props: {
+        content: "",
+        dark: false,
+        onSceneChange: () => {},
+        session: session as unknown as SceneSession,
+      },
+    }),
+  );
+  await vi.waitFor(() => expect(renderMock).toHaveBeenCalled());
+  const rendered = renderMock.mock.calls.at(-1)![0] as {
+    props: { excalidrawAPI: (a: unknown) => void };
+  };
+  const api = fakeApi(initial);
+  rendered.props.excalidrawAPI(api);
+  await vi.waitFor(() => expect(session.bindCanvas).toHaveBeenCalled());
+  return { api, session, binding: bound! };
+}
+
+describe("scene session binding loop safety", () => {
+  test("a remote apply never enters undo and never re-pushes", async () => {
+    const { api, session, binding } = await mountBound([]);
+    binding.applyUpdate({ elements: [wireEl("x", 5)] });
+
+    const call = api.updateScene.mock.calls.find((c) =>
+      Array.isArray((c[0] as Record<string, unknown>).elements),
+    );
+    expect(call).toBeDefined();
+    expect((call![0] as Record<string, unknown>).captureUpdate).toBe("NEVER");
+
+    expect(binding.hasPendingLocal()).toBe(false);
+    binding.flushPendingLocal();
+    expect(session.pushScene).not.toHaveBeenCalled();
+  });
+
+  test("a local change pushes once and the noted version never repeats", async () => {
+    const { api, session, binding } = await mountBound([]);
+    api.setElements([wireEl("a", 3)]);
+    expect(binding.hasPendingLocal()).toBe(true);
+    binding.flushPendingLocal();
+    expect(session.pushScene).toHaveBeenCalledTimes(1);
+    expect(binding.hasPendingLocal()).toBe(false);
+    binding.flushPendingLocal();
+    expect(session.pushScene).toHaveBeenCalledTimes(1);
+  });
+
+  test("a newer local element survives the reconcile and still pushes", async () => {
+    const { api, session, binding } = await mountBound([wireEl("x", 7)]);
+    binding.applyUpdate({ elements: [wireEl("x", 5)] });
+    expect(api.getSceneElementsIncludingDeleted()[0]!.version).toBe(7);
+    expect(binding.hasPendingLocal()).toBe(true);
+    binding.flushPendingLocal();
+    expect(session.pushScene).toHaveBeenCalledWith(
+      [expect.objectContaining({ id: "x", version: 7 })],
+      undefined,
+      undefined,
+    );
+  });
+
+  test("collaborators repaint from the peer cursor snapshot", async () => {
+    const { api, binding } = await mountBound([]);
+    binding.collaboratorsChanged();
+    const call = api.updateScene.mock.calls.find(
+      (c) => (c[0] as Record<string, unknown>).collaborators !== undefined,
+    );
+    expect(call).toBeDefined();
+    const collabs = (call![0] as { collaborators: Map<string, Record<string, unknown>> })
+      .collaborators;
+    const peer = collabs.get("7")!;
+    // No roster row in this fixture: the window-id prefix identifies.
+    expect(peer.username).toBe("win-peer");
+    expect(peer.pointer).toEqual({ x: 1.5, y: 2, tool: "pointer" });
+    expect((peer.color as { background: string }).background).toMatch(/^#/);
+  });
+
+  test("unmounting unbinds the session", async () => {
+    const { session } = await mountBound([]);
+    unmount(mounted.pop()!);
+    expect(session.unbindCanvas).toHaveBeenCalledTimes(1);
+  });
+
+  test("the collab path pins its load-bearing calls in source", () => {
+    expect(canvasSrc).toContain("getSceneElementsIncludingDeleted");
+    expect(canvasSrc).toContain("CaptureUpdateAction.NEVER");
+    expect(canvasSrc).toMatch(/reconcileElements\(/);
+    expect(fileEditorSrc).toMatch(/<ExcalidrawCanvas[\s\S]*?session=\{sceneSession\}/);
+  });
+});
+
+describe("sceneDeltas bookkeeping", () => {
+  test("delta detection keys on the recorded version", () => {
+    const map = new Map<string, number>();
+    const els = [wireEl("a", 1), wireEl("b", 2)];
+    expect(sceneDeltas(els, map)).toHaveLength(2);
+    noteVersions(map, els);
+    expect(sceneDeltas(els, map)).toHaveLength(0);
+    const bumped = [wireEl("a", 2), wireEl("b", 2)];
+    expect(sceneDeltas(bumped, map).map((e) => e.id)).toEqual(["a"]);
   });
 });

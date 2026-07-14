@@ -30,6 +30,7 @@ import {
 } from "./survey.svelte";
 import { applySessionRoster, isFollower, showHandover, type SessionParticipant } from "./session.svelte";
 import { docSyncRosterChanged } from "./docSync.svelte";
+import { sceneSyncRosterChanged } from "./sceneSync.svelte";
 import { isWindowEnded, markWindowDiscarded, markWindowHidden } from "./windowLifecycle.svelte";
 import {
   activeLayout,
@@ -780,6 +781,8 @@ export function onWatchEvent(e: unknown): void {
     // Peer caret name flags resolve through this roster; restamp any
     // bound editors so a rename swaps flag text without flashing it.
     docSyncRosterChanged();
+    // Scene collaborator labels resolve through the same roster.
+    sceneSyncRosterChanged();
     return;
   }
   const kind = (e as { kind?: string } | null)?.kind;

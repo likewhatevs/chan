@@ -1,3 +1,33 @@
+<script module lang="ts">
+  // Pure version-map bookkeeping for the live-session binding, exported
+  // so the loop-safety pins can drive it directly. An element is a
+  // pending local delta iff its canvas version differs from the last
+  // version this client broadcast OR applied from the authority: noting
+  // remote applies here is what keeps a remote-won element from ever
+  // re-pushing.
+  export function sceneDeltas(
+    elements: readonly Record<string, unknown>[],
+    lastBroadcast: ReadonlyMap<string, number>,
+  ): Record<string, unknown>[] {
+    return elements.filter((el) => {
+      const id = el.id;
+      if (typeof id !== "string") return false;
+      return lastBroadcast.get(id) !== (typeof el.version === "number" ? el.version : 0);
+    });
+  }
+
+  export function noteVersions(
+    lastBroadcast: Map<string, number>,
+    elements: readonly Record<string, unknown>[],
+  ): void {
+    for (const el of elements) {
+      const id = el.id;
+      if (typeof id !== "string") continue;
+      lastBroadcast.set(id, typeof el.version === "number" ? el.version : 0);
+    }
+  }
+</script>
+
 <script lang="ts">
   // The SPA's one React island: an interactive Excalidraw board mounted
   // inside a Svelte file tab. createRoot ONCE in onMount; every later
@@ -14,6 +44,14 @@
     ExcalidrawInitialDataState,
   } from "@excalidraw/excalidraw/types";
   import { configureExcalidrawAssets } from "./excalidrawAssets";
+  import { peerColorIdx, resolvePeerName } from "./collab/remoteCursors";
+  import type {
+    SceneCanvasBinding,
+    SceneSession,
+    WireAppState,
+    WireElement,
+    WireFiles,
+  } from "../state/sceneSync.svelte";
   import "@excalidraw/excalidraw/index.css";
 
   type Props = {
@@ -28,14 +66,20 @@
     /// The board changed. The host serializes into the tab buffer, which
     /// the existing autosave path persists.
     onSceneChange: (json: string) => void;
+    /// Live scene session for this tab, if any; absent renders a solo
+    /// board with every collab path inert.
+    session?: SceneSession | null;
   };
-  let { content, dark, active = true, onSceneChange }: Props = $props();
+  let { content, dark, active = true, onSceneChange, session = null }: Props = $props();
 
   let host: HTMLDivElement | undefined = $state();
   let root: import("react-dom/client").Root | null = null;
   let react: typeof import("react") | null = null;
   let ex: typeof import("@excalidraw/excalidraw") | null = null;
   let api: ExcalidrawImperativeAPI | null = null;
+  /// Reactive mirror of "the imperative API exists", so the session
+  /// bind effect re-runs once the async chunk delivers it.
+  let apiReady = $state(false);
 
   // Last scene JSON we know the buffer holds. Distinguishes our own
   // serialized output from an external buffer write (reload, 409
@@ -50,8 +94,168 @@
   // event, and serializing the whole scene on each would jank a drag.
   // serializeAsJSON("local") keeps only elements plus a few persistent
   // appState keys (grid, background), so pan / zoom / selection / theme
-  // churn produce an identical string and never dirty the buffer.
+  // churn produce an identical string and never dirty the buffer. The
+  // same debounce paces the live-session delta pushes.
   let serializeTimer: ReturnType<typeof setTimeout> | null = null;
+
+  // ---- live scene session binding ------------------------------------
+
+  /// Last element version broadcast to (or applied from) the authority.
+  const lastBroadcast = new Map<string, number>();
+  /// File ids the authority already knows (pushed by us or fanned in).
+  const knownFiles = new Set<string>();
+  /// Cleaned appState from the latest serialize, plus the JSON of the
+  /// last version the authority holds; a difference rides the next push
+  /// (whole-object LWW server-side).
+  let cleanedAppState: WireAppState = {};
+  let cleanedAppStateJson = "";
+  let lastPushedAppStateJson = "";
+
+  /// Literal colors for the collaborator layer, resolved from the shared
+  /// --peer-c0..7 vars so canvas pointers match editor carets; the
+  /// literals are the light-theme palette, covering detached test DOMs
+  /// and scopes where the vars do not resolve.
+  const PEER_COLOR_FALLBACKS = [
+    "#1a6fd4",
+    "#c62f2f",
+    "#1e8a44",
+    "#8a3fd1",
+    "#b26305",
+    "#0f8390",
+    "#c22a6e",
+    "#59626e",
+  ];
+  function peerColor(windowId: string): { background: string; stroke: string } {
+    const i = peerColorIdx(windowId);
+    let v = "";
+    try {
+      v = getComputedStyle(document.documentElement)
+        .getPropertyValue(`--peer-c${i}`)
+        .trim();
+    } catch {
+      // Detached DOM (tests): fall through to the literal palette.
+    }
+    const c = v || PEER_COLOR_FALLBACKS[i % PEER_COLOR_FALLBACKS.length]!;
+    return { background: c, stroke: c };
+  }
+
+  function allElements(): Record<string, unknown>[] {
+    if (!api) return [];
+    return api.getSceneElementsIncludingDeleted() as unknown as Record<string, unknown>[];
+  }
+
+  /// Fold authority content into the canvas. The local side of the
+  /// reconcile includes deleted elements: a local tombstone must beat a
+  /// slower remote update of the same element or a delete could
+  /// resurrect during the push round-trip. The transaction never enters
+  /// local undo (CaptureUpdateAction.NEVER).
+  function applyRemote(
+    elements: WireElement[],
+    appState: WireAppState | undefined,
+    files: WireFiles | undefined,
+    isSnapshot: boolean,
+  ): void {
+    if (!api || !ex) return;
+    const reconciled = ex.reconcileElements(
+      api.getSceneElementsIncludingDeleted(),
+      elements as unknown as Parameters<typeof ex.reconcileElements>[1],
+      api.getAppState(),
+    );
+    api.updateScene({
+      elements: reconciled,
+      ...(appState !== undefined ? { appState } : {}),
+      captureUpdate: ex.CaptureUpdateAction.NEVER,
+    } as unknown as Parameters<ExcalidrawImperativeAPI["updateScene"]>[0]);
+    // Equal canvas/broadcast versions afterwards mean the remote value
+    // won (never re-push it); a surviving newer local element stays
+    // unequal and pushes through the normal delta path.
+    noteVersions(lastBroadcast, elements);
+    if (files !== undefined) {
+      const list = Object.values(files);
+      if (list.length > 0) {
+        api.addFiles(list as unknown as Parameters<ExcalidrawImperativeAPI["addFiles"]>[0]);
+      }
+      for (const k of Object.keys(files)) knownFiles.add(k);
+    }
+    if (isSnapshot && appState !== undefined) {
+      // The snapshot appState is the authority baseline; only later
+      // local changes should ride a push.
+      lastPushedAppStateJson = JSON.stringify(appState);
+    }
+  }
+
+  /// Hand pending local deltas to the session: elements whose canvas
+  /// version moved past the broadcast map, file entries the authority
+  /// has not seen, and the cleaned appState when it changed.
+  function pushDeltas(): void {
+    if (!api || !session) return;
+    const deltas = sceneDeltas(allElements(), lastBroadcast);
+    const newFiles: WireFiles = {};
+    for (const [k, v] of Object.entries(api.getFiles())) {
+      if (!knownFiles.has(k)) newFiles[k] = v as WireFiles[string];
+    }
+    const appState =
+      cleanedAppStateJson !== "" && cleanedAppStateJson !== lastPushedAppStateJson
+        ? cleanedAppState
+        : undefined;
+    const hasFiles = Object.keys(newFiles).length > 0;
+    if (deltas.length === 0 && appState === undefined && !hasFiles) return;
+    noteVersions(lastBroadcast, deltas);
+    for (const k of Object.keys(newFiles)) knownFiles.add(k);
+    if (appState !== undefined) lastPushedAppStateJson = cleanedAppStateJson;
+    session.pushScene(
+      deltas as WireElement[],
+      appState,
+      hasFiles ? newFiles : undefined,
+    );
+  }
+
+  const binding: SceneCanvasBinding = {
+    applySnapshot(elements, appState, files) {
+      applyRemote(elements, appState, files, true);
+    },
+    applyUpdate(f) {
+      applyRemote(f.elements, f.appState, f.files, false);
+    },
+    collaboratorsChanged() {
+      if (!api || !session) return;
+      const collaborators = new Map<string, Record<string, unknown>>();
+      for (const [id, c] of session.peerCursorSnapshot()) {
+        collaborators.set(String(id), {
+          username: resolvePeerName(c.w),
+          color: peerColor(c.w),
+          pointer: { x: c.x, y: c.y, tool: "pointer" },
+          ...(c.selected !== undefined
+            ? {
+                selectedElementIds: Object.fromEntries(
+                  c.selected.map((s) => [s, true] as const),
+                ),
+              }
+            : {}),
+        });
+      }
+      api.updateScene({
+        collaborators,
+      } as unknown as Parameters<ExcalidrawImperativeAPI["updateScene"]>[0]);
+    },
+    hasPendingLocal() {
+      if (!api) return false;
+      return sceneDeltas(allElements(), lastBroadcast).length > 0;
+    },
+    flushPendingLocal() {
+      pushDeltas();
+    },
+  };
+
+  // Bind the session once the imperative API exists; rebind when the
+  // session is replaced. bindCanvas replays the authority snapshot into
+  // a late-mounting canvas.
+  $effect(() => {
+    const s = session;
+    if (!s || !apiReady) return;
+    s.bindCanvas(binding);
+    return () => s.unbindCanvas(binding);
+  });
 
   function parseScene(json: string): ExcalidrawInitialDataState | null {
     if (!json.trim()) return null;
@@ -78,6 +282,20 @@
       api.getFiles(),
       "local",
     );
+    if (session) {
+      // The serialized envelope already carries the cleaned appState
+      // (the exact object the classic save would persist); reuse it as
+      // the push payload instead of re-cleaning by hand.
+      try {
+        const parsed = JSON.parse(json) as { appState?: WireAppState };
+        cleanedAppState = parsed.appState ?? {};
+        cleanedAppStateJson = JSON.stringify(cleanedAppState);
+      } catch {
+        // The buffer mirror below still runs; deltas push without
+        // appState this round.
+      }
+      pushDeltas();
+    }
     if (json === lastSerialized) return;
     lastSerialized = json;
     onSceneChange(json);
@@ -92,8 +310,24 @@
       react.createElement(ex.Excalidraw, {
         ...(withInitial ? { initialData: parseScene(content) } : {}),
         theme: dark ? "dark" : "light",
-        excalidrawAPI: (a: ExcalidrawImperativeAPI) => (api = a),
+        excalidrawAPI: (a: ExcalidrawImperativeAPI) => {
+          api = a;
+          apiReady = true;
+        },
         onChange: scheduleSerialize,
+        onPointerUpdate: (p: {
+          pointer: { x: number; y: number; tool: string };
+        }) => {
+          if (!session || !api) return;
+          const sel = api.getAppState().selectedElementIds;
+          const ids = Object.keys(sel).filter((k) => sel[k]);
+          session.sendCursor(
+            p.pointer.x,
+            p.pointer.y,
+            p.pointer.tool,
+            ids.length > 0 ? ids : undefined,
+          );
+        },
       }),
     );
   }

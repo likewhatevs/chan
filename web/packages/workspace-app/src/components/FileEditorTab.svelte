@@ -107,6 +107,12 @@
     type DocSession,
   } from "../state/docSync.svelte";
   import {
+    acquireSceneSession,
+    isSceneSyncEligible,
+    releaseSceneSession,
+    type SceneSession,
+  } from "../state/sceneSync.svelte";
+  import {
     registerEditorCommands,
     unregisterEditorCommands,
   } from "../state/mountedEditors";
@@ -361,6 +367,24 @@
       untrack(() => {
         docSession = null;
         releaseDocSession(tabId);
+      });
+  });
+  /// Live scene-session lifecycle for canvas tabs, the exact shape of
+  /// the doc effect above: eligibility inputs tracked, the acquire
+  /// untracked (its size gate reads tab.content), release lingering so
+  /// a cross-pane move keeps the socket + shadow.
+  let sceneSession: SceneSession | null = $state(null);
+  $effect(() => {
+    const eligible = isSceneSyncEligible(tab);
+    const tabId = tab.id;
+    untrack(() => {
+      sceneSession = eligible ? acquireSceneSession(tab) : null;
+      if (!eligible) releaseSceneSession(tabId);
+    });
+    return () =>
+      untrack(() => {
+        sceneSession = null;
+        releaseSceneSession(tabId);
       });
   });
   /// Per-editor-mount collab + presence extension bundle, minted ONCE
@@ -1338,6 +1362,7 @@
             content={tab.content}
             dark={effectiveHybridSurfaceTheme("editor") === "dark"}
             onSceneChange={(json) => (tab.content = json)}
+            session={sceneSession}
           />
         {/if}
       </div>

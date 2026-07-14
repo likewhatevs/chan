@@ -103,7 +103,10 @@ function clampPos(pos: number, docLen: number): number {
   return Math.max(0, Math.min(pos, docLen));
 }
 
-function resolvePeerName(windowId: string): string {
+/// Resolve a window id to a display name through the session roster.
+/// Exported: the scene collaborators layer (ExcalidrawCanvas) labels
+/// canvas pointers with the same names the caret flags carry.
+export function resolvePeerName(windowId: string): string {
   const row = sessionState.participants.find((p) => p.window_id === windowId);
   const name = row?.name?.trim();
   // The roster guarantees non-empty names for live participants, but a
