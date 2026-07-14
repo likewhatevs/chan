@@ -22,7 +22,18 @@ v0.68.0 brings multiple devservers per gateway account with a sign-in picker, a 
 
 ### Fixed
 
+- **Live sessions no longer trust a lying filesystem.** The doc and scene session reconcilers identified their own save echoes by mtime alone and trusted a single read enough to replace a live session wholesale; on filesystems that re-stamp mtime after an async upload or serve stale/empty read-after-write (Google Drive FUSE clients), a session's own save came back as an "external edit" that blanked every attached editor and could persist the blank to disk. Sessions now recognize their own recent content by hash, corroborate suspicious reads (empty, or divergent while edits are unflushed) with a second observation before folding them in, heal a refused lying read by re-flushing the live content, and serialize flush/reconcile IO per session (also fixing a filesystem-independent race that could revert mid-save typing).
 - **distros-publish re-runs are safe after a transient Launchpad failure.** The PPA path skips series Launchpad already accepted (asked via the Launchpad API) and retries the rest with bounded backoff, so re-running the workflow after an FTP 550 no longer needs a manual local rebuild and never re-uploads a duplicate. An sftp upload method is plumbed behind an optional `LAUNCHPAD_SSH_PRIVATE_KEY` secret.
+
+### Operators
+
+Rollout notes for the gateway deploy (prod agents: read before rolling this version):
+
+- BEFORE deploy: `SELECT username FROM users WHERE username LIKE '%--%'` must return no rows; `--` is now reserved as the devserver host separator (new signups already reject it).
+- `MAX_DEVSERVERS_PER_USER` replaces `MAX_WORKSPACES_PER_USER` (legacy name still honored when the new one is unset). The unset default changed from unlimited to 100; set `0` to remove the cap. Packaged env templates ship the new name.
+- New optional env `IDENTITY_ADMIN_TOKEN` enables `POST /admin/v1/tokens` (operator PAT mint, used by `chan-gateway-admin token create`); unset = surface answers 404.
+- Desktops older than 0.68 cannot sign in against a 0.68 gateway (one-time-code handoff); upgrade desktops with or before the gateway.
+- Optional CI secret `LAUNCHPAD_SSH_PRIVATE_KEY` switches PPA uploads from ftp to sftp; without it the new skip/retry logic still applies over ftp.
 
 ## [v0.67.3] - 2026-07-13
 
