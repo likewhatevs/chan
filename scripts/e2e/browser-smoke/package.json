@@ -1,0 +1,13 @@
+{
+  "name": "chan-browser-smoke",
+  "private": true,
+  "type": "module",
+  "description": "Headless-Chrome browser smokes against a throwaway chan test server.",
+  "scripts": {
+    "smoke": "node run.mjs"
+  },
+  "dependencies": {
+    "pdf-lib": "^1.17.1",
+    "puppeteer-core": "^24.0.0"
+  }
+}
