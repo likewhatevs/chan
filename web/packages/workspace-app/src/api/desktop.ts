@@ -370,8 +370,8 @@ export async function runDesktopDownload(
 /// Save bytes the SPA already holds in memory to the Downloads folder
 /// through the same `save_file_to_downloads` command + progress
 /// indicator that `runDesktopDownload` uses. Unlike that path there is
-/// no network fetch (the bytes are produced locally, e.g. the native PDF
-/// export), so the transfer goes straight from begin -> finish.
+/// no network fetch (the bytes are produced locally, e.g. by the PDF
+/// export engine), so the transfer goes straight from begin -> finish.
 ///
 /// Resolves to the saved absolute path; rejects on error. Reuses the
 /// existing capability, so no new Tauri permission is required.

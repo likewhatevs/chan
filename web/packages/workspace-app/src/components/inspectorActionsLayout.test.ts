@@ -91,6 +91,25 @@ describe("shared actions section under the filename", () => {
     );
   });
 
+  test("markdown files carry an Export to PDF secondary action", () => {
+    // Gated on isMarkdown (never a directory), unconditional across web
+    // and desktop; only the save path differs inside the handler.
+    expect(fileInfo).toMatch(
+      /!isDir && isMarkdown\(p\)[\s\S]{1,80}label: "Export to PDF", onClick: exportSelectionToPdf/,
+    );
+    // The editable branch surfaces it in the dropdown.
+    expect(fileInfo).toMatch(
+      /secondary\.push\(download, newTerminal\);[\s\S]{1,60}if \(exportPdf\) secondary\.push\(exportPdf\);/,
+    );
+    // The handler branches desktop Downloads vs the shared web helper.
+    expect(fileInfo).toMatch(
+      /async function exportSelectionToPdf\(\): Promise<void> \{[\s\S]{1,900}saveBytesToDownloads\(bytes, filename\)[\s\S]{1,200}downloadBytes\(bytes, filename, "application\/pdf"\)/,
+    );
+    expect(fileInfo).toMatch(
+      /import \{ downloadBytes \} from "\.\.\/api\/download";/,
+    );
+  });
+
   test("New terminal here is a secondary action seeded via fromHere", () => {
     expect(fileInfo).toMatch(
       /label: "New terminal here",[\s\S]{1,40}onClick: newTerminalHere,/,

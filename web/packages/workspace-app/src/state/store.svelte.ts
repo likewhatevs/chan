@@ -1004,6 +1004,17 @@ type WindowCommandFrame =
       // Which representation to emit: auto (image-first) | text | html | image.
       prefer: "auto" | "text" | "html" | "image";
     }
+  | {
+      type: "window_command";
+      window_id: string;
+      // `cs export` (Contract B): render `path` with the exporter for
+      // `format`, upload to `out`, reply via /api/window/reply with `id`.
+      command: "export-job";
+      id: string;
+      path: string;
+      format: string;
+      out: string;
+    }
   // The session leader discarded / hid this window from the launcher; the
   // server targets the affected window's own socket. No payload.
   | { type: "window_command"; window_id: string; command: "window_discarded" }
@@ -1601,6 +1612,23 @@ async function handleWindowCommand(raw: unknown): Promise<void> {
     // `cs paste` asked this window for its clipboard; read it and POST the
     // bytes back to unblock the CLI.
     await respondClipboardRead(frame.request_id, frame.prefer);
+    return;
+  }
+  if (
+    frame.command === "export-job" &&
+    typeof frame.id === "string" &&
+    typeof frame.path === "string" &&
+    typeof frame.format === "string" &&
+    typeof frame.out === "string"
+  ) {
+    // `cs export` pushed a render job to this window; the export engine
+    // (dynamic import: pdf machinery loads only when a job arrives) does
+    // render -> upload -> reply.
+    const { respondExportJob } = await import("../editor/pdf_export");
+    await respondExportJob(
+      { id: frame.id, path: frame.path, format: frame.format, out: frame.out },
+      effectiveHybridSurfaceTheme("editor") === "dark" ? "dark" : "light",
+    );
     return;
   }
 }

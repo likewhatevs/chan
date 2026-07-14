@@ -19,6 +19,7 @@ import {
   normalizeDocPageBreaks,
   paginateDocBlocks,
 } from "./pdf_pages";
+import { api } from "../api/client";
 import {
   snapshotPage,
   SnapshotError,
@@ -107,6 +108,107 @@ export function pdfFilenameFor(path: string): string {
   const dot = trimmed.lastIndexOf(".");
   const stem = dot > 0 ? trimmed.slice(0, dot) : trimmed;
   return `${stem}.pdf`;
+}
+
+/// The export-job window_command payload (Contract B): `cs export`
+/// pushed a job to this window; render `path` via the exporter
+/// registry, upload the bytes to `out`, reply with the request id.
+export type ExportJobCommand = {
+  id: string;
+  path: string;
+  format: string;
+  out: string;
+};
+
+/// Exporter registry, keyed by the opaque wire format string. The
+/// server never interprets the format; unknown values reply ok:false.
+const EXPORTERS: Record<
+  string,
+  {
+    render: (
+      opts: ExportMarkdownOptions,
+      seams: ExportSeams,
+    ) => Promise<Uint8Array>;
+    mime: string;
+  }
+> = {
+  pdf: {
+    render: (opts, seams) => exportMarkdownToPdf(opts, seams),
+    mime: "application/pdf",
+  },
+};
+
+/// Answer an export-job window_command: run the export and POST the
+/// result to `/api/window/reply`, unblocking the waiting CLI. A thrown
+/// error is reported as `ok:false` rather than dropped, so the CLI
+/// always gets a reply (or times out server-side).
+export async function respondExportJob(
+  frame: ExportJobCommand,
+  theme: SlideDomTheme,
+  seams: ExportSeams = {},
+): Promise<void> {
+  let payload:
+    | { ok: true; out: string }
+    | { ok: false; error: string };
+  try {
+    await runExportJob(frame, theme, seams);
+    payload = { ok: true, out: frame.out };
+  } catch (e) {
+    payload = { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+  try {
+    await api.windowReply({ requestId: frame.id, payload });
+  } catch (e) {
+    // 404 = the CLI already timed out (stale request id). Anything else
+    // would leave it hanging blind, so surface it to the console.
+    if ((e as { status?: number } | null)?.status !== 404) {
+      console.warn("export-job reply POST failed", e);
+    }
+  }
+}
+
+async function runExportJob(
+  frame: ExportJobCommand,
+  theme: SlideDomTheme,
+  seams: ExportSeams,
+): Promise<void> {
+  const exporter = EXPORTERS[frame.format];
+  if (!exporter) throw new Error(`unknown export format: ${frame.format}`);
+  const doc = await api.read(frame.path);
+  const bytes = await exporter.render(
+    {
+      path: frame.path,
+      markdown: doc.content,
+      theme,
+      styleSource: null,
+    },
+    seams,
+  );
+  await uploadExportBytes(bytes, frame.out, exporter.mime);
+}
+
+/// Write the export output through the workspace upload route (all
+/// writes stay inside the Workspace sandbox). The replace path requires
+/// an existing target, so a fresh out file is created first when the
+/// replace rejects it; the original error surfaces if creation cannot
+/// repair it.
+async function uploadExportBytes(
+  bytes: Uint8Array,
+  out: string,
+  mime: string,
+): Promise<void> {
+  const filename = out.split("/").pop() || "export";
+  const file = new File([bytes as BlobPart], filename, { type: mime });
+  try {
+    await api.replaceFile(file, out);
+  } catch (replaceErr) {
+    try {
+      await api.create(out, false);
+    } catch {
+      throw replaceErr;
+    }
+    await api.replaceFile(file, out);
+  }
 }
 
 /// Render markdown to PDF bytes: deck when the source carries the chan

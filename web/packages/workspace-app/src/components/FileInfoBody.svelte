@@ -20,6 +20,8 @@
   // tracking does the gating).
 
   import { api, withTokenQuery } from "../api/client";
+  import { isTauriDesktop, saveBytesToDownloads } from "../api/desktop";
+  import { downloadBytes } from "../api/download";
   import type {
     GraphEdge,
     InspectorPayload,
@@ -28,7 +30,7 @@
     ReportPrefix,
     TreeEntry,
   } from "../api/types";
-  import { isImage, isPdf } from "../state/fileTypes";
+  import { isImage, isMarkdown, isPdf } from "../state/fileTypes";
   import { basename, formatMtime, formatSize } from "../state/format";
   import {
     ensureGraphLoaded,
@@ -40,6 +42,7 @@
   import {
     copyTextToClipboard,
     draftsDir,
+    effectiveHybridSurfaceTheme,
     isDraftPath,
     setTransientStatus,
     ui,
@@ -428,6 +431,40 @@
     fileOps.downloadPathWithProgress(entry.path, entry.is_dir);
   }
 
+  /// Render the selected markdown document to PDF and save it: the
+  /// native Downloads pipeline on desktop, a browser download on the
+  /// web. The engine loads on first use (dynamic import) and renders
+  /// with the editor surface theme.
+  async function exportSelectionToPdf(): Promise<void> {
+    if (!entry || entry.is_dir) return;
+    const path = entry.path;
+    setTransientStatus(`exporting ${basename(path)}...`);
+    try {
+      const doc = await api.read(path);
+      const { exportMarkdownToPdf, pdfFilenameFor } = await import(
+        "../editor/pdf_export"
+      );
+      const theme =
+        effectiveHybridSurfaceTheme("editor") === "dark" ? "dark" : "light";
+      const bytes = await exportMarkdownToPdf({
+        path,
+        markdown: doc.content,
+        theme,
+        styleSource: null,
+      });
+      const filename = pdfFilenameFor(path);
+      if (isTauriDesktop()) {
+        await saveBytesToDownloads(bytes, filename);
+      } else {
+        downloadBytes(bytes, filename, "application/pdf");
+      }
+      setTransientStatus(`exported ${filename}`);
+    } catch (err) {
+      ui.status = `PDF export failed: ${err instanceof Error ? err.message : String(err)}`;
+      ui.statusKind = "persistent";
+    }
+  }
+
   // Desktop-download progress now shows in the transfer bubble (the single
   // transfer surface), not an inline inspector indicator.
 
@@ -578,6 +615,12 @@
       label: "New terminal here",
       onClick: newTerminalHere,
     };
+    // Markdown documents export to PDF on every surface (web and
+    // desktop alike; the save path differs, not the availability).
+    const exportPdf: InspectorAction | null =
+      !isDir && isMarkdown(p)
+        ? { label: "Export to PDF", onClick: exportSelectionToPdf }
+        : null;
     const graph: InspectorAction | null = onSetAsScope
       ? { label: "Graph from here", onClick: onSetAsScope }
       : null;
@@ -616,6 +659,7 @@
         main = download;
       }
       secondary.push(download, newTerminal);
+      if (exportPdf) secondary.push(exportPdf);
       if (graph) secondary.push(graph);
     } else {
       // Binary, including symlinks: download is the only sensible action.
