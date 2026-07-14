@@ -4,6 +4,26 @@ All notable changes to this project will be documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+v0.68.0 brings multiple devservers per gateway account with a sign-in picker, a one-time-code desktop sign-in handoff, Export to PDF through the Inspector and `cs export`, live-collaborative Excalidraw boards, an operator token mint, and retry-idempotent PPA publishing.
+
+### Added
+
+- **Multiple devservers per gateway account.** A user can keep up to `MAX_DEVSERVERS_PER_USER` live devservers (default 100; `0` removes the cap; the legacy `MAX_WORKSPACES_PER_USER` name is still honored). Each devserver is reachable at its own `{user}--{disc}.devserver` host (the disc is the first 12 hex chars of the devserver id); the bare `{user}.` host keeps working, resolving through the credential when several are live. Share links accept a `?d=` selector and the dashboard copies per-devserver links. The desktop sign-in consent page lists your devservers and the ones shared with you; the pick is recorded and every desktop connect targets exactly that devserver, with a clear re-pick path when a grant is revoked. Usernames may no longer contain `--` (reserved as the host separator).
+- **Export to PDF.** Markdown documents and slide decks export to PDF from the file Inspector and from the command line: `cs export <path> [--format pdf] [--out <path>]` renders in a connected workspace window and writes the file into the workspace. Output matches what the editor renders (mermaid and excalidraw diagrams, images, themes); documents paginate onto portrait A4 with page-break support, decks land one slide per landscape A4 page. No browser print dialog or platform print API is involved.
+- **Excalidraw boards are live-collaborative.** Boards open into the same shared-session model the editor uses: everyone converges on the same scene through element-level last-writer-wins, peers' pointers show live, tabs carry the same presence badges, and saves/conflicts behave like the editor's. Source-mode edits and external file writes fold into a live session instead of conflicting with it.
+- **`chan-gateway-admin token create <email> --scope tunnel`.** Mints a PAT for a user directly through the new identity operator surface (gated by `IDENTITY_ADMIN_TOKEN`); the secret prints exactly once.
+- **Close pane from the pane menu.** The pane hamburger menu ends with a separator and a Close pane row, matching the command launcher entry.
+
+### Changed
+
+- **Desktop sign-in hands off a one-time code instead of the token secret.** The `chan://` callback fragment now carries a single-use, 120-second redemption code; chan-desktop redeems it over HTTPS for the token. The secret never sits in the handoff page. BREAKING: desktops older than 0.68 cannot sign in against a 0.68 gateway and must upgrade.
+
+### Fixed
+
+- **distros-publish re-runs are safe after a transient Launchpad failure.** The PPA path skips series Launchpad already accepted (asked via the Launchpad API) and retries the rest with bounded backoff, so re-running the workflow after an FTP 550 no longer needs a manual local rebuild and never re-uploads a duplicate. An sftp upload method is plumbed behind an optional `LAUNCHPAD_SSH_PRIVATE_KEY` secret.
+
 ## [v0.67.3] - 2026-07-13
 
 v0.67.3 stops gateway devserver windows from reload-looping so their shells finally attach, and quiets two boot-time 404s on terminal windows.
