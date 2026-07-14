@@ -79,6 +79,10 @@ pub async fn api_storage_reset(
         .doc_sessions
         .close_all("reset", doc_workspace.as_ref(), &state.self_writes)
         .await;
+    state
+        .scene_sessions
+        .close_all("reset", doc_workspace.as_ref(), &state.self_writes)
+        .await;
     // Run the reset on a blocking-thread: the drain spin-wait sleeps
     // and the chan-workspace wipe walks the filesystem; neither belongs
     // on the async runtime's worker thread.

@@ -103,6 +103,10 @@ pub async fn api_metadata_import(
         .doc_sessions
         .close_all("import", doc_workspace.as_ref(), &state.self_writes)
         .await;
+    state
+        .scene_sessions
+        .close_all("import", doc_workspace.as_ref(), &state.self_writes)
+        .await;
     let state_clone = state.clone();
     let result = tokio::task::spawn_blocking(move || {
         perform_metadata_import(&state_clone, bytes, rescan, force_scm)

@@ -96,6 +96,11 @@ pub struct AppState {
     /// reset` structurally (the registry object persists) but reset
     /// closes every session via `close_all` before the cell swap.
     pub doc_sessions: Arc<crate::doc_sessions::DocRegistry>,
+    /// Live Excalidraw scene sessions. The scene WebSocket route
+    /// attaches canvases here; the scene flusher and reconciler tasks
+    /// keep the sessions and the disk in step. Same reset semantics as
+    /// `doc_sessions`.
+    pub scene_sessions: Arc<crate::scene_sessions::SceneRegistry>,
     /// Process-wide shutdown signal. Fires once SIGINT/SIGTERM or
     /// the idle-timeout watcher trip. Long-lived handlers (e.g.
     /// `/ws`) observe this to close their sockets promptly so axum's
@@ -311,6 +316,7 @@ pub(crate) mod test_support {
                 terminal: ServerConfig::default().terminal,
             })),
             doc_sessions: Arc::new(crate::doc_sessions::DocRegistry::new()),
+            scene_sessions: Arc::new(crate::scene_sessions::SceneRegistry::new()),
             shutdown_rx,
             scope_registry: Arc::new(crate::bus::ScopeRegistry::new()),
             survey_bus: Arc::new(crate::survey::SurveyBus::new()),

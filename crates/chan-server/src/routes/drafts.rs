@@ -689,6 +689,7 @@ mod tests {
                 terminal: ServerConfig::default().terminal,
             })),
             doc_sessions: std::sync::Arc::new(crate::doc_sessions::DocRegistry::new()),
+            scene_sessions: std::sync::Arc::new(crate::scene_sessions::SceneRegistry::new()),
             shutdown_rx,
             scope_registry: std::sync::Arc::new(crate::bus::ScopeRegistry::new()),
             survey_bus: std::sync::Arc::new(crate::survey::SurveyBus::new()),

@@ -40,8 +40,6 @@ mod indexer;
 mod mcp_bridge;
 mod preferences;
 mod routes;
-// The pure scene core; its unit tests are the only callers.
-#[allow(dead_code)]
 mod scene_sessions;
 mod self_writes;
 mod session_roster;
@@ -110,12 +108,13 @@ use routes::{
     api_post_attachment, api_post_contacts_import, api_preflight, api_preflight_decision,
     api_promote_draft, api_put_session, api_read_file, api_report_dir, api_report_file,
     api_report_prefix, api_reports_disable, api_reports_enable, api_reports_state,
-    api_resolve_link, api_restart_terminal, api_screensaver_clear_pin, api_screensaver_patch,
-    api_screensaver_set_pin, api_screensaver_state, api_screensaver_verify, api_search_content,
-    api_search_files, api_session_handover_reply, api_set_terminal_broadcast, api_storage_reset,
-    api_survey_reply, api_team_config_read, api_team_config_write, api_terminal_next_name,
-    api_terminal_ws, api_terminals_roster, api_upload_file, api_window_reply,
-    api_workspace_bootstrap, api_write_file, spawn_roster_broadcaster, ws_upgrade,
+    api_resolve_link, api_restart_terminal, api_scene_ws, api_screensaver_clear_pin,
+    api_screensaver_patch, api_screensaver_set_pin, api_screensaver_state, api_screensaver_verify,
+    api_search_content, api_search_files, api_session_handover_reply, api_set_terminal_broadcast,
+    api_storage_reset, api_survey_reply, api_team_config_read, api_team_config_write,
+    api_terminal_next_name, api_terminal_ws, api_terminals_roster, api_upload_file,
+    api_window_reply, api_workspace_bootstrap, api_write_file, spawn_roster_broadcaster,
+    ws_upgrade,
 };
 #[cfg(feature = "embeddings")]
 use routes::{
@@ -211,6 +210,12 @@ struct AppArtifacts {
     /// Folds raw watcher events into live doc sessions. Same
     /// terminal-only caveat as the flusher.
     _doc_reconciler: Option<tokio::task::JoinHandle<()>>,
+    /// Debounced scene-session disk flusher + detach-grace reaper.
+    /// Same terminal-only caveat as the doc flusher.
+    _scene_flusher: Option<tokio::task::JoinHandle<()>>,
+    /// Folds raw watcher events into live scene sessions. Same
+    /// terminal-only caveat as the flusher.
+    _scene_reconciler: Option<tokio::task::JoinHandle<()>>,
     /// Mutable handle to the URL prefix injected into the SPA shell
     /// as `<meta name="chan-prefix">`. Local serve sets it once at
     /// build time from `ServeConfig::prefix`; tunnel mode swaps in
@@ -701,6 +706,7 @@ async fn build_app(
         last_activity: last_activity.clone(),
         terminal_sessions,
         doc_sessions: Arc::new(doc_sessions::DocRegistry::new()),
+        scene_sessions: Arc::new(scene_sessions::SceneRegistry::new()),
         shutdown_rx,
         scope_registry,
         survey_bus,
@@ -732,6 +738,21 @@ async fn build_app(
         state.index_events_tx.subscribe(),
         state.shutdown_rx.clone(),
     );
+    // Scene-session background tasks: the same flusher/reconciler shape
+    // for the Excalidraw authority (element-level sessions instead of
+    // update logs). Workspace apps only, like the doc tasks above.
+    let scene_flusher = scene_sessions::spawn_flusher(
+        state.scene_sessions.clone(),
+        state.workspace_cell.clone(),
+        state.self_writes.clone(),
+        state.shutdown_rx.clone(),
+    );
+    let scene_reconciler = scene_sessions::spawn_reconciler(
+        state.scene_sessions.clone(),
+        state.workspace_cell.clone(),
+        state.index_events_tx.subscribe(),
+        state.shutdown_rx.clone(),
+    );
     // Nest under the prefix so `--prefix=/foo` makes every existing
     // route reachable at `/foo<route>` without changing any handler.
     // axum strips the prefix from the inner URI, so handlers continue
@@ -754,6 +775,8 @@ async fn build_app(
         _session_reaper: session_reaper,
         _doc_flusher: Some(doc_flusher),
         _doc_reconciler: Some(doc_reconciler),
+        _scene_flusher: Some(scene_flusher),
+        _scene_reconciler: Some(scene_reconciler),
         prefix,
         mcp_bridge,
         control_socket,
@@ -947,6 +970,7 @@ async fn build_terminal_app(
         last_activity: last_activity.clone(),
         terminal_sessions,
         doc_sessions: Arc::new(doc_sessions::DocRegistry::new()),
+        scene_sessions: Arc::new(scene_sessions::SceneRegistry::new()),
         shutdown_rx,
         scope_registry,
         survey_bus,
@@ -986,6 +1010,8 @@ async fn build_terminal_app(
         // router mounts no doc route).
         _doc_flusher: None,
         _doc_reconciler: None,
+        _scene_flusher: None,
+        _scene_reconciler: None,
         prefix,
         // No workspace to MCP-bridge; the control socket above IS the
         // local CLI surface (terminal-scoped).
@@ -1244,6 +1270,8 @@ fn into_tenant_artifacts(a: AppArtifacts) -> chan_library::TenantArtifacts {
         _session_reaper,
         _doc_flusher,
         _doc_reconciler,
+        _scene_flusher,
+        _scene_reconciler,
         prefix,
         mcp_bridge,
         control_socket,
@@ -1281,6 +1309,8 @@ fn into_tenant_artifacts(a: AppArtifacts) -> chan_library::TenantArtifacts {
             _session_reaper,
             _doc_flusher,
             _doc_reconciler,
+            _scene_flusher,
+            _scene_reconciler,
             mcp_bridge,
             control_socket,
             state,
@@ -1635,6 +1665,9 @@ fn router(state: Arc<AppState>) -> Router {
         // Live co-editing doc sessions: one duplex socket per (editor
         // mount, document). Wire contract pinned in routes/doc.rs.
         .route("/api/doc/ws", get(api_doc_ws))
+        // Live Excalidraw scene sessions: one duplex socket per (canvas
+        // mount, scene). Wire contract pinned in routes/scene.rs.
+        .route("/api/scene/ws", get(api_scene_ws))
         // Per-workspace Terminal-N sequence + cross-window roster seed.
         // Same handlers as the slim terminal router; the per-tenant registry
         // gives each workspace its own name sequence and roster.

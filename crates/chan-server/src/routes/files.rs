@@ -14,6 +14,8 @@ use tokio::sync::mpsc;
 
 use crate::doc_sessions::{flush_session, DocSession};
 use crate::error::{err, err_from, err_state};
+use crate::scene_sessions::scene::SceneError;
+use crate::scene_sessions::{flush_session as flush_scene_session, SceneSession};
 use crate::state::AppState;
 use crate::static_assets::content_type_for;
 
@@ -575,7 +577,15 @@ pub async fn api_read_file(
     // carry, and an old client's read-modify-PUT loop stays
     // token-consistent with the PUT divert below.
     if let Some(session) = state.doc_sessions.get(&path) {
-        return read_via_session(&workspace, &session, &path, &query).await;
+        let (content, token) = session.authority_view();
+        return read_via_session(&workspace, content, token, &path, &query).await;
+    }
+    // Same divert for a live scene session: every read mode serves the
+    // scene's file form (exactly what a flush would write) under the
+    // session token.
+    if let Some(session) = state.scene_sessions.get(&path) {
+        let (content, token) = session.authority_view();
+        return read_via_session(&workspace, content, token, &path, &query).await;
     }
     if query_flag(&query.download) {
         let plan_ws = workspace.clone();
@@ -643,17 +653,18 @@ pub async fn api_read_file(
     }
 }
 
-/// Serve an attached path from its doc session: authority text under
-/// the session CAS token, in whichever of the three read modes the
-/// query picked. The wire shapes are identical to the disk path's, so
-/// the SPA and scripts cannot tell an attached read from a disk read.
+/// Serve an attached path from its live session (doc or scene):
+/// authority content under the session CAS token, in whichever of the
+/// three read modes the query picked. The wire shapes are identical to
+/// the disk path's, so the SPA and scripts cannot tell an attached
+/// read from a disk read.
 async fn read_via_session(
     workspace: &Arc<chan_workspace::Workspace>,
-    session: &Arc<DocSession>,
+    content: String,
+    token: Option<i64>,
     path: &str,
     query: &ReadFileQuery,
 ) -> Response {
-    let (content, token) = session.authority_view();
     let mtime = token.map(|ns| ns / 1_000_000_000);
     let mtime_ns = token.map(|ns| ns.to_string());
     if query_flag(&query.download) {
@@ -840,6 +851,23 @@ pub async fn api_write_file(
             .await;
         }
     }
+    // Same divert for a live scene session: CAS against the session
+    // token, the body becomes the scene authority through the replace
+    // semantics, and the reply awaits a forced flush. The removed-state
+    // fall-through matches the doc divert above.
+    if let Some(session) = state.scene_sessions.get(&path) {
+        if session.token().is_some() {
+            return write_via_scene_session(
+                &state,
+                &workspace,
+                &session,
+                body.expected_mtime,
+                expected_mtime_ns,
+                &body.content,
+            )
+            .await;
+        }
+    }
     // Record the self-write BEFORE the blocking write runs. The fs
     // watcher runs on its own thread and can deliver the resulting
     // notify event the instant the write lands; noting after the
@@ -932,6 +960,64 @@ async fn write_via_session(
         return err(
             StatusCode::SERVICE_UNAVAILABLE,
             "doc session accepted the write but the disk flush failed; retry".into(),
+        );
+    }
+    let token = session.token();
+    Json(WriteResponse {
+        mtime: token.map(|ns| ns / 1_000_000_000),
+        mtime_ns: token.map(|ns| ns.to_string()),
+    })
+    .into_response()
+}
+
+/// Write an attached path through its scene session: CAS against the
+/// session token, adopt the body as the scene authority (bumped
+/// versions and tombstones fan live to every canvas), force and await
+/// a flush, answer with the post-flush token. Status shapes match the
+/// disk path; a body that is not a usable scene is a 400 and never
+/// touches the session.
+async fn write_via_scene_session(
+    state: &Arc<AppState>,
+    workspace: &Arc<chan_workspace::Workspace>,
+    session: &Arc<SceneSession>,
+    expected_mtime: Option<i64>,
+    expected_mtime_ns: Option<i64>,
+    content: &str,
+) -> Response {
+    let pre_token = session.token();
+    // The CAS matrix mirrors write_file_sync: the ns token is
+    // preferred, the legacy form compares at second resolution, no
+    // token is last-write-wins.
+    let conflict = if let Some(expected) = expected_mtime_ns {
+        pre_token != Some(expected)
+    } else if let Some(expected) = expected_mtime {
+        pre_token.map(|ns| ns / 1_000_000_000) != Some(expected)
+    } else {
+        false
+    };
+    if conflict {
+        return (
+            StatusCode::CONFLICT,
+            Json(WriteConflictBody {
+                current_mtime: pre_token.map(|ns| ns / 1_000_000_000),
+                current_mtime_ns: pre_token.map(|ns| ns.to_string()),
+            }),
+        )
+            .into_response();
+    }
+    if let Err(e) = session.apply_replace(content) {
+        return match e {
+            SceneError::Invalid(_) => err(StatusCode::BAD_REQUEST, e.to_string()),
+            SceneError::TooLarge { .. } => err(StatusCode::PAYLOAD_TOO_LARGE, e.to_string()),
+        };
+    }
+    // A failed forced flush answers 503: the content is authoritative
+    // in the session and every client (a retried PUT re-applies
+    // idempotently), but a 200 must keep meaning "bytes on disk".
+    if !flush_scene_session(session, workspace, &state.self_writes).await {
+        return err(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "scene session accepted the write but the disk flush failed; retry".into(),
         );
     }
     let token = session.token();
@@ -2211,7 +2297,7 @@ mod doc_divert_tests {
     use crate::terminal_sessions::{Registry as TerminalRegistry, RegistryConfig};
     use crate::{EditorPrefs, ServerConfig};
 
-    fn divert_app() -> (TempDir, TempDir, Arc<AppState>) {
+    pub(super) fn divert_app() -> (TempDir, TempDir, Arc<AppState>) {
         let cfg = TempDir::new().unwrap();
         let root = TempDir::new().unwrap();
         let lib = chan_workspace::Library::open_at(cfg.path().join("config.toml")).unwrap();
@@ -2254,6 +2340,7 @@ mod doc_divert_tests {
                 terminal: ServerConfig::default().terminal,
             })),
             doc_sessions: Arc::new(crate::doc_sessions::DocRegistry::new()),
+            scene_sessions: Arc::new(crate::scene_sessions::SceneRegistry::new()),
             shutdown_rx,
             scope_registry: Arc::new(crate::bus::ScopeRegistry::new()),
             survey_bus: Arc::new(crate::survey::SurveyBus::new()),
@@ -2270,7 +2357,7 @@ mod doc_divert_tests {
         (cfg, root, state)
     }
 
-    async fn body_json(resp: axum::response::Response) -> Value {
+    pub(super) async fn body_json(resp: axum::response::Response) -> Value {
         let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
         serde_json::from_slice(&bytes).unwrap()
     }
@@ -2579,6 +2666,225 @@ mod doc_divert_tests {
         assert_eq!(
             std::fs::read_to_string(root.path().join("n.md")).unwrap(),
             "one\n"
+        );
+    }
+}
+
+#[cfg(test)]
+mod scene_divert_tests {
+    use axum::extract::{Path as AxumPath, Query, State};
+    use axum::http::StatusCode;
+    use axum::Json;
+    use chan_workspace::{WatchEvent, WatchKind};
+    use serde_json::{json, Value};
+
+    use super::doc_divert_tests::{body_json, divert_app};
+    use super::{api_read_file, api_write_file, ReadFileQuery, WriteBody};
+
+    fn scene_body(elements: Value) -> String {
+        json!({
+            "type": "excalidraw",
+            "version": 2,
+            "source": "t",
+            "elements": elements,
+            "appState": {},
+            "files": {},
+        })
+        .to_string()
+    }
+
+    fn elem(id: &str, version: u64, nonce: u64, index: &str) -> Value {
+        json!({
+            "id": id,
+            "type": "rectangle",
+            "version": version,
+            "versionNonce": nonce,
+            "index": index,
+            "isDeleted": false,
+        })
+    }
+
+    #[tokio::test]
+    async fn get_divert_serves_the_scene_file_form_under_the_session_token() {
+        let (_cfg, root, state) = divert_app();
+        let workspace = state.try_workspace().unwrap();
+        workspace
+            .write_text("b.excalidraw", &scene_body(json!([elem("x", 1, 1, "a1")])))
+            .unwrap();
+        let mut handle = state
+            .scene_sessions
+            .attach(&workspace, "b.excalidraw", "win-1")
+            .await
+            .unwrap();
+        let _frames = handle.take_frames();
+        // Live push, not yet flushed: authority and disk now differ.
+        handle
+            .push(vec![elem("y", 1, 1, "a2")], None, None)
+            .unwrap();
+        let token = handle.session().token().expect("seeded token");
+
+        let resp = api_read_file(
+            State(state.clone()),
+            AxumPath("b.excalidraw".to_string()),
+            Query(ReadFileQuery {
+                download: None,
+                stream: None,
+            }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let v = body_json(resp).await;
+        assert_eq!(v["mtime_ns"], token.to_string());
+        let content: Value = serde_json::from_str(v["content"].as_str().unwrap()).unwrap();
+        let ids: Vec<&str> = content["elements"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| e["id"].as_str().unwrap())
+            .collect();
+        assert_eq!(ids, ["x", "y"], "authority file form, not the disk bytes");
+
+        // Disk still holds only x: reads never touch it while attached.
+        let on_disk: Value = serde_json::from_str(
+            &std::fs::read_to_string(root.path().join("b.excalidraw")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(on_disk["elements"].as_array().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn put_divert_cas_replace_and_bad_body() {
+        let (_cfg, root, state) = divert_app();
+        let workspace = state.try_workspace().unwrap();
+        workspace
+            .write_text("b.excalidraw", &scene_body(json!([elem("x", 5, 10, "a1")])))
+            .unwrap();
+        let mut handle = state
+            .scene_sessions
+            .attach(&workspace, "b.excalidraw", "win-1")
+            .await
+            .unwrap();
+        let mut frames = handle.take_frames();
+        let session = handle.session().clone();
+        let token0 = session.token().expect("seeded token");
+        while frames.try_recv().is_ok() {}
+
+        // Wrong ns token: 409 carrying the SESSION token, nothing
+        // applied anywhere.
+        let resp = api_write_file(
+            State(state.clone()),
+            AxumPath("b.excalidraw".into()),
+            Json(WriteBody {
+                content: scene_body(json!([])),
+                expected_mtime: None,
+                expected_mtime_ns: Some((token0 + 1).to_string()),
+            }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::CONFLICT);
+        let v = body_json(resp).await;
+        assert_eq!(v["current_mtime_ns"], token0.to_string());
+
+        // A body that is not a scene against the live session: 400,
+        // session untouched, nothing fanned.
+        let resp = api_write_file(
+            State(state.clone()),
+            AxumPath("b.excalidraw".into()),
+            Json(WriteBody {
+                content: "{not a scene".into(),
+                expected_mtime: None,
+                expected_mtime_ns: Some(token0.to_string()),
+            }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        assert!(frames.try_recv().is_err(), "nothing fanned");
+
+        // Correct token: 200, the hand-edit fans live with a bumped
+        // version, the disk flushes, and the reply carries the
+        // post-flush session token.
+        let mut edited = elem("x", 5, 10, "a1");
+        edited
+            .as_object_mut()
+            .unwrap()
+            .insert("angle".into(), json!(30));
+        let resp = api_write_file(
+            State(state.clone()),
+            AxumPath("b.excalidraw".into()),
+            Json(WriteBody {
+                content: scene_body(json!([edited])),
+                expected_mtime: None,
+                expected_mtime_ns: Some(token0.to_string()),
+            }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let v = body_json(resp).await;
+        let token1 = session.token().expect("post-flush token");
+        assert_eq!(v["mtime_ns"], token1.to_string());
+        assert_ne!(token0, token1);
+        let fanned: Value = serde_json::from_str(&frames.try_recv().unwrap()).unwrap();
+        assert_eq!(fanned["type"], "update");
+        assert_eq!(
+            fanned["elements"][0]["version"], 6,
+            "replace bumps past the stored version"
+        );
+        let flush: Value = serde_json::from_str(&frames.try_recv().unwrap()).unwrap();
+        assert_eq!(flush["type"], "flush");
+        let on_disk: Value = serde_json::from_str(
+            &std::fs::read_to_string(root.path().join("b.excalidraw")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(on_disk["elements"][0]["angle"], 30);
+    }
+
+    #[tokio::test]
+    async fn put_on_a_removed_state_session_falls_through_to_classic() {
+        let (_cfg, root, state) = divert_app();
+        let workspace = state.try_workspace().unwrap();
+        workspace
+            .write_text("b.excalidraw", &scene_body(json!([elem("x", 1, 1, "a1")])))
+            .unwrap();
+        let mut handle = state
+            .scene_sessions
+            .attach(&workspace, "b.excalidraw", "win-1")
+            .await
+            .unwrap();
+        let mut frames = handle.take_frames();
+        let session = handle.session().clone();
+
+        std::fs::remove_file(root.path().join("b.excalidraw")).unwrap();
+        state
+            .scene_sessions
+            .reconcile_event(
+                &workspace,
+                WatchEvent {
+                    kind: WatchKind::Removed,
+                    path: Some("b.excalidraw".into()),
+                    to: None,
+                },
+            )
+            .await;
+        assert_eq!(session.token(), None, "removed state");
+        while frames.try_recv().is_ok() {}
+
+        // A PUT there is an explicit re-create intent: the classic
+        // disk path recreates the file (the reconciler then folds it
+        // back into the session).
+        let resp = api_write_file(
+            State(state.clone()),
+            AxumPath("b.excalidraw".into()),
+            Json(WriteBody {
+                content: scene_body(json!([elem("z", 1, 1, "a1")])),
+                expected_mtime: None,
+                expected_mtime_ns: None,
+            }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert!(
+            root.path().join("b.excalidraw").exists(),
+            "classic path recreated the file"
         );
     }
 }

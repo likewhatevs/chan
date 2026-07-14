@@ -30,6 +30,11 @@ mod preferences;
 mod preflight;
 mod report;
 mod reports_toggle;
+// pub(crate) so the server-side scene-session authority (registry,
+// flusher, reconciler) fans the exact ServerFrame shapes the
+// `/api/scene/ws` route serves; the frame enums in `scene` are the wire
+// contract's single source.
+pub(crate) mod scene;
 mod screensaver;
 mod search;
 mod session_handover;
@@ -89,6 +94,7 @@ pub use preferences::{
 pub use preflight::{api_preflight, api_preflight_decision};
 pub use report::{api_report_dir, api_report_file, api_report_prefix};
 pub use reports_toggle::{api_reports_disable, api_reports_enable, api_reports_state};
+pub use scene::api_scene_ws;
 pub use screensaver::{
     api_screensaver_clear_pin, api_screensaver_patch, api_screensaver_set_pin,
     api_screensaver_state, api_screensaver_verify,
