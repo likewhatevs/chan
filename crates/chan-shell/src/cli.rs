@@ -19,10 +19,8 @@ use crate::control::{absolutize, control_socket_env, open_env, send_control_requ
 use crate::submit::{submit_writes, SubmitAgent};
 use crate::wire::{
     ControlRequest, PaneOp, PastePrefer, SplitDir, SurveyFollowup, SurveySpec, TeamOp,
-    MAX_CLIPBOARD_BYTES,
+    GRAPH_LINK_PREFIX, MAX_CLIPBOARD_BYTES,
 };
-
-const GRAPH_LINK_PREFIX: &str = "chan://graph?";
 
 /// Top-level `cs` parser. The `chan` binary reaches `cs` through its own
 /// `Cli` (rewriting `cs ...` into `chan shell ...` in `parse_cli`), but

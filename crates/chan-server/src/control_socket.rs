@@ -3047,7 +3047,8 @@ fn open_graph(
 /// Category 1: open a graph tab from a serialized `chan://graph?...` link.
 /// The SPA owns the graph-link parser already, so the control socket forwards
 /// the exact link instead of duplicating query decoding server-side.
-fn open_graph_link(
+/// pub(crate): shared with `routes::open` like [`open_path`].
+pub(crate) fn open_graph_link(
     window_id: &str,
     link: &str,
     events_tx: &broadcast::Sender<String>,
@@ -3421,7 +3422,11 @@ fn term_list(registry: &TerminalRegistry, windows: &[WindowRecord]) -> Result<St
     serde_json::to_string(&payload).map_err(|e| format!("encode terminal list: {e}"))
 }
 
-fn open_path(
+// pub(crate): `routes::open` (POST /api/open, the command-launcher Open)
+// calls this directly so the HTTP path and `cs open` share ONE semantics
+// (dir -> browser, text/sniffed-text -> editor, missing -> create + open,
+// binary -> refusal) instead of a reimplementation.
+pub(crate) fn open_path(
     workspace: &Workspace,
     self_writes: &crate::self_writes::SelfWrites,
     window_id: &str,

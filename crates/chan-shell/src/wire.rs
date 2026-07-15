@@ -32,6 +32,13 @@ fn default_survey_timeout_secs() -> u64 {
 /// copy-handler cap, and the `POST /api/window/reply` body limit agree.
 pub const MAX_CLIPBOARD_BYTES: usize = 32 * 1024 * 1024;
 
+/// The serialized graph-link prefix (`chan://graph?...`) a `cs open` /
+/// `POST /api/open` target splits on: a matching target forwards to the
+/// window verbatim as a graph link (the SPA owns the parser), anything else
+/// resolves as a filesystem path. Shared here so the CLI and chan-server's
+/// open route can never disagree on the split.
+pub const GRAPH_LINK_PREFIX: &str = "chan://graph?";
+
 /// Largest control-socket request line the server will read, in bytes. It
 /// bounds the JSON envelope, so it must clear a `MAX_CLIPBOARD_BYTES` payload
 /// base64-encoded (~1.34x) plus the surrounding keys: 48 MiB leaves headroom.

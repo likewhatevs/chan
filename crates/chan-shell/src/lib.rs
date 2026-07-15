@@ -16,7 +16,7 @@
 mod wire;
 pub use wire::{
     ControlRequest, ControlResponse, Identity, PaneOp, PastePrefer, ServeKind, SplitDir,
-    SurveyFollowup, SurveyReply, SurveySpec, TeamOp, MAX_CLIPBOARD_BYTES,
+    SurveyFollowup, SurveyReply, SurveySpec, TeamOp, GRAPH_LINK_PREFIX, MAX_CLIPBOARD_BYTES,
     MAX_CONTROL_REQUEST_BYTES,
 };
 

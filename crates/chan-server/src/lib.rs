@@ -106,10 +106,10 @@ use routes::{
     api_get_workspace, api_graph, api_headings, api_health, api_index_rebuild, api_index_status,
     api_indexing_state, api_inspect_draft, api_inspector, api_language_graph, api_link_targets,
     api_links, api_list_files, api_list_sessions, api_list_windows, api_metadata_export,
-    api_metadata_import, api_move, api_patch_config, api_patch_server_config, api_patch_workspace,
-    api_post_attachment, api_post_contacts_import, api_preflight, api_preflight_decision,
-    api_promote_draft, api_put_session, api_read_file, api_report_dir, api_report_file,
-    api_report_prefix, api_reports_disable, api_reports_enable, api_reports_state,
+    api_metadata_import, api_move, api_open, api_patch_config, api_patch_server_config,
+    api_patch_workspace, api_post_attachment, api_post_contacts_import, api_preflight,
+    api_preflight_decision, api_promote_draft, api_put_session, api_read_file, api_report_dir,
+    api_report_file, api_report_prefix, api_reports_disable, api_reports_enable, api_reports_state,
     api_resolve_link, api_restart_terminal, api_scene_ws, api_screensaver_clear_pin,
     api_screensaver_patch, api_screensaver_set_pin, api_screensaver_state, api_screensaver_verify,
     api_search_content, api_search_files, api_session_handover_reply, api_set_terminal_broadcast,
@@ -1577,6 +1577,10 @@ fn router(state: Arc<AppState>) -> Router {
                 chan_shell::MAX_CONTROL_REQUEST_BYTES as usize,
             )),
         )
+        // Command-launcher Open: `cs open` semantics over HTTP (Contract C).
+        // Workspace tenants only (a standalone terminal has no workspace to
+        // open into); tunnel-reachable by design, see routes/open.rs.
+        .route("/api/open", post(api_open))
         // cs session handover reply: the leader accepts/rejects a parked
         // `cs session handover`, unblocking the requester's CLI.
         .route(
