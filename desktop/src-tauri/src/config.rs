@@ -597,7 +597,16 @@ fn entry_from_devserver(
         script: d.script.clone(),
         has_token: !d.token.is_empty(),
         status: if conns.is_connected(&d.id) {
-            DevserverStatus::Connected
+            // The connection record exists, but if this devserver's window/color
+            // feed sockets have gone down (the post-sleep half-open zombie, N
+            // consecutive feed reconnect failures) report Unreachable instead of
+            // a green Connected that the fresh-TCP workspace poll would otherwise
+            // keep lit over a dead feed.
+            if feed.is_unreachable(&d.id) {
+                DevserverStatus::Unreachable
+            } else {
+                DevserverStatus::Connected
+            }
         } else if connecting
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -1348,6 +1357,60 @@ mod tests {
         assert_eq!(reg.list()[0].status, DevserverStatus::Disconnected);
         awaiting.lock().unwrap().remove(&id);
         assert!(!reg.list()[0].pending_signin);
+    }
+
+    /// A live connection whose window/color feed sockets have gone down (the
+    /// post-sleep half-open zombie) reports Unreachable, not a green Connected
+    /// the fresh-TCP poll would otherwise keep lit. Gated on a live conn: with no
+    /// conn, a lingering flag still reads Disconnected.
+    #[test]
+    fn registry_status_unreachable_when_feed_down_but_conn_lives() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(Mutex::new(ConfigStore {
+            path: dir.path().join("config.json"),
+        }));
+        let conns = Arc::new(crate::devserver::DevserverConns::default());
+        let feed = Arc::new(crate::DevserverFeed::default());
+        let reg = DevserverConfigRegistry::new(
+            Arc::clone(&store),
+            Arc::new(OnceLock::new()),
+            Arc::clone(&conns),
+            empty_connecting(),
+            empty_awaiting(),
+            Arc::clone(&feed),
+        );
+        let id = reg
+            .add(DevserverInput {
+                host: "127.0.0.1".into(),
+                port: 8787,
+                ..Default::default()
+            })
+            .expect("add")
+            .id;
+        conns.set(
+            id.clone(),
+            crate::devserver::DevserverConn {
+                host: "127.0.0.1".into(),
+                port: 8787,
+                token: "tok".into(),
+                name: "box".into(),
+                gateway: None,
+            },
+        );
+        // A live conn with a healthy feed reads Connected.
+        assert_eq!(reg.list()[0].status, DevserverStatus::Connected);
+        // The feed watchdog marks the sockets unreachable while the conn record
+        // survives -> Unreachable.
+        assert!(feed.set_unreachable(&id, true));
+        assert_eq!(reg.list()[0].status, DevserverStatus::Unreachable);
+        // Recovery clears it -> back to Connected.
+        assert!(feed.set_unreachable(&id, false));
+        assert_eq!(reg.list()[0].status, DevserverStatus::Connected);
+        // Unreachable is a sub-state of a live conn: drop the conn and even a
+        // lingering flag reads Disconnected, not Unreachable.
+        feed.set_unreachable(&id, true);
+        conns.remove(&id);
+        assert_eq!(reg.list()[0].status, DevserverStatus::Disconnected);
     }
 
     /// `update` with a blank/absent token keeps the stored one; a non-blank

@@ -597,6 +597,13 @@ pub struct DevserverFeed {
     /// caches stay intact underneath; the rows return the moment the flag
     /// clears (poll recovery or a fresh connect).
     down: Mutex<std::collections::HashSet<String>>,
+    /// Devserver ids whose window/color FEED sockets are down (N consecutive
+    /// feed reconnect failures) while the connection record still exists -- the
+    /// post-sleep half-open zombie. Kept SEPARATE from `down` (the workspace
+    /// poll's fresh-TCP set): the poll heals on a fresh dial every 5s and would
+    /// fight a watchdog-driven bit, so the feed watchdog owns this flag and
+    /// `entry_from_devserver` maps it to `DevserverStatus::Unreachable`.
+    unreachable: Mutex<std::collections::HashSet<String>>,
 }
 
 impl DevserverFeed {
@@ -644,6 +651,7 @@ impl DevserverFeed {
         self.workspaces.lock().unwrap().remove(id);
         self.colors.lock().unwrap().remove(id);
         self.down.lock().unwrap().remove(id);
+        self.unreachable.lock().unwrap().remove(id);
         if let Some(library_id) = self.library_ids.lock().unwrap().get(id).cloned() {
             let prefix = format!("{library_id}::");
             self.buried
@@ -711,6 +719,24 @@ impl DevserverFeed {
         } else {
             set.remove(id)
         }
+    }
+
+    /// Flip a devserver's UNREACHABLE state (its window/color feed sockets are
+    /// down while the connection record still exists). Returns whether it
+    /// changed, so the caller fires the attention/library signals only on a real
+    /// flip. Read by `entry_from_devserver` to render `DevserverStatus::Unreachable`.
+    fn set_unreachable(&self, id: &str, unreachable: bool) -> bool {
+        let mut set = self.unreachable.lock().unwrap();
+        if unreachable {
+            set.insert(id.to_string())
+        } else {
+            set.remove(id)
+        }
+    }
+
+    /// Whether this devserver's feed sockets are currently marked unreachable.
+    fn is_unreachable(&self, id: &str) -> bool {
+        self.unreachable.lock().unwrap().contains(id)
     }
 
     /// Mark a devserver window LOCALLY buried (or un-buried) so `windows()`
@@ -2225,8 +2251,12 @@ async fn connect_gateway_devserver(
         }
     }
 
-    let (cancel, snapshot, view) =
-        window_watcher_wiring::spawn_devserver_window_watcher(app.clone(), conn.clone()).await?;
+    let (cancel, snapshot, view) = window_watcher_wiring::spawn_devserver_window_watcher(
+        id.clone(),
+        app.clone(),
+        conn.clone(),
+    )
+    .await?;
     state.devserver_feed.set_down(&id, false);
     state.devserver_feed.register_windows(id.clone(), snapshot);
     let library_id = state.devserver_feed.library_id_of(&id);
@@ -2519,8 +2549,12 @@ async fn connect_devserver_impl_inner(
     // spawn it over the library feed (`/api/library/windows/watch`), and its
     // snapshots reconcile open whatever the devserver persisted. An EMPTY feed is
     // valid (a fresh devserver, or one the user emptied before disconnecting).
-    let (cancel, snapshot, view) =
-        window_watcher_wiring::spawn_devserver_window_watcher(app.clone(), conn.clone()).await?;
+    let (cancel, snapshot, view) = window_watcher_wiring::spawn_devserver_window_watcher(
+        id.clone(),
+        app.clone(),
+        conn.clone(),
+    )
+    .await?;
     if let Some((ct, generation)) = &control {
         ensure_control_run_live(&state, &id, *generation, &ct.prefix)?;
     }
@@ -2753,6 +2787,7 @@ async fn reconnect_devserver(
                 }
                 let (cancel, snapshot, view) =
                     window_watcher_wiring::spawn_devserver_window_watcher(
+                        id.clone(),
                         app.clone(),
                         probe.clone(),
                     )

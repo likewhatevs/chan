@@ -19,7 +19,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use chan_server::{WindowRecord, WindowSet};
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::{watch, Notify};
 
 use crate::devserver::DevserverConn;
@@ -443,31 +443,77 @@ async fn connect_gateway_ws(conn: &DevserverConn, path: &str) -> Result<GatewayW
     }
 }
 
+/// Keepalive cadence for a devserver feed socket: send a WS Ping after this long
+/// with no inbound frame. Well under the gateway proxy's 300s bridge idle cut, so
+/// the Ping/Pong both keeps the tunnel warm and probes liveness.
+const FEED_PING_INTERVAL: Duration = Duration::from_secs(30);
+/// Consecutive ping intervals with NO inbound frame (not even a pong) before a
+/// feed socket is declared a half-open zombie and the stream errors out.
+const FEED_MAX_MISSED: u32 = 2;
+/// Consecutive feed rounds that never received a frame (connect kept failing, or
+/// the socket died before any data) before the devserver is marked Unreachable.
+/// A round that gets a frame resets the count, so a transient drop that
+/// reconnects never flips it -- only a persistent outage does.
+const FEED_UNREACHABLE_AFTER: u32 = 2;
+
 /// Stream a devserver's window-set feed into `snapshot` + wake `change` on every
 /// push, reconnecting on a dropped socket until `cancel` fires. The server
 /// pushes a full snapshot on connect, so a drop self-heals on the next reconcile.
+///
+/// Feeds go half-open silently after a laptop sleep (the gateway proxy tears the
+/// bridge down at its idle cut while the machine is frozen, and no FIN reaches
+/// us), so a bare `next()` would pend forever and the launcher would show a
+/// stale-but-green devserver. `stream_window_feed` keepalive-pings and errors out
+/// on a dead socket; this loop counts consecutive rounds that never saw a frame
+/// and, past `FEED_UNREACHABLE_AFTER`, marks the devserver `Unreachable` so the
+/// launcher dot is honest. The flag clears on the next frame (recovery).
 async fn run_devserver_window_feed(
+    id: String,
+    app: AppHandle,
     conn: DevserverConn,
     snapshot: Arc<Mutex<Vec<WindowRecord>>>,
     change: Arc<Notify>,
     state: Arc<AppState>,
     mut cancel: watch::Receiver<DevserverWatcherStop>,
 ) {
+    use std::sync::atomic::{AtomicBool, Ordering};
     const RECONNECT_BACKOFF: Duration = Duration::from_secs(2);
     // One WARN per outage window, DEBUG in between: an offline devserver is a
     // routine long-lived state, and this loop retries every 2s for the app's
     // lifetime -- unthrottled WARNs would flood stderr while saying nothing new.
     const WARN_EVERY: Duration = Duration::from_secs(5 * 60);
     let mut last_warn: Option<std::time::Instant> = None;
+    let mut consecutive_failures: u32 = 0;
     loop {
         // A `watch` (not a `Notify`) so the cancel PERSISTS: a disconnect that
         // flips it while we are between selects is still seen here, not missed.
         if (*cancel.borrow_and_update()).is_stopped() {
             return;
         }
+        let saw_frame = AtomicBool::new(false);
         tokio::select! {
             _ = cancel.changed() => return,
-            result = stream_window_feed(&conn, &snapshot, &change, &state) => {
+            result = stream_window_feed(&id, &app, &conn, &snapshot, &change, &state, &saw_frame) => {
+                if saw_frame.load(Ordering::Relaxed) {
+                    // The feed delivered at least one frame this round: healthy.
+                    consecutive_failures = 0;
+                } else {
+                    consecutive_failures = consecutive_failures.saturating_add(1);
+                    // Persistent feed failure while the connection record still
+                    // exists: a green dot would lie (the 5s workspace poll heals
+                    // on fresh TCP). Mark Unreachable + raise attention on the
+                    // real flip; entry_from_devserver renders the red dot off the
+                    // flag, and it clears on the next frame inside the stream.
+                    if consecutive_failures >= FEED_UNREACHABLE_AFTER
+                        && state.devservers.is_connected(&id)
+                        && state.devserver_feed.set_unreachable(&id, true)
+                    {
+                        let _ = app.emit(crate::DEVSERVER_CONTROL_ATTENTION_EVENT, id.clone());
+                        if let Some(embedded) = state.embedded() {
+                            embedded.signal_library_change();
+                        }
+                    }
+                }
                 if let Err(e) = result {
                     // WARN (rate-limited), not debug: a dead feed means no
                     // devserver window ever materializes and the launcher
@@ -503,13 +549,23 @@ async fn run_devserver_window_feed(
 /// One connection's lifetime: open the `/watch` WS, then push every `WindowSet`
 /// text frame into `snapshot` + wake `change`. Raw tunnel devservers auth with a
 /// bearer header; gateway devservers auth with the devserver-gate cookie.
+///
+/// A keepalive Ping every [`FEED_PING_INTERVAL`] with a read-deadline of
+/// [`FEED_MAX_MISSED`] intervals turns a half-open socket into an error instead
+/// of a forever-pending `next()`. `saw_frame` is set on the first inbound frame
+/// so the caller can tell a healthy round from a never-connected one; the first
+/// frame also clears any `Unreachable` state (recovery) and announces it.
 async fn stream_window_feed(
+    id: &str,
+    app: &AppHandle,
     conn: &DevserverConn,
     snapshot: &Arc<Mutex<Vec<WindowRecord>>>,
     change: &Arc<Notify>,
     state: &Arc<AppState>,
+    saw_frame: &std::sync::atomic::AtomicBool,
 ) -> Result<(), String> {
-    use futures::StreamExt;
+    use futures::{SinkExt, StreamExt};
+    use std::sync::atomic::Ordering;
     use tokio_tungstenite::tungstenite::client::IntoClientRequest;
     use tokio_tungstenite::tungstenite::Message;
     let mut ws = if conn.gateway.is_some() {
@@ -530,38 +586,76 @@ async fn stream_window_feed(
             .map(|(ws, _)| ws)
             .map_err(|e| format!("connect /watch: {e}"))?
     };
-    while let Some(message) = ws.next().await {
-        if let Message::Text(text) = message.map_err(|e| format!("watch stream: {e}"))? {
-            if let Ok(set) = serde_json::from_str::<WindowSet>(&text) {
-                // Rows keep their devserver-local tokens: `should_show` reads
-                // token emptiness as the tenant on/off signal, and gateway
-                // navigation credentials are minted at open/retarget time
-                // (`devserver::window_navigation_url`), never stamped into
-                // the feed.
-                let windows = set.windows;
-                // Refresh this library's active-transfer cache so the desktop
-                // close guard can see a remote window's in-flight transfer (the
-                // desktop sees no remote `/ws`; the feed bit is its only signal).
-                // The library_id is constant per devserver; an empty snapshot
-                // carries none, but then there are no windows to guard either.
-                if let Some(library_id) = windows.first().map(|r| r.library_id.clone()) {
-                    let active: Vec<String> = windows
-                        .iter()
-                        .filter(|r| r.active_transfer)
-                        .map(native_label)
-                        .collect();
-                    state.refresh_devserver_active_transfers(&library_id, &active);
+    let mut missed_pongs = 0u32;
+    loop {
+        let text = match tokio::time::timeout(FEED_PING_INTERVAL, ws.next()).await {
+            Ok(Some(message)) => {
+                missed_pongs = 0;
+                match message.map_err(|e| format!("watch stream: {e}"))? {
+                    Message::Text(text) => text,
+                    Message::Close(_) => break,
+                    // Pong (our keepalive answered), Ping (axum auto-pongs the
+                    // peer's), Binary, Frame: not data, but arriving already reset
+                    // `missed_pongs` -- proof the socket is alive.
+                    _ => continue,
                 }
-                *snapshot.lock().unwrap() = windows;
-                // Re-push the launcher feed: a devserver window change
-                // shifts the merged launcher window set, so signal the embedded
-                // host to re-assemble + re-push. The devserver only pushes on a
-                // real change, so this is already change-gated.
-                if let Some(embedded) = state.embedded() {
-                    embedded.signal_library_change();
-                }
-                change.notify_one();
             }
+            Ok(None) => break,
+            Err(_) => {
+                // No inbound for a whole interval: send a keepalive Ping. The
+                // gateway bridge forwards Ping/Pong and axum auto-pongs, so a live
+                // feed answers within the next interval; FEED_MAX_MISSED intervals
+                // with nothing inbound is a half-open zombie.
+                missed_pongs += 1;
+                if missed_pongs > FEED_MAX_MISSED {
+                    return Err("window feed idle: no frame or pong within deadline".to_string());
+                }
+                ws.send(Message::Ping(Vec::new().into()))
+                    .await
+                    .map_err(|e| format!("window feed ping: {e}"))?;
+                continue;
+            }
+        };
+        // Any inbound data frame means the feed is live. Mark it, and on the FIRST
+        // such frame clear any Unreachable state so the launcher's red dot clears
+        // the instant the feed reconnects, not at the next drop.
+        if !saw_frame.swap(true, Ordering::Relaxed)
+            && state.devserver_feed.set_unreachable(id, false)
+        {
+            let _ = app.emit(crate::DEVSERVER_CONTROL_RESTORED_EVENT, id.to_string());
+            if let Some(embedded) = state.embedded() {
+                embedded.signal_library_change();
+            }
+        }
+        if let Ok(set) = serde_json::from_str::<WindowSet>(&text) {
+            // Rows keep their devserver-local tokens: `should_show` reads
+            // token emptiness as the tenant on/off signal, and gateway
+            // navigation credentials are minted at open/retarget time
+            // (`devserver::window_navigation_url`), never stamped into
+            // the feed.
+            let windows = set.windows;
+            // Refresh this library's active-transfer cache so the desktop
+            // close guard can see a remote window's in-flight transfer (the
+            // desktop sees no remote `/ws`; the feed bit is its only signal).
+            // The library_id is constant per devserver; an empty snapshot
+            // carries none, but then there are no windows to guard either.
+            if let Some(library_id) = windows.first().map(|r| r.library_id.clone()) {
+                let active: Vec<String> = windows
+                    .iter()
+                    .filter(|r| r.active_transfer)
+                    .map(native_label)
+                    .collect();
+                state.refresh_devserver_active_transfers(&library_id, &active);
+            }
+            *snapshot.lock().unwrap() = windows;
+            // Re-push the launcher feed: a devserver window change
+            // shifts the merged launcher window set, so signal the embedded
+            // host to re-assemble + re-push. The devserver only pushes on a
+            // real change, so this is already change-gated.
+            if let Some(embedded) = state.embedded() {
+                embedded.signal_library_change();
+            }
+            change.notify_one();
         }
     }
     Ok(())
@@ -624,7 +718,7 @@ async fn stream_color_feed(
     id: &str,
     conn: &DevserverConn,
 ) -> Result<(), String> {
-    use futures::StreamExt;
+    use futures::{SinkExt, StreamExt};
     use tokio_tungstenite::tungstenite::client::IntoClientRequest;
     use tokio_tungstenite::tungstenite::Message;
     let mut ws = if conn.gateway.is_some() {
@@ -648,13 +742,37 @@ async fn stream_color_feed(
             .map(|(ws, _)| ws)
             .map_err(|e| format!("connect colour watch: {e}"))?
     };
-    while let Some(message) = ws.next().await {
-        if let Message::Text(text) = message.map_err(|e| format!("colour watch stream: {e}"))? {
-            if let Ok(frame) = serde_json::from_str::<LocalColorFrame>(&text) {
-                if state.devserver_feed.set_color(id.to_string(), frame.color) {
-                    if let Some(embedded) = state.embedded() {
-                        embedded.signal_library_change();
-                    }
+    // Same keepalive Ping + read-deadline as the window feed so a half-open
+    // colour socket self-heals instead of pending forever. The colour feed does
+    // NOT drive the Unreachable flag (the window feed owns it -- one writer);
+    // this loop just reconnects.
+    let mut missed_pongs = 0u32;
+    loop {
+        let text = match tokio::time::timeout(FEED_PING_INTERVAL, ws.next()).await {
+            Ok(Some(message)) => {
+                missed_pongs = 0;
+                match message.map_err(|e| format!("colour watch stream: {e}"))? {
+                    Message::Text(text) => text,
+                    Message::Close(_) => break,
+                    _ => continue,
+                }
+            }
+            Ok(None) => break,
+            Err(_) => {
+                missed_pongs += 1;
+                if missed_pongs > FEED_MAX_MISSED {
+                    return Err("colour feed idle: no frame or pong within deadline".to_string());
+                }
+                ws.send(Message::Ping(Vec::new().into()))
+                    .await
+                    .map_err(|e| format!("colour feed ping: {e}"))?;
+                continue;
+            }
+        };
+        if let Ok(frame) = serde_json::from_str::<LocalColorFrame>(&text) {
+            if state.devserver_feed.set_color(id.to_string(), frame.color) {
+                if let Some(embedded) = state.embedded() {
+                    embedded.signal_library_change();
                 }
             }
         }
@@ -674,6 +792,7 @@ async fn stream_color_feed(
 /// initial seed is best-effort -- an empty or failed fetch is fine; the `/watch`
 /// WS pushes the authoritative snapshot on connect.
 pub(crate) async fn spawn_devserver_window_watcher(
+    id: String,
     app: AppHandle,
     conn: DevserverConn,
 ) -> Result<
@@ -699,6 +818,8 @@ pub(crate) async fn spawn_devserver_window_watcher(
     // The WS feed task owns a `conn` clone, pushes changes into `snapshot` +
     // wakes `change`, and stops when `cancel` flips true.
     tauri::async_runtime::spawn(run_devserver_window_feed(
+        id,
+        app.clone(),
         conn.clone(),
         Arc::clone(&snapshot),
         Arc::clone(&change),

@@ -41,6 +41,12 @@ pub enum DevserverStatus {
     /// The desktop holds a live connection. The launcher shows Disconnect and
     /// gates Edit read-only.
     Connected,
+    /// The connection record still exists, but this devserver's window/color
+    /// feed sockets are down (N consecutive reconnect failures) -- the half-open
+    /// zombie a laptop sleep leaves behind, where the 5s workspace poll's fresh
+    /// dials still succeed so `Connected` would lie. The launcher maps this to
+    /// the connection-lost (red) dot; the desktop clears it on feed recovery.
+    Unreachable,
 }
 
 /// One configured devserver, as the launcher lists it. The token is WRITE-ONLY:
@@ -167,4 +173,31 @@ pub trait DevserverRegistry: Send + Sync {
     fn update(&self, id: &str, input: DevserverInput) -> Result<Option<DevserverEntry>, String>;
     /// Remove a devserver; `Ok(false)` when no devserver has `id`.
     fn remove(&self, id: &str) -> Result<bool, String>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn status_serde_lowercase_with_unreachable_and_default() {
+        // Contract E: the new variant rides the lowercase wire `"unreachable"`,
+        // round-tripping both ways.
+        assert_eq!(
+            serde_json::to_string(&DevserverStatus::Unreachable).unwrap(),
+            "\"unreachable\""
+        );
+        assert_eq!(
+            serde_json::from_str::<DevserverStatus>("\"unreachable\"").unwrap(),
+            DevserverStatus::Unreachable
+        );
+        // The default stays Disconnected, so a devserver row without a `status`
+        // field (an older desktop's config) deserializes as disconnected.
+        assert_eq!(DevserverStatus::default(), DevserverStatus::Disconnected);
+        // The pre-existing variants keep their wire spelling unchanged.
+        assert_eq!(
+            serde_json::to_string(&DevserverStatus::Connected).unwrap(),
+            "\"connected\""
+        );
+    }
 }
