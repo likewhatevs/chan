@@ -106,6 +106,18 @@ function machineNode(
   return { kind, devserver, libraryId, control, terminals, workspaces, looseWindows };
 }
 
+/** Total windows a machine owns, summed across its disjoint buckets (control +
+ * standalone terminals + per-workspace cards + loose). Orphans belong to no
+ * machine and are excluded. Drives the machine card's collapse count badge. */
+export function machineWindowCount(node: MachineNode): number {
+  return (
+    node.control.length +
+    node.terminals.length +
+    node.workspaces.reduce((sum, w) => sum + w.count, 0) +
+    node.looseWindows.length
+  );
+}
+
 /** Build the machine-first tree: LOCAL first, then each devserver sorted by name.
  * Each machine owns its windows (control / terminals / per-workspace) and its
  * workspace cards; windows of an unknown library land in `orphans`. */

@@ -47,7 +47,13 @@
   import { hasControlAttention } from "../state/controlAttention.svelte";
   import { openEditDevserver, openNewDialog } from "../state/dialog.svelte";
   import { basename } from "../lib/windowLabel";
-  import { buildMachineTree, type MachineNode, type WorkspaceNode } from "../lib/machineTree";
+  import {
+    buildMachineTree,
+    machineWindowCount,
+    type MachineNode,
+    type WorkspaceNode,
+  } from "../lib/machineTree";
+  import { isMachineCollapsed, toggleMachineCollapsed } from "../state/machineCollapse.svelte";
   import { readOnly, hasDesktopBridge, selfManagedWindows, hostOs } from "../state/capabilities";
   import { canActOnTenant, ownsTenantLeader, tenantLeader } from "../state/leadership.svelte";
   import { mintWindow } from "../state/windowManager.svelte";
@@ -66,6 +72,15 @@
   }
   function endpoint(ds: DevserverEntry): string {
     return ds.url || `${ds.host}:${ds.port}`;
+  }
+
+  // The persisted collapse key for a machine card: "local" for the local card,
+  // the devserver's stable id per devserver (matching the machine-tree card key).
+  function machineKey(node: MachineNode): string {
+    return node.kind === "local" ? "local" : node.devserver!.id;
+  }
+  function machineName(node: MachineNode): string {
+    return node.kind === "local" ? "This machine" : devserverName(node.devserver!);
   }
 
   // Per-workspace card expand state, keyed by the stable workspace_id so it
@@ -409,7 +424,30 @@
   </span>
 {/snippet}
 
+<!-- The machine-card collapse toggle: a window-count badge (reusing the
+     workspace-card .count-badge style) that shows how many windows the machine
+     owns and collapses/expands the whole below-header block. Rendered on every
+     surface (including read-only) as the FIRST machine action; the count may be
+     zero. Its aria-label is prefix-safe against the read-only mutation-control
+     assertions. -->
+{#snippet windowCountToggle(node: MachineNode)}
+  {@const key = machineKey(node)}
+  {@const count = machineWindowCount(node)}
+  {@const collapsed = isMachineCollapsed(key)}
+  <button
+    class="count-badge machine-toggle"
+    type="button"
+    title={`${count} window${count === 1 ? "" : "s"}`}
+    aria-label={`${collapsed ? "Expand" : "Collapse"} windows of ${machineName(node)}`}
+    aria-expanded={!collapsed}
+    onclick={() => toggleMachineCollapsed(key)}>
+    <AppWindow size={12} />
+    {count}
+  </button>
+{/snippet}
+
 {#each tree.machines as node (node.kind === "local" ? "local" : node.devserver!.id)}
+  {@const collapsed = isMachineCollapsed(machineKey(node))}
   <section class="machine">
     {#if node.kind === "local"}
       <div class="machine-header">
@@ -423,6 +461,7 @@
         <span class="machine-name">This machine</span>
         <span class="status-dot live" title="This machine"></span>
         <div class="machine-actions">
+          {@render windowCountToggle(node)}
           {#if !readOnly}
             <button
               class="icon-btn"
@@ -443,7 +482,9 @@
           {/if}
         </div>
       </div>
-      {@render machineContent(node)}
+      {#if !collapsed}
+        {@render machineContent(node)}
+      {/if}
     {:else if node.devserver}
       {@const ds = node.devserver}
       <div class="machine-header">
@@ -468,6 +509,7 @@
           </button>
         {/if}
         <div class="machine-actions">
+          {@render windowCountToggle(node)}
           {#if hasDesktopBridge && connected(ds)}
             <button
               class="icon-btn"
@@ -530,20 +572,22 @@
           {/if}
         </div>
       </div>
-      {#if hasContent(node)}
-        {@render machineContent(node)}
-      {:else if ds.pending_signin}
-        <!-- The connect handed off to a browser sign-in: narrate the wait.
-             The row stays Disconnected (no status dot); the desktop clears
-             the state on the deep-link callback, its timeout, or teardown. -->
-        <p class="connect-prompt waiting">
-          <LoaderCircle class="spin" size={14} aria-hidden="true" />
-          Waiting for sign-in in your browser...
-        </p>
-      {:else if dsSpinning(ds)}
-        <p class="connect-prompt">Connecting…</p>
-      {:else}
-        <p class="connect-prompt">Not connected.</p>
+      {#if !collapsed}
+        {#if hasContent(node)}
+          {@render machineContent(node)}
+        {:else if ds.pending_signin}
+          <!-- The connect handed off to a browser sign-in: narrate the wait.
+               The row stays Disconnected (no status dot); the desktop clears
+               the state on the deep-link callback, its timeout, or teardown. -->
+          <p class="connect-prompt waiting">
+            <LoaderCircle class="spin" size={14} aria-hidden="true" />
+            Waiting for sign-in in your browser...
+          </p>
+        {:else if dsSpinning(ds)}
+          <p class="connect-prompt">Connecting…</p>
+        {:else}
+          <p class="connect-prompt">Not connected.</p>
+        {/if}
       {/if}
     {/if}
   </section>

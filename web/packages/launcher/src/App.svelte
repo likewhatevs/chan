@@ -22,6 +22,7 @@
   } from "./state/controlAttention.svelte";
   import { onTauriEvent, restartDesktopAfterUpdate } from "./api/desktop";
   import { applyTheme, reconcileLocalTheme } from "./state/theme.svelte";
+  import { reconcileCollapsedMachines } from "./state/machineCollapse.svelte";
   import { readOnly } from "./state/capabilities";
 
   let updateReadyVersion: string | null = $state(null);
@@ -55,6 +56,10 @@
     // desktop-config value, so a cleared WebView store or a second writer can
     // never leave the launcher and the local terminals on different themes.
     void reconcileLocalTheme();
+    // Same reconcile for the per-machine collapse set: localStorage is a
+    // first-paint cache, the desktop config is authoritative (a desktop restart
+    // gets a fresh loopback origin, so localStorage alone cannot survive it).
+    void reconcileCollapsedMachines();
     loadLibrary();
     // A connected devserver stopped answering while its control terminal is
     // still alive: flash that row for attention until the desktop reports the

@@ -4,7 +4,7 @@
 // orphan fallbacks, LOCAL-first machine ordering).
 
 import { describe, it, expect } from "vitest";
-import { sortWindows, dedupeWindows, buildMachineTree } from "./machineTree";
+import { sortWindows, dedupeWindows, buildMachineTree, machineWindowCount } from "./machineTree";
 import type { DevserverEntry, WindowRecord, WorkspaceEntry } from "../api/library";
 
 function win(
@@ -206,5 +206,54 @@ describe("buildMachineTree", () => {
     ]);
     const alpha = tree.machines.find((m) => m.devserver?.id === "ds-a")!;
     expect(alpha.terminals.map((w) => w.window_id)).toEqual(["a-term"]);
+  });
+});
+
+describe("machineWindowCount", () => {
+  it("is zero for a machine with no windows", () => {
+    const tree = buildMachineTree([], [], []);
+    expect(machineWindowCount(tree.machines[0]!)).toBe(0);
+  });
+
+  it("sums control + terminals + per-workspace + loose across the disjoint buckets", () => {
+    const windows = [
+      win({ window_id: "c", library_id: "local", control: true, ordinal: 0 }),
+      win({ window_id: "t", library_id: "local", kind: "terminal", ordinal: 1 }),
+      win({
+        window_id: "w1",
+        library_id: "local",
+        kind: "workspace",
+        workspace_path: "/p/notes",
+        ordinal: 1,
+      }),
+      win({
+        window_id: "w2",
+        library_id: "local",
+        kind: "workspace",
+        workspace_path: "/p/notes",
+        ordinal: 2,
+      }),
+      win({
+        window_id: "loose",
+        library_id: "local",
+        kind: "workspace",
+        workspace_path: "/p/gone",
+        ordinal: 3,
+      }),
+    ];
+    const workspaces = [ws({ workspace_id: "ws-notes", path: "/p/notes" })];
+    const local = buildMachineTree([], workspaces, windows).machines[0]!;
+    // 1 control + 1 terminal + 2 in the notes card + 1 loose.
+    expect(machineWindowCount(local)).toBe(5);
+  });
+
+  it("excludes orphan windows (they belong to no machine)", () => {
+    const windows = [
+      win({ window_id: "orphan", library_id: "lib-unsynced", control: true, ordinal: 0 }),
+    ];
+    const devservers = [ds({ id: "ds-1", label: "fresh", library_id: null })];
+    const tree = buildMachineTree(devservers, [], windows);
+    expect(tree.orphans.map((w) => w.window_id)).toEqual(["orphan"]);
+    for (const m of tree.machines) expect(machineWindowCount(m)).toBe(0);
   });
 });

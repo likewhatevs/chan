@@ -8,9 +8,10 @@
 // surface is covered in Library.test.ts.
 
 import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
-import { mount, unmount } from "svelte";
+import { mount, unmount, flushSync } from "svelte";
 import Library from "./Library.svelte";
 import { loadLibrary, stopWatching } from "../state/library.svelte";
+import { collapsedState } from "../state/machineCollapse.svelte";
 
 // Force the read-only surface for the whole file (hoisted before the imports):
 // no registry mutation, no desktop bridge, not self-managed.
@@ -85,5 +86,35 @@ describe("Library read-only parity", () => {
     expect(target!.querySelector(".dot")).not.toBeNull();
     expect(target!.querySelector('[aria-label="Focus window"]')).toBeNull();
     expect(target!.querySelector('[aria-label="Hide window"]')).toBeNull();
+  });
+
+  it("keeps the machine-collapse toggle: it is not a mutation control", () => {
+    // The collapse toggle renders OUTSIDE the readOnly mutation guard, so a
+    // gateway viewer can still fold a machine's windows. Its prefix-safe
+    // aria-label must not read as a mutation control.
+    collapsedState.keys = [];
+    const fetchMock = vi.fn(async () => new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      mountList();
+      // Scope to the local section: other machine cards keep their own content.
+      const localSection = (): HTMLElement =>
+        [...target!.querySelectorAll("section.machine")].find((m) =>
+          m.textContent?.includes("This machine"),
+        ) as HTMLElement;
+      const toggle = localSection().querySelector(
+        ".machine-actions .count-badge",
+      ) as HTMLButtonElement;
+      expect(toggle).not.toBeNull();
+      expect(toggle.getAttribute("aria-label")).toBe("Collapse windows of This machine");
+      expect(localSection().querySelector(".machine-content")).not.toBeNull();
+      toggle.click();
+      flushSync();
+      // Folded to the header row; the local content is gone.
+      expect(localSection().querySelector(".machine-content")).toBeNull();
+    } finally {
+      vi.unstubAllGlobals();
+      collapsedState.keys = [];
+    }
   });
 });
