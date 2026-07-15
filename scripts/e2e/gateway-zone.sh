@@ -25,8 +25,15 @@
 #   - internet DNS for localtest.me (or a resolver override).
 #
 # Usage:
-#   scripts/e2e/gateway-zone.sh            # run everything
+#   scripts/e2e/gateway-zone.sh            # everything: core suite + all scenarios
+#   scripts/e2e/gateway-zone.sh core       # the core suite only
+#   scripts/e2e/gateway-zone.sh <scenario> # stack bring-up + that scenario only
 #   E2E_KEEP=1 scripts/e2e/gateway-zone.sh # leave the stack running
+#
+# Scenarios: self-contained assert groups that run against the
+# brought-up stack after the core region. Register one by defining
+# scenario_<name>() at the SCENARIO FUNCTIONS marker near the bottom
+# and appending <name> to $SCENARIOS below.
 #
 # Output: plain-text assertion log at $WORK/assertions.log (echoed),
 # service logs under $WORK/logs/. Exit 0 iff every assertion passed.
@@ -64,6 +71,14 @@ TOK_ADMIN="e2e-admin-bearer"
 # The tunnel-server cap under test: two devservers register, a third
 # is refused.
 MAX_DEVSERVERS=2
+
+# Scenario dispatch: "all" (default) = core suite + every registered
+# scenario; "core" = the inline suite only; a registered name = stack
+# bring-up + that scenario only. Lanes append their scenario name here.
+SCENARIOS=""
+SCENARIO="${1:-all}"
+RUN_CORE=1
+case "$SCENARIO" in all | core) ;; *) RUN_CORE=0 ;; esac
 
 ASSERT_LOG="$WORK/assertions.log"
 FAILURES=0
@@ -484,6 +499,11 @@ check_entry_routes() { # check_entry_routes <name> <pat> <dsid>
         assert_fail "entry($name): expected the devserver root, got $code: $(head -c 120 "$WORK/root-$name.html")"
     fi
 }
+
+# The core suite (sections A-I). Skipped when a single scenario is
+# requested; the bring-up and its asserts above always run.
+if [ "$RUN_CORE" = 1 ]; then
+
 check_entry_routes a "$PAT_A" "$DS_A"
 check_entry_routes b "$PAT_B" "$DS_B"
 
@@ -671,6 +691,32 @@ if [ -x "$CHROME_BIN" ]; then
 else
     assert_fail "consent: headless Chrome not found (set E2E_CHROME_BIN)"
 fi
+
+fi # RUN_CORE
+
+# ---------------------------------------------------------------
+# SCENARIO FUNCTIONS: lanes append scenario_<name>() definitions
+# below this marker (and register the name in $SCENARIOS at the top).
+# Each function asserts via assert_pass/assert_fail against the
+# running stack and must leave the stack usable (clean up what it
+# stops/starts).
+# ---------------------------------------------------------------
+
+run_scenarios() { # run_scenarios <all|name>
+    local which="$1" ran=0 s
+    for s in $SCENARIOS; do
+        if [ "$which" = all ] || [ "$which" = "$s" ]; then
+            log ""
+            log "==== scenario: $s ===="
+            "scenario_$s"
+            ran=1
+        fi
+    done
+    if [ "$which" != all ] && [ "$ran" = 0 ]; then
+        assert_fail "unknown scenario '$which' (registered: ${SCENARIOS:-none})"
+    fi
+}
+[ "$SCENARIO" != core ] && run_scenarios "$SCENARIO"
 
 log ""
 log "==== assertion summary ($ASSERT_LOG) ===="
