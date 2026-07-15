@@ -137,7 +137,8 @@ pub async fn ws_upgrade(
 
 /// Client -> server frame. `sub`/`unsub` add/drop this socket's directory
 /// scope (`dir: ""` is the workspace root); `transfers` reports this window's
-/// in-flight upload/download count for the desktop close guard. Unknown frame
+/// in-flight upload/download count for the desktop close guard; `ping` is the
+/// client heartbeat answered with a `pong` on the same socket. Unknown frame
 /// types are ignored (the client may send other shapes we don't model here).
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
@@ -154,7 +155,25 @@ enum ClientFrame {
     Transfers {
         active: usize,
     },
+    /// `{ "type": "ping" }` -- the SPA/desktop watcher heartbeat. Answered with a
+    /// `pong` on the same socket so an inbound frame keeps flowing while the
+    /// window is live but quiet, below the gateway proxy's per-direction idle
+    /// bridge cut. No fields; the socket already identifies the window.
+    Ping,
 }
+
+/// The pump's follow-up after applying one client frame: whether it owes the
+/// socket a reply. A `ping` owes a `pong`; every other frame owes nothing.
+#[derive(Debug, PartialEq, Eq)]
+enum ClientFrameReply {
+    None,
+    Pong,
+}
+
+/// The `pong` answer to a client `ping` heartbeat, echoed verbatim on the same
+/// socket. Pinned by [`tests::pong_frame_is_the_pinned_wire_shape`] so the
+/// server -> client half cannot drift from the SPA/desktop parse.
+const PONG_FRAME: &str = r#"{"type":"pong"}"#;
 
 /// Forward server -> client frames to one WebSocket client and apply this
 /// socket's inbound `sub`/`unsub` frames, until either side hangs up.
@@ -258,14 +277,21 @@ async fn pump_loop(
                 Err(broadcast::error::RecvError::Closed) => break,
                 Err(broadcast::error::RecvError::Lagged(_)) => continue,
             },
-            // Client -> server: sub/unsub frames. A None / Err means the
-            // client closed or sent garbage at the transport level; treat
-            // a clean close as end-of-stream. A Close frame ends the pump;
-            // Text frames route to the scope registry; other frames
-            // (Binary/Ping/Pong) are ignored (axum auto-replies to Ping).
+            // Client -> server: sub/unsub/transfers/ping frames. A None / Err
+            // means the client closed or sent garbage at the transport level;
+            // treat a clean close as end-of-stream. A Close frame ends the pump;
+            // Text frames route through `apply_client_frame`, and an app-level
+            // `ping` is answered with a `pong` on this socket. Non-text frames
+            // (Binary and WS-level Ping/Pong) are ignored (axum auto-replies to
+            // the WS-level Ping; the app-level heartbeat is the text `ping`).
             inbound = socket.recv() => match inbound {
                 Some(Ok(Message::Text(text))) => {
-                    apply_client_frame(scopes, sub_id, &text, transfer_guard);
+                    if apply_client_frame(scopes, sub_id, &text, transfer_guard)
+                        == ClientFrameReply::Pong
+                        && socket.send(Message::text(PONG_FRAME)).await.is_err()
+                    {
+                        break;
+                    }
                     last_activity.store(now_unix_secs(), Ordering::Relaxed);
                 }
                 Some(Ok(Message::Close(_))) => break,
@@ -287,16 +313,24 @@ fn apply_client_frame(
     sub_id: SubId,
     text: &str,
     transfer_guard: Option<&TransferGuard>,
-) {
+) -> ClientFrameReply {
     match serde_json::from_str::<ClientFrame>(text) {
-        Ok(ClientFrame::Sub { dir }) => scopes.subscribe(sub_id, &dir),
-        Ok(ClientFrame::Unsub { dir }) => scopes.unsubscribe(sub_id, &dir),
+        Ok(ClientFrame::Sub { dir }) => {
+            scopes.subscribe(sub_id, &dir);
+            ClientFrameReply::None
+        }
+        Ok(ClientFrame::Unsub { dir }) => {
+            scopes.unsubscribe(sub_id, &dir);
+            ClientFrameReply::None
+        }
         Ok(ClientFrame::Transfers { active }) => {
             if let Some(guard) = transfer_guard {
                 guard.set(active);
             }
+            ClientFrameReply::None
         }
-        Err(_) => {}
+        Ok(ClientFrame::Ping) => ClientFrameReply::Pong,
+        Err(_) => ClientFrameReply::None,
     }
 }
 
@@ -312,16 +346,52 @@ mod tests {
         let reg = ScopeRegistry::new();
         let (id, _rx) = reg.register();
 
-        apply_client_frame(&reg, id, r#"{"type":"sub","dir":"notes/recipes"}"#, None);
+        // sub/unsub owe the socket no reply.
+        assert_eq!(
+            apply_client_frame(&reg, id, r#"{"type":"sub","dir":"notes/recipes"}"#, None),
+            ClientFrameReply::None
+        );
         assert!(reg.scope_exists("notes/recipes"));
         assert_eq!(reg.subscriber_count("notes/recipes"), 1);
 
-        apply_client_frame(&reg, id, r#"{"type":"unsub","dir":"notes/recipes"}"#, None);
+        assert_eq!(
+            apply_client_frame(&reg, id, r#"{"type":"unsub","dir":"notes/recipes"}"#, None),
+            ClientFrameReply::None
+        );
         assert!(!reg.scope_exists("notes/recipes"));
 
         // The workspace root scope rides the same path.
         apply_client_frame(&reg, id, r#"{"type":"sub","dir":""}"#, None);
         assert!(reg.scope_exists(""));
+    }
+
+    // Contract B: the client heartbeat `{"type":"ping"}` parses to
+    // `ClientFrame::Ping` and owes the socket a `pong`; it is not a
+    // subscription, so it registers no scope. Old servers (no `Ping` variant)
+    // drop it as unmodeled and old clients never send it, so the skew is safe
+    // both ways.
+    #[test]
+    fn ping_frame_asks_for_a_pong_reply() {
+        let reg = ScopeRegistry::new();
+        let (id, _rx) = reg.register();
+
+        assert_eq!(
+            apply_client_frame(&reg, id, r#"{"type":"ping"}"#, None),
+            ClientFrameReply::Pong
+        );
+        // A ping must not touch the scope registry.
+        assert!(!reg.scope_exists("ping"));
+        assert_eq!(reg.subscriber_count(""), 0);
+    }
+
+    // Pins the server -> client `pong` bytes so the SPA/desktop watcher's
+    // read-deadline (which treats any inbound frame as liveness) and this
+    // server cannot silently desync on the frame shape.
+    #[test]
+    fn pong_frame_is_the_pinned_wire_shape() {
+        assert_eq!(PONG_FRAME, r#"{"type":"pong"}"#);
+        let parsed: serde_json::Value = serde_json::from_str(PONG_FRAME).unwrap();
+        assert_eq!(parsed["type"], "pong");
     }
 
     #[test]
