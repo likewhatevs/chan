@@ -2767,8 +2767,8 @@ mod tests {
         include_str!("../capabilities/launcher-events.json");
     const LAUNCHER_UPDATE_CAPABILITY_JSON: &str =
         include_str!("../capabilities/launcher-update.json");
-    const DEVSERVER_ABANDON_CAPABILITY_JSON: &str =
-        include_str!("../capabilities/devserver-abandon.json");
+    const DEVSERVER_WINDOW_CAPABILITY_JSON: &str =
+        include_str!("../capabilities/devserver-window.json");
     const ABOUT_CAPABILITY_JSON: &str = include_str!("../capabilities/about.json");
     const LOCAL_UPLOAD_CAPABILITY_JSON: &str = include_str!("../capabilities/local-upload.json");
     const APP_PERMISSIONS_TOML: &str = include_str!("../permissions/app.toml");
@@ -3049,40 +3049,71 @@ mod tests {
     }
 
     #[test]
-    fn devserver_abandon_capability_grants_window_lifecycle_to_remote_devserver_windows() {
-        // A tunnel-served devserver window (lib-<hex>::<window_id>) loads from a
-        // remote https origin, which workspace.json's loopback-only remote.urls
-        // does NOT cover -- so the disconnect overlay's Abandon
-        // (abandon_devserver_for_window) AND the close-confirm overlay's Close
-        // (request_close_window) / Hide (hide_window_from_close_confirm) are
-        // denied there and the clicks are silent no-ops. This narrow capability
-        // re-grants those window-lifecycle commands to lib-* windows over the
-        // tunnel origin. Pin the shape so an edit can't silently broaden the
-        // remote grant or drop a lifecycle command's reach.
-        let windows = capability_windows(DEVSERVER_ABANDON_CAPABILITY_JSON);
+    fn devserver_window_capability_grants_workspace_parity_to_tunnel_devserver_windows() {
+        // A tunnel-served devserver window (lib-<hex>::<window_id>) loads from
+        // the user's own gateway origin (https://*.devserver.chan.app), which
+        // workspace.json's loopback-only remote.urls does NOT cover. This
+        // capability grants that window the same command reach as its
+        // loopback-served twin: the workspace-window set plus the upload
+        // picker, fullscreen, webview zoom, and the opener. The one deliberate
+        // difference -- on any origin -- is read_dropped_paths, which lib-*
+        // windows never get (local-drop.json). The origin-aware parity test
+        // asserts the resulting reach; this pins the intent so an edit cannot
+        // silently broaden the remote scope or drop a grant.
+        let windows = capability_windows(DEVSERVER_WINDOW_CAPABILITY_JSON);
         assert_eq!(
             windows,
             vec!["lib-*".to_string()],
-            "devserver-abandon must target only lib-* devserver windows: {windows:?}",
+            "devserver-window must target only lib-* devserver windows: {windows:?}",
         );
-        let perms = capability_permissions(DEVSERVER_ABANDON_CAPABILITY_JSON);
+        let perms = capability_permissions(DEVSERVER_WINDOW_CAPABILITY_JSON);
         assert_eq!(
             perms,
             vec![
-                "allow-abandon-devserver-for-window".to_string(),
-                "allow-reconnect-devserver-for-window".to_string(),
-                "allow-request-close-window".to_string(),
-                "allow-hide-window-from-close-confirm".to_string(),
+                "workspace-window".to_string(),
+                "allow-pick-upload-files".to_string(),
+                "core:webview:allow-set-webview-zoom".to_string(),
+                "core:window:allow-set-fullscreen".to_string(),
+                "opener:default".to_string(),
+                "opener:allow-open-url".to_string(),
             ],
-            "devserver-abandon must grant the window-lifecycle commands \
-             (abandon, reconnect, close, hide) so a tunnel devserver window's \
-             overlays are not silent no-ops: {perms:?}",
+            "devserver-window must grant exact loopback parity (workspace-window set + \
+             upload picker + fullscreen + webview zoom + opener): {perms:?}",
         );
-        let remote_urls = capability_remote_urls(DEVSERVER_ABANDON_CAPABILITY_JSON);
+        assert!(
+            perms.iter().all(|p| p != "allow-read-dropped-paths"),
+            "the drag-pasteboard read must never reach tunnel-served content: {perms:?}",
+        );
+        let remote_urls = capability_remote_urls(DEVSERVER_WINDOW_CAPABILITY_JSON);
         assert_eq!(
             remote_urls,
             vec!["https://*.devserver.chan.app".to_string()],
-            "devserver-abandon must scope to the tunnel origin only: {remote_urls:?}",
+            "devserver-window must scope to the tunnel origin only: {remote_urls:?}",
+        );
+    }
+
+    #[test]
+    fn local_upload_capability_covers_every_locally_served_window_kind() {
+        // cs upload runs wherever a terminal runs: workspace windows,
+        // standalone terminals, connect-script control terminals, and
+        // watcher-opened windows (local:: and loopback lib-*). A kind
+        // missing from this list silently loses the native picker.
+        let windows = capability_windows(LOCAL_UPLOAD_CAPABILITY_JSON);
+        for expected in [
+            "workspace-*",
+            "terminal-*",
+            "control-terminal-*",
+            "local::*",
+            "lib-*",
+        ] {
+            assert!(
+                windows.iter().any(|w| w == expected),
+                "local-upload capability must cover {expected} windows: {windows:?}",
+            );
+        }
+        assert!(
+            windows.iter().all(|w| w != "outbound-*"),
+            "local-upload must stay off ad-hoc remote-URL webviews: {windows:?}",
         );
     }
 
@@ -3386,7 +3417,7 @@ mod tests {
     const CAPABILITY_FILES: [(&str, &str); 8] = [
         ("about.json", ABOUT_CAPABILITY_JSON),
         ("default.json", DEFAULT_CAPABILITY_JSON),
-        ("devserver-abandon.json", DEVSERVER_ABANDON_CAPABILITY_JSON),
+        ("devserver-window.json", DEVSERVER_WINDOW_CAPABILITY_JSON),
         ("launcher-events.json", LAUNCHER_EVENTS_CAPABILITY_JSON),
         ("launcher-update.json", LAUNCHER_UPDATE_CAPABILITY_JSON),
         ("local-drop.json", LOCAL_DROP_CAPABILITY_JSON),
@@ -3709,9 +3740,6 @@ mod tests {
     /// window/origin class, every command the SPA can invoke must be
     /// granted by some capability, minus the DELIBERATE_EXCLUSIONS.
     #[test]
-    #[ignore = "red at baseline by design: tunnel lib-* windows lack the workspace command \
-                grants until capabilities/devserver-window.json (Contract A) replaces \
-                devserver-abandon.json; that change removes this attribute"]
     fn origin_aware_acl_grants_spa_invoke_vocabulary_per_window_class() {
         let mut vocabulary: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
         vocabulary.extend(tauri_invoke_commands(WORKSPACE_APP_DESKTOP_TS));

@@ -191,9 +191,10 @@ commands.allow = ["read_dropped_paths"]
 
 # Deliberately NOT in the workspace-window set: this command pops a native
 # open panel and reads the chosen files' bytes off the user's local disk, so
-# it is granted only to locally-served windows via
-# capabilities/local-upload.json (workspace-*, terminal-*, local::*) -- never to
-# the remote-served outbound-* webviews.
+# it is granted per window kind -- locally-served windows plus loopback lib-*
+# via capabilities/local-upload.json, tunnel-served lib-* via
+# capabilities/devserver-window.json (the user's own gateway origin) -- never
+# to outbound-* (ad-hoc remote URL) webviews.
 [[permission]]
 identifier = "allow-pick-upload-files"
 description = "Enables the pick_upload_files command (native file picker for `cs upload`)."
