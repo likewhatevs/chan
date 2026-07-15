@@ -206,25 +206,35 @@
   // in place of a textual "connection lost" cue; the control row's eye flash
   // rides the same attention state. Both clear on recovery, reconnect, the
   // user acting on the control row, or the row leaving the feed.
+  // A devserver whose feed sockets went dead post-sleep (the desktop watchdog
+  // sets status `unreachable` while the connection record still exists) is the
+  // honest source here: a gateway devserver structurally can't hold control
+  // attention (the 5s workspace poll's fresh-TCP successes clear it), so the
+  // status field, not attention, carries its lost state.
   const connectionLost = (ds: DevserverEntry): boolean =>
-    ds.library_id !== null && ds.library_id !== undefined && hasControlAttention(ds.library_id);
+    ds.status === "unreachable" ||
+    (ds.library_id !== null && ds.library_id !== undefined && hasControlAttention(ds.library_id));
   // Devserver spinner = backend reports the dial in flight (`connecting`) OR the
   // optimistic bridge is open. A dropped tunnel lands `disconnected` + clears it.
   const dsSpinning = (ds: DevserverEntry): boolean =>
     ds.status === "connecting" || isPending(dsKey(ds.id));
 
   // A machine shows its content block while connected, while a fresh dial is
-  // `connecting`, or while it still owns a control terminal. The last clause keeps
-  // a disconnected devserver's DEAD "process exited" control row mounted (the
-  // script died, connection torn down, control terminal kept alive) so it can
-  // flash for attention and the user can open it to read the death reason; the row
-  // clears once the control terminal is closed and its record leaves the feed.
+  // `connecting`, while its feed is `unreachable` (a live-but-degraded connection
+  // whose record still exists -- keep its windows visible so each can raise its
+  // own DisconnectOverlay Reconnect), or while it still owns a control terminal.
+  // The last clause keeps a disconnected devserver's DEAD "process exited" control
+  // row mounted (the script died, connection torn down, control terminal kept
+  // alive) so it can flash for attention and the user can open it to read the
+  // death reason; the row clears once the control terminal is closed and its
+  // record leaves the feed.
   function hasContent(node: MachineNode): boolean {
     return (
       node.kind === "local" ||
       (node.devserver !== null &&
         (connected(node.devserver) ||
           node.devserver.status === "connecting" ||
+          node.devserver.status === "unreachable" ||
           node.control.length > 0))
     );
   }

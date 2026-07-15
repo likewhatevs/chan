@@ -10,8 +10,9 @@
 import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import { mount, unmount, flushSync } from "svelte";
 import Library from "./Library.svelte";
-import { loadLibrary, stopWatching } from "../state/library.svelte";
+import { library, loadLibrary, stopWatching } from "../state/library.svelte";
 import { collapsedState } from "../state/machineCollapse.svelte";
+import type { DevserverEntry } from "../api/library";
 
 // Force the read-only surface for the whole file (hoisted before the imports):
 // no registry mutation, no desktop bridge, not self-managed.
@@ -86,6 +87,23 @@ describe("Library read-only parity", () => {
     expect(target!.querySelector(".dot")).not.toBeNull();
     expect(target!.querySelector('[aria-label="Focus window"]')).toBeNull();
     expect(target!.querySelector('[aria-label="Hide window"]')).toBeNull();
+  });
+
+  it("shows the red lost dot for an unreachable devserver on the gateway surface", () => {
+    // The gateway (read-only) surface is where a post-sleep unreachable devserver
+    // appears; the honest red dot comes from the status field, no mutation
+    // controls involved.
+    library.devservers = library.devservers.map(
+      (d): DevserverEntry => (d.id === "ds-1" ? { ...d, status: "unreachable" } : d),
+    );
+    mountList();
+    const prod = [...target!.querySelectorAll("section.machine")].find((m) =>
+      m.textContent?.includes("box.example.com:8787"),
+    );
+    expect(prod).toBeTruthy();
+    expect(prod!.querySelector(".status-dot.lost")).not.toBeNull();
+    expect(prod!.querySelector(".status-dot.live")).toBeNull();
+    expect(prod!.textContent).not.toContain("Not connected");
   });
 
   it("keeps the machine-collapse toggle: it is not a mutation control", () => {

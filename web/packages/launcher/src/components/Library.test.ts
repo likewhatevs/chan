@@ -289,6 +289,29 @@ describe("Library: devserver groups", () => {
     expect(prod!.querySelector("button.icon-btn.attention")).not.toBeNull();
   });
 
+  it("turns the identity dot red for an unreachable devserver off the status field alone", () => {
+    // The desktop watchdog marks a post-sleep zombie `unreachable` while the
+    // connection record still exists. The launcher shows the red "lost" dot from
+    // the status field with NO control attention (a gateway devserver can't hold
+    // it), and keeps the content visible so each window can raise its own
+    // Reconnect overlay.
+    library.devservers = library.devservers.map(
+      (d): DevserverEntry => (d.id === "ds-1" ? { ...d, status: "unreachable" } : d),
+    );
+
+    mountList();
+
+    const machines = [...target!.querySelectorAll("section.machine")];
+    const prod = machines.find((m) => m.textContent?.includes("box.example.com:8787"));
+    expect(prod).toBeTruthy();
+    // Red lost dot, no green live dot -- driven purely by status (no attention set).
+    expect(prod!.querySelector(".status-dot.lost")).not.toBeNull();
+    expect(prod!.querySelector(".status-dot.live")).toBeNull();
+    // Content stays mounted (not collapsed to the "Not connected" prompt).
+    expect(prod!.textContent).toContain("Control terminal");
+    expect(prod!.textContent).not.toContain("Not connected");
+  });
+
   it("renders a connecting devserver's control row while it is dialing", () => {
     library.devservers = library.devservers.map(
       (d): DevserverEntry => (d.id === "ds-1" ? { ...d, status: "connecting" } : d),

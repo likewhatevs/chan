@@ -147,7 +147,7 @@ export interface WorkspaceEntry {
  * - `connecting`   dial in flight (the spinner state)
  * - `connected`    a live connection is held (the Disconnect state)
  */
-export type DevserverStatus = "disconnected" | "connecting" | "connected";
+export type DevserverStatus = "disconnected" | "connecting" | "connected" | "unreachable";
 
 export interface DevserverEntry {
   /** Stable registry id used for row actions and the connection-state map. */
