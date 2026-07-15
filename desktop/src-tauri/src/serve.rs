@@ -2769,7 +2769,20 @@ mod tests {
         include_str!("../capabilities/launcher-update.json");
     const DEVSERVER_ABANDON_CAPABILITY_JSON: &str =
         include_str!("../capabilities/devserver-abandon.json");
+    const ABOUT_CAPABILITY_JSON: &str = include_str!("../capabilities/about.json");
+    const LOCAL_UPLOAD_CAPABILITY_JSON: &str = include_str!("../capabilities/local-upload.json");
     const APP_PERMISSIONS_TOML: &str = include_str!("../permissions/app.toml");
+
+    // The SPA side of the IPC bridge: api/desktop.ts is the single
+    // tauriInvoke dispatch site (a workspace-app vitest pins that), and
+    // editor/external_links.ts carries the one plugin invoke that rides
+    // its own thin wrapper. The cross-tree include_str! deliberately ties
+    // this crate's tests to the repo layout: the invoke vocabulary must be
+    // the shipped SPA source, not a hand-copied list that rots.
+    const WORKSPACE_APP_DESKTOP_TS: &str =
+        include_str!("../../../web/packages/workspace-app/src/api/desktop.ts");
+    const WORKSPACE_APP_EXTERNAL_LINKS_TS: &str =
+        include_str!("../../../web/packages/workspace-app/src/editor/external_links.ts");
 
     fn capability_permissions(raw: &str) -> Vec<String> {
         let v: serde_json::Value = serde_json::from_str(raw).expect("capability JSON parses");
@@ -3352,5 +3365,430 @@ mod tests {
         let permissions = APP_PERMISSIONS_TOML;
         assert!(permissions.contains("identifier = \"allow-restart-desktop-after-update\""));
         assert!(permissions.contains("commands.allow = [\"restart_desktop_after_update\"]"));
+    }
+
+    // ---- origin-aware ACL parity ------------------------------------
+    //
+    // Tauri resolves a window's effective grants from BOTH its label
+    // (capability `windows` globs) and the origin its content loaded from
+    // (`remote.urls`): a capability with no matching remote pattern never
+    // reaches remotely-served content, and every chan window is remotely
+    // served (the loopback embedded server included). The ACL itself only
+    // exists in the shipped app -- unit tests call the Rust fns directly
+    // and a mocked webview has no ACL -- so vocabulary/grant drift shows
+    // up as runtime denials unless these tests recompute the per-class
+    // grants from the capability files and pin the SPA's invoke
+    // vocabulary as a subset.
+
+    /// Every capability file, by name. `capability_walk_covers_every_capability_file`
+    /// pins this table against the directory listing so a new capability
+    /// cannot land without joining the origin-aware walk.
+    const CAPABILITY_FILES: [(&str, &str); 8] = [
+        ("about.json", ABOUT_CAPABILITY_JSON),
+        ("default.json", DEFAULT_CAPABILITY_JSON),
+        ("devserver-abandon.json", DEVSERVER_ABANDON_CAPABILITY_JSON),
+        ("launcher-events.json", LAUNCHER_EVENTS_CAPABILITY_JSON),
+        ("launcher-update.json", LAUNCHER_UPDATE_CAPABILITY_JSON),
+        ("local-drop.json", LOCAL_DROP_CAPABILITY_JSON),
+        ("local-upload.json", LOCAL_UPLOAD_CAPABILITY_JSON),
+        ("workspace.json", WORKSPACE_CAPABILITY_JSON),
+    ];
+
+    /// The window/origin classes the desktop actually opens for workspace
+    /// SPA content. Labels mirror the real minting sites (workspace-*,
+    /// and the library scheme `lib-<hex>::<window_id>`); origins are the
+    /// loopback embedded server and the gateway tunnel entry URL
+    /// (`window_navigation_url`).
+    const ORIGIN_CLASSES: [(&str, &str, &str); 3] = [
+        (
+            "loopback workspace window",
+            "workspace-8f2c",
+            "http://127.0.0.1:4090",
+        ),
+        (
+            "loopback lib window",
+            "lib-0a1b::w-1",
+            "http://127.0.0.1:4090",
+        ),
+        (
+            "tunnel lib window",
+            "lib-0a1b::w-1",
+            "https://alice.devserver.chan.app",
+        ),
+    ];
+
+    /// (class, invoke) pairs the ACL withholds ON PURPOSE. Every entry is
+    /// enforced in both directions: the invoke must stay in the SPA
+    /// vocabulary-checked set, and if a capability ever grants an excluded
+    /// pair the parity test fails, so this table cannot go stale.
+    ///
+    /// read_dropped_paths: the macOS drag pasteboard is system-wide and
+    /// outlives the drag, so the command stays off lib-* windows on EVERY
+    /// origin -- local-drop.json's windows list deliberately has no lib-*.
+    const DELIBERATE_EXCLUSIONS: [(&str, &str); 2] = [
+        ("loopback lib window", "read_dropped_paths"),
+        ("tunnel lib window", "read_dropped_paths"),
+    ];
+
+    /// Minimal window-label glob: `*` matches any run of characters
+    /// (labels never contain `/`, so this agrees with Tauri for every
+    /// glob in capabilities/); no `*` means exact match.
+    fn label_glob_matches(pattern: &str, text: &str) -> bool {
+        let mut pieces = pattern.split('*');
+        let first = pieces.next().expect("split yields at least one piece");
+        let Some(mut rest) = text.strip_prefix(first) else {
+            return false;
+        };
+        let mut middle: Vec<&str> = pieces.collect();
+        let Some(last) = middle.pop() else {
+            return rest.is_empty();
+        };
+        for piece in middle {
+            if piece.is_empty() {
+                continue;
+            }
+            match rest.find(piece) {
+                Some(at) => rest = &rest[at + piece.len()..],
+                None => return false,
+            }
+        }
+        rest.ends_with(last)
+    }
+
+    /// Minimal remote-URL pattern match for the origins these tests use:
+    /// exact scheme, glob host, glob port (a pattern without a port only
+    /// matches an origin without one, which is how the tunnel origin's
+    /// default https port reads). Not a general URLPattern engine.
+    fn remote_url_matches(pattern: &str, origin: &str) -> bool {
+        fn parts(url: &str) -> Option<(&str, &str, Option<&str>)> {
+            let (scheme, rest) = url.split_once("://")?;
+            Some(match rest.split_once(':') {
+                Some((host, port)) => (scheme, host, Some(port)),
+                None => (scheme, rest, None),
+            })
+        }
+        let Some((pattern_scheme, pattern_host, pattern_port)) = parts(pattern) else {
+            return false;
+        };
+        let Some((origin_scheme, origin_host, origin_port)) = parts(origin) else {
+            return false;
+        };
+        if pattern_scheme != origin_scheme || !label_glob_matches(pattern_host, origin_host) {
+            return false;
+        }
+        match (pattern_port, origin_port) {
+            (None, None) => true,
+            (Some(port_pattern), Some(port)) => label_glob_matches(port_pattern, port),
+            _ => false,
+        }
+    }
+
+    /// Every `tauriInvoke(` command literal in a SPA module. Tolerates a
+    /// generic parameter list (`tauriInvoke<T>(`) and multi-line calls
+    /// whose command literal sits on the line after the open paren; call
+    /// sites without a leading string literal (the wrapper's own
+    /// declaration, template-literal error strings) are skipped.
+    fn tauri_invoke_commands(source: &str) -> Vec<String> {
+        let mut commands = Vec::new();
+        for (idx, _) in source.match_indices("tauriInvoke") {
+            let rest = &source[idx + "tauriInvoke".len()..];
+            let rest = match rest.strip_prefix('<') {
+                Some(generics) => match generics.find(">(") {
+                    Some(close) => &generics[close + 1..],
+                    None => continue,
+                },
+                None => rest,
+            };
+            let Some(args) = rest.strip_prefix('(') else {
+                continue;
+            };
+            let Some(quoted) = args.trim_start().strip_prefix('"') else {
+                continue;
+            };
+            let Some(end) = quoted.find('"') else {
+                continue;
+            };
+            commands.push(quoted[..end].to_string());
+        }
+        commands
+    }
+
+    /// Plugin invokes fired through a module's own thin invoke wrapper
+    /// (editor/external_links.ts): `invoke("plugin:...")` literals.
+    fn plugin_invoke_commands(source: &str) -> Vec<String> {
+        source
+            .match_indices("invoke(\"plugin:")
+            .map(|(idx, _)| {
+                let quoted = &source[idx + "invoke(\"".len()..];
+                let end = quoted.find('"').expect("plugin invoke literal closes");
+                quoted[..end].to_string()
+            })
+            .collect()
+    }
+
+    /// Commands KEY_BRIDGE_JS fires from inside every desktop-opened
+    /// window. The chord bridge is an initialization script, so it runs on
+    /// tunnel origins too and its invokes face the same origin-aware ACL
+    /// as the SPA's. Parses only the KEY_BRIDGE_JS raw-string body: other
+    /// tests mention the invoke pattern inside assertion strings, and
+    /// scanning the whole file would collect those as garbage commands.
+    fn key_bridge_invoke_commands(serve_rs: &str) -> Vec<String> {
+        // concat! so the markers never match this function's own source.
+        let marker = concat!("const KEY_BRIDGE", "_JS: &str = r#\"");
+        let start = serve_rs.find(marker).expect("KEY_BRIDGE_JS const present") + marker.len();
+        let body = &serve_rs[start..];
+        let body = &body[..body.find("\"#").expect("KEY_BRIDGE_JS raw string closes")];
+        let needle = concat!("invokeIpc", "(e, '");
+        body.match_indices(needle)
+            .map(|(idx, _)| {
+                let quoted = &body[idx + needle.len()..];
+                let end = quoted.find('\'').expect("invokeIpc literal closes");
+                quoted[..end].to_string()
+            })
+            .collect()
+    }
+
+    /// Permission identifiers that grant a given plugin-channel invoke.
+    /// app.toml expansion cannot resolve these (they are Tauri core/plugin
+    /// permissions, not app commands), so the mapping is explicit; the
+    /// parity test fails on any unmapped plugin invoke, so a new plugin
+    /// call site cannot bypass the walk.
+    fn plugin_permission_candidates(invoke: &str) -> Option<&'static [&'static str]> {
+        match invoke {
+            "plugin:window|set_fullscreen" => Some(&["core:window:allow-set-fullscreen"]),
+            // opener:default alone does not name open_url; every capability
+            // in this tree that means to grant it carries the explicit
+            // allow-open-url, so that is the identifier the walk requires.
+            "plugin:opener|open_url" => Some(&["opener:allow-open-url"]),
+            _ => None,
+        }
+    }
+
+    /// How one capability `permissions` entry lands at the ACL: app.toml
+    /// set names and `[[permission]]` identifiers expand to app command
+    /// names; anything else is a Tauri core/plugin permission string that
+    /// gates plugin invokes rather than app commands.
+    enum GrantExpansion {
+        AppCommands(Vec<String>),
+        PluginPermission(String),
+    }
+
+    fn expand_capability_permission(id: &str) -> GrantExpansion {
+        let v: toml::Value = toml::from_str(APP_PERMISSIONS_TOML).expect("app permissions parse");
+        let is_set = v["set"]
+            .as_array()
+            .expect("permission sets is an array")
+            .iter()
+            .any(|s| s["identifier"].as_str() == Some(id));
+        if is_set {
+            return GrantExpansion::AppCommands(app_permission_set_commands(id));
+        }
+        let block_commands = v["permission"]
+            .as_array()
+            .expect("permission blocks")
+            .iter()
+            .find(|p| p["identifier"].as_str() == Some(id))
+            .map(|p| {
+                p["commands"]["allow"]
+                    .as_array()
+                    .expect("commands.allow is an array")
+                    .iter()
+                    .map(|c| c.as_str().expect("command is a string").to_string())
+                    .collect::<Vec<_>>()
+            });
+        match block_commands {
+            Some(commands) => GrantExpansion::AppCommands(commands),
+            None => GrantExpansion::PluginPermission(id.to_string()),
+        }
+    }
+
+    /// The app commands + plugin permissions a window with this label,
+    /// serving content from this origin, can actually reach.
+    fn effective_grants(
+        label: &str,
+        origin: &str,
+    ) -> (
+        std::collections::HashSet<String>,
+        std::collections::HashSet<String>,
+    ) {
+        let mut app_commands = std::collections::HashSet::new();
+        let mut plugin_permissions = std::collections::HashSet::new();
+        for (_, raw) in CAPABILITY_FILES {
+            let cap: serde_json::Value = serde_json::from_str(raw).expect("capability JSON parses");
+            let windows_match = cap["windows"]
+                .as_array()
+                .expect("windows is an array")
+                .iter()
+                .any(|w| label_glob_matches(w.as_str().expect("window glob is a string"), label));
+            if !windows_match {
+                continue;
+            }
+            // No remote.urls means the capability never reaches
+            // remotely-served content, which is every class here.
+            let Some(urls) = cap["remote"]["urls"].as_array() else {
+                continue;
+            };
+            if !urls.iter().any(|u| {
+                remote_url_matches(u.as_str().expect("remote URL pattern is a string"), origin)
+            }) {
+                continue;
+            }
+            for p in cap["permissions"]
+                .as_array()
+                .expect("permissions is an array")
+            {
+                match expand_capability_permission(p.as_str().expect("permission is a string")) {
+                    GrantExpansion::AppCommands(commands) => app_commands.extend(commands),
+                    GrantExpansion::PluginPermission(id) => {
+                        plugin_permissions.insert(id);
+                    }
+                }
+            }
+        }
+        (app_commands, plugin_permissions)
+    }
+
+    #[test]
+    fn capability_walk_covers_every_capability_file() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("capabilities");
+        let mut on_disk: Vec<String> = std::fs::read_dir(&dir)
+            .expect("capabilities dir reads")
+            .map(|e| {
+                e.expect("dir entry reads")
+                    .file_name()
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .filter(|n| n.ends_with(".json"))
+            .collect();
+        on_disk.sort();
+        let mut in_table: Vec<String> = CAPABILITY_FILES
+            .iter()
+            .map(|(name, _)| name.to_string())
+            .collect();
+        in_table.sort();
+        assert_eq!(
+            in_table, on_disk,
+            "CAPABILITY_FILES must list exactly the files in capabilities/ so the \
+             origin-aware ACL walk cannot silently skip a capability",
+        );
+    }
+
+    #[test]
+    fn label_glob_and_remote_url_matchers_cover_the_capability_patterns() {
+        assert!(label_glob_matches("lib-*", "lib-0a1b::w-1"));
+        assert!(!label_glob_matches("lib-*", "library"));
+        assert!(label_glob_matches("local::*", "local::w-1"));
+        assert!(label_glob_matches("workspace-*", "workspace-8f2c"));
+        assert!(label_glob_matches("main-*", "main-2"));
+        assert!(!label_glob_matches("main", "main-2"));
+        assert!(remote_url_matches(
+            "http://127.0.0.1:*",
+            "http://127.0.0.1:4090"
+        ));
+        assert!(!remote_url_matches(
+            "http://127.0.0.1:*",
+            "https://alice.devserver.chan.app"
+        ));
+        assert!(remote_url_matches(
+            "https://*.devserver.chan.app",
+            "https://alice.devserver.chan.app"
+        ));
+        // The apex domain is NOT a tunnel host; the wildcard needs a label.
+        assert!(!remote_url_matches(
+            "https://*.devserver.chan.app",
+            "https://devserver.chan.app"
+        ));
+        assert!(!remote_url_matches(
+            "https://*.devserver.chan.app",
+            "https://evil.example.com"
+        ));
+    }
+
+    /// The real regression proof for item-1-class breakage: for every
+    /// window/origin class, every command the SPA can invoke must be
+    /// granted by some capability, minus the DELIBERATE_EXCLUSIONS.
+    #[test]
+    #[ignore = "red at baseline by design: tunnel lib-* windows lack the workspace command \
+                grants until capabilities/devserver-window.json (Contract A) replaces \
+                devserver-abandon.json; that change removes this attribute"]
+    fn origin_aware_acl_grants_spa_invoke_vocabulary_per_window_class() {
+        let mut vocabulary: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        vocabulary.extend(tauri_invoke_commands(WORKSPACE_APP_DESKTOP_TS));
+        vocabulary.extend(plugin_invoke_commands(WORKSPACE_APP_EXTERNAL_LINKS_TS));
+        const SERVE_RS: &str = include_str!("serve.rs");
+        vocabulary.extend(key_bridge_invoke_commands(SERVE_RS));
+
+        // Parser honesty: the hard forms must have parsed (the generic and
+        // multi-line save_file_to_downloads call, both plugin channels, a
+        // KEY_BRIDGE chord). If any is missing the subset assertion below
+        // is hollow, so fail here first.
+        for expected in [
+            "save_file_to_downloads",
+            "pick_upload_files",
+            "read_clipboard_text",
+            "read_dropped_paths",
+            "plugin:window|set_fullscreen",
+            "plugin:opener|open_url",
+            "zoom_in",
+        ] {
+            assert!(
+                vocabulary.contains(expected),
+                "invoke-vocabulary parser lost `{expected}`; fix the parser before trusting \
+                 this test",
+            );
+        }
+
+        // Every app command in the vocabulary must be a registered
+        // handler: catches both parser garbage and SPA calls to commands
+        // the desktop no longer ships.
+        const MAIN_RS: &str = include_str!("main.rs");
+        let registered: std::collections::HashSet<String> =
+            invoke_handler_commands(MAIN_RS).into_iter().collect();
+        for command in vocabulary.iter().filter(|c| !c.starts_with("plugin:")) {
+            assert!(
+                registered.contains(command),
+                "SPA invokes `{command}` but generate_handler! does not register it",
+            );
+        }
+
+        let mut violations: Vec<String> = Vec::new();
+        for (class, label, origin) in ORIGIN_CLASSES {
+            let (app_commands, plugin_permissions) = effective_grants(label, origin);
+            for invoke in &vocabulary {
+                let granted = match plugin_permission_candidates(invoke.as_str()) {
+                    Some(candidates) => candidates
+                        .iter()
+                        .any(|candidate| plugin_permissions.contains(*candidate)),
+                    None if invoke.starts_with("plugin:") => {
+                        violations.push(format!(
+                            "{class}: `{invoke}` has no plugin_permission_candidates entry; \
+                             map it to the permission that grants it",
+                        ));
+                        continue;
+                    }
+                    None => app_commands.contains(invoke.as_str()),
+                };
+                let excluded = DELIBERATE_EXCLUSIONS
+                    .iter()
+                    .any(|(c, x)| *c == class && *x == invoke.as_str());
+                match (excluded, granted) {
+                    (true, true) => violations.push(format!(
+                        "{class}: `{invoke}` is in DELIBERATE_EXCLUSIONS but a capability \
+                         grants it; drop the stale exclusion or the grant",
+                    )),
+                    (false, false) => violations.push(format!(
+                        "{class}: the SPA can invoke `{invoke}` but no capability grants it \
+                         on this label/origin",
+                    )),
+                    _ => {}
+                }
+            }
+        }
+        assert!(
+            violations.is_empty(),
+            "origin-aware ACL parity violations:\n{}",
+            violations.join("\n"),
+        );
     }
 }
