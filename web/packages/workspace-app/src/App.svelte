@@ -9,6 +9,7 @@
   import DisconnectOverlay from "./components/DisconnectOverlay.svelte";
   import SessionEndedOverlay from "./components/SessionEndedOverlay.svelte";
   import CloseConfirmOverlay from "./components/CloseConfirmOverlay.svelte";
+  import { installWakeGapDetector } from "./wakeGap";
   import { uiCloseConfirm } from "./state/closeConfirm.svelte";
   import DraftCloseModal from "./components/DraftCloseModal.svelte";
   import WorkspaceWarningsModal from "./components/WorkspaceWarningsModal.svelte";
@@ -410,14 +411,13 @@
     if (!ui.terminalOnly) {
       void loadScreensaverState();
     }
-    // Visibility-change resume hook. Browsers throttle / suspend
-    // backgrounded tabs and the WebSocket reconnect can stretch
-    // to seconds before the user returns; a manual nudge here
-    // lands the connection immediately. Debounced 300 ms so a
-    // quick tab-switch flicker doesn't fire the reconnect twice.
+    // Resume hook after the tab (or the whole machine) was dormant. Browsers
+    // throttle / suspend backgrounded tabs and the WebSocket reconnect can
+    // stretch to seconds before the user returns; a manual nudge lands the
+    // connection immediately. Debounced 300 ms so a quick tab-switch flicker
+    // doesn't fire the reconnect twice.
     let resumeTimer: ReturnType<typeof setTimeout> | null = null;
-    function onVisibility(): void {
-      if (document.visibilityState !== "visible") return;
+    function scheduleResume(): void {
       if (resumeTimer) clearTimeout(resumeTimer);
       resumeTimer = setTimeout(() => {
         resumeTimer = null;
@@ -430,7 +430,17 @@
         void refreshWorkspace();
       }, 300);
     }
+    function onVisibility(): void {
+      if (document.visibilityState !== "visible") return;
+      scheduleResume();
+    }
     document.addEventListener("visibilitychange", onVisibility);
+    // macOS WKWebView holds the window "visible" + focused across a display /
+    // system sleep, so visibilitychange never fires on wake. The shared
+    // wall-clock detector catches that sleep off a late-firing coarse interval
+    // and runs the same resume, so a post-sleep window is not left on a dead
+    // watcher under a stale tree.
+    installWakeGapDetector(scheduleResume);
   });
 
   /// Context-aware spawn helpers shared by all chord entry paths (top-level

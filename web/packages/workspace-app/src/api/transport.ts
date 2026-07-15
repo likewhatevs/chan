@@ -23,7 +23,8 @@
 // the open port. We stay on plain loopback everywhere.
 
 import { ApiError } from "./errors";
-import type { WsClientFrame } from "./types";
+import type { WsClientFrame, WsPingFrame } from "./types";
+import { installWakeGapDetector } from "../wakeGap";
 
 export type WsStatus = "connecting" | "open" | "reconnecting" | "closed";
 
@@ -385,6 +386,29 @@ async function requestTo<T>(
 /// `request`; `0` disables.
 const REQUEST_TIMEOUT_MS = 10_000;
 
+/// Watcher heartbeat cadence. A `ping` every WATCH_PING_MS keeps an inbound
+/// frame (the server's `pong`) flowing, so the gateway proxy's 300s
+/// per-direction idle bridge never cuts a live but quiet window and the
+/// read-deadline below always has something to observe.
+const WATCH_PING_MS = 20_000;
+/// If no frame arrives for WATCH_READ_DEADLINE_MS -- not even a pong -- the
+/// socket is a half-open zombie the browser has not reported as closed (the
+/// post-sleep case). Force it closed so the onclose reconnect runs. Kept well
+/// under the proxy's 300s cut and above the ping cadence so a healthy socket
+/// always refreshes it in time.
+const WATCH_READ_DEADLINE_MS = 45_000;
+
+/// The heartbeat `pong` is liveness-only: the transport counts it against the
+/// read-deadline but does not forward it to the event sink (the store dispatcher
+/// would ignore it anyway).
+function isPongFrame(frame: unknown): boolean {
+  return (
+    typeof frame === "object" &&
+    frame !== null &&
+    (frame as { type?: unknown }).type === "pong"
+  );
+}
+
 /// Open the watcher subscription. Auto-reconnects with capped
 /// exponential backoff (500 ms ramping to 8 s). The status callback
 /// fires on connect/reconnect transitions so the UI can show the
@@ -413,6 +437,42 @@ export function openWatch(
   // 1, 2, ... on each successive reconnect, so the disconnect overlay can show
   // "attempt N" the way the desktop connecting screen does.
   let attempt = 0;
+  // Per-connection liveness: a heartbeat ping and a read-deadline that force-
+  // closes a socket gone silent (a half-open zombie the browser never reports
+  // closed). The wake-gap detector force-closes on a detected machine sleep so
+  // the watcher redials at once instead of waiting out the (frozen) deadline.
+  let pingTimer: ReturnType<typeof setInterval> | null = null;
+  let deadlineTimer: ReturnType<typeof setTimeout> | null = null;
+  let disposeWakeGap: (() => void) | null = null;
+
+  const clearLiveness = () => {
+    if (pingTimer !== null) {
+      clearInterval(pingTimer);
+      pingTimer = null;
+    }
+    if (deadlineTimer !== null) {
+      clearTimeout(deadlineTimer);
+      deadlineTimer = null;
+    }
+  };
+
+  // Close the current socket so its onclose schedules the reconnect. A truly
+  // half-open socket never fires onclose on its own, so this is the only path
+  // that revives the watcher after the far end (or the whole machine) went away.
+  const forceReconnect = () => {
+    try {
+      ws?.close();
+    } catch {
+      // Already CLOSING/CLOSED; the pending onclose still drives the reconnect.
+    }
+  };
+
+  // Re-arm the read-deadline: any inbound frame (an event OR the heartbeat pong)
+  // is proof the socket is still alive.
+  const armDeadline = () => {
+    if (deadlineTimer !== null) clearTimeout(deadlineTimer);
+    deadlineTimer = setTimeout(forceReconnect, WATCH_READ_DEADLINE_MS);
+  };
 
   const connect = () => {
     if (closed) return;
@@ -436,6 +496,20 @@ export function openWatch(
       backoff = 500;
       attempt = 0;
       onStatus("open", attempt);
+      // Start this connection's heartbeat + read-deadline. The ping rides a
+      // raw `ws.send` (it is not part of the scope-control `WsClientFrame`
+      // union) but uses the same OPEN-only guard as `send`.
+      armDeadline();
+      pingTimer = setInterval(() => {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          try {
+            ws.send(JSON.stringify({ type: "ping" } satisfies WsPingFrame));
+          } catch {
+            // Socket flipped to CLOSING between the check and here; the
+            // reconnect path re-establishes the heartbeat.
+          }
+        }
+      }, WATCH_PING_MS);
       // The server's scope registry is per-socket, so a fresh socket
       // starts with no subscriptions. The owner re-establishes its
       // active scopes here (the File Browser instances wire that in);
@@ -443,13 +517,23 @@ export function openWatch(
       onOpen();
     };
     ws.onmessage = (m) => {
+      // Any inbound frame proves the socket is live -- refresh the deadline
+      // first, before parsing.
+      armDeadline();
+      let frame: unknown;
       try {
-        onEvent(JSON.parse(m.data));
+        frame = JSON.parse(m.data);
       } catch {
         // Drop malformed frames; the server controls the wire format.
+        return;
       }
+      // The heartbeat pong is liveness-only (already counted above); it is not
+      // an app event, so do not forward it to the sink.
+      if (isPongFrame(frame)) return;
+      onEvent(frame);
     };
     ws.onclose = () => {
+      clearLiveness();
       if (closed) return;
       attempt += 1;
       onStatus("reconnecting", attempt);
@@ -461,6 +545,9 @@ export function openWatch(
 
   const close = () => {
     closed = true;
+    clearLiveness();
+    disposeWakeGap?.();
+    disposeWakeGap = null;
     const w = ws;
     ws = null;
     if (w) {
@@ -497,6 +584,11 @@ export function openWatch(
   };
 
   connect();
+  // One wake-gap detector for the whole watcher lifetime: on a detected sleep,
+  // force the (possibly zombie) socket closed so onclose redials at once rather
+  // than waiting for the read-deadline (whose timer also froze during the
+  // sleep) to re-expire on wake.
+  disposeWakeGap = installWakeGapDetector(forceReconnect);
 
   // Callable disposer (back-compat with the original `() => void`
   // return) plus the typed scope-control methods.

@@ -20,6 +20,7 @@
   import "@xterm/xterm/css/xterm.css";
   import { api, sessionWindowId, withTokenQuery } from "../api/client";
   import { createSocket } from "../api/transport";
+  import { installWakeGapDetector } from "../wakeGap";
   import {
     isTauriDesktop,
     readClipboardText,
@@ -233,16 +234,11 @@
   const ptyWrites = new PtyWriteTracker();
   let hostResumeTimers: ReturnType<typeof setTimeout>[] = [];
   let hostResumeListenerCleanup: (() => void) | null = null;
-  // Wall-clock-gap sleep/wake detector. See
-  // installHostResumeListeners for why focus/pageshow/visibilitychange
-  // miss a macOS display/system sleep in WKWebView.
-  let wakeProbeTimer: ReturnType<typeof setInterval> | null = null;
-  let lastWakeProbe = 0;
-  // Probe every 2s; a gap past 6s (several missed ticks) means JS
-  // timers froze (the machine slept) and the probe is firing late on
-  // wake.
-  const WAKE_PROBE_MS = 2000;
-  const WAKE_GAP_MS = 6000;
+  // Wall-clock-gap sleep/wake detector (shared `installWakeGapDetector`). See
+  // installHostResumeListeners for why focus/pageshow/visibilitychange miss a
+  // macOS display/system sleep in WKWebView; the detector catches it off the
+  // wall clock instead.
+  let disposeWakeGap: (() => void) | null = null;
   const trailingFit = createTrailingFitScheduler(() => {
     runTerminalFit(fit, term, (detail) => {
       statusDetail = detail;
@@ -550,31 +546,38 @@
     // (the window stays "visible" + focused through the sleep), so the
     // listeners above never fire on wake and the WebGL renderer stays
     // glitchy until the user RESIZES a window (ResizeObserver ->
-    // queueFit -> recovery). Detect the wake directly: a coarse
-    // interval whose callback fires far
-    // later than scheduled means the wall clock jumped while JS timers
-    // were frozen (the machine slept), so run the same recovery the
-    // resize path proves works. One interval per terminal so EVERY pane
-    // recovers at once, matching "resize any window clears ALL
-    // terminals". (Pure display-only sleep that does not freeze timers
-    // is not caught here; verify in chan-desktop - WebKit-only.)
-    lastWakeProbe = Date.now();
-    wakeProbeTimer = setInterval(() => {
-      const now = Date.now();
-      const gap = now - lastWakeProbe;
-      lastWakeProbe = now;
-      if (gap > WAKE_GAP_MS) recoverTerminalRendererAfterHostResume();
-    }, WAKE_PROBE_MS);
+    // queueFit -> recovery). The shared wall-clock detector catches the wake
+    // directly (a coarse interval firing far later than scheduled means JS
+    // timers froze while the machine slept); on wake it runs the renderer
+    // recovery the resize path proves works AND recycles a frozen PTY socket.
+    // One detector per terminal so EVERY pane recovers at once, matching
+    // "resize any window clears ALL terminals". (Pure display-only sleep that
+    // does not freeze timers is not caught here; verify in chan-desktop --
+    // WebKit-only.)
+    disposeWakeGap = installWakeGapDetector(() => {
+      recoverTerminalRendererAfterHostResume();
+      recyclePtySocketAfterWake();
+    });
     hostResumeListenerCleanup = () => {
       window.removeEventListener("focus", onHostResume);
       window.removeEventListener("pageshow", onHostResume);
       document.removeEventListener("visibilitychange", onVisibility);
-      if (wakeProbeTimer) {
-        clearInterval(wakeProbeTimer);
-        wakeProbeTimer = null;
-      }
+      disposeWakeGap?.();
+      disposeWakeGap = null;
       hostResumeListenerCleanup = null;
     };
+  }
+
+  // A machine sleep freezes the PTY socket into a half-open zombie: readyState
+  // stays OPEN but the far end (through the gateway proxy) was torn down, so no
+  // onclose fires and typed keys are swallowed. On a detected wake, force a
+  // reconnect via the existing resume path (sessionId/since/generation), which
+  // replays only the missed bytes -- no scrollback loss. A socket that is not
+  // OPEN is already reconnecting (or intentionally closed); leave it alone.
+  function recyclePtySocketAfterWake(): void {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      void connect();
+    }
   }
 
   // The live WebGL context can be lost long after mount (GPU reset,

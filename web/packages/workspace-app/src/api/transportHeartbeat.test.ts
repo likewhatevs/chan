@@ -1,0 +1,156 @@
+// @vitest-environment jsdom
+
+// The watcher transport keeps a live-but-quiet /ws from going unnoticed: it
+// pings on a cadence, treats any inbound frame (event OR the heartbeat pong) as
+// liveness against a read-deadline, and force-closes -> reconnects a socket that
+// has gone silent (a half-open zombie the browser never reports closed) or that
+// a machine sleep froze. Driven with fake timers + an injected socket.
+
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { openWatch, setSocketFactory } from "./transport";
+import * as wakeGap from "../wakeGap";
+
+class FakeSocket {
+  static OPEN = 1;
+  static CONNECTING = 0;
+  static CLOSING = 2;
+  static CLOSED = 3;
+  static instances: FakeSocket[] = [];
+
+  readyState = 0; // CONNECTING
+  sent: string[] = [];
+  onopen: (() => void) | null = null;
+  onmessage: ((m: { data: string }) => void) | null = null;
+  onclose: (() => void) | null = null;
+  onerror: (() => void) | null = null;
+
+  constructor(public url: string) {
+    FakeSocket.instances.push(this);
+  }
+  open(): void {
+    this.readyState = FakeSocket.OPEN;
+    this.onopen?.();
+  }
+  message(data: string): void {
+    this.onmessage?.({ data });
+  }
+  send(d: string): void {
+    this.sent.push(d);
+  }
+  close(): void {
+    if (this.readyState === FakeSocket.CLOSED) return;
+    this.readyState = FakeSocket.CLOSED;
+    this.onclose?.();
+  }
+}
+
+const pingCount = (s: FakeSocket) => s.sent.filter((x) => x === '{"type":"ping"}').length;
+
+beforeEach(() => {
+  vi.useFakeTimers();
+  FakeSocket.instances = [];
+  vi.stubGlobal("WebSocket", FakeSocket); // provides WebSocket.OPEN to the transport
+  setSocketFactory((url) => new FakeSocket(url) as unknown as WebSocket);
+});
+
+afterEach(() => {
+  setSocketFactory(null);
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+  vi.useRealTimers();
+});
+
+describe("watcher heartbeat + read-deadline", () => {
+  test("sends a ping on the heartbeat cadence while open", () => {
+    const handle = openWatch(() => {});
+    const s = FakeSocket.instances[0];
+    s.open();
+    expect(pingCount(s)).toBe(0);
+    vi.advanceTimersByTime(20_000);
+    expect(pingCount(s)).toBe(1);
+    vi.advanceTimersByTime(20_000);
+    expect(pingCount(s)).toBe(2);
+    handle.close();
+  });
+
+  test("a pong refreshes the deadline and is not forwarded as an event", () => {
+    const events: unknown[] = [];
+    const handle = openWatch((e) => events.push(e));
+    const s = FakeSocket.instances[0];
+    s.open();
+    vi.advanceTimersByTime(44_000);
+    s.message('{"type":"pong"}');
+    expect(events).toEqual([]); // pong is liveness-only, not an app event
+    // 44s since the pong (< the 45s deadline): the socket stays live, no reconnect.
+    vi.advanceTimersByTime(44_000);
+    expect(FakeSocket.instances.length).toBe(1);
+    handle.close();
+  });
+
+  test("an event frame refreshes the deadline and IS forwarded", () => {
+    const events: unknown[] = [];
+    const handle = openWatch((e) => events.push(e));
+    const s = FakeSocket.instances[0];
+    s.open();
+    vi.advanceTimersByTime(44_000);
+    s.message('{"type":"windowset","windows":[]}');
+    expect(events).toEqual([{ type: "windowset", windows: [] }]);
+    vi.advanceTimersByTime(44_000);
+    expect(FakeSocket.instances.length).toBe(1); // frame kept it alive
+    handle.close();
+  });
+
+  test("force-closes and reconnects after the read-deadline with no inbound frame", () => {
+    const statuses: string[] = [];
+    const handle = openWatch(
+      () => {},
+      (s) => statuses.push(s),
+    );
+    const s0 = FakeSocket.instances[0];
+    s0.open();
+    expect(statuses).toContain("open");
+    // No inbound frame for the whole deadline -> the zombie is force-closed.
+    vi.advanceTimersByTime(45_000);
+    expect(s0.readyState).toBe(FakeSocket.CLOSED);
+    expect(statuses).toContain("reconnecting");
+    // The backoff reconnect opens a fresh socket.
+    vi.advanceTimersByTime(500);
+    expect(FakeSocket.instances.length).toBe(2);
+    handle.close();
+  });
+
+  test("stops the heartbeat + deadline once the socket closes", () => {
+    const handle = openWatch(() => {});
+    const s0 = FakeSocket.instances[0];
+    s0.open();
+    vi.advanceTimersByTime(20_000);
+    expect(pingCount(s0)).toBe(1);
+    // Dispose: no more pings on the (now closed) socket, and no reconnect churn.
+    handle.close();
+    const before = FakeSocket.instances.length;
+    vi.advanceTimersByTime(60_000);
+    expect(pingCount(s0)).toBe(1);
+    expect(FakeSocket.instances.length).toBe(before);
+  });
+});
+
+describe("wake-gap wiring", () => {
+  test("a detected machine wake force-closes and redials the watcher", () => {
+    // Capture the onWake the transport hands the detector, then fire it to model
+    // a wake without fighting the fake-timer/Date coupling. Starts as a noop, so
+    // the socket only closes if the transport actually installed a detector.
+    let onWake: () => void = () => {};
+    vi.spyOn(wakeGap, "installWakeGapDetector").mockImplementation((cb: () => void) => {
+      onWake = cb;
+      return () => {};
+    });
+    const handle = openWatch(() => {});
+    const s0 = FakeSocket.instances[0];
+    s0.open();
+    onWake(); // the machine woke: force the (possibly zombie) socket closed
+    expect(s0.readyState).toBe(FakeSocket.CLOSED);
+    vi.advanceTimersByTime(500);
+    expect(FakeSocket.instances.length).toBe(2); // redialed
+    handle.close();
+  });
+});

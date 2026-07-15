@@ -712,6 +712,14 @@ export type WsUnsubFrame = { type: "unsub"; dir: WatchScopeDir };
 /// once on each (re)connect; the server tracks it per-`/ws`-socket so the
 /// desktop close guard can prompt before closing a window mid-transfer.
 export type WsTransfersFrame = { type: "transfers"; active: number };
+/// Watcher heartbeat: a bare `{ type: "ping" }`. The server echoes
+/// `{ type: "pong" }` on the same socket, which the transport's read-deadline
+/// treats as liveness. Kept below the gateway proxy's per-direction idle cut so
+/// a live but quiet window is not torn down. Pins the Rust `ClientFrame::Ping`
+/// half in `crates/chan-server/src/routes/ws.rs`. NOT a member of
+/// `WsClientFrame`: it rides its own transport path (a raw `ws.send`), and the
+/// scope-control union's consumers narrow on the presence of `dir`.
+export type WsPingFrame = { type: "ping" };
 
 /// The client -> server frame union. Other server -> client frames
 /// (`progress`, `window_command`, `config_changed`, ...) are handled

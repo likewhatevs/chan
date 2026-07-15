@@ -110,13 +110,18 @@ describe("TerminalTab WebGL renderer", () => {
     expect(tab).toMatch(/hostResumeListenerCleanup\?\.\(\)/);
   });
 
-  test("a wall-clock-gap wake probe fires recovery on sleep/wake", () => {
-    // macOS sleep does not fire focus/pageshow/visibilitychange in
-    // WKWebView. A coarse interval detects the wake by observing that
-    // the timer callback fired far later than scheduled.
-    expect(tab).toMatch(/wakeProbeTimer = setInterval\(/);
-    expect(tab).toMatch(/if \(gap > WAKE_GAP_MS\) recoverTerminalRendererAfterHostResume\(\);/);
-    expect(tab).toMatch(/clearInterval\(wakeProbeTimer\)/);
+  test("a wall-clock-gap wake detector recovers the renderer and recycles the PTY", () => {
+    // macOS sleep does not fire focus/pageshow/visibilitychange in WKWebView, so
+    // the shared wall-clock detector catches the wake off a late-firing coarse
+    // interval. On wake it recovers the renderer AND reconnects a frozen PTY
+    // socket via the resume path (no scrollback loss).
+    expect(tab).toMatch(/import \{ installWakeGapDetector \} from "\.\.\/wakeGap"/);
+    expect(tab).toMatch(
+      /disposeWakeGap = installWakeGapDetector\(\(\) => \{[\s\S]*?recoverTerminalRendererAfterHostResume\(\);[\s\S]*?recyclePtySocketAfterWake\(\);[\s\S]*?\}\);/,
+    );
+    expect(tab).toMatch(/function recyclePtySocketAfterWake\(\): void/);
+    expect(tab).toMatch(/if \(ws && ws\.readyState === WebSocket\.OPEN\)[\s\S]*?void connect\(\);/);
+    expect(tab).toMatch(/disposeWakeGap\?\.\(\)/);
   });
 
   test("prefers server-provided virtual cwd when present", () => {
