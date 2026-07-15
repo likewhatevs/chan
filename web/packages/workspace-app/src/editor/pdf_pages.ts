@@ -146,16 +146,18 @@ export function measureDocBlocks(content: HTMLElement): DocBlockRect[] {
 }
 
 /// Build one detached page element per window: a clone of the document
-/// root fixed at page height with its content shifted up by the window
-/// start, so each page shows exactly its slice of the ORIGINAL layout.
+/// root clipped at the WINDOW length with its content shifted up by the
+/// window start, so each page shows exactly [startPx, endPx) of the
+/// ORIGINAL layout and the windows partition the content across pages.
+/// A window shorter than the page leaves a transparent tail in the
+/// raster; the exporter paints the page background behind it.
 export function buildDocPageElements(
   doc: DocDom,
   windows: readonly DocPageWindow[],
-  pageHeightPx: number,
 ): HTMLElement[] {
   return windows.map((window) => {
     const page = doc.root.cloneNode(true) as HTMLElement;
-    page.style.height = `${pageHeightPx}px`;
+    page.style.height = `${window.endPx - window.startPx}px`;
     page.style.overflow = "hidden";
     const content = page.querySelector<HTMLElement>(".chan-print-content");
     if (content) content.style.marginTop = `-${window.startPx}px`;

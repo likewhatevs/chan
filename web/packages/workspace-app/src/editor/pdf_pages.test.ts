@@ -107,6 +107,26 @@ describe("paginateDocBlocks", () => {
   test("an empty document still yields one window", () => {
     expect(paginateDocBlocks([], PAGE)).toEqual([{ startPx: 0, endPx: 0 }]);
   });
+
+  test("windows partition the content: contiguous, complete, page-bounded", () => {
+    const blocks = [
+      block(0, 80, { heading: true }),
+      block(100, 700),
+      block(720, 780, { heading: true }),
+      block(800, 1400),
+      block(1410, 1410, { pageBreak: true }),
+      block(1420, 4200), // oversized: hard-cuts
+      block(4220, 4500),
+    ];
+    const windows = paginateDocBlocks(blocks, PAGE);
+    expect(windows[0]!.startPx).toBe(0);
+    expect(windows.at(-1)!.endPx).toBe(4500);
+    for (const [i, w] of windows.entries()) {
+      expect(w.endPx).toBeGreaterThan(w.startPx);
+      expect(w.endPx - w.startPx).toBeLessThanOrEqual(PAGE);
+      if (i > 0) expect(w.startPx).toBe(windows[i - 1]!.endPx);
+    }
+  });
 });
 
 describe("normalizeDocPageBreaks", () => {
@@ -150,26 +170,27 @@ describe("slideBoxFit", () => {
 });
 
 describe("buildDocPageElements", () => {
-  test("windows become root clones with shifted content", () => {
+  function fakeDoc() {
     const root = document.createElement("div");
     root.className = "chan-print-page";
     const content = document.createElement("div");
     content.className = "chan-print-content";
     content.innerHTML = "<p>one</p><p>two</p>";
     root.appendChild(content);
+    return { root, content, completion: Promise.resolve() };
+  }
 
-    const pages = buildDocPageElements(
-      { root, content, completion: Promise.resolve() },
-      [
-        { startPx: 0, endPx: 900 },
-        { startPx: 900, endPx: 1400 },
-      ],
-      900,
-    );
+  test("each page clips at its window length with shifted content", () => {
+    const doc = fakeDoc();
+    const pages = buildDocPageElements(doc, [
+      { startPx: 0, endPx: 900 },
+      { startPx: 900, endPx: 1400 },
+    ]);
 
     expect(pages).toHaveLength(2);
+    expect(pages[0]!.style.height).toBe("900px");
+    expect(pages[1]!.style.height).toBe("500px");
     for (const page of pages) {
-      expect(page.style.height).toBe("900px");
       expect(page.style.overflow).toBe("hidden");
     }
     expect(
@@ -181,6 +202,28 @@ describe("buildDocPageElements", () => {
         .marginTop,
     ).toBe("-900px");
     // Clones are independent of the original.
-    expect(root.style.height).toBe("");
+    expect(doc.root.style.height).toBe("");
+  });
+
+  test("clip geometry realizes the cut geometry: visible bands partition", () => {
+    const windows = paginateDocBlocks(
+      [
+        block(0, 700),
+        block(720, 780, { heading: true }),
+        block(800, 1400),
+        block(1420, 4200),
+      ],
+      1000,
+    );
+    const pages = buildDocPageElements(fakeDoc(), windows);
+    expect(pages).toHaveLength(windows.length);
+    for (const [i, page] of pages.entries()) {
+      const content = page.querySelector<HTMLElement>(".chan-print-content")!;
+      const shift = -parseFloat(content.style.marginTop || "0");
+      const clip = parseFloat(page.style.height);
+      // Visible band [shift, shift + clip) is exactly this page's window.
+      expect(shift).toBeCloseTo(windows[i]!.startPx, 6);
+      expect(shift + clip).toBeCloseTo(windows[i]!.endPx, 6);
+    }
   });
 });

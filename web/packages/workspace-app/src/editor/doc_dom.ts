@@ -111,6 +111,11 @@ export function buildDocDom(opts: DocDomOptions): DocDom {
 
   const content = document.createElement("div");
   content.className = "chan-print-content";
+  // flow-root keeps child margins inside the content box, so block
+  // offsets measured against it hold in any container: page clones clip
+  // inside a BFC, and a collapsed-through margin would shift every
+  // measured cut by the first block's margin.
+  content.style.display = "flow-root";
   content.innerHTML = renderMarkdown(opts.markdown);
   root.appendChild(content);
 

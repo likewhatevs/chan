@@ -279,11 +279,7 @@ export async function exportMarkdownToPdf(
       measureDocBlocks(doc.content),
       geometry.pageContentHeightPx,
     );
-    const pages = buildDocPageElements(
-      doc,
-      windows,
-      geometry.pageContentHeightPx,
-    );
+    const pages = buildDocPageElements(doc, windows);
     const { rgb } = await import("pdf-lib");
     for (const [index, pageEl] of pages.entries()) {
       const snap = await withPageTimeout(

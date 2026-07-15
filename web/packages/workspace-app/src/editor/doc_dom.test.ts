@@ -80,6 +80,21 @@ describe("buildDocDom", () => {
     expect(img.classList.contains("chan-slide-align-right")).toBe(true);
   });
 
+  test("the content box traps child margins for BFC-invariant measurement", () => {
+    const { root, content } = buildDocDom({
+      markdown: "# Title\n\nbody\n",
+      path: "notes/doc.md",
+      theme: "light",
+      contentWidthPx: 669,
+    });
+    document.body.append(root);
+    // Block offsets are measured relative to the content box and
+    // replayed inside clipping page clones; without a BFC on the
+    // content box the first block's margin escapes during measurement
+    // but is trapped in the clones, shifting every cut.
+    expect(content.style.display).toBe("flow-root");
+  });
+
   test("keeps page-break markers invisible", () => {
     const { root } = buildDocDom({
       markdown: 'a\n\n<hr class="chan-page-break">\n\nb\n',
