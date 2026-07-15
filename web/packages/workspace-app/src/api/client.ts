@@ -1327,6 +1327,15 @@ export const api = {
   windowReply: (reply: WindowReplyRequest) =>
     req<void>("POST", "/api/window/reply", reply),
 
+  /// Command-launcher Open: queue `cs open` semantics for `target` in the
+  /// given window (Contract C, `POST /api/open`). The resulting
+  /// open_browser / open_file / open_graph_link window command rides /ws
+  /// back to that window; the response `message` is just the queued ack. A
+  /// refusal (binary target, workspace escape, no connected window)
+  /// rejects with the server's 400 `{error}` as the ApiError message.
+  open: (request: OpenPathRequest) =>
+    req<{ message: string }>("POST", "/api/open", request),
+
   /// Persist the pane-highlight colour for the library this window is served
   /// from. ROOT path (`requestRoot`, NOT prefixed): the local-color route is
   /// mounted ONLY on the root launcher router, but a workspace/terminal/devserver
@@ -1438,6 +1447,15 @@ export type SurveyReplyRequest =
 export type WindowReplyRequest = {
   requestId: string;
   payload: unknown;
+};
+
+/// Body of `POST /api/open` (Contract C). snake_case to match the server's
+/// `OpenRequest`. `window_id` is the submitting window (`sessionWindowId()`);
+/// `target` is a workspace-relative or absolute path, or a serialized
+/// `chan://graph?...` link, forwarded verbatim.
+export type OpenPathRequest = {
+  window_id: string;
+  target: string;
 };
 
 /// Body of `POST /api/session/handover/reply` (the leader's answer to

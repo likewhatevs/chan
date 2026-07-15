@@ -22,6 +22,7 @@
     validatePath,
   } from "../state/pathValidate";
   import { longestCommonPrefix } from "../state/lcp";
+  import { GRAPH_LINK_PREFIX, parseGraphLink } from "../state/tabs.svelte";
   import type { PathPromptMode } from "../state/store.svelte";
 
   let value = $state("");
@@ -153,9 +154,21 @@
   /// of any auto-resolution. We also re-validate the resolved
   /// path as a defensive backstop in case auto-resolution ever
   /// produces something the raw input wouldn't have.
+  /// Open-mode graph-link detection. A `chan://graph?...` target rides to
+  /// the server verbatim, so path validation (which rejects `:` and `?`)
+  /// must not see it; parseGraphLink is the judge instead.
+  const openGraphLink = $derived(
+    pathPromptState.mode === "open" && value.trim().startsWith(GRAPH_LINK_PREFIX),
+  );
+
   const validation = $derived.by(() => {
     const trimmed = value.trim();
     if (trimmed === "") return { ok: true as const };
+    if (openGraphLink) {
+      return parseGraphLink(trimmed)
+        ? { ok: true as const }
+        : { ok: false as const, reason: "not a valid chan://graph link" };
+    }
     // A directory target may legitimately end in `/` (the "New File
     // or Directory" caption invites it, and an explicit New Directory
     // dialog produces it once the user types `name/`). Only allow the
@@ -317,6 +330,10 @@
     | { kind: "kind-mismatch"; reason: string }
     | { kind: "no-op" }
     | { kind: "overwrites"; path: string; isFolder: boolean }
+    /// Open mode over an existing entry: the normal case, no creation.
+    | { kind: "opens"; path: string; isFolder: boolean }
+    /// Open mode over a valid `chan://graph?...` link.
+    | { kind: "opens-graph" }
     | {
         kind: "creates";
         /// Ancestor directories that need to be created. Empty when
@@ -334,12 +351,30 @@
     const path = normalizedPath;
     if (path === "") return { kind: "empty" };
     if (!validation.ok) return { kind: "invalid", reason: validation.reason };
+    if (openGraphLink) return { kind: "opens-graph" };
 
     // Existing entry at the exact typed path: file overwrite (move)
     // or kind-mismatch. Directory overwrite is also a mismatch because
     // chan-workspace refuses to replace directory targets.
     const targetEntry = entryByPath.get(path);
     const wantDir = effectiveKind === "folder";
+
+    // Open mode never treats an existing entry as an error: an existing
+    // directory opens the file browser, an existing file opens the
+    // editor (the server's content sniff has the final word on binary).
+    // A path the tree doesn't know gets the ruling-6 disclosure: the
+    // server creates it empty and opens it, full `cs open` parity.
+    if (pathPromptState.mode === "open") {
+      if (targetEntry) {
+        return { kind: "opens", path, isFolder: targetEntry.is_dir };
+      }
+      return {
+        kind: "creates",
+        newAncestors: missingAncestors(path),
+        target: { path, isFolder: wantDir },
+        mode: pathPromptState.mode,
+      };
+    }
     if (targetEntry) {
       if (targetEntry.is_dir !== wantDir) {
         const have = targetEntry.is_dir ? "directory" : "file";
@@ -619,6 +654,12 @@
           <span class="mono">{status.path}{status.isFolder ? "/" : ""}</span>
         {:else if status.kind === "no-op"}
           <span class="muted">unchanged</span>
+        {:else if status.kind === "opens-graph"}
+          → opens graph link
+        {:else if status.kind === "opens"}
+          → opens {status.isFolder ? "directory " : ""}<span class="mono"
+            >{status.path}{status.isFolder ? "/" : ""}</span
+          >
         {:else}
           {@const segs = pathSegments(status)}
           {@const arrow = status.newAncestors.length > 0 ? "⚠" : "→"}
@@ -627,6 +668,8 @@
             moves to
           {:else if status.mode === "attach"}
             attach watcher to
+          {:else if status.mode === "open"}
+            creates and opens
           {:else}
             new {status.target.isFolder ? "directory" : "file"}
           {/if}

@@ -7,16 +7,19 @@
 // Register with registerCommands. See state/commands.ts for the Command
 // shape and helpers.
 
-import { registerCommands } from "../commands";
+import { registerCommands, workspaceOnly } from "../commands";
 import {
+  launcherReturnFocus,
   setThemeChoice,
   setTransientStatus,
+  ui,
+  uiPathPrompt,
   uiPrompt,
   workspace,
 } from "../store.svelte";
 import { loadScreensaverState, lockNow } from "../screensaver.svelte";
 import { hashPin } from "../screensaver";
-import { api } from "../../api/client";
+import { api, sessionWindowId } from "../../api/client";
 import {
   hideWindowFromCloseConfirm,
   isTauriDesktop,
@@ -45,6 +48,41 @@ async function testScreenLock(): Promise<void> {
   lockNow();
 }
 
+/// Send an Open target through `POST /api/open` (Contract C): the server
+/// applies the exact `cs open` semantics (dir -> browser, text -> editor,
+/// missing -> create + open, graph link verbatim) and the resulting window
+/// command rides /ws back to THIS window. Success needs no pill of its own
+/// - the arriving frame's handler already reports; a refusal lands in the
+/// status pill persistently so it survives until the user has seen it.
+async function executeOpen(target: string): Promise<void> {
+  try {
+    await api.open({ window_id: sessionWindowId(), target });
+  } catch (err) {
+    ui.status = `open failed: ${err instanceof Error ? err.message : String(err)}`;
+  }
+}
+
+/// The bare "Open" flow: a PathPromptModal in `open` mode (autocomplete,
+/// no extension append, graph links allowed, ruling-6 "creates and opens"
+/// disclosure). Cancel restores focus to the element captured when the
+/// launcher opened (the launcher itself is long dismissed by now); a
+/// submitted open hands focus to the opened surface instead.
+async function openPathDialog(): Promise<void> {
+  const returnFocus = launcherReturnFocus();
+  const target = await uiPathPrompt({
+    title: "Open path or chan://graph link",
+    kind: "either",
+    mode: "open",
+    allowAbsolute: true,
+  });
+  if (target === null) {
+    if (returnFocus?.isConnected) returnFocus.focus();
+    return;
+  }
+  const trimmed = target.trim();
+  if (trimmed !== "") await executeOpen(trimmed);
+}
+
 /// Prompt twice and set the screen-lock PIN. The salt is the workspace
 /// root so the same digits hash differently per workspace, matching the
 /// About-pane PIN dialog.
@@ -68,6 +106,26 @@ async function setScreenLockPin(): Promise<void> {
 }
 
 registerCommands([
+  {
+    // The global Open: bare invocation pops the path dialog; "Open <path>"
+    // typed in the launcher forwards the remainder straight to /api/open
+    // (acceptsArg). workspaceOnly hides it in standalone-terminal windows
+    // (precedent "New file"): the route only mounts on workspace tenants
+    // and the control socket refuses opens there anyway, so the launcher
+    // simply never offers it.
+    id: "app.open.path",
+    title: "Open",
+    category: "Global",
+    keywords: ["open", "file", "path", "folder", "go to", "goto", "graph link"],
+    icon: "folder",
+    available: workspaceOnly,
+    acceptsArg: true,
+    run: (arg?: string) => {
+      const target = arg?.trim();
+      if (target) void executeOpen(target);
+      else void openPathDialog();
+    },
+  },
   {
     id: "app.theme.system",
     title: "Theme: system",

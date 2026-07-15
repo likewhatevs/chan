@@ -80,10 +80,16 @@ export type Command = {
   /// Whether the command shows in the given context. Unavailable
   /// commands are hidden (not shown-disabled) for a clean Spotlight feel.
   available: (ctx: CommandContext) => boolean;
+  /// Whether the launcher forwards a typed argument: with this set, a
+  /// query like "Open notes/x.md" matches the command on its HEAD token
+  /// and run() receives the verbatim remainder. A bare invocation (row
+  /// picked with no remainder) passes undefined. Defaults to false.
+  acceptsArg?: boolean;
   /// Perform the action. Reuse-existing commands dispatch their id
   /// through the chan:command bridge; chordless commands call their
-  /// action directly.
-  run: () => void;
+  /// action directly. `arg` is the launcher's verbatim remainder for
+  /// acceptsArg commands; everything else ignores it.
+  run: (arg?: string) => void;
 };
 
 // ---- registry ----------------------------------------------------------

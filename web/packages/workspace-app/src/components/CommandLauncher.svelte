@@ -28,7 +28,11 @@
   } from "lucide-svelte";
   import OverlayShell from "./OverlayShell.svelte";
   import CommandChordAssign from "./CommandChordAssign.svelte";
-  import { launcherPanel, closeCommandLauncher } from "../state/store.svelte";
+  import {
+    launcherPanel,
+    closeCommandLauncher,
+    launcherReturnFocus,
+  } from "../state/store.svelte";
   import {
     availableCommands,
     commandContext,
@@ -127,9 +131,13 @@
     return best;
   }
 
-  type Row = { cmd: Command; index: number };
+  /// One runnable list entry: the command plus, for an acceptsArg match
+  /// via the head-token split, the verbatim argument remainder that
+  /// run() will receive.
+  type Entry = { cmd: Command; arg?: string };
+  type Row = Entry & { index: number };
   type Group = { label: string; rows: Row[] };
-  type ScoredCommand = { cmd: Command; score: number };
+  type ScoredCommand = Entry & { score: number };
 
   const ctx = $derived(commandContext());
   const hasQuery = $derived(launcherPanel.query.trim().length > 0);
@@ -197,7 +205,7 @@
     }
     const n = ((index % flat.length) + flat.length) % flat.length;
     highlight = n;
-    highlightedCommandKey = commandKey(flat[n]);
+    highlightedCommandKey = commandKey(flat[n].cmd);
   }
 
   // The query never hides an available command; it only reorders. Matches
@@ -209,14 +217,31 @@
   // then the rest). Each row carries its flat index so arrow navigation and
   // aria-activedescendant span the sections in order.
   const groups = $derived.by<Group[]>(() => {
-    const query = launcherPanel.query.trim().toLowerCase();
+    const raw = launcherPanel.query.trim();
+    const query = raw.toLowerCase();
     if (query === "") return [];
+    // Head-token split for arg-accepting commands: "Open notes/x.md"
+    // scores "open" against the command and carries "notes/x.md" to
+    // run() VERBATIM (no lowercasing - paths are case-sensitive).
+    const argSplit = /^(\S+)\s+(.+)$/.exec(raw);
+    const argHead = argSplit ? argSplit[1].toLowerCase() : null;
+    const argRest = argSplit ? argSplit[2] : null;
     const matches: ScoredCommand[] = [];
     const rest: Command[] = [];
     for (const cmd of availableCommands(ctx)) {
       const score = commandScore(cmd, query);
-      if (score !== null) matches.push({ cmd, score });
-      else rest.push(cmd);
+      if (score !== null) {
+        matches.push({ cmd, score });
+        continue;
+      }
+      if (cmd.acceptsArg && argHead !== null && argRest !== null) {
+        const headScore = commandScore(cmd, argHead);
+        if (headScore !== null) {
+          matches.push({ cmd, score: headScore, arg: argRest });
+          continue;
+        }
+      }
+      rest.push(cmd);
     }
     const out: Group[] = [];
     let index = 0;
@@ -225,7 +250,7 @@
       matches.sort((a, b) => b.score - a.score || compareCommands(a, b));
       out.push({
         label: "Results",
-        rows: matches.map((x) => ({ cmd: x.cmd, index: index++ })),
+        rows: matches.map((x) => ({ cmd: x.cmd, arg: x.arg, index: index++ })),
       });
     }
     // Below: the rest of the available catalog, nothing dropped, grouped by
@@ -254,7 +279,9 @@
     return out;
   });
 
-  const flat = $derived(groups.flatMap((g) => g.rows.map((r) => r.cmd)));
+  const flat = $derived(
+    groups.flatMap((g) => g.rows.map((r): Entry => ({ cmd: r.cmd, arg: r.arg }))),
+  );
 
   // Whether the current query matched anything. Matches float into the
   // leading "Results" section (no CommandCategory shares that label), so
@@ -282,7 +309,9 @@
       return;
     }
     if (highlightedCommandKey) {
-      const index = rows.findIndex((cmd) => commandKey(cmd) === highlightedCommandKey);
+      const index = rows.findIndex(
+        (entry) => commandKey(entry.cmd) === highlightedCommandKey,
+      );
       if (index >= 0) {
         highlight = index;
         return;
@@ -291,11 +320,14 @@
     setHighlight(autoIndex);
   });
 
-  // Open/close focus management.
+  // Open/close focus management. The pre-launcher element is captured by
+  // openCommandLauncher() (module-level, so a command's own dialog flow
+  // can restore it after the launcher is gone); this component just reads
+  // it back for the plain-dismissal restore.
   $effect(() => {
     const open = launcherPanel.open;
     if (open && !wasOpen) {
-      restoreTarget = document.activeElement as HTMLElement | null;
+      restoreTarget = launcherReturnFocus();
       ranCommand = false;
       lastQuery = launcherPanel.query;
       setHighlight(0);
@@ -317,13 +349,14 @@
     });
   }
 
-  function run(cmd: Command): void {
+  function run(entry: Entry): void {
     // Close first so a command that opens another surface lands on top of
     // the dismissed launcher; the command's action owns focus next, so
-    // suppress focus restore.
+    // suppress focus restore. The head-token remainder (if any) rides to
+    // run() verbatim; a bare invocation passes undefined.
     ranCommand = true;
     closeCommandLauncher();
-    cmd.run();
+    entry.cmd.run(entry.arg);
   }
 
   function onKeydown(e: KeyboardEvent): void {
@@ -342,8 +375,8 @@
     } else if (e.key === "Enter") {
       e.preventDefault();
       e.stopPropagation();
-      const cmd = flat[highlight];
-      if (cmd) run(cmd);
+      const entry = flat[highlight];
+      if (entry) run(entry);
     } else if (e.key === "Tab") {
       // The input is the only focusable control, so keep focus on it
       // rather than letting Tab escape to the page behind the overlay.
@@ -404,14 +437,18 @@
                   role="option"
                   tabindex="-1"
                   aria-selected={row.index === highlight}
-                  onclick={() => run(row.cmd)}
+                  onclick={() => run(row)}
                   onpointermove={() => setHighlight(row.index)}
                 >
                   <span class="row-icon">
                     <Icon size={21} strokeWidth={1.6} aria-hidden="true" />
                   </span>
                   <span class="row-copy">
-                    <span class="title">{row.cmd.title}</span>
+                    <span class="title"
+                      >{row.cmd.title}{#if row.arg}<span class="arg"
+                          >{" "}{row.arg}</span
+                        >{/if}</span
+                    >
                     <span class="description">{row.cmd.category}</span>
                   </span>
                   <CommandChordAssign
@@ -542,6 +579,14 @@
     white-space: nowrap;
     font-size: 14px;
     font-weight: 600;
+  }
+  /* The verbatim argument a head-token match carries ("Open notes/x.md"):
+     mono + muted so it reads as the payload, not part of the title. */
+  .title .arg {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-weight: 400;
+    color: var(--text-secondary);
+    white-space: pre;
   }
   .description {
     overflow: hidden;
