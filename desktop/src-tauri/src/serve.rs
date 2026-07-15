@@ -1055,6 +1055,34 @@ fn build_workspace_window(app: &AppHandle, spec: WindowSpec<'_>) -> Result<(), S
             // `read_dropped_paths` (dropped_paths.rs) instead of
             // native drag events.
             .disable_drag_drop_handler();
+        // Off-mac the menubar renders per window, so each SPA window is
+        // born with its kind's bar (built in main.rs): workspace windows
+        // get the pane-hamburger-mirror File menu addressed to this
+        // window's label; standalone terminals get the launcher shape
+        // without the New-Terminal chord claim (KEY_BRIDGE_JS keeps
+        // Ctrl+Shift+T = new terminal tab). Control terminals inherit
+        // the app-wide launcher menu. Best-effort: a menu-build failure
+        // just leaves the inherited default bar.
+        #[cfg(not(target_os = "macos"))]
+        let builder = {
+            let menu = match kind_owned.as_str() {
+                "workspace" => Some(crate::build_workspace_menu(&app_owned, &label_owned)),
+                "terminal" => Some(crate::build_launcher_menu(&app_owned, false)),
+                _ => None,
+            };
+            match menu {
+                Some(Ok(menu)) => builder.menu(menu),
+                Some(Err(e)) => {
+                    tracing::warn!(
+                        label = %label_owned,
+                        error = %e,
+                        "building the per-window menu failed",
+                    );
+                    builder
+                }
+                None => builder,
+            }
+        };
         // Build hidden when restored geometry will be applied, so the window
         // never flashes at the default size/position before it is repositioned.
         let builder = if geometry_plan.builds_hidden() {
@@ -1067,6 +1095,12 @@ fn build_workspace_window(app: &AppHandle, spec: WindowSpec<'_>) -> Result<(), S
                 // Apply the restored OS geometry (physical px) and reveal the
                 // window at its final size/position before anything else.
                 apply_geometry_plan(&window, &label_owned, geometry_plan);
+                // A per-window menubar is born without the dynamic
+                // Window-submenu tail (open/hidden/remote sections); one
+                // rebuild pass stamps it onto every live bar, this one
+                // included.
+                #[cfg(not(target_os = "macos"))]
+                crate::rebuild_window_menu(&app_owned);
                 // Register the OS title + kind so `cs window list` shows
                 // the same title the title bar does. The `Destroyed` arm
                 // below drops the entry. No-op without an embedded server
