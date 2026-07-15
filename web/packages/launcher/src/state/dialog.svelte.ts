@@ -1,6 +1,6 @@
 // The New-workspace / devserver dialog's open/choice/edit state. Two
 // context-anchored entry points open it pre-set to a choice: the LOCAL
-// [new workspace] button opens "local", the bottom "Add dev server" button
+// [new workspace] button opens "local", the bottom "Add devserver" button
 // opens "devserver". There is no in-dialog chooser. The devserver body doubles
 // as the edit form, prefilled from `editing` (null = add a new one).
 

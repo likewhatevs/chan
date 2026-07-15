@@ -60,7 +60,7 @@
         : "Edit devserver"
       : showLocal
         ? "New workspace"
-        : "Add dev server",
+        : "Add devserver",
   );
 
   function msg(e: unknown): string {
@@ -299,7 +299,7 @@
       <button class="btn primary" type="button" onclick={closeDialog}>OK</button>
     {:else}
       <button class="btn primary" type="button" disabled={submitting} onclick={submitDevserver}>
-        {editing ? "Save changes" : "Add dev server"}
+        {editing ? "Save changes" : "Add devserver"}
       </button>
     {/if}
   </div>

@@ -1,6 +1,6 @@
 <section class="page-head">
   <h1>Manual</h1>
-  <p>What chan is and how to get productive with it: terminals, workspaces, the command launcher, dev servers, and the editor.</p>
+  <p>What chan is and how to get productive with it: terminals, workspaces, the command launcher, devservers, and the editor.</p>
 </section>
 
 <section class="manual-block" id="what-is-chan">
@@ -21,7 +21,7 @@
   <div class="section-heading">
     <h2><a class="heading-anchor" href="#first-run">First run: the Computers screen</a></h2>
   </div>
-  <p>Chan Desktop opens on the Computers screen. It lists this machine and any dev servers you add later. The "This machine" card has two buttons:</p>
+  <p>Chan Desktop opens on the Computers screen. It lists this machine and any devservers you add later. The "This machine" card has two buttons:</p>
   <ul>
     <li><strong>New terminal</strong> opens a standalone terminal window.</li>
     <li><strong>New workspace</strong> registers a folder as a workspace (see Workspaces below).</li>
@@ -163,7 +163,7 @@
   </ul>
   <p>Now add the devserver to Chan Desktop:</p>
   <ol>
-    <li>On the Computers screen, click <strong>Add dev server</strong> at the bottom.</li>
+    <li>On the Computers screen, click <strong>Add devserver</strong> at the bottom.</li>
     <li>Fill in Name, Address, and Connect script. Examples:
       <ul>
         <li>lima-vm from macOS:
@@ -187,11 +187,11 @@
       </ul>
     </li>
     <li>Optionally tick <strong>Auto-hide control terminal on success</strong> so the terminal running the connect script hides itself once connected.</li>
-    <li>Click <strong>Add dev server</strong>, then click Connect on the machine's row.</li>
+    <li>Click <strong>Add devserver</strong>, then click Connect on the machine's row.</li>
   </ol>
   <figure class="launcher-manual">
-    <iframe class="launcher-demo-embed" src="/manual/demo/devserver/" title="Interactive Add dev server demo" loading="lazy"></iframe>
-    <figcaption>The Add dev server form. This is a live mock too: fill it in, add, and connect.</figcaption>
+    <iframe class="launcher-demo-embed" src="/manual/demo/devserver/" title="Interactive Add devserver demo" loading="lazy"></iframe>
+    <figcaption>The Add devserver form. This is a live mock too: fill it in, add, and connect.</figcaption>
   </figure>
   <p>Once connected, remote terminals and workspaces behave like local ones: run <code>chan open {path}</code> in a devserver terminal to create a workspace on that machine. Disconnecting keeps the remote sessions alive and running; reconnect and pick up where you left off.</p>
   <p>The clipboard and file transfer work across the connection too: see <a href="#copy-paste">Copy and paste freely</a> and <a href="#download-upload">Download and upload freely</a> in the Terminals section.</p>

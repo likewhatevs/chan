@@ -82,7 +82,7 @@ describe("New workspace dialog -- devserver", () => {
   it("shows Name + a single Address field + Connect script + auto-hide + the tip", () => {
     openNewDialog("devserver");
     const el = render();
-    expect(el.textContent).toContain("Add dev server");
+    expect(el.textContent).toContain("Add devserver");
     expect(el.textContent).toContain("Address");
     expect(el.querySelector("textarea")).not.toBeNull();
     expect(el.textContent).toContain("Auto-hide control terminal on success");
@@ -110,7 +110,7 @@ describe("New workspace dialog -- devserver", () => {
     const el = render();
     setInput(addressInput(el), "valid.example.com:8787");
     flushSync();
-    btn(el, "Add dev server").click();
+    btn(el, "Add devserver").click();
     await settle();
     flushSync();
     expect(el.querySelector('[role="alert"]')).toBeNull();
@@ -124,7 +124,7 @@ describe("New workspace dialog -- devserver", () => {
     const el = render();
     setInput(addressInput(el), "https://proxy.example.com:9443?t=sekret");
     flushSync();
-    btn(el, "Add dev server").click();
+    btn(el, "Add devserver").click();
     await settle();
     flushSync();
     expect(el.querySelector('[role="alert"]')).toBeNull();
@@ -141,7 +141,7 @@ describe("New workspace dialog -- devserver", () => {
     const el = render();
     setInput(addressInput(el), "https://old.example.com:9443?token=sekret");
     flushSync();
-    btn(el, "Add dev server").click();
+    btn(el, "Add devserver").click();
     await settle();
     flushSync();
     const added = library.devservers.find((d) => d.host === "old.example.com" && d.port === 9443);
@@ -154,7 +154,7 @@ describe("New workspace dialog -- devserver", () => {
     const el = render();
     setInput(addressInput(el), "no-port-here");
     flushSync();
-    btn(el, "Add dev server").click();
+    btn(el, "Add devserver").click();
     flushSync();
     expect(el.querySelector('[role="alert"]')?.textContent).toContain("address");
   });
@@ -164,7 +164,7 @@ describe("New workspace dialog -- devserver", () => {
     const el = render();
     setInput(addressInput(el), "host::8787");
     flushSync();
-    btn(el, "Add dev server").click();
+    btn(el, "Add devserver").click();
     flushSync();
     expect(el.querySelector('[role="alert"]')?.textContent).toContain("address");
   });

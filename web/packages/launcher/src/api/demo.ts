@@ -252,7 +252,7 @@ export type LauncherDemoOptions = {
   onOpenWindow?: (id: string) => void;
   /// "populated" is the home hero's library fixture; "empty" is the manual's
   /// first-run mock (local machine only, nothing created yet); "devserver" is
-  /// the same empty seed with the Add-dev-server dialog opened on mount.
+  /// the same empty seed with the Add-devserver dialog opened on mount.
   variant?: LauncherDemoVariant;
 };
 

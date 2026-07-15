@@ -628,7 +628,7 @@
 {#if hasDesktopBridge}
   <button class="add-devserver" type="button" onclick={() => openNewDialog("devserver")}>
     <Plus size={16} />
-    Add dev server
+    Add devserver
   </button>
 {/if}
 

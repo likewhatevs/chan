@@ -2,7 +2,7 @@
   // The launcher's top bar: the "Computers" title with its subtitle, a Gmail-style
   // Select-mode toggle, and the theme toggle. The add-workspace and add-devserver
   // entry points live in the library tree (the LOCAL header's [new workspace] and
-  // the bottom "Add dev server" dashed button), and open-terminal lives in each
+  // the bottom "Add devserver" dashed button), and open-terminal lives in each
   // machine header, so the top bar stays the global chrome: title + select + theme.
   import { Moon, SquareCheckBig, Sun } from "lucide-svelte";
   import { themeState, toggleTheme } from "../state/theme.svelte";
@@ -13,7 +13,7 @@
 <header class="topbar">
   <div class="title">
     <h1 class="brand">Computers</h1>
-    <p class="subtitle">This machine &amp; dev servers</p>
+    <p class="subtitle">This machine &amp; devservers</p>
   </div>
   <div class="actions">
     {#if !readOnly}

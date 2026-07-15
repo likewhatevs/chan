@@ -3,7 +3,7 @@
 // desktop bridge. So the local create controls show, window rows carry an OPEN
 // action plus a bridgeless leader-gated Eye toggle (not the desktop Focus
 // bridge), and remote-devserver dialing (connect/disconnect,
-// devserver terminal, Add dev server) is hidden. New-window controls gate on
+// devserver terminal, Add devserver) is hidden. New-window controls gate on
 // per-tenant leadership. Desktop parity is in Library.test.ts, readonly in
 // LibraryReadOnly.test.ts.
 
@@ -72,7 +72,7 @@ describe("Library self-managed surface", () => {
     expect(l.some((x) => x.startsWith("New terminal on"))).toBe(false);
     expect(l.some((x) => x.startsWith("Connect ") || x.startsWith("Disconnect "))).toBe(false);
     expect(
-      [...target!.querySelectorAll("button")].some((b) => b.textContent?.includes("Add dev server")),
+      [...target!.querySelectorAll("button")].some((b) => b.textContent?.includes("Add devserver")),
     ).toBe(false);
   });
 

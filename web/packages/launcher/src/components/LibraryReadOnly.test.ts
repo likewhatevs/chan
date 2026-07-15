@@ -66,7 +66,7 @@ describe("Library read-only parity", () => {
     expect(l.some((x) => x.startsWith("New local"))).toBe(false);
     expect(l.some((x) => x.startsWith("New terminal on"))).toBe(false);
     expect(
-      [...target!.querySelectorAll("button")].some((b) => b.textContent?.includes("Add dev server")),
+      [...target!.querySelectorAll("button")].some((b) => b.textContent?.includes("Add devserver")),
     ).toBe(false);
     // No selection checkboxes.
     expect(target!.querySelector('input[type="checkbox"]')).toBeNull();

@@ -63,9 +63,9 @@
 
   onMount(() => {
     void resetDemoData().then(() => {
-      // The devserver embed is ABOUT the Add-dev-server form, so it greets the
+      // The devserver embed is ABOUT the Add-devserver form, so it greets the
       // reader with the dialog already open (closable and reopenable via the
-      // real Add dev server button).
+      // real Add devserver button).
       if (variant === "devserver") openNewDialog("devserver");
     });
     return () => {

@@ -44,7 +44,7 @@ describe("launcher root", () => {
     const topbar = target.querySelector(".topbar")!;
     expect(topbar).not.toBeNull();
     expect(topbar.textContent).toContain("Computers");
-    expect(topbar.textContent).toContain("This machine & dev servers");
+    expect(topbar.textContent).toContain("This machine & devservers");
     expect(target.querySelector('[aria-label="Toggle theme"]')).not.toBeNull();
     // The Gmail-style Select-mode toggle (reveals the row checkboxes).
     expect(topbar.querySelector("button.select")).not.toBeNull();
@@ -68,7 +68,7 @@ describe("launcher root", () => {
     expect(target.querySelector('[aria-label="New local workspace"]')).not.toBeNull();
     // The decoupled add-devserver entry is the bottom dashed button in the tree.
     const addDs = [...target.querySelectorAll("button")].find((b) =>
-      b.textContent?.includes("Add dev server"),
+      b.textContent?.includes("Add devserver"),
     );
     expect(addDs).toBeTruthy();
   });

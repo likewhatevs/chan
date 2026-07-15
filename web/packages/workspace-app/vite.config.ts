@@ -30,7 +30,7 @@ const svelteClient = join(dirname(require.resolve("svelte/package.json")), "src/
 // sessions and chan-desktop degrade silently. Copy the package's prod
 // fonts verbatim into dist/static/excalidraw/fonts (chan-server serves
 // web/dist/static/* through its SPA fallback, prefix-aware) and serve the
-// same files from the dev server. Filenames must survive the copy since
+// same files from the vite dev server. Filenames must survive the copy since
 // excalidraw composes them itself, so no hashing. Xiaolai (the 12.7M CJK
 // family) is excluded, keeping dist growth near 0.5M; CJK boards fall back
 // to the CDN exactly as before self-hosting.

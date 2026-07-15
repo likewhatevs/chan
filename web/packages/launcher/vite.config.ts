@@ -32,7 +32,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 // Frozen rust-embed input path (X-2): repo-root web-launcher/dist.
 const OUT_DIR = join(here, "../../../web-launcher/dist");
 
-// The backend port the dev server proxies to. Defaults to 8787 (the local
+// The backend port the vite dev server proxies to. Defaults to 8787 (the local
 // loopback library / a default `chan devserver`); override with VITE_PROXY_PORT
 // to point at a devserver on another port.
 const proxyPort = process.env.VITE_PROXY_PORT ?? "8787";

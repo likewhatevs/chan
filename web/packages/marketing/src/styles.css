@@ -705,7 +705,7 @@ code {
    desktop-launcher width; the first-run callouts render OUTSIDE it in the
    right gutter (in-window bubbles cover the card), shown per the hint flags
    the demo stamps on its frame. Fixed height so the in-frame dialogs (New
-   workspace, Add dev server) clear the fold under overflow: hidden. */
+   workspace, Add devserver) clear the fold under overflow: hidden. */
 .launcher-manual {
   margin: 24px 0;
 }
@@ -733,7 +733,7 @@ code {
 
 /* The devserver-form demo: same window chrome as the first-run mock, but the
    demo lives in an iframe because a LauncherDemo mount is one-per-page.
-   Taller than the first-run mock: it opens ON the Add-dev-server form, which
+   Taller than the first-run mock: it opens ON the Add-devserver form, which
    needs the extra rows to breathe. */
 .launcher-demo-embed {
   display: block;

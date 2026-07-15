@@ -100,7 +100,7 @@ async function main() {
       active: "manual",
       bodyClass: "manual-page",
       title: "Chan manual",
-      description: "What chan is and how to get productive with it: terminals, workspaces, the command launcher, dev servers, and the editor.",
+      description: "What chan is and how to get productive with it: terminals, workspaces, the command launcher, devservers, and the editor.",
       content: fillTemplate(manualTemplate, { version, ...releaseTemplateValues }),
       headExtra: launcherDemoHead,
     }),
@@ -112,7 +112,7 @@ async function main() {
   await writePage(
     "manual/demo/devserver/index.html",
     fillTemplate(demoEmbedTemplate, {
-      title: "Add dev server demo",
+      title: "Add devserver demo",
       variant: "devserver",
     }),
   );

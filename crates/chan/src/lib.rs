@@ -2354,7 +2354,7 @@ async fn cmd_serve(args: ServeArgs, personality: Personality) -> Result<()> {
         // register with it instead of fighting for the lock. Worded as a
         // possibility: we have not confirmed the holder IS a devserver.
         Err(chan_workspace::ChanError::WorkspaceLocked) => anyhow::bail!(
-            "the workspace is held by another process; if a local dev server \
+            "the workspace is held by another process; if a local devserver \
              owns it, run `chan open --devserver` to register with it."
         ),
         Err(e) => return Err(e.into()),
