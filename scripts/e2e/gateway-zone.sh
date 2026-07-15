@@ -75,7 +75,7 @@ MAX_DEVSERVERS=2
 # Scenario dispatch: "all" (default) = core suite + every registered
 # scenario; "core" = the inline suite only; a registered name = stack
 # bring-up + that scenario only. Lanes append their scenario name here.
-SCENARIOS="sweeper"
+SCENARIOS="sweeper watchdog"
 SCENARIO="${1:-all}"
 RUN_CORE=1
 case "$SCENARIO" in all | core) ;; *) RUN_CORE=0 ;; esac
@@ -878,6 +878,149 @@ scenario_sweeper() {
     else
         assert_fail "sweeper: restore did not bring B's row back"
     fi
+}
+
+# Scenario: gateway devserver liveness watchdog (item 5). Holds devserver A's
+# window-feed WS through the REAL proxy and proves the pieces the client
+# watchdog depends on: the keepalive Ping is answered end to end (the proxy
+# bridge forwards Ping/Pong, the devserver's axum /watch auto-pongs), a SIGSTOP'd
+# proxy leaves the held socket a half-open zombie -- no Pong AND no onclose --
+# while a fresh dial still routes (the dishonest-green asymmetry), and SIGCONT
+# heals the socket. The SPA DisconnectOverlay and the desktop Unreachable
+# rendering are unit-covered (workspace-app transportHeartbeat/disconnectOverlay,
+# chan-desktop entry_from_devserver); this scenario cannot drive a browser
+# because the rig's chan is built --no-default-features and serves no SPA bundle,
+# so it asserts the server+proxy behaviour those clients sit on.
+scenario_watchdog() {
+    # A lone-scenario run skips the core suite, so mint devserver A's entry +
+    # gate cookie here (the same two-hop check_entry_routes does).
+    local host body entry_url hdrs cookie
+    host="$ALICE_USER--$(disc "$DS_A").devserver.$DOMAIN"
+    body="$(entry_for "$PAT_A" "{\"devserver_id\":\"$DS_A\"}")"
+    entry_url="$(printf %s "$body" | json_get entry_url)"
+    if [ -z "$entry_url" ]; then
+        assert_fail "watchdog: no entry_url minted for devserver A: $body"
+        return
+    fi
+    hdrs="$WORK/hdrs-watchdog.txt"
+    curl_host "$host" -o /dev/null -D "$hdrs" "$entry_url" >/dev/null
+    cookie="$(sed -n 's/^[Ss]et-[Cc]ookie: \(devserver_gate=[^;]*\).*/\1/p' "$hdrs" | head -1)"
+    if [ -z "$cookie" ]; then
+        assert_fail "watchdog: no gate cookie minted for devserver A"
+        return
+    fi
+
+    # A fresh dial through the proxy still routes to the devserver (200, or the
+    # no-bundle banner from a chan built without web assets) -- the poll-heals
+    # path the launcher green dot rides even while a held socket is dead.
+    local fresh
+    fresh="$(curl_host "$host" -o /dev/null -w '%{http_code}' -H "Cookie: $cookie" \
+        "http://$host:$PROXY_PORT/")"
+    case "$fresh" in
+    200 | 404) assert_pass "watchdog: a fresh dial routes to the devserver ($fresh)" ;;
+    *) assert_fail "watchdog: fresh dial did not reach the devserver (got $fresh)" ;;
+    esac
+
+    # The probe holds the feed WS and drives three phases (alive / proxy SIGSTOP
+    # / SIGCONT), reporting per-phase whether a WS Ping is answered and whether
+    # onclose fired.
+    cat > "$WORK/watchdog-probe.mjs" <<'PROBE'
+import { createRequire } from "node:module";
+import fs from "node:fs";
+const require = createRequire(process.env.WORK + "/x.js");
+const { WebSocket } = require("ws");
+const { WORK, PROXY_PORT, WD_HOST, WD_COOKIE } = process.env;
+const PROXY_PID = Number(fs.readFileSync(`${WORK}/pids/proxy.pid`, "utf8").trim());
+const log = (o) => console.log(JSON.stringify(o));
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+// Send a WS Ping; resolve true iff a Pong comes back within `ms`.
+function pingPong(ws, ms) {
+  return new Promise((resolve) => {
+    let done = false;
+    const onPong = () => { if (!done) { done = true; ws.off("pong", onPong); resolve(true); } };
+    ws.on("pong", onPong);
+    try { ws.ping(); } catch {}
+    setTimeout(() => { if (!done) { done = true; ws.off("pong", onPong); resolve(false); } }, ms);
+  });
+}
+const ws = new WebSocket(`ws://127.0.0.1:${PROXY_PORT}/api/library/windows/watch`, {
+  headers: { Host: `${WD_HOST}:${PROXY_PORT}`, Cookie: WD_COOKIE },
+});
+let firstFrame = false, closed = false;
+ws.on("message", () => { firstFrame = true; });
+ws.on("close", () => { closed = true; });
+ws.on("error", () => {});
+const opened = await new Promise((res) => {
+  ws.on("open", () => res(true));
+  setTimeout(() => res(false), 5000);
+});
+if (!opened) { log({ SUMMARY: { opened: false } }); process.exit(0); }
+await sleep(1000);
+const aliveKeepalive = await pingPong(ws, 3000);
+log({ phase: "alive", firstFrame, pong: aliveKeepalive });
+
+// Freeze the proxy: the held client<->proxy TCP stays ESTABLISHED (kernel), but
+// the frozen app forwards nothing -- the sleep-zombie condition.
+process.kill(PROXY_PID, "SIGSTOP");
+await sleep(1000);
+const frozenPong = await pingPong(ws, 4000);
+const closedWhileFrozen = closed;
+log({ phase: "frozen", pong: frozenPong, closed: closedWhileFrozen });
+
+process.kill(PROXY_PID, "SIGCONT");
+await sleep(1500);
+const recovered = await pingPong(ws, 5000);
+log({ phase: "recovered", pong: recovered });
+
+log({ SUMMARY: {
+  opened: true, firstFrame, aliveKeepalive,
+  frozenSilent: !frozenPong, frozenNoOnclose: !closedWhileFrozen, recovered,
+} });
+try { ws.terminate(); } catch {}
+process.exit(0);
+PROBE
+
+    local out
+    out="$(WORK="$WORK" PROXY_PORT="$PROXY_PORT" WD_HOST="$host" WD_COOKIE="$cookie" \
+        node "$WORK/watchdog-probe.mjs" 2>> "$LOGS/watchdog.log")"
+    # Belt and braces: whatever the probe did, make sure the proxy is running
+    # again so the stack stays usable for later scenarios / teardown.
+    local ppid
+    ppid="$(cat "$WORK/pids/proxy.pid" 2>/dev/null)"
+    [ -n "$ppid" ] && kill -CONT "$ppid" 2>/dev/null
+    :
+
+    local summary
+    summary="$(printf %s "$out" | grep '"SUMMARY"' | tail -1)"
+    if [ -z "$summary" ]; then
+        assert_fail "watchdog: probe produced no summary (see logs/watchdog.log)"
+        return
+    fi
+    wd_field() { # wd_field <key>; prints SUMMARY.<key> from the probe JSON
+        printf %s "$summary" | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{console.log(String(JSON.parse(d).SUMMARY[process.argv[1]]))}catch{console.log("")}})' "$1"
+    }
+
+    if [ "$(wd_field opened)" = "true" ]; then
+        assert_pass "watchdog: feed WS opened through the proxy"
+    else
+        assert_fail "watchdog: feed WS did not open through the proxy"
+        return
+    fi
+    [ "$(wd_field firstFrame)" = "true" ] &&
+        assert_pass "watchdog: server pushed the window snapshot on connect" ||
+        assert_fail "watchdog: no window snapshot frame on connect"
+    [ "$(wd_field aliveKeepalive)" = "true" ] &&
+        assert_pass "watchdog: keepalive Ping answered through the proxy (server auto-pong)" ||
+        assert_fail "watchdog: keepalive Ping got no Pong on a live proxy"
+    [ "$(wd_field frozenSilent)" = "true" ] &&
+        assert_pass "watchdog: a frozen proxy silences the Ping (the read-deadline trigger)" ||
+        assert_fail "watchdog: Ping answered while the proxy was frozen"
+    [ "$(wd_field frozenNoOnclose)" = "true" ] &&
+        assert_pass "watchdog: the frozen socket is a half-open zombie (no onclose)" ||
+        assert_fail "watchdog: onclose fired during the freeze (expected a silent zombie)"
+    [ "$(wd_field recovered)" = "true" ] &&
+        assert_pass "watchdog: SIGCONT heals the socket (Ping answered again)" ||
+        assert_fail "watchdog: socket did not recover after SIGCONT"
 }
 
 run_scenarios() { # run_scenarios <all|name>

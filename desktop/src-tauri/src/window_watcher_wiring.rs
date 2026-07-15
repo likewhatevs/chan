@@ -546,15 +546,61 @@ async fn run_devserver_window_feed(
     }
 }
 
+/// Pump a devserver feed WS with a keepalive Ping + read-deadline. `on_text` runs
+/// for each text frame; a clean close returns Ok; `max_missed` consecutive
+/// `ping_interval` windows with NO inbound frame -- a half-open socket that a
+/// laptop sleep leaves behind -- returns Err instead of a forever-pending
+/// `next()`. The interval + threshold are parameters so a unit test can drive a
+/// silent mock socket (short interval) without a real Tauri app/state.
+async fn keepalive_pump(
+    ws: &mut GatewayWs,
+    ping_interval: Duration,
+    max_missed: u32,
+    mut on_text: impl FnMut(&str),
+) -> Result<(), String> {
+    use futures::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message;
+    let mut missed = 0u32;
+    loop {
+        match tokio::time::timeout(ping_interval, ws.next()).await {
+            Ok(Some(message)) => {
+                missed = 0;
+                match message.map_err(|e| format!("watch stream: {e}"))? {
+                    Message::Text(text) => on_text(&text),
+                    Message::Close(_) => break,
+                    // Pong (our keepalive answered), Ping (axum auto-pongs the
+                    // peer's), Binary, Frame: not data, but arriving already reset
+                    // `missed` -- proof the socket is alive.
+                    _ => {}
+                }
+            }
+            Ok(None) => break,
+            Err(_) => {
+                // No inbound for a whole interval: send a keepalive Ping. The
+                // gateway bridge forwards Ping/Pong and axum auto-pongs, so a live
+                // feed answers within the next interval; `max_missed` intervals
+                // with nothing inbound is a half-open zombie.
+                missed += 1;
+                if missed > max_missed {
+                    return Err("feed idle: no frame or pong within deadline".to_string());
+                }
+                ws.send(Message::Ping(Vec::new().into()))
+                    .await
+                    .map_err(|e| format!("feed keepalive ping: {e}"))?;
+            }
+        }
+    }
+    Ok(())
+}
+
 /// One connection's lifetime: open the `/watch` WS, then push every `WindowSet`
 /// text frame into `snapshot` + wake `change`. Raw tunnel devservers auth with a
 /// bearer header; gateway devservers auth with the devserver-gate cookie.
 ///
-/// A keepalive Ping every [`FEED_PING_INTERVAL`] with a read-deadline of
-/// [`FEED_MAX_MISSED`] intervals turns a half-open socket into an error instead
-/// of a forever-pending `next()`. `saw_frame` is set on the first inbound frame
-/// so the caller can tell a healthy round from a never-connected one; the first
-/// frame also clears any `Unreachable` state (recovery) and announces it.
+/// The [`keepalive_pump`] read-deadline turns a half-open socket into an error
+/// instead of a forever-pending `next()`. `saw_frame` is set on the first inbound
+/// frame so the caller can tell a healthy round from a never-connected one; the
+/// first frame also clears any `Unreachable` state (recovery) and announces it.
 async fn stream_window_feed(
     id: &str,
     app: &AppHandle,
@@ -564,10 +610,8 @@ async fn stream_window_feed(
     state: &Arc<AppState>,
     saw_frame: &std::sync::atomic::AtomicBool,
 ) -> Result<(), String> {
-    use futures::{SinkExt, StreamExt};
     use std::sync::atomic::Ordering;
     use tokio_tungstenite::tungstenite::client::IntoClientRequest;
-    use tokio_tungstenite::tungstenite::Message;
     let mut ws = if conn.gateway.is_some() {
         connect_gateway_ws(conn, "/api/library/windows/watch").await?
     } else {
@@ -586,36 +630,7 @@ async fn stream_window_feed(
             .map(|(ws, _)| ws)
             .map_err(|e| format!("connect /watch: {e}"))?
     };
-    let mut missed_pongs = 0u32;
-    loop {
-        let text = match tokio::time::timeout(FEED_PING_INTERVAL, ws.next()).await {
-            Ok(Some(message)) => {
-                missed_pongs = 0;
-                match message.map_err(|e| format!("watch stream: {e}"))? {
-                    Message::Text(text) => text,
-                    Message::Close(_) => break,
-                    // Pong (our keepalive answered), Ping (axum auto-pongs the
-                    // peer's), Binary, Frame: not data, but arriving already reset
-                    // `missed_pongs` -- proof the socket is alive.
-                    _ => continue,
-                }
-            }
-            Ok(None) => break,
-            Err(_) => {
-                // No inbound for a whole interval: send a keepalive Ping. The
-                // gateway bridge forwards Ping/Pong and axum auto-pongs, so a live
-                // feed answers within the next interval; FEED_MAX_MISSED intervals
-                // with nothing inbound is a half-open zombie.
-                missed_pongs += 1;
-                if missed_pongs > FEED_MAX_MISSED {
-                    return Err("window feed idle: no frame or pong within deadline".to_string());
-                }
-                ws.send(Message::Ping(Vec::new().into()))
-                    .await
-                    .map_err(|e| format!("window feed ping: {e}"))?;
-                continue;
-            }
-        };
+    keepalive_pump(&mut ws, FEED_PING_INTERVAL, FEED_MAX_MISSED, |text| {
         // Any inbound data frame means the feed is live. Mark it, and on the FIRST
         // such frame clear any Unreachable state so the launcher's red dot clears
         // the instant the feed reconnects, not at the next drop.
@@ -627,7 +642,7 @@ async fn stream_window_feed(
                 embedded.signal_library_change();
             }
         }
-        if let Ok(set) = serde_json::from_str::<WindowSet>(&text) {
+        if let Ok(set) = serde_json::from_str::<WindowSet>(text) {
             // Rows keep their devserver-local tokens: `should_show` reads
             // token emptiness as the tenant on/off signal, and gateway
             // navigation credentials are minted at open/retarget time
@@ -657,8 +672,8 @@ async fn stream_window_feed(
             }
             change.notify_one();
         }
-    }
-    Ok(())
+    })
+    .await
 }
 
 /// Subscribe to a connected devserver's pane-highlight COLOUR feed
@@ -718,9 +733,7 @@ async fn stream_color_feed(
     id: &str,
     conn: &DevserverConn,
 ) -> Result<(), String> {
-    use futures::{SinkExt, StreamExt};
     use tokio_tungstenite::tungstenite::client::IntoClientRequest;
-    use tokio_tungstenite::tungstenite::Message;
     let mut ws = if conn.gateway.is_some() {
         connect_gateway_ws(conn, "/api/library/local-color/watch").await?
     } else {
@@ -744,40 +757,17 @@ async fn stream_color_feed(
     };
     // Same keepalive Ping + read-deadline as the window feed so a half-open
     // colour socket self-heals instead of pending forever. The colour feed does
-    // NOT drive the Unreachable flag (the window feed owns it -- one writer);
-    // this loop just reconnects.
-    let mut missed_pongs = 0u32;
-    loop {
-        let text = match tokio::time::timeout(FEED_PING_INTERVAL, ws.next()).await {
-            Ok(Some(message)) => {
-                missed_pongs = 0;
-                match message.map_err(|e| format!("colour watch stream: {e}"))? {
-                    Message::Text(text) => text,
-                    Message::Close(_) => break,
-                    _ => continue,
-                }
-            }
-            Ok(None) => break,
-            Err(_) => {
-                missed_pongs += 1;
-                if missed_pongs > FEED_MAX_MISSED {
-                    return Err("colour feed idle: no frame or pong within deadline".to_string());
-                }
-                ws.send(Message::Ping(Vec::new().into()))
-                    .await
-                    .map_err(|e| format!("colour feed ping: {e}"))?;
-                continue;
-            }
-        };
-        if let Ok(frame) = serde_json::from_str::<LocalColorFrame>(&text) {
+    // NOT drive the Unreachable flag (the window feed owns it -- one writer).
+    keepalive_pump(&mut ws, FEED_PING_INTERVAL, FEED_MAX_MISSED, |text| {
+        if let Ok(frame) = serde_json::from_str::<LocalColorFrame>(text) {
             if state.devserver_feed.set_color(id.to_string(), frame.color) {
                 if let Some(embedded) = state.embedded() {
                     embedded.signal_library_change();
                 }
             }
         }
-    }
-    Ok(())
+    })
+    .await
 }
 
 /// Spawn a connected devserver's window watcher: one [`watch_loop`] driven by the
@@ -945,5 +935,55 @@ mod tests {
             RemoteLaunchKey::from_record(&base, true),
             RemoteLaunchKey::from_record(&prefix, true)
         );
+    }
+
+    #[tokio::test]
+    async fn keepalive_pump_errs_on_a_silent_socket() {
+        // A mock feed WS that completes the handshake then stays silent: it never
+        // sends a frame and never polls, so it does not even auto-pong. The pump
+        // must give up after `max_missed` idle intervals rather than pend forever
+        // on `next()` -- the half-open zombie a laptop sleep leaves behind. Short
+        // injected interval so the deadline fires in ~120ms of real time.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (sock, _) = listener.accept().await.unwrap();
+            let _ws = tokio_tungstenite::accept_async(sock).await.unwrap();
+            tokio::time::sleep(Duration::from_secs(5)).await; // hold it open, silent
+        });
+        let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/"))
+            .await
+            .expect("connect to the mock feed");
+        let mut frames = 0u32;
+        let result = keepalive_pump(&mut ws, Duration::from_millis(40), 2, |_| frames += 1).await;
+        assert!(
+            result.is_err(),
+            "a silent socket must error out, got {result:?}"
+        );
+        assert_eq!(frames, 0, "no frames should have arrived");
+    }
+
+    #[tokio::test]
+    async fn keepalive_pump_forwards_frames_then_ok_on_clean_close() {
+        use futures::SinkExt;
+        use tokio_tungstenite::tungstenite::Message;
+        // A mock feed that pushes two frames then closes cleanly: every frame
+        // reaches `on_text` and the clean close returns Ok (no false deadline).
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (sock, _) = listener.accept().await.unwrap();
+            let mut ws = tokio_tungstenite::accept_async(sock).await.unwrap();
+            ws.send(Message::text("{\"windows\":[]}")).await.unwrap();
+            ws.send(Message::text("{\"windows\":[]}")).await.unwrap();
+            ws.send(Message::Close(None)).await.unwrap();
+        });
+        let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/"))
+            .await
+            .expect("connect to the mock feed");
+        let mut frames = 0u32;
+        let result = keepalive_pump(&mut ws, Duration::from_secs(5), 2, |_| frames += 1).await;
+        assert!(result.is_ok(), "a clean close returns Ok, got {result:?}");
+        assert_eq!(frames, 2, "both text frames forwarded to on_text");
     }
 }
