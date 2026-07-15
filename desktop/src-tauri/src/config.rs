@@ -312,6 +312,14 @@ pub struct Config {
     /// (their host installs no store).
     #[serde(default)]
     pub launcher_theme: Option<String>,
+    /// The launcher's collapsed machine cards -- the `"local"` card and each
+    /// devserver keyed by its id. Backs the
+    /// [`CollapsedMachinesStore`](chan_server::CollapsedMachinesStore) the
+    /// launcher reconciles against on boot; the collapse toggle writes it.
+    /// Empty (the default, so shipping this changes nothing) until the user
+    /// collapses a card. Stale ids are harmless and left unpruned.
+    #[serde(default)]
+    pub collapsed_machines: Vec<String>,
 }
 
 pub struct ConfigStore {
@@ -504,6 +512,39 @@ impl chan_server::LocalThemeStore for LocalThemeConfig {
         let mut store = self.store.lock().unwrap();
         let mut cfg = store.get().map_err(|e| e.to_string())?;
         cfg.launcher_theme = theme;
+        store.save(&cfg).map_err(|e| e.to_string())
+    }
+}
+
+/// chan-desktop's [`CollapsedMachinesStore`](chan_server::CollapsedMachinesStore):
+/// the launcher's collapsed machine cards persisted in the shared desktop config
+/// (the same store the theme + colour + devserver registry use, so every write
+/// serializes through one lock). The launcher reconciles against it on boot; the
+/// collapse toggle writes it.
+pub struct CollapsedMachinesConfig {
+    store: Arc<Mutex<ConfigStore>>,
+}
+
+impl CollapsedMachinesConfig {
+    pub fn new(store: Arc<Mutex<ConfigStore>>) -> Self {
+        Self { store }
+    }
+}
+
+impl chan_server::CollapsedMachinesStore for CollapsedMachinesConfig {
+    fn get(&self) -> Vec<String> {
+        self.store
+            .lock()
+            .unwrap()
+            .get()
+            .map(|c| c.collapsed_machines)
+            .unwrap_or_default()
+    }
+
+    fn set(&self, collapsed: Vec<String>) -> Result<(), String> {
+        let mut store = self.store.lock().unwrap();
+        let mut cfg = store.get().map_err(|e| e.to_string())?;
+        cfg.collapsed_machines = collapsed;
         store.save(&cfg).map_err(|e| e.to_string())
     }
 }

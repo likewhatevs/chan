@@ -215,6 +215,10 @@ pub fn launcher_router(
             "/api/library/local-theme/watch",
             get(handle_watch_local_theme),
         )
+        .route(
+            "/api/library/collapsed-machines",
+            get(handle_get_collapsed_machines).put(handle_set_collapsed_machines),
+        )
         .route_layer(middleware::from_fn(require_local_mutation))
         .with_state(Arc::new(LauncherState {
             host: host.clone(),
@@ -1393,6 +1397,54 @@ async fn watch_local_theme(mut socket: WebSocket, state: Arc<LauncherState>) {
     }
 }
 
+// Collapsed launcher machine cards (`/api/library/collapsed-machines`). The set
+// lives in chan-desktop's config (invisible from chan-library), so the launcher
+// reads/writes it through the host's `CollapsedMachinesStore`. No watch: the
+// launcher owns the live collapse state and only reconciles on boot.
+
+#[derive(Serialize)]
+struct CollapsedMachines {
+    /// The persisted collapsed keys, or `null` on a surface with no store.
+    collapsed: Option<Vec<String>>,
+}
+
+#[derive(Deserialize)]
+struct SetCollapsedMachines {
+    collapsed: Vec<String>,
+}
+
+/// `GET /api/library/collapsed-machines`: the persisted collapsed machine cards
+/// (`{ collapsed: [...] }`), or `{ collapsed: null }` on a surface with no store
+/// installed. Served on all surfaces, infallible. A headless devserver installs
+/// none, so its launcher keeps a localStorage-only collapse.
+async fn handle_get_collapsed_machines(
+    State(state): State<Arc<LauncherState>>,
+) -> Json<CollapsedMachines> {
+    let collapsed = state
+        .host
+        .collapsed_machines_store()
+        .map(|store| store.get());
+    Json(CollapsedMachines { collapsed })
+}
+
+/// `PUT /api/library/collapsed-machines` `{ collapsed }`: persist the collapsed
+/// machine cards. Surface-bearer gated like local-theme, with no
+/// `require_mutable`: it writes the surface's OWN machine collapse. 204 on
+/// success; 404 when no store is installed (so a store-less surface answers 404,
+/// never 403); 400 on a persist failure.
+async fn handle_set_collapsed_machines(
+    State(state): State<Arc<LauncherState>>,
+    Json(body): Json<SetCollapsedMachines>,
+) -> Response {
+    let Some(store) = state.host.collapsed_machines_store() else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    match store.set(body.collapsed) {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(msg) => (StatusCode::BAD_REQUEST, msg).into_response(),
+    }
+}
+
 #[cfg(test)]
 mod devserver_route_tests {
     //! The devserver route gate semantics, exercised over a fake registry: list
@@ -1411,8 +1463,8 @@ mod devserver_route_tests {
 
     use super::launcher_router;
     use crate::{
-        DevserverEntry, DevserverInput, DevserverRegistry, DevserverStatus, LocalColorStore,
-        LocalThemeStore, WorkspaceHost,
+        CollapsedMachinesStore, DevserverEntry, DevserverInput, DevserverRegistry, DevserverStatus,
+        LocalColorStore, LocalThemeStore, WorkspaceHost,
     };
 
     /// An in-memory `DevserverRegistry` standing in for the desktop config so the
@@ -1955,6 +2007,79 @@ mod devserver_route_tests {
             "PUT",
             "/api/library/local-theme",
             Some(r#"{"theme":"light"}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    /// An in-memory [`CollapsedMachinesStore`] so the collapsed-machines routes
+    /// are exercised without a desktop.
+    #[derive(Default)]
+    struct FakeCollapsedStore {
+        collapsed: Mutex<Vec<String>>,
+    }
+
+    impl CollapsedMachinesStore for FakeCollapsedStore {
+        fn get(&self) -> Vec<String> {
+            self.collapsed.lock().unwrap().clone()
+        }
+        fn set(&self, collapsed: Vec<String>) -> Result<(), String> {
+            *self.collapsed.lock().unwrap() = collapsed;
+            Ok(())
+        }
+    }
+
+    /// A launcher router with an optional collapsed-machines store installed.
+    fn collapsed_router(store: Option<Arc<dyn CollapsedMachinesStore>>) -> axum::Router {
+        let dir = tempfile::tempdir().unwrap();
+        let lib = Library::open_at(dir.path().join("config.toml")).unwrap();
+        std::mem::forget(dir);
+        let host = Arc::new(WorkspaceHost::new(lib, crate::route_builder()));
+        if let Some(store) = store {
+            host.install_collapsed_machines_store(store);
+        }
+        launcher_router(host, None, None)
+    }
+
+    #[tokio::test]
+    async fn collapsed_machines_get_is_null_without_store() {
+        // No store installed (headless devserver): GET reports "no store" as
+        // null, distinct from an installed-but-empty store's `[]`.
+        let router = collapsed_router(None);
+        let (status, body) = request(&router, "GET", "/api/library/collapsed-machines", None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["collapsed"], serde_json::Value::Null);
+    }
+
+    #[tokio::test]
+    async fn collapsed_machines_set_then_get_round_trips() {
+        let store = Arc::new(FakeCollapsedStore::default());
+        let router = collapsed_router(Some(store));
+        let (set_status, _) = request(
+            &router,
+            "PUT",
+            "/api/library/collapsed-machines",
+            Some(r#"{"collapsed":["local","ds-1"]}"#),
+        )
+        .await;
+        assert_eq!(set_status, StatusCode::NO_CONTENT);
+        let (get_status, body) =
+            request(&router, "GET", "/api/library/collapsed-machines", None).await;
+        assert_eq!(get_status, StatusCode::OK);
+        assert_eq!(body["collapsed"], serde_json::json!(["local", "ds-1"]));
+    }
+
+    #[tokio::test]
+    async fn collapsed_machines_set_404s_without_store_never_403() {
+        // Like local-theme: the config sub-router carries no `require_mutable`,
+        // so a store-less surface answers 404 (not 403). The launcher PUT is
+        // best-effort and swallows this rather than keying on a status code.
+        let router = collapsed_router(None);
+        let (status, _) = request(
+            &router,
+            "PUT",
+            "/api/library/collapsed-machines",
+            Some(r#"{"collapsed":["local"]}"#),
         )
         .await;
         assert_eq!(status, StatusCode::NOT_FOUND);

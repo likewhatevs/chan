@@ -108,9 +108,16 @@ impl EmbeddedServer {
         // Install the launcher-theme store over the SAME shared config, so a
         // local standalone terminal window reads + watches the launcher's
         // light/dark choice and the launcher's local-theme route writes it.
-        host.install_local_theme_store(Arc::new(crate::config::LocalThemeConfig::new(
-            config_store,
-        )));
+        host.install_local_theme_store(Arc::new(crate::config::LocalThemeConfig::new(Arc::clone(
+            &config_store,
+        ))));
+        // Install the collapsed-machines store over the SAME shared config, so
+        // the launcher reconciles its per-machine collapse against it on boot and
+        // the collapse toggle writes it (surviving a desktop restart, which the
+        // per-launch loopback origin makes localStorage alone unable to do).
+        host.install_collapsed_machines_store(Arc::new(
+            crate::config::CollapsedMachinesConfig::new(config_store),
+        ));
         // Install the launcher SPA as the loopback's root fallback so the
         // desktop launcher loads the same web-launcher served at `/` on every
         // surface -- parity with the devserver's `build_devserver_app`. Without

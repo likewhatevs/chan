@@ -36,8 +36,8 @@ pub use config::{
 pub use devserver_registry::{DevserverEntry, DevserverInput, DevserverRegistry, DevserverStatus};
 pub use error::Error;
 pub use host::{
-    DevserverFeedSource, HostedWorkspace, LauncherWorkspace, LocalColorStore, LocalThemeStore,
-    WorkspaceHost, WorkspaceLifecycleOutcome, WorkspaceStatus,
+    CollapsedMachinesStore, DevserverFeedSource, HostedWorkspace, LauncherWorkspace,
+    LocalColorStore, LocalThemeStore, WorkspaceHost, WorkspaceLifecycleOutcome, WorkspaceStatus,
 };
 pub use prefix::{allocate_workspace_prefix, workspace_slug};
 pub use serve_config::{sanitize_prefix, ServeConfig, ServeHandle};
