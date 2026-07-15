@@ -83,12 +83,10 @@ import {
 import { isTauriDesktop, pickUploadFiles, runDesktopDownload } from "../api/desktop";
 import {
   base64ToBytes,
-  bytesToBase64,
   hintClipboardError,
-  readClipboardPayload,
   writeClipboardPayload,
-  type PastePrefer,
 } from "../api/clipboard";
+import { respondClipboardRead, warnUnlessStaleReply } from "./pasteRequest.svelte";
 import {
   appendDefaultMd,
   preserveExtension,
@@ -1276,36 +1274,6 @@ async function respondClipboardWrite(
   } catch (e) {
     warnUnlessStaleReply(e);
   }
-}
-
-/// Answer a `cs paste`: read the clipboard (honoring `prefer`) and POST the
-/// `{ mime, data_b64 }` reply (or `{ error }`) to `/api/window/reply`, which
-/// unblocks the waiting CLI with the bytes to write to stdout. Transient, no
-/// session save.
-async function respondClipboardRead(requestId: string, prefer: PastePrefer): Promise<void> {
-  let payload: { mime: string; data_b64: string } | { error: string };
-  try {
-    const { mime, bytes } = await readClipboardPayload(prefer);
-    payload = { mime, data_b64: bytesToBase64(bytes) };
-  } catch (e) {
-    payload = { error: e instanceof Error ? e.message : String(e) };
-  }
-  try {
-    await api.windowReply({ requestId, payload });
-  } catch (e) {
-    warnUnlessStaleReply(e);
-  }
-}
-
-/// A window-bus reply POST that 404s is expected (the CLI already timed out or
-/// disconnected -> a stale request id), so swallow it. Any OTHER failure (e.g.
-/// a 413 body-limit rejection, a network error) would otherwise leave the CLI
-/// hanging until its 30 s timeout with no clue why, so surface it to the
-/// console instead of dropping it silently.
-function warnUnlessStaleReply(e: unknown): void {
-  const status = (e as { status?: number } | null)?.status;
-  if (status === 404) return;
-  console.warn("clipboard reply POST failed", e);
 }
 
 /// Resolve a survey's target `tabName` (a terminal's `--tab-name`) to the SPA

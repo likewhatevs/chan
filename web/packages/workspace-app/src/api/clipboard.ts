@@ -115,13 +115,23 @@ function htmlToPlainText(html: string): string {
 }
 
 /// Write `bytes` onto the clipboard as `mime` (`cs copy`). Images normalize to
-/// PNG; HTML carries a plain-text fallback; anything else writes as text.
+/// PNG; HTML carries a plain-text fallback; anything else writes as text. The
+/// desktop's native arboard IPCs go first; when one fails (an ACL-denied
+/// gateway-served window) the write degrades to the gesture-bound web API
+/// instead of surfacing an opaque ACL string, mirroring `writeClipboardText`.
 export async function writeClipboardPayload(mime: string, bytes: Uint8Array): Promise<void> {
   if (mime.startsWith("image/")) {
     const pngBlob = await toPngBlob(bytes, mime);
     if (isTauriDesktop()) {
-      await writeClipboardImage(new Uint8Array(await pngBlob.arrayBuffer()));
-      return;
+      try {
+        await writeClipboardImage(new Uint8Array(await pngBlob.arrayBuffer()));
+        return;
+      } catch (err) {
+        console.warn(
+          "writeClipboardPayload: native image write failed, falling back to web",
+          err,
+        );
+      }
     }
     await navigator.clipboard.write([new ClipboardItem({ "image/png": pngBlob })]);
     return;
@@ -130,8 +140,15 @@ export async function writeClipboardPayload(mime: string, bytes: Uint8Array): Pr
     const html = new TextDecoder().decode(bytes);
     const plain = htmlToPlainText(html);
     if (isTauriDesktop()) {
-      await writeClipboardHtml(html, plain);
-      return;
+      try {
+        await writeClipboardHtml(html, plain);
+        return;
+      } catch (err) {
+        console.warn(
+          "writeClipboardPayload: native html write failed, falling back to web",
+          err,
+        );
+      }
     }
     await navigator.clipboard.write([
       new ClipboardItem({
@@ -141,82 +158,125 @@ export async function writeClipboardPayload(mime: string, bytes: Uint8Array): Pr
     ]);
     return;
   }
-  // Plain text: writeClipboardText already branches desktop/web.
+  // Plain text: writeClipboardText already branches desktop/web with its own
+  // IPC-failure fallback.
   await writeClipboardText(new TextDecoder().decode(bytes));
 }
 
-async function readImagePayload(): Promise<ClipboardPayload | null> {
-  if (isTauriDesktop()) {
-    const bytes = await readClipboardImage();
-    return bytes ? { mime: "image/png", bytes } : null;
+/// Enforce `MAX_CLIPBOARD_BYTES` on a read payload: refuse it here rather
+/// than build a giant base64 string that the reply route (F1 body limit)
+/// would 413 anyway.
+function capPayload(payload: ClipboardPayload): ClipboardPayload {
+  if (payload.bytes.length > MAX_CLIPBOARD_BYTES) {
+    throw new Error(
+      `clipboard content too large (max ${MAX_CLIPBOARD_BYTES / (1024 * 1024)} MB)`,
+    );
   }
-  const items = await navigator.clipboard.read();
+  return payload;
+}
+
+/// Pick one representation off ALREADY-READ web clipboard items, so every
+/// candidate derives from the same single `navigator.clipboard.read()`
+/// access (a second access would need its own permission grant).
+async function payloadFromWebItems(
+  items: ClipboardItems,
+  kind: Exclude<PastePrefer, "auto">,
+): Promise<ClipboardPayload | null> {
   for (const item of items) {
-    const type = item.types.find((t) => t.startsWith("image/"));
-    if (type) {
+    if (kind === "image") {
+      const type = item.types.find((t) => t.startsWith("image/"));
+      if (!type) continue;
       const blob = await item.getType(type);
       // Label with the ACTUAL clipboard type: browsers sanitize images to
       // image/png in practice, but if one ever surfaces a non-PNG type the CLI
       // must not stamp png bytes as image/png (wrong container under a .png).
       return { mime: type, bytes: new Uint8Array(await blob.arrayBuffer()) };
     }
+    const mime = kind === "html" ? "text/html" : "text/plain";
+    if (!item.types.includes(mime)) continue;
+    const text = await (await item.getType(mime)).text();
+    if (!text) continue;
+    return {
+      mime: kind === "html" ? "text/html" : PLAIN_MIME,
+      bytes: new TextEncoder().encode(text),
+    };
   }
   return null;
 }
 
-async function readHtmlPayload(): Promise<ClipboardPayload | null> {
-  let html: string | null = null;
-  if (isTauriDesktop()) {
-    html = await readClipboardHtml();
-  } else {
-    const items = await navigator.clipboard.read();
-    for (const item of items) {
-      if (item.types.includes("text/html")) {
-        html = await (await item.getType("text/html")).text();
-        break;
-      }
-    }
-  }
-  if (!html) return null;
-  return { mime: "text/html", bytes: new TextEncoder().encode(html) };
-}
-
-async function readTextPayload(): Promise<ClipboardPayload | null> {
-  const text = await readClipboardText();
-  if (!text) return null;
-  return { mime: PLAIN_MIME, bytes: new TextEncoder().encode(text) };
-}
-
-/// Read the clipboard for `cs paste`, honoring `prefer`. Tries each candidate
-/// representation in order and returns the first that yields content. Throws a
-/// hinted error when a read is denied, and a plain "clipboard is empty" when
+/// Web read for `cs paste`: ONE clipboard access, every candidate
+/// representation derived from it. `prefer=text` uses `readText()` (still a
+/// single access); everything else is one `navigator.clipboard.read()`
+/// walked in preference order. Exported so the paste card's click handler
+/// can run this exact read inside its user activation. Throws the raw
+/// browser error on denial (callers hint it) and "clipboard is empty" when
 /// nothing matched.
-export async function readClipboardPayload(prefer: PastePrefer): Promise<ClipboardPayload> {
+export async function readWebClipboardPayload(prefer: PastePrefer): Promise<ClipboardPayload> {
+  if (prefer === "text") {
+    const text = (await navigator.clipboard?.readText()) ?? "";
+    if (!text) throw new Error("clipboard is empty");
+    return capPayload({ mime: PLAIN_MIME, bytes: new TextEncoder().encode(text) });
+  }
+  const items = await navigator.clipboard.read();
   const order: Exclude<PastePrefer, "auto">[] =
     prefer === "auto" ? ["image", "text"] : [prefer];
-  let lastError: unknown = null;
   for (const kind of order) {
-    try {
-      const payload =
-        kind === "image"
-          ? await readImagePayload()
-          : kind === "html"
-            ? await readHtmlPayload()
-            : await readTextPayload();
-      if (payload) {
-        // Refuse an over-cap payload here rather than build a giant base64
-        // string that the reply route (F1 body limit) would 413 anyway.
-        if (payload.bytes.length > MAX_CLIPBOARD_BYTES) {
-          throw new Error(
-            `clipboard content too large (max ${MAX_CLIPBOARD_BYTES / (1024 * 1024)} MB)`,
-          );
-        }
-        return payload;
-      }
-    } catch (err) {
-      lastError = err;
+    const payload = await payloadFromWebItems(items, kind);
+    if (payload) return capPayload(payload);
+  }
+  throw new Error("clipboard is empty");
+}
+
+/// Native desktop read (the arboard IPCs, no permission UI). Returns `null`
+/// when no candidate representation is present; THROWS when an IPC fails
+/// (an ACL-denied gateway-served window) so the caller can degrade to the
+/// web path. The text kind rides `readClipboardText`, which never
+/// ACL-throws (it has its own internal web fallback).
+async function readNativeClipboardPayload(
+  prefer: PastePrefer,
+): Promise<ClipboardPayload | null> {
+  const order: Exclude<PastePrefer, "auto">[] =
+    prefer === "auto" ? ["image", "text"] : [prefer];
+  for (const kind of order) {
+    if (kind === "image") {
+      const bytes = await readClipboardImage();
+      if (bytes) return { mime: "image/png", bytes };
+    } else if (kind === "html") {
+      const html = await readClipboardHtml();
+      if (html) return { mime: "text/html", bytes: new TextEncoder().encode(html) };
+    } else {
+      const text = await readClipboardText();
+      if (text) return { mime: PLAIN_MIME, bytes: new TextEncoder().encode(text) };
     }
   }
-  if (lastError) throw new Error(hintClipboardError(lastError));
-  throw new Error("clipboard is empty");
+  return null;
+}
+
+/// Read the clipboard for `cs paste`, honoring `prefer`. Desktop windows go
+/// native first (instant, no permission UI); a failed IPC (ACL-denied
+/// gateway-served window) degrades to the web path -- the same single-access
+/// read a plain browser uses, which may pend on a permission prompt and
+/// raise the paste card. Throws a hinted error when a read is denied, and a
+/// plain "clipboard is empty" when nothing matched.
+export async function readClipboardPayload(prefer: PastePrefer): Promise<ClipboardPayload> {
+  if (isTauriDesktop()) {
+    let native: ClipboardPayload | null | undefined;
+    try {
+      native = await readNativeClipboardPayload(prefer);
+    } catch (err) {
+      console.warn(
+        "readClipboardPayload: native clipboard read failed, falling back to web",
+        err,
+      );
+    }
+    if (native !== undefined) {
+      if (native === null) throw new Error("clipboard is empty");
+      return capPayload(native);
+    }
+  }
+  try {
+    return await readWebClipboardPayload(prefer);
+  } catch (err) {
+    throw new Error(hintClipboardError(err));
+  }
 }

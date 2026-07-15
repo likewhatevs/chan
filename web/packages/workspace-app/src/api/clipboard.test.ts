@@ -85,7 +85,15 @@ describe("readClipboardPayload", () => {
   });
 });
 
-describe("readImagePayload label (web path)", () => {
+/// A fake web clipboard item carrying one text representation.
+function textItem(mime: string, text: string) {
+  return {
+    types: [mime],
+    getType: async () => new Blob([text], { type: mime }),
+  };
+}
+
+describe("web read path (single access)", () => {
   test("uses the actual clipboard image type, not a hardcoded png", async () => {
     vi.mocked(desktop.isTauriDesktop).mockReturnValue(false);
     const jpeg = new Uint8Array([0xff, 0xd8, 0xff, 0xe0]);
@@ -99,6 +107,100 @@ describe("readImagePayload label (web path)", () => {
     });
     const payload = await readClipboardPayload("image");
     expect(payload.mime).toBe("image/jpeg");
+  });
+
+  test("auto derives the text fallback from ONE read() access", async () => {
+    // prefer=auto with no image present must NOT issue a second permission-
+    // gated access (readText): the text derives from the same read() items.
+    vi.mocked(desktop.isTauriDesktop).mockReturnValue(false);
+    const read = vi.fn(async () => [textItem("text/plain", "clipboard words")]);
+    const readText = vi.fn(async () => "clipboard words");
+    Object.defineProperty(navigator, "clipboard", {
+      value: { read, readText },
+      configurable: true,
+    });
+    const payload = await readClipboardPayload("auto");
+    expect(payload.mime).toBe("text/plain;charset=utf-8");
+    expect(new TextDecoder().decode(payload.bytes)).toBe("clipboard words");
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(readText).not.toHaveBeenCalled();
+  });
+
+  test("prefer=text is one readText access, never read()", async () => {
+    vi.mocked(desktop.isTauriDesktop).mockReturnValue(false);
+    const read = vi.fn();
+    const readText = vi.fn(async () => "just text");
+    Object.defineProperty(navigator, "clipboard", {
+      value: { read, readText },
+      configurable: true,
+    });
+    const payload = await readClipboardPayload("text");
+    expect(payload.mime).toBe("text/plain;charset=utf-8");
+    expect(readText).toHaveBeenCalledTimes(1);
+    expect(read).not.toHaveBeenCalled();
+  });
+
+  test("prefer=html picks text/html off the single read()", async () => {
+    vi.mocked(desktop.isTauriDesktop).mockReturnValue(false);
+    const read = vi.fn(async () => [textItem("text/html", "<p>hi</p>")]);
+    Object.defineProperty(navigator, "clipboard", {
+      value: { read },
+      configurable: true,
+    });
+    const payload = await readClipboardPayload("html");
+    expect(payload.mime).toBe("text/html");
+    expect(new TextDecoder().decode(payload.bytes)).toBe("<p>hi</p>");
+    expect(read).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("desktop ACL degradation", () => {
+  test("a failed native read degrades to the web path", async () => {
+    // A gateway-served desktop window whose ACL withholds the clipboard IPCs
+    // must land on the same web read a plain browser uses, not surface the
+    // opaque ACL string.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.mocked(desktop.isTauriDesktop).mockReturnValue(true);
+    vi.mocked(desktop.readClipboardImage).mockRejectedValue(
+      new Error("Command read_clipboard_image not allowed by ACL"),
+    );
+    const read = vi.fn(async () => [textItem("text/plain", "web words")]);
+    Object.defineProperty(navigator, "clipboard", {
+      value: { read },
+      configurable: true,
+    });
+    const payload = await readClipboardPayload("auto");
+    expect(payload.mime).toBe("text/plain;charset=utf-8");
+    expect(new TextDecoder().decode(payload.bytes)).toBe("web words");
+    expect(warn).toHaveBeenCalledTimes(1);
+    warn.mockRestore();
+  });
+
+  test("a failed native html write degrades to the web write", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.mocked(desktop.isTauriDesktop).mockReturnValue(true);
+    vi.mocked(desktop.writeClipboardHtml).mockRejectedValue(
+      new Error("Command write_clipboard_html not allowed by ACL"),
+    );
+    const write = vi.fn(async () => {});
+    Object.defineProperty(navigator, "clipboard", {
+      value: { write },
+      configurable: true,
+    });
+    // jsdom has no ClipboardItem; a bag holding the blobs is all the web
+    // write stub needs.
+    vi.stubGlobal(
+      "ClipboardItem",
+      class {
+        constructor(public items: Record<string, Blob>) {}
+      },
+    );
+    await writeClipboardPayload("text/html", enc("<p>hi</p>"));
+    expect(desktop.writeClipboardHtml).toHaveBeenCalledTimes(1);
+    expect(write).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledTimes(1);
+    vi.unstubAllGlobals();
+    warn.mockRestore();
   });
 });
 

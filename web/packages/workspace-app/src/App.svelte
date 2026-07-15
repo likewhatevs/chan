@@ -3,6 +3,7 @@
   import AppStatusBar from "./components/AppStatusBar.svelte";
   import TransferBubble from "./components/TransferBubble.svelte";
   import SessionHandoverBubble from "./components/SessionHandoverBubble.svelte";
+  import PasteRequestBubble from "./components/PasteRequestBubble.svelte";
   import ConfirmModal from "./components/ConfirmModal.svelte";
   import ConflictModal from "./components/ConflictModal.svelte";
   import DisconnectOverlay from "./components/DisconnectOverlay.svelte";
@@ -1459,6 +1460,10 @@
      shows who is asking to take over, with Accept / Reject. Mounted once,
      window-anchored like the transfer bubble. -->
 <SessionHandoverBubble />
+<!-- Paste-request card (cs paste): shows when a clipboard read is parked on
+     a browser permission prompt, with Paste / Cancel. Mounted once,
+     window-anchored like the transfer bubble. -->
+<PasteRequestBubble />
 <!-- Hybrid Nav (Cmd+.) cheatsheet, toggled with `h` while pane mode
      is active. Gated on the live `paneMode.active` so it auto-hides
      the moment the transaction commits / discards. -->
