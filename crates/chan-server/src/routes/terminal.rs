@@ -1174,12 +1174,11 @@ mod tests {
 
     /// Cross-process serial gate for the real-PTY shell-probe tests.
     /// Each spawns a real shell on a PTY, sends commands, and asserts on
-    /// the shell's output within a bounded window. Under the FULL
-    /// parallel `cargo test` run (CI) every core is saturated, so the
-    /// shell's startup, `stty -echo` settling, and command output all
-    /// slip past a tight window; the probe then returns only the echoed
-    /// command line (which itself contains tokens like `CHAN_MCP_`),
-    /// tripping the assertions.
+    /// the shell's output. Correctness under load comes from the
+    /// marker-window harvest (collect_marker_window: runtime-built
+    /// markers, echo excluded); this gate keeps the probes from
+    /// stacking real-shell load on each other and on the FS-timing
+    /// tests, so they finish well inside PROBE_BUDGET.
     ///
     /// WHY a FILE lock and not a `static`/`tokio` Mutex: a `static` lock
     /// serializes only tests WITHIN this test binary, but `cargo test`
@@ -1717,23 +1716,50 @@ mod tests {
         }
     }
 
-    /// Type `command` into a real shell and collect output until `end`
-    /// appears (PROBE_BUDGET cap).
+    /// Type `script` into an already-spawned test terminal and return
+    /// ONLY the output between its `__<family>_BEGIN__` and
+    /// `__<family>_END__` markers (PROBE_BUDGET cap).
     ///
-    /// INVARIANT: `end` must NOT appear literally in `command` -- build
-    /// it in the shell instead (`printf '__X_%s__' END`). The `stty
-    /// -echo` below is best-effort: its settle window is two short
-    /// idle reads, and on a loaded runner the shell may not have
-    /// executed it before `command` is typed, so the command ECHOES.
-    /// A literal end marker then matches inside the echo and
-    /// collect_until returns the echo alone, before the command ever
-    /// ran -- the v0.31.0 tag-run flake in the tty probe.
-    async fn run_shell_probe(command: &str, end: &str) -> String {
+    /// INVARIANT (enforced): neither marker may appear literally in
+    /// `script` -- the script must build them at runtime
+    /// (`printf '__X_%s__' BEGIN` / `... END`). A typed line ECHOES on
+    /// the PTY (there is no reliable way to settle `stty -echo` on a
+    /// loaded host before typing), so a literal end marker matches
+    /// inside the echo and the harvest returns the echo alone, before
+    /// the script ever ran -- the v0.31.0 tag-run flake in the tty
+    /// probe and this round's flake in the cwd/home and mcp-env-off
+    /// probes. Slicing to the marker window additionally drops the
+    /// echoed line, the prompt, and any shell banner, so assertions
+    /// (negative ones included) only ever see the script's real
+    /// output.
+    async fn collect_marker_window(
+        session: &mut AttachHandle,
+        script: &str,
+        family: &str,
+    ) -> String {
+        let begin = format!("__{family}_BEGIN__");
+        let end = format!("__{family}_END__");
         assert!(
-            !command.contains(end),
-            "shell probe end marker {end:?} must not appear literally in the typed command \
-             (it would match the command's own echo); build it with printf '%s'"
+            !script.contains(&begin) && !script.contains(&end),
+            "probe markers {begin:?}/{end:?} must not appear literally in the typed script \
+             (they would match the script's own echo); build them with printf '%s'"
         );
+        session.send_input(format!("{script}\r").as_bytes());
+        let out = collect_until(session, &end, PROBE_BUDGET).await;
+        let Some(begin_at) = out.find(&begin) else {
+            panic!("probe never printed {begin:?} within {PROBE_BUDGET:?}; buffer: {out:?}");
+        };
+        let after_begin = &out[begin_at + begin.len()..];
+        let Some(end_at) = after_begin.find(&end) else {
+            panic!("probe never printed {end:?} within {PROBE_BUDGET:?}; buffer: {out:?}");
+        };
+        after_begin[..end_at].to_string()
+    }
+
+    /// Spawn a fresh real shell in a temp workspace, type `script`, and
+    /// return its marker window (see collect_marker_window for the
+    /// marker discipline).
+    async fn run_shell_probe(script: &str, family: &str) -> String {
         let tmp = tempfile::tempdir().expect("temp workspace");
         let mut terminal = TestTerminal::spawn(
             tmp.path().to_path_buf(),
@@ -1741,34 +1767,16 @@ mod tests {
             None,
             None,
         );
+        // Drain the shell banner/prompt burst; correctness does not
+        // depend on this (the marker window excludes anything typed or
+        // printed before BEGIN), it just keeps harvested buffers small.
         let _ = collect_until_idle(
             &mut terminal.handle,
             Duration::from_millis(300),
             Duration::from_millis(100),
         )
         .await;
-        terminal
-            .handle
-            .send_input("stty -echo 2>/dev/null\r".as_bytes());
-        let _ = collect_until_idle(
-            &mut terminal.handle,
-            Duration::from_millis(300),
-            Duration::from_millis(100),
-        )
-        .await;
-        terminal
-            .handle
-            .send_input(format!("{command}\r").as_bytes());
-        let mut out = collect_until(&mut terminal.handle, end, PROBE_BUDGET).await;
-        out.push_str(
-            &collect_until_idle(
-                &mut terminal.handle,
-                Duration::from_millis(300),
-                Duration::from_millis(100),
-            )
-            .await,
-        );
-        out
+        collect_marker_window(&mut terminal.handle, script, family).await
     }
 
     #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -1827,8 +1835,8 @@ mod tests {
         if command_available("tty") {
             ran += 1;
             let out = run_shell_probe(
-                "printf '\\n__TTY_BEGIN__\\n'; tty; printf '\\n__TTY_%s__\\n' END",
-                "__TTY_END__",
+                "printf '\\n__TTY_%s__\\n' BEGIN; tty; printf '\\n__TTY_%s__\\n' END",
+                "TTY",
             )
             .await;
             // A real PTY makes `tty` report a /dev/ttys… device path,
@@ -1854,8 +1862,8 @@ mod tests {
         if command_available("stty") {
             ran += 1;
             let out = run_shell_probe(
-                "printf '\\n__STTY_BEGIN__\\n'; stty size; printf '\\n__STTY_%s__\\n' END",
-                "__STTY_END__",
+                "printf '\\n__STTY_%s__\\n' BEGIN; stty size; printf '\\n__STTY_%s__\\n' END",
+                "STTY",
             )
             .await;
             assert!(
@@ -1868,8 +1876,8 @@ mod tests {
         if command_available("tput") {
             ran += 1;
             let out = run_shell_probe(
-                "printf '\\n__TPUT_BEGIN__\\n'; tput cols; tput lines; printf '\\n__TPUT_%s__\\n' END",
-                "__TPUT_END__",
+                "printf '\\n__TPUT_%s__\\n' BEGIN; tput cols; tput lines; printf '\\n__TPUT_%s__\\n' END",
+                "TPUT",
             )
             .await;
             assert!(
@@ -1895,19 +1903,12 @@ mod tests {
                 Duration::from_millis(100),
             )
             .await;
-            terminal
-                .handle
-                .send_input("stty -echo 2>/dev/null\r".as_bytes());
-            let _ = collect_until_idle(
+            let out = collect_marker_window(
                 &mut terminal.handle,
-                Duration::from_millis(300),
-                Duration::from_millis(100),
+                "printf '\\n__CWD_HOME_%s__\\n' BEGIN; pwd; printf '<HOME=%s>\\n' \"$HOME\"; printf '<CHAN_TAB_NAME=%s>\\n' \"$CHAN_TAB_NAME\"; printf '<CHAN_TAB_GROUP=%s>\\n' \"$CHAN_TAB_GROUP\"; printf '<CHAN_WINDOW_ID=%s>\\n' \"$CHAN_WINDOW_ID\"; printf '<CHAN_CONTROL_SOCKET=%s>\\n' \"$CHAN_CONTROL_SOCKET\"; printf '<CHAN_WORKSPACE_NAME=%s>\\n' \"$CHAN_WORKSPACE_NAME\"; printf '<CHAN_WORKSPACE_PATH=%s>\\n' \"$CHAN_WORKSPACE_PATH\"; env | grep -E '^(CHAN|CLAUDE|CODEX|GEMINI)_MCP_' | sort; printf '\\n__CWD_HOME_%s__\\n' END",
+                "CWD_HOME",
             )
             .await;
-            terminal.handle.send_input(
-                b"printf '\\n__CWD_HOME_BEGIN__\\n'; pwd; printf '<HOME=%s>\\n' \"$HOME\"; printf '<CHAN_TAB_NAME=%s>\\n' \"$CHAN_TAB_NAME\"; printf '<CHAN_TAB_GROUP=%s>\\n' \"$CHAN_TAB_GROUP\"; printf '<CHAN_WINDOW_ID=%s>\\n' \"$CHAN_WINDOW_ID\"; printf '<CHAN_CONTROL_SOCKET=%s>\\n' \"$CHAN_CONTROL_SOCKET\"; printf '<CHAN_WORKSPACE_NAME=%s>\\n' \"$CHAN_WORKSPACE_NAME\"; printf '<CHAN_WORKSPACE_PATH=%s>\\n' \"$CHAN_WORKSPACE_PATH\"; env | grep -E '^(CHAN|CLAUDE|CODEX|GEMINI)_MCP_' | sort; printf '\\n__CWD_HOME_END__\\n'\r",
-            );
-            let out = collect_until(&mut terminal.handle, "__CWD_HOME_END__", PROBE_BUDGET).await;
             assert!(
                 out.contains(&cwd.display().to_string()),
                 "terminal should start at workspace root cwd, got {out:?}"
@@ -1969,7 +1970,7 @@ mod tests {
 
         if command_available("sh") {
             ran += 1;
-            let out = run_shell_probe("printf '\\n__READ_BEGIN__\\n'; sh -lc 'read x; printf \"<%s>\\\\n\" \"$x\"' <<'EOF'\nchan-term\nEOF\nprintf '\\n__READ_%s__\\n' END", "__READ_END__").await;
+            let out = run_shell_probe("printf '\\n__READ_%s__\\n' BEGIN; sh -lc 'read x; printf \"<%s>\\\\n\" \"$x\"' <<'EOF'\nchan-term\nEOF\nprintf '\\n__READ_%s__\\n' END", "READ").await;
             assert!(
                 out.contains("<chan-term>"),
                 "shell read/write probe should roundtrip input, got {out:?}"
@@ -1992,25 +1993,21 @@ mod tests {
                 Duration::from_millis(100),
             )
             .await;
+            // The needle must differ from the TYPED text (the line
+            // echoes): `al%s` in the input, `alpha` only in less's
+            // rendered output.
             terminal
                 .handle
-                .send_input("stty -echo 2>/dev/null\r".as_bytes());
-            let _ = collect_until_idle(
-                &mut terminal.handle,
-                Duration::from_millis(300),
-                Duration::from_millis(100),
-            )
-            .await;
-            terminal
-                .handle
-                .send_input(b"printf 'alpha\\nbeta\\n' | less\r");
+                .send_input(b"printf 'al%s\\nbeta\\n' pha | less\r");
             let out = collect_until(&mut terminal.handle, "alpha", PROBE_BUDGET).await;
             assert!(
                 out.contains("alpha"),
                 "less should render piped text, got {out:?}"
             );
             terminal.handle.send_input(b"q");
-            terminal.handle.send_input(b"printf '\\n__LESS_END__\\n'\r");
+            terminal
+                .handle
+                .send_input(b"printf '\\n__LESS_%s__\\n' END\r");
             let out = collect_until(&mut terminal.handle, "__LESS_END__", PROBE_BUDGET).await;
             assert!(
                 out.contains("__LESS_END__"),
@@ -2048,19 +2045,16 @@ mod tests {
             Duration::from_millis(100),
         )
         .await;
-        terminal
-            .handle
-            .send_input("stty -echo 2>/dev/null\r".as_bytes());
-        let _ = collect_until_idle(
+        // The marker window is load-bearing for the NEGATIVE assert
+        // below: the typed script itself contains `CHAN_MCP_` (the
+        // grep pattern), so the echoed line outside the window would
+        // false-fail it.
+        let out = collect_marker_window(
             &mut terminal.handle,
-            Duration::from_millis(300),
-            Duration::from_millis(100),
+            "printf '\\n__MCP_ENV_OFF_%s__\\n' BEGIN; env | grep '^CHAN_MCP_' || true; printf '<CHAN_TAB_NAME=%s>\\n' \"$CHAN_TAB_NAME\"; printf '<CHAN_WINDOW_ID=%s>\\n' \"$CHAN_WINDOW_ID\"; printf '<CHAN_CONTROL_SOCKET=%s>\\n' \"$CHAN_CONTROL_SOCKET\"; printf '\\n__MCP_ENV_OFF_%s__\\n' END",
+            "MCP_ENV_OFF",
         )
         .await;
-        terminal.handle.send_input(
-            b"printf '\\n__MCP_ENV_OFF_BEGIN__\\n'; env | grep '^CHAN_MCP_' || true; printf '<CHAN_TAB_NAME=%s>\\n' \"$CHAN_TAB_NAME\"; printf '<CHAN_WINDOW_ID=%s>\\n' \"$CHAN_WINDOW_ID\"; printf '<CHAN_CONTROL_SOCKET=%s>\\n' \"$CHAN_CONTROL_SOCKET\"; printf '\\n__MCP_ENV_OFF_END__\\n'\r",
-        );
-        let out = collect_until(&mut terminal.handle, "__MCP_ENV_OFF_END__", PROBE_BUDGET).await;
         assert!(
             !out.contains("CHAN_MCP_"),
             "mcp_env=false should omit CHAN_MCP_* env vars, got {out:?}"
