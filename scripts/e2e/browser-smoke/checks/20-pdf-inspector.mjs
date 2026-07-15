@@ -52,6 +52,15 @@ export default {
 
     const cases = [
       { file: "doc.md", pdf: "doc.pdf", orientation: "portrait", minPages: 2 },
+      // Long non-repeating corpus: every sentence is unique, so any
+      // ink band appearing on two pages is a pagination bug.
+      {
+        file: "long-doc.md",
+        pdf: "long-doc.pdf",
+        orientation: "portrait",
+        minPages: 6,
+        boundaries: true,
+      },
       { file: "deck-169.md", pdf: "deck-169.pdf", orientation: "landscape", pages: 3 },
       { file: "deck-43.md", pdf: "deck-43.pdf", orientation: "landscape", pages: 3 },
     ];
@@ -82,6 +91,9 @@ export default {
           pages: count,
           orientation: c.orientation,
         });
+      }
+      if (c.boundaries) {
+        details[`${c.file}:boundaries`] = await ctx.assertNoDuplicateBands(bytes);
       }
     }
     return details;

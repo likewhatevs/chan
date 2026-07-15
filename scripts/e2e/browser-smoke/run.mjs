@@ -34,7 +34,7 @@ if (!existsSync(join(HERE, "node_modules"))) {
 }
 
 const { default: puppeteer } = await import("puppeteer-core");
-const { assertPdf } = await import("./lib/pdf.mjs");
+const { assertNoDuplicateBands, assertPdf } = await import("./lib/pdf.mjs");
 const {
   defaultChrome,
   findControlSocket,
@@ -153,6 +153,7 @@ try {
       throw err;
     },
     assertPdf,
+    assertNoDuplicateBands,
     exec: (bin, args, opts = {}) =>
       execFileP(bin, args, { timeout: 120_000, ...opts }),
   };

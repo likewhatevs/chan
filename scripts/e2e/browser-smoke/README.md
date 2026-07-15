@@ -43,6 +43,9 @@ intermediate evidence:
   merged yet).
 - `ctx.assertPdf(bytes, { pages, orientation, minInkRatio })`: pdf-lib
   byte assertions (page count, A4 dims, per-page nonzero raster ink).
+- `ctx.assertNoDuplicateBands(bytes)`: fails when the head band of a
+  page also appears on the previous page (pagination duplication).
+  Only meaningful for documents whose content does not repeat itself.
 
 Add a new check by dropping a numbered file into `checks/`; nothing
 else needs editing.

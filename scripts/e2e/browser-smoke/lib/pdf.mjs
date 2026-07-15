@@ -59,6 +59,151 @@ function pageImageInk(page) {
   return best;
 }
 
+/// Decode a page's raster to a grayscale matrix plus per-row ink
+/// counts and a structured-row mask. A row is structured when its own
+/// pixels vary (glyph or diagram edges); uniform regions of any color
+/// carry no matching evidence. Transparent pixels decode as black in
+/// the raw stream (their alpha lives in the SMask), so uniformity, not
+/// distance from the background, is the featureless test.
+function pageGray(page, tol = 24) {
+  const resources = page.node.Resources();
+  const xobjects = resources?.lookup(PDFName.of("XObject"));
+  if (!xobjects) return null;
+  for (const key of xobjects.keys()) {
+    const stream = xobjects.lookup(key);
+    if (!(stream instanceof PDFRawStream)) continue;
+    const dict = stream.dict;
+    const width = dict.lookup(PDFName.of("Width"))?.asNumber?.() ?? 0;
+    const height = dict.lookup(PDFName.of("Height"))?.asNumber?.() ?? 0;
+    let raw;
+    try {
+      raw = inflateSync(Buffer.from(stream.contents));
+    } catch {
+      continue;
+    }
+    const channels = Math.max(1, Math.round(raw.length / (width * height)));
+    const gray = new Uint8Array(width * height);
+    const rowInk = new Uint32Array(height);
+    const structured = new Uint8Array(height);
+    let bg = 0;
+    for (let c = 0; c < channels; c++) bg += raw[c];
+    bg /= channels;
+    for (let y = 0; y < height; y++) {
+      let lo = 255;
+      let hi = 0;
+      for (let x = 0; x < width; x++) {
+        let v = 0;
+        const p = y * width + x;
+        for (let c = 0; c < channels; c++) v += raw[p * channels + c];
+        v /= channels;
+        gray[p] = v;
+        if (Math.abs(v - bg) > tol) rowInk[y]++;
+        if (v < lo) lo = v;
+        if (v > hi) hi = v;
+      }
+      structured[y] = hi - lo > 48 ? 1 : 0;
+    }
+    return { gray, rowInk, structured, width, height };
+  }
+  return null;
+}
+
+/// Mean absolute pixel difference between page B's structured rows
+/// within [bStart, bStart+band) and page A's corresponding rows
+/// starting at aStart, with A blended between adjacent rows by `alpha`
+/// to absorb sub-pixel raster offsets between the two page snapshots.
+function bandResidual(A, B, aStart, bStart, band, alpha) {
+  const { width } = A;
+  let sum = 0;
+  let rows = 0;
+  for (let k = 0; k < band; k++) {
+    if (!B.structured[bStart + k]) continue;
+    rows++;
+    const a0 = (aStart + k) * width;
+    const a1 = Math.min(A.height - 1, aStart + k + 1) * width;
+    const b0 = (bStart + k) * width;
+    for (let x = 0; x < width; x++) {
+      const av = (1 - alpha) * A.gray[a0 + x] + alpha * A.gray[a1 + x];
+      sum += Math.abs(av - B.gray[b0 + x]);
+    }
+  }
+  return rows === 0 ? Infinity : sum / (rows * width);
+}
+
+/// Assert that no content band is painted on two adjacent pages: for
+/// each pair, the head band of page N+1 is searched for anywhere in
+/// page N via a coarse row-ink-profile alignment shortlist, then a
+/// sub-pixel pixel residual over the band's STRUCTURED rows only, so
+/// featureless regions (page background, transparent tails) carry no
+/// matching evidence. A low residual means the same ink appears on
+/// both pages. Requires a document whose content does not repeat
+/// itself across a boundary.
+export async function assertNoDuplicateBands(
+  bytes,
+  { band = 400, dupResidual = 3, minStructuredRows = 40 } = {},
+) {
+  const doc = await PDFDocument.load(bytes);
+  const pages = doc.getPages();
+  const grays = pages.map(pageGray);
+  const summary = [];
+  for (let i = 0; i + 1 < grays.length; i++) {
+    const A = grays[i];
+    const B = grays[i + 1];
+    if (!A || !B || A.width !== B.width) continue;
+    const bStart = B.structured.findIndex((v) => v > 0);
+    if (bStart < 0) continue; // featureless page
+    // Grow the band from the first structured row until it carries
+    // enough structured rows to be discriminating.
+    let bandRows = 0;
+    let structuredRows = 0;
+    while (
+      bStart + bandRows < B.height &&
+      bandRows < band &&
+      structuredRows < 2 * minStructuredRows
+    ) {
+      structuredRows += B.structured[bStart + bandRows];
+      bandRows++;
+    }
+    if (structuredRows < minStructuredRows) continue; // too sparse to judge
+    // Coarse shortlist: row-ink-profile distance at every alignment.
+    const coarse = [];
+    for (let a = 0; a + bandRows <= A.height; a++) {
+      let d = 0;
+      for (let k = 0; k < bandRows; k++) {
+        d += Math.abs(A.rowInk[a + k] - B.rowInk[bStart + k]);
+      }
+      coarse.push({ a, d });
+    }
+    coarse.sort((p, q) => p.d - q.d);
+    let best = { a: -1, residual: Infinity };
+    const tried = new Set();
+    for (const { a } of coarse.slice(0, 12)) {
+      for (const j of [-1, 0, 1]) {
+        const aj = a + j;
+        if (aj < 0 || aj + bandRows > A.height || tried.has(aj)) continue;
+        tried.add(aj);
+        for (const alpha of [0, 0.25, 0.5, 0.75]) {
+          const r = bandResidual(A, B, aj, bStart, bandRows, alpha);
+          if (r < best.residual) best = { a: aj, residual: r };
+        }
+      }
+    }
+    summary.push({
+      pair: `${i + 1}/${i + 2}`,
+      residual: Number(best.residual.toFixed(2)),
+      align: best.a,
+      structuredRows,
+    });
+    if (best.residual < dupResidual) {
+      throw new Error(
+        `pages ${i + 1}/${i + 2}: duplicated boundary band (head of page ${i + 2} ` +
+          `found at page ${i + 1} row ${best.a}, residual ${best.residual.toFixed(2)} < ${dupResidual})`,
+      );
+    }
+  }
+  return summary;
+}
+
 /// Assert exported PDF bytes: `pages` (exact count), `orientation`
 /// ("portrait" | "landscape", A4), and `minInkRatio` per page. Throws
 /// with a precise message on the first violation; returns a summary.
