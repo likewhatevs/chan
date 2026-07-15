@@ -4,6 +4,35 @@ All notable changes to this project will be documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+v0.69.0 makes chan-desktop's gateway devserver windows first-class (working upload/download/clipboard/chords, honest reconnect feedback after sleep), unhangs `cs paste` everywhere with a visible in-window paste card, adds a global Open command to the launcher, makes launcher machine cards collapsible with durable state, and prunes long-offline devservers from the gateway registry.
+
+### Added
+
+- **Open from the command launcher.** A global Open command pops a path dialog with the same autocomplete as New File/Dir; Enter runs exact `cs open` semantics (directory opens the file browser, text opens the editor, a copy-link-to-graph URL opens the graph tab, a missing path is created and opened with the dialog saying so up front, binary refuses with an error in the top-right pill). Typing `Open <path>` directly in the launcher input works too, and Esc from the dialog returns focus to wherever you were. Backed by `POST /api/open`, which rides the same server dispatch as `cs open`. Hidden in standalone terminal windows.
+- **Collapsible machine cards in chan-launcher.** "This machine" and every devserver card carry a window-count toggle (control terminal + standalone terminals + windows of running workspaces) left of the Terminal button; collapsed cards show just the header row. The state survives page reloads and full chan-desktop restarts (config-backed on desktop).
+- **Gateway devserver registry cleanup.** profile-service sweeps devservers that have been offline longer than `DEVSERVER_RETENTION_MINUTES` (default 15; `0` disables), marking liveness from the proxy's tunnel snapshot each minute and never deleting on a tick whose snapshot fetch failed. Deleting a row drops its label and shares; a re-granted or redialing devserver reappears cleanly.
+
+### Changed
+
+- **`cs paste` / `cs copy` report a clipboard timeout as exit 124** (like `cs terminal survey`) with a message naming the likely browser permission prompt; after ~2s of waiting the CLI prints a one-line notice instead of sitting silent.
+- **One word: "devserver".** All labels, docs, site copy, and comments now use "devserver(s)"; the launcher reads "Add devserver" and "This machine & devservers".
+- **A held workspace window now counts as server activity.** The window watcher sends a liveness ping every 20s, so socket-activated `chan --timeout` instances no longer idle-exit while any window holds the watch socket.
+
+### Fixed
+
+- **chan-desktop gateway devserver windows regain the full command vocabulary.** Windows served from `https://*.devserver.chan.app` had no Tauri IPC grants, so `cs upload` died with an ACL toast, `cs download`'s save step and PDF-export save were dead, all six clipboard commands fell back to browser prompts, and the reload/zoom/devtools chords did nothing. They now carry the same grants as their loopback twins (deliberately: the tunnel origin serves your own PAT-backed devserver). File drag-in stays excluded by design, and an origin-aware ACL parity test now fails the build if a command ships without reach on any window class. Self-hosted gateways on other domains remain uncovered for now.
+- **`cs paste` no longer hangs.** When a browser parks the clipboard read on a permission prompt, the window shows a chan-owned card ("cs paste is waiting for this window's clipboard") with Paste and Cancel: Paste completes the read inside a real click (one prompt at most, no more double-prompt denials), Cancel unblocks the CLI immediately, and the server's 30s timeout is now typed and self-explanatory. Image/HTML clipboard commands degrade to the same web path instead of surfacing raw ACL errors.
+- **Sleeping the laptop no longer strands gateway devserver windows.** No layer sent keepalives, so post-sleep sockets were half-open zombies: windows froze while the launcher stayed green. The watcher socket now runs a 20s ping / 45s read-deadline plus a wall-clock wake detector, so stuck windows flip to the existing Reconnecting overlay (Reconnect / Abandon) within a minute of wake; terminals recycle their PTY sockets without losing scrollback; and a devserver whose feeds stay dark turns its launcher dot red with a "Disconnect lost connection" button instead of lying green.
+
+### Operators
+
+- New optional profile-service env `DEVSERVER_RETENTION_MINUTES` (absent = 15, `0` = disabled). The sweeper only runs when `DEVSERVER_ADMIN_TOKEN` / `DEVSERVER_ADMIN_URL` are configured on profile-service; note a sweep deletes the row's shares and label permanently (the item's intent; re-grant recreates the row).
+- Scripts wrapping `cs paste` / `cs copy`: timeout is now exit 124, not 1.
+- Front proxies must not send a `Permissions-Policy` header denying `clipboard-read` on the devserver wildcard host (the paste card needs it in plain browsers).
+- Desktops 0.69+ grant native IPC (picker, Downloads writes, OS clipboard) to windows on `https://*.devserver.chan.app`; if you terminate that wildcard somewhere unusual, review before rolling.
+
 ## [v0.68.0] - 2026-07-15
 
 v0.68.0 brings multiple devservers per gateway account with a sign-in picker, a one-time-code desktop sign-in handoff, Export to PDF through the Inspector and `cs export`, live-collaborative Excalidraw boards, an operator token mint, and retry-idempotent PPA publishing.
