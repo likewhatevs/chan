@@ -310,6 +310,14 @@ describe("Library: devserver groups", () => {
     // Content stays mounted (not collapsed to the "Not connected" prompt).
     expect(prod!.textContent).toContain("Control terminal");
     expect(prod!.textContent).not.toContain("Not connected");
+    // The connection record still exists, so it keeps the (red "lost") Disconnect
+    // affordance -- not the plug Connect, which would stack a second connect.
+    const disconnect = byAria("Disconnect prod");
+    expect(disconnect).toBeTruthy();
+    expect(disconnect!.classList.contains("lost")).toBe(true);
+    expect(disconnect!.classList.contains("on")).toBe(false);
+    expect(disconnect!.title).toBe("Disconnect lost connection");
+    expect(byAria("Connect prod")).toBeUndefined();
   });
 
   it("renders a connecting devserver's control row while it is dialing", () => {

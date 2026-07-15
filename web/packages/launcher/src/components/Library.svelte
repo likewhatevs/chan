@@ -541,7 +541,12 @@
                 aria-label={`Working on ${devserverName(ds)}`}>
                 <LoaderCircle class="spin" size={16} />
               </button>
-            {:else if connected(ds)}
+            {:else if connected(ds) || ds.status === "unreachable"}
+              <!-- `unreachable` keeps the disconnect affordance (its connection
+                   record still exists, so a plug-connect would stack a second
+                   connect over it); disconnect-then-reconnect is the recovery.
+                   connectionLost is true here, so it renders the red "lost"
+                   variant. -->
               <button
                 class="icon-btn"
                 class:on={!connectionLost(ds)}
