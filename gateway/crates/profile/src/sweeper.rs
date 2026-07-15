@@ -1,0 +1,120 @@
+//! Devserver registry sweeper.
+//!
+//! Identity mints one `devservers` row per PAT (the devserver id is
+//! the SHA-256 of the raw token) and nothing deletes them: PAT
+//! rotation strands the old row forever, so the dashboard lists every
+//! devserver ever registered. The sweeper keeps the registry honest:
+//! each tick stamps `last_seen_at` on the rows that are live right now
+//! (devserver-proxy's admin tunnel snapshot) and deletes rows offline
+//! longer than the configured retention, where offline age is
+//! `now() - COALESCE(last_seen_at, created_at)`.
+//!
+//! Fail-safe rule (load-bearing, test-pinned): a tick that cannot
+//! fetch the live-tunnel snapshot marks and deletes NOTHING. Marking
+//! runs strictly before deletion inside a tick, so rows only age
+//! toward deletion while ticks are succeeding -- a devserver-proxy
+//! outage longer than the retention cannot wipe a live registry.
+//!
+//! Comeback semantics: deletion cascades the row's grants away
+//! (`devserver_grants` FK). A swept devserver that redials shows up
+//! live-unlabeled on the owner's dashboard (the live list comes from
+//! devserver-proxy, and the next grant create or identity mint
+//! recreates the row); its grants and label are gone until re-granted
+//! and re-labeled. The owner's own entry and open flow never break:
+//! owner-side access checks never read the `devservers` table.
+//!
+//! Single-proxy assumption: the snapshot comes from the one
+//! devserver-proxy instance the admin client points at. A multi-proxy
+//! deployment needs a merged snapshot before this sweeper is safe.
+//!
+//! The loop runs detached for the life of the process (spawned from
+//! `run()` in main before serve); process shutdown is its cancellation
+//! path.
+
+use std::time::Duration;
+
+use gateway_common::workspace_admin_client::WorkspaceAdminClient;
+use sqlx::postgres::PgPool;
+
+/// What one sweep did: live rows stamped, stale rows deleted (grants
+/// cascade in Postgres and are not counted here).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SweepStats {
+    pub marked: u64,
+    pub deleted: u64,
+}
+
+/// One mark-then-delete pass. `live` is the full live-tunnel snapshot
+/// as `(username, devserver_id)` pairs. The caller owns the fail-safe
+/// rule: only call this with a snapshot that fetched successfully.
+pub async fn sweep_once(
+    pool: &PgPool,
+    live: &[(String, String)],
+    retention: Duration,
+) -> sqlx::Result<SweepStats> {
+    let usernames: Vec<String> = live.iter().map(|(u, _)| u.clone()).collect();
+    let devserver_ids: Vec<String> = live.iter().map(|(_, d)| d.clone()).collect();
+
+    // Mark strictly before delete: a row live in this snapshot must not
+    // be deletable by this same tick. The proxy reports owners by
+    // username; rows key on owner_user_id, so the pairs join through
+    // users.
+    let marked = sqlx::query(
+        "UPDATE devservers AS d SET last_seen_at = now() \
+         FROM UNNEST($1::text[], $2::text[]) AS live(username, devserver_id) \
+         JOIN users u ON u.username = live.username \
+         WHERE d.owner_user_id = u.id AND d.devserver_id = live.devserver_id",
+    )
+    .bind(&usernames)
+    .bind(&devserver_ids)
+    .execute(pool)
+    .await?
+    .rows_affected();
+
+    let deleted: Vec<String> = sqlx::query_scalar(
+        "DELETE FROM devservers \
+         WHERE COALESCE(last_seen_at, created_at) < now() - make_interval(secs => $1) \
+         RETURNING devserver_id",
+    )
+    .bind(retention.as_secs_f64())
+    .fetch_all(pool)
+    .await?;
+
+    if !deleted.is_empty() {
+        tracing::info!(
+            marked,
+            deleted = deleted.len(),
+            ids = ?deleted,
+            "devserver registry sweep deleted stale rows (their grants cascade)",
+        );
+    }
+    Ok(SweepStats {
+        marked,
+        deleted: deleted.len() as u64,
+    })
+}
+
+/// Sweep loop: one tick per minute, each tick gated on a SUCCESSFUL
+/// `list_all_tunnels` fetch; any fetch error skips the whole tick.
+pub async fn run(pool: PgPool, admin: WorkspaceAdminClient, retention: Duration) {
+    const TICK: Duration = Duration::from_secs(60);
+    let mut interval = tokio::time::interval(TICK);
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        interval.tick().await;
+        let snapshot = match admin.list_all_tunnels().await {
+            Ok(tunnels) => tunnels,
+            Err(err) => {
+                tracing::warn!(error = %err, "sweeper: live-tunnel fetch failed; skipping tick");
+                continue;
+            }
+        };
+        let live: Vec<(String, String)> = snapshot
+            .into_iter()
+            .map(|t| (t.user, t.devserver_id))
+            .collect();
+        if let Err(err) = sweep_once(&pool, &live, retention).await {
+            tracing::warn!(error = %err, "sweeper: sweep failed");
+        }
+    }
+}

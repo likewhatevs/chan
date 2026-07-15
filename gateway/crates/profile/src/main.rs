@@ -26,6 +26,23 @@ async fn run() -> anyhow::Result<()> {
     let pool = db::connect(&cfg.database_url).await?;
     db::migrate(&pool).await?;
 
+    // Devserver registry sweeper: needs the devserver-proxy admin
+    // client (live-tunnel snapshot source) AND a nonzero retention.
+    // Absent either, say so once and don't spawn.
+    match (cfg.workspace_admin.clone(), cfg.devserver_retention) {
+        (Some(admin), Some(retention)) => {
+            tracing::info!(
+                retention_secs = retention.as_secs(),
+                "devserver registry sweeper enabled"
+            );
+            tokio::spawn(profile::sweeper::run(pool.clone(), admin, retention));
+        }
+        _ => tracing::info!(
+            "devserver registry sweeper disabled (needs DEVSERVER_ADMIN_TOKEN/URL and a \
+             nonzero DEVSERVER_RETENTION_MINUTES)"
+        ),
+    }
+
     let app = http::router(http::AppState {
         pool,
         auth_token: cfg.auth_token.clone(),

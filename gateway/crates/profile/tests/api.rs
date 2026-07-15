@@ -1781,3 +1781,179 @@ async fn flag_delete_cascades_overrides() {
     assert!(v.get("tmp").is_none(), "tmp flag is gone");
     app.cleanup().await;
 }
+
+// ---------------------------------------------------------------------------
+// devserver registry sweeper
+// ---------------------------------------------------------------------------
+
+const RETENTION: std::time::Duration = std::time::Duration::from_secs(15 * 60);
+
+async fn username_of(app: &TestApp, user_id: &str) -> String {
+    sqlx::query_scalar("SELECT username FROM users WHERE id = $1")
+        .bind(Uuid::parse_str(user_id).unwrap())
+        .fetch_one(&app.pool)
+        .await
+        .expect("user has a username")
+}
+
+async fn seed_devserver(app: &TestApp, owner_id: &str, dsid: &str) {
+    sqlx::query("INSERT INTO devservers (owner_user_id, devserver_id) VALUES ($1, $2)")
+        .bind(Uuid::parse_str(owner_id).unwrap())
+        .bind(dsid)
+        .execute(&app.pool)
+        .await
+        .expect("seed devserver row");
+}
+
+/// Backdate a row's liveness evidence: `created_min` minutes ago for
+/// created_at, and last_seen_at = `seen_min` minutes ago (None keeps
+/// it NULL, the never-marked state).
+async fn backdate_devserver(app: &TestApp, dsid: &str, created_min: f64, seen_min: Option<f64>) {
+    // make_interval's only double-precision named arg is secs.
+    sqlx::query(
+        "UPDATE devservers SET \
+             created_at = now() - make_interval(secs => $2 * 60.0), \
+             last_seen_at = CASE WHEN $3::double precision IS NULL THEN NULL \
+                                 ELSE now() - make_interval(secs => $3 * 60.0) END \
+         WHERE devserver_id = $1",
+    )
+    .bind(dsid)
+    .bind(created_min)
+    .bind(seen_min)
+    .execute(&app.pool)
+    .await
+    .expect("backdate devserver row");
+}
+
+async fn devserver_ids(app: &TestApp) -> Vec<String> {
+    sqlx::query_scalar("SELECT devserver_id FROM devservers ORDER BY devserver_id")
+        .fetch_all(&app.pool)
+        .await
+        .expect("list devserver rows")
+}
+
+async fn grant_count(app: &TestApp, dsid: &str) -> i64 {
+    sqlx::query_scalar("SELECT COUNT(*) FROM devserver_grants WHERE devserver_id = $1")
+        .bind(dsid)
+        .fetch_one(&app.pool)
+        .await
+        .expect("count grants")
+}
+
+#[tokio::test]
+async fn sweep_deletes_stale_rows_cascades_grants_and_marks_live_ones() {
+    let app = TestApp::new().await;
+    let owner = mk_user(&app, "owner@x.com").await;
+    mk_user(&app, "friend@x.com").await;
+    let stale = ds("a");
+    let live = ds("b");
+
+    // The stale row carries a grant (the endpoint auto-creates the
+    // devservers row); ruling: sweep deletes rows offline > retention
+    // INCLUDING rows carrying grants, and the grants cascade away.
+    let (s, _) = app
+        .req(
+            Method::POST,
+            &format!("/v1/users/{owner}/devservers/{stale}/grants"),
+            Some(json!({"grantee_email": "friend@x.com", "role": "viewer"})),
+        )
+        .await;
+    assert_eq!(s, StatusCode::CREATED);
+    seed_devserver(&app, &owner, &live).await;
+
+    // Both rows are older than the retention and never marked; only
+    // the live one appears in the snapshot.
+    backdate_devserver(&app, &stale, 30.0, None).await;
+    backdate_devserver(&app, &live, 30.0, None).await;
+
+    let snapshot = vec![(username_of(&app, &owner).await, live.clone())];
+    let stats = profile::sweeper::sweep_once(&app.pool, &snapshot, RETENTION)
+        .await
+        .expect("sweep runs");
+    assert_eq!(stats.marked, 1, "the live row is stamped");
+    assert_eq!(stats.deleted, 1, "the stale row is deleted");
+
+    assert_eq!(devserver_ids(&app).await, vec![live.clone()]);
+    assert_eq!(
+        grant_count(&app, &stale).await,
+        0,
+        "grants cascade with the row"
+    );
+    let seen: Option<chrono::DateTime<chrono::Utc>> =
+        sqlx::query_scalar("SELECT last_seen_at FROM devservers WHERE devserver_id = $1")
+            .bind(&live)
+            .fetch_one(&app.pool)
+            .await
+            .expect("live row remains");
+    let seen = seen.expect("mark stamped last_seen_at");
+    assert!(chrono::Utc::now() - seen < chrono::Duration::seconds(60));
+
+    app.cleanup().await;
+}
+
+#[tokio::test]
+async fn sweep_spares_young_rows_whether_marked_or_never_seen() {
+    let app = TestApp::new().await;
+    let owner = mk_user(&app, "owner@x.com").await;
+    let never_seen_young = ds("c");
+    let seen_recently = ds("d");
+    let seen_long_ago = ds("e");
+    for dsid in [&never_seen_young, &seen_recently, &seen_long_ago] {
+        seed_devserver(&app, &owner, dsid).await;
+    }
+    // Freshly registered, never dialed: COALESCE falls back to
+    // created_at, which is inside the retention.
+    backdate_devserver(&app, &never_seen_young, 5.0, None).await;
+    // Offline but recently seen: inside the retention.
+    backdate_devserver(&app, &seen_recently, 30.0, Some(5.0)).await;
+    // Offline past the retention: the one that goes.
+    backdate_devserver(&app, &seen_long_ago, 40.0, Some(30.0)).await;
+
+    // Nothing is live; an empty snapshot is a valid successful fetch.
+    let stats = profile::sweeper::sweep_once(&app.pool, &[], RETENTION)
+        .await
+        .expect("sweep runs");
+    assert_eq!(stats.marked, 0);
+    assert_eq!(stats.deleted, 1);
+    assert_eq!(
+        devserver_ids(&app).await,
+        vec![never_seen_young.clone(), seen_recently.clone()],
+    );
+
+    app.cleanup().await;
+}
+
+#[tokio::test]
+async fn sweep_is_idempotent_across_ticks() {
+    let app = TestApp::new().await;
+    let owner = mk_user(&app, "owner@x.com").await;
+    let stale = ds("a");
+    let live = ds("b");
+    seed_devserver(&app, &owner, &stale).await;
+    seed_devserver(&app, &owner, &live).await;
+    backdate_devserver(&app, &stale, 30.0, None).await;
+    backdate_devserver(&app, &live, 30.0, None).await;
+
+    let snapshot = vec![(username_of(&app, &owner).await, live.clone())];
+    let first = profile::sweeper::sweep_once(&app.pool, &snapshot, RETENTION)
+        .await
+        .expect("first sweep");
+    assert_eq!((first.marked, first.deleted), (1, 1));
+
+    // Same snapshot again: the live row re-marks, nothing new dies.
+    let second = profile::sweeper::sweep_once(&app.pool, &snapshot, RETENTION)
+        .await
+        .expect("second sweep");
+    assert_eq!((second.marked, second.deleted), (1, 0));
+    assert_eq!(devserver_ids(&app).await, vec![live.clone()]);
+
+    // A snapshot naming a user with no rows marks nothing and is
+    // harmless (the proxy can know tunnels profile has no row for).
+    let stranger = vec![("no-such-user".to_string(), ds("f"))];
+    let third = profile::sweeper::sweep_once(&app.pool, &stranger, RETENTION)
+        .await
+        .expect("third sweep");
+    assert_eq!(third.marked, 0);
+
+    app.cleanup().await;
+}
