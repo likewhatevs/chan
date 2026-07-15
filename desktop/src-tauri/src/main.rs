@@ -4963,7 +4963,7 @@ fn install_app_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
     // carries no key bridge for it, so only a native accelerator can
     // serve the chord there).
     #[cfg(not(target_os = "macos"))]
-    let menu = build_launcher_menu(app, true)?;
+    let menu = build_launcher_menu(app, true, None)?;
 
     app.set_menu(menu)?;
     app.on_menu_event(handle_menu_event);
@@ -5010,8 +5010,15 @@ fn handle_menu_event(app: &tauri::AppHandle, event: tauri::menu::MenuEvent) {
             return;
         }
         if let Some(label) = id.strip_prefix(WS_NEW_WINDOW_MENU_ID_PREFIX) {
-            if let Err(e) = open_new_window_for_label(app, label) {
-                tracing::warn!(label, error = %e, "open new window from a workspace menu failed");
+            // Parity with the focused route: an SPA window opens another
+            // window of its connection; a control terminal (not
+            // SPA-classified) means a standalone terminal.
+            if serve::is_workspace_webview_label(label) {
+                if let Err(e) = open_new_window_for_label(app, label) {
+                    tracing::warn!(label, error = %e, "open new window from a window menu failed");
+                }
+            } else {
+                spawn_terminal_window(app);
             }
             return;
         }
@@ -5106,9 +5113,11 @@ const LINUX_WINDOW_SUBMENU_ID: &str = "chan-window-submenu";
 /// the two even for composite labels like `local::<window_id>`.
 #[cfg(not(target_os = "macos"))]
 const WORKSPACE_CMD_MENU_ID_PREFIX: &str = "wscmd:";
-/// Workspace File-menu window-level rows, label-addressed like `wscmd:`:
-/// New Window / Open in Browser / Close Window acting on the OWNING
-/// window (id = prefix + label).
+/// Per-window window-level rows, label-addressed like `wscmd:` (id =
+/// prefix + label): New Window / Open in Browser / Close Window acting
+/// on the OWNING window. The workspace menu carries all three; owned
+/// launcher-shape instances (standalone and control terminals) carry
+/// New Window and Close Window.
 #[cfg(not(target_os = "macos"))]
 const WS_NEW_WINDOW_MENU_ID_PREFIX: &str = "ws-new-window:";
 #[cfg(not(target_os = "macos"))]
@@ -5165,12 +5174,16 @@ fn parse_workspace_cmd_menu_id(id: &str) -> Option<(&str, &str)> {
 /// Close Window, About, Quit), Edit (the four clipboard items muda
 /// implements on GTK), Window (Workspaces, New Window, Open in Browser
 /// plus the dynamic tail `rebuild_window_menu` appends). Installed as
-/// the app-wide default by `install_app_menu` (the launcher, control
-/// terminals, and any window built without an explicit menu show it);
-/// standalone terminal windows get their own instance with
+/// the app-wide default by `install_app_menu` (the launcher and any
+/// window built without an explicit menu show it); standalone and
+/// control terminal windows get their own instances with `owner =
+/// Some(label)`, which label-addresses New Window and Close Window (the
+/// `ws-*:` id namespaces) so those rows act on the OWNING window
+/// instead of consulting focus. Standalone terminals also pass
 /// `claim_new_terminal_chord = false` so Ctrl+Shift+T stays with the
 /// SPA (new terminal tab via KEY_BRIDGE_JS) while the row keeps working
-/// by click.
+/// by click; the launcher and control terminals keep the claim (their
+/// webviews do not serve the chord).
 ///
 /// "About Chan" opens a version dialog that also offers a manual update
 /// check - the only manual self-update entry point off macOS (the
@@ -5188,6 +5201,7 @@ fn parse_workspace_cmd_menu_id(id: &str) -> Option<(&str, &str)> {
 pub(crate) fn build_launcher_menu(
     app: &tauri::AppHandle,
     claim_new_terminal_chord: bool,
+    owner: Option<&str>,
 ) -> tauri::Result<Menu<tauri::Wry>> {
     use tauri::menu::{MenuBuilder, SubmenuBuilder};
     // File ▸ New Standalone Terminal always opens a fresh standalone
@@ -5209,8 +5223,13 @@ pub(crate) fn build_launcher_menu(
     // as macOS's Cmd+W item: tab-close in SPA windows,
     // cancel-close on the connecting screen, native close
     // elsewhere. KEY_BRIDGE_JS claims the same chord inside SPA
-    // webviews, mirroring the macOS menu/bridge shadow pair.
-    let close_window = MenuItemBuilder::with_id("app-close-window", "Close Window")
+    // webviews, mirroring the macOS menu/bridge shadow pair. An owned
+    // instance addresses the row to its window by label.
+    let close_window_id = match owner {
+        Some(label) => format!("{WS_CLOSE_WINDOW_MENU_ID_PREFIX}{label}"),
+        None => "app-close-window".to_string(),
+    };
+    let close_window = MenuItemBuilder::with_id(close_window_id, "Close Window")
         .accelerator("CmdOrCtrl+Shift+W")
         .build(app)?;
     let file = SubmenuBuilder::new(app, "File")
@@ -5232,13 +5251,18 @@ pub(crate) fn build_launcher_menu(
     // bridge script in serve.rs). The menu entry still surfaces the
     // window by name.
     let workspace_manager = MenuItemBuilder::with_id("win-main", "Workspaces").build(app)?;
-    // New Window opens another window of the FOCUSED window's connection:
-    // another standalone terminal from a terminal window; a standalone
-    // terminal from the launcher (or nothing) focused -- the launcher
-    // itself is a singleton and is never multiplied. `CmdOrCtrl+Shift+N`
-    // (not plain Cmd+N) so the SPA's New Draft handler can claim Cmd+N
-    // without the menu accelerator intercepting first.
-    let new_window = MenuItemBuilder::with_id("app-new-window", "New Window")
+    // New Window opens another window of this menubar's connection:
+    // another standalone terminal from a terminal window (owned
+    // instances address the row by label); a standalone terminal from
+    // the launcher (or nothing) focused -- the launcher itself is a
+    // singleton and is never multiplied. `CmdOrCtrl+Shift+N` (not plain
+    // Cmd+N) so the SPA's New Draft handler can claim Cmd+N without the
+    // menu accelerator intercepting first.
+    let new_window_id = match owner {
+        Some(label) => format!("{WS_NEW_WINDOW_MENU_ID_PREFIX}{label}"),
+        None => "app-new-window".to_string(),
+    };
+    let new_window = MenuItemBuilder::with_id(new_window_id, "New Window")
         .accelerator("CmdOrCtrl+Shift+N")
         .build(app)?;
     // Open the FOCUSED workspace window's contents in the system browser.
@@ -5258,12 +5282,12 @@ pub(crate) fn build_launcher_menu(
 
 /// Per-window menubar for a WORKSPACE window (off-mac). File mirrors the
 /// pane hamburger (Commands, Hybrid Nav, the app-spawn rows), then the
-/// window-level rows (New Window, Open in Browser, Close Window) and the
-/// File tail every off-mac shape carries (About, Quit). Window keeps
-/// Workspaces plus the dynamic tail -- New Window / Open in Browser live
-/// in File here, so they are not duplicated into Window like the
-/// launcher shape does. Every window-scoped row encodes `label` in its
-/// id so the handler acts on THIS window regardless of focus.
+/// window-level rows (New Window, Open in Browser, Hide Window, Close
+/// Window) and the File tail every off-mac shape carries (About, Quit).
+/// Window keeps Workspaces plus the dynamic tail -- New Window / Open in
+/// Browser live in File here, so they are not duplicated into Window
+/// like the launcher shape does. Every window-scoped row encodes `label`
+/// in its id so the handler acts on THIS window regardless of focus.
 #[cfg(not(target_os = "macos"))]
 pub(crate) fn build_workspace_menu(
     app: &tauri::AppHandle,
@@ -5297,6 +5321,16 @@ pub(crate) fn build_workspace_menu(
         "Open in Browser",
     )
     .build(app)?;
+    // Hide Window buries THIS window (sessions stay warm; the record
+    // persists hidden and reopens from the launcher or the Window
+    // menu's Hidden section) -- the SPA's `app.window.hide`, dispatched
+    // over the same bridge as the mirror rows. No accelerator: the SPA
+    // owns the user-editable Mod+Shift+H chord.
+    let hide_window = MenuItemBuilder::with_id(
+        workspace_cmd_menu_id("app.window.hide", label),
+        "Hide Window",
+    )
+    .build(app)?;
     let close_window = MenuItemBuilder::with_id(
         format!("{WS_CLOSE_WINDOW_MENU_ID_PREFIX}{label}"),
         "Close Window",
@@ -5311,6 +5345,7 @@ pub(crate) fn build_workspace_menu(
         .separator()
         .item(&new_window)
         .item(&open_in_browser)
+        .item(&hide_window)
         .item(&close_window)
         .separator()
         .item(&about)
@@ -7262,9 +7297,12 @@ mod tests {
             "local::w-42",
             "lib-deadbeef::w-7",
         ] {
+            // Hide Window is a window-level row (not part of the
+            // hamburger mirror) but rides the same wscmd namespace.
             for (command, _) in WORKSPACE_MENU_NAV_ROWS
                 .iter()
                 .chain(WORKSPACE_MENU_APP_ROWS)
+                .chain(&[("app.window.hide", "Hide Window")])
             {
                 assert!(
                     !command.contains(':'),
@@ -7323,5 +7361,25 @@ mod tests {
             !mirror.contains(".accelerator("),
             "hamburger-mirror rows must not claim native accelerators",
         );
+        // The workspace menu carries the Hide Window row (item 10's
+        // command over the same bridge, chordless -- the SPA owns
+        // Mod+Shift+H). concat! so the pin doesn't match this test's
+        // own source.
+        assert!(MAIN_RS.contains(concat!(
+            "workspace_cmd_menu_id(\"app.window.",
+            "hide\", label)"
+        )));
+        // Owned launcher-shape instances label-address New Window and
+        // Close Window so terminal/control menu clicks act on their own
+        // window instead of consulting focus.
+        let launcher = MAIN_RS
+            .split("fn build_launcher_menu")
+            .nth(1)
+            .expect("build_launcher_menu exists")
+            .split("fn build_workspace_menu")
+            .next()
+            .expect("launcher region bounded");
+        assert!(launcher.contains("WS_NEW_WINDOW_MENU_ID_PREFIX"));
+        assert!(launcher.contains("WS_CLOSE_WINDOW_MENU_ID_PREFIX"));
     }
 }

@@ -1058,16 +1058,27 @@ fn build_workspace_window(app: &AppHandle, spec: WindowSpec<'_>) -> Result<(), S
         // Off-mac the menubar renders per window, so each SPA window is
         // born with its kind's bar (built in main.rs): workspace windows
         // get the pane-hamburger-mirror File menu addressed to this
-        // window's label; standalone terminals get the launcher shape
-        // without the New-Terminal chord claim (KEY_BRIDGE_JS keeps
-        // Ctrl+Shift+T = new terminal tab). Control terminals inherit
-        // the app-wide launcher menu. Best-effort: a menu-build failure
-        // just leaves the inherited default bar.
+        // window's label; standalone terminals get an owned launcher
+        // shape without the New-Terminal chord claim (KEY_BRIDGE_JS
+        // keeps Ctrl+Shift+T = new terminal tab); control terminals get
+        // an owned launcher shape WITH the claim (their chord spawns a
+        // standalone window). Owned instances address New Window / Close
+        // Window to this window's label. Best-effort: a menu-build
+        // failure just leaves the inherited default bar.
         #[cfg(not(target_os = "macos"))]
         let builder = {
             let menu = match kind_owned.as_str() {
                 "workspace" => Some(crate::build_workspace_menu(&app_owned, &label_owned)),
-                "terminal" => Some(crate::build_launcher_menu(&app_owned, false)),
+                "terminal" => Some(crate::build_launcher_menu(
+                    &app_owned,
+                    false,
+                    Some(&label_owned),
+                )),
+                "control" => Some(crate::build_launcher_menu(
+                    &app_owned,
+                    true,
+                    Some(&label_owned),
+                )),
                 _ => None,
             };
             match menu {
