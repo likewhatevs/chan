@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [v0.69.0] - 2026-07-15
 
 v0.69.0 makes chan-desktop's gateway devserver windows first-class (working upload/download/clipboard/chords, honest reconnect feedback after sleep), unhangs `cs paste` everywhere with a visible in-window paste card, adds a global Open command to the launcher, makes launcher machine cards collapsible with durable state, and prunes long-offline devservers from the gateway registry.
 
