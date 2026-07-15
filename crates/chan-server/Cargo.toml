@@ -93,3 +93,7 @@ url = { workspace = true }
 # terminal-session registry directly, including its test-only `attach`/`len`/
 # `is_empty` helpers behind the `test-util` feature; enable it for the test build.
 chan-library = { workspace = true, features = ["test-util"] }
+# The clipboard round-trip timeout test runs on a paused tokio clock
+# (`#[tokio::test(start_paused = true)]`) so the 30s reply window elapses
+# instantly; `start_paused` lives behind tokio's own `test-util` feature.
+tokio = { workspace = true, features = ["test-util"] }

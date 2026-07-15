@@ -1417,6 +1417,51 @@ fn render_pane_layout_markdown(raw: &str) -> Result<String> {
     Ok(out)
 }
 
+/// How long a clipboard round-trip stays silent before `cs` prints the
+/// waiting notice. A plain browser can park the read on a paste-permission
+/// prompt the user has to click; without a notice the CLI looks wedged for
+/// the whole 30s server-side reply bound.
+const CLIPBOARD_WAIT_NOTICE_DELAY: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Round-trip a clipboard control request, printing ONE stderr notice if no
+/// reply arrived within [`CLIPBOARD_WAIT_NOTICE_DELAY`], then keep waiting
+/// (the server bounds the whole trip at 30s). The notice names the likely
+/// cause - a browser paste prompt in the window - so a blocking `cs paste` /
+/// `cs copy` is self-explaining instead of silent.
+async fn send_clipboard_request(
+    socket: &std::path::Path,
+    request: ControlRequest,
+) -> Result<String> {
+    let round_trip = send_control_request(socket, request);
+    tokio::pin!(round_trip);
+    match tokio::time::timeout(CLIPBOARD_WAIT_NOTICE_DELAY, &mut round_trip).await {
+        Ok(result) => result,
+        Err(_still_waiting) => {
+            eprintln!(
+                "waiting for the window's clipboard (a browser may be showing a paste \
+                 prompt; Ctrl-C to cancel)"
+            );
+            round_trip.await
+        }
+    }
+}
+
+/// Unwrap a clipboard round-trip result: a reply passes through; an elapsed
+/// reply window prints the server's hint to stderr and exits
+/// [`crate::exit_code::CONTROL_TIMEOUT`] (124), so a script can tell an
+/// unanswered permission prompt from a real clipboard failure (exit 1).
+/// stderr is unbuffered, so the line lands before the hard exit skips the
+/// runtime shutdown.
+fn clipboard_reply_or_timeout_exit(result: Result<String>) -> Result<String> {
+    match classify_control_result(result)? {
+        ControlOutcome::Replied(message) => Ok(message),
+        ControlOutcome::TimedOut(message) => {
+            eprintln!("{message}");
+            std::process::exit(crate::exit_code::CONTROL_TIMEOUT);
+        }
+    }
+}
+
 /// `cs copy`: read all of stdin and push it onto the window's clipboard. The
 /// bytes ride a base64 string on the control socket (a JSON envelope), so an
 /// image and text share one path. `--html` maps to `--mime text/html`;
@@ -1449,7 +1494,7 @@ async fn cmd_shell_copy(mime: Option<String>, html: bool) -> Result<()> {
         mime
     };
     let data_b64 = base64::engine::general_purpose::STANDARD.encode(&buf);
-    let message = send_control_request(
+    let result = send_clipboard_request(
         &env.control_socket,
         ControlRequest::ClipboardCopy {
             window_id: env.window_id,
@@ -1457,7 +1502,8 @@ async fn cmd_shell_copy(mime: Option<String>, html: bool) -> Result<()> {
             mime,
         },
     )
-    .await?;
+    .await;
+    let message = clipboard_reply_or_timeout_exit(result)?;
     eprintln!("{message}");
     Ok(())
 }
@@ -1487,14 +1533,15 @@ async fn cmd_shell_paste(text: bool, html: bool, image: bool) -> Result<()> {
     } else {
         PastePrefer::Auto
     };
-    let message = send_control_request(
+    let result = send_clipboard_request(
         &env.control_socket,
         ControlRequest::ClipboardPaste {
             window_id: env.window_id,
             prefer,
         },
     )
-    .await?;
+    .await;
+    let message = clipboard_reply_or_timeout_exit(result)?;
     let reply: ClipboardPasteReply =
         serde_json::from_str(&message).context("decoding clipboard paste reply")?;
     let bytes = base64::engine::general_purpose::STANDARD
@@ -1987,10 +2034,10 @@ async fn cmd_shell_survey(args: SurveyArgs) -> Result<()> {
         },
     )
     .await;
-    match classify_survey_result(result)? {
+    match classify_control_result(result)? {
         // The reply is the result the caller wants captured, so it goes to
         // stdout (unlike the queued-request acks the other commands eprintln).
-        SurveyOutcome::Answered(message) => {
+        ControlOutcome::Replied(message) => {
             println!("{message}");
             Ok(())
         }
@@ -1998,35 +2045,36 @@ async fn cmd_shell_survey(args: SurveyArgs) -> Result<()> {
         // stays empty for a `$(cs terminal survey ...)` capture, and exit 124
         // lets a script branch on the timeout. stderr is unbuffered, so the
         // line lands before the hard exit skips the runtime shutdown.
-        SurveyOutcome::TimedOut(message) => {
+        ControlOutcome::TimedOut(message) => {
             eprintln!("{message}");
-            std::process::exit(crate::exit_code::SURVEY_TIMEOUT);
+            std::process::exit(crate::exit_code::CONTROL_TIMEOUT);
         }
     }
 }
 
-/// The terminal outcome of a blocking `cs terminal survey` round-trip. Split
-/// from [`cmd_shell_survey`] so the print-stream + exit-code decision is
-/// unit-testable without a live server or a `process::exit`.
+/// The terminal outcome of a bounded blocking control round-trip
+/// (`cs terminal survey`, `cs copy`, `cs paste`). Split from the commands so
+/// the print-stream + exit-code decision is unit-testable without a live
+/// server or a `process::exit`.
 #[derive(Debug)]
-enum SurveyOutcome {
-    /// The host answered, deferred (`[F]`), or dismissed: the reply line is
-    /// printed to stdout and the process exits 0.
-    Answered(String),
-    /// `--timeout` elapsed with no reply: the message is printed to stderr and
-    /// the process exits [`crate::exit_code::SURVEY_TIMEOUT`] (124).
+enum ControlOutcome {
+    /// The server replied: the message is the command's normal payload
+    /// (a survey answer line, a clipboard reply) and the process exits 0.
+    Replied(String),
+    /// The reply window elapsed: the message is printed to stderr and the
+    /// process exits [`crate::exit_code::CONTROL_TIMEOUT`] (124).
     TimedOut(String),
 }
 
-/// Classify a [`send_control_request`] result for the survey command: a plain
-/// reply is [`SurveyOutcome::Answered`]; the typed timeout error
+/// Classify a [`send_control_request`] result for a bounded blocking command:
+/// a plain reply is [`ControlOutcome::Replied`]; the typed timeout error
 /// ([`crate::exit_code::ControlTimeout`], from a `ControlResponse::Timeout`)
-/// becomes [`SurveyOutcome::TimedOut`]; any other error propagates (exit 1).
-fn classify_survey_result(result: Result<String>) -> Result<SurveyOutcome> {
+/// becomes [`ControlOutcome::TimedOut`]; any other error propagates (exit 1).
+fn classify_control_result(result: Result<String>) -> Result<ControlOutcome> {
     match result {
-        Ok(message) => Ok(SurveyOutcome::Answered(message)),
+        Ok(message) => Ok(ControlOutcome::Replied(message)),
         Err(err) => match err.downcast::<crate::exit_code::ControlTimeout>() {
-            Ok(timeout) => Ok(SurveyOutcome::TimedOut(timeout.message)),
+            Ok(timeout) => Ok(ControlOutcome::TimedOut(timeout.message)),
             Err(other) => Err(other),
         },
     }
@@ -2270,25 +2318,27 @@ mod tests {
     }
 
     #[test]
-    fn classify_survey_result_maps_reply_timeout_and_error() {
-        // A plain reply is the answered outcome (stdout, exit 0).
-        match classify_survey_result(Ok("Ship it".into())).unwrap() {
-            SurveyOutcome::Answered(m) => assert_eq!(m, "Ship it"),
-            SurveyOutcome::TimedOut(m) => panic!("unexpected timeout: {m}"),
+    fn classify_control_result_maps_reply_timeout_and_error() {
+        // A plain reply is the replied outcome (stdout, exit 0).
+        match classify_control_result(Ok("Ship it".into())).unwrap() {
+            ControlOutcome::Replied(m) => assert_eq!(m, "Ship it"),
+            ControlOutcome::TimedOut(m) => panic!("unexpected timeout: {m}"),
         }
         // The typed timeout error becomes the timed-out outcome (stderr, 124),
-        // carrying the server's elapsed-window line verbatim.
-        let timed_out = classify_survey_result(Err(crate::exit_code::ControlTimeout {
+        // carrying the server's elapsed-window line verbatim. This is the
+        // shared path for `cs terminal survey --timeout` AND the `cs copy` /
+        // `cs paste` clipboard round-trips.
+        let timed_out = classify_control_result(Err(crate::exit_code::ControlTimeout {
             message: "no reply within 30s".into(),
         }
         .into()))
         .unwrap();
         match timed_out {
-            SurveyOutcome::TimedOut(m) => assert_eq!(m, "no reply within 30s"),
-            SurveyOutcome::Answered(m) => panic!("expected timeout, got answer: {m}"),
+            ControlOutcome::TimedOut(m) => assert_eq!(m, "no reply within 30s"),
+            ControlOutcome::Replied(m) => panic!("expected timeout, got answer: {m}"),
         }
         // Any other error propagates unchanged (the generic exit-1 path).
-        let err = classify_survey_result(Err(anyhow::anyhow!("connection refused"))).unwrap_err();
+        let err = classify_control_result(Err(anyhow::anyhow!("connection refused"))).unwrap_err();
         assert!(err.to_string().contains("connection refused"));
     }
 

@@ -126,10 +126,11 @@ pub async fn send_control_request(socket: &Path, request: ControlRequest) -> Res
     match response {
         ControlResponse::Ok { message } => Ok(message),
         ControlResponse::Error { message } => anyhow::bail!("{message}"),
-        // A bounded blocking request whose window elapsed (today only
-        // `cs terminal survey --timeout`). Surface it as a typed error the
-        // dispatch edge downcasts to a dedicated exit code, NOT the generic
-        // bail (exit 1), so a timeout is never confused with a real failure.
+        // A bounded blocking request whose window elapsed (a `cs terminal
+        // survey --timeout`, or a `cs copy` / `cs paste` clipboard
+        // round-trip). Surface it as a typed error the dispatch edge
+        // downcasts to a dedicated exit code (124), NOT the generic bail
+        // (exit 1), so a timeout is never confused with a real failure.
         ControlResponse::Timeout { message } => {
             Err(crate::exit_code::ControlTimeout { message }.into())
         }
@@ -277,6 +278,45 @@ mod tests {
         assert!(err
             .downcast_ref::<crate::exit_code::ControlTimeout>()
             .is_none());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn send_control_request_types_a_timeout_reply_for_the_124_edge() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        // A one-shot fake server answering with the timeout status, standing
+        // in for a clipboard round-trip (or survey window) that elapsed. The
+        // reply must downcast to ControlTimeout so the dispatch edge exits
+        // 124 instead of the generic 1.
+        let socket =
+            std::env::temp_dir().join(format!("chan-cs-timeout-{}.sock", std::process::id()));
+        let _ = std::fs::remove_file(&socket);
+        let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+        let server = tokio::spawn(async move {
+            let (mut conn, _) = listener.accept().await.unwrap();
+            let mut buf = [0u8; 4096];
+            let _ = conn.read(&mut buf).await.unwrap();
+            conn.write_all(
+                b"{\"status\":\"timeout\",\"message\":\"no clipboard reply from the window within 30s\"}\n",
+            )
+            .await
+            .unwrap();
+        });
+
+        let err = send_control_request(&socket, ControlRequest::WindowList)
+            .await
+            .unwrap_err();
+        server.await.unwrap();
+        let _ = std::fs::remove_file(&socket);
+
+        let timeout = err
+            .downcast_ref::<crate::exit_code::ControlTimeout>()
+            .expect("typed ControlTimeout");
+        assert_eq!(
+            timeout.message,
+            "no clipboard reply from the window within 30s"
+        );
     }
 
     #[tokio::test]

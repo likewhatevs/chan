@@ -2332,7 +2332,10 @@ const CLIPBOARD_REPLY_TIMEOUT: std::time::Duration = std::time::Duration::from_s
 /// (copy reads `{ ok }` / `{ error }`, paste reads `{ mime, data_b64 }`). The
 /// `Err` arm carries a ready-made [`ControlResponse`] for the failure paths
 /// (send failed, cancelled, or timed out) so the handlers just `?`-style
-/// early-return it.
+/// early-return it. An elapsed reply window answers the typed
+/// [`ControlResponse::Timeout`] (the CLI maps it to exit 124), because the
+/// usual cause is a browser paste-permission prompt nobody clicked - the
+/// message says so instead of implying the window is gone.
 async fn clipboard_round_trip<F>(
     window_id: &str,
     make_command: F,
@@ -2359,8 +2362,13 @@ where
         }
         Err(_elapsed) => {
             window_bus.cancel(&request_id);
-            Err(ControlResponse::Error {
-                message: "no reply from the window (is it open in a browser?)".into(),
+            Err(ControlResponse::Timeout {
+                message: format!(
+                    "no clipboard reply from the window within {}s; the browser may be \
+                     waiting on a paste-permission prompt - click it or grant clipboard \
+                     permission, then retry",
+                    CLIPBOARD_REPLY_TIMEOUT.as_secs()
+                ),
             })
         }
     }
@@ -3616,6 +3624,59 @@ mod tests {
         match resp {
             ControlResponse::Error { message } => {
                 assert!(message.contains("not valid UTF-8"), "unexpected: {message}")
+            }
+            other => panic!("expected Error, got {other:?}"),
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn clipboard_round_trip_elapses_to_the_typed_timeout() {
+        // No SPA ever replies: the paused clock auto-advances past the 30s
+        // reply window and the round-trip answers the typed Timeout (the CLI
+        // maps it to exit 124), with the paste-permission hint - not the
+        // generic Error a disconnected window would get.
+        let (events_tx, _rx) = broadcast::channel(4);
+        let window_bus = Arc::new(crate::window_bus::WindowBus::new());
+        let resp =
+            handle_clipboard_paste("w-1".into(), PastePrefer::Auto, &events_tx, &window_bus).await;
+        match resp {
+            ControlResponse::Timeout { message } => {
+                assert!(message.contains("within 30s"), "unexpected: {message}");
+                assert!(
+                    message.contains("paste-permission prompt"),
+                    "unexpected: {message}"
+                );
+            }
+            other => panic!("expected Timeout, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn clipboard_paste_passes_the_windows_error_through() {
+        // The SPA answered `{ error }` (a real denial, e.g. the user clicked
+        // Cancel on the paste card): the message rides through verbatim as an
+        // Error, NOT a Timeout - the CLI exits 1 with the window's own words.
+        let (events_tx, mut events_rx) = broadcast::channel(4);
+        let window_bus = Arc::new(crate::window_bus::WindowBus::new());
+        let bus = Arc::clone(&window_bus);
+        let round_trip = tokio::spawn(async move {
+            handle_clipboard_paste("w-1".into(), PastePrefer::Auto, &events_tx, &bus).await
+        });
+        let raw = events_rx.recv().await.expect("frame on /ws broadcast");
+        let frame: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(frame["command"], "clipboard_read");
+        assert_eq!(frame["window_id"], "w-1");
+        let id = frame["request_id"]
+            .as_str()
+            .expect("request_id")
+            .to_string();
+        assert!(window_bus.complete(
+            &id,
+            serde_json::json!({ "error": "paste cancelled in the window" })
+        ));
+        match round_trip.await.unwrap() {
+            ControlResponse::Error { message } => {
+                assert_eq!(message, "paste cancelled in the window")
             }
             other => panic!("expected Error, got {other:?}"),
         }
