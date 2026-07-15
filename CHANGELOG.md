@@ -100,7 +100,7 @@ v0.66.1 hardens the devserver lifecycle around control terminals, sockets, and r
 
 - **The empty pane sheds the workspace-path label.** The path no longer renders under the chan mark, and the mark hides on short panes to give the waves room, reappearing when the pane grows. The pane carries no actions of its own; the Apps rows live in the hamburger.
 - **Terminal surveys queue per target.** A second survey addressed to the same tab now waits its turn instead of replacing the visible one and starving its caller into a timeout; an overflowing target (100 open or waiting) is refused with an explicit queue-full error.
-- **The dev-server form tip is shorter.** It keeps only the foreground guidance with a plain `ssh -N` example.
+- **The devserver form tip is shorter.** It keeps only the foreground guidance with a plain `ssh -N` example.
 
 ### Fixed
 
@@ -199,7 +199,7 @@ A Cmd+K command launcher lists, filters, and runs every UI action; New diagram s
 ### Changed
 
 - **Tab right-click menus keep only what belongs beside the surface.** The terminal, editor, graph, and file browser tab menus now show their surface controls (group broadcast, page width, graph depth and filters, the file browser dock toggles) plus Close; every other action they used to list is reachable from the command launcher instead.
-- **The launcher titles the machine list "Computers" and the local block "This machine."** The top bar reads "Computers" over "This machine & dev servers", and the local machine block header reads "This machine".
+- **The launcher titles the machine list "Computers" and the local block "This machine."** The top bar reads "Computers" over "This machine & devservers", and the local machine block header reads "This machine".
 
 ### Fixed
 
@@ -463,12 +463,12 @@ A patch release for devserver control-terminal lifecycle correctness, launcher h
 
 ## [v0.55.0] - 2026-06-28
 
-An editor-polish and devserver-hardening round: mermaid diagrams zoom, dev servers show their OS, local workspaces take a display name, wide tables stay readable, pasted image paths resolve from the terminal, plus a batch of editor and Windows fixes.
+An editor-polish and devserver-hardening round: mermaid diagrams zoom, devservers show their OS, local workspaces take a display name, wide tables stay readable, pasted image paths resolve from the terminal, plus a batch of editor and Windows fixes.
 
 ### Added
 
 - **Mermaid diagrams zoom.** Clicking a rendered mermaid diagram opens a pan-and-zoom view with keyboard control (`+`/`-`/`0`, arrow keys and WASD to pan, wheel to zoom, Escape to close), on both the web app and chan-desktop.
-- **Dev servers show their operating system.** A dev server self-reports its OS (and Linux distribution where available); the launcher shows an OS icon on the local machine card and on each remote dev server.
+- **Devservers show their operating system.** A devserver self-reports its OS (and Linux distribution where available); the launcher shows an OS icon on the local machine card and on each remote devserver.
 - **Name a local workspace.** Adding a local workspace in the launcher accepts an optional display name, shown in place of the folder name.
 
 ### Changed
@@ -480,8 +480,8 @@ An editor-polish and devserver-hardening round: mermaid diagrams zoom, dev serve
 
 - **Ordered lists renumber on a mid-list insert.** Inserting an item in the middle of a numbered list -- including a loose, blank-line-separated list -- renumbers the rest instead of leaving a duplicate number.
 - **List-line selection no longer bleeds into the left margin.** Selecting a list line highlights just the line instead of overflowing past the marker into the margin.
-- **The model download reports a clear error behind a broken proxy.** When a proxy environment variable is set but unusable, the dev server's model download fails with an actionable error instead of silently. Standard `HTTP(S)_PROXY` / `ALL_PROXY` / SOCKS proxies already worked; `NO_PROXY` and https-scheme proxies are documented as unsupported for the model download.
-- **Windows `chan open` and `chan ps`.** `chan open` on Windows no longer prints the stale-port error toast -- the dev server persists its bound port and the local on-toggle is best-effort -- and `chan ps` resolves a server's PID and kind under the `\\?\` verbatim path prefix.
+- **The model download reports a clear error behind a broken proxy.** When a proxy environment variable is set but unusable, the devserver's model download fails with an actionable error instead of silently. Standard `HTTP(S)_PROXY` / `ALL_PROXY` / SOCKS proxies already worked; `NO_PROXY` and https-scheme proxies are documented as unsupported for the model download.
+- **Windows `chan open` and `chan ps`.** `chan open` on Windows no longer prints the stale-port error toast -- the devserver persists its bound port and the local on-toggle is best-effort -- and `chan ps` resolves a server's PID and kind under the `\\?\` verbatim path prefix.
 
 ### Notes
 
@@ -499,9 +499,9 @@ A feature round: the chan-desktop launcher reorganized machine-first, container 
 
 ### Changed
 
-- **The chan-desktop launcher is organized machine-first.** The local machine and each dev server are equal top-level blocks. Each block opens its own terminals and lists windows control-terminal-first, then standalone terminals, then per-workspace windows nested inside their workspace; the old flat window feed is gone. Adding a workspace and adding a dev server are now separate actions, the bulk-selection checkboxes reveal on a Select toggle (Gmail-style) with a docked bulk bar, workspace cards lift on hover, and a dev server whose control process disconnects shows an inline "reconnecting" flash instead of a modal.
+- **The chan-desktop launcher is organized machine-first.** The local machine and each devserver are equal top-level blocks. Each block opens its own terminals and lists windows control-terminal-first, then standalone terminals, then per-workspace windows nested inside their workspace; the old flat window feed is gone. Adding a workspace and adding a devserver are now separate actions, the bulk-selection checkboxes reveal on a Select toggle (Gmail-style) with a docked bulk bar, workspace cards lift on hover, and a devserver whose control process disconnects shows an inline "reconnecting" flash instead of a modal.
 - **The ambient status notification sits in the top-right.** It moved from the bottom-left, where it overlapped the terminal prompt, to the top-right with its collapse control on the right; transfer notifications now stack downward beneath it. The session-handover and survey overlays are unchanged.
-- **`chan open` routes by where its shell is running.** `chan open <path>` now detects whether its shell belongs to chan-desktop or a dev server and serves there by default -- standalone when it can detect neither -- instead of always trying the desktop handoff first. The existing `--standalone` plus the new `--desktop` / `--devserver` force a target; `--devserver` from inside a dev server is refused (no nested dev servers). When a workspace is already held (for example by a local dev server), the standalone path now points you at `--devserver`. This fixes a dev-server shell whose `chan open` opened on chan-desktop instead of the dev server it runs on.
+- **`chan open` routes by where its shell is running.** `chan open <path>` now detects whether its shell belongs to chan-desktop or a devserver and serves there by default -- standalone when it can detect neither -- instead of always trying the desktop handoff first. The existing `--standalone` plus the new `--desktop` / `--devserver` force a target; `--devserver` from inside a devserver is refused (no nested devservers). When a workspace is already held (for example by a local devserver), the standalone path now points you at `--devserver`. This fixes a devserver shell whose `chan open` opened on chan-desktop instead of the devserver it runs on.
 
 ### Notes
 
