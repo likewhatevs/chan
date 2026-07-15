@@ -115,6 +115,27 @@ impl WorkspaceAdminClient {
         Ok(body.killed)
     }
 
+    /// Snapshot of EVERY live tunnel across all users
+    /// (`GET /admin/v1/tunnels`). The profile sweeper's mark source: each
+    /// sweep tick stamps `devservers.last_seen_at` for exactly the
+    /// `(user, devserver_id)` pairs returned here, so an error MUST make
+    /// the caller skip the whole tick -- marking from a partial or failed
+    /// snapshot would age live rows toward deletion. Errors bubble up
+    /// (no best-effort swallowing) for that reason.
+    pub async fn list_all_tunnels(&self) -> WorkspaceAdminResult<Vec<TunnelView>> {
+        let mut url = self.base.clone();
+        url.set_path("/admin/v1/tunnels");
+        let res = self.http.get(url).bearer_auth(&self.token).send().await?;
+        let status = res.status();
+        if !status.is_success() {
+            let body = res.text().await.unwrap_or_default();
+            tracing::warn!(%status, body = %body, "devserver-proxy admin upstream error");
+            return Err(WorkspaceAdminError::Upstream(format!("{status}")));
+        }
+        let tunnels: Vec<TunnelView> = res.json().await?;
+        Ok(tunnels)
+    }
+
     /// Snapshot of every live tunnel for `username`. Identity's
     /// dashboard calls this on every `/api/me` so the SPA renders
     /// the user's workspace cards. Empty list when the user has nothing
@@ -141,4 +162,43 @@ impl WorkspaceAdminClient {
 #[derive(Debug, Deserialize)]
 struct KillResponse {
     killed: usize,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tunnel_view_pins_the_admin_wire_field_names() {
+        // devserver-proxy's admin::TunnelView serializes the owner as
+        // `user` (NOT `username`) and the registration key as
+        // `devserver_id`. The profile sweeper joins its mark UPDATE
+        // through users on these values, so a silent producer-side
+        // rename would no-op every mark and age the whole registry
+        // toward deletion.
+        let v: TunnelView = serde_json::from_str(
+            r#"{
+                "user": "alice",
+                "devserver_id": "abc123",
+                "peer_addr": "192.0.2.7:52011",
+                "connected_at": "2026-07-15T00:00:00Z"
+            }"#,
+        )
+        .expect("admin tunnel wire shape parses");
+        assert_eq!(v.user, "alice");
+        assert_eq!(v.devserver_id, "abc123");
+        assert_eq!(v.peer_addr.as_deref(), Some("192.0.2.7:52011"));
+
+        // A payload using `username` must NOT parse: catching the rename
+        // here beats debugging a sweeper that never marks anything.
+        let renamed = serde_json::from_str::<TunnelView>(
+            r#"{
+                "username": "alice",
+                "devserver_id": "abc123",
+                "peer_addr": null,
+                "connected_at": "2026-07-15T00:00:00Z"
+            }"#,
+        );
+        assert!(renamed.is_err(), "the owner field is pinned to `user`");
+    }
 }
