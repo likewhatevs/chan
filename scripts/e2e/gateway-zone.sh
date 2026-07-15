@@ -75,7 +75,7 @@ MAX_DEVSERVERS=2
 # Scenario dispatch: "all" (default) = core suite + every registered
 # scenario; "core" = the inline suite only; a registered name = stack
 # bring-up + that scenario only. Lanes append their scenario name here.
-SCENARIOS=""
+SCENARIOS="sweeper"
 SCENARIO="${1:-all}"
 RUN_CORE=1
 case "$SCENARIO" in all | core) ;; *) RUN_CORE=0 ;; esac
@@ -701,6 +701,184 @@ fi # RUN_CORE
 # running stack and must leave the stack usable (clean up what it
 # stops/starts).
 # ---------------------------------------------------------------
+
+# Scenario: devserver registry sweeper (profile-service). Proves the
+# mark/delete cycle against the real stack: a stale never-dialed row
+# leaves the owner's list while the live devservers are marked in the
+# SAME tick and survive, the swept row's grant cascades away, a
+# stopped devserver's row ages out after the retention, and a redial
+# after a sweep comes back live-unlabeled (tunnel up, no registry row
+# until a mint recreates it). Runs profile-service with
+# DEVSERVER_RETENTION_MINUTES=1 for the duration, then restores the
+# bring-up config and re-inserts whatever the 1-minute window swept.
+scenario_sweeper() {
+    sweeper_sql() { sql "$E2E_DATABASE_URL" "SET search_path TO $E2E_SCHEMA; $1"; }
+
+    sweeper_owned() { # alice's owned devserver_ids, one per line
+        # Fetch and extraction split on purpose: under pipefail an
+        # empty list (grep exit 1) would otherwise read as a fetch
+        # failure, and a fetch failure must NOT read as an empty list.
+        local body
+        body="$(curl -fsS -H "Authorization: Bearer $TOK_PROFILE" \
+            "http://127.0.0.1:$PROFILE_PORT/v1/users/$ALICE_ID/grants/owned")" || return 1
+        printf '%s' "$body" | grep -o '"devserver_id":"[0-9a-f]*"' | cut -d'"' -f4
+        return 0
+    }
+
+    sweeper_respawn_profile() { # sweeper_respawn_profile [retention-minutes]
+        local pid
+        pid="$(cat "$WORK/pids/profile.pid" 2>/dev/null)"
+        [ -n "$pid" ] && kill "$pid" 2>/dev/null
+        for _ in $(seq 25); do
+            kill -0 "$pid" 2>/dev/null || break
+            sleep 0.2
+        done
+        spawn profile env \
+            BIND_ADDR="127.0.0.1:$PROFILE_PORT" \
+            DATABASE_URL="$DB_URL" \
+            PROFILE_AUTH_TOKEN="$TOK_PROFILE" \
+            DEVSERVER_ADMIN_TOKEN="$TOK_ADMIN" \
+            DEVSERVER_ADMIN_URL="http://127.0.0.1:$PROXY_PORT" \
+            ${1:+DEVSERVER_RETENTION_MINUTES="$1"} \
+            RUST_LOG=info \
+            "$GW_BIN/profile-service"
+        wait_http profile "http://127.0.0.1:$PROFILE_PORT/healthz" || return 1
+        require_alive profile
+    }
+
+    sweeper_wait_owned_gone() { # <dsid> [tries]; polls every 2s
+        local dsid="$1" tries="${2:-45}" out
+        for _ in $(seq "$tries"); do
+            # Only a SUCCESSFUL fetch may declare the id gone: during
+            # a profile respawn the list is unreachable, not empty.
+            if out="$(sweeper_owned)"; then
+                printf '%s\n' "$out" | grep -q "^$dsid$" || return 0
+            fi
+            sleep 2
+        done
+        return 1
+    }
+
+    # Snapshot the registry so the scenario can put back whatever the
+    # 1-minute retention sweeps besides its own seeds (bob's shared
+    # row, the cap PAT's row -- both offline and older than a minute).
+    sweeper_sql "
+        CREATE TABLE sweeper_snap_ds AS SELECT * FROM devservers;
+        CREATE TABLE sweeper_snap_grants AS SELECT * FROM devserver_grants;" || {
+        assert_fail "sweeper: registry snapshot failed"
+        return
+    }
+
+    # A stranded row: registered long ago, never dialed, carrying a
+    # grant (the ruling: grants do NOT protect a row from the sweep).
+    local stale_id
+    stale_id="$(openssl rand -hex 32)"
+    sweeper_sql "
+        INSERT INTO devservers (owner_user_id, devserver_id, label, created_at)
+        VALUES ('$ALICE_ID', '$stale_id', 'stale-e2e', now() - interval '10 minutes');
+        INSERT INTO devserver_grants (owner_user_id, devserver_id, grantee_email, role)
+        VALUES ('$ALICE_ID', '$stale_id', 'e2e-swept@example.com', 'viewer');" || {
+        assert_fail "sweeper: stale-row seed failed"
+        return
+    }
+
+    sweeper_respawn_profile 1 || {
+        assert_fail "sweeper: profile restart with retention=1 failed"
+        return
+    }
+
+    # The first tick fires immediately on spawn: the stale row must go,
+    # and the two LIVE devservers must be marked in the same tick and
+    # survive (mark-before-delete, observed end to end).
+    if sweeper_wait_owned_gone "$stale_id"; then
+        assert_pass "sweeper: stale never-dialed row left the owned list"
+    else
+        assert_fail "sweeper: stale row still listed after retention + tick"
+    fi
+    local grants_left
+    grants_left="$(sweeper_sql \
+        "SELECT COUNT(*) FROM devserver_grants WHERE devserver_id = '$stale_id';")"
+    if [ "$grants_left" = "0" ]; then
+        assert_pass "sweeper: the swept row's grant cascaded away"
+    else
+        assert_fail "sweeper: expected 0 grants on the swept row, got $grants_left"
+    fi
+    if sweeper_owned | grep -q "^$DS_A$"; then
+        assert_pass "sweeper: live devserver A survived the sweep tick"
+    else
+        assert_fail "sweeper: live devserver A vanished from the owned list"
+    fi
+    local seen_a
+    seen_a="$(sweeper_sql "SELECT COUNT(*) FROM devservers
+        WHERE devserver_id = '$DS_A' AND last_seen_at IS NOT NULL;")"
+    if [ "$seen_a" = "1" ]; then
+        assert_pass "sweeper: live devserver A carries a last_seen_at mark"
+    else
+        assert_fail "sweeper: devserver A has no last_seen_at mark"
+    fi
+
+    # Stop devserver B: its registration drops, then the row ages past
+    # the retention (backdated so the next tick, at most 60s away,
+    # collects it instead of a wall-clock wait).
+    if [ -f "$WORK/pids/ds-b.pid" ]; then
+        kill "$(cat "$WORK/pids/ds-b.pid")" 2>/dev/null
+        rm -f "$WORK/pids/ds-b.pid"
+    fi
+    if wait_tunnels 1 75; then
+        sweeper_sql "UPDATE devservers SET last_seen_at = now() - interval '2 minutes'
+            WHERE devserver_id = '$DS_B';"
+        if sweeper_wait_owned_gone "$DS_B"; then
+            assert_pass "sweeper: stopped devserver's row left the owned list"
+        else
+            assert_fail "sweeper: stopped devserver B still listed after retention + tick"
+        fi
+    else
+        assert_fail "sweeper: devserver B's tunnel did not drop after kill"
+    fi
+
+    # Redial: the tunnel returns but no registry row does -- the
+    # live-unlabeled comeback state (a later mint recreates the row).
+    spawn_devserver b "${DS_PORTS[1]}" "$PAT_B"
+    if wait_tunnels 2 150; then
+        local owned_after
+        if ! admin_tunnels | grep -q "$DS_B"; then
+            assert_fail "sweeper: redial registered but B's id missing: $(admin_tunnels)"
+        elif ! owned_after="$(sweeper_owned)"; then
+            # Absence only counts from a successful fetch.
+            assert_fail "sweeper: owned list unreachable during the live-unlabeled check"
+        elif printf '%s\n' "$owned_after" | grep -q "^$DS_B$"; then
+            assert_fail "sweeper: redial recreated the registry row (expected live-unlabeled)"
+        else
+            assert_pass "sweeper: redialed devserver is live-unlabeled (tunnel up, no row)"
+        fi
+    else
+        assert_fail "sweeper: devserver B did not re-register after redial"
+    fi
+
+    # Restore: bring-up profile config (default retention) and every
+    # row the 1-minute window swept; devservers before grants (FK).
+    sweeper_respawn_profile || {
+        assert_fail "sweeper: profile restore restart failed"
+        return
+    }
+    sweeper_sql "
+        INSERT INTO devservers SELECT * FROM sweeper_snap_ds s
+            WHERE NOT EXISTS (SELECT 1 FROM devservers d
+                WHERE d.owner_user_id = s.owner_user_id
+                  AND d.devserver_id = s.devserver_id);
+        INSERT INTO devserver_grants SELECT * FROM sweeper_snap_grants g
+            WHERE NOT EXISTS (SELECT 1 FROM devserver_grants x WHERE x.id = g.id);
+        DROP TABLE sweeper_snap_ds;
+        DROP TABLE sweeper_snap_grants;" || {
+        assert_fail "sweeper: registry restore failed"
+        return
+    }
+    if sweeper_owned | grep -q "^$DS_B$"; then
+        assert_pass "sweeper: registry restored (B's row back for later scenarios)"
+    else
+        assert_fail "sweeper: restore did not bring B's row back"
+    fi
+}
 
 run_scenarios() { # run_scenarios <all|name>
     local which="$1" ran=0 s
