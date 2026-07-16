@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v0.69.1] - 2026-07-16
+
+v0.69.1 lets a tunnel-mode devserver restart gracefully under systemd (fd-preserving, like the local path already did) and switches the chan-devserver container image to a rootless, PPA-free chan install.
+
+### Added
+
+- **`chan devserver --restart` works in tunnel mode under systemd.** Setting `CHAN_TUNNEL_TOKEN` (env or `--tunnel-token`) with `--service=systemd` now configures the service in tunnel mode instead of being refused: the generated unit carries the PAT via `Environment=` (written 0600) and dials the gateway via `--tunnel-url`, reusing the first-run endpoint on a plain restart and refreshing it on `--force`. Restart preserves live PTYs across the bounce through the systemd fd store, exactly as the non-tunnel path does; under systemd the tunnel devserver also binds its loopback management API (127.0.0.1:8787) so the fd-park handshake can reach it. launchd still refuses tunnel mode (its plist would persist the token 0644).
+
+### Changed
+
+- **The chan-devserver container image installs chan per-user, without the PPA.** `chan-devserver.sdme` no longer enables `ppa:fiorix/chan` or bakes the `chan` package into the rootfs; `chan-devserver-provision` installs the released `chan` as the target user via `https://chan.app/install.sh` into `~/.local/bin` (so the user can `chan upgrade` without root), honoring `http(s)_proxy` for networks behind an outbound proxy. The systemd user unit runs the absolute `~/.local/bin/chan`.
+
 ## [v0.69.0] - 2026-07-15
 
 v0.69.0 makes chan-desktop's gateway devserver windows first-class (working upload/download/clipboard/chords, honest reconnect feedback after sleep), unhangs `cs paste` everywhere with a visible in-window paste card, adds a global Open command to the launcher, makes launcher machine cards collapsible with durable state, and prunes long-offline devservers from the gateway registry.
