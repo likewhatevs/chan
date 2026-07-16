@@ -154,16 +154,23 @@ impl TestApp {
         id
     }
 
-    /// Mint a PAT carrying `desktop.connect`, as the desktop authorize
-    /// flow would.
+    /// Mint a PAT carrying `desktop.connect`, as the legacy desktop
+    /// authorize flow would.
     async fn desktop_pat(&self, uid: Uuid) -> String {
+        self.pat_with_scopes(uid, &["desktop.connect"]).await
+    }
+
+    /// Mint a PAT with `scopes` (`["desktop.account"]` is what the
+    /// account-mode authorize flow issues).
+    async fn pat_with_scopes(&self, uid: Uuid, scopes: &[&str]) -> String {
+        let scopes: Vec<String> = scopes.iter().map(|s| (*s).to_string()).collect();
         self.api_tokens
             .create(
                 NewToken {
                     user_id: uid,
                     label: "desktop",
                     expires_at: None,
-                    scopes: &["desktop.connect".to_string()],
+                    scopes: &scopes,
                     origin: TokenOrigin::Desktop,
                 },
                 &RequestMeta::default(),
@@ -565,5 +572,127 @@ async fn entry_two_live_no_selector_falls_back_to_first_accessible() {
         body["proxy_origin"],
         format!("https://{}", disc_host(&username, &ds2))
     );
+    app.cleanup().await;
+}
+
+// ---------------------------------------------------------------
+// Scope gate: desktop.connect OR desktop.account (Contract B)
+// ---------------------------------------------------------------
+
+#[tokio::test]
+async fn entry_accepts_account_scope_for_owned_devserver() {
+    let app = TestApp::new().await;
+    let uid = app.insert_user().await;
+    let username = placeholder_username(uid);
+    let pat = app.pat_with_scopes(uid, &["desktop.account"]).await;
+
+    let dsid = "5".repeat(64);
+    mock_tunnels(&app, &username, &[&dsid]).await;
+    Mock::given(method("GET"))
+        .and(path(format!("/v1/users/{uid}/devservers/{dsid}/access")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"role": "owner"})))
+        .mount(&app.profile)
+        .await;
+
+    let (s, body) =
+        post_entry_body(&app, &pat, json!({"owner": username, "devserver_id": dsid})).await;
+    assert_eq!(s, StatusCode::OK, "got {body}");
+    assert_eq!(body["username"], username);
+    assert_eq!(body["devserver_id"], dsid);
+    let claims = decode_entry_url(body["entry_url"].as_str().unwrap(), &username, &dsid);
+    assert_eq!(claims.role, "owner");
+    app.cleanup().await;
+}
+
+#[tokio::test]
+async fn entry_accepts_account_scope_for_granted_devserver() {
+    let app = TestApp::new().await;
+    let uid = app.insert_user().await;
+    let pat = app.pat_with_scopes(uid, &["desktop.account"]).await;
+
+    let owner_uid = Uuid::new_v4();
+    let owner = "owner-handle";
+    let dsid = "6".repeat(64);
+    mock_user_by_username(&app, owner_uid, owner).await;
+    mock_tunnels(&app, owner, &[&dsid]).await;
+    Mock::given(method("GET"))
+        .and(path(format!(
+            "/v1/users/{owner_uid}/devservers/{dsid}/access"
+        )))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"role": "editor"})))
+        .mount(&app.profile)
+        .await;
+
+    let (s, body) =
+        post_entry_body(&app, &pat, json!({"owner": owner, "devserver_id": dsid})).await;
+    assert_eq!(s, StatusCode::OK, "got {body}");
+    assert_eq!(body["username"], owner);
+    let claims = decode_entry_url(body["entry_url"].as_str().unwrap(), owner, &dsid);
+    assert_eq!(claims.sub, uid, "sub is the caller, not the owner");
+    assert_eq!(claims.role, "editor");
+    app.cleanup().await;
+}
+
+#[tokio::test]
+async fn entry_still_accepts_legacy_connect_scope() {
+    // Shipped desktops hold desktop.connect PATs; the widened gate
+    // must keep accepting them unchanged.
+    let app = TestApp::new().await;
+    let uid = app.insert_user().await;
+    let username = placeholder_username(uid);
+    let pat = app.pat_with_scopes(uid, &["desktop.connect"]).await;
+
+    let dsid = "7".repeat(64);
+    mock_tunnels(&app, &username, &[&dsid]).await;
+    Mock::given(method("GET"))
+        .and(path(format!("/v1/users/{uid}/devservers/{dsid}/access")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"role": "owner"})))
+        .mount(&app.profile)
+        .await;
+
+    let (s, body) = post_entry(&app, &pat).await;
+    assert_eq!(s, StatusCode::OK, "got {body}");
+    assert_eq!(body["devserver_id"], dsid);
+    app.cleanup().await;
+}
+
+#[tokio::test]
+async fn entry_rejects_tunnel_only_pat() {
+    // The widened gate is connect-or-account, never tunnel: a
+    // devserver's own dial-in credential cannot mint entry URLs.
+    let app = TestApp::new().await;
+    let uid = app.insert_user().await;
+    let pat = app.pat_with_scopes(uid, &["tunnel"]).await;
+
+    let (s, body) = post_entry(&app, &pat).await;
+    assert_eq!(s, StatusCode::UNAUTHORIZED, "got {body}");
+    app.cleanup().await;
+}
+
+#[tokio::test]
+async fn entry_404_reasons_unchanged_for_account_pat() {
+    // The reason vocabulary is a desktop wire contract; the account
+    // scope must not change it.
+    let app = TestApp::new().await;
+    let uid = app.insert_user().await;
+    let username = placeholder_username(uid);
+    let pat = app.pat_with_scopes(uid, &["desktop.account"]).await;
+
+    // No devserver at all -> no_devserver.
+    mock_tunnels(&app, &username, &[]).await;
+    Mock::given(method("GET"))
+        .and(path(format!("/v1/users/{uid}/grants/owned")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
+        .mount(&app.profile)
+        .await;
+    let (s, body) = post_entry(&app, &pat).await;
+    assert_eq!(s, StatusCode::NOT_FOUND);
+    assert_eq!(body["reason"], "no_devserver");
+    assert_eq!(body["username"], username);
+
+    // Explicit target that is not live -> devserver_offline.
+    let (s, body) = post_entry_body(&app, &pat, json!({"devserver_id": "8".repeat(64)})).await;
+    assert_eq!(s, StatusCode::NOT_FOUND);
+    assert_eq!(body["reason"], "devserver_offline");
     app.cleanup().await;
 }

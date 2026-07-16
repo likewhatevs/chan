@@ -1543,14 +1543,18 @@ async fn desktop_devserver_entry(
         .api_tokens
         .validate(token, &request_meta(&headers))
         .await?;
+    // Either desktop scope opens the entry mint: legacy per-devserver
+    // PATs carry desktop.connect, account-mode PATs desktop.account.
+    // Authorization for the TARGET stays per-devserver either way
+    // (the profile devserver_access check below).
     if !validated
         .scopes
         .iter()
-        .any(|scope| scope == DESKTOP_CONNECT_SCOPE)
+        .any(|scope| scope == DESKTOP_CONNECT_SCOPE || scope == DESKTOP_ACCOUNT_SCOPE)
     {
         tracing::warn!(
             user = %validated.username,
-            "desktop entry denied: missing desktop.connect scope",
+            "desktop entry denied: no desktop scope on the token",
         );
         return Err(Error::Unauthorized);
     }
