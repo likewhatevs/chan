@@ -1,19 +1,44 @@
 <script lang="ts">
-  // The launcher's top bar: the "Computers" title with its subtitle, a Gmail-style
-  // Select-mode toggle, and the theme toggle. The add-workspace and add-devserver
-  // entry points live in the library tree (the LOCAL header's [new workspace] and
-  // the bottom "Add devserver" dashed button), and open-terminal lives in each
-  // machine header, so the top bar stays the global chrome: title + select + theme.
+  // The launcher's top bar: the screen title block (on the desktop surface a
+  // toggle that flips the main area between Computers and Gateways), a
+  // Gmail-style Select-mode toggle, and the theme toggle. The add-workspace and
+  // add-devserver entry points live in the library tree (the LOCAL header's
+  // [new workspace] and the bottom "Add devserver" dashed button), and
+  // open-terminal lives in each machine header, so the top bar stays the
+  // global chrome: title + select + theme.
   import { Moon, SquareCheckBig, Sun } from "lucide-svelte";
   import { themeState, toggleTheme } from "../state/theme.svelte";
   import { selection, toggleSelectMode } from "../state/selection.svelte";
-  import { readOnly } from "../state/capabilities";
+  import { readOnly, hasDesktopBridge } from "../state/capabilities";
+  import { screen, toggleScreen } from "../state/screen.svelte";
+
+  const title = $derived(screen.current === "computers" ? "Computers" : "Gateways");
+  const subtitle = $derived(
+    screen.current === "computers"
+      ? "This machine & devservers"
+      : "Connection to remote gateways",
+  );
+  const flipLabel = $derived(screen.current === "computers" ? "Show gateways" : "Show computers");
 </script>
 
 <header class="topbar">
   <div class="title">
-    <h1 class="brand">Computers</h1>
-    <p class="subtitle">This machine &amp; devservers</p>
+    {#if hasDesktopBridge}
+      <h1 class="brand">
+        <button
+          class="title-toggle"
+          type="button"
+          aria-label={flipLabel}
+          title={flipLabel}
+          onclick={toggleScreen}>
+          {title}
+        </button>
+      </h1>
+      <p class="subtitle">{subtitle}</p>
+    {:else}
+      <h1 class="brand">Computers</h1>
+      <p class="subtitle">This machine &amp; devservers</p>
+    {/if}
   </div>
   <div class="actions">
     {#if !readOnly}
@@ -69,6 +94,23 @@
     line-height: 1.1;
     margin: 0;
     text-decoration: none;
+  }
+
+  /* The title as a flip toggle: a bare button inheriting the h1's face, with
+     the brand hover as its affordance. */
+  .title-toggle {
+    padding: 0;
+    border: none;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    letter-spacing: inherit;
+    cursor: pointer;
+    transition: color 160ms ease;
+  }
+
+  .title-toggle:hover {
+    color: var(--brand);
   }
 
   .subtitle {

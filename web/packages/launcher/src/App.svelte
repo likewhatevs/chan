@@ -6,6 +6,7 @@
   import { RotateCw, X } from "lucide-svelte";
   import TopBar from "./components/TopBar.svelte";
   import SelectionBar from "./components/SelectionBar.svelte";
+  import ScreenFlip from "./components/ScreenFlip.svelte";
   import Library from "./components/Library.svelte";
   import NewWorkspaceDialog from "./components/NewWorkspaceDialog.svelte";
   import ConfirmDialog from "./components/ConfirmDialog.svelte";
@@ -14,6 +15,7 @@
   import { dialog } from "./state/dialog.svelte";
   import { confirm } from "./state/confirm.svelte";
   import { checksVisible } from "./state/selection.svelte";
+  import { screen } from "./state/screen.svelte";
   import { onControlAttentionEvent, onControlRestoredEvent } from "./state/controlClosed.svelte";
   import {
     clearControlAttention,
@@ -141,7 +143,15 @@
     </div>
   {/if}
 
-  <Library />
+  <ScreenFlip
+    flips={screen.flips}
+    backLabel={screen.current === "computers" ? "Computers" : "Gateways"}>
+    {#if screen.current === "computers"}
+      <Library />
+    {:else}
+      <section class="gateways-screen" aria-label="Gateways"></section>
+    {/if}
+  </ScreenFlip>
 </main>
 
 {#if !readOnly}
