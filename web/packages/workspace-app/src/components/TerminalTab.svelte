@@ -19,7 +19,13 @@
   import { WebglAddon } from "@xterm/addon-webgl";
   import "@xterm/xterm/css/xterm.css";
   import { api, sessionWindowId, withTokenQuery } from "../api/client";
-  import { createSocket } from "../api/transport";
+  import {
+    createSocket,
+    WS_PING_MS,
+    WS_READ_DEADLINE_MS,
+    WS_RECONNECT_BACKOFF_MIN_MS,
+    WS_RECONNECT_BACKOFF_MAX_MS,
+  } from "../api/transport";
   import { installWakeGapDetector } from "../wakeGap";
   import {
     isTauriDesktop,
@@ -196,6 +202,13 @@
 
   type CloseReason = "idle" | "workspace" | "shutdown" | "explicit" | "capped" | "error";
 
+  // Consecutive redials that died before their `session` frame before the
+  // stored session id is dropped. A resumable session must survive transient
+  // dial failures (the v0.69 behavior cleared it on the FIRST one, stranding
+  // the scrollback); a session the server genuinely no longer has keeps
+  // refusing the attach, and after this budget the next dial starts fresh.
+  const MAX_ATTACH_FAILURES = 5;
+
   let host: HTMLDivElement | undefined = $state();
   let searchInput: HTMLInputElement | undefined = $state();
   let term: Terminal | null = null;
@@ -208,6 +221,17 @@
   // window that's actually in memory.
   let scrollbackLines = scrollbackLinesFromMb(SCROLLBACK_MB_DEFAULT);
   let ws: WebSocket | null = null;
+  // Liveness + reconnect for the PTY socket: the watcher kit (constants
+  // shared from transport.ts so the two cannot drift) applied to the one SPA
+  // socket that had neither half. The app-level ping keeps an inbound pong
+  // flowing through the gateway's idle bridge; the read-deadline force-closes
+  // a half-open zombie so onclose runs; onclose redials with capped backoff
+  // through the existing session/since/generation reattach.
+  let pingTimer: ReturnType<typeof setInterval> | null = null;
+  let deadlineTimer: ReturnType<typeof setTimeout> | null = null;
+  let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  let reconnectBackoffMs = WS_RECONNECT_BACKOFF_MIN_MS;
+  let attachFailures = 0;
   // Scrollback snapshot resume state. `pendingSnapshot` is a cache hit
   // loaded at connect time, primed into the xterm on the attach prelude only
   // when the server confirms the same generation + no missed bytes; otherwise
@@ -766,8 +790,46 @@
     if (focused) queueMicrotask(() => term?.focus());
   }
 
+  function clearLiveness(): void {
+    if (pingTimer !== null) {
+      clearInterval(pingTimer);
+      pingTimer = null;
+    }
+    if (deadlineTimer !== null) {
+      clearTimeout(deadlineTimer);
+      deadlineTimer = null;
+    }
+  }
+
+  function cancelReconnect(): void {
+    if (reconnectTimer !== null) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    }
+  }
+
+  // Re-arm the read-deadline: ANY inbound frame (PTY bytes, a pong, a queue /
+  // activity frame, even an old server's unknown-variant error) proves the
+  // socket is alive. On expiry, force it closed so the onclose redial runs --
+  // a half-open zombie never fires onclose on its own.
+  function armDeadline(): void {
+    if (deadlineTimer !== null) clearTimeout(deadlineTimer);
+    deadlineTimer = setTimeout(() => {
+      deadlineTimer = null;
+      try {
+        ws?.close();
+      } catch {
+        // Already CLOSING/CLOSED; the pending onclose still drives the redial.
+      }
+    }, WS_READ_DEADLINE_MS);
+  }
+
   async function connect(): Promise<void> {
     if (!term) return;
+    // Single-dial guard: an explicit (re)connect -- mount, wake recycle, a
+    // restart -- supersedes any scheduled backoff redial, so exactly one dial
+    // path is ever in flight for this tab.
+    cancelReconnect();
     // Resolve the per-tenant `Terminal-N` default name BEFORE opening the WS,
     // so the session spawns with its final name (the cross-window roster and
     // `cs term list` then show it, not the local placeholder). Only for a
@@ -842,10 +904,19 @@
     ws.onopen = () => {
       status = "connected";
       statusDetail = `${term?.cols ?? 0}x${term?.rows ?? 0}`;
+      // This connection's heartbeat: the app-level ping (client
+      // `{"type":"ping"}` answered `{"type":"pong"}`, the watcher socket's
+      // vocabulary) plus the read-deadline it feeds. `send` carries the
+      // OPEN-only guard.
+      armDeadline();
+      pingTimer = setInterval(() => send({ type: "ping" }), WS_PING_MS);
       if (term) send({ type: "resize", cols: term.cols, rows: term.rows });
       sendFocusState();
     };
     ws.onmessage = async (event) => {
+      // Any inbound frame proves the socket is live -- refresh the deadline
+      // first, before decoding.
+      armDeadline();
       const bytes = await terminalMessageBytes(event.data);
       if (bytes) {
         writePtyOutput(bytes, attachPtyWriteOrigin());
@@ -875,6 +946,10 @@
         attachReplayActive = true;
         suppressAttachReplayGeneratedReplies = duplicateReplay;
         sawSessionControl = true;
+        // A successful attach proves the session + path healthy: reset the
+        // redial budget and the backoff ramp.
+        attachFailures = 0;
+        reconnectBackoffMs = WS_RECONNECT_BACKOFF_MIN_MS;
         // Adopt the server's byte cursor + epoch for this incarnation. Prime the
         // cached snapshot ONLY when the server confirms the SAME generation and
         // no ring bytes were lost: then the replay chunks that follow are just
@@ -983,8 +1058,14 @@
         );
       } else if (frame.type === "error") {
         const detail = frame.message ?? frame.reason ?? "unknown error";
-        statusDetail = detail;
-        term?.writeln(`\r\nterminal error: ${detail}`);
+        // Version skew: a server without the terminal heartbeat answers the
+        // app-level ping with an unknown-variant error every ping interval.
+        // It proves liveness like any inbound frame (already counted above);
+        // do not splat it into the terminal.
+        if (!detail.includes("unknown variant `ping`")) {
+          statusDetail = detail;
+          term?.writeln(`\r\nterminal error: ${detail}`);
+        }
       } else if (frame.type === "agent_event_echo") {
         // Server-side `dispatch_agent_event` (`terminal_sessions.rs`)
         // emits this frame instead of writing the `poke + chord`
@@ -1013,24 +1094,43 @@
       }
     };
     ws.onclose = () => {
-      if (tab.terminalSessionId && !sawSessionControl && status === "connecting") {
-        clearTerminalSession(tab);
-        scheduleTerminalSessionSave();
-      }
-      if (status !== "exited") status = "closed";
+      clearLiveness();
       // Socket gone: any in-flight prompt can no longer observe its
       // delivery -- fail it (bubble unlocks, keeps text, labels honestly;
       // the message may still be queued server-side). The badge zeroes and
       // re-syncs from the session frame on reconnect.
       failPendingPrompt(tab);
       setTerminalQueueDepth(tab, 0);
+      // A dial that died before its `session` frame counts against the attach
+      // budget; the session id survives until the budget is spent, so a
+      // transient failure never strands a resumable session (the server ends
+      // a session explicitly via the `closed` / `exit` frames instead).
+      if (tab.terminalSessionId && !sawSessionControl && status === "connecting") {
+        attachFailures += 1;
+        if (attachFailures >= MAX_ATTACH_FAILURES) {
+          attachFailures = 0;
+          clearTerminalSession(tab);
+          scheduleTerminalSessionSave();
+        }
+      }
+      if (status !== "exited") status = "closed";
+      // Heal: redial with capped backoff through the reattach path. An exited
+      // session stays down (the server ended it; the tab shows its exit
+      // affordance); everything else -- the gateway idle cut, a tunnel bounce,
+      // the read-deadline forcing a zombie closed, a failed dial -- redials.
+      if (status === "exited") return;
+      statusDetail = "reconnecting";
+      const delay = reconnectBackoffMs;
+      reconnectBackoffMs = Math.min(reconnectBackoffMs * 2, WS_RECONNECT_BACKOFF_MAX_MS);
+      cancelReconnect();
+      reconnectTimer = setTimeout(() => {
+        reconnectTimer = null;
+        void connect();
+      }, delay);
     };
     ws.onerror = () => {
+      // The paired onclose owns session-budget accounting and the redial.
       statusDetail = "connection failed";
-      if (tab.terminalSessionId && !sawSessionControl) {
-        clearTerminalSession(tab);
-        scheduleTerminalSessionSave();
-      }
     };
   }
 
@@ -1272,6 +1372,10 @@
   function closeSocket(): void {
     attachReplayActive = false;
     suppressAttachReplayGeneratedReplies = false;
+    // Intentional teardown: stop the heartbeat and any scheduled redial (the
+    // handlers are detached below, so no onclose will re-arm them).
+    clearLiveness();
+    cancelReconnect();
     const s = ws;
     ws = null;
     if (!s) return;

@@ -386,17 +386,23 @@ async function requestTo<T>(
 /// `request`; `0` disables.
 const REQUEST_TIMEOUT_MS = 10_000;
 
-/// Watcher heartbeat cadence. A `ping` every WATCH_PING_MS keeps an inbound
-/// frame (the server's `pong`) flowing, so the gateway proxy's 300s
-/// per-direction idle bridge never cuts a live but quiet window and the
-/// read-deadline below always has something to observe.
-const WATCH_PING_MS = 20_000;
-/// If no frame arrives for WATCH_READ_DEADLINE_MS -- not even a pong -- the
+/// Heartbeat cadence for the SPA's long-lived sockets. The `/ws` watcher and
+/// the terminal PTY socket (TerminalTab.svelte) share ONE liveness kit, and
+/// these exported constants are its single source so the two cannot drift. A
+/// `ping` every WS_PING_MS keeps an inbound frame (the server's `pong`)
+/// flowing, so the gateway proxy's idle bridge never cuts a live but quiet
+/// socket and the read-deadline below always has something to observe.
+export const WS_PING_MS = 20_000;
+/// If no frame arrives for WS_READ_DEADLINE_MS -- not even a pong -- the
 /// socket is a half-open zombie the browser has not reported as closed (the
 /// post-sleep case). Force it closed so the onclose reconnect runs. Kept well
-/// under the proxy's 300s cut and above the ping cadence so a healthy socket
+/// under the proxy's idle cut and above the ping cadence so a healthy socket
 /// always refreshes it in time.
-const WATCH_READ_DEADLINE_MS = 45_000;
+export const WS_READ_DEADLINE_MS = 45_000;
+/// Reconnect backoff for the same sockets: the first redial fires after the
+/// MIN delay, doubling per attempt up to the MAX cap.
+export const WS_RECONNECT_BACKOFF_MIN_MS = 500;
+export const WS_RECONNECT_BACKOFF_MAX_MS = 8_000;
 
 /// The heartbeat `pong` is liveness-only: the transport counts it against the
 /// read-deadline but does not forward it to the event sink (the store dispatcher
@@ -432,7 +438,7 @@ export function openWatch(
 ): WatchSocket {
   let closed = false;
   let ws: WebSocket | null = null;
-  let backoff = 500;
+  let backoff = WS_RECONNECT_BACKOFF_MIN_MS;
   // Reconnect attempt counter: 0 on the initial connect and while open, then
   // 1, 2, ... on each successive reconnect, so the disconnect overlay can show
   // "attempt N" the way the desktop connecting screen does.
@@ -471,7 +477,7 @@ export function openWatch(
   // is proof the socket is still alive.
   const armDeadline = () => {
     if (deadlineTimer !== null) clearTimeout(deadlineTimer);
-    deadlineTimer = setTimeout(forceReconnect, WATCH_READ_DEADLINE_MS);
+    deadlineTimer = setTimeout(forceReconnect, WS_READ_DEADLINE_MS);
   };
 
   const connect = () => {
@@ -493,7 +499,7 @@ export function openWatch(
     const url = `${proto}//${window.location.host}${path}`;
     ws = createSocket(url);
     ws.onopen = () => {
-      backoff = 500;
+      backoff = WS_RECONNECT_BACKOFF_MIN_MS;
       attempt = 0;
       onStatus("open", attempt);
       // Start this connection's heartbeat + read-deadline. The ping rides a
@@ -509,7 +515,7 @@ export function openWatch(
             // reconnect path re-establishes the heartbeat.
           }
         }
-      }, WATCH_PING_MS);
+      }, WS_PING_MS);
       // The server's scope registry is per-socket, so a fresh socket
       // starts with no subscriptions. The owner re-establishes its
       // active scopes here (the File Browser instances wire that in);
@@ -538,7 +544,7 @@ export function openWatch(
       attempt += 1;
       onStatus("reconnecting", attempt);
       const delay = backoff;
-      backoff = Math.min(backoff * 2, 8000);
+      backoff = Math.min(backoff * 2, WS_RECONNECT_BACKOFF_MAX_MS);
       setTimeout(connect, delay);
     };
   };
@@ -621,7 +627,7 @@ export function openLocalColorWatch(
 ): () => void {
   let closed = false;
   let ws: WebSocket | null = null;
-  let backoff = 500;
+  let backoff = WS_RECONNECT_BACKOFF_MIN_MS;
 
   const connect = () => {
     if (closed) return;
@@ -632,7 +638,7 @@ export function openLocalColorWatch(
     const path = rootTokenQuery("/api/library/local-color/watch");
     ws = createSocket(`${proto}//${window.location.host}${path}`);
     ws.onopen = () => {
-      backoff = 500;
+      backoff = WS_RECONNECT_BACKOFF_MIN_MS;
     };
     ws.onmessage = (m) => {
       try {
@@ -645,7 +651,7 @@ export function openLocalColorWatch(
     ws.onclose = () => {
       if (closed) return;
       const delay = backoff;
-      backoff = Math.min(backoff * 2, 8000);
+      backoff = Math.min(backoff * 2, WS_RECONNECT_BACKOFF_MAX_MS);
       setTimeout(connect, delay);
     };
   };
@@ -689,7 +695,7 @@ export function openLocalThemeWatch(
 ): () => void {
   let closed = false;
   let ws: WebSocket | null = null;
-  let backoff = 500;
+  let backoff = WS_RECONNECT_BACKOFF_MIN_MS;
 
   const connect = () => {
     if (closed) return;
@@ -700,7 +706,7 @@ export function openLocalThemeWatch(
     const path = rootTokenQuery("/api/library/local-theme/watch");
     ws = createSocket(`${proto}//${window.location.host}${path}`);
     ws.onopen = () => {
-      backoff = 500;
+      backoff = WS_RECONNECT_BACKOFF_MIN_MS;
     };
     ws.onmessage = (m) => {
       try {
@@ -713,7 +719,7 @@ export function openLocalThemeWatch(
     ws.onclose = () => {
       if (closed) return;
       const delay = backoff;
-      backoff = Math.min(backoff * 2, 8000);
+      backoff = Math.min(backoff * 2, WS_RECONNECT_BACKOFF_MAX_MS);
       setTimeout(connect, delay);
     };
   };
