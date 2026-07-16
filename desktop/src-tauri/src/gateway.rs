@@ -178,6 +178,72 @@ impl GatewayManager {
             .map(|rt| rt.roster.clone())
             .unwrap_or_default()
     }
+
+    /// The validated discovery of a gateway with a live runtime, for the
+    /// rostered-devserver connect path. `None` when the gateway is not
+    /// connected.
+    pub fn discovery(&self, gateway_id: &str) -> Option<GatewayDiscovery> {
+        self.runtimes
+            .lock()
+            .unwrap()
+            .get(gateway_id)
+            .map(|rt| rt.discovery.clone())
+    }
+
+    /// One rostered devserver by its (owner, id) key. `None` when the
+    /// gateway has no runtime or the roster no longer carries the row.
+    pub fn roster_row(
+        &self,
+        gateway_id: &str,
+        owner: &str,
+        devserver_id: &str,
+    ) -> Option<RosterDevserver> {
+        self.runtimes
+            .lock()
+            .unwrap()
+            .get(gateway_id)
+            .and_then(|rt| {
+                rt.roster
+                    .iter()
+                    .find(|r| r.owner == owner && r.devserver_id == devserver_id)
+                    .cloned()
+            })
+    }
+
+    /// Seed a runtime with a fixed roster, bypassing the connect flow, so
+    /// registry-projection tests exercise synthesized rows without HTTP.
+    #[cfg(test)]
+    pub(crate) fn seed_test_runtime(
+        &self,
+        gateway_id: &str,
+        discovery: GatewayDiscovery,
+        roster: Vec<RosterDevserver>,
+    ) {
+        let mut rt = new_runtime(discovery);
+        rt.roster = roster;
+        rt.status = GatewayStatus::Connected;
+        self.runtimes
+            .lock()
+            .unwrap()
+            .insert(gateway_id.to_string(), rt);
+    }
+}
+
+/// Split a synthesized row id back into (gateway id, owner, devserver id);
+/// `None` for anything that is not a well-formed `gw:` triple. The
+/// gateway id comes back WITH its `gw-` prefix, ready for config lookups.
+pub fn parse_synthesized_id(id: &str) -> Option<(String, String, String)> {
+    let rest = id.strip_prefix("gw:")?;
+    let mut parts = rest.splitn(3, ':');
+    let (hex, owner, devserver_id) = (parts.next()?, parts.next()?, parts.next()?);
+    if hex.is_empty() || owner.is_empty() || devserver_id.is_empty() {
+        return None;
+    }
+    Some((
+        format!("gw-{hex}"),
+        owner.to_string(),
+        devserver_id.to_string(),
+    ))
 }
 
 /// The synthesized launcher-row id for a rostered devserver:
@@ -1002,6 +1068,24 @@ mod tests {
             synthesized_row_id("gw-1a2b3c4d", "alice", &"d".repeat(64)),
             format!("gw:1a2b3c4d:alice:{}", "d".repeat(64))
         );
+    }
+
+    #[test]
+    fn synthesized_id_round_trips_through_parse() {
+        let id = synthesized_row_id("gw-1a2b3c4d", "alice", "abc123");
+        assert_eq!(
+            parse_synthesized_id(&id),
+            Some((
+                "gw-1a2b3c4d".to_string(),
+                "alice".to_string(),
+                "abc123".to_string()
+            ))
+        );
+        // Plain row ids and malformed triples parse to None.
+        assert_eq!(parse_synthesized_id("a-plain-uuid"), None);
+        assert_eq!(parse_synthesized_id("gw:onlyhex"), None);
+        assert_eq!(parse_synthesized_id("gw:hex:owner:"), None);
+        assert_eq!(parse_synthesized_id("gw::owner:ds"), None);
     }
 
     #[test]

@@ -117,6 +117,7 @@ impl EmbeddedServer {
             devserver_connecting,
             devserver_awaiting_signin,
             devserver_feed,
+            Arc::clone(&gateway_manager),
         )));
         // Install the launcher's gateway registry over the SAME shared config,
         // so the `/api/library/gateways` CRUD persists beside the devserver

@@ -203,6 +203,10 @@ pub struct AppState {
     /// poll handles. Shared with the config registry (its live-state
     /// projection) and every gateway operation.
     pub gateway_manager: Arc<gateway::GatewayManager>,
+    /// Plain devserver rows whose raw-dial failure already ran the
+    /// is-this-really-a-gateway backstop probe this run, so the probe
+    /// never becomes a per-connect cost again.
+    pub gateway_backstop_probed: Mutex<std::collections::HashSet<String>>,
     /// Set when the user confirmed the quit dialog: the re-fired
     /// `ExitRequested` (from `app.exit(0)` in the dialog callback)
     /// must pass instead of prompting again.
@@ -1996,6 +2000,12 @@ async fn connect_devserver_impl(
         match connect_devserver_impl_inner(app.clone(), Arc::clone(&state), id.clone()).await {
             Ok(()) => Ok(()),
             Err(e) => {
+                // A failed raw dial on a plain row may mean "this URL is a
+                // gateway" (ruling out offline rows is impossible here);
+                // the one-time backstop probe answers that out-of-band.
+                if !id.starts_with("gw:") {
+                    spawn_gateway_backstop_probe(&app, &state, &id);
+                }
                 let control_terminated = e.control_terminated();
                 let message = e.message();
                 // ControlTerminated covers two very different endings, told
@@ -2084,51 +2094,45 @@ const GATEWAY_SIGNIN_TIMEOUT: std::time::Duration = std::time::Duration::from_se
 /// only its own stamp, so an old clock can never expire a newer attempt. On
 /// expiry (row i': the user never completed sign-in) the row resets and the
 /// banner explains.
-fn begin_awaiting_signin(app: &tauri::AppHandle, state: &Arc<AppState>, id: &str) {
-    let stamp = Instant::now();
-    state
-        .devserver_awaiting_signin
+/// A raw dial failed on a plain devserver row: probe once per row per run
+/// whether the URL is really a gateway (rows predating the Gateways screen
+/// carry no marker and cannot be identified offline). A gateway answer
+/// surfaces an info notice pointing at the Gateways screen. Detached from
+/// the failure path so the connect error banners immediately; never
+/// re-probes, so the probe cannot become a per-connect cost.
+fn spawn_gateway_backstop_probe(app: &tauri::AppHandle, state: &Arc<AppState>, id: &str) {
+    if !state
+        .gateway_backstop_probed
         .lock()
         .unwrap()
-        .insert(id.to_string(), stamp);
-    signal_devserver_rows_changed(app, state);
+        .insert(id.to_string())
+    {
+        return;
+    }
     let app = app.clone();
     let state = Arc::clone(state);
     let id = id.to_string();
     tauri::async_runtime::spawn(async move {
-        tokio::time::sleep(GATEWAY_SIGNIN_TIMEOUT).await;
-        let expired = {
-            let mut awaiting = state.devserver_awaiting_signin.lock().unwrap();
-            match awaiting.get(&id) {
-                Some(s) if *s == stamp => {
-                    awaiting.remove(&id);
-                    true
-                }
-                _ => false,
-            }
+        let Ok(cfg) = state.store.lock().unwrap().get() else {
+            return;
         };
-        if expired {
-            let _ = app.emit(
-                auth::AUTH_ERROR,
-                "sign-in was not completed in the browser; click Connect to try again",
+        let Some(row) = cfg.devservers.iter().find(|d| d.id == id) else {
+            return;
+        };
+        let (url, label) = (row.url.clone(), row.label.clone());
+        drop(cfg);
+        if devserver::discover_gateway(&url).await.is_ok() {
+            gateway::emit_notice(
+                &app,
+                "info",
+                "devserver",
+                &id,
+                if label.is_empty() { &url } else { &label },
+                "This URL is a gateway",
+                "this address answers as a chan-gateway - add it on the Gateways screen to see all its devservers",
             );
-            signal_devserver_rows_changed(&app, &state);
         }
     });
-}
-
-/// Drop `id`'s waiting-on-sign-in mark (the connect resumed, or the
-/// connection was torn down). No-op when it was not waiting.
-fn clear_awaiting_signin(app: &tauri::AppHandle, state: &Arc<AppState>, id: &str) {
-    let removed = state
-        .devserver_awaiting_signin
-        .lock()
-        .unwrap()
-        .remove(id)
-        .is_some();
-    if removed {
-        signal_devserver_rows_changed(app, state);
-    }
 }
 
 /// Resume the winner of a completed sign-in. Gateway ids (`gw-*`) resume
@@ -2169,47 +2173,61 @@ fn signal_devserver_rows_changed(app: &tauri::AppHandle, state: &AppState) {
     let _ = app.emit(serve::SERVES_CHANGED, ());
 }
 
-async fn connect_gateway_devserver(
+/// Connect one rostered gateway devserver (a synthesized `gw:` row): mint
+/// its entry through the gateway with the explicit (owner, devserver id)
+/// target from the row id, then wire the proxy-backed connection exactly
+/// like a raw devserver. The GATEWAY must already be connected - the row
+/// only lists while its roster is live - and its account PAT comes from
+/// the keyring; sign-in runs at the gateway level, never per row.
+async fn connect_rostered_devserver(
     app: tauri::AppHandle,
     state: Arc<AppState>,
     id: String,
-    url: String,
-    configured_label: String,
-    discovery: devserver::GatewayDiscovery,
+    gateway_id: String,
+    owner: String,
+    devserver_id: String,
 ) -> Result<(), ConnectDevserverError> {
-    let Some(pat) = auth::load_gateway_pat(&discovery.identity_origin)? else {
-        // No PAT: hand off to the browser and mark the row waiting so the
-        // launcher narrates the hand-off instead of silently going idle. A
-        // re-click lands here again: open_gateway_signin overwrites the
-        // pending nonce and begin_awaiting_signin re-stamps the row
-        // (latest-wins on both sides).
-        auth::open_gateway_signin(
-            &app,
-            &discovery.identity_origin,
-            &discovery.desktop_authorize_url,
-            &id,
-        )?;
-        begin_awaiting_signin(&app, &state, &id);
-        return Ok(());
+    let Some(discovery) = state.gateway_manager.discovery(&gateway_id) else {
+        return Err(
+            "connect the gateway first - its roster supplies this devserver"
+                .to_string()
+                .into(),
+        );
     };
-    // A PAT-backed connect is running: any waiting mark is stale (this IS the
-    // resume, or a manual connect superseded it).
-    clear_awaiting_signin(&app, &state, &id);
-    let gateway = match devserver::gateway_conn(&discovery, pat.secret, None).await {
+    let row_label = state
+        .gateway_manager
+        .roster_row(&gateway_id, &owner, &devserver_id)
+        .map(|r| r.label)
+        .unwrap_or_default();
+    let Some(pat) = auth::load_gateway_pat(&discovery.identity_origin)? else {
+        return Err("the gateway sign-in is missing - reconnect the gateway"
+            .to_string()
+            .into());
+    };
+    let gateway = match devserver::gateway_conn(
+        &discovery,
+        pat.secret,
+        Some((owner.clone(), devserver_id.clone())),
+    )
+    .await
+    {
         Ok(gateway) => gateway,
         Err(devserver::GatewayEntryError::Unauthorized) => {
-            // The stored PAT is revoked/expired (taxonomy row ii): drop it and
-            // fall into the same browser sign-in as the no-PAT path, so a dead
-            // credential self-heals into re-sign-in instead of dead-ending.
-            auth::clear_gateway_pat(&discovery.identity_origin)?;
-            auth::open_gateway_signin(
+            // Dead PAT: the same 401 semantics as the roster poll - run the
+            // gateway cascade (which clears the credential) and point the
+            // user at the gateway-level reconnect.
+            gateway::cascade_disconnect(
                 &app,
-                &discovery.identity_origin,
-                &discovery.desktop_authorize_url,
-                &id,
-            )?;
-            begin_awaiting_signin(&app, &state, &id);
-            return Ok(());
+                &state,
+                &gateway_id,
+                gateway::CascadeReason::Unauthorized,
+            )
+            .await;
+            return Err(
+                "the gateway sign-in is no longer valid - reconnect the gateway"
+                    .to_string()
+                    .into(),
+            );
         }
         // Known reasons (no devserver, offline, denied) surface their own
         // banner strings; Other keeps the raw message. No prefix here: the
@@ -2217,7 +2235,11 @@ async fn connect_gateway_devserver(
         Err(e) => return Err(e.to_string().into()),
     };
     let (host, port) = origin_host_port(&gateway.proxy_origin)?;
-    let name = gateway_display_name(&configured_label, &url, &gateway.proxy_origin);
+    let name = gateway_display_name(
+        &row_label,
+        &discovery.identity_origin,
+        &gateway.proxy_origin,
+    );
     let conn = devserver::DevserverConn {
         host,
         port,
@@ -2293,6 +2315,12 @@ async fn connect_devserver_impl_inner(
     state: Arc<AppState>,
     id: String,
 ) -> Result<(), ConnectDevserverError> {
+    // Rostered gateway devservers route through the gateway manager's
+    // state, never the persisted vec: the synthesized id carries the
+    // (gateway, owner, devserver) triple.
+    if let Some((gateway_id, owner, devserver_id)) = gateway::parse_synthesized_id(&id) {
+        return connect_rostered_devserver(app, state, id, gateway_id, owner, devserver_id).await;
+    }
     let (url, script, stored_token, configured_label, auto_hide_control) = {
         let cfg = state.store.lock().unwrap().get().map_err(err)?;
         let ds = cfg
@@ -2308,19 +2336,11 @@ async fn connect_devserver_impl_inner(
             ds.auto_hide_control,
         )
     };
-    match devserver::discover_gateway(&url).await {
-        Ok(discovery) => {
-            return connect_gateway_devserver(app, state, id, url, configured_label, discovery)
-                .await;
-        }
-        Err(e) => {
-            tracing::debug!(
-                url = %url,
-                error = %e,
-                "gateway discovery unavailable; falling back to raw devserver",
-            );
-        }
-    }
+    // Plain rows go straight to the raw dial: gateways are first-class
+    // rows with their own connect, so no per-connect discovery probe runs
+    // here. A gateway URL still stored as a plain row (predating the
+    // Gateways screen, unidentifiable offline) surfaces through the
+    // one-time backstop probe when its raw dial fails.
     // Parse the stored URL into the (host, port) the raw-tunnel dial uses
     // (the port defaults from the scheme when omitted).
     let (host, port) = devserver::parse_devserver_url(&url)?;
@@ -2952,6 +2972,7 @@ fn register_devserver_from_handoff(
         Arc::clone(&state.devserver_connecting),
         Arc::clone(&state.devserver_awaiting_signin),
         Arc::clone(&state.devserver_feed),
+        Arc::clone(&state.gateway_manager),
     );
     registry.add(DevserverInput {
         url: Some(url),
@@ -4265,6 +4286,7 @@ fn main() {
         devserver_remove_hook: Arc::new(OnceLock::new()),
         gateway_remove_hook: Arc::new(OnceLock::new()),
         gateway_manager: Arc::new(gateway::GatewayManager::default()),
+        gateway_backstop_probed: Mutex::new(std::collections::HashSet::new()),
         quit_confirmed: std::sync::atomic::AtomicBool::new(false),
         quit_prompt_open: std::sync::atomic::AtomicBool::new(false),
     });
@@ -6838,25 +6860,31 @@ mod tests {
     }
 
     #[test]
-    fn gateway_signin_wait_rides_the_connect_flow() {
-        const MAIN_RS: &str = include_str!("main.rs");
-        // The gateway connect narrates the browser hand-off: the no-PAT path
-        // marks the row waiting, a 401 clears the dead PAT and re-enters the
-        // SAME sign-in path (self-heal, no dead end), and a PAT-backed connect
-        // clears any stale wait.
-        let connect = MAIN_RS
-            .split("async fn connect_gateway_devserver")
+    fn gateway_signin_wait_rides_the_gateway_flow() {
+        // The browser hand-off lives at the GATEWAY level: the sign-in leg
+        // stamps a pending wait whose timeout expires only its own attempt
+        // (a re-click's fresh wait survives an old timer).
+        const GATEWAY_RS: &str = include_str!("gateway.rs");
+        let leg = GATEWAY_RS
+            .split("fn signin_leg")
             .nth(1)
-            .expect("connect_gateway_devserver exists")
+            .expect("signin_leg exists");
+        assert!(leg.contains("GATEWAY_SIGNIN_TIMEOUT"));
+        assert!(leg.contains("rt.signin_stamp == stamp"));
+        // A rostered row's 401 runs the gateway cascade (which clears the
+        // dead PAT) instead of opening a per-row sign-in.
+        const MAIN_RS: &str = include_str!("main.rs");
+        let connect = MAIN_RS
+            .split("async fn connect_rostered_devserver")
+            .nth(1)
+            .expect("connect_rostered_devserver exists")
             .split("async fn connect_devserver_impl_inner")
             .next()
-            .expect("connect_gateway_devserver precedes the raw inner");
-        assert!(connect.contains("begin_awaiting_signin"));
-        assert!(connect.contains("clear_awaiting_signin"));
+            .expect("rostered connect precedes the raw inner");
         assert!(connect.contains("GatewayEntryError::Unauthorized"));
-        assert!(connect.contains("clear_gateway_pat"));
-        // A teardown (disconnect/remove/reconnect) abandons the wait: the
-        // spinner row must not outlive the connection state.
+        assert!(connect.contains("cascade_disconnect"));
+        // A teardown (disconnect/remove/reconnect) abandons any waiting
+        // mark: the spinner row must not outlive the connection state.
         let teardown = MAIN_RS
             .split("fn teardown_devserver_connection")
             .nth(1)
@@ -6880,18 +6908,6 @@ mod tests {
             4,
             "both delivery paths clear on SignedIn AND on a consumed failure"
         );
-        // The timeout expires only its own attempt: the clock compares its
-        // stamp before clearing, so a re-click's fresh wait survives an old
-        // timer.
-        let wait = MAIN_RS
-            .split("fn begin_awaiting_signin")
-            .nth(1)
-            .expect("begin_awaiting_signin exists")
-            .split("fn clear_awaiting_signin")
-            .next()
-            .expect("begin precedes clear");
-        assert!(wait.contains("GATEWAY_SIGNIN_TIMEOUT"));
-        assert!(wait.contains("Some(s) if *s == stamp"));
     }
 
     #[test]

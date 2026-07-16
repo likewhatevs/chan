@@ -444,6 +444,10 @@ pub struct DevserverConfigRegistry {
     /// `WorkspaceHost::pane_color` matches a devserver window's `library_id`
     /// against these entries to find its colour, so the projection MUST carry it.
     feed: Arc<crate::DevserverFeed>,
+    /// The gateway runtime map (shared with `AppState.gateway_manager`):
+    /// `list` appends one synthesized row per rostered gateway devserver,
+    /// so connected gateways' devservers appear beside the persisted rows.
+    gateway_manager: Arc<crate::gateway::GatewayManager>,
 }
 
 impl DevserverConfigRegistry {
@@ -454,6 +458,7 @@ impl DevserverConfigRegistry {
         connecting: Arc<Mutex<HashSet<String>>>,
         awaiting_signin: Arc<Mutex<HashMap<String, Instant>>>,
         feed: Arc<crate::DevserverFeed>,
+        gateway_manager: Arc<crate::gateway::GatewayManager>,
     ) -> Self {
         Self {
             store,
@@ -462,7 +467,63 @@ impl DevserverConfigRegistry {
             connecting,
             awaiting_signin,
             feed,
+            gateway_manager,
         }
+    }
+}
+
+/// Project a rostered gateway devserver into a launcher row. The id is the
+/// synthesized `gw:` triple; connection state reads the same conns /
+/// connecting / feed maps as persisted rows (keyed by that id); the roster
+/// supplies label, liveness, and provenance. Synthesized rows carry no
+/// local config: no token, no script, no editing.
+fn entry_from_roster_row(
+    gateway: &Gateway,
+    row: &crate::gateway::RosterDevserver,
+    conns: &DevserverConns,
+    connecting: &Arc<Mutex<HashSet<String>>>,
+    feed: &crate::DevserverFeed,
+) -> DevserverEntry {
+    let id = crate::gateway::synthesized_row_id(&gateway.id, &row.owner, &row.devserver_id);
+    let (host, port) = url::Url::parse(&gateway.url)
+        .ok()
+        .and_then(|u| {
+            let host = u.host_str()?.to_string();
+            Some((host, u.port_or_known_default().unwrap_or(443)))
+        })
+        .unwrap_or_else(|| (gateway.url.clone(), 443));
+    let (os, pretty_name) = feed.os_of(&id).unwrap_or_default();
+    DevserverEntry {
+        status: if conns.is_connected(&id) {
+            if feed.is_unreachable(&id) {
+                DevserverStatus::Unreachable
+            } else {
+                DevserverStatus::Connected
+            }
+        } else if connecting
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains(&id)
+        {
+            DevserverStatus::Connecting
+        } else {
+            DevserverStatus::Disconnected
+        },
+        library_id: feed.library_id_of(&id),
+        id,
+        url: gateway.url.clone(),
+        host,
+        port,
+        label: row.label.clone(),
+        script: String::new(),
+        has_token: false,
+        auto_hide_control: false,
+        pending_signin: false,
+        os,
+        pretty_name,
+        gateway_id: Some(gateway.id.clone()),
+        gateway_url: gateway.url.clone(),
+        shared: row.shared,
     }
 }
 
@@ -661,12 +722,16 @@ fn entry_from_devserver(
 impl DevserverRegistry for DevserverConfigRegistry {
     fn list(&self) -> Vec<DevserverEntry> {
         // Infallible by contract (mirrors the window feed): a read error
-        // surfaces as an empty list, not a 500.
+        // surfaces as an empty list, not a 500. Persisted rows first, then
+        // one synthesized row per rostered gateway devserver - derived
+        // deterministically from the config rows + the roster cache, so
+        // repeated lists agree while nothing changed.
         let store = self.store.lock().unwrap();
         store
             .get()
             .map(|cfg| {
-                cfg.devservers
+                let mut rows: Vec<DevserverEntry> = cfg
+                    .devservers
                     .iter()
                     .map(|d| {
                         entry_from_devserver(
@@ -677,7 +742,13 @@ impl DevserverRegistry for DevserverConfigRegistry {
                             &self.feed,
                         )
                     })
-                    .collect()
+                    .collect();
+                for g in &cfg.gateways {
+                    rows.extend(self.gateway_manager.roster(&g.id).iter().map(|r| {
+                        entry_from_roster_row(g, r, &self.conns, &self.connecting, &self.feed)
+                    }));
+                }
+                rows
             })
             .unwrap_or_default()
     }
@@ -710,6 +781,9 @@ impl DevserverRegistry for DevserverConfigRegistry {
     }
 
     fn update(&self, id: &str, input: DevserverInput) -> Result<Option<DevserverEntry>, String> {
+        // Synthesized gateway rows carry no local config to edit; they are
+        // not in the persisted vec, so the lookup below misses and the
+        // route layer answers 404. Same for remove.
         let url = devserver_url(&input)?;
         let mut store = self.store.lock().unwrap();
         let mut cfg = store.get().map_err(|e| e.to_string())?;
@@ -1492,6 +1566,7 @@ mod tests {
             empty_connecting(),
             empty_awaiting(),
             Arc::new(crate::DevserverFeed::default()),
+            Arc::new(crate::gateway::GatewayManager::default()),
         );
         let added = reg
             .add(DevserverInput {
@@ -1539,6 +1614,7 @@ mod tests {
             Arc::clone(&connecting),
             Arc::clone(&awaiting),
             Arc::new(crate::DevserverFeed::default()),
+            Arc::new(crate::gateway::GatewayManager::default()),
         );
         let id = reg
             .add(DevserverInput {
@@ -1602,6 +1678,7 @@ mod tests {
             empty_connecting(),
             empty_awaiting(),
             Arc::clone(&feed),
+            Arc::new(crate::gateway::GatewayManager::default()),
         );
         let id = reg
             .add(DevserverInput {
@@ -1653,6 +1730,7 @@ mod tests {
             empty_connecting(),
             empty_awaiting(),
             Arc::new(crate::DevserverFeed::default()),
+            Arc::new(crate::gateway::GatewayManager::default()),
         );
         let id = reg
             .add(DevserverInput {
@@ -1731,6 +1809,7 @@ mod tests {
             empty_connecting(),
             empty_awaiting(),
             Arc::new(crate::DevserverFeed::default()),
+            Arc::new(crate::gateway::GatewayManager::default()),
         );
         let missing = reg
             .update(
@@ -1770,6 +1849,7 @@ mod tests {
             empty_connecting(),
             empty_awaiting(),
             Arc::new(crate::DevserverFeed::default()),
+            Arc::new(crate::gateway::GatewayManager::default()),
         );
         let id = reg
             .add(DevserverInput {
@@ -1800,6 +1880,7 @@ mod tests {
             empty_connecting(),
             empty_awaiting(),
             Arc::new(crate::DevserverFeed::default()),
+            Arc::new(crate::gateway::GatewayManager::default()),
         );
         assert!(reg
             .add(DevserverInput {
@@ -2304,6 +2385,127 @@ mod tests {
             serde_json::to_value(store.lock().unwrap().get().unwrap()).unwrap(),
             serde_json::to_value(&after_first).unwrap()
         );
+    }
+
+    fn test_discovery() -> crate::devserver::GatewayDiscovery {
+        crate::devserver::GatewayDiscovery {
+            kind: "chan-gateway".into(),
+            api_version: 1,
+            identity_origin: "https://id.chan.app".into(),
+            desktop_authorize_url: "https://id.chan.app/desktop/authorize".into(),
+            desktop_entry_url: "https://id.chan.app/desktop/v1/devserver/entry".into(),
+            devserver_proxy_origin: "https://x.devserver.chan.app".into(),
+            roster_url: Some("https://id.chan.app/desktop/v1/devservers".into()),
+        }
+    }
+
+    fn roster_row(
+        owner: &str,
+        id: &str,
+        label: &str,
+        shared: bool,
+    ) -> crate::gateway::RosterDevserver {
+        crate::gateway::RosterDevserver {
+            owner: owner.to_string(),
+            devserver_id: id.to_string(),
+            label: label.to_string(),
+            online: true,
+            role: if shared { "viewer" } else { "owner" }.to_string(),
+            shared,
+        }
+    }
+
+    fn registry_with_gateway_roster() -> (tempfile::TempDir, DevserverConfigRegistry) {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(Mutex::new(ConfigStore {
+            path: dir.path().join("config.json"),
+        }));
+        {
+            let mut guard = store.lock().unwrap();
+            let cfg = Config {
+                devservers: vec![plain_row("ds1", "http://box.example.com:8787")],
+                gateways: vec![Gateway {
+                    id: "gw-1a2b3c4d".to_string(),
+                    url: "https://id.chan.app".to_string(),
+                    label: "work".to_string(),
+                    enabled: true,
+                    added_at: 1,
+                }],
+                ..Default::default()
+            };
+            guard.save(&cfg).unwrap();
+        }
+        let manager = Arc::new(crate::gateway::GatewayManager::default());
+        manager.seed_test_runtime(
+            "gw-1a2b3c4d",
+            test_discovery(),
+            vec![
+                roster_row("alice", &"a".repeat(64), "laptop", false),
+                roster_row("bob", &"b".repeat(64), "shared-box", true),
+            ],
+        );
+        let reg = DevserverConfigRegistry::new(
+            Arc::clone(&store),
+            Arc::new(OnceLock::new()),
+            Arc::new(crate::devserver::DevserverConns::default()),
+            empty_connecting(),
+            empty_awaiting(),
+            Arc::new(crate::DevserverFeed::default()),
+            manager,
+        );
+        (dir, reg)
+    }
+
+    #[test]
+    fn list_appends_synthesized_gateway_rows() {
+        let (_dir, reg) = registry_with_gateway_roster();
+        let rows = reg.list();
+        assert_eq!(rows.len(), 3, "one plain + two synthesized");
+        assert_eq!(rows[0].id, "ds1");
+        assert_eq!(rows[0].gateway_id, None);
+
+        let own = &rows[1];
+        assert_eq!(own.id, format!("gw:1a2b3c4d:alice:{}", "a".repeat(64)));
+        assert_eq!(own.gateway_id.as_deref(), Some("gw-1a2b3c4d"));
+        assert_eq!(own.gateway_url, "https://id.chan.app");
+        assert!(!own.shared);
+        assert_eq!(own.label, "laptop");
+        assert_eq!(own.status, DevserverStatus::Disconnected);
+        assert!(!own.has_token);
+        assert!(own.script.is_empty());
+        assert_eq!(own.host, "id.chan.app");
+
+        let shared = &rows[2];
+        assert_eq!(shared.id, format!("gw:1a2b3c4d:bob:{}", "b".repeat(64)));
+        assert!(shared.shared);
+
+        // Deterministic across calls while nothing changes.
+        assert_eq!(reg.list(), rows);
+    }
+
+    #[test]
+    fn update_and_remove_answer_missing_for_synthesized_ids() {
+        // Synthesized rows carry no local config: the route layer must 404
+        // mutations, which the registry signals out-of-band.
+        let (_dir, reg) = registry_with_gateway_roster();
+        let synth = format!("gw:1a2b3c4d:alice:{}", "a".repeat(64));
+        let update = reg.update(
+            &synth,
+            DevserverInput {
+                url: None,
+                host: "box.example.com".into(),
+                port: 8787,
+                label: None,
+                script: None,
+                token: None,
+                clear_token: false,
+                auto_hide_control: false,
+            },
+        );
+        assert_eq!(update, Ok(None));
+        assert_eq!(reg.remove(&synth), Ok(false));
+        // And the synthesized rows are untouched by the attempts.
+        assert_eq!(reg.list().len(), 3);
     }
 
     #[test]
