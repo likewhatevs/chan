@@ -172,6 +172,13 @@ enum ClientFrame {
     /// double-delivery, or (removed=false) when it had already drained.
     #[serde(rename = "cancel-prompt")]
     CancelPrompt { id: String },
+    /// `{ "type": "ping" }` -- the terminal heartbeat, same vocabulary as the
+    /// watcher socket's (`routes/ws.rs`). Answered with [`ServerFrame::Pong`]
+    /// on this socket so a live-but-quiet tab keeps a frame flowing in each
+    /// direction below the gateway bridge's idle cut. Never touches the PTY
+    /// input path or the prompt queue.
+    #[serde(rename = "ping")]
+    Ping,
 }
 
 #[derive(Debug, Serialize)]
@@ -264,6 +271,13 @@ enum ServerFrame {
     /// duplicates, multi-window safe.
     #[serde(rename = "queue")]
     Queue { depth: usize },
+    /// Answer to the client `ping` heartbeat, echoed on the same socket.
+    /// Wire shape `{"type":"pong"}`, identical to the watcher socket's
+    /// `PONG_FRAME` and pinned by
+    /// [`tests::pong_frame_is_the_pinned_wire_shape`]; the SPA terminal
+    /// transport parses this exact object.
+    #[serde(rename = "pong")]
+    Pong,
 }
 
 pub async fn api_terminal_ws(
@@ -756,6 +770,15 @@ async fn terminal_ws(mut socket: WebSocket, state: Arc<AppState>, opts: Terminal
                                 .await;
                                 state.last_activity.store(now_unix_secs(), Ordering::Relaxed);
                             }
+                            Ok(ClientFrame::Ping) => {
+                                // Heartbeat only: answer on this socket and
+                                // count it as activity (a pinging tab is a
+                                // live tab, matching the watcher socket's
+                                // ping). Nothing reaches the PTY or the
+                                // prompt queue.
+                                let _ = send_frame(&mut socket, ServerFrame::Pong).await;
+                                state.last_activity.store(now_unix_secs(), Ordering::Relaxed);
+                            }
                             Err(e) => {
                                 let _ = send_frame(
                                     &mut socket,
@@ -1108,6 +1131,29 @@ mod tests {
     use std::fs;
     use std::process::Command;
     use std::time::{Duration, Instant};
+
+    // The terminal heartbeat vocabulary is shared with the watcher socket
+    // (routes/ws.rs): client `{"type":"ping"}` -> server `{"type":"pong"}`.
+    // Old servers (no `Ping` variant) answer it with an `error` frame the SPA
+    // tolerates; old clients never send it, so the skew is safe both ways.
+    #[test]
+    fn ping_frame_parses_to_the_heartbeat_variant() {
+        assert!(matches!(
+            serde_json::from_str::<ClientFrame>(r#"{"type":"ping"}"#),
+            Ok(ClientFrame::Ping)
+        ));
+    }
+
+    // Pins the server -> client `pong` bytes, mirroring ws.rs's
+    // `pong_frame_is_the_pinned_wire_shape`: the SPA terminal transport's
+    // read-deadline parses this exact object, so the shape must not drift.
+    #[test]
+    fn pong_frame_is_the_pinned_wire_shape() {
+        assert_eq!(
+            serde_json::to_string(&ServerFrame::Pong).unwrap(),
+            r#"{"type":"pong"}"#
+        );
+    }
 
     struct TestTerminal {
         _registry: Registry,
