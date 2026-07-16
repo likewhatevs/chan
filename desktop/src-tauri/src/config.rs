@@ -377,6 +377,13 @@ impl ConfigStore {
         })
     }
 
+    /// Test-only store at an explicit path; production stores resolve
+    /// their path through [`ConfigStore::new`].
+    #[cfg(test)]
+    pub(crate) fn at_path(path: PathBuf) -> Self {
+        Self { path }
+    }
+
     pub fn get(&self) -> io::Result<Config> {
         match fs::read(&self.path) {
             Ok(bytes) => serde_json::from_slice(&bytes)

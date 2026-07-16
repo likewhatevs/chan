@@ -215,6 +215,44 @@ pub struct AppState {
     pub quit_prompt_open: std::sync::atomic::AtomicBool,
 }
 
+impl AppState {
+    /// Fresh process state over a config store: every runtime map empty,
+    /// every cell unfilled. The single construction path, shared by the
+    /// real app and by tests driving the gateway/devserver flows.
+    pub(crate) fn with_store(store: Arc<Mutex<ConfigStore>>) -> Self {
+        Self {
+            store,
+            serves: Mutex::new(HashMap::new()),
+            embedded: OnceLock::new(),
+            local_watcher_view: OnceLock::new(),
+            live_window_zooms: Mutex::new(HashMap::new()),
+            window_numbers: Mutex::new(HashMap::new()),
+            window_title_overrides: Mutex::new(HashMap::new()),
+            buried_windows: Mutex::new(Vec::new()),
+            silent_hides: Mutex::new(std::collections::HashSet::new()),
+            remote_reopen: Mutex::new(HashMap::new()),
+            devservers: Arc::new(devserver::DevserverConns::default()),
+            devserver_feed: Arc::new(DevserverFeed::default()),
+            devserver_windows: Mutex::new(HashMap::new()),
+            devserver_watchers: Mutex::new(HashMap::new()),
+            devserver_watcher_views: Mutex::new(HashMap::new()),
+            devserver_active_transfers: Mutex::new(std::collections::HashSet::new()),
+            control_terminal_prefixes: Mutex::new(HashMap::new()),
+            control_terminal_runs: Mutex::new(HashMap::new()),
+            control_terminal_dead: Mutex::new(std::collections::HashSet::new()),
+            control_terminal_generation: std::sync::atomic::AtomicU64::new(0),
+            devserver_connecting: Arc::new(Mutex::new(std::collections::HashSet::new())),
+            devserver_awaiting_signin: Arc::new(Mutex::new(HashMap::new())),
+            devserver_remove_hook: Arc::new(OnceLock::new()),
+            gateway_remove_hook: Arc::new(OnceLock::new()),
+            gateway_manager: Arc::new(gateway::GatewayManager::default()),
+            gateway_backstop_probed: Mutex::new(std::collections::HashSet::new()),
+            quit_confirmed: std::sync::atomic::AtomicBool::new(false),
+            quit_prompt_open: std::sync::atomic::AtomicBool::new(false),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ControlTerminalRun {
     pub generation: u64,
@@ -2141,8 +2179,13 @@ fn spawn_gateway_backstop_probe(app: &tauri::AppHandle, state: &Arc<AppState>, i
 async fn resume_signed_in(app: tauri::AppHandle, state: Arc<AppState>, id: String) {
     if id.starts_with("gw-") {
         gateway::resume_gateway_signin(app, state, id).await;
-    } else if let Err(e) = connect_devserver_impl(app.clone(), state, id).await {
-        let _ = app.emit(auth::AUTH_ERROR, e);
+    } else {
+        // A devserver-row sign-in consumed the slot: any parked gateway
+        // wait is settled too (its browser leg lost the nonce).
+        gateway::abandon_pending_signins(&app, &state);
+        if let Err(e) = connect_devserver_impl(app.clone(), state, id).await {
+            let _ = app.emit(auth::AUTH_ERROR, e);
+        }
     }
 }
 
@@ -4259,36 +4302,7 @@ fn main() {
         Ok(_) => {}
         Err(e) => tracing::warn!(error = %e, "legacy gateway row migration failed"),
     }
-    let state = Arc::new(AppState {
-        store,
-        serves: Mutex::new(HashMap::new()),
-        embedded: OnceLock::new(),
-        local_watcher_view: OnceLock::new(),
-        live_window_zooms: Mutex::new(HashMap::new()),
-        window_numbers: Mutex::new(HashMap::new()),
-        window_title_overrides: Mutex::new(HashMap::new()),
-        buried_windows: Mutex::new(Vec::new()),
-        silent_hides: Mutex::new(std::collections::HashSet::new()),
-        remote_reopen: Mutex::new(HashMap::new()),
-        devservers: Arc::new(devserver::DevserverConns::default()),
-        devserver_feed: Arc::new(DevserverFeed::default()),
-        devserver_windows: Mutex::new(HashMap::new()),
-        devserver_watchers: Mutex::new(HashMap::new()),
-        devserver_watcher_views: Mutex::new(HashMap::new()),
-        devserver_active_transfers: Mutex::new(std::collections::HashSet::new()),
-        control_terminal_prefixes: Mutex::new(HashMap::new()),
-        control_terminal_runs: Mutex::new(HashMap::new()),
-        control_terminal_dead: Mutex::new(std::collections::HashSet::new()),
-        control_terminal_generation: std::sync::atomic::AtomicU64::new(0),
-        devserver_connecting: Arc::new(Mutex::new(std::collections::HashSet::new())),
-        devserver_awaiting_signin: Arc::new(Mutex::new(HashMap::new())),
-        devserver_remove_hook: Arc::new(OnceLock::new()),
-        gateway_remove_hook: Arc::new(OnceLock::new()),
-        gateway_manager: Arc::new(gateway::GatewayManager::default()),
-        gateway_backstop_probed: Mutex::new(std::collections::HashSet::new()),
-        quit_confirmed: std::sync::atomic::AtomicBool::new(false),
-        quit_prompt_open: std::sync::atomic::AtomicBool::new(false),
-    });
+    let state = Arc::new(AppState::with_store(store));
     let state_for_exit = Arc::clone(&state);
     let state_for_setup = Arc::clone(&state);
 
@@ -4438,8 +4452,11 @@ fn main() {
                         } => {
                             // Denied/cancelled/failed sign-in (row i): the
                             // banner was emitted by handle_callback; reset the
-                            // waiting rows.
+                            // waiting rows AND any parked gateway sign-in
+                            // (the consumed slot means no parked leg can
+                            // complete anymore).
                             clear_all_awaiting_signin(&app_for_links, &state_for_links);
+                            gateway::abandon_pending_signins(&app_for_links, &state_for_links);
                         }
                         auth::CallbackOutcome::Failed {
                             consumed_pending: false,
@@ -4468,6 +4485,7 @@ fn main() {
                             consumed_pending: true,
                         } => {
                             clear_all_awaiting_signin(app.handle(), &state_for_setup);
+                            gateway::abandon_pending_signins(app.handle(), &state_for_setup);
                         }
                         auth::CallbackOutcome::Failed {
                             consumed_pending: false,

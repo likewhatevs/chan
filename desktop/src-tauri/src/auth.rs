@@ -34,11 +34,11 @@
 //! side revoke needs the id.chan.app session, which only the user's
 //! browser has -- wiring that is a follow-up.
 
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use keyring::Entry;
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter, Url};
+use tauri::{AppHandle, Emitter, Manager, Url};
 use tauri_plugin_opener::OpenerExt;
 
 /// Event emitted whenever the local sign-in state changes (after a
@@ -197,6 +197,10 @@ pub fn open_signin(app: AppHandle) -> Result<(), String> {
         identity_origin: IDENTITY_ORIGIN.to_string(),
         resume_gateway_id: None,
     });
+    // Replacing the slot orphans any parked gateway sign-in (its browser
+    // leg lost the nonce): settle those waits so no spinner or busy gate
+    // outlives them.
+    crate::gateway::abandon_pending_signins(&app, &app.state::<Arc<crate::AppState>>());
 
     let label = format!("chan-desktop @ {}", hostname());
     let url = url::Url::parse_with_params(
@@ -220,7 +224,21 @@ pub fn gateway_account(identity_origin: &str) -> String {
     format!("gateway:{identity_origin}")
 }
 
+/// Test-only gateway PAT source, consulted before the OS keyring:
+/// entry-scoped keyring mocks don't share state across `Entry`
+/// instances, and a headless test host has no real credential service,
+/// so flow tests seed credentials here.
+#[cfg(test)]
+pub(crate) fn test_gateway_pats() -> &'static Mutex<std::collections::HashMap<String, StoredPat>> {
+    static PATS: OnceLock<Mutex<std::collections::HashMap<String, StoredPat>>> = OnceLock::new();
+    PATS.get_or_init(|| Mutex::new(std::collections::HashMap::new()))
+}
+
 pub fn load_gateway_pat(identity_origin: &str) -> Result<Option<StoredPat>, String> {
+    #[cfg(test)]
+    if let Some(pat) = test_gateway_pats().lock().unwrap().get(identity_origin) {
+        return Ok(Some(pat.clone()));
+    }
     let account = gateway_account(identity_origin);
     match entry_for(&account)?.get_password() {
         Ok(s) => serde_json::from_str(&s)
@@ -243,8 +261,8 @@ pub fn clear_gateway_pat(identity_origin: &str) -> Result<(), String> {
     }
 }
 
-pub fn open_gateway_signin(
-    app: &AppHandle,
+pub fn open_gateway_signin<R: tauri::Runtime>(
+    app: &AppHandle<R>,
     identity_origin: &str,
     authorize_url: &str,
     resume_id: &str,

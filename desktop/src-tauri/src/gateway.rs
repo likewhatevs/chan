@@ -19,9 +19,17 @@
 //!
 //! Sign-in is single-flight (the pending-auth slot in [`crate::auth`] is
 //! process-global latest-wins): one gateway sign-in may be in the browser
-//! at a time; a second Connect surfaces a notice instead of a parallel
-//! browser leg. A callback that resumes a gateway removed mid-flight is
-//! dropped with a notice.
+//! at a time; a second Connect on ANOTHER gateway surfaces a busy notice
+//! instead of a parallel browser leg. A re-click on the SAME gateway
+//! falls through latest-wins and re-opens the browser - the prior tab
+//! orphans into a state-mismatch failure - which is deliberate: the
+//! fall-through is the user's retry hatch. Because the slot is single,
+//! ANY consumed callback (success, failure, cancellation) or a competing
+//! sign-in replacing the slot settles every parked gateway wait:
+//! [`abandon_pending_signins`] resets them so no spinner or busy gate
+//! outlives its browser leg. A callback that resumes a gateway removed
+//! mid-flight is dropped with a notice; one that resumes a gateway the
+//! user disconnected meanwhile stores the PAT but stays disconnected.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -271,26 +279,36 @@ pub struct RosterDiff {
     pub added: Vec<(String, String)>,
     pub removed: Vec<(String, String)>,
     pub flipped_online: Vec<(String, String)>,
+    /// Rows whose label or role changed (a devserver rename must reach
+    /// the launcher without waiting for a membership or online change).
+    pub updated: Vec<(String, String)>,
 }
 
 impl RosterDiff {
     pub fn is_empty(&self) -> bool {
-        self.added.is_empty() && self.removed.is_empty() && self.flipped_online.is_empty()
+        self.added.is_empty()
+            && self.removed.is_empty()
+            && self.flipped_online.is_empty()
+            && self.updated.is_empty()
     }
 }
 
-/// Pure roster diff: which rows appeared, disappeared, or flipped their
-/// online bit. Label/role edits don't count as membership changes; the
-/// fresh snapshot replaces the cache either way.
+/// Pure roster diff: which rows appeared, disappeared, flipped their
+/// online bit, or changed label/role. The fresh snapshot replaces the
+/// cache either way; the diff only decides whether the launcher gets a
+/// push.
 pub fn diff_rosters(old: &[RosterDevserver], new: &[RosterDevserver]) -> RosterDiff {
     let key = |r: &RosterDevserver| (r.owner.clone(), r.devserver_id.clone());
-    let old_map: HashMap<_, _> = old.iter().map(|r| (key(r), r.online)).collect();
-    let new_map: HashMap<_, _> = new.iter().map(|r| (key(r), r.online)).collect();
+    let old_map: HashMap<_, _> = old.iter().map(|r| (key(r), r)).collect();
+    let new_map: HashMap<_, _> = new.iter().map(|r| (key(r), r)).collect();
     let mut diff = RosterDiff::default();
-    for (k, online) in &new_map {
+    for (k, row) in &new_map {
         match old_map.get(k) {
             None => diff.added.push(k.clone()),
-            Some(was) if was != online => diff.flipped_online.push(k.clone()),
+            Some(was) if was.online != row.online => diff.flipped_online.push(k.clone()),
+            Some(was) if was.label != row.label || was.role != row.role => {
+                diff.updated.push(k.clone())
+            }
             Some(_) => {}
         }
     }
@@ -412,8 +430,8 @@ pub async fn fetch_roster(roster_url: &str, pat_secret: &str, etag: Option<&str>
 /// Emit a launcher-notice bubble. Fire-and-forget: the launcher's notice
 /// store keeps what it receives; nothing is replayed to a launcher that
 /// was not yet listening.
-pub fn emit_notice(
-    app: &tauri::AppHandle,
+pub fn emit_notice<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
     kind: &str,
     source_type: &str,
     source_id: &str,
@@ -456,6 +474,17 @@ pub fn emit_notice(
             at: config::now_millis(),
         },
     );
+}
+
+/// Push the launcher a fresh devserver/gateway list (the feed re-lists
+/// registries on the library change signal). The gateway flow's own copy
+/// of the crate-level push helper, generic over the runtime so the whole
+/// flow drives under the mock runtime in tests.
+fn signal_rows_changed<R: tauri::Runtime>(app: &tauri::AppHandle<R>, state: &AppState) {
+    if let Some(embedded) = state.embedded() {
+        embedded.signal_library_change();
+    }
+    let _ = app.emit(crate::serve::SERVES_CHANGED, ());
 }
 
 fn gateway_row(state: &AppState, gateway_id: &str) -> Result<Gateway, String> {
@@ -503,8 +532,8 @@ fn persist_enabled(state: &AppState, gateway_id: &str, enabled: bool) {
 /// a user click may open the sign-in page; the startup autoconnect must
 /// never pop a browser and instead leaves the row disconnected with a
 /// sign-in-required error.
-pub async fn connect_gateway(
-    app: tauri::AppHandle,
+pub async fn connect_gateway<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
     state: Arc<AppState>,
     gateway_id: String,
     interactive: bool,
@@ -539,7 +568,7 @@ pub async fn connect_gateway(
                 "Gateway unreachable",
                 &msg,
             );
-            crate::signal_devserver_rows_changed(&app, &state);
+            signal_rows_changed(&app, &state);
             return Err(msg);
         }
     };
@@ -556,7 +585,7 @@ pub async fn connect_gateway(
             "Gateway too old",
             &msg,
         );
-        crate::signal_devserver_rows_changed(&app, &state);
+        signal_rows_changed(&app, &state);
         return Err(msg);
     };
 
@@ -566,7 +595,8 @@ pub async fn connect_gateway(
     };
 
     upsert_connecting(&state, &gateway_id, &discovery);
-    crate::signal_devserver_rows_changed(&app, &state);
+    drop_runtime_if_removed(&state, &gateway_id);
+    signal_rows_changed(&app, &state);
 
     match fetch_roster(&roster_url, &pat.secret, None).await {
         RosterFetch::Unauthorized => {
@@ -611,7 +641,8 @@ pub async fn connect_gateway(
                 }
             }
             spawn_roster_poll(&app, &state, &gateway_id, roster_url);
-            crate::signal_devserver_rows_changed(&app, &state);
+            drop_runtime_if_removed(&state, &gateway_id);
+            signal_rows_changed(&app, &state);
             Ok(())
         }
     }
@@ -655,11 +686,33 @@ fn upsert_disconnected(state: &AppState, gateway_id: &str, error: &str) {
     }
 }
 
+/// A cascade for a removed gateway can race a connect attempt whose
+/// awaits were in flight: the cascade takes the runtime out, the connect
+/// re-inserts it, and the resurrected poll would hit the removed gateway
+/// with the stored PAT for the process lifetime. Called after every
+/// runtime (re)insertion: drops the runtime again (poll cancelled) when
+/// the config row is gone. Returns whether it dropped one.
+fn drop_runtime_if_removed(state: &AppState, gateway_id: &str) -> bool {
+    if gateway_row(state, gateway_id).is_ok() {
+        return false;
+    }
+    let removed = {
+        let mut runtimes = state.gateway_manager.runtimes.lock().unwrap();
+        runtimes.remove(gateway_id)
+    };
+    if let Some(rt) = &removed {
+        if let Some(cancel) = &rt.poll_cancel {
+            cancel.cancel();
+        }
+    }
+    removed.is_some()
+}
+
 /// The browser sign-in leg. Non-interactive callers (startup autoconnect)
 /// never open a browser: the row parks disconnected with a
 /// sign-in-required error instead.
-fn signin_leg(
-    app: &tauri::AppHandle,
+fn signin_leg<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
     state: &Arc<AppState>,
     gateway_id: &str,
     label: &str,
@@ -667,8 +720,30 @@ fn signin_leg(
     interactive: bool,
 ) -> Result<(), String> {
     if !interactive {
-        upsert_disconnected(state, gateway_id, "sign-in required - click Connect");
-        crate::signal_devserver_rows_changed(app, state);
+        // The startup autoconnect must make the missing-PAT state VISIBLE
+        // without a browser: park a runtime (creating one for a gateway
+        // that has never connected) carrying the sign-in-required error,
+        // and say so once.
+        {
+            let mut runtimes = state.gateway_manager.runtimes.lock().unwrap();
+            let rt = runtimes
+                .entry(gateway_id.to_string())
+                .or_insert_with(|| new_runtime(discovery.clone()));
+            rt.status = GatewayStatus::Disconnected;
+            rt.pending_signin = false;
+            rt.last_error = Some("sign-in required - click Connect".to_string());
+        }
+        emit_notice(
+            app,
+            "info",
+            "gateway",
+            gateway_id,
+            label,
+            "Sign-in required",
+            "this gateway needs a browser sign-in; click Connect on the Gateways screen",
+        );
+        drop_runtime_if_removed(state, gateway_id);
+        signal_rows_changed(app, state);
         return Ok(());
     }
     if state
@@ -704,7 +779,8 @@ fn signin_leg(
         rt.signin_stamp = stamp;
         rt.status = GatewayStatus::Connecting;
     }
-    crate::signal_devserver_rows_changed(app, state);
+    drop_runtime_if_removed(state, gateway_id);
+    signal_rows_changed(app, state);
     // Expire the wait like the devserver rows do: only the matching stamp
     // clears, so a re-click's fresh wait survives the stale timeout.
     let app = app.clone();
@@ -735,7 +811,7 @@ fn signin_leg(
                 "Sign-in timed out",
                 "sign-in was not completed in the browser; click Connect to try again",
             );
-            crate::signal_devserver_rows_changed(&app, &state);
+            signal_rows_changed(&app, &state);
         }
     });
     Ok(())
@@ -754,24 +830,45 @@ impl GatewayManager {
 /// Resume after a sign-in callback stored the PAT: the gateway must still
 /// be configured (ruling: a mid-flight removal drops the sign-in with a
 /// notice), then the connect re-runs PAT-backed.
-pub async fn resume_gateway_signin(
-    app: tauri::AppHandle,
+pub async fn resume_gateway_signin<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
     state: Arc<AppState>,
     gateway_id: String,
 ) {
+    // Make the parked runtime resumable FIRST - pending cleared, status
+    // Disconnected - so connect_gateway's coalesce guard (which lets a
+    // live non-pending Connecting attempt finish on its own) cannot
+    // mistake the park for an attempt in flight and dead-end the row.
     {
         let mut runtimes = state.gateway_manager.runtimes.lock().unwrap();
         if let Some(rt) = runtimes.get_mut(&gateway_id) {
             rt.pending_signin = false;
+            rt.status = GatewayStatus::Disconnected;
         }
     }
     match gateway_row(&state, &gateway_id) {
-        Ok(_) => {
+        // Still configured and still wanted: the connect re-runs
+        // PAT-backed.
+        Ok(row) if row.enabled => {
             if let Err(e) =
                 connect_gateway(app.clone(), Arc::clone(&state), gateway_id.clone(), true).await
             {
                 tracing::warn!(gateway = %gateway_id, error = %e, "gateway connect after sign-in failed");
             }
+        }
+        // The user disconnected the row while the browser leg ran: the
+        // PAT is stored for later, but the disconnect stands.
+        Ok(row) => {
+            emit_notice(
+                &app,
+                "info",
+                "gateway",
+                &gateway_id,
+                &display_label(&row),
+                "Sign-in stored",
+                "the sign-in completed for a gateway that was disconnected meanwhile; click Connect to use it",
+            );
+            signal_rows_changed(&app, &state);
         }
         Err(_) => {
             emit_notice(
@@ -789,8 +886,34 @@ pub async fn resume_gateway_signin(
     }
 }
 
-fn spawn_roster_poll(
-    app: &tauri::AppHandle,
+/// Reset every parked gateway sign-in wait. The pending-auth slot is
+/// process-global and single: once ANY callback consumes it (success,
+/// failure, cancellation) or a competing sign-in replaces it, a parked
+/// gateway's browser leg can never complete - its spinner and the
+/// cross-gateway busy gate must not outlive the leg.
+pub fn abandon_pending_signins<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    state: &Arc<AppState>,
+) {
+    let mut cleared = false;
+    {
+        let mut runtimes = state.gateway_manager.runtimes.lock().unwrap();
+        for rt in runtimes.values_mut() {
+            if rt.pending_signin {
+                rt.pending_signin = false;
+                rt.status = GatewayStatus::Disconnected;
+                rt.last_error = Some("sign-in was not completed".to_string());
+                cleared = true;
+            }
+        }
+    }
+    if cleared {
+        signal_rows_changed(app, state);
+    }
+}
+
+fn spawn_roster_poll<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
     state: &Arc<AppState>,
     gateway_id: &str,
     roster_url: String,
@@ -834,6 +957,14 @@ fn spawn_roster_poll(
                 }
             };
             let fetch = fetch_roster(&roster_url, &secret, etag.as_deref()).await;
+            // A disconnect+reconnect replaced this poll while the fetch
+            // was in flight: the successor owns the runtime now, and the
+            // map-presence check below cannot tell the two polls apart -
+            // only the token can. Applying the stale fetch would clobber
+            // the successor's state.
+            if cancel.is_cancelled() {
+                break;
+            }
             let effect = {
                 let mut runtimes = state.gateway_manager.runtimes.lock().unwrap();
                 match runtimes.get_mut(&gateway_id) {
@@ -864,14 +995,14 @@ fn spawn_roster_poll(
                 notice_unreachable(&app, &state, &gateway_id, &label);
             }
             if effect.changed {
-                crate::signal_devserver_rows_changed(&app, &state);
+                signal_rows_changed(&app, &state);
             }
         }
     });
 }
 
-fn notice_unreachable(
-    app: &tauri::AppHandle,
+fn notice_unreachable<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
     state: &Arc<AppState>,
     gateway_id: &str,
     label: &str,
@@ -911,8 +1042,8 @@ pub enum CascadeReason {
 /// Serialized per gateway by the runtimes lock taking the runtime OUT
 /// before any teardown runs; a second cascade for the same id finds no
 /// runtime and no-ops.
-pub async fn cascade_disconnect(
-    app: &tauri::AppHandle,
+pub async fn cascade_disconnect<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
     state: &Arc<AppState>,
     gateway_id: &str,
     reason: CascadeReason,
@@ -922,11 +1053,15 @@ pub async fn cascade_disconnect(
         runtimes.remove(gateway_id)
     };
     let Some(runtime) = runtime else {
-        // Nothing live; still honor the intent flag for a user disconnect.
+        // Nothing live; still honor the intent flag for a user disconnect,
+        // and signal regardless - the GATEWAY row changed (removed or
+        // disabled) even when no runtime existed, and the invariant
+        // "signal on every gateway mutation" must not depend on the
+        // caller.
         if reason == CascadeReason::UserDisconnect {
             persist_enabled(state, gateway_id, false);
-            crate::signal_devserver_rows_changed(app, state);
         }
+        signal_rows_changed(app, state);
         return;
     };
     if let Some(cancel) = &runtime.poll_cancel {
@@ -934,7 +1069,9 @@ pub async fn cascade_disconnect(
     }
     for row in &runtime.roster {
         let synth_id = synthesized_row_id(gateway_id, &row.owner, &row.devserver_id);
-        crate::teardown_devserver_connection(app, state, &synth_id);
+        if let Some(teardown) = state.devserver_remove_hook.get() {
+            teardown(&synth_id);
+        }
     }
     match reason {
         CascadeReason::UserDisconnect => persist_enabled(state, gateway_id, false),
@@ -945,12 +1082,15 @@ pub async fn cascade_disconnect(
             }
         }
     }
-    crate::signal_devserver_rows_changed(app, state);
+    signal_rows_changed(app, state);
 }
 
 /// Startup autoconnect: every enabled gateway connects non-interactively
 /// (no browser legs at login; PAT-less rows park as sign-in required).
-pub fn autoconnect_enabled_gateways(app: &tauri::AppHandle, state: &Arc<AppState>) {
+pub fn autoconnect_enabled_gateways<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    state: &Arc<AppState>,
+) {
     let gateways = state
         .store
         .lock()
@@ -1011,6 +1151,31 @@ mod tests {
             vec![("alice".to_string(), "b".to_string())]
         );
         assert!(diff_rosters(&new, &new).is_empty());
+    }
+
+    #[test]
+    fn diff_reports_label_and_role_updates_and_apply_signals_them() {
+        // A devserver rename (or role change) must reach the launcher
+        // without waiting for a membership or online change.
+        let old = vec![row("alice", "a", true)];
+        let mut renamed = row("alice", "a", true);
+        renamed.label = "new-name".to_string();
+        let diff = diff_rosters(&old, &[renamed.clone()]);
+        assert_eq!(diff.updated, vec![("alice".to_string(), "a".to_string())]);
+        assert!(diff.added.is_empty());
+        assert!(diff.flipped_online.is_empty());
+        assert!(!diff.is_empty());
+
+        let mut rt = runtime_with(old);
+        let effect = apply_roster_fetch(
+            &mut rt,
+            RosterFetch::Fresh {
+                username: "alice".into(),
+                rows: vec![renamed],
+                etag: None,
+            },
+        );
+        assert!(effect.changed, "a rename pushes to the launcher");
     }
 
     #[test]
@@ -1215,6 +1380,134 @@ mod tests {
             RosterFetch::Upstream(msg) => assert!(msg.contains("502"), "{msg}"),
             other => panic!("expected Upstream, got {other:?}"),
         }
+        server.abort();
+    }
+
+    /// A gateway in one stub: discovery (loopback http, roster_url
+    /// advertised, proxy origin inside the static grant scope so the
+    /// capability mint no-ops under the mock runtime) plus a one-row
+    /// roster.
+    async fn spawn_gateway_stub() -> (String, tokio::task::JoinHandle<()>) {
+        use axum::routing::get;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let origin = format!("http://{}", listener.local_addr().unwrap());
+        let disc_origin = origin.clone();
+        let app = axum::Router::new()
+            .route(
+                "/.well-known/chan-gateway",
+                get(move || {
+                    let o = disc_origin.clone();
+                    async move {
+                        axum::Json(serde_json::json!({
+                            "kind": "chan-gateway",
+                            "api_version": 1,
+                            "identity_origin": o,
+                            "desktop_authorize_url": format!("{o}/desktop/authorize"),
+                            "desktop_entry_url": format!("{o}/desktop/v1/devserver/entry"),
+                            "devserver_proxy_origin": "https://devserver.chan.app",
+                            "roster_url": format!("{o}/desktop/v1/devservers"),
+                        }))
+                    }
+                }),
+            )
+            .route(
+                "/desktop/v1/devservers",
+                get(|| async {
+                    axum::Json(serde_json::json!({
+                        "username": "alice",
+                        "devservers": [{
+                            "owner": "alice",
+                            "devserver_id": "a1",
+                            "label": "laptop",
+                            "online": true,
+                            "role": "owner"
+                        }]
+                    }))
+                }),
+            );
+        let handle = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        (origin, handle)
+    }
+
+    /// The blocker regression: park -> callback -> roster fetched -> poll
+    /// running. The resume must make the parked runtime resumable before
+    /// re-entering connect_gateway, or the coalesce guard reads the park
+    /// as an attempt in flight and the gateway sticks Connecting forever.
+    #[tokio::test]
+    async fn resume_after_signin_fetches_roster_and_starts_poll() {
+        let (origin, server) = spawn_gateway_stub().await;
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(Mutex::new(config::ConfigStore::at_path(
+            dir.path().join("config.json"),
+        )));
+        {
+            let mut cfg = config::Config::default();
+            cfg.gateways.push(Gateway {
+                id: "gw-feedface".to_string(),
+                url: origin.clone(),
+                label: String::new(),
+                enabled: true,
+                added_at: 0,
+            });
+            store.lock().unwrap().save(&cfg).unwrap();
+        }
+        let state = Arc::new(crate::AppState::with_store(store));
+        let app = tauri::test::mock_app();
+
+        // Park the runtime exactly the way the sign-in leg leaves it.
+        {
+            let mut rt = new_runtime(GatewayDiscovery {
+                kind: "chan-gateway".into(),
+                api_version: 1,
+                identity_origin: origin.clone(),
+                desktop_authorize_url: format!("{origin}/desktop/authorize"),
+                desktop_entry_url: format!("{origin}/desktop/v1/devserver/entry"),
+                devserver_proxy_origin: "https://devserver.chan.app".into(),
+                roster_url: Some(format!("{origin}/desktop/v1/devservers")),
+            });
+            rt.pending_signin = true;
+            rt.signin_stamp = 42;
+            let mut runtimes = state.gateway_manager.runtimes.lock().unwrap();
+            runtimes.insert("gw-feedface".to_string(), rt);
+        }
+        // The callback stored the account PAT before the resume runs.
+        crate::auth::test_gateway_pats().lock().unwrap().insert(
+            origin.clone(),
+            crate::auth::StoredPat {
+                id: "pat-1".into(),
+                secret: "s3cret".into(),
+                label: "test".into(),
+                expires_at: String::new(),
+            },
+        );
+
+        resume_gateway_signin(
+            app.handle().clone(),
+            Arc::clone(&state),
+            "gw-feedface".to_string(),
+        )
+        .await;
+
+        let view = state
+            .gateway_manager
+            .view("gw-feedface")
+            .expect("runtime lives");
+        assert!(!view.pending_signin, "the park is cleared");
+        assert_eq!(
+            view.status,
+            GatewayStatus::Connected,
+            "the roster fetch ran (last_error: {:?})",
+            view.last_error
+        );
+        assert_eq!(view.devserver_count, 1, "the stub roster row arrived");
+        assert!(
+            state.gateway_manager.runtimes.lock().unwrap()["gw-feedface"]
+                .poll_cancel
+                .is_some(),
+            "the roster poll is running"
+        );
         server.abort();
     }
 }
