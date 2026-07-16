@@ -43,4 +43,13 @@ describe("terminal-only command gate", () => {
       }),
     ).toBe(false);
   });
+
+  test("blocks the search toggle in terminal-only windows (slim tenant, no search routes)", () => {
+    expect(
+      windowModeAllowsCommand("app.search.toggle", {
+        terminalOnly: true,
+        terminalControl: false,
+      }),
+    ).toBe(false);
+  });
 });

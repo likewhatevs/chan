@@ -21,4 +21,16 @@ describe("terminal-only windows skip workspace-concept endpoints", () => {
       /if \(!ui\.terminalOnly\) \{\s*void loadScreensaverState\(\);/,
     );
   });
+
+  test("the built-in search chord dispatches through the window-mode gate", () => {
+    // The Cmd+Shift+S branch must not toggle the overlay directly: routing
+    // through runCommand is what drops it in terminal-only windows (the slim
+    // tenant serves no search routes, so the overlay would open dead).
+    expect(app).toMatch(
+      /if \(searchChord && !builtInChordSuperseded\("app\.search\.toggle"\)\) \{[\s\S]{0,400}runCommand\("app\.search\.toggle", \{\}\);/,
+    );
+    expect(app).not.toMatch(
+      /if \(searchChord && !builtInChordSuperseded\("app\.search\.toggle"\)\) \{[\s\S]{0,400}searchPanel\.open = !searchPanel\.open;/,
+    );
+  });
 });

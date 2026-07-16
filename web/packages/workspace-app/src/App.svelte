@@ -620,8 +620,12 @@
         ? e.metaKey && !e.ctrlKey && !e.altKey && e.shiftKey && e.code === "KeyS"
         : e.ctrlKey && !e.metaKey && e.altKey && !e.shiftKey && e.code === "KeyS";
     if (searchChord && !builtInChordSuperseded("app.search.toggle")) {
+      // Swallow the chord either way (the browser's Save dialog must not
+      // open), but route the toggle through runCommand: its window-mode gate
+      // drops it in terminal-only/control windows, where the slim tenant
+      // serves no search routes and the overlay would 404.
       e.preventDefault();
-      searchPanel.open = !searchPanel.open;
+      runCommand("app.search.toggle", {});
       return;
     }
     // Cmd+. enters Hybrid Nav. Cmd+, / Ctrl+, opens Settings above so the
