@@ -59,7 +59,10 @@ const IDENTITY_ORIGIN: &str = "https://id.chan.app";
 const AUTHORIZE_URL: &str = "https://id.chan.app/desktop/authorize";
 const REDIRECT_URI: &str = "chan://auth/callback";
 const SCOPES: &str = "tunnel";
-const DESKTOP_CONNECT_SCOPES: &str = "desktop.connect";
+/// Account-level gateway scope: one PAT reads the account's devserver
+/// roster and mints entries for any of its devservers (own or shared).
+/// Requested as the SOLE scope; the gateway rejects mixed requests.
+const DESKTOP_ACCOUNT_SCOPES: &str = "desktop.account";
 const EXPIRES_IN_SECONDS: u64 = 30 * 24 * 60 * 60;
 /// Bound on the redeem round trip. The deep-link caller blocks while
 /// we redeem, so fail fast enough to keep the app responsive; the
@@ -144,7 +147,7 @@ struct PendingAuth {
     /// redeems the callback's one-time code against this exact origin,
     /// never one named by the callback URL itself.
     identity_origin: String,
-    resume_devserver_id: Option<String>,
+    resume_gateway_id: Option<String>,
 }
 
 fn pending_state() -> &'static Mutex<Option<PendingAuth>> {
@@ -192,7 +195,7 @@ pub fn open_signin(app: AppHandle) -> Result<(), String> {
         state: state.clone(),
         account: KEYCHAIN_ACCOUNT.to_string(),
         identity_origin: IDENTITY_ORIGIN.to_string(),
-        resume_devserver_id: None,
+        resume_gateway_id: None,
     });
 
     let label = format!("chan-desktop @ {}", hostname());
@@ -244,14 +247,14 @@ pub fn open_gateway_signin(
     app: &AppHandle,
     identity_origin: &str,
     authorize_url: &str,
-    devserver_id: &str,
+    resume_id: &str,
 ) -> Result<(), String> {
     let state = new_state()?;
     *pending_state().lock().unwrap() = Some(PendingAuth {
         state: state.clone(),
         account: gateway_account(identity_origin),
         identity_origin: identity_origin.to_string(),
-        resume_devserver_id: Some(devserver_id.to_string()),
+        resume_gateway_id: Some(resume_id.to_string()),
     });
     let label = format!("chan-desktop @ {}", hostname());
     let url = url::Url::parse_with_params(
@@ -260,7 +263,7 @@ pub fn open_gateway_signin(
             ("redirect_uri", REDIRECT_URI.to_string()),
             ("state", state),
             ("label", label),
-            ("scopes", DESKTOP_CONNECT_SCOPES.to_string()),
+            ("scopes", DESKTOP_ACCOUNT_SCOPES.to_string()),
             ("expires_in", EXPIRES_IN_SECONDS.to_string()),
         ],
     )
@@ -278,9 +281,9 @@ pub fn open_gateway_signin(
 /// not just the one this callback belonged to.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CallbackOutcome {
-    /// The PAT was stored and AUTH_CHANGED emitted. `resume_devserver_id`
-    /// names the devserver whose connect launched this sign-in, if any.
-    SignedIn { resume_devserver_id: Option<String> },
+    /// The PAT was stored and AUTH_CHANGED emitted. `resume_gateway_id`
+    /// names the gateway whose connect launched this sign-in, if any.
+    SignedIn { resume_gateway_id: Option<String> },
     /// The callback failed and AUTH_ERROR was emitted. `consumed_pending` is
     /// true when the failure popped the in-flight sign-in state; false means
     /// the URL itself was malformed and any waiting sign-in is still live.
@@ -305,7 +308,7 @@ pub fn handle_callback(app: &AppHandle, raw: &str) -> CallbackOutcome {
             code,
             identity_origin,
             account,
-            resume_devserver_id,
+            resume_gateway_id,
         } => {
             let redeemed = match redeem_code(&identity_origin, &code) {
                 Ok(r) => r,
@@ -338,9 +341,7 @@ pub fn handle_callback(app: &AppHandle, raw: &str) -> CallbackOutcome {
                 },
             };
             let _ = app.emit(AUTH_CHANGED, &status);
-            CallbackOutcome::SignedIn {
-                resume_devserver_id,
-            }
+            CallbackOutcome::SignedIn { resume_gateway_id }
         }
         CallbackAction::Fail {
             message,
@@ -437,7 +438,7 @@ enum CallbackAction {
         code: String,
         identity_origin: String,
         account: String,
-        resume_devserver_id: Option<String>,
+        resume_gateway_id: Option<String>,
     },
     /// Emit AUTH_ERROR. `consumed_pending` as on [`CallbackOutcome::Failed`].
     Fail {
@@ -504,7 +505,7 @@ fn classify_callback(raw: &str, pending: &mut Option<PendingAuth>) -> CallbackAc
         code,
         identity_origin: expected.identity_origin,
         account: expected.account,
-        resume_devserver_id: expected.resume_devserver_id,
+        resume_gateway_id: expected.resume_gateway_id,
     }
 }
 
@@ -559,7 +560,7 @@ mod tests {
             state: state.to_string(),
             account: "id.chan.app".to_string(),
             identity_origin: "https://id.example".to_string(),
-            resume_devserver_id: Some("ds-1".to_string()),
+            resume_gateway_id: Some("ds-1".to_string()),
         })
     }
 
@@ -575,12 +576,12 @@ mod tests {
                 code,
                 identity_origin,
                 account,
-                resume_devserver_id,
+                resume_gateway_id,
             } => {
                 assert_eq!(code, "one-time-abc");
                 assert_eq!(identity_origin, "https://id.example");
                 assert_eq!(account, "id.chan.app");
-                assert_eq!(resume_devserver_id.as_deref(), Some("ds-1"));
+                assert_eq!(resume_gateway_id.as_deref(), Some("ds-1"));
             }
             other => panic!("expected Redeem, got {other:?}"),
         }

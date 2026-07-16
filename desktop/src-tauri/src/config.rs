@@ -27,7 +27,7 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use chan_server::{
     DevserverEntry, DevserverInput, DevserverRegistry, DevserverStatus, GatewayEntry, GatewayInput,
-    GatewayRegistry, GatewayStatus,
+    GatewayRegistry,
 };
 use serde::{Deserialize, Serialize};
 
@@ -821,10 +821,9 @@ pub type GatewayRemoveHook = Arc<dyn Fn(&str) + Send + Sync>;
 /// [`ConfigStore`] handle like [`DevserverConfigRegistry`], so gateway CRUD
 /// serializes through the same lock as every other config write.
 ///
-/// The projection reports config state only: the volatile
-/// [`GatewayEntry`](chan_server::GatewayEntry) fields (`status`,
-/// `pending_signin`, `devserver_count`, `last_error`) ride their
-/// disconnected defaults.
+/// The volatile [`GatewayEntry`](chan_server::GatewayEntry) fields
+/// (`status`, `pending_signin`, `devserver_count`, `last_error`) project
+/// from the gateway manager's runtime map.
 pub struct GatewayConfigRegistry {
     store: Arc<Mutex<ConfigStore>>,
     /// Filled (once the `AppHandle` exists) with the cascade teardown;
@@ -832,27 +831,40 @@ pub struct GatewayConfigRegistry {
     /// surfaces without live connections) -- `remove` then only drops the
     /// config row.
     on_remove: Arc<OnceLock<GatewayRemoveHook>>,
+    /// The live runtime map (shared with `AppState.gateway_manager`), so
+    /// `list` reports each row's connection state; a gateway without a
+    /// runtime renders the disconnected defaults.
+    manager: Arc<crate::gateway::GatewayManager>,
 }
 
 impl GatewayConfigRegistry {
     pub fn new(
         store: Arc<Mutex<ConfigStore>>,
         on_remove: Arc<OnceLock<GatewayRemoveHook>>,
+        manager: Arc<crate::gateway::GatewayManager>,
     ) -> Self {
-        Self { store, on_remove }
+        Self {
+            store,
+            on_remove,
+            manager,
+        }
     }
 }
 
-fn entry_from_gateway(g: &Gateway) -> GatewayEntry {
+fn entry_from_gateway(
+    g: &Gateway,
+    view: Option<crate::gateway::GatewayRuntimeView>,
+) -> GatewayEntry {
+    let view = view.unwrap_or_default();
     GatewayEntry {
         id: g.id.clone(),
         url: g.url.clone(),
         label: g.label.clone(),
         enabled: g.enabled,
-        status: GatewayStatus::Disconnected,
-        pending_signin: false,
-        devserver_count: 0,
-        last_error: None,
+        status: view.status,
+        pending_signin: view.pending_signin,
+        devserver_count: view.devserver_count,
+        last_error: view.last_error,
     }
 }
 
@@ -863,7 +875,12 @@ impl GatewayRegistry for GatewayConfigRegistry {
         let store = self.store.lock().unwrap();
         store
             .get()
-            .map(|cfg| cfg.gateways.iter().map(entry_from_gateway).collect())
+            .map(|cfg| {
+                cfg.gateways
+                    .iter()
+                    .map(|g| entry_from_gateway(g, self.manager.view(&g.id)))
+                    .collect()
+            })
             .unwrap_or_default()
     }
 
@@ -883,7 +900,7 @@ impl GatewayRegistry for GatewayConfigRegistry {
         };
         cfg.gateways.push(gw.clone());
         store.save(&cfg).map_err(|e| e.to_string())?;
-        Ok(entry_from_gateway(&gw))
+        Ok(entry_from_gateway(&gw, None))
     }
 
     fn remove(&self, id: &str) -> Result<bool, String> {
@@ -916,11 +933,16 @@ pub struct GatewayMigration {
     pub created: Vec<Gateway>,
     /// Legacy devserver rows dropped after conversion.
     pub converted_rows: usize,
+    /// Rows kept as plain devservers with their legacy markers cleared
+    /// (their URL no longer parses). Counted separately because the
+    /// clearing alone must still persist, or every startup re-visits
+    /// those rows.
+    pub cleared_marker_rows: usize,
 }
 
 impl GatewayMigration {
     pub fn changed(&self) -> bool {
-        self.converted_rows > 0
+        self.converted_rows > 0 || self.cleared_marker_rows > 0
     }
 }
 
@@ -947,6 +969,7 @@ fn split_legacy_gateway_rows(cfg: &mut Config) -> GatewayMigration {
         let Ok(origin) = normalize_gateway_url(&row.url) else {
             row.gateway_owner = None;
             row.gateway_devserver_id = None;
+            outcome.cleared_marker_rows += 1;
             cfg.devservers.push(row);
             continue;
         };
@@ -1204,7 +1227,7 @@ pub fn clamp_rect_to_bbox(
     (cx, cy, w, h)
 }
 
-fn now_millis() -> u64 {
+pub(crate) fn now_millis() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
@@ -1228,6 +1251,7 @@ fn config_path() -> io::Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chan_server::GatewayStatus;
 
     fn empty_connecting() -> Arc<Mutex<HashSet<String>>> {
         Arc::new(Mutex::new(HashSet::new()))
@@ -2222,7 +2246,36 @@ mod tests {
         assert_eq!(cfg.devservers.len(), 1);
         assert_eq!(cfg.devservers[0].gateway_owner, None);
         assert_eq!(cfg.devservers[0].gateway_devserver_id, None);
-        assert!(!outcome.changed());
+        // Clearing alone still counts as a change: the driver must persist
+        // it or every startup re-visits the row.
+        assert_eq!(outcome.converted_rows, 0);
+        assert_eq!(outcome.cleared_marker_rows, 1);
+        assert!(outcome.changed());
+    }
+
+    #[test]
+    fn migration_driver_persists_marker_clearing_alone() {
+        // An unparseable legacy row is the ONLY change: the cleared
+        // markers must reach disk, making the second run a no-op.
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(Mutex::new(ConfigStore {
+            path: dir.path().join("config.json"),
+        }));
+        {
+            let mut guard = store.lock().unwrap();
+            let cfg = Config {
+                devservers: vec![legacy_gateway_row("ds1", "not a url", "broken")],
+                ..Default::default()
+            };
+            guard.save(&cfg).unwrap();
+        }
+        let first = migrate_legacy_gateway_rows(&store).unwrap();
+        assert!(first.changed());
+        let persisted = store.lock().unwrap().get().unwrap();
+        assert_eq!(persisted.devservers[0].gateway_owner, None);
+        assert_eq!(persisted.devservers[0].gateway_devserver_id, None);
+        let second = migrate_legacy_gateway_rows(&store).unwrap();
+        assert!(!second.changed(), "second run re-visits nothing");
     }
 
     #[test]
@@ -2259,7 +2312,11 @@ mod tests {
         let store = Arc::new(Mutex::new(ConfigStore {
             path: dir.path().join("config.json"),
         }));
-        let reg = GatewayConfigRegistry::new(Arc::clone(&store), Arc::new(OnceLock::new()));
+        let reg = GatewayConfigRegistry::new(
+            Arc::clone(&store),
+            Arc::new(OnceLock::new()),
+            Arc::new(crate::gateway::GatewayManager::default()),
+        );
         let added = reg
             .add(GatewayInput {
                 url: "https://ID.chan.app/consent?pick=1".to_string(),
@@ -2310,7 +2367,11 @@ mod tests {
             }))
             .ok()
             .expect("hook installs once");
-        let reg = GatewayConfigRegistry::new(Arc::clone(&store), Arc::clone(&hook_cell));
+        let reg = GatewayConfigRegistry::new(
+            Arc::clone(&store),
+            Arc::clone(&hook_cell),
+            Arc::new(crate::gateway::GatewayManager::default()),
+        );
         assert_eq!(reg.remove("gw-deadbeef"), Ok(false));
         assert!(removed_ids.lock().unwrap().is_empty());
         let added = reg

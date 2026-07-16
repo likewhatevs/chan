@@ -7,6 +7,7 @@ mod devserver;
 mod download;
 mod dropped_paths;
 mod embedded;
+mod gateway;
 mod linux_gui_stack;
 mod native_dialog;
 mod registry;
@@ -198,6 +199,10 @@ pub struct AppState {
     /// the same cascade teardown the Tauri command does. Filled once Tauri
     /// setup runs.
     pub gateway_remove_hook: Arc<OnceLock<config::GatewayRemoveHook>>,
+    /// The managed per-gateway runtime map: connect state, roster cache,
+    /// poll handles. Shared with the config registry (its live-state
+    /// projection) and every gateway operation.
+    pub gateway_manager: Arc<gateway::GatewayManager>,
     /// Set when the user confirmed the quit dialog: the re-fired
     /// `ExitRequested` (from `app.exit(0)` in the dialog callback)
     /// must pass instead of prompting again.
@@ -2123,6 +2128,18 @@ fn clear_awaiting_signin(app: &tauri::AppHandle, state: &Arc<AppState>, id: &str
         .is_some();
     if removed {
         signal_devserver_rows_changed(app, state);
+    }
+}
+
+/// Resume the winner of a completed sign-in. Gateway ids (`gw-*`) resume
+/// through the gateway manager; anything else is a devserver row id from
+/// the legacy per-row gateway connect, which resumes that row's connect
+/// (that path lasts until the row dispatch goes through the manager).
+async fn resume_signed_in(app: tauri::AppHandle, state: Arc<AppState>, id: String) {
+    if id.starts_with("gw-") {
+        gateway::resume_gateway_signin(app, state, id).await;
+    } else if let Err(e) = connect_devserver_impl(app.clone(), state, id).await {
+        let _ = app.emit(auth::AUTH_ERROR, e);
     }
 }
 
@@ -4247,6 +4264,7 @@ fn main() {
         devserver_awaiting_signin: Arc::new(Mutex::new(HashMap::new())),
         devserver_remove_hook: Arc::new(OnceLock::new()),
         gateway_remove_hook: Arc::new(OnceLock::new()),
+        gateway_manager: Arc::new(gateway::GatewayManager::default()),
         quit_confirmed: std::sync::atomic::AtomicBool::new(false),
         quit_prompt_open: std::sync::atomic::AtomicBool::new(false),
     });
@@ -4272,21 +4290,17 @@ fn main() {
             // the embedded host so the launcher's devserver registry persists
             // through the same lock and its HTTP DELETE can reap a live connection.
             let config_store = Arc::clone(&state_for_setup.store);
-            let remove_hook = Arc::clone(&state_for_setup.devserver_remove_hook);
-            let gateway_remove_hook = Arc::clone(&state_for_setup.gateway_remove_hook);
-            let conns_for_registry = Arc::clone(&state_for_setup.devservers);
-            let connecting_for_registry = Arc::clone(&state_for_setup.devserver_connecting);
-            let awaiting_for_registry = Arc::clone(&state_for_setup.devserver_awaiting_signin);
-            let feed_for_registry = Arc::clone(&state_for_setup.devserver_feed);
-            match tauri::async_runtime::block_on(embedded::EmbeddedServer::start(
+            let registry_deps = embedded::RegistryDeps {
                 config_store,
-                remove_hook,
-                gateway_remove_hook,
-                conns_for_registry,
-                connecting_for_registry,
-                awaiting_for_registry,
-                feed_for_registry,
-            )) {
+                devserver_remove_hook: Arc::clone(&state_for_setup.devserver_remove_hook),
+                gateway_remove_hook: Arc::clone(&state_for_setup.gateway_remove_hook),
+                gateway_manager: Arc::clone(&state_for_setup.gateway_manager),
+                devserver_conns: Arc::clone(&state_for_setup.devservers),
+                devserver_connecting: Arc::clone(&state_for_setup.devserver_connecting),
+                devserver_awaiting_signin: Arc::clone(&state_for_setup.devserver_awaiting_signin),
+                devserver_feed: Arc::clone(&state_for_setup.devserver_feed),
+            };
+            match tauri::async_runtime::block_on(embedded::EmbeddedServer::start(registry_deps)) {
                 Ok(server) => {
                     if state_for_setup.embedded.set(server).is_err() {
                         tracing::warn!("embedded local server initialized more than once");
@@ -4312,6 +4326,35 @@ fn main() {
                             teardown_devserver_connection(&app_for_teardown, &state, id);
                         },
                     ));
+                    // The gateway analogue: the launcher's HTTP DELETE runs
+                    // the full cascade (poll stop, rostered-connection
+                    // teardown, roster drop). The registry's remove already
+                    // dropped the config row, so the cascade only reaps
+                    // runtime state.
+                    let app_for_gw_remove = app.handle().clone();
+                    let _ = state_for_setup.gateway_remove_hook.set(Arc::new(
+                        move |id: &str| {
+                            let app = app_for_gw_remove.clone();
+                            let id = id.to_string();
+                            tauri::async_runtime::spawn(async move {
+                                let state = Arc::clone(&app.state::<Arc<AppState>>());
+                                gateway::cascade_disconnect(
+                                    &app,
+                                    &state,
+                                    &id,
+                                    gateway::CascadeReason::Removed,
+                                )
+                                .await;
+                            });
+                        },
+                    ));
+                    // Reconnect enabled gateways from the last run. Never
+                    // opens a browser: PAT-less rows park as sign-in
+                    // required until the user clicks Connect.
+                    gateway::autoconnect_enabled_gateways(
+                        app.handle(),
+                        &state_for_setup,
+                    );
                     // Spawn the `cs window <op>` consumer now that the
                     // AppHandle exists: it owns the bridge receiver and
                     // turns lifecycle requests into Tauri window actions.
@@ -4356,20 +4399,16 @@ fn main() {
             app.deep_link().on_open_url(move |event| {
                 for url in event.urls() {
                     match auth::handle_callback(&app_for_links, url.as_str()) {
-                        auth::CallbackOutcome::SignedIn { resume_devserver_id } => {
+                        auth::CallbackOutcome::SignedIn { resume_gateway_id } => {
                             // Any processed callback pops the single pending-
                             // auth slot, so every waiting row's browser leg is
                             // settled: clear them all, then resume the winner.
                             clear_all_awaiting_signin(&app_for_links, &state_for_links);
-                            if let Some(id) = resume_devserver_id {
+                            if let Some(id) = resume_gateway_id {
                                 let app = app_for_links.clone();
                                 let state = Arc::clone(&state_for_links);
                                 tauri::async_runtime::spawn(async move {
-                                    if let Err(e) =
-                                        connect_devserver_impl(app.clone(), state, id).await
-                                    {
-                                        let _ = app.emit(auth::AUTH_ERROR, e);
-                                    }
+                                    resume_signed_in(app, state, id).await;
                                 });
                             }
                         }
@@ -4394,17 +4433,13 @@ fn main() {
             if let Ok(Some(urls)) = app.deep_link().get_current() {
                 for url in urls {
                     match auth::handle_callback(app.handle(), url.as_str()) {
-                        auth::CallbackOutcome::SignedIn { resume_devserver_id } => {
+                        auth::CallbackOutcome::SignedIn { resume_gateway_id } => {
                             clear_all_awaiting_signin(app.handle(), &state_for_setup);
-                            if let Some(id) = resume_devserver_id {
+                            if let Some(id) = resume_gateway_id {
                                 let app_handle = app.handle().clone();
                                 let state = Arc::clone(&state_for_setup);
                                 tauri::async_runtime::spawn(async move {
-                                    if let Err(e) =
-                                        connect_devserver_impl(app_handle.clone(), state, id).await
-                                    {
-                                        let _ = app_handle.emit(auth::AUTH_ERROR, e);
-                                    }
+                                    resume_signed_in(app_handle, state, id).await;
                                 });
                             }
                         }

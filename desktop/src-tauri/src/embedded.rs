@@ -51,16 +51,32 @@ pub struct EmbeddedServer {
     launcher_token: String,
 }
 
+/// Everything the launcher's registries and stores need from the desktop,
+/// bundled so [`EmbeddedServer::start`] stays one readable argument as the
+/// registry surface grows. All handles are shared with `AppState`.
+pub struct RegistryDeps {
+    pub config_store: Arc<Mutex<ConfigStore>>,
+    pub devserver_remove_hook: Arc<OnceLock<DevserverRemoveHook>>,
+    pub gateway_remove_hook: Arc<OnceLock<GatewayRemoveHook>>,
+    pub gateway_manager: Arc<crate::gateway::GatewayManager>,
+    pub devserver_conns: Arc<DevserverConns>,
+    pub devserver_connecting: Arc<Mutex<HashSet<String>>>,
+    pub devserver_awaiting_signin: Arc<Mutex<HashMap<String, Instant>>>,
+    pub devserver_feed: Arc<crate::DevserverFeed>,
+}
+
 impl EmbeddedServer {
-    pub async fn start(
-        config_store: Arc<Mutex<ConfigStore>>,
-        devserver_remove_hook: Arc<OnceLock<DevserverRemoveHook>>,
-        gateway_remove_hook: Arc<OnceLock<GatewayRemoveHook>>,
-        devserver_conns: Arc<DevserverConns>,
-        devserver_connecting: Arc<Mutex<HashSet<String>>>,
-        devserver_awaiting_signin: Arc<Mutex<HashMap<String, Instant>>>,
-        devserver_feed: Arc<crate::DevserverFeed>,
-    ) -> Result<Self, String> {
+    pub async fn start(deps: RegistryDeps) -> Result<Self, String> {
+        let RegistryDeps {
+            config_store,
+            devserver_remove_hook,
+            gateway_remove_hook,
+            gateway_manager,
+            devserver_conns,
+            devserver_connecting,
+            devserver_awaiting_signin,
+            devserver_feed,
+        } = deps;
         let library = chan_workspace::Library::open()
             .map_err(|e| format!("opening chan workspace registry for embedded server: {e}"))?;
         // Install the desktop bridge: a window-ops channel (the consumer
@@ -108,6 +124,7 @@ impl EmbeddedServer {
         host.install_gateway_registry(Arc::new(GatewayConfigRegistry::new(
             Arc::clone(&config_store),
             gateway_remove_hook,
+            gateway_manager,
         )));
         // Install the local-library pane-highlight colour store over the
         // SAME shared desktop config the devserver registry uses, so the host reads
