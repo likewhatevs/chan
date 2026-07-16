@@ -4,6 +4,31 @@ All notable changes to this project will be documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v0.70.0] - 2026-07-16
+
+v0.70.0 makes gateways first-class in chan-desktop: add a gateway by URL, sign in once for your account, and every devserver you own or that is shared with you appears in the launcher live - connect, open windows, and use the full command vocabulary even on self-hosted gateways. A new Gateways screen flips out of the Computers list, notification bubbles replace the error banner, and terminal tabs on gateway-backed devservers no longer go dead after idling.
+
+### Added
+
+- **First-class gateways in chan-desktop.** The Computers title flips to a new Gateways screen: add a gateway by URL, Connect to sign in once for your account, and the gateway's devservers - yours and the ones shared with you - appear under Computers automatically, appearing, disappearing, and flipping online state within seconds (rosters poll every 10s with ETag, so a quiet gateway costs almost nothing). Rows show "via <gateway>"; connect and disconnect work per row exactly like plain devservers. Disconnecting a gateway closes its devserver windows and greys its rows; removing it also drops the entry (your sign-in stays in the system keyring). Bulk select covers gateways too (deleted last, after their rows). The old flow - a gateway URL pasted into the Add devserver form, picking ONE devserver at sign-in - is gone; existing picked rows migrate into gateway entries automatically at first startup.
+- **Launcher notification bubbles.** Corner bubbles (styled after the workspace notices) replace the launcher's error banner: each names its source (gateway, devserver, or the desktop), expands on click to the full message, and dismisses. Gateway life-cycle events narrate there - sign-in required, sign-in stored, gateway unreachable, devserver offline, a too-old gateway, the migration summary.
+- **`chan open <gateway-url>` registers the gateway.** Opening a gateway URL against a running desktop converts it into a gateway entry (visible on the Gateways screen immediately) instead of a failed devserver dial; plain devserver URLs behave exactly as before. No CLI changes - old CLIs work unchanged, and the desktop answers the handoff at the same speed.
+
+### Changed
+
+- **One sign-in per gateway account.** The gateway consent page authorizes your account - "chan-desktop will get access to your account on this gateway: your devservers and devservers shared with you." - with no per-devserver pick. Existing desktop sign-ins keep working for already-connected rows, but cannot list the account roster: the first gateway Connect after upgrading asks you to sign in once more, then everything rides the account token.
+- **Full command vocabulary on self-hosted gateways.** Windows served from ANY gateway's proxy origin now get the same IPC grants as `*.devserver.chan.app` windows (upload/download, all clipboard commands, zoom chords, open-in-browser): the desktop mints a runtime capability at first gateway connect, scoped to exactly that gateway's proxy wildcard. Already-open windows gain the grant live, no reload. One caveat, by Tauri design: a removed gateway's grant persists until the app exits (grants cannot be un-minted at runtime).
+
+### Fixed
+
+- **Terminal tabs on gateway-backed devservers no longer go dead after idle.** Two layers conspired: the gateway's WebSocket bridge cut any connection quiet in ONE direction for 300s (a terminal streaming output still died 300s after the last keystroke), and the terminal socket was the only one with neither a heartbeat nor reconnect - a dead tab stayed dead until a full reload. The terminal socket now heartbeats (20s ping, 45s read-deadline) and reconnects with capped backoff into the SAME session - scrollback preserved, no reload; the bridge cuts only when BOTH directions are idle and always sends a real Close frame, so the browser notices promptly instead of holding a zombie socket. Doc and scene sync sockets gain the same bridge protection and faster heal on tunnel redials.
+
+### Operators
+
+- Identity: new PAT scope `desktop.account` (must be requested alone; `tunnel` and `desktop.connect` remain for shipped clients). New roster endpoint `GET /desktop/v1/devservers` (Bearer PAT, `desktop.account`): owned + shared devservers with live online state, `ETag`/`If-None-Match` 304, 401 only for a dead token or wrong scope (clients cascade), 502 when profile or proxy is degraded (clients keep the last-known roster; the endpoint never serves a degraded all-offline 200). Roster reads bump `last_used_at` but skip the per-read audit row. Discovery advertises `roster_url` (additive; `api_version` stays 1). The entry mint accepts `desktop.connect` OR `desktop.account`.
+- devserver-proxy: the bridged-WebSocket idle cut is now both-directions-idle (default 300s) and announces itself with a WS Close frame to both halves; idle cuts log at info.
+- e2e: `gateway-zone.sh` gains a browser-free `scenario_roster`; the consent-page browser scenario rides the account flow (no picker).
+
 ## [v0.69.1] - 2026-07-16
 
 v0.69.1 lets a tunnel-mode devserver restart gracefully under systemd (fd-preserving, like the local path already did) and switches the chan-devserver container image to a rootless, PPA-free chan install.
