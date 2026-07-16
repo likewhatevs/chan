@@ -17,7 +17,10 @@ use chan_server::{
 };
 use tokio::sync::{mpsc, watch, Notify};
 
-use crate::config::{ConfigStore, DevserverConfigRegistry, DevserverRemoveHook};
+use crate::config::{
+    ConfigStore, DevserverConfigRegistry, DevserverRemoveHook, GatewayConfigRegistry,
+    GatewayRemoveHook,
+};
 use crate::devserver::DevserverConns;
 use crate::serve;
 
@@ -52,6 +55,7 @@ impl EmbeddedServer {
     pub async fn start(
         config_store: Arc<Mutex<ConfigStore>>,
         devserver_remove_hook: Arc<OnceLock<DevserverRemoveHook>>,
+        gateway_remove_hook: Arc<OnceLock<GatewayRemoveHook>>,
         devserver_conns: Arc<DevserverConns>,
         devserver_connecting: Arc<Mutex<HashSet<String>>>,
         devserver_awaiting_signin: Arc<Mutex<HashMap<String, Instant>>>,
@@ -97,6 +101,13 @@ impl EmbeddedServer {
             devserver_connecting,
             devserver_awaiting_signin,
             devserver_feed,
+        )));
+        // Install the launcher's gateway registry over the SAME shared config,
+        // so the `/api/library/gateways` CRUD persists beside the devserver
+        // rows. Headless surfaces install none (empty list, 404 mutation).
+        host.install_gateway_registry(Arc::new(GatewayConfigRegistry::new(
+            Arc::clone(&config_store),
+            gateway_remove_hook,
         )));
         // Install the local-library pane-highlight colour store over the
         // SAME shared desktop config the devserver registry uses, so the host reads

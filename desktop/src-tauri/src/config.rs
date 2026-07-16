@@ -25,7 +25,10 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use chan_server::{DevserverEntry, DevserverInput, DevserverRegistry, DevserverStatus};
+use chan_server::{
+    DevserverEntry, DevserverInput, DevserverRegistry, DevserverStatus, GatewayEntry, GatewayInput,
+    GatewayRegistry, GatewayStatus,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::devserver::DevserverConns;
@@ -124,6 +127,41 @@ pub struct Devserver {
     pub gateway_owner: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gateway_devserver_id: Option<String>,
+}
+
+/// A gateway the desktop holds an account-level connection to: the public
+/// identity origin the user added on the launcher's Gateways screen. The
+/// desktop signs in once per gateway account, polls the gateway's devserver
+/// roster, and synthesizes the rostered devservers into the launcher list.
+/// Only this connection recipe persists; roster rows are volatile and the
+/// account PAT lives in the OS keyring (keyed by the identity origin), so a
+/// removed-then-re-added gateway reconnects without a fresh sign-in.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Gateway {
+    /// Stable desktop-minted id (`gw-` + 8 lowercase hex). The hex segment
+    /// (sans prefix) rides inside synthesized devserver row ids, whose
+    /// charset is pinned to `[A-Za-z0-9_-]`.
+    pub id: String,
+    /// The gateway's public identity origin, scheme included, no path
+    /// (`https://id.chan.app`). Normalized to an origin at add time.
+    pub url: String,
+    /// Optional user label for the gateway badge; empty falls back to the
+    /// URL host.
+    #[serde(default)]
+    pub label: String,
+    /// Connect intent: enabled gateways auto-connect at startup. Connect
+    /// persists `true`, disconnect persists `false`. Defaults `true` so a
+    /// hand-added row behaves like a freshly added one.
+    #[serde(default = "gateway_enabled_default")]
+    pub enabled: bool,
+    /// Wall-clock millis when the gateway was added (or when its legacy
+    /// devserver row was converted).
+    #[serde(default)]
+    pub added_at: u64,
+}
+
+fn gateway_enabled_default() -> bool {
+    true
 }
 
 /// Per-window layout snapshot pushed when a workspace webview closes,
@@ -282,6 +320,13 @@ pub struct Config {
     /// devserver rotates them); only the connection recipe is.
     #[serde(default)]
     pub devservers: Vec<Devserver>,
+    /// Configured gateways: account-level connections whose devserver
+    /// rosters the desktop synthesizes into the launcher list. Only the
+    /// connection recipe persists (see [`Gateway`]); the rostered rows are
+    /// volatile. `#[serde(default)]`: configs predating gateways read empty,
+    /// and a downgrade ignores the unknown field.
+    #[serde(default)]
+    pub gateways: Vec<Gateway>,
     /// LRU stack of closed window configs. Newest at index 0. A
     /// fresh workspace webview pops the most-recent matching entry on
     /// open so the user re-enters the same panes / tabs / overlays
@@ -751,6 +796,231 @@ impl DevserverRegistry for DevserverConfigRegistry {
         }
         Ok(true)
     }
+}
+
+/// Normalize a gateway URL to its origin: scheme + host [+ non-default
+/// port], path/query/fragment dropped. Rejects non-http(s) schemes and
+/// hostless URLs; everything after the origin is user noise (a pasted
+/// consent-page URL still yields the right gateway).
+pub fn normalize_gateway_url(raw: &str) -> Result<String, String> {
+    let parsed = url::Url::parse(raw.trim()).map_err(|e| format!("invalid gateway URL: {e}"))?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err("gateway URL must be http(s)".to_string());
+    }
+    if parsed.host_str().is_none() {
+        return Err("gateway URL needs a host".to_string());
+    }
+    Ok(parsed.origin().ascii_serialization())
+}
+
+/// Mint a gateway id: `gw-` + 8 lowercase hex chars from the OS CSPRNG.
+/// Callers dedup against the config's existing ids (four random bytes make
+/// startup-collisions astronomically unlikely, but a config file is
+/// forever).
+fn mint_gateway_id() -> Result<String, String> {
+    let mut b = [0u8; 4];
+    getrandom::getrandom(&mut b).map_err(|e| format!("CSPRNG unavailable: {e}"))?;
+    Ok(format!(
+        "gw-{:02x}{:02x}{:02x}{:02x}",
+        b[0], b[1], b[2], b[3]
+    ))
+}
+
+fn mint_unused_gateway_id(existing: &[Gateway]) -> Result<String, String> {
+    loop {
+        let id = mint_gateway_id()?;
+        if !existing.iter().any(|g| g.id == id) {
+            return Ok(id);
+        }
+    }
+}
+
+/// Side effect run after a gateway row is removed via the registry's
+/// [`remove`](chan_server::GatewayRegistry::remove) (the HTTP `DELETE`
+/// path), so that path runs the same cascade the Tauri command does (stop
+/// the roster poll, tear down rostered connections, drop the roster rows).
+/// Set once, after the Tauri `AppHandle` exists, via the shared
+/// [`OnceLock`] cell -- mirror of [`DevserverRemoveHook`]. A no-op when the
+/// gateway wasn't connected.
+pub type GatewayRemoveHook = Arc<dyn Fn(&str) + Send + Sync>;
+
+/// chan-desktop's [`GatewayRegistry`](chan_server::GatewayRegistry)
+/// implementation -- the bridge the launcher's `/api/library/gateways`
+/// routes reach through `WorkspaceHost::gateway_registry`. Wraps the SHARED
+/// [`ConfigStore`] handle like [`DevserverConfigRegistry`], so gateway CRUD
+/// serializes through the same lock as every other config write.
+///
+/// The projection reports config state only: the volatile
+/// [`GatewayEntry`](chan_server::GatewayEntry) fields (`status`,
+/// `pending_signin`, `devserver_count`, `last_error`) ride their
+/// disconnected defaults.
+pub struct GatewayConfigRegistry {
+    store: Arc<Mutex<ConfigStore>>,
+    /// Filled (once the `AppHandle` exists) with the cascade teardown;
+    /// `remove` fires it after dropping a row. Empty until then (and on
+    /// surfaces without live connections) -- `remove` then only drops the
+    /// config row.
+    on_remove: Arc<OnceLock<GatewayRemoveHook>>,
+}
+
+impl GatewayConfigRegistry {
+    pub fn new(
+        store: Arc<Mutex<ConfigStore>>,
+        on_remove: Arc<OnceLock<GatewayRemoveHook>>,
+    ) -> Self {
+        Self { store, on_remove }
+    }
+}
+
+fn entry_from_gateway(g: &Gateway) -> GatewayEntry {
+    GatewayEntry {
+        id: g.id.clone(),
+        url: g.url.clone(),
+        label: g.label.clone(),
+        enabled: g.enabled,
+        status: GatewayStatus::Disconnected,
+        pending_signin: false,
+        devserver_count: 0,
+        last_error: None,
+    }
+}
+
+impl GatewayRegistry for GatewayConfigRegistry {
+    fn list(&self) -> Vec<GatewayEntry> {
+        // Infallible by contract (mirrors the devserver list): a read error
+        // surfaces as an empty list, not a 500.
+        let store = self.store.lock().unwrap();
+        store
+            .get()
+            .map(|cfg| cfg.gateways.iter().map(entry_from_gateway).collect())
+            .unwrap_or_default()
+    }
+
+    fn add(&self, input: GatewayInput) -> Result<GatewayEntry, String> {
+        let url = normalize_gateway_url(&input.url)?;
+        let mut store = self.store.lock().unwrap();
+        let mut cfg = store.get().map_err(|e| e.to_string())?;
+        if cfg.gateways.iter().any(|g| g.url == url) {
+            return Err(format!("gateway already configured: {url}"));
+        }
+        let gw = Gateway {
+            id: mint_unused_gateway_id(&cfg.gateways)?,
+            url,
+            label: input.label.unwrap_or_default().trim().to_string(),
+            enabled: true,
+            added_at: now_millis(),
+        };
+        cfg.gateways.push(gw.clone());
+        store.save(&cfg).map_err(|e| e.to_string())?;
+        Ok(entry_from_gateway(&gw))
+    }
+
+    fn remove(&self, id: &str) -> Result<bool, String> {
+        {
+            let mut store = self.store.lock().unwrap();
+            let mut cfg = store.get().map_err(|e| e.to_string())?;
+            let before = cfg.gateways.len();
+            cfg.gateways.retain(|g| g.id != id);
+            if cfg.gateways.len() == before {
+                return Ok(false);
+            }
+            store.save(&cfg).map_err(|e| e.to_string())?;
+        }
+        // Row dropped: run the cascade so the HTTP DELETE matches the Tauri
+        // command's teardown. The store lock is released above first -- the
+        // cascade locks live-connection state, never the store.
+        if let Some(hook) = self.on_remove.get() {
+            hook(id);
+        }
+        Ok(true)
+    }
+}
+
+/// What the one-shot legacy migration did, for the startup log and the
+/// launcher's info notice.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct GatewayMigration {
+    /// Gateways created from legacy rows (rows merged into a pre-existing
+    /// gateway entry create nothing but still count as converted).
+    pub created: Vec<Gateway>,
+    /// Legacy devserver rows dropped after conversion.
+    pub converted_rows: usize,
+}
+
+impl GatewayMigration {
+    pub fn changed(&self) -> bool {
+        self.converted_rows > 0
+    }
+}
+
+/// Convert devserver rows recorded by the retired pick-one gateway flow
+/// (`gateway_owner`/`gateway_devserver_id` set) into [`Gateway`] entries,
+/// dropping the rows: the gateway's roster now supplies its devservers, so
+/// a persisted per-devserver row would shadow the synthesized one. Rows
+/// pointing at the same origin merge into one gateway (first non-empty
+/// label wins); an origin already configured merges into that entry. A row
+/// whose URL no longer parses keeps its devserver row (gateway markers
+/// cleared) rather than losing user data -- the raw-dial backstop re-flags
+/// it as a gateway at connect time.
+///
+/// Pure over [`Config`] so the shapes are table-testable; the startup
+/// driver persists only when something converted.
+fn split_legacy_gateway_rows(cfg: &mut Config) -> GatewayMigration {
+    let devservers = std::mem::take(&mut cfg.devservers);
+    let mut outcome = GatewayMigration::default();
+    for mut row in devservers {
+        if row.gateway_owner.is_none() && row.gateway_devserver_id.is_none() {
+            cfg.devservers.push(row);
+            continue;
+        }
+        let Ok(origin) = normalize_gateway_url(&row.url) else {
+            row.gateway_owner = None;
+            row.gateway_devserver_id = None;
+            cfg.devservers.push(row);
+            continue;
+        };
+        outcome.converted_rows += 1;
+        if let Some(existing) = cfg.gateways.iter_mut().find(|g| g.url == origin) {
+            if existing.label.is_empty() && !row.label.is_empty() {
+                existing.label = row.label;
+            }
+            continue;
+        }
+        let Ok(id) = mint_unused_gateway_id(&cfg.gateways) else {
+            // No CSPRNG, no id: keep the row untouched and let a later
+            // startup retry the conversion.
+            outcome.converted_rows -= 1;
+            cfg.devservers.push(row);
+            continue;
+        };
+        let gw = Gateway {
+            id,
+            url: origin,
+            label: row.label,
+            enabled: true,
+            added_at: row.added_at,
+        };
+        cfg.gateways.push(gw.clone());
+        outcome.created.push(gw);
+    }
+    outcome
+}
+
+/// One-shot startup migration driver: runs right after the [`ConfigStore`]
+/// exists, before any registry or connection reads the config
+/// (single-threaded), and saves atomically only when rows converted. A
+/// config read/write error leaves the file untouched; the caller logs and
+/// the next startup retries.
+pub fn migrate_legacy_gateway_rows(
+    store: &Arc<Mutex<ConfigStore>>,
+) -> io::Result<GatewayMigration> {
+    let mut guard = store.lock().unwrap();
+    let mut cfg = guard.get()?;
+    let outcome = split_legacy_gateway_rows(&mut cfg);
+    if outcome.changed() {
+        guard.save(&cfg)?;
+    }
+    Ok(outcome)
 }
 
 /// Identity key for a local-workspace WindowConfig. Matches the
@@ -1909,5 +2179,223 @@ mod tests {
         // Newest (sigB) first.
         assert_eq!(rec.geometries[0].monitor_sig, "sigB");
         assert_eq!(rec.geometries[1].monitor_sig, "sigA");
+    }
+
+    fn legacy_gateway_row(id: &str, url: &str, label: &str) -> Devserver {
+        Devserver {
+            id: id.to_string(),
+            url: url.to_string(),
+            script: String::new(),
+            label: label.to_string(),
+            token: String::new(),
+            added_at: 42,
+            auto_hide_control: false,
+            gateway_owner: Some("alice".to_string()),
+            gateway_devserver_id: Some("d".repeat(64)),
+        }
+    }
+
+    fn plain_row(id: &str, url: &str) -> Devserver {
+        Devserver {
+            id: id.to_string(),
+            url: url.to_string(),
+            script: String::new(),
+            label: String::new(),
+            token: String::new(),
+            added_at: 7,
+            auto_hide_control: false,
+            gateway_owner: None,
+            gateway_devserver_id: None,
+        }
+    }
+
+    #[test]
+    fn config_loads_without_gateways_field() {
+        // A config.json predating gateways must still load: serde reads the
+        // missing key as the empty vec.
+        let raw = r#"{ "outbound": [], "devservers": [] }"#;
+        let cfg: Config = serde_json::from_str(raw).expect("load without gateways");
+        assert!(cfg.gateways.is_empty());
+    }
+
+    #[test]
+    fn gateway_enabled_defaults_true() {
+        // A hand-edited row without the field behaves like a fresh add.
+        let raw = r#"{ "id": "gw-00000000", "url": "https://id.chan.app" }"#;
+        let gw: Gateway = serde_json::from_str(raw).expect("gateway row");
+        assert!(gw.enabled);
+        assert!(gw.label.is_empty());
+    }
+
+    #[test]
+    fn migration_converts_legacy_rows_and_keeps_plain_ones() {
+        let mut cfg = Config {
+            devservers: vec![
+                legacy_gateway_row("ds1", "https://ID.chan.app/consent?x=1", "work"),
+                plain_row("ds2", "http://box.example.com:8787"),
+            ],
+            ..Default::default()
+        };
+        let outcome = split_legacy_gateway_rows(&mut cfg);
+        // The legacy row became a gateway: origin-normalized URL (host
+        // lowercased, path/query dropped), label + added_at carried, enabled.
+        assert_eq!(cfg.gateways.len(), 1);
+        let gw = &cfg.gateways[0];
+        assert_eq!(gw.url, "https://id.chan.app");
+        assert_eq!(gw.label, "work");
+        assert_eq!(gw.added_at, 42);
+        assert!(gw.enabled);
+        // The plain row stayed; the legacy row is gone.
+        assert_eq!(cfg.devservers.len(), 1);
+        assert_eq!(cfg.devservers[0].id, "ds2");
+        assert_eq!(outcome.created.len(), 1);
+        assert_eq!(outcome.converted_rows, 1);
+        assert!(outcome.changed());
+    }
+
+    #[test]
+    fn migration_merges_same_origin_rows_and_existing_gateways() {
+        let mut cfg = Config {
+            devservers: vec![
+                legacy_gateway_row("ds1", "https://id.chan.app/a", ""),
+                legacy_gateway_row("ds2", "https://id.chan.app/b", "named"),
+                legacy_gateway_row("ds3", "https://other.example", "elsewhere"),
+            ],
+            gateways: vec![Gateway {
+                id: "gw-11111111".to_string(),
+                url: "https://other.example".to_string(),
+                label: String::new(),
+                enabled: true,
+                added_at: 1,
+            }],
+            ..Default::default()
+        };
+        let outcome = split_legacy_gateway_rows(&mut cfg);
+        // Two same-origin rows collapse into ONE new gateway; the first
+        // non-empty label wins. The third row merges into the pre-existing
+        // entry (filling its empty label) instead of duplicating it.
+        assert_eq!(cfg.gateways.len(), 2);
+        assert_eq!(cfg.gateways[0].url, "https://other.example");
+        assert_eq!(cfg.gateways[0].label, "elsewhere");
+        assert_eq!(cfg.gateways[1].url, "https://id.chan.app");
+        assert_eq!(cfg.gateways[1].label, "named");
+        assert!(cfg.devservers.is_empty());
+        assert_eq!(outcome.created.len(), 1);
+        assert_eq!(outcome.converted_rows, 3);
+    }
+
+    #[test]
+    fn migration_keeps_unparseable_rows_as_plain_devservers() {
+        // Losing the row would lose user data; clearing the markers keeps it
+        // usable as a plain devserver and stops the migration re-visiting it.
+        let mut cfg = Config {
+            devservers: vec![legacy_gateway_row("ds1", "not a url", "broken")],
+            ..Default::default()
+        };
+        let outcome = split_legacy_gateway_rows(&mut cfg);
+        assert!(cfg.gateways.is_empty());
+        assert_eq!(cfg.devservers.len(), 1);
+        assert_eq!(cfg.devservers[0].gateway_owner, None);
+        assert_eq!(cfg.devservers[0].gateway_devserver_id, None);
+        assert!(!outcome.changed());
+    }
+
+    #[test]
+    fn migration_driver_persists_once_and_is_idempotent() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(Mutex::new(ConfigStore {
+            path: dir.path().join("config.json"),
+        }));
+        {
+            let mut guard = store.lock().unwrap();
+            let cfg = Config {
+                devservers: vec![legacy_gateway_row("ds1", "https://id.chan.app", "")],
+                ..Default::default()
+            };
+            guard.save(&cfg).unwrap();
+        }
+        let first = migrate_legacy_gateway_rows(&store).unwrap();
+        assert!(first.changed());
+        let after_first = store.lock().unwrap().get().unwrap();
+        assert_eq!(after_first.gateways.len(), 1);
+        assert!(after_first.devservers.is_empty());
+        // A second run converts nothing and leaves the file as-is.
+        let second = migrate_legacy_gateway_rows(&store).unwrap();
+        assert!(!second.changed());
+        assert_eq!(
+            serde_json::to_value(store.lock().unwrap().get().unwrap()).unwrap(),
+            serde_json::to_value(&after_first).unwrap()
+        );
+    }
+
+    #[test]
+    fn gateway_registry_add_normalizes_dedups_and_mints_ids() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(Mutex::new(ConfigStore {
+            path: dir.path().join("config.json"),
+        }));
+        let reg = GatewayConfigRegistry::new(Arc::clone(&store), Arc::new(OnceLock::new()));
+        let added = reg
+            .add(GatewayInput {
+                url: "https://ID.chan.app/consent?pick=1".to_string(),
+                label: Some("  work  ".to_string()),
+            })
+            .expect("add");
+        assert_eq!(added.url, "https://id.chan.app");
+        assert_eq!(added.label, "work");
+        assert!(added.enabled);
+        assert_eq!(added.status, GatewayStatus::Disconnected);
+        // The minted id is gw- + 8 lowercase hex (the synthesized-row id
+        // charset depends on it).
+        let hex = added.id.strip_prefix("gw-").expect("gw- prefix");
+        assert_eq!(hex.len(), 8);
+        assert!(hex
+            .chars()
+            .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
+        // Same origin (different noise) is a dup.
+        let err = reg
+            .add(GatewayInput {
+                url: "https://id.chan.app/other".to_string(),
+                label: None,
+            })
+            .expect_err("dup origin");
+        assert!(err.contains("already configured"), "{err}");
+        // Non-http(s) is rejected.
+        assert!(reg
+            .add(GatewayInput {
+                url: "ftp://id.chan.app".to_string(),
+                label: None,
+            })
+            .is_err());
+        assert_eq!(reg.list().len(), 1);
+    }
+
+    #[test]
+    fn gateway_registry_remove_fires_hook_and_reports_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(Mutex::new(ConfigStore {
+            path: dir.path().join("config.json"),
+        }));
+        let hook_cell: Arc<OnceLock<GatewayRemoveHook>> = Arc::new(OnceLock::new());
+        let removed_ids: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&removed_ids);
+        hook_cell
+            .set(Arc::new(move |id: &str| {
+                sink.lock().unwrap().push(id.to_string());
+            }))
+            .ok()
+            .expect("hook installs once");
+        let reg = GatewayConfigRegistry::new(Arc::clone(&store), Arc::clone(&hook_cell));
+        assert_eq!(reg.remove("gw-deadbeef"), Ok(false));
+        assert!(removed_ids.lock().unwrap().is_empty());
+        let added = reg
+            .add(GatewayInput {
+                url: "https://id.chan.app".to_string(),
+                label: None,
+            })
+            .expect("add");
+        assert_eq!(reg.remove(&added.id), Ok(true));
+        assert_eq!(*removed_ids.lock().unwrap(), vec![added.id]);
+        assert!(reg.list().is_empty());
     }
 }

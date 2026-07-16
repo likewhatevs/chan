@@ -193,6 +193,11 @@ pub struct AppState {
     /// so it's installed with this shared cell and the desktop fills it (with a
     /// closure over the `AppHandle`) once Tauri setup runs.
     pub devserver_remove_hook: Arc<OnceLock<config::DevserverRemoveHook>>,
+    /// The gateway analogue of [`devserver_remove_hook`](Self::devserver_remove_hook):
+    /// HTTP `DELETE /api/library/gateways/{id}` drops a row, so that path runs
+    /// the same cascade teardown the Tauri command does. Filled once Tauri
+    /// setup runs.
+    pub gateway_remove_hook: Arc<OnceLock<config::GatewayRemoveHook>>,
     /// Set when the user confirmed the quit dialog: the re-fired
     /// `ExitRequested` (from `app.exit(0)` in the dialog callback)
     /// must pass instead of prompting again.
@@ -4248,6 +4253,18 @@ fn main() {
     let store = Arc::new(Mutex::new(
         ConfigStore::new().expect("failed to init config store"),
     ));
+    // One-shot: devserver rows recorded by the retired pick-one gateway flow
+    // become gateway entries, before any registry or connection reads the
+    // config. A failure leaves the file untouched; the next startup retries.
+    match config::migrate_legacy_gateway_rows(&store) {
+        Ok(m) if m.changed() => tracing::info!(
+            gateways = m.created.len(),
+            rows = m.converted_rows,
+            "migrated legacy gateway devserver rows"
+        ),
+        Ok(_) => {}
+        Err(e) => tracing::warn!(error = %e, "legacy gateway row migration failed"),
+    }
     let state = Arc::new(AppState {
         store,
         serves: Mutex::new(HashMap::new()),
@@ -4272,6 +4289,7 @@ fn main() {
         devserver_connecting: Arc::new(Mutex::new(std::collections::HashSet::new())),
         devserver_awaiting_signin: Arc::new(Mutex::new(HashMap::new())),
         devserver_remove_hook: Arc::new(OnceLock::new()),
+        gateway_remove_hook: Arc::new(OnceLock::new()),
         quit_confirmed: std::sync::atomic::AtomicBool::new(false),
         quit_prompt_open: std::sync::atomic::AtomicBool::new(false),
     });
@@ -4298,6 +4316,7 @@ fn main() {
             // through the same lock and its HTTP DELETE can reap a live connection.
             let config_store = Arc::clone(&state_for_setup.store);
             let remove_hook = Arc::clone(&state_for_setup.devserver_remove_hook);
+            let gateway_remove_hook = Arc::clone(&state_for_setup.gateway_remove_hook);
             let conns_for_registry = Arc::clone(&state_for_setup.devservers);
             let connecting_for_registry = Arc::clone(&state_for_setup.devserver_connecting);
             let awaiting_for_registry = Arc::clone(&state_for_setup.devserver_awaiting_signin);
@@ -4305,6 +4324,7 @@ fn main() {
             match tauri::async_runtime::block_on(embedded::EmbeddedServer::start(
                 config_store,
                 remove_hook,
+                gateway_remove_hook,
                 conns_for_registry,
                 connecting_for_registry,
                 awaiting_for_registry,
