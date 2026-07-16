@@ -35,8 +35,8 @@ use tokio::sync::{oneshot, Notify};
 use crate::devserver::bytes_eq;
 use crate::static_assets::{serve_launcher, LauncherSurface};
 use crate::{
-    CreateWindow, DesktopWindowOp, DevserverEntry, DevserverInput, LauncherWorkspace,
-    SetWorkspaceOnOutcome, WindowKind, WindowRecord, WindowSet, WorkspaceHost,
+    CreateWindow, DesktopWindowOp, DevserverEntry, DevserverInput, GatewayEntry, GatewayInput,
+    LauncherWorkspace, SetWorkspaceOnOutcome, WindowKind, WindowRecord, WindowSet, WorkspaceHost,
     WorkspaceLifecycleOutcome, WorkspaceStatus,
 };
 
@@ -165,6 +165,18 @@ pub fn launcher_router(
             "/api/library/devservers/{id}/workspaces/forget",
             post(handle_forget_devserver_workspace),
         )
+        // Gateway connect/disconnect are desktop-bridge dispatches like the
+        // devserver ops above -- they operate live connection state, not
+        // registry CRUD -- so a desktop-less surface answers NO_DESKTOP/409
+        // on its own.
+        .route(
+            "/api/library/gateways/{id}/connect",
+            post(handle_connect_gateway),
+        )
+        .route(
+            "/api/library/gateways/{id}/disconnect",
+            post(handle_disconnect_gateway),
+        )
         // Native folder picker -- another desktop-bridge dispatch (the launcher's
         // New-Workspace "Browse…"), so it sits with the other bridge ops.
         .route("/api/library/fs/pick-folder", post(handle_pick_folder))
@@ -228,6 +240,21 @@ pub fn launcher_router(
     // surface-bearer gate needs the host to validate a window's per-tenant
     // token against the live tenants.
     let host_for_surface = host.clone();
+    // Gateways: list on BOTH surfaces (a registry-less surface returns
+    // empty); add/remove gated mutable (403 read-only, 404 no registry)
+    // inside the handlers, same as the devserver block below. No update
+    // route: the launcher's Save just adds.
+    let gateways = Router::new()
+        .route(
+            "/api/library/gateways",
+            get(handle_list_gateways).post(handle_add_gateway),
+        )
+        .route("/api/library/gateways/{id}", delete(handle_remove_gateway))
+        .route_layer(middleware::from_fn(require_local_mutation))
+        .with_state(Arc::new(LauncherState {
+            host: host.clone(),
+            serve_addr: serve_addr.clone(),
+        }));
     // Devservers: list on BOTH surfaces (a registry-less surface returns empty);
     // add/update/remove gated mutable (403 read-only, 404 no registry) inside the
     // handlers, same as workspaces.
@@ -248,7 +275,7 @@ pub fn launcher_router(
     // is open -- which carries a per-TENANT token, not the launcher token -- so
     // they get a relaxed SURFACE gate (launcher OR any valid tenant token). A
     // launcher-only gate 401'd every window's colour GET/PUT/watch.
-    let launcher_api = windows.merge(workspaces).merge(devservers);
+    let launcher_api = windows.merge(workspaces).merge(gateways).merge(devservers);
     let (launcher_api, config) = match bearer {
         Some(token) => {
             let launcher_token = token.to_string();
@@ -1230,6 +1257,95 @@ async fn handle_remove_devserver(
 }
 
 // ---------------------------------------------------------------------------
+// Gateways (`/api/library/gateways`). The persisted set lives in the desktop
+// config, reached through an installed `GatewayRegistry` (mirror of the
+// devserver block above); connect/disconnect are desktop-bridge ops on the
+// host-stated router.
+// ---------------------------------------------------------------------------
+
+/// `GET /api/library/gateways`: every configured gateway with its live
+/// connection state. A registry-less surface (headless devserver, plain
+/// `chan open`) returns the empty list.
+async fn handle_list_gateways(State(state): State<Arc<LauncherState>>) -> Json<Vec<GatewayEntry>> {
+    Json(
+        state
+            .host
+            .gateway_registry()
+            .map(|reg| reg.list())
+            .unwrap_or_default(),
+    )
+}
+
+/// `POST /api/library/gateways` `{url, label?}`: configure a gateway,
+/// returning the stored row. Save just adds -- no probe; a wrong URL
+/// surfaces on the first connect. Loopback-only ([`require_mutable`] → 403
+/// on the read-only surface). A registry rejection (bad or duplicate URL)
+/// maps to 400; no registry installed maps to 404 (defensive -- the desktop
+/// loopback always installs one).
+async fn handle_add_gateway(
+    State(state): State<Arc<LauncherState>>,
+    Json(input): Json<GatewayInput>,
+) -> Response {
+    if let Err(resp) = require_mutable(&state) {
+        return *resp;
+    }
+    let Some(reg) = state.host.gateway_registry() else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    match reg.add(input) {
+        Ok(entry) => Json(entry).into_response(),
+        Err(msg) => (StatusCode::BAD_REQUEST, msg).into_response(),
+    }
+}
+
+/// `DELETE /api/library/gateways/{id}`: remove a gateway; the desktop side
+/// cascades (roster poll stopped, rostered connections torn down,
+/// synthesized rows dropped). Loopback-only. 404 when no gateway has the id
+/// (or no registry is installed); 400 on a registry rejection.
+async fn handle_remove_gateway(
+    State(state): State<Arc<LauncherState>>,
+    AxumPath(id): AxumPath<String>,
+) -> Response {
+    if let Err(resp) = require_mutable(&state) {
+        return *resp;
+    }
+    let Some(reg) = state.host.gateway_registry() else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    match reg.remove(&id) {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => StatusCode::NOT_FOUND.into_response(),
+        Err(msg) => (StatusCode::BAD_REQUEST, msg).into_response(),
+    }
+}
+
+/// `POST /api/library/gateways/{id}/connect`: connect a configured gateway
+/// through the desktop bridge -- discovery, browser sign-in hand-off when no
+/// credential is stored, roster fetch, poll spawn. 204 on success; 409
+/// (`NO_DESKTOP`) on a surface with no desktop attached.
+async fn handle_connect_gateway(
+    State(host): State<Arc<WorkspaceHost>>,
+    AxumPath(id): AxumPath<String>,
+) -> Response {
+    dispatch_window_op(&host, |reply| DesktopWindowOp::ConnectGateway { id, reply }).await
+}
+
+/// `POST /api/library/gateways/{id}/disconnect`: disconnect a connected
+/// gateway through the desktop bridge -- poll stopped, rostered connections
+/// torn down, disabled intent persisted. 204 on success; 409 (`NO_DESKTOP`)
+/// with no desktop attached.
+async fn handle_disconnect_gateway(
+    State(host): State<Arc<WorkspaceHost>>,
+    AxumPath(id): AxumPath<String>,
+) -> Response {
+    dispatch_window_op(&host, |reply| DesktopWindowOp::DisconnectGateway {
+        id,
+        reply,
+    })
+    .await
+}
+
+// ---------------------------------------------------------------------------
 // Local-library colour (`/api/library/local-color`). The value lives in the
 // desktop config, reached through an installed `LocalColorStore`. GET is served
 // on every surface (no store → `null`); PUT is loopback-only.
@@ -2164,6 +2280,224 @@ mod devserver_route_tests {
 }
 
 #[cfg(test)]
+mod gateway_route_tests {
+    //! The gateway CRUD guard stack, mirroring the devserver trio:
+    //! `require_mutable` first (403 read-only) then registry-keyed (404
+    //! absent / 400 rejected). Connect/disconnect are bridge ops covered in
+    //! `window_op_route_tests`.
+    use std::net::SocketAddr;
+    use std::sync::{Arc, Mutex, OnceLock};
+
+    use axum::body::Body;
+    use axum::http::{header, Request, StatusCode};
+    use chan_workspace::Library;
+    use tower::ServiceExt;
+
+    use super::launcher_router;
+    use crate::{GatewayEntry, GatewayInput, GatewayRegistry, GatewayStatus, WorkspaceHost};
+
+    /// An in-memory `GatewayRegistry` standing in for the desktop config so
+    /// the route gates are exercised without a desktop. `add` echoes the
+    /// input back as a stored row (rejecting the sentinel url `"bad"` to
+    /// drive the 400 path); `remove` answers `Ok(false)` unless the id is
+    /// present.
+    #[derive(Default)]
+    struct FakeGatewayRegistry {
+        rows: Mutex<Vec<GatewayEntry>>,
+    }
+
+    impl FakeGatewayRegistry {
+        fn seeded() -> Self {
+            FakeGatewayRegistry {
+                rows: Mutex::new(vec![GatewayEntry {
+                    id: "gw-1a2b3c4d".into(),
+                    url: "https://id.chan.app".into(),
+                    label: "work".into(),
+                    enabled: true,
+                    status: GatewayStatus::Disconnected,
+                    pending_signin: false,
+                    devserver_count: 0,
+                    last_error: None,
+                }]),
+            }
+        }
+    }
+
+    impl GatewayRegistry for FakeGatewayRegistry {
+        fn list(&self) -> Vec<GatewayEntry> {
+            self.rows.lock().unwrap().clone()
+        }
+        fn add(&self, input: GatewayInput) -> Result<GatewayEntry, String> {
+            if input.url == "bad" {
+                return Err("rejected url".into());
+            }
+            let entry = GatewayEntry {
+                id: "gw-feedface".into(),
+                url: input.url,
+                label: input.label.unwrap_or_default(),
+                enabled: true,
+                status: GatewayStatus::Disconnected,
+                pending_signin: false,
+                devserver_count: 0,
+                last_error: None,
+            };
+            self.rows.lock().unwrap().push(entry.clone());
+            Ok(entry)
+        }
+        fn remove(&self, id: &str) -> Result<bool, String> {
+            let mut rows = self.rows.lock().unwrap();
+            let before = rows.len();
+            rows.retain(|r| r.id != id);
+            Ok(rows.len() != before)
+        }
+    }
+
+    /// A launcher router over an empty host with the given gateway registry
+    /// installed (or none). `mutable` true → a loopback surface with a bound
+    /// `serve_addr`; false → the read-only devserver/gateway surface.
+    fn router_with(registry: Option<Arc<dyn GatewayRegistry>>, mutable: bool) -> axum::Router {
+        let dir = tempfile::tempdir().unwrap();
+        let lib = Library::open_at(dir.path().join("config.toml")).unwrap();
+        // The router never reads the config file again; leak the dir so the
+        // path the Library holds stays valid for the (short) test body.
+        std::mem::forget(dir);
+        let host = Arc::new(WorkspaceHost::new(lib, crate::route_builder()));
+        if let Some(reg) = registry {
+            host.install_gateway_registry(reg);
+        }
+        let serve_addr = mutable.then(|| {
+            let cell = OnceLock::new();
+            let _ = cell.set("127.0.0.1:8080".parse::<SocketAddr>().unwrap());
+            Arc::new(cell)
+        });
+        launcher_router(host, None, serve_addr)
+    }
+
+    async fn request(
+        router: &axum::Router,
+        method: &str,
+        uri: &str,
+        body: Option<&str>,
+    ) -> (StatusCode, serde_json::Value) {
+        let mut req = Request::builder().method(method).uri(uri);
+        let body = if let Some(b) = body {
+            req = req.header(header::CONTENT_TYPE, "application/json");
+            Body::from(b.to_string())
+        } else {
+            Body::empty()
+        };
+        let response = router
+            .clone()
+            .oneshot(req.body(body).unwrap())
+            .await
+            .unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json = serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
+        (status, json)
+    }
+
+    #[tokio::test]
+    async fn list_serves_empty_without_registry_on_both_surfaces() {
+        for mutable in [true, false] {
+            let router = router_with(None, mutable);
+            let (status, body) = request(&router, "GET", "/api/library/gateways", None).await;
+            assert_eq!(status, StatusCode::OK, "mutable={mutable}");
+            assert_eq!(body, serde_json::json!([]), "mutable={mutable}");
+        }
+    }
+
+    #[tokio::test]
+    async fn list_returns_seeded_rows() {
+        let router = router_with(Some(Arc::new(FakeGatewayRegistry::seeded())), false);
+        let (status, body) = request(&router, "GET", "/api/library/gateways", None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body[0]["id"], "gw-1a2b3c4d");
+        assert_eq!(body[0]["url"], "https://id.chan.app");
+        assert_eq!(body[0]["status"], "disconnected");
+        assert_eq!(body[0]["devserver_count"], 0);
+        assert_eq!(body[0]["last_error"], serde_json::Value::Null);
+    }
+
+    #[tokio::test]
+    async fn add_on_loopback_returns_row_and_label_is_optional() {
+        let router = router_with(Some(Arc::new(FakeGatewayRegistry::default())), true);
+        let (status, body) = request(
+            &router,
+            "POST",
+            "/api/library/gateways",
+            Some(r#"{"url":"https://id.chan.app"}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["id"], "gw-feedface");
+        assert_eq!(body["label"], "");
+        assert_eq!(body["enabled"], true);
+    }
+
+    #[tokio::test]
+    async fn add_rejected_by_registry_is_400() {
+        let router = router_with(Some(Arc::new(FakeGatewayRegistry::default())), true);
+        let (status, _) = request(
+            &router,
+            "POST",
+            "/api/library/gateways",
+            Some(r#"{"url":"bad"}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn mutation_on_read_only_surface_is_403() {
+        // require_mutable runs FIRST: even with a registry installed, the
+        // read-only devserver/gateway surface refuses every mutation.
+        let router = router_with(Some(Arc::new(FakeGatewayRegistry::seeded())), false);
+        for (method, uri, body) in [
+            (
+                "POST",
+                "/api/library/gateways",
+                Some(r#"{"url":"https://x.example"}"#),
+            ),
+            ("DELETE", "/api/library/gateways/gw-1a2b3c4d", None),
+        ] {
+            let (status, _) = request(&router, method, uri, body).await;
+            assert_eq!(status, StatusCode::FORBIDDEN, "{method} {uri}");
+        }
+    }
+
+    #[tokio::test]
+    async fn mutation_without_registry_is_404() {
+        // Loopback (mutable) but no registry installed -- defensive 404 (the
+        // desktop loopback always installs one).
+        let router = router_with(None, true);
+        let (status, _) = request(
+            &router,
+            "POST",
+            "/api/library/gateways",
+            Some(r#"{"url":"https://x.example"}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        let (status, _) = request(&router, "DELETE", "/api/library/gateways/gw-x", None).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn remove_existing_is_204_and_missing_is_404() {
+        let router = router_with(Some(Arc::new(FakeGatewayRegistry::seeded())), true);
+        let (status, _) =
+            request(&router, "DELETE", "/api/library/gateways/gw-1a2b3c4d", None).await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
+        let (status, _) =
+            request(&router, "DELETE", "/api/library/gateways/gw-1a2b3c4d", None).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+}
+
+#[cfg(test)]
 mod window_op_route_tests {
     //! The launcher window open/hide routes: with a desktop bridge attached they
     //! dispatch and answer 204; with none (the standalone serve / devserver
@@ -2291,7 +2625,9 @@ mod window_op_route_tests {
                     | DesktopWindowOp::ConnectDevserver { reply, .. }
                     | DesktopWindowOp::DisconnectDevserver { reply, .. }
                     | DesktopWindowOp::OpenDevserverTerminal { reply, .. }
-                    | DesktopWindowOp::OpenDevserverWorkspace { reply, .. } => {
+                    | DesktopWindowOp::OpenDevserverWorkspace { reply, .. }
+                    | DesktopWindowOp::ConnectGateway { reply, .. }
+                    | DesktopWindowOp::DisconnectGateway { reply, .. } => {
                         let _ = reply.send(Ok(()));
                     }
                     DesktopWindowOp::SetDevserverWorkspaceOn { reply, .. }
@@ -2319,6 +2655,14 @@ mod window_op_route_tests {
         for uri in [
             "/api/library/devservers/ds1/disconnect",
             "/api/library/devservers/ds1/terminal",
+        ] {
+            let (status, _) = post(&router, uri).await;
+            assert_eq!(status, StatusCode::NO_CONTENT, "{uri}");
+        }
+        // Gateway connect/disconnect ride the same bridge → 204.
+        for uri in [
+            "/api/library/gateways/gw-1/connect",
+            "/api/library/gateways/gw-1/disconnect",
         ] {
             let (status, _) = post(&router, uri).await;
             assert_eq!(status, StatusCode::NO_CONTENT, "{uri}");
@@ -2472,6 +2816,17 @@ mod window_op_route_tests {
         for uri in [
             "/api/library/devservers/ds1/disconnect",
             "/api/library/devservers/ds1/terminal",
+        ] {
+            let (status, body) = post(&router, uri).await;
+            assert_eq!(status, StatusCode::CONFLICT, "{uri}");
+            assert_eq!(body, NO_DESKTOP, "{uri}");
+        }
+        // Gateway connect/disconnect are inert without a desktop -- 409
+        // NO_DESKTOP with the pinned body, distinguishable from the
+        // live_terminals JSON 409.
+        for uri in [
+            "/api/library/gateways/gw-1/connect",
+            "/api/library/gateways/gw-1/disconnect",
         ] {
             let (status, body) = post(&router, uri).await;
             assert_eq!(status, StatusCode::CONFLICT, "{uri}");

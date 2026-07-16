@@ -143,6 +143,26 @@ pub enum DesktopWindowOp {
         force: bool,
         reply: oneshot::Sender<Result<SetWorkspaceOnOutcome, String>>,
     },
+    /// Connect a configured gateway by id: discover it, hand off to the
+    /// browser sign-in when no account credential is stored, fetch the
+    /// devserver roster, and start its poll. The Gateways screen's Connect
+    /// button drives this over the bridge; the reply is `Ok(())` once the
+    /// connect flow settles (or the error string). Inert without a desktop
+    /// attached -- the route then answers [`NO_DESKTOP`].
+    ConnectGateway {
+        id: String,
+        reply: oneshot::Sender<Result<(), String>>,
+    },
+    /// Disconnect a connected gateway by id: stop its roster poll, tear
+    /// down its rostered devserver connections, drop its synthesized rows,
+    /// and persist the disabled intent. The Gateways screen's Disconnect
+    /// button drives this over the bridge; the reply is `Ok(())` once torn
+    /// down. Inert without a desktop attached -- the route then answers
+    /// [`NO_DESKTOP`].
+    DisconnectGateway {
+        id: String,
+        reply: oneshot::Sender<Result<(), String>>,
+    },
     /// Open the OS native folder-picker dialog and return the chosen
     /// directory, or `None` when the user cancels. The launcher's
     /// New-Workspace dialog drives this over the bridge so the Folder field

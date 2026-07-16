@@ -80,6 +80,21 @@ async fn handle(app: AppHandle, state: Arc<AppState>, op: DesktopWindowOp) {
             crate::teardown_devserver_connection(&app, &state, &id);
             let _ = reply.send(Ok(()));
         }
+        DesktopWindowOp::ConnectGateway { id, reply } => {
+            // The Gateways screen's Connect button: discovery, browser
+            // sign-in hand-off when needed, roster fetch, poll spawn.
+            let _ = reply.send(crate::gateway::connect_gateway(app, state, id, true).await);
+        }
+        DesktopWindowOp::DisconnectGateway { id, reply } => {
+            crate::gateway::cascade_disconnect(
+                &app,
+                &state,
+                &id,
+                crate::gateway::CascadeReason::UserDisconnect,
+            )
+            .await;
+            let _ = reply.send(Ok(()));
+        }
         DesktopWindowOp::OpenDevserverTerminal { id, reply } => {
             let _ = reply.send(crate::open_devserver_terminal_impl(&state, id).await);
         }
