@@ -4,16 +4,16 @@
 # to stand up one tunnel-publishing `chan devserver` as a lingering
 # systemd --user service.
 #
-# The rootfs ships `chan` from ppa:fiorix/chan plus dbus-user-session (the
-# per-user D-Bus bus `systemctl --user` needs) and dialog (the token prompt).
-# This script does the per-tenant part that cannot be baked because it carries
-# a secret: it creates a regular user, turns on linger so their user manager
-# runs with nobody logged in, writes ~/.config/systemd/user/chan-devserver.service
-# carrying the CHAN_TUNNEL_TOKEN, and enables + starts it. That home unit shadows
-# the bare, local-only one the `chan` package ships at /usr/lib/systemd/user/
-# (systemd's user-unit search order prefers ~/.config), so the only difference
-# is the token env that flips the devserver into tunnel mode. Re-running is
-# idempotent: it rewrites the unit with the current token and restarts.
+# The rootfs ships base tools (curl, ca-certificates, dbus-user-session, dialog)
+# but NOT `chan`. This script installs the released `chan` per-user via
+# https://chan.app/install.sh into ~/.local/bin (no root, no PPA; honors
+# http(s)_proxy), then does the per-tenant part that cannot be baked because it
+# carries a secret: it creates a regular user, turns on linger so their user
+# manager runs with nobody logged in, writes
+# ~/.config/systemd/user/chan-devserver.service carrying the CHAN_TUNNEL_TOKEN
+# (which flips the devserver into tunnel mode), and enables + starts it.
+# Re-running is idempotent: it reuses an already-installed ~/.local/bin/chan,
+# rewrites the unit with the current token, and restarts.
 #
 # Usage:
 #   chan-devserver-provision [--user NAME] [--token chan_pat_...] [--tunnel-url URL]
@@ -37,6 +37,20 @@ set -euo pipefail
 die() { printf 'chan-devserver-provision: %s\n' "$*" >&2; exit 1; }
 
 usage() { sed -n '18,33p' "$0" | sed 's/^# \{0,1\}//'; }
+
+# Emit `export VAR='val'; ` for each proxy var that is set (single-quote-escaped)
+# so they survive `su`'s environment reset when the chan install runs as the
+# user. Some environments require an outbound proxy to reach chan.app; curl reads
+# these from the environment. set -u safe via ${VAR-}.
+proxy_exports() {
+  for _v in http_proxy https_proxy no_proxy all_proxy \
+            HTTP_PROXY HTTPS_PROXY NO_PROXY ALL_PROXY; do
+    eval "_val=\${$_v-}"
+    [ -n "${_val:-}" ] || continue
+    _esc=$(printf '%s' "$_val" | sed "s/'/'\\\\''/g")
+    printf "export %s='%s'; " "$_v" "$_esc"
+  done
+}
 
 USER_NAME="${CHAN_DEVSERVER_USER:-devserver}"
 TOKEN="${CHAN_TUNNEL_TOKEN:-}"
@@ -138,7 +152,21 @@ EOF
   chown "$USER_NAME:$USER_NAME" "$BASHRC"
 fi
 
-# 2. Linger: start user@$UID_N.service now and on every boot, so the user
+# 2. chan itself, installed FOR THE USER (no root, no PPA). install.sh defaults
+#    to PREFIX=$HOME/.local, so running it as the user drops chan + the cs
+#    symlink in ~/.local/bin. su sets HOME to the user's, and proxy_exports
+#    forwards any http(s)_proxy into the piped shell (curl reads it). Skip when
+#    already installed so a re-run for a new token does not refetch; the user
+#    owns the binary, so `chan upgrade` works for them later without root.
+CHAN_BIN="$HOME_DIR/.local/bin/chan"
+if [ ! -x "$CHAN_BIN" ]; then
+  su -s /bin/sh "$USER_NAME" -c \
+    "$(proxy_exports)curl -fsSL https://chan.app/install.sh | sh" \
+    || die "installing chan via https://chan.app/install.sh failed (proxy/network?)"
+  [ -x "$CHAN_BIN" ] || die "chan install did not produce $CHAN_BIN"
+fi
+
+# 3. Linger: start user@$UID_N.service now and on every boot, so the user
 #    manager (and its /run/user/$UID_N D-Bus socket) exists with nobody
 #    logged in -- the whole point of a headless container.
 loginctl enable-linger "$USER_NAME"
@@ -163,13 +191,14 @@ for _ in $(seq 1 60); do
 done
 [ -n "$ready" ] || die "user manager for $USER_NAME did not come up (linger/dbus-user-session?)"
 
-# 3. The unit, carrying the token. Mode 600: the PAT is a secret and the unit
-#    embeds it verbatim via Environment=.
+# 4. The unit, carrying the token. Mode 600: the PAT is a secret and the unit
+#    embeds it verbatim via Environment=. The absolute ~/.local/bin/chan path is
+#    used because systemd user units do not expand ~.
 UNIT_DIR="$HOME_DIR/.config/systemd/user"
 UNIT="$UNIT_DIR/chan-devserver.service"
 install -d -o "$USER_NAME" -g "$USER_NAME" -m 700 "$UNIT_DIR"
 
-EXEC="/usr/bin/chan devserver"
+EXEC="$CHAN_BIN devserver"
 [ -n "$TUNNEL_URL" ] && EXEC="$EXEC --tunnel-url=$TUNNEL_URL"
 
 ( umask 077; cat > "$UNIT" <<EOF
@@ -193,7 +222,7 @@ EOF
 chown "$USER_NAME:$USER_NAME" "$UNIT"
 chmod 600 "$UNIT"
 
-# 4. Reload, enable on boot, and (re)start so a re-run picks up the new token.
+# 5. Reload, enable on boot, and (re)start so a re-run picks up the new token.
 as_user "systemctl --user daemon-reload"
 as_user "systemctl --user enable chan-devserver.service"
 if ! as_user "systemctl --user restart chan-devserver.service"; then

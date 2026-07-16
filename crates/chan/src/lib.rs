@@ -2501,9 +2501,16 @@ async fn cmd_devserver(
             warn_non_loopback_bind(requested);
             let tunnel = build_devserver_tunnel(tunnel_token, tunnel_url);
             // Tunnel mode defaults to NOT binding the loopback port (the gateway
-            // is the surface, and it 404s the management API anyway);
-            // `CHAN_DEVSERVER_LISTEN` overrides either way.
-            let listen = resolve_devserver_listen(tunnel.is_some(), devserver_listen_override())?;
+            // is the surface, and it 404s the management API anyway), but under
+            // systemd notify it does bind so `chan devserver --restart` fdstore
+            // parking can reach the local management API. `CHAN_DEVSERVER_LISTEN`
+            // overrides either way.
+            let under_systemd = std::env::var_os("NOTIFY_SOCKET").is_some();
+            let listen = resolve_devserver_listen(
+                tunnel.is_some(),
+                under_systemd,
+                devserver_listen_override(),
+            )?;
             run_devserver_foreground(requested, tunnel, listen).await
         }
         DevPlan::Foreground(kind) => {
@@ -2533,22 +2540,24 @@ async fn cmd_devserver(
             }
         }
         DevPlan::Supervised(kind, action) => {
-            // systemd/launchd would have to persist a tunnel PAT in the unit /
-            // plist (0644) to re-exec with it, so tunnel mode is refused here.
-            if tunnel_token.is_some() {
+            // launchd would have to persist a tunnel PAT in the plist (0644) to
+            // re-exec with it, so tunnel mode is refused there. systemd instead
+            // writes the unit 0600 (see write_devserver_unit) and carries the
+            // token via Environment=, so it is supported.
+            if tunnel_token.is_some() && kind == ServiceKind::Launchd {
                 anyhow::bail!(
                     "chan devserver: tunnel mode (--tunnel-token) is not supported under \
-                     --service={}; the supervised backend would persist the token in the \
-                     unit / agent (0644). Use --service=chan, or run the devserver in the \
-                     foreground.",
-                    kind.cli_name()
+                     --service=launchd; the launch agent would persist the token in the \
+                     plist (0644). Use --service=chan or --service=systemd, or run the \
+                     devserver in the foreground."
                 );
             }
             // Preserve the running service's bound address when --bind/--port are
             // omitted (per field: explicit flag > persisted > default), so a
             // flagless --restart/--join keeps what the service runs on.
             let addr = service_target_addr(kind, bind, port);
-            run_supervised_devserver(kind, action, addr, force, verbose).await
+            let tunnel = supervised_tunnel_spec(kind, tunnel_token, tunnel_url, force);
+            run_supervised_devserver(kind, action, addr, force, verbose, tunnel).await
         }
     }
 }
@@ -2594,6 +2603,39 @@ fn build_devserver_tunnel_from_env(tunnel_url: String) -> Option<chan_server::De
     Some(chan_server::DevserverTunnel { tunnel_url, token })
 }
 
+/// A tunnel registration to bake into a systemd unit: the PAT that flips the
+/// devserver into tunnel mode and the gateway endpoint it dials.
+struct SystemdTunnel {
+    token: String,
+    url: String,
+}
+
+/// Build the tunnel spec for a systemd unit from the CLI `--tunnel-token` /
+/// `--tunnel-url`, resolving the endpoint as "reuse the first-run value, refresh
+/// on --force": a flagless restart reuses the `--tunnel-url` already persisted in
+/// the unit's ExecStart, while `--force` (or a first start with no unit) takes
+/// the CLI value. Returns None when there is no token (non-tunnel) or the backend
+/// is not systemd (launchd tunnel mode is refused upstream).
+fn supervised_tunnel_spec(
+    kind: ServiceKind,
+    tunnel_token: Option<String>,
+    tunnel_url: String,
+    force: bool,
+) -> Option<SystemdTunnel> {
+    if kind != ServiceKind::Systemd {
+        return None;
+    }
+    let token = tunnel_token?;
+    let url = if force {
+        tunnel_url
+    } else {
+        read_systemd_unit()
+            .and_then(|unit| persisted_flag_value(&unit, "--tunnel-url=").map(str::to_owned))
+            .unwrap_or(tunnel_url)
+    };
+    Some(SystemdTunnel { token, url })
+}
+
 /// Dispatch a `systemd`/`launchd` action verb: `--start` (create + enable +
 /// start, then return), `--stop` (stop + disable), `--restart` (rewrite + bounce,
 /// then return), `--status`, or `--join` (ensure running, then attach + block).
@@ -2605,6 +2647,7 @@ async fn run_supervised_devserver(
     addr: SocketAddr,
     force: bool,
     verbose: bool,
+    tunnel: Option<SystemdTunnel>,
 ) -> Result<()> {
     match kind {
         ServiceKind::Systemd => {
@@ -2614,11 +2657,11 @@ async fn run_supervised_devserver(
                 );
             }
             match action {
-                DevAction::Start => start_devserver_under_systemd(addr).await,
+                DevAction::Start => start_devserver_under_systemd(addr, tunnel).await,
                 DevAction::Stop => stop_devserver_under_systemd().await,
-                DevAction::Restart => restart_devserver_under_systemd(addr, force).await,
+                DevAction::Restart => restart_devserver_under_systemd(addr, force, tunnel).await,
                 DevAction::Status => run_devserver_status(kind, verbose).await,
-                DevAction::Join => join_devserver_under_systemd(addr).await,
+                DevAction::Join => join_devserver_under_systemd(addr, tunnel).await,
             }
         }
         ServiceKind::Launchd => {
@@ -2787,13 +2830,19 @@ fn unescape_plist_xml(s: &str) -> String {
         .replace("&amp;", "&")
 }
 
-/// Whether the foreground devserver binds a local TCP listener. Tunnel mode
-/// defaults to no-bind (the gateway is the surface); `CHAN_DEVSERVER_LISTEN`
+/// Whether the foreground devserver binds a local TCP listener. Non-tunnel always
+/// binds. Tunnel mode defaults to no-bind (the gateway is the surface) EXCEPT
+/// under systemd notify, where the loopback management API is needed so
+/// `chan devserver --restart` can drive the fdstore handoff. `CHAN_DEVSERVER_LISTEN`
 /// forces either way. Tunnel-off + LISTEN=0 leaves nothing reachable (no local
 /// listener, no tunnel -- only the `chan open` discovery socket), so it is a
 /// hard error rather than a silently-unreachable devserver.
-fn resolve_devserver_listen(tunnel_mode: bool, listen_override: Option<bool>) -> Result<bool> {
-    let listen = listen_override.unwrap_or(!tunnel_mode);
+fn resolve_devserver_listen(
+    tunnel_mode: bool,
+    under_systemd_notify: bool,
+    listen_override: Option<bool>,
+) -> Result<bool> {
+    let listen = listen_override.unwrap_or(!tunnel_mode || under_systemd_notify);
     if !listen && !tunnel_mode {
         anyhow::bail!(
             "chan devserver: CHAN_DEVSERVER_LISTEN=0 with no tunnel leaves nothing reachable \
@@ -2937,7 +2986,10 @@ async fn health_ok(client: &reqwest::Client, url: &str) -> bool {
 /// write/enable/start when it is not already running), then return. Enables the
 /// unit so it also comes back on boot. Idempotent: a no-op (beyond re-providing
 /// the token) when the service is already active.
-async fn start_devserver_under_systemd(addr: SocketAddr) -> Result<()> {
+async fn start_devserver_under_systemd(
+    addr: SocketAddr,
+    tunnel: Option<SystemdTunnel>,
+) -> Result<()> {
     ensure_systemd_linger().await?;
     if unit_is_active().await {
         emit_devserver_token_marker(DEVSERVER_TOKEN_WAIT).await?;
@@ -2946,7 +2998,7 @@ async fn start_devserver_under_systemd(addr: SocketAddr) -> Result<()> {
         );
         return Ok(());
     }
-    bootstrap_systemd_unit(addr, false).await?;
+    bootstrap_systemd_unit(addr, false, tunnel).await?;
     eprintln!(
         "chan devserver: started the systemd user service {DEVSERVER_SYSTEMD_UNIT} (bind={addr})."
     );
@@ -2958,7 +3010,10 @@ async fn start_devserver_under_systemd(addr: SocketAddr) -> Result<()> {
 /// watchdog until Ctrl-C. This is the "bring it up and watch it" form connect
 /// scripts use; unlike `--start` it does not return until the service stops or
 /// the user detaches.
-async fn join_devserver_under_systemd(addr: SocketAddr) -> Result<()> {
+async fn join_devserver_under_systemd(
+    addr: SocketAddr,
+    tunnel: Option<SystemdTunnel>,
+) -> Result<()> {
     ensure_systemd_linger().await?;
 
     if unit_is_active().await {
@@ -2971,7 +3026,7 @@ async fn join_devserver_under_systemd(addr: SocketAddr) -> Result<()> {
              {DEVSERVER_SYSTEMD_UNIT}"
         );
     } else {
-        bootstrap_systemd_unit(addr, false).await?;
+        bootstrap_systemd_unit(addr, false, tunnel).await?;
         eprintln!(
             "chan devserver: started the systemd user service \
              {DEVSERVER_SYSTEMD_UNIT} (bind={addr})"
@@ -2992,8 +3047,12 @@ async fn join_devserver_under_systemd(addr: SocketAddr) -> Result<()> {
 /// until active and surfaces the bearer token. Shared by the first-start path
 /// and [`restart_devserver_under_systemd`]; the caller owns linger + the
 /// started/restarted log line + watching the service.
-async fn bootstrap_systemd_unit(addr: SocketAddr, restart: bool) -> Result<()> {
-    let unit_path = write_devserver_unit(addr)?;
+async fn bootstrap_systemd_unit(
+    addr: SocketAddr,
+    restart: bool,
+    tunnel: Option<SystemdTunnel>,
+) -> Result<()> {
+    let unit_path = write_devserver_unit(addr, tunnel)?;
     eprintln!("chan devserver: wrote {}", unit_path.display());
     systemctl_user(&["daemon-reload"]).await?;
     if restart {
@@ -3024,7 +3083,11 @@ async fn bootstrap_systemd_unit(addr: SocketAddr, restart: bool) -> Result<()> {
 /// binary + `addr`), bounce it (or start it if stopped), then return. Linger is
 /// ensured first, mirroring the start path. Preserves live PTYs across the bounce
 /// via the systemd fdstore unless `--force`. Use `--join` to stay attached.
-async fn restart_devserver_under_systemd(addr: SocketAddr, force: bool) -> Result<()> {
+async fn restart_devserver_under_systemd(
+    addr: SocketAddr,
+    force: bool,
+    tunnel: Option<SystemdTunnel>,
+) -> Result<()> {
     ensure_systemd_linger().await?;
     let was_running = unit_is_active().await;
     if was_running && force {
@@ -3034,7 +3097,7 @@ async fn restart_devserver_under_systemd(addr: SocketAddr, force: bool) -> Resul
     } else if was_running {
         prepare_systemd_fdstore_restart(addr, force).await?;
     }
-    bootstrap_systemd_unit(addr, true).await?;
+    bootstrap_systemd_unit(addr, true, tunnel).await?;
     eprintln!(
         "chan devserver: {} the systemd user service {DEVSERVER_SYSTEMD_UNIT} (bind={addr})",
         if was_running { "restarted" } else { "started" }
@@ -3259,13 +3322,28 @@ fn resolve_relaunchable_exe() -> PathBuf {
     PathBuf::from("chan")
 }
 
-fn write_devserver_unit(addr: SocketAddr) -> Result<PathBuf> {
+fn write_devserver_unit(addr: SocketAddr, tunnel: Option<SystemdTunnel>) -> Result<PathBuf> {
     let exe = resolve_relaunchable_exe();
     let dir = systemd_user_unit_dir()?;
     std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
     let unit_path = dir.join(DEVSERVER_SYSTEMD_UNIT);
-    let unit = devserver_systemd_unit(&exe, addr, devserver_chan_home().as_deref());
+    let unit = devserver_systemd_unit(
+        &exe,
+        addr,
+        devserver_chan_home().as_deref(),
+        tunnel.as_ref(),
+    );
     std::fs::write(&unit_path, unit).with_context(|| format!("writing {}", unit_path.display()))?;
+    // The tunnel unit embeds the PAT via Environment=; keep it owner-only. The
+    // 0644 default is exactly why launchd tunnel mode is still refused.
+    if tunnel.is_some() {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&unit_path, std::fs::Permissions::from_mode(0o600))
+                .with_context(|| format!("setting 0600 on {}", unit_path.display()))?;
+        }
+    }
     Ok(unit_path)
 }
 
@@ -3279,12 +3357,40 @@ fn devserver_chan_home() -> Option<String> {
     std::env::var("CHAN_HOME").ok().filter(|v| !v.is_empty())
 }
 
-fn devserver_systemd_unit(exe: &Path, addr: SocketAddr, chan_home: Option<&str>) -> String {
+fn devserver_systemd_unit(
+    exe: &Path,
+    addr: SocketAddr,
+    chan_home: Option<&str>,
+    tunnel: Option<&SystemdTunnel>,
+) -> String {
     // A CHAN_HOME-scoped supervisor passes it to the service, else the unit runs
     // against the real ~/.chan. Quoted so a path with spaces survives.
-    let environment = match chan_home {
+    let mut environment = match chan_home {
         Some(home) => format!("Environment=\"CHAN_HOME={home}\"\n"),
         None => String::new(),
+    };
+    // Tunnel mode: carry the PAT in the unit (written 0600) and dial the gateway
+    // via --tunnel-url instead of binding a fixed --bind/--port. Under systemd the
+    // devserver still binds the loopback management API (see
+    // resolve_devserver_listen) so `--restart` can drive the fdstore handoff.
+    let exec = match tunnel {
+        Some(tunnel) => {
+            environment.push_str(&format!(
+                "Environment=\"CHAN_TUNNEL_TOKEN={}\"\n",
+                tunnel.token
+            ));
+            format!(
+                "{exe} devserver --tunnel-url={url}",
+                exe = exe.display(),
+                url = tunnel.url
+            )
+        }
+        None => format!(
+            "{exe} devserver --bind={ip} --port={port}",
+            exe = exe.display(),
+            ip = addr.ip(),
+            port = addr.port(),
+        ),
     };
     format!(
         "[Unit]\n\
@@ -3297,14 +3403,11 @@ fn devserver_systemd_unit(exe: &Path, addr: SocketAddr, chan_home: Option<&str>)
          FileDescriptorStoreMax=512\n\
          KillMode=process\n\
          {environment}\
-         ExecStart={exe} devserver --bind={ip} --port={port}\n\
+         ExecStart={exec}\n\
          Restart=on-failure\n\
          \n\
          [Install]\n\
          WantedBy=default.target\n",
-        exe = exe.display(),
-        ip = addr.ip(),
-        port = addr.port(),
     )
 }
 
@@ -5995,21 +6098,27 @@ mod tests {
         }
     }
 
-    /// The `listen` resolution matrix: tunnel mode flips the
-    /// default to no-bind; `CHAN_DEVSERVER_LISTEN` overrides; tunnel-off +
-    /// LISTEN=0 is the unreachable-devserver hard error.
+    /// The `listen` resolution matrix: tunnel mode flips the default to no-bind
+    /// UNLESS running under systemd notify; `CHAN_DEVSERVER_LISTEN` overrides;
+    /// tunnel-off + LISTEN=0 is the unreachable-devserver hard error.
     #[test]
     fn devserver_listen_matrix() {
         // Tunnel off: default binds; explicit 1 binds; explicit 0 errors
-        // (nothing reachable).
-        assert!(resolve_devserver_listen(false, None).unwrap());
-        assert!(resolve_devserver_listen(false, Some(true)).unwrap());
-        assert!(resolve_devserver_listen(false, Some(false)).is_err());
-        // Tunnel on: default does NOT bind locally; explicit 0 also doesn't;
-        // explicit 1 binds the local listener alongside the tunnel.
-        assert!(!resolve_devserver_listen(true, None).unwrap());
-        assert!(!resolve_devserver_listen(true, Some(false)).unwrap());
-        assert!(resolve_devserver_listen(true, Some(true)).unwrap());
+        // (nothing reachable). systemd notify makes no difference off-tunnel.
+        assert!(resolve_devserver_listen(false, false, None).unwrap());
+        assert!(resolve_devserver_listen(false, true, None).unwrap());
+        assert!(resolve_devserver_listen(false, false, Some(true)).unwrap());
+        assert!(resolve_devserver_listen(false, false, Some(false)).is_err());
+        // Tunnel on, NOT under systemd: default does NOT bind locally; explicit 0
+        // also doesn't; explicit 1 binds the local listener alongside the tunnel.
+        assert!(!resolve_devserver_listen(true, false, None).unwrap());
+        assert!(!resolve_devserver_listen(true, false, Some(false)).unwrap());
+        assert!(resolve_devserver_listen(true, false, Some(true)).unwrap());
+        // Tunnel on, UNDER systemd notify: default binds the loopback management
+        // API so `--restart` fdstore parking can reach it; explicit 0 still opts
+        // out.
+        assert!(resolve_devserver_listen(true, true, None).unwrap());
+        assert!(!resolve_devserver_listen(true, true, Some(false)).unwrap());
     }
 
     /// `CHAN_DEVSERVER_LISTEN` is a tri-state: unset/empty ⇒ default, `"0"` ⇒
@@ -6873,6 +6982,7 @@ mod tests {
             Path::new("/usr/local/bin/chan"),
             "127.0.0.1:8799".parse().unwrap(),
             None,
+            None,
         );
         assert!(unit.contains("Type=notify"));
         assert!(unit.contains("NotifyAccess=main"));
@@ -6891,6 +7001,7 @@ mod tests {
             Path::new("/usr/local/bin/chan"),
             "127.0.0.1:8799".parse().unwrap(),
             Some("/tmp/iso home"),
+            None,
         );
         // The service inherits the supervisor's CHAN_HOME (quoted for the space),
         // placed before ExecStart so systemd resolves it for the started process.
@@ -6898,6 +7009,98 @@ mod tests {
         let env = unit.find("Environment=").unwrap();
         let exec = unit.find("ExecStart=").unwrap();
         assert!(env < exec);
+    }
+
+    #[test]
+    fn devserver_systemd_unit_tunnel_carries_token_and_url() {
+        let tunnel = SystemdTunnel {
+            token: "chan_pat_abc123".to_string(),
+            url: "https://devserver.chan.app/v1/tunnel".to_string(),
+        };
+        let unit = devserver_systemd_unit(
+            Path::new("/home/dev/.local/bin/chan"),
+            "127.0.0.1:8787".parse().unwrap(),
+            None,
+            Some(&tunnel),
+        );
+        // Tunnel mode dials the gateway via --tunnel-url; no fixed --bind/--port.
+        assert!(unit.contains(
+            "ExecStart=/home/dev/.local/bin/chan devserver \
+             --tunnel-url=https://devserver.chan.app/v1/tunnel\n"
+        ));
+        assert!(!unit.contains("--bind="));
+        assert!(!unit.contains("--port="));
+        // The PAT rides in an Environment= line (the unit is written 0600).
+        assert!(unit.contains("Environment=\"CHAN_TUNNEL_TOKEN=chan_pat_abc123\"\n"));
+        // The systemd fdstore scaffold is unchanged from the non-tunnel unit.
+        assert!(unit.contains("Type=notify"));
+        assert!(unit.contains("NotifyAccess=main"));
+        assert!(unit.contains("FileDescriptorStoreMax=512"));
+    }
+
+    #[test]
+    fn devserver_systemd_unit_tunnel_stacks_chan_home_and_token() {
+        // CHAN_HOME (test isolation) and the token stack as two Environment lines,
+        // both before ExecStart so systemd resolves them for the started process.
+        let tunnel = SystemdTunnel {
+            token: "chan_pat_xyz".to_string(),
+            url: "https://example.test/v1/tunnel".to_string(),
+        };
+        let unit = devserver_systemd_unit(
+            Path::new("/home/dev/.local/bin/chan"),
+            "127.0.0.1:8787".parse().unwrap(),
+            Some("/tmp/iso"),
+            Some(&tunnel),
+        );
+        assert!(unit.contains("Environment=\"CHAN_HOME=/tmp/iso\"\n"));
+        assert!(unit.contains("Environment=\"CHAN_TUNNEL_TOKEN=chan_pat_xyz\"\n"));
+        let token_env = unit.find("CHAN_TUNNEL_TOKEN").unwrap();
+        let exec = unit.find("ExecStart=").unwrap();
+        assert!(token_env < exec);
+    }
+
+    #[test]
+    fn supervised_tunnel_spec_reuses_persisted_url_unless_forced() {
+        // No token -> no tunnel spec (non-tunnel supervised restart).
+        assert!(supervised_tunnel_spec(
+            ServiceKind::Systemd,
+            None,
+            "https://cli.test".into(),
+            false
+        )
+        .is_none());
+        // launchd never gets a tunnel spec (its tunnel mode is refused upstream).
+        assert!(supervised_tunnel_spec(
+            ServiceKind::Launchd,
+            Some("chan_pat_a".into()),
+            "https://cli.test".into(),
+            false,
+        )
+        .is_none());
+        // With a token, --force takes the CLI URL (a "refresh"). This path does
+        // not read the persisted unit, so the assertion stays hermetic; the
+        // reuse-from-persisted parse is covered by persisted_flag_value below.
+        let spec = supervised_tunnel_spec(
+            ServiceKind::Systemd,
+            Some("chan_pat_a".into()),
+            "https://cli.test".into(),
+            true,
+        )
+        .unwrap();
+        assert_eq!(spec.token, "chan_pat_a");
+        assert_eq!(spec.url, "https://cli.test");
+    }
+
+    #[test]
+    fn persisted_flag_value_reads_tunnel_url_from_execstart() {
+        // The "reuse first-run URL" read: pull --tunnel-url back out of a unit's
+        // ExecStart line the way a flagless --restart would.
+        let unit = "ExecStart=/home/dev/.local/bin/chan devserver \
+                    --tunnel-url=https://first-run.test/v1/tunnel\n";
+        assert_eq!(
+            persisted_flag_value(unit, "--tunnel-url="),
+            Some("https://first-run.test/v1/tunnel")
+        );
     }
 
     #[test]
