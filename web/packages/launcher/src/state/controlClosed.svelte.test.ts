@@ -47,6 +47,9 @@ function devserver(over: Partial<DevserverEntry> & Pick<DevserverEntry, "id">): 
     auto_hide_control: false,
     os: "",
     pretty_name: null,
+    gateway_id: null,
+    gateway_url: "",
+    shared: false,
     ...over,
   };
 }

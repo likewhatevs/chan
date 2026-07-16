@@ -50,6 +50,9 @@ function ds(over: Partial<DevserverEntry> & Pick<DevserverEntry, "id">): Devserv
     auto_hide_control: false,
     os: "",
     pretty_name: null,
+    gateway_id: null,
+    gateway_url: "",
+    shared: false,
     ...over,
   };
 }

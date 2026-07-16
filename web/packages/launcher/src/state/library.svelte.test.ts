@@ -4,13 +4,17 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import {
+  addGateway,
   addLocalWorkspace,
   connectDevserver,
+  connectGateway,
   disconnectDevserver,
+  disconnectGateway,
   library,
   loadLibrary,
   openWorkspaceWindow,
   removeDevserver,
+  removeGateway,
   removeWorkspace,
   resync,
   saveDevserver,
@@ -270,5 +274,48 @@ describe("resync on regaining visibility/focus", () => {
     await vi.advanceTimersByTimeAsync(4000);
     expect(ws.mock.calls.length).toBe(calls);
     ws.mockRestore();
+  });
+});
+
+describe("gateway registry state", () => {
+  afterEach(async () => {
+    const { resetMockGateways } = await import("../api/mock");
+    resetMockGateways();
+  });
+
+  it("loadLibrary populates gateways alongside the other registries", async () => {
+    await addGateway({ url: "https://gw.example" });
+    await loadLibrary();
+    expect(library.gateways.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("add/connect/disconnect/remove re-list so the acting client flips at once", async () => {
+    await addGateway({ url: "https://gw.example", label: "gw" });
+    const gw = library.gateways.find((g) => g.url === "https://gw.example")!;
+    expect(gw).toBeTruthy();
+    expect(gw.status).toBe("disconnected");
+
+    await connectGateway(gw.id);
+    expect(library.gateways.find((g) => g.id === gw.id)!.status).toBe("connected");
+
+    await disconnectGateway(gw.id);
+    const off = library.gateways.find((g) => g.id === gw.id)!;
+    expect(off.status).toBe("disconnected");
+    expect(off.enabled).toBe(false);
+
+    await removeGateway(gw.id);
+    expect(library.gateways.some((g) => g.id === gw.id)).toBe(false);
+  });
+
+  it("the watch push re-fetches gateways live (the third refresh)", async () => {
+    const { backend } = await import("../api/backend");
+    const spy = vi.spyOn(backend, "listGateways");
+    // A window mutation fires the watch push; the gateway registry re-lists
+    // on the same signal (the desktop signals library-change on gateway
+    // mutations, which ride the same feed).
+    await backend.createWindow("terminal");
+    await new Promise((r) => setTimeout(r, 0));
+    expect(spy).toHaveBeenCalled();
+    spy.mockRestore();
   });
 });

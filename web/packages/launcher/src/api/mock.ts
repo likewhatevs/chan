@@ -9,6 +9,7 @@
 import {
   ApiError,
   type DevserverEntry,
+  type GatewayEntry,
   type LibraryApi,
   type WindowRecord,
   type WindowSet,
@@ -71,8 +72,16 @@ const devservers: MockDevserver[] = [
     auto_hide_control: false,
     os: "linux",
     pretty_name: "Debian GNU/Linux 12 (bookworm)",
+    gateway_id: null,
+    gateway_url: "",
+    shared: false,
   },
 ];
+
+// The gateway registry starts empty (the read-only and browser-test surfaces
+// hold none); addGateway keeps CRUD exercisable in-memory.
+const gateways: GatewayEntry[] = [];
+let nextGw = 1;
 
 // A connected devserver's served workspaces, merged into the workspace feed
 // tagged with their devserver_id + library_id. Only surface while the owning
@@ -116,6 +125,12 @@ const liveTerminals = new Map<string, number>([["ds-1:w/api", 2]]);
  * off clears the flag. */
 export function setMockLocalLiveTerminals(workspace_id: string, n: number): void {
   liveTerminals.set(`local:${workspace_id}`, n);
+}
+
+/** Test-only: drop every mock gateway (the registry seeds empty), so a suite
+ * that adds one stays order-independent. */
+export function resetMockGateways(): void {
+  gateways.length = 0;
 }
 
 /** Re-seed the remote-workspace state the confirm-and-retry flow mutates (the
@@ -240,6 +255,9 @@ function publicDevserver(ds: MockDevserver): DevserverEntry {
     auto_hide_control: ds.auto_hide_control,
     os: ds.os,
     pretty_name: ds.pretty_name,
+    gateway_id: ds.gateway_id,
+    gateway_url: ds.gateway_url,
+    shared: ds.shared,
   };
 }
 
@@ -341,6 +359,10 @@ export const mockApi: LibraryApi = {
       // OS is unknown until the first connect surfaces the self-report.
       os: "",
       pretty_name: null,
+      // A registry add is always a plain row; gateway rows are synthesized.
+      gateway_id: null,
+      gateway_url: "",
+      shared: false,
     };
     devservers.push(ds);
     return tick(publicDevserver(ds));
@@ -488,6 +510,55 @@ export const mockApi: LibraryApi = {
     const i = devserverWorkspaces.findIndex((w) => w.devserver_id === id && w.prefix === prefix);
     if (i >= 0) devserverWorkspaces.splice(i, 1);
     notify();
+    return tick(undefined);
+  },
+
+  listGateways: () => tick(gateways.map((g) => ({ ...g }))),
+
+  addGateway: (input) => {
+    const gw: GatewayEntry = {
+      id: `gw-mock${nextGw++}`,
+      url: input.url,
+      label: (input.label ?? "").trim(),
+      enabled: true,
+      status: "disconnected",
+      pending_signin: false,
+      devserver_count: 0,
+      last_error: null,
+    };
+    gateways.push(gw);
+    notify();
+    return tick({ ...gw });
+  },
+
+  removeGateway: (id) => {
+    const i = gateways.findIndex((g) => g.id === id);
+    if (i >= 0) {
+      gateways.splice(i, 1);
+      notify();
+    }
+    return tick(undefined);
+  },
+
+  // The mock has no desktop to discover/sign in through, so connect just marks
+  // the gateway connected (and disconnect back), mirroring the devserver mock.
+  connectGateway: (id) => {
+    const gw = gateways.find((g) => g.id === id);
+    if (gw) {
+      gw.status = "connected";
+      gw.enabled = true;
+      notify();
+    }
+    return tick(undefined);
+  },
+
+  disconnectGateway: (id) => {
+    const gw = gateways.find((g) => g.id === id);
+    if (gw) {
+      gw.status = "disconnected";
+      gw.enabled = false;
+      notify();
+    }
     return tick(undefined);
   },
 

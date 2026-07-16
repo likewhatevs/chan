@@ -192,6 +192,9 @@ describe("New workspace dialog -- edit", () => {
       auto_hide_control: false,
       os: "",
       pretty_name: null,
+      gateway_id: null,
+      gateway_url: "",
+      shared: false,
     };
     openEditDevserver(ds);
     const el = render();
@@ -220,6 +223,9 @@ describe("New workspace dialog -- edit", () => {
       auto_hide_control: false,
       os: "macos",
       pretty_name: "macOS 15.1",
+      gateway_id: null,
+      gateway_url: "",
+      shared: false,
     };
     openEditDevserver(ds);
     const el = render();

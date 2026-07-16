@@ -11,6 +11,7 @@ import App from "./App.svelte";
 import appSource from "./App.svelte?raw";
 import { library, reportError } from "./state/library.svelte";
 import { clearNotices } from "./state/notices.svelte";
+import { screen } from "./state/screen.svelte";
 import { controlAttention, clearAllControlAttention } from "./state/controlAttention.svelte";
 
 // Pin the in-memory mock as the backend so loadLibrary succeeds (no spurious
@@ -37,6 +38,8 @@ describe("launcher root", () => {
     library.error = null;
     clearNotices();
     clearAllControlAttention();
+    screen.current = "computers";
+    screen.flips = 0;
   });
 
   it("renders the top bar: title, subtitle, theme toggle, and no [+]", () => {
@@ -97,6 +100,39 @@ describe("launcher root", () => {
     dismiss.click();
     flushSync();
     expect(target.querySelector('.notice-bubble[role="alert"]')).toBeNull();
+  });
+
+  it("flipping swaps Library for the gateways screen and labels the back face", async () => {
+    target = document.createElement("div");
+    document.body.appendChild(target);
+    app = mount(App, { target });
+    await settle();
+    flushSync();
+
+    const flipLabel = (): string | null =>
+      target!.querySelector(".screen-flip-inner")?.getAttribute("data-flip-label") ?? null;
+    const toggle = (): void => {
+      (target!.querySelector("button.title-toggle") as HTMLButtonElement).click();
+      flushSync();
+    };
+
+    // Computers side: the library tree renders, no gateways section, and the
+    // back face carries the CURRENT screen's name (showScreen mutates
+    // screen.current before the turn plays, so the just-set screen is the
+    // incoming face -- the label must read as the destination).
+    expect(target.querySelector("section.machine")).not.toBeNull();
+    expect(target.querySelector(".gateways-screen")).toBeNull();
+    expect(flipLabel()).toBe("Computers");
+
+    toggle();
+    expect(target.querySelector(".gateways-screen")).not.toBeNull();
+    expect(target.querySelector("section.machine")).toBeNull();
+    expect(flipLabel()).toBe("Gateways");
+
+    toggle();
+    expect(target.querySelector(".gateways-screen")).toBeNull();
+    expect(target.querySelector("section.machine")).not.toBeNull();
+    expect(flipLabel()).toBe("Computers");
   });
 
   it("subscribes the desktop's structured launcher-notice event", () => {

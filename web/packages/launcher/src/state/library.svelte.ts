@@ -4,7 +4,14 @@
 // record; the window feed updates from the watch subscription.
 
 import { backend } from "../api/backend";
-import type { DevserverEntry, DevserverInput, WindowRecord, WorkspaceEntry } from "../api/library";
+import type {
+  DevserverEntry,
+  DevserverInput,
+  GatewayEntry,
+  GatewayInput,
+  WindowRecord,
+  WorkspaceEntry,
+} from "../api/library";
 import { selfManagedWindows } from "./capabilities";
 import { pushLocalError } from "./notices.svelte";
 import { beginPending, clearPending, dsKey, reconcile, servedKey, wsKey } from "./pending.svelte";
@@ -13,6 +20,7 @@ import { reconcileWindows } from "./windowManager.svelte";
 interface LibraryState {
   workspaces: WorkspaceEntry[];
   devservers: DevserverEntry[];
+  gateways: GatewayEntry[];
   windows: WindowRecord[];
   // Per-tenant leadership from the watch feed: prefix -> leader window_id. Empty
   // (leaderless) when the tenant has no live leader. Correlated against this
@@ -25,6 +33,7 @@ interface LibraryState {
 export const library = $state<LibraryState>({
   workspaces: [],
   devservers: [],
+  gateways: [],
   windows: [],
   leaders: {},
   loading: false,
@@ -85,12 +94,15 @@ function ensureWindowFeed(): void {
       // the feed (close handles for discarded records, flag orphans). Inert on
       // desktop (bridge-driven, no browser-origin records) and in the demo.
       if (selfManagedWindows) reconcileWindows(set);
-      // The feed also fires on workspace mount/unmount (chan open / on / off)
-      // and on a devserver connect/disconnect (its windows enter/leave + its
-      // served-workspace rows merge in/out, and its `connected` flag flips), so
-      // re-fetch both registries to reflect the new state live.
+      // The feed also fires on workspace mount/unmount (chan open / on / off),
+      // on a devserver connect/disconnect (its windows enter/leave + its
+      // served-workspace rows merge in/out, and its `connected` flag flips),
+      // and on every gateway mutation (the desktop signals the library change
+      // on add/remove/connect/cascade/roster diff), so re-fetch all three
+      // registries to reflect the new state live.
       void refreshWorkspacesLive();
       void refreshDevserversLive();
+      void refreshGatewaysLive();
     });
   } catch {
     // The window feed is best-effort: a host without WebSocket or a failed
@@ -109,12 +121,14 @@ export async function loadLibrary(): Promise<void> {
   // slow or rebuilding.
   ensureWindowFeed();
   try {
-    const [workspaces, devservers] = await Promise.all([
+    const [workspaces, devservers, gateways] = await Promise.all([
       backend.listWorkspaces(),
       backend.listDevservers(),
+      backend.listGateways(),
     ]);
     library.workspaces = workspaces;
     library.devservers = devservers;
+    library.gateways = gateways;
     // On mount/reload: clear any persisted marker the real state already
     // satisfies (the op finished while we were away), so the spinner picks up
     // the latest state and only survives for rows still genuinely in-flight.
@@ -142,6 +156,7 @@ export function stopWatching(): void {
 export function resync(): void {
   void refreshWorkspacesLive();
   void refreshDevserversLive();
+  void refreshGatewaysLive();
 }
 
 // Resync whenever the launcher becomes visible / focused again. The window feed's
@@ -238,6 +253,35 @@ async function refreshDevserversLive(): Promise<void> {
   }
 }
 
+async function refreshGateways(): Promise<void> {
+  library.gateways = await backend.listGateways();
+}
+
+// The live gateway re-fetch the window-watch feed drives, mirroring
+// refreshWorkspacesLive/refreshDevserversLive: the desktop signals the library
+// change on every gateway mutation (add/remove/connect/cascade/roster diff).
+// Coalesced + best-effort for the same reasons.
+let liveGatewaysRefreshing = false;
+let liveGatewaysRefreshPending = false;
+
+export async function refreshGatewaysLive(): Promise<void> {
+  if (liveGatewaysRefreshing) {
+    liveGatewaysRefreshPending = true;
+    return;
+  }
+  liveGatewaysRefreshing = true;
+  try {
+    do {
+      liveGatewaysRefreshPending = false;
+      library.gateways = await backend.listGateways();
+    } while (liveGatewaysRefreshPending);
+  } catch {
+    // Best-effort: a failed live re-fetch must not tear down the feed.
+  } finally {
+    liveGatewaysRefreshing = false;
+  }
+}
+
 export async function addLocalWorkspace(path: string, label?: string): Promise<void> {
   await backend.addLocalWorkspace(path, label);
   await refreshWorkspaces();
@@ -313,6 +357,40 @@ export async function disconnectDevserver(id: string): Promise<void> {
     throw e;
   }
   await refreshDevservers(); // reconcile clears the marker once disconnected
+}
+
+// The gateway actions mirror the devserver ones: uniform throws (bulk loops
+// count per-item failures; per-row callers route errors to reportError), and
+// an explicit re-list after each op so the acting client flips at once -- the
+// watch push keeps it live for desktop-driven changes (sign-in landing,
+// roster diffs, cascades).
+
+/** Register a gateway by URL. Save just adds; the first Connect discovers,
+ * signs in, and starts the roster poll. */
+export async function addGateway(input: GatewayInput): Promise<void> {
+  await backend.addGateway(input);
+  await refreshGateways();
+}
+
+/** Remove a gateway: the desktop cascades its live connections and its
+ * synthesized rows leave the feed. */
+export async function removeGateway(id: string): Promise<void> {
+  await backend.removeGateway(id);
+  await refreshGateways();
+}
+
+/** Connect a gateway (desktop action, 409 with no bridge): discovery, the
+ * account sign-in when needed, then the roster poll. */
+export async function connectGateway(id: string): Promise<void> {
+  await backend.connectGateway(id);
+  await refreshGateways();
+}
+
+/** Disconnect a gateway (desktop action, 409 with no bridge): stops the poll
+ * and cascades its roster devservers' connections. */
+export async function disconnectGateway(id: string): Promise<void> {
+  await backend.disconnectGateway(id);
+  await refreshGateways();
 }
 
 /** Open a terminal window on a connected devserver. The window feed updates

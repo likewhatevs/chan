@@ -2,6 +2,8 @@ import {
   ApiError,
   type DevserverEntry,
   type DevserverInput,
+  type GatewayEntry,
+  type GatewayInput,
   type LibraryApi,
   type WindowRecord,
   type WindowSet,
@@ -31,6 +33,7 @@ interface Seed {
   workspaces: WorkspaceEntry[];
   devservers: DemoDevserver[];
   devserverWorkspaces: WorkspaceEntry[];
+  gateways: GatewayEntry[];
   windows: WindowRecord[];
   liveTerminals: [string, number][];
   nextWs: number;
@@ -81,6 +84,9 @@ function seed(): Seed {
         auto_hide_control: true,
         os: "linux",
         pretty_name: "Ubuntu 24.04.1 LTS",
+        gateway_id: null,
+        gateway_url: "",
+        shared: false,
       },
       {
         id: "ds-windows",
@@ -97,6 +103,9 @@ function seed(): Seed {
         auto_hide_control: false,
         os: "windows",
         pretty_name: "Windows 11 Pro",
+        gateway_id: null,
+        gateway_url: "",
+        shared: false,
       },
       {
         id: ATTENTION_DEVSERVER_ID,
@@ -115,6 +124,23 @@ function seed(): Seed {
         auto_hide_control: false,
         os: "linux",
         pretty_name: "Debian GNU/Linux 13",
+        gateway_id: null,
+        gateway_url: "",
+        shared: false,
+      },
+    ],
+    // One sample gateway so the Gateways screen has a badge to render in the
+    // demo embed. Connected with a quiet roster; the demo mints no roster rows.
+    gateways: [
+      {
+        id: "gw-demo1a2b",
+        url: "https://id.chan.app",
+        label: "chan.app",
+        enabled: true,
+        status: "connected",
+        pending_signin: false,
+        devserver_count: 1,
+        last_error: null,
       },
     ],
     devserverWorkspaces: [
@@ -175,6 +201,7 @@ function emptySeed(): Seed {
     workspaces: [],
     devservers: [],
     devserverWorkspaces: [],
+    gateways: [],
     windows: [],
     liveTerminals: [],
   };
@@ -260,10 +287,12 @@ export function createLauncherDemoApi(opts: LauncherDemoOptions = {}): LauncherD
   let workspaces: WorkspaceEntry[] = [];
   let devservers: DemoDevserver[] = [];
   let devserverWorkspaces: WorkspaceEntry[] = [];
+  let gateways: GatewayEntry[] = [];
   let windows: WindowRecord[] = [];
   let liveTerminals = new Map<string, number>();
   let nextWs = 1;
   let nextDs = 1;
+  let nextGw = 1;
   const subscribers = new Set<(set: WindowSet) => void>();
 
   const startsEmpty = opts.variant === "empty" || opts.variant === "devserver";
@@ -273,10 +302,12 @@ export function createLauncherDemoApi(opts: LauncherDemoOptions = {}): LauncherD
     workspaces = clone(s.workspaces);
     devservers = clone(s.devservers);
     devserverWorkspaces = clone(s.devserverWorkspaces);
+    gateways = clone(s.gateways);
     windows = clone(s.windows);
     liveTerminals = new Map(s.liveTerminals);
     nextWs = s.nextWs;
     nextDs = s.nextDs;
+    nextGw = 1;
     notify();
   }
 
@@ -364,6 +395,9 @@ export function createLauncherDemoApi(opts: LauncherDemoOptions = {}): LauncherD
         auto_hide_control: input.auto_hide_control ?? false,
         os: "",
         pretty_name: null,
+        gateway_id: null,
+        gateway_url: "",
+        shared: false,
       };
       devservers.push(ds);
       notify();
@@ -461,6 +495,47 @@ export function createLauncherDemoApi(opts: LauncherDemoOptions = {}): LauncherD
         const ws = devserverWorkspaces[i]!;
         discardWorkspaceWindows(ws.path, ws.library_id ?? "");
         devserverWorkspaces.splice(i, 1);
+        notify();
+      }
+      return tick(undefined);
+    },
+    listGateways: () => tick(gateways.map((g) => ({ ...g }))),
+    addGateway: (input: GatewayInput) => {
+      const gw: GatewayEntry = {
+        id: `gw-demo-${nextGw++}`,
+        url: input.url,
+        label: (input.label ?? "").trim(),
+        enabled: true,
+        status: "disconnected",
+        pending_signin: false,
+        devserver_count: 0,
+        last_error: null,
+      };
+      gateways.push(gw);
+      notify();
+      return tick({ ...gw });
+    },
+    removeGateway: (id) => {
+      gateways = gateways.filter((g) => g.id !== id);
+      notify();
+      return tick(undefined);
+    },
+    // No desktop to discover/sign in through: connect/disconnect just flip the
+    // badge state, like the demo devservers.
+    connectGateway: (id) => {
+      const gw = gateways.find((g) => g.id === id);
+      if (gw) {
+        gw.status = "connected";
+        gw.enabled = true;
+        notify();
+      }
+      return tick(undefined);
+    },
+    disconnectGateway: (id) => {
+      const gw = gateways.find((g) => g.id === id);
+      if (gw) {
+        gw.status = "disconnected";
+        gw.enabled = false;
         notify();
       }
       return tick(undefined);

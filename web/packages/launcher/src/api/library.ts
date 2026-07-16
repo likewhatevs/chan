@@ -150,7 +150,9 @@ export interface WorkspaceEntry {
 export type DevserverStatus = "disconnected" | "connecting" | "connected" | "unreachable";
 
 export interface DevserverEntry {
-  /** Stable registry id used for row actions and the connection-state map. */
+  /** Stable registry id used for row actions and the connection-state map. For
+   * a synthesized gateway roster row this is the desktop-minted
+   * `gw:{gateway_id}:{owner}:{devserver_id}` triple; update/remove 404 on it. */
   id: string;
   /** Full configured endpoint URL, including scheme. */
   url: string;
@@ -206,6 +208,60 @@ export interface DevserverEntry {
    * `PRETTY_NAME`); null when unknown.
    */
   pretty_name: string | null;
+  /**
+   * The owning gateway's registry id for a synthesized gateway roster row;
+   * null for a plain (persisted) devserver row. Synthesized rows are
+   * read-only in the registry: no checkbox, no edit, no remove.
+   */
+  gateway_id: string | null;
+  /** The owning gateway's URL; empty for plain rows. */
+  gateway_url: string;
+  /** A roster row shared with the account (role != owner), not owned by it. */
+  shared: boolean;
+}
+
+// ---- The gateway registry -------------------------------------------------
+// A gateway is a remote chan-gateway the desktop holds an account-level
+// connection to; its devservers surface as synthesized read-only rows in the
+// devserver feed (`gateway_id` set). The launcher CRUDs the registry over
+// HTTP; discovery, the account sign-in, roster polling, and the connection
+// cascade are desktop-internal. The field names ARE the wire (the server's
+// GatewayEntry).
+
+/**
+ * Live connection lifecycle of a gateway, driving the badge on the Gateways
+ * screen:
+ * - `disconnected` no live connection (the Connect state)
+ * - `connecting`   discovery / sign-in / first roster fetch in flight
+ * - `connected`    roster polling is live
+ * - `unreachable`  polling kept failing; the desktop keeps the last-known
+ *   roster and retries (401 instead cascades to `disconnected`)
+ */
+export type GatewayStatus = "disconnected" | "connecting" | "connected" | "unreachable";
+
+export interface GatewayEntry {
+  /** Stable registry id (desktop-minted `gw-<8hex>`). */
+  id: string;
+  /** The gateway origin the desktop discovers and polls. */
+  url: string;
+  /** Optional user label; empty falls back to the URL. */
+  label: string;
+  /** Persisted DESIRED state: connect on startup vs parked. Connect persists
+   * true, disconnect false. */
+  enabled: boolean;
+  status: GatewayStatus;
+  /** An account sign-in for this gateway is waiting on the user's browser. */
+  pending_signin: boolean;
+  /** How many roster devservers this gateway currently synthesizes. */
+  devserver_count: number;
+  /** The last connection/roster error, or null. */
+  last_error: string | null;
+}
+
+/** Write payload for add gateway. Save just adds -- no probe, no sign-in. */
+export interface GatewayInput {
+  url: string;
+  label?: string;
 }
 
 /** Write payload for add/edit devserver. `token` absent on edit leaves it unchanged. */
@@ -278,6 +334,21 @@ export interface LibraryApi {
    * mounted prefix (desktop action, 409 with no bridge). An unforced forget with
    * live terminals answers the same live_terminals body as off. */
   forgetDevserverWorkspace(id: string, prefix: string, force?: boolean): Promise<void>;
+  /** List the gateway registry. Empty on surfaces that hold none. */
+  listGateways(): Promise<GatewayEntry[]>;
+  /** Register a gateway by URL. Save just adds: no probe, no sign-in; the
+   * first Connect discovers + signs in. */
+  addGateway(input: GatewayInput): Promise<GatewayEntry>;
+  /** Remove a gateway. The desktop cascades: live roster connections tear
+   * down and the synthesized rows leave the feed. */
+  removeGateway(id: string): Promise<void>;
+  /** Connect a gateway (persists enabled=true; discovery, sign-in, and the
+   * roster poll are desktop-internal). A surface with no desktop bridge
+   * answers 409. */
+  connectGateway(id: string): Promise<void>;
+  /** Disconnect a gateway (persists enabled=false; cascades its live rows).
+   * A surface with no desktop bridge answers 409. */
+  disconnectGateway(id: string): Promise<void>;
   /** Open the desktop's native folder picker; resolves to the chosen absolute
    * path, or null if the user cancelled. A pure desktop action (no desktop
    * bridge → 409), offered only where window-ops are available. */
@@ -430,6 +501,12 @@ export const liveApi: LibraryApi = {
       prefix,
       force,
     }),
+  listGateways: () => req("GET", "/api/library/gateways"),
+  addGateway: (input) => req("POST", "/api/library/gateways", input),
+  removeGateway: (id) => req("DELETE", `/api/library/gateways/${encodeURIComponent(id)}`),
+  connectGateway: (id) => req("POST", `/api/library/gateways/${encodeURIComponent(id)}/connect`),
+  disconnectGateway: (id) =>
+    req("POST", `/api/library/gateways/${encodeURIComponent(id)}/disconnect`),
   pickFolder: () => req("POST", "/api/library/fs/pick-folder"),
   listWindows: () => req("GET", "/api/library/windows"),
   watchWindows: (onSet) => {
