@@ -18,12 +18,12 @@
 //! in memory while a serve is running, and the desktop webview
 //! reloads it fresh on every On toggle.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::fs;
 use std::io;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use chan_server::{
     DevserverEntry, DevserverInput, DevserverRegistry, DevserverStatus, GatewayEntry, GatewayInput,
@@ -441,11 +441,6 @@ pub struct DevserverConfigRegistry {
     /// `AppState.devserver_connecting`, so list reports `connecting` during the
     /// coalesced dial attempt.
     connecting: Arc<Mutex<HashSet<String>>>,
-    /// Devservers whose gateway sign-in is waiting on the user's browser,
-    /// stamped with when the browser was opened. Shared with
-    /// `AppState.devserver_awaiting_signin`, so list reports `pending_signin`
-    /// and the launcher renders the waiting row.
-    awaiting_signin: Arc<Mutex<HashMap<String, Instant>>>,
     /// The connected-devserver feed (shared with `AppState.devserver_feed`), so
     /// `list` resolves each row's `library_id` from the live window snapshot.
     /// `WorkspaceHost::pane_color` matches a devserver window's `library_id`
@@ -463,7 +458,6 @@ impl DevserverConfigRegistry {
         on_remove: Arc<OnceLock<DevserverRemoveHook>>,
         conns: Arc<DevserverConns>,
         connecting: Arc<Mutex<HashSet<String>>>,
-        awaiting_signin: Arc<Mutex<HashMap<String, Instant>>>,
         feed: Arc<crate::DevserverFeed>,
         gateway_manager: Arc<crate::gateway::GatewayManager>,
     ) -> Self {
@@ -472,7 +466,6 @@ impl DevserverConfigRegistry {
             on_remove,
             conns,
             connecting,
-            awaiting_signin,
             feed,
             gateway_manager,
         }
@@ -661,7 +654,6 @@ fn entry_from_devserver(
     d: &Devserver,
     conns: &DevserverConns,
     connecting: &Arc<Mutex<HashSet<String>>>,
-    awaiting_signin: &Arc<Mutex<HashMap<String, Instant>>>,
     feed: &crate::DevserverFeed,
 ) -> DevserverEntry {
     // The desktop stores the dial URL (formed from the user's host+port); the wire
@@ -700,13 +692,9 @@ fn entry_from_devserver(
         } else {
             DevserverStatus::Disconnected
         },
-        // The row waits on a browser sign-in (the desktop's awaiting-sign-in
-        // set, cleared by the deep-link callback, its timeout, a teardown, or
-        // a re-click). Presence is the state; the timeout task owns expiry.
-        pending_signin: awaiting_signin
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .contains_key(&d.id),
+        // Sign-in waits are gateway-level; a persisted row never waits, and
+        // the key stays on the wire so the launcher parses it unconditionally.
+        pending_signin: false,
         // The connected library id, learned from the live window feed (`None`
         // until this devserver is connected with ≥1 window). `pane_color` matches
         // a devserver window's `library_id` against this (in the feed) to resolve
@@ -740,15 +728,7 @@ impl DevserverRegistry for DevserverConfigRegistry {
                 let mut rows: Vec<DevserverEntry> = cfg
                     .devservers
                     .iter()
-                    .map(|d| {
-                        entry_from_devserver(
-                            d,
-                            &self.conns,
-                            &self.connecting,
-                            &self.awaiting_signin,
-                            &self.feed,
-                        )
-                    })
+                    .map(|d| entry_from_devserver(d, &self.conns, &self.connecting, &self.feed))
                     .collect();
                 for g in &cfg.gateways {
                     rows.extend(self.gateway_manager.roster(&g.id).iter().map(|r| {
@@ -782,7 +762,6 @@ impl DevserverRegistry for DevserverConfigRegistry {
             &entry,
             &self.conns,
             &self.connecting,
-            &self.awaiting_signin,
             &self.feed,
         ))
     }
@@ -817,13 +796,7 @@ impl DevserverRegistry for DevserverConfigRegistry {
         } else if input.clear_token {
             ds.token.clear();
         }
-        let entry = entry_from_devserver(
-            ds,
-            &self.conns,
-            &self.connecting,
-            &self.awaiting_signin,
-            &self.feed,
-        );
+        let entry = entry_from_devserver(ds, &self.conns, &self.connecting, &self.feed);
         store.save(&cfg).map_err(|e| e.to_string())?;
         Ok(Some(entry))
     }
@@ -1079,6 +1052,44 @@ fn split_legacy_gateway_rows(cfg: &mut Config) -> GatewayMigration {
         outcome.created.push(gw);
     }
     outcome
+}
+
+/// Convert one persisted devserver row into a gateway entry: the row's
+/// URL origin becomes (or merges into, first non-empty label winning) a
+/// gateway, and the row is dropped - the gateway's roster supplies its
+/// devservers from here on. The `chan open` handoff probe calls this when
+/// a just-registered URL answers as a gateway. `Ok(None)` when no row has
+/// `id` (removed meanwhile); an unparseable row URL is an error and the
+/// config stays untouched.
+pub fn convert_devserver_row_to_gateway(
+    store: &Arc<Mutex<ConfigStore>>,
+    id: &str,
+) -> Result<Option<Gateway>, String> {
+    let mut guard = store.lock().unwrap();
+    let mut cfg = guard.get().map_err(|e| e.to_string())?;
+    let Some(pos) = cfg.devservers.iter().position(|d| d.id == id) else {
+        return Ok(None);
+    };
+    let row = cfg.devservers.remove(pos);
+    let origin = normalize_gateway_url(&row.url)?;
+    let gw = if let Some(existing) = cfg.gateways.iter_mut().find(|g| g.url == origin) {
+        if existing.label.is_empty() && !row.label.is_empty() {
+            existing.label = row.label;
+        }
+        existing.clone()
+    } else {
+        let gw = Gateway {
+            id: mint_unused_gateway_id(&cfg.gateways)?,
+            url: origin,
+            label: row.label,
+            enabled: true,
+            added_at: row.added_at,
+        };
+        cfg.gateways.push(gw.clone());
+        gw
+    };
+    guard.save(&cfg).map_err(|e| e.to_string())?;
+    Ok(Some(gw))
 }
 
 /// One-shot startup migration driver: runs right after the [`ConfigStore`]
@@ -1338,10 +1349,6 @@ mod tests {
         Arc::new(Mutex::new(HashSet::new()))
     }
 
-    fn empty_awaiting() -> Arc<Mutex<HashMap<String, Instant>>> {
-        Arc::new(Mutex::new(HashMap::new()))
-    }
-
     fn entry(key: &str, label: &str, hash: &str, saved_at: u64) -> WindowConfig {
         WindowConfig {
             key: key.to_string(),
@@ -1571,7 +1578,6 @@ mod tests {
             Arc::new(OnceLock::new()),
             Arc::new(crate::devserver::DevserverConns::default()),
             empty_connecting(),
-            empty_awaiting(),
             Arc::new(crate::DevserverFeed::default()),
             Arc::new(crate::gateway::GatewayManager::default()),
         );
@@ -1613,13 +1619,11 @@ mod tests {
         }));
         let conns = Arc::new(crate::devserver::DevserverConns::default());
         let connecting = empty_connecting();
-        let awaiting = empty_awaiting();
         let reg = DevserverConfigRegistry::new(
             Arc::clone(&store),
             Arc::new(OnceLock::new()),
             Arc::clone(&conns),
             Arc::clone(&connecting),
-            Arc::clone(&awaiting),
             Arc::new(crate::DevserverFeed::default()),
             Arc::new(crate::gateway::GatewayManager::default()),
         );
@@ -1654,15 +1658,8 @@ mod tests {
         conns.remove(&id);
         assert_eq!(reg.list()[0].status, DevserverStatus::Disconnected);
         assert_eq!(store.lock().unwrap().get().unwrap().devservers.len(), 1);
-        // The waiting-on-browser-sign-in flag rides the shared awaiting set the
-        // same way: present -> pending_signin, removed -> back to a plain row.
-        // Status stays disconnected either way (waiting is a row state, not a
-        // connection state).
-        assert!(!reg.list()[0].pending_signin);
-        awaiting.lock().unwrap().insert(id.clone(), Instant::now());
-        assert!(reg.list()[0].pending_signin);
-        assert_eq!(reg.list()[0].status, DevserverStatus::Disconnected);
-        awaiting.lock().unwrap().remove(&id);
+        // Sign-in waits are gateway-level: a persisted row never reports
+        // pending_signin (the wire key stays, pinned false).
         assert!(!reg.list()[0].pending_signin);
     }
 
@@ -1683,7 +1680,6 @@ mod tests {
             Arc::new(OnceLock::new()),
             Arc::clone(&conns),
             empty_connecting(),
-            empty_awaiting(),
             Arc::clone(&feed),
             Arc::new(crate::gateway::GatewayManager::default()),
         );
@@ -1735,7 +1731,6 @@ mod tests {
             Arc::new(OnceLock::new()),
             Arc::new(crate::devserver::DevserverConns::default()),
             empty_connecting(),
-            empty_awaiting(),
             Arc::new(crate::DevserverFeed::default()),
             Arc::new(crate::gateway::GatewayManager::default()),
         );
@@ -1814,7 +1809,6 @@ mod tests {
             Arc::new(OnceLock::new()),
             Arc::new(crate::devserver::DevserverConns::default()),
             empty_connecting(),
-            empty_awaiting(),
             Arc::new(crate::DevserverFeed::default()),
             Arc::new(crate::gateway::GatewayManager::default()),
         );
@@ -1854,7 +1848,6 @@ mod tests {
             Arc::clone(&hook_cell),
             Arc::new(crate::devserver::DevserverConns::default()),
             empty_connecting(),
-            empty_awaiting(),
             Arc::new(crate::DevserverFeed::default()),
             Arc::new(crate::gateway::GatewayManager::default()),
         );
@@ -1885,7 +1878,6 @@ mod tests {
             Arc::new(OnceLock::new()),
             Arc::new(crate::devserver::DevserverConns::default()),
             empty_connecting(),
-            empty_awaiting(),
             Arc::new(crate::DevserverFeed::default()),
             Arc::new(crate::gateway::GatewayManager::default()),
         );
@@ -2456,7 +2448,6 @@ mod tests {
             Arc::new(OnceLock::new()),
             Arc::new(crate::devserver::DevserverConns::default()),
             empty_connecting(),
-            empty_awaiting(),
             Arc::new(crate::DevserverFeed::default()),
             manager,
         );
@@ -2513,6 +2504,54 @@ mod tests {
         assert_eq!(reg.remove(&synth), Ok(false));
         // And the synthesized rows are untouched by the attempts.
         assert_eq!(reg.list().len(), 3);
+    }
+
+    #[test]
+    fn convert_handoff_row_becomes_or_merges_into_a_gateway() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(Mutex::new(ConfigStore {
+            path: dir.path().join("config.json"),
+        }));
+        {
+            let cfg = Config {
+                devservers: vec![
+                    plain_row("ds1", "https://gw.example.com/some/path"),
+                    plain_row("ds2", "https://id.chan.app"),
+                    plain_row("ds3", "not a url"),
+                ],
+                gateways: vec![Gateway {
+                    id: "gw-11111111".to_string(),
+                    url: "https://id.chan.app".to_string(),
+                    label: String::new(),
+                    enabled: true,
+                    added_at: 1,
+                }],
+                ..Default::default()
+            };
+            store.lock().unwrap().save(&cfg).unwrap();
+        }
+        // A fresh origin becomes a new gateway; the row is gone.
+        let gw = convert_devserver_row_to_gateway(&store, "ds1")
+            .expect("convert")
+            .expect("row existed");
+        assert_eq!(gw.url, "https://gw.example.com");
+        assert!(gw.enabled);
+        let cfg = store.lock().unwrap().get().unwrap();
+        assert!(!cfg.devservers.iter().any(|d| d.id == "ds1"));
+        assert_eq!(cfg.gateways.len(), 2);
+        // A known origin merges into the existing entry (no duplicate).
+        let gw = convert_devserver_row_to_gateway(&store, "ds2")
+            .expect("convert")
+            .expect("row existed");
+        assert_eq!(gw.id, "gw-11111111");
+        let cfg = store.lock().unwrap().get().unwrap();
+        assert_eq!(cfg.gateways.len(), 2);
+        // Unknown id (removed meanwhile): None, nothing changes.
+        assert_eq!(convert_devserver_row_to_gateway(&store, "ghost"), Ok(None));
+        // An unparseable row URL errors and the config stays untouched.
+        assert!(convert_devserver_row_to_gateway(&store, "ds3").is_err());
+        let cfg = store.lock().unwrap().get().unwrap();
+        assert!(cfg.devservers.iter().any(|d| d.id == "ds3"));
     }
 
     #[test]

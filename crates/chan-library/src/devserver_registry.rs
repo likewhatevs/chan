@@ -93,14 +93,11 @@ pub struct DevserverEntry {
     /// row without the field reads `disconnected`.
     #[serde(default)]
     pub status: DevserverStatus,
-    /// A gateway sign-in for this devserver is waiting on the user's browser:
-    /// the desktop opened the identity page and holds the row until the deep
-    /// link returns, the wait times out, or the user re-clicks Connect (which
-    /// re-opens the browser). The launcher renders a waiting spinner row off
-    /// this instead of leaving the silent `disconnected` state. Volatile
-    /// runtime state populated by chan-desktop; always `false` on a
-    /// headless/registry-less surface. `#[serde(default)]`: a row without the
-    /// field reads `false`.
+    /// Whether a browser sign-in is holding this row. Sign-in waits are
+    /// gateway-level (a gateway's `pending_signin` rides its own entry), so
+    /// devserver rows always report `false` today; the key stays on the
+    /// wire so the launcher parses it unconditionally. `#[serde(default)]`:
+    /// a row without the field reads `false`.
     #[serde(default)]
     pub pending_signin: bool,
     /// The devserver host's OS family (`macos | windows | linux | other`),

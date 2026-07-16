@@ -3,12 +3,11 @@
 //! This owns one loopback listener for the desktop process and
 //! mounts local workspaces into chan-server's multi-workspace host.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::net::{Ipv4Addr, SocketAddr, TcpListener};
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::Instant;
 
 use axum::Router;
 use chan_server::{
@@ -61,7 +60,6 @@ pub struct RegistryDeps {
     pub gateway_manager: Arc<crate::gateway::GatewayManager>,
     pub devserver_conns: Arc<DevserverConns>,
     pub devserver_connecting: Arc<Mutex<HashSet<String>>>,
-    pub devserver_awaiting_signin: Arc<Mutex<HashMap<String, Instant>>>,
     pub devserver_feed: Arc<crate::DevserverFeed>,
 }
 
@@ -74,7 +72,6 @@ impl EmbeddedServer {
             gateway_manager,
             devserver_conns,
             devserver_connecting,
-            devserver_awaiting_signin,
             devserver_feed,
         } = deps;
         let library = chan_workspace::Library::open()
@@ -115,7 +112,6 @@ impl EmbeddedServer {
             devserver_remove_hook,
             devserver_conns,
             devserver_connecting,
-            devserver_awaiting_signin,
             devserver_feed,
             Arc::clone(&gateway_manager),
         )));

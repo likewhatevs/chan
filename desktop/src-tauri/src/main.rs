@@ -23,7 +23,6 @@ use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::Instant;
 
 use serde::Serialize;
 // MenuItemKind and the predefined-menu items are only NAMED by the
@@ -177,15 +176,6 @@ pub struct AppState {
     /// Devservers with a connect request currently in flight. A second connect
     /// coalesces into the first instead of spawning another control terminal.
     pub devserver_connecting: Arc<Mutex<std::collections::HashSet<String>>>,
-    /// Devservers whose gateway sign-in is waiting on the user's browser,
-    /// stamped with when the browser was opened. Shared with the launcher's
-    /// [`DevserverConfigRegistry`](config::DevserverConfigRegistry) so rows
-    /// report `pending_signin` (the waiting spinner row). An entry is cleared
-    /// by the deep-link callback, its ~5 min timeout, a teardown
-    /// (disconnect/remove/reconnect), or a re-click, which re-opens the
-    /// browser and re-stamps the entry (latest-wins, like `PendingAuth`); the
-    /// stamp lets the timeout task expire only its own attempt.
-    pub devserver_awaiting_signin: Arc<Mutex<HashMap<String, Instant>>>,
     /// Teardown hook the launcher's [`DevserverConfigRegistry`] fires after an
     /// HTTP `DELETE /api/library/devservers/{id}` drops a row, so that path
     /// reaps a live connection/windows through [`teardown_devserver_connection`]
@@ -242,7 +232,6 @@ impl AppState {
             control_terminal_dead: Mutex::new(std::collections::HashSet::new()),
             control_terminal_generation: std::sync::atomic::AtomicU64::new(0),
             devserver_connecting: Arc::new(Mutex::new(std::collections::HashSet::new())),
-            devserver_awaiting_signin: Arc::new(Mutex::new(HashMap::new())),
             devserver_remove_hook: Arc::new(OnceLock::new()),
             gateway_remove_hook: Arc::new(OnceLock::new()),
             gateway_manager: Arc::new(gateway::GatewayManager::default()),
@@ -1546,11 +1535,6 @@ fn remove_devserver_windows(app: &tauri::AppHandle, state: &AppState, id: &str) 
 /// good. Idempotent; safe to call when the devserver is already disconnected.
 fn teardown_devserver_connection(app: &tauri::AppHandle, state: &AppState, id: &str) {
     state.devservers.remove(id);
-    // A teardown also abandons a pending browser sign-in: the row is going
-    // away (disconnect/remove) or restarting (reconnect), so the waiting
-    // spinner must not outlive it. The follow-up refresh below pushes the
-    // cleared row.
-    state.devserver_awaiting_signin.lock().unwrap().remove(id);
     // A full teardown reaps the control terminal, so the reconnect block must
     // not outlive it: the block's invariant is that a kept "process exited"
     // terminal exists for the user to close. A stale entry here permanently
@@ -2124,27 +2108,29 @@ fn gateway_display_name(configured_label: &str, gateway_url: &str, proxy_origin:
 /// passkey; a re-click any time re-opens the browser and restarts the clock.
 const GATEWAY_SIGNIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5 * 60);
 
-/// Mark `id` as waiting on a browser sign-in and start its expiry clock. The
-/// launcher renders the row's waiting spinner off the shared map
-/// (`DevserverEntry.pending_signin`). Re-marking re-stamps the entry
-/// (latest-wins, mirroring `PendingAuth`), and the spawned timeout clears
-/// only its own stamp, so an old clock can never expire a newer attempt. On
-/// expiry (row i': the user never completed sign-in) the row resets and the
-/// banner explains.
-/// A raw dial failed on a plain devserver row: probe once per row per run
+/// A plain devserver row's connect failed: probe once per row per run
 /// whether the URL is really a gateway (rows predating the Gateways screen
 /// carry no marker and cannot be identified offline). A gateway answer
 /// surfaces an info notice pointing at the Gateways screen. Detached from
 /// the failure path so the connect error banners immediately; never
-/// re-probes, so the probe cannot become a per-connect cost.
-fn spawn_gateway_backstop_probe(app: &tauri::AppHandle, state: &Arc<AppState>, id: &str) {
+/// re-probes, so the probe cannot become a per-connect cost. Deliberately
+/// broader than the raw dial itself - ANY failure class on a plain row
+/// triggers the one probe - because the one-shot guard and the
+/// gateway-positive-only notice make a stray probe free, while classifying
+/// dial errors would miss gateways that fail later in the connect.
+/// Returns whether this call spawned the probe (false = already probed).
+fn spawn_gateway_backstop_probe<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    state: &Arc<AppState>,
+    id: &str,
+) -> bool {
     if !state
         .gateway_backstop_probed
         .lock()
         .unwrap()
         .insert(id.to_string())
     {
-        return;
+        return false;
     }
     let app = app.clone();
     let state = Arc::clone(state);
@@ -2170,49 +2156,20 @@ fn spawn_gateway_backstop_probe(app: &tauri::AppHandle, state: &Arc<AppState>, i
             );
         }
     });
+    true
 }
 
-/// Resume the winner of a completed sign-in. Gateway ids (`gw-*`) resume
-/// through the gateway manager; anything else is a devserver row id from
-/// the legacy per-row gateway connect, which resumes that row's connect
-/// (that path lasts until the row dispatch goes through the manager).
+/// Resume the winner of a completed sign-in. Only gateway connects park a
+/// resume id (`gw-*`); anything else is a stray value from an unexpected
+/// producer and is dropped after settling the parked waits (the consumed
+/// slot means no parked browser leg can complete anymore).
 async fn resume_signed_in(app: tauri::AppHandle, state: Arc<AppState>, id: String) {
     if id.starts_with("gw-") {
         gateway::resume_gateway_signin(app, state, id).await;
     } else {
-        // A devserver-row sign-in consumed the slot: any parked gateway
-        // wait is settled too (its browser leg lost the nonce).
         gateway::abandon_pending_signins(&app, &state);
-        if let Err(e) = connect_devserver_impl(app.clone(), state, id).await {
-            let _ = app.emit(auth::AUTH_ERROR, e);
-        }
+        tracing::warn!(resume = %id, "sign-in resume id is not a gateway; ignoring");
     }
-}
-
-/// Drop EVERY waiting-on-sign-in mark. `PendingAuth` is a single slot popped
-/// by any processed deep-link callback, so once a callback is consumed no
-/// waiting row's browser leg can complete anymore; the winner's connect
-/// resumes separately.
-fn clear_all_awaiting_signin(app: &tauri::AppHandle, state: &Arc<AppState>) {
-    let had_any = {
-        let mut awaiting = state.devserver_awaiting_signin.lock().unwrap();
-        let had_any = !awaiting.is_empty();
-        awaiting.clear();
-        had_any
-    };
-    if had_any {
-        signal_devserver_rows_changed(app, state);
-    }
-}
-
-/// Push the launcher a fresh devserver list (the feed re-lists registries on
-/// the library change signal). The waiting-state transitions ride this, the
-/// same push every other row-state change uses.
-fn signal_devserver_rows_changed(app: &tauri::AppHandle, state: &AppState) {
-    if let Some(embedded) = state.embedded() {
-        embedded.signal_library_change();
-    }
-    let _ = app.emit(serve::SERVES_CHANGED, ());
 }
 
 /// Connect one rostered gateway devserver (a synthesized `gw:` row): mint
@@ -2995,8 +2952,16 @@ fn open_local_workspace(state: State<Arc<AppState>>, path: String) -> Result<(),
 /// row shows up in the launcher. A `?t=` URL carries the write-only devserver
 /// bearer; otherwise the user can provide a connect script that prints
 /// `CHAN_DEVSERVER_TOKEN=...` and connect it from the launcher row.
+///
+/// This fn stays SYNC and never dials the URL: the CLI blocks ~3s on the
+/// `DevserverRegistered` response, so the is-this-really-a-gateway probe
+/// rides a detached task spawned here. A gateway-positive answer converts
+/// the just-registered row into a gateway entry out-of-band; the launcher
+/// picks the swap up over the library feed and the wire stays byte-
+/// identical for old and new CLIs alike.
 #[cfg(any(unix, windows))]
 fn register_devserver_from_handoff(
+    app: &tauri::AppHandle,
     state: &Arc<AppState>,
     url: String,
     name: Option<String>,
@@ -3012,11 +2977,10 @@ fn register_devserver_from_handoff(
         Arc::clone(&state.devserver_remove_hook),
         Arc::clone(&state.devservers),
         Arc::clone(&state.devserver_connecting),
-        Arc::clone(&state.devserver_awaiting_signin),
         Arc::clone(&state.devserver_feed),
         Arc::clone(&state.gateway_manager),
     );
-    registry.add(DevserverInput {
+    let entry = registry.add(DevserverInput {
         url: Some(url),
         host,
         port,
@@ -3035,6 +2999,39 @@ fn register_devserver_from_handoff(
     if let Some(embedded) = state.embedded() {
         embedded.signal_library_change();
     }
+    let app = app.clone();
+    let state = Arc::clone(state);
+    tauri::async_runtime::spawn(async move {
+        if devserver::discover_gateway(&entry.url).await.is_err() {
+            return;
+        }
+        match config::convert_devserver_row_to_gateway(&state.store, &entry.id) {
+            Ok(Some(gw)) => {
+                let label = if gw.label.is_empty() {
+                    gw.url.clone()
+                } else {
+                    gw.label.clone()
+                };
+                gateway::emit_notice(
+                    &app,
+                    "info",
+                    "gateway",
+                    &gw.id,
+                    &label,
+                    "Gateway added",
+                    "chan open registered a gateway; connect it on the Gateways screen to see all its devservers",
+                );
+                if let Some(embedded) = state.embedded() {
+                    embedded.signal_library_change();
+                }
+            }
+            // The row was removed while the probe ran: nothing to convert.
+            Ok(None) => {}
+            Err(e) => {
+                tracing::warn!(devserver = %entry.id, error = %e, "gateway conversion after handoff failed");
+            }
+        }
+    });
     Ok(())
 }
 
@@ -4332,7 +4329,6 @@ fn main() {
                 gateway_manager: Arc::clone(&state_for_setup.gateway_manager),
                 devserver_conns: Arc::clone(&state_for_setup.devservers),
                 devserver_connecting: Arc::clone(&state_for_setup.devserver_connecting),
-                devserver_awaiting_signin: Arc::clone(&state_for_setup.devserver_awaiting_signin),
                 devserver_feed: Arc::clone(&state_for_setup.devserver_feed),
             };
             match tauri::async_runtime::block_on(embedded::EmbeddedServer::start(registry_deps)) {
@@ -4435,10 +4431,6 @@ fn main() {
                 for url in event.urls() {
                     match auth::handle_callback(&app_for_links, url.as_str()) {
                         auth::CallbackOutcome::SignedIn { resume_gateway_id } => {
-                            // Any processed callback pops the single pending-
-                            // auth slot, so every waiting row's browser leg is
-                            // settled: clear them all, then resume the winner.
-                            clear_all_awaiting_signin(&app_for_links, &state_for_links);
                             if let Some(id) = resume_gateway_id {
                                 let app = app_for_links.clone();
                                 let state = Arc::clone(&state_for_links);
@@ -4450,12 +4442,10 @@ fn main() {
                         auth::CallbackOutcome::Failed {
                             consumed_pending: true,
                         } => {
-                            // Denied/cancelled/failed sign-in (row i): the
-                            // banner was emitted by handle_callback; reset the
-                            // waiting rows AND any parked gateway sign-in
-                            // (the consumed slot means no parked leg can
-                            // complete anymore).
-                            clear_all_awaiting_signin(&app_for_links, &state_for_links);
+                            // Denied/cancelled/failed sign-in: the banner
+                            // was emitted by handle_callback; the consumed
+                            // slot means no parked gateway leg can complete
+                            // anymore, so settle every wait.
                             gateway::abandon_pending_signins(&app_for_links, &state_for_links);
                         }
                         auth::CallbackOutcome::Failed {
@@ -4472,7 +4462,6 @@ fn main() {
                 for url in urls {
                     match auth::handle_callback(app.handle(), url.as_str()) {
                         auth::CallbackOutcome::SignedIn { resume_gateway_id } => {
-                            clear_all_awaiting_signin(app.handle(), &state_for_setup);
                             if let Some(id) = resume_gateway_id {
                                 let app_handle = app.handle().clone();
                                 let state = Arc::clone(&state_for_setup);
@@ -4484,7 +4473,6 @@ fn main() {
                         auth::CallbackOutcome::Failed {
                             consumed_pending: true,
                         } => {
-                            clear_all_awaiting_signin(app.handle(), &state_for_setup);
                             gateway::abandon_pending_signins(app.handle(), &state_for_setup);
                         }
                         auth::CallbackOutcome::Failed {
@@ -4632,7 +4620,7 @@ fn main() {
                                 Request::OpenDevserver {
                                     url, name, script, ..
                                 } => match register_devserver_from_handoff(
-                                    &state, url, name, script,
+                                    &app, &state, url, name, script,
                                 ) {
                                     Ok(()) => {
                                         let _ = app.emit(serve::SERVES_CHANGED, ());
@@ -6900,19 +6888,9 @@ mod tests {
             .expect("rostered connect precedes the raw inner");
         assert!(connect.contains("GatewayEntryError::Unauthorized"));
         assert!(connect.contains("cascade_disconnect"));
-        // A teardown (disconnect/remove/reconnect) abandons any waiting
-        // mark: the spinner row must not outlive the connection state.
-        let teardown = MAIN_RS
-            .split("fn teardown_devserver_connection")
-            .nth(1)
-            .expect("teardown_devserver_connection exists")
-            .split("fn mark_devserver_control_exited")
-            .next()
-            .expect("teardown precedes mark_devserver_control_exited");
-        assert!(teardown.contains("devserver_awaiting_signin"));
-        // Any processed deep-link callback settles every waiting row (the
-        // pending-auth slot is single); both the runtime and cold-start
-        // delivery paths clear before resuming the winner.
+        // A consumed FAILED callback settles every parked gateway wait on
+        // both delivery paths (the pending-auth slot is single, so no
+        // parked browser leg can complete after it is consumed).
         let links = MAIN_RS
             .split("on_open_url(move |event|")
             .nth(1)
@@ -6921,9 +6899,9 @@ mod tests {
             .next()
             .expect("deep-link section ends before the launcher window build");
         assert_eq!(
-            links.matches("clear_all_awaiting_signin").count(),
-            4,
-            "both delivery paths clear on SignedIn AND on a consumed failure"
+            links.matches("abandon_pending_signins").count(),
+            2,
+            "both delivery paths settle parked waits on a consumed failure"
         );
     }
 
@@ -7461,5 +7439,100 @@ mod tests {
             .expect("launcher region bounded");
         assert!(launcher.contains("WS_NEW_WINDOW_MENU_ID_PREFIX"));
         assert!(launcher.contains("WS_CLOSE_WINDOW_MENU_ID_PREFIX"));
+    }
+
+    #[test]
+    fn handoff_registration_responds_before_the_gateway_probe() {
+        const MAIN_RS: &str = include_str!("main.rs");
+        // The CLI blocks ~3s on DevserverRegistered: the register fn must
+        // stay SYNC (the handoff closure builds the response as soon as it
+        // returns) with the is-this-a-gateway probe on a detached task.
+        assert!(
+            !MAIN_RS.contains(concat!("async fn register_devserver", "_from_handoff")),
+            "the handoff registration must not become async"
+        );
+        let reg = MAIN_RS
+            .split("fn register_devserver_from_handoff(")
+            .nth(1)
+            .expect("register_devserver_from_handoff exists")
+            .split("/// Open a workspace in a native window")
+            .next()
+            .expect("registration precedes the workspace handoff");
+        assert!(reg.contains("tauri::async_runtime::spawn"));
+        assert!(reg.contains("discover_gateway"));
+        assert!(reg.contains("convert_devserver_row_to_gateway"));
+        // Nothing awaits before the spawn: the probe and the conversion
+        // live entirely inside the detached task.
+        let before_spawn = reg
+            .split("tauri::async_runtime::spawn")
+            .next()
+            .expect("region before the spawn");
+        assert!(!before_spawn.contains(".await"));
+        assert!(!before_spawn.contains("discover_gateway"));
+    }
+
+    #[test]
+    fn synthesized_dispatch_runs_before_the_persisted_row_lookup() {
+        const MAIN_RS: &str = include_str!("main.rs");
+        // A gw: id must route to the gateway manager BEFORE the persisted
+        // vec is consulted: synthesized rows are never in the config, so a
+        // lookup-first order would answer "no devserver" for every one.
+        let inner = MAIN_RS
+            .split("async fn connect_devserver_impl_inner")
+            .nth(1)
+            .expect("connect_devserver_impl_inner exists");
+        let dispatch = inner
+            .find("parse_synthesized_id")
+            .expect("gw: dispatch present");
+        let lookup = inner
+            .find("cfg.devservers")
+            .expect("persisted-row lookup present");
+        assert!(
+            dispatch < lookup,
+            "gw: dispatch must precede the persisted-row lookup"
+        );
+    }
+
+    #[tokio::test]
+    async fn gateway_backstop_probe_fires_once_per_row_per_run() {
+        // The one-time flag is load-bearing: the probe must never become a
+        // per-connect cost (its removal from the connect path is what the
+        // dispatch rework bought).
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(Mutex::new(config::ConfigStore::at_path(
+            dir.path().join("config.json"),
+        )));
+        {
+            let cfg = config::Config {
+                devservers: vec![config::Devserver {
+                    id: "ds1".to_string(),
+                    // An unroutable dial so the detached probe fails fast.
+                    url: "http://127.0.0.1:1".to_string(),
+                    script: String::new(),
+                    label: String::new(),
+                    token: String::new(),
+                    added_at: 0,
+                    auto_hide_control: false,
+                    gateway_owner: None,
+                    gateway_devserver_id: None,
+                }],
+                ..Default::default()
+            };
+            store.lock().unwrap().save(&cfg).unwrap();
+        }
+        let state = Arc::new(AppState::with_store(store));
+        let app = tauri::test::mock_app();
+        assert!(
+            spawn_gateway_backstop_probe(app.handle(), &state, "ds1"),
+            "the first failure spawns the probe"
+        );
+        assert!(
+            !spawn_gateway_backstop_probe(app.handle(), &state, "ds1"),
+            "a second failure for the same row never re-probes"
+        );
+        assert!(
+            spawn_gateway_backstop_probe(app.handle(), &state, "ds2"),
+            "other rows keep their own one-shot"
+        );
     }
 }

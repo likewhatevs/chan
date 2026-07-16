@@ -1937,17 +1937,27 @@ mod devserver_route_tests {
     async fn update_and_remove_missing_id_is_404() {
         let reg = Arc::new(FakeRegistry::default());
         let router = router_with(Some(reg), true);
-        let (put_status, _) = request(
-            &router,
-            "PUT",
-            "/api/library/devservers/nope",
-            Some(r#"{"host":"x","port":1}"#),
-        )
-        .await;
-        assert_eq!(put_status, StatusCode::NOT_FOUND);
-        let (del_status, _) =
-            request(&router, "DELETE", "/api/library/devservers/nope", None).await;
-        assert_eq!(del_status, StatusCode::NOT_FOUND);
+        // A synthesized gateway row id rides the same missing-id path: it is
+        // never in the persisted registry, so mutations on it answer 404.
+        let synth = format!("gw:1a2b3c4d:alice:{}", "a".repeat(64));
+        for id in ["nope", synth.as_str()] {
+            let (put_status, _) = request(
+                &router,
+                "PUT",
+                &format!("/api/library/devservers/{id}"),
+                Some(r#"{"host":"x","port":1}"#),
+            )
+            .await;
+            assert_eq!(put_status, StatusCode::NOT_FOUND, "PUT {id}");
+            let (del_status, _) = request(
+                &router,
+                "DELETE",
+                &format!("/api/library/devservers/{id}"),
+                None,
+            )
+            .await;
+            assert_eq!(del_status, StatusCode::NOT_FOUND, "DELETE {id}");
+        }
     }
 
     #[tokio::test]
