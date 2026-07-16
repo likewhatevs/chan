@@ -10,6 +10,8 @@ mod embedded;
 mod linux_gui_stack;
 mod native_dialog;
 mod registry;
+#[cfg(test)]
+mod runtime_capability;
 mod serve;
 mod upload;
 mod watcher;

@@ -106,3 +106,7 @@ objc2-core-foundation = { version = "0.3", default-features = false, features = 
 
 [dev-dependencies]
 tempfile = { workspace = true }
+# The mock runtime (`tauri::test`) drives real IPC `on_message` dispatch
+# against the app's generated ACL context without a display server; the
+# runtime_capability pins ride it. Feature-only: pulls no extra crates.
+tauri = { workspace = true, features = ["test"] }
