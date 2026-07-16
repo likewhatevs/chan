@@ -494,6 +494,12 @@ fn entry_from_roster_row(
         .unwrap_or_else(|| (gateway.url.clone(), 443));
     let (os, pretty_name) = feed.os_of(&id).unwrap_or_default();
     DevserverEntry {
+        // Three-way mapping for rostered rows: a live conn reports
+        // Connected (the window-feed watchdog still owns quiet-conn
+        // Unreachable), an unconnected row follows the roster's online
+        // bit - offline rows get the lost dot BEFORE any connect attempt.
+        // Gateway-level trouble (the roster fetch failing) stays on the
+        // GatewayEntry badge, never painted across rows.
         status: if conns.is_connected(&id) {
             if feed.is_unreachable(&id) {
                 DevserverStatus::Unreachable
@@ -506,8 +512,10 @@ fn entry_from_roster_row(
             .contains(&id)
         {
             DevserverStatus::Connecting
-        } else {
+        } else if row.online {
             DevserverStatus::Disconnected
+        } else {
+            DevserverStatus::Unreachable
         },
         library_id: feed.library_id_of(&id),
         id,
@@ -2479,6 +2487,77 @@ mod tests {
 
         // Deterministic across calls while nothing changes.
         assert_eq!(reg.list(), rows);
+    }
+
+    #[test]
+    fn synthesized_status_maps_conn_and_roster_online_three_ways() {
+        // conn live -> Connected; no conn + online -> Disconnected; no conn
+        // + offline -> Unreachable (the lost dot as a pre-connect signal).
+        // Gateway-level trouble never reaches row status.
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(Mutex::new(ConfigStore {
+            path: dir.path().join("config.json"),
+        }));
+        {
+            let cfg = Config {
+                gateways: vec![Gateway {
+                    id: "gw-1a2b3c4d".to_string(),
+                    url: "https://id.chan.app".to_string(),
+                    label: String::new(),
+                    enabled: true,
+                    added_at: 1,
+                }],
+                ..Default::default()
+            };
+            store.lock().unwrap().save(&cfg).unwrap();
+        }
+        let manager = Arc::new(crate::gateway::GatewayManager::default());
+        let mut offline = roster_row("alice", &"b".repeat(64), "dark-box", false);
+        offline.online = false;
+        manager.seed_test_runtime(
+            "gw-1a2b3c4d",
+            test_discovery(),
+            vec![
+                roster_row("alice", &"a".repeat(64), "laptop", false),
+                offline,
+            ],
+        );
+        let conns = Arc::new(crate::devserver::DevserverConns::default());
+        let reg = DevserverConfigRegistry::new(
+            Arc::clone(&store),
+            Arc::new(OnceLock::new()),
+            Arc::clone(&conns),
+            empty_connecting(),
+            Arc::new(crate::DevserverFeed::default()),
+            manager,
+        );
+        let rows = reg.list();
+        assert_eq!(
+            rows[0].status,
+            DevserverStatus::Disconnected,
+            "online, no conn"
+        );
+        assert_eq!(
+            rows[1].status,
+            DevserverStatus::Unreachable,
+            "offline, no conn"
+        );
+        // A live conn wins over the roster bit.
+        conns.set(
+            rows[0].id.clone(),
+            crate::devserver::DevserverConn {
+                host: "x.devserver.chan.app".to_string(),
+                port: 443,
+                token: String::new(),
+                name: "laptop".to_string(),
+                gateway: None,
+            },
+        );
+        assert_eq!(
+            reg.list()[0].status,
+            DevserverStatus::Connected,
+            "conn live"
+        );
     }
 
     #[test]

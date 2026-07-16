@@ -2165,6 +2165,43 @@ fn spawn_gateway_backstop_probe<R: tauri::Runtime>(
     true
 }
 
+/// Take the parked legacy-migration outcome and narrate it as a launcher
+/// notice, called from the launcher's first page load. Only converted
+/// rows narrate (marker clearing alone changes nothing the user can see).
+/// Returns whether a notice was scheduled. The emit rides a 1s grace so
+/// the SPA's listener registration (during mount, just after the load
+/// event) usually lands first; a launcher taking longer than the grace
+/// LOSES the one-shot - accepted, since the migrated gateways are visible
+/// on the Gateways screen regardless.
+fn narrate_parked_migration<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    state: &Arc<AppState>,
+) -> bool {
+    let Some(migration) = state.gateway_migration.lock().unwrap().take() else {
+        return false;
+    };
+    if migration.converted_rows == 0 {
+        return false;
+    }
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        gateway::emit_notice(
+            &app,
+            "info",
+            "desktop",
+            "desktop",
+            "chan-desktop",
+            "Gateways migrated",
+            &format!(
+                "{} gateway connection(s) moved from devserver rows to the Gateways screen",
+                migration.converted_rows
+            ),
+        );
+    });
+    true
+}
+
 /// Resume the winner of a completed sign-in. Only gateway connects park a
 /// resume id (`gw-*`); anything else is a stray value from an unexpected
 /// producer and is dropped after settling the parked waits (the consumed
@@ -2178,21 +2215,22 @@ async fn resume_signed_in(app: tauri::AppHandle, state: Arc<AppState>, id: Strin
     }
 }
 
-/// Connect one rostered gateway devserver (a synthesized `gw:` row): mint
-/// its entry through the gateway with the explicit (owner, devserver id)
-/// target from the row id, then wire the proxy-backed connection exactly
-/// like a raw devserver. The GATEWAY must already be connected - the row
-/// only lists while its roster is live - and its account PAT comes from
-/// the keyring; sign-in runs at the gateway level, never per row.
-async fn connect_rostered_devserver(
-    app: tauri::AppHandle,
-    state: Arc<AppState>,
-    id: String,
-    gateway_id: String,
-    owner: String,
-    devserver_id: String,
-) -> Result<(), ConnectDevserverError> {
-    let Some(discovery) = state.gateway_manager.discovery(&gateway_id) else {
+/// The runtime-independent head of a rostered-devserver connect: mint the
+/// entry through the gateway with the explicit (owner, devserver id)
+/// target and narrate the failures - a 401 runs the gateway cascade, an
+/// offline row emits a clean devserver-sourced notice beside the failed
+/// connect. Returns the ready proxy connection for the concrete wiring
+/// tail. Generic over the runtime so the narration paths drive under the
+/// mock runtime in tests.
+async fn rostered_conn<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    state: &Arc<AppState>,
+    id: &str,
+    gateway_id: &str,
+    owner: &str,
+    devserver_id: &str,
+) -> Result<devserver::DevserverConn, ConnectDevserverError> {
+    let Some(discovery) = state.gateway_manager.discovery(gateway_id) else {
         return Err(
             "connect the gateway first - its roster supplies this devserver"
                 .to_string()
@@ -2201,7 +2239,7 @@ async fn connect_rostered_devserver(
     };
     let row_label = state
         .gateway_manager
-        .roster_row(&gateway_id, &owner, &devserver_id)
+        .roster_row(gateway_id, owner, devserver_id)
         .map(|r| r.label)
         .unwrap_or_default();
     let Some(pat) = auth::load_gateway_pat(&discovery.identity_origin)? else {
@@ -2212,7 +2250,7 @@ async fn connect_rostered_devserver(
     let gateway = match devserver::gateway_conn(
         &discovery,
         pat.secret,
-        Some((owner.clone(), devserver_id.clone())),
+        Some((owner.to_string(), devserver_id.to_string())),
     )
     .await
     {
@@ -2222,9 +2260,9 @@ async fn connect_rostered_devserver(
             // gateway cascade (which clears the credential) and point the
             // user at the gateway-level reconnect.
             gateway::cascade_disconnect(
-                &app,
-                &state,
-                &gateway_id,
+                app,
+                state,
+                gateway_id,
                 gateway::CascadeReason::Unauthorized,
             )
             .await;
@@ -2245,10 +2283,10 @@ async fn connect_rostered_devserver(
                 row_label.clone()
             };
             gateway::emit_notice(
-                &app,
+                app,
                 "info",
                 "devserver",
-                &id,
+                id,
                 &label,
                 "Devserver offline",
                 &e.to_string(),
@@ -2266,13 +2304,30 @@ async fn connect_rostered_devserver(
         &discovery.identity_origin,
         &gateway.proxy_origin,
     );
-    let conn = devserver::DevserverConn {
+    Ok(devserver::DevserverConn {
         host,
         port,
         token: String::new(),
         name,
         gateway: Some(gateway),
-    };
+    })
+}
+
+/// Connect one rostered gateway devserver (a synthesized `gw:` row): mint
+/// its entry through the gateway ([`rostered_conn`]), then wire the
+/// proxy-backed connection exactly like a raw devserver. The GATEWAY must
+/// already be connected - the row only lists while its roster is live -
+/// and its account PAT comes from the keyring; sign-in runs at the
+/// gateway level, never per row.
+async fn connect_rostered_devserver(
+    app: tauri::AppHandle,
+    state: Arc<AppState>,
+    id: String,
+    gateway_id: String,
+    owner: String,
+    devserver_id: String,
+) -> Result<(), ConnectDevserverError> {
+    let conn = rostered_conn(&app, &state, &id, &gateway_id, &owner, &devserver_id).await?;
 
     let rows = devserver::fetch_workspaces(&conn)
         .await
@@ -4324,9 +4379,7 @@ fn main() {
                 rows = m.converted_rows,
                 "migrated legacy gateway devserver rows"
             );
-            // Only converted rows are launcher-narratable (marker clearing
-            // alone changes nothing the user can see).
-            (m.converted_rows > 0).then_some(m)
+            Some(m)
         }
         Ok(_) => None,
         Err(e) => {
@@ -4355,28 +4408,7 @@ fn main() {
                 return;
             }
             let state = Arc::clone(&webview.state::<Arc<AppState>>());
-            let Some(migration) = state.gateway_migration.lock().unwrap().take() else {
-                return;
-            };
-            let app = webview.app_handle().clone();
-            tauri::async_runtime::spawn(async move {
-                // The SPA registers its notice listener during mount, just
-                // after this load event; a short grace keeps the one-shot
-                // from racing the subscription.
-                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-                gateway::emit_notice(
-                    &app,
-                    "info",
-                    "desktop",
-                    "desktop",
-                    "chan-desktop",
-                    "Gateways migrated",
-                    &format!(
-                        "{} gateway connection(s) moved from devserver rows to the Gateways screen",
-                        migration.converted_rows
-                    ),
-                );
-            });
+            narrate_parked_migration(&webview.app_handle().clone(), &state);
         })
         .setup(move |app| {
             install_app_menu(app.handle())?;
@@ -6949,12 +6981,12 @@ mod tests {
         // dead PAT) instead of opening a per-row sign-in.
         const MAIN_RS: &str = include_str!("main.rs");
         let connect = MAIN_RS
-            .split("async fn connect_rostered_devserver")
+            .split("async fn rostered_conn")
             .nth(1)
-            .expect("connect_rostered_devserver exists")
+            .expect("rostered_conn exists")
             .split("async fn connect_devserver_impl_inner")
             .next()
-            .expect("rostered connect precedes the raw inner");
+            .expect("rostered head precedes the raw inner");
         assert!(connect.contains("GatewayEntryError::Unauthorized"));
         assert!(connect.contains("cascade_disconnect"));
         // A consumed FAILED callback settles every parked gateway wait on
@@ -7516,6 +7548,9 @@ mod tests {
         // The CLI blocks ~3s on DevserverRegistered: the register fn must
         // stay SYNC (the handoff closure builds the response as soon as it
         // returns) with the is-this-a-gateway probe on a detached task.
+        // What this pins is that the response can never WAIT on the probe -
+        // not a literal happens-before between the write and the task's
+        // first poll - which is the property the handoff contract needs.
         assert!(
             !MAIN_RS.contains(concat!("async fn register_devserver", "_from_handoff")),
             "the handoff registration must not become async"
@@ -7553,8 +7588,11 @@ mod tests {
         let dispatch = inner
             .find("parse_synthesized_id")
             .expect("gw: dispatch present");
+        // Anchor the lookup on its unique error literal (rustfmt splits
+        // `cfg.devservers` across lines inside this fn, so the field
+        // access itself is not greppable here).
         let lookup = inner
-            .find("cfg.devservers")
+            .find(r#"format!("no devserver {id}")"#)
             .expect("persisted-row lookup present");
         assert!(
             dispatch < lookup,
@@ -7603,5 +7641,142 @@ mod tests {
             spawn_gateway_backstop_probe(app.handle(), &state, "ds2"),
             "other rows keep their own one-shot"
         );
+    }
+
+    fn empty_state() -> Arc<AppState> {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(Mutex::new(config::ConfigStore::at_path(
+            dir.path().join("config.json"),
+        )));
+        std::mem::forget(dir);
+        Arc::new(AppState::with_store(store))
+    }
+
+    /// A rostered row whose entry mint answers devserver_offline fails the
+    /// connect AND emits a clean devserver-sourced info notice (the gateway
+    /// checks liveness before authorization, so dark shared rows land here
+    /// too).
+    #[tokio::test]
+    async fn offline_rostered_row_notices_and_fails_the_connect() {
+        use tauri::Listener;
+        // A gateway whose entry endpoint always answers the offline reason.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let origin = format!("http://{}", listener.local_addr().unwrap());
+        let stub = axum::Router::new().route(
+            "/desktop/v1/devserver/entry",
+            axum::routing::post(|| async {
+                axum::http::Response::builder()
+                    .status(404)
+                    .header("content-type", "application/json")
+                    .body(axum::body::Body::from(
+                        r#"{"error":"not found","reason":"devserver_offline","label":"lap"}"#,
+                    ))
+                    .unwrap()
+            }),
+        );
+        let server = tokio::spawn(async move {
+            axum::serve(listener, stub).await.unwrap();
+        });
+
+        let state = empty_state();
+        state.gateway_manager.seed_test_runtime(
+            "gw-feedface",
+            devserver::GatewayDiscovery {
+                kind: "chan-gateway".into(),
+                api_version: 1,
+                identity_origin: origin.clone(),
+                desktop_authorize_url: format!("{origin}/desktop/authorize"),
+                desktop_entry_url: format!("{origin}/desktop/v1/devserver/entry"),
+                devserver_proxy_origin: "https://devserver.chan.app".into(),
+                roster_url: Some(format!("{origin}/desktop/v1/devservers")),
+            },
+            Vec::new(),
+        );
+        crate::auth::test_gateway_pats().lock().unwrap().insert(
+            origin.clone(),
+            crate::auth::StoredPat {
+                id: "pat-1".into(),
+                secret: "s3cret".into(),
+                label: "test".into(),
+                expires_at: String::new(),
+            },
+        );
+        let app = tauri::test::mock_app();
+        let (tx, rx) = std::sync::mpsc::channel::<String>();
+        app.listen(gateway::LAUNCHER_NOTICE, move |event| {
+            let _ = tx.send(event.payload().to_string());
+        });
+
+        let ds64 = "d".repeat(64);
+        let result = rostered_conn(
+            app.handle(),
+            &state,
+            &format!("gw:feedface:alice:{ds64}"),
+            "gw-feedface",
+            "alice",
+            &ds64,
+        )
+        .await;
+        let message = result
+            .expect_err("offline entry fails the connect")
+            .message();
+        assert!(message.contains("not currently connected"), "{message}");
+        // The notice went out synchronously before the Err returned.
+        let payload = rx.try_recv().expect("offline notice emitted");
+        let notice: serde_json::Value = serde_json::from_str(&payload).unwrap();
+        assert_eq!(notice["kind"], "info");
+        assert_eq!(notice["source"]["type"], "devserver");
+        // No roster label was seeded: the source label falls back to the
+        // 12-char devserver-id prefix; the entry body's label ("lap")
+        // rides the human message instead.
+        assert_eq!(notice["source"]["label"], "dddddddddddd");
+        assert_eq!(notice["title"], "Devserver offline");
+        assert!(
+            notice["message"].as_str().unwrap().contains("lap"),
+            "{payload}"
+        );
+        server.abort();
+    }
+
+    /// The legacy-migration summary parks until the first launcher page
+    /// load narrates it, once; marker-clearing-only outcomes stay silent.
+    #[test]
+    fn migration_summary_parks_until_narrated_once() {
+        use tauri::Listener;
+        let state = empty_state();
+        *state.gateway_migration.lock().unwrap() = Some(config::GatewayMigration {
+            created: Vec::new(),
+            converted_rows: 2,
+            cleared_marker_rows: 0,
+        });
+        let app = tauri::test::mock_app();
+        let (tx, rx) = std::sync::mpsc::channel::<String>();
+        app.listen(gateway::LAUNCHER_NOTICE, move |event| {
+            let _ = tx.send(event.payload().to_string());
+        });
+
+        assert!(
+            narrate_parked_migration(app.handle(), &state),
+            "a converted-rows outcome narrates"
+        );
+        let payload = rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("migration notice emitted after the grace");
+        let notice: serde_json::Value = serde_json::from_str(&payload).unwrap();
+        assert_eq!(notice["title"], "Gateways migrated");
+        assert!(
+            notice["message"].as_str().unwrap().starts_with("2 gateway"),
+            "{payload}"
+        );
+        // The park is one-shot.
+        assert!(!narrate_parked_migration(app.handle(), &state));
+
+        // Marker clearing alone changes nothing the user can see: silent.
+        *state.gateway_migration.lock().unwrap() = Some(config::GatewayMigration {
+            created: Vec::new(),
+            converted_rows: 0,
+            cleared_marker_rows: 1,
+        });
+        assert!(!narrate_parked_migration(app.handle(), &state));
     }
 }
