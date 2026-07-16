@@ -13,6 +13,8 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import TerminalTab from "./TerminalTab.svelte";
 import terminalSource from "./TerminalTab.svelte?raw";
+import docSyncSource from "../state/docSync.svelte.ts?raw";
+import sceneSyncSource from "../state/sceneSync.svelte.ts?raw";
 import {
   WS_PING_MS,
   WS_READ_DEADLINE_MS,
@@ -319,5 +321,16 @@ describe("heartbeat source pins", () => {
       /async function connect\(\): Promise<void> \{\n    if \(!term\) return;\n    \/\/ Single-dial guard/,
     );
     expect(terminalSource).toContain("cancelReconnect();");
+  });
+
+  test("doc-sync and scene-sync backoffs ride the same shared constants", () => {
+    for (const source of [docSyncSource, sceneSyncSource]) {
+      expect(source).toContain("private backoffMs = WS_RECONNECT_BACKOFF_MIN_MS;");
+      expect(source).toContain(
+        "this.backoffMs = Math.min(this.backoffMs * 2, WS_RECONNECT_BACKOFF_MAX_MS);",
+      );
+      // No local literals left to drift.
+      expect(source).not.toMatch(/RECONNECT_BASE_MS|RECONNECT_MAX_MS/);
+    }
   });
 });

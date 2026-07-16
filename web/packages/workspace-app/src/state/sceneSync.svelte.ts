@@ -29,7 +29,12 @@
 /// edge points one way (sceneSync -> tabs) and the classic save path
 /// works even if this module never loads.
 
-import { createSocket, withTokenQuery } from "../api/transport";
+import {
+  createSocket,
+  withTokenQuery,
+  WS_RECONNECT_BACKOFF_MIN_MS,
+  WS_RECONNECT_BACKOFF_MAX_MS,
+} from "../api/transport";
 import { sessionWindowId } from "../api/client";
 import { isDraftPath } from "./workspace.svelte";
 import { isExcalidraw } from "./fileTypes";
@@ -60,9 +65,6 @@ export const SCENE_RELEASE_LINGER_MS = 250;
 /// autosave resumes. Background retries continue at capped backoff.
 export const SCENE_RECONNECT_GRACE_ATTEMPTS = 2;
 export const SCENE_RECONNECT_GRACE_MS = 3000;
-
-const RECONNECT_BASE_MS = 500;
-const RECONNECT_MAX_MS = 8000;
 
 /// A dial that produces no frame within this window counts as a failed
 /// attempt.
@@ -230,7 +232,7 @@ export class SceneSession {
   private sawFrameOnSocket = false;
   private closedByUs = false;
   private retryStopped = false;
-  private backoffMs = RECONNECT_BASE_MS;
+  private backoffMs = WS_RECONNECT_BACKOFF_MIN_MS;
   private reconnectAttempts = 0;
   private droppedAt = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -515,7 +517,7 @@ export class SceneSession {
   }
 
   private onChannelUp(): void {
-    this.backoffMs = RECONNECT_BASE_MS;
+    this.backoffMs = WS_RECONNECT_BACKOFF_MIN_MS;
     this.reconnectAttempts = 0;
     this.droppedAt = 0;
   }
@@ -548,7 +550,7 @@ export class SceneSession {
     }
     this.checkFlushWaiters();
     const delay = this.backoffMs;
-    this.backoffMs = Math.min(this.backoffMs * 2, RECONNECT_MAX_MS);
+    this.backoffMs = Math.min(this.backoffMs * 2, WS_RECONNECT_BACKOFF_MAX_MS);
     this.reconnectTimer = setTimeout(() => this.dial(), delay);
   }
 

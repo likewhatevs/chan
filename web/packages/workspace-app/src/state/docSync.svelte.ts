@@ -47,7 +47,12 @@ import {
   removePeerEffect,
   rosterRestampEffects,
 } from "../editor/collab/remoteCursors";
-import { createSocket, withTokenQuery } from "../api/transport";
+import {
+  createSocket,
+  withTokenQuery,
+  WS_RECONNECT_BACKOFF_MIN_MS,
+  WS_RECONNECT_BACKOFF_MAX_MS,
+} from "../api/transport";
 import { sessionWindowId } from "../api/client";
 import { notify } from "./notify.svelte";
 import { isDraftPath } from "./workspace.svelte";
@@ -83,10 +88,6 @@ export const DOC_RELEASE_LINGER_MS = 250;
 /// successful reattach hard-resyncs and returns to `attached`.
 export const DOC_RECONNECT_GRACE_ATTEMPTS = 2;
 export const DOC_RECONNECT_GRACE_MS = 3000;
-
-/// Transport backoff, mirroring the watcher socket conventions.
-const RECONNECT_BASE_MS = 500;
-const RECONNECT_MAX_MS = 8000;
 
 /// A dial that produces no frame within this window counts as a failed
 /// attempt. Without it a hung upgrade would pin the tab in `connecting`
@@ -243,7 +244,7 @@ export class DocSession {
   private sawFrameOnSocket = false;
   private closedByUs = false;
   private retryStopped = false;
-  private backoffMs = RECONNECT_BASE_MS;
+  private backoffMs = WS_RECONNECT_BACKOFF_MIN_MS;
   private reconnectAttempts = 0;
   private droppedAt = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -660,7 +661,7 @@ export class DocSession {
   }
 
   private onChannelUp(): void {
-    this.backoffMs = RECONNECT_BASE_MS;
+    this.backoffMs = WS_RECONNECT_BACKOFF_MIN_MS;
     this.reconnectAttempts = 0;
     this.droppedAt = 0;
   }
@@ -693,7 +694,7 @@ export class DocSession {
     }
     this.checkFlushWaiters();
     const delay = this.backoffMs;
-    this.backoffMs = Math.min(this.backoffMs * 2, RECONNECT_MAX_MS);
+    this.backoffMs = Math.min(this.backoffMs * 2, WS_RECONNECT_BACKOFF_MAX_MS);
     this.reconnectTimer = setTimeout(() => this.dial(), delay);
   }
 
