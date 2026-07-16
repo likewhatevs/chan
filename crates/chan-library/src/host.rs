@@ -31,8 +31,8 @@ use crate::terminal_sessions::{
 };
 use crate::windows::{PersistedWindow, WindowKind, WindowOrigin, WindowRecord, WindowRegistry};
 use crate::{
-    allocate_workspace_prefix, sanitize_prefix, DevserverRegistry, Error, ServeConfig, ServeHandle,
-    WorkspaceOverlay,
+    allocate_workspace_prefix, sanitize_prefix, DevserverRegistry, Error, GatewayRegistry,
+    ServeConfig, ServeHandle, WorkspaceOverlay,
 };
 
 /// One workspace mounted into a [`WorkspaceHost`].
@@ -281,6 +281,13 @@ pub struct WorkspaceHost {
     /// request time. Empty on the headless devserver / plain `chan open` -- the
     /// routes then serve an empty devserver list and 404 mutation.
     devserver_registry: OnceLock<Arc<dyn DevserverRegistry>>,
+    /// The launcher's gateway registry, inverted like
+    /// [`devserver_registry`](Self::devserver_registry): the gateway set lives
+    /// in chan-desktop's config, so the embedder installs an
+    /// `Arc<dyn GatewayRegistry>` and the launcher's gateway routes read it at
+    /// request time. Empty on the headless devserver / plain `chan open` -- the
+    /// routes then serve an empty gateway list and 404 mutation.
+    gateway_registry: OnceLock<Arc<dyn GatewayRegistry>>,
     /// The launcher's connected-devserver feed, inverted like
     /// [`devserver_registry`](Self::devserver_registry): chan-desktop installs an
     /// `Arc<dyn DevserverFeedSource>` over its live connections, and
@@ -444,6 +451,7 @@ impl WorkspaceHost {
             window_registry: OnceLock::new(),
             workspace_overlay: OnceLock::new(),
             devserver_registry: OnceLock::new(),
+            gateway_registry: OnceLock::new(),
             devserver_feed: OnceLock::new(),
             local_color: OnceLock::new(),
             local_theme: OnceLock::new(),
@@ -549,6 +557,23 @@ impl WorkspaceHost {
     /// list and 404 mutation.
     pub fn devserver_registry(&self) -> Option<&Arc<dyn DevserverRegistry>> {
         self.devserver_registry.get()
+    }
+
+    /// Install the launcher's gateway registry. Idempotent set-once; chan-desktop
+    /// calls this once (next to [`install_devserver_registry`](
+    /// Self::install_devserver_registry)) with an impl over its config. A host
+    /// that never installs one answers [`gateway_registry`](
+    /// Self::gateway_registry) with `None` -- the headless devserver / plain
+    /// `chan open`.
+    pub fn install_gateway_registry(&self, registry: Arc<dyn GatewayRegistry>) {
+        let _ = self.gateway_registry.set(registry);
+    }
+
+    /// The launcher's gateway registry, once installed. `None` on a host whose
+    /// embedder installed none; the launcher routes then serve an empty gateway
+    /// list and 404 mutation.
+    pub fn gateway_registry(&self) -> Option<&Arc<dyn GatewayRegistry>> {
+        self.gateway_registry.get()
     }
 
     /// Install the launcher's connected-devserver feed. Idempotent set-once;

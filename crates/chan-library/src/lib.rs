@@ -16,6 +16,7 @@ pub mod config;
 pub mod desktop_window_ops;
 pub mod devserver_registry;
 pub mod error;
+pub mod gateway_registry;
 pub mod host;
 pub mod participant_names;
 pub mod prefix;
@@ -35,6 +36,7 @@ pub use config::{
 };
 pub use devserver_registry::{DevserverEntry, DevserverInput, DevserverRegistry, DevserverStatus};
 pub use error::Error;
+pub use gateway_registry::{GatewayEntry, GatewayInput, GatewayRegistry, GatewayStatus};
 pub use host::{
     CollapsedMachinesStore, DevserverFeedSource, HostedWorkspace, LauncherWorkspace,
     LocalColorStore, LocalThemeStore, WorkspaceHost, WorkspaceLifecycleOutcome, WorkspaceStatus,

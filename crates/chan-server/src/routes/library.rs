@@ -1493,6 +1493,9 @@ mod devserver_route_tests {
                     auto_hide_control: false,
                     os: "linux".into(),
                     pretty_name: Some("Debian GNU/Linux 12".into()),
+                    gateway_id: None,
+                    gateway_url: String::new(),
+                    shared: false,
                 }]),
             }
         }
@@ -1523,6 +1526,9 @@ mod devserver_route_tests {
                 auto_hide_control: input.auto_hide_control,
                 os: String::new(),
                 pretty_name: None,
+                gateway_id: None,
+                gateway_url: String::new(),
+                shared: false,
             };
             self.rows.lock().unwrap().push(entry.clone());
             Ok(entry)

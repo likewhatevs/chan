@@ -116,6 +116,24 @@ pub struct DevserverEntry {
     /// (uniform with `library_id`, so the launcher wire always carries the key).
     #[serde(default)]
     pub pretty_name: Option<String>,
+    /// The id of the gateway this row was synthesized from (`gw-<8hex>`), or
+    /// `None` for a plain configured row. The launcher gates row editing off
+    /// this: synthesized rows come and go with the gateway's roster and carry
+    /// no local config to edit. `#[serde(default)]`: a row without the field
+    /// reads `None`; the key always serializes (no skip), so the TypeScript
+    /// mirror never needs optional-key handling.
+    #[serde(default)]
+    pub gateway_id: Option<String>,
+    /// The owning gateway's public identity origin for the launcher's
+    /// "via <gateway>" note; empty for plain rows. `#[serde(default)]`: a row
+    /// without the field reads empty.
+    #[serde(default)]
+    pub gateway_url: String,
+    /// Whether this row is a devserver SHARED with the user (roster role is
+    /// not `owner`) rather than one the user owns; always `false` for plain
+    /// rows. `#[serde(default)]`: a row without the field reads `false`.
+    #[serde(default)]
+    pub shared: bool,
 }
 
 /// The add/update payload. `host` + `port` are required; the rest are optional.
@@ -199,5 +217,26 @@ mod tests {
             serde_json::to_string(&DevserverStatus::Connected).unwrap(),
             "\"connected\""
         );
+    }
+
+    #[test]
+    fn gateway_fields_default_and_always_serialize() {
+        // A row serialized before the gateway fields existed deserializes
+        // with their defaults, so older desktop configs and older wire
+        // producers keep parsing.
+        let legacy = "{\"id\":\"ds1\",\"url\":\"http://box:8787\",\"host\":\"box\",\
+                      \"port\":8787,\"label\":\"\",\"script\":\"\",\"has_token\":false,\
+                      \"library_id\":null}";
+        let entry: DevserverEntry = serde_json::from_str(legacy).unwrap();
+        assert_eq!(entry.gateway_id, None);
+        assert_eq!(entry.gateway_url, "");
+        assert!(!entry.shared);
+        // And the keys always ride the wire (no skip_serializing_if), so the
+        // launcher's TypeScript mirror reads them unconditionally.
+        let wire = serde_json::to_value(&entry).unwrap();
+        let obj = wire.as_object().unwrap();
+        assert_eq!(obj.get("gateway_id"), Some(&serde_json::Value::Null));
+        assert_eq!(obj.get("gateway_url"), Some(&serde_json::json!("")));
+        assert_eq!(obj.get("shared"), Some(&serde_json::json!(false)));
     }
 }
