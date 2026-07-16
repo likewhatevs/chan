@@ -6,6 +6,7 @@
 import { backend } from "../api/backend";
 import type { DevserverEntry, DevserverInput, WindowRecord, WorkspaceEntry } from "../api/library";
 import { selfManagedWindows } from "./capabilities";
+import { pushLocalError } from "./notices.svelte";
 import { beginPending, clearPending, dsKey, reconcile, servedKey, wsKey } from "./pending.svelte";
 import { reconcileWindows } from "./windowManager.svelte";
 
@@ -39,11 +40,13 @@ function errorText(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
-/** Surface a failed action in the launcher's error banner. Components catch
- * their action rejections and route them here; the throwing actions stay
- * uniform (so bulk loops can count per-item failures). */
+/** Surface a failed action as a corner notice bubble. Components catch their
+ * action rejections and route them here; the throwing actions stay uniform
+ * (so bulk loops can count per-item failures). `library.error` keeps the last
+ * error as state for callers that inspect it. */
 export function reportError(e: unknown): void {
   library.error = errorText(e);
+  pushLocalError(errorText(e));
 }
 
 export function clearError(): void {
@@ -117,7 +120,7 @@ export async function loadLibrary(): Promise<void> {
     // the latest state and only survives for rows still genuinely in-flight.
     reconcilePending();
   } catch (e) {
-    library.error = errorText(e);
+    reportError(e);
   } finally {
     library.loading = false;
   }

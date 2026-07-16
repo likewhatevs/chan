@@ -3,7 +3,7 @@
   // New/Edit dialog mounted while open. Data loads on mount and the tree stays
   // live through the window-watch subscription.
   import { onMount } from "svelte";
-  import { RotateCw, X } from "lucide-svelte";
+  import { RotateCw } from "lucide-svelte";
   import TopBar from "./components/TopBar.svelte";
   import SelectionBar from "./components/SelectionBar.svelte";
   import ScreenFlip from "./components/ScreenFlip.svelte";
@@ -11,7 +11,9 @@
   import NewWorkspaceDialog from "./components/NewWorkspaceDialog.svelte";
   import ConfirmDialog from "./components/ConfirmDialog.svelte";
   import Modal from "./components/Modal.svelte";
-  import { library, loadLibrary, clearError, reportError, resync } from "./state/library.svelte";
+  import NoticeBubbles from "./components/NoticeBubbles.svelte";
+  import { library, loadLibrary, reportError, resync } from "./state/library.svelte";
+  import { pushNotice, type Notice } from "./state/notices.svelte";
   import { dialog } from "./state/dialog.svelte";
   import { confirm } from "./state/confirm.svelte";
   import { checksVisible } from "./state/selection.svelte";
@@ -72,6 +74,7 @@
     let unlistenUpdate: (() => void) | null = null;
     let unlistenAuthError: (() => void) | null = null;
     let unlistenAuthChanged: (() => void) | null = null;
+    let unlistenNotice: (() => void) | null = null;
     void onTauriEvent("devserver-control-attention", onControlAttentionEvent).then((un) => {
       unlistenAttention = un;
     });
@@ -84,15 +87,21 @@
     ).then((un) => {
       unlistenUpdate = un;
     });
-    // Gateway sign-in narration. auth-error carries a banner-ready string
+    // Gateway sign-in narration. auth-error carries a display-ready string
     // (denied/cancelled sign-in, a failed resume connect, the sign-in
-    // timeout); auth-changed fires when a sign-in lands or is cleared, so
-    // re-list the registries and the waiting rows resolve without a reload.
+    // timeout) that reportError maps into an error notice; auth-changed fires
+    // when a sign-in lands or is cleared, so re-list the registries and the
+    // waiting rows resolve without a reload.
     void onTauriEvent<string>("auth-error", reportError).then((un) => {
       unlistenAuthError = un;
     });
     void onTauriEvent("auth-changed", () => resync()).then((un) => {
       unlistenAuthChanged = un;
+    });
+    // Structured desktop narration (gateway/devserver cascades, migrations,
+    // expiries): each payload is one corner bubble.
+    void onTauriEvent<Notice>("launcher-notice", pushNotice).then((un) => {
+      unlistenNotice = un;
     });
     return () => {
       unlistenAttention?.();
@@ -100,6 +109,7 @@
       unlistenUpdate?.();
       unlistenAuthError?.();
       unlistenAuthChanged?.();
+      unlistenNotice?.();
     };
   });
 
@@ -129,20 +139,6 @@
 <TopBar />
 
 <main class="content" class:with-bulk-bar={!readOnly && checksVisible()}>
-  {#if library.error}
-    <div class="banner" role="alert">
-      <span class="banner-text">{library.error}</span>
-      <button
-        class="banner-dismiss"
-        type="button"
-        aria-label="Dismiss"
-        title="Dismiss"
-        onclick={() => clearError()}>
-        <X size={16} />
-      </button>
-    </div>
-  {/if}
-
   <ScreenFlip
     flips={screen.flips}
     backLabel={screen.current === "computers" ? "Computers" : "Gateways"}>
@@ -157,6 +153,8 @@
 {#if !readOnly}
   <SelectionBar />
 {/if}
+
+<NoticeBubbles />
 
 {#if dialog.open}
   <NewWorkspaceDialog />
@@ -207,44 +205,6 @@
      bottom padding keeps the last rows clear of it. */
   .content.with-bulk-bar {
     padding-bottom: 6rem;
-  }
-
-  .banner {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    margin-bottom: 1rem;
-    padding: 0.5rem 0.5rem 0.5rem 0.8rem;
-    border-radius: 8px;
-    background: color-mix(in srgb, var(--danger) 16%, transparent);
-    color: var(--danger);
-    font-size: 0.9rem;
-  }
-
-  .banner-text {
-    flex: 1;
-  }
-
-  /* Dismiss [X] -- the icon-button posture, but transparent so it blends into the
-     danger banner and inherits its colour. */
-  .banner-dismiss {
-    flex-shrink: 0;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 1.6rem;
-    height: 1.6rem;
-    padding: 0;
-    border: none;
-    border-radius: 6px;
-    background: transparent;
-    color: inherit;
-    cursor: pointer;
-    transition: background 160ms ease;
-  }
-
-  .banner-dismiss:hover {
-    background: color-mix(in srgb, var(--danger) 22%, transparent);
   }
 
   .update-copy {

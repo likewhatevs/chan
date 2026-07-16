@@ -1,14 +1,16 @@
 // Smoke test: the launcher root mounts and renders its top bar with the
 // theme toggle and the New-workspace button. Registry/feed rendering loads
 // asynchronously from the backend and is covered by the state + component
-// tests; this keeps the mount path itself green. Also covers the error banner's
-// dismiss [X] (clearError) -- a real component mount, since a banner with no way
-// to clear it short of a reload was the reported bug.
+// tests; this keeps the mount path itself green. Also covers the error
+// notice bubble's Dismiss -- a real component mount, since an error with no
+// way to clear it short of a reload was the reported bug.
 
 import { describe, it, expect, afterEach, vi } from "vitest";
 import { mount, unmount, flushSync } from "svelte";
 import App from "./App.svelte";
-import { library } from "./state/library.svelte";
+import appSource from "./App.svelte?raw";
+import { library, reportError } from "./state/library.svelte";
+import { clearNotices } from "./state/notices.svelte";
 import { controlAttention, clearAllControlAttention } from "./state/controlAttention.svelte";
 
 // Pin the in-memory mock as the backend so loadLibrary succeeds (no spurious
@@ -33,6 +35,7 @@ describe("launcher root", () => {
     target = null;
     app = null;
     library.error = null;
+    clearNotices();
     clearAllControlAttention();
   });
 
@@ -73,28 +76,34 @@ describe("launcher root", () => {
     expect(addDs).toBeTruthy();
   });
 
-  it("shows a dismissable error banner that the [X] clears (no reload needed)", async () => {
+  it("shows a dismissable error bubble that Dismiss clears (no reload needed)", async () => {
     target = document.createElement("div");
     document.body.appendChild(target);
     app = mount(App, { target });
-    // Let the mock loadLibrary settle (it nulls error on success), then inject a
-    // banner-worthy error the way a failed action would.
+    // Let the mock loadLibrary settle (it nulls error on success), then raise
+    // an error the way a failed action would.
     await settle();
     flushSync();
 
-    library.error = "the control terminal was closed before the devserver connected";
+    reportError(new Error("the control terminal was closed before the devserver connected"));
     flushSync();
 
-    const banner = target.querySelector('.banner[role="alert"]');
-    expect(banner).not.toBeNull();
-    expect(banner?.textContent).toContain("control terminal");
-    const dismiss = target.querySelector('button[aria-label="Dismiss"]') as HTMLButtonElement;
+    const bubble = target.querySelector('.notice-bubble[role="alert"]');
+    expect(bubble).not.toBeNull();
+    expect(bubble?.textContent).toContain("control terminal");
+    const dismiss = bubble!.querySelector('button[aria-label="Dismiss"]') as HTMLButtonElement;
     expect(dismiss).toBeTruthy();
 
     dismiss.click();
     flushSync();
-    expect(library.error).toBeNull();
-    expect(target.querySelector('.banner[role="alert"]')).toBeNull();
+    expect(target.querySelector('.notice-bubble[role="alert"]')).toBeNull();
+  });
+
+  it("subscribes the desktop's structured launcher-notice event", () => {
+    // jsdom has no Tauri event bridge, so the wiring is source-pinned: the
+    // structured notices channel must stay subscribed alongside auth-error.
+    expect(appSource).toContain('onTauriEvent<Notice>("launcher-notice", pushNotice)');
+    expect(appSource).toContain('onTauriEvent<string>("auth-error", reportError)');
   });
 
   it("does not clear existing control attention on the first connected snapshot", async () => {
