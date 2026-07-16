@@ -100,7 +100,8 @@ use uuid::Uuid;
 use crate::api_tokens::{ApiToken, CreatedToken, NewToken, TokenOrigin, ACTION_DESKTOP_REDEEM};
 use crate::error::{Error, Result};
 use crate::http::{
-    current_user_id, current_user_id_optional, request_meta, AppState, DESKTOP_CONNECT_SCOPE,
+    current_user_id, current_user_id_optional, request_meta, AppState, DESKTOP_ACCOUNT_SCOPE,
+    DESKTOP_CONNECT_SCOPE,
 };
 use crate::pages;
 use crate::profile_client::User;
@@ -132,8 +133,11 @@ const MAX_STATE_LEN: usize = 512;
 /// Scope allowlist for the desktop flow. Stricter than the shape
 /// check `ApiTokenService::create` runs: scopes here must be one of
 /// the desktop/tunnel vocabulary entries, so a desktop build cannot
-/// mint a token carrying a typo'd or future-only scope.
-const ALLOWED_SCOPES: &[&str] = &["tunnel", "desktop.connect"];
+/// mint a token carrying a typo'd or future-only scope. `tunnel` and
+/// `desktop.connect` stay listed for shipped desktops (dropping
+/// either would 400 their sign-in); new desktops request
+/// `desktop.account` alone (see the sole-scope rule in [`validate`]).
+const ALLOWED_SCOPES: &[&str] = &["tunnel", DESKTOP_CONNECT_SCOPE, DESKTOP_ACCOUNT_SCOPE];
 
 /// Default when the client omits `scopes`. Matches the SPA / general
 /// PAT default so silence means "private tunnel only".
@@ -160,168 +164,6 @@ pub struct RedeemPayload {
     /// Always present on the wire (`null` for a token that never
     /// expires); the desktop contract reads the key unconditionally.
     pub expires_at: Option<DateTime<Utc>>,
-}
-
-/// Devserver pick carried on the callback fragment as the optional
-/// `devserver_owner` / `devserver_id` / `devserver_label` keys.
-/// `None` renders a fragment without the keys (the user picked
-/// nothing or has no devservers); the desktop passes a present pick
-/// through to its connect flow.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DevserverSelection {
-    pub owner: String,
-    pub devserver_id: String,
-    pub label: String,
-}
-
-/// One row of the consent page's devserver picker.
-#[derive(Debug, Clone)]
-struct PickerRow {
-    /// The devserver owner's username (the wildcard host label). The
-    /// signed-in user for own rows.
-    owner: String,
-    devserver_id: String,
-    /// Display label; falls back to the id's 12-hex disc.
-    label: String,
-    /// Whether a tunnel is currently registered.
-    live: bool,
-    /// Granted role for shared rows; `None` on own rows.
-    role: Option<String>,
-}
-
-impl PickerRow {
-    /// The radio value the confirm POST parses back:
-    /// `<owner_username>:<devserver_id>`.
-    fn form_value(&self) -> String {
-        format!("{}:{}", self.owner, self.devserver_id)
-    }
-}
-
-/// The pick lists the consent page renders: the signing-in user's own
-/// devservers (profile roster unioned with live tunnels) and the ones
-/// shared with them.
-#[derive(Debug, Clone, Default)]
-struct PickerData {
-    own: Vec<PickerRow>,
-    shared: Vec<PickerRow>,
-}
-
-impl PickerData {
-    fn is_empty(&self) -> bool {
-        self.own.is_empty() && self.shared.is_empty()
-    }
-
-    /// Find the row matching a posted `<owner>:<devserver_id>` pick.
-    fn find(&self, owner: &str, devserver_id: &str) -> Option<&PickerRow> {
-        self.own
-            .iter()
-            .chain(self.shared.iter())
-            .find(|r| r.owner == owner && r.devserver_id == devserver_id)
-    }
-}
-
-/// What the consent page's devserver section renders.
-enum PickerVariant {
-    /// Requested scopes do not include `desktop.connect`: no section.
-    Hidden,
-    /// Lists fetched (possibly empty: the zero-state blurb renders).
-    Rows(PickerData),
-    /// A dependency failed. The pick is optional, so the flow
-    /// degrades to a "lists unavailable" note instead of failing.
-    Unavailable,
-}
-
-/// Display label fallback: the id's 12-hex disc (the same string the
-/// wildcard host carries).
-fn disc_label(devserver_id: &str) -> String {
-    devserver_id.chars().take(12).collect()
-}
-
-/// Fetch the pick lists for `user`. `None` when profile or the proxy
-/// admin failed and the page should render [`PickerVariant::Unavailable`].
-async fn fetch_picker_data(state: &AppState, user: &User) -> Option<PickerData> {
-    let owned = match state
-        .cfg
-        .profile_client
-        .list_owned_devservers(user.id)
-        .await
-    {
-        Ok(rows) => rows,
-        Err(e) => {
-            tracing::warn!(error = ?e, user = %user.username, "consent picker: owned list failed");
-            return None;
-        }
-    };
-    let shared = match state.cfg.profile_client.list_incoming_shares(user.id).await {
-        Ok(rows) => rows,
-        Err(e) => {
-            tracing::warn!(error = ?e, user = %user.username, "consent picker: incoming list failed");
-            return None;
-        }
-    };
-    // No admin client (dev/lab) renders the roster offline-only
-    // rather than degrading: the lists are still authoritative.
-    let live: Vec<String> = match state.cfg.workspace_admin.as_ref() {
-        Some(client) => match client.list_user_tunnels(&user.username).await {
-            Ok(rows) => rows.into_iter().map(|t| t.devserver_id).collect(),
-            Err(e) => {
-                tracing::warn!(error = ?e, user = %user.username, "consent picker: tunnel list failed");
-                return None;
-            }
-        },
-        None => Vec::new(),
-    };
-
-    let mut own: Vec<PickerRow> = Vec::new();
-    for o in &owned {
-        own.push(PickerRow {
-            owner: user.username.clone(),
-            devserver_id: o.devserver_id.clone(),
-            label: if o.label.is_empty() {
-                disc_label(&o.devserver_id)
-            } else {
-                o.label.clone()
-            },
-            live: live.contains(&o.devserver_id),
-            role: None,
-        });
-    }
-    // A live tunnel missing from the roster (registered before the
-    // row existed) is appended so nothing the user can reach is
-    // hidden from the pick.
-    for id in &live {
-        if !own.iter().any(|r| &r.devserver_id == id) {
-            own.push(PickerRow {
-                owner: user.username.clone(),
-                devserver_id: id.clone(),
-                label: disc_label(id),
-                live: true,
-                role: None,
-            });
-        }
-    }
-    own.sort_by(|a, b| a.label.cmp(&b.label));
-
-    let mut shared_rows: Vec<PickerRow> = shared
-        .into_iter()
-        .map(|s| PickerRow {
-            owner: s.owner_username.clone(),
-            label: if s.label.is_empty() {
-                disc_label(&s.devserver_id)
-            } else {
-                s.label.clone()
-            },
-            devserver_id: s.devserver_id,
-            live: false,
-            role: Some(s.role),
-        })
-        .collect();
-    shared_rows.sort_by(|a, b| a.label.cmp(&b.label));
-
-    Some(PickerData {
-        own,
-        shared: shared_rows,
-    })
 }
 
 /// In-process single-use store for pending redemptions, shared via
@@ -438,6 +280,13 @@ fn validate(q: AuthorizeQuery) -> Result<AuthorizeParams> {
             return Err(Error::BadRequest("invalid scopes".into()));
         }
     }
+    // Sole-scope rule: desktop.account already covers the whole
+    // account (roster read + entry mint), so a request mixing it with
+    // the per-devserver vocabulary is a confused client, not a
+    // capability request we can honor.
+    if scopes.iter().any(|s| s == DESKTOP_ACCOUNT_SCOPE) && scopes.len() > 1 {
+        return Err(Error::BadRequest("invalid scopes".into()));
+    }
     // Clamp instead of reject: the spec note says "Cap expires_in to
     // whatever your policy max is. Don't trust the client." Clamping
     // keeps an over-eager desktop build working at the policy ceiling
@@ -460,12 +309,7 @@ fn validate(q: AuthorizeQuery) -> Result<AuthorizeParams> {
 /// metadata the desktop shows while it redeems. Fragment (not query)
 /// keeps it out of any access log along the redirect chain (browsers
 /// do not send the fragment to servers).
-pub fn success_url(
-    params: &AuthorizeParams,
-    code: &str,
-    token: &ApiToken,
-    devserver: Option<&DevserverSelection>,
-) -> String {
+pub fn success_url(params: &AuthorizeParams, code: &str, token: &ApiToken) -> String {
     let mut frag = String::new();
     push_pair(&mut frag, "code", code);
     push_pair(&mut frag, "label", &token.label);
@@ -473,11 +317,6 @@ pub fn success_url(
         push_pair(&mut frag, "expires_at", &exp.to_rfc3339());
     }
     push_pair(&mut frag, "state", &params.state);
-    if let Some(d) = devserver {
-        push_pair(&mut frag, "devserver_owner", &d.owner);
-        push_pair(&mut frag, "devserver_id", &d.devserver_id);
-        push_pair(&mut frag, "devserver_label", &d.label);
-    }
     format!("{}#{}", params.redirect_uri, frag)
 }
 
@@ -535,7 +374,7 @@ fn generate_csrf() -> String {
 /// mechanics (meta refresh + manual link to the `chan://` target) do
 /// not.
 enum Handoff {
-    /// PAT minted; the target carries `#id=&secret=…`.
+    /// PAT minted; the target carries `#code=…`.
     Success,
     /// The user clicked Cancel; the target carries `#error=user_cancelled`.
     Cancelled,
@@ -598,15 +437,13 @@ fn handoff_response(kind: &Handoff, target: &str) -> Response {
 }
 
 /// Mint the PAT, stash it under a one-time redemption code, and
-/// return the chan:// success URL carrying the code (plus the
-/// devserver pick when one was made). Called by the confirm POST when
-/// the user clicks Authorize.
+/// return the chan:// success URL carrying the code. Called by the
+/// confirm POST when the user clicks Authorize.
 async fn complete(
     state: &AppState,
     headers: &HeaderMap,
     params: &AuthorizeParams,
     user: &User,
-    devserver: Option<&DevserverSelection>,
 ) -> Result<String> {
     let expires_at: DateTime<Utc> = Utc::now() + chrono::Duration::seconds(params.expires_in_secs);
     let CreatedToken { token, secret } = state
@@ -653,7 +490,7 @@ async fn complete(
         label: token.label.clone(),
         expires_at: token.expires_at,
     });
-    Ok(success_url(params, &code, &token, devserver))
+    Ok(success_url(params, &code, &token))
 }
 
 #[derive(Debug, Deserialize)]
@@ -748,20 +585,7 @@ pub async fn consent(State(state): State<AppState>, session: Session) -> Result<
         .await
         .map_err(|e| Error::Anyhow(anyhow::anyhow!("session insert desktop_csrf: {e}")))?;
 
-    // The devserver picker renders only when the requested scopes
-    // include desktop.connect (the pick is what the desktop records
-    // for its connect flow). List failures degrade to a note: the
-    // pick is optional and must not block the authorize.
-    let picker = if params.scopes.iter().any(|s| s == DESKTOP_CONNECT_SCOPE) {
-        match fetch_picker_data(&state, &user).await {
-            Some(data) => PickerVariant::Rows(data),
-            None => PickerVariant::Unavailable,
-        }
-    } else {
-        PickerVariant::Hidden
-    };
-
-    let html = render_consent_html(&params, &user, &csrf, &picker);
+    let html = render_consent_html(&params, &user, &csrf);
     Ok((pages::security_headers(), Html(html)).into_response())
 }
 
@@ -772,11 +596,6 @@ pub struct ConfirmForm {
     /// Echoed CSRF nonce. Compared constant-time to the session
     /// value stored during consent render.
     csrf: String,
-    /// Optional devserver pick from the consent radios:
-    /// `<owner_username>:<devserver_id>`, or empty for "no
-    /// devserver". Re-validated against freshly fetched lists.
-    #[serde(default)]
-    devserver: Option<String>,
 }
 
 /// `POST /desktop/authorize/confirm` -- handles allow / deny. Every
@@ -823,11 +642,7 @@ pub async fn confirm(
                     &error_url(&params, "account_blocked"),
                 ));
             }
-            let selection = match form.devserver.as_deref().filter(|s| !s.is_empty()) {
-                Some(raw) => Some(validate_pick(&state, &user, raw).await?),
-                None => None,
-            };
-            let url = complete(&state, &headers, &params, &user, selection.as_ref()).await?;
+            let url = complete(&state, &headers, &params, &user).await?;
             Ok(handoff_response(&Handoff::Success, &url))
         }
         "deny" => Ok(handoff_response(
@@ -838,45 +653,12 @@ pub async fn confirm(
     }
 }
 
-/// Re-validate a posted devserver pick against freshly fetched lists
-/// (the render-time lists may be stale: a grant can be revoked or a
-/// devserver can vanish between render and POST). A pick that is not
-/// in the fresh lists is a 400; entry-time `devserver_access` remains
-/// the authoritative check when the desktop later connects.
-async fn validate_pick(state: &AppState, user: &User, raw: &str) -> Result<DevserverSelection> {
-    let Some((owner, devserver_id)) = raw.split_once(':') else {
-        return Err(Error::BadRequest("invalid devserver pick".into()));
-    };
-    let Some(data) = fetch_picker_data(state, user).await else {
-        // Lists unavailable: without them the pick cannot be
-        // validated, and minting with an unverified pick would hand
-        // the desktop a selection nobody vetted.
-        return Err(Error::BadRequest(
-            "devserver lists unavailable; retry or authorize without a pick".into(),
-        ));
-    };
-    let Some(row) = data.find(owner, devserver_id) else {
-        return Err(Error::BadRequest("unknown devserver pick".into()));
-    };
-    Ok(DevserverSelection {
-        owner: row.owner.clone(),
-        devserver_id: row.devserver_id.clone(),
-        label: row.label.clone(),
-    })
-}
-
 /// Render the consent page in the shared [`crate::pages`] shell (the
 /// SPA card look). Every interpolated value is escaped; the form's
-/// `csrf` / `action` / `devserver` fields are the wire contract the
-/// confirm POST (and the integration tests) read. Script-free: the
-/// picker is plain radios inside the confirm form, within the shell's
+/// `csrf` / `action` fields are the wire contract the confirm POST
+/// (and the integration tests) read. Script-free within the shell's
 /// strict CSP.
-fn render_consent_html(
-    params: &AuthorizeParams,
-    user: &User,
-    csrf: &str,
-    picker: &PickerVariant,
-) -> String {
+fn render_consent_html(params: &AuthorizeParams, user: &User, csrf: &str) -> String {
     let display = user
         .display_name
         .as_deref()
@@ -884,19 +666,27 @@ fn render_consent_html(
         .unwrap_or(&user.username);
     let scopes = params.scopes.join(", ");
     let expires_phrase = humanize_expires(params.expires_in_secs);
-    let picker_html = render_picker_html(picker);
+    // Account-mode consent spells out what the single scope grants;
+    // the legacy scopes keep the bare details table shipped desktops
+    // were reviewed against.
+    let account_blurb = if params.scopes.iter().any(|s| s == DESKTOP_ACCOUNT_SCOPE) {
+        "<p class=\"muted\">chan-desktop will get access to your account on this \
+         gateway: your devservers and devservers shared with you.</p>\n    "
+    } else {
+        ""
+    };
     let body = format!(
         r#"
     <span class="mark" aria-hidden="true"></span>
     <h1>Authorize chan-desktop?</h1>
     <p class="muted">Signed in as <strong>{display}</strong>.</p>
-    <div class="details">
+    {account_blurb}<div class="details">
       <div class="row"><span class="k">Label</span><span class="v">{label}</span></div>
       <div class="row"><span class="k">Scopes</span><span class="v">{scopes}</span></div>
       <div class="row"><span class="k">Expires in</span><span class="v">{expires_phrase}</span></div>
     </div>
     <form method="post" action="/desktop/authorize/confirm">
-      {picker_html}<input type="hidden" name="csrf" value="{csrf}">
+      <input type="hidden" name="csrf" value="{csrf}">
       <button class="btn" type="submit" name="action" value="deny">Cancel</button>
       <button class="btn primary" type="submit" name="action" value="allow">Authorize</button>
     </form>
@@ -912,72 +702,6 @@ fn render_consent_html(
         head_extra: "",
         body: &body,
     })
-}
-
-/// The devserver-pick section of the consent form. Empty string when
-/// hidden; otherwise a radio list (own, then shared) or the
-/// zero-state / unavailable notes. The first own LIVE devserver is
-/// preselected so the common single-devserver case rides through a
-/// plain Authorize click; "No devserver" is always offered.
-fn render_picker_html(picker: &PickerVariant) -> String {
-    let data = match picker {
-        PickerVariant::Hidden => return String::new(),
-        PickerVariant::Unavailable => {
-            return r#"<div class="details">
-        <p class="muted small">Devserver lists are unavailable right now. You can
-        authorize anyway and pick a devserver from the app later.</p>
-      </div>
-      "#
-            .to_string();
-        }
-        PickerVariant::Rows(data) => data,
-    };
-    if data.is_empty() {
-        return r#"<div class="details">
-        <p class="muted small">No devservers yet. Run <code>chan devserver</code> on the
-        machine you want to reach, then Connect again.</p>
-      </div>
-      "#
-        .to_string();
-    }
-    let preselect = data.own.iter().find(|r| r.live).map(PickerRow::form_value);
-    let mut rows = String::new();
-    let mut push_row = |row: &PickerRow, status: &str| {
-        let value = row.form_value();
-        let checked = if preselect.as_deref() == Some(value.as_str()) {
-            " checked"
-        } else {
-            ""
-        };
-        rows.push_str(&format!(
-            r#"<div class="row"><label><input type="radio" name="devserver" value="{value}"{checked}>
-          {label}</label><span class="muted small">{status}</span></div>
-        "#,
-            value = pages::html_escape(&value),
-            label = pages::html_escape(&row.label),
-            status = pages::html_escape(status),
-        ));
-    };
-    for row in &data.own {
-        push_row(row, if row.live { "online" } else { "offline" });
-    }
-    for row in &data.shared {
-        let status = format!(
-            "from @{} \u{00b7} {}",
-            row.owner,
-            row.role.as_deref().unwrap_or("shared"),
-        );
-        push_row(row, &status);
-    }
-    format!(
-        r#"<div class="details">
-        <div class="row"><span class="k">Devserver</span><span class="v"></span></div>
-        {rows}<div class="row"><label><input type="radio" name="devserver" value=""{none_checked}>
-          No devserver (pick later in the app)</label></div>
-      </div>
-      "#,
-        none_checked = if preselect.is_none() { " checked" } else { "" },
-    )
 }
 
 /// Best-effort coarse phrasing. "30 days", "2 hours" -- never tries
@@ -1090,6 +814,55 @@ mod tests {
     }
 
     #[test]
+    fn accepts_sole_account_scope() {
+        let q = AuthorizeQuery {
+            redirect_uri: EXPECTED_REDIRECT_URI.into(),
+            state: "nonce".into(),
+            label: "x".into(),
+            scopes: Some("desktop.account".into()),
+            expires_in: Some(10),
+        };
+        let p = validate(q).unwrap();
+        assert_eq!(p.scopes, vec!["desktop.account"]);
+    }
+
+    #[test]
+    fn rejects_account_scope_mixed_with_others() {
+        // desktop.account is sole-scope: any companion, even an
+        // otherwise-allowed one, is a 400.
+        for bad in [
+            "desktop.account,tunnel",
+            "tunnel,desktop.account",
+            "desktop.account,desktop.connect",
+        ] {
+            let q = AuthorizeQuery {
+                redirect_uri: EXPECTED_REDIRECT_URI.into(),
+                state: "nonce".into(),
+                label: "x".into(),
+                scopes: Some((*bad).into()),
+                expires_in: Some(10),
+            };
+            assert!(validate(q).is_err(), "{bad} should reject");
+        }
+    }
+
+    #[test]
+    fn legacy_scope_pairs_still_validate() {
+        // Shipped desktops send tunnel and tunnel,desktop.connect;
+        // both must keep working (Contract A back-compat).
+        for ok in ["tunnel", "tunnel,desktop.connect", "desktop.connect"] {
+            let q = AuthorizeQuery {
+                redirect_uri: EXPECTED_REDIRECT_URI.into(),
+                state: "nonce".into(),
+                label: "x".into(),
+                scopes: Some((*ok).into()),
+                expires_in: Some(10),
+            };
+            assert!(validate(q).is_ok(), "{ok} should validate");
+        }
+    }
+
+    #[test]
     fn accepts_csv_scopes_with_whitespace() {
         // Exercises comma-split + trim + empty-element filter. `tunnel`
         // is the only live scope now (public path dropped).
@@ -1138,7 +911,7 @@ mod tests {
             "chan-desktop @ box",
             Some(Utc.with_ymd_and_hms(2030, 1, 2, 3, 4, 5).unwrap()),
         );
-        let url = success_url(&params(), "the-code", &token, None);
+        let url = success_url(&params(), "the-code", &token);
         assert!(url.starts_with("chan://auth/callback#"), "got {url}");
         assert!(!url.contains('?'));
         assert!(url.contains("code=the-code"), "got {url}");
@@ -1156,7 +929,7 @@ mod tests {
             "box",
             Some(Utc.with_ymd_and_hms(2030, 1, 2, 3, 4, 5).unwrap()),
         );
-        let url = success_url(&params(), "the-code", &token, None);
+        let url = success_url(&params(), "the-code", &token);
         assert!(!url.contains("secret="), "got {url}");
         assert!(!url.contains("chan_pat_"), "got {url}");
         assert!(!url.contains("id="), "got {url}");
@@ -1165,28 +938,18 @@ mod tests {
     #[test]
     fn success_url_omits_expires_at_when_token_has_none() {
         let token = dummy_token(Uuid::nil(), "x", None);
-        let url = success_url(&params(), "the-code", &token, None);
+        let url = success_url(&params(), "the-code", &token);
         assert!(!url.contains("expires_at="), "got {url}");
     }
 
     #[test]
-    fn success_url_devserver_keys_are_optional() {
+    fn success_url_never_emits_devserver_keys() {
+        // The devserver_* fragment keys are retired (Contract A); the
+        // desktop's handle_callback tolerates their absence, and they
+        // must never come back.
         let token = dummy_token(Uuid::nil(), "x", None);
-        let url = success_url(&params(), "the-code", &token, None);
+        let url = success_url(&params(), "the-code", &token);
         assert!(!url.contains("devserver_"), "got {url}");
-
-        let pick = DevserverSelection {
-            owner: "alice".into(),
-            devserver_id: "ab".repeat(32),
-            label: "work box".into(),
-        };
-        let url = success_url(&params(), "the-code", &token, Some(&pick));
-        assert!(url.contains("devserver_owner=alice"), "got {url}");
-        assert!(
-            url.contains(&format!("devserver_id={}", "ab".repeat(32))),
-            "got {url}"
-        );
-        assert!(url.contains("devserver_label=work+box"), "got {url}");
     }
 
     #[test]
@@ -1255,13 +1018,8 @@ mod tests {
         p.label = r#"a"b<c>'d e"#.into();
         p.state = r#""onmouseover='x' "#.into();
         let token = dummy_token(Uuid::nil(), &p.label, None);
-        let pick = DevserverSelection {
-            owner: "alice".into(),
-            devserver_id: "ab".repeat(32),
-            label: r#"box "with' <breakers>"#.into(),
-        };
         for url in [
-            success_url(&p, "the-code", &token, Some(&pick)),
+            success_url(&p, "the-code", &token),
             error_url(&p, "user_cancelled"),
         ] {
             for breaker in ['"', '<', '>', '\'', ' '] {
@@ -1273,7 +1031,7 @@ mod tests {
     #[test]
     fn handoff_html_embeds_target_twice_and_escapes() {
         let token = dummy_token(Uuid::nil(), "chan-desktop @ box", None);
-        let url = success_url(&params(), "the-code", &token, None);
+        let url = success_url(&params(), "the-code", &token);
         let html = render_handoff_html(&Handoff::Success, &url);
         // Exactly twice: the meta refresh and the manual fallback link.
         let escaped = pages::html_escape(&url);
@@ -1324,7 +1082,7 @@ mod tests {
             block_reason: None,
             avatar_url: None,
         };
-        let html = render_consent_html(&p, &user, "csrf-token", &PickerVariant::Hidden);
+        let html = render_consent_html(&p, &user, "csrf-token");
         // CSRF appears as a hidden input.
         assert!(html.contains(r#"name="csrf" value="csrf-token""#), "{html}");
         // Two action buttons.
@@ -1337,99 +1095,39 @@ mod tests {
         assert!(!html.contains("<img src=x"));
         assert!(html.contains("&lt;img src=x onerror=alert(1)&gt;"));
         assert!(html.contains("&lt;b&gt;Alice&lt;/b&gt;"));
-        // Hidden variant renders no picker radios at all.
+        // The devserver picker is gone: no radios, ever.
         assert!(!html.contains(r#"name="devserver""#), "{html}");
-    }
-
-    fn picker_row(owner: &str, id: &str, label: &str, live: bool, role: Option<&str>) -> PickerRow {
-        PickerRow {
-            owner: owner.into(),
-            devserver_id: id.into(),
-            label: label.into(),
-            live,
-            role: role.map(Into::into),
-        }
+        assert!(!html.contains(r#"type="radio""#), "{html}");
+        // A tunnel-scoped request renders no account blurb.
+        assert!(!html.contains("access to your account"), "{html}");
     }
 
     #[test]
-    fn picker_renders_own_and_shared_rows_with_preselect() {
-        let data = PickerData {
-            own: vec![
-                picker_row("alice", &"a".repeat(64), "laptop", false, None),
-                picker_row("alice", &"b".repeat(64), "office", true, None),
-            ],
-            shared: vec![picker_row(
-                "bob",
-                &"c".repeat(64),
-                "bob-box",
-                false,
-                Some("editor"),
-            )],
+    fn consent_html_account_scope_renders_the_account_copy() {
+        let mut p = params();
+        p.scopes = vec!["desktop.account".into()];
+        let user = User {
+            id: Uuid::nil(),
+            email: "u@example.com".into(),
+            display_name: None,
+            username: "alice".into(),
+            username_edits: 0,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            blocked_at: None,
+            block_reason: None,
+            avatar_url: None,
         };
-        let html = render_picker_html(&PickerVariant::Rows(data));
-        // Radio values are `<owner>:<devserver_id>`.
+        let html = render_consent_html(&p, &user, "csrf-token");
         assert!(
-            html.contains(&format!(r#"value="alice:{}""#, "a".repeat(64))),
+            html.contains(
+                "chan-desktop will get access to your account on this \
+                 gateway: your devservers and devservers shared with you."
+            ),
             "{html}"
         );
-        assert!(html.contains(&format!(r#"value="bob:{}""#, "c".repeat(64))));
-        // The first own LIVE devserver is preselected; the offline own
-        // row and the "no devserver" option are not.
-        let live_value = format!(r#"value="alice:{}" checked"#, "b".repeat(64));
-        assert!(html.contains(&live_value), "{html}");
-        assert!(!html.contains(&format!(r#"value="alice:{}" checked"#, "a".repeat(64))));
-        assert!(!html.contains(r#"value="" checked"#), "{html}");
-        // Status text: own rows badge live/offline, shared rows carry
-        // the owner + role.
-        assert!(html.contains("online"), "{html}");
-        assert!(html.contains("offline"), "{html}");
-        assert!(html.contains("from @bob"), "{html}");
-        assert!(html.contains("editor"), "{html}");
-    }
-
-    #[test]
-    fn picker_zero_state_offers_no_radios_and_preselects_nothing() {
-        let html = render_picker_html(&PickerVariant::Rows(PickerData::default()));
-        assert!(html.contains("No devservers yet"), "{html}");
-        assert!(html.contains("chan devserver"), "{html}");
         assert!(!html.contains(r#"type="radio""#), "{html}");
-    }
-
-    #[test]
-    fn picker_unavailable_notes_and_offers_no_radios() {
-        let html = render_picker_html(&PickerVariant::Unavailable);
-        assert!(html.contains("unavailable"), "{html}");
-        assert!(!html.contains(r#"type="radio""#), "{html}");
-    }
-
-    #[test]
-    fn picker_all_offline_preselects_no_devserver() {
-        let data = PickerData {
-            own: vec![picker_row("alice", &"a".repeat(64), "laptop", false, None)],
-            shared: vec![],
-        };
-        let html = render_picker_html(&PickerVariant::Rows(data));
-        assert!(html.contains(r#"value="" checked"#), "{html}");
-    }
-
-    #[test]
-    fn picker_escapes_hostile_labels() {
-        let data = PickerData {
-            own: vec![picker_row(
-                "alice",
-                &"a".repeat(64),
-                "<img src=x onerror=alert(1)>",
-                true,
-                None,
-            )],
-            shared: vec![],
-        };
-        let html = render_picker_html(&PickerVariant::Rows(data));
-        assert!(!html.contains("<img src=x"), "{html}");
-        assert!(
-            html.contains("&lt;img src=x onerror=alert(1)&gt;"),
-            "{html}"
-        );
+        assert!(!html.contains(r#"name="devserver""#), "{html}");
     }
 
     #[test]

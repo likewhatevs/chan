@@ -1,18 +1,20 @@
 // Headless-Chrome half of the gateway-zone e2e: sign in through the
-// stubbed OAuth, walk the desktop-authorize consent flow, pick a
-// devserver, and hand the chan:// callback URL back to the harness.
+// stubbed OAuth, walk the account-mode desktop-authorize consent, and
+// hand the chan:// callback URL back to the harness.
 //
 // Env: CHROME_BIN, ID_ORIGIN (http://id.localtest.me:PORT),
-// AUTH_PATH (the /desktop/authorize?... query), PICK (the radio value
-// to select). Prints one JSON object on stdout:
-//   { radios: [values...], checked: value|null, handoff_url: "chan://..." }
-// Exits nonzero on navigation/shape failures; content assertions stay
-// in the harness so the log reads as one assert list.
+// AUTH_PATH (the /desktop/authorize?... query). Prints one JSON
+// object on stdout:
+//   { radios: [values...], consent_text: "...", handoff_url: "chan://..." }
+// radios reports any input[name="devserver"] on the consent page so
+// the harness can assert the picker stays gone. Exits nonzero on
+// navigation/shape failures; content assertions stay in the harness
+// so the log reads as one assert list.
 import puppeteer from "puppeteer-core";
 
-const { CHROME_BIN, ID_ORIGIN, AUTH_PATH, PICK } = process.env;
-if (!CHROME_BIN || !ID_ORIGIN || !AUTH_PATH || !PICK) {
-    console.error("missing CHROME_BIN / ID_ORIGIN / AUTH_PATH / PICK");
+const { CHROME_BIN, ID_ORIGIN, AUTH_PATH } = process.env;
+if (!CHROME_BIN || !ID_ORIGIN || !AUTH_PATH) {
+    console.error("missing CHROME_BIN / ID_ORIGIN / AUTH_PATH");
     process.exit(2);
 }
 
@@ -43,13 +45,13 @@ try {
     }
 
     const radios = await page.$$eval('input[name="devserver"]', (els) =>
-        els.map((el) => ({ value: el.value, checked: el.checked })),
+        els.map((el) => el.value),
     );
+    const consentText = await page.$eval("body", (el) => el.innerText);
 
-    // Pick and authorize. The handoff answers the form POST as a 200
-    // page whose primary button carries the chan:// URL (the meta
-    // refresh to a custom scheme is a no-op in headless Chrome).
-    await page.click(`input[name="devserver"][value="${PICK}"]`);
+    // Authorize. The handoff answers the form POST as a 200 page
+    // whose primary button carries the chan:// URL (the meta refresh
+    // to a custom scheme is a no-op in headless Chrome).
     await Promise.all([
         page.waitForNavigation({ waitUntil: "networkidle2" }),
         page.click('button[name="action"][value="allow"]'),
@@ -62,8 +64,8 @@ try {
 
     console.log(
         JSON.stringify({
-            radios: radios.map((r) => r.value),
-            checked: radios.find((r) => r.checked)?.value ?? null,
+            radios,
+            consent_text: consentText,
             handoff_url: handoff,
         }),
     );

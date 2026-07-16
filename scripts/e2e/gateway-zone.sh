@@ -75,7 +75,7 @@ MAX_DEVSERVERS=2
 # Scenario dispatch: "all" (default) = core suite + every registered
 # scenario; "core" = the inline suite only; a registered name = stack
 # bring-up + that scenario only. Lanes append their scenario name here.
-SCENARIOS="sweeper watchdog"
+SCENARIOS="sweeper watchdog roster"
 SCENARIO="${1:-all}"
 RUN_CORE=1
 case "$SCENARIO" in all | core) ;; *) RUN_CORE=0 ;; esac
@@ -609,9 +609,11 @@ else
 fi
 
 # ---------------------------------------------------------------
-# I: consent flow in headless Chrome: sign in via the stub OAuth,
-# assert the picker lists own + shared devservers, pick one, and read
-# the chan:// handoff fragment.
+# I: account-mode consent flow in headless Chrome: sign in via the
+# stub OAuth, assert the picker-less account consent, read the
+# chan:// handoff fragment, redeem the one-time code, then drive the
+# roster and a roster-targeted desktop entry with the redeemed
+# account PAT.
 # ---------------------------------------------------------------
 
 frag_get() { # frag_get <url> <key> -> percent-decoded value
@@ -621,37 +623,51 @@ frag_get() { # frag_get <url> <key> -> percent-decoded value
         "$1" "$2"
 }
 
-AUTH_PATH="/desktop/authorize?redirect_uri=chan%3A%2F%2Fauth%2Fcallback&state=e2e-nonce&label=chan-desktop+%40+e2e&scopes=tunnel%2Cdesktop.connect&expires_in=2592000"
-PICK_VALUE="$ALICE_USER:$DS_A"
+roster_row() { # roster_row <roster-json> <dsid> -> "owner online role"
+    printf %s "$1" | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{
+        const id=process.argv[1];
+        try{const r=JSON.parse(d).devservers.find(x=>x.devserver_id===id);
+            console.log(r?`${r.owner} ${r.online} ${r.role}`:"")}catch{console.log("")}})' \
+        "$2"
+}
+
+AUTH_PATH="/desktop/authorize?redirect_uri=chan%3A%2F%2Fauth%2Fcallback&state=e2e-nonce&label=chan-desktop+%40+e2e&scopes=desktop.account&expires_in=2592000"
 if [ -x "$CHROME_BIN" ]; then
     # Run from a copy inside the work dir: ESM resolves node_modules
     # (puppeteer-core) relative to the script's own location.
     cp "$REPO/scripts/e2e/gateway-zone-browser.mjs" "$WORK/"
     browser_json="$(CHROME_BIN="$CHROME_BIN" ID_ORIGIN="http://$ID_HOST" \
-        AUTH_PATH="$AUTH_PATH" PICK="$PICK_VALUE" \
+        AUTH_PATH="$AUTH_PATH" \
         node "$WORK/gateway-zone-browser.mjs" 2> "$LOGS/browser.log")" || browser_json=""
     if [ -z "$browser_json" ]; then
         assert_fail "consent: browser run produced no output (see logs/browser.log)"
     else
-        radios="$(printf %s "$browser_json" | json_get radios)"
+        # radios is an array; count it explicitly (json_get prints
+        # node's inspect form for non-strings).
+        radios_n="$(printf %s "$browser_json" | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{console.log(String(JSON.parse(d).radios.length))}catch{console.log("-1")}})')"
+        consent_text="$(printf %s "$browser_json" | json_get consent_text)"
         handoff="$(printf %s "$browser_json" | json_get handoff_url)"
-        for want in "$ALICE_USER:$DS_A" "$ALICE_USER:$DS_B" "$BOB_USER:$DS_BOB"; do
-            if printf %s "$radios" | grep -q "$want"; then
-                assert_pass "consent: picker lists $want"
-            else
-                assert_fail "consent: picker missing $want in: $radios"
-            fi
-        done
-        if [ "$(frag_get "$handoff" devserver_owner)" = "$ALICE_USER" ] &&
-            [ "$(frag_get "$handoff" devserver_id)" = "$DS_A" ]; then
-            assert_pass "consent: the pick rides the callback fragment"
+        if [ "$radios_n" = "0" ]; then
+            assert_pass "consent: account consent renders no devserver picker"
         else
-            assert_fail "consent: fragment lacks the pick: $handoff"
+            assert_fail "consent: expected 0 devserver radios, found $radios_n"
+        fi
+        case "$consent_text" in
+        *"access to your account on this gateway"*)
+            assert_pass "consent: the account copy renders"
+            ;;
+        *)
+            assert_fail "consent: account copy missing (see logs/browser.log)"
+            ;;
+        esac
+        if [ -z "$(frag_get "$handoff" devserver_owner)" ] &&
+            [ -z "$(frag_get "$handoff" devserver_id)" ]; then
+            assert_pass "consent: fragment carries no retired devserver_* keys"
+        else
+            assert_fail "consent: retired devserver_* keys present: $handoff"
         fi
 
-        # Redeem the one-time code: 200 exactly once, 410 on replay,
-        # and the redeemed PAT drives a desktop entry for the picked
-        # devserver end to end.
+        # Redeem the one-time code: 200 exactly once, 410 on replay.
         code="$(frag_get "$handoff" code)"
         redeem1="$(curl -sS -o "$WORK/redeem.json" -w '%{http_code}' \
             -X POST "http://127.0.0.1:$ID_PORT/desktop/authorize/redeem" \
@@ -665,7 +681,34 @@ if [ -x "$CHROME_BIN" ]; then
             assert_fail "redeem: expected 200 then 410, got $redeem1 then $redeem2"
         fi
         browser_pat="$(json_get secret < "$WORK/redeem.json")"
-        entry_body="$(entry_for "$browser_pat" "{\"owner\":\"$ALICE_USER\",\"devserver_id\":\"$DS_A\"}")"
+
+        # The redeemed account PAT reads the roster; own live rows and
+        # bob's claimed share replace the old picker listing.
+        roster_json="$(curl -sS -H "Authorization: Bearer $browser_pat" \
+            "http://127.0.0.1:$ID_PORT/desktop/v1/devservers")"
+        row_a="$(roster_row "$roster_json" "$DS_A")"
+        if [ "$row_a" = "$ALICE_USER true owner" ]; then
+            assert_pass "roster: redeemed PAT lists devserver A online (owner row)"
+        else
+            assert_fail "roster: devserver A row wrong: '$row_a' in: $roster_json"
+        fi
+        row_b="$(roster_row "$roster_json" "$DS_B")"
+        if [ "$row_b" = "$ALICE_USER true owner" ]; then
+            assert_pass "roster: redeemed PAT lists devserver B online (owner row)"
+        else
+            assert_fail "roster: devserver B row wrong: '$row_b' in: $roster_json"
+        fi
+        row_bob="$(roster_row "$roster_json" "$DS_BOB")"
+        if [ "$row_bob" = "$BOB_USER false editor" ]; then
+            assert_pass "roster: bob's claimed share listed (offline, editor)"
+        else
+            assert_fail "roster: bob share row wrong: '$row_bob' in: $roster_json"
+        fi
+
+        # Entry mint targeted from the roster row, then the same
+        # two-hop routing check the picker flow used to cover.
+        entry_owner="${row_a%% *}"
+        entry_body="$(entry_for "$browser_pat" "{\"owner\":\"$entry_owner\",\"devserver_id\":\"$DS_A\"}")"
         entry_url="$(printf %s "$entry_body" | json_get entry_url)"
         if [ -n "$entry_url" ]; then
             # Same two-hop shape as check_entry_routes: capture the
@@ -680,7 +723,7 @@ if [ -x "$CHROME_BIN" ]; then
             fi
             if [ "$hop2" = "200" ] ||
                 { [ -n "$hop2" ] && grep -qi "bundle not built" "$WORK/root-browser.html"; }; then
-                assert_pass "redeem: redeemed PAT opens the picked devserver ($hop2)"
+                assert_pass "redeem: account PAT opens the roster-picked devserver ($hop2)"
             else
                 assert_fail "redeem: entry hops expected 303 then devserver answer, got $hop1/$hop2"
             fi
@@ -1021,6 +1064,190 @@ PROBE
     [ "$(wd_field recovered)" = "true" ] &&
         assert_pass "watchdog: SIGCONT heals the socket (Ping answered again)" ||
         assert_fail "watchdog: socket did not recover after SIGCONT"
+}
+
+# Scenario: account-mode roster (browser-free). Mints a
+# desktop.account PAT through the operator surface, then proves the
+# roster read against the live stack: owned + shared rows with real
+# liveness, the online flag flipping as a devserver stops and
+# returns, ETag/If-None-Match 304 on an unchanged roster, and entry
+# mints with the account PAT for an own live row (two-hop route) and
+# the shared offline row (devserver_offline; the live shared mint is
+# pinned in tests/desktop_entry.rs). Leaves the stack as found
+# (devserver A redialed and online).
+scenario_roster() {
+    rrow() { # rrow <roster-json> <dsid> -> "owner online role"
+        printf %s "$1" | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{
+            const id=process.argv[1];
+            try{const r=JSON.parse(d).devservers.find(x=>x.devserver_id===id);
+                console.log(r?`${r.owner} ${r.online} ${r.role}`:"")}catch{console.log("")}})' \
+            "$2"
+    }
+    roster_get() { # roster_get <outfile> [etag] -> http code; headers to $WORK/roster-hdrs.txt
+        curl -sS -o "$1" -w '%{http_code}' -D "$WORK/roster-hdrs.txt" \
+            ${2:+-H "If-None-Match: $2"} \
+            -H "Authorization: Bearer $ROSTER_PAT" \
+            "http://127.0.0.1:$ID_PORT/desktop/v1/devservers"
+    }
+    roster_etag() { # the header line is CRLF; strip the CR or the echoed If-None-Match breaks
+        tr -d '\r' < "$WORK/roster-hdrs.txt" | sed -n 's/^[Ee][Tt]ag: //p' | head -1
+    }
+
+    local out account_dsid
+    out="$("$GW_BIN/chan-gateway-admin" \
+        --identity-url "http://127.0.0.1:$ID_PORT" --token "$TOK_ADMIN" --json \
+        token create "$ALICE_EMAIL" \
+        --scope desktop.account --label roster-e2e \
+        2>> "$LOGS/admin-mint.log")" || out=""
+    ROSTER_PAT="$(printf %s "$out" | json_get secret)"
+    case "$ROSTER_PAT" in
+    chan_pat_*) assert_pass "roster: admin mint of a desktop.account PAT" ;;
+    *)
+        assert_fail "roster: account PAT mint failed (logs/admin-mint.log)"
+        return
+        ;;
+    esac
+    # The operator mint registers a devserver row for every PAT
+    # (parity with the SPA mint); an account PAT is not a devserver,
+    # so drop the side-effect row to keep the roster exact.
+    account_dsid="$(printf %s "$ROSTER_PAT" | sha256sum | awk '{print $1}')"
+    sql "$E2E_DATABASE_URL" "SET search_path TO $E2E_SCHEMA;
+        DELETE FROM devservers WHERE devserver_id = '$account_dsid';" || {
+        assert_fail "roster: side-effect row cleanup failed"
+        return
+    }
+
+    # A tunnel/connect PAT must not read the roster.
+    local code
+    code="$(curl -sS -o /dev/null -w '%{http_code}' \
+        -H "Authorization: Bearer $PAT_A" \
+        "http://127.0.0.1:$ID_PORT/desktop/v1/devservers")"
+    if [ "$code" = "401" ]; then
+        assert_pass "roster: tunnel/connect PAT is 401 on the roster"
+    else
+        assert_fail "roster: expected 401 for a wrong-scope PAT, got $code"
+    fi
+
+    local roster_json
+    code="$(roster_get "$WORK/roster1.json")"
+    roster_json="$(cat "$WORK/roster1.json")"
+    if [ "$code" = "200" ]; then
+        assert_pass "roster: account PAT reads the roster (200)"
+    else
+        assert_fail "roster: expected 200, got $code: $roster_json"
+        return
+    fi
+    if [ "$(rrow "$roster_json" "$DS_A")" = "$ALICE_USER true owner" ]; then
+        assert_pass "roster: own live devserver A is online (owner row)"
+    else
+        assert_fail "roster: devserver A row wrong in: $roster_json"
+    fi
+    if [ "$(rrow "$roster_json" "$DS_C")" = "$ALICE_USER false owner" ]; then
+        assert_pass "roster: own registered-but-dark devserver C is offline"
+    else
+        assert_fail "roster: devserver C row wrong in: $roster_json"
+    fi
+    if [ "$(rrow "$roster_json" "$DS_BOB")" = "$BOB_USER false editor" ]; then
+        assert_pass "roster: bob's claimed share listed (offline, editor)"
+    else
+        assert_fail "roster: bob share row wrong in: $roster_json"
+    fi
+
+    local etag
+    etag="$(roster_etag)"
+    if [ -n "$etag" ]; then
+        assert_pass "roster: the 200 carries an ETag"
+    else
+        assert_fail "roster: no ETag header on the roster 200"
+    fi
+    code="$(roster_get /dev/null "$etag")"
+    if [ "$code" = "304" ]; then
+        assert_pass "roster: If-None-Match answers 304 on an unchanged roster"
+    else
+        assert_fail "roster: expected 304 on the unchanged roster, got $code"
+    fi
+
+    # Stop devserver A: its row must flip offline (fresh 200s while
+    # polling), and the pre-flip ETag must stop matching.
+    if [ -f "$WORK/pids/ds-a.pid" ]; then
+        kill "$(cat "$WORK/pids/ds-a.pid")" 2>/dev/null
+        rm -f "$WORK/pids/ds-a.pid"
+    fi
+    local flipped=0
+    for _ in $(seq 75); do
+        code="$(roster_get "$WORK/roster2.json")"
+        if [ "$code" = "200" ] &&
+            [ "$(rrow "$(cat "$WORK/roster2.json")" "$DS_A")" = "$ALICE_USER false owner" ]; then
+            flipped=1
+            break
+        fi
+        sleep 0.4
+    done
+    if [ "$flipped" = 1 ]; then
+        assert_pass "roster: stopping devserver A flips its row offline"
+    else
+        assert_fail "roster: devserver A never went offline in the roster"
+    fi
+    code="$(roster_get /dev/null "$etag")"
+    if [ "$code" = "200" ]; then
+        assert_pass "roster: the pre-flip ETag reads a fresh 200 after the change"
+    else
+        assert_fail "roster: stale ETag expected 200, got $code"
+    fi
+
+    # Redial devserver A and wait for the flip back so the stack is
+    # left as found.
+    spawn_devserver a "${DS_PORTS[0]}" "$PAT_A"
+    local back=0
+    for _ in $(seq 150); do
+        code="$(roster_get "$WORK/roster3.json")"
+        if [ "$code" = "200" ] &&
+            [ "$(rrow "$(cat "$WORK/roster3.json")" "$DS_A")" = "$ALICE_USER true owner" ]; then
+            back=1
+            break
+        fi
+        sleep 0.4
+    done
+    if [ "$back" = 1 ]; then
+        assert_pass "roster: devserver A returns online after redial"
+    else
+        assert_fail "roster: devserver A did not come back online"
+    fi
+
+    # Entry mints with the account PAT: the own live row routes end
+    # to end (the same two-hop shape check_entry_routes uses); the
+    # shared row is registered but dark, so it answers the
+    # devserver_offline reason.
+    local entry_body entry_url hdrs cookie hop1 hop2 host
+    entry_body="$(entry_for "$ROSTER_PAT" "{\"owner\":\"$ALICE_USER\",\"devserver_id\":\"$DS_A\"}")"
+    entry_url="$(printf %s "$entry_body" | json_get entry_url)"
+    host="$ALICE_USER--$(disc "$DS_A").devserver.$DOMAIN"
+    if [ -n "$entry_url" ]; then
+        hdrs="$WORK/hdrs-roster-entry.txt"
+        hop1="$(curl_host "$host" -o /dev/null -w '%{http_code}' -D "$hdrs" "$entry_url")"
+        cookie="$(sed -n 's/^[Ss]et-[Cc]ookie: \(devserver_gate=[^;]*\).*/\1/p' "$hdrs" | head -1)"
+        hop2=""
+        if [ "$hop1" = "303" ] && [ -n "$cookie" ]; then
+            hop2="$(curl_host "$host" -o "$WORK/root-roster.html" -w '%{http_code}' \
+                -H "Cookie: $cookie" "http://$host:$PROXY_PORT/")"
+        fi
+        if [ "$hop2" = "200" ] ||
+            { [ -n "$hop2" ] && grep -qi "bundle not built" "$WORK/root-roster.html"; }; then
+            assert_pass "roster: account PAT entry routes to the own devserver ($hop2)"
+        else
+            assert_fail "roster: entry hops expected 303 then devserver answer, got $hop1/$hop2"
+        fi
+    else
+        assert_fail "roster: entry mint for the own devserver failed: $entry_body"
+    fi
+    local shared_body shared_reason
+    shared_body="$(entry_for "$ROSTER_PAT" "{\"owner\":\"$BOB_USER\",\"devserver_id\":\"$DS_BOB\"}")"
+    shared_reason="$(printf %s "$shared_body" | json_get reason)"
+    if [ "$shared_reason" = "devserver_offline" ]; then
+        assert_pass "roster: shared-row entry answers devserver_offline (box dark)"
+    else
+        assert_fail "roster: shared-row entry expected devserver_offline, got: $shared_body"
+    fi
 }
 
 run_scenarios() { # run_scenarios <all|name>

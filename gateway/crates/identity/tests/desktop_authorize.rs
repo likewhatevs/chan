@@ -805,11 +805,19 @@ async fn happy_login_resume(app: &TestApp, c: &mut Client<'_>, user_id: Uuid, em
 }
 
 // ---------------------------------------------------------------
-// Consent devserver picker
+// Account-mode flow + legacy scope regression
 // ---------------------------------------------------------------
 
-/// AUTH query whose scopes include desktop.connect, which is what
-/// makes the consent page render the devserver picker.
+/// AUTH query for the account-mode flow: the sole desktop.account
+/// scope (Contract A).
+const AUTH_URI_ACCOUNT: &str = "/desktop/authorize?\
+                                redirect_uri=chan%3A%2F%2Fauth%2Fcallback&\
+                                state=desktop-nonce-3&\
+                                label=chan-desktop+%40+host&\
+                                scopes=desktop.account&\
+                                expires_in=2592000";
+
+/// AUTH query with the legacy scope pair shipped desktops send.
 const AUTH_URI_CONNECT: &str = "/desktop/authorize?\
                                 redirect_uri=chan%3A%2F%2Fauth%2Fcallback&\
                                 state=desktop-nonce-2&\
@@ -817,42 +825,8 @@ const AUTH_URI_CONNECT: &str = "/desktop/authorize?\
                                 scopes=tunnel%2Cdesktop.connect&\
                                 expires_in=2592000";
 
-/// Mock the owned + incoming devserver lists the picker fetches.
-async fn mock_devserver_lists(
-    app: &TestApp,
-    user_id: Uuid,
-    owned: serde_json::Value,
-    incoming: serde_json::Value,
-) {
-    Mock::given(method("GET"))
-        .and(path(format!("/v1/users/{user_id}/grants/owned")))
-        .respond_with(ResponseTemplate::new(200).set_body_json(owned))
-        .mount(&app.profile)
-        .await;
-    Mock::given(method("GET"))
-        .and(path(format!("/v1/users/{user_id}/grants/incoming")))
-        .respond_with(ResponseTemplate::new(200).set_body_json(incoming))
-        .mount(&app.profile)
-        .await;
-}
-
-fn incoming_share_json(owner: &str, devserver_id: &str, label: &str) -> serde_json::Value {
-    let now = chrono::Utc::now().to_rfc3339();
-    json!({
-        "grant_id": Uuid::new_v4(),
-        "owner_user_id": Uuid::new_v4(),
-        "owner_username": owner,
-        "owner_display_name": null,
-        "owner_avatar_url": null,
-        "devserver_id": devserver_id,
-        "label": label,
-        "role": "editor",
-        "accepted_at": now,
-    })
-}
-
 #[tokio::test]
-async fn consent_lists_devservers_and_pick_rides_the_fragment() {
+async fn account_flow_mints_account_pat_and_no_devserver_row() {
     let app = TestApp::new().await;
     let mut c = Client::new(&app);
     let uid = Uuid::new_v4();
@@ -860,90 +834,32 @@ async fn consent_lists_devservers_and_pick_rides_the_fragment() {
     happy_login(&app, &mut c, uid, "octo@example.com").await;
     mock_get_user(&app, uid, "octo@example.com", false).await;
 
-    let own_id = "a".repeat(64);
-    let shared_id = "b".repeat(64);
-    mock_devserver_lists(
-        &app,
-        uid,
-        json!([{"devserver_id": own_id, "label": "laptop", "grant_count": 0}]),
-        json!([incoming_share_json("bob-handle", &shared_id, "bob-box")]),
-    )
-    .await;
-
-    let resp = c.get(AUTH_URI_CONNECT).await;
-    assert_eq!(resp.status, StatusCode::SEE_OTHER);
-    let resp = c.get("/desktop/authorize/consent").await;
-    assert_eq!(resp.status, StatusCode::OK);
-    let html = resp.body_str().to_string();
-    let csrf = extract_csrf(&html);
-    let username = format!("u{}", &uid.simple().to_string()[..12]);
-    // Own row + shared row render as radios keyed <owner>:<id>.
-    assert!(html.contains("laptop"), "{html}");
-    assert!(
-        html.contains(&format!(r#"value="{username}:{own_id}""#)),
-        "{html}"
-    );
-    assert!(html.contains("bob-box"), "{html}");
-    assert!(html.contains("from @bob-handle"), "{html}");
-    assert!(
-        html.contains(&format!(r#"value="bob-handle:{shared_id}""#)),
-        "{html}"
-    );
-
-    // Pick the SHARED devserver; the pick rides the callback fragment
-    // as the devserver_* keys next to the one-time code.
-    let resp = c
-        .post_form(
-            "/desktop/authorize/confirm",
-            &[
-                ("csrf", &csrf),
-                ("action", "allow"),
-                ("devserver", &format!("bob-handle:{shared_id}")),
-            ],
-        )
+    // Contract A: the account PAT mints NO devservers row. Verified
+    // at MockServer drop: zero calls to the profile registration.
+    Mock::given(method("POST"))
+        .and(path(format!("/v1/users/{uid}/devservers")))
+        .respond_with(ResponseTemplate::new(500))
+        .expect(0)
+        .mount(&app.profile)
         .await;
-    assert_eq!(resp.status, StatusCode::OK);
-    let url = extract_handoff_url(resp.body_str());
-    let frag = parse_chan_fragment(&url);
-    assert!(frag.contains_key("code"), "{url}");
-    assert_eq!(
-        frag.get("devserver_owner").map(String::as_str),
-        Some("bob-handle"),
-        "{url}"
-    );
-    assert_eq!(
-        frag.get("devserver_id").map(String::as_str),
-        Some(shared_id.as_str()),
-        "{url}"
-    );
-    assert_eq!(
-        frag.get("devserver_label").map(String::as_str),
-        Some("bob-box"),
-        "{url}"
-    );
-    app.cleanup().await;
-}
 
-#[tokio::test]
-async fn consent_zero_state_still_mints_without_devserver_keys() {
-    let app = TestApp::new().await;
-    let mut c = Client::new(&app);
-    let uid = Uuid::new_v4();
-    app.insert_user(uid, "octo@example.com").await;
-    happy_login(&app, &mut c, uid, "octo@example.com").await;
-    mock_get_user(&app, uid, "octo@example.com", false).await;
-    mock_devserver_lists(&app, uid, json!([]), json!([])).await;
-
-    let resp = c.get(AUTH_URI_CONNECT).await;
+    let resp = c.get(AUTH_URI_ACCOUNT).await;
     assert_eq!(resp.status, StatusCode::SEE_OTHER);
     let resp = c.get("/desktop/authorize/consent").await;
     assert_eq!(resp.status, StatusCode::OK);
     let html = resp.body_str().to_string();
     let csrf = extract_csrf(&html);
-    assert!(html.contains("No devservers yet"), "{html}");
+    // The account consent: the copy is present, the picker is gone.
+    assert!(
+        html.contains(
+            "chan-desktop will get access to your account on this \
+             gateway: your devservers and devservers shared with you."
+        ),
+        "{html}"
+    );
     assert!(!html.contains(r#"type="radio""#), "{html}");
+    assert!(!html.contains(r#"name="devserver""#), "{html}");
 
-    // Authorize still mints; the fragment simply has no devserver_*.
     let resp = c
         .post_form(
             "/desktop/authorize/confirm",
@@ -953,54 +869,95 @@ async fn consent_zero_state_still_mints_without_devserver_keys() {
     assert_eq!(resp.status, StatusCode::OK);
     let url = extract_handoff_url(resp.body_str());
     let frag = parse_chan_fragment(&url);
-    assert!(frag.contains_key("code"), "{url}");
-    assert!(!frag.contains_key("devserver_owner"), "{url}");
-    assert!(!frag.contains_key("devserver_id"), "{url}");
+    let code = frag.get("code").expect("code in fragment").clone();
+    // devserver_* keys are retired: never emitted, not even empty.
+    assert!(!frag.keys().any(|k| k.starts_with("devserver_")), "{url}");
+
+    // The redeemed PAT carries exactly the account scope.
+    let resp = c
+        .post_json("/desktop/authorize/redeem", &json!({ "code": code }))
+        .await;
+    assert_eq!(resp.status, StatusCode::OK);
+    let redeemed: serde_json::Value = serde_json::from_slice(&resp.body).expect("redeem json");
+    let secret = redeemed["secret"].as_str().expect("secret string");
+    let validated = app
+        .api_tokens
+        .validate(secret, &RequestMeta::default())
+        .await
+        .expect("account PAT validates");
+    assert_eq!(validated.scopes, vec!["desktop.account".to_string()]);
     app.cleanup().await;
 }
 
 #[tokio::test]
-async fn confirm_rejects_pick_not_in_lists() {
+async fn legacy_connect_flow_still_mints_and_registers() {
     let app = TestApp::new().await;
     let mut c = Client::new(&app);
     let uid = Uuid::new_v4();
     app.insert_user(uid, "octo@example.com").await;
     happy_login(&app, &mut c, uid, "octo@example.com").await;
     mock_get_user(&app, uid, "octo@example.com", false).await;
-    mock_devserver_lists(
-        &app,
-        uid,
-        json!([{"devserver_id": "a".repeat(64), "label": "laptop", "grant_count": 0}]),
-        json!([]),
-    )
-    .await;
 
-    // A pick that is in neither fresh list (revoked / fabricated).
+    // The tunnel scope keeps registering the 1-token:1-devserver row
+    // exactly once (shipped-desktop back-compat).
+    let now = chrono::Utc::now().to_rfc3339();
+    Mock::given(method("POST"))
+        .and(path(format!("/v1/users/{uid}/devservers")))
+        .respond_with(ResponseTemplate::new(201).set_body_json(json!({
+            "id": Uuid::new_v4(),
+            "owner_user_id": uid,
+            "devserver_id": "a".repeat(64),
+            "label": "chan-desktop @ host",
+            "created_at": now,
+        })))
+        .expect(1)
+        .mount(&app.profile)
+        .await;
+
     let resp = c.get(AUTH_URI_CONNECT).await;
     assert_eq!(resp.status, StatusCode::SEE_OTHER);
     let resp = c.get("/desktop/authorize/consent").await;
-    let csrf = extract_csrf(resp.body_str());
+    assert_eq!(resp.status, StatusCode::OK);
+    let html = resp.body_str().to_string();
+    let csrf = extract_csrf(&html);
+    // No picker on the legacy consent either, and no account copy.
+    assert!(!html.contains(r#"type="radio""#), "{html}");
+    assert!(!html.contains("access to your account"), "{html}");
+
+    // A stale desktop.connect client may still POST a devserver pick;
+    // the retired field is ignored, the mint proceeds, and the
+    // fragment carries no devserver_* keys.
     let resp = c
         .post_form(
             "/desktop/authorize/confirm",
             &[
                 ("csrf", &csrf),
                 ("action", "allow"),
-                ("devserver", &format!("mallory:{}", "f".repeat(64))),
+                ("devserver", &format!("bob:{}", "b".repeat(64))),
             ],
         )
         .await;
-    assert_eq!(resp.status, StatusCode::BAD_REQUEST);
+    assert_eq!(resp.status, StatusCode::OK);
+    let url = extract_handoff_url(resp.body_str());
+    let frag = parse_chan_fragment(&url);
+    assert!(frag.contains_key("code"), "{url}");
+    assert!(!frag.keys().any(|k| k.starts_with("devserver_")), "{url}");
 
-    // Malformed pick (no owner:id separator): fresh flow, same 400.
-    let resp = c.get(AUTH_URI_CONNECT).await;
-    assert_eq!(resp.status, StatusCode::SEE_OTHER);
-    let resp = c.get("/desktop/authorize/consent").await;
-    let csrf = extract_csrf(resp.body_str());
+    // The minted PAT carries the legacy scope pair.
+    let tokens = app.api_tokens.list(uid).await.expect("list");
+    assert_eq!(tokens.len(), 1);
+    assert_eq!(tokens[0].scopes, vec!["tunnel", "desktop.connect"]);
+    app.cleanup().await;
+}
+
+#[tokio::test]
+async fn account_scope_mixed_with_tunnel_is_400_at_the_door() {
+    let app = TestApp::new().await;
+    let mut c = Client::new(&app);
     let resp = c
-        .post_form(
-            "/desktop/authorize/confirm",
-            &[("csrf", &csrf), ("action", "allow"), ("devserver", "junk")],
+        .get(
+            "/desktop/authorize?redirect_uri=chan%3A%2F%2Fauth%2Fcallback&\
+             state=x&label=x&scopes=desktop.account%2Ctunnel&expires_in=10",
         )
         .await;
     assert_eq!(resp.status, StatusCode::BAD_REQUEST);
