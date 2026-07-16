@@ -3,6 +3,12 @@ use std::net::SocketAddr;
 use anyhow::Context;
 use url::Url;
 
+/// Both-directions idle window after which a bridged WebSocket is cut.
+/// Long enough that any heartbeat-carrying socket (the SPA pings every
+/// 20s) never trips it; short enough that abandoned bridges do not pin
+/// yamux substreams for hours.
+pub const DEFAULT_WS_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
+
 /// Runtime config sourced from environment variables.
 #[derive(Clone)]
 pub struct Config {
@@ -63,9 +69,16 @@ pub struct Config {
     /// `None` disables.
     pub max_request_bytes: Option<usize>,
     /// Hard cap on total time a single proxied HTTP request may
-    /// consume. `None` disables; default 60s. WebSocket requests use
-    /// per-half idle timeouts instead.
+    /// consume. `None` disables; default 60s. WebSocket bridges use
+    /// the shared `ws_idle_timeout` window instead.
     pub request_timeout: Option<std::time::Duration>,
+    /// Idle window for bridged WebSockets. The bridge is cut (with a
+    /// proper Close frame to both halves) only after BOTH directions
+    /// have been quiet this long; a frame either way resets the
+    /// window, so a socket streaming one way never dies mid-stream.
+    /// Always [`DEFAULT_WS_IDLE_TIMEOUT`] in production (not
+    /// env-sourced); tests inject sub-second values via the struct.
+    pub ws_idle_timeout: std::time::Duration,
     /// Value to set on the outbound `X-Forwarded-Proto` header before
     /// forwarding to the upstream `chan devserver`. devserver-proxy itself
     /// does not see TLS (nginx terminates), so we cannot derive this
@@ -201,6 +214,7 @@ impl Config {
             max_response_bytes,
             max_request_bytes,
             request_timeout,
+            ws_idle_timeout: DEFAULT_WS_IDLE_TIMEOUT,
             forwarded_proto,
         })
     }
@@ -345,6 +359,7 @@ mod tests {
             max_response_bytes: None,
             max_request_bytes: None,
             request_timeout: None,
+            ws_idle_timeout: DEFAULT_WS_IDLE_TIMEOUT,
             forwarded_proto: "https".into(),
         }
     }

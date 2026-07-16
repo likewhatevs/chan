@@ -334,6 +334,7 @@ pub async fn handle(state: AppState, user: String, disc: Option<String>, req: Re
             &devserver_id,
         );
         let handle = entry.handle.clone();
+        let idle_timeout = state.cfg.ws_idle_timeout;
         let _ = body; // upgrade swallows the body anyway.
         return upgrade
             .on_upgrade(move |client| async move {
@@ -343,6 +344,7 @@ pub async fn handle(state: AppState, user: String, disc: Option<String>, req: Re
                     &upstream_path_and_query,
                     &forwarded,
                     assertion,
+                    idle_timeout,
                 )
                 .await
                 {
@@ -837,12 +839,22 @@ fn strip_response_headers(
 }
 
 /// Bidirectional WebSocket pump.
+///
+/// One shared idle window covers BOTH directions: a frame either way
+/// resets it, so a socket streaming upstream->client (a terminal
+/// printing output) or client->upstream (heartbeats) never dies
+/// mid-stream; only a bridge quiet in both directions for
+/// `idle_timeout` (production: [`crate::config::DEFAULT_WS_IDLE_TIMEOUT`])
+/// is cut. Every non-error teardown announces itself with a real WS
+/// Close frame to each half -- an abrupt FIN leaves browsers without a
+/// prompt `onclose` and the peer devserver with a dangling substream.
 async fn bridge_ws(
     client: WebSocket,
     handle: TunnelHandle,
     path_and_query: &str,
     forwarded: &ForwardedHeaders,
     assertion: Option<HeaderValue>,
+    idle_timeout: std::time::Duration,
 ) -> anyhow::Result<()> {
     let stream = handle.open().await?;
     let io = stream.compat();
@@ -862,49 +874,81 @@ async fn bridge_ws(
     let (mut up_tx, mut up_rx) = upstream.split();
     let (mut cl_tx, mut cl_rx) = client.split();
 
-    const IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
-
-    let c2u = async {
-        loop {
-            let msg = match tokio::time::timeout(IDLE_TIMEOUT, cl_rx.next()).await {
-                Ok(Some(m)) => m?,
-                Ok(None) => break,
-                Err(_) => {
-                    tracing::debug!("ws client->upstream idle timeout");
+    let mut idle_deadline = tokio::time::Instant::now() + idle_timeout;
+    loop {
+        tokio::select! {
+            msg = cl_rx.next() => match msg {
+                Some(Ok(msg)) => {
+                    idle_deadline = tokio::time::Instant::now() + idle_timeout;
+                    let stop = matches!(msg, Message::Close(_));
+                    up_tx.send(client_to_upstream(msg)).await?;
+                    if stop {
+                        break;
+                    }
+                }
+                Some(Err(e)) => {
+                    // Client transport died mid-frame; the upstream
+                    // half is still healthy, so close it properly.
+                    let _ = up_tx.send(TgMessage::Close(None)).await;
+                    return Err(e.into());
+                }
+                None => {
+                    // Client vanished without a Close handshake.
+                    let _ = up_tx.send(TgMessage::Close(None)).await;
                     break;
                 }
-            };
-            let stop = matches!(msg, Message::Close(_));
-            up_tx.send(client_to_upstream(msg)).await?;
-            if stop {
+            },
+            msg = up_rx.next() => match msg {
+                Some(Ok(msg)) => {
+                    idle_deadline = tokio::time::Instant::now() + idle_timeout;
+                    let stop = matches!(msg, TgMessage::Close(_));
+                    if let Some(translated) = upstream_to_client(msg) {
+                        cl_tx.send(translated).await?;
+                    }
+                    if stop {
+                        break;
+                    }
+                }
+                Some(Err(e)) => {
+                    let _ = cl_tx
+                        .send(Message::Close(Some(CloseFrame {
+                            code: 1011, // internal error
+                            reason: "upstream error".into(),
+                        })))
+                        .await;
+                    return Err(e.into());
+                }
+                None => {
+                    // The substream ended without a Close handshake
+                    // (tunnel redial, yamux teardown): tell the
+                    // browser so `onclose` fires promptly instead of
+                    // leaving a half-open zombie socket.
+                    let _ = cl_tx
+                        .send(Message::Close(Some(CloseFrame {
+                            code: 1001, // going away
+                            reason: "upstream closed".into(),
+                        })))
+                        .await;
+                    break;
+                }
+            },
+            _ = tokio::time::sleep_until(idle_deadline) => {
+                tracing::info!("ws bridge idle timeout (both directions quiet)");
+                let _ = cl_tx
+                    .send(Message::Close(Some(CloseFrame {
+                        code: 1001, // going away
+                        reason: "idle timeout".into(),
+                    })))
+                    .await;
+                let _ = up_tx
+                    .send(TgMessage::Close(Some(TgCloseFrame {
+                        code: TgCloseCode::Away,
+                        reason: TgUtf8Bytes::from_static("idle timeout"),
+                    })))
+                    .await;
                 break;
             }
         }
-        Ok::<(), anyhow::Error>(())
-    };
-    let u2c = async {
-        loop {
-            let msg = match tokio::time::timeout(IDLE_TIMEOUT, up_rx.next()).await {
-                Ok(Some(m)) => m?,
-                Ok(None) => break,
-                Err(_) => {
-                    tracing::debug!("ws upstream->client idle timeout");
-                    break;
-                }
-            };
-            let stop = matches!(msg, TgMessage::Close(_));
-            if let Some(translated) = upstream_to_client(msg) {
-                cl_tx.send(translated).await?;
-            }
-            if stop {
-                break;
-            }
-        }
-        Ok::<(), anyhow::Error>(())
-    };
-    tokio::select! {
-        r = c2u => r?,
-        r = u2c => r?,
     }
     Ok(())
 }

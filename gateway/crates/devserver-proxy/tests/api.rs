@@ -22,6 +22,7 @@ use axum::Router;
 use bytes::Bytes;
 use chan_tunnel_proto::{H2Duplex, TUNNEL_PATH};
 use chan_tunnel_server::{serve_tunnel_listener, ServerError, Validated, Validator};
+use futures_util::{SinkExt, StreamExt};
 use gateway_common::devserver_gate;
 use http::Method as HttpMethod;
 use serde_json::Value;
@@ -29,7 +30,7 @@ use tokio::net::{TcpListener, TcpStream};
 use tower::ServiceExt;
 use uuid::Uuid;
 
-use devserver_proxy::config::Config;
+use devserver_proxy::config::{Config, DEFAULT_WS_IDLE_TIMEOUT};
 use devserver_proxy::http as dp_http;
 use devserver_proxy::identity_validator::CapturingValidator;
 use devserver_proxy::registry::Registry;
@@ -103,10 +104,23 @@ struct TestApp {
 
 impl TestApp {
     async fn new() -> Self {
-        Self::new_with_max_devservers(0).await
+        Self::new_inner(0, DEFAULT_WS_IDLE_TIMEOUT).await
     }
 
     async fn new_with_max_devservers(max_devservers_per_user: usize) -> Self {
+        Self::new_inner(max_devservers_per_user, DEFAULT_WS_IDLE_TIMEOUT).await
+    }
+
+    /// The WS-bridge tests inject a sub-second idle window so the cut
+    /// is observable without waiting out the production default.
+    async fn new_with_ws_idle_timeout(ws_idle_timeout: std::time::Duration) -> Self {
+        Self::new_inner(0, ws_idle_timeout).await
+    }
+
+    async fn new_inner(
+        max_devservers_per_user: usize,
+        ws_idle_timeout: std::time::Duration,
+    ) -> Self {
         let registry = Registry::new();
 
         let cfg = Arc::new(Config {
@@ -123,6 +137,7 @@ impl TestApp {
             max_response_bytes: None,
             max_request_bytes: None,
             request_timeout: None,
+            ws_idle_timeout,
             forwarded_proto: "https".into(),
         });
 
@@ -1808,5 +1823,245 @@ async fn admin_kill_user_tunnels_evicts_all_for_user() {
     )
     .await;
     assert_eq!(body["killed"], 0);
+    app.cleanup().await;
+}
+
+// ---------------------------------------------------------------
+// WS bridge idle semantics
+// ---------------------------------------------------------------
+
+/// Sub-second idle window for the bridge tests: long enough that
+/// handshakes and scheduling jitter never trip it, short enough that
+/// the cut is observable in a unit-test budget.
+const WS_TEST_IDLE: std::time::Duration = std::time::Duration::from_millis(600);
+
+/// Serve the proxy router on a real listener: a WS upgrade needs a
+/// live connection, which `oneshot` cannot provide. The server task
+/// is aborted by the caller when the test ends.
+async fn serve_proxy(router: Router) -> (SocketAddr, tokio::task::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let task = tokio::spawn(async move {
+        let _ = axum::serve(
+            listener,
+            router.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .await;
+    });
+    (addr, task)
+}
+
+/// Dial a gated WS through the proxy: TCP to the test listener, Host
+/// riding the request URI, session cookie passing the gate.
+async fn ws_connect(
+    addr: SocketAddr,
+    host: &str,
+    path: &str,
+    cookie: &str,
+) -> tokio_tungstenite::WebSocketStream<TcpStream> {
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+    let tcp = TcpStream::connect(addr).await.unwrap();
+    tcp.set_nodelay(true).unwrap();
+    let mut request = format!("ws://{host}{path}").into_client_request().unwrap();
+    request
+        .headers_mut()
+        .insert(header::COOKIE, cookie.parse().unwrap());
+    let (ws, _resp) = tokio_tungstenite::client_async(request, tcp)
+        .await
+        .expect("ws handshake through the proxy");
+    ws
+}
+
+/// Upstream devserver router with three WS personalities: `stream`
+/// pushes a text frame every 100ms unprompted, `echo` answers each
+/// text frame and sends nothing on its own, `sink` reads and
+/// discards everything.
+fn ws_upstream_router() -> Router {
+    use axum::extract::ws::{Message as AxMessage, WebSocketUpgrade as AxUpgrade};
+    Router::new()
+        .route(
+            "/blog/ws-stream",
+            axum::routing::get(|ws: AxUpgrade| async move {
+                ws.on_upgrade(|mut socket| async move {
+                    let mut n = 0u64;
+                    loop {
+                        n += 1;
+                        if socket
+                            .send(AxMessage::text(format!("tick-{n}")))
+                            .await
+                            .is_err()
+                        {
+                            break;
+                        }
+                        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                    }
+                })
+            }),
+        )
+        .route(
+            "/blog/ws-echo",
+            axum::routing::get(|ws: AxUpgrade| async move {
+                ws.on_upgrade(|mut socket| async move {
+                    while let Some(Ok(msg)) = socket.recv().await {
+                        if let AxMessage::Text(t) = msg {
+                            if socket.send(AxMessage::Text(t)).await.is_err() {
+                                break;
+                            }
+                        }
+                    }
+                })
+            }),
+        )
+        .route(
+            "/blog/ws-sink",
+            axum::routing::get(|ws: AxUpgrade| async move {
+                ws.on_upgrade(
+                    |mut socket| async move { while let Some(Ok(_)) = socket.recv().await {} },
+                )
+            }),
+        )
+}
+
+#[tokio::test]
+async fn ws_bridge_survives_idle_window_while_upstream_streams() {
+    use tokio_tungstenite::tungstenite::Message as WsMsg;
+    let app = TestApp::new_with_ws_idle_timeout(WS_TEST_IDLE).await;
+    let uid = Uuid::new_v4();
+    app.register_tunnel("alice", "blog", uid, ws_upstream_router())
+        .await;
+    let (addr, server) = serve_proxy(app.router.clone()).await;
+
+    let host = host_for("alice");
+    let cookie = session_cookie(uid, "blog", &host);
+    let mut ws = ws_connect(addr, &host, "/blog/ws-stream", &cookie).await;
+
+    // Zero client->upstream frames for 3x the idle window: the shared
+    // window must keep resetting on upstream->client traffic alone.
+    let hold_until = tokio::time::Instant::now() + 3 * WS_TEST_IDLE;
+    let mut ticks = 0u32;
+    while tokio::time::Instant::now() < hold_until {
+        match tokio::time::timeout(std::time::Duration::from_millis(500), ws.next()).await {
+            Ok(Some(Ok(WsMsg::Text(_)))) => ticks += 1,
+            Ok(Some(Ok(WsMsg::Close(frame)))) => {
+                panic!("bridge cut a streaming socket: {frame:?}")
+            }
+            Ok(Some(Ok(_))) => {}
+            Ok(Some(Err(e))) => panic!("ws error on a streaming socket: {e}"),
+            Ok(None) => panic!("bridge dropped a streaming socket"),
+            Err(_) => panic!("stream stalled past the tick interval"),
+        }
+    }
+    assert!(ticks >= 12, "expected steady ticks over 1.8s, got {ticks}");
+    server.abort();
+    app.cleanup().await;
+}
+
+#[tokio::test]
+async fn ws_bridge_survives_idle_window_on_client_frames_alone() {
+    use tokio_tungstenite::tungstenite::Message as WsMsg;
+    let app = TestApp::new_with_ws_idle_timeout(WS_TEST_IDLE).await;
+    let uid = Uuid::new_v4();
+    app.register_tunnel("alice", "blog", uid, ws_upstream_router())
+        .await;
+    let (addr, server) = serve_proxy(app.router.clone()).await;
+
+    let host = host_for("alice");
+    let cookie = session_cookie(uid, "blog", &host);
+    let mut ws = ws_connect(addr, &host, "/blog/ws-sink", &cookie).await;
+
+    // The upstream never sends; client frames every 150ms must keep
+    // the bridge open well past the idle window. If the client
+    // direction failed to reset the shared window, the cut would land
+    // mid-send phase and surface as a Close below.
+    let send_until = tokio::time::Instant::now() + 3 * WS_TEST_IDLE;
+    while tokio::time::Instant::now() < send_until {
+        ws.send(WsMsg::text("ping")).await.expect("send while live");
+        match tokio::time::timeout(std::time::Duration::from_millis(150), ws.next()).await {
+            Err(_) => {} // nothing inbound: the sink stays silent
+            Ok(Some(Ok(WsMsg::Close(frame)))) => {
+                panic!("bridge cut a client-active socket: {frame:?}")
+            }
+            Ok(Some(Ok(_))) => {}
+            Ok(other) => panic!("client-active socket ended early: {other:?}"),
+        }
+    }
+
+    // Now go quiet: the cut must arrive roughly one idle window later,
+    // proving the bridge was alive until the LAST client frame.
+    let quiet_started = tokio::time::Instant::now();
+    let closed = tokio::time::timeout(4 * WS_TEST_IDLE, async {
+        loop {
+            match ws.next().await {
+                Some(Ok(WsMsg::Close(frame))) => break frame,
+                Some(Ok(_)) => continue,
+                other => panic!("expected a Close frame, got {other:?}"),
+            }
+        }
+    })
+    .await
+    .expect("idle cut must arrive after the client goes quiet");
+    let elapsed = quiet_started.elapsed();
+    assert!(
+        elapsed >= WS_TEST_IDLE.mul_f32(0.75),
+        "cut arrived before the idle window elapsed: {elapsed:?}"
+    );
+    let frame = closed.expect("close carries code and reason");
+    assert_eq!(u16::from(frame.code), 1001, "going away");
+    server.abort();
+    app.cleanup().await;
+}
+
+#[tokio::test]
+async fn ws_bridge_cuts_both_idle_socket_with_a_close_frame() {
+    use tokio_tungstenite::tungstenite::Message as WsMsg;
+    let app = TestApp::new_with_ws_idle_timeout(WS_TEST_IDLE).await;
+    let uid = Uuid::new_v4();
+    app.register_tunnel("alice", "blog", uid, ws_upstream_router())
+        .await;
+    let (addr, server) = serve_proxy(app.router.clone()).await;
+
+    let host = host_for("alice");
+    let cookie = session_cookie(uid, "blog", &host);
+    let mut ws = ws_connect(addr, &host, "/blog/ws-echo", &cookie).await;
+
+    // Prove the socket is live end to end, then go silent in both
+    // directions.
+    ws.send(WsMsg::text("hello")).await.unwrap();
+    let echoed = tokio::time::timeout(std::time::Duration::from_secs(2), ws.next())
+        .await
+        .expect("echo within budget")
+        .expect("socket open")
+        .expect("clean frame");
+    assert_eq!(echoed, WsMsg::text("hello"));
+
+    // The client half must observe a real Close frame (code + reason),
+    // not an abrupt FIN, and not before the idle window has elapsed.
+    let quiet_started = tokio::time::Instant::now();
+    let closed = tokio::time::timeout(4 * WS_TEST_IDLE, async {
+        loop {
+            match ws.next().await {
+                Some(Ok(WsMsg::Close(frame))) => break frame,
+                Some(Ok(_)) => continue,
+                other => panic!("expected a Close frame, got {other:?}"),
+            }
+        }
+    })
+    .await
+    .expect("both-idle cut must arrive");
+    let elapsed = quiet_started.elapsed();
+    assert!(
+        elapsed >= WS_TEST_IDLE.mul_f32(0.75),
+        "cut arrived before the idle window elapsed: {elapsed:?}"
+    );
+    let frame = closed.expect("close carries code and reason");
+    assert_eq!(u16::from(frame.code), 1001, "going away");
+    assert_eq!(frame.reason.as_str(), "idle timeout");
+
+    // After the Close the stream ends cleanly.
+    match tokio::time::timeout(std::time::Duration::from_secs(2), ws.next()).await {
+        Ok(None) | Ok(Some(Err(_))) => {}
+        other => panic!("socket should end after the Close, got {other:?}"),
+    }
+    server.abort();
     app.cleanup().await;
 }
