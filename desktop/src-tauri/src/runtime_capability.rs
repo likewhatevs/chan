@@ -170,7 +170,7 @@ mod tests {
     fn mock_desktop_app() -> tauri::App<tauri::test::MockRuntime> {
         mock_builder()
             .invoke_handler(tauri::generate_handler![platform_os, read_dropped_paths])
-            .build(tauri::generate_context!())
+            .build(crate::app_context())
             .expect("mock app builds from the real context")
     }
 

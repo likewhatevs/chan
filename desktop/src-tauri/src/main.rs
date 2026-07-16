@@ -4307,6 +4307,19 @@ fn wait_for_child(child: &mut std::process::Child, timeout: std::time::Duration)
     }
 }
 
+/// The generated tauri context: config, assets, icons, and the ACL manifests
+/// from tauri.conf.json and capabilities/. This must stay the crate's ONLY
+/// `generate_context!` expansion: on macOS each expansion embeds a
+/// `#[no_mangle] _EMBED_INFO_PLIST` static, so a second expansion anywhere in
+/// the crate (e.g. a test building from the real context) is a
+/// duplicate-symbol compile error in the test binary - and invisible on
+/// Linux, where the macro embeds nothing. Generic over the runtime; a static
+/// inside a generic fn is emitted exactly once, so the Wry and MockRuntime
+/// instantiations share the one symbol.
+fn app_context<R: tauri::Runtime>() -> tauri::Context<R> {
+    tauri::generate_context!()
+}
+
 fn main() {
     // Windows: a release chan-desktop.exe is GUI-subsystem (no console). When
     // invoked as the `chan` / `cs` CLI through a shim, reattach to the parent
@@ -4895,7 +4908,7 @@ fn main() {
             auth::open_signin,
             auth::signout,
         ])
-        .build(tauri::generate_context!())
+        .build(app_context())
         .expect("error building tauri application");
 
     app.run(move |_app, event| {
