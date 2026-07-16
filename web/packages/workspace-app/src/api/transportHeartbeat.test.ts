@@ -119,6 +119,18 @@ describe("watcher heartbeat + read-deadline", () => {
     handle.close();
   });
 
+  test("a dial stuck in CONNECTING trips the connect-deadline and redials", () => {
+    const handle = openWatch(() => {});
+    const s0 = FakeSocket.instances[0];
+    // Never opened: the read-deadline only arms on open, so the dial's own
+    // 10s deadline is what force-closes the hung attempt into the backoff.
+    vi.advanceTimersByTime(10_000);
+    expect(s0.readyState).toBe(FakeSocket.CLOSED);
+    vi.advanceTimersByTime(500);
+    expect(FakeSocket.instances.length).toBe(2);
+    handle.close();
+  });
+
   test("stops the heartbeat + deadline once the socket closes", () => {
     const handle = openWatch(() => {});
     const s0 = FakeSocket.instances[0];

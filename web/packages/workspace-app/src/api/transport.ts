@@ -399,6 +399,11 @@ export const WS_PING_MS = 20_000;
 /// under the proxy's idle cut and above the ping cadence so a healthy socket
 /// always refreshes it in time.
 export const WS_READ_DEADLINE_MS = 45_000;
+/// A dial stuck in CONNECTING produces no frame and no onclose, so the
+/// read-deadline (armed only on open) never covers it: give the attempt its
+/// own deadline, superseded by the read-deadline the moment the socket opens.
+/// Kept above any sane dial time and well under the read-deadline.
+export const WS_CONNECT_DEADLINE_MS = 10_000;
 /// Reconnect backoff for the same sockets: the first redial fires after the
 /// MIN delay, doubling per attempt up to the MAX cap.
 export const WS_RECONNECT_BACKOFF_MIN_MS = 500;
@@ -498,6 +503,12 @@ export function openWatch(
     }
     const url = `${proto}//${window.location.host}${path}`;
     ws = createSocket(url);
+    // The dial's own deadline: a socket stuck in CONNECTING would otherwise
+    // sit untimed until the browser gives up on it. onopen's armDeadline
+    // below supersedes it with the read-deadline; onclose's clearLiveness
+    // clears it; expiry force-closes into the normal backoff reconnect.
+    if (deadlineTimer !== null) clearTimeout(deadlineTimer);
+    deadlineTimer = setTimeout(forceReconnect, WS_CONNECT_DEADLINE_MS);
     ws.onopen = () => {
       backoff = WS_RECONNECT_BACKOFF_MIN_MS;
       attempt = 0;

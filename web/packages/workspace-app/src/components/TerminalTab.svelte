@@ -21,6 +21,7 @@
   import { api, sessionWindowId, withTokenQuery } from "../api/client";
   import {
     createSocket,
+    WS_CONNECT_DEADLINE_MS,
     WS_PING_MS,
     WS_READ_DEADLINE_MS,
     WS_RECONNECT_BACKOFF_MIN_MS,
@@ -824,6 +825,22 @@
     }, WS_READ_DEADLINE_MS);
   }
 
+  // The dial's own deadline: a socket stuck in CONNECTING produces no frame
+  // and no onclose, so armDeadline (armed only on open) never covers it.
+  // Writes the SAME deadlineTimer slot -- onopen's armDeadline supersedes it,
+  // clearLiveness clears it with the rest.
+  function armConnectDeadline(): void {
+    if (deadlineTimer !== null) clearTimeout(deadlineTimer);
+    deadlineTimer = setTimeout(() => {
+      deadlineTimer = null;
+      try {
+        ws?.close();
+      } catch {
+        // Already CLOSING/CLOSED; the pending onclose still drives the redial.
+      }
+    }, WS_CONNECT_DEADLINE_MS);
+  }
+
   async function connect(): Promise<void> {
     if (!term) return;
     // Single-dial guard: an explicit (re)connect -- mount, wake recycle, a
@@ -901,6 +918,7 @@
     );
     ws = createSocket(`${proto}//${window.location.host}${path}`);
     ws.binaryType = "arraybuffer";
+    armConnectDeadline();
     ws.onopen = () => {
       status = "connected";
       statusDetail = `${term?.cols ?? 0}x${term?.rows ?? 0}`;

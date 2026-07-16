@@ -16,6 +16,7 @@ import terminalSource from "./TerminalTab.svelte?raw";
 import docSyncSource from "../state/docSync.svelte.ts?raw";
 import sceneSyncSource from "../state/sceneSync.svelte.ts?raw";
 import {
+  WS_CONNECT_DEADLINE_MS,
   WS_PING_MS,
   WS_READ_DEADLINE_MS,
   WS_RECONNECT_BACKOFF_MIN_MS,
@@ -240,9 +241,20 @@ describe("terminal heartbeat", () => {
     await attach(lastSocket());
 
     await vi.advanceTimersByTimeAsync(WS_READ_DEADLINE_MS);
-    // Far past every timer: the one scheduled redial fires; the un-opened
-    // dial arms no heartbeat, so nothing else ever closes or re-dials.
-    await vi.advanceTimersByTimeAsync(60_000);
+    // Within the redial's own connect-deadline window there is exactly one
+    // dial; past it the hung attempt is force-closed into the next backoff
+    // step (the heal keeps healing, one dial at a time).
+    await vi.advanceTimersByTimeAsync(WS_CONNECT_DEADLINE_MS - 1);
+    expect(sockets).toHaveLength(2);
+  });
+
+  test("a dial stuck in CONNECTING trips the connect-deadline and redials", async () => {
+    await renderTerminal(terminalTab());
+    const socket = lastSocket();
+    // Never opened: only the connect-deadline covers the hung dial.
+    await vi.advanceTimersByTimeAsync(WS_CONNECT_DEADLINE_MS);
+    expect(socket.readyState).toBe(3);
+    await vi.advanceTimersByTimeAsync(WS_RECONNECT_BACKOFF_MIN_MS);
     expect(sockets).toHaveLength(2);
   });
 
@@ -311,6 +323,10 @@ describe("heartbeat source pins", () => {
       'pingTimer = setInterval(() => send({ type: "ping" }), WS_PING_MS);',
     );
     expect(terminalSource).toMatch(/deadlineTimer = setTimeout\([\s\S]{0,200}WS_READ_DEADLINE_MS\)/);
+    expect(terminalSource).toMatch(
+      /deadlineTimer = setTimeout\([\s\S]{0,200}WS_CONNECT_DEADLINE_MS\)/,
+    );
+    expect(terminalSource).toContain('ws.binaryType = "arraybuffer";\n    armConnectDeadline();');
     expect(terminalSource).toContain(
       "reconnectBackoffMs = Math.min(reconnectBackoffMs * 2, WS_RECONNECT_BACKOFF_MAX_MS);",
     );
