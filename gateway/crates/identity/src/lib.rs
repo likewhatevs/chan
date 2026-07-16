@@ -9,6 +9,7 @@
 pub mod api_tokens;
 pub mod config;
 pub mod desktop_authorize;
+pub mod desktop_roster;
 pub mod error;
 pub mod http;
 pub mod pages;

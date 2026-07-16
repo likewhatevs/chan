@@ -280,6 +280,19 @@ impl ApiTokenService {
     /// `last_used_at` and write an audit row. Single statement so
     /// concurrent validates can't both write conflicting timestamps.
     pub async fn validate(&self, token: &str, meta: &RequestMeta) -> Result<ValidatedToken> {
+        let v = self.validate_no_audit(token).await?;
+        self.write_audit(v.token_id, ACTION_USED, meta).await?;
+        Ok(v)
+    }
+
+    /// [`validate`] minus the `used` audit row: the same single
+    /// UPDATE..RETURNING, so `last_used_at` still bumps (a roster
+    /// poll is real token use and keeps the token visibly active in
+    /// the SPA), but nothing lands in `api_token_audit`. Serves only
+    /// the desktop roster read, which polls per connected desktop and
+    /// would otherwise write thousands of audit rows a day that say
+    /// nothing beyond the bumped timestamp.
+    pub async fn validate_no_audit(&self, token: &str) -> Result<ValidatedToken> {
         if !token.starts_with(TOKEN_PREFIX) {
             return Err(Error::Unauthorized);
         }
@@ -307,8 +320,6 @@ impl ApiTokenService {
         .await
         .map_err(map_db)?
         .ok_or(Error::Unauthorized)?;
-
-        self.write_audit(row.0, ACTION_USED, meta).await?;
 
         Ok(ValidatedToken {
             token_id: row.0,

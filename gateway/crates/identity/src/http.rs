@@ -196,6 +196,7 @@ pub fn router(
             post(crate::desktop_authorize::redeem),
         )
         .route("/desktop/v1/devserver/entry", post(desktop_devserver_entry))
+        .route("/desktop/v1/devservers", get(crate::desktop_roster::roster))
         .merge(internal)
         .merge(admin)
         .fallback(static_files::handler)
@@ -215,6 +216,10 @@ struct GatewayDiscovery {
     identity_origin: String,
     desktop_authorize_url: String,
     desktop_entry_url: String,
+    /// Account-mode roster (`GET`, PAT bearer with `desktop.account`).
+    /// Presence tells a desktop this gateway supports account-level
+    /// authorize; a gateway without the key reads as connect-mode only.
+    roster_url: String,
     devserver_proxy_origin: String,
     tunnel_url: String,
 }
@@ -247,6 +252,12 @@ async fn gateway_discovery(State(state): State<AppState>) -> Result<Json<Gateway
             .base_url
             .join("/desktop/v1/devserver/entry")
             .map_err(|e| Error::Anyhow(anyhow::anyhow!("discovery entry url: {e}")))?
+            .to_string(),
+        roster_url: state
+            .cfg
+            .base_url
+            .join("/desktop/v1/devservers")
+            .map_err(|e| Error::Anyhow(anyhow::anyhow!("discovery roster url: {e}")))?
             .to_string(),
         devserver_proxy_origin: devserver_proxy_origin.clone(),
         tunnel_url: format!("{devserver_proxy_origin}{}", chan_tunnel_proto::TUNNEL_PATH),
@@ -1482,6 +1493,12 @@ async fn share_landing_root(
 
 pub(crate) const DESKTOP_CONNECT_SCOPE: &str = "desktop.connect";
 
+/// Account-level desktop scope: one PAT for the whole account, read
+/// via the roster endpoint (`crate::desktop_roster`) and accepted by
+/// the entry mint below. Sole-scope by the authorize flow's rule
+/// (`desktop_authorize::validate`).
+pub(crate) const DESKTOP_ACCOUNT_SCOPE: &str = "desktop.account";
+
 /// Stable failure-reason tokens for the desktop entry 404 body. A
 /// de-facto desktop API like the `desktop_authorize` `#error=` reasons:
 /// the desktop branches on these to narrate the failure, so keep them
@@ -1689,7 +1706,7 @@ async fn desktop_entry_no_tunnel(state: &AppState, validated: &ValidatedToken) -
     }
 }
 
-fn bearer_token(headers: &HeaderMap) -> Option<&str> {
+pub(crate) fn bearer_token(headers: &HeaderMap) -> Option<&str> {
     headers
         .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
