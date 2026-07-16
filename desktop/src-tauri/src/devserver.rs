@@ -347,6 +347,13 @@ pub struct GatewayDiscovery {
     pub desktop_authorize_url: String,
     pub desktop_entry_url: String,
     pub devserver_proxy_origin: String,
+    /// Account-mode devserver roster endpoint. Presence means the gateway
+    /// supports account-level desktop connections; a gateway without it is
+    /// too old for account mode and the desktop says so instead of
+    /// connecting. `#[serde(default)]`: additive on the wire, older
+    /// gateways simply omit it.
+    #[serde(default)]
+    pub roster_url: Option<String>,
 }
 
 fn origin_of(raw: &str) -> Result<String, String> {
@@ -400,6 +407,14 @@ fn validate_gateway_discovery(
     {
         return Err("chan-gateway discovery is cross-origin".to_string());
     }
+    // The roster URL is identity-side like the entry URL: same-origin, or
+    // the discovery is lying about where the account roster lives.
+    if let Some(roster_url) = &d.roster_url {
+        if origin_of(roster_url)? != configured_origin {
+            return Err("chan-gateway discovery is cross-origin".to_string());
+        }
+        require_https_unless_loopback(roster_url)?;
+    }
 
     for raw in [
         configured_url,
@@ -438,7 +453,7 @@ pub async fn discover_gateway(url: &str) -> Result<GatewayDiscovery, String> {
 #[derive(Serialize)]
 struct GatewayEntryRequest<'a> {
     path: &'a str,
-    /// Explicit devserver target from the recorded consent pick; the
+    /// Explicit devserver target (a roster row's owner + id); the
     /// keys stay off the wire when absent so an older gateway parses
     /// the request unchanged.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1510,6 +1525,7 @@ mod tests {
             desktop_authorize_url: "https://id.chan.app/desktop/authorize".into(),
             desktop_entry_url: "https://id.chan.app/desktop/v1/devserver/entry".into(),
             devserver_proxy_origin: "https://alice.devserver.chan.app".into(),
+            roster_url: Some("https://id.chan.app/desktop/v1/devservers".into()),
         }
     }
 
@@ -1543,6 +1559,7 @@ mod tests {
         d.desktop_authorize_url = "http://id.chan.app/desktop/authorize".into();
         d.desktop_entry_url = "http://id.chan.app/desktop/v1/devserver/entry".into();
         d.devserver_proxy_origin = "http://alice.devserver.chan.app".into();
+        d.roster_url = Some("http://id.chan.app/desktop/v1/devservers".into());
         let err = validate_gateway_discovery("http://id.chan.app", d).unwrap_err();
         assert!(err.contains("must use https"), "{err}");
     }
@@ -1556,14 +1573,40 @@ mod tests {
             desktop_authorize_url: "http://localhost:7000/desktop/authorize".into(),
             desktop_entry_url: "http://localhost:7000/desktop/v1/devserver/entry".into(),
             devserver_proxy_origin: "http://127.0.0.1:7002".into(),
+            roster_url: None,
         };
         validate_gateway_discovery("http://localhost:7000", d)
             .expect("loopback http is explicit dev use");
     }
 
     #[test]
-    fn entry_request_carries_target_only_when_recorded() {
-        // No recorded pick: the wire body stays exactly `{"path":...}`
+    fn gateway_discovery_tolerates_absent_roster_url() {
+        // Older gateways omit the field entirely; discovery stays valid and
+        // the desktop reports "too old for account mode" instead of failing.
+        let mut d = valid_gateway_discovery();
+        d.roster_url = None;
+        validate_gateway_discovery("https://id.chan.app", d).expect("absent roster_url is valid");
+    }
+
+    #[test]
+    fn gateway_discovery_rejects_cross_origin_or_http_roster_url() {
+        let mut d = valid_gateway_discovery();
+        d.roster_url = Some("https://evil.example/desktop/v1/devservers".into());
+        let err = validate_gateway_discovery("https://id.chan.app", d).unwrap_err();
+        assert!(err.contains("cross-origin"), "{err}");
+
+        let mut d = valid_gateway_discovery();
+        d.roster_url = Some("http://id.chan.app/desktop/v1/devservers".into());
+        let err = validate_gateway_discovery("https://id.chan.app", d).unwrap_err();
+        assert!(
+            err.contains("cross-origin") || err.contains("must use https"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn entry_request_carries_target_only_when_given() {
+        // No explicit target: the wire body stays exactly `{"path":...}`
         // so an older gateway parses it unchanged.
         let bare = serde_json::to_value(GatewayEntryRequest {
             path: "/",
@@ -1573,8 +1616,8 @@ mod tests {
         .unwrap();
         assert_eq!(bare, serde_json::json!({"path": "/"}));
 
-        // A recorded pick rides as the optional owner + devserver_id
-        // fields the gateway resolves the explicit target from.
+        // An explicit target rides as the optional owner + devserver_id
+        // fields the gateway resolves the devserver from.
         let targeted = serde_json::to_value(GatewayEntryRequest {
             path: "/",
             owner: Some("alice"),

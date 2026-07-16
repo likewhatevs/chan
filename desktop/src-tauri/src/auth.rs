@@ -280,13 +280,7 @@ pub fn open_gateway_signin(
 pub enum CallbackOutcome {
     /// The PAT was stored and AUTH_CHANGED emitted. `resume_devserver_id`
     /// names the devserver whose connect launched this sign-in, if any.
-    SignedIn {
-        resume_devserver_id: Option<String>,
-        /// Devserver pick from the gateway consent page, passed
-        /// through for the connect flow to record. `None` when the
-        /// page offered no picker or the user picked nothing.
-        devserver: Option<GatewaySelection>,
-    },
+    SignedIn { resume_devserver_id: Option<String> },
     /// The callback failed and AUTH_ERROR was emitted. `consumed_pending` is
     /// true when the failure popped the in-flight sign-in state; false means
     /// the URL itself was malformed and any waiting sign-in is still live.
@@ -312,7 +306,6 @@ pub fn handle_callback(app: &AppHandle, raw: &str) -> CallbackOutcome {
             identity_origin,
             account,
             resume_devserver_id,
-            devserver,
         } => {
             let redeemed = match redeem_code(&identity_origin, &code) {
                 Ok(r) => r,
@@ -347,7 +340,6 @@ pub fn handle_callback(app: &AppHandle, raw: &str) -> CallbackOutcome {
             let _ = app.emit(AUTH_CHANGED, &status);
             CallbackOutcome::SignedIn {
                 resume_devserver_id,
-                devserver,
             }
         }
         CallbackAction::Fail {
@@ -359,16 +351,6 @@ pub fn handle_callback(app: &AppHandle, raw: &str) -> CallbackOutcome {
         }
         CallbackAction::Ignore => CallbackOutcome::Ignored,
     }
-}
-
-/// Devserver pick delivered on the callback fragment as the optional
-/// `devserver_owner` / `devserver_id` / `devserver_label` keys, minted
-/// by the gateway consent page's picker.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct GatewaySelection {
-    pub owner: String,
-    pub devserver_id: String,
-    pub label: String,
 }
 
 /// What the redeem endpoint answers with, exactly once per code.
@@ -456,7 +438,6 @@ enum CallbackAction {
         identity_origin: String,
         account: String,
         resume_devserver_id: Option<String>,
-        devserver: Option<GatewaySelection>,
     },
     /// Emit AUTH_ERROR. `consumed_pending` as on [`CallbackOutcome::Failed`].
     Fail {
@@ -519,23 +500,11 @@ fn classify_callback(raw: &str, pending: &mut Option<PendingAuth>) -> CallbackAc
             true,
         );
     }
-    // The pick is optional and all-or-nothing: a fragment carrying
-    // only part of it redeems fine but drops the pick.
-    let devserver = match (params.get("devserver_owner"), params.get("devserver_id")) {
-        (Some(owner), Some(id)) if !owner.is_empty() && !id.is_empty() => Some(GatewaySelection {
-            owner: owner.clone(),
-            devserver_id: id.clone(),
-            label: params.get("devserver_label").cloned().unwrap_or_default(),
-        }),
-        _ => None,
-    };
-
     CallbackAction::Redeem {
         code,
         identity_origin: expected.identity_origin,
         account: expected.account,
         resume_devserver_id: expected.resume_devserver_id,
-        devserver,
     }
 }
 
@@ -607,13 +576,11 @@ mod tests {
                 identity_origin,
                 account,
                 resume_devserver_id,
-                devserver,
             } => {
                 assert_eq!(code, "one-time-abc");
                 assert_eq!(identity_origin, "https://id.example");
                 assert_eq!(account, "id.chan.app");
                 assert_eq!(resume_devserver_id.as_deref(), Some("ds-1"));
-                assert_eq!(devserver, None);
             }
             other => panic!("expected Redeem, got {other:?}"),
         }
@@ -621,7 +588,10 @@ mod tests {
     }
 
     #[test]
-    fn classify_passes_a_devserver_pick_through() {
+    fn classify_ignores_legacy_devserver_pick_keys() {
+        // A gateway older than the account flow may still append the retired
+        // devserver_* pick keys to the fragment; they are unknown params now
+        // and the redeem proceeds untouched.
         let mut slot = pending("nonce-1");
         let id64 = "ab".repeat(32);
         let raw = format!(
@@ -629,32 +599,8 @@ mod tests {
              devserver_owner=alice&devserver_id={id64}&devserver_label=work+box"
         );
         match classify_callback(&raw, &mut slot) {
-            CallbackAction::Redeem { devserver, .. } => {
-                let d = devserver.expect("pick present");
-                assert_eq!(d.owner, "alice");
-                assert_eq!(d.devserver_id, id64);
-                assert_eq!(d.label, "work box");
-            }
+            CallbackAction::Redeem { code, .. } => assert_eq!(code, "c1"),
             other => panic!("expected Redeem, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn classify_drops_a_partial_devserver_pick() {
-        // The pick is all-or-nothing: a fragment carrying only part of
-        // it still redeems, but no selection passes through.
-        for frag in [
-            "code=c1&state=nonce-1&devserver_owner=alice",
-            "code=c1&state=nonce-1&devserver_id=abc",
-            "code=c1&state=nonce-1&devserver_owner=&devserver_id=abc",
-        ] {
-            let mut slot = pending("nonce-1");
-            match classify_callback(&format!("chan://auth/callback#{frag}"), &mut slot) {
-                CallbackAction::Redeem { devserver, .. } => {
-                    assert_eq!(devserver, None, "{frag}")
-                }
-                other => panic!("expected Redeem for {frag}, got {other:?}"),
-            }
         }
     }
 
