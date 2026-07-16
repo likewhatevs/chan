@@ -992,10 +992,15 @@ mod tests {
         let g = reg.join("w-a", true, None).guard;
         let _keep = reg.join("w-b", true, None).guard;
         drop(g);
+        // The disconnect stamp lands at drop time, so bound the deadline
+        // with an instant taken AFTER the drop: joins + drop can take
+        // arbitrarily long under load, and a fixed allowance from t0
+        // flakes.
+        let after_drop = Instant::now();
         // Before the reload grace, the next transition is the reload threshold.
         let out = reg.reap_due(t0);
         let deadline = out.next_deadline.expect("a disconnected participant");
-        assert!(deadline <= t0 + RELOAD_GRACE + Duration::from_millis(1));
+        assert!(deadline <= after_drop + RELOAD_GRACE);
     }
 
     #[test]
