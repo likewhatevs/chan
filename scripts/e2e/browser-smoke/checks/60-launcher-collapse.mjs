@@ -105,7 +105,7 @@ export default {
       if (collapsed !== "false") {
         throw new Error(`expected aria-expanded=false after collapse, got ${collapsed}`);
       }
-      await ctx.shot("collapsed");
+      await ctx.shot("collapsed", page);
 
       // Reload and assert the collapse survived (localStorage reload path).
       await page.reload({ waitUntil: "networkidle2", timeout: 60_000 });
@@ -118,7 +118,7 @@ export default {
       if (contentBack) {
         throw new Error("machine content reappeared after reload; collapse did not persist");
       }
-      await ctx.shot("collapsed-after-reload");
+      await ctx.shot("collapsed-after-reload", page);
 
       return { url: url.replace(/([?&]t=)[^&]+/, "$1<token>"), persistedAcrossReload: true };
     } finally {

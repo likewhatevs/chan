@@ -77,14 +77,6 @@ export default {
 
     const site = await serveStatic(distRoot);
     let page = null;
-    // ctx.shot captures the harness's shared page; this check drives its own,
-    // so screenshots are taken here directly.
-    let shots = 0;
-    const shot = async (name) => {
-      await page.screenshot({
-        path: join(ctx.outDir, `launcher-gateways-${++shots}-${name}.png`),
-      });
-    };
     try {
       page = await ctx.browser.newPage();
       // A minimal Tauri event bridge, installed before any SPA module runs:
@@ -127,7 +119,7 @@ export default {
       if (!emptyHint.includes("No gateways yet")) {
         throw new Error("expected the empty-state hint on the fresh gateways screen");
       }
-      await shot("gateways-empty");
+      await ctx.shot("gateways-empty", page);
 
       // Add a gateway through the URL-only form.
       await page.click("button[class*='add-gateway']");
@@ -142,7 +134,7 @@ export default {
           ),
         { timeout: 10_000 },
       );
-      await shot("gateway-added");
+      await ctx.shot("gateway-added", page);
 
       // Connect it: the demo flips the badge live.
       await page.click('[aria-label="Connect gateway smoke-gw"]');
@@ -152,7 +144,7 @@ export default {
       await page.waitForSelector('[aria-label="Disconnect gateway smoke-gw"]', {
         timeout: 10_000,
       });
-      await shot("gateway-connected");
+      await ctx.shot("gateway-connected", page);
 
       // Synthetic desktop error over the launcher-notice channel -> a corner
       // bubble with the gateway source chip; expand, then dismiss.
@@ -178,7 +170,7 @@ export default {
       if (!bubbleText.includes("gateway smoke-gw") || !bubbleText.includes("Roster poll failed")) {
         throw new Error(`notice bubble missing source/title: ${bubbleText}`);
       }
-      await shot("notice-bubble");
+      await ctx.shot("notice-bubble", page);
 
       await page.click("[class*='nb-body']");
       await page.waitForFunction(

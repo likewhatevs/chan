@@ -37,7 +37,8 @@ intermediate evidence:
 - `ctx.page`: a puppeteer page already on the workspace window.
 - `ctx.serverUrl`, `ctx.workspaceDir`, `ctx.outDir`, `ctx.downloadDir`
 - `ctx.chanBin`, `ctx.serverPid`, `ctx.controlSocket`
-- `ctx.shot(name)`: screenshot into the out dir (auto-recorded).
+- `ctx.shot(name, page = ctx.page)`: screenshot into the out dir
+  (auto-recorded). A check driving its own page passes it explicitly.
 - `ctx.pollFile(path, timeoutMs)`: wait for a file to exist + settle.
 - `ctx.skip(reason)`: mark the check skipped (e.g. a peer surface not
   merged yet).

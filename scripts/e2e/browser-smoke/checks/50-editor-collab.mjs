@@ -90,7 +90,7 @@ export default {
       const markerA = `SMOKE-DOC-A-${Date.now()}`;
       await typeAtTop(page, markerA);
       await waitForText(page2, markerA);
-      await ctx.shot("marker-a-on-client-b");
+      await ctx.shot("marker-a-on-client-b", page2);
 
       const markerB = `SMOKE-DOC-B-${Date.now()}`;
       await typeAtTop(page2, markerB);

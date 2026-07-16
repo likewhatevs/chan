@@ -126,9 +126,11 @@ try {
     get controlSocket() {
       return findControlSocket(server.child.pid);
     },
-    async shot(name) {
+    // Checks that drive their OWN page pass it as `target`; the default stays
+    // the shared harness page.
+    async shot(name, target = page) {
       const file = join(outDir, `${currentCheck.name}-${name}.png`);
-      await page.screenshot({ path: file });
+      await target.screenshot({ path: file });
       currentCheck.screenshots.push(file);
       return file;
     },
