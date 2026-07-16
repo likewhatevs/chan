@@ -4287,9 +4287,11 @@ fn resolve_login_shell_path() -> Option<String> {
 /// blocking so a broken interactive rc can't hang app launch. Extracted from
 /// `resolve_login_shell_path` so the timeout/kill branch is unit-testable
 /// without a real login shell.
+// Compiled only on macOS: the Linux gate (fmt/clippy/test) never builds this
+// block, so changes here need a macOS build to validate.
 #[cfg(target_os = "macos")]
 fn wait_for_child(child: &mut std::process::Child, timeout: std::time::Duration) -> bool {
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
     let started = Instant::now();
     loop {
         match child.try_wait() {
