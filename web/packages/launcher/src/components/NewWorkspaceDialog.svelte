@@ -16,7 +16,7 @@
   import Modal from "./Modal.svelte";
   import { SquareTerminal } from "lucide-svelte";
   import { closeDialog, dialog } from "../state/dialog.svelte";
-  import { addLocalWorkspace, pickFolder, saveDevserver } from "../state/library.svelte";
+  import { addGateway, addLocalWorkspace, pickFolder, saveDevserver } from "../state/library.svelte";
   import { readOnly } from "../state/capabilities";
 
   const editing = dialog.editing;
@@ -52,7 +52,13 @@
   // Auto-hide the connect control terminal once the devserver connects.
   let autoHideControl = $state(editing?.auto_hide_control ?? false);
 
+  // Gateway form: URL + optional label, add-only (Save just adds; no probe at
+  // add -- the first Connect discovers and signs in).
+  let gatewayUrl = $state("");
+  let gatewayName = $state("");
+
   const showLocal = $derived(dialog.choice === "local" && !editing);
+  const showGateway = $derived(dialog.choice === "gateway" && !editing);
   const title = $derived(
     editing
       ? readOnlyEdit
@@ -60,7 +66,9 @@
         : "Edit devserver"
       : showLocal
         ? "New workspace"
-        : "Add devserver",
+        : showGateway
+          ? "Add gateway"
+          : "Add devserver",
   );
 
   function msg(e: unknown): string {
@@ -163,6 +171,29 @@
     return p !== null && Number.isInteger(p) && p >= 1 && p <= 65535;
   }
 
+  async function submitGateway(): Promise<void> {
+    const raw = gatewayUrl.trim();
+    let parsed: URL | null = null;
+    try {
+      parsed = new URL(raw);
+    } catch {
+      parsed = null;
+    }
+    if (!parsed || (parsed.protocol !== "https:" && parsed.protocol !== "http:")) {
+      error = "Enter the gateway URL, like https://id.chan.app";
+      return;
+    }
+    submitting = true;
+    try {
+      await addGateway({ url: raw, label: gatewayName.trim() || undefined });
+      closeDialog();
+    } catch (e) {
+      error = msg(e);
+    } finally {
+      submitting = false;
+    }
+  }
+
   async function submitDevserver(): Promise<void> {
     const parsed = parseAddress(address);
     if (!parsed || !parsed.host || !validPort(parsed.port)) {
@@ -232,6 +263,31 @@
         workspace.
       </span>
     </div>
+  {:else if showGateway}
+    <p class="intro">
+      Add a gateway to reach your devservers and devservers shared with you. Connect signs in
+      once for the whole account.
+    </p>
+    <label class="field">
+      Gateway URL
+      <input
+        type="text"
+        class="mono"
+        bind:value={gatewayUrl}
+        placeholder="https://id.chan.app"
+        autocomplete="off"
+        spellcheck="false"
+        onkeydown={(e) => onFieldKey(e, submitGateway)} />
+    </label>
+    <label class="field">
+      Name <span class="muted">(optional)</span>
+      <input
+        type="text"
+        bind:value={gatewayName}
+        placeholder="Defaults to the URL host"
+        autocomplete="off"
+        onkeydown={(e) => onFieldKey(e, submitGateway)} />
+    </label>
   {:else}
     {#if readOnlyEdit}
       <p class="intro">
@@ -293,6 +349,10 @@
     {#if showLocal}
       <button class="btn primary" type="button" disabled={submitting} onclick={submitLocal}>
         Create workspace
+      </button>
+    {:else if showGateway}
+      <button class="btn primary" type="button" disabled={submitting} onclick={submitGateway}>
+        Add gateway
       </button>
     {:else if readOnlyEdit}
       <!-- Connected: read-only, so the only action is to dismiss. -->

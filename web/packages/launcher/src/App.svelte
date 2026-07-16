@@ -8,6 +8,7 @@
   import SelectionBar from "./components/SelectionBar.svelte";
   import ScreenFlip from "./components/ScreenFlip.svelte";
   import Library from "./components/Library.svelte";
+  import Gateways from "./components/Gateways.svelte";
   import NewWorkspaceDialog from "./components/NewWorkspaceDialog.svelte";
   import ConfirmDialog from "./components/ConfirmDialog.svelte";
   import Modal from "./components/Modal.svelte";
@@ -145,7 +146,7 @@
     {#if screen.current === "computers"}
       <Library />
     {:else}
-      <section class="gateways-screen" aria-label="Gateways"></section>
+      <Gateways />
     {/if}
   </ScreenFlip>
 </main>

@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach, vi } from "vitest";
 import { mount, unmount, flushSync } from "svelte";
 import NewWorkspaceDialog from "./NewWorkspaceDialog.svelte";
-import { openNewDialog, openEditDevserver, closeDialog } from "../state/dialog.svelte";
+import { dialog, openNewDialog, openEditDevserver, closeDialog } from "../state/dialog.svelte";
 import { library } from "../state/library.svelte";
 import type { DevserverEntry } from "../api/library";
 
@@ -173,6 +173,59 @@ describe("New workspace dialog -- devserver", () => {
     openNewDialog("devserver");
     const el = render();
     expect(el.querySelector(".dialog-footer")).not.toBeNull();
+  });
+});
+
+describe("New workspace dialog -- gateway", () => {
+  afterEach(async () => {
+    const { resetMockGateways } = await import("../api/mock");
+    resetMockGateways();
+  });
+
+  function urlInput(el: HTMLElement): HTMLInputElement {
+    return el.querySelector('input[placeholder="https://id.chan.app"]') as HTMLInputElement;
+  }
+
+  it("shows the URL-only form: URL + optional name, no devserver plumbing", () => {
+    openNewDialog("gateway");
+    const el = render();
+    expect(el.textContent).toContain("Add gateway");
+    expect(el.textContent).toContain("Gateway URL");
+    expect(urlInput(el)).not.toBeNull();
+    // No polymorphic Address field, no connect script, no auto-hide checkbox.
+    expect(el.querySelector('input[placeholder*="?t="]')).toBeNull();
+    expect(el.querySelector("textarea")).toBeNull();
+    expect(el.querySelector('input[type="checkbox"]')).toBeNull();
+    expect(btn(el, "Add gateway")).toBeTruthy();
+  });
+
+  it("rejects a non-URL with one message and adds nothing", async () => {
+    openNewDialog("gateway");
+    const el = render();
+    setInput(urlInput(el), "id.chan.app");
+    btn(el, "Add gateway").click();
+    await settle();
+    flushSync();
+    expect(el.querySelector('.error[role="alert"]')?.textContent).toContain("gateway URL");
+    expect(dialog.open).toBe(true);
+    expect(library.gateways.some((g) => g.url.includes("id.chan.app"))).toBe(false);
+  });
+
+  it("adds the gateway with its optional name and closes", async () => {
+    openNewDialog("gateway");
+    const el = render();
+    setInput(urlInput(el), "https://id.chan.app");
+    setInput(
+      el.querySelector('input[placeholder="Defaults to the URL host"]') as HTMLInputElement,
+      "prod-gw",
+    );
+    btn(el, "Add gateway").click();
+    await settle();
+    flushSync();
+    expect(dialog.open).toBe(false);
+    expect(
+      library.gateways.some((g) => g.url === "https://id.chan.app" && g.label === "prod-gw"),
+    ).toBe(true);
   });
 });
 

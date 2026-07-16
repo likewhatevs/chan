@@ -1,27 +1,33 @@
-// Gmail-style multi-select for the registry lists. ONE selection spans three
-// kinds -- local workspaces, served (devserver-mounted) workspaces, and
-// devservers -- feeding ONE global bulk bar (rendered App-level above the lists).
-// Bulk turn on/off loops the per-kind singular op (the ops are independent +
-// idempotent, so no bulk endpoints are needed); bulk remove runs an ORDERED
-// cross-kind delete (remove local -> forget served -> remove devservers).
-// Served rows carry their owning `devserverId` so the delete is self-sufficient
-// and immune to the live window-watch re-fetch dropping a row mid-bulk. Partial
-// failures are counted and surfaced; the per-row quick actions stay the
-// single-item path; remove is bulk-only (behind selection + a confirm).
+// Gmail-style multi-select for the registry lists. ONE selection spans four
+// kinds -- local workspaces, served (devserver-mounted) workspaces,
+// devservers, and gateways (selected on the Gateways screen; flipping screens
+// clears the selection) -- feeding ONE global bulk bar (rendered App-level
+// above the lists). Bulk turn on/off loops the per-kind singular op (the ops
+// are independent + idempotent, so no bulk endpoints are needed); bulk remove
+// runs an ORDERED cross-kind delete (remove local -> forget served -> remove
+// devservers -> remove gateways LAST, so a gateway's synthesized rows are
+// gone before their source is). Served rows carry their owning `devserverId`
+// so the delete is self-sufficient and immune to the live window-watch
+// re-fetch dropping a row mid-bulk. Partial failures are counted and
+// surfaced; the per-row quick actions stay the single-item path; remove is
+// bulk-only (behind selection + a confirm).
 
 import {
   connectDevserver,
+  connectGateway,
   disconnectDevserver,
+  disconnectGateway,
   forgetDevserverWorkspace,
   library,
   removeDevserver,
+  removeGateway,
   removeWorkspace,
   setDevserverWorkspaceOn,
   toggleWorkspace,
 } from "./library.svelte";
 
-/** The three selectable registry kinds, all feeding the one global bulk bar. */
-export type SelKind = "workspace" | "served" | "devserver";
+/** The four selectable registry kinds, all feeding the one global bulk bar. */
+export type SelKind = "workspace" | "served" | "devserver" | "gateway";
 
 /** A selected row, keyed by (kind, id, devserverId) so ids never collide across
  * kinds (a local workspace_id, a served prefix, and a devserver id), and two
@@ -183,10 +189,19 @@ export async function bulkSetOnAll(on: boolean): Promise<void> {
   selection.note = null;
   const skipped = items.filter(lockedWorkspace);
   const active = items.filter((item) => !lockedWorkspace(item));
+  // Exhaustive per-kind dispatch (no catch-all arm): a new SelKind fails the
+  // compile here instead of silently riding another kind's op.
   const failures = await runBulk(active, (item) => {
-    if (item.kind === "workspace") return toggleWorkspace(item.id, on);
-    if (item.kind === "served") return setDevserverWorkspaceOn(item.devserverId!, item.id, on);
-    return on ? connectDevserver(item.id) : disconnectDevserver(item.id);
+    switch (item.kind) {
+      case "workspace":
+        return toggleWorkspace(item.id, on);
+      case "served":
+        return setDevserverWorkspaceOn(item.devserverId!, item.id, on);
+      case "devserver":
+        return on ? connectDevserver(item.id) : disconnectDevserver(item.id);
+      case "gateway":
+        return on ? connectGateway(item.id) : disconnectGateway(item.id);
+    }
   });
   selection.busy = false;
   const verb = on ? "turn on" : "turn off";
@@ -207,6 +222,9 @@ export function cancelBulkDelete(): void {
  *      still present.
  *   3. Remove selected DEVSERVERS -- `reg.remove`'s `on_remove` hook reaps the
  *      live connection + windows.
+ *   4. Remove selected GATEWAYS LAST -- the desktop cascade tears down their
+ *      roster devservers' connections, so any selected rows they own are
+ *      handled before their source goes.
  * Succeeded rows drop from the selection; failures stay so the count reflects
  * what is left. */
 export async function confirmBulkDelete(): Promise<void> {
@@ -214,7 +232,8 @@ export async function confirmBulkDelete(): Promise<void> {
   const served = selection.selected.filter((s) => s.kind === "served");
   const devservers = selection.selected.filter((s) => s.kind === "devserver");
   const locals = selection.selected.filter((s) => s.kind === "workspace");
-  const total = served.length + devservers.length + locals.length;
+  const gateways = selection.selected.filter((s) => s.kind === "gateway");
+  const total = served.length + devservers.length + locals.length + gateways.length;
   if (total === 0) {
     selection.confirmingDelete = false;
     return;
@@ -230,6 +249,7 @@ export async function confirmBulkDelete(): Promise<void> {
     )),
   );
   failures.push(...(await runBulk(devservers, (s) => removeDevserver(s.id))));
+  failures.push(...(await runBulk(gateways, (s) => removeGateway(s.id))));
   selection.busy = false;
   selection.confirmingDelete = false;
   // Keep only the failures/skips selected (succeeded rows drop); surface the count.

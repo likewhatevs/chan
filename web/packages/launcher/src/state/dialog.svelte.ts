@@ -1,12 +1,14 @@
-// The New-workspace / devserver dialog's open/choice/edit state. Two
-// context-anchored entry points open it pre-set to a choice: the LOCAL
+// The New-workspace / devserver / gateway dialog's open/choice/edit state.
+// Context-anchored entry points open it pre-set to a choice: the LOCAL
 // [new workspace] button opens "local", the bottom "Add devserver" button
-// opens "devserver". There is no in-dialog chooser. The devserver body doubles
-// as the edit form, prefilled from `editing` (null = add a new one).
+// opens "devserver", the Gateways screen's "Add gateway" button opens
+// "gateway". There is no in-dialog chooser. The devserver body doubles as the
+// edit form, prefilled from `editing` (null = add a new one); local and
+// gateway are add-only.
 
 import type { DevserverEntry } from "../api/library";
 
-export type DialogChoice = "local" | "devserver";
+export type DialogChoice = "local" | "devserver" | "gateway";
 
 interface DialogState {
   open: boolean;

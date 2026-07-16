@@ -20,6 +20,7 @@ import {
   checksVisible,
 } from "./selection.svelte";
 import {
+  addGateway,
   addLocalWorkspace,
   connectDevserver,
   library,
@@ -200,6 +201,76 @@ describe("devserver multi-select", () => {
     expect(library.devservers.some((d) => d.id === ds.id)).toBe(false);
     expect(library.devservers.length).toBe(before - 1);
     expect(selectedCount()).toBe(0);
+  });
+});
+
+describe("gateway multi-select", () => {
+  afterEach(async () => {
+    const { resetMockGateways } = await import("../api/mock");
+    resetMockGateways();
+  });
+
+  it("bulk on/off routes gateway rows to the gateway ops, never the devserver ones", async () => {
+    await addGateway({ url: "https://bulk-gw.example" });
+    const gw = library.gateways.find((g) => g.url === "https://bulk-gw.example")!;
+    const { backend } = await import("../api/backend");
+    const dsConnect = vi.spyOn(backend, "connectDevserver");
+    const dsDisconnect = vi.spyOn(backend, "disconnectDevserver");
+
+    toggleSelected("gateway", gw.id);
+    await bulkSetOnAll(true);
+    expect(library.gateways.find((g) => g.id === gw.id)?.status).toBe("connected");
+    await bulkSetOnAll(false);
+    expect(library.gateways.find((g) => g.id === gw.id)?.status).toBe("disconnected");
+    expect(selection.note).toBeNull();
+
+    // The regression the explicit dispatch prevents: a gateway id riding the
+    // devserver connect/disconnect path.
+    expect(dsConnect).not.toHaveBeenCalled();
+    expect(dsDisconnect).not.toHaveBeenCalled();
+    dsConnect.mockRestore();
+    dsDisconnect.mockRestore();
+  });
+
+  it("confirmed bulk remove drops the selected gateway and clears the selection", async () => {
+    await addGateway({ url: "https://rm-gw.example" });
+    const gw = library.gateways.find((g) => g.url === "https://rm-gw.example")!;
+    toggleSelected("gateway", gw.id);
+    requestBulkDelete();
+    await confirmBulkDelete();
+    expect(library.gateways.some((g) => g.id === gw.id)).toBe(false);
+    expect(selectedCount()).toBe(0);
+    expect(selection.confirmingDelete).toBe(false);
+  });
+
+  it("the ordered cross-kind delete removes gateways LAST", async () => {
+    const { backend } = await import("../api/backend");
+    const order: string[] = [];
+    const spies = [
+      vi.spyOn(backend, "removeWorkspace").mockImplementation(async () => {
+        order.push("workspace");
+      }),
+      vi.spyOn(backend, "forgetDevserverWorkspace").mockImplementation(async () => {
+        order.push("served");
+      }),
+      vi.spyOn(backend, "removeDevserver").mockImplementation(async () => {
+        order.push("devserver");
+      }),
+      vi.spyOn(backend, "removeGateway").mockImplementation(async () => {
+        order.push("gateway");
+      }),
+    ];
+    try {
+      toggleSelected("gateway", "gw-order");
+      toggleSelected("devserver", "ds-order");
+      toggleSelected("served", "w/order", "ds-order");
+      toggleSelected("workspace", "ws-order");
+      requestBulkDelete();
+      await confirmBulkDelete();
+      expect(order).toEqual(["workspace", "served", "devserver", "gateway"]);
+    } finally {
+      for (const s of spies) s.mockRestore();
+    }
   });
 });
 
