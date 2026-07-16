@@ -164,9 +164,11 @@ impl TestApp {
     }
 
     /// Mint a PAT with `scopes` through the real operator surface, as
-    /// the e2e rig does. Returns `(token_id, secret)`. The mint's
-    /// best-effort devserver registration hits the profile mock's
-    /// unmatched-404 and is swallowed, matching a rig without the row.
+    /// the e2e rig does. Returns `(token_id, secret)`. A tunnel-scoped
+    /// mint's best-effort devserver registration hits the profile
+    /// mock's unmatched-404 and is swallowed; a non-tunnel mint
+    /// registers nothing at all (row registration is gated on the
+    /// dial scope).
     async fn admin_mint(&self, uid: Uuid, scopes: &[&str]) -> (Uuid, String) {
         let req = Request::builder()
             .method(Method::POST)
@@ -532,5 +534,55 @@ async fn discovery_advertises_roster_url_with_api_version_1() {
         body["desktop_entry_url"], "http://localhost:7000/desktop/v1/devserver/entry",
         "{body}"
     );
+    app.cleanup().await;
+}
+
+#[tokio::test]
+async fn admin_mint_without_tunnel_scope_registers_no_devserver_row() {
+    let app = TestApp::new().await;
+    let uid = app.insert_user().await;
+
+    // Row registration is gated on the dial scope: a desktop.account
+    // mint must never POST to the profile devservers path (a row for
+    // an undialable PAT would be a phantom in the dashboard and the
+    // roster). Verified at MockServer drop.
+    Mock::given(method("POST"))
+        .and(path(format!("/v1/users/{uid}/devservers")))
+        .respond_with(ResponseTemplate::new(500))
+        .expect(0)
+        .mount(&app.profile)
+        .await;
+
+    let (_, secret) = app.admin_mint(uid, &["desktop.account"]).await;
+    assert!(secret.starts_with("chan_pat_"), "mint still succeeds");
+    app.cleanup().await;
+}
+
+#[tokio::test]
+async fn admin_mint_with_tunnel_scope_registers_devserver_row() {
+    let app = TestApp::new().await;
+    let uid = app.insert_user().await;
+
+    // A dialable PAT keeps registering exactly one row, labeled after
+    // the mint (the operator surface's default label).
+    let now = chrono::Utc::now().to_rfc3339();
+    Mock::given(method("POST"))
+        .and(path(format!("/v1/users/{uid}/devservers")))
+        .and(wiremock::matchers::body_partial_json(
+            json!({"label": "admin mint"}),
+        ))
+        .respond_with(ResponseTemplate::new(201).set_body_json(json!({
+            "id": Uuid::new_v4(),
+            "owner_user_id": uid,
+            "devserver_id": "a".repeat(64),
+            "label": "admin mint",
+            "created_at": now,
+        })))
+        .expect(1)
+        .mount(&app.profile)
+        .await;
+
+    let (_, secret) = app.admin_mint(uid, &["tunnel"]).await;
+    assert!(secret.starts_with("chan_pat_"));
     app.cleanup().await;
 }

@@ -101,7 +101,7 @@ use crate::api_tokens::{ApiToken, CreatedToken, NewToken, TokenOrigin, ACTION_DE
 use crate::error::{Error, Result};
 use crate::http::{
     current_user_id, current_user_id_optional, request_meta, AppState, DESKTOP_ACCOUNT_SCOPE,
-    DESKTOP_CONNECT_SCOPE,
+    DESKTOP_CONNECT_SCOPE, TUNNEL_SCOPE,
 };
 use crate::pages;
 use crate::profile_client::User;
@@ -137,11 +137,11 @@ const MAX_STATE_LEN: usize = 512;
 /// `desktop.connect` stay listed for shipped desktops (dropping
 /// either would 400 their sign-in); new desktops request
 /// `desktop.account` alone (see the sole-scope rule in [`validate`]).
-const ALLOWED_SCOPES: &[&str] = &["tunnel", DESKTOP_CONNECT_SCOPE, DESKTOP_ACCOUNT_SCOPE];
+const ALLOWED_SCOPES: &[&str] = &[TUNNEL_SCOPE, DESKTOP_CONNECT_SCOPE, DESKTOP_ACCOUNT_SCOPE];
 
 /// Default when the client omits `scopes`. Matches the SPA / general
 /// PAT default so silence means "private tunnel only".
-const DEFAULT_SCOPES: &[&str] = &["tunnel"];
+const DEFAULT_SCOPES: &[&str] = &[TUNNEL_SCOPE];
 
 /// Path the consent page lives at. Exported so other modules (today
 /// `auth_callback`) can build a redirect without restating the literal.
@@ -463,27 +463,12 @@ async fn complete(
             tracing::warn!(error = ?e, user = %user.username, "desktop authorize mint failed");
             e
         })?;
-    // The PAT IS a devserver (1 token : 1 devserver) when it carries
-    // the tunnel scope: register the roster row so the owner sees it
-    // and can grant on it before it ever dials in, exactly like the
-    // SPA mint. Best-effort: the row also auto-creates on first
-    // grant, and the PAT is already persisted, so a profile hiccup
-    // must not fail the mint.
-    if params.scopes.iter().any(|s| s == "tunnel") {
-        let devserver_id = crate::api_tokens::devserver_id_from_pat(&secret);
-        if let Err(e) = state
-            .cfg
-            .profile_client
-            .create_devserver(user.id, &devserver_id, &params.label)
-            .await
-        {
-            tracing::warn!(
-                error = ?e,
-                user = %user.username,
-                "register devserver after desktop PAT mint failed",
-            );
-        }
-    }
+    // A PAT is a devserver only when it can dial (tunnel scope): the
+    // shared mint-site helper registers the roster row so the owner
+    // sees it and can grant on it before it ever dials in; account
+    // and connect mints register nothing.
+    crate::http::register_devserver_row(state, user.id, &secret, &params.label, &params.scopes)
+        .await;
     let code = state.desktop_redemptions.insert(RedeemPayload {
         id: token.id,
         secret,

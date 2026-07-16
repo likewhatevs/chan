@@ -1107,15 +1107,10 @@ scenario_roster() {
         return
         ;;
     esac
-    # The operator mint registers a devserver row for every PAT
-    # (parity with the SPA mint); an account PAT is not a devserver,
-    # so drop the side-effect row to keep the roster exact.
+    # A PAT is a devserver only when it carries the tunnel scope, so
+    # this desktop.account mint registers no row; the id (sha256 of
+    # the PAT) must never surface in the roster (asserted below).
     account_dsid="$(printf %s "$ROSTER_PAT" | sha256sum | awk '{print $1}')"
-    sql "$E2E_DATABASE_URL" "SET search_path TO $E2E_SCHEMA;
-        DELETE FROM devservers WHERE devserver_id = '$account_dsid';" || {
-        assert_fail "roster: side-effect row cleanup failed"
-        return
-    }
 
     # A tunnel/connect PAT must not read the roster.
     local code
@@ -1151,6 +1146,11 @@ scenario_roster() {
         assert_pass "roster: bob's claimed share listed (offline, editor)"
     else
         assert_fail "roster: bob share row wrong in: $roster_json"
+    fi
+    if printf %s "$roster_json" | grep -q "$account_dsid"; then
+        assert_fail "roster: the account PAT's mint registered a phantom devserver row"
+    else
+        assert_pass "roster: the account PAT mint registered no devserver row"
     fi
 
     local etag

@@ -928,20 +928,10 @@ async fn tokens_create(
         )
         .await?;
 
-    // The PAT IS a devserver (1 token : 1 devserver). Register the
-    // devserver row so the owner sees it and can grant on it before it
-    // ever dials in; the label mirrors the PAT label. Best-effort: the
-    // row also auto-creates on first grant, and the PAT is already
-    // persisted, so a profile hiccup must not fail the mint.
-    let devserver_id = crate::api_tokens::devserver_id_from_pat(&secret);
-    if let Err(e) = state
-        .cfg
-        .profile_client
-        .create_devserver(uid, &devserver_id, &body.label)
-        .await
-    {
-        tracing::warn!(error = ?e, user = %uid, "register devserver after PAT mint failed");
-    }
+    // A PAT is a devserver only when it can dial (tunnel scope):
+    // register the roster row so the owner sees it and can grant on
+    // it before it ever dials in; the label mirrors the PAT label.
+    register_devserver_row(&state, uid, &secret, &body.label, &scopes).await;
 
     Ok((
         StatusCode::CREATED,
@@ -1499,6 +1489,42 @@ pub(crate) const DESKTOP_CONNECT_SCOPE: &str = "desktop.connect";
 /// (`desktop_authorize::validate`).
 pub(crate) const DESKTOP_ACCOUNT_SCOPE: &str = "desktop.account";
 
+/// The dial scope: a PAT carrying it can register on chan-tunnel, so
+/// it IS a devserver (`devserver_id` = sha256 of the PAT is the
+/// tunnel-registry key). This is what gates devserver-row
+/// registration at every mint site ([`register_devserver_row`]).
+pub(crate) const TUNNEL_SCOPE: &str = "tunnel";
+
+/// Register the devserver row for a freshly minted PAT. One shared
+/// path for every mint site (SPA, operator, desktop authorize): a PAT
+/// is a devserver ONLY when it can dial, so a row is registered iff
+/// `scopes` carries [`TUNNEL_SCOPE`] -- a desktop.account or
+/// desktop.connect mint registers nothing (its id can never appear in
+/// the tunnel registry, so a row would be a phantom in the dashboard
+/// and the desktop roster). Best-effort: the row also auto-creates on
+/// first grant, and the PAT is already persisted, so a profile hiccup
+/// must not fail the mint (warn only).
+pub(crate) async fn register_devserver_row(
+    state: &AppState,
+    user_id: Uuid,
+    secret: &str,
+    label: &str,
+    scopes: &[String],
+) {
+    if !scopes.iter().any(|s| s == TUNNEL_SCOPE) {
+        return;
+    }
+    let devserver_id = crate::api_tokens::devserver_id_from_pat(secret);
+    if let Err(e) = state
+        .cfg
+        .profile_client
+        .create_devserver(user_id, &devserver_id, label)
+        .await
+    {
+        tracing::warn!(error = ?e, user = %user_id, "register devserver after PAT mint failed");
+    }
+}
+
 /// Stable failure-reason tokens for the desktop entry 404 body. A
 /// de-facto desktop API like the `desktop_authorize` `#error=` reasons:
 /// the desktop branches on these to narrate the failure, so keep them
@@ -1829,17 +1855,10 @@ async fn admin_tokens_create(
         )
         .await?;
 
-    // Same parity call the SPA mint makes: the PAT IS a devserver, so
-    // register the row best-effort (see tokens_create).
-    let devserver_id = crate::api_tokens::devserver_id_from_pat(&secret);
-    if let Err(e) = state
-        .cfg
-        .profile_client
-        .create_devserver(uid, &devserver_id, label)
-        .await
-    {
-        tracing::warn!(error = ?e, user = %uid, "register devserver after admin PAT mint failed");
-    }
+    // Same gated path the SPA mint takes: a PAT is a devserver only
+    // when it can dial (tunnel scope), so an operator minting e.g. a
+    // desktop.account PAT registers no row.
+    register_devserver_row(&state, uid, &secret, label, &scopes).await;
 
     Ok((
         StatusCode::CREATED,
