@@ -1,11 +1,11 @@
-//! Pins for the runtime-minted gateway window IPC capability.
+//! Pins for granting gateway windows IPC through a runtime capability.
 //!
 //! Self-hosted gateway proxy origins are unknown at build time, so the
 //! static `capabilities/devserver-window.json` grant (scoped to
-//! `https://*.devserver.chan.app`) cannot cover them; gateway windows on
-//! foreign origins get their command vocabulary from a capability added at
-//! runtime via `Manager::add_capability`. These tests pin the tauri
-//! behavior that grant relies on:
+//! `https://*.devserver.chan.app`) cannot cover them; covering a foreign
+//! origin takes a capability added at runtime via
+//! `Manager::add_capability`. These tests pin the tauri behavior such a
+//! grant relies on:
 //!
 //! - IPC access is resolved against the shared `RuntimeAuthority` on every
 //!   invoke (`Webview::on_message`), never snapshotted per window: a
@@ -20,6 +20,18 @@
 //!   the build-time ACL manifests (`Resolved::resolve` unwrap), aborting
 //!   the app. The JSON shape minted for gateway windows is pinned here to
 //!   parse and resolve cleanly so both panic paths stay unreachable.
+//!
+//! Two further tauri facts constrain what a minted capability may carry:
+//!
+//! - Deny entries are ORIGIN-BLIND in `resolve_access` (the origin-match
+//!   result of a denied command is discarded): any deny entry would deny
+//!   the command on EVERY origin, so a minted capability carries NO deny
+//!   entries - the same absolute rule as no scoped permissions (runtime
+//!   scope ids collide with build-time ids).
+//! - Re-adding a capability ACCUMULATES duplicate resolved-command
+//!   entries (no dedup on the identifier), so minting must stay
+//!   once-per-(origin, app run); the duplicates are harmless to
+//!   resolution but grow the authority without bound.
 //!
 //! What unit tests cannot prove on a headless host: a real OS webview
 //! delivering an invoke from a remote https page. That end matters only
@@ -40,7 +52,18 @@ use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 /// handler to reach and returns a recognizable body.
 #[tauri::command]
 fn platform_os() -> &'static str {
-    "spike-os"
+    "stub-os"
+}
+
+/// Stub for `read_dropped_paths` - the one command a loopback workspace
+/// window holds that `lib-*` windows never get, on any origin. Registered
+/// so the out-of-set denial pin cannot pass vacuously: if a capability
+/// ever leaked this command to lib windows, the invoke would reach this
+/// handler and return Ok, failing the pin (an unregistered command is
+/// rejected with the same Err shape as an ACL denial).
+#[tauri::command]
+fn read_dropped_paths() -> &'static str {
+    "leaked"
 }
 
 /// The capability JSON minted for a gateway proxy origin: the exact
@@ -70,7 +93,7 @@ fn gateway_capability_json(origin_pattern: &str) -> String {
 /// server required.
 fn mock_desktop_app() -> tauri::App<tauri::test::MockRuntime> {
     mock_builder()
-        .invoke_handler(tauri::generate_handler![platform_os])
+        .invoke_handler(tauri::generate_handler![platform_os, read_dropped_paths])
         .build(tauri::generate_context!())
         .expect("mock app builds from the real context")
 }
@@ -121,7 +144,7 @@ fn static_devserver_grant_resolves_through_invoke_path() {
     let webview = lib_window(&app, "lib-static", STATIC_DEVSERVER_PAGE);
     assert_eq!(
         invoke_from(&webview, STATIC_DEVSERVER_PAGE, "platform_os"),
-        Ok("spike-os".into())
+        Ok("stub-os".into())
     );
 }
 
@@ -139,18 +162,18 @@ fn runtime_grant_reaches_already_open_and_later_windows() {
     );
 
     app.add_capability(gateway_capability_json(GATEWAY_ORIGIN_PATTERN))
-        .expect("minted capability resolves");
+        .expect("add_capability returned Ok");
 
     assert_eq!(
         invoke_from(&open_before_mint, GATEWAY_PAGE, "platform_os"),
-        Ok("spike-os".into()),
+        Ok("stub-os".into()),
         "an already-open window gains the grant on its next invoke"
     );
 
     let opened_after_mint = lib_window(&app, "lib-after", GATEWAY_PAGE);
     assert_eq!(
         invoke_from(&opened_after_mint, GATEWAY_PAGE, "platform_os"),
-        Ok("spike-os".into()),
+        Ok("stub-os".into()),
         "windows created after the mint are covered"
     );
 }
@@ -161,7 +184,7 @@ fn runtime_grant_reaches_already_open_and_later_windows() {
 fn runtime_grant_stays_scoped() {
     let app = mock_desktop_app();
     app.add_capability(gateway_capability_json(GATEWAY_ORIGIN_PATTERN))
-        .expect("minted capability resolves");
+        .expect("add_capability returned Ok");
 
     let lib = lib_window(&app, "lib-scoped", GATEWAY_PAGE);
     assert!(
@@ -189,9 +212,29 @@ fn minted_capability_parses_and_resolves() {
     json.parse::<CapabilityFile>()
         .expect("minted JSON parses as a capability");
 
+    // A clean return proves resolution: an unresolvable set panics inside
+    // add_capability before an Err is ever reachable.
     let app = mock_desktop_app();
     app.add_capability(json)
-        .expect("every minted permission resolves");
+        .expect("add_capability returned Ok");
+}
+
+/// Re-adding the same capability accumulates duplicate grants rather than
+/// erroring or replacing: resolution still allows the command, which is
+/// why the mint must stay once-per-(origin, app run) rather than
+/// re-issuing on every connect.
+#[test]
+fn re_minting_accumulates_without_breaking_resolution() {
+    let app = mock_desktop_app();
+    let json = gateway_capability_json(GATEWAY_ORIGIN_PATTERN);
+    app.add_capability(json.clone())
+        .expect("add_capability returned Ok");
+    app.add_capability(json).expect("re-add returned Ok");
+    let webview = lib_window(&app, "lib-remint", GATEWAY_PAGE);
+    assert_eq!(
+        invoke_from(&webview, GATEWAY_PAGE, "platform_os"),
+        Ok("stub-os".into())
+    );
 }
 
 /// The hazard the pin above guards: malformed JSON and unknown
