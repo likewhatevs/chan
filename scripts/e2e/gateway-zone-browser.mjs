@@ -7,7 +7,7 @@
 // object on stdout:
 //   { radios: [values...], consent_text: "...", handoff_url: "chan://..." }
 // radios reports any input[name="devserver"] on the consent page so
-// the harness can assert the picker stays gone. Exits nonzero on
+// the harness can assert the consent renders no picker. Exits nonzero on
 // navigation/shape failures; content assertions stay in the harness
 // so the log reads as one assert list.
 import puppeteer from "puppeteer-core";

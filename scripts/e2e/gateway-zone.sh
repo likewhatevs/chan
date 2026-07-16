@@ -662,9 +662,9 @@ if [ -x "$CHROME_BIN" ]; then
         esac
         if [ -z "$(frag_get "$handoff" devserver_owner)" ] &&
             [ -z "$(frag_get "$handoff" devserver_id)" ]; then
-            assert_pass "consent: fragment carries no retired devserver_* keys"
+            assert_pass "consent: fragment carries no devserver_* keys"
         else
-            assert_fail "consent: retired devserver_* keys present: $handoff"
+            assert_fail "consent: unexpected devserver_* keys: $handoff"
         fi
 
         # Redeem the one-time code: 200 exactly once, 410 on replay.
@@ -682,8 +682,8 @@ if [ -x "$CHROME_BIN" ]; then
         fi
         browser_pat="$(json_get secret < "$WORK/redeem.json")"
 
-        # The redeemed account PAT reads the roster; own live rows and
-        # bob's claimed share replace the old picker listing.
+        # The redeemed account PAT reads the roster: own live rows plus
+        # bob's claimed share.
         roster_json="$(curl -sS -H "Authorization: Bearer $browser_pat" \
             "http://127.0.0.1:$ID_PORT/desktop/v1/devservers")"
         row_a="$(roster_row "$roster_json" "$DS_A")"
@@ -705,8 +705,8 @@ if [ -x "$CHROME_BIN" ]; then
             assert_fail "roster: bob share row wrong: '$row_bob' in: $roster_json"
         fi
 
-        # Entry mint targeted from the roster row, then the same
-        # two-hop routing check the picker flow used to cover.
+        # Entry mint targeted from the roster row, then the two-hop
+        # routing check (the same shape check_entry_routes uses).
         entry_owner="${row_a%% *}"
         entry_body="$(entry_for "$browser_pat" "{\"owner\":\"$entry_owner\",\"devserver_id\":\"$DS_A\"}")"
         entry_url="$(printf %s "$entry_body" | json_get entry_url)"

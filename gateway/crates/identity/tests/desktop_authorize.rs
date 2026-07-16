@@ -870,7 +870,7 @@ async fn account_flow_mints_account_pat_and_no_devserver_row() {
     let url = extract_handoff_url(resp.body_str());
     let frag = parse_chan_fragment(&url);
     let code = frag.get("code").expect("code in fragment").clone();
-    // devserver_* keys are retired: never emitted, not even empty.
+    // The fragment never carries devserver_* keys, not even empty ones.
     assert!(!frag.keys().any(|k| k.starts_with("devserver_")), "{url}");
 
     // The redeemed PAT carries exactly the account scope.
@@ -924,9 +924,9 @@ async fn legacy_connect_flow_still_mints_and_registers() {
     assert!(!html.contains(r#"type="radio""#), "{html}");
     assert!(!html.contains("access to your account"), "{html}");
 
-    // A stale desktop.connect client may still POST a devserver pick;
-    // the retired field is ignored, the mint proceeds, and the
-    // fragment carries no devserver_* keys.
+    // A client may still POST a devserver pick; the unmodeled field
+    // is ignored, the mint proceeds, and the fragment carries no
+    // devserver_* keys.
     let resp = c
         .post_form(
             "/desktop/authorize/confirm",

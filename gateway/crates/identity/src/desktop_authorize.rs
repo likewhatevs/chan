@@ -374,7 +374,7 @@ fn generate_csrf() -> String {
 /// mechanics (meta refresh + manual link to the `chan://` target) do
 /// not.
 enum Handoff {
-    /// PAT minted; the target carries `#code=…`.
+    /// PAT minted; the target carries `#code=...`.
     Success,
     /// The user clicked Cancel; the target carries `#error=user_cancelled`.
     Cancelled,
@@ -944,9 +944,9 @@ mod tests {
 
     #[test]
     fn success_url_never_emits_devserver_keys() {
-        // The devserver_* fragment keys are retired (Contract A); the
-        // desktop's handle_callback tolerates their absence, and they
-        // must never come back.
+        // The fragment vocabulary is code/label/expires_at/state only;
+        // the desktop's handle_callback reads nothing else, so no
+        // devserver_* key may ever appear.
         let token = dummy_token(Uuid::nil(), "x", None);
         let url = success_url(&params(), "the-code", &token);
         assert!(!url.contains("devserver_"), "got {url}");
