@@ -401,6 +401,10 @@
   /// Side flips animate on the axis that matches the pane's shape:
   /// wide panes turn horizontally, tall panes turn vertically, and a
   /// square pane chooses either axis so both orientations stay possible.
+  // Tracks the 520ms CSS literal on the `pane-side-flip` animation below; a
+  // cross-package share with the launcher's flip.ts is off the table (its
+  // ?raw pins forbid extraction), so the two copies pin each other instead.
+  const SIDE_FLIP_DURATION_MS = 520;
   let sideFlipActive = $state(false);
   let sideFlipAxis = $state<PaneFlipAxis>("horizontal");
   let sideFlipStartTransform = $state("rotateY(-180deg)");
@@ -451,10 +455,13 @@
     sideFlipFrame = requestAnimationFrame(() => {
       sideFlipFrame = null;
       sideFlipActive = true;
+      // animationend clears the class in a real browser; the timer covers
+      // jsdom and reduced-motion environments where it never fires, so it
+      // must OUTLAST the animation instead of cancelling it mid-turn.
       sideFlipTimer = setTimeout(() => {
         sideFlipActive = false;
         sideFlipTimer = null;
-      }, 320);
+      }, SIDE_FLIP_DURATION_MS + 80);
     });
   });
 
@@ -1140,8 +1147,12 @@
   onmouseleave={onPaneBodyMouseLeave}
   onmouseup={onPaneBodyMouseUp}
   onanimationend={(e) => {
-    if (e.animationName === "pane-wobble-once") wobbleActive = false;
-    if (e.animationName === "pane-side-flip") sideFlipActive = false;
+    // Svelte scopes keyframe names (svelte-<hash>-pane-wobble-once), so a
+    // strict equality against the source name never matches in a real
+    // browser; substring-match instead. No other keyframe name contains
+    // these as a substring.
+    if (e.animationName.includes("pane-wobble-once")) wobbleActive = false;
+    if (e.animationName.includes("pane-side-flip")) sideFlipActive = false;
   }}
   role="region"
   aria-label="editor pane"
@@ -1339,7 +1350,7 @@
         class:side-toggle-flash={sideToggleFlashActive}
         onclick={() => flipHybrid(pane.id)}
         onanimationend={(e) => {
-          if (e.animationName === "pane-side-toggle-flash") sideToggleFlashActive = false;
+          if (e.animationName.includes("pane-side-toggle-flash")) sideToggleFlashActive = false;
         }}
         title={sideToggleTitle}
         aria-label={sideToggleTitle}
@@ -1385,6 +1396,19 @@
               </button>
             </li>
           {/each}
+        {:else}
+          <!-- The one spawn command a terminal-only window CAN run (the
+               window-mode gate allows app.terminal.toggle). A hardcoded row,
+               NOT an appRows entry: the appRows table is regex-pinned to the
+               workspace-window set. -->
+          <li class="sep" role="separator"></li>
+          <li>
+            <button role="menuitem" onclick={() => runAppRow("app.terminal.toggle")}>
+              <Terminal size={16} strokeWidth={1.75} aria-hidden="true" />
+              <span class="menu-row-label">New terminal</span>
+              <span class="menu-row-chord">{chordLabel("app.terminal.toggle")}</span>
+            </button>
+          </li>
         {/if}
         <li class="sep" role="separator"></li>
         <li class="menu-label">

@@ -27,6 +27,7 @@ import {
   type LeafNode,
   type TerminalTab,
 } from "../state/tabs.svelte";
+import { ui } from "../state/store.svelte";
 
 const mounted: Array<Record<string, any>> = [];
 
@@ -230,6 +231,51 @@ describe("Pane right-click menus", () => {
       "Kill pane",
     ]) {
       expect(labels).not.toContain(label);
+    }
+  });
+
+  test("terminal-only hamburger keeps New terminal as the sole spawn row", async () => {
+    // ui is module-global $state: restore in finally so the workspace-order
+    // tests above stay on the default surface.
+    ui.terminalOnly = true;
+    try {
+      const pane: LeafNode = {
+        kind: "leaf",
+        id: "pane-terminal-only-menu",
+        tabs: [terminalTab()],
+        activeTabId: "term-1",
+      };
+      const target = await renderPane(pane, { paneMode: false });
+
+      target.querySelector<HTMLButtonElement>(".hamburger-trigger")?.click();
+      await tick();
+
+      // Order mirrors the workspace menu with the app-spawn block reduced to
+      // the one command a terminal-only window can run.
+      expect(menuLabels()).toEqual([
+        "Commands",
+        "Hybrid Nav",
+        "New terminal",
+        "blue",
+        "orange",
+        "green",
+        "pink",
+        "Close pane",
+      ]);
+
+      const items = [...document.body.querySelectorAll(".hamburger-menu li")];
+      const sepIdx = items
+        .map((li, i) => (li.classList.contains("sep") ? i : -1))
+        .filter((i) => i >= 0);
+      expect(sepIdx).toHaveLength(3);
+      const between = items
+        .slice(sepIdx[0]! + 1, sepIdx[1]!)
+        .map((li) => li.querySelector(".menu-row-label")?.textContent?.trim());
+      expect(between).toEqual(["New terminal"]);
+      const chord = items[sepIdx[0]! + 1]?.querySelector(".menu-row-chord");
+      expect(chord).not.toBeNull();
+    } finally {
+      ui.terminalOnly = false;
     }
   });
 
@@ -546,9 +592,30 @@ describe("Pane side flip", () => {
       expect(paneEl?.style.getPropertyValue("--pane-side-flip-start")).toContain(
         "rotateX(-180deg)",
       );
+
+      // A real browser reports the SCOPED keyframe name (Svelte rewrites
+      // `pane-side-flip` to `svelte-<hash>-pane-side-flip`), so the cleanup
+      // must substring-match; a strict-equality regression fails here and
+      // leaves the class stuck until the fallback timer.
+      const end = new Event("animationend", { bubbles: true }) as AnimationEvent;
+      Object.defineProperty(end, "animationName", {
+        configurable: true,
+        value: "svelte-abc123-pane-side-flip",
+      });
+      target.querySelector(".pane-card-inner")?.dispatchEvent(end);
+      await tick();
+      expect(paneEl?.classList.contains("sideFlipActive")).toBe(false);
     } finally {
       HTMLElement.prototype.getBoundingClientRect = originalRect;
     }
+  });
+
+  test("flip cleanup tolerates scoped keyframe names and outlasts the animation", () => {
+    expect(paneSource).toMatch(/e\.animationName\.includes\("pane-side-flip"\)/);
+    expect(paneSource).toMatch(/e\.animationName\.includes\("pane-wobble-once"\)/);
+    expect(paneSource).toMatch(/e\.animationName\.includes\("pane-side-toggle-flash"\)/);
+    expect(paneSource).toMatch(/SIDE_FLIP_DURATION_MS = 520/);
+    expect(paneSource).toContain("}, SIDE_FLIP_DURATION_MS + 80);");
   });
 
   test("flip axis follows pane dimensions", () => {
