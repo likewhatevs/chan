@@ -74,6 +74,22 @@
     return ds.url || `${ds.host}:${ds.port}`;
   }
 
+  // The "via <gateway>" note on a synthesized roster row: the owning gateway's
+  // label (or URL host), resolved from the registry; the row's own gateway_url
+  // is the fallback when the gateway just left the registry mid-refresh.
+  function hostOf(url: string): string {
+    try {
+      return new URL(url).host;
+    } catch {
+      return url;
+    }
+  }
+  function owningGatewayName(ds: DevserverEntry): string {
+    const gw = library.gateways.find((g) => g.id === ds.gateway_id);
+    if (gw) return gw.label || hostOf(gw.url);
+    return hostOf(ds.gateway_url);
+  }
+
   // The persisted collapse key for a machine card: "local" for the local card,
   // the devserver's stable id per devserver (matching the machine-tree card key).
   function machineKey(node: MachineNode): string {
@@ -429,8 +445,14 @@
   </span>
   <span class="ds-addr-row">
     <span class="ds-glyph"></span>
-    <span class="row-sub" title={endpoint(ds)}>{endpoint(ds)}</span>
-    {#if withPencil}<Pencil size={12} class="addr-pencil" />{/if}
+    {#if ds.gateway_id}
+      <!-- A gateway roster row has no user-entered address: the desktop mints
+           per-connect entry URLs. The owning gateway replaces the address. -->
+      <span class="row-sub" title={ds.gateway_url}>via {owningGatewayName(ds)}</span>
+    {:else}
+      <span class="row-sub" title={endpoint(ds)}>{endpoint(ds)}</span>
+      {#if withPencil}<Pencil size={12} class="addr-pencil" />{/if}
+    {/if}
   </span>
 {/snippet}
 
@@ -498,7 +520,7 @@
     {:else if node.devserver}
       {@const ds = node.devserver}
       <div class="machine-header">
-        {#if !readOnly && checksVisible()}
+        {#if !readOnly && checksVisible() && !ds.gateway_id}
           <input
             class="row-check"
             type="checkbox"
@@ -506,7 +528,12 @@
             aria-label={`Select ${devserverName(ds)}`}
             onchange={() => toggleSelected("devserver", ds.id)} />
         {/if}
-        {#if readOnly}
+        {#if readOnly || ds.gateway_id}
+          <!-- Gateway roster rows are registry-read-only: managed on the
+               Gateways screen (select/remove the GATEWAY, not the row), so the
+               identity block stays static -- no edit form, no checkbox. The
+               connect/disconnect controls below stay: they operate the live
+               connection, not the registry. -->
           <div class="ds-id">{@render dsIdentity(ds, false)}</div>
         {:else}
           <button
