@@ -7,7 +7,7 @@
 //! static scope, the desktop mints the same grant for that origin via
 //! `Manager::add_capability`: [`gateway_capability_json`] builds the
 //! capability (the devserver-window permission list, `lib-*` windows,
-//! `remote.urls` = the gateway's proxy wildcard + apex), and
+//! `remote.urls` = the gateway's proxy wildcard, nothing wider), and
 //! [`mint_gateway_grant`] installs it once per (origin, app run).
 //!
 //! Rules the mint must never break, each pinned by a test below:
@@ -51,11 +51,12 @@ use tauri::Manager;
 /// capability file's pattern.
 const STATIC_GRANT_PATTERN: &str = "https://*.devserver.chan.app";
 
-/// The `remote.urls` patterns for a gateway's proxy origin: the subdomain
+/// The `remote.urls` pattern for a gateway's proxy origin: the subdomain
 /// wildcard (every devserver's window origin is a label under the proxy
-/// host) plus the apex itself (a gateway that serves windows from the
-/// proxy origin directly). Both stay scoped to the gateway's exact host
-/// and carry its explicit port when one is present.
+/// host), scoped to the gateway's exact host and carrying its explicit
+/// port when one is present. Deliberately NOTHING wider: no window class
+/// serves from the apex origin itself, so the runtime grant surface stays
+/// exactly the wildcard shape the static grant uses for chan.app.
 pub fn gateway_proxy_remote_urls(proxy_origin: &str) -> Result<Vec<String>, String> {
     let parsed = url::Url::parse(proxy_origin).map_err(|e| format!("invalid proxy origin: {e}"))?;
     let scheme = parsed.scheme();
@@ -66,15 +67,12 @@ pub fn gateway_proxy_remote_urls(proxy_origin: &str) -> Result<Vec<String>, Stri
         .host_str()
         .ok_or_else(|| format!("proxy origin {proxy_origin:?} has no host"))?;
     let port = parsed.port().map(|p| format!(":{p}")).unwrap_or_default();
-    Ok(vec![
-        format!("{scheme}://*.{host}{port}"),
-        format!("{scheme}://{host}{port}"),
-    ])
+    Ok(vec![format!("{scheme}://*.{host}{port}")])
 }
 
 /// The capability JSON minted for a gateway's window origins: the exact
 /// permission list of `capabilities/devserver-window.json`, `lib-*`
-/// windows only, `remote.urls` swapped to the gateway's proxy patterns.
+/// windows only, `remote.urls` swapped to the gateway's proxy wildcard.
 /// No scoped permissions, no deny entries (see the module doc for why
 /// both rules are absolute).
 pub fn gateway_capability_json(remote_urls: &[String]) -> String {
@@ -113,7 +111,12 @@ pub fn mint_gateway_grant<R: tauri::Runtime>(
     if urls[0] == STATIC_GRANT_PATTERN {
         return Ok(false);
     }
-    let mut minted = minted_origins().lock().unwrap();
+    // Poison-tolerant: an unwind inside add_capability (its panic paths
+    // are pinned unreachable for our JSON, but pins are not proofs) must
+    // not wedge every later mint into a panic on this lock; recovering a
+    // possibly-stale set risks at most one duplicate re-mint, which
+    // resolution tolerates.
+    let mut minted = minted_origins().lock().unwrap_or_else(|e| e.into_inner());
     if minted.contains(&urls[0]) {
         return Ok(false);
     }
@@ -214,20 +217,14 @@ mod tests {
     }
 
     #[test]
-    fn proxy_remote_urls_cover_wildcard_and_apex_with_port() {
+    fn proxy_remote_urls_are_the_wildcard_alone() {
         assert_eq!(
             gateway_proxy_remote_urls("https://proxy.gw-test.example").unwrap(),
-            vec![
-                "https://*.proxy.gw-test.example".to_string(),
-                "https://proxy.gw-test.example".to_string(),
-            ]
+            vec!["https://*.proxy.gw-test.example".to_string()]
         );
         assert_eq!(
             gateway_proxy_remote_urls("http://127.0.0.1:7002").unwrap(),
-            vec![
-                "http://*.127.0.0.1:7002".to_string(),
-                "http://127.0.0.1:7002".to_string(),
-            ]
+            vec!["http://*.127.0.0.1:7002".to_string()]
         );
         assert!(gateway_proxy_remote_urls("ftp://x").is_err());
         assert!(gateway_proxy_remote_urls("not a url").is_err());
@@ -312,6 +309,10 @@ mod tests {
         assert!(
             invoke_from(&lib, OTHER_REMOTE_PAGE, "platform_os").is_err(),
             "origins outside remote.urls stay denied"
+        );
+        assert!(
+            invoke_from(&lib, "https://proxy.gw-test.example/", "platform_os").is_err(),
+            "the apex origin is outside the grant: the wildcard needs a label"
         );
         assert!(
             invoke_from(&lib, GATEWAY_PAGE, "read_dropped_paths").is_err(),

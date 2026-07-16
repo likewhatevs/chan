@@ -196,6 +196,11 @@ pub struct AppState {
     /// is-this-really-a-gateway backstop probe this run, so the probe
     /// never becomes a per-connect cost again.
     pub gateway_backstop_probed: Mutex<std::collections::HashSet<String>>,
+    /// The startup legacy-row migration outcome, parked until the first
+    /// launcher page load takes it and narrates it as a notice (an emit at
+    /// startup would fire before the SPA subscribes). `None` when nothing
+    /// migrated or once the notice went out.
+    pub gateway_migration: Mutex<Option<config::GatewayMigration>>,
     /// Set when the user confirmed the quit dialog: the re-fired
     /// `ExitRequested` (from `app.exit(0)` in the dialog callback)
     /// must pass instead of prompting again.
@@ -236,6 +241,7 @@ impl AppState {
             gateway_remove_hook: Arc::new(OnceLock::new()),
             gateway_manager: Arc::new(gateway::GatewayManager::default()),
             gateway_backstop_probed: Mutex::new(std::collections::HashSet::new()),
+            gateway_migration: Mutex::new(None),
             quit_confirmed: std::sync::atomic::AtomicBool::new(false),
             quit_prompt_open: std::sync::atomic::AtomicBool::new(false),
         }
@@ -2228,9 +2234,30 @@ async fn connect_rostered_devserver(
                     .into(),
             );
         }
-        // Known reasons (no devserver, offline, denied) surface their own
-        // banner strings; Other keeps the raw message. No prefix here: the
-        // entry narration IS the failure.
+        // The row holds no live tunnel right now (the gateway checks
+        // liveness before authorization, so a dark SHARED row answers this
+        // too): say so as a clean devserver-sourced notice in addition to
+        // failing the connect.
+        Err(e @ devserver::GatewayEntryError::DevserverOffline { .. }) => {
+            let label = if row_label.is_empty() {
+                devserver_id.chars().take(12).collect::<String>()
+            } else {
+                row_label.clone()
+            };
+            gateway::emit_notice(
+                &app,
+                "info",
+                "devserver",
+                &id,
+                &label,
+                "Devserver offline",
+                &e.to_string(),
+            );
+            return Err(e.to_string().into());
+        }
+        // Known reasons (no devserver, denied) surface their own banner
+        // strings; Other keeps the raw message. No prefix here: the entry
+        // narration IS the failure.
         Err(e) => return Err(e.to_string().into()),
     };
     let (host, port) = origin_host_port(&gateway.proxy_origin)?;
@@ -4290,16 +4317,25 @@ fn main() {
     // One-shot: devserver rows recorded by the retired pick-one gateway flow
     // become gateway entries, before any registry or connection reads the
     // config. A failure leaves the file untouched; the next startup retries.
-    match config::migrate_legacy_gateway_rows(&store) {
-        Ok(m) if m.changed() => tracing::info!(
-            gateways = m.created.len(),
-            rows = m.converted_rows,
-            "migrated legacy gateway devserver rows"
-        ),
-        Ok(_) => {}
-        Err(e) => tracing::warn!(error = %e, "legacy gateway row migration failed"),
-    }
+    let migration_outcome = match config::migrate_legacy_gateway_rows(&store) {
+        Ok(m) if m.changed() => {
+            tracing::info!(
+                gateways = m.created.len(),
+                rows = m.converted_rows,
+                "migrated legacy gateway devserver rows"
+            );
+            // Only converted rows are launcher-narratable (marker clearing
+            // alone changes nothing the user can see).
+            (m.converted_rows > 0).then_some(m)
+        }
+        Ok(_) => None,
+        Err(e) => {
+            tracing::warn!(error = %e, "legacy gateway row migration failed");
+            None
+        }
+    };
     let state = Arc::new(AppState::with_store(store));
+    *state.gateway_migration.lock().unwrap() = migration_outcome;
     let state_for_exit = Arc::clone(&state);
     let state_for_setup = Arc::clone(&state);
 
@@ -4309,6 +4345,39 @@ fn main() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(state)
+        // The migration summary waits for the FIRST launcher page load: a
+        // notice emitted at startup would fire before the SPA subscribes,
+        // and the launcher-notice event has no replay.
+        .on_page_load(|webview, payload| {
+            if webview.label() != "main"
+                || !matches!(payload.event(), tauri::webview::PageLoadEvent::Finished)
+            {
+                return;
+            }
+            let state = Arc::clone(&webview.state::<Arc<AppState>>());
+            let Some(migration) = state.gateway_migration.lock().unwrap().take() else {
+                return;
+            };
+            let app = webview.app_handle().clone();
+            tauri::async_runtime::spawn(async move {
+                // The SPA registers its notice listener during mount, just
+                // after this load event; a short grace keeps the one-shot
+                // from racing the subscription.
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                gateway::emit_notice(
+                    &app,
+                    "info",
+                    "desktop",
+                    "desktop",
+                    "chan-desktop",
+                    "Gateways migrated",
+                    &format!(
+                        "{} gateway connection(s) moved from devserver rows to the Gateways screen",
+                        migration.converted_rows
+                    ),
+                );
+            });
+        })
         .setup(move |app| {
             install_app_menu(app.handle())?;
 
