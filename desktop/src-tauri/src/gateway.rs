@@ -586,6 +586,30 @@ pub async fn connect_gateway(
             if effect.became_unreachable {
                 notice_unreachable(&app, &state, &gateway_id, &label);
             }
+            // First successful connect for this origin grants its lib-*
+            // windows their IPC vocabulary (no-op inside the static
+            // *.devserver.chan.app scope or when already minted this run).
+            // A failure is not fatal to the connect - the roster still
+            // serves - but the user should know their windows will have
+            // dead commands.
+            match crate::runtime_capability::mint_gateway_grant(
+                &app,
+                &discovery.devserver_proxy_origin,
+            ) {
+                Ok(_) => {}
+                Err(e) => {
+                    tracing::warn!(gateway = %gateway_id, error = %e, "gateway window grant failed");
+                    emit_notice(
+                        &app,
+                        "error",
+                        "gateway",
+                        &gateway_id,
+                        &label,
+                        "Gateway windows limited",
+                        &format!("granting window permissions for this gateway failed: {e}"),
+                    );
+                }
+            }
             spawn_roster_poll(&app, &state, &gateway_id, roster_url);
             crate::signal_devserver_rows_changed(&app, &state);
             Ok(())

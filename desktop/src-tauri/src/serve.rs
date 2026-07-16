@@ -3430,7 +3430,7 @@ mod tests {
     /// and the library scheme `lib-<hex>::<window_id>`); origins are the
     /// loopback embedded server and the gateway tunnel entry URL
     /// (`window_navigation_url`).
-    const ORIGIN_CLASSES: [(&str, &str, &str); 3] = [
+    const ORIGIN_CLASSES: [(&str, &str, &str); 4] = [
         (
             "loopback workspace window",
             "workspace-8f2c",
@@ -3446,6 +3446,13 @@ mod tests {
             "lib-0a1b::w-1",
             "https://alice.devserver.chan.app",
         ),
+        // A self-hosted gateway's proxy origin: outside the static grant,
+        // covered only by the runtime-minted gateway capability.
+        (
+            "gateway lib window",
+            "lib-0a1b::w-1",
+            "https://ws1.proxy.gw-test.example",
+        ),
     ];
 
     /// (class, invoke) pairs the ACL withholds ON PURPOSE. Every entry is
@@ -3456,9 +3463,10 @@ mod tests {
     /// read_dropped_paths: the macOS drag pasteboard is system-wide and
     /// outlives the drag, so the command stays off lib-* windows on EVERY
     /// origin -- local-drop.json's windows list deliberately has no lib-*.
-    const DELIBERATE_EXCLUSIONS: [(&str, &str); 2] = [
+    const DELIBERATE_EXCLUSIONS: [(&str, &str); 3] = [
         ("loopback lib window", "read_dropped_paths"),
         ("tunnel lib window", "read_dropped_paths"),
+        ("gateway lib window", "read_dropped_paths"),
     ];
 
     /// Minimal window-label glob: `*` matches any run of characters
@@ -3633,8 +3641,22 @@ mod tests {
         }
     }
 
+    /// Runtime-minted capabilities, produced by the SAME builders the
+    /// desktop hands to add_capability, so the walk recomputes exactly
+    /// what ships. NEVER files in capabilities/: the dir-pin test keeps
+    /// CAPABILITY_FILES pinned to the directory on purpose, and a runtime
+    /// capability landing there would get baked statically by tauri_build
+    /// too. The origin mirrors ORIGIN_CLASSES' gateway class.
+    fn runtime_capabilities() -> Vec<String> {
+        let urls =
+            crate::runtime_capability::gateway_proxy_remote_urls("https://proxy.gw-test.example")
+                .expect("gateway class proxy origin parses");
+        vec![crate::runtime_capability::gateway_capability_json(&urls)]
+    }
+
     /// The app commands + plugin permissions a window with this label,
-    /// serving content from this origin, can actually reach.
+    /// serving content from this origin, can actually reach - through the
+    /// static capability files AND the runtime-minted set.
     fn effective_grants(
         label: &str,
         origin: &str,
@@ -3644,7 +3666,12 @@ mod tests {
     ) {
         let mut app_commands = std::collections::HashSet::new();
         let mut plugin_permissions = std::collections::HashSet::new();
-        for (_, raw) in CAPABILITY_FILES {
+        let mut raws: Vec<String> = CAPABILITY_FILES
+            .iter()
+            .map(|(_, raw)| raw.to_string())
+            .collect();
+        raws.extend(runtime_capabilities());
+        for raw in &raws {
             let cap: serde_json::Value = serde_json::from_str(raw).expect("capability JSON parses");
             let windows_match = cap["windows"]
                 .as_array()

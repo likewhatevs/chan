@@ -54,10 +54,10 @@ pub struct GatewayConn {
     pub desktop_entry_url: String,
     pub proxy_origin: String,
     pub pat: String,
-    /// Explicit devserver target recorded from the consent pick
-    /// (`(owner_username, devserver_id)`), included in every entry
-    /// request so the gateway mints for this exact devserver (own or
-    /// shared). `None` = the gateway's first-accessible-live fallback.
+    /// Explicit devserver target (`(owner_username, devserver_id)`, a
+    /// roster row's key), included in every entry request so the gateway
+    /// mints for this exact devserver (own or shared). `None` = the
+    /// gateway's first-accessible-live fallback.
     pub entry_target: Option<(String, String)>,
     session: Arc<Mutex<Option<GatewaySession>>>,
 }
@@ -79,7 +79,7 @@ impl GatewayConn {
         }
     }
 
-    /// Attach the recorded devserver selection to every entry mint.
+    /// Attach an explicit devserver target to every entry mint.
     pub fn with_entry_target(mut self, target: Option<(String, String)>) -> Self {
         self.entry_target = target;
         self
