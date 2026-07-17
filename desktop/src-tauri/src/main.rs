@@ -832,6 +832,22 @@ impl DevserverFeed {
         })
     }
 
+    /// Current devserver window record for a BARE `window_id`, plus the owning
+    /// devserver id -- the `cs window rm` resolution, where only the id (no
+    /// composite label) crosses the bridge. Window ids are random hex minted
+    /// per library, so a cross-library collision is theoretical; the first
+    /// match wins.
+    fn record_for_window_id(&self, window_id: &str) -> Option<(String, chan_server::WindowRecord)> {
+        self.windows.lock().unwrap().iter().find_map(|(id, snap)| {
+            snap.lock()
+                .unwrap()
+                .iter()
+                .find(|r| r.window_id == window_id)
+                .cloned()
+                .map(|record| (id.clone(), record))
+        })
+    }
+
     /// The devserver id owning `library_id`, learned from live window snapshots
     /// or the cached library id seeded at connect. The reverse of
     /// [`library_id_of`]; window-label actions use it so a disconnect overlay
@@ -3860,14 +3876,40 @@ fn request_close_window(app: tauri::AppHandle, window: tauri::WebviewWindow) -> 
     // discard its record on the owning devserver -- the async analog of the
     // `local::` discard above. The server drops + PERSISTS the removal and fires
     // the watch, so the close survives a restart instead of the record reopening
-    // empty. The DELETE is an HTTP round-trip, so fire-and-forget it (logging a
-    // failure) and destroy the native window now for an instant close.
+    // empty. The DELETE is an HTTP round-trip, so run it async and destroy the
+    // native window now for an instant close. The label is buried in the owning
+    // devserver's watcher view FIRST: a feed frame landing mid-DELETE (e.g. the
+    // destroyed webview's `/ws` drop flipping `connected`) must not reconcile
+    // the still-live record back open. On DELETE success the record leaves the
+    // feed and the bury entry is inert; on failure the unbury lets the record
+    // reconcile back open -- visibly, with a launcher notice saying why.
     if closing.starts_with("lib-") {
+        let state = app.state::<Arc<AppState>>();
         let label = closing.to_string();
+        let view =
+            devserver_id_for_window_label(&state.devserver_feed, closing).and_then(|ds_id| {
+                state
+                    .devserver_watcher_views
+                    .lock()
+                    .unwrap()
+                    .get(&ds_id)
+                    .cloned()
+            });
+        if let Some(view) = &view {
+            view.bury(&label);
+        }
         let app = app.clone();
         tauri::async_runtime::spawn(async move {
             if let Err(e) = discard_devserver_window(&app, &label).await {
                 tracing::warn!(label = %label, error = %e, "discarding a closed devserver window failed");
+                if let Some(view) = &view {
+                    view.unbury(&label);
+                }
+                emit_system_notice(
+                    &app,
+                    "warning",
+                    format!("Closing the devserver window failed ({e}); it was reopened."),
+                );
             }
         });
         return window.destroy().map_err(err);
@@ -6386,84 +6428,67 @@ fn open_new_window_for_label(app: &tauri::AppHandle, focused_label: &str) -> Res
 }
 
 /// Mint another window for the devserver window that owns `focused_label`
-/// (a `lib-<library_id>::<window_id>` watcher window), for Cmd+Shift+N. No stored
-/// `library_id -> devserver` map exists, so match the focused label against each
-/// connected devserver's library feed; the matching record yields the conn AND
-/// the focused window's kind + `workspace_path`. Mint the SAME kind on that conn  --
-/// the watcher opens it -- mirroring the `local::` New-Window behavior. A stale
-/// window whose devserver is gone falls back to the picker.
+/// (a `lib-<library_id>::<window_id>` watcher window), for Cmd+Shift+N. The
+/// owning conn resolves through the window feed (`record_for_native_label`),
+/// which covers persisted-config devservers AND gateway-rostered ones (whose
+/// synthesized ids never live in `cfg.devservers`); the matching record yields
+/// the conn AND the focused window's kind + `workspace_path`. Mint the SAME
+/// kind on that conn -- the watcher opens it -- mirroring the `local::`
+/// New-Window behavior. A stale window whose devserver is gone falls back to
+/// the picker.
 async fn mint_another_devserver_window(
     app: &tauri::AppHandle,
     focused_label: &str,
 ) -> Result<(), String> {
     let state = app.state::<Arc<AppState>>();
-    // Snapshot the ids under the lock, then release it before the awaits.
-    let devserver_ids: Vec<String> = {
-        let cfg = state.store.lock().unwrap().get().map_err(err)?;
-        cfg.devservers.iter().map(|ds| ds.id.clone()).collect()
+    let Some((devserver_id, record)) = state.devserver_feed.record_for_native_label(focused_label)
+    else {
+        // Stale window for a disconnected/forgotten devserver: surface the picker.
+        return show_window(app, "main");
     };
-    for id in devserver_ids {
-        let Some(conn) = state.devservers.get(&id) else {
-            continue;
-        };
-        let Ok(windows) = devserver::fetch_library_windows(&conn).await else {
-            continue;
-        };
-        if let Some(record) = windows
-            .iter()
-            .find(|r| crate::window_watcher::native_label(r) == focused_label)
-        {
-            // Mirror the focused window's kind. A Terminal record carries no
-            // `workspace_path`, so minting a Workspace would make a blank,
-            // path-less window; branch on the kind and carry the path only for a
-            // Workspace.
-            let workspace_path = match record.kind {
-                chan_server::WindowKind::Terminal => None,
-                chan_server::WindowKind::Workspace => record.workspace_path.clone(),
-            };
-            return devserver::mint_library_window(&conn, record.kind, workspace_path)
-                .await
-                .map(|_| ());
-        }
-    }
-    // Stale window for a disconnected/forgotten devserver: surface the picker.
-    show_window(app, "main")
+    let Some(conn) = state.devservers.get(&devserver_id) else {
+        return show_window(app, "main");
+    };
+    // Mirror the focused window's kind. A Terminal record carries no
+    // `workspace_path`, so minting a Workspace would make a blank,
+    // path-less window; branch on the kind and carry the path only for a
+    // Workspace.
+    let workspace_path = match record.kind {
+        chan_server::WindowKind::Terminal => None,
+        chan_server::WindowKind::Workspace => record.workspace_path.clone(),
+    };
+    devserver::mint_library_window(&conn, record.kind, workspace_path)
+        .await
+        .map(|_| ())
 }
 
 /// Discard a closed devserver window's record on its owning devserver -- the
 /// `DELETE` the empty-window close-cascade sends for `lib-` windows (the
-/// devserver analog of `embedded.discard_window`). There is no stored
-/// library_id->devserver map, so feed-match the focused/closing label to find the
-/// conn AND the bare `window_id`, then DELETE. A no-op if the devserver is gone
-/// or the record already left the feed.
+/// devserver analog of `embedded.discard_window`). The owning conn resolves
+/// through the window feed (`record_for_native_label`), which covers
+/// persisted-config devservers AND gateway-rostered ones (whose synthesized
+/// ids never live in `cfg.devservers` -- an id-list walk over the persisted
+/// config silently skips them and the un-DELETEd record reopens on the next
+/// reconcile). A no-op if the devserver is gone or the record already left
+/// the feed.
 async fn discard_devserver_window(app: &tauri::AppHandle, label: &str) -> Result<(), String> {
     let state = app.state::<Arc<AppState>>();
-    let devserver_ids: Vec<String> = {
-        let cfg = state.store.lock().unwrap().get().map_err(err)?;
-        cfg.devservers.iter().map(|ds| ds.id.clone()).collect()
+    let Some((devserver_id, record)) = state.devserver_feed.record_for_native_label(label) else {
+        return Ok(());
     };
-    for id in devserver_ids {
-        let Some(conn) = state.devservers.get(&id) else {
-            continue;
-        };
-        let Ok(windows) = devserver::fetch_library_windows(&conn).await else {
-            continue;
-        };
-        if let Some(record) = windows
-            .iter()
-            .find(|r| crate::window_watcher::native_label(r) == label)
-        {
-            return devserver::discard_library_window(&conn, &record.window_id).await;
-        }
-    }
-    Ok(())
+    let Some(conn) = state.devservers.get(&devserver_id) else {
+        return Ok(());
+    };
+    devserver::discard_library_window(&conn, &record.window_id).await
 }
 
 /// Like [`discard_devserver_window`] but matched by the BARE `window_id` (what
 /// `cs window rm` sends) instead of the composite native label -- the cross-host
 /// path where a local terminal removes a connected devserver's window, whose
 /// registry row lives remote-side and so cannot be reached by the embedded
-/// host's own `discard_window`. Returns whether a connected devserver owned the
+/// host's own `discard_window`. Resolves the owning conn through the window
+/// feed (`record_for_window_id`), covering rostered gateway devservers like
+/// the label-matched sibling. Returns whether a connected devserver owned the
 /// id (and its row was DELETEd there). The local `--force` guard does not apply
 /// on this path: the embedded host cannot see the devserver's terminals, so a
 /// devserver window is best managed from one of its own terminals (which routes
@@ -6473,23 +6498,14 @@ async fn discard_devserver_window_by_id(
     window_id: &str,
 ) -> Result<bool, String> {
     let state = app.state::<Arc<AppState>>();
-    let devserver_ids: Vec<String> = {
-        let cfg = state.store.lock().unwrap().get().map_err(err)?;
-        cfg.devservers.iter().map(|ds| ds.id.clone()).collect()
+    let Some((devserver_id, _)) = state.devserver_feed.record_for_window_id(window_id) else {
+        return Ok(false);
     };
-    for id in devserver_ids {
-        let Some(conn) = state.devservers.get(&id) else {
-            continue;
-        };
-        let Ok(windows) = devserver::fetch_library_windows(&conn).await else {
-            continue;
-        };
-        if windows.iter().any(|r| r.window_id == window_id) {
-            devserver::discard_library_window(&conn, window_id).await?;
-            return Ok(true);
-        }
-    }
-    Ok(false)
+    let Some(conn) = state.devservers.get(&devserver_id) else {
+        return Ok(false);
+    };
+    devserver::discard_library_window(&conn, window_id).await?;
+    Ok(true)
 }
 
 /// OS window title for the singleton launcher. Launchers are never
@@ -7214,6 +7230,105 @@ mod tests {
         assert_eq!(id, "ds-1");
         assert_eq!(record.token, "fresh-token");
         assert!(feed.record_for_native_label("lib-fed::w-9").is_none());
+    }
+
+    #[test]
+    fn devserver_feed_resolves_a_rostered_devserver_for_the_close_discard() {
+        // A gateway-rostered devserver registers its conn under a SYNTHESIZED
+        // id (`gw:<8hex>:<owner>:<devserver_id>`) that never lives in the
+        // persisted `cfg.devservers` vec, so the close/discard paths must
+        // resolve the owning conn from the window feed -- where the rostered
+        // id is the registration key -- or the DELETE silently never fires and
+        // the record reconciles back open as a new window.
+        let feed = DevserverFeed::default();
+        let rostered = "gw:9f2c1a44:alice:9e314b8e58ea";
+        let snapshot = Arc::new(Mutex::new(vec![chan_server::WindowRecord {
+            window_id: "w-86fd".into(),
+            library_id: "lib-f978".into(),
+            kind: chan_server::WindowKind::Terminal,
+            title: "Terminal".into(),
+            ordinal: 1,
+            workspace_path: None,
+            prefix: "/terminal".into(),
+            token: "tok".into(),
+            persisted: true,
+            connected: true,
+            active_transfer: false,
+            control: false,
+            hidden: false,
+            origin: chan_server::WindowOrigin::Native,
+        }]));
+        feed.register_windows(rostered.to_string(), snapshot);
+
+        // The close-cascade discard matches the composite native label.
+        let (id, record) = feed
+            .record_for_native_label("lib-f978::w-86fd")
+            .expect("rostered record by native label");
+        assert_eq!(id, rostered);
+        assert_eq!(record.window_id, "w-86fd");
+
+        // The `cs window rm` discard matches the BARE window_id.
+        let (id, record) = feed
+            .record_for_window_id("w-86fd")
+            .expect("rostered record by bare window_id");
+        assert_eq!(id, rostered);
+        assert_eq!(record.library_id, "lib-f978");
+        assert!(feed.record_for_window_id("w-none").is_none());
+    }
+
+    #[test]
+    fn devserver_close_paths_resolve_conns_from_the_feed_not_the_config() {
+        // The persisted `cfg.devservers` vec never carries rostered gateway
+        // devservers, so any conn resolution that walks it silently skips
+        // them; the discard/mint helpers must resolve through the feed.
+        const MAIN_RS: &str = include_str!("main.rs");
+        let discard = MAIN_RS
+            .split("async fn discard_devserver_window(")
+            .nth(1)
+            .expect("discard_devserver_window exists")
+            .split("async fn discard_devserver_window_by_id(")
+            .next()
+            .expect("label discard precedes the by-id sibling");
+        assert!(discard.contains("record_for_native_label"));
+        assert!(!discard.contains("cfg.devservers"));
+        let by_id = MAIN_RS
+            .split("async fn discard_devserver_window_by_id(")
+            .nth(1)
+            .expect("discard_devserver_window_by_id exists")
+            .split("const LAUNCHER_WINDOW_TITLE")
+            .next()
+            .expect("by-id discard precedes the launcher constants");
+        assert!(by_id.contains("record_for_window_id"));
+        assert!(!by_id.contains("cfg.devservers"));
+    }
+
+    #[test]
+    fn devserver_window_close_buries_before_destroy_and_unburies_on_failure() {
+        // The lib- close branch must bury the label in the owning devserver's
+        // watcher view BEFORE destroying the webview (a feed frame landing
+        // mid-DELETE must not reconcile the record back open), and a failed
+        // DELETE must unbury + surface a notice instead of reopening silently.
+        const MAIN_RS: &str = include_str!("main.rs");
+        let close = MAIN_RS
+            .split("fn request_close_window")
+            .nth(1)
+            .expect("request_close_window exists")
+            .split("fn hide_window_from_close_confirm")
+            .next()
+            .expect("close handler precedes the hide callback");
+        let lib_branch = close
+            .split("if closing.starts_with(\"lib-\")")
+            .nth(1)
+            .expect("devserver close branch exists");
+        let bury = lib_branch
+            .find("view.bury(&label)")
+            .expect("buries the label");
+        let destroy = lib_branch
+            .find("window.destroy()")
+            .expect("destroys the webview");
+        assert!(bury < destroy, "the bury must precede the destroy");
+        assert!(lib_branch.contains("view.unbury(&label)"));
+        assert!(lib_branch.contains("emit_system_notice"));
     }
 
     #[test]

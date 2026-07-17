@@ -75,7 +75,7 @@ MAX_DEVSERVERS=2
 # Scenario dispatch: "all" (default) = core suite + every registered
 # scenario; "core" = the inline suite only; a registered name = stack
 # bring-up + that scenario only. Lanes append their scenario name here.
-SCENARIOS="sweeper watchdog roster upload"
+SCENARIOS="sweeper watchdog roster upload windowclose"
 SCENARIO="${1:-all}"
 RUN_CORE=1
 case "$SCENARIO" in all | core) ;; *) RUN_CORE=0 ;; esac
@@ -1349,6 +1349,100 @@ scenario_upload() {
         assert_pass "upload: scratch workspace removed (stack left as found)"
     else
         assert_fail "upload: scratch workspace removal expected 2xx, got $code"
+    fi
+}
+
+# Scenario: window close through the tunnel -- chan-desktop's exact close
+# sequence for a tunneled devserver window, over HTTP. The desktop's watcher
+# reopens any listed record lacking a native window, so a close only sticks
+# when the DELETE lands and the record leaves the registry; this pins that
+# proxy leg end to end (desktop/src-tauri/src/devserver.rs sends these):
+#   session: GET entry_url -> devserver_gate + devserver_csrf cookies
+#   mint:    POST /api/library/windows          (Cookie + X-Chan-CSRF)
+#   discard: DELETE /api/library/windows/{id}   (Cookie + X-Chan-CSRF)
+#   verify:  GET /api/library/windows           (record gone)
+scenario_windowclose() {
+    local host body entry_url hdrs gate csrf cookie code
+    host="$ALICE_USER--$(disc "$DS_A").devserver.$DOMAIN"
+    body="$(entry_for "$PAT_A" "{\"devserver_id\":\"$DS_A\"}")"
+    entry_url="$(printf %s "$body" | json_get entry_url)"
+    if [ -z "$entry_url" ]; then
+        assert_fail "windowclose: no entry_url minted for devserver A: $body"
+        return
+    fi
+    hdrs="$WORK/hdrs-windowclose.txt"
+    code="$(curl_host "$host" -o /dev/null -w '%{http_code}' -D "$hdrs" "$entry_url")"
+    gate="$(sed -n 's/^[Ss]et-[Cc]ookie: devserver_gate=\([^;]*\).*/\1/p' "$hdrs" | head -1)"
+    csrf="$(sed -n 's/^[Ss]et-[Cc]ookie: devserver_csrf=\([^;]*\).*/\1/p' "$hdrs" | head -1)"
+    if [ "$code" = "303" ] && [ -n "$gate" ] && [ -n "$csrf" ]; then
+        assert_pass "windowclose: entry 303 mints the gate + csrf cookie pair"
+    else
+        assert_fail "windowclose: expected 303 + both cookies, got $code gate=${gate:+y} csrf=${csrf:+y}"
+        return
+    fi
+    cookie="devserver_gate=$gate; devserver_csrf=$csrf"
+
+    # Mint a terminal window through the tunnel (the desktop's
+    # mint_library_window shape) and confirm it lists.
+    local wid
+    code="$(curl_host "$host" -o "$WORK/windowclose-mint.json" -w '%{http_code}' \
+        -X POST -H "Cookie: $cookie" -H "X-Chan-CSRF: $csrf" \
+        -H "content-type: application/json" -d '{"kind":"terminal"}' \
+        "http://$host:$PROXY_PORT/api/library/windows")"
+    wid="$(json_get window_id < "$WORK/windowclose-mint.json")"
+    if { [ "$code" = "200" ] || [ "$code" = "201" ]; } && [ -n "$wid" ]; then
+        assert_pass "windowclose: window minted through the proxy ($wid)"
+    else
+        assert_fail "windowclose: mint expected 2xx + window_id, got $code: $(head -c 200 "$WORK/windowclose-mint.json")"
+        return
+    fi
+    curl_host "$host" -o "$WORK/windowclose-list0.json" -s \
+        -H "Cookie: $cookie" "http://$host:$PROXY_PORT/api/library/windows"
+    if grep -q "\"$wid\"" "$WORK/windowclose-list0.json"; then
+        assert_pass "windowclose: minted record is in the windows list"
+    else
+        assert_fail "windowclose: minted record missing from list: $(head -c 200 "$WORK/windowclose-list0.json")"
+        return
+    fi
+
+    # The guard half: a DELETE without the csrf mirror is refused at the
+    # proxy (bare-body 403) and the record survives -- so the mirrored
+    # header below is what makes the close land.
+    code="$(curl_host "$host" -o "$WORK/windowclose-nocsrf.txt" -w '%{http_code}' \
+        -X DELETE -H "Cookie: $cookie" \
+        "http://$host:$PROXY_PORT/api/library/windows/$wid")"
+    if [ "$code" = "403" ] && grep -q '^forbidden$' "$WORK/windowclose-nocsrf.txt"; then
+        assert_pass "windowclose: DELETE without the csrf mirror is the proxy's 403 forbidden"
+    else
+        assert_fail "windowclose: unmirrored DELETE expected 403 forbidden, got $code: $(head -c 120 "$WORK/windowclose-nocsrf.txt")"
+    fi
+    curl_host "$host" -o "$WORK/windowclose-list1.json" -s \
+        -H "Cookie: $cookie" "http://$host:$PROXY_PORT/api/library/windows"
+    if grep -q "\"$wid\"" "$WORK/windowclose-list1.json"; then
+        assert_pass "windowclose: the refused DELETE left the record in place"
+    else
+        assert_fail "windowclose: record vanished without an admitted DELETE"
+        return
+    fi
+
+    # The close half: the desktop's DELETE (Cookie + X-Chan-CSRF) lands
+    # and the record leaves the next list fetch -- the reconcile has
+    # nothing to reopen, so the window stays closed.
+    code="$(curl_host "$host" -o "$WORK/windowclose-del.txt" -w '%{http_code}' \
+        -X DELETE -H "Cookie: $cookie" -H "X-Chan-CSRF: $csrf" \
+        "http://$host:$PROXY_PORT/api/library/windows/$wid")"
+    if [ "$code" = "200" ] || [ "$code" = "204" ]; then
+        assert_pass "windowclose: csrf-mirrored DELETE answers $code"
+    else
+        assert_fail "windowclose: DELETE expected 2xx, got $code: $(head -c 200 "$WORK/windowclose-del.txt")"
+        return
+    fi
+    curl_host "$host" -o "$WORK/windowclose-list2.json" -s \
+        -H "Cookie: $cookie" "http://$host:$PROXY_PORT/api/library/windows"
+    if grep -q "\"$wid\"" "$WORK/windowclose-list2.json"; then
+        assert_fail "windowclose: record still present after DELETE: $(head -c 200 "$WORK/windowclose-list2.json")"
+    else
+        assert_pass "windowclose: record gone from the next windows fetch"
     fi
 }
 
