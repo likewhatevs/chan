@@ -52,6 +52,12 @@ impl IdentityValidator {
 #[derive(Serialize)]
 struct ValidateRequest<'a> {
     token: &'a str,
+    /// Display name announced in the tunnel `Hello`, forwarded on the
+    /// post-registration follow-up call only; identity refreshes the
+    /// devserver row's label from it. Omitted from the auth-stage
+    /// validate so that wire stays byte-identical to pre-name clients.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    name: Option<&'a str>,
 }
 
 #[derive(Deserialize)]
@@ -74,7 +80,7 @@ impl Validator for IdentityValidator {
             .client
             .post(self.endpoint.clone())
             .header(reqwest::header::AUTHORIZATION, &self.auth_header)
-            .json(&ValidateRequest { token })
+            .json(&ValidateRequest { token, name: None })
             .send()
             .await
             .map_err(|e| ServerError::Identity(format!("request: {e}")))?;
@@ -98,6 +104,46 @@ impl Validator for IdentityValidator {
             StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => Err(ServerError::InvalidToken),
             other => Err(ServerError::Identity(format!("unexpected status {other}"))),
         }
+    }
+
+    /// Forward the Hello-announced display name to identity as a
+    /// follow-up call on the same validate exchange, now carrying
+    /// `name`; identity refreshes the devserver row's label from it.
+    /// The follow-up lands moments after the auth-stage validate, and
+    /// identity's per-fingerprint throttle seeds a FRESH fingerprint
+    /// with a single token (refill 4/s), so the first dial of a new
+    /// identity process would 401 the immediate retry -- hence the
+    /// spaced attempts. Best-effort: exhausting them only logs; the
+    /// tunnel is already registered.
+    async fn announce_devserver_name(&self, token: &str, name: &str) {
+        const RETRY_DELAYS: [std::time::Duration; 3] = [
+            std::time::Duration::ZERO,
+            std::time::Duration::from_secs(1),
+            std::time::Duration::from_secs(3),
+        ];
+        let mut last = String::new();
+        for delay in RETRY_DELAYS {
+            tokio::time::sleep(delay).await;
+            let resp = self
+                .client
+                .post(self.endpoint.clone())
+                .header(reqwest::header::AUTHORIZATION, &self.auth_header)
+                .json(&ValidateRequest {
+                    token,
+                    name: Some(name),
+                })
+                .send()
+                .await;
+            // The token was valid moments ago, so any 2xx means identity
+            // accepted the exchange (the label refresh is identity-side
+            // best-effort from there).
+            match resp {
+                Ok(resp) if resp.status().is_success() => return,
+                Ok(resp) => last = format!("status {}", resp.status()),
+                Err(e) => last = format!("request: {e}"),
+            }
+        }
+        tracing::warn!(name, error = %last, "devserver name announce failed");
     }
 }
 
@@ -124,6 +170,12 @@ impl<V: Validator> Validator for CapturingValidator<V> {
         self.registry
             .record_user(&validated.username, validated.user_id);
         Ok(validated)
+    }
+
+    // Nothing to capture from a name announce; pass it through so the
+    // default no-op cannot swallow it on the wrapped chain.
+    async fn announce_devserver_name(&self, token: &str, name: &str) {
+        self.inner.announce_devserver_name(token, name).await;
     }
 }
 

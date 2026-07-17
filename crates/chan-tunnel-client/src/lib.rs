@@ -91,6 +91,10 @@ pub struct ClientConfig {
     /// with the token's user to form the public path
     /// `/{user}/{workspace}/...`. Required.
     pub workspace: String,
+    /// Display name sent in the Hello frame, for the gateway roster
+    /// (`chan devserver --tunnel-devserver-name`). Optional and
+    /// routing-inert: servers that predate the field ignore it.
+    pub name: Option<String>,
     /// `chan` version reported in the Hello frame; logs only.
     pub client_version: String,
     /// Initial reconnect backoff. Doubled up to `max_backoff`.
@@ -134,6 +138,7 @@ impl Default for ClientConfig {
                 .expect("hard-coded url is valid"),
             token: String::new(),
             workspace: String::new(),
+            name: None,
             client_version: format!("chan-tunnel-client/{}", env!("CARGO_PKG_VERSION")),
             initial_backoff: Duration::from_millis(500),
             max_backoff: Duration::from_secs(30),
@@ -199,6 +204,7 @@ where
         protocol: ProtocolVersion::V1,
         client_version: cfg.client_version.clone(),
         workspace: cfg.workspace.clone(),
+        name: cfg.name.clone(),
     };
     write_frame(&mut socket, &hello).await?;
 

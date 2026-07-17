@@ -68,6 +68,15 @@ impl<V: Validator> Validator for ThrottlingValidator<V> {
         }
         self.inner.validate(token).await
     }
+
+    // Not throttled here: the announce fires once per ACCEPTED
+    // registration (the brute-force surface this bucket guards is the
+    // pre-registration validate), and consuming a bucket token for it
+    // would double-charge every legitimate dial. identity runs its own
+    // defense-in-depth throttle on the shared endpoint.
+    async fn announce_devserver_name(&self, token: &str, name: &str) {
+        self.inner.announce_devserver_name(token, name).await;
+    }
 }
 
 #[cfg(test)]

@@ -900,9 +900,12 @@ async fn admin_revoke_token(
 /// Idempotent devserver create. Re-issuing for the same
 /// (owner, devserver_id) returns the existing row at 200 OK instead of
 /// 409. identity-service calls this at PAT-create time (it holds the raw
-/// token to compute `devserver_id`); the `(owner, devserver_id)` pair is
-/// the canonical key, the surrogate uuid is for FK joins only. A blank /
-/// absent label on a re-issue leaves the stored label untouched.
+/// token to compute `devserver_id`) and again when a tunnel announces a
+/// display name; the `(owner, devserver_id)` pair is the canonical key,
+/// the surrogate uuid is for FK joins only. A blank / absent label on a
+/// re-issue leaves the stored label untouched. A non-blank label dedups
+/// within the owner's rows (`-2`, `-3`, ... suffixes) so the roster
+/// never shows two identical names for one owner.
 async fn create_devserver(
     State(state): State<AppState>,
     Path(owner_id): Path<Uuid>,
@@ -926,6 +929,25 @@ async fn create_devserver(
         return Err(Error::NotFound);
     }
 
+    // Owner-scoped label dedup. The row's own current label is excluded
+    // so a reconnect announcing the name it already holds is a no-op,
+    // never a fresh suffix. Best-effort against concurrent upserts (no
+    // unique constraint backs it): two simultaneous first dials could
+    // both win the same label, and the next reconnect heals it.
+    let label = if label.is_empty() {
+        String::new()
+    } else {
+        let taken: Vec<String> = sqlx::query_scalar(
+            "SELECT label FROM devservers \
+             WHERE owner_user_id = $1 AND devserver_id <> $2 AND label <> ''",
+        )
+        .bind(owner_id)
+        .bind(&devserver_id)
+        .fetch_all(&state.pool)
+        .await?;
+        dedup_label(label, &taken)
+    };
+
     // ON CONFLICT DO NOTHING + RETURNING returns 0 rows on hit, so
     // we follow up with an UPDATE-returning in that case. Two-step keeps
     // the INSERT happy-path single-statement.
@@ -936,7 +958,7 @@ async fn create_devserver(
     )
     .bind(owner_id)
     .bind(&devserver_id)
-    .bind(label)
+    .bind(&label)
     .fetch_optional(&state.pool)
     .await?;
 
@@ -953,10 +975,35 @@ async fn create_devserver(
     )
     .bind(owner_id)
     .bind(&devserver_id)
-    .bind(label)
+    .bind(&label)
     .fetch_one(&state.pool)
     .await?;
     Ok((StatusCode::OK, Json(existing)))
+}
+
+/// First free variant of `label` against the owner's other rows'
+/// labels: the label itself, else `label-2`, `label-3`, ... The base is
+/// shortened (on a char boundary) when a suffix would push past the
+/// 64-byte label bound, and the shortened candidate re-checks the taken
+/// set, so the result always validates. Terminates: candidates differ
+/// for every n, and `taken` is finite.
+fn dedup_label(label: &str, taken: &[String]) -> String {
+    let is_free = |candidate: &str| !taken.iter().any(|t| t == candidate);
+    if is_free(label) {
+        return label.to_string();
+    }
+    for n in 2u64.. {
+        let suffix = format!("-{n}");
+        let mut end = (64 - suffix.len()).min(label.len());
+        while !label.is_char_boundary(end) {
+            end -= 1;
+        }
+        let candidate = format!("{}{suffix}", &label[..end]);
+        if is_free(&candidate) {
+            return candidate;
+        }
+    }
+    unreachable!("some numeric suffix is always free");
 }
 
 async fn list_devservers(
@@ -1491,4 +1538,51 @@ async fn admin_token_audit(
     .fetch_all(&state.pool)
     .await?;
     Ok(Json(rows))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::dedup_label;
+
+    fn taken(labels: &[&str]) -> Vec<String> {
+        labels.iter().map(|l| l.to_string()).collect()
+    }
+
+    #[test]
+    fn dedup_label_keeps_a_free_label() {
+        assert_eq!(dedup_label("laptop", &taken(&["office"])), "laptop");
+        assert_eq!(dedup_label("laptop", &[]), "laptop");
+    }
+
+    #[test]
+    fn dedup_label_suffixes_until_free() {
+        assert_eq!(dedup_label("laptop", &taken(&["laptop"])), "laptop-2");
+        assert_eq!(
+            dedup_label("laptop", &taken(&["laptop", "laptop-2"])),
+            "laptop-3"
+        );
+        // Only exact matches collide; a prefix relation does not.
+        assert_eq!(dedup_label("laptop", &taken(&["laptop-2"])), "laptop");
+    }
+
+    #[test]
+    fn dedup_label_respects_the_64_byte_bound() {
+        let base = "x".repeat(64);
+        let out = dedup_label(&base, &taken(&[&base]));
+        assert_eq!(out, format!("{}-2", "x".repeat(62)));
+        assert!(out.len() <= 64);
+        // The shortened candidate re-checks the taken set.
+        let out = dedup_label(&base, &taken(&[&base, &format!("{}-2", "x".repeat(62))]));
+        assert_eq!(out, format!("{}-3", "x".repeat(62)));
+    }
+
+    #[test]
+    fn dedup_label_shortens_on_char_boundaries() {
+        // 32 two-byte chars = 64 bytes; the suffix forces dropping a
+        // whole char, never splitting one.
+        let base = "é".repeat(32);
+        let out = dedup_label(&base, &taken(&[&base]));
+        assert_eq!(out, format!("{}-2", "é".repeat(31)));
+        assert!(out.len() <= 64);
+    }
 }

@@ -392,6 +392,11 @@ log "seeded bob ($BOB_USER) sharing $(disc "$DS_BOB") with alice"
 # Devservers (host-local foreground processes)
 # ---------------------------------------------------------------
 
+# Every devserver announces the SAME display name so the T5 dedup
+# assertion below exercises the owner-scoped -2 suffix; redials
+# re-announce it, which must be label-stable (no suffix creep).
+DS_DISPLAY_NAME="e2e-box"
+
 spawn_devserver() { # spawn_devserver <name> <port> <pat>
     local name="$1" port="$2" pat="$3"
     mkdir -p "$WORK/home-$name"
@@ -400,7 +405,8 @@ spawn_devserver() { # spawn_devserver <name> <port> <pat>
         CHAN_TUNNEL_TOKEN="$pat" \
         "$CHAN_BIN" devserver --service=none \
         --bind 127.0.0.1 --port "$port" \
-        --tunnel-url="http://127.0.0.1:$TUNNEL_PORT/v1/tunnel"
+        --tunnel-url="http://127.0.0.1:$TUNNEL_PORT/v1/tunnel" \
+        --tunnel-devserver-name="$DS_DISPLAY_NAME"
 }
 
 admin_tunnels() { # admin_tunnels -> JSON list of alice's live tunnels
@@ -426,6 +432,32 @@ if wait_tunnels 2; then
     assert_pass "tunnels: 2 devservers of one user registered"
 else
     assert_fail "tunnels: expected 2 registrations, got: $(admin_tunnels)"
+fi
+
+# T5 (--tunnel-devserver-name): both devservers announced the same
+# display name; the gateway persists it as the label (over the PAT
+# label) and dedups within the owner with a -2 suffix. The announce is
+# an async post-registration follow-up (spaced against the identity
+# validate throttle), so poll the rows.
+ds_label() { # ds_label <dsid>
+    sql "$E2E_DATABASE_URL" "SET search_path TO $E2E_SCHEMA;
+        SELECT label FROM devservers WHERE devserver_id = '$1';"
+}
+labels_ok=0
+for _ in $(seq 50); do
+    label_a="$(ds_label "$DS_A")"
+    label_b="$(ds_label "$DS_B")"
+    sorted="$(printf '%s\n%s\n' "$label_a" "$label_b" | sort | paste -sd' ')"
+    if [ "$sorted" = "$DS_DISPLAY_NAME $DS_DISPLAY_NAME-2" ]; then
+        labels_ok=1
+        break
+    fi
+    sleep 0.4
+done
+if [ "$labels_ok" = 1 ]; then
+    assert_pass "tunnels: same announced name dedups to $DS_DISPLAY_NAME + $DS_DISPLAY_NAME-2"
+else
+    assert_fail "tunnels: expected labels $DS_DISPLAY_NAME/$DS_DISPLAY_NAME-2, got A='$label_a' B='$label_b'"
 fi
 
 # ---------------------------------------------------------------
@@ -750,8 +782,9 @@ fi # RUN_CORE
 # leaves the owner's list while the live devservers are marked in the
 # SAME tick and survive, the swept row's grant cascades away, a
 # stopped devserver's row ages out after the retention, and a redial
-# after a sweep comes back live-unlabeled (tunnel up, no registry row
-# until a mint recreates it). Runs profile-service with
+# after a sweep recreates the row through the tunnel name announce
+# (the post-registration create_devserver upsert), labeled from
+# --tunnel-devserver-name. Runs profile-service with
 # DEVSERVER_RETENTION_MINUTES=1 for the duration, then restores the
 # bring-up config and re-inserts whatever the 1-minute window swept.
 scenario_sweeper() {
@@ -879,20 +912,31 @@ scenario_sweeper() {
         assert_fail "sweeper: devserver B's tunnel did not drop after kill"
     fi
 
-    # Redial: the tunnel returns but no registry row does -- the
-    # live-unlabeled comeback state (a later mint recreates the row).
+    # Redial: the tunnel returns and its name announce recreates the
+    # registry row (create_devserver upsert), so the roster shows the
+    # announced name with no mint in between. The announce is an async
+    # post-registration follow-up (spaced against the validate
+    # throttle), so poll for the row.
     spawn_devserver b "${DS_PORTS[1]}" "$PAT_B"
     if wait_tunnels 2 150; then
-        local owned_after
         if ! admin_tunnels | grep -q "$DS_B"; then
             assert_fail "sweeper: redial registered but B's id missing: $(admin_tunnels)"
-        elif ! owned_after="$(sweeper_owned)"; then
-            # Absence only counts from a successful fetch.
-            assert_fail "sweeper: owned list unreachable during the live-unlabeled check"
-        elif printf '%s\n' "$owned_after" | grep -q "^$DS_B$"; then
-            assert_fail "sweeper: redial recreated the registry row (expected live-unlabeled)"
         else
-            assert_pass "sweeper: redialed devserver is live-unlabeled (tunnel up, no row)"
+            local row_back=0 owned_after
+            for _ in $(seq 30); do
+                # Absence only counts from a successful fetch.
+                if owned_after="$(sweeper_owned)" &&
+                    printf '%s\n' "$owned_after" | grep -q "^$DS_B$"; then
+                    row_back=1
+                    break
+                fi
+                sleep 1
+            done
+            if [ "$row_back" = 1 ]; then
+                assert_pass "sweeper: redial's name announce recreated B's registry row"
+            else
+                assert_fail "sweeper: B's row did not come back after the redial announce"
+            fi
         fi
     else
         assert_fail "sweeper: devserver B did not re-register after redial"

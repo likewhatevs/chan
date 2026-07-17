@@ -23,11 +23,13 @@ use uuid::Uuid;
 /// Validator stub. Maps each known token to the `devserver_id` it resolves
 /// to (identity is token-resolved, not from the client's `Hello`); an unknown
 /// token is `InvalidToken`. All tokens belong to one `username` so the
-/// per-user cap counts distinct devservers.
+/// per-user cap counts distinct devservers. Announced display names are
+/// recorded so tests can assert the listener's post-registration hook.
 struct StubValidator {
     username: String,
     scopes: Vec<String>,
     tokens: HashMap<String, String>,
+    announced: std::sync::Mutex<Vec<(String, String)>>,
 }
 
 impl StubValidator {
@@ -39,7 +41,12 @@ impl StubValidator {
                 .iter()
                 .map(|(t, d)| (t.to_string(), d.to_string()))
                 .collect(),
+            announced: std::sync::Mutex::new(Vec::new()),
         })
+    }
+
+    fn announced(&self) -> Vec<(String, String)> {
+        self.announced.lock().unwrap().clone()
     }
 }
 
@@ -56,6 +63,13 @@ impl Validator for StubValidator {
             }),
             None => Err(ServerError::InvalidToken),
         }
+    }
+
+    async fn announce_devserver_name(&self, token: &str, name: &str) {
+        self.announced
+            .lock()
+            .unwrap()
+            .push((token.to_string(), name.to_string()));
     }
 }
 
@@ -94,6 +108,7 @@ fn cfg(port: u16, token: &str, workspace: &str) -> ClientConfig {
             .expect("hard-coded url is valid"),
         token: token.into(),
         workspace: workspace.into(),
+        name: None,
         client_version: "chan/test".into(),
         initial_backoff: Duration::from_millis(50),
         max_backoff: Duration::from_secs(1),
@@ -135,6 +150,39 @@ async fn registration_keys_on_token_devserver_id_not_hello_workspace() {
     let registered = h.registry.list_workspaces_for("alice");
     assert_eq!(registered.len(), 1);
     assert_eq!(registered[0].workspace.as_ref(), "ds-1");
+}
+
+#[tokio::test]
+async fn hello_name_reaches_the_validator_hook() {
+    // A Hello-announced display name lands on the validator's
+    // announce hook (trimmed), with the same token the dial used.
+    let validator = StubValidator::new("alice", vec![TUNNEL_SCOPE.into()], &[("good", "ds-1")]);
+    let h = spawn_listener(validator.clone(), 0).await;
+    let mut config = cfg(h.port, "good", "devsrv");
+    config.name = Some("  office box  ".into());
+    let (_reg, _yconn) = dial(&config).await.expect("dial ok");
+    assert!(wait_registered(&h.registry, "alice", "ds-1").await);
+    // The announce runs on a detached task; give it the same grace.
+    let mut announced = validator.announced();
+    for _ in 0..100 {
+        if !announced.is_empty() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        announced = validator.announced();
+    }
+    assert_eq!(
+        announced,
+        vec![("good".to_string(), "office box".to_string())]
+    );
+
+    // No name (an old client's Hello): the hook stays silent.
+    let quiet = StubValidator::new("bob", vec![TUNNEL_SCOPE.into()], &[("tok", "ds-2")]);
+    let h2 = spawn_listener(quiet.clone(), 0).await;
+    let (_reg, _yconn2) = dial(&cfg(h2.port, "tok", "devsrv")).await.expect("dial ok");
+    assert!(wait_registered(&h2.registry, "bob", "ds-2").await);
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(quiet.announced().is_empty());
 }
 
 #[tokio::test]

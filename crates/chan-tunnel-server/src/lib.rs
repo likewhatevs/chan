@@ -142,6 +142,19 @@ pub struct Validated {
 #[async_trait]
 pub trait Validator: Send + Sync + 'static {
     async fn validate(&self, token: &str) -> Result<Validated, ServerError>;
+
+    /// Report the display name the client announced in its `Hello`,
+    /// once the registration is accepted. The token is passed again
+    /// because the name arrives one wire step after `validate` (the
+    /// `Hello` is read only after the 200), so the implementation
+    /// carries it into the same identity exchange as a follow-up.
+    /// Best-effort and fire-and-forget: failures must be swallowed
+    /// (logged) by the implementation, never fail the tunnel. The
+    /// token-handling contract above applies unchanged. Default:
+    /// drop the name (stub validators, deployments without a roster).
+    async fn announce_devserver_name(&self, token: &str, name: &str) {
+        let _ = (token, name);
+    }
 }
 
 /// Public path prefix shape: `/{key}`, where `key` is the registration's

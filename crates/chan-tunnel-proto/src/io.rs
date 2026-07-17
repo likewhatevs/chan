@@ -69,6 +69,7 @@ mod tests {
             protocol: ProtocolVersion::V1,
             client_version: "chan/test".into(),
             workspace: "notes".into(),
+            name: None,
         };
         write_frame(&mut a, &h).await.unwrap();
         let got: Hello = read_frame(&mut b).await.unwrap();

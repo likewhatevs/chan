@@ -409,11 +409,18 @@ enum Command {
         /// Personal access token (chan_pat_*) from id.chan.app. Setting this
         /// enables tunnel mode: the devserver dials the gateway and publishes
         /// every mounted workspace behind one registration. The devserver
-        /// identity is resolved backend-side from the token, so there is no
-        /// name to pass. Prefer the CHAN_TUNNEL_TOKEN env var so the secret
-        /// does not appear in `ps`.
+        /// identity is resolved backend-side from the token; the display
+        /// name shown in the roster comes from --tunnel-devserver-name.
+        /// Prefer the CHAN_TUNNEL_TOKEN env var so the secret does not
+        /// appear in `ps`.
         #[arg(long, env = "CHAN_TUNNEL_TOKEN")]
         tunnel_token: Option<String>,
+        /// Display name for this devserver in the gateway roster (tunnel
+        /// mode only). Defaults to this machine's hostname. Trimmed and
+        /// capped at 64 bytes; when another of your devservers already
+        /// holds the name, the gateway suffixes `-2`, `-3`, ...
+        #[arg(long, env = "CHAN_TUNNEL_DEVSERVER_NAME")]
+        tunnel_devserver_name: Option<String>,
     },
     /// Internal: run the background `--service=chan` daemon child. The parent
     /// process detaches this command, redirects stdout/stderr to the devserver
@@ -430,6 +437,10 @@ enum Command {
         /// CHAN_TUNNEL_TOKEN.
         #[arg(long, default_value = "https://devserver.chan.app/v1/tunnel")]
         tunnel_url: String,
+        /// Display name for the gateway roster; the parent passes the
+        /// resolved value (explicit flag or hostname) through argv.
+        #[arg(long)]
+        tunnel_devserver_name: Option<String>,
     },
     /// Read or write settings persisted outside the workspace. Keys use
     /// the same namespaces as the web Settings overlay where possible
@@ -1169,6 +1180,7 @@ where
             force,
             tunnel_url,
             tunnel_token,
+            tunnel_devserver_name,
         } => {
             cmd_devserver(
                 bind,
@@ -1182,6 +1194,7 @@ where
                 force,
                 tunnel_url,
                 tunnel_token,
+                tunnel_devserver_name,
                 verbose,
             )
             .await
@@ -1190,9 +1203,10 @@ where
             bind,
             port,
             tunnel_url,
+            tunnel_devserver_name,
         } => {
             let addr = SocketAddr::new(bind, port);
-            let tunnel = build_devserver_tunnel_from_env(tunnel_url);
+            let tunnel = build_devserver_tunnel_from_env(tunnel_url, tunnel_devserver_name);
             devserver_daemon::run_devserver_daemon_child(addr, tunnel).await
         }
         Command::Config { action } => cmd_config(action),
@@ -2494,6 +2508,7 @@ async fn cmd_devserver(
     force: bool,
     tunnel_url: String,
     tunnel_token: Option<String>,
+    tunnel_devserver_name: Option<String>,
     verbose: bool,
 ) -> Result<()> {
     let action = selected_devserver_action(start, stop, restart, status, join);
@@ -2518,7 +2533,8 @@ async fn cmd_devserver(
 
     match plan {
         DevPlan::Foreground(ServiceKind::None) => {
-            let tunnel = build_devserver_tunnel(tunnel_token, tunnel_url);
+            let tunnel =
+                build_devserver_tunnel(tunnel_token, tunnel_url, tunnel_devserver_name.as_deref());
             // Tunnel mode defaults to NOT binding the loopback port (the gateway
             // is the surface, and it 404s the management API anyway), but under
             // systemd notify it does bind so `chan devserver --restart` fdstore
@@ -2552,18 +2568,30 @@ async fn cmd_devserver(
                 DevAction::Stop => devserver_daemon::stop_devserver_chan(verbose).await,
                 DevAction::Restart => {
                     warn_non_loopback_bind(addr);
-                    let tunnel = build_devserver_tunnel(tunnel_token, tunnel_url);
+                    let tunnel = build_devserver_tunnel(
+                        tunnel_token,
+                        tunnel_url,
+                        tunnel_devserver_name.as_deref(),
+                    );
                     devserver_daemon::restart_devserver_chan(addr, force, verbose, tunnel).await
                 }
                 DevAction::Status => devserver_daemon::status_devserver_chan(verbose),
                 DevAction::Start => {
                     warn_non_loopback_bind(addr);
-                    let tunnel = build_devserver_tunnel(tunnel_token, tunnel_url);
+                    let tunnel = build_devserver_tunnel(
+                        tunnel_token,
+                        tunnel_url,
+                        tunnel_devserver_name.as_deref(),
+                    );
                     devserver_daemon::run_devserver_as_chan(addr, force, verbose, tunnel).await
                 }
                 DevAction::Join => {
                     warn_non_loopback_bind(addr);
-                    let tunnel = build_devserver_tunnel(tunnel_token, tunnel_url);
+                    let tunnel = build_devserver_tunnel(
+                        tunnel_token,
+                        tunnel_url,
+                        tunnel_devserver_name.as_deref(),
+                    );
                     devserver_daemon::join_devserver_chan(addr, force, verbose, tunnel).await
                 }
             }
@@ -2589,6 +2617,7 @@ async fn cmd_devserver(
                 kind,
                 tunnel_token,
                 tunnel_url,
+                tunnel_devserver_name.as_deref(),
                 force,
                 bind,
                 port,
@@ -2619,6 +2648,7 @@ fn warn_non_loopback_bind(addr: SocketAddr) {
 fn build_devserver_tunnel(
     tunnel_token: Option<String>,
     tunnel_url: String,
+    tunnel_devserver_name: Option<&str>,
 ) -> Option<chan_server::DevserverTunnel> {
     let token = tunnel_token?;
     // clap does not expose the arg source, so compare to the env directly.
@@ -2628,16 +2658,70 @@ fn build_devserver_tunnel(
              Prefer CHAN_TUNNEL_TOKEN env var instead."
         );
     }
-    Some(chan_server::DevserverTunnel { tunnel_url, token })
+    Some(chan_server::DevserverTunnel {
+        tunnel_url,
+        token,
+        name: resolve_tunnel_devserver_name(tunnel_devserver_name),
+    })
 }
 
 /// Hidden daemon child tunnel config. The token is never accepted as an argv
-/// field here; the parent passes it through CHAN_TUNNEL_TOKEN only.
-fn build_devserver_tunnel_from_env(tunnel_url: String) -> Option<chan_server::DevserverTunnel> {
+/// field here; the parent passes it through CHAN_TUNNEL_TOKEN only. The name
+/// is not a secret and rides argv (`--tunnel-devserver-name`).
+fn build_devserver_tunnel_from_env(
+    tunnel_url: String,
+    tunnel_devserver_name: Option<String>,
+) -> Option<chan_server::DevserverTunnel> {
     let token = std::env::var("CHAN_TUNNEL_TOKEN")
         .ok()
         .filter(|token| !token.is_empty())?;
-    Some(chan_server::DevserverTunnel { tunnel_url, token })
+    Some(chan_server::DevserverTunnel {
+        tunnel_url,
+        token,
+        name: resolve_tunnel_devserver_name(tunnel_devserver_name.as_deref()),
+    })
+}
+
+/// Gateway bound on a devserver's roster label
+/// (`gateway/crates/profile/src/http.rs`, `create_devserver`): 64 bytes.
+/// The CLI caps the announced name to the same bound so the gateway
+/// never has to reject it.
+const TUNNEL_DEVSERVER_NAME_MAX_BYTES: usize = 64;
+
+/// Normalize an explicit `--tunnel-devserver-name`: trim, cap at the
+/// gateway's 64-byte label bound (truncating on a char boundary). A
+/// blank value reads as absent so the hostname default applies.
+fn normalize_tunnel_devserver_name(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    Some(truncate_on_char_boundary(trimmed, TUNNEL_DEVSERVER_NAME_MAX_BYTES).to_string())
+}
+
+/// The display name a tunnel registration announces for the gateway
+/// roster: the explicit `--tunnel-devserver-name` when given, else this
+/// box's hostname (via [`devserver_host_label`]). Never empty.
+fn resolve_tunnel_devserver_name(explicit: Option<&str>) -> String {
+    explicit
+        .and_then(normalize_tunnel_devserver_name)
+        .unwrap_or_else(|| {
+            normalize_tunnel_devserver_name(&devserver_host_label())
+                .expect("devserver_host_label never yields a blank label")
+        })
+}
+
+/// The longest prefix of `s` that fits in `max` bytes without splitting
+/// a UTF-8 code point.
+fn truncate_on_char_boundary(s: &str, max: usize) -> &str {
+    if s.len() <= max {
+        return s;
+    }
+    let mut end = max;
+    while !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
 }
 
 /// A tunnel registration to bake into a systemd unit: the PAT that flips the
@@ -2655,6 +2739,12 @@ struct SystemdTunnel {
     /// the assigned port is never written back here, or a restart would
     /// fossilize it as if the user chose it.
     pinned_port: Option<u16>,
+    /// The roster display name to pin in the unit's environment
+    /// (`CHAN_TUNNEL_DEVSERVER_NAME`), same explicitness rule as the
+    /// address pins: `Some` when given explicitly now or persisted in
+    /// the tunnel unit. `None` omits the variable, so the service
+    /// resolves its hostname default at runtime.
+    pinned_name: Option<String>,
 }
 
 /// Build the tunnel spec for a systemd unit from the CLI `--tunnel-token` /
@@ -2664,13 +2754,16 @@ struct SystemdTunnel {
 /// with no unit) takes the CLI value. The address pins follow the `--port` help
 /// contract instead (omit = preserve, so `--force` does not drop them): an
 /// explicit CLI flag pins, else a pin persisted in a TUNNEL unit carries over
-/// (see [`persisted_tunnel_pins`]). Returns None when there is no token
-/// (non-tunnel) or the backend is not systemd (launchd tunnel mode is refused
-/// upstream).
+/// (see [`persisted_tunnel_pins`]). The display name follows the same
+/// pin rule via `CHAN_TUNNEL_DEVSERVER_NAME` in the unit environment.
+/// Returns None when there is no token (non-tunnel) or the backend is
+/// not systemd (launchd tunnel mode is refused upstream).
+#[allow(clippy::too_many_arguments)]
 fn supervised_tunnel_spec(
     kind: ServiceKind,
     tunnel_token: Option<String>,
     tunnel_url: String,
+    tunnel_devserver_name: Option<&str>,
     force: bool,
     bind: Option<IpAddr>,
     port: Option<u16>,
@@ -2696,6 +2789,9 @@ fn supervised_tunnel_spec(
         url,
         pinned_bind: bind.or(persisted_bind),
         pinned_port: port.or(persisted_port),
+        pinned_name: tunnel_devserver_name
+            .and_then(normalize_tunnel_devserver_name)
+            .or_else(|| persisted_unit.and_then(persisted_tunnel_name)),
     })
 }
 
@@ -2714,6 +2810,22 @@ fn persisted_tunnel_pins(unit: &str) -> (Option<IpAddr>, Option<u16>) {
         persisted_flag_value(unit, "--bind=").and_then(|v| v.parse().ok()),
         persisted_flag_value(unit, "--port=").and_then(|v| v.parse().ok()),
     )
+}
+
+/// The display name a persisted TUNNEL unit pins via its
+/// `Environment="CHAN_TUNNEL_DEVSERVER_NAME=..."` line, if any. Same
+/// explicitness record as [`persisted_tunnel_pins`]: the unit carries
+/// the variable only when the user chose a name, and a non-tunnel unit
+/// (no `--tunnel-url=`) yields nothing. The value is read up to the
+/// closing quote, so names with spaces survive the round trip
+/// ([`devserver_systemd_unit`] strips quotes/backslashes on write).
+fn persisted_tunnel_name(unit: &str) -> Option<String> {
+    persisted_flag_value(unit, "--tunnel-url=")?;
+    let marker = "Environment=\"CHAN_TUNNEL_DEVSERVER_NAME=";
+    let start = unit.find(marker)? + marker.len();
+    let rest = &unit[start..];
+    let value = &rest[..rest.find('"')?];
+    (!value.is_empty()).then(|| value.to_string())
 }
 
 /// Dispatch a `systemd`/`launchd` action verb: `--start` (create + enable +
@@ -3519,6 +3631,18 @@ fn devserver_systemd_unit(
                 "Environment=\"CHAN_TUNNEL_TOKEN={}\"\n",
                 tunnel.token
             ));
+            // Pinned only when the user chose a name (explicit or
+            // preserved-explicit); omitted, the service resolves its
+            // hostname default at runtime. Quotes and backslashes are
+            // stripped: systemd's Environment= quoting cannot carry
+            // them raw, and a display name has no business containing
+            // either.
+            if let Some(name) = &tunnel.pinned_name {
+                environment.push_str(&format!(
+                    "Environment=\"CHAN_TUNNEL_DEVSERVER_NAME={}\"\n",
+                    name.replace(['"', '\\'], "")
+                ));
+            }
             let mut exec = format!("{exe} devserver", exe = exe.display());
             if let Some(ip) = tunnel.pinned_bind {
                 exec.push_str(&format!(" --bind={ip}"));
@@ -7214,6 +7338,7 @@ mod tests {
             url: "https://devserver.chan.app/v1/tunnel".to_string(),
             pinned_bind: None,
             pinned_port: None,
+            pinned_name: None,
         };
         let unit = devserver_systemd_unit(
             Path::new("/home/dev/.local/bin/chan"),
@@ -7247,6 +7372,7 @@ mod tests {
             url: "https://devserver.chan.app/v1/tunnel".to_string(),
             pinned_bind: Some("0.0.0.0".parse().unwrap()),
             pinned_port: Some(9000),
+            pinned_name: None,
         };
         let unit = devserver_systemd_unit(
             Path::new("/home/dev/.local/bin/chan"),
@@ -7265,6 +7391,7 @@ mod tests {
             url: "https://devserver.chan.app/v1/tunnel".to_string(),
             pinned_bind: None,
             pinned_port: Some(9000),
+            pinned_name: None,
         };
         let unit = devserver_systemd_unit(
             Path::new("/home/dev/.local/bin/chan"),
@@ -7288,6 +7415,7 @@ mod tests {
             url: "https://example.test/v1/tunnel".to_string(),
             pinned_bind: None,
             pinned_port: None,
+            pinned_name: None,
         };
         let unit = devserver_systemd_unit(
             Path::new("/home/dev/.local/bin/chan"),
@@ -7309,6 +7437,7 @@ mod tests {
             ServiceKind::Systemd,
             None,
             "https://cli.test".into(),
+            None,
             false,
             None,
             None,
@@ -7320,6 +7449,7 @@ mod tests {
             ServiceKind::Launchd,
             Some("chan_pat_a".into()),
             "https://cli.test".into(),
+            None,
             false,
             None,
             None,
@@ -7332,6 +7462,7 @@ mod tests {
             ServiceKind::Systemd,
             Some("chan_pat_a".into()),
             "https://cli.test".into(),
+            None,
             true,
             None,
             None,
@@ -7349,6 +7480,7 @@ mod tests {
             ServiceKind::Systemd,
             Some("chan_pat_a".into()),
             "https://cli.test".into(),
+            None,
             false,
             None,
             None,
@@ -7364,6 +7496,7 @@ mod tests {
             ServiceKind::Systemd,
             Some("chan_pat_a".into()),
             "https://cli.test".into(),
+            None,
             true,
             None,
             None,
@@ -7377,6 +7510,7 @@ mod tests {
             ServiceKind::Systemd,
             Some("chan_pat_a".into()),
             "https://cli.test".into(),
+            None,
             false,
             Some("0.0.0.0".parse().unwrap()),
             Some(9100),
@@ -7418,6 +7552,142 @@ mod tests {
             persisted_flag_value(unit, "--tunnel-url="),
             Some("https://first-run.test/v1/tunnel")
         );
+    }
+
+    #[test]
+    fn tunnel_devserver_name_resolves_explicit_then_hostname() {
+        // Explicit wins and is trimmed; blank/whitespace falls back to the
+        // hostname default, which is never empty.
+        assert_eq!(
+            resolve_tunnel_devserver_name(Some("  office box  ")),
+            "office box"
+        );
+        let host_default = resolve_tunnel_devserver_name(None);
+        assert!(!host_default.is_empty());
+        assert_eq!(resolve_tunnel_devserver_name(Some("   ")), host_default);
+    }
+
+    #[test]
+    fn tunnel_devserver_name_caps_at_64_bytes_on_char_boundary() {
+        let long = "x".repeat(80);
+        assert_eq!(resolve_tunnel_devserver_name(Some(&long)), "x".repeat(64));
+        // A multi-byte char straddling the cap is dropped whole, never split.
+        let mut tricky = "x".repeat(63);
+        tricky.push('é'); // 2 bytes: 63 + 2 > 64
+        let resolved = resolve_tunnel_devserver_name(Some(&tricky));
+        assert_eq!(resolved, "x".repeat(63));
+    }
+
+    #[test]
+    fn devserver_systemd_unit_tunnel_pins_explicit_name() {
+        // A pinned name rides in the unit environment (like the token), so
+        // the service re-announces it on every restart. Quotes and
+        // backslashes are stripped: systemd's Environment= quoting cannot
+        // carry them raw.
+        let tunnel = SystemdTunnel {
+            token: "chan_pat_abc123".to_string(),
+            url: "https://devserver.chan.app/v1/tunnel".to_string(),
+            pinned_bind: None,
+            pinned_port: None,
+            pinned_name: Some("office \"box\"\\".to_string()),
+        };
+        let unit = devserver_systemd_unit(
+            Path::new("/home/dev/.local/bin/chan"),
+            "127.0.0.1:8787".parse().unwrap(),
+            None,
+            Some(&tunnel),
+        );
+        assert!(unit.contains("Environment=\"CHAN_TUNNEL_DEVSERVER_NAME=office box\"\n"));
+        // Unpinned name: no variable, the service resolves its hostname
+        // default at runtime.
+        let unnamed = SystemdTunnel {
+            pinned_name: None,
+            ..tunnel
+        };
+        let unit = devserver_systemd_unit(
+            Path::new("/home/dev/.local/bin/chan"),
+            "127.0.0.1:8787".parse().unwrap(),
+            None,
+            Some(&unnamed),
+        );
+        assert!(!unit.contains("CHAN_TUNNEL_DEVSERVER_NAME"));
+    }
+
+    #[test]
+    fn persisted_tunnel_name_reads_tunnel_units_only() {
+        // The persisted name (spaces included) reads back up to the closing
+        // quote, and only from a tunnel unit.
+        let unit = "Environment=\"CHAN_TUNNEL_TOKEN=chan_pat_a\"\n\
+                    Environment=\"CHAN_TUNNEL_DEVSERVER_NAME=office box\"\n\
+                    ExecStart=/usr/bin/chan devserver \
+                    --tunnel-url=https://t.test/v1/tunnel\n";
+        assert_eq!(persisted_tunnel_name(unit), Some("office box".to_string()));
+        let nameless = "Environment=\"CHAN_TUNNEL_TOKEN=chan_pat_a\"\n\
+                        ExecStart=/usr/bin/chan devserver \
+                        --tunnel-url=https://t.test/v1/tunnel\n";
+        assert_eq!(persisted_tunnel_name(nameless), None);
+        let non_tunnel = "Environment=\"CHAN_TUNNEL_DEVSERVER_NAME=office box\"\n\
+                          ExecStart=/usr/bin/chan devserver --bind=127.0.0.1 --port=8787\n";
+        assert_eq!(persisted_tunnel_name(non_tunnel), None);
+    }
+
+    #[test]
+    fn supervised_tunnel_spec_pins_name_explicit_over_persisted() {
+        let unit = "Environment=\"CHAN_TUNNEL_DEVSERVER_NAME=persisted name\"\n\
+                    ExecStart=/usr/bin/chan devserver \
+                    --tunnel-url=https://first-run.test/v1/tunnel\n";
+        // A flagless restart carries the persisted name over.
+        let spec = supervised_tunnel_spec(
+            ServiceKind::Systemd,
+            Some("chan_pat_a".into()),
+            "https://cli.test".into(),
+            None,
+            false,
+            None,
+            None,
+            Some(unit),
+        )
+        .unwrap();
+        assert_eq!(spec.pinned_name, Some("persisted name".to_string()));
+        // An explicit flag (trimmed) pins over the persisted value.
+        let spec = supervised_tunnel_spec(
+            ServiceKind::Systemd,
+            Some("chan_pat_a".into()),
+            "https://cli.test".into(),
+            Some("  new name  "),
+            false,
+            None,
+            None,
+            Some(unit),
+        )
+        .unwrap();
+        assert_eq!(spec.pinned_name, Some("new name".to_string()));
+        // No flag, no unit: nothing pins; the service resolves its
+        // hostname default at runtime.
+        let spec = supervised_tunnel_spec(
+            ServiceKind::Systemd,
+            Some("chan_pat_a".into()),
+            "https://cli.test".into(),
+            None,
+            false,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(spec.pinned_name, None);
+    }
+
+    #[test]
+    fn devserver_name_flag_parses() {
+        let cli = Cli::parse_from(["chan", "devserver", "--tunnel-devserver-name", "office box"]);
+        match cli.command {
+            Command::Devserver {
+                tunnel_devserver_name,
+                ..
+            } => assert_eq!(tunnel_devserver_name.as_deref(), Some("office box")),
+            other => panic!("expected Command::Devserver, got {other:?}"),
+        }
     }
 
     #[test]

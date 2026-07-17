@@ -247,7 +247,7 @@ async fn handle_tunnel_conn(
 
     let duplex = H2Duplex::new(send, recv_body);
     let registry_for_check = registry.clone();
-    let (_hello, validated, yconn) = handshake_validated(duplex, validated, |_hello, validated| {
+    let (hello, validated, yconn) = handshake_validated(duplex, validated, |_hello, validated| {
         if max_workspaces_per_user == 0 {
             return Ok(());
         }
@@ -302,6 +302,24 @@ async fn handle_tunnel_conn(
         }
     };
     tracing::info!(%user, %devserver, "tunnel registered");
+
+    // The Hello may carry a display name for the roster. Hand it to
+    // the validator on a detached task: it is best-effort metadata,
+    // so a slow identity hop must not delay the tunnel driver, and a
+    // failure never unwinds the registration.
+    if let Some(name) = hello
+        .name
+        .as_deref()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(str::to_owned)
+    {
+        let validator = validator.clone();
+        let token = token.clone();
+        tokio::spawn(async move {
+            validator.announce_devserver_name(&token, &name).await;
+        });
+    }
 
     // Handshake is done; the in-flight slot belongs to the next
     // dialer. The per-tunnel driver runs without holding a permit.

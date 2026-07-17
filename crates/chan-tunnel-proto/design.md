@@ -16,7 +16,7 @@ sequenceDiagram
     C->>S: POST /v1/tunnel plus Bearer token
     S->>S: validate token and tunnel scope
     S-->>C: 200 OK, h2 stream stays open
-    C->>S: Hello frame (protocol, workspace)
+    C->>S: Hello frame (protocol, workspace, display name)
     S->>S: validate workspace and run pre_ack hook
     S-->>C: HelloAck Ok frame (prefix, user, workspace)
     Note over C,S: h2 stream now belongs to yamux, both directions
@@ -68,7 +68,7 @@ The split between the sync codec (`BytesMut`-based `encode_frame` / `decode_fram
 
 This crate owns the stable tunnel path, the control-frame size cap, the Hello / HelloAck schemas, the refusal-code vocabulary, the shared identifier validators, the frame codec, and the h2 duplex adapter. Client and server crates may orchestrate I/O differently, but they must use these shared contracts for the bytes and validation rules.
 
-Control frames are owned serde values with plain strings and enums, no borrowed lifetimes. `Hello` carries protocol, client version for logs, and workspace; `HelloAck` is either success with the assigned prefix/user/workspace or refusal with a stable code plus safe message. Refusal codes are additive and machine-matchable.
+Control frames are owned serde values with plain strings and enums, no borrowed lifetimes. `Hello` carries protocol, client version for logs, workspace, and an optional display name; `HelloAck` is either success with the assigned prefix/user/workspace or refusal with a stable code plus safe message. Refusal codes are additive and machine-matchable.
 
 The codec split remains deliberate: the sync codec is reusable from any I/O loop, while the tokio helpers are convenience for the current callers. Errors flatten cleanly so client and server can convert them into their own umbrella enums without re-exporting h2 or serde internals.
 
@@ -101,6 +101,10 @@ The control frames are exchanged once per tunnel lifetime; encode cost is irrele
 ### No `public` bit (always authenticated)
 
 Earlier revisions carried a `Hello.public` flag (`#[serde(default)]`, so absence decoded as `false`) that asked the terminator to skip its sign-in check for a public workspace; `true` was a privilege-escalation request, gated server-side on an extra token scope (`TUNNEL_PUBLIC_SCOPE`) and refused with `missing_public_scope` when the scope was absent. The per-devserver model removed all of it: the tunnel is always authenticated and there is no anonymous-readable path, so `Hello.public`, `TUNNEL_PUBLIC_SCOPE`, and the `missing_public_scope` refusal are gone. The gateway authorizes a viewer with a single `devserver_access(owner, devserver, caller)` check, where one grant covers the whole library; see `chan-tunnel-server/design.md` and the gateway's `devserver-proxy/design.md`. A legacy client that still sends a `public` key is harmless: `Hello` decoding ignores unknown fields.
+
+### Hello.name (display name, additive)
+
+`Hello` carries an optional `name` (`#[serde(default)] Option<String>`): the display name the devserver announces for the gateway roster (`chan devserver --tunnel-devserver-name`, defaulting to the client host's hostname). It is display-only metadata -- never part of routing or the registry key, which stay token-resolved -- and rides the additive-field rule with no `ProtocolVersion` bump: an old client omits the key and decodes as `None` on a new server; an old server ignores the unknown key from a new client. The terminator hands a non-empty name to its validator hook (`Validator::announce_devserver_name`); the production gateway persists it as the devserver's label, deduped per owner with `-2`/`-3` suffixes.
 
 ### HelloAck: Ok or Refused
 

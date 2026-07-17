@@ -451,3 +451,42 @@ async fn pat_validate_endpoint_requires_internal_bearer() {
 
     env.cleanup().await;
 }
+
+#[tokio::test]
+async fn pat_validate_endpoint_accepts_display_name() {
+    // The tunnel name announce rides the validate exchange as an
+    // optional `name` (devserver-proxy's post-registration follow-up).
+    // The label refresh through profile is best-effort -- TestEnv's
+    // profile client points at a dead port -- so the exchange itself
+    // must answer 200 with the unchanged response shape regardless.
+    let env = TestEnv::new().await;
+    let uid = env.insert_user().await;
+
+    let created = env
+        .api_tokens_service()
+        .create(
+            NewToken {
+                user_id: uid,
+                label: "tunnel",
+                expires_at: None,
+                scopes: &default_scopes(),
+                origin: TokenOrigin::Spa,
+            },
+            &RequestMeta::default(),
+        )
+        .await
+        .expect("create");
+
+    let (s, v) = json_post_with_auth(
+        &env.router,
+        "/internal/v1/tokens/validate",
+        "test-internal",
+        json!({"token": created.secret, "name": "office box"}),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(v["user_id"].as_str().unwrap(), uid.to_string());
+    assert!(v["devserver_id"].as_str().is_some());
+
+    env.cleanup().await;
+}

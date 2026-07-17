@@ -1459,6 +1459,84 @@ async fn devserver_create_validates_id() {
 }
 
 #[tokio::test]
+async fn devserver_label_dedups_within_owner_only() {
+    let app = TestApp::new().await;
+    let owner = mk_user(&app, "owner@x.com").await;
+    let other = mk_user(&app, "other@x.com").await;
+    let ds_a = ds("a");
+    let ds_b = ds("b");
+    let ds_c = ds("c");
+
+    // First taker keeps the label.
+    let (s, v) = app
+        .req(
+            Method::POST,
+            &format!("/v1/users/{owner}/devservers"),
+            Some(json!({"devserver_id": ds_a, "label": "laptop"})),
+        )
+        .await;
+    assert_eq!(s, StatusCode::CREATED);
+    assert_eq!(v["label"], "laptop");
+
+    // A second devserver of the SAME owner announcing the same label
+    // gets the -2 suffix; a third gets -3.
+    let (s, v) = app
+        .req(
+            Method::POST,
+            &format!("/v1/users/{owner}/devservers"),
+            Some(json!({"devserver_id": ds_b, "label": "laptop"})),
+        )
+        .await;
+    assert_eq!(s, StatusCode::CREATED);
+    assert_eq!(v["label"], "laptop-2");
+    let (s, v) = app
+        .req(
+            Method::POST,
+            &format!("/v1/users/{owner}/devservers"),
+            Some(json!({"devserver_id": ds_c, "label": "laptop"})),
+        )
+        .await;
+    assert_eq!(s, StatusCode::CREATED);
+    assert_eq!(v["label"], "laptop-3");
+
+    // Re-announcing the label a row already holds is idempotent: the
+    // row's own label is excluded from the taken set (no suffix creep
+    // on reconnect).
+    let (s, v) = app
+        .req(
+            Method::POST,
+            &format!("/v1/users/{owner}/devservers"),
+            Some(json!({"devserver_id": ds_b, "label": "laptop-2"})),
+        )
+        .await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(v["label"], "laptop-2");
+    // Same for the plain name on the first row.
+    let (s, v) = app
+        .req(
+            Method::POST,
+            &format!("/v1/users/{owner}/devservers"),
+            Some(json!({"devserver_id": ds_a, "label": "laptop"})),
+        )
+        .await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(v["label"], "laptop");
+
+    // The dedup is owner-scoped: another owner takes "laptop" untouched.
+    let (s, v) = app
+        .req(
+            Method::POST,
+            &format!("/v1/users/{other}/devservers"),
+            Some(json!({"devserver_id": ds_a, "label": "laptop"})),
+        )
+        .await;
+    assert_eq!(s, StatusCode::CREATED);
+    assert_eq!(v["label"], "laptop");
+
+    app.cleanup().await;
+}
+
+#[tokio::test]
 async fn devserver_list_and_delete_cascades_grants() {
     let app = TestApp::new().await;
     let owner = mk_user(&app, "owner@x.com").await;

@@ -281,6 +281,10 @@ fn spawn_daemon_child(
     match tunnel {
         Some(tunnel) => {
             cmd.arg(format!("--tunnel-url={}", tunnel.tunnel_url));
+            // The resolved display name is not a secret; it rides argv
+            // (no shell in between, so spaces survive). Only the token
+            // stays env-only.
+            cmd.arg(format!("--tunnel-devserver-name={}", tunnel.name));
             cmd.env("CHAN_TUNNEL_TOKEN", tunnel.token);
         }
         None => {

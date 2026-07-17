@@ -29,6 +29,14 @@ pub struct Hello {
     /// Workspace name to register under. Combined with the token's
     /// user to form the public path `/{user}/{workspace}/...`.
     pub workspace: String,
+    /// Display name the devserver announces for the gateway roster
+    /// (`--tunnel-devserver-name`, defaulting to the client host's
+    /// hostname). Additive field: old clients omit it (decodes as
+    /// `None` via the default) and old servers ignore it, so there is
+    /// no protocol bump. The gateway persists it as the devserver's
+    /// label, deduped per owner; it never affects routing.
+    #[serde(default)]
+    pub name: Option<String>,
 }
 
 /// First frame, server -> client. Either confirms the
@@ -113,6 +121,7 @@ mod wire_tests {
             protocol: ProtocolVersion::V1,
             client_version: "chan/test".into(),
             workspace: "notes".into(),
+            name: Some("office-box".into()),
         };
         assert_eq!(
             serde_json::to_value(&hello).unwrap(),
@@ -120,6 +129,7 @@ mod wire_tests {
                 "protocol": 1,
                 "client_version": "chan/test",
                 "workspace": "notes",
+                "name": "office-box",
             })
         );
     }
@@ -139,6 +149,35 @@ mod wire_tests {
         let hello: Hello = serde_json::from_value(legacy).unwrap();
         assert_eq!(hello.workspace, "notes");
         assert_eq!(hello.client_version, "chan/old");
+    }
+
+    // A pre-name client's Hello (no `name` key) decodes with `name: None`
+    // on a new server -- the additive-field tolerance the name feature
+    // rides on (no protocol bump).
+    #[test]
+    fn hello_decode_without_name_is_none() {
+        let old = json!({
+            "protocol": 1,
+            "client_version": "chan/old",
+            "workspace": "notes",
+        });
+        let hello: Hello = serde_json::from_value(old).unwrap();
+        assert_eq!(hello.name, None);
+        assert_eq!(hello.workspace, "notes");
+    }
+
+    // Full round-trip with a name: what a new client encodes, a new
+    // server decodes verbatim.
+    #[test]
+    fn hello_name_round_trips() {
+        let hello = Hello {
+            protocol: ProtocolVersion::V1,
+            client_version: "chan/test".into(),
+            workspace: "notes".into(),
+            name: Some("my box".into()),
+        };
+        let decoded: Hello = serde_json::from_value(serde_json::to_value(&hello).unwrap()).unwrap();
+        assert_eq!(decoded.name.as_deref(), Some("my box"));
     }
 
     #[test]

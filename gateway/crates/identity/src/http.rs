@@ -1872,6 +1872,12 @@ async fn admin_tokens_create(
 #[derive(Debug, Deserialize)]
 struct ValidateBody {
     token: String,
+    /// Optional display name the devserver announced in its tunnel
+    /// `Hello` (devserver-proxy forwards it as a follow-up validate
+    /// once the registration is accepted). When present, it refreshes
+    /// the devserver row's label.
+    #[serde(default)]
+    name: Option<String>,
 }
 
 async fn validate_token(
@@ -1903,7 +1909,36 @@ async fn validate_token(
         .api_tokens
         .validate(&body.token, &request_meta(&headers))
         .await?;
+    // A tunnel-announced display name refreshes the devserver row's
+    // label through the same gated upsert every mint site uses
+    // (tunnel scope only, best-effort). Sanitized to the label bound
+    // so profile never has to reject it; the upsert dedups within the
+    // owner's rows.
+    if let Some(name) = body
+        .name
+        .as_deref()
+        .and_then(sanitize_devserver_display_name)
+    {
+        register_devserver_row(&state, v.user_id, &body.token, &name, &v.scopes).await;
+    }
     Ok(Json(v))
+}
+
+/// Trim a tunnel-announced display name and cap it at profile's
+/// 64-byte label bound (on a char boundary). `None` for a blank value.
+/// The wire cap is defense in depth: a well-behaved client (`chan
+/// devserver`) already applies the same bound.
+fn sanitize_devserver_display_name(raw: &str) -> Option<String> {
+    const MAX: usize = 64;
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let mut end = MAX.min(trimmed.len());
+    while !trimmed.is_char_boundary(end) {
+        end -= 1;
+    }
+    Some(trimmed[..end].trim_end().to_string())
 }
 
 /// Bundle the audit-only request context (`client_ip` + `user_agent`)
@@ -1998,5 +2033,29 @@ mod tests {
                 "{bad:?} should be rejected"
             );
         }
+    }
+
+    #[test]
+    fn devserver_display_name_sanitizes_to_the_label_bound() {
+        // Trim; blank reads as absent.
+        assert_eq!(
+            sanitize_devserver_display_name("  office box  ").as_deref(),
+            Some("office box")
+        );
+        assert_eq!(sanitize_devserver_display_name("   "), None);
+        assert_eq!(sanitize_devserver_display_name(""), None);
+        // Cap at 64 bytes so profile's label validation never rejects
+        // the upsert; multi-byte chars are dropped whole.
+        let long = "x".repeat(80);
+        assert_eq!(
+            sanitize_devserver_display_name(&long).as_deref(),
+            Some("x".repeat(64).as_str())
+        );
+        let mut tricky = "x".repeat(63);
+        tricky.push('é');
+        assert_eq!(
+            sanitize_devserver_display_name(&tricky).as_deref(),
+            Some("x".repeat(63).as_str())
+        );
     }
 }

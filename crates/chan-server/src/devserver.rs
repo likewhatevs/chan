@@ -84,14 +84,18 @@ pub struct DevserverConfig {
 }
 
 /// Gateway tunnel registration for a devserver. The devserver identity is
-/// resolved backend-side from the token (PAT SHA-256), so there is no name to
-/// supply; the whole library rides one registration.
+/// resolved backend-side from the token (PAT SHA-256); the whole library
+/// rides one registration. `name` is display-only metadata for the roster.
 #[derive(Debug, Clone)]
 pub struct DevserverTunnel {
     /// Tunnel endpoint URL (default `https://devserver.chan.app/v1/tunnel`).
     pub tunnel_url: String,
     /// Personal access token (`chan_pat_*`) from id.chan.app.
     pub token: String,
+    /// Display name announced in the tunnel `Hello` for the gateway
+    /// roster. The CLI resolves it (`--tunnel-devserver-name`, else the
+    /// hostname), trimmed and capped; never empty. Routing-inert.
+    pub name: String,
 }
 
 /// On-disk devserver state: the bearer token (minted once and reused so a
@@ -946,7 +950,11 @@ fn spawn_devserver_tunnel(
     app: Router,
     signal_tx: &Arc<tokio::sync::watch::Sender<bool>>,
 ) {
-    let DevserverTunnel { tunnel_url, token } = tunnel;
+    let DevserverTunnel {
+        tunnel_url,
+        token,
+        name,
+    } = tunnel;
     let mut shutdown_rx = signal_tx.subscribe();
     tokio::spawn(async move {
         let url = match url::Url::parse(&tunnel_url) {
@@ -992,6 +1000,7 @@ fn spawn_devserver_tunnel(
             tunnel_url: url,
             token,
             workspace: DEVSERVER_TUNNEL_NAME.to_string(),
+            name: Some(name),
             client_version: format!("chan/{}", env!("CARGO_PKG_VERSION")),
             initial_backoff: Duration::from_millis(500),
             max_backoff: Duration::from_secs(30),
