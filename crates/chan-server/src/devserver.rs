@@ -213,6 +213,18 @@ pub fn persisted_devserver_token() -> Option<String> {
     (!token.is_empty()).then_some(token)
 }
 
+/// Read the last bound TCP port the devserver recorded in
+/// `~/.chan/devserver/config.json`, or `None` when nothing is recorded (`0`).
+/// The CLI's supervised management verbs dial the running service through
+/// this when its unit pins no `--port` (a listening tunnel-mode devserver
+/// binds an OS-assigned port); the record is written before the readiness
+/// notify, so an active unit has already persisted it.
+pub fn persisted_devserver_port() -> Option<u16> {
+    let store = DevserverStore::at(devserver_config_path().ok()?);
+    let port = store.load().port;
+    (port != 0).then_some(port)
+}
+
 /// A registered workspace as the devserver tracks it, the source of truth for
 /// `GET /api/devserver/workspaces`. Keyed by its stable `prefix` in
 /// [`DevserverState`]. Either mounted (`on`, live in the host, carrying a
@@ -769,6 +781,9 @@ pub async fn run_devserver(library: Library, config: DevserverConfig) -> anyhow:
     // still meaningful when unbound -- the discovery socket and the per-tenant
     // window records use it; only the loopback TCP bind is skipped.
     let listener = if config.listen {
+        // Bind intent, printed BEFORE the bind: on failure the journal names
+        // the attempted address (port 0 = the OS assigns a free port).
+        println!("chan devserver: binding {}", config.addr);
         Some(
             tokio::net::TcpListener::bind(config.addr)
                 .await

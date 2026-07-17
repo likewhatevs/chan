@@ -81,8 +81,8 @@ pub use chan_library::{
     WorkspaceLifecycleOutcome, WorkspaceOverlay, WorkspaceStatus,
 };
 pub use devserver::{
-    persisted_devserver_token, run_devserver, DevserverConfig, DevserverTunnel,
-    DEVSERVER_TOKEN_MARKER,
+    persisted_devserver_port, persisted_devserver_token, run_devserver, DevserverConfig,
+    DevserverTunnel, DEVSERVER_TOKEN_MARKER,
 };
 pub use error::Error;
 pub use mcp_bridge::run_stdio_proxy as run_mcp_stdio_proxy;

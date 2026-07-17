@@ -353,7 +353,9 @@ enum Command {
         /// address instead of reverting to the default.
         #[arg(long)]
         bind: Option<IpAddr>,
-        /// Port to bind. Default 8787; preserved from the running service on
+        /// Port to bind. Default 8787, except a listening tunnel-mode
+        /// devserver (systemd / CHAN_DEVSERVER_LISTEN=1) which defaults to an
+        /// OS-assigned free port; preserved from the running service on
         /// `--restart` when omitted.
         #[arg(long)]
         port: Option<u16>,
@@ -2447,6 +2449,32 @@ fn devserver_port_collision_hint(port: u16, err: &chan_server::Error) -> Option<
     ))
 }
 
+/// Devserver twin of [`devserver_port_collision_hint`]: an actionable message
+/// for the devserver's own listener failing to bind with `AddrInUse` (the only
+/// fallible bind that escapes `run_devserver`; the discovery-socket bind is
+/// non-fatal). Unlike the serve-path hint this fires for ANY port and names
+/// it, so a deliberate squatter against an explicit `--port` reads as a
+/// collision in the journal instead of a generic anyhow chain. `None` for
+/// every other error, which keeps its context unchanged.
+fn devserver_bind_collision_hint(addr: SocketAddr, err: &anyhow::Error) -> Option<String> {
+    let io_err = err.root_cause().downcast_ref::<std::io::Error>()?;
+    if io_err.kind() != std::io::ErrorKind::AddrInUse {
+        return None;
+    }
+    let squatter = if addr.port() == DEFAULT_PORT {
+        "most likely another `chan devserver` or a standalone `chan open` \
+         server (both default to it)"
+    } else {
+        "another process owns it"
+    };
+    Some(format!(
+        "chan devserver: could not bind {addr}: the port is already in use -- \
+         {squatter}. Stop the other process or re-run with a different \
+         `--port` (a listening tunnel-mode devserver defaults to an \
+         OS-assigned free port)."
+    ))
+}
+
 /// Run a headless multi-workspace devserver. The no-service default and
 /// `--service=none` run in the foreground on `bind:port`; `--service=chan` is
 /// the portable background daemon; `--service=systemd`/`launchd` are OS-backed
@@ -2488,17 +2516,8 @@ async fn cmd_devserver(
     let plan =
         plan_devserver(service, action).map_err(|msg| anyhow::anyhow!("chan devserver: {msg}"))?;
 
-    // The requested address for a fresh foreground start: an explicit flag or
-    // the built-in default. Management verbs recompute it from the running
-    // service's persisted address (see `service_target_addr`).
-    let requested = SocketAddr::new(
-        bind.unwrap_or(DEFAULT_DEVSERVER_BIND),
-        port.unwrap_or(DEFAULT_PORT),
-    );
-
     match plan {
         DevPlan::Foreground(ServiceKind::None) => {
-            warn_non_loopback_bind(requested);
             let tunnel = build_devserver_tunnel(tunnel_token, tunnel_url);
             // Tunnel mode defaults to NOT binding the loopback port (the gateway
             // is the surface, and it 404s the management API anyway), but under
@@ -2511,6 +2530,16 @@ async fn cmd_devserver(
                 under_systemd,
                 devserver_listen_override(),
             )?;
+            // The requested address for a fresh foreground start: explicit
+            // flags win; the port default depends on the resolved mode (see
+            // `resolve_devserver_port`). Management verbs recompute theirs
+            // from the running service's persisted address instead (see
+            // `service_target_addr`).
+            let requested = SocketAddr::new(
+                bind.unwrap_or(DEFAULT_DEVSERVER_BIND),
+                resolve_devserver_port(port, tunnel.is_some(), listen),
+            );
+            warn_non_loopback_bind(requested);
             run_devserver_foreground(requested, tunnel, listen).await
         }
         DevPlan::Foreground(kind) => {
@@ -2556,7 +2585,15 @@ async fn cmd_devserver(
             // omitted (per field: explicit flag > persisted > default), so a
             // flagless --restart/--join keeps what the service runs on.
             let addr = service_target_addr(kind, bind, port);
-            let tunnel = supervised_tunnel_spec(kind, tunnel_token, tunnel_url, force);
+            let tunnel = supervised_tunnel_spec(
+                kind,
+                tunnel_token,
+                tunnel_url,
+                force,
+                bind,
+                port,
+                read_systemd_unit().as_deref(),
+            );
             run_supervised_devserver(kind, action, addr, force, verbose, tunnel).await
         }
     }
@@ -2608,19 +2645,36 @@ fn build_devserver_tunnel_from_env(tunnel_url: String) -> Option<chan_server::De
 struct SystemdTunnel {
     token: String,
     url: String,
+    /// The `--bind` to pin in the unit's ExecStart: `Some` when given
+    /// explicitly now or already pinned in the persisted tunnel unit. `None`
+    /// omits the flag, so the service resolves the loopback default.
+    pinned_bind: Option<IpAddr>,
+    /// The `--port` to pin in the unit's ExecStart, same explicitness rule as
+    /// `pinned_bind`. `None` omits the flag, so a listening tunnel-mode
+    /// service binds an OS-assigned port (see [`resolve_devserver_port`]);
+    /// the assigned port is never written back here, or a restart would
+    /// fossilize it as if the user chose it.
+    pinned_port: Option<u16>,
 }
 
 /// Build the tunnel spec for a systemd unit from the CLI `--tunnel-token` /
 /// `--tunnel-url`, resolving the endpoint as "reuse the first-run value, refresh
 /// on --force": a flagless restart reuses the `--tunnel-url` already persisted in
-/// the unit's ExecStart, while `--force` (or a first start with no unit) takes
-/// the CLI value. Returns None when there is no token (non-tunnel) or the backend
-/// is not systemd (launchd tunnel mode is refused upstream).
+/// the unit's ExecStart (`persisted_unit`), while `--force` (or a first start
+/// with no unit) takes the CLI value. The address pins follow the `--port` help
+/// contract instead (omit = preserve, so `--force` does not drop them): an
+/// explicit CLI flag pins, else a pin persisted in a TUNNEL unit carries over
+/// (see [`persisted_tunnel_pins`]). Returns None when there is no token
+/// (non-tunnel) or the backend is not systemd (launchd tunnel mode is refused
+/// upstream).
 fn supervised_tunnel_spec(
     kind: ServiceKind,
     tunnel_token: Option<String>,
     tunnel_url: String,
     force: bool,
+    bind: Option<IpAddr>,
+    port: Option<u16>,
+    persisted_unit: Option<&str>,
 ) -> Option<SystemdTunnel> {
     if kind != ServiceKind::Systemd {
         return None;
@@ -2629,11 +2683,37 @@ fn supervised_tunnel_spec(
     let url = if force {
         tunnel_url
     } else {
-        read_systemd_unit()
-            .and_then(|unit| persisted_flag_value(&unit, "--tunnel-url=").map(str::to_owned))
+        persisted_unit
+            .and_then(|unit| persisted_flag_value(unit, "--tunnel-url="))
+            .map(str::to_owned)
             .unwrap_or(tunnel_url)
     };
-    Some(SystemdTunnel { token, url })
+    let (persisted_bind, persisted_port) = persisted_unit
+        .map(persisted_tunnel_pins)
+        .unwrap_or((None, None));
+    Some(SystemdTunnel {
+        token,
+        url,
+        pinned_bind: bind.or(persisted_bind),
+        pinned_port: port.or(persisted_port),
+    })
+}
+
+/// The `--bind`/`--port` pins a persisted TUNNEL unit carries in its
+/// ExecStart, each field independently. A tunnel unit persists these flags
+/// only when the user chose them (see `devserver_systemd_unit`), so presence
+/// IS the explicitness record; a defaulted field is simply absent. A
+/// non-tunnel unit (no `--tunnel-url=`) yields no pins: it always persists
+/// its address, so carrying that over into a tunnel unit would fossilize a
+/// default as if the user picked it.
+fn persisted_tunnel_pins(unit: &str) -> (Option<IpAddr>, Option<u16>) {
+    if persisted_flag_value(unit, "--tunnel-url=").is_none() {
+        return (None, None);
+    }
+    (
+        persisted_flag_value(unit, "--bind=").and_then(|v| v.parse().ok()),
+        persisted_flag_value(unit, "--port=").and_then(|v| v.parse().ok()),
+    )
 }
 
 /// Dispatch a `systemd`/`launchd` action verb: `--start` (create + enable +
@@ -2751,6 +2831,26 @@ fn resolve_devserver_addr(
         .or_else(|| persisted.map(|a| a.port()))
         .unwrap_or(DEFAULT_PORT);
     SocketAddr::new(ip, port)
+}
+
+/// The address the RUNNING systemd devserver serves its management API on,
+/// for the verbs that dial it (the `--restart` fdstore prepare, `--join`'s
+/// health watch) and the bind= report lines. Unit-persisted `--bind`/`--port`
+/// flags are the truth when present; a tunnel unit with no pinned port binds
+/// an OS-assigned one, which the service records in the devserver config at
+/// bind time (before READY=1, so an `is-active` unit has already written it).
+/// `None` when neither source knows a port.
+fn running_systemd_devserver_addr() -> Option<SocketAddr> {
+    let unit = read_systemd_unit();
+    let ip = unit
+        .as_deref()
+        .and_then(|unit| persisted_flag_value(unit, "--bind=")?.parse().ok())
+        .unwrap_or(DEFAULT_DEVSERVER_BIND);
+    let port = unit
+        .as_deref()
+        .and_then(|unit| persisted_flag_value(unit, "--port=")?.parse().ok())
+        .or_else(chan_server::persisted_devserver_port)?;
+    Some(SocketAddr::new(ip, port))
 }
 
 /// The address a supervised backend persisted for its running (or last) service,
@@ -2872,6 +2972,23 @@ fn parse_listen_override(raw: &str) -> Option<bool> {
     }
 }
 
+/// The port a fresh foreground devserver binds. An explicit `--port` always
+/// wins, tunnel mode included. A LISTENING tunnel-mode devserver defaults to
+/// `0` (the OS assigns a free port): its listener is management-only plumbing
+/// behind the gateway -- nothing depends on the number, the bound port is
+/// read back from `local_addr()` and persisted -- while a fixed 8787 default
+/// collides with whatever else owns that port, and the systemd unit path
+/// restarts into the same collision forever. Everything else keeps
+/// [`DEFAULT_PORT`], whose equality with `chan open`'s default powers the
+/// serve-path collision hint.
+fn resolve_devserver_port(explicit: Option<u16>, tunnel_mode: bool, listen: bool) -> u16 {
+    match explicit {
+        Some(port) => port,
+        None if tunnel_mode && listen => 0,
+        None => DEFAULT_PORT,
+    }
+}
+
 /// Run the devserver in the foreground. The no-supervisor default and the
 /// systemd unit's `ExecStart` / launchd agent's `ProgramArguments` all land
 /// here. `tunnel` carries the gateway registration when `--tunnel-token` is
@@ -2882,7 +2999,7 @@ async fn run_devserver_foreground(
     listen: bool,
 ) -> Result<()> {
     let lib = library()?;
-    chan_server::run_devserver(
+    let result = chan_server::run_devserver(
         lib,
         chan_server::DevserverConfig {
             addr,
@@ -2891,8 +3008,15 @@ async fn run_devserver_foreground(
             listen,
         },
     )
-    .await
-    .context("running devserver")
+    .await;
+    // A bind collision gets the actionable hint (mirrors `cmd_serve`); under
+    // systemd it lands in the journal as the loud failure line.
+    if let Err(err) = &result {
+        if let Some(hint) = devserver_bind_collision_hint(addr, err) {
+            return Err(anyhow::anyhow!(hint));
+        }
+    }
+    result.context("running devserver")
 }
 
 /// Human label for the box, shown in the management API. Falls back to a
@@ -2999,8 +3123,11 @@ async fn start_devserver_under_systemd(
         return Ok(());
     }
     bootstrap_systemd_unit(addr, false, tunnel).await?;
+    // Report the address the service actually bound: a tunnel unit with no
+    // pinned port is on an OS-assigned one, not the requested default.
     eprintln!(
-        "chan devserver: started the systemd user service {DEVSERVER_SYSTEMD_UNIT} (bind={addr})."
+        "chan devserver: started the systemd user service {DEVSERVER_SYSTEMD_UNIT} (bind={}).",
+        running_systemd_devserver_addr().unwrap_or(addr)
     );
     Ok(())
 }
@@ -3029,10 +3156,14 @@ async fn join_devserver_under_systemd(
         bootstrap_systemd_unit(addr, false, tunnel).await?;
         eprintln!(
             "chan devserver: started the systemd user service \
-             {DEVSERVER_SYSTEMD_UNIT} (bind={addr})"
+             {DEVSERVER_SYSTEMD_UNIT} (bind={})",
+            running_systemd_devserver_addr().unwrap_or(addr)
         );
     }
 
+    // Watch the address the service actually bound: a tunnel unit with no
+    // pinned port is on an OS-assigned one, recorded by the service at bind.
+    let addr = running_systemd_devserver_addr().unwrap_or(addr);
     run_health_watchdog(
         &addr.to_string(),
         DaemonLiveness::Systemd,
@@ -3095,12 +3226,17 @@ async fn restart_devserver_under_systemd(
             "chan devserver: WARNING: restarting systemd service destructively because --force was supplied"
         );
     } else if was_running {
-        prepare_systemd_fdstore_restart(addr, force).await?;
+        // Dial the RUNNING service's management API for the prepare: a tunnel
+        // unit with no pinned port serves on an OS-assigned port, not the
+        // requested/default `addr`.
+        let dial = running_systemd_devserver_addr().unwrap_or(addr);
+        prepare_systemd_fdstore_restart(dial, force).await?;
     }
     bootstrap_systemd_unit(addr, true, tunnel).await?;
     eprintln!(
-        "chan devserver: {} the systemd user service {DEVSERVER_SYSTEMD_UNIT} (bind={addr})",
-        if was_running { "restarted" } else { "started" }
+        "chan devserver: {} the systemd user service {DEVSERVER_SYSTEMD_UNIT} (bind={})",
+        if was_running { "restarted" } else { "started" },
+        running_systemd_devserver_addr().unwrap_or(addr)
     );
     Ok(())
 }
@@ -3370,20 +3506,28 @@ fn devserver_systemd_unit(
         None => String::new(),
     };
     // Tunnel mode: carry the PAT in the unit (written 0600) and dial the gateway
-    // via --tunnel-url instead of binding a fixed --bind/--port. Under systemd the
-    // devserver still binds the loopback management API (see
-    // resolve_devserver_listen) so `--restart` can drive the fdstore handoff.
+    // via --tunnel-url. Under systemd the devserver still binds the loopback
+    // management API (see resolve_devserver_listen) so `--restart` can drive the
+    // fdstore handoff. Only PINNED (explicit or preserved-explicit) address
+    // flags ride in the ExecStart; an omitted field leaves the service to
+    // resolve its tunnel-mode default (loopback bind, OS-assigned port), and
+    // the assigned port is never written back here -- persisting it would pin
+    // it as if the user chose it.
     let exec = match tunnel {
         Some(tunnel) => {
             environment.push_str(&format!(
                 "Environment=\"CHAN_TUNNEL_TOKEN={}\"\n",
                 tunnel.token
             ));
-            format!(
-                "{exe} devserver --tunnel-url={url}",
-                exe = exe.display(),
-                url = tunnel.url
-            )
+            let mut exec = format!("{exe} devserver", exe = exe.display());
+            if let Some(ip) = tunnel.pinned_bind {
+                exec.push_str(&format!(" --bind={ip}"));
+            }
+            if let Some(port) = tunnel.pinned_port {
+                exec.push_str(&format!(" --port={port}"));
+            }
+            exec.push_str(&format!(" --tunnel-url={}", tunnel.url));
+            exec
         }
         None => format!(
             "{exe} devserver --bind={ip} --port={port}",
@@ -5585,6 +5729,38 @@ mod tests {
     }
 
     #[test]
+    fn devserver_bind_collision_hint_names_any_port() {
+        use std::io::{Error as IoError, ErrorKind};
+        let bind_err = |kind: ErrorKind, addr: &str| {
+            anyhow::Error::from(IoError::from(kind)).context(format!("binding devserver on {addr}"))
+        };
+
+        // An explicit non-default port gets the hint too (a squatter against
+        // `--port 9000` must fail loud with the port named), reading the
+        // AddrInUse through the anyhow context chain the bind site adds.
+        let addr: SocketAddr = "127.0.0.1:9000".parse().unwrap();
+        let hint = devserver_bind_collision_hint(addr, &bind_err(ErrorKind::AddrInUse, "9000"))
+            .expect("hint");
+        assert!(hint.contains("127.0.0.1:9000"), "{hint}");
+        assert!(hint.contains("--port"), "{hint}");
+
+        // The shared default names its likely squatters.
+        let addr: SocketAddr = format!("127.0.0.1:{DEFAULT_PORT}").parse().unwrap();
+        let hint = devserver_bind_collision_hint(addr, &bind_err(ErrorKind::AddrInUse, "8787"))
+            .expect("hint");
+        assert!(hint.contains("chan devserver"), "{hint}");
+        assert!(hint.contains("chan open"), "{hint}");
+
+        // Any other failure keeps its generic context.
+        assert!(devserver_bind_collision_hint(
+            addr,
+            &bind_err(ErrorKind::PermissionDenied, "8787")
+        )
+        .is_none());
+        assert!(devserver_bind_collision_hint(addr, &anyhow::anyhow!("not io")).is_none());
+    }
+
+    #[test]
     fn devserver_url_discriminator() {
         // scheme://host shapes are devserver URLs.
         assert!(looks_like_devserver_url("https://box.example.com:8787"));
@@ -6130,6 +6306,26 @@ mod tests {
         assert_eq!(parse_listen_override("1"), Some(true));
         // Any non-empty, non-"0" value is truthy (mirrors CHAN_NO_DESKTOP_HANDOFF).
         assert_eq!(parse_listen_override("yes"), Some(true));
+    }
+
+    /// The port default matrix: an explicit `--port` always wins; a LISTENING
+    /// tunnel-mode devserver defaults to 0 (OS-assigned, so systemd restarts
+    /// never collide on a fixed port); everything else keeps the shared 8787.
+    #[test]
+    fn devserver_port_defaults_by_mode() {
+        // Explicit wins everywhere, tunnel mode included.
+        assert_eq!(resolve_devserver_port(Some(9000), true, true), 9000);
+        assert_eq!(resolve_devserver_port(Some(9000), false, true), 9000);
+        assert_eq!(resolve_devserver_port(Some(DEFAULT_PORT), true, true), 8787);
+        // Tunnel + listen (systemd notify / CHAN_DEVSERVER_LISTEN=1): the OS
+        // assigns the port.
+        assert_eq!(resolve_devserver_port(None, true, true), 0);
+        // Tunnel without a listener: nothing binds; the addr keeps the shared
+        // default for the discovery/window-record report, as before.
+        assert_eq!(resolve_devserver_port(None, true, false), DEFAULT_PORT);
+        // Non-tunnel keeps the shared default the `chan open` handoff and the
+        // serve-path collision hint rely on.
+        assert_eq!(resolve_devserver_port(None, false, true), DEFAULT_PORT);
     }
 
     /// The action verbs parse onto their flags, and clap's `action` group makes
@@ -7016,6 +7212,8 @@ mod tests {
         let tunnel = SystemdTunnel {
             token: "chan_pat_abc123".to_string(),
             url: "https://devserver.chan.app/v1/tunnel".to_string(),
+            pinned_bind: None,
+            pinned_port: None,
         };
         let unit = devserver_systemd_unit(
             Path::new("/home/dev/.local/bin/chan"),
@@ -7023,7 +7221,9 @@ mod tests {
             None,
             Some(&tunnel),
         );
-        // Tunnel mode dials the gateway via --tunnel-url; no fixed --bind/--port.
+        // Unpinned tunnel mode dials the gateway via --tunnel-url with no
+        // --bind/--port: the service resolves its tunnel-mode defaults
+        // (loopback, OS-assigned port), so no default can fossilize here.
         assert!(unit.contains(
             "ExecStart=/home/dev/.local/bin/chan devserver \
              --tunnel-url=https://devserver.chan.app/v1/tunnel\n"
@@ -7039,12 +7239,55 @@ mod tests {
     }
 
     #[test]
+    fn devserver_systemd_unit_tunnel_pins_explicit_addr_flags() {
+        // Pinned (explicit or preserved-explicit) address flags ride in the
+        // ExecStart, so the tunnel service binds exactly there.
+        let tunnel = SystemdTunnel {
+            token: "chan_pat_abc123".to_string(),
+            url: "https://devserver.chan.app/v1/tunnel".to_string(),
+            pinned_bind: Some("0.0.0.0".parse().unwrap()),
+            pinned_port: Some(9000),
+        };
+        let unit = devserver_systemd_unit(
+            Path::new("/home/dev/.local/bin/chan"),
+            "0.0.0.0:9000".parse().unwrap(),
+            None,
+            Some(&tunnel),
+        );
+        assert!(unit.contains(
+            "ExecStart=/home/dev/.local/bin/chan devserver --bind=0.0.0.0 \
+             --port=9000 --tunnel-url=https://devserver.chan.app/v1/tunnel\n"
+        ));
+        // Each field pins independently: a port-only pin keeps the bind
+        // omitted (the service resolves the loopback default).
+        let port_only = SystemdTunnel {
+            token: "chan_pat_abc123".to_string(),
+            url: "https://devserver.chan.app/v1/tunnel".to_string(),
+            pinned_bind: None,
+            pinned_port: Some(9000),
+        };
+        let unit = devserver_systemd_unit(
+            Path::new("/home/dev/.local/bin/chan"),
+            "127.0.0.1:9000".parse().unwrap(),
+            None,
+            Some(&port_only),
+        );
+        assert!(unit.contains(
+            "ExecStart=/home/dev/.local/bin/chan devserver --port=9000 \
+             --tunnel-url=https://devserver.chan.app/v1/tunnel\n"
+        ));
+        assert!(!unit.contains("--bind="));
+    }
+
+    #[test]
     fn devserver_systemd_unit_tunnel_stacks_chan_home_and_token() {
         // CHAN_HOME (test isolation) and the token stack as two Environment lines,
         // both before ExecStart so systemd resolves them for the started process.
         let tunnel = SystemdTunnel {
             token: "chan_pat_xyz".to_string(),
             url: "https://example.test/v1/tunnel".to_string(),
+            pinned_bind: None,
+            pinned_port: None,
         };
         let unit = devserver_systemd_unit(
             Path::new("/home/dev/.local/bin/chan"),
@@ -7066,7 +7309,10 @@ mod tests {
             ServiceKind::Systemd,
             None,
             "https://cli.test".into(),
-            false
+            false,
+            None,
+            None,
+            None,
         )
         .is_none());
         // launchd never gets a tunnel spec (its tunnel mode is refused upstream).
@@ -7075,20 +7321,91 @@ mod tests {
             Some("chan_pat_a".into()),
             "https://cli.test".into(),
             false,
+            None,
+            None,
+            None,
         )
         .is_none());
-        // With a token, --force takes the CLI URL (a "refresh"). This path does
-        // not read the persisted unit, so the assertion stays hermetic; the
-        // reuse-from-persisted parse is covered by persisted_flag_value below.
+        // With a token, --force takes the CLI URL (a "refresh"); with no unit
+        // and no flags there is nothing to pin.
         let spec = supervised_tunnel_spec(
             ServiceKind::Systemd,
             Some("chan_pat_a".into()),
             "https://cli.test".into(),
             true,
+            None,
+            None,
+            None,
         )
         .unwrap();
         assert_eq!(spec.token, "chan_pat_a");
         assert_eq!(spec.url, "https://cli.test");
+        assert_eq!(spec.pinned_bind, None);
+        assert_eq!(spec.pinned_port, None);
+        // A flagless restart reuses the persisted unit's URL and pins.
+        let unit = "ExecStart=/home/dev/.local/bin/chan devserver --port=9000 \
+                    --tunnel-url=https://first-run.test/v1/tunnel\n";
+        let spec = supervised_tunnel_spec(
+            ServiceKind::Systemd,
+            Some("chan_pat_a".into()),
+            "https://cli.test".into(),
+            false,
+            None,
+            None,
+            Some(unit),
+        )
+        .unwrap();
+        assert_eq!(spec.url, "https://first-run.test/v1/tunnel");
+        assert_eq!(spec.pinned_bind, None);
+        assert_eq!(spec.pinned_port, Some(9000));
+        // --force refreshes the URL from the CLI but keeps the pins: the
+        // `--port` help contract is omit = preserve, force or not.
+        let spec = supervised_tunnel_spec(
+            ServiceKind::Systemd,
+            Some("chan_pat_a".into()),
+            "https://cli.test".into(),
+            true,
+            None,
+            None,
+            Some(unit),
+        )
+        .unwrap();
+        assert_eq!(spec.url, "https://cli.test");
+        assert_eq!(spec.pinned_port, Some(9000));
+        // An explicit CLI flag pins over anything persisted.
+        let spec = supervised_tunnel_spec(
+            ServiceKind::Systemd,
+            Some("chan_pat_a".into()),
+            "https://cli.test".into(),
+            false,
+            Some("0.0.0.0".parse().unwrap()),
+            Some(9100),
+            Some(unit),
+        )
+        .unwrap();
+        assert_eq!(spec.pinned_bind, Some("0.0.0.0".parse().unwrap()));
+        assert_eq!(spec.pinned_port, Some(9100));
+    }
+
+    #[test]
+    fn persisted_tunnel_pins_only_read_tunnel_units() {
+        // A tunnel unit's persisted --bind/--port ARE the explicitness record,
+        // each field independently.
+        let pinned = "ExecStart=/usr/bin/chan devserver --bind=0.0.0.0 --port=9000 \
+                      --tunnel-url=https://t.test/v1/tunnel\n";
+        assert_eq!(
+            persisted_tunnel_pins(pinned),
+            (Some("0.0.0.0".parse().unwrap()), Some(9000))
+        );
+        let port_only =
+            "ExecStart=/usr/bin/chan devserver --port=9000 --tunnel-url=https://t.test/v1/tunnel\n";
+        assert_eq!(persisted_tunnel_pins(port_only), (None, Some(9000)));
+        let unpinned = "ExecStart=/usr/bin/chan devserver --tunnel-url=https://t.test/v1/tunnel\n";
+        assert_eq!(persisted_tunnel_pins(unpinned), (None, None));
+        // A NON-tunnel unit always persists its address; converting it to
+        // tunnel mode must not carry that address over as a pin.
+        let non_tunnel = "ExecStart=/usr/bin/chan devserver --bind=127.0.0.1 --port=8787\n";
+        assert_eq!(persisted_tunnel_pins(non_tunnel), (None, None));
     }
 
     #[test]
