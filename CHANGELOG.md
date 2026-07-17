@@ -4,6 +4,31 @@ All notable changes to this project will be documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v0.70.1] - 2026-07-17
+
+v0.70.1 is a patch release focused on tunneled (gateway) devservers: uploads and PDF export work through the proxy, closed windows stay closed, rows show the machine's OS logo and a real name, tunnel-mode devservers stop colliding on port 8787, gateways can be renamed, and `cs` help no longer says `cs shell`.
+
+### Added
+
+- **Name your tunneled devserver.** `chan devserver --tunnel-token ... --tunnel-devserver-name <name>` names the roster row in the launcher and on the gateway dashboard; without the flag the machine's hostname is used. Previously the row showed the PAT label or a 12-hex token hash. Names are trimmed and capped at 64 bytes; two devservers of one account announcing the same name get `-2`/`-3` suffixes, and reconnects keep their suffix stable. Old clients and old gateways are both unaffected: the name rides an additive field on the tunnel hello, no protocol bump.
+- **Rename gateways.** The pencil on a Gateways-screen card renames the gateway; the label survives restarts and the Computers rows' "via <gateway>" text follows. The URL stays immutable (remove and re-add to change the origin).
+
+### Fixed
+
+- **Uploads through a gateway no longer answer 403 forbidden.** The SPA's multipart upload and file-replace requests (drag-drop, `cs upload`, the export write-back) now mirror the gateway CSRF cookie like every other mutation; downloads were never affected. Local (non-gateway) devservers are untouched.
+- **`cs export` works through the tunnel**, riding the upload fix. Its errors also name the actual requirement now: an open workspace window does the rendering, and the terminal running `cs` does not count as one.
+- **Closed windows of tunneled devservers stay closed.** For gateway-rostered devservers, every close gesture (red-dot Close, closing the last tab, `cs terminal close`) destroyed the native window without ever sending the server-side discard, so the window feed immediately reopened it as a new window. The close path now resolves the owning connection through the window feed and deletes the record through the gateway; a feed frame arriving mid-close can no longer flash the window back open; and if the delete fails the launcher shows a notice instead of silently reopening the window. Local and raw-URL devservers were never affected.
+- **Tunneled devservers show the OS logo** instead of the globe after connect: the desktop reads the devserver's OS self-report through the tunnel when connecting a rostered row.
+- **Tunnel-mode devservers no longer collide on port 8787.** Under systemd, a tunnel devserver with no explicit `--port` now binds an OS-assigned port; nothing depends on the number (same-host `chan open` hands off over the local socket and gateway traffic rides the tunnel). An explicit `--port` binds exactly that port, and a bind failure is now loud: the journal names the address and prints the collision hint instead of a silent generic error. Non-tunnel devservers and `chan open` keep the 8787 default.
+- **The chan-devserver container recipe installs `adduser`.** Provisioning on minimal Ubuntu images no longer fails at the sudo-group step.
+- **`cs --help` renders `cs <cmd>`, not `cs shell <cmd>`.** The `cs` symlink now parses through the same parser chan-desktop uses, so every help screen reads naturally; dispatch, exit codes, and explicit `chan shell` usage are unchanged (`cs` additionally accepts the global `-v`).
+
+### Operators
+
+- identity/profile: a devserver redial that announces a name recreates its registry row through the standard upsert, so a swept row comes back labeled on the next dial (previously it stayed gone until the next grant create or mint). Owner-scoped label dedup is serialized server-side (advisory lock), and announced names are sanitized before persistence: control, zero-width, and bidi-override characters are stripped on top of the trim and 64-byte cap.
+- The tunnel systemd unit pins an explicit `--tunnel-devserver-name` via `Environment=` with `%` escaped; client-side normalization maps control characters in names to spaces. Flagless tunnel units journal `binding 127.0.0.1:0` followed by the assigned port, and `chan devserver --restart`/`--join` resolve the running service's actual port from its recorded state.
+- e2e: `gateway-zone.sh` gains `upload` (CSRF-mirrored multipart through the proxy) and `windowclose` (proxy DELETE removes the record) scenarios, and the core flow asserts same-name dedup across two tunnels.
+
 ## [v0.70.0] - 2026-07-17
 
 v0.70.0 makes gateways first-class in chan-desktop: add a gateway by URL, sign in once for your account, and every devserver you own or that is shared with you appears in the launcher live - connect, open windows, and use the full command vocabulary even on self-hosted gateways. A new Gateways screen flips out of the Computers list, notification bubbles replace the error banner, and terminal tabs on gateway-backed devservers no longer go dead after idling.
