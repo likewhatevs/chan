@@ -971,6 +971,56 @@ pub async fn fetch_info(host: &str, port: u16) -> Result<DevserverInfo, String> 
         .map_err(|e| format!("decoding devserver info: {e}"))
 }
 
+/// The meta descriptor chan-server injects into every launcher shell
+/// (`inject_launcher_meta`) carrying the serving host's OS family.
+const HOST_OS_META_NAME: &str = "chan-launcher-host-os";
+
+/// Fetch a gateway-proxied devserver's OS family (`macos | windows | linux |
+/// other`) for the launcher's machine icon. The gateway proxy never forwards
+/// the local-only `/api/devserver/*` management surface, so the [`fetch_info`]
+/// probe is unreachable through it; the devserver's OS self-report on the
+/// tunnel surface is the host-os meta injected into its launcher shell (the
+/// same descriptor the web launcher's capabilities probe reads). Errors when
+/// the shell is unreachable or lacks the descriptor (a devserver too old to
+/// inject it); the caller leaves the icon neutral.
+pub async fn fetch_gateway_host_os(conn: &DevserverConn) -> Result<String, String> {
+    let resp = gateway_get(conn, "/").await?;
+    if !resp.status().is_success() {
+        return Err(format!(
+            "gateway launcher shell returned HTTP {}",
+            resp.status()
+        ));
+    }
+    let html = resp
+        .text()
+        .await
+        .map_err(|e| format!("reading gateway launcher shell: {e}"))?;
+    parse_host_os_meta(&html)
+        .ok_or_else(|| "the launcher shell carries no host-os descriptor".to_string())
+}
+
+/// Pull the host-os meta's content out of a launcher shell. Scans whole
+/// `<meta ...>` tags rather than matching the injector's exact byte sequence,
+/// so attribute order and spacing are free to vary across server versions.
+fn parse_host_os_meta(html: &str) -> Option<String> {
+    let name_attr = format!("name=\"{HOST_OS_META_NAME}\"");
+    let mut rest = html;
+    while let Some(start) = rest.find("<meta") {
+        let tag_and_rest = &rest[start..];
+        let end = tag_and_rest.find('>')?;
+        let tag = &tag_and_rest[..end];
+        if tag.contains(&name_attr) {
+            let value = tag
+                .split_once("content=\"")
+                .and_then(|(_, after)| after.split_once('"'))
+                .map(|(value, _)| value)?;
+            return (!value.is_empty()).then(|| value.to_string());
+        }
+        rest = &tag_and_rest[end..];
+    }
+    None
+}
+
 /// `GET /api/devserver/workspaces`: the live workspace list, each entry's
 /// tenant URL already assembled.
 pub async fn fetch_workspaces(conn: &DevserverConn) -> Result<Vec<DevserverWorkspaceRow>, String> {
@@ -1779,6 +1829,36 @@ mod tests {
         assert_eq!(info.devserver_version, "0.38.0");
         assert_eq!(info.protocol, 1);
         assert_eq!(info.host_label, "lab box");
+    }
+
+    #[test]
+    fn parse_host_os_meta_reads_the_injected_descriptor() {
+        // The exact shape `inject_launcher_meta` emits, among its siblings.
+        let html = "<!doctype html><html><head>\
+             <meta name=\"chan-launcher-host-os\" content=\"linux\">\
+             <meta name=\"chan-launcher-surface\" content=\"devserver\">\
+             </head><body></body></html>";
+        assert_eq!(parse_host_os_meta(html).as_deref(), Some("linux"));
+    }
+
+    #[test]
+    fn parse_host_os_meta_tolerates_attribute_order_and_spacing() {
+        let html = "<head><meta  content=\"macos\"  name=\"chan-launcher-host-os\" ></head>";
+        assert_eq!(parse_host_os_meta(html).as_deref(), Some("macos"));
+    }
+
+    #[test]
+    fn parse_host_os_meta_is_none_without_the_descriptor() {
+        // A shell from a devserver too old to inject it: other metas only.
+        let html = "<head><meta name=\"viewport\" content=\"width=device-width\"></head>";
+        assert_eq!(parse_host_os_meta(html), None);
+        assert_eq!(parse_host_os_meta(""), None);
+    }
+
+    #[test]
+    fn parse_host_os_meta_is_none_on_an_empty_value() {
+        let html = "<head><meta name=\"chan-launcher-host-os\" content=\"\"></head>";
+        assert_eq!(parse_host_os_meta(html), None);
     }
 
     #[test]

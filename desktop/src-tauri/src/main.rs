@@ -2347,6 +2347,25 @@ async fn connect_rostered_devserver(
         }
     }
 
+    // Seed the devserver's self-reported OS so the launcher's machine icon
+    // renders instead of the neutral globe. The raw-connect path reads it from
+    // the `fetch_info` probe, which the gateway proxy never forwards, so the
+    // rostered path reads the launcher shell's host-os meta; no `pretty_name`
+    // travels that surface (the icon is driven by `os` alone). Best-effort:
+    // connect must not fail on a cosmetic seed, the icon just stays neutral.
+    match devserver::fetch_gateway_host_os(&conn).await {
+        Ok(os) => {
+            state.devserver_feed.seed_os(id.clone(), os, None);
+        }
+        Err(e) => {
+            tracing::debug!(
+                devserver = %id,
+                error = %e,
+                "gateway OS seed failed; the machine icon stays neutral",
+            );
+        }
+    }
+
     let (cancel, snapshot, view) = window_watcher_wiring::spawn_devserver_window_watcher(
         id.clone(),
         app.clone(),
