@@ -386,7 +386,10 @@ fn terminal_tenant_refusal(req: &ControlRequest, tenant: ControlTenant) -> Optio
         )),
         ControlRequest::OpenGraph { .. } => Some(workspace_only_refusal("graph", None)),
         ControlRequest::Search { .. } => Some(workspace_only_refusal("search", None)),
-        ControlRequest::Export { .. } => Some(workspace_only_refusal("export", None)),
+        ControlRequest::Export { .. } => Some(workspace_only_refusal(
+            "export",
+            Some("An open workspace window does the rendering; run cs export from a terminal in one."),
+        )),
         ControlRequest::OpenTermNew { path: Some(_), .. } => Some(workspace_only_refusal(
             "terminal new --path",
             Some("Drop --path to open a terminal here."),
@@ -2187,8 +2190,9 @@ const EXPORT_REPLY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 
 /// The `cs export` no-renderer refusal. Only a live SPA window can run an
 /// export job (the `format -> exporter` registry lives in the frontend).
-const EXPORT_NO_RENDERER: &str =
-    "no connected renderer: open the workspace in a browser or chan-desktop";
+const EXPORT_NO_RENDERER: &str = "no connected renderer: an open workspace window does the \
+     rendering (the terminal running cs does not); open the workspace in a browser or \
+     chan-desktop";
 
 /// Resolve the export target: the most recently active live workspace
 /// window, approximated as the LATEST-JOINED live `/ws` participant (the

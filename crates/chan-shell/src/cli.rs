@@ -172,7 +172,8 @@ pub enum ShellAction {
     /// workspace. `cs export doc.md` renders doc.md to PDF and writes
     /// doc.pdf next to it; the final workspace-relative output path prints
     /// on stdout. Blocks until the renderer replies. Workspace windows
-    /// only, and a window must be open: the renderer does the rendering.
+    /// only, and a window must be open: the open window does the
+    /// rendering; the terminal running cs does not.
     Export {
         /// Workspace-relative source path (e.g. notes/doc.md).
         #[arg(value_hint = clap::ValueHint::AnyPath)]
