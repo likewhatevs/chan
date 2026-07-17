@@ -825,18 +825,19 @@ enum ReportsAction {
     },
 }
 
-/// Parse argv with the `cs` alias rewrite. When the binary is invoked
-/// through a `cs` symlink (argv[0] basename == "cs"), the remaining args
-/// parse as `chan shell <args>`, so `cs terminal list` == `chan shell
-/// terminal list`. The symlink is the user's to create (documented in
-/// `chan shell --help`); the build never ships one.
 /// Parse `args` (typically `std::env::args_os()`) into the clap [`Cli`],
-/// applying the `cs` alias rewrite. The `cs -> chan` symlink (or a
-/// chan-desktop launched as `cs`) makes `arg0`'s file_stem `cs`; in that
-/// case we splice `shell` in as the subcommand so `cs <action>` resolves to
-/// `chan shell <action>`. Invoked as `chan` (the standalone shim or
-/// chan-desktop's `chan` dispatch) there is no rewrite. Takes `args` rather
-/// than reading the environment so chan-desktop can hand us its own argv.
+/// resolving the `cs` alias. The `cs -> chan` symlink (or a chan-desktop
+/// launched as `cs`) makes `arg0`'s file_stem `cs`; that argv parses
+/// through chan-shell's own `cs` parser (`chan_shell::parse_cs`, the same
+/// parse chan-desktop uses), so every `cs` front end shares one help
+/// rendering whose usage lines read `cs <cmd>` -- never `cs shell <cmd>`.
+/// The parsed action then dispatches through [`Command::Shell`] exactly as
+/// an explicit `chan shell <action>` does, so `cs terminal list` == `chan
+/// shell terminal list`. The symlink is the user's to create (documented
+/// in `chan shell --help`); the build never ships one. Invoked as `chan`
+/// (the standalone shim or chan-desktop's `chan` dispatch) there is no
+/// aliasing. Takes `args` rather than reading the environment so
+/// chan-desktop can hand us its own argv.
 fn parse_cli<I, T>(args: I) -> Cli
 where
     I: IntoIterator<Item = T>,
@@ -851,11 +852,11 @@ where
     if !chan_shell::invoked_as_cs(arg0) {
         return Cli::parse_from(argv);
     }
-    let mut rewritten: Vec<std::ffi::OsString> = Vec::with_capacity(argv.len() + 1);
-    rewritten.push(arg0.clone());
-    rewritten.push("shell".into());
-    rewritten.extend(argv.into_iter().skip(1));
-    Cli::parse_from(rewritten)
+    let cs = chan_shell::parse_cs(argv);
+    Cli {
+        verbose: cs.verbose,
+        command: Command::Shell { action: cs.action },
+    }
 }
 
 /// Which binary is driving the `chan` CLI, and therefore how the

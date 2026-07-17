@@ -36,7 +36,7 @@ mod exit_code;
 mod submit;
 
 #[cfg(feature = "client")]
-pub use cli::{dispatch, run_cs, ShellAction, TerminalAction};
+pub use cli::{dispatch, parse_cs, run_cs, CsCli, ShellAction, TerminalAction};
 #[cfg(feature = "client")]
 pub use control::{
     absolutize, control_socket_env, open_env, open_env_from, send_control_request, OpenEnv,
@@ -45,8 +45,9 @@ pub use submit::{apply_submit_chord, set_chord_overrides, submit_writes, SubmitA
 
 /// Whether this process was invoked through a `cs` name (a `cs -> chan`
 /// symlink on PATH, or chan-desktop launched as `cs`). Both `chan`'s
-/// `parse_cli` and chan-desktop's entry use this so the `cs` alias rewrite
-/// is defined once. The file stem comparison ignores any directory and
+/// `parse_cli` and chan-desktop's entry use this so the `cs` alias
+/// detection is defined once; a match routes the argv into [`parse_cs`] /
+/// [`run_cs`]. The file stem comparison ignores any directory and
 /// extension, so `/usr/local/bin/cs` and a bare `cs` both match.
 #[cfg(feature = "client")]
 pub fn invoked_as_cs(arg0: &std::ffi::OsStr) -> bool {

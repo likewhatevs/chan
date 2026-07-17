@@ -1,7 +1,9 @@
-//! The `cs` alias: invoking the chan binary through a `cs` symlink
-//! rewrites argv so `cs <action>` parses as `chan shell <action>`. The
-//! build never ships the symlink; the user creates it. These tests
-//! create the symlink in a tempdir and exercise the dispatch.
+//! The `cs` alias: invoking the chan binary through a `cs` symlink routes
+//! argv through chan-shell's own `cs` parser (the same parse chan-desktop
+//! uses), then dispatches like `chan shell <action>`. One parse means one
+//! help rendering: usage lines read `cs <cmd>`, never `cs shell <cmd>`.
+//! The build never ships the symlink; the user creates it. These tests
+//! create the symlink in a tempdir and exercise dispatch and help.
 
 #![cfg(unix)]
 
@@ -67,6 +69,110 @@ fn cs_help_shows_shell_subcommands() {
     assert!(
         !stdout.contains("upgrade"),
         "shell help should not list the top-level `upgrade`: {stdout}"
+    );
+}
+
+/// Drop ANSI style sequences (`ESC [ ... <letter>`) so the help assertions
+/// hold whether or not clap's color detection kicks in.
+fn strip_ansi(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        if c == '\u{1b}' {
+            for c2 in chars.by_ref() {
+                if c2.is_ascii_alphabetic() {
+                    break;
+                }
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+#[test]
+fn cs_help_usage_is_cs_not_cs_shell() {
+    let (_dir, cs) = cs_symlink();
+    // `cs --help` parses through chan-shell's `cs` parser, so the usage
+    // line names `cs` itself -- no `shell` level anywhere in the path.
+    // (The word "shell" alone still appears in command prose, e.g. "the
+    // shell's own reach"; the forbidden string is the `cs shell` path.)
+    let output = Command::new(&cs)
+        .arg("--help")
+        .output()
+        .expect("run cs --help");
+
+    assert!(output.status.success(), "cs --help should succeed");
+    let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
+    assert!(
+        stdout.contains("Usage: cs [OPTIONS] <COMMAND>"),
+        "cs --help usage must be `cs`, got: {stdout}"
+    );
+    assert!(
+        !stdout.contains("cs shell"),
+        "cs --help must not render a `cs shell` path: {stdout}"
+    );
+}
+
+#[test]
+fn cs_terminal_help_usage_is_cs_terminal() {
+    let (_dir, cs) = cs_symlink();
+    let output = Command::new(&cs)
+        .args(["terminal", "--help"])
+        .output()
+        .expect("run cs terminal --help");
+
+    assert!(output.status.success(), "cs terminal --help should succeed");
+    let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
+    assert!(
+        stdout.contains("Usage: cs terminal [OPTIONS] <COMMAND>"),
+        "cs terminal --help usage must be `cs terminal`, got: {stdout}"
+    );
+    assert!(
+        !stdout.contains("cs shell"),
+        "cs terminal --help must not render a `cs shell` path: {stdout}"
+    );
+}
+
+#[test]
+fn chan_shell_help_keeps_its_own_usage() {
+    // Explicit `chan shell` (no alias) still renders its own two-level
+    // usage; the shared-parser routing applies only to a `cs` argv0.
+    let output = Command::new(env!("CARGO_BIN_EXE_chan"))
+        .args(["shell", "--help"])
+        .output()
+        .expect("run chan shell --help");
+
+    assert!(output.status.success(), "chan shell --help should succeed");
+    let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
+    assert!(
+        stdout.contains("Usage: chan shell [OPTIONS] <COMMAND>"),
+        "chan shell --help usage must be `chan shell`, got: {stdout}"
+    );
+}
+
+#[test]
+fn cs_verbose_flag_parses_under_the_shared_parser() {
+    let (_dir, cs) = cs_symlink();
+    // The `cs` parser carries the same global `-v` the `chan` CLI has, so
+    // `cs -v terminal list` parses and fails on the missing control
+    // socket -- not on a clap usage error.
+    let output = Command::new(&cs)
+        .args(["-v", "terminal", "list"])
+        .env_remove("CHAN_CONTROL_SOCKET")
+        .env_remove("CHAN_WINDOW_ID")
+        .output()
+        .expect("run cs -v terminal list");
+
+    assert!(
+        !output.status.success(),
+        "cs -v terminal list should fail without a control socket"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("CHAN_CONTROL_SOCKET"),
+        "expected the missing-control-socket error (proving -v parses), got: {stderr}"
     );
 }
 

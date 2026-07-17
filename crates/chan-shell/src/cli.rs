@@ -22,33 +22,56 @@ use crate::wire::{
     GRAPH_LINK_PREFIX, MAX_CLIPBOARD_BYTES,
 };
 
-/// Top-level `cs` parser. The `chan` binary reaches `cs` through its own
-/// `Cli` (rewriting `cs ...` into `chan shell ...` in `parse_cli`), but
-/// `chan-desktop` has no `chan` binary, so it parses `cs` argv directly
-/// through this. `infer_subcommands` mirrors the `chan shell` command so
-/// `cs t l` / `cs o` resolve the same way under both front ends.
+/// Top-level `cs` parser: the one argv shape behind every `cs` front end.
+/// `chan-desktop` parses `cs` argv directly through [`run_cs`]; the `chan`
+/// binary's `parse_cli` routes its `cs -> chan` symlink alias through
+/// [`parse_cs`] and dispatches the action exactly as `chan shell <action>`
+/// does. One parse means one help rendering, so usage lines read
+/// `cs <cmd>` (never `cs shell <cmd>`) under both front ends.
+/// `infer_subcommands` mirrors the `chan shell` command so `cs t l` /
+/// `cs o` resolve the same way everywhere.
 #[derive(Parser, Debug)]
 #[command(
     name = "cs",
     about = "Drive the current chan window from its terminal."
 )]
 #[command(infer_subcommands = true)]
-struct CsCli {
+pub struct CsCli {
+    /// Increase logging. -v = info, -vv = debug, -vvv = trace.
+    // Parsed here so every front end accepts the same argv (the flag
+    // mirrors the `chan` CLI's global `-v`). The `chan` front end wires
+    // the count into its tracing init; chan-desktop's [`run_cs`] runs
+    // without a subscriber, so there the count is inert.
+    #[arg(short, long, action = clap::ArgAction::Count, global = true)]
+    pub verbose: u8,
+
     #[command(subcommand)]
-    action: ShellAction,
+    pub action: ShellAction,
+}
+
+/// Parse a full `cs` argv (`argv[0]` included) into its [`CsCli`] shape
+/// without dispatching. The `chan` binary's cs-symlink path uses this to
+/// share the one `cs` parse (and its `cs <cmd>` help rendering) while
+/// keeping dispatch and tracing init on its own side. clap prints help /
+/// usage and exits the process on a parse error or `--help`.
+pub fn parse_cs<I>(args: I) -> CsCli
+where
+    I: IntoIterator,
+    I::Item: Into<std::ffi::OsString> + Clone,
+{
+    CsCli::parse_from(args)
 }
 
 /// Parse a full `cs` argv (`argv[0]` included) and dispatch it. The entry
 /// `chan-desktop` calls when invoked through a `cs` name, so desktop users
-/// get the `cs` client without a `chan` binary on PATH. clap prints help /
-/// usage and exits on a parse error or `--help`, exactly like the `chan`
-/// binary's `Cli::parse_from`.
+/// get the `cs` client without a `chan` binary on PATH. Parses through
+/// [`parse_cs`], the same parse the `chan` binary's cs path uses.
 pub async fn run_cs<I>(args: I) -> Result<()>
 where
     I: IntoIterator,
     I::Item: Into<std::ffi::OsString> + Clone,
 {
-    dispatch(CsCli::parse_from(args).action).await
+    dispatch(parse_cs(args).action).await
 }
 
 #[derive(Subcommand, Debug)]
@@ -2190,6 +2213,33 @@ fn render_terminal_list_markdown(raw: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cs_help_renders_cs_usage_without_a_shell_level() {
+        // This parser IS the `cs` help surface for every front end (the
+        // chan binary's symlink alias and chan-desktop's direct entry), so
+        // its usage lines must read `cs <cmd>` with no `shell` level.
+        use clap::CommandFactory;
+        let mut cmd = CsCli::command();
+        cmd.build(); // propagate bin names so subcommand usage says `cs terminal`
+        let help = cmd.render_long_help().to_string();
+        assert!(
+            help.contains("Usage: cs [OPTIONS] <COMMAND>"),
+            "usage must be `cs`: {help}"
+        );
+        assert!(!help.contains("cs shell"), "no `cs shell` path: {help}");
+
+        let help = cmd
+            .find_subcommand_mut("terminal")
+            .expect("terminal subcommand")
+            .render_long_help()
+            .to_string();
+        assert!(
+            help.contains("Usage: cs terminal [OPTIONS] <COMMAND>"),
+            "terminal usage must be `cs terminal`: {help}"
+        );
+        assert!(!help.contains("cs shell"), "no `cs shell` path: {help}");
+    }
 
     #[test]
     fn search_markdown_converts_bold_highlight_and_locator() {
