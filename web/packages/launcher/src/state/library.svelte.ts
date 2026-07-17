@@ -372,6 +372,14 @@ export async function addGateway(input: GatewayInput): Promise<void> {
   await refreshGateways();
 }
 
+/** Rename a gateway (label only; the URL is identity and stays fixed --
+ * remove + re-add changes the origin). The re-list also refreshes the
+ * Computers rows' "via <gateway>" text, which derives from this registry. */
+export async function updateGateway(id: string, input: GatewayInput): Promise<void> {
+  await backend.updateGateway(id, input);
+  await refreshGateways();
+}
+
 /** Remove a gateway: the desktop cascades its live connections and its
  * synthesized rows leave the feed. */
 export async function removeGateway(id: string): Promise<void> {

@@ -339,6 +339,9 @@ export interface LibraryApi {
   /** Register a gateway by URL. Save just adds: no probe, no sign-in; the
    * first Connect discovers + signs in. */
   addGateway(input: GatewayInput): Promise<GatewayEntry>;
+  /** Rename a gateway (label only). The URL is the gateway's identity and
+   * stays fixed: remove + re-add changes the origin. */
+  updateGateway(id: string, input: GatewayInput): Promise<GatewayEntry>;
   /** Remove a gateway. The desktop cascades: live roster connections tear
    * down and the synthesized rows leave the feed. */
   removeGateway(id: string): Promise<void>;
@@ -503,6 +506,8 @@ export const liveApi: LibraryApi = {
     }),
   listGateways: () => req("GET", "/api/library/gateways"),
   addGateway: (input) => req("POST", "/api/library/gateways", input),
+  updateGateway: (id, input) =>
+    req("PUT", `/api/library/gateways/${encodeURIComponent(id)}`, input),
   removeGateway: (id) => req("DELETE", `/api/library/gateways/${encodeURIComponent(id)}`),
   connectGateway: (id) => req("POST", `/api/library/gateways/${encodeURIComponent(id)}/connect`),
   disconnectGateway: (id) =>

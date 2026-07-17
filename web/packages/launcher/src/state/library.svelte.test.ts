@@ -20,6 +20,7 @@ import {
   saveDevserver,
   stopWatching,
   toggleWorkspace,
+  updateGateway,
 } from "./library.svelte";
 import { beginPending, clearAllPending, dsKey, isPending } from "./pending.svelte";
 
@@ -305,6 +306,16 @@ describe("gateway registry state", () => {
 
     await removeGateway(gw.id);
     expect(library.gateways.some((g) => g.id === gw.id)).toBe(false);
+  });
+
+  it("updateGateway renames and re-lists so the acting client flips at once", async () => {
+    await addGateway({ url: "https://rename.example", label: "before" });
+    const gw = library.gateways.find((g) => g.url === "https://rename.example")!;
+    await updateGateway(gw.id, { url: gw.url, label: "after" });
+    const renamed = library.gateways.find((g) => g.id === gw.id)!;
+    expect(renamed.label).toBe("after");
+    // Rename only: the URL is identity and never moves.
+    expect(renamed.url).toBe("https://rename.example");
   });
 
   it("the watch push re-fetches gateways live (the third refresh)", async () => {

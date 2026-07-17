@@ -139,6 +139,20 @@ describe("Gateways screen", () => {
     expect(el.textContent).toContain("Connecting");
   });
 
+  it("the pencil opens the edit dialog seeded with the gateway", () => {
+    library.gateways = [gw({ label: "prod" })];
+    const el = render();
+    const pencil = el.querySelector('[aria-label="Rename gateway prod"]') as HTMLButtonElement;
+    expect(pencil).not.toBeNull();
+    pencil.click();
+    flushSync();
+    expect(dialog.open).toBe(true);
+    expect(dialog.choice).toBe("gateway");
+    expect(dialog.editingGateway?.id).toBe("gw-test0001");
+    // The devserver edit slot stays clear: the gateway branch renders.
+    expect(dialog.editing).toBeNull();
+  });
+
   it("select mode reveals a checkbox feeding the gateway selection", () => {
     library.gateways = [gw({ label: "prod" })];
     const el = render();

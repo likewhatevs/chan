@@ -1,8 +1,14 @@
 import { describe, it, expect, afterEach, vi } from "vitest";
 import { mount, unmount, flushSync } from "svelte";
 import NewWorkspaceDialog from "./NewWorkspaceDialog.svelte";
-import { dialog, openNewDialog, openEditDevserver, closeDialog } from "../state/dialog.svelte";
-import { library } from "../state/library.svelte";
+import {
+  dialog,
+  openNewDialog,
+  openEditDevserver,
+  openEditGateway,
+  closeDialog,
+} from "../state/dialog.svelte";
+import { addGateway, library } from "../state/library.svelte";
 import type { DevserverEntry } from "../api/library";
 
 // Pin the in-memory mock as the backend so the Browse… picker returns a canned
@@ -226,6 +232,30 @@ describe("New workspace dialog -- gateway", () => {
     expect(
       library.gateways.some((g) => g.url === "https://id.chan.app" && g.label === "prod-gw"),
     ).toBe(true);
+  });
+
+  it("edit prefills the fields, fixes the URL, and Save changes renames", async () => {
+    await addGateway({ url: "https://rename.example", label: "before" });
+    const gw = library.gateways.find((g) => g.url === "https://rename.example")!;
+    openEditGateway(gw);
+    const el = render();
+    expect(el.textContent).toContain("Edit gateway");
+    // The URL is identity: prefilled but disabled (remove + re-add changes it).
+    expect(urlInput(el).value).toBe("https://rename.example");
+    expect(urlInput(el).disabled).toBe(true);
+    const nameInput = el.querySelector(
+      'input[placeholder="Defaults to the URL host"]',
+    ) as HTMLInputElement;
+    expect(nameInput.value).toBe("before");
+    expect(nameInput.disabled).toBe(false);
+    setInput(nameInput, "after");
+    btn(el, "Save changes").click();
+    await settle();
+    flushSync();
+    expect(dialog.open).toBe(false);
+    const renamed = library.gateways.find((g) => g.id === gw.id)!;
+    expect(renamed.label).toBe("after");
+    expect(renamed.url).toBe("https://rename.example");
   });
 });
 

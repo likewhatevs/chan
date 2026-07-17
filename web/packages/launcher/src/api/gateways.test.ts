@@ -25,11 +25,13 @@ describe("liveApi gateway routes (frozen wire)", () => {
     return { calls };
   }
 
-  it("lists, adds, removes, connects, and disconnects on /api/library/gateways", async () => {
+  it("lists, adds, updates, removes, connects, and disconnects on /api/library/gateways", async () => {
     const { calls } = stubFetch();
     await liveApi.listGateways();
     const { calls: post } = stubFetch(200, {});
     await liveApi.addGateway({ url: "https://id.chan.app", label: "" });
+    const { calls: putCalls } = stubFetch(200, {});
+    await liveApi.updateGateway("gw-1a2b3c4d", { url: "https://id.chan.app", label: "prod" });
     const { calls: rest } = stubFetch(204);
     await liveApi.removeGateway("gw-1a2b3c4d");
     await liveApi.connectGateway("gw-1a2b3c4d");
@@ -40,6 +42,11 @@ describe("liveApi gateway routes (frozen wire)", () => {
     expect(post[0][0]).toBe("/api/library/gateways");
     expect(post[0][1].method).toBe("POST");
     expect(post[0][1].body).toBe(JSON.stringify({ url: "https://id.chan.app", label: "" }));
+    expect(putCalls[0][0]).toBe("/api/library/gateways/gw-1a2b3c4d");
+    expect(putCalls[0][1].method).toBe("PUT");
+    expect(putCalls[0][1].body).toBe(
+      JSON.stringify({ url: "https://id.chan.app", label: "prod" }),
+    );
     expect(rest.map(([url, init]) => [url, init.method])).toEqual([
       ["/api/library/gateways/gw-1a2b3c4d", "DELETE"],
       ["/api/library/gateways/gw-1a2b3c4d/connect", "POST"],
@@ -87,6 +94,22 @@ describe("mock gateway registry", () => {
 
     await mockApi.removeGateway(gw.id);
     expect(await mockApi.listGateways()).toEqual([]);
+  });
+
+  it("update renames in place and leaves the URL untouched", async () => {
+    const gw = await mockApi.addGateway({ url: "https://gw.example", label: "old" });
+    const renamed = await mockApi.updateGateway(gw.id, {
+      url: "https://gw.example",
+      label: "  new  ",
+    });
+    expect(renamed.id).toBe(gw.id);
+    expect(renamed.label).toBe("new");
+    expect(renamed.url).toBe("https://gw.example");
+    expect((await mockApi.listGateways())[0].label).toBe("new");
+    // The mock guards throw synchronously (like updateDevserver's).
+    expect(() => mockApi.updateGateway("gw-ghost", { url: "https://gw.example" })).toThrow(
+      /unknown gateway/,
+    );
   });
 
   it("notifies watch subscribers on gateway mutations", async () => {

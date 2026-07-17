@@ -1,14 +1,14 @@
 <script lang="ts">
   // The Gateways screen: one machine-styled badge per configured gateway --
-  // the ArrowRightLeft glyph, the label over the URL, the status dot, and the
-  // plug/unplug controls in the Library card idiom (spinner while connecting,
-  // sign-in narration while a browser sign-in is pending, red lost dot +
-  // disconnect-to-recover while unreachable). Below the list sits the dashed
-  // "Add gateway" entry point. Select mode reveals per-badge checkboxes
+  // the ArrowRightLeft glyph, the label over the URL, the status dot, the
+  // rename pencil, and the plug/unplug controls in the Library card idiom
+  // (spinner while connecting, sign-in narration while a browser sign-in is
+  // pending, red lost dot + disconnect-to-recover while unreachable). Below
+  // the list sits the dashed "Add gateway" entry point. Select mode reveals per-badge checkboxes
   // feeding the same global bulk bar as the Computers screen; the screen is
   // reachable only on the desktop surface (the TopBar toggle gates on the
   // bridge), and the controls carry the same bridge gate.
-  import { ArrowRightLeft, LoaderCircle, Plug, Plus, Unplug } from "lucide-svelte";
+  import { ArrowRightLeft, LoaderCircle, Pencil, Plug, Plus, Unplug } from "lucide-svelte";
   import {
     library,
     connectGateway,
@@ -17,7 +17,7 @@
     clearError,
   } from "../state/library.svelte";
   import { checksVisible, isSelected, toggleSelected } from "../state/selection.svelte";
-  import { openNewDialog } from "../state/dialog.svelte";
+  import { openEditGateway, openNewDialog } from "../state/dialog.svelte";
   import { readOnly, hasDesktopBridge } from "../state/capabilities";
   import type { GatewayEntry } from "../api/library";
 
@@ -79,6 +79,18 @@
           </span>
         </div>
         <div class="gateway-actions">
+          {#if !readOnly}
+            <!-- Rename is a registry write (label only; the URL is identity),
+                 so it gates on the mutable surface, not the desktop bridge. -->
+            <button
+              class="icon-btn"
+              type="button"
+              title="Rename"
+              aria-label={`Rename gateway ${gatewayName(gw)}`}
+              onclick={() => openEditGateway(gw)}>
+              <Pencil size={16} />
+            </button>
+          {/if}
           {#if hasDesktopBridge}
             {#if spinning(gw)}
               <button

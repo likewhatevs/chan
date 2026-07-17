@@ -515,6 +515,14 @@ export function createLauncherDemoApi(opts: LauncherDemoOptions = {}): LauncherD
       notify();
       return tick({ ...gw });
     },
+    // Rename only, like the mock: the URL is identity and never changes.
+    updateGateway: (id, input) => {
+      const gw = gateways.find((g) => g.id === id);
+      if (!gw) throw new Error(`unknown gateway ${id}`);
+      gw.label = (input.label ?? "").trim();
+      notify();
+      return tick({ ...gw });
+    },
     removeGateway: (id) => {
       gateways = gateways.filter((g) => g.id !== id);
       notify();

@@ -85,13 +85,14 @@ pub struct GatewayEntry {
     pub last_error: Option<String>,
 }
 
-/// The add payload. `url` is required; `label` is optional. There is no
-/// update payload: adding is the only mutation besides remove, and a Save on
-/// the launcher's form just adds (no probe at add).
+/// The add/update payload. `url` is required on add; on update the URL is
+/// the gateway's identity and stays immutable (changing the origin is a
+/// remove + re-add), so the registry only checks it against the stored row.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct GatewayInput {
     /// The gateway's public identity origin, scheme included. The registry
-    /// validates and normalizes it on add.
+    /// validates and normalizes it on add; on update it must match the
+    /// stored origin (empty means keep).
     pub url: String,
     /// Optional user label; `None`/empty derives from the URL host.
     #[serde(default)]
@@ -113,6 +114,13 @@ pub trait GatewayRegistry: Send + Sync {
     /// Add a gateway, returning the stored row with its assigned id. Adding
     /// never probes the URL; a wrong one surfaces on first connect.
     fn add(&self, input: GatewayInput) -> Result<GatewayEntry, String>;
+    /// Rename a gateway in place: `label` is full-replace (`None`/empty
+    /// clears, deriving the badge from the URL host). The URL is the
+    /// gateway's identity and stays immutable: a non-empty `url` naming a
+    /// different origin is rejected (remove + re-add is the origin-change
+    /// path). Returns the updated row, or `Ok(None)` when no gateway has
+    /// `id`.
+    fn update(&self, id: &str, input: GatewayInput) -> Result<Option<GatewayEntry>, String>;
     /// Remove a gateway; `Ok(false)` when no gateway has `id`. Removal
     /// cascades on the desktop side (live connections torn down, roster rows
     /// dropped); the stored keyring PAT is kept for a later re-add.

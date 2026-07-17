@@ -531,6 +531,16 @@ export const mockApi: LibraryApi = {
     return tick({ ...gw });
   },
 
+  // Rename only: the URL is the gateway's identity, so update never touches it
+  // (the real registry refuses a different origin).
+  updateGateway: (id, input) => {
+    const gw = gateways.find((g) => g.id === id);
+    if (!gw) throw new Error(`unknown gateway ${id}`);
+    gw.label = (input.label ?? "").trim();
+    notify();
+    return tick({ ...gw });
+  },
+
   removeGateway: (id) => {
     const i = gateways.findIndex((g) => g.id === id);
     if (i >= 0) {

@@ -241,15 +241,17 @@ pub fn launcher_router(
     // token against the live tenants.
     let host_for_surface = host.clone();
     // Gateways: list on BOTH surfaces (a registry-less surface returns
-    // empty); add/remove gated mutable (403 read-only, 404 no registry)
-    // inside the handlers, same as the devserver block below. No update
-    // route: the launcher's Save just adds.
+    // empty); add/update/remove gated mutable (403 read-only, 404 no
+    // registry) inside the handlers, same as the devserver block below.
     let gateways = Router::new()
         .route(
             "/api/library/gateways",
             get(handle_list_gateways).post(handle_add_gateway),
         )
-        .route("/api/library/gateways/{id}", delete(handle_remove_gateway))
+        .route(
+            "/api/library/gateways/{id}",
+            put(handle_update_gateway).delete(handle_remove_gateway),
+        )
         .route_layer(middleware::from_fn(require_local_mutation))
         .with_state(Arc::new(LauncherState {
             host: host.clone(),
@@ -1298,6 +1300,30 @@ async fn handle_add_gateway(
     }
 }
 
+/// `PUT /api/library/gateways/{id}` `{url, label?}`: rename a gateway in
+/// place. `label` is full-replace (empty derives the badge from the URL
+/// host); the URL is the gateway's identity and must match the stored
+/// origin when present (changing it is a remove + re-add). Loopback-only.
+/// 404 when no gateway has the id (or no registry is installed); 400 on a
+/// registry rejection (a URL change).
+async fn handle_update_gateway(
+    State(state): State<Arc<LauncherState>>,
+    AxumPath(id): AxumPath<String>,
+    Json(input): Json<GatewayInput>,
+) -> Response {
+    if let Err(resp) = require_mutable(&state) {
+        return *resp;
+    }
+    let Some(reg) = state.host.gateway_registry() else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    match reg.update(&id, input) {
+        Ok(Some(entry)) => Json(entry).into_response(),
+        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Err(msg) => (StatusCode::BAD_REQUEST, msg).into_response(),
+    }
+}
+
 /// `DELETE /api/library/gateways/{id}`: remove a gateway; the desktop side
 /// cascades (roster poll stopped, rostered connections torn down,
 /// synthesized rows dropped). Loopback-only. 404 when no gateway has the id
@@ -2308,9 +2334,9 @@ mod gateway_route_tests {
 
     /// An in-memory `GatewayRegistry` standing in for the desktop config so
     /// the route gates are exercised without a desktop. `add` echoes the
-    /// input back as a stored row (rejecting the sentinel url `"bad"` to
-    /// drive the 400 path); `remove` answers `Ok(false)` unless the id is
-    /// present.
+    /// input back as a stored row; `add`/`update` reject the sentinel url
+    /// `"bad"` to drive the 400 path; `update`/`remove` answer
+    /// `Ok(None)`/`Ok(false)` unless the id is present.
     #[derive(Default)]
     struct FakeGatewayRegistry {
         rows: Mutex<Vec<GatewayEntry>>,
@@ -2353,6 +2379,17 @@ mod gateway_route_tests {
             };
             self.rows.lock().unwrap().push(entry.clone());
             Ok(entry)
+        }
+        fn update(&self, id: &str, input: GatewayInput) -> Result<Option<GatewayEntry>, String> {
+            if input.url == "bad" {
+                return Err("rejected url".into());
+            }
+            let mut rows = self.rows.lock().unwrap();
+            let Some(row) = rows.iter_mut().find(|r| r.id == id) else {
+                return Ok(None);
+            };
+            row.label = input.label.unwrap_or_default();
+            Ok(Some(row.clone()))
         }
         fn remove(&self, id: &str) -> Result<bool, String> {
             let mut rows = self.rows.lock().unwrap();
@@ -2461,6 +2498,42 @@ mod gateway_route_tests {
     }
 
     #[tokio::test]
+    async fn update_renames_and_missing_id_is_404() {
+        let router = router_with(Some(Arc::new(FakeGatewayRegistry::seeded())), true);
+        let (status, body) = request(
+            &router,
+            "PUT",
+            "/api/library/gateways/gw-1a2b3c4d",
+            Some(r#"{"url":"https://id.chan.app","label":"prod"}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["id"], "gw-1a2b3c4d");
+        assert_eq!(body["label"], "prod");
+        let (status, _) = request(
+            &router,
+            "PUT",
+            "/api/library/gateways/gw-ghost",
+            Some(r#"{"url":"https://id.chan.app","label":"prod"}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn update_rejected_by_registry_is_400() {
+        let router = router_with(Some(Arc::new(FakeGatewayRegistry::seeded())), true);
+        let (status, _) = request(
+            &router,
+            "PUT",
+            "/api/library/gateways/gw-1a2b3c4d",
+            Some(r#"{"url":"bad"}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
     async fn mutation_on_read_only_surface_is_403() {
         // require_mutable runs FIRST: even with a registry installed, the
         // read-only devserver/gateway surface refuses every mutation.
@@ -2470,6 +2543,11 @@ mod gateway_route_tests {
                 "POST",
                 "/api/library/gateways",
                 Some(r#"{"url":"https://x.example"}"#),
+            ),
+            (
+                "PUT",
+                "/api/library/gateways/gw-1a2b3c4d",
+                Some(r#"{"url":"https://id.chan.app","label":"x"}"#),
             ),
             ("DELETE", "/api/library/gateways/gw-1a2b3c4d", None),
         ] {
@@ -2487,6 +2565,14 @@ mod gateway_route_tests {
             &router,
             "POST",
             "/api/library/gateways",
+            Some(r#"{"url":"https://x.example"}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        let (status, _) = request(
+            &router,
+            "PUT",
+            "/api/library/gateways/gw-x",
             Some(r#"{"url":"https://x.example"}"#),
         )
         .await;

@@ -1,10 +1,11 @@
 <script lang="ts">
-  // The New-workspace / devserver dialog. `dialog.choice` (set by the entry
-  // point that opened it) drives the body: a local directory or a devserver.
-  // There is no in-dialog chooser. The devserver body doubles as the edit form,
-  // prefilled from the registry entry; one form does Add (POST) and Save changes
-  // (PUT). The component mounts fresh each time the dialog opens, so its fields
-  // seed from the edit target and need no manual reset.
+  // The New-workspace / devserver / gateway dialog. `dialog.choice` (set by
+  // the entry point that opened it) drives the body: a local directory, a
+  // devserver, or a gateway. There is no in-dialog chooser. The devserver and
+  // gateway bodies double as edit forms, prefilled from the registry entry;
+  // one form does Add (POST) and Save changes (PUT). The component mounts
+  // fresh each time the dialog opens, so its fields seed from the edit target
+  // and need no manual reset.
   //
   // The devserver Address is one field accepting EITHER a bare `host:port` (the
   // local ssh-forward case) OR a full `http(s)://host:port?t=…` URL (the
@@ -16,10 +17,20 @@
   import Modal from "./Modal.svelte";
   import { SquareTerminal } from "lucide-svelte";
   import { closeDialog, dialog } from "../state/dialog.svelte";
-  import { addGateway, addLocalWorkspace, pickFolder, saveDevserver } from "../state/library.svelte";
+  import {
+    addGateway,
+    addLocalWorkspace,
+    pickFolder,
+    saveDevserver,
+    updateGateway,
+  } from "../state/library.svelte";
   import { readOnly } from "../state/capabilities";
 
   const editing = dialog.editing;
+  // The gateway body doubles as the rename form, prefilled from the entry.
+  // Rename only: the URL is the gateway's identity, so its field renders
+  // disabled (remove + re-add changes the origin).
+  const editingGateway = dialog.editingGateway;
   // A devserver with a live connection (connecting or connected) can't be edited
   // (the backend rejects the write), so the form opens read-only: inputs
   // disabled, no Save -- disconnect first to edit. Captured at open (the dialog
@@ -52,10 +63,10 @@
   // Auto-hide the connect control terminal once the devserver connects.
   let autoHideControl = $state(editing?.auto_hide_control ?? false);
 
-  // Gateway form: URL + optional label, add-only (Save just adds; no probe at
-  // add -- the first Connect discovers and signs in).
-  let gatewayUrl = $state("");
-  let gatewayName = $state("");
+  // Gateway form: URL + optional label. Add just adds (no probe -- the first
+  // Connect discovers and signs in); the edit variant seeds from the entry.
+  let gatewayUrl = $state(editingGateway?.url ?? "");
+  let gatewayName = $state(editingGateway?.label ?? "");
 
   const showLocal = $derived(dialog.choice === "local" && !editing);
   const showGateway = $derived(dialog.choice === "gateway" && !editing);
@@ -67,7 +78,9 @@
       : showLocal
         ? "New workspace"
         : showGateway
-          ? "Add gateway"
+          ? editingGateway
+            ? "Edit gateway"
+            : "Add gateway"
           : "Add devserver",
   );
 
@@ -172,6 +185,23 @@
   }
 
   async function submitGateway(): Promise<void> {
+    // Rename: the URL field is disabled, so the stored origin rides back
+    // unchanged (the registry re-checks it) and only the label moves.
+    if (editingGateway) {
+      submitting = true;
+      try {
+        await updateGateway(editingGateway.id, {
+          url: editingGateway.url,
+          label: gatewayName.trim() || undefined,
+        });
+        closeDialog();
+      } catch (e) {
+        error = msg(e);
+      } finally {
+        submitting = false;
+      }
+      return;
+    }
     const raw = gatewayUrl.trim();
     let parsed: URL | null = null;
     try {
@@ -264,10 +294,16 @@
       </span>
     </div>
   {:else if showGateway}
-    <p class="intro">
-      Add a gateway to reach your devservers and devservers shared with you. Connect signs in
-      once for the whole account.
-    </p>
+    {#if editingGateway}
+      <p class="intro">
+        Rename this gateway. The URL is its identity; remove and re-add the gateway to change it.
+      </p>
+    {:else}
+      <p class="intro">
+        Add a gateway to reach your devservers and devservers shared with you. Connect signs in
+        once for the whole account.
+      </p>
+    {/if}
     <label class="field">
       Gateway URL
       <input
@@ -277,6 +313,7 @@
         placeholder="https://id.chan.app"
         autocomplete="off"
         spellcheck="false"
+        disabled={editingGateway != null}
         onkeydown={(e) => onFieldKey(e, submitGateway)} />
     </label>
     <label class="field">
@@ -352,7 +389,7 @@
       </button>
     {:else if showGateway}
       <button class="btn primary" type="button" disabled={submitting} onclick={submitGateway}>
-        Add gateway
+        {editingGateway ? "Save changes" : "Add gateway"}
       </button>
     {:else if readOnlyEdit}
       <!-- Connected: read-only, so the only action is to dismiss. -->

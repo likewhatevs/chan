@@ -965,6 +965,27 @@ impl GatewayRegistry for GatewayConfigRegistry {
         Ok(entry_from_gateway(&gw, None))
     }
 
+    fn update(&self, id: &str, input: GatewayInput) -> Result<Option<GatewayEntry>, String> {
+        let mut store = self.store.lock().unwrap();
+        let mut cfg = store.get().map_err(|e| e.to_string())?;
+        let Some(gw) = cfg.gateways.iter_mut().find(|g| g.id == id) else {
+            return Ok(None);
+        };
+        // The URL is the gateway's identity (the keyring PAT and the
+        // synthesized row ids key off it), so update refuses a different
+        // origin; an empty url means keep. Changing the origin is a
+        // remove + re-add.
+        if !input.url.trim().is_empty() && normalize_gateway_url(&input.url)? != gw.url {
+            return Err("gateway URL is immutable; remove and re-add to change it".to_string());
+        }
+        // Label is full-replace: empty clears, and the badge derives from
+        // the URL host again.
+        gw.label = input.label.unwrap_or_default().trim().to_string();
+        let entry = entry_from_gateway(gw, self.manager.view(id));
+        store.save(&cfg).map_err(|e| e.to_string())?;
+        Ok(Some(entry))
+    }
+
     fn remove(&self, id: &str) -> Result<bool, String> {
         {
             let mut store = self.store.lock().unwrap();
@@ -2677,6 +2698,93 @@ mod tests {
             })
             .is_err());
         assert_eq!(reg.list().len(), 1);
+    }
+
+    #[test]
+    fn gateway_registry_update_renames_and_keeps_the_url_immutable() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(Mutex::new(ConfigStore {
+            path: dir.path().join("config.json"),
+        }));
+        let reg = GatewayConfigRegistry::new(
+            Arc::clone(&store),
+            Arc::new(OnceLock::new()),
+            Arc::new(crate::gateway::GatewayManager::default()),
+        );
+        let added = reg
+            .add(GatewayInput {
+                url: "https://id.chan.app".to_string(),
+                label: Some("work".to_string()),
+            })
+            .expect("add");
+        // Rename: label is full-replace (trimmed), echoing the stored URL back
+        // is fine, and the new label persists in the config store.
+        let updated = reg
+            .update(
+                &added.id,
+                GatewayInput {
+                    url: "https://id.chan.app".to_string(),
+                    label: Some("  prod  ".to_string()),
+                },
+            )
+            .expect("update")
+            .expect("row exists");
+        assert_eq!(updated.id, added.id);
+        assert_eq!(updated.url, "https://id.chan.app");
+        assert_eq!(updated.label, "prod");
+        let cfg = store.lock().unwrap().get().unwrap();
+        assert_eq!(cfg.gateways[0].label, "prod");
+        // An empty url means keep; an absent label clears (the badge derives
+        // from the URL host again).
+        let cleared = reg
+            .update(
+                &added.id,
+                GatewayInput {
+                    url: String::new(),
+                    label: None,
+                },
+            )
+            .expect("update")
+            .expect("row exists");
+        assert_eq!(cleared.url, "https://id.chan.app");
+        assert_eq!(cleared.label, "");
+        // A different origin is refused: the URL is identity (remove + re-add
+        // is the origin-change path) and the stored row stays untouched.
+        let err = reg
+            .update(
+                &added.id,
+                GatewayInput {
+                    url: "https://other.example".to_string(),
+                    label: Some("x".to_string()),
+                },
+            )
+            .expect_err("url change refused");
+        assert!(err.contains("immutable"), "{err}");
+        let cfg = store.lock().unwrap().get().unwrap();
+        assert_eq!(cfg.gateways[0].url, "https://id.chan.app");
+        assert_eq!(cfg.gateways[0].label, "");
+        // Same origin with URL noise still counts as a match (normalized).
+        assert!(reg
+            .update(
+                &added.id,
+                GatewayInput {
+                    url: "https://ID.chan.app/consent?pick=1".to_string(),
+                    label: Some("noisy".to_string()),
+                },
+            )
+            .expect("update")
+            .is_some());
+        // Unknown id: None, nothing changes.
+        assert_eq!(
+            reg.update(
+                "gw-deadbeef",
+                GatewayInput {
+                    url: String::new(),
+                    label: None,
+                },
+            ),
+            Ok(None)
+        );
     }
 
     #[test]
