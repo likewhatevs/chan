@@ -1537,6 +1537,41 @@ async fn devserver_label_dedups_within_owner_only() {
 }
 
 #[tokio::test]
+async fn devserver_label_dedup_serializes_concurrent_first_dials() {
+    let app = TestApp::new().await;
+    let owner = mk_user(&app, "owner@x.com").await;
+
+    // Three first dials race the same label for one owner. The
+    // per-owner advisory lock serializes the dedup-then-upsert, so
+    // the labels come out {laptop, laptop-2, laptop-3} in some order
+    // -- never two rows holding the same name.
+    let mk = |dsid: String| {
+        let app = &app;
+        let owner = &owner;
+        async move {
+            app.req(
+                Method::POST,
+                &format!("/v1/users/{owner}/devservers"),
+                Some(json!({"devserver_id": dsid, "label": "laptop"})),
+            )
+            .await
+        }
+    };
+    let ((sa, va), (sb, vb), (sc, vc)) = tokio::join!(mk(ds("a")), mk(ds("b")), mk(ds("c")));
+    for s in [sa, sb, sc] {
+        assert_eq!(s, StatusCode::CREATED);
+    }
+    let mut labels: Vec<String> = [&va, &vb, &vc]
+        .iter()
+        .map(|v| v["label"].as_str().unwrap().to_string())
+        .collect();
+    labels.sort();
+    assert_eq!(labels, ["laptop", "laptop-2", "laptop-3"]);
+
+    app.cleanup().await;
+}
+
+#[tokio::test]
 async fn devserver_list_and_delete_cascades_grants() {
     let app = TestApp::new().await;
     let owner = mk_user(&app, "owner@x.com").await;

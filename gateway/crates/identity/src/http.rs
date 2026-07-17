@@ -1924,21 +1924,42 @@ async fn validate_token(
     Ok(Json(v))
 }
 
-/// Trim a tunnel-announced display name and cap it at profile's
-/// 64-byte label bound (on a char boundary). `None` for a blank value.
-/// The wire cap is defense in depth: a well-behaved client (`chan
-/// devserver`) already applies the same bound.
+/// Sanitize a tunnel-announced display name: drop invisible/spoofing
+/// code points, map control characters to spaces, collapse whitespace,
+/// and cap at profile's 64-byte label bound (on a char boundary).
+/// `None` for a value that is blank after filtering. Defense in depth
+/// against modified clients: a well-behaved client (`chan devserver`)
+/// already strips control characters and applies the same bound, but
+/// this name renders cross-user in grantees' rosters, so the
+/// persistence sink filters too.
 fn sanitize_devserver_display_name(raw: &str) -> Option<String> {
     const MAX: usize = 64;
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
+    // Zero-width space/joiner/non-joiner, ZWNBSP (BOM), and the bidi
+    // embedding/override/isolate controls: invisible or
+    // order-mangling, so dropped outright (a space would add a
+    // visible gap mid-word). Control characters (C0/C1 via
+    // `is_control`, covers ANSI escapes) map to a space instead so
+    // words stay separated, then whitespace runs collapse.
+    let invisible = |c: char| {
+        matches!(
+            c,
+            '\u{200B}'..='\u{200D}' | '\u{FEFF}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}'
+        )
+    };
+    let mapped: String = raw
+        .chars()
+        .filter(|c| !invisible(*c))
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect();
+    let collapsed = mapped.split_whitespace().collect::<Vec<_>>().join(" ");
+    if collapsed.is_empty() {
         return None;
     }
-    let mut end = MAX.min(trimmed.len());
-    while !trimmed.is_char_boundary(end) {
+    let mut end = MAX.min(collapsed.len());
+    while !collapsed.is_char_boundary(end) {
         end -= 1;
     }
-    Some(trimmed[..end].trim_end().to_string())
+    Some(collapsed[..end].trim_end().to_string())
 }
 
 /// Bundle the audit-only request context (`client_ip` + `user_agent`)
@@ -2056,6 +2077,47 @@ mod tests {
         assert_eq!(
             sanitize_devserver_display_name(&tricky).as_deref(),
             Some("x".repeat(63).as_str())
+        );
+    }
+
+    #[test]
+    fn devserver_display_name_filters_control_and_invisible_chars() {
+        // The name renders cross-user in grantees' rosters; a modified
+        // client must not smuggle in terminal escapes, unit-breaking
+        // newlines, or spoofing code points.
+        // Control characters map to spaces; runs collapse.
+        assert_eq!(
+            sanitize_devserver_display_name("office\r\nbox").as_deref(),
+            Some("office box")
+        );
+        // ANSI escape: the ESC byte is a control character.
+        assert_eq!(
+            sanitize_devserver_display_name("a\u{1b}[31mb").as_deref(),
+            Some("a [31mb")
+        );
+        // Bidi override / isolates are dropped outright.
+        assert_eq!(
+            sanitize_devserver_display_name("abc\u{202E}def").as_deref(),
+            Some("abcdef")
+        );
+        assert_eq!(
+            sanitize_devserver_display_name("x\u{2066}y\u{2069}z").as_deref(),
+            Some("xyz")
+        );
+        // Zero-width space/joiner/non-joiner and ZWNBSP are dropped.
+        assert_eq!(
+            sanitize_devserver_display_name("of\u{200B}f\u{200C}i\u{200D}ce\u{FEFF}").as_deref(),
+            Some("office")
+        );
+        // Nothing left after filtering reads as no name.
+        assert_eq!(
+            sanitize_devserver_display_name("\u{200B}\u{1b}\u{FEFF}"),
+            None
+        );
+        // Plain unicode survives: accents, CJK, emoji.
+        assert_eq!(
+            sanitize_devserver_display_name("café 東京 🚀").as_deref(),
+            Some("café 東京 🚀")
         );
     }
 }

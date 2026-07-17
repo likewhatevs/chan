@@ -16,12 +16,14 @@
 //! outage longer than the retention cannot wipe a live registry.
 //!
 //! Comeback semantics: deletion cascades the row's grants away
-//! (`devserver_grants` FK). A swept devserver that redials shows up
-//! live-unlabeled on the owner's dashboard (the live list comes from
-//! devserver-proxy, and the next grant create or identity mint
-//! recreates the row); its grants and label are gone until re-granted
-//! and re-labeled. The owner's own entry and open flow never break:
-//! owner-side access checks never read the `devservers` table.
+//! (`devserver_grants` FK); grants stay gone until re-granted. A
+//! swept devserver that redials announces its display name in the
+//! tunnel `Hello`, and identity's validate exchange recreates the row
+//! with that label on the spot. A client that announces no name shows
+//! up live-unlabeled on the owner's dashboard (the live list comes
+//! from devserver-proxy) until the next grant create or identity mint
+//! recreates its row. The owner's own entry and open flow never
+//! break: owner-side access checks never read the `devservers` table.
 //!
 //! Single-proxy assumption: the snapshot comes from the one
 //! devserver-proxy instance the admin client points at. A multi-proxy

@@ -2689,15 +2689,24 @@ fn build_devserver_tunnel_from_env(
 /// never has to reject it.
 const TUNNEL_DEVSERVER_NAME_MAX_BYTES: usize = 64;
 
-/// Normalize an explicit `--tunnel-devserver-name`: trim, cap at the
-/// gateway's 64-byte label bound (truncating on a char boundary). A
-/// blank value reads as absent so the hostname default applies.
+/// Normalize an explicit `--tunnel-devserver-name`: map control
+/// characters to spaces, collapse whitespace runs, trim, and cap at
+/// the gateway's 64-byte label bound (truncating on a char boundary).
+/// Control characters never reach the wire or the systemd unit from
+/// here: an interior newline would inject unit directives into
+/// `Environment=` and an ANSI escape would corrupt whatever renders
+/// the name. A blank value (after mapping) reads as absent so the
+/// hostname default applies.
 fn normalize_tunnel_devserver_name(raw: &str) -> Option<String> {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
+    let mapped: String = raw
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect();
+    let collapsed = mapped.split_whitespace().collect::<Vec<_>>().join(" ");
+    if collapsed.is_empty() {
         return None;
     }
-    Some(truncate_on_char_boundary(trimmed, TUNNEL_DEVSERVER_NAME_MAX_BYTES).to_string())
+    Some(truncate_on_char_boundary(&collapsed, TUNNEL_DEVSERVER_NAME_MAX_BYTES).to_string())
 }
 
 /// The display name a tunnel registration announces for the gateway
@@ -2819,14 +2828,16 @@ fn persisted_tunnel_pins(unit: &str) -> (Option<IpAddr>, Option<u16>) {
 /// the variable only when the user chose a name, and a non-tunnel unit
 /// (no `--tunnel-url=`) yields nothing. The value is read up to the
 /// closing quote, so names with spaces survive the round trip
-/// ([`devserver_systemd_unit`] strips quotes/backslashes on write).
+/// ([`devserver_systemd_unit`] strips quotes/backslashes on write),
+/// and the `%%` specifier escaping the write site applies is undone
+/// here so a `%`-containing name round-trips literally.
 fn persisted_tunnel_name(unit: &str) -> Option<String> {
     persisted_flag_value(unit, "--tunnel-url=")?;
     let marker = "Environment=\"CHAN_TUNNEL_DEVSERVER_NAME=";
     let start = unit.find(marker)? + marker.len();
     let rest = &unit[start..];
-    let value = &rest[..rest.find('"')?];
-    (!value.is_empty()).then(|| value.to_string())
+    let value = rest[..rest.find('"')?].replace("%%", "%");
+    (!value.is_empty()).then_some(value)
 }
 
 /// Dispatch a `systemd`/`launchd` action verb: `--start` (create + enable +
@@ -3637,11 +3648,13 @@ fn devserver_systemd_unit(
             // hostname default at runtime. Quotes and backslashes are
             // stripped: systemd's Environment= quoting cannot carry
             // them raw, and a display name has no business containing
-            // either.
+            // either. `%` is escaped as `%%` so systemd's specifier
+            // expansion hands the service the literal name
+            // ([`persisted_tunnel_name`] undoes it on read-back).
             if let Some(name) = &tunnel.pinned_name {
                 environment.push_str(&format!(
                     "Environment=\"CHAN_TUNNEL_DEVSERVER_NAME={}\"\n",
-                    name.replace(['"', '\\'], "")
+                    name.replace(['"', '\\'], "").replace('%', "%%")
                 ));
             }
             let mut exec = format!("{exe} devserver", exe = exe.display());
@@ -7569,6 +7582,32 @@ mod tests {
     }
 
     #[test]
+    fn tunnel_devserver_name_maps_control_chars_to_spaces() {
+        // Interior control characters (newline would inject systemd
+        // unit directives, ESC would corrupt renderers) become spaces,
+        // and whitespace runs collapse.
+        assert_eq!(
+            resolve_tunnel_devserver_name(Some("office\nbox")),
+            "office box"
+        );
+        assert_eq!(
+            resolve_tunnel_devserver_name(Some("office\r\n\tbox")),
+            "office box"
+        );
+        assert_eq!(
+            resolve_tunnel_devserver_name(Some("a\u{1b}b")),
+            "a b",
+            "ANSI escape byte maps to a space"
+        );
+        // All-control input reads as blank: hostname default applies.
+        let host_default = resolve_tunnel_devserver_name(None);
+        assert_eq!(resolve_tunnel_devserver_name(Some("\n\t\r")), host_default);
+        // Percent is not a control character; it survives untouched
+        // (the systemd unit write site escapes it, not this layer).
+        assert_eq!(resolve_tunnel_devserver_name(Some("box 50%")), "box 50%");
+    }
+
+    #[test]
     fn tunnel_devserver_name_caps_at_64_bytes_on_char_boundary() {
         let long = "x".repeat(80);
         assert_eq!(resolve_tunnel_devserver_name(Some(&long)), "x".repeat(64));
@@ -7599,11 +7638,26 @@ mod tests {
             Some(&tunnel),
         );
         assert!(unit.contains("Environment=\"CHAN_TUNNEL_DEVSERVER_NAME=office box\"\n"));
+        // A `%` writes as `%%` (systemd Environment= specifier
+        // escaping), and reads back literal via persisted_tunnel_name:
+        // the round trip a flagless --restart takes.
+        let percent = SystemdTunnel {
+            pinned_name: Some("box 50%".to_string()),
+            ..tunnel
+        };
+        let unit = devserver_systemd_unit(
+            Path::new("/home/dev/.local/bin/chan"),
+            "127.0.0.1:8787".parse().unwrap(),
+            None,
+            Some(&percent),
+        );
+        assert!(unit.contains("Environment=\"CHAN_TUNNEL_DEVSERVER_NAME=box 50%%\"\n"));
+        assert_eq!(persisted_tunnel_name(&unit), Some("box 50%".to_string()));
         // Unpinned name: no variable, the service resolves its hostname
         // default at runtime.
         let unnamed = SystemdTunnel {
             pinned_name: None,
-            ..tunnel
+            ..percent
         };
         let unit = devserver_systemd_unit(
             Path::new("/home/dev/.local/bin/chan"),

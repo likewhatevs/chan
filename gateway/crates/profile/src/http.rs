@@ -931,19 +931,28 @@ async fn create_devserver(
 
     // Owner-scoped label dedup. The row's own current label is excluded
     // so a reconnect announcing the name it already holds is a no-op,
-    // never a fresh suffix. Best-effort against concurrent upserts (no
-    // unique constraint backs it): two simultaneous first dials could
-    // both win the same label, and the next reconnect heals it.
+    // never a fresh suffix. No unique constraint backs the label, so
+    // the dedup-then-upsert runs in one transaction under a per-owner
+    // advisory lock (`pg_advisory_xact_lock`, released at commit): two
+    // simultaneous first dials serialize, and the second one's taken
+    // snapshot always sees the first one's committed label.
+    let mut tx = state.pool.begin().await?;
     let label = if label.is_empty() {
         String::new()
     } else {
+        sqlx::query(
+            "SELECT pg_advisory_xact_lock(hashtext('devserver_label'), hashtext($1::text))",
+        )
+        .bind(owner_id)
+        .execute(&mut *tx)
+        .await?;
         let taken: Vec<String> = sqlx::query_scalar(
             "SELECT label FROM devservers \
              WHERE owner_user_id = $1 AND devserver_id <> $2 AND label <> ''",
         )
         .bind(owner_id)
         .bind(&devserver_id)
-        .fetch_all(&state.pool)
+        .fetch_all(&mut *tx)
         .await?;
         dedup_label(label, &taken)
     };
@@ -959,10 +968,11 @@ async fn create_devserver(
     .bind(owner_id)
     .bind(&devserver_id)
     .bind(&label)
-    .fetch_optional(&state.pool)
+    .fetch_optional(&mut *tx)
     .await?;
 
     if let Some(d) = inserted {
+        tx.commit().await?;
         return Ok((StatusCode::CREATED, Json(d)));
     }
     // Existing row: refresh the label only when a non-empty one is
@@ -976,8 +986,9 @@ async fn create_devserver(
     .bind(owner_id)
     .bind(&devserver_id)
     .bind(&label)
-    .fetch_one(&state.pool)
+    .fetch_one(&mut *tx)
     .await?;
+    tx.commit().await?;
     Ok((StatusCode::OK, Json(existing)))
 }
 
