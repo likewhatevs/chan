@@ -30,6 +30,8 @@ FROM ubuntu
 #   curl               the install.sh fetch, plus token/health probes
 #   dbus-user-session  the per-user D-Bus session bus `systemctl --user` needs;
 #                      without it a lingering user's manager has no bus to reach
+#   adduser            chan-devserver-provision runs `adduser <user> sudo`;
+#                      minimal ubuntu rootfs no longer ships it
 #
 # sudo is deliberately NOT installed here: the runtime overlay path drops its
 # setuid bit, and sudo then refuses to run ("must be owned by uid 0 and have
@@ -39,7 +41,7 @@ FROM ubuntu
 # --no-install-recommends keeps the base lean; the booting base provides systemd.
 RUN apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-        ca-certificates dialog curl dbus-user-session && \
+        ca-certificates dialog curl dbus-user-session adduser && \
     rm -rf /var/lib/apt/lists/*
 
 # The runtime provisioning helper (see its header). COPY resolves the source
