@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [v0.70.0] - 2026-07-16
+## [v0.70.0] - 2026-07-17
 
 v0.70.0 makes gateways first-class in chan-desktop: add a gateway by URL, sign in once for your account, and every devserver you own or that is shared with you appears in the launcher live - connect, open windows, and use the full command vocabulary even on self-hosted gateways. A new Gateways screen flips out of the Computers list, notification bubbles replace the error banner, and terminal tabs on gateway-backed devservers no longer go dead after idling.
 
@@ -18,16 +18,19 @@ v0.70.0 makes gateways first-class in chan-desktop: add a gateway by URL, sign i
 
 - **One sign-in per gateway account.** The gateway consent page authorizes your account - "chan-desktop will get access to your account on this gateway: your devservers and devservers shared with you." - with no per-devserver pick. Existing desktop sign-ins keep working for already-connected rows, but cannot list the account roster: the first gateway Connect after upgrading asks you to sign in once more, then everything rides the account token.
 - **Full command vocabulary on self-hosted gateways.** Windows served from ANY gateway's proxy origin now get the same IPC grants as `*.devserver.chan.app` windows (upload/download, all clipboard commands, zoom chords, open-in-browser): the desktop mints a runtime capability at first gateway connect, scoped to exactly that gateway's proxy wildcard. Already-open windows gain the grant live, no reload. One caveat, by Tauri design: a removed gateway's grant persists until the app exits (grants cannot be un-minted at runtime).
+- **New terminal from a standalone terminal window.** The pane menu in a standalone terminal window now offers New terminal (Cmd+T), matching the workspace window's menu.
 
 ### Fixed
 
 - **Terminal tabs on gateway-backed devservers no longer go dead after idle.** Two layers conspired: the gateway's WebSocket bridge cut any connection quiet in ONE direction for 300s (a terminal streaming output still died 300s after the last keystroke), and the terminal socket was the only one with neither a heartbeat nor reconnect - a dead tab stayed dead until a full reload. The terminal socket now heartbeats (20s ping, 45s read-deadline) and reconnects with capped backoff into the SAME session - scrollback preserved, no reload; the bridge cuts only when BOTH directions are idle and always sends a real Close frame, so the browser notices promptly instead of holding a zombie socket. Doc and scene sync sockets gain the same bridge protection and faster heal on tunnel redials.
+- **Cmd+Shift+S no longer opens a dead Search overlay in a standalone terminal window.** Search needs a workspace, so the chord is now inert in a terminal window, matching every other search entry point.
 
 ### Operators
 
 - Identity: new PAT scope `desktop.account` (must be requested alone; `tunnel` and `desktop.connect` remain for shipped clients). New roster endpoint `GET /desktop/v1/devservers` (Bearer PAT, `desktop.account`): owned + shared devservers with live online state, `ETag`/`If-None-Match` 304, 401 only for a dead token or wrong scope (clients cascade), 502 when profile or proxy is degraded (clients keep the last-known roster; the endpoint never serves a degraded all-offline 200). Roster reads bump `last_used_at` but skip the per-read audit row. Discovery advertises `roster_url` (additive; `api_version` stays 1). The entry mint accepts `desktop.connect` OR `desktop.account`.
 - devserver-proxy: the bridged-WebSocket idle cut is now both-directions-idle (default 300s) and announces itself with a WS Close frame to both halves; idle cuts log at info.
 - e2e: `gateway-zone.sh` gains a browser-free `scenario_roster`; the consent-page browser scenario rides the account flow (no picker).
+- A PAT mint (operator `POST /admin/v1/tokens` and the SPA) now registers a devserver row only when the token carries the `tunnel` scope, matching the OAuth authorize flow - a non-tunnel PAT (for example `desktop.account`) no longer creates an offline, never-dialable phantom row. Default-scope mints (`tunnel`) still register as before.
 
 ## [v0.69.1] - 2026-07-16
 
