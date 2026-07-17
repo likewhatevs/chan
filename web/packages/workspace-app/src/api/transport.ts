@@ -181,17 +181,29 @@ function headersWithValue(
   return { ...(headers ?? {}), [name]: value };
 }
 
+/// Header pairs mirroring the gateway's double-submit CSRF cookie into
+/// `x-chan-csrf` for a request that can mutate state. Empty for safe methods
+/// and when the `devserver_csrf` cookie is absent (loopback), so consumers can
+/// apply the pairs unconditionally. The single source of the mirror logic:
+/// `withGatewayCsrf` covers the fetch path, and the XHR multipart helpers in
+/// client.ts (which the fetch seam does not cover) consume the pairs directly.
+export function gatewayCsrfHeaderPairs(method: string): [string, string][] {
+  if (!isUnsafeMethod(method)) return [];
+  const csrf = cookieValue("devserver_csrf");
+  if (!csrf) return [];
+  return [["x-chan-csrf", csrf]];
+}
+
 /// Add the gateway CSRF mirror when a request can mutate state. The cookie is
 /// absent on loopback, so this is a no-op outside the gateway.
 export function withGatewayCsrf(init: RequestInit = {}): RequestInit {
-  const method = init.method ?? "GET";
-  if (!isUnsafeMethod(method)) return init;
-  const csrf = cookieValue("devserver_csrf");
-  if (!csrf) return init;
-  return {
-    ...init,
-    headers: headersWithValue(init.headers, "x-chan-csrf", csrf),
-  };
+  const pairs = gatewayCsrfHeaderPairs(init.method ?? "GET");
+  if (pairs.length === 0) return init;
+  let headers = init.headers;
+  for (const [name, value] of pairs) {
+    headers = headersWithValue(headers, name, value);
+  }
+  return { ...init, headers };
 }
 
 /// Injectable HTTP + WebSocket primitives. Both default to the real browser

@@ -54,6 +54,7 @@ import {
   authToken as transportAuthToken,
   chanFetch,
   createXhr,
+  gatewayCsrfHeaderPairs,
   openWatch,
   request,
   requestRoot,
@@ -685,6 +686,12 @@ export const api = {
       for (const [name, value] of Object.entries(directAuthHeaders())) {
         xhr.setRequestHeader(name, value);
       }
+      // The gateway's double-submit CSRF guard 403s a tunneled POST without
+      // the cookie mirror; chanFetch applies it via withGatewayCsrf, but this
+      // XHR path bypasses the fetch seam, so mirror it here too.
+      for (const [name, value] of gatewayCsrfHeaderPairs("POST")) {
+        xhr.setRequestHeader(name, value);
+      }
       xhr.upload.onprogress = (event) => {
         opts.onProgress?.({
           loaded: event.loaded,
@@ -741,6 +748,10 @@ export const api = {
       const xhr = createXhr();
       xhr.open("POST", apiPath("/api/files/upload"));
       for (const [name, value] of Object.entries(directAuthHeaders())) {
+        xhr.setRequestHeader(name, value);
+      }
+      // Same gateway CSRF mirror as uploadFile: XHR bypasses the fetch seam.
+      for (const [name, value] of gatewayCsrfHeaderPairs("POST")) {
         xhr.setRequestHeader(name, value);
       }
       xhr.upload.onprogress = (event) => {

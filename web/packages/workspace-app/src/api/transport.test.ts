@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { afterEach, describe, expect, test } from "vitest";
-import { chanFetch, setFetchImpl } from "./transport";
+import { chanFetch, gatewayCsrfHeaderPairs, setFetchImpl } from "./transport";
 
 afterEach(() => {
   setFetchImpl(null);
@@ -44,5 +44,23 @@ describe("gateway CSRF", () => {
     const headers = seen?.headers as Record<string, string>;
     expect(headers.authorization).toBe("Bearer tok");
     expect(headers["x-chan-csrf"]).toBeUndefined();
+  });
+});
+
+describe("gatewayCsrfHeaderPairs", () => {
+  test("carries the cookie mirror for unsafe methods only", () => {
+    document.cookie = "devserver_csrf=csrf-token; path=/";
+
+    expect(gatewayCsrfHeaderPairs("POST")).toEqual([
+      ["x-chan-csrf", "csrf-token"],
+    ]);
+    expect(gatewayCsrfHeaderPairs("delete")).toEqual([
+      ["x-chan-csrf", "csrf-token"],
+    ]);
+    expect(gatewayCsrfHeaderPairs("GET")).toEqual([]);
+  });
+
+  test("is empty without the cookie (loopback)", () => {
+    expect(gatewayCsrfHeaderPairs("POST")).toEqual([]);
   });
 });

@@ -75,7 +75,7 @@ MAX_DEVSERVERS=2
 # Scenario dispatch: "all" (default) = core suite + every registered
 # scenario; "core" = the inline suite only; a registered name = stack
 # bring-up + that scenario only. Lanes append their scenario name here.
-SCENARIOS="sweeper watchdog roster"
+SCENARIOS="sweeper watchdog roster upload"
 SCENARIO="${1:-all}"
 RUN_CORE=1
 case "$SCENARIO" in all | core) ;; *) RUN_CORE=0 ;; esac
@@ -1247,6 +1247,108 @@ scenario_roster() {
         assert_pass "roster: shared-row entry answers devserver_offline (box dark)"
     else
         assert_fail "roster: shared-row entry expected devserver_offline, got: $shared_body"
+    fi
+}
+
+# Scenario: multipart upload through the proxy (the HTTP leg of
+# `cs upload` and the SPA's drag-drop upload). The proxy's
+# double-submit CSRF guard gates every mutation: a multipart POST to
+# `/api/files/upload` carrying only the session cookies must be
+# refused with the proxy's own 403 `forbidden` before it reaches the
+# tunnel, and the same POST with the `devserver_csrf` cookie mirrored
+# into `x-chan-csrf` (what the SPA's XHR helpers send) must cross
+# host -> proxy -> tunnel -> devserver and land the bytes in the
+# workspace on disk. Registers a scratch workspace on devserver A
+# through the tunnel (owner assertions may mutate; the harness
+# devservers bind loopback, so the mutable launcher surface is up)
+# and removes it afterwards so the stack is left as found.
+scenario_upload() {
+    local host body entry_url hdrs gate csrf cookies
+    host="$ALICE_USER--$(disc "$DS_A").devserver.$DOMAIN"
+    body="$(entry_for "$PAT_A" "{\"devserver_id\":\"$DS_A\"}")"
+    entry_url="$(printf %s "$body" | json_get entry_url)"
+    if [ -z "$entry_url" ]; then
+        assert_fail "upload: no entry_url minted for devserver A: $body"
+        return
+    fi
+    hdrs="$WORK/hdrs-upload.txt"
+    curl_host "$host" -o /dev/null -D "$hdrs" "$entry_url" >/dev/null
+    gate="$(sed -n 's/^[Ss]et-[Cc]ookie: \(devserver_gate=[^;]*\).*/\1/p' "$hdrs" | head -1)"
+    csrf="$(sed -n 's/^[Ss]et-[Cc]ookie: devserver_csrf=\([^;]*\).*/\1/p' "$hdrs" | head -1)"
+    if [ -n "$gate" ] && [ -n "$csrf" ]; then
+        assert_pass "upload: entry 303 mints the gate + csrf cookie pair"
+    else
+        assert_fail "upload: expected devserver_gate + devserver_csrf on the entry 303"
+        return
+    fi
+    cookies="$gate; devserver_csrf=$csrf"
+
+    # A workspace to upload into: a real folder on the devserver's host
+    # (the whole harness shares loopback), registered + mounted through
+    # the tunnel. Registration is idempotent, so an aborted earlier run
+    # cannot strand this step.
+    local ws_dir add_body prefix ws_id
+    ws_dir="$WORK/upload-ws"
+    rm -rf "$ws_dir"
+    mkdir -p "$ws_dir"
+    add_body="$(curl_host "$host" -X POST \
+        "http://$host:$PROXY_PORT/api/library/workspaces" \
+        -H "Cookie: $cookies" -H "x-chan-csrf: $csrf" \
+        -H "content-type: application/json" \
+        -d "{\"path\":\"$ws_dir\"}")"
+    prefix="$(printf %s "$add_body" | json_get prefix)"
+    ws_id="$(printf %s "$add_body" | json_get workspace_id)"
+    if [ -n "$prefix" ] && [ -n "$ws_id" ]; then
+        assert_pass "upload: workspace registered + mounted through the tunnel"
+    else
+        assert_fail "upload: workspace add through the tunnel failed: $add_body"
+        return
+    fi
+
+    # The guard half: no `x-chan-csrf` mirror -> the proxy's own 403
+    # `forbidden` (the devserver never sees the request; its errors are
+    # JSON-shaped, so the bare body pins the refusal to the proxy).
+    local payload code
+    payload="$WORK/upload-payload.txt"
+    printf 'tunneled upload payload\n' > "$payload"
+    code="$(curl_host "$host" -o "$WORK/upload-noheader.txt" -w '%{http_code}' \
+        -X POST "http://$host:$PROXY_PORT/$prefix/api/files/upload" \
+        -H "Cookie: $cookies" \
+        -F "file=@$payload" -F "dir=")"
+    if [ "$code" = "403" ] && grep -q '^forbidden$' "$WORK/upload-noheader.txt"; then
+        assert_pass "upload: POST without the csrf mirror is the proxy's 403 forbidden"
+    else
+        assert_fail "upload: expected 403 forbidden, got $code: $(head -c 120 "$WORK/upload-noheader.txt")"
+    fi
+
+    # The fix half: the mirrored header admits the multipart POST and
+    # the devserver writes the file into the workspace root.
+    local uploaded_path
+    code="$(curl_host "$host" -o "$WORK/upload-ok.json" -w '%{http_code}' \
+        -X POST "http://$host:$PROXY_PORT/$prefix/api/files/upload" \
+        -H "Cookie: $cookies" -H "x-chan-csrf: $csrf" \
+        -F "file=@$payload" -F "dir=")"
+    uploaded_path="$(json_get path < "$WORK/upload-ok.json")"
+    if [ "$code" = "200" ] && [ -n "$uploaded_path" ]; then
+        assert_pass "upload: csrf-mirrored multipart POST answers 200 ($uploaded_path)"
+    else
+        assert_fail "upload: expected 200 with a path, got $code: $(head -c 200 "$WORK/upload-ok.json")"
+    fi
+    if [ -n "$uploaded_path" ] && cmp -s "$payload" "$ws_dir/$uploaded_path"; then
+        assert_pass "upload: the uploaded bytes landed in the workspace on disk"
+    else
+        assert_fail "upload: uploaded file missing or differs at $ws_dir/$uploaded_path"
+    fi
+
+    # Leave the stack as found: unregister the scratch workspace (the
+    # DELETE unmounts first; it is a mutation, so it carries the mirror).
+    code="$(curl_host "$host" -o /dev/null -w '%{http_code}' \
+        -X DELETE "http://$host:$PROXY_PORT/api/library/workspaces/$ws_id" \
+        -H "Cookie: $cookies" -H "x-chan-csrf: $csrf")"
+    if [ "$code" = "204" ] || [ "$code" = "200" ]; then
+        assert_pass "upload: scratch workspace removed (stack left as found)"
+    else
+        assert_fail "upload: scratch workspace removal expected 2xx, got $code"
     fi
 }
 
