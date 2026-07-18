@@ -4,6 +4,15 @@ All notable changes to this project will be documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v0.70.3] - 2026-07-18
+
+v0.70.3 is a patch release. It restores the editor's text-selection highlight, which v0.70.2's page-width scrollbar change hid whenever the page-width cap was on (the default), and stops a refused launcher Open from leaving a status pill stuck on the workspace with no way to dismiss it.
+
+### Fixed
+
+- **Selecting text in the editor shows the highlight again.** v0.70.2 painted the page background on CodeMirror's content element, which sits in front of the selection layer drawn behind it, so with the page-width cap on (the 80% default) selected text had no visible highlight at all. The page fill now lives on a layer behind the selection, leaving the content transparent so the selection shows through; the centered page and the off-page shade are unchanged.
+- **A refused launcher Open no longer sticks on the workspace forever.** When an "Open" was refused (a path outside the workspace root, a binary target, or no connected window), the error was written to the status pill with no dismiss control and no auto-clear, so it stayed up indefinitely. The refusal is now a dismissable persistent pill, matching every other one-shot error.
+
 ## [v0.70.2] - 2026-07-18
 
 v0.70.2 is a patch release. It stops the devserver control terminal from re-running its connect script in a loop, keeps a remote terminal's process alive across a long idle (and clears the mouse-tracking garbage a dead program left behind), renders inline markdown inside table cells, sizes exported Excalidraw diagrams to the slide, seeds the slide-deck zoom_factor, and moves the editor's page-width scrollbar to the window edge.

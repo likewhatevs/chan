@@ -86,6 +86,7 @@ New agents should also read [`.agents/playbook.md`](../.agents/playbook.md), the
 - [release-v0.70.0](release-v0.70.0.md) - first-class gateways in chan-desktop: add by URL, one account sign-in, live rosters under Computers, launcher notification bubbles, and the terminal-socket heartbeat/reconnect that keeps gateway terminals alive after idle.
 - [release-v0.70.1](release-v0.70.1.md) - tunneled-devserver hardening: uploads and PDF export through the proxy, closed windows staying closed, OS logos and real names on rows, the port 8787 collision fix, and gateway rename.
 - [release-v0.70.2](release-v0.70.2.md) - the terminal-reconnect regression patch (the control terminal no longer loops its connect script, an idle remote terminal keeps its process and stops leaking mouse tracking) plus table-cell inline markdown, exported-Excalidraw sizing, the slide-deck zoom_factor seed, and the page-width scrollbar position.
+- [release-v0.70.3](release-v0.70.3.md) - the v0.70.2 regression patch: the editor's text-selection highlight restored under the default page-width cap, and a refused launcher Open turned into a dismissable pill instead of one stuck on the workspace forever.
 
 ## Conventions
 
