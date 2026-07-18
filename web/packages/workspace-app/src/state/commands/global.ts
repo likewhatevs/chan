@@ -58,7 +58,12 @@ async function executeOpen(target: string): Promise<void> {
   try {
     await api.open({ window_id: sessionWindowId(), target });
   } catch (err) {
+    // Persistent so the pill gets a dismiss control; a bare `ui.status =`
+    // leaves statusKind null, and the refusal (binary target, workspace
+    // escape, no connected window) then sticks forever with no way to
+    // clear it.
     ui.status = `open failed: ${err instanceof Error ? err.message : String(err)}`;
+    ui.statusKind = "persistent";
   }
 }
 
