@@ -35,6 +35,7 @@ chan:
   kind: slides
   slides:
     aspect_ratio: "16:9"
+    zoom_factor: 2
 ---
 
 # Slide 1
@@ -407,7 +408,7 @@ mod tests {
         // very start, `chan: kind: slides`, quoted 16:9 aspect. A drift here
         // opens the new deck as a plain draft instead of slides.
         assert!(NEW_SLIDES_CONTENT.starts_with(
-            "---\nchan:\n  kind: slides\n  slides:\n    aspect_ratio: \"16:9\"\n---\n"
+            "---\nchan:\n  kind: slides\n  slides:\n    aspect_ratio: \"16:9\"\n    zoom_factor: 2\n---\n"
         ));
         assert!(NEW_SLIDES_CONTENT.contains("# Slide 1"));
     }
