@@ -20,6 +20,7 @@ import {
 } from "@codemirror/view";
 import { syntaxTree } from "@codemirror/language";
 import { StateField, type Extension } from "@codemirror/state";
+import { renderMarkdownInline } from "../../api/markdown";
 import { selectionInRange } from "../decorations/selection";
 
 interface TableData {
@@ -58,7 +59,9 @@ class TableWidget extends WidgetType {
     const headRow = document.createElement("tr");
     for (const h of this.data.headers) {
       const th = document.createElement("th");
-      th.textContent = h;
+      // Cell source is inline markdown; render it (bold, italic, code,
+      // links) through the sanitized inline pipeline before insert.
+      th.innerHTML = renderMarkdownInline(h);
       headRow.appendChild(th);
     }
     thead.appendChild(headRow);
@@ -68,7 +71,7 @@ class TableWidget extends WidgetType {
       const tr = document.createElement("tr");
       for (const cell of row) {
         const td = document.createElement("td");
-        td.textContent = cell;
+        td.innerHTML = renderMarkdownInline(cell);
         tr.appendChild(td);
       }
       tbody.appendChild(tr);

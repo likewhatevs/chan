@@ -93,3 +93,13 @@ export function renderMarkdownWithBreaks(input: string): string {
   }) as string;
   return DOMPurify.sanitize(raw, SANITIZE_OPTS);
 }
+
+/// Render a markdown string to sanitized INLINE HTML: bold, italic,
+/// inline code, links and the other inline spans, with no wrapping
+/// block element (no `<p>`). For inline-only contexts like table cells
+/// that need marked's inline pass but must stay in flow. Goes through
+/// the same `DOMPurify.sanitize` chokepoint as the block renderers.
+export function renderMarkdownInline(input: string): string {
+  const raw = marked.parseInline(input ?? "", { async: false }) as string;
+  return DOMPurify.sanitize(raw, SANITIZE_OPTS);
+}

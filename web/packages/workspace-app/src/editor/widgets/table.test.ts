@@ -39,6 +39,36 @@ describe("tableDecorations", () => {
     parent.remove();
   });
 
+  test("bold in a cell renders as <strong>", () => {
+    const parent = document.createElement("div");
+    document.body.appendChild(parent);
+
+    const doc = [
+      "before",
+      "",
+      "| Name | Note |",
+      "|------|------|",
+      "| Alice | **bold** |",
+      "",
+      "after",
+    ].join("\n");
+
+    const view = new EditorView({
+      parent,
+      state: EditorState.create({
+        doc,
+        extensions: [chanMarkdown(), tableDecorations()],
+      }),
+    });
+
+    const strong = parent.querySelector(".cm-md-table td strong");
+    expect(strong).toBeTruthy();
+    expect(strong?.textContent).toBe("bold");
+
+    view.destroy();
+    parent.remove();
+  });
+
   test("wide tables are contained so prose still wraps at page width", () => {
     const source = readFileSync("src/editor/Wysiwyg.svelte", "utf8");
 
