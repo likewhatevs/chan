@@ -230,6 +230,23 @@ async function main() {
     );
     assert(unsortedError.includes("newest"), "first-not-newest rejected");
 
+    // A middle-inverted array is rejected even when the first entry is the
+    // newest: releases.json must always be newest-first.
+    const invertedManifest = path.join(out, "inverted.json");
+    await fs.writeFile(
+      invertedManifest,
+      `${JSON.stringify([
+        syntheticManifest("0.16.0"),
+        syntheticManifest("0.15.6"),
+        syntheticManifest("0.15.8"),
+      ])}\n`,
+    );
+    const invertedError = await runNodeExpectFail(
+      path.join(scriptsRoot, "generate-release-metadata.mjs"),
+      ["--manifest", invertedManifest, "--out", path.join(out, "inverted")],
+    );
+    assert(invertedError.includes("newest-first"), "middle-inverted history rejected");
+
     const emptyManifest = path.join(out, "empty.json");
     await fs.writeFile(emptyManifest, "[]\n");
     const emptyError = await runNodeExpectFail(

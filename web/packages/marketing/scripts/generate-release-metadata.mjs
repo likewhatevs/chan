@@ -3,7 +3,12 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 
-import { escapeRegExp, gatewayPackageVersion, versionFromTag } from "./release-version.mjs";
+import {
+  compareVersions,
+  escapeRegExp,
+  gatewayPackageVersion,
+  versionFromTag,
+} from "./release-version.mjs";
 
 // The standalone Linux CLI tarball is musl (fully static): a too-new build
 // glibc must not gate older machines. install.sh maps Linux arch to these
@@ -262,9 +267,10 @@ function parseLatestCount(value) {
 // Accepts a single manifest object or an array newest-first (as
 // collect-release-assets.mjs --latest-count writes it). Every manifest is
 // validated with the single-manifest rules; duplicate versions or tags are
-// rejected and the first entry must be the newest release, since it drives
-// latest.json. At most options.latestCount manifests are retained, so /dl
-// keeps the latest release plus that many previous GA releases minus one.
+// rejected and the array must be in strictly descending version order, since
+// the first entry drives latest.json and releases.json keeps the input
+// order. At most options.latestCount manifests are retained, so /dl keeps
+// the latest release plus that many previous GA releases minus one.
 function normalizeManifests(raw, options) {
   const source = options.manifest;
   const entries = Array.isArray(raw) ? raw : [raw];
@@ -284,59 +290,17 @@ function normalizeManifests(raw, options) {
     versions.add(manifest.version);
     tags.add(manifest.tag);
   }
-  const latest = manifests[0];
-  for (const manifest of manifests.slice(1)) {
-    if (compareVersions(manifest.version, latest.version) > 0) {
+  for (let i = 1; i < manifests.length; i += 1) {
+    const previous = manifests[i - 1];
+    const current = manifests[i];
+    if (compareVersions(current.version, previous.version) >= 0) {
       throw new Error(
-        `${source}: first manifest must be the newest release ` +
-          `(${manifest.version} sorts after ${latest.version})`,
+        `${source}: manifest array must be newest-first ` +
+          `(${current.version} sorts at or after ${previous.version})`,
       );
     }
   }
   return manifests.slice(0, options.latestCount);
-}
-
-// Minimal semver compare for X.Y.Z(-prerelease) versions (tags are validated
-// upstream): numeric core; a prerelease sorts before the same core without
-// one; prerelease identifiers compare per semver (numeric < alphanumeric,
-// numerics numerically, longer list after a shared prefix wins).
-function compareVersions(a, b) {
-  const [coreA, preA] = splitPrerelease(a);
-  const [coreB, preB] = splitPrerelease(b);
-  for (let i = 0; i < 3; i += 1) {
-    if (coreA[i] !== coreB[i]) return coreA[i] - coreB[i];
-  }
-  if (!preA && !preB) return 0;
-  if (!preA) return 1;
-  if (!preB) return -1;
-  const idsA = preA.split(".");
-  const idsB = preB.split(".");
-  for (let i = 0; i < Math.max(idsA.length, idsB.length); i += 1) {
-    const idA = idsA[i];
-    const idB = idsB[i];
-    if (idA === undefined) return -1;
-    if (idB === undefined) return 1;
-    const numA = /^\d+$/.test(idA);
-    const numB = /^\d+$/.test(idB);
-    if (numA && numB) {
-      const diff = Number(idA) - Number(idB);
-      if (diff !== 0) return diff;
-    } else if (numA) {
-      return -1;
-    } else if (numB) {
-      return 1;
-    } else if (idA !== idB) {
-      return idA < idB ? -1 : 1;
-    }
-  }
-  return 0;
-}
-
-function splitPrerelease(version) {
-  const dash = version.indexOf("-");
-  const core = (dash === -1 ? version : version.slice(0, dash)).split(".").map(Number);
-  const prerelease = dash === -1 ? "" : version.slice(dash + 1);
-  return [core, prerelease];
 }
 
 function normalizeManifest(raw, source) {

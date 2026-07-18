@@ -86,23 +86,24 @@ try {
     "fallback sha256 without digest",
   );
 
-  // History mode (--latest-count N): GA releases are kept newest-first,
+  // History mode (--latest-count N): GA releases are kept and sorted
+  // newest-first by semver (the out-of-order fixture list proves the sort),
   // rc tags and prerelease/draft entries are filtered out, and the output is
   // a manifest array that generate-release-metadata.mjs consumes as-is.
   const history = [
-    { releaseVersion: "0.15.9" },
-    { releaseVersion: "0.16.0-rc1" },
     { releaseVersion: "0.15.8" },
+    { releaseVersion: "0.16.0-rc1" },
+    { releaseVersion: "0.15.9" },
     { releaseVersion: "0.15.7", prerelease: true },
-    { releaseVersion: "0.15.6" },
-    { releaseVersion: "0.15.5", draft: true },
     { releaseVersion: "0.15.4" },
+    { releaseVersion: "0.15.5", draft: true },
+    { releaseVersion: "0.15.6" },
   ];
-  const historyRun = runCollectHistory("history", history);
+  const historyRun = runFixtureCollect("history", history, { latestCount: 5 });
   assertEqual(
     JSON.stringify(historyRun.manifests.map((manifest) => manifest.tag)),
     JSON.stringify(["v0.15.9", "v0.15.8", "v0.15.6", "v0.15.4"]),
-    "history keeps GA releases newest-first",
+    "history keeps GA releases sorted newest-first",
   );
   const historyUpdater = historyRun.manifests[0].assets.find(
     (asset) => asset.updater_platform === "darwin-aarch64",
@@ -114,16 +115,56 @@ try {
     "history asset uses digest",
   );
 
-  // An explicit --tag is forced to the front of the history window.
-  const forced = runCollectHistory("forced", history, { latestCount: 2, tag: "v0.15.4" });
+  // A GA forced tag that leads the history keeps its place at the front.
+  const forced = runFixtureCollect("forced", history, { latestCount: 2, tag: "v0.15.9" });
   assertEqual(
     JSON.stringify(forced.manifests.map((manifest) => manifest.tag)),
-    JSON.stringify(["v0.15.4", "v0.15.9"]),
-    "requested tag forced to the front",
+    JSON.stringify(["v0.15.9", "v0.15.8"]),
+    "requested GA tag leads the window",
   );
 
+  // A GA forced tag with no list behind it collects as a one-entry window.
+  const solo = runFixtureCollect("forced-solo", { releaseVersion: "0.15.9" }, { latestCount: 5 });
+  assert(Array.isArray(solo.manifests), "history mode emits a manifest array");
+  assertEqual(solo.manifests.length, 1, "single forced release collected");
+  assertEqual(solo.manifests[0].tag, "v0.15.9", "single forced release tag");
+
+  // A non-GA forced tag never reaches /dl: rc-tagged, prerelease-flagged,
+  // and draft-flagged requested releases are all rejected outright.
+  const rcError = runFixtureCollectExpectFail(
+    "forced-rc",
+    { releaseVersion: "0.56.0-rc1" },
+    { latestCount: 5 },
+  );
+  assert(rcError.includes("non-GA"), "rc forced tag rejected");
+  const forcedPrereleaseError = runFixtureCollectExpectFail(
+    "forced-prerelease",
+    { releaseVersion: "0.15.9", prerelease: true },
+    { latestCount: 5 },
+  );
+  assert(forcedPrereleaseError.includes("non-GA"), "prerelease-flagged forced tag rejected");
+  const draftError = runFixtureCollectExpectFail(
+    "forced-draft",
+    { releaseVersion: "0.15.9", draft: true },
+    { latestCount: 5 },
+  );
+  assert(draftError.includes("non-GA"), "draft forced tag rejected");
+
+  // A forced tag that is not the newest GA release is rejected instead of
+  // becoming latest.json; a tag missing from the history is an error too.
+  const staleError = runFixtureCollectExpectFail("forced-stale", history, {
+    latestCount: 5,
+    tag: "v0.15.6",
+  });
+  assert(staleError.includes("not the newest"), "stale forced tag rejected");
+  const missingError = runFixtureCollectExpectFail("forced-missing", history, {
+    latestCount: 5,
+    tag: "v0.15.3",
+  });
+  assert(missingError.includes("not found"), "missing forced tag rejected");
+
   // Integration pin: the collector's history array feeds the generator
-  // unchanged, producing the retained /dl tree.
+  // unchanged, producing the retained /dl tree with well-formed content.
   const dlOut = path.join(root, "history", "dl");
   execFileSync("node", [
     "scripts/generate-release-metadata.mjs",
@@ -136,11 +177,38 @@ try {
   assertEqual(dlReleases.releases.length, 4, "releases.json carries all retained releases");
   assertEqual(dlReleases.latest, "0.15.9", "releases.json latest");
   assertEqual(dlReleases.latest_tag, "v0.15.9", "releases.json latest_tag");
+  assertEqual(
+    JSON.stringify(dlReleases.releases.map((entry) => entry.tag)),
+    JSON.stringify(["v0.15.9", "v0.15.8", "v0.15.6", "v0.15.4"]),
+    "releases.json entries newest-first",
+  );
   for (const retained of ["v0.15.9", "v0.15.8", "v0.15.6", "v0.15.4"]) {
-    assert(existsSync(path.join(dlOut, "cli", `${retained}.json`)), `cli/${retained}.json exists`);
+    const retainedVersion = retained.slice(1);
+    const cliJson = JSON.parse(readFileSync(path.join(dlOut, "cli", `${retained}.json`), "utf8"));
+    assertEqual(cliJson.version, retainedVersion, `cli ${retained} version`);
+    assertEqual(cliJson.tag, retained, `cli ${retained} tag`);
+    assertEqual(cliJson.targets.length, 3, `cli ${retained} target count`);
     assert(
-      existsSync(path.join(dlOut, "desktop", `${retained}.json`)),
-      `desktop/${retained}.json exists`,
+      cliJson.targets.every((target) => /^[a-f0-9]{64}$/.test(target.sha256)),
+      `cli ${retained} sha256 values`,
+    );
+    assertEqual(
+      cliJson.targets.find((target) => target.asset === firstCliAsset)?.sha256,
+      digestFor(retained, firstCliAsset),
+      `cli ${retained} digest sha256`,
+    );
+    const desktopJson = JSON.parse(
+      readFileSync(path.join(dlOut, "desktop", `${retained}.json`), "utf8"),
+    );
+    assertEqual(desktopJson.version, retainedVersion, `desktop ${retained} version`);
+    assertEqual(
+      desktopJson.platforms["darwin-aarch64"]?.signature,
+      "fixture-updater-signature",
+      `desktop ${retained} updater signature`,
+    );
+    assert(
+      desktopJson.platforms["darwin-aarch64"]?.url.includes(`/${retained}/`),
+      `desktop ${retained} updater url`,
     );
   }
   assert(!existsSync(path.join(dlOut, "cli", "v0.16.0-rc1.json")), "rc tag filtered out of /dl");
@@ -230,58 +298,78 @@ function runCollect(label, releaseVersion, extraNames, digestNames = new Set()) 
   return JSON.parse(readFileSync(out, "utf8"));
 }
 
-// Fixture-history mode: the --release-json file holds an array of release
-// objects standing in for the GitHub releases list. Every non-sig asset
-// carries a digest so no asset bytes are needed; only the updater signatures
-// are read from disk.
-function runCollectHistory(label, entries, { latestCount = 5, tag = "" } = {}) {
+// A release object in the shape of the GitHub API, with a digest on every
+// non-sig asset so collection needs no asset bytes; only the updater
+// signature is read from disk (into assetDir).
+function buildReleaseObject({ releaseVersion, prerelease = false, draft = false }, assetDir) {
+  const releaseTag = `v${releaseVersion}`;
+  const release = {
+    tag_name: releaseTag,
+    published_at: "2026-05-27T00:00:00Z",
+    body: "Fixture release",
+    prerelease,
+    draft,
+    assets: [],
+  };
+  for (const name of namesFor(releaseVersion)) {
+    const asset = {
+      name,
+      url: `https://api.github.com/repos/fiorix/chan/releases/assets/${encodeURIComponent(name)}`,
+      browser_download_url: `https://github.com/fiorix/chan/releases/download/${releaseTag}/${encodeURIComponent(name)}`,
+    };
+    if (name.endsWith(".sig")) {
+      writeFileSync(path.join(assetDir, name), "fixture-updater-signature\n");
+    } else {
+      asset.digest = `sha256:${digestFor(releaseTag, name)}`;
+    }
+    release.assets.push(asset);
+  }
+  return release;
+}
+
+// Runs the collector against a --release-json fixture: a single release
+// entry yields the single-object form (the requested release), an array the
+// releases-list form. Returns { manifestPath, manifests }.
+function runFixtureCollect(label, fixture, { latestCount = 0, tag = "" } = {}) {
+  const { args, manifestPath } = prepareFixtureCollect(label, fixture, { latestCount, tag });
+  execFileSync("node", args, { cwd: siteRoot });
+  return { manifestPath, manifests: JSON.parse(readFileSync(manifestPath, "utf8")) };
+}
+
+function runFixtureCollectExpectFail(label, fixture, options = {}) {
+  const { args } = prepareFixtureCollect(label, fixture, options);
+  try {
+    execFileSync("node", args, { cwd: siteRoot, stdio: ["ignore", "pipe", "pipe"] });
+  } catch (err) {
+    return String(err.stderr || err.message);
+  }
+  throw new Error("collect-release-assets.mjs should have failed");
+}
+
+function prepareFixtureCollect(label, fixture, { latestCount = 0, tag = "" } = {}) {
   const runRoot = path.join(root, label);
   const assetDir = path.join(runRoot, "assets");
   mkdirSync(assetDir, { recursive: true });
-  const releases = entries.map(({ releaseVersion, prerelease = false, draft = false }) => {
-    const releaseTag = `v${releaseVersion}`;
-    const release = {
-      tag_name: releaseTag,
-      published_at: "2026-05-27T00:00:00Z",
-      body: "Fixture release",
-      prerelease,
-      draft,
-      assets: [],
-    };
-    for (const name of namesFor(releaseVersion)) {
-      const asset = {
-        name,
-        url: `https://api.github.com/repos/fiorix/chan/releases/assets/${encodeURIComponent(name)}`,
-        browser_download_url: `https://github.com/fiorix/chan/releases/download/${releaseTag}/${encodeURIComponent(name)}`,
-      };
-      if (name.endsWith(".sig")) {
-        writeFileSync(path.join(assetDir, name), "fixture-updater-signature\n");
-      } else {
-        asset.digest = `sha256:${digestFor(releaseTag, name)}`;
-      }
-      release.assets.push(asset);
-    }
-    return release;
-  });
-
-  const releaseJson = path.join(runRoot, "releases.json");
+  const entries = Array.isArray(fixture) ? fixture : [fixture];
+  const releases = entries.map((entry) => buildReleaseObject(entry, assetDir));
+  const releaseJson = path.join(runRoot, "release.json");
+  writeFileSync(
+    releaseJson,
+    `${JSON.stringify(Array.isArray(fixture) ? releases : releases[0], null, 2)}\n`,
+  );
   const manifestPath = path.join(runRoot, "manifest.json");
-  writeFileSync(releaseJson, `${JSON.stringify(releases, null, 2)}\n`);
   const args = [
     "scripts/collect-release-assets.mjs",
     "--release-json",
     releaseJson,
     "--asset-dir",
     assetDir,
-    "--latest-count",
-    String(latestCount),
     "--out",
     manifestPath,
   ];
+  if (latestCount > 0) args.push("--latest-count", String(latestCount));
   if (tag) args.push("--tag", tag);
-  execFileSync("node", args, { cwd: siteRoot });
-
-  return { manifestPath, manifests: JSON.parse(readFileSync(manifestPath, "utf8")) };
+  return { args, manifestPath };
 }
 
 function digestFor(releaseTag, name) {

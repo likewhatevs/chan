@@ -6,7 +6,12 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 
 import { gatewayServices } from "./gateway-services.mjs";
-import { gatewayPackageVersion, validateReleaseTag, versionFromTag } from "./release-version.mjs";
+import {
+  compareVersions,
+  gatewayPackageVersion,
+  validateReleaseTag,
+  versionFromTag,
+} from "./release-version.mjs";
 
 const defaultRepo = "fiorix/chan";
 
@@ -163,8 +168,10 @@ With --latest-count N the output is an array of manifests, newest first: the
 requested tag (or the latest GA release) plus its GA predecessors, so /dl
 keeps the latest release and N-1 previous GA releases upgradeable by explicit
 version. Prerelease and draft releases are never collected from the releases
-list. With --release-json, the fixture may hold one release object or an
-array standing in for the releases list.
+list, and an explicit --tag must be GA and the newest retained release: the
+script refuses to publish a prerelease or a stale tag to /dl. With
+--release-json, the fixture may hold one release object or an array standing
+in for the releases list.
 `);
 }
 
@@ -200,13 +207,15 @@ async function fetchRelease(url, options) {
   return response.json();
 }
 
-// History mode (--latest-count N): select the newest N GA releases. The
-// GitHub releases list is newest-first; an explicitly requested --tag (the
-// release being published) is forced to the front and kept even when the
-// list does not carry it yet. Prerelease and draft entries are filtered out
-// of the list so rc builds never land in /dl. With --release-json the
-// fixture may hold either one release object (collected as-is, like an
-// explicit --tag) or an array standing in for the releases list.
+// History mode (--latest-count N): select the newest N GA releases. An
+// explicitly requested --tag (the release being published) must be GA and
+// must end up the newest entry, since it drives latest.json. Prerelease and
+// draft entries are filtered out of the releases list so rc builds never
+// land in /dl. The retained set is sorted newest-first by semver, never by
+// API order (the releases list is created_at-ordered, not version-ordered).
+// With --release-json the fixture may hold either one release object (the
+// requested release, held to the same GA rules) or an array standing in for
+// the releases list.
 async function loadReleaseHistory(options) {
   let requested = null;
   let listed = [];
@@ -234,6 +243,14 @@ async function loadReleaseHistory(options) {
     listed = await response.json();
   }
 
+  // The requested release is published to /dl verbatim, so it must be GA:
+  // a forced rc/prerelease/draft tag would otherwise land in latest.json
+  // and every GA install would self-upgrade onto it.
+  if (requested && !isGaRelease(requested)) {
+    const tag = typeof requested.tag_name === "string" ? requested.tag_name : options.tag;
+    throw new Error(`refusing to publish non-GA tag ${tag} to /dl`);
+  }
+
   const releases = [];
   const seen = new Set();
   const push = (release) => {
@@ -247,12 +264,17 @@ async function loadReleaseHistory(options) {
     if (!isGaRelease(release)) continue;
     push(release);
   }
-  if (options.tag && !requested) {
-    const index = releases.findIndex((release) => release.tag_name === options.tag);
-    if (index === -1) {
-      throw new Error(`requested tag ${options.tag} not found in the release history`);
-    }
-    releases.unshift(...releases.splice(index, 1));
+
+  releases.sort((a, b) =>
+    compareVersions(versionFromTag(b.tag_name), versionFromTag(a.tag_name)),
+  );
+
+  if (
+    options.tag &&
+    !requested &&
+    !releases.some((release) => release.tag_name === options.tag)
+  ) {
+    throw new Error(`requested tag ${options.tag} not found in the GA release history`);
   }
 
   const selected = releases.slice(0, options.latestCount);
@@ -262,6 +284,16 @@ async function loadReleaseHistory(options) {
       return null;
     }
     throw new Error("no GA releases found to collect");
+  }
+
+  // An explicit --tag that is not the newest GA release would silently
+  // demote the true latest (or drop it entirely with a small window), so
+  // refuse it instead of writing a stale latest.json.
+  if (options.tag && selected[0].tag_name !== options.tag) {
+    throw new Error(
+      `--tag ${options.tag} is not the newest GA release (newest is ${selected[0].tag_name}); ` +
+        "refusing to publish it as /dl latest",
+    );
   }
   return selected;
 }
