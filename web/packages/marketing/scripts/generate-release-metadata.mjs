@@ -199,20 +199,25 @@ function windowsDownloads(manifest) {
 
 async function main() {
   const options = parseArgs(process.argv.slice(2));
-  const manifest = normalizeManifest(
+  const manifests = normalizeManifests(
     JSON.parse(await fs.readFile(options.manifest, "utf8")),
-    options.manifest,
+    options,
   );
-  const output = buildMetadata(manifest);
+  const output = buildMetadata(manifests);
   await writeMetadata(options.out, output);
-  console.log(`generated release metadata for ${manifest.tag} under ${options.out}`);
+  const retained = manifests.length - 1;
+  const suffix = retained > 0 ? ` (+${retained} retained GA releases)` : "";
+  console.log(`generated release metadata for ${manifests[0].tag}${suffix} under ${options.out}`);
 }
 
 function parseArgs(args) {
-  const options = { manifest: "", out: "" };
+  const options = { latestCount: 5, manifest: "", out: "" };
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i];
-    if (arg === "--manifest") {
+    if (arg === "--latest-count") {
+      options.latestCount = parseLatestCount(args[i + 1] ?? "");
+      i += 1;
+    } else if (arg === "--manifest") {
       options.manifest = args[i + 1] ?? "";
       i += 1;
     } else if (arg === "--out") {
@@ -233,10 +238,105 @@ function parseArgs(args) {
 function printHelp() {
   console.log(`usage: node scripts/generate-release-metadata.mjs --manifest release-assets.json --out dist/dl
 
-The manifest must describe already uploaded and verified release assets. This
-script only writes static metadata files; it does not create releases, upload
-assets, or publish Pages.
+The manifest must describe already uploaded and verified release assets: a
+single manifest object, or an array newest-first as collected with
+collect-release-assets.mjs --latest-count. The first manifest drives
+cli/latest.json + desktop/latest.json; every retained manifest gets
+per-version cli/vX.Y.Z.json + desktop/vX.Y.Z.json files plus a releases.json
+entry, so /dl keeps the latest release and up to --latest-count-1 previous GA
+releases (default 4) available for explicit-version upgrades.
+
+This script only writes static metadata files; it does not create releases,
+upload assets, or publish Pages.
 `);
+}
+
+function parseLatestCount(value) {
+  const count = Number(value);
+  if (!Number.isInteger(count) || count < 1) {
+    throw new Error("--latest-count must be a positive integer");
+  }
+  return count;
+}
+
+// Accepts a single manifest object or an array newest-first (as
+// collect-release-assets.mjs --latest-count writes it). Every manifest is
+// validated with the single-manifest rules; duplicate versions or tags are
+// rejected and the first entry must be the newest release, since it drives
+// latest.json. At most options.latestCount manifests are retained, so /dl
+// keeps the latest release plus that many previous GA releases minus one.
+function normalizeManifests(raw, options) {
+  const source = options.manifest;
+  const entries = Array.isArray(raw) ? raw : [raw];
+  if (entries.length === 0) {
+    throw new Error(`${source}: manifest array must not be empty`);
+  }
+  const manifests = entries.map((entry) => normalizeManifest(entry, source));
+  const versions = new Set();
+  const tags = new Set();
+  for (const manifest of manifests) {
+    if (versions.has(manifest.version)) {
+      throw new Error(`${source}: duplicate version ${manifest.version}`);
+    }
+    if (tags.has(manifest.tag)) {
+      throw new Error(`${source}: duplicate tag ${manifest.tag}`);
+    }
+    versions.add(manifest.version);
+    tags.add(manifest.tag);
+  }
+  const latest = manifests[0];
+  for (const manifest of manifests.slice(1)) {
+    if (compareVersions(manifest.version, latest.version) > 0) {
+      throw new Error(
+        `${source}: first manifest must be the newest release ` +
+          `(${manifest.version} sorts after ${latest.version})`,
+      );
+    }
+  }
+  return manifests.slice(0, options.latestCount);
+}
+
+// Minimal semver compare for X.Y.Z(-prerelease) versions (tags are validated
+// upstream): numeric core; a prerelease sorts before the same core without
+// one; prerelease identifiers compare per semver (numeric < alphanumeric,
+// numerics numerically, longer list after a shared prefix wins).
+function compareVersions(a, b) {
+  const [coreA, preA] = splitPrerelease(a);
+  const [coreB, preB] = splitPrerelease(b);
+  for (let i = 0; i < 3; i += 1) {
+    if (coreA[i] !== coreB[i]) return coreA[i] - coreB[i];
+  }
+  if (!preA && !preB) return 0;
+  if (!preA) return 1;
+  if (!preB) return -1;
+  const idsA = preA.split(".");
+  const idsB = preB.split(".");
+  for (let i = 0; i < Math.max(idsA.length, idsB.length); i += 1) {
+    const idA = idsA[i];
+    const idB = idsB[i];
+    if (idA === undefined) return -1;
+    if (idB === undefined) return 1;
+    const numA = /^\d+$/.test(idA);
+    const numB = /^\d+$/.test(idB);
+    if (numA && numB) {
+      const diff = Number(idA) - Number(idB);
+      if (diff !== 0) return diff;
+    } else if (numA) {
+      return -1;
+    } else if (numB) {
+      return 1;
+    } else if (idA !== idB) {
+      return idA < idB ? -1 : 1;
+    }
+  }
+  return 0;
+}
+
+function splitPrerelease(version) {
+  const dash = version.indexOf("-");
+  const core = (dash === -1 ? version : version.slice(0, dash)).split(".").map(Number);
+  const prerelease = dash === -1 ? "" : version.slice(dash + 1);
+  return [core, prerelease];
 }
 
 function normalizeManifest(raw, source) {
@@ -307,7 +407,19 @@ function requireString(value, label) {
   return value.trim();
 }
 
-function buildMetadata(manifest) {
+function buildMetadata(manifests) {
+  const entries = manifests.map(buildRelease);
+  const latest = entries[0];
+  const releases = {
+    schema_version: 1,
+    latest: latest.cli.version,
+    latest_tag: latest.cli.tag,
+    releases: entries.map((entry) => entry.release),
+  };
+  return { entries, releases };
+}
+
+function buildRelease(manifest) {
   const cli = {
     schema_version: 1,
     version: manifest.version,
@@ -346,24 +458,17 @@ function buildMetadata(manifest) {
     platforms: desktopPlatforms(manifest),
   };
 
-  const releases = {
-    schema_version: 1,
-    latest: manifest.version,
-    latest_tag: manifest.tag,
-    releases: [
-      {
-        version: manifest.version,
-        tag: manifest.tag,
-        published_at: manifest.publishedAt,
-        notes: manifest.notes,
-        cli: `/dl/cli/${manifest.tag}.json`,
-        desktop: `/dl/desktop/${manifest.tag}.json`,
-        downloads: publicDownloads,
-      },
-    ],
+  const release = {
+    version: manifest.version,
+    tag: manifest.tag,
+    published_at: manifest.publishedAt,
+    notes: manifest.notes,
+    cli: `/dl/cli/${manifest.tag}.json`,
+    desktop: `/dl/desktop/${manifest.tag}.json`,
+    downloads: publicDownloads,
   };
 
-  return { cli, desktop, releases };
+  return { cli, desktop, release };
 }
 
 function desktopPlatforms(manifest) {
@@ -390,14 +495,17 @@ function requireAsset(manifest, name) {
   return asset;
 }
 
-async function writeMetadata(outRoot, { cli, desktop, releases }) {
+async function writeMetadata(outRoot, { entries, releases }) {
   await fs.mkdir(path.join(outRoot, "cli"), { recursive: true });
   await fs.mkdir(path.join(outRoot, "desktop"), { recursive: true });
   await writeJson(path.join(outRoot, "releases.json"), releases);
-  await writeJson(path.join(outRoot, "cli", "latest.json"), cli);
-  await writeJson(path.join(outRoot, "cli", `${cli.tag}.json`), cli);
-  await writeJson(path.join(outRoot, "desktop", "latest.json"), desktop);
-  await writeJson(path.join(outRoot, "desktop", `${cli.tag}.json`), desktop);
+  const latest = entries[0];
+  await writeJson(path.join(outRoot, "cli", "latest.json"), latest.cli);
+  await writeJson(path.join(outRoot, "desktop", "latest.json"), latest.desktop);
+  for (const entry of entries) {
+    await writeJson(path.join(outRoot, "cli", `${entry.cli.tag}.json`), entry.cli);
+    await writeJson(path.join(outRoot, "desktop", `${entry.cli.tag}.json`), entry.desktop);
+  }
 }
 
 async function writeJson(file, value) {

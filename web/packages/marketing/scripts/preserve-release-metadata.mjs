@@ -7,11 +7,11 @@
 // and would otherwise ship without /dl, 404ing the download page and
 // the CLI / desktop update checks until the next release.
 //
-// /dl is regenerated from the latest GitHub Release, the durable source
+// /dl is regenerated from the GitHub Releases history, the durable source
 // of truth (signed updater assets + checksums), exactly the way
-// release.yml does: collect-release-assets builds the manifest, then
-// generate-release-metadata writes the static files. It does NOT read
-// the live site.
+// release.yml does: collect-release-assets builds the manifest for the
+// latest 5 GA releases, then generate-release-metadata writes the static
+// files. It does NOT read the live site.
 
 import { execFileSync } from "node:child_process";
 import { promises as fs } from "node:fs";
@@ -32,7 +32,9 @@ async function main() {
     // --allow-missing-release: before the first release there is nothing
     // to publish, and a marketing deploy must still succeed. When no
     // release exists the collector skips writing the manifest.
-    const collectArgs = ["--allow-missing-release", "--out", manifest];
+    // --latest-count 5 mirrors release.yml: /dl keeps the latest GA release
+    // plus the 4 previous GA releases upgradeable by explicit version.
+    const collectArgs = ["--allow-missing-release", "--latest-count", "5", "--out", manifest];
     if (options.tag) collectArgs.push("--tag", options.tag);
     runScript("collect-release-assets.mjs", collectArgs);
 
@@ -42,7 +44,7 @@ async function main() {
     }
 
     runScript("generate-release-metadata.mjs", ["--manifest", manifest, "--out", options.out]);
-    console.log(`rebuilt /dl metadata from the latest GitHub Release under ${options.out}`);
+    console.log(`rebuilt /dl metadata from the latest 5 GA GitHub Releases under ${options.out}`);
   } finally {
     await fs.rm(workDir, { force: true, recursive: true });
   }
@@ -73,9 +75,10 @@ function parseArgs(args) {
 function printHelp() {
   console.log(`usage: node scripts/preserve-release-metadata.mjs [--out dist/dl] [--tag vX.Y.Z[-rcN]]
 
-Rebuilds /dl into a freshly built Pages artifact from the latest GitHub
-Release (or --tag), so a marketing-only deploy keeps the download page and
-update-check metadata intact. Mirrors release.yml's generation path.
+Rebuilds /dl into a freshly built Pages artifact from the latest 5 GA GitHub
+Releases (or --tag plus its GA predecessors), so a marketing-only deploy keeps
+the download page, the update-check metadata, and explicit-version upgrades
+for the retained releases intact. Mirrors release.yml's generation path.
 `);
 }
 

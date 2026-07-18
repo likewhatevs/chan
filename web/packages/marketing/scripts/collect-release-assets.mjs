@@ -75,6 +75,22 @@ function updaterAssets(version) {
 
 async function main() {
   const options = parseArgs(process.argv.slice(2));
+  if (options.latestCount > 0) {
+    const releases = await loadReleaseHistory(options);
+    if (!releases) return;
+    const manifests = [];
+    for (const release of releases) {
+      manifests.push(await collectManifest(release, options));
+    }
+    await fs.mkdir(path.dirname(options.out), { recursive: true });
+    await fs.writeFile(options.out, `${JSON.stringify(manifests, null, 2)}\n`);
+    const tags = manifests.map((manifest) => manifest.tag).join(", ");
+    console.log(
+      `wrote release asset manifest for ${manifests.length} releases (${tags}) to ${options.out}`,
+    );
+    return;
+  }
+
   const release = await loadRelease(options);
   if (!release) return;
 
@@ -88,6 +104,7 @@ function parseArgs(args) {
   const options = {
     allowMissingRelease: false,
     assetDir: "",
+    latestCount: 0,
     out: "",
     releaseJson: "",
     repo: defaultRepo,
@@ -99,6 +116,9 @@ function parseArgs(args) {
       options.allowMissingRelease = true;
     } else if (arg === "--asset-dir") {
       options.assetDir = args[i + 1] ?? "";
+      i += 1;
+    } else if (arg === "--latest-count") {
+      options.latestCount = parseLatestCount(args[i + 1] ?? "");
       i += 1;
     } else if (arg === "--out") {
       options.out = args[i + 1] ?? "";
@@ -132,12 +152,28 @@ function parseArgs(args) {
 }
 
 function printHelp() {
-  console.log(`usage: node scripts/collect-release-assets.mjs --out release-assets.json [--tag vX.Y.Z[-rcN]]
+  console.log(`usage: node scripts/collect-release-assets.mjs --out release-assets.json [--tag vX.Y.Z[-rcN]] [--latest-count N]
 
 Collects uploaded GitHub Release assets into the manifest consumed by
 generate-release-metadata.mjs. The script downloads asset bytes to compute
-SHA256 values and reads updater signature assets for signed platform entries.
+SHA256 values (unless the GitHub API already reports a "sha256:<hex>" digest
+for the asset) and reads updater signature assets for signed platform entries.
+
+With --latest-count N the output is an array of manifests, newest first: the
+requested tag (or the latest GA release) plus its GA predecessors, so /dl
+keeps the latest release and N-1 previous GA releases upgradeable by explicit
+version. Prerelease and draft releases are never collected from the releases
+list. With --release-json, the fixture may hold one release object or an
+array standing in for the releases list.
 `);
+}
+
+function parseLatestCount(value) {
+  const count = Number(value);
+  if (!Number.isInteger(count) || count < 1) {
+    throw new Error("--latest-count must be a positive integer");
+  }
+  return count;
 }
 
 async function loadRelease(options) {
@@ -149,6 +185,10 @@ async function loadRelease(options) {
   const url = options.tag
     ? `${apiBase}/releases/tags/${encodeURIComponent(options.tag)}`
     : `${apiBase}/releases/latest`;
+  return fetchRelease(url, options);
+}
+
+async function fetchRelease(url, options) {
   const response = await request(url);
   if (response.status === 404 && options.allowMissingRelease) {
     console.warn("warning: no GitHub Release found; skipping /dl metadata");
@@ -158,6 +198,78 @@ async function loadRelease(options) {
     throw new Error(`${url} returned HTTP ${response.status}`);
   }
   return response.json();
+}
+
+// History mode (--latest-count N): select the newest N GA releases. The
+// GitHub releases list is newest-first; an explicitly requested --tag (the
+// release being published) is forced to the front and kept even when the
+// list does not carry it yet. Prerelease and draft entries are filtered out
+// of the list so rc builds never land in /dl. With --release-json the
+// fixture may hold either one release object (collected as-is, like an
+// explicit --tag) or an array standing in for the releases list.
+async function loadReleaseHistory(options) {
+  let requested = null;
+  let listed = [];
+  if (options.releaseJson) {
+    const raw = JSON.parse(await fs.readFile(options.releaseJson, "utf8"));
+    if (Array.isArray(raw)) {
+      listed = raw;
+    } else {
+      requested = raw;
+    }
+  } else {
+    const apiBase = `https://api.github.com/repos/${options.repo}`;
+    if (options.tag) {
+      requested = await fetchRelease(
+        `${apiBase}/releases/tags/${encodeURIComponent(options.tag)}`,
+        options,
+      );
+      if (!requested) return null;
+    }
+    const listUrl = `${apiBase}/releases?per_page=100`;
+    const response = await request(listUrl);
+    if (!response.ok) {
+      throw new Error(`${listUrl} returned HTTP ${response.status}`);
+    }
+    listed = await response.json();
+  }
+
+  const releases = [];
+  const seen = new Set();
+  const push = (release) => {
+    const tag = requireString(release.tag_name, "release.tag_name");
+    if (seen.has(tag)) return;
+    seen.add(tag);
+    releases.push(release);
+  };
+  if (requested) push(requested);
+  for (const release of listed) {
+    if (!isGaRelease(release)) continue;
+    push(release);
+  }
+  if (options.tag && !requested) {
+    const index = releases.findIndex((release) => release.tag_name === options.tag);
+    if (index === -1) {
+      throw new Error(`requested tag ${options.tag} not found in the release history`);
+    }
+    releases.unshift(...releases.splice(index, 1));
+  }
+
+  const selected = releases.slice(0, options.latestCount);
+  if (selected.length === 0) {
+    if (options.allowMissingRelease) {
+      console.warn("warning: no GA GitHub Release found; skipping /dl metadata");
+      return null;
+    }
+    throw new Error("no GA releases found to collect");
+  }
+  return selected;
+}
+
+function isGaRelease(release) {
+  if (release?.draft || release?.prerelease) return false;
+  const tag = typeof release?.tag_name === "string" ? release.tag_name : "";
+  return /^v\d+\.\d+\.\d+$/.test(tag);
 }
 
 async function collectManifest(release, options) {
@@ -205,12 +317,24 @@ async function collectManifest(release, options) {
 async function collectAsset(name, releaseAssets, options) {
   const asset = releaseAssets.get(name);
   if (!asset) throw new Error(`missing release asset: ${name}`);
+  const url = requireString(asset.browser_download_url, `${name} browser_download_url`);
+  const digest = digestSha256(asset);
+  if (digest) return { name, url, sha256: digest };
   const bytes = await readAssetBytes(asset, options);
   return {
     name,
-    url: requireString(asset.browser_download_url, `${name} browser_download_url`),
+    url,
     sha256: createHash("sha256").update(bytes).digest("hex"),
   };
+}
+
+// The GitHub API reports asset digests as "sha256:<hex>"; trust those instead
+// of re-downloading bytes just to hash them. Local fixtures and old API
+// responses without a digest still take the download-and-hash path.
+function digestSha256(asset) {
+  const digest = typeof asset.digest === "string" ? asset.digest.trim() : "";
+  const match = digest.match(/^sha256:([0-9a-fA-F]{64})$/);
+  return match ? match[1].toLowerCase() : "";
 }
 
 async function collectSignature(name, releaseAssets, options) {

@@ -861,6 +861,9 @@ jobs:
     # move those to the rc and every GA install would self-upgrade onto it, so
     # the /dl metadata + Pages deploy stay GA-only. Mirrors the docker `latest`
     # GA-only gate below; rc builds still ship as GitHub Release assets.
+    # collect-release-assets --latest-count 5 keeps the just-published release
+    # plus the 4 previous GA releases in /dl, so `chan upgrade --version
+    # X.Y.Z` keeps resolving older GA versions after newer releases ship.
     if: needs.context.outputs.publish == 'true' && needs.context.outputs.prerelease == 'false'
     needs:
       - context
@@ -887,7 +890,7 @@ jobs:
         run: |
           set -e
           npm run build
-          node scripts/collect-release-assets.mjs --tag "$TAG" --out /var/tmp/chan-release-assets.json
+          node scripts/collect-release-assets.mjs --tag "$TAG" --latest-count 5 --out /var/tmp/chan-release-assets.json
           node scripts/generate-release-metadata.mjs --manifest /var/tmp/chan-release-assets.json --out dist/dl
           find dist/dl -type f | sort
 

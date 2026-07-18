@@ -120,6 +120,123 @@ async function main() {
       prereleaseDownloads.some((download) => download.asset === "Chan-0.56.0-rc1-1.x86_64.rpm"),
       "prerelease desktop rpm mapped",
     );
+
+    // History mode: an array of synthetic manifests (newest first) emits only
+    // the retained window (default --latest-count 5).
+    const historyVersions = ["0.16.0", "0.15.9", "0.15.8", "0.15.7", "0.15.6", "0.15.5"];
+    const fixtureRaw = await fs.readFile(fixture, "utf8");
+    const syntheticManifest = (historyVersion) =>
+      rewriteFixtureVersion(JSON.parse(fixtureRaw), historyVersion);
+    const historyManifest = path.join(out, "history.json");
+    await fs.writeFile(
+      historyManifest,
+      `${JSON.stringify(historyVersions.map(syntheticManifest))}\n`,
+    );
+    const historyOut = path.join(out, "history");
+    await runNode(path.join(scriptsRoot, "generate-release-metadata.mjs"), [
+      "--manifest",
+      historyManifest,
+      "--out",
+      historyOut,
+    ]);
+
+    const retained = historyVersions.slice(0, 5);
+    const historyReleases = await readJson(path.join(historyOut, "releases.json"));
+    assert(historyReleases.releases.length === 5, "releases.json retains 5 entries");
+    assert(
+      JSON.stringify(historyReleases.releases.map((entry) => entry.version)) ===
+        JSON.stringify(retained),
+      "releases.json entries newest-first",
+    );
+    assert(historyReleases.latest === "0.16.0", "history latest version");
+    assert(historyReleases.latest_tag === "v0.16.0", "history latest tag");
+    for (const [index, retainedVersion] of retained.entries()) {
+      const retainedTag = `v${retainedVersion}`;
+      const entry = historyReleases.releases[index];
+      assert(entry.cli === `/dl/cli/${retainedTag}.json`, `entry cli path ${retainedTag}`);
+      assert(
+        entry.desktop === `/dl/desktop/${retainedTag}.json`,
+        `entry desktop path ${retainedTag}`,
+      );
+      const cliVersioned = await readJson(path.join(historyOut, "cli", `${retainedTag}.json`));
+      const desktopVersioned = await readJson(
+        path.join(historyOut, "desktop", `${retainedTag}.json`),
+      );
+      assert(cliVersioned.version === retainedVersion, `cli ${retainedTag} version`);
+      assert(cliVersioned.tag === retainedTag, `cli ${retainedTag} tag`);
+      assert(desktopVersioned.version === retainedVersion, `desktop ${retainedTag} version`);
+    }
+    const historyCliLatest = await readJson(path.join(historyOut, "cli", "latest.json"));
+    const historyCliNewest = await readJson(path.join(historyOut, "cli", "v0.16.0.json"));
+    const historyDesktopLatest = await readJson(path.join(historyOut, "desktop", "latest.json"));
+    const historyDesktopNewest = await readJson(
+      path.join(historyOut, "desktop", "v0.16.0.json"),
+    );
+    assert(
+      JSON.stringify(historyCliLatest) === JSON.stringify(historyCliNewest),
+      "history cli latest equals newest version file",
+    );
+    assert(
+      JSON.stringify(historyDesktopLatest) === JSON.stringify(historyDesktopNewest),
+      "history desktop latest equals newest version file",
+    );
+    assert(
+      !(await fileExists(path.join(historyOut, "cli", "v0.15.5.json"))),
+      "oldest version outside the window has no cli file",
+    );
+    assert(
+      !(await fileExists(path.join(historyOut, "desktop", "v0.15.5.json"))),
+      "oldest version outside the window has no desktop file",
+    );
+
+    // A smaller explicit window retains fewer releases.
+    const narrowOut = path.join(out, "narrow");
+    await runNode(path.join(scriptsRoot, "generate-release-metadata.mjs"), [
+      "--manifest",
+      historyManifest,
+      "--out",
+      narrowOut,
+      "--latest-count",
+      "2",
+    ]);
+    const narrowReleases = await readJson(path.join(narrowOut, "releases.json"));
+    assert(narrowReleases.releases.length === 2, "explicit --latest-count caps retention");
+    assert(
+      !(await fileExists(path.join(narrowOut, "cli", "v0.15.8.json"))),
+      "narrow window drops older versions",
+    );
+
+    // Invalid histories are rejected: duplicate versions, a first entry that
+    // is not the newest, and an empty array.
+    const duplicateManifest = path.join(out, "duplicate.json");
+    await fs.writeFile(
+      duplicateManifest,
+      `${JSON.stringify([syntheticManifest("0.16.0"), syntheticManifest("0.16.0")])}\n`,
+    );
+    const duplicateError = await runNodeExpectFail(
+      path.join(scriptsRoot, "generate-release-metadata.mjs"),
+      ["--manifest", duplicateManifest, "--out", path.join(out, "duplicate")],
+    );
+    assert(duplicateError.includes("duplicate"), "duplicate versions rejected");
+
+    const unsortedManifest = path.join(out, "unsorted.json");
+    await fs.writeFile(
+      unsortedManifest,
+      `${JSON.stringify([syntheticManifest("0.15.9"), syntheticManifest("0.16.0")])}\n`,
+    );
+    const unsortedError = await runNodeExpectFail(
+      path.join(scriptsRoot, "generate-release-metadata.mjs"),
+      ["--manifest", unsortedManifest, "--out", path.join(out, "unsorted")],
+    );
+    assert(unsortedError.includes("newest"), "first-not-newest rejected");
+
+    const emptyManifest = path.join(out, "empty.json");
+    await fs.writeFile(emptyManifest, "[]\n");
+    const emptyError = await runNodeExpectFail(
+      path.join(scriptsRoot, "generate-release-metadata.mjs"),
+      ["--manifest", emptyManifest, "--out", path.join(out, "empty")],
+    );
+    assert(emptyError.includes("empty"), "empty manifest array rejected");
   } finally {
     await fs.rm(out, { recursive: true, force: true });
   }
@@ -136,6 +253,27 @@ function runNode(file, args) {
       }
     });
   });
+}
+
+function runNodeExpectFail(file, args) {
+  return new Promise((resolve, reject) => {
+    execFile(process.execPath, [file, ...args], (err, stdout, stderr) => {
+      if (err) {
+        resolve(stderr || stdout || err.message);
+      } else {
+        reject(new Error(`${path.basename(file)} should have failed`));
+      }
+    });
+  });
+}
+
+async function fileExists(file) {
+  try {
+    await fs.access(file);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function readJson(file) {
