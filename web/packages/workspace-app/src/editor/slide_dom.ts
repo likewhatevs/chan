@@ -203,6 +203,7 @@ export function renderSlideDiagrams(
         if (res.ok && res.svg) {
           body.classList.remove("md-slide-diagram-error");
           body.innerHTML = res.svg;
+          normalizeDiagramSvgSizing(body);
         } else {
           renderSlideDiagramError(body, source, res, label);
         }
@@ -309,6 +310,30 @@ function renderSlideDiagramError(
   body.append(reason);
 }
 
+/// Normalize an Excalidraw export SVG so it shrinks to its container but
+/// never past its native size. The export bakes fixed pixel `width` and
+/// `height` attributes; during the PDF `foreignObject` rasterization a
+/// nested fixed-size SVG lays out at that native size and a percentage
+/// `max-width` does not constrain it, so the diagram overflows the page.
+/// An absolute pixel `max-width` survives that path and `width:100%`
+/// gives the same shrink the preview applies, so export matches preview
+/// at min(container, native). Mermaid exports carry `width="100%"` and
+/// fall through untouched; the `viewBox` is preserved so the crisp-zoom
+/// viewer still opens at full size.
+function normalizeDiagramSvgSizing(body: HTMLElement): void {
+  const svg = body.querySelector("svg");
+  if (!svg) return;
+  const width = svg.getAttribute("width")?.trim();
+  if (!width || width.endsWith("%")) return;
+  const nativePx = parseFloat(width);
+  if (!Number.isFinite(nativePx) || nativePx <= 0) return;
+  svg.removeAttribute("width");
+  svg.removeAttribute("height");
+  svg.style.width = "100%";
+  svg.style.height = "auto";
+  svg.style.maxWidth = `${nativePx}px`;
+}
+
 /// Resolve image srcs (including the #w=/#left/#right grammar), replace
 /// Excalidraw image embeds with rendered SVG, and retarget links. The
 /// synchronous work happens before this returns; the returned promise
@@ -371,6 +396,7 @@ function renderSlideExcalidraw(
     if (res.ok && res.svg) {
       body.classList.remove("md-slide-excalidraw-error");
       body.innerHTML = res.svg;
+      normalizeDiagramSvgSizing(body);
     } else {
       renderSlideExcalidrawError(body, res.error ?? "render failed");
     }
