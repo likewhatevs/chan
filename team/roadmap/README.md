@@ -21,13 +21,24 @@ Each item is one Markdown file that names an observed behavior or need, the evid
 
 ### v0.71.0
 
-- [release-flow](v0.71.0/release-flow.md) - make `team/` the development front door, split into this roadmap tree and the release-history tree, and land it as the barrier before any technical v0.71.0 work. This item is what the first v0.71.0 commit executes.
-- [chan-upgrade-release-history-fix](v0.71.0/chan-upgrade-release-history-fix.md) - keep the last five CLI upgrade versions resolvable through `chan upgrade --version`.
-- [chan-workspace-graph-fix](v0.71.0/chan-workspace-graph-fix.md) - unify workspace search and graph traversal behind one bounded contract used by `cs`, `chan workspace`, chan-server, and `chan-llm`.
-- [terminal-write-queue-drain](v0.71.0/terminal-write-queue-drain.md) - drain queued terminal notifications within one agent turn.
-- [tauri-permission](v0.71.0/tauri-permission.md) - authenticated exact-origin Tauri permissions.
-- [terminal-gemini-opencode](v0.71.0/terminal-gemini-opencode.md) - Gemini verification and first-class OpenCode terminal support (implementation in flight on its feature branch).
-- [cosmetics](v0.71.0/cosmetics.md) - editor light-mode codeblock box and dark-mode selection-highlight color fixes.
+Scope descriptions are in each linked proposal. State and immediate action:
+
+| item | state | what needs to happen |
+| --- | --- | --- |
+| [release-flow](v0.71.0/release-flow.md) | landed on `main` (39db4e6b) | move to `done/` at GA |
+| [terminal-gemini-opencode](v0.71.0/terminal-gemini-opencode.md) | implementation in flight | rebase `feature/opencode-terminal-support` onto `main`, gate, merge as the first intake |
+| [chan-workspace-graph-fix](v0.71.0/chan-workspace-graph-fix.md) | proposed | assign a lane, implement, validate |
+| [chan-upgrade-release-history-fix](v0.71.0/chan-upgrade-release-history-fix.md) | proposed | assign a lane, implement, validate |
+| [terminal-write-queue-drain](v0.71.0/terminal-write-queue-drain.md) | proposed | assign a lane, implement, validate |
+| [tauri-permission](v0.71.0/tauri-permission.md) | proposed | assign the desktop lane, implement, validate |
+| [cosmetics](v0.71.0/cosmetics.md) | proposed | assign the web/editor lane, implement, validate |
+
+**Next steps**
+
+1. Intake the opencode work first: rebase `feature/opencode-terminal-support` onto `main`, run the gate, and merge it as the first accepted candidate. It carries `terminal-gemini-opencode.md`, so drop that file's stale `dev/` copy at the rebase.
+2. Prepare the delivery team with `cs terminal team`: assign the remaining proposed items to file-disjoint lanes by surface, with a dependency graph and a per-item validation matrix.
+3. Open `0.71.0-rc1`: bump every version pin in one commit, dispatch the `publish=false` dry run, validate the artifacts, and iterate.
+4. GA close in one commit: write `team/release/release-v0.71.0.md`, index it, move every v0.71.0 item to `done/` with an honest status line, carry the CHANGELOG and pins, and tag `v0.71.0`.
 
 ## Completed
 
