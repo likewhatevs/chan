@@ -1,7 +1,7 @@
 //! Runtime overrides for the per-agent submit chords. The DEFAULT chord
 //! bytes live in chan-shell (`SubmitAgent::default_template`); this module
 //! lets a user override them without a rebuild by editing
-//! `<config>/chan/submit.toml`, so a client (claude/codex/gemini) changing
+//! `<config>/chan/submit.toml`, so a client (claude/codex/gemini/opencode) changing
 //! its submit behavior is a config edit, not a release. Env
 //! `CHAN_SUBMIT_<AGENT>` still takes precedence over the file (resolved in
 //! chan-shell at chord-application time).
@@ -10,11 +10,13 @@
 //!
 //! ```text
 //! [claude]
-//! template = "{}\e[27;9;13~"      # {} is the text; \e \xHH \r \n \t escapes
+//! template = '{}\e[27;9;13~'      # {} is the text; \e \xHH \r \n \t escapes
 //! [codex]
-//! template = "\e[200~{}\e[201~\r"
+//! template = '\e[200~{}\e[201~\r'
 //! [gemini]
-//! template = "{}\r"
+//! template = '{}\r'
+//! [opencode]
+//! template = '\e[200~{}\e[201~\r'
 //! ```
 //!
 //! A template without `{}` is treated as a pure suffix appended after the
@@ -29,11 +31,29 @@ struct SubmitOverridesFile {
     claude: Option<AgentChord>,
     codex: Option<AgentChord>,
     gemini: Option<AgentChord>,
+    opencode: Option<AgentChord>,
 }
 
 #[derive(Debug, Deserialize)]
 struct AgentChord {
     template: String,
+}
+
+impl SubmitOverridesFile {
+    fn into_map(self) -> HashMap<String, String> {
+        let mut map = HashMap::new();
+        for (name, chord) in [
+            ("claude", self.claude),
+            ("codex", self.codex),
+            ("gemini", self.gemini),
+            ("opencode", self.opencode),
+        ] {
+            if let Some(chord) = chord {
+                map.insert(name.to_string(), chord.template);
+            }
+        }
+        map
+    }
 }
 
 /// Load `<config>/chan/submit.toml` (if present) and install any per-agent
@@ -49,17 +69,28 @@ pub fn install() {
             return;
         }
     };
-    let mut map = HashMap::new();
-    if let Some(c) = file.claude {
-        map.insert("claude".to_string(), c.template);
-    }
-    if let Some(c) = file.codex {
-        map.insert("codex".to_string(), c.template);
-    }
-    if let Some(c) = file.gemini {
-        map.insert("gemini".to_string(), c.template);
-    }
+    let map = file.into_map();
     if !map.is_empty() {
         chan_shell::set_chord_overrides(map);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn opencode_table_deserializes() {
+        let file: SubmitOverridesFile = toml::from_str(
+            r#"
+[opencode]
+template = "\\e[200~{}\\e[201~\\r"
+"#,
+        )
+        .expect("valid submit config");
+        assert_eq!(
+            file.into_map().get("opencode").map(String::as_str),
+            Some("\\e[200~{}\\e[201~\\r")
+        );
     }
 }

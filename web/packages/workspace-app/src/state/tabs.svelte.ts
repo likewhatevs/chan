@@ -33,6 +33,7 @@ import {
   type SerializedKeyboardProtocolState,
   type TerminalKeyboardProtocolState,
 } from "../terminal/keymap";
+import type { SubmitAgent } from "../terminal/submitMode";
 import { notify } from "./notify.svelte";
 import { isRichPromptVisible, showRichPromptForTab } from "./richPrompt.svelte";
 import {
@@ -362,6 +363,10 @@ export type TerminalTab = {
   terminalEnvTabName?: string;
   terminalEnvNamePromptDismissed?: boolean;
   terminalSessionId?: string;
+  /// Spawn-derived submit identity from the server's latest `session` frame.
+  /// Transient and replaced, including with `undefined`, on every attach so a
+  /// restart or old server cannot leave stale agent identity on the tab.
+  submitAgent?: SubmitAgent;
   controlledTerminal?: boolean;
   lastAgentEchoSeq?: number;
   terminalActivity?: boolean;
@@ -1282,6 +1287,7 @@ function tabForReopen(src: Tab): Tab {
   const tab = cloneTab(src);
   if (tab.kind === "terminal") {
     tab.terminalSessionId = undefined;
+    tab.submitAgent = undefined;
     tab.controlledTerminal = undefined;
     tab.lastAgentEchoSeq = undefined;
     tab.terminalEnvTabName = undefined;
@@ -1938,10 +1944,18 @@ export function setTerminalSession(tab: TerminalTab, sessionId: string): void {
   const wasFresh = !tab.terminalSessionId || tab.terminalSessionId !== sessionId;
   tab.terminalSessionId = sessionId;
   if (wasFresh) {
+    tab.submitAgent = undefined;
     tab.lastAgentEchoSeq = undefined;
     tab.terminalEnvTabName = terminalTabName(tab);
     tab.terminalEnvNamePromptDismissed = false;
   }
+}
+
+export function setTerminalSubmitAgent(
+  tab: TerminalTab,
+  submitAgent: SubmitAgent | undefined,
+): void {
+  tab.submitAgent = submitAgent;
 }
 
 export function setTerminalActivity(tab: TerminalTab, active: boolean): void {
@@ -2032,6 +2046,7 @@ export function failPendingPrompt(tab: TerminalTab): void {
 
 export function clearTerminalSession(tab: TerminalTab): void {
   tab.terminalSessionId = undefined;
+  tab.submitAgent = undefined;
   tab.lastAgentEchoSeq = undefined;
   tab.terminalActivity = undefined;
   tab.terminalActivityPulsing = undefined;

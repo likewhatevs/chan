@@ -1,6 +1,6 @@
 # Orchestration with chan
 
-`chan` is the local notes-and-editor host. It also doubles as an orchestration host: a single-machine surface where agents (claude, codex, gemini, custom) can be spawned into named terminal tabs (the Team Work flow) and reach chan's MCP server through `CHAN_MCP_*` terminal environment variables.
+`chan` is the local notes-and-editor host. It also doubles as an orchestration host: a single-machine surface where agents (claude, codex, gemini, opencode, custom) can be spawned into named terminal tabs (the Team Work flow) and reach chan's MCP server through `CHAN_MCP_*` terminal environment variables.
 
 > Status note: the fsnotify-driven event-coordination layer (typed event files -> watcher -> `poke` dispatch -> notification bubbles) was REMOVED in the Team Work revamp, along with the event-reply / submit-mode endpoints and the Spawn-agents dialog. The notification bubble overlay is now a frontend-only static stub. Equivalent functionality is planned to return in a later phase; the event/watcher contracts below are retained as the blueprint for that returning implementation.
 
@@ -10,7 +10,7 @@ This SKILL documents the contracts external authors need to integrate with that 
 
 * "I want my agent to send events to other agents routed through chan" → [atomic-writes.md](./atomic-writes.md).
 * "I want chan to spawn an agent CLI for me" → [spawn-protocol.md](./spawn-protocol.md).
-* "I want claude / codex / gemini launched in a chan terminal to use chan's MCP server" -> [mcp-discovery.md](./mcp-discovery.md).
+* "I want claude / codex / gemini / opencode launched in a chan terminal to use chan's MCP server" -> [mcp-discovery.md](./mcp-discovery.md).
 
 ## What chan provides
 

@@ -38,6 +38,13 @@ describe("TerminalTab Rich Prompt wiring", () => {
     expect(terminal).toMatch(/setTerminalQueueDepth\(tab, frame\.queue_depth \?\? 0\);/);
   });
 
+  test("session frame replaces the transient server-reported submit identity", () => {
+    expect(terminal).toMatch(/submit_agent\?: SubmitAgent;/);
+    expect(terminal).toMatch(
+      /setTerminalSession\(tab, frame\.id\);[\s\S]{1,260}setTerminalSubmitAgent\(tab, frame\.submit_agent\);/,
+    );
+  });
+
   test("Pane tab strip shows the queue-depth pill for terminal tabs", () => {
     // Same affordance family as the activity dot: only for terminal
     // tabs, only when something is queued (0 collapses to undefined in

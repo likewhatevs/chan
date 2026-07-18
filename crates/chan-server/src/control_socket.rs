@@ -1613,8 +1613,8 @@ struct TeamSpawn {
     /// `(handle, writes)` for each AGENT member. `writes` is the ordered list
     /// of PTY writes that deliver the identity prompt + submit it: one element
     /// for most agents (prompt + chord), but TWO for gemini (the prompt, then
-    /// the bare submit chord as a distinct write, since gemini coalesces a
-    /// bulk text+CR). The delivery loop writes them with a gap between.
+    /// the bare submit chord as a distinct write, since an immediate Return
+    /// becomes Shift+Return). The delivery loop writes them with a gap between.
     pokes: Vec<(String, Vec<String>)>,
     /// Each spawned member's tab name + live `session_id`, for the
     /// SPA-surfacing push (`WindowCommand::TeamSpawned`).
@@ -5346,6 +5346,34 @@ is_lead = false
             registry.window_ids_matching(None, Some("spawnme")),
             vec!["win-spawn".to_string()],
             "agents are bound to the caller window"
+        );
+    }
+
+    #[test]
+    fn spawn_team_opencode_lead_uses_one_bracketed_paste_write() {
+        let (_root, registry) = empty_registry();
+        let mut config = spawnable_config();
+        let lead = config
+            .members
+            .iter_mut()
+            .find(|member| member.is_lead)
+            .expect("lead member");
+        lead.env.insert("CHAN_AGENT".into(), "opencode".into());
+
+        let spawn = spawn_team(&registry, "new-team-1", &config, None);
+        let (_, writes) = spawn
+            .pokes
+            .iter()
+            .find(|(handle, _)| handle == "@@Lead")
+            .expect("lead identity poke");
+        assert_eq!(writes.len(), 1, "opencode has raw-write cost one");
+        assert!(
+            writes[0].starts_with("\x1b[200~# Team work") && writes[0].contains("You are @@Lead"),
+            "opencode lead body starts inside bracketed paste: {writes:?}"
+        );
+        assert!(
+            writes[0].ends_with("\x1b[201~\r"),
+            "opencode lead submits after bracketed paste: {writes:?}"
         );
     }
 

@@ -16,9 +16,9 @@
 //!     `<config>/chan/submit.toml`) so a client changing its submit behavior
 //!     does not need a rebuild. See `apply_submit_chord` / `set_chord_overrides`.
 //!
-//! The frontend only ever sends the agent NAME (the server applies the
-//! chord), so the chord bytes are not duplicated in the SPA. The agent-name
-//! detection in `submitMode.ts` is the only TS half that must stay in sync.
+//! Rich Prompt sends the agent NAME and the server applies the chord. The SPA's
+//! `submitMode.ts` also pins the byte map for browser-side parity tests, so its
+//! agent union, detection, and default encodings must stay in sync.
 
 use std::collections::HashMap;
 use std::sync::RwLock;
@@ -49,18 +49,21 @@ pub enum SubmitAgent {
     /// Live-probed 2026-06-02 against codex-cli 0.136.0.
     Codex,
     /// Google gemini. Submits on a CR, but ONLY when the CR arrives as a
-    /// DISTINCT write: gemini 0.42 coalesces a bulk `text + CR` write into one
-    /// read and treats the trailing CR as a newline in its draft, not Enter
-    /// (a bracketed-paste wrap does not help, unlike codex). So gemini's chord
-    /// is delivered as a SEPARATE write from the text - see `submit_writes`.
-    /// Live-probed 2026-06-03 against gemini-cli 0.42.0: bare CR and a
-    /// bracketed-paste wrap both left the buffer unsubmitted; a standalone CR
-    /// write submitted it. (Earlier 0.x gemini did submit on a coalesced CR.)
+    /// DISTINCT write: gemini 0.51 converts Return received within 30 ms of
+    /// inserted text into Shift+Return, including text delivered as bracketed
+    /// paste. So gemini's chord is delivered as a SEPARATE write from the text
+    /// - see `submit_writes`.
     Gemini,
+    /// OpenCode. Its TUI accepts bracketed paste followed by CR in the same
+    /// PTY write. The bracketed form is the default because it is proven for
+    /// multiline and paste-sized input. Live-probed 2026-07-18 against
+    /// OpenCode 1.18.3.
+    OpenCode,
 }
 
 impl SubmitAgent {
-    /// Resolve an agent NAME ("claude" | "codex" | "gemini") to its variant
+    /// Resolve an agent NAME ("claude" | "codex" | "gemini" | "opencode")
+    /// to its variant
     /// without clap's `ValueEnum::from_str` (so a caller that only has the
     /// string does not have to pull clap in). Returns `None` for an unknown
     /// name.
@@ -69,6 +72,7 @@ impl SubmitAgent {
             "claude" => Some(SubmitAgent::Claude),
             "codex" => Some(SubmitAgent::Codex),
             "gemini" => Some(SubmitAgent::Gemini),
+            "opencode" => Some(SubmitAgent::OpenCode),
             _ => None,
         }
     }
@@ -79,6 +83,7 @@ impl SubmitAgent {
             SubmitAgent::Claude => "claude",
             SubmitAgent::Codex => "codex",
             SubmitAgent::Gemini => "gemini",
+            SubmitAgent::OpenCode => "opencode",
         }
     }
 
@@ -88,10 +93,10 @@ impl SubmitAgent {
     /// (teamDialog.svelte.ts).
     ///
     /// `CHAN_AGENT` wins when it names a known agent ("claude"/"codex"/
-    /// "gemini") or an explicit shell ("none"/"shell" -> `None`); an
-    /// unrecognized value falls through to the command sniff (the escape
+    /// "gemini"/"opencode") or an explicit shell ("none"/"shell" ->
+    /// `None`); an unrecognized value falls through to the command sniff (the escape
     /// hatch is opt-in, a typo should not silently disable submit). The
-    /// command match is a LOOSE whole-word sniff: claude/codex/gemini
+    /// command match is a LOOSE whole-word sniff: claude/codex/gemini/opencode
     /// recognized anywhere in the command as a word, so wrappers like
     /// `my-claude.sh`, `/usr/local/bin/codex-cli`, or `claude --resume` still
     /// resolve, while `claudette` does not. `None` means a shell member with
@@ -102,6 +107,7 @@ impl SubmitAgent {
                 "claude" => return Some(SubmitAgent::Claude),
                 "codex" => return Some(SubmitAgent::Codex),
                 "gemini" => return Some(SubmitAgent::Gemini),
+                "opencode" => return Some(SubmitAgent::OpenCode),
                 "none" | "shell" => return None,
                 // Unrecognized CHAN_AGENT: ignore it, sniff the command.
                 _ => {}
@@ -114,6 +120,8 @@ impl SubmitAgent {
             Some(SubmitAgent::Codex)
         } else if word_match(&c, "gemini") {
             Some(SubmitAgent::Gemini)
+        } else if word_match(&c, "opencode") {
+            Some(SubmitAgent::OpenCode)
         } else {
             None
         }
@@ -123,14 +131,16 @@ impl SubmitAgent {
     /// `{}` placeholder for the (trailing-newline-trimmed) text. These ARE
     /// the live-probed default bytes; an override (env / config file) replaces
     /// the whole template. claude appends the modifyOtherKeys Cmd+Enter CSI;
-    /// gemini a bare CR; codex wraps the text in bracketed paste then CR (its
-    /// paste-burst coalescing eats a bare trailing CR, so the wrap is what
-    /// makes the CR submit).
+    /// gemini a bare CR; codex and opencode wrap the text in bracketed paste
+    /// then CR. Codex needs the wrap to keep its paste-burst coalescing from
+    /// eating the submit; opencode uses the same bytes as its multiline-safe
+    /// default.
     fn default_template(self) -> &'static str {
         match self {
             SubmitAgent::Claude => "{}\x1b[27;9;13~",
             SubmitAgent::Codex => "\x1b[200~{}\x1b[201~\r",
             SubmitAgent::Gemini => "{}\r",
+            SubmitAgent::OpenCode => "\x1b[200~{}\x1b[201~\r",
         }
     }
 
@@ -146,7 +156,7 @@ impl SubmitAgent {
 }
 
 /// Process-global per-agent chord template overrides, keyed by agent name
-/// ("claude"/"codex"/"gemini"). The server loads these from
+/// ("claude"/"codex"/"gemini"/"opencode"). The server loads these from
 /// `<config>/chan/submit.toml` once at startup via `set_chord_overrides`;
 /// env `CHAN_SUBMIT_<AGENT>` still takes precedence at apply time. Default
 /// `None` means "no file overrides", which every chan-shell-only caller
@@ -191,9 +201,9 @@ fn resolve_template(
 /// the buffer before submit fires.
 ///
 /// The agent's resolved template (default or overridden) drives the bytes. A
-/// template with a `{}` placeholder substitutes the text there (the codex
-/// bracketed-paste wrap is expressed this way); a template WITHOUT `{}` is
-/// treated as a pure suffix appended after the text, so a bare-chord override
+/// template with a `{}` placeholder substitutes the text there (the codex and
+/// opencode bracketed-paste wraps are expressed this way); a template WITHOUT
+/// `{}` is treated as a pure suffix appended after the text, so a bare-chord override
 /// like `CHAN_SUBMIT_GEMINI=$'\r'` still works.
 ///
 /// Defaults mirror the live-probed bytes; the agent-name half is mirrored by
@@ -215,17 +225,13 @@ pub fn apply_submit_chord(data: String, submit: Option<SubmitAgent>) -> String {
 /// agents need ONE write (the chord is part of it, via `apply_submit_chord`),
 /// so a caller can write/enqueue the single element verbatim.
 ///
-/// gemini is the exception. gemini 0.42 coalesces a bulk `text + CR` write
-/// into one read and treats the trailing CR as a newline in its draft, not an
-/// Enter, so the submit never fires (even a bracketed-paste wrap does not
-/// help; unlike codex, gemini ignores the post-paste CR as a distinct key).
-/// Only a CR delivered as its OWN write submits gemini, so for gemini this
+/// gemini is the exception. gemini 0.51 converts Return received within 30 ms
+/// of inserted text into Shift+Return, including bracketed paste. Only a CR
+/// delivered as its OWN later write submits gemini, so for gemini this
 /// returns TWO writes (the text body, then the submit chord alone) which the
 /// caller MUST deliver as separate events: separate write-queue items, whose
 /// drainer idle-gates between them, or separate PTY writes with a gap. Empty
-/// parts are dropped. Live-probed 2026-06-03 against gemini-cli 0.42.0: bare
-/// CR and a bracketed-paste wrap both left the buffer unsubmitted; a
-/// standalone CR submitted it.
+/// parts are dropped.
 pub fn submit_writes(data: String, submit: Option<SubmitAgent>) -> Vec<String> {
     if submit != Some(SubmitAgent::Gemini) {
         return vec![apply_submit_chord(data, submit)];
@@ -356,6 +362,11 @@ mod tests {
             apply_submit_chord("poke".into(), Some(SubmitAgent::Gemini)),
             "poke\r"
         );
+        // opencode -> bracketed paste and CR in the same PTY write.
+        assert_eq!(
+            apply_submit_chord("poke\n".into(), Some(SubmitAgent::OpenCode)),
+            "\x1b[200~poke\x1b[201~\r"
+        );
         // codex keeps interior newlines inside the paste (a multi-line poke is
         // one message) and trims only the trailing ones before the wrap.
         assert_eq!(
@@ -368,7 +379,7 @@ mod tests {
 
     #[test]
     fn submit_writes_is_one_write_except_gemini() {
-        // claude/codex/none: a single write, identical to apply_submit_chord.
+        // claude/codex/opencode/none: one write, identical to apply_submit_chord.
         assert_eq!(
             submit_writes("poke\n".into(), Some(SubmitAgent::Claude)),
             vec!["poke\x1b[27;9;13~".to_string()]
@@ -377,9 +388,13 @@ mod tests {
             submit_writes("poke".into(), Some(SubmitAgent::Codex)),
             vec!["\x1b[200~poke\x1b[201~\r".to_string()]
         );
+        assert_eq!(
+            submit_writes("poke".into(), Some(SubmitAgent::OpenCode)),
+            vec!["\x1b[200~poke\x1b[201~\r".to_string()]
+        );
         assert_eq!(submit_writes("raw".into(), None), vec!["raw".to_string()]);
         // gemini: TWO writes - the text body, then the bare submit chord -
-        // so the CR is a distinct keypress (gemini coalesces a bulk text+CR).
+        // so Return is not converted to Shift+Return with the insertion.
         assert_eq!(
             submit_writes("poke\n".into(), Some(SubmitAgent::Gemini)),
             vec!["poke".to_string(), "\r".to_string()]
@@ -397,15 +412,20 @@ mod tests {
         assert_eq!(d("claude"), Some(SubmitAgent::Claude));
         assert_eq!(d("codex"), Some(SubmitAgent::Codex));
         assert_eq!(d("gemini"), Some(SubmitAgent::Gemini));
+        assert_eq!(d("opencode"), Some(SubmitAgent::OpenCode));
         // past the first token / through a path / a wrapper
         assert_eq!(d("claude --resume"), Some(SubmitAgent::Claude));
         assert_eq!(d("/usr/local/bin/codex-cli"), Some(SubmitAgent::Codex));
         assert_eq!(d("my-claude.sh --flag"), Some(SubmitAgent::Claude));
         assert_eq!(d("env FOO=1 gemini chat"), Some(SubmitAgent::Gemini));
+        assert_eq!(d("/usr/local/bin/opencode-ai"), Some(SubmitAgent::OpenCode));
+        assert_eq!(d("OPENCODE"), Some(SubmitAgent::OpenCode));
         assert_eq!(d("CLAUDE"), Some(SubmitAgent::Claude)); // case-insensitive
                                                             // word boundaries keep near-misses out
         assert_eq!(d("claudette"), None);
         assert_eq!(d("codexterous"), None);
+        assert_eq!(d("myopencode"), None);
+        assert_eq!(d("opencoded"), None);
         // a plain shell -> no chord
         assert_eq!(d("bash"), None);
         assert_eq!(d(""), None);
@@ -435,6 +455,10 @@ mod tests {
         assert_eq!(
             SubmitAgent::derive("bash", Some("  Codex ")),
             Some(SubmitAgent::Codex)
+        );
+        assert_eq!(
+            SubmitAgent::derive("claude", Some(" OpenCode ")),
+            Some(SubmitAgent::OpenCode)
         );
     }
 
@@ -483,6 +507,43 @@ mod tests {
     }
 
     #[test]
+    fn opencode_template_precedence_env_over_file_over_default() {
+        let none = |_: &str| None;
+        assert_eq!(
+            resolve_template(SubmitAgent::OpenCode, none, None),
+            "\x1b[200~{}\x1b[201~\r"
+        );
+        let mut file = HashMap::new();
+        file.insert("opencode".to_string(), "{}\\r".to_string());
+        assert_eq!(
+            resolve_template(SubmitAgent::OpenCode, none, Some(&file)),
+            "{}\r"
+        );
+        let env = |key: &str| {
+            (key == "CHAN_SUBMIT_OPENCODE").then(|| "\\e[200~{}\\e[201~\\r".to_string())
+        };
+        assert_eq!(
+            resolve_template(SubmitAgent::OpenCode, env, Some(&file)),
+            "\x1b[200~{}\x1b[201~\r"
+        );
+    }
+
+    #[test]
+    fn opencode_encoding_pins_multiline_trimming_and_paste_sized_bytes() {
+        assert_eq!(
+            apply_submit_chord("one\ntwo\n\n".into(), Some(SubmitAgent::OpenCode)),
+            "\x1b[200~one\ntwo\x1b[201~\r"
+        );
+        let body = format!("HEAD{}TAIL", "x".repeat(20 * 1024));
+        let encoded = apply_submit_chord(body.clone(), Some(SubmitAgent::OpenCode));
+        assert_eq!(
+            encoded,
+            format!("\x1b[200~{body}\x1b[201~\r"),
+            "paste-sized input must remain one exact bracketed PTY write"
+        );
+    }
+
+    #[test]
     fn unescape_decodes_control_escapes() {
         assert_eq!(unescape("\\e[27;9;13~"), "\x1b[27;9;13~");
         assert_eq!(unescape("\\x1b[200~"), "\x1b[200~");
@@ -510,12 +571,21 @@ mod tests {
             SubmitAgent::from_str("gemini", true).unwrap(),
             SubmitAgent::Gemini
         );
+        assert_eq!(
+            SubmitAgent::from_str("opencode", true).unwrap(),
+            SubmitAgent::OpenCode
+        );
         assert!(SubmitAgent::from_str("turbo", true).is_err());
     }
 
     #[test]
     fn from_agent_name_round_trips_with_name() {
-        for a in [SubmitAgent::Claude, SubmitAgent::Codex, SubmitAgent::Gemini] {
+        for a in [
+            SubmitAgent::Claude,
+            SubmitAgent::Codex,
+            SubmitAgent::Gemini,
+            SubmitAgent::OpenCode,
+        ] {
             assert_eq!(SubmitAgent::from_agent_name(a.name()), Some(a));
         }
         assert_eq!(SubmitAgent::from_agent_name("turbo"), None);

@@ -28,6 +28,10 @@
     type TerminalTab,
   } from "../state/tabs.svelte";
   import { api } from "../api/client";
+  import {
+    submitAgentForTerminal,
+    type SubmitAgent,
+  } from "../terminal/submitMode";
 
   // `focused` is true only while this bubble's terminal is the active tab
   // of the active pane. It gates the editor's mount autofocus and the
@@ -267,17 +271,8 @@
     scheduleWrite();
   });
 
-  function submitAgent(): string {
-    const kp = tab.keyboardProtocol;
-    if (kp) {
-      if (kp.xtermModifyOtherKeys > 0) return "claude";
-      const kittyFlags =
-        kp.kitty.screen === "alternate"
-          ? kp.kitty.alternateFlags
-          : kp.kitty.mainFlags;
-      if (kittyFlags > 0) return "codex";
-    }
-    return "gemini";
+  function submitAgent(): SubmitAgent {
+    return submitAgentForTerminal(tab.submitAgent, tab.keyboardProtocol);
   }
 
   function submitFromView(view: EditorView): boolean {

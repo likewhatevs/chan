@@ -609,6 +609,21 @@ impl AttachHandle {
         &self.id
     }
 
+    /// The command stored for this PTY incarnation. A restart handle reads
+    /// from the replacement session, so callers never retain stale launch
+    /// identity after command overrides.
+    pub fn spawn_command(&self) -> Option<&str> {
+        self.session.spawn_opts.command.as_deref()
+    }
+
+    /// One value from the environment stored for this PTY incarnation.
+    /// This intentionally exposes only lookup, not the full map: callers that
+    /// derive terminal identity need `CHAN_AGENT`, while spawn configuration
+    /// remains registry-owned.
+    pub fn spawn_env(&self, key: &str) -> Option<&str> {
+        self.session.spawn_opts.env.get(key).map(String::as_str)
+    }
+
     pub fn send_input(&self, data: &[u8]) {
         self.session.send_input(data);
     }

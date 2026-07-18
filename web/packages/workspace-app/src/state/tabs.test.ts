@@ -97,6 +97,7 @@ import {
   setTerminalBroadcastTarget,
   setWindowFocusColor,
   setTerminalSession,
+  setTerminalSubmitAgent,
   shouldCloseTabAfterDragEnd,
   createTeamWorkLeadTerminal,
   clearTeamWorkPending,
@@ -2574,6 +2575,16 @@ describe("find state", () => {
 });
 
 describe("terminal keyboard-protocol survival", () => {
+  test("server submit identity is transient and replaceable on every session frame", () => {
+    const tab = terminalTab();
+    setTerminalSubmitAgent(tab, "opencode");
+    expect(tab.submitAgent).toBe("opencode");
+    setTerminalSubmitAgent(tab, "gemini");
+    expect(tab.submitAgent).toBe("gemini");
+    setTerminalSubmitAgent(tab, undefined);
+    expect(tab.submitAgent).toBeUndefined();
+  });
+
   test("a fresh spawn creates a zero-state protocol on the tab", () => {
     const tab = terminalTab();
 

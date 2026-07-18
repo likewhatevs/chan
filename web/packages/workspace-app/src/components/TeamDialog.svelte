@@ -500,6 +500,12 @@
 
       <fieldset class="team-members">
         <legend>Members</legend>
+        <p class="team-field-hint team-agent-hint">
+          Commands auto-detect <code>claude</code>, <code>codex</code>,
+          <code>gemini</code>, and <code>opencode</code>. Set
+          <code>CHAN_AGENT</code> for a custom launcher; <code>none</code> or
+          <code>shell</code> forces shell behavior.
+        </p>
         {#each config.members as member, idx (idx)}
           {@const assignedCell = cellOfMember(idx)}
           <div
@@ -529,7 +535,7 @@
               autocomplete="off"
             />
             <!-- Submit-encoding agent is auto-detected from the command
-                 (claude/codex/gemini), overridable with CHAN_AGENT in the env
+                 (claude/codex/gemini/opencode), overridable with CHAN_AGENT in the env
                  below - no manual picker. -->
             <input
               class="team-member-env"
@@ -808,6 +814,9 @@
     color: var(--text-secondary);
     text-transform: uppercase;
     letter-spacing: 0.05em;
+  }
+  .team-agent-hint {
+    margin: 0 0 2px;
   }
   .team-member-row {
     display: grid;

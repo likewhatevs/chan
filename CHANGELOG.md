@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Added
+
+- **OpenCode is a first-class terminal agent.** `cs terminal write --submit=opencode`, `CHAN_AGENT=opencode`, `CHAN_SUBMIT_OPENCODE`, Team Work command derivation, and `[opencode]` in `submit.toml` use one bracketed-paste-plus-Return PTY write, including multiline and paste-sized prompts. Gemini keeps its body and Return as two ordered writes.
+- **Rich Prompt uses server-reported terminal identity.** Terminal session frames carry an optional spawn-derived submit agent for Claude, Codex, Gemini, and OpenCode; restart and reattach recompute it from the current command and `CHAN_AGENT`. Shells and unknown commands omit it, and the existing keyboard-protocol inference remains the fallback. No agent selector is added to the SPA.
+
 ## [v0.70.3] - 2026-07-18
 
 v0.70.3 is a patch release. It restores the editor's text-selection highlight, which v0.70.2's page-width scrollbar change hid whenever the page-width cap was on (the default), and stops a refused launcher Open from leaving a status pill stuck on the workspace with no way to dismiss it.

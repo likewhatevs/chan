@@ -3,7 +3,10 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { api } from "../api/client";
 import { runTeamBootstrap } from "../state/teamOrchestrator.svelte";
-import type { TeamDialogConfig } from "../state/teamDialog.svelte";
+import {
+  agentForMember,
+  type TeamDialogConfig,
+} from "../state/teamDialog.svelte";
 import {
   allTerminalTabs,
   layout,
@@ -172,7 +175,31 @@ describe("runTeamBootstrap: lead-first flow", () => {
     expect(src).toMatch(
       /async function deliverLeadIdentity\([\s\S]*?sendPromptToTerminal\(tabId, text, agent\)/,
     );
+    expect(src).toMatch(
+      /const leadAgent = leadDraft[\s\S]{1,180}agentForMember\(leadDraft\.command, leadDraft\.env\)[\s\S]{1,220}deliverLeadIdentity\([\s\S]{1,100}leadAgent === "none" \? undefined : leadAgent/,
+    );
     expect(src).not.toMatch(/primeTeamWork/);
+  });
+
+  test("spawns an OpenCode lead whose identity delivery derives opencode", async () => {
+    resetLayoutWithLead(leadTerminalTab());
+    const { spawn } = mockApi();
+    const config = tabsConfig();
+    config.members[0] = {
+      ...config.members[0],
+      command: "opencode --model test",
+    };
+    await runTeamBootstrap(config, {
+      leadTabId: "lead-tab",
+      leadPaneId: "pane-test",
+    });
+    expect(spawn.mock.calls[0][0]).toMatchObject({
+      name: "@@Lead",
+      command: "opencode --model test",
+    });
+    expect(agentForMember(config.members[0].command, config.members[0].env)).toBe(
+      "opencode",
+    );
   });
 
   test("teams start with broadcast OFF: final membership is empty", async () => {

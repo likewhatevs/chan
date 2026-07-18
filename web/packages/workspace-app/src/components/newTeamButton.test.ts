@@ -95,6 +95,9 @@ describe("TeamDialog component shell", () => {
     expect(dialog).not.toMatch(/setMemberField\(\s*idx,\s*"agent"/);
     // The env field advertises the override hatch.
     expect(dialog).toMatch(/CHAN_AGENT/);
+    expect(dialog).toMatch(
+      /auto-detect[\s\S]{1,160}<code>opencode<\/code>/,
+    );
   });
 
   test("the unassigned chip is relabeled drag-me", () => {

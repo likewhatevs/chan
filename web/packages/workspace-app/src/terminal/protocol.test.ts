@@ -25,7 +25,7 @@ describe("terminal protocol invariants", () => {
   test("server attach prelude sends control, binary replay, alt-screen prelude, then ready", () => {
     const prelude = route.match(/async fn send_attach_prelude[\s\S]*?\n}\n\nfn terminal_cwd_payload/)?.[0];
     expect(prelude).toBeTruthy();
-    const sessionFrame = prelude!.indexOf("ServerFrame::Session");
+    const sessionFrame = prelude!.indexOf("session_frame(session)");
     const replay = prelude!.indexOf("for chunk in &session.replay");
     const altScreen = prelude!.indexOf("ALT_SCREEN_ATTACH_PRELUDE");
     const ready = prelude!.indexOf("ServerFrame::Ready");
@@ -34,6 +34,9 @@ describe("terminal protocol invariants", () => {
     expect(replay).toBeGreaterThan(sessionFrame);
     expect(altScreen).toBeGreaterThan(replay);
     expect(ready).toBeGreaterThan(altScreen);
+    expect(route).toMatch(
+      /fn session_frame\(session: &AttachHandle\)[\s\S]*?SubmitAgent::derive\([\s\S]*?session\.spawn_command\(\)[\s\S]*?session\.spawn_env\("CHAN_AGENT"\)[\s\S]*?ServerFrame::Session/,
+    );
   });
 
   test("PTY output remains binary on both sides of the websocket", () => {

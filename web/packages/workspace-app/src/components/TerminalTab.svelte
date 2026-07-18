@@ -65,6 +65,7 @@
     resolvePendingPrompt,
     failPendingPrompt,
     setTerminalSession,
+    setTerminalSubmitAgent,
     tabFocusPulse,
     terminalBroadcastMemberIds,
     terminalEnvTabNameStale,
@@ -116,6 +117,7 @@
     scrollbackLinesFromMb,
     SCROLLBACK_MB_DEFAULT,
   } from "../terminal/scrollback";
+  import type { SubmitAgent } from "../terminal/submitMode";
   import { uiConfirm } from "../state/confirm.svelte";
   import { clampMenu } from "./menuClamp";
   import { portal } from "./portal";
@@ -165,6 +167,9 @@
         /// `index+1` (vs the anonymous `queue_depth`, which may count pokes
         /// from other windows). Always present (`[]` when none).
         queued_prompt_ids?: string[];
+        /// Spawn-derived submit identity. Omitted by old servers and for
+        /// shells or unknown launch commands.
+        submit_agent?: SubmitAgent;
       }
     | { type: "activity"; bytes_since_focus: number }
     /// Queue-visibility frames (server: routes/terminal.rs). `queue` is the
@@ -1003,6 +1008,9 @@
         }
         pendingSnapshot = null;
         setTerminalSession(tab, frame.id);
+        // Replace, including with undefined, on every session frame. Restart
+        // and reattach preludes are authoritative for the current PTY life.
+        setTerminalSubmitAgent(tab, frame.submit_agent);
         setTerminalActivity(tab, !focused && (frame.bytes_since_focus ?? 0) > 0);
         // Re-sync the queue badge on every (re)attach: the depth is absolute
         // server truth, never persisted client-side.
@@ -1292,7 +1300,8 @@
   /// the submit chord when the agent is idle. Deliberately NOT `sendInput` (the
   /// raw keystroke path bypasses the queue). Returns whether the WS was open so
   /// the orchestrator can retry a freshly-spawned lead. `agent` picks the chord
-  /// (claude CSI / codex/gemini CR); omitted defaults to claude server-side.
+  /// (claude CSI, codex/opencode bracketed paste + CR, gemini split CR);
+  /// omitted defaults to claude server-side.
   /// `id` tags the message for prompt-ack / prompt-delivered tracking; omitted
   /// = fire-and-forget (the orchestrator's lead-identity prompt stays so).
   function sendPrompt(data: string, agent?: string, id?: string): boolean {

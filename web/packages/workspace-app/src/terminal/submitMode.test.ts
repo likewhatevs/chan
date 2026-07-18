@@ -3,7 +3,10 @@ import {
   AGENT_SUBMIT_CHORD,
   AGENT_SUBMIT_CHORDS,
   encodeForAgentSubmit,
+  inferSubmitAgentFromKeyboardProtocol,
+  submitAgentForTerminal,
 } from "./submitMode";
+import { createTerminalKeyboardProtocolState } from "./keymap";
 
 describe("submitMode", () => {
   test("AGENT_SUBMIT_CHORD matches the probe-pinned Claude Code chord", () => {
@@ -19,6 +22,7 @@ describe("submitMode", () => {
       claude: "\x1b[27;9;13~",
       codex: "\r",
       gemini: "\r",
+      opencode: "\r",
     });
   });
 
@@ -42,6 +46,22 @@ describe("submitMode", () => {
     // are stripped before the wrap.
     expect(encodeForAgentSubmit("line one\nline two\n\n", "codex")).toBe(
       "\x1b[200~line one\nline two\x1b[201~\r",
+    );
+  });
+
+  test("encodeForAgentSubmit wraps opencode in bracketed paste then CR", () => {
+    expect(encodeForAgentSubmit("ship it\n", "opencode")).toBe(
+      "\x1b[200~ship it\x1b[201~\r",
+    );
+    expect(encodeForAgentSubmit("line one\nline two\n\n", "opencode")).toBe(
+      "\x1b[200~line one\nline two\x1b[201~\r",
+    );
+  });
+
+  test("opencode paste-sized encoding is one exact Rust-parity payload", () => {
+    const body = `HEAD${"x".repeat(20 * 1024)}TAIL`;
+    expect(encodeForAgentSubmit(body, "opencode")).toBe(
+      `\x1b[200~${body}\x1b[201~\r`,
     );
   });
 
@@ -75,5 +95,21 @@ describe("submitMode", () => {
 
   test("encodeForAgentSubmit handles empty buffer", () => {
     expect(encodeForAgentSubmit("")).toBe("\x1b[27;9;13~");
+  });
+
+  test("server identity wins over keyboard-protocol fallback", () => {
+    const protocol = createTerminalKeyboardProtocolState();
+    protocol.xtermModifyOtherKeys = 1;
+    expect(submitAgentForTerminal("opencode", protocol)).toBe("opencode");
+    expect(submitAgentForTerminal(undefined, protocol)).toBe("claude");
+  });
+
+  test("protocol fallback keeps the existing claude/codex/gemini inference", () => {
+    const protocol = createTerminalKeyboardProtocolState();
+    expect(inferSubmitAgentFromKeyboardProtocol(protocol)).toBe("gemini");
+    protocol.kitty.mainFlags = 8;
+    expect(inferSubmitAgentFromKeyboardProtocol(protocol)).toBe("codex");
+    protocol.xtermModifyOtherKeys = 1;
+    expect(inferSubmitAgentFromKeyboardProtocol(protocol)).toBe("claude");
   });
 });

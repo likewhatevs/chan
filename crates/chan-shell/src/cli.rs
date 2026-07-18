@@ -549,11 +549,11 @@ survey target); passing --followup-dir is what makes [F] write the file:
 const TEAM_AFTER_HELP: &str = r#"EXAMPLES:
 A team is one config.toml (the on-disk `{dir}/config.toml` shape). Members
 are 1..=9, exactly one `is_lead = true`. The submit-encoding agent
-(claude / codex / gemini) is DERIVED from each member's `command`: a loose
+(claude / codex / gemini / opencode) is DERIVED from each member's `command`: a loose
 whole-word match, so `claude --resume` or `/usr/local/bin/codex-cli` resolve.
 A command that matches none is a plain shell member (no submit chord). To
 force the agent for an unorthodox launcher, set `CHAN_AGENT` in the member's
-env (claude/codex/gemini, or none/shell to force a shell). `created_at` is
+env (claude/codex/gemini/opencode, or none/shell to force a shell). `created_at` is
 optional: the server stamps the current time when it is omitted.
 
   # myteam.toml
@@ -632,9 +632,9 @@ pub enum TerminalAction {
         /// After the bytes, encode them so the named agent submits the input
         /// hands-free (the completion-poke path). Trailing newlines are
         /// stripped first. Values: `claude` (Cmd+Enter chord),
-        /// `gemini` (plain CR), `codex` (bracketed-paste wrap + CR; a bare CR
-        /// is coalesced into a paste burst and lands as a newline, so it never
-        /// submits). Omit it to write pure bytes: the input parks in the
+        /// `gemini` (plain CR in a later write), or `codex` / `opencode`
+        /// (bracketed-paste wrap + CR in one write). Omit it to write pure
+        /// bytes: the input parks in the
         /// agent's compose box unsubmitted (a bare newline is a newline to an
         /// agent, not a submit).
         #[arg(long, value_name = "AGENT")]
@@ -1628,8 +1628,8 @@ async fn cmd_shell_terminal(action: TerminalAction) -> Result<()> {
             // --submit=<agent>: strip trailing newlines then append that
             // agent's submit chord so a running agent submits the input
             // hands-free (the completion poke). Most agents take ONE write;
-            // gemini needs the chord as a SEPARATE write (it coalesces a bulk
-            // text+CR into a newline), so submit_writes may return two. Each
+            // gemini needs the chord as a SEPARATE write (an immediate Return
+            // is converted to Shift+Return), so submit_writes may return two. Each
             // goes as its own TermWrite -> its own write-queue item, which the
             // per-session drainer delivers idle-gated, so the CR lands as a
             // distinct keypress. Mirrors submit_writes / encodeForAgentSubmit.
@@ -2740,6 +2740,33 @@ mod tests {
             } => assert_eq!(tab_group.as_deref(), Some("chan-team")),
             other => panic!("unexpected parse: {other:?}"),
         }
+    }
+
+    #[test]
+    fn terminal_write_accepts_opencode_submit_and_rejects_unknown_agents() {
+        let cli = CsCli::parse_from([
+            "cs",
+            "terminal",
+            "write",
+            "hello",
+            "--submit=opencode",
+            "--tab-name=@@Lead",
+        ]);
+        match cli.action {
+            ShellAction::Terminal {
+                action: TerminalAction::Write { submit, .. },
+            } => assert_eq!(submit, Some(SubmitAgent::OpenCode)),
+            other => panic!("unexpected parse: {other:?}"),
+        }
+        assert!(CsCli::try_parse_from([
+            "cs",
+            "terminal",
+            "write",
+            "hello",
+            "--submit=unknown",
+            "--tab-name=@@Lead",
+        ])
+        .is_err());
     }
 
     #[test]

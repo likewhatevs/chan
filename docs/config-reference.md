@@ -26,6 +26,28 @@ Source: `crates/chan-server/src/config.rs`.
 
 Legacy `[reports] enabled = ...` blocks in `server.toml` are ignored on load and omitted on the next save. Per-workspace `IndexConfig.reports_enabled` is the only reports toggle source.
 
+### `~/.chan/submit.toml` -- agent submit templates
+
+Source: `crates/chan-server/src/submit_config.rs` and `crates/chan-shell/src/submit.rs`.
+
+Each optional agent table has one `template` string containing at most one `{}` placeholder for the trailing-newline-trimmed prompt body. A template without `{}` is appended as a suffix. Escapes include `\e`, `\xHH`, `\r`, `\n`, `\t`, `\0`, and `\\`. Resolution is `CHAN_SUBMIT_<AGENT>` environment variable, then this file, then the built-in default.
+
+```toml
+[claude]
+template = '{}\e[27;9;13~'
+
+[codex]
+template = '\e[200~{}\e[201~\r'
+
+[gemini]
+template = '{}\r'
+
+[opencode]
+template = '\e[200~{}\e[201~\r'
+```
+
+The environment equivalents are `CHAN_SUBMIT_CLAUDE`, `CHAN_SUBMIT_CODEX`, `CHAN_SUBMIT_GEMINI`, and `CHAN_SUBMIT_OPENCODE`. Gemini alone splits its resolved body and submit chord into two ordered PTY writes; overriding its template does not change that write-splitting contract.
+
 ### `~/.chan/preferences.toml` -- `EditorPrefs`
 
 Source: `crates/chan-server/src/preferences.rs`.
@@ -110,7 +132,7 @@ Source: `crates/chan-workspace/src/teams.rs`.
 | `created_at` | `String` (ISO 8601) | required | (set at create time) | sort + display |
 | `members[]` | `Vec<Member>` | empty | (future Settings) | team roster + position grid |
 
-`Member`: `handle: String`, `command: String`, `env: BTreeMap<String, String>`, `is_lead: bool`, `position: Option<Position>`.
+`Member`: `handle: String`, `command: String`, `env: BTreeMap<String, String>`, `is_lead: bool`, `position: Option<Position>`. The submit agent is derived from a case-insensitive whole-word `claude`, `codex`, `gemini`, or `opencode` in `command`; `env.CHAN_AGENT` overrides it and `none` / `shell` forces shell behavior.
 
 `Position`: `row: u32`, `col: u32` (airplane-grid coordinate).
 

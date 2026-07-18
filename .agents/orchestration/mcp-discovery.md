@@ -7,6 +7,7 @@ In particular, chan does not write:
 * `~/.claude.json`
 * `~/.codex/config.toml`
 * `~/.gemini/settings.json`
+* `~/.config/opencode/opencode.json`
 
 Chan-launched terminal sessions are the supported discovery path. When the MCP bridge is available, terminal processes receive:
 

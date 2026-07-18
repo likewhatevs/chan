@@ -184,16 +184,14 @@ describe("RichPrompt.svelte component", () => {
     expect(richPromptSrc).toMatch(/\$\{queuedCount\} queued · ↑ recall · \$\{submitLabel\}/);
   });
 
-  test("submitAgent picks the chord from the terminal's negotiated protocol", () => {
-    // modifyOtherKeys -> claude; kitty -> codex; neither (shell / gemini) -> a
-    // bare CR = the gemini chord, which a plain shell also understands (the
-    // old no-agent path defaulted to claude's CSI, unreadable by a shell).
-    expect(richPromptSrc).toMatch(/function submitAgent\(\): string/);
+  test("submitAgent prefers server identity and delegates protocol fallback", () => {
+    // The session frame's spawn-derived identity is authoritative. The shared
+    // helper retains negotiated-protocol inference for old servers and agents
+    // launched manually from a shell.
+    expect(richPromptSrc).toMatch(/function submitAgent\(\): SubmitAgent/);
     expect(richPromptSrc).toMatch(
-      /kp\.xtermModifyOtherKeys > 0\) return "claude"/,
+      /return submitAgentForTerminal\(tab\.submitAgent, tab\.keyboardProtocol\);/,
     );
-    expect(richPromptSrc).toMatch(/return "codex"/);
-    expect(richPromptSrc).toMatch(/return "gemini";/);
   });
 
   test("adds only a never-escape composer Tab; Wysiwyg owns the rest of the keymap", () => {

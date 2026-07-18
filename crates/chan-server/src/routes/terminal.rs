@@ -148,7 +148,7 @@ enum ClientFrame {
     /// queue -- the SAME FIFO the control socket's `cs terminal write` feeds
     /// -- so bubble prompts and CLI pokes serialize through one drain and
     /// submit one after another when the agent is idle. The server appends
-    /// the submit chord for `agent` (claude / codex / gemini); `agent` is
+    /// the submit chord for `agent` (claude / codex / gemini / opencode); `agent` is
     /// optional and DEFAULTS to claude when the SPA does not know the
     /// terminal's launch command.
     #[serde(rename = "prompt")]
@@ -205,6 +205,11 @@ enum ServerFrame {
         /// instead of trusting the anonymous `queue_depth`. Always present
         /// (empty when nothing tagged is queued).
         queued_prompt_ids: Vec<String>,
+        /// Submit encoding derived from this PTY incarnation's stored spawn
+        /// command and `CHAN_AGENT`. Omitted for shells and unknown commands.
+        /// Recomputed for every attach prelude, including after restart.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        submit_agent: Option<&'static str>,
     },
     #[serde(rename = "activity")]
     Activity { bytes_since_focus: u64 },
@@ -724,8 +729,8 @@ async fn terminal_ws(mut socket: WebSocket, state: Arc<AppState>, opts: Terminal
                                     agent.as_deref().unwrap_or("claude"),
                                 );
                                 // gemini needs its submit chord as a SEPARATE
-                                // queue item (it coalesces a bulk text+CR into
-                                // a newline); submit_writes returns two writes
+                                // queue item (an immediate Return becomes
+                                // Shift+Return); submit_writes returns two writes
                                 // for gemini, one for everyone else. Each
                                 // enqueued item drains idle-gated, so the CR
                                 // lands as a distinct keypress. The list goes
@@ -895,21 +900,7 @@ async fn send_attach_prelude(
     session: &AttachHandle,
     size: PtySize,
 ) -> Result<(), ()> {
-    if send_frame(
-        socket,
-        ServerFrame::Session {
-            id: session.id().to_owned(),
-            seq: session.seq,
-            generation: session.generation,
-            missed_bytes: session.missed_bytes,
-            bytes_since_focus: session.bytes_since_focus(),
-            queue_depth: session.queue_depth(),
-            queued_prompt_ids: session.queued_prompt_ids(),
-        },
-    )
-    .await
-    .is_err()
-    {
+    if send_frame(socket, session_frame(session)).await.is_err() {
         return Err(());
     }
     for chunk in &session.replay {
@@ -960,6 +951,24 @@ async fn send_attach_prelude(
         return Err(());
     }
     Ok(())
+}
+
+fn session_frame(session: &AttachHandle) -> ServerFrame {
+    let submit_agent = SubmitAgent::derive(
+        session.spawn_command().unwrap_or_default(),
+        session.spawn_env("CHAN_AGENT"),
+    )
+    .map(SubmitAgent::name);
+    ServerFrame::Session {
+        id: session.id().to_owned(),
+        seq: session.seq,
+        generation: session.generation,
+        missed_bytes: session.missed_bytes,
+        bytes_since_focus: session.bytes_since_focus(),
+        queue_depth: session.queue_depth(),
+        queued_prompt_ids: session.queued_prompt_ids(),
+        submit_agent,
+    }
 }
 
 async fn send_frame(socket: &mut WebSocket, frame: ServerFrame) -> Result<(), axum::Error> {
@@ -1346,10 +1355,11 @@ mod tests {
             bytes_since_focus: 0,
             queue_depth: 2,
             queued_prompt_ids: vec!["u-1".into(), "u-2".into()],
+            submit_agent: Some("opencode"),
         };
         assert_eq!(
             serde_json::to_string(&session).unwrap(),
-            r#"{"type":"session","id":"abc","seq":7,"generation":3,"missed_bytes":0,"bytes_since_focus":0,"queue_depth":2,"queued_prompt_ids":["u-1","u-2"]}"#
+            r#"{"type":"session","id":"abc","seq":7,"generation":3,"missed_bytes":0,"bytes_since_focus":0,"queue_depth":2,"queued_prompt_ids":["u-1","u-2"],"submit_agent":"opencode"}"#
         );
         // Empty list still serializes as `[]` (always present; the SPA can
         // assume the field exists -- pre-release, no back-compat).
@@ -1361,6 +1371,7 @@ mod tests {
             bytes_since_focus: 0,
             queue_depth: 0,
             queued_prompt_ids: vec![],
+            submit_agent: None,
         };
         assert_eq!(
             serde_json::to_string(&session_empty).unwrap(),
@@ -1383,6 +1394,97 @@ mod tests {
             serde_json::to_string(&cancelled).unwrap(),
             r#"{"type":"prompt-cancelled","id":"u-1","removed":true}"#
         );
+    }
+
+    fn create_identity_session(
+        command: &str,
+        chan_agent: Option<&str>,
+    ) -> (Arc<crate::state::AppState>, AttachHandle) {
+        let state = crate::state::test_support::make_test_state(false);
+        let mut env = BTreeMap::new();
+        if let Some(agent) = chan_agent {
+            env.insert("CHAN_AGENT".into(), agent.into());
+        }
+        let handle = state
+            .terminal_sessions
+            .create(CreateOptions {
+                size: PtySize {
+                    cols: 80,
+                    rows: 24,
+                    pixel_width: 0,
+                    pixel_height: 0,
+                },
+                tab_name: Some("@@Identity".into()),
+                tab_group: None,
+                window_id: None,
+                mcp_env: false,
+                cwd: None,
+                command: Some(command.into()),
+                env,
+            })
+            .expect("spawn identity session");
+        (state, handle)
+    }
+
+    fn frame_submit_agent(handle: &AttachHandle) -> Option<String> {
+        serde_json::to_value(session_frame(handle))
+            .expect("serialize session frame")
+            .get("submit_agent")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string)
+    }
+
+    #[test]
+    fn session_frame_reports_command_and_environment_derived_opencode() {
+        let (command_state, command_handle) =
+            create_identity_session("sleep 5 # opencode-ai", None);
+        assert_eq!(
+            frame_submit_agent(&command_handle).as_deref(),
+            Some("opencode")
+        );
+        command_state
+            .terminal_sessions
+            .close(command_handle.id(), CloseReason::Explicit);
+
+        let (env_state, env_handle) = create_identity_session("sleep 5", Some("OpenCode"));
+        assert_eq!(frame_submit_agent(&env_handle).as_deref(), Some("opencode"));
+        env_state
+            .terminal_sessions
+            .close(env_handle.id(), CloseReason::Explicit);
+    }
+
+    #[test]
+    fn session_frame_omits_unknown_agent_and_resyncs_restarted_identity() {
+        let (state, shell_handle) = create_identity_session("sleep 5", None);
+        assert_eq!(frame_submit_agent(&shell_handle), None);
+        state
+            .terminal_sessions
+            .close(shell_handle.id(), CloseReason::Explicit);
+
+        let (state, initial) = create_identity_session("sleep 5 # claude", None);
+        let id = initial.id().to_string();
+        assert_eq!(frame_submit_agent(&initial).as_deref(), Some("claude"));
+        state
+            .terminal_sessions
+            .restart(
+                &id,
+                RestartOverrides {
+                    command: Some("sleep 5 # opencode".into()),
+                    ..RestartOverrides::default()
+                },
+            )
+            .expect("restart identity session");
+        let restarted = state
+            .terminal_sessions
+            .attach(&id, Some(0))
+            .expect("attach restarted session");
+        assert_eq!(frame_submit_agent(&restarted).as_deref(), Some("opencode"));
+        let reattached = state
+            .terminal_sessions
+            .attach(&id, Some(0))
+            .expect("reattach restarted session");
+        assert_eq!(frame_submit_agent(&reattached).as_deref(), Some("opencode"));
+        state.terminal_sessions.close(&id, CloseReason::Explicit);
     }
 
     #[test]
@@ -1951,7 +2053,7 @@ mod tests {
             .await;
             let out = collect_marker_window(
                 &mut terminal.handle,
-                "printf '\\n__CWD_HOME_%s__\\n' BEGIN; pwd; printf '<HOME=%s>\\n' \"$HOME\"; printf '<CHAN_TAB_NAME=%s>\\n' \"$CHAN_TAB_NAME\"; printf '<CHAN_TAB_GROUP=%s>\\n' \"$CHAN_TAB_GROUP\"; printf '<CHAN_WINDOW_ID=%s>\\n' \"$CHAN_WINDOW_ID\"; printf '<CHAN_CONTROL_SOCKET=%s>\\n' \"$CHAN_CONTROL_SOCKET\"; printf '<CHAN_WORKSPACE_NAME=%s>\\n' \"$CHAN_WORKSPACE_NAME\"; printf '<CHAN_WORKSPACE_PATH=%s>\\n' \"$CHAN_WORKSPACE_PATH\"; env | grep -E '^(CHAN|CLAUDE|CODEX|GEMINI)_MCP_' | sort; printf '\\n__CWD_HOME_%s__\\n' END",
+                "printf '\\n__CWD_HOME_%s__\\n' BEGIN; pwd; printf '<HOME=%s>\\n' \"$HOME\"; printf '<CHAN_TAB_NAME=%s>\\n' \"$CHAN_TAB_NAME\"; printf '<CHAN_TAB_GROUP=%s>\\n' \"$CHAN_TAB_GROUP\"; printf '<CHAN_WINDOW_ID=%s>\\n' \"$CHAN_WINDOW_ID\"; printf '<CHAN_CONTROL_SOCKET=%s>\\n' \"$CHAN_CONTROL_SOCKET\"; printf '<CHAN_WORKSPACE_NAME=%s>\\n' \"$CHAN_WORKSPACE_NAME\"; printf '<CHAN_WORKSPACE_PATH=%s>\\n' \"$CHAN_WORKSPACE_PATH\"; env | grep -E '^(CHAN|CLAUDE|CODEX|GEMINI|OPENCODE)_MCP_' | sort; printf '\\n__CWD_HOME_%s__\\n' END",
                 "CWD_HOME",
             )
             .await;
@@ -2008,7 +2110,8 @@ mod tests {
             assert!(
                 !out.contains("CLAUDE_MCP_SERVER_JSON=")
                     && !out.contains("CODEX_MCP_SERVER_JSON=")
-                    && !out.contains("GEMINI_MCP_SERVER_JSON="),
+                    && !out.contains("GEMINI_MCP_SERVER_JSON=")
+                    && !out.contains("OPENCODE_MCP_SERVER_JSON="),
                 "terminal should not expose third-party MCP aliases, got {out:?}"
             );
             passed += 1;

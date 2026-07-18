@@ -129,14 +129,14 @@ fn member_agent(m: &Member) -> Option<&'static str> {
 /// shared submit map (`chan_shell::apply_submit_chord` / submitMode.ts;
 /// the chord is the agent's DEFAULT template, overridable at runtime):
 /// claude uses the xterm
-/// modifyOtherKeys Cmd+Enter CSI; gemini submits on a bare CR; codex also
-/// ends in CR but its text must be bracketed-paste wrapped first
+/// modifyOtherKeys Cmd+Enter CSI; gemini submits on a bare CR; codex and
+/// opencode use bracketed paste followed by CR in one write
 /// (codex coalesces a single `text + CR` write into a paste burst whose
 /// trailing CR never submits), so a bare CR alone does NOT submit codex.
 fn submit_chord_literal(agent: Option<&str>) -> &'static str {
     match agent {
-        // codex needs its text wrapped in bracketed paste before the CR.
-        Some("codex") => "bracketed-paste + \\r",
+        // codex and opencode use bracketed paste before the CR.
+        Some("codex" | "opencode") => "bracketed-paste + \\r",
         Some("gemini") => "\\r",
         // claude is the default chord for any agent member; a shell member
         // (None) is not poked as an agent, so it falls through to the claude
@@ -964,6 +964,10 @@ mod tests {
             .env
             .insert("CHAN_AGENT".into(), "gemini".into());
         assert_eq!(member_agent(&config.members[1]), Some("gemini"));
+        config.members[1]
+            .env
+            .insert("CHAN_AGENT".into(), "opencode".into());
+        assert_eq!(member_agent(&config.members[1]), Some("opencode"));
         // A shell command derives no agent.
         config.members[1].command = "bash".into();
         config.members[1].env.remove("CHAN_AGENT");
@@ -997,6 +1001,18 @@ mod tests {
         // Still pure ASCII, no em dashes.
         assert!(bootstrap.is_ascii(), "bootstrap must be pure ASCII");
         assert!(!bootstrap.contains('\u{2014}'), "no em dashes");
+    }
+
+    #[test]
+    fn bootstrap_describes_opencode_submit_encoding() {
+        let mut config = sample_config();
+        config.members[1].command = "opencode".into();
+        let bootstrap = generate_bootstrap_md("new-team-1", &config, None);
+        assert!(bootstrap.contains("opencode"), "opencode member in roster");
+        assert!(
+            bootstrap.contains("--submit=opencode (chord bracketed-paste + \\r)"),
+            "opencode chord line reflects the bracketed-paste wrap"
+        );
     }
 
     #[test]

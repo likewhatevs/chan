@@ -141,12 +141,13 @@ Stable contracts:
   incremental records.
 - `/api/devserver/*` is reserved local-only management surface; the gateway tunnel must 404 it publicly.
 - `GET /ws` is the watcher and window-presence side channel; window tags are part of that presence contract.
+- A terminal WebSocket's `session` frame carries optional `submit_agent`, derived from the current PTY incarnation's stored spawn command and `CHAN_AGENT`. Restart and reattach recompute it; shells and unknown commands omit it, so old clients and servers remain wire-compatible.
 
 ### chan-llm
 
 Owns: the chan MCP server (`chan_llm::mcp::Server`), tool schemas exposed over MCP, embedded prompt text, and MCP key resolution. Tool reads / writes always go through `chan_workspace::Workspace` so the filesystem gates apply. MCP handlers also move synchronous chan-workspace work onto blocking threads. `read_file` and `write_file` cover editable UTF-8 text, including source and config files. `read_media` covers chan-workspace Image and Pdf classes: images return MCP image content, PDFs return MCP blob resources.
 
-chan-llm is MCP-only: it has no in-app chat session, no CLI backends, and no tool loop of its own. External agent CLIs (claude, codex, gemini) connect to the chan MCP server by reading the `CHAN_MCP_*` environment variables the embedded terminal exports and translating them to their own MCP configuration. The crate also ships `chan-llm-mcp`, a standalone stdio MCP server binary any MCP client (Claude Desktop, Cursor, ...) can spawn for chan-workspace-sandboxed access to a workspace.
+chan-llm is MCP-only: it has no in-app chat session, no CLI backends, and no tool loop of its own. External agent CLIs (claude, codex, gemini, opencode) connect to the chan MCP server by reading the `CHAN_MCP_*` environment variables the embedded terminal exports and translating them to their own MCP configuration. The crate also ships `chan-llm-mcp`, a standalone stdio MCP server binary any MCP client (Claude Desktop, Cursor, ...) can spawn for chan-workspace-sandboxed access to a workspace.
 
 chan-server hosts the MCP server in-process behind a Unix-domain socket. External subprocesses connect via
 `chan __mcp-proxy <socket>`, which is a stdio<->socket pipe. This sidesteps chan-workspace's per-workspace flock
