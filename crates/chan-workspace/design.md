@@ -62,12 +62,12 @@ flowchart TB
 
 Per-machine singleton-in-practice. Owns the `Registry` (`Mutex<Registry>` intra-process), the config-file path, and the directory-name blocklist for indexing walks. `open_workspace` looks up the registry row for the caller's path and constructs a `Workspace` keyed by the row's `metadata_key`, holding the cross-process writer lock for its lifetime.
 
-Each registry row carries the canonical `root_path`, a stable `metadata_key`, and timestamps. The key is derived from the first registered path as a readable path slug plus an 8-hex sha256 suffix, and is preserved across `Library::move_workspace`. All per-workspace sidecar state (graph DB, search index, sessions, tokens, trash, report) is keyed by that metadata key. Consequences:
+Each registry row carries the canonical `root_path`, a stable `metadata_key`, an optional `display_name`, and timestamps. The key is derived from the first registered path as a readable path slug plus an 8-hex sha256 suffix, and is preserved across `Library::move_workspace`. All per-workspace sidecar state (graph DB, search index, sessions, tokens, trash, report) is keyed by that metadata key. `Workspace::canonical_root`, `metadata_key`, and `display_name` expose read-only identity; the effective display name falls back to the root basename. Consequences:
 
   - Moving the workspace directory (recorded via `move_workspace`) is a registry-only change, zero file motion on the sidecars.
   - Registering the same canonical path is idempotent and preserves the metadata key.
   - Deleting then re-creating a workspace at the same path uses the same deterministic key. `unregister_workspace` wipes chan-managed state so stale sidecars do not reappear by accident.
-  - There is no user-managed workspace name in the registry. UIs derive labels from the path and show the full path where identity matters.
+  - A user-managed display name is presentation metadata only; routing and sidecar placement continue to use canonical roots and metadata keys.
 
 The registry also holds two global, hand-edited policy fields: `index_excluded_dirs` (directory basenames the indexing walks skip; see "Walk filter") and `drafts_dir` (the in-root drafts directory name, default `.Drafts`; see "Drafts").
 
@@ -169,6 +169,14 @@ Chunking is configurable per-index via `Chunking` (`Headings`, `WholeDoc`, `Fixe
 
 `Index::build_all` runs the per-file read + markdown chunking on a bounded thread pool. Worker count comes from `SearchAggression`: `Conservative` pins one reader, `Balanced` (the default) uses `available_parallelism - 2` clamped to [1, 6], `Aggressive` uses `available_parallelism - 1` clamped to [1, 8]. The file-descriptor budget (`fd_budget`) can cap the count further and paces workers when the process is near its `nofile` limit: the crate runs inside the editor process, where macOS commonly starts with a soft limit of 256, and an eager SQLite pool plus Tantivy fanout can otherwise exhaust the table during first boot on a large workspace. Workers ship parsed chunks to the main thread over a bounded `sync_channel` (workers * 4); the main thread is the only writer into tantivy and the only producer of embed batches, so writer-mutex contention and embed ordering stay simple. Cores are held back so the server's tokio runtime and the OS UI thread keep breathing during a reindex of a large workspace. Progress ticks remain monotonic from the consumer's perspective even when worker completions land out of order.
 
+#### Unified workspace search
+
+`Workspace::workspace_search` is the workspace-local retrieval contract used by transports. One owned, serde-compatible request combines optional content retrieval, lexical file/directory/tag/mention/contact/language matching, exact typed selectors, and bounded traversal. Normalization applies defaults, stable deduplication, and hard caps once in this crate. Request, selector, readiness, ambiguity, and unavailable-domain failures remain structured result entries so valid seeds can still return partial work; SQLite, Tantivy, and filesystem failures use the outer `Result`.
+
+The query path performs one filtered metadata-only tree walk. It may read maintained graph rows, the ready search index, and a warm or valid persisted report snapshot, but it never reads source bodies, mutates registry/config state, starts a report scan, or initiates an index rebuild. `effective_search_mode` is the single BM25/hybrid policy: hybrid is effective only when semantic search is enabled and the configured model resolves; no-embeddings builds always report BM25.
+
+Traversal is breadth-first and queries semantic graph edges in SQLite bind-bounded frontier batches. File and contact nodes reserve their complete root containment spine before admission. Node and relationship limits can therefore omit a candidate, but never return it parentless; forced spine relationships are recorded in the effective traversal. Containment and maintained-report language relationships are joined in memory, and tag/mention/contact/directory profiles receive bounded metadata closure without traversing through closure nodes. Returned nodes and relationships have stable hop/kind/ID ordering.
+
 ```mermaid
 flowchart TB
   Files["list_indexable -> files[]"]
@@ -234,7 +242,7 @@ The filter is honored by the indexing pipeline, the bootstrap snapshot, the repo
 
 Single-writer semantics, multi-reader: the writer connection sits behind a `Mutex<Connection>` (sqlite's contract); reads pull from an `r2d2::Pool<SqliteConnectionManager>` so editor link-autocomplete queries do not queue behind a reindex write or another typeahead. WAL mode plus a uniform per-connection PRAGMA init keep the writer and the pool agreeing on `journal_mode`, `busy_timeout`, and `synchronous`.
 
-`replace_file` inserts outgoing edges (links + tag/mention tokens) and headings with computed anchors. `forget_file` removes a file and all its edges; `forget_under` does the same for a directory prefix. `clear` wipes everything for a full rebuild. Full rebuilds parse into staging tables and swap atomically; see "Schema versioning" for the resumability model. Read surface: `neighbors`, `backlinks`, `tags`, `mentions`, `files_with_tag`, `files`, `files_with_stat`, `node_kind`, `headings_of`, `link_targets`, `contacts`, `contacts_filtered`. `graph_normalize` projects authored link and mention destinations onto canonical graph IDs at query time. It resolves percent-encoded and relative link targets against supplied filesystem metadata and resolves mentions from supplied contact rows without writing derived values back to SQLite. Mention collisions retain every candidate while selecting the final `GraphView::contacts()` candidate for compatibility with the visualization graph.
+`replace_file` inserts outgoing edges (links + tag/mention tokens) and headings with computed anchors. `forget_file` removes a file and all its edges; `forget_under` does the same for a directory prefix. `clear` wipes everything for a full rebuild. Full rebuilds parse into staging tables and swap atomically; see "Schema versioning" for the resumability model. Read surface: `neighbors`, link-only `backlinks`, bind-batched semantic `edges_from` / `edges_to`, `tags`, `mentions`, `files_with_tag`, `files`, `files_with_stat`, `node_kind`, `headings_of`, `link_targets`, `contacts`, `contacts_filtered`. `graph_normalize` projects authored link and mention destinations onto canonical graph IDs at query time. It resolves percent-encoded and relative link targets against supplied filesystem metadata and resolves mentions from supplied contact rows without writing derived values back to SQLite. Mention collisions retain every candidate while selecting the final `GraphView::contacts()` candidate for compatibility with the visualization graph.
 
 #### Link resolution
 
@@ -377,7 +385,7 @@ Drafts, session blobs, contact import, trash restore/purge, and bootstrap snapsh
 
 ### Search, graph, report, watch
 
-Search, graph, and report state are lazy sidecars owned by `Workspace`. Reindexing is synchronous and caller-scheduled; the built-in watcher/indexer is optional and uses the same walk filter as the cold paths. Graph writes serialize through the graph writer connection; graph reads use the reader pool. Report state is opt-in, watcher-fed before user callbacks run, and persisted through chan-report JSONL.
+Search, graph, and report state are lazy sidecars owned by `Workspace`. Reindexing is synchronous and caller-scheduled; the built-in watcher/indexer is optional and uses the same walk filter as the cold paths. Graph writes serialize through the graph writer connection; graph reads use the reader pool. Report state is opt-in, watcher-fed before user callbacks run, and persisted through chan-report JSONL. `report_if_available` is the non-scanning read path: it returns a warm snapshot or loads a valid persisted JSONL and otherwise returns `None`; unlike `report()`, it never falls back to a filesystem scan.
 
 Per-workspace settings live with the index config so search mode, report enablement, excluded dirs, and screensaver policy move with the workspace sidecar rather than with an app-specific preference file.
 

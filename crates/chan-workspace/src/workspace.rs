@@ -608,6 +608,26 @@ impl Workspace {
         &self.entry.root_path
     }
 
+    /// Canonical workspace root captured when the writer handle opened.
+    pub fn canonical_root(&self) -> &std::path::Path {
+        &self.root_canon
+    }
+
+    /// Stable registry key for this workspace's sidecar state.
+    pub fn metadata_key(&self) -> &str {
+        &self.entry.metadata_key
+    }
+
+    /// Effective display label: configured name, then root basename.
+    pub fn display_name(&self) -> String {
+        self.entry.display_name.clone().unwrap_or_else(|| {
+            self.root_canon
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_else(|| self.root_canon.display().to_string())
+        })
+    }
+
     /// Per-workspace paths (sessions, index dir, graph DB, lock).
     /// Exposed for apps that want to put their own state alongside
     /// chan-workspace's.
@@ -3174,6 +3194,21 @@ impl Workspace {
     /// caller's job.
     pub fn report(&self) -> Result<Report> {
         Ok(self.report_state()?.snapshot(&ReportScope::All))
+    }
+
+    /// Return a maintained report snapshot without starting a filesystem scan.
+    pub fn report_if_available(&self) -> Result<Option<Report>> {
+        if let Some(state) = self.report.get() {
+            return Ok(Some(state.snapshot(&ReportScope::All)));
+        }
+        if !self.reports_enabled()? {
+            return Ok(None);
+        }
+        crate::report::load_snapshot_if_available(
+            self.root(),
+            &self.paths.report,
+            &self.walk_filter.excluded_dir_names,
+        )
     }
 
     /// Snapshot of the report restricted to a workspace-relative

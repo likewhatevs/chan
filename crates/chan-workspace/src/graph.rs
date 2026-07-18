@@ -51,7 +51,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use r2d2_sqlite::SqliteConnectionManager;
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, params_from_iter, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{ChanError, Result};
@@ -203,7 +203,7 @@ impl EdgeKind {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Edge {
     pub src: String,
     pub dst: String,
@@ -691,6 +691,108 @@ impl GraphView {
                 });
             }
         }
+        Ok(out)
+    }
+
+    /// Fetch outgoing semantic edges for a frontier in bounded SQL batches.
+    ///
+    /// An empty `kinds` slice selects every semantic edge kind. Results are
+    /// stable by source, kind, destination, and anchor across chunk boundaries.
+    pub fn edges_from(&self, nodes: &[String], kinds: &[EdgeKind]) -> Result<Vec<Edge>> {
+        self.edges_for_nodes("src", nodes, kinds)
+    }
+
+    /// Fetch incoming semantic edges for a frontier in bounded SQL batches.
+    ///
+    /// Unlike [`GraphView::backlinks`], this returns tag and mention edges when
+    /// requested and never applies the compatibility link-only filter.
+    pub fn edges_to(&self, nodes: &[String], kinds: &[EdgeKind]) -> Result<Vec<Edge>> {
+        self.edges_for_nodes("dst", nodes, kinds)
+    }
+
+    fn edges_for_nodes(
+        &self,
+        column: &'static str,
+        nodes: &[String],
+        kinds: &[EdgeKind],
+    ) -> Result<Vec<Edge>> {
+        if nodes.is_empty() {
+            return Ok(Vec::new());
+        }
+        debug_assert!(matches!(column, "src" | "dst"));
+        const SQLITE_BIND_BUDGET: usize = 900;
+
+        let unique_nodes: Vec<String> = nodes
+            .iter()
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .cloned()
+            .collect();
+        let mut kind_names = Vec::new();
+        for kind in kinds {
+            let name = kind.as_str().to_string();
+            if !kind_names.contains(&name) {
+                kind_names.push(name);
+            }
+        }
+        let chunk_size = SQLITE_BIND_BUDGET.saturating_sub(kind_names.len()).max(1);
+        let conn = self.reader()?;
+        let mut out = Vec::new();
+        for chunk in unique_nodes.chunks(chunk_size) {
+            let node_params = std::iter::repeat_n("?", chunk.len())
+                .collect::<Vec<_>>()
+                .join(",");
+            let kind_clause = if kind_names.is_empty() {
+                String::new()
+            } else {
+                let kind_params = std::iter::repeat_n("?", kind_names.len())
+                    .collect::<Vec<_>>()
+                    .join(",");
+                format!(" AND kind IN ({kind_params})")
+            };
+            let sql = format!(
+                "SELECT src, dst, kind, anchor FROM edges \
+                 WHERE {column} IN ({node_params}){kind_clause} \
+                 ORDER BY src, kind, dst, anchor"
+            );
+            let mut values = chunk.to_vec();
+            values.extend(kind_names.iter().cloned());
+            let mut stmt = conn.prepare(&sql)?;
+            let rows = stmt.query_map(params_from_iter(values.iter()), |row| {
+                let kind: String = row.get(2)?;
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    kind,
+                    row.get::<_, String>(3)?,
+                ))
+            })?;
+            for row in rows {
+                let (src, dst, kind, anchor) = row?;
+                if let Some(kind) = EdgeKind::from_str(&kind) {
+                    out.push(Edge {
+                        src,
+                        dst,
+                        kind,
+                        anchor: (!anchor.is_empty()).then_some(anchor),
+                    });
+                }
+            }
+        }
+        out.sort_by(|left, right| {
+            (
+                left.src.as_str(),
+                left.kind.as_str(),
+                left.dst.as_str(),
+                left.anchor.as_deref().unwrap_or(""),
+            )
+                .cmp(&(
+                    right.src.as_str(),
+                    right.kind.as_str(),
+                    right.dst.as_str(),
+                    right.anchor.as_deref().unwrap_or(""),
+                ))
+        });
         Ok(out)
     }
 
@@ -1604,6 +1706,37 @@ mod tests {
         let db = tmp.path().join("graph.sqlite");
         let g = GraphView::open(&db).unwrap();
         assert_eq!(count(&g, "PRAGMA user_version"), 6);
+    }
+
+    #[test]
+    fn workspace_search_batched_edges_cross_bind_limit_and_incoming_is_not_link_only() {
+        let tmp = TempDir::new().unwrap();
+        let g = GraphView::open(&tmp.path().join("g.sqlite")).unwrap();
+        let nodes: Vec<String> = (0..905).map(|i| format!("notes/{i}.md")).collect();
+        {
+            let conn = g.writer.lock().unwrap();
+            let tx = conn.unchecked_transaction().unwrap();
+            {
+                let mut insert = tx
+                    .prepare("INSERT INTO edges(src, dst, kind, anchor) VALUES (?1, '#shared', 'tag', '')")
+                    .unwrap();
+                for node in &nodes {
+                    insert.execute(params![node]).unwrap();
+                }
+            }
+            tx.commit().unwrap();
+        }
+
+        let outgoing = g.edges_from(&nodes, &[EdgeKind::Tag]).unwrap();
+        assert_eq!(outgoing.len(), nodes.len());
+        assert_eq!(outgoing.first().unwrap().src, "notes/0.md");
+        assert_eq!(outgoing.last().unwrap().src, "notes/99.md");
+
+        let incoming = g
+            .edges_to(&["#shared".to_string()], &[EdgeKind::Tag])
+            .unwrap();
+        assert_eq!(incoming, outgoing);
+        assert!(g.backlinks("#shared").unwrap().is_empty());
     }
 
     #[test]

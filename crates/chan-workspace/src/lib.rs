@@ -49,6 +49,7 @@ pub mod trash;
 pub mod vcs;
 pub mod watch;
 pub mod workspace;
+pub mod workspace_search;
 
 pub use bootstrap::{BootstrapDir, BootstrapFile, BootstrapTree, FileClassWire, SubtreeStats};
 
@@ -99,4 +100,12 @@ pub use workspace::ReconcileReport;
 pub use workspace::{
     CopyOutcome, DirEntry, FileStat, RenameOutcome, ResolvedLink, SearchOpts, TextReadEvent,
     TreeEntry, Workspace, BYTES_WRITE_LIMIT, TEXT_READ_CHUNK_SIZE, TEXT_WRITE_LIMIT,
+};
+pub use workspace_search::{
+    EffectiveSearchMode, EffectiveWorkspaceTraversal, WorkspaceContentHit, WorkspaceEntityMatch,
+    WorkspaceEntityMatchClass, WorkspaceGraphFileClass, WorkspaceGraphNode, WorkspaceRelationship,
+    WorkspaceRelationshipKind, WorkspaceSearchDomain, WorkspaceSearchError,
+    WorkspaceSearchIdentity, WorkspaceSearchRequest, WorkspaceSearchResult, WorkspaceSearchStatus,
+    WorkspaceSearchTruncation, WorkspaceSearchWarning, WorkspaceSelector, WorkspaceSelectorKind,
+    WorkspaceTraversalDirection, WorkspaceTraversalProfile,
 };

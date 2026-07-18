@@ -56,21 +56,7 @@ impl ReportState {
         jsonl_path: &Path,
         excluded_dirs: &[String],
     ) -> Result<Arc<Self>> {
-        let mut opts = ReportOptions::new(workspace_root);
-        // Mirror the index/graph WalkFilter: the report's language
-        // analysis must not walk `node_modules/` / `target/` / `venv/`
-        // etc., so a source-tree workspace doesn't roll up its dependency
-        // trees. chan-report's exclude_globs are gitignore-style ignore
-        // patterns applied to the walk AND to incremental updates; a
-        // bare dir basename with a trailing slash excludes that dir at
-        // any depth, matching `WalkFilter::is_excluded`. (Hidden dirs
-        // like `.git`/`.venv` are already dropped by the default
-        // include_hidden=false, but we list them too for parity and in
-        // case a future config flips include_hidden on.)
-        opts.exclude_globs = excluded_dirs
-            .iter()
-            .map(|name| format!("{}/", name.trim_end_matches('/')))
-            .collect();
+        let opts = report_options(workspace_root, excluded_dirs);
 
         // Try the persisted form first. Any error (missing file,
         // schema mismatch, parse error, partial write) falls
@@ -206,6 +192,33 @@ impl ReportState {
     pub(crate) fn jsonl_path(&self) -> &Path {
         &self.jsonl_path
     }
+}
+
+pub(crate) fn load_snapshot_if_available(
+    workspace_root: &Path,
+    jsonl_path: &Path,
+    excluded_dirs: &[String],
+) -> Result<Option<Report>> {
+    let file = match std::fs::File::open(jsonl_path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(ChanError::Report(error.to_string())),
+    };
+    let opts = report_options(workspace_root, excluded_dirs);
+    let Ok(index) = Index::load_jsonl(BufReader::new(file), &opts) else {
+        return Ok(None);
+    };
+    Ok(Some(index.snapshot(&Scope::All, &opts.cocomo)))
+}
+
+fn report_options(workspace_root: &Path, excluded_dirs: &[String]) -> ReportOptions {
+    let mut opts = ReportOptions::new(workspace_root);
+    // The report and workspace index must prune the same dependency trees.
+    opts.exclude_globs = excluded_dirs
+        .iter()
+        .map(|name| format!("{}/", name.trim_end_matches('/')))
+        .collect();
+    opts
 }
 
 impl Drop for ReportState {
