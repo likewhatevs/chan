@@ -1732,6 +1732,18 @@
     --pane-shadow: 0 1px 6px rgba(0, 0, 0, 0.14);
   }
 
+  /* CM6's drawSelection paints the highlight into .cm-selectionLayer
+     markers, and its base theme hard-codes light greys (#d7d4f0
+     focused, #d9d9d9 unfocused) regardless of the app's color scheme -
+     in dark mode that washed near-white text under a light lavender
+     fill. Route the layer through --selection-bg so the selection
+     follows the app palette (the dark value matches GitHub's
+     accent-muted selection blue). Peer-collab selections use their own
+     .cm-peer-sel classes and are unaffected. */
+  :global(.cm-selectionBackground) {
+    background: var(--selection-bg) !important;
+  }
+
   :global(html), :global(body), :global(#app) {
     height: 100%; margin: 0; padding: 0;
   }

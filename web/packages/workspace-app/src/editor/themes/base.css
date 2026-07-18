@@ -61,7 +61,11 @@
   --chan-editor-source-size: 14px;
   --chan-editor-inline-code-bg: var(--bg-card, rgba(0, 0, 0, 0.06));
   --chan-editor-inline-code-color: inherit;
-  --chan-editor-code-block-bg: var(--bg-card, rgba(0, 0, 0, 0.04));
+  /* --code-bg is the app palette's designated code-slab token (a clear
+     step away from --bg in both schemes); --bg-card sat too close to
+     the light canvas, so a fallback fence fill disappeared into the
+     page. */
+  --chan-editor-code-block-bg: var(--code-bg, rgba(0, 0, 0, 0.06));
   --chan-editor-code-block-color: inherit;
   --chan-editor-code-block-border: transparent;
 

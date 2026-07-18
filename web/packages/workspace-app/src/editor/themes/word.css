@@ -51,7 +51,10 @@
   --chan-editor-source-size: 13px;
   --chan-editor-inline-code-bg: #f2f2f2;
   --chan-editor-inline-code-color: #000000;
-  --chan-editor-code-block-bg: #f7f7f7;
+  /* The WYSIWYG fence paints no border (the border token only reaches
+     the paginated DOM), so #f7f7f7 merged into the white canvas; use
+     the theme's own chip grey so the slab separates from the page. */
+  --chan-editor-code-block-bg: #f2f2f2;
   --chan-editor-code-block-color: #000000;
   --chan-editor-code-block-border: #d4d4d4;
 
@@ -109,7 +112,7 @@
 
   --chan-editor-inline-code-bg: #f2f2f2;
   --chan-editor-inline-code-color: #000000;
-  --chan-editor-code-block-bg: #f7f7f7;
+  --chan-editor-code-block-bg: #f2f2f2;
   --chan-editor-code-block-color: #000000;
   --chan-editor-code-block-border: #d4d4d4;
 

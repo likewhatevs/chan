@@ -53,7 +53,11 @@
   --chan-editor-code-size: 0.85em;
   --chan-editor-inline-code-bg: rgba(175, 184, 193, 0.2);
   --chan-editor-inline-code-color: inherit;
-  --chan-editor-code-block-bg: #f6f8fa;
+  /* GitHub's canonical light fence fill is canvas-inset #f6f8fa, but on
+     chan's pure-white editor canvas that reads as no fill at all (the
+     "invisible grey box" bug). Primer gray-1 #eaeef2 keeps the GitHub
+     light-grey family with a visible step off the page. */
+  --chan-editor-code-block-bg: #eaeef2;
   --chan-editor-code-block-color: #1f2328;
   --chan-editor-code-block-border: transparent;
 
@@ -119,7 +123,7 @@
   --chan-editor-h6-color: #59636e;
 
   --chan-editor-inline-code-bg: rgba(175, 184, 193, 0.2);
-  --chan-editor-code-block-bg: #f6f8fa;
+  --chan-editor-code-block-bg: #eaeef2;
   --chan-editor-code-block-color: #1f2328;
   --chan-editor-code-block-border: transparent;
 

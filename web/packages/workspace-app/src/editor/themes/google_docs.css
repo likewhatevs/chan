@@ -45,7 +45,9 @@
   --chan-editor-source-size: 13px;
   --chan-editor-inline-code-bg: #f1f3f4;
   --chan-editor-inline-code-color: #202124;
-  --chan-editor-code-block-bg: #f8f9fa;
+  /* #f8f9fa was indistinguishable from the white canvas; use the
+     theme's own inline-chip grey so the fence slab reads as a slab. */
+  --chan-editor-code-block-bg: #f1f3f4;
   --chan-editor-code-block-color: #202124;
   --chan-editor-code-block-border: transparent;
 
@@ -101,7 +103,7 @@
 
   --chan-editor-inline-code-bg: #f1f3f4;
   --chan-editor-inline-code-color: #202124;
-  --chan-editor-code-block-bg: #f8f9fa;
+  --chan-editor-code-block-bg: #f1f3f4;
   --chan-editor-code-block-color: #202124;
 
   --chan-editor-link-color: #1a73e8;
