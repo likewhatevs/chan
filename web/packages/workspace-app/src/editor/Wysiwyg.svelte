@@ -962,18 +962,41 @@
      keeps the lift and removes the stall. */
   :global(.md-wysiwyg-cm6 .cm-editor),
   :global(.md-wysiwyg-cm6 .cm-editor .cm-scroller),
+  :global(.md-wysiwyg-cm6 .cm-editor .cm-content),
   :global(.md-wysiwyg-cm6 .cm-editor .cm-line),
   :global(.md-wysiwyg-cm6 .cm-editor .cm-activeLine) {
     background-color: transparent !important;
   }
-  /* When the page-width cap is active, paint the full-width scroll area
-     with a subtle off-page tint and give the centered .cm-content its
-     own --bg so the "page" pops out of the surrounding shade. */
+  /* When the page-width cap is active, paint the container with a
+     subtle off-page tint and paint the centered "page" as a --bg
+     layer BEHIND the text.
+
+     The page fill must NOT live on .cm-content's own background:
+     CodeMirror draws the selection highlight in .cm-selectionLayer, a
+     sibling of .cm-content inside .cm-scroller at z-index:-1 (it sits
+     *behind* .cm-content). An opaque .cm-content background paints over
+     that layer and hides the selection entirely - which is exactly what
+     broke once the 80% page cap became the default and every capped
+     editor stopped showing selected text.
+
+     Instead the fill lives on a .cm-content::before pseudo-element at
+     z-index:-2, strictly behind the selection layer, so the selection
+     shows on top of the page. Positioning it to .cm-content (which we
+     make position:relative) keeps the page pixel-aligned with the text
+     while .cm-content itself stays transparent. */
   :global(.chan-page-capped .md-wysiwyg-cm6) {
     background: var(--page-shade);
   }
   :global(.chan-page-capped .md-wysiwyg-cm6 .cm-content) {
-    background-color: var(--bg) !important;
+    position: relative;
+  }
+  :global(.chan-page-capped .md-wysiwyg-cm6 .cm-content)::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: -2;
+    background: var(--bg);
+    pointer-events: none;
   }
   /* CM6 paints `outline: 1px dotted` on .cm-editor.cm-focused as a
      focus indicator. We don't want it - the cursor itself is
