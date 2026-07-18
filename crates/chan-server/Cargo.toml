@@ -67,7 +67,6 @@ dirs = { workspace = true }
 futures = { workspace = true }
 notify = { workspace = true }
 open = "5"
-percent-encoding = "2"
 portable-pty = { workspace = true }
 rand = { workspace = true }
 # HTTP client for the Source Code Pro download endpoint

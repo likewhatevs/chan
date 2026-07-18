@@ -26,6 +26,7 @@ gray_matter = { version = "0.2", default-features = false, features = ["yaml"] }
 # (defaults off + macos_fsevent) so a change to the workspace-wide notify
 # default cannot silently swap this crate's backend.
 notify = { version = "6", default-features = false, features = ["macos_fsevent"] }
+percent-encoding = "2"
 pulldown-cmark = { version = "0.12", default-features = false }
 rusqlite = { version = "0.32", features = ["bundled"] }
 rustix = { workspace = true }

@@ -31,6 +31,7 @@ pub mod error;
 pub(crate) mod fd_budget;
 pub mod fs_ops;
 pub mod graph;
+pub mod graph_normalize;
 pub mod index;
 pub mod indexer;
 pub mod library;
@@ -70,6 +71,10 @@ pub use fs_ops::{
 pub use graph::{
     ContactNode, Edge, EdgeKind, GraphView, HeadingRow, LinkTarget, LinkTargetKind, Mention,
     NodeKind, Tag,
+};
+pub use graph_normalize::{
+    normalize_graph_edges, resolve_link_target, GraphNormalization, MentionContactResolution,
+    MentionContactResolver,
 };
 pub use index::{
     BuildOptions, BuildSummary, Chunking, Hit, IndexConfig, IndexStats, Mode as SearchMode,

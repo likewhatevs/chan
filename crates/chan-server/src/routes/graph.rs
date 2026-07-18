@@ -22,7 +22,8 @@ use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use chan_workspace::{
-    EdgeKind, FileClass, PathClass, PathPermission, ReportFileBucket, ReportFileStats,
+    normalize_graph_edges, resolve_link_target as resolve_link_dst, EdgeKind, FileClass, PathClass,
+    PathPermission, ReportFileBucket, ReportFileStats,
 };
 use futures::{stream, StreamExt};
 use serde::{Deserialize, Serialize};
@@ -534,86 +535,6 @@ fn is_image_path(rel: &str) -> bool {
         ext.as_deref(),
         Some("png" | "jpg" | "jpeg" | "gif" | "webp" | "svg" | "avif" | "bmp")
     )
-}
-
-/// Resolve a markdown link-edge target to an indexed workspace file when
-/// possible. chan-workspace stores link targets verbatim from the source
-/// (e.g. `[link](my%20note.md)` -> dst = `"my%20note.md"`); without
-/// this rewrite, every URL-encoded or source-relative target ends up
-/// as a non-clickable "ghost" node in the inspector.
-///
-/// Resolution order, first hit wins:
-///   1. Decoded target as workspace-relative (with `.md` / `.txt` /
-///      exact tries), matching wiki-style link semantics: chan-workspace
-///      normalizes a bare `[[a/b]]` as workspace-rooted.
-///   2. Decoded target joined to the source file's parent directory
-///      (handles `./peer.md`, `../sibling/note.md`, and bare leaves
-///      authored relative to the source).
-///   3. Decoded target joined to each higher ANCESTOR directory of the
-///      source, walking up toward the workspace root. This rescues workspace-
-///      rooted wiki-links authored with a partial prefix: chan-workspace
-///      stores bare `[[sub/topic.md]]` as the workspace-rooted
-///      `sub/topic.md`, but when the workspace root is a repo root the
-///      real file may live at `docs/sub/topic.md`. Joining the prefix to
-///      the ancestor base `docs` lands on the real file instead of a
-///      false "does not exist" ghost.
-///      Tried after the workspace-root + immediate-parent bases so
-///      it only acts as a fallback and a sibling/root match still wins.
-///
-/// On miss, returns the percent-decoded target so the ghost node
-/// gets a clean label ("my note") instead of "my%20note".
-fn resolve_link_dst(src: &str, target: &str, files: &std::collections::BTreeSet<&str>) -> String {
-    use percent_encoding::percent_decode_str;
-    use std::path::Path;
-
-    let decoded = percent_decode_str(target).decode_utf8_lossy().into_owned();
-    let stripped = decoded.trim_start_matches('/');
-
-    // 1. Workspace-root-relative first (the wiki-rooted + absolute-`/path`
-    //    convention). 2. The source's immediate parent. 3. Then each
-    //    higher ancestor toward the workspace root, so a partial-prefix
-    //    wiki-link still lands on its real file. Most-specific bases
-    //    (root, then parent) take priority over the ancestor fallback.
-    let mut candidates: Vec<String> = vec![stripped.to_string()];
-    let mut base = Path::new(src).parent();
-    while let Some(dir) = base {
-        if !dir.as_os_str().is_empty() {
-            if let Some(norm) = normalize_workspace_rel(&dir.join(stripped)) {
-                candidates.push(norm);
-            }
-        }
-        base = dir.parent();
-    }
-
-    for cand in &candidates {
-        for try_path in [cand.clone(), format!("{cand}.md"), format!("{cand}.txt")] {
-            if files.contains(try_path.as_str()) {
-                return try_path;
-            }
-        }
-    }
-    decoded
-}
-
-/// Collapse `.` / `..` components against a workspace-relative path.
-/// Returns None if the result would escape the workspace root or if the
-/// path includes an absolute prefix. Always emits `/` separators so
-/// the result matches workspace-relative file-set keys on Windows too,
-/// where `PathBuf::to_string_lossy` would otherwise yield `\`.
-fn normalize_workspace_rel(p: &std::path::Path) -> Option<String> {
-    use std::path::Component;
-    let mut parts: Vec<String> = Vec::new();
-    for c in p.components() {
-        match c {
-            Component::CurDir => {}
-            Component::ParentDir => {
-                parts.pop()?;
-            }
-            Component::Normal(s) => parts.push(s.to_string_lossy().into_owned()),
-            Component::RootDir | Component::Prefix(_) => return None,
-        }
-    }
-    Some(parts.join("/"))
 }
 
 /// Collect every regular file under the workspace root, workspace-relative
@@ -1578,33 +1499,6 @@ fn build_graph_view(
     let contact_rows = workspace.contacts().unwrap_or_default();
     let contact_paths: std::collections::HashSet<String> =
         contact_rows.iter().map(|c| c.rel_path.clone()).collect();
-    // Maps the lowercased mention name (the bit after `@@`) to the
-    // resolved contact file. The basename-stem entry is the original
-    // resolver (`@@alice` resolves to `Contacts/alice.md` by
-    // filename match). Each contact's declared aliases layer
-    // on top: a contact with `aliases: [ali, smith]` adds
-    // `(ali, path)` and `(smith, path)` entries so `@@ali` resolves
-    // the same way `@@alice` does. When two contacts claim the same
-    // alias the last writer wins; the picker UI surfaces aliases so
-    // users can disambiguate by editing the offending contact's
-    // frontmatter.
-    let mut mention_to_contact: std::collections::HashMap<String, String> =
-        std::collections::HashMap::new();
-    for c in &contact_rows {
-        if let Some(stem) = std::path::Path::new(&c.rel_path)
-            .file_stem()
-            .and_then(|s| s.to_str())
-        {
-            mention_to_contact.insert(stem.to_lowercase(), c.rel_path.clone());
-        }
-        for alias in &c.aliases {
-            let key = alias.trim().to_lowercase();
-            if !key.is_empty() {
-                mention_to_contact.insert(key, c.rel_path.clone());
-            }
-        }
-    }
-
     // `graph_file_set` is the indexed-only view; `file_set` is the
     // full link-resolution oracle (graph + all on-disk files). Keep
     // both: graph_file_set workspaces the "is this a real graph node?"
@@ -1644,23 +1538,9 @@ fn build_graph_view(
     // referenced handles on a real seed workspace). Resolved
     // contacts ARE kept; unresolved mentions still synthesize a
     // `@@name` Mention node via the existing mention_set loop.
-    let mut referenced_contact_paths: std::collections::HashSet<String> =
-        std::collections::HashSet::new();
-    for e in all_edges.iter_mut() {
-        match e.kind {
-            EdgeKind::Link => {
-                e.dst = resolve_link_dst(&e.src, &e.dst, &file_set);
-            }
-            EdgeKind::Mention => {
-                let stripped = e.dst.strip_prefix("@@").unwrap_or(&e.dst).to_lowercase();
-                if let Some(contact_path) = mention_to_contact.get(&stripped) {
-                    e.dst = contact_path.clone();
-                    referenced_contact_paths.insert(contact_path.clone());
-                }
-            }
-            EdgeKind::Tag => {}
-        }
-    }
+    let normalization = normalize_graph_edges(&mut all_edges, &file_set, &contact_rows);
+    let referenced_contact_paths: std::collections::HashSet<String> =
+        normalization.referenced_contact_paths.into_iter().collect();
 
     // Track which image / other-disk files are actually referenced
     // by a link edge so we only emit nodes for ones that participate
