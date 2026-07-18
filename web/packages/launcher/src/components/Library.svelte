@@ -23,6 +23,7 @@
     Plus,
     Power,
     SquareTerminal,
+    ShieldOff,
     Unplug,
   } from "lucide-svelte";
   import WindowRow from "./WindowRow.svelte";
@@ -34,6 +35,8 @@
     openDevserverWorkspace,
     setDevserverWorkspaceOn,
     connectDevserver,
+    grantNativeTrustAndConnect,
+    revokeDevserverNativeTrust,
     disconnectDevserver,
     openDevserverTerminal,
     openTerminal,
@@ -119,6 +122,22 @@
     } catch (e) {
       reportError(e);
     }
+  }
+
+  const NATIVE_TRUST_MESSAGE =
+    "This shared devserver controls the web content in its Chan windows. Native access can read and write your clipboard, read files you select, save downloads, control Chan windows, and open links in your system browser. Grant access only if you trust its owner.";
+
+  function connectWithNativeTrust(ds: DevserverEntry): void {
+    if (!ds.native_trust_required) {
+      void run(connectDevserver(ds.id));
+      return;
+    }
+    requestConfirm({
+      title: "Grant native access?",
+      message: NATIVE_TRUST_MESSAGE,
+      confirmLabel: "Grant native access",
+      onConfirm: () => run(grantNativeTrustAndConnect(ds.id)),
+    });
   }
 
   // The acting leader claim for minting onto a tenant: the leader window_id when
@@ -558,6 +577,16 @@
             </button>
           {/if}
           {#if hasDesktopBridge}
+            {#if ds.gateway_id && ds.shared && !ds.native_trust_required}
+              <button
+                class="icon-btn danger"
+                type="button"
+                title="Revoke native access. Quit Chan Desktop to purge the runtime ACL."
+                aria-label={`Revoke native access for ${devserverName(ds)}`}
+                onclick={() => run(revokeDevserverNativeTrust(ds.id))}>
+                <ShieldOff size={16} />
+              </button>
+            {/if}
             {#if dsSpinning(ds)}
               <button
                 class="icon-btn"
@@ -607,7 +636,7 @@
                   : ds.pending_signin
                     ? `Re-open sign-in in your browser for ${devserverName(ds)}`
                     : `Connect ${devserverName(ds)}`}
-                onclick={() => run(connectDevserver(ds.id))}>
+                onclick={() => connectWithNativeTrust(ds)}>
                 <Plug size={16} />
               </button>
             {/if}

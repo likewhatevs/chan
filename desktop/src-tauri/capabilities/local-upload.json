@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "local-upload",
-  "description": "Native multi-file open picker for `cs upload`. Granted to LOCALLY-served SPA windows (workspace-*, terminal-*, control-terminal-* connect-script terminals, local::<window_id> watcher-opened workspace windows) and to the user's own devserver windows reached at loopback (lib-*, e.g. over an ssh -L / chan tunnel -- the loopback remote.urls below scope this file to that case; the gateway tunnel origin's equivalent grant lives in devserver-window.json). Excludes outbound-* (ad-hoc remote-URL attach): this command pops a native open panel and reads the chosen files' bytes off the local disk, so it stays off untrusted remote-served webviews. The picker is user-interactive (the user picks the files) and `cs upload` is a user-initiated terminal command, so a static grant to the user's own windows is acceptable; a per-gesture handshake ACL is the follow-up.",
+  "description": "Native multi-file open picker for `cs upload`. Granted to locally-served SPA windows (workspace-*, terminal-*, control-terminal-* connect-script terminals, local::<window_id> watcher-opened workspace windows) and loopback devserver windows (lib-*). Authenticated exact gateway origins receive the equivalent permission through a runtime capability. Excludes outbound-* remote URL attachments because this command opens a native picker and reads the selected local files.",
   "remote": {
     "urls": ["http://127.0.0.1:*", "http://localhost:*"]
   },

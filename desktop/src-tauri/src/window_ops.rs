@@ -80,6 +80,12 @@ async fn handle(app: AppHandle, state: Arc<AppState>, op: DesktopWindowOp) {
             crate::teardown_devserver_connection(&app, &state, &id);
             let _ = reply.send(Ok(()));
         }
+        DesktopWindowOp::GrantDevserverNativeTrust { id, reply } => {
+            let _ = reply.send(crate::grant_devserver_native_trust(&app, &state, &id).await);
+        }
+        DesktopWindowOp::RevokeDevserverNativeTrust { id, reply } => {
+            let _ = reply.send(crate::revoke_devserver_native_trust(&app, &state, &id).await);
+        }
         DesktopWindowOp::ConnectGateway { id, reply } => {
             // The Gateways screen's Connect button: discovery, browser
             // sign-in hand-off when needed, roster fetch, poll spawn.

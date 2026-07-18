@@ -128,6 +128,15 @@ pub struct Devserver {
     pub gateway_devserver_id: Option<String>,
 }
 
+/// Persisted consent for one shared devserver's exact gateway identity.
+/// Labels, proxy origins, and short discriminators are intentionally absent:
+/// only the gateway-authorized full `(owner, devserver_id)` tuple is stable.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct NativeDevserverTrust {
+    pub owner: String,
+    pub devserver_id: String,
+}
+
 /// A gateway the desktop holds an account-level connection to: the public
 /// identity origin the user added on the launcher's Gateways screen. The
 /// desktop signs in once per gateway account, polls the gateway's devserver
@@ -157,6 +166,71 @@ pub struct Gateway {
     /// devserver row was converted).
     #[serde(default)]
     pub added_at: u64,
+    /// Shared devservers the user has allowed to receive native IPC. Trust is
+    /// scoped by this enclosing gateway row and survives disconnect/restart;
+    /// removing the gateway removes the records with it.
+    #[serde(default)]
+    pub native_trust: Vec<NativeDevserverTrust>,
+}
+
+impl Gateway {
+    pub fn trusts_native(&self, owner: &str, devserver_id: &str) -> bool {
+        self.native_trust
+            .iter()
+            .any(|trust| trust.owner == owner && trust.devserver_id == devserver_id)
+    }
+}
+
+/// Read one persisted shared-devserver trust decision. The gateway row is the
+/// outer trust boundary, so an absent gateway is an error rather than an
+/// untrusted answer that might hide a mid-flight removal.
+pub fn native_trust(
+    store: &Arc<Mutex<ConfigStore>>,
+    gateway_id: &str,
+    owner: &str,
+    devserver_id: &str,
+) -> Result<bool, String> {
+    let cfg = store.lock().unwrap().get().map_err(|e| e.to_string())?;
+    let gateway = cfg
+        .gateways
+        .iter()
+        .find(|gateway| gateway.id == gateway_id)
+        .ok_or_else(|| format!("no gateway {gateway_id}"))?;
+    Ok(gateway.trusts_native(owner, devserver_id))
+}
+
+/// Persist or remove one exact shared-devserver trust tuple. Returns whether
+/// the file changed; repeated PUT/DELETE operations are idempotent.
+pub fn set_native_trust(
+    store: &Arc<Mutex<ConfigStore>>,
+    gateway_id: &str,
+    owner: &str,
+    devserver_id: &str,
+    trusted: bool,
+) -> Result<bool, String> {
+    let mut store = store.lock().unwrap();
+    let mut cfg = store.get().map_err(|e| e.to_string())?;
+    let gateway = cfg
+        .gateways
+        .iter_mut()
+        .find(|gateway| gateway.id == gateway_id)
+        .ok_or_else(|| format!("no gateway {gateway_id}"))?;
+    let present = gateway.trusts_native(owner, devserver_id);
+    if present == trusted {
+        return Ok(false);
+    }
+    if trusted {
+        gateway.native_trust.push(NativeDevserverTrust {
+            owner: owner.to_string(),
+            devserver_id: devserver_id.to_string(),
+        });
+    } else {
+        gateway
+            .native_trust
+            .retain(|trust| trust.owner != owner || trust.devserver_id != devserver_id);
+    }
+    store.save(&cfg).map_err(|e| e.to_string())?;
+    Ok(true)
 }
 
 fn gateway_enabled_default() -> bool {
@@ -532,6 +606,7 @@ fn entry_from_roster_row(
         gateway_id: Some(gateway.id.clone()),
         gateway_url: gateway.url.clone(),
         shared: row.shared,
+        native_trust_required: row.shared && !gateway.trusts_native(&row.owner, &row.devserver_id),
     }
 }
 
@@ -719,6 +794,7 @@ fn entry_from_devserver(
         gateway_id: None,
         gateway_url: String::new(),
         shared: false,
+        native_trust_required: false,
     }
 }
 
@@ -959,6 +1035,7 @@ impl GatewayRegistry for GatewayConfigRegistry {
             label: input.label.unwrap_or_default().trim().to_string(),
             enabled: true,
             added_at: now_millis(),
+            native_trust: Vec::new(),
         };
         cfg.gateways.push(gw.clone());
         store.save(&cfg).map_err(|e| e.to_string())?;
@@ -1076,6 +1153,7 @@ fn split_legacy_gateway_rows(cfg: &mut Config) -> GatewayMigration {
             label: row.label,
             enabled: true,
             added_at: row.added_at,
+            native_trust: Vec::new(),
         };
         cfg.gateways.push(gw.clone());
         outcome.created.push(gw);
@@ -1113,6 +1191,7 @@ pub fn convert_devserver_row_to_gateway(
             label: row.label,
             enabled: true,
             added_at: row.added_at,
+            native_trust: Vec::new(),
         };
         cfg.gateways.push(gw.clone());
         gw
@@ -2325,6 +2404,7 @@ mod tests {
                 label: String::new(),
                 enabled: true,
                 added_at: 1,
+                native_trust: Vec::new(),
             }],
             ..Default::default()
         };
@@ -2458,6 +2538,7 @@ mod tests {
                     label: "work".to_string(),
                     enabled: true,
                     added_at: 1,
+                    native_trust: Vec::new(),
                 }],
                 ..Default::default()
             };
@@ -2496,6 +2577,7 @@ mod tests {
         assert_eq!(own.gateway_id.as_deref(), Some("gw-1a2b3c4d"));
         assert_eq!(own.gateway_url, "https://id.chan.app");
         assert!(!own.shared);
+        assert!(!own.native_trust_required);
         assert_eq!(own.label, "laptop");
         assert_eq!(own.status, DevserverStatus::Disconnected);
         assert!(!own.has_token);
@@ -2505,9 +2587,34 @@ mod tests {
         let shared = &rows[2];
         assert_eq!(shared.id, format!("gw:1a2b3c4d:bob:{}", "b".repeat(64)));
         assert!(shared.shared);
+        assert!(shared.native_trust_required);
+
+        // Trust is the exact full tuple under this gateway. Once persisted it
+        // survives a fresh config read and only that shared row flips.
+        assert!(
+            set_native_trust(&reg.store, "gw-1a2b3c4d", "bob", &"b".repeat(64), true,).unwrap()
+        );
+        assert!(
+            !set_native_trust(&reg.store, "gw-1a2b3c4d", "bob", &"b".repeat(64), true,).unwrap(),
+            "re-grant is idempotent"
+        );
+        let trusted = reg.list();
+        assert!(!trusted[1].native_trust_required);
+        assert!(!trusted[2].native_trust_required);
+        assert_eq!(
+            reg.store.lock().unwrap().get().unwrap().gateways[0]
+                .native_trust
+                .len(),
+            1,
+            "idempotent grant persists one exact record"
+        );
 
         // Deterministic across calls while nothing changes.
-        assert_eq!(reg.list(), rows);
+        assert_eq!(reg.list(), trusted);
+        assert!(
+            set_native_trust(&reg.store, "gw-1a2b3c4d", "bob", &"b".repeat(64), false,).unwrap()
+        );
+        assert!(reg.list()[2].native_trust_required);
     }
 
     #[test]
@@ -2527,6 +2634,7 @@ mod tests {
                     label: String::new(),
                     enabled: true,
                     added_at: 1,
+                    native_trust: Vec::new(),
                 }],
                 ..Default::default()
             };
@@ -2625,6 +2733,7 @@ mod tests {
                     label: String::new(),
                     enabled: true,
                     added_at: 1,
+                    native_trust: Vec::new(),
                 }],
                 ..Default::default()
             };

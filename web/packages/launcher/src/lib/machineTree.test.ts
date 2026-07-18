@@ -53,6 +53,7 @@ function ds(over: Partial<DevserverEntry> & Pick<DevserverEntry, "id">): Devserv
     gateway_id: null,
     gateway_url: "",
     shared: false,
+    native_trust_required: false,
     ...over,
   };
 }

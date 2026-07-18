@@ -21,6 +21,7 @@ function ds(status: DevserverEntry["status"], library_id: string): DevserverEntr
     has_token: false,
     library_id,
     status,
+    native_trust_required: false,
   } as unknown as DevserverEntry;
 }
 

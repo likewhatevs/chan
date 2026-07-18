@@ -101,6 +101,19 @@ pub enum DesktopWindowOp {
         id: String,
         reply: oneshot::Sender<Result<(), String>>,
     },
+    /// Persist native-IPC consent for one current shared gateway roster row.
+    /// The desktop validates the synthesized id against its authenticated
+    /// roster; plain and owned rows refuse the operation.
+    GrantDevserverNativeTrust {
+        id: String,
+        reply: oneshot::Sender<Result<(), String>>,
+    },
+    /// Revoke native-IPC consent for one current shared gateway roster row,
+    /// tearing down its connection and windows before replying.
+    RevokeDevserverNativeTrust {
+        id: String,
+        reply: oneshot::Sender<Result<(), String>>,
+    },
     /// Open a fresh standalone-terminal window on a connected devserver by id.
     /// The launcher's per-devserver New-Terminal button drives this; the reply is
     /// `Ok(())` once the window is spawning. Inert without a desktop attached  --

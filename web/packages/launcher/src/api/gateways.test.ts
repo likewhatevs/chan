@@ -71,6 +71,19 @@ describe("liveApi gateway routes (frozen wire)", () => {
     const entry: GatewayEntry = list[0];
     expect(entry).toEqual(wire);
   });
+
+  it("uses guarded PUT and DELETE routes for exact synthesized-row trust", async () => {
+    const id = `gw:feedface:bob:${"d".repeat(64)}`;
+    const { calls } = stubFetch(204);
+    await liveApi.grantDevserverNativeTrust(id);
+    await liveApi.revokeDevserverNativeTrust(id);
+
+    const path = `/api/library/devservers/${encodeURIComponent(id)}/native-trust`;
+    expect(calls.map(([url, init]) => [url, init.method])).toEqual([
+      [path, "PUT"],
+      [path, "DELETE"],
+    ]);
+  });
 });
 
 describe("mock gateway registry", () => {

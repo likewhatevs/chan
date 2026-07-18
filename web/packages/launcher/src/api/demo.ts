@@ -87,6 +87,7 @@ function seed(): Seed {
         gateway_id: null,
         gateway_url: "",
         shared: false,
+        native_trust_required: false,
       },
       {
         id: "ds-windows",
@@ -106,6 +107,7 @@ function seed(): Seed {
         gateway_id: null,
         gateway_url: "",
         shared: false,
+        native_trust_required: false,
       },
       {
         id: ATTENTION_DEVSERVER_ID,
@@ -127,6 +129,7 @@ function seed(): Seed {
         gateway_id: null,
         gateway_url: "",
         shared: false,
+        native_trust_required: false,
       },
     ],
     // One sample gateway so the Gateways screen has a badge to render in the
@@ -398,6 +401,7 @@ export function createLauncherDemoApi(opts: LauncherDemoOptions = {}): LauncherD
         gateway_id: null,
         gateway_url: "",
         shared: false,
+        native_trust_required: false,
       };
       devservers.push(ds);
       notify();
@@ -453,6 +457,26 @@ export function createLauncherDemoApi(opts: LauncherDemoOptions = {}): LauncherD
         }
         notify();
       }
+      return tick(undefined);
+    },
+
+    grantDevserverNativeTrust: (id) => {
+      const ds = devservers.find((d) => d.id === id);
+      if (!ds || !ds.gateway_id || !ds.shared) {
+        return Promise.reject(new ApiError(409, "native trust requires a shared gateway row"));
+      }
+      ds.native_trust_required = false;
+      return tick(undefined);
+    },
+
+    revokeDevserverNativeTrust: (id) => {
+      const ds = devservers.find((d) => d.id === id);
+      if (!ds || !ds.gateway_id || !ds.shared) {
+        return Promise.reject(new ApiError(409, "native trust requires a shared gateway row"));
+      }
+      ds.native_trust_required = true;
+      ds.status = "disconnected";
+      notify();
       return tick(undefined);
     },
     openDevserverTerminal: (id) => {

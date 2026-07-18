@@ -131,6 +131,12 @@ pub struct DevserverEntry {
     /// rows. `#[serde(default)]`: a row without the field reads `false`.
     #[serde(default)]
     pub shared: bool,
+    /// Whether this shared gateway row still needs explicit consent before the
+    /// desktop grants its exact web origin native IPC. Always `false` for plain
+    /// and owned rows. `#[serde(default)]` keeps older producers readable while
+    /// the key always serializes for the launcher's required wire mirror.
+    #[serde(default)]
+    pub native_trust_required: bool,
 }
 
 /// The add/update payload. `host` + `port` are required; the rest are optional.
@@ -228,6 +234,7 @@ mod tests {
         assert_eq!(entry.gateway_id, None);
         assert_eq!(entry.gateway_url, "");
         assert!(!entry.shared);
+        assert!(!entry.native_trust_required);
         // And the keys always ride the wire (no skip_serializing_if), so the
         // launcher's TypeScript mirror reads them unconditionally.
         let wire = serde_json::to_value(&entry).unwrap();
@@ -235,5 +242,9 @@ mod tests {
         assert_eq!(obj.get("gateway_id"), Some(&serde_json::Value::Null));
         assert_eq!(obj.get("gateway_url"), Some(&serde_json::json!("")));
         assert_eq!(obj.get("shared"), Some(&serde_json::json!(false)));
+        assert_eq!(
+            obj.get("native_trust_required"),
+            Some(&serde_json::json!(false))
+        );
     }
 }

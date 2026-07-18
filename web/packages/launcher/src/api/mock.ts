@@ -75,6 +75,7 @@ const devservers: MockDevserver[] = [
     gateway_id: null,
     gateway_url: "",
     shared: false,
+    native_trust_required: false,
   },
 ];
 
@@ -258,6 +259,7 @@ function publicDevserver(ds: MockDevserver): DevserverEntry {
     gateway_id: ds.gateway_id,
     gateway_url: ds.gateway_url,
     shared: ds.shared,
+    native_trust_required: ds.native_trust_required,
   };
 }
 
@@ -363,6 +365,7 @@ export const mockApi: LibraryApi = {
       gateway_id: null,
       gateway_url: "",
       shared: false,
+      native_trust_required: false,
     };
     devservers.push(ds);
     return tick(publicDevserver(ds));
@@ -428,6 +431,26 @@ export const mockApi: LibraryApi = {
       }
       notify();
     }
+    return tick(undefined);
+  },
+
+  grantDevserverNativeTrust: (id) => {
+    const ds = devservers.find((d) => d.id === id);
+    if (!ds || !ds.gateway_id || !ds.shared) {
+      return Promise.reject(new ApiError(409, "native trust requires a shared gateway row"));
+    }
+    ds.native_trust_required = false;
+    return tick(undefined);
+  },
+
+  revokeDevserverNativeTrust: (id) => {
+    const ds = devservers.find((d) => d.id === id);
+    if (!ds || !ds.gateway_id || !ds.shared) {
+      return Promise.reject(new ApiError(409, "native trust requires a shared gateway row"));
+    }
+    ds.native_trust_required = true;
+    ds.status = "disconnected";
+    notify();
     return tick(undefined);
   },
 

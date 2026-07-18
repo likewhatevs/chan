@@ -52,6 +52,10 @@ pub struct DevserverConn {
 pub struct GatewayConn {
     pub identity_origin: String,
     pub desktop_entry_url: String,
+    /// Discovery-advertised proxy namespace apex. Entry responses must name one
+    /// exact child label beneath this origin with the same scheme/effective port.
+    proxy_apex_origin: String,
+    /// Canonical exact origin pinned by the first validated entry response.
     pub proxy_origin: String,
     pub pat: String,
     /// Explicit devserver target (`(owner_username, devserver_id)`, a
@@ -72,6 +76,7 @@ impl GatewayConn {
         Self {
             identity_origin,
             desktop_entry_url,
+            proxy_apex_origin: proxy_origin.clone(),
             proxy_origin,
             pat,
             entry_target: None,
@@ -462,10 +467,104 @@ struct GatewayEntryRequest<'a> {
     devserver_id: Option<&'a str>,
 }
 
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize)]
 struct GatewayEntryResponse {
+    username: String,
+    devserver_id: String,
     proxy_origin: String,
     entry_url: String,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct ValidatedGatewayEntry {
+    proxy_origin: String,
+    entry_url: String,
+}
+
+fn canonical_origin_only(raw: &str, field: &str) -> Result<url::Url, String> {
+    let parsed = url::Url::parse(raw).map_err(|e| format!("invalid {field}: {e}"))?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err(format!(
+            "{field} has unsupported scheme {:?}",
+            parsed.scheme()
+        ));
+    }
+    if parsed.host_str().is_none() {
+        return Err(format!("{field} has no host"));
+    }
+    if !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || parsed.path() != "/"
+        || parsed.query().is_some()
+        || parsed.fragment().is_some()
+    {
+        return Err(format!("{field} must contain only scheme, host, and port"));
+    }
+    require_https_unless_loopback(raw)?;
+    Ok(parsed)
+}
+
+fn validate_gateway_entry(
+    proxy_apex_origin: &str,
+    requested_target: Option<&(String, String)>,
+    pinned_origin: Option<&str>,
+    response: GatewayEntryResponse,
+) -> Result<ValidatedGatewayEntry, String> {
+    if let Some((owner, devserver_id)) = requested_target {
+        if response.username != *owner {
+            return Err(format!(
+                "gateway entry username mismatch: requested {owner:?}, got {:?}",
+                response.username
+            ));
+        }
+        if response.devserver_id != *devserver_id {
+            return Err(format!(
+                "gateway entry devserver id mismatch: requested {devserver_id:?}, got {:?}",
+                response.devserver_id
+            ));
+        }
+    }
+    if response.proxy_origin.trim().is_empty() {
+        return Err("gateway entry proxy_origin is empty".to_string());
+    }
+    let apex = canonical_origin_only(proxy_apex_origin, "gateway proxy apex")?;
+    let proxy = canonical_origin_only(&response.proxy_origin, "gateway entry proxy_origin")?;
+    if proxy.scheme() != apex.scheme()
+        || proxy.port_or_known_default() != apex.port_or_known_default()
+    {
+        return Err("gateway entry proxy_origin does not match discovery scheme and port".into());
+    }
+    let apex_host = apex.host_str().expect("origin validator requires a host");
+    let proxy_host = proxy.host_str().expect("origin validator requires a host");
+    let suffix = format!(".{apex_host}");
+    let child = proxy_host
+        .strip_suffix(&suffix)
+        .filter(|child| !child.is_empty() && !child.contains('.'))
+        .ok_or_else(|| {
+            "gateway entry proxy_origin is not exactly one label below the discovery proxy apex"
+                .to_string()
+        })?;
+    if child.is_empty() {
+        return Err("gateway entry proxy origin has an empty child label".into());
+    }
+
+    let proxy_origin = proxy.origin().ascii_serialization();
+    if pinned_origin.is_some_and(|pinned| pinned != proxy_origin) {
+        return Err("gateway entry attempted to change the pinned proxy origin".to_string());
+    }
+
+    let entry = url::Url::parse(&response.entry_url)
+        .map_err(|e| format!("invalid gateway entry_url: {e}"))?;
+    if !entry.username().is_empty() || entry.password().is_some() {
+        return Err("gateway entry_url must not contain credentials".to_string());
+    }
+    if entry.origin().ascii_serialization() != proxy_origin {
+        return Err("gateway entry_url origin does not match proxy_origin".to_string());
+    }
+    Ok(ValidatedGatewayEntry {
+        proxy_origin,
+        entry_url: response.entry_url,
+    })
 }
 
 /// Why the gateway refused to mint an entry URL, parsed from the entry
@@ -578,18 +677,20 @@ fn classify_entry_error(status: reqwest::StatusCode, body: &[u8]) -> GatewayEntr
     GatewayEntryError::Other(format!("gateway entry returned HTTP {status}"))
 }
 
-async fn gateway_entry(
-    gw: &GatewayConn,
+async fn request_gateway_entry(
+    desktop_entry_url: &str,
+    pat: &str,
+    entry_target: Option<&(String, String)>,
     path: &str,
 ) -> Result<GatewayEntryResponse, GatewayEntryError> {
     let resp = http_client()
         .map_err(GatewayEntryError::Other)?
-        .post(&gw.desktop_entry_url)
-        .bearer_auth(&gw.pat)
+        .post(desktop_entry_url)
+        .bearer_auth(pat)
         .json(&GatewayEntryRequest {
             path,
-            owner: gw.entry_target.as_ref().map(|(o, _)| o.as_str()),
-            devserver_id: gw.entry_target.as_ref().map(|(_, d)| d.as_str()),
+            owner: entry_target.map(|(o, _)| o.as_str()),
+            devserver_id: entry_target.map(|(_, d)| d.as_str()),
         })
         .send()
         .await
@@ -604,31 +705,55 @@ async fn gateway_entry(
         .map_err(|e| GatewayEntryError::Other(format!("decoding gateway entry: {e}")))
 }
 
+async fn gateway_entry(
+    gw: &GatewayConn,
+    path: &str,
+) -> Result<ValidatedGatewayEntry, GatewayEntryError> {
+    let response = request_gateway_entry(
+        &gw.desktop_entry_url,
+        &gw.pat,
+        gw.entry_target.as_ref(),
+        path,
+    )
+    .await?;
+    validate_gateway_entry(
+        &gw.proxy_apex_origin,
+        gw.entry_target.as_ref(),
+        Some(&gw.proxy_origin),
+        response,
+    )
+    .map_err(GatewayEntryError::Other)
+}
+
 pub async fn gateway_conn(
     discovery: &GatewayDiscovery,
     pat: String,
     entry_target: Option<(String, String)>,
 ) -> Result<GatewayConn, GatewayEntryError> {
-    let probe = GatewayConn::new(
-        discovery.identity_origin.clone(),
-        discovery.desktop_entry_url.clone(),
-        discovery.devserver_proxy_origin.clone(),
+    let response = request_gateway_entry(
+        &discovery.desktop_entry_url,
+        &pat,
+        entry_target.as_ref(),
+        "/",
+    )
+    .await?;
+    let entry = validate_gateway_entry(
+        &discovery.devserver_proxy_origin,
+        entry_target.as_ref(),
+        None,
+        response,
+    )
+    .map_err(GatewayEntryError::Other)?;
+    let gw = GatewayConn {
+        identity_origin: discovery.identity_origin.clone(),
+        desktop_entry_url: discovery.desktop_entry_url.clone(),
+        proxy_apex_origin: origin_of(&discovery.devserver_proxy_origin)
+            .map_err(GatewayEntryError::Other)?,
+        proxy_origin: entry.proxy_origin,
         pat,
-    )
-    .with_entry_target(entry_target);
-    let entry = gateway_entry(&probe, "/").await?;
-    let proxy_origin = if entry.proxy_origin.trim().is_empty() {
-        discovery.devserver_proxy_origin.clone()
-    } else {
-        entry.proxy_origin
+        entry_target,
+        session: Arc::new(Mutex::new(None)),
     };
-    let gw = GatewayConn::new(
-        discovery.identity_origin.clone(),
-        discovery.desktop_entry_url.clone(),
-        proxy_origin,
-        probe.pat,
-    )
-    .with_entry_target(probe.entry_target);
     establish_gateway_session_from_entry(&gw, &entry.entry_url)
         .await
         .map_err(GatewayEntryError::Other)?;
@@ -1574,7 +1699,7 @@ mod tests {
             identity_origin: "https://id.chan.app".into(),
             desktop_authorize_url: "https://id.chan.app/desktop/authorize".into(),
             desktop_entry_url: "https://id.chan.app/desktop/v1/devserver/entry".into(),
-            devserver_proxy_origin: "https://alice.devserver.chan.app".into(),
+            devserver_proxy_origin: "https://devserver.chan.app".into(),
             roster_url: Some("https://id.chan.app/desktop/v1/devservers".into()),
         }
     }
@@ -1608,7 +1733,7 @@ mod tests {
         d.identity_origin = "http://id.chan.app".into();
         d.desktop_authorize_url = "http://id.chan.app/desktop/authorize".into();
         d.desktop_entry_url = "http://id.chan.app/desktop/v1/devserver/entry".into();
-        d.devserver_proxy_origin = "http://alice.devserver.chan.app".into();
+        d.devserver_proxy_origin = "http://devserver.chan.app".into();
         d.roster_url = Some("http://id.chan.app/desktop/v1/devservers".into());
         let err = validate_gateway_discovery("http://id.chan.app", d).unwrap_err();
         assert!(err.contains("must use https"), "{err}");
@@ -1627,6 +1752,205 @@ mod tests {
         };
         validate_gateway_discovery("http://localhost:7000", d)
             .expect("loopback http is explicit dev use");
+    }
+
+    fn gateway_entry_response(proxy_origin: &str, entry_url: &str) -> GatewayEntryResponse {
+        GatewayEntryResponse {
+            username: "alice".into(),
+            devserver_id: "a".repeat(64),
+            proxy_origin: proxy_origin.into(),
+            entry_url: entry_url.into(),
+        }
+    }
+
+    fn validate_test_entry(
+        proxy_origin: &str,
+        entry_url: &str,
+    ) -> Result<ValidatedGatewayEntry, String> {
+        validate_gateway_entry(
+            "https://devserver.chan.app",
+            Some(&("alice".into(), "a".repeat(64))),
+            None,
+            gateway_entry_response(proxy_origin, entry_url),
+        )
+    }
+
+    #[test]
+    fn gateway_entry_accepts_current_and_bare_user_exact_hosts() {
+        for origin in [
+            // The desktop validates the namespace boundary but does not
+            // reconstruct a gateway's routing label from owner/id. The exact
+            // authenticated response stays the source of truth.
+            "https://alice--0a1b2c3d4e5f.devserver.chan.app",
+            "https://alice.devserver.chan.app",
+        ] {
+            let entry = validate_test_entry(origin, &format!("{origin}/notes/index.html?t=entry"))
+                .expect("one-label entry origin validates");
+            assert_eq!(entry.proxy_origin, origin);
+        }
+        let canonical = validate_test_entry(
+            "https://alice.devserver.chan.app:443",
+            "https://alice.devserver.chan.app:443/?t=entry",
+        )
+        .unwrap();
+        assert_eq!(canonical.proxy_origin, "https://alice.devserver.chan.app");
+    }
+
+    #[test]
+    fn gateway_entry_binds_full_requested_identity() {
+        let mut response = gateway_entry_response(
+            "https://alice.devserver.chan.app",
+            "https://alice.devserver.chan.app/?t=entry",
+        );
+        response.username = "mallory".into();
+        assert!(validate_gateway_entry(
+            "https://devserver.chan.app",
+            Some(&("alice".into(), "a".repeat(64))),
+            None,
+            response,
+        )
+        .unwrap_err()
+        .contains("username mismatch"));
+
+        let mut response = gateway_entry_response(
+            "https://alice.devserver.chan.app",
+            "https://alice.devserver.chan.app/?t=entry",
+        );
+        response.devserver_id = format!("{}b", "a".repeat(63));
+        assert!(validate_gateway_entry(
+            "https://devserver.chan.app",
+            Some(&("alice".into(), "a".repeat(64))),
+            None,
+            response,
+        )
+        .unwrap_err()
+        .contains("devserver id mismatch"));
+    }
+
+    #[test]
+    fn gateway_entry_rejects_namespace_origin_and_entry_url_escapes() {
+        for proxy in [
+            "",
+            "not a url",
+            "ftp://alice.devserver.chan.app",
+            "http://alice.devserver.chan.app",
+            "https://user@alice.devserver.chan.app",
+            "https://alice.devserver.chan.app/path",
+            "https://alice.devserver.chan.app/?q=1",
+            "https://alice.devserver.chan.app/#frag",
+            "https://devserver.chan.app",
+            "https://nested.alice.devserver.chan.app",
+            "https://alice.devserver.chan.app.evil.example",
+            "https://alice.devserver.chan.app:444",
+        ] {
+            assert!(
+                validate_test_entry(proxy, "https://alice.devserver.chan.app/?t=entry").is_err(),
+                "proxy escape accepted: {proxy}"
+            );
+        }
+        for entry_url in [
+            "https://bob.devserver.chan.app/?t=entry",
+            "http://alice.devserver.chan.app/?t=entry",
+            "https://alice.devserver.chan.app:444/?t=entry",
+            "https://user@alice.devserver.chan.app/?t=entry",
+        ] {
+            assert!(
+                validate_test_entry("https://alice.devserver.chan.app", entry_url).is_err(),
+                "entry URL escape accepted: {entry_url}"
+            );
+        }
+    }
+
+    #[test]
+    fn gateway_entry_refresh_cannot_change_the_pinned_origin() {
+        let response = gateway_entry_response(
+            "https://bob.devserver.chan.app",
+            "https://bob.devserver.chan.app/?t=entry",
+        );
+        let err = validate_gateway_entry(
+            "https://devserver.chan.app",
+            Some(&("alice".into(), "a".repeat(64))),
+            Some("https://alice.devserver.chan.app"),
+            response,
+        )
+        .unwrap_err();
+        assert!(err.contains("pinned proxy origin"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn gateway_conn_validates_entry_origin_before_any_entry_get() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let sink_hits = Arc::new(AtomicUsize::new(0));
+        let sink_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let sink_origin = format!("http://{}", sink_listener.local_addr().unwrap());
+        let sink_hits_for_route = Arc::clone(&sink_hits);
+        let sink = axum::Router::new().route(
+            "/stolen",
+            axum::routing::get(move || {
+                let hits = Arc::clone(&sink_hits_for_route);
+                async move {
+                    hits.fetch_add(1, Ordering::SeqCst);
+                    "should not be requested"
+                }
+            }),
+        );
+        let sink_server = tokio::spawn(async move {
+            axum::serve(sink_listener, sink).await.unwrap();
+        });
+
+        let entry_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let entry_addr = entry_listener.local_addr().unwrap();
+        let identity_origin = format!("http://{entry_addr}");
+        let proxy_apex = format!("http://localtest.me:{}", entry_addr.port());
+        let proxy_origin = format!("http://alice.localtest.me:{}", entry_addr.port());
+        let response_proxy = proxy_origin.clone();
+        let malicious_entry = format!("{sink_origin}/stolen?t=secret");
+        let entry = axum::Router::new().route(
+            "/desktop/v1/devserver/entry",
+            axum::routing::post(move || {
+                let proxy_origin = response_proxy.clone();
+                let entry_url = malicious_entry.clone();
+                async move {
+                    axum::Json(serde_json::json!({
+                        "username": "alice",
+                        "devserver_id": "a".repeat(64),
+                        "proxy_origin": proxy_origin,
+                        "entry_url": entry_url,
+                    }))
+                }
+            }),
+        );
+        let entry_server = tokio::spawn(async move {
+            axum::serve(entry_listener, entry).await.unwrap();
+        });
+
+        let discovery = GatewayDiscovery {
+            kind: "chan-gateway".into(),
+            api_version: 1,
+            identity_origin: identity_origin.clone(),
+            desktop_authorize_url: format!("{identity_origin}/desktop/authorize"),
+            desktop_entry_url: format!("{identity_origin}/desktop/v1/devserver/entry"),
+            devserver_proxy_origin: proxy_apex,
+            roster_url: None,
+        };
+        let err = gateway_conn(
+            &discovery,
+            "pat".into(),
+            Some(("alice".into(), "a".repeat(64))),
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("entry_url origin does not match"), "{err}");
+        assert_eq!(
+            sink_hits.load(Ordering::SeqCst),
+            0,
+            "a rejected cross-origin entry URL must receive no HTTP request"
+        );
+
+        entry_server.abort();
+        sink_server.abort();
     }
 
     #[test]
@@ -2027,17 +2351,20 @@ mod tests {
     }
 
     fn gateway_test_conn(entry_url: String) -> DevserverConn {
+        let mut gateway = GatewayConn::new(
+            "https://id.chan.app".into(),
+            entry_url,
+            "https://alice.devserver.chan.app".into(),
+            "pat".into(),
+        )
+        .with_entry_target(Some(("alice".into(), "a".repeat(64))));
+        gateway.proxy_apex_origin = "https://devserver.chan.app".into();
         DevserverConn {
             host: "alice.devserver.chan.app".into(),
             port: 443,
             token: String::new(),
             name: "alice".into(),
-            gateway: Some(GatewayConn::new(
-                "https://id.chan.app".into(),
-                entry_url,
-                "https://alice.devserver.chan.app".into(),
-                "pat".into(),
-            )),
+            gateway: Some(gateway),
         }
     }
 
@@ -2069,7 +2396,10 @@ mod tests {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         tokio::spawn(async move {
-            let body = r#"{"proxy_origin":"https://alice.devserver.chan.app","entry_url":"https://alice.devserver.chan.app/notes-1a2b3c/index.html?t=tok_entry_1"}"#;
+            let body = format!(
+                r#"{{"username":"alice","devserver_id":"{}","proxy_origin":"https://alice.devserver.chan.app","entry_url":"https://alice.devserver.chan.app/notes-1a2b3c/index.html?t=tok_entry_1"}}"#,
+                "a".repeat(64)
+            );
             let response = format!(
                 "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
                 body.len()

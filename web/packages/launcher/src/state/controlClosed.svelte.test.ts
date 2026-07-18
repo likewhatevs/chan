@@ -50,6 +50,7 @@ function devserver(over: Partial<DevserverEntry> & Pick<DevserverEntry, "id">): 
     gateway_id: null,
     gateway_url: "",
     shared: false,
+    native_trust_required: false,
     ...over,
   };
 }

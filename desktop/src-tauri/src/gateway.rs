@@ -143,6 +143,9 @@ pub struct FetchEffect {
     pub cascade: bool,
     /// This fetch crossed the unreachable threshold: emit the notice once.
     pub became_unreachable: bool,
+    /// Actionable membership/policy changes from a fresh roster. The caller
+    /// applies teardown and trust pruning after releasing the runtime-map lock.
+    pub diff: RosterDiff,
 }
 
 /// Process-wide gateway runtime map. Lives in [`AppState`] and is shared
@@ -306,7 +309,9 @@ pub fn diff_rosters(old: &[RosterDevserver], new: &[RosterDevserver]) -> RosterD
         match old_map.get(k) {
             None => diff.added.push(k.clone()),
             Some(was) if was.online != row.online => diff.flipped_online.push(k.clone()),
-            Some(was) if was.label != row.label || was.role != row.role => {
+            Some(was)
+                if was.label != row.label || was.role != row.role || was.shared != row.shared =>
+            {
                 diff.updated.push(k.clone())
             }
             Some(_) => {}
@@ -334,6 +339,7 @@ pub fn apply_roster_fetch(rt: &mut GatewayRuntime, fetch: RosterFetch) -> FetchE
         } => {
             let diff = diff_rosters(&rt.roster, &rows);
             effect.changed = !diff.is_empty() || rt.status != GatewayStatus::Connected;
+            effect.diff = diff;
             rt.username = username;
             rt.roster = rows;
             rt.etag = etag;
@@ -363,6 +369,53 @@ pub fn apply_roster_fetch(rt: &mut GatewayRuntime, fetch: RosterFetch) -> FetchE
         }
     }
     effect
+}
+
+async fn apply_roster_policy_diff(state: &Arc<AppState>, gateway_id: &str, diff: &RosterDiff) {
+    for (owner, devserver_id) in &diff.removed {
+        let id = synthesized_row_id(gateway_id, owner, devserver_id);
+        let policy_lock = state.native_policy_lock(&id);
+        let _policy_guard = policy_lock.lock().await;
+        state.bump_native_policy_generation(&id);
+        if let Err(e) =
+            config::set_native_trust(&state.store, gateway_id, owner, devserver_id, false)
+        {
+            tracing::warn!(gateway = %gateway_id, devserver = %id, error = %e, "pruning removed devserver native trust failed");
+        }
+        if let Some(teardown) = state.devserver_remove_hook.get() {
+            teardown(&id);
+        }
+    }
+
+    for (owner, devserver_id) in &diff.updated {
+        let Some(row) = state
+            .gateway_manager
+            .roster_row(gateway_id, owner, devserver_id)
+        else {
+            continue;
+        };
+        let id = synthesized_row_id(gateway_id, owner, devserver_id);
+        let policy_lock = state.native_policy_lock(&id);
+        let _policy_guard = policy_lock.lock().await;
+        if row.shared {
+            match config::native_trust(&state.store, gateway_id, owner, devserver_id) {
+                Ok(true) => {}
+                Ok(false) => {
+                    state.bump_native_policy_generation(&id);
+                    if let Some(teardown) = state.devserver_remove_hook.get() {
+                        teardown(&id);
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(gateway = %gateway_id, devserver = %id, error = %e, "checking changed devserver native trust failed")
+                }
+            }
+        } else if let Err(e) =
+            config::set_native_trust(&state.store, gateway_id, owner, devserver_id, false)
+        {
+            tracing::warn!(gateway = %gateway_id, devserver = %id, error = %e, "pruning owned devserver native trust failed");
+        }
+    }
 }
 
 fn roster_client() -> Result<reqwest::Client, String> {
@@ -613,32 +666,9 @@ pub async fn connect_gateway<R: tauri::Runtime>(
                     .or_insert_with(|| new_runtime(discovery.clone()));
                 apply_roster_fetch(rt, fetch)
             };
+            apply_roster_policy_diff(&state, &gateway_id, &effect.diff).await;
             if effect.became_unreachable {
                 notice_unreachable(&app, &state, &gateway_id, &label);
-            }
-            // First successful connect for this origin grants its lib-*
-            // windows their IPC vocabulary (no-op inside the static
-            // *.devserver.chan.app scope or when already minted this run).
-            // A failure is not fatal to the connect - the roster still
-            // serves - but the user should know their windows will have
-            // dead commands.
-            match crate::runtime_capability::mint_gateway_grant(
-                &app,
-                &discovery.devserver_proxy_origin,
-            ) {
-                Ok(_) => {}
-                Err(e) => {
-                    tracing::warn!(gateway = %gateway_id, error = %e, "gateway window grant failed");
-                    emit_notice(
-                        &app,
-                        "error",
-                        "gateway",
-                        &gateway_id,
-                        &label,
-                        "Gateway windows limited",
-                        &format!("granting window permissions for this gateway failed: {e}"),
-                    );
-                }
             }
             spawn_roster_poll(&app, &state, &gateway_id, roster_url);
             drop_runtime_if_removed(&state, &gateway_id);
@@ -972,6 +1002,7 @@ fn spawn_roster_poll<R: tauri::Runtime>(
                     None => break,
                 }
             };
+            apply_roster_policy_diff(&state, &gateway_id, &effect.diff).await;
             if effect.cascade {
                 let label = gateway_row(&state, &gateway_id)
                     .map(|g| display_label(&g))
@@ -1069,6 +1100,9 @@ pub async fn cascade_disconnect<R: tauri::Runtime>(
     }
     for row in &runtime.roster {
         let synth_id = synthesized_row_id(gateway_id, &row.owner, &row.devserver_id);
+        let policy_lock = state.native_policy_lock(&synth_id);
+        let _policy_guard = policy_lock.lock().await;
+        state.bump_native_policy_generation(&synth_id);
         if let Some(teardown) = state.devserver_remove_hook.get() {
             teardown(&synth_id);
         }
@@ -1139,6 +1173,25 @@ mod tests {
         rt
     }
 
+    fn policy_state(native_trust: Vec<config::NativeDevserverTrust>) -> Arc<AppState> {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(Mutex::new(config::ConfigStore::at_path(
+            dir.path().join("config.json"),
+        )));
+        let mut cfg = config::Config::default();
+        cfg.gateways.push(Gateway {
+            id: "gw-feedface".into(),
+            url: "https://id.example.test".into(),
+            label: String::new(),
+            enabled: true,
+            added_at: 0,
+            native_trust,
+        });
+        store.lock().unwrap().save(&cfg).unwrap();
+        std::mem::forget(dir);
+        Arc::new(AppState::with_store(store))
+    }
+
     #[test]
     fn diff_reports_adds_removes_and_online_flips() {
         let old = vec![row("alice", "a", true), row("alice", "b", false)];
@@ -1176,6 +1229,92 @@ mod tests {
             },
         );
         assert!(effect.changed, "a rename pushes to the launcher");
+    }
+
+    #[test]
+    fn diff_reports_owned_to_shared_policy_flip() {
+        let old = vec![row("alice", "a", true)];
+        let mut shared = row("alice", "a", true);
+        shared.role = "editor".to_string();
+        shared.shared = true;
+
+        let diff = diff_rosters(&old, &[shared]);
+        assert_eq!(diff.updated, vec![("alice".to_string(), "a".to_string())]);
+        assert!(diff.added.is_empty());
+        assert!(diff.removed.is_empty());
+        assert!(diff.flipped_online.is_empty());
+    }
+
+    #[tokio::test]
+    async fn removed_row_prunes_trust_bumps_policy_and_tears_down() {
+        let owner = "bob";
+        let devserver_id = "d".repeat(64);
+        let state = policy_state(vec![config::NativeDevserverTrust {
+            owner: owner.into(),
+            devserver_id: devserver_id.clone(),
+        }]);
+        let torn_down = Arc::new(Mutex::new(Vec::new()));
+        let seen = Arc::clone(&torn_down);
+        assert!(state
+            .devserver_remove_hook
+            .set(Arc::new(move |id| seen
+                .lock()
+                .unwrap()
+                .push(id.to_string())))
+            .is_ok());
+        let diff = RosterDiff {
+            removed: vec![(owner.into(), devserver_id.clone())],
+            ..Default::default()
+        };
+
+        apply_roster_policy_diff(&state, "gw-feedface", &diff).await;
+
+        let id = synthesized_row_id("gw-feedface", owner, &devserver_id);
+        assert!(!config::native_trust(&state.store, "gw-feedface", owner, &devserver_id).unwrap());
+        assert_eq!(state.native_policy_generation(&id), 1);
+        assert_eq!(*torn_down.lock().unwrap(), vec![id]);
+    }
+
+    #[tokio::test]
+    async fn owned_to_untrusted_shared_flip_tears_down() {
+        let owner = "bob";
+        let devserver_id = "d".repeat(64);
+        let state = policy_state(Vec::new());
+        let mut shared = row(owner, &devserver_id, true);
+        shared.role = "editor".into();
+        shared.shared = true;
+        state.gateway_manager.seed_test_runtime(
+            "gw-feedface",
+            GatewayDiscovery {
+                kind: "chan-gateway".into(),
+                api_version: 1,
+                identity_origin: "https://id.example.test".into(),
+                desktop_authorize_url: "https://id.example.test/desktop/authorize".into(),
+                desktop_entry_url: "https://id.example.test/desktop/v1/devserver/entry".into(),
+                devserver_proxy_origin: "https://devserver.example.test".into(),
+                roster_url: Some("https://id.example.test/desktop/v1/devservers".into()),
+            },
+            vec![shared],
+        );
+        let torn_down = Arc::new(Mutex::new(Vec::new()));
+        let seen = Arc::clone(&torn_down);
+        assert!(state
+            .devserver_remove_hook
+            .set(Arc::new(move |id| seen
+                .lock()
+                .unwrap()
+                .push(id.to_string())))
+            .is_ok());
+        let diff = RosterDiff {
+            updated: vec![(owner.into(), devserver_id.clone())],
+            ..Default::default()
+        };
+
+        apply_roster_policy_diff(&state, "gw-feedface", &diff).await;
+
+        let id = synthesized_row_id("gw-feedface", owner, &devserver_id);
+        assert_eq!(state.native_policy_generation(&id), 1);
+        assert_eq!(*torn_down.lock().unwrap(), vec![id]);
     }
 
     #[test]
@@ -1450,6 +1589,7 @@ mod tests {
                 label: String::new(),
                 enabled: true,
                 added_at: 0,
+                native_trust: Vec::new(),
             });
             store.lock().unwrap().save(&cfg).unwrap();
         }

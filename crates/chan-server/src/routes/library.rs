@@ -146,6 +146,10 @@ pub fn launcher_router(
             post(handle_disconnect_devserver),
         )
         .route(
+            "/api/library/devservers/{id}/native-trust",
+            put(handle_grant_devserver_native_trust).delete(handle_revoke_devserver_native_trust),
+        )
+        .route(
             "/api/library/devservers/{id}/terminal",
             post(handle_devserver_terminal),
         )
@@ -694,6 +698,33 @@ async fn handle_disconnect_devserver(
     AxumPath(id): AxumPath<String>,
 ) -> Response {
     dispatch_window_op(&host, |reply| DesktopWindowOp::DisconnectDevserver {
+        id,
+        reply,
+    })
+    .await
+}
+
+/// `PUT /api/library/devservers/{id}/native-trust`: persist native-IPC consent
+/// for one current shared gateway roster row. The desktop bridge validates the
+/// authenticated roster target and rejects plain or owned rows.
+async fn handle_grant_devserver_native_trust(
+    State(host): State<Arc<WorkspaceHost>>,
+    AxumPath(id): AxumPath<String>,
+) -> Response {
+    dispatch_window_op(&host, |reply| DesktopWindowOp::GrantDevserverNativeTrust {
+        id,
+        reply,
+    })
+    .await
+}
+
+/// `DELETE /api/library/devservers/{id}/native-trust`: remove persisted consent
+/// and wait for the desktop to tear down that row's connection and windows.
+async fn handle_revoke_devserver_native_trust(
+    State(host): State<Arc<WorkspaceHost>>,
+    AxumPath(id): AxumPath<String>,
+) -> Response {
+    dispatch_window_op(&host, |reply| DesktopWindowOp::RevokeDevserverNativeTrust {
         id,
         reply,
     })
@@ -1638,6 +1669,7 @@ mod devserver_route_tests {
                     gateway_id: None,
                     gateway_url: String::new(),
                     shared: false,
+                    native_trust_required: false,
                 }]),
             }
         }
@@ -1671,6 +1703,7 @@ mod devserver_route_tests {
                 gateway_id: None,
                 gateway_url: String::new(),
                 shared: false,
+                native_trust_required: false,
             };
             self.rows.lock().unwrap().push(entry.clone());
             Ok(entry)
@@ -2720,6 +2753,8 @@ mod window_op_route_tests {
                     | DesktopWindowOp::Hide { reply, .. }
                     | DesktopWindowOp::ConnectDevserver { reply, .. }
                     | DesktopWindowOp::DisconnectDevserver { reply, .. }
+                    | DesktopWindowOp::GrantDevserverNativeTrust { reply, .. }
+                    | DesktopWindowOp::RevokeDevserverNativeTrust { reply, .. }
                     | DesktopWindowOp::OpenDevserverTerminal { reply, .. }
                     | DesktopWindowOp::OpenDevserverWorkspace { reply, .. }
                     | DesktopWindowOp::ConnectGateway { reply, .. }
@@ -2746,6 +2781,16 @@ mod window_op_route_tests {
         // route maps the dispatch success to 204.
         let (status, _) = post(&router, "/api/library/devservers/ds1/connect").await;
         assert_eq!(status, StatusCode::NO_CONTENT, "connect");
+        for method in ["PUT", "DELETE"] {
+            let (status, _) = send(
+                &router,
+                method,
+                "/api/library/devservers/gw%3A1%3Aalice%3Adev/native-trust",
+                None,
+            )
+            .await;
+            assert_eq!(status, StatusCode::NO_CONTENT, "native trust {method}");
+        }
         // The 5 new devserver bridge ops ride the same bridge → 204. disconnect +
         // terminal take no body; open carries {path}; on/off/forget carry {prefix}.
         for uri in [
@@ -2907,6 +2952,17 @@ mod window_op_route_tests {
         let (status, body) = post(&router, "/api/library/devservers/ds1/connect").await;
         assert_eq!(status, StatusCode::CONFLICT, "connect");
         assert_eq!(body, NO_DESKTOP, "connect");
+        for method in ["PUT", "DELETE"] {
+            let (status, body) = send(
+                &router,
+                method,
+                "/api/library/devservers/gw%3A1%3Aalice%3Adev/native-trust",
+                None,
+            )
+            .await;
+            assert_eq!(status, StatusCode::CONFLICT, "native trust {method}");
+            assert_eq!(body, NO_DESKTOP, "native trust {method}");
+        }
         // The new devserver bridge ops are inert without a desktop too -- 409
         // NO_DESKTOP, so the launcher's row buttons are safe to show everywhere.
         for uri in [
@@ -2951,6 +3007,31 @@ mod window_op_route_tests {
         let (status, body) = post(&router, "/api/library/fs/pick-folder").await;
         assert_eq!(status, StatusCode::CONFLICT, "pick-folder");
         assert_eq!(body, NO_DESKTOP, "pick-folder");
+    }
+
+    #[tokio::test]
+    async fn native_trust_mutation_is_forbidden_from_non_owner_tunnel() {
+        let host = Arc::new(WorkspaceHost::new(library(), crate::route_builder()));
+        let router = launcher_router(host, None, None);
+
+        for method in ["PUT", "DELETE"] {
+            let request = Request::builder()
+                .method(method)
+                .uri("/api/library/devservers/gw%3A1%3Aalice%3Adev/native-trust")
+                .extension(crate::TunnelOrigin { caller: None })
+                .body(Body::empty())
+                .unwrap();
+            let response = router.clone().oneshot(request).await.unwrap();
+            assert_eq!(response.status(), StatusCode::FORBIDDEN, "{method}");
+            let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            assert_eq!(
+                String::from_utf8_lossy(&body),
+                "launcher mutation is not available for this gateway role",
+                "{method}"
+            );
+        }
     }
 
     #[tokio::test]

@@ -2057,6 +2057,32 @@ mod tests {
     }
 
     #[test]
+    fn desktop_entry_response_pins_full_identity_and_exact_origin_fields() {
+        let full_id = "a".repeat(64);
+        let proxy_origin = "https://alice--aaaaaaaaaaaa.devserver.chan.app";
+        let response = DesktopEntryResponse {
+            username: "alice".to_string(),
+            devserver_id: full_id.clone(),
+            proxy_origin: proxy_origin.to_string(),
+            entry_url: format!("{proxy_origin}/notes/index.html?t=entry"),
+            expires_at: Utc::now() + chrono::Duration::seconds(30),
+        };
+        let wire = serde_json::to_value(response).unwrap();
+        assert_eq!(wire["username"], "alice");
+        assert_eq!(wire["devserver_id"], full_id);
+        assert_eq!(wire["proxy_origin"], proxy_origin);
+        let entry_url = wire["entry_url"].as_str().unwrap();
+        assert_eq!(
+            url::Url::parse(entry_url)
+                .unwrap()
+                .origin()
+                .ascii_serialization(),
+            proxy_origin
+        );
+        assert!(wire.get("expires_at").is_some());
+    }
+
+    #[test]
     fn devserver_display_name_sanitizes_to_the_label_bound() {
         // Trim; blank reads as absent.
         assert_eq!(

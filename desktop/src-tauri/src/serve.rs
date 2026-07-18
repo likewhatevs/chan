@@ -2767,8 +2767,6 @@ mod tests {
         include_str!("../capabilities/launcher-events.json");
     const LAUNCHER_UPDATE_CAPABILITY_JSON: &str =
         include_str!("../capabilities/launcher-update.json");
-    const DEVSERVER_WINDOW_CAPABILITY_JSON: &str =
-        include_str!("../capabilities/devserver-window.json");
     const ABOUT_CAPABILITY_JSON: &str = include_str!("../capabilities/about.json");
     const LOCAL_UPLOAD_CAPABILITY_JSON: &str = include_str!("../capabilities/local-upload.json");
     const APP_PERMISSIONS_TOML: &str = include_str!("../permissions/app.toml");
@@ -2806,10 +2804,14 @@ mod tests {
 
     fn capability_remote_urls(raw: &str) -> Vec<String> {
         let v: serde_json::Value = serde_json::from_str(raw).expect("capability JSON parses");
-        v["remote"]["urls"]
-            .as_array()
-            .expect("remote urls is an array")
-            .iter()
+        let Some(urls) = v
+            .get("remote")
+            .and_then(|remote| remote.get("urls"))
+            .and_then(serde_json::Value::as_array)
+        else {
+            return Vec::new();
+        };
+        urls.iter()
             .map(|u| {
                 u.as_str()
                     .expect("remote URL pattern is a string")
@@ -3045,50 +3047,6 @@ mod tests {
         assert!(
             remote_urls.iter().any(|u| u == "http://localhost:*"),
             "workspace capability must include localhost loopback: {remote_urls:?}",
-        );
-    }
-
-    #[test]
-    fn devserver_window_capability_grants_workspace_parity_to_tunnel_devserver_windows() {
-        // A tunnel-served devserver window (lib-<hex>::<window_id>) loads from
-        // the user's own gateway origin (https://*.devserver.chan.app), which
-        // workspace.json's loopback-only remote.urls does NOT cover. This
-        // capability grants that window the same command reach as its
-        // loopback-served twin: the workspace-window set plus the upload
-        // picker, fullscreen, webview zoom, and the opener. The one deliberate
-        // difference -- on any origin -- is read_dropped_paths, which lib-*
-        // windows never get (local-drop.json). The origin-aware parity test
-        // asserts the resulting reach; this pins the intent so an edit cannot
-        // silently broaden the remote scope or drop a grant.
-        let windows = capability_windows(DEVSERVER_WINDOW_CAPABILITY_JSON);
-        assert_eq!(
-            windows,
-            vec!["lib-*".to_string()],
-            "devserver-window must target only lib-* devserver windows: {windows:?}",
-        );
-        let perms = capability_permissions(DEVSERVER_WINDOW_CAPABILITY_JSON);
-        assert_eq!(
-            perms,
-            vec![
-                "workspace-window".to_string(),
-                "allow-pick-upload-files".to_string(),
-                "core:webview:allow-set-webview-zoom".to_string(),
-                "core:window:allow-set-fullscreen".to_string(),
-                "opener:default".to_string(),
-                "opener:allow-open-url".to_string(),
-            ],
-            "devserver-window must grant exact loopback parity (workspace-window set + \
-             upload picker + fullscreen + webview zoom + opener): {perms:?}",
-        );
-        assert!(
-            perms.iter().all(|p| p != "allow-read-dropped-paths"),
-            "the drag-pasteboard read must never reach tunnel-served content: {perms:?}",
-        );
-        let remote_urls = capability_remote_urls(DEVSERVER_WINDOW_CAPABILITY_JSON);
-        assert_eq!(
-            remote_urls,
-            vec!["https://*.devserver.chan.app".to_string()],
-            "devserver-window must scope to the tunnel origin only: {remote_urls:?}",
         );
     }
 
@@ -3414,10 +3372,9 @@ mod tests {
     /// Every capability file, by name. `capability_walk_covers_every_capability_file`
     /// pins this table against the directory listing so a new capability
     /// cannot land without joining the origin-aware walk.
-    const CAPABILITY_FILES: [(&str, &str); 8] = [
+    const CAPABILITY_FILES: [(&str, &str); 7] = [
         ("about.json", ABOUT_CAPABILITY_JSON),
         ("default.json", DEFAULT_CAPABILITY_JSON),
-        ("devserver-window.json", DEVSERVER_WINDOW_CAPABILITY_JSON),
         ("launcher-events.json", LAUNCHER_EVENTS_CAPABILITY_JSON),
         ("launcher-update.json", LAUNCHER_UPDATE_CAPABILITY_JSON),
         ("local-drop.json", LOCAL_DROP_CAPABILITY_JSON),
@@ -3442,14 +3399,12 @@ mod tests {
             "http://127.0.0.1:4090",
         ),
         (
-            "tunnel lib window",
+            "official exact-origin lib window",
             "lib-0a1b::w-1",
-            "https://alice.devserver.chan.app",
+            "https://alice--0a1b2c3d4e5f.devserver.chan.app",
         ),
-        // A self-hosted gateway's proxy origin: outside the static grant,
-        // covered only by the runtime-minted gateway capability.
         (
-            "gateway lib window",
+            "custom exact-origin lib window",
             "lib-0a1b::w-1",
             "https://ws1.proxy.gw-test.example",
         ),
@@ -3465,8 +3420,8 @@ mod tests {
     /// origin -- local-drop.json's windows list deliberately has no lib-*.
     const DELIBERATE_EXCLUSIONS: [(&str, &str); 3] = [
         ("loopback lib window", "read_dropped_paths"),
-        ("tunnel lib window", "read_dropped_paths"),
-        ("gateway lib window", "read_dropped_paths"),
+        ("official exact-origin lib window", "read_dropped_paths"),
+        ("custom exact-origin lib window", "read_dropped_paths"),
     ];
 
     /// Minimal window-label glob: `*` matches any run of characters
@@ -3648,10 +3603,16 @@ mod tests {
     /// capability landing there would get baked statically by tauri_build
     /// too. The origin mirrors ORIGIN_CLASSES' gateway class.
     fn runtime_capabilities() -> Vec<String> {
-        let urls =
-            crate::runtime_capability::gateway_proxy_remote_urls("https://proxy.gw-test.example")
-                .expect("gateway class proxy origin parses");
-        vec![crate::runtime_capability::gateway_capability_json(&urls)]
+        [
+            "https://alice--0a1b2c3d4e5f.devserver.chan.app",
+            "https://ws1.proxy.gw-test.example",
+        ]
+        .into_iter()
+        .map(|origin| {
+            crate::runtime_capability::exact_origin_capability_json(origin)
+                .expect("exact gateway origin parses")
+        })
+        .collect()
     }
 
     /// The app commands + plugin permissions a window with this label,
@@ -3733,6 +3694,27 @@ mod tests {
     }
 
     #[test]
+    fn no_static_or_runtime_capability_grants_a_gateway_wildcard() {
+        for (name, raw) in CAPABILITY_FILES {
+            for url in capability_remote_urls(raw) {
+                assert!(
+                    !url.contains("*.chan.app"),
+                    "static capability {name} carries a chan.app wildcard: {url}"
+                );
+            }
+        }
+        for raw in runtime_capabilities() {
+            let urls = capability_remote_urls(&raw);
+            assert_eq!(urls.len(), 1, "each runtime grant has one exact origin");
+            assert!(
+                !urls[0].contains('*'),
+                "runtime capability carries a discovery-apex wildcard: {}",
+                urls[0]
+            );
+        }
+    }
+
+    #[test]
     fn label_glob_and_remote_url_matchers_cover_the_capability_patterns() {
         assert!(label_glob_matches("lib-*", "lib-0a1b::w-1"));
         assert!(!label_glob_matches("lib-*", "library"));
@@ -3749,16 +3731,19 @@ mod tests {
             "https://alice.devserver.chan.app"
         ));
         assert!(remote_url_matches(
-            "https://*.devserver.chan.app",
-            "https://alice.devserver.chan.app"
+            "https://alice--0a1b2c3d4e5f.devserver.chan.app",
+            "https://alice--0a1b2c3d4e5f.devserver.chan.app"
         ));
-        // The apex domain is NOT a tunnel host; the wildcard needs a label.
         assert!(!remote_url_matches(
-            "https://*.devserver.chan.app",
+            "https://alice--0a1b2c3d4e5f.devserver.chan.app",
+            "https://bob--1a2b3c4d5e6f.devserver.chan.app"
+        ));
+        assert!(!remote_url_matches(
+            "https://alice--0a1b2c3d4e5f.devserver.chan.app",
             "https://devserver.chan.app"
         ));
         assert!(!remote_url_matches(
-            "https://*.devserver.chan.app",
+            "https://alice--0a1b2c3d4e5f.devserver.chan.app",
             "https://evil.example.com"
         ));
     }

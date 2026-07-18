@@ -1,14 +1,9 @@
-//! The runtime-minted IPC grant for gateway windows.
+//! Runtime-minted IPC grants for authenticated gateway devserver windows.
 //!
-//! Self-hosted gateway proxy origins are unknown at build time, so the
-//! static `capabilities/devserver-window.json` grant (scoped to
-//! `https://*.devserver.chan.app`) cannot cover them. At the first
-//! successful connect of a gateway whose proxy origin falls outside that
-//! static scope, the desktop mints the same grant for that origin via
-//! `Manager::add_capability`: [`gateway_capability_json`] builds the
-//! capability (the devserver-window permission list, `lib-*` windows,
-//! `remote.urls` = the gateway's proxy wildcard, nothing wider), and
-//! [`mint_gateway_grant`] installs it once per (origin, app run).
+//! A grant is minted only after the gateway entry endpoint authorizes one
+//! explicit roster target. Its `remote.urls` contains that response's validated
+//! canonical exact origin, never a discovery-apex wildcard. Official and
+//! self-hosted gateways use the same path.
 //!
 //! Rules the mint must never break, each pinned by a test below:
 //!
@@ -16,17 +11,17 @@
 //! - NO deny entries: deny entries are ORIGIN-BLIND in tauri's
 //!   `resolve_access` (the origin-match result of a denied command is
 //!   discarded), so any deny entry would kill the command on EVERY origin.
-//! - Once per (origin, run): re-adding a capability ACCUMULATES duplicate
+//! - Once per exact origin and process: re-adding a capability ACCUMULATES duplicate
 //!   resolved-command entries (no dedup on the identifier); duplicates are
 //!   harmless to resolution but grow the authority without bound. There is
 //!   no remove_capability: a removed gateway's grant persists until the
-//!   app restarts, which is why the grant stays scoped to the exact proxy
-//!   host.
+//!   app restarts. Revocation therefore closes managed windows immediately but
+//!   a hard ACL purge requires quitting Chan Desktop.
 //! - The minted JSON must parse and every permission must resolve:
 //!   `add_capability`'s string form PANICS on malformed JSON
 //!   (`RuntimeCapability::build` expect) and on permissions missing from
 //!   the build-time ACL manifests (`Resolved::resolve` unwrap), aborting
-//!   the app. [`mint_gateway_grant`] parses as a guard before handing the
+//!   the app. [`mint_exact_origin_grant`] parses as a guard before handing the
 //!   string over, and the pins keep the resolution path green.
 //!
 //! The tests drive the production `on_message` dispatch through the mock
@@ -36,8 +31,7 @@
 //! the capability is added gains the grant on its next invoke. What unit
 //! tests cannot prove on a headless host - a real OS webview delivering an
 //! invoke from a remote https page - is covered by the desktop hand-smoke;
-//! the static devserver-window capability shipping in production pins the
-//! same remote-IPC delivery path.
+//! native-shell smoke covers the real WebView delivery path.
 
 use std::collections::HashSet;
 use std::sync::{Mutex, OnceLock};
@@ -45,40 +39,42 @@ use std::sync::{Mutex, OnceLock};
 use tauri::utils::acl::capability::CapabilityFile;
 use tauri::Manager;
 
-/// The `remote.urls` scope of the static devserver-window grant. A gateway
-/// whose proxy wildcard equals this is already covered at build time and
-/// mints nothing; the pin test keeps this constant equal to the shipped
-/// capability file's pattern.
-const STATIC_GRANT_PATTERN: &str = "https://*.devserver.chan.app";
-
-/// The `remote.urls` pattern for a gateway's proxy origin: the subdomain
-/// wildcard (every devserver's window origin is a label under the proxy
-/// host), scoped to the gateway's exact host and carrying its explicit
-/// port when one is present. Deliberately NOTHING wider: no window class
-/// serves from the apex origin itself, so the runtime grant surface stays
-/// exactly the wildcard shape the static grant uses for chan.app.
-pub fn gateway_proxy_remote_urls(proxy_origin: &str) -> Result<Vec<String>, String> {
-    let parsed = url::Url::parse(proxy_origin).map_err(|e| format!("invalid proxy origin: {e}"))?;
+/// Canonicalize and validate the one exact origin a runtime capability may
+/// carry. The entry validator already enforces the gateway namespace; this
+/// guard keeps accidental wildcard/path/query inputs away from `add_capability`.
+pub fn exact_origin_remote_urls(exact_origin: &str) -> Result<Vec<String>, String> {
+    let parsed = url::Url::parse(exact_origin).map_err(|e| format!("invalid exact origin: {e}"))?;
     let scheme = parsed.scheme();
     if !matches!(scheme, "http" | "https") {
-        return Err(format!("proxy origin {proxy_origin:?} must be http(s)"));
+        return Err(format!("exact origin {exact_origin:?} must be http(s)"));
     }
     let host = parsed
         .host_str()
-        .ok_or_else(|| format!("proxy origin {proxy_origin:?} has no host"))?;
-    let port = parsed.port().map(|p| format!(":{p}")).unwrap_or_default();
-    Ok(vec![format!("{scheme}://*.{host}{port}")])
+        .ok_or_else(|| format!("exact origin {exact_origin:?} has no host"))?;
+    if host.contains('*')
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || parsed.path() != "/"
+        || parsed.query().is_some()
+        || parsed.fragment().is_some()
+    {
+        return Err(format!(
+            "exact origin {exact_origin:?} must contain only scheme, host, and port"
+        ));
+    }
+    Ok(vec![parsed.origin().ascii_serialization()])
 }
 
-/// The capability JSON minted for a gateway's window origins: the exact
-/// permission list of `capabilities/devserver-window.json`, `lib-*`
-/// windows only, `remote.urls` swapped to the gateway's proxy wildcard.
+/// The capability JSON minted for one authenticated exact origin: the existing
+/// devserver native vocabulary, `lib-*` windows only, and one `remote.urls`
+/// entry.
 /// No scoped permissions, no deny entries (see the module doc for why
 /// both rules are absolute).
-pub fn gateway_capability_json(remote_urls: &[String]) -> String {
-    serde_json::json!({
+pub fn exact_origin_capability_json(exact_origin: &str) -> Result<String, String> {
+    let remote_urls = exact_origin_remote_urls(exact_origin)?;
+    Ok(serde_json::json!({
         "identifier": "gateway-window",
-        "description": "runtime grant for gateway-served lib windows",
+        "description": "authenticated exact-origin grant for a gateway-served lib window",
         "remote": { "urls": remote_urls },
         "windows": ["lib-*"],
         "permissions": [
@@ -90,7 +86,7 @@ pub fn gateway_capability_json(remote_urls: &[String]) -> String {
             "opener:allow-open-url",
         ],
     })
-    .to_string()
+    .to_string())
 }
 
 fn minted_origins() -> &'static Mutex<HashSet<String>> {
@@ -98,19 +94,15 @@ fn minted_origins() -> &'static Mutex<HashSet<String>> {
     MINTED.get_or_init(|| Mutex::new(HashSet::new()))
 }
 
-/// Grant gateway windows on `proxy_origin` their IPC vocabulary, once per
-/// (origin, app run). Returns `Ok(true)` when a capability was added,
-/// `Ok(false)` when the origin is covered by the static grant or already
-/// minted this run. Already-open windows on the origin gain the grant on
-/// their next invoke; there is nothing to re-issue.
-pub fn mint_gateway_grant<R: tauri::Runtime>(
+/// Grant `lib-*` windows on `exact_origin` their native IPC vocabulary once per
+/// process. Already-open windows on the origin gain the grant on their next
+/// invoke; revocation prevents managed reopening but cannot remove this Tauri
+/// authority entry until process exit.
+pub fn mint_exact_origin_grant<R: tauri::Runtime>(
     manager: &impl Manager<R>,
-    proxy_origin: &str,
+    exact_origin: &str,
 ) -> Result<bool, String> {
-    let urls = gateway_proxy_remote_urls(proxy_origin)?;
-    if urls[0] == STATIC_GRANT_PATTERN {
-        return Ok(false);
-    }
+    let urls = exact_origin_remote_urls(exact_origin)?;
     // Poison-tolerant: an unwind inside add_capability (its panic paths
     // are pinned unreachable for our JSON, but pins are not proofs) must
     // not wedge every later mint into a panic on this lock; recovering a
@@ -120,7 +112,7 @@ pub fn mint_gateway_grant<R: tauri::Runtime>(
     if minted.contains(&urls[0]) {
         return Ok(false);
     }
-    let json = gateway_capability_json(&urls);
+    let json = exact_origin_capability_json(&urls[0])?;
     // Parse first: the string form of add_capability ABORTS on malformed
     // JSON, so guard with the fallible parse before handing the string
     // over (the unresolvable-permission abort stays covered by the pins).
@@ -207,60 +199,46 @@ mod tests {
         .map(|body| body.deserialize::<String>().expect("string response"))
     }
 
-    const GATEWAY_PROXY_ORIGIN: &str = "https://proxy.gw-test.example";
-    const GATEWAY_PAGE: &str = "https://ws1.proxy.gw-test.example/";
+    const EXACT_ORIGIN: &str = "https://alice--0a1b2c3d4e5f.devserver.chan.app";
+    const GATEWAY_PAGE: &str = "https://alice--0a1b2c3d4e5f.devserver.chan.app/";
+    const SIBLING_PAGE: &str = "https://bob--1a2b3c4d5e6f.devserver.chan.app/";
+    const PROXY_APEX_PAGE: &str = "https://devserver.chan.app/";
+    const WRONG_PORT_PAGE: &str = "https://alice--0a1b2c3d4e5f.devserver.chan.app:444/";
     const OTHER_REMOTE_PAGE: &str = "https://ws1.unrelated.example/";
-    const STATIC_DEVSERVER_PAGE: &str = "https://0a1b2c3d4e5f.devserver.chan.app/";
 
     fn production_json() -> String {
-        gateway_capability_json(&gateway_proxy_remote_urls(GATEWAY_PROXY_ORIGIN).unwrap())
+        exact_origin_capability_json(EXACT_ORIGIN).unwrap()
     }
 
     #[test]
-    fn proxy_remote_urls_are_the_wildcard_alone() {
+    fn remote_urls_are_one_canonical_exact_origin() {
         assert_eq!(
-            gateway_proxy_remote_urls("https://proxy.gw-test.example").unwrap(),
-            vec!["https://*.proxy.gw-test.example".to_string()]
+            exact_origin_remote_urls(EXACT_ORIGIN).unwrap(),
+            vec![EXACT_ORIGIN.to_string()]
         );
         assert_eq!(
-            gateway_proxy_remote_urls("http://127.0.0.1:7002").unwrap(),
-            vec!["http://*.127.0.0.1:7002".to_string()]
+            exact_origin_remote_urls("https://alice--0a1b2c3d4e5f.devserver.chan.app:443").unwrap(),
+            vec![EXACT_ORIGIN.to_string()],
+            "effective default ports canonicalize"
         );
-        assert!(gateway_proxy_remote_urls("ftp://x").is_err());
-        assert!(gateway_proxy_remote_urls("not a url").is_err());
-    }
-
-    #[test]
-    fn static_grant_pattern_matches_the_shipped_capability_file() {
-        // The skip rule compares against this constant; it must stay equal
-        // to what capabilities/devserver-window.json actually scopes, or
-        // chan.app gateways would double-mint (or foreign ones skip).
-        let file: serde_json::Value =
-            serde_json::from_str(include_str!("../capabilities/devserver-window.json"))
-                .expect("static capability parses");
-        assert_eq!(
-            file["remote"]["urls"][0].as_str(),
-            Some(STATIC_GRANT_PATTERN)
-        );
-    }
-
-    /// Control: the shipped static capability resolves through this
-    /// harness, so a denial elsewhere means "no grant", not a broken rig.
-    #[test]
-    fn static_devserver_grant_resolves_through_invoke_path() {
-        let app = mock_desktop_app();
-        let webview = lib_window(&app, "lib-static", STATIC_DEVSERVER_PAGE);
-        assert_eq!(
-            invoke_from(&webview, STATIC_DEVSERVER_PAGE, "platform_os"),
-            Ok("stub-os".into())
-        );
+        for invalid in [
+            "ftp://x",
+            "not a url",
+            "https://*.devserver.chan.app",
+            "https://user@alice.devserver.chan.app",
+            "https://alice.devserver.chan.app/path",
+            "https://alice.devserver.chan.app/?q=1",
+            "https://alice.devserver.chan.app/#fragment",
+        ] {
+            assert!(exact_origin_remote_urls(invalid).is_err(), "{invalid}");
+        }
     }
 
     /// The core pin: a foreign-origin invoke is denied before the mint,
     /// the SAME already-open window is allowed right after it, and a
     /// window created after the mint is covered too. Consumes the
     /// PRODUCTION mint path end to end. This test is the sole
-    /// mint_gateway_grant caller for GATEWAY_PROXY_ORIGIN: the once-guard
+    /// mint_exact_origin_grant caller for EXACT_ORIGIN: the once-guard
     /// is process-global, so a second caller would read Ok(false)
     /// depending on test order.
     #[test]
@@ -274,7 +252,7 @@ mod tests {
         );
 
         assert_eq!(
-            mint_gateway_grant(&app, GATEWAY_PROXY_ORIGIN),
+            mint_exact_origin_grant(&app, EXACT_ORIGIN),
             Ok(true),
             "first mint for the origin installs the capability"
         );
@@ -294,7 +272,7 @@ mod tests {
 
         // The once-per-(origin, run) guard: a reconnect does not
         // accumulate duplicate grants.
-        assert_eq!(mint_gateway_grant(&app, GATEWAY_PROXY_ORIGIN), Ok(false));
+        assert_eq!(mint_exact_origin_grant(&app, EXACT_ORIGIN), Ok(false));
     }
 
     /// The grant must not leak: wrong origin, wrong window label, or a
@@ -306,14 +284,17 @@ mod tests {
             .expect("add_capability returned Ok");
 
         let lib = lib_window(&app, "lib-scoped", GATEWAY_PAGE);
-        assert!(
-            invoke_from(&lib, OTHER_REMOTE_PAGE, "platform_os").is_err(),
-            "origins outside remote.urls stay denied"
-        );
-        assert!(
-            invoke_from(&lib, "https://proxy.gw-test.example/", "platform_os").is_err(),
-            "the apex origin is outside the grant: the wildcard needs a label"
-        );
+        for denied in [
+            SIBLING_PAGE,
+            PROXY_APEX_PAGE,
+            WRONG_PORT_PAGE,
+            OTHER_REMOTE_PAGE,
+        ] {
+            assert!(
+                invoke_from(&lib, denied, "platform_os").is_err(),
+                "origin {denied} must stay outside the exact grant"
+            );
+        }
         assert!(
             invoke_from(&lib, GATEWAY_PAGE, "read_dropped_paths").is_err(),
             "commands outside the granted set stay denied"
@@ -323,17 +304,6 @@ mod tests {
         assert!(
             invoke_from(&non_lib, GATEWAY_PAGE, "platform_os").is_err(),
             "window labels outside lib-* stay denied"
-        );
-    }
-
-    /// Origins the static grant covers mint nothing: the wildcard equals
-    /// the shipped pattern, so a chan.app gateway adds no capability.
-    #[test]
-    fn static_scope_origins_skip_the_mint() {
-        let app = mock_desktop_app();
-        assert_eq!(
-            mint_gateway_grant(&app, "https://devserver.chan.app"),
-            Ok(false)
         );
     }
 
@@ -355,7 +325,7 @@ mod tests {
 
     /// Re-adding the same capability accumulates duplicate grants rather
     /// than erroring or replacing: resolution still allows the command,
-    /// which is why mint_gateway_grant keeps its once-per-(origin, run)
+    /// which is why mint_exact_origin_grant keeps its once-per-origin guard
     /// guard rather than re-issuing on every connect.
     #[test]
     fn re_minting_accumulates_without_breaking_resolution() {

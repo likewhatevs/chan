@@ -176,6 +176,16 @@ pub struct AppState {
     /// Devservers with a connect request currently in flight. A second connect
     /// coalesces into the first instead of spawning another control terminal.
     pub devserver_connecting: Arc<Mutex<std::collections::HashSet<String>>>,
+    /// Per synthesized row serialization for connect, trust mutation, roster
+    /// revocation, and gateway cascades. Holding the async lock makes DELETE
+    /// wait for an older connect to settle and then tear it down, while a
+    /// connect that starts later observes the revoked policy before any entry
+    /// or capability work.
+    native_policy_locks: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
+    /// Monotonic policy generation per synthesized row. Connect captures it
+    /// before entry work and rechecks it immediately before registration; trust
+    /// revocation and roster invalidation bump it.
+    native_policy_generations: Mutex<HashMap<String, u64>>,
     /// Teardown hook the launcher's [`DevserverConfigRegistry`] fires after an
     /// HTTP `DELETE /api/library/devservers/{id}` drops a row, so that path
     /// reaps a live connection/windows through [`teardown_devserver_connection`]
@@ -237,6 +247,8 @@ impl AppState {
             control_terminal_dead: Mutex::new(std::collections::HashSet::new()),
             control_terminal_generation: std::sync::atomic::AtomicU64::new(0),
             devserver_connecting: Arc::new(Mutex::new(std::collections::HashSet::new())),
+            native_policy_locks: Mutex::new(HashMap::new()),
+            native_policy_generations: Mutex::new(HashMap::new()),
             devserver_remove_hook: Arc::new(OnceLock::new()),
             gateway_remove_hook: Arc::new(OnceLock::new()),
             gateway_manager: Arc::new(gateway::GatewayManager::default()),
@@ -245,6 +257,32 @@ impl AppState {
             quit_confirmed: std::sync::atomic::AtomicBool::new(false),
             quit_prompt_open: std::sync::atomic::AtomicBool::new(false),
         }
+    }
+
+    fn native_policy_lock(&self, id: &str) -> Arc<tokio::sync::Mutex<()>> {
+        Arc::clone(
+            self.native_policy_locks
+                .lock()
+                .unwrap()
+                .entry(id.to_string())
+                .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(()))),
+        )
+    }
+
+    fn native_policy_generation(&self, id: &str) -> u64 {
+        self.native_policy_generations
+            .lock()
+            .unwrap()
+            .get(id)
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn bump_native_policy_generation(&self, id: &str) -> u64 {
+        let mut generations = self.native_policy_generations.lock().unwrap();
+        let generation = generations.entry(id.to_string()).or_insert(0);
+        *generation = generation.saturating_add(1);
+        *generation
     }
 }
 
@@ -1555,6 +1593,96 @@ fn remove_devserver_windows(app: &tauri::AppHandle, state: &AppState, id: &str) 
 /// explicit Disconnect button (`DesktopWindowOp::DisconnectDevserver`) and the
 /// launcher's HTTP-DELETE remove hook, where the connection is going away for
 /// good. Idempotent; safe to call when the devserver is already disconnected.
+const NATIVE_TRUST_REQUIRED: &str = "native_trust_required";
+
+fn require_rostered_native_policy(
+    state: &AppState,
+    gateway_id: &str,
+    owner: &str,
+    devserver_id: &str,
+) -> Result<gateway::RosterDevserver, String> {
+    let row = state
+        .gateway_manager
+        .roster_row(gateway_id, owner, devserver_id)
+        .ok_or_else(|| "the gateway roster no longer contains this devserver".to_string())?;
+    let cfg = state.store.lock().unwrap().get().map_err(err)?;
+    let gateway = cfg
+        .gateways
+        .iter()
+        .find(|gateway| gateway.id == gateway_id)
+        .ok_or_else(|| format!("no gateway {gateway_id}"))?;
+    if row.shared && !gateway.trusts_native(owner, devserver_id) {
+        return Err(NATIVE_TRUST_REQUIRED.to_string());
+    }
+    Ok(row)
+}
+
+fn require_rostered_native_policy_generation(
+    state: &AppState,
+    id: &str,
+    gateway_id: &str,
+    owner: &str,
+    devserver_id: &str,
+    expected_generation: u64,
+) -> Result<gateway::RosterDevserver, String> {
+    if state.native_policy_generation(id) != expected_generation {
+        return Err("devserver native trust changed while connecting".to_string());
+    }
+    require_rostered_native_policy(state, gateway_id, owner, devserver_id)
+}
+
+fn signal_devserver_policy_change(app: &tauri::AppHandle, state: &AppState) {
+    if let Some(embedded) = state.embedded() {
+        embedded.signal_library_change();
+    }
+    let _ = app.emit(serve::SERVES_CHANGED, ());
+}
+
+async fn grant_devserver_native_trust(
+    app: &tauri::AppHandle,
+    state: &Arc<AppState>,
+    id: &str,
+) -> Result<(), String> {
+    let (gateway_id, owner, devserver_id) = gateway::parse_synthesized_id(id)
+        .ok_or_else(|| "native trust is only available for gateway devservers".to_string())?;
+    let policy_lock = state.native_policy_lock(id);
+    let _policy_guard = policy_lock.lock().await;
+    let row = state
+        .gateway_manager
+        .roster_row(&gateway_id, &owner, &devserver_id)
+        .ok_or_else(|| "the gateway roster no longer contains this devserver".to_string())?;
+    if !row.shared {
+        return Err("owned devservers do not require native trust".to_string());
+    }
+    config::set_native_trust(&state.store, &gateway_id, &owner, &devserver_id, true)?;
+    state.bump_native_policy_generation(id);
+    signal_devserver_policy_change(app, state);
+    Ok(())
+}
+
+async fn revoke_devserver_native_trust(
+    app: &tauri::AppHandle,
+    state: &Arc<AppState>,
+    id: &str,
+) -> Result<(), String> {
+    let (gateway_id, owner, devserver_id) = gateway::parse_synthesized_id(id)
+        .ok_or_else(|| "native trust is only available for gateway devservers".to_string())?;
+    let policy_lock = state.native_policy_lock(id);
+    let _policy_guard = policy_lock.lock().await;
+    let row = state
+        .gateway_manager
+        .roster_row(&gateway_id, &owner, &devserver_id)
+        .ok_or_else(|| "the gateway roster no longer contains this devserver".to_string())?;
+    if !row.shared {
+        return Err("owned devservers do not carry revocable native trust".to_string());
+    }
+    config::set_native_trust(&state.store, &gateway_id, &owner, &devserver_id, false)?;
+    state.bump_native_policy_generation(id);
+    teardown_devserver_connection(app, state, id);
+    signal_devserver_policy_change(app, state);
+    Ok(())
+}
+
 fn teardown_devserver_connection(app: &tauri::AppHandle, state: &AppState, id: &str) {
     state.devservers.remove(id);
     // A full teardown reaps the control terminal, so the reconnect block must
@@ -2246,6 +2374,7 @@ async fn rostered_conn<R: tauri::Runtime>(
     owner: &str,
     devserver_id: &str,
 ) -> Result<devserver::DevserverConn, ConnectDevserverError> {
+    let row = require_rostered_native_policy(state, gateway_id, owner, devserver_id)?;
     let Some(discovery) = state.gateway_manager.discovery(gateway_id) else {
         return Err(
             "connect the gateway first - its roster supplies this devserver"
@@ -2253,11 +2382,7 @@ async fn rostered_conn<R: tauri::Runtime>(
                 .into(),
         );
     };
-    let row_label = state
-        .gateway_manager
-        .roster_row(gateway_id, owner, devserver_id)
-        .map(|r| r.label)
-        .unwrap_or_default();
+    let row_label = row.label;
     let Some(pat) = auth::load_gateway_pat(&discovery.identity_origin)? else {
         return Err("the gateway sign-in is missing - reconnect the gateway"
             .to_string()
@@ -2343,11 +2468,47 @@ async fn connect_rostered_devserver(
     owner: String,
     devserver_id: String,
 ) -> Result<(), ConnectDevserverError> {
+    let policy_lock = state.native_policy_lock(&id);
+    let _policy_guard = policy_lock.lock().await;
+    let policy_generation = state.native_policy_generation(&id);
+    require_rostered_native_policy_generation(
+        &state,
+        &id,
+        &gateway_id,
+        &owner,
+        &devserver_id,
+        policy_generation,
+    )?;
     let conn = rostered_conn(&app, &state, &id, &gateway_id, &owner, &devserver_id).await?;
+
+    let proxy_origin = conn
+        .gateway
+        .as_ref()
+        .expect("rostered connections are gateway-backed")
+        .proxy_origin
+        .clone();
+    crate::runtime_capability::mint_exact_origin_grant(&app, &proxy_origin)
+        .map_err(|e| format!("granting native access for this devserver failed: {e}"))?;
+    require_rostered_native_policy_generation(
+        &state,
+        &id,
+        &gateway_id,
+        &owner,
+        &devserver_id,
+        policy_generation,
+    )?;
 
     let rows = devserver::fetch_workspaces(&conn)
         .await
         .map_err(|e| format!("authenticating gateway devserver proxy: {e}"))?;
+    require_rostered_native_policy_generation(
+        &state,
+        &id,
+        &gateway_id,
+        &owner,
+        &devserver_id,
+        policy_generation,
+    )?;
     state.devservers.set(id.clone(), conn.clone());
 
     match devserver::fetch_local_color(&conn).await {
@@ -2382,12 +2543,36 @@ async fn connect_rostered_devserver(
         }
     }
 
+    if let Err(e) = require_rostered_native_policy_generation(
+        &state,
+        &id,
+        &gateway_id,
+        &owner,
+        &devserver_id,
+        policy_generation,
+    ) {
+        state.devservers.remove(&id);
+        return Err(e.into());
+    }
+
     let (cancel, snapshot, view) = window_watcher_wiring::spawn_devserver_window_watcher(
         id.clone(),
         app.clone(),
         conn.clone(),
     )
     .await?;
+    if let Err(e) = require_rostered_native_policy_generation(
+        &state,
+        &id,
+        &gateway_id,
+        &owner,
+        &devserver_id,
+        policy_generation,
+    ) {
+        state.devservers.remove(&id);
+        let _ = cancel.send(DevserverWatcherStop::CloseWindows);
+        return Err(e.into());
+    }
     state.devserver_feed.set_down(&id, false);
     state.devserver_feed.register_windows(id.clone(), snapshot);
     let library_id = state.devserver_feed.library_id_of(&id);
@@ -7801,6 +7986,78 @@ mod tests {
         Arc::new(AppState::with_store(store))
     }
 
+    #[test]
+    fn shared_rostered_policy_requires_exact_persisted_trust() {
+        let state = empty_state();
+        let gateway_id = "gw-feedface";
+        let owner = "bob";
+        let devserver_id = "d".repeat(64);
+        {
+            let mut store = state.store.lock().unwrap();
+            let mut cfg = store.get().unwrap();
+            cfg.gateways.push(config::Gateway {
+                id: gateway_id.into(),
+                url: "https://id.example.test".into(),
+                label: String::new(),
+                enabled: true,
+                added_at: 0,
+                native_trust: Vec::new(),
+            });
+            store.save(&cfg).unwrap();
+        }
+        let discovery = devserver::GatewayDiscovery {
+            kind: "chan-gateway".into(),
+            api_version: 1,
+            identity_origin: "https://id.example.test".into(),
+            desktop_authorize_url: "https://id.example.test/desktop/authorize".into(),
+            desktop_entry_url: "https://id.example.test/desktop/v1/devserver/entry".into(),
+            devserver_proxy_origin: "https://devserver.example.test".into(),
+            roster_url: Some("https://id.example.test/desktop/v1/devservers".into()),
+        };
+        state.gateway_manager.seed_test_runtime(
+            gateway_id,
+            discovery.clone(),
+            vec![gateway::RosterDevserver {
+                owner: owner.into(),
+                devserver_id: devserver_id.clone(),
+                label: "shared".into(),
+                online: true,
+                role: "editor".into(),
+                shared: true,
+            }],
+        );
+
+        assert_eq!(
+            require_rostered_native_policy(&state, gateway_id, owner, &devserver_id).unwrap_err(),
+            NATIVE_TRUST_REQUIRED
+        );
+        config::set_native_trust(
+            &state.store,
+            gateway_id,
+            "someone-else",
+            &devserver_id,
+            true,
+        )
+        .unwrap();
+        assert_eq!(
+            require_rostered_native_policy(&state, gateway_id, owner, &devserver_id).unwrap_err(),
+            NATIVE_TRUST_REQUIRED,
+            "trust for another owner must not widen the grant"
+        );
+        config::set_native_trust(&state.store, gateway_id, owner, &devserver_id, true).unwrap();
+        assert!(require_rostered_native_policy(&state, gateway_id, owner, &devserver_id).is_ok());
+
+        state
+            .gateway_manager
+            .seed_test_runtime(gateway_id, discovery, Vec::new());
+        assert!(
+            require_rostered_native_policy(&state, gateway_id, owner, &devserver_id)
+                .unwrap_err()
+                .contains("roster no longer contains"),
+            "persisted trust must not outlive authenticated roster membership"
+        );
+    }
+
     /// A rostered row whose entry mint answers devserver_offline fails the
     /// connect AND emits a clean devserver-sourced info notice (the gateway
     /// checks liveness before authorization, so dark shared rows land here
@@ -7827,7 +8084,21 @@ mod tests {
             axum::serve(listener, stub).await.unwrap();
         });
 
+        let ds64 = "d".repeat(64);
         let state = empty_state();
+        {
+            let mut store = state.store.lock().unwrap();
+            let mut cfg = store.get().unwrap();
+            cfg.gateways.push(config::Gateway {
+                id: "gw-feedface".into(),
+                url: origin.clone(),
+                label: String::new(),
+                enabled: true,
+                added_at: 0,
+                native_trust: Vec::new(),
+            });
+            store.save(&cfg).unwrap();
+        }
         state.gateway_manager.seed_test_runtime(
             "gw-feedface",
             devserver::GatewayDiscovery {
@@ -7839,7 +8110,14 @@ mod tests {
                 devserver_proxy_origin: "https://devserver.chan.app".into(),
                 roster_url: Some(format!("{origin}/desktop/v1/devservers")),
             },
-            Vec::new(),
+            vec![gateway::RosterDevserver {
+                owner: "alice".into(),
+                devserver_id: ds64.clone(),
+                label: String::new(),
+                online: false,
+                role: "owner".into(),
+                shared: false,
+            }],
         );
         crate::auth::test_gateway_pats().lock().unwrap().insert(
             origin.clone(),
@@ -7856,7 +8134,6 @@ mod tests {
             let _ = tx.send(event.payload().to_string());
         });
 
-        let ds64 = "d".repeat(64);
         let result = rostered_conn(
             app.handle(),
             &state,

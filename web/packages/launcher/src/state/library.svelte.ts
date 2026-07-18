@@ -345,6 +345,26 @@ export async function connectDevserver(id: string): Promise<void> {
   await refreshDevservers(); // reconcile clears the marker once connected
 }
 
+/** Grant a shared row native access, re-read the authoritative projection, then
+ * connect. The ordering is security-sensitive: no pending/connect transition
+ * begins until PUT succeeded and the row confirms consent persisted. */
+export async function grantNativeTrustAndConnect(id: string): Promise<void> {
+  await backend.grantDevserverNativeTrust(id);
+  await refreshDevservers();
+  const row = library.devservers.find((devserver) => devserver.id === id);
+  if (!row || row.native_trust_required) {
+    throw new Error("native trust did not persist for this devserver");
+  }
+  await connectDevserver(id);
+}
+
+/** Revoke a shared row's native access. DELETE waits for desktop teardown; the
+ * re-list then restores the trust-required state and removes live content. */
+export async function revokeDevserverNativeTrust(id: string): Promise<void> {
+  await backend.revokeDevserverNativeTrust(id);
+  await refreshDevservers();
+}
+
 /** Disconnect a devserver: its windows + served-workspace rows leave the feed;
  * the registry entry stays so Connect can redial. */
 export async function disconnectDevserver(id: string): Promise<void> {

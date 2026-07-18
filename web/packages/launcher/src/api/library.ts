@@ -218,6 +218,8 @@ export interface DevserverEntry {
   gateway_url: string;
   /** A roster row shared with the account (role != owner), not owned by it. */
   shared: boolean;
+  /** A shared roster row that needs explicit native-IPC consent before connect. */
+  native_trust_required: boolean;
 }
 
 // ---- The gateway registry -------------------------------------------------
@@ -319,6 +321,10 @@ export interface LibraryApi {
   /** Tear down the desktop's live connection to a devserver (its windows leave
    * the feed). A desktop action; a surface with no desktop bridge answers 409. */
   disconnectDevserver(id: string): Promise<void>;
+  /** Persist consent for one current shared gateway devserver's native IPC. */
+  grantDevserverNativeTrust(id: string): Promise<void>;
+  /** Revoke consent and wait for its desktop connection/windows to close. */
+  revokeDevserverNativeTrust(id: string): Promise<void>;
   /** Open a terminal window on a connected devserver (desktop action, 409 with
    * no bridge). */
   openDevserverTerminal(id: string): Promise<void>;
@@ -483,6 +489,10 @@ export const liveApi: LibraryApi = {
     req("POST", `/api/library/devservers/${encodeURIComponent(id)}/connect`),
   disconnectDevserver: (id) =>
     req("POST", `/api/library/devservers/${encodeURIComponent(id)}/disconnect`),
+  grantDevserverNativeTrust: (id) =>
+    req("PUT", `/api/library/devservers/${encodeURIComponent(id)}/native-trust`),
+  revokeDevserverNativeTrust: (id) =>
+    req("DELETE", `/api/library/devservers/${encodeURIComponent(id)}/native-trust`),
   openDevserverTerminal: (id) =>
     req("POST", `/api/library/devservers/${encodeURIComponent(id)}/terminal`),
   // The devserver-workspace ops carry the remote mount `prefix` / `path` in the
