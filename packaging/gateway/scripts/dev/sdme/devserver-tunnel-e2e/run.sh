@@ -43,15 +43,21 @@ APEX="devserver.localtest.me"
 SUFFIX=".devserver.localtest.me"
 TENANT_USER="alice"
 USER_ID="11111111-1111-4111-8111-111111111111"
-DEVSERVER_ID="0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+EDITOR_USER_ID="22222222-2222-4222-8222-222222222222"
 GATE_SECRET="e2e-workspace-gate-secret-0123456789"
 IDENTITY_TOKEN="e2e-identity-internal-token"
 PAT="chan_pat_e2e_dummy_token"
+DEVSERVER_ID="$(printf '%s' "$PAT" | sha256sum | awk '{print $1}')"
+DESKTOP_OWNER_PAT="chan_pat_e2e_desktop_owner"
+DESKTOP_EDITOR_PAT="chan_pat_e2e_desktop_editor"
 STUB_PORT="7799"
 WS_NAME="notes"
 PROXY_PUB_PORT=7002
 PROXY_TUN_PORT=7100
 DS_PORT=8787
+HOST_NAME="${TENANT_USER}--${DEVSERVER_ID:0:12}${SUFFIX}"
+HOSTHDR="$HOST_NAME:$PROXY_PUB_PORT"
+PROXY_ORIGIN="http://$HOSTHDR"
 
 say()  { printf '\n\033[1;36m== %s\033[0m\n' "$*"; }
 info() { printf '   %s\n' "$*"; }
@@ -101,10 +107,22 @@ $SDME exec "$C_DS" -- /bin/sh -c \
   "mkdir -p /root/$WS_NAME /run/chan && printf '# e2e notes\nhello-through-the-tunnel\n' > /root/$WS_NAME/README.md"
 
 say "start stub identity (loopback) in $C_PROXY"
+# Mint close to use: the one-time rootfs/container setup above can take longer
+# than an entry token lifetime on a cold host.
+OWNER_ENTRY_TOKEN="$(python3 "$MINT_PY" --secret "$GATE_SECRET" --sub "$USER_ID" \
+  --role owner --name 'Alice Owner' --email alice@example.test --drv "$DEVSERVER_ID" \
+  --aud "$HOSTHDR" --typ entry --ttl 300)"
+EDITOR_ENTRY_TOKEN="$(python3 "$MINT_PY" --secret "$GATE_SECRET" --sub "$EDITOR_USER_ID" \
+  --role editor --name 'Ed Grantee' --email ed@example.test --drv "$DEVSERVER_ID" \
+  --aud "$HOSTHDR" --typ entry --ttl 300)"
 $SDME exec "$C_PROXY" -- /usr/bin/systemd-run --unit=stub --collect \
   --setenv=STUB_BIND=127.0.0.1:$STUB_PORT --setenv=STUB_USERNAME=$TENANT_USER \
   --setenv=STUB_USER_ID=$USER_ID --setenv=STUB_DEVSERVER_ID=$DEVSERVER_ID \
-  --setenv=STUB_SCOPES=tunnel \
+  --setenv=STUB_SCOPES=tunnel --setenv=STUB_PROXY_ORIGIN=$PROXY_ORIGIN \
+  --setenv=STUB_DESKTOP_OWNER_PAT=$DESKTOP_OWNER_PAT \
+  --setenv=STUB_DESKTOP_EDITOR_PAT=$DESKTOP_EDITOR_PAT \
+  --setenv=STUB_OWNER_ENTRY_TOKEN=$OWNER_ENTRY_TOKEN \
+  --setenv=STUB_EDITOR_ENTRY_TOKEN=$EDITOR_ENTRY_TOKEN \
   /usr/bin/python3 /root/stub-identity.py || die "systemd-run stub identity"
 sleep 1
 
@@ -159,16 +177,82 @@ except Exception: print("")')"
 [ -n "$PREFIX" ] || die "could not resolve mounted workspace prefix (token=${TOKEN:0:8}...)"
 info "mounted prefix = $PREFIX"
 
-say "mint gate session cookie + drive request through the proxy"
-HOSTHDR="$TENANT_USER$SUFFIX"
-COOKIE="$(python3 "$MINT_PY" --secret "$GATE_SECRET" --sub "$USER_ID" --drv "$DEVSERVER_ID" --aud "$HOSTHDR")"
+say "mint authenticated desktop entry responses"
+ENTRY_BODY="$(printf '{\"owner\":\"%s\",\"devserver_id\":\"%s\",\"path\":\"%s/\"}' \
+  "$TENANT_USER" "$DEVSERVER_ID" "$PREFIX")"
+BAD_ENTRY_CODE="$($SDME exec "$C_PROXY" -- /usr/bin/curl -sS -o /tmp/bad-entry.json \
+  -w '%{http_code}' -H 'Authorization: Bearer wrong' -H 'content-type: application/json' \
+  --data "$ENTRY_BODY" "http://127.0.0.1:$STUB_PORT/desktop/v1/devserver/entry" || true)"
+[ "$BAD_ENTRY_CODE" = "401" ] || die "desktop entry accepted an invalid bearer ($BAD_ENTRY_CODE)"
+
+OWNER_ENTRY_JSON="$($SDME exec "$C_PROXY" -- /usr/bin/curl -fsS \
+  -H "Authorization: Bearer $DESKTOP_OWNER_PAT" -H 'content-type: application/json' \
+  --data "$ENTRY_BODY" "http://127.0.0.1:$STUB_PORT/desktop/v1/devserver/entry")" \
+  || die "owner desktop entry response"
+EDITOR_ENTRY_JSON="$($SDME exec "$C_PROXY" -- /usr/bin/curl -fsS \
+  -H "Authorization: Bearer $DESKTOP_EDITOR_PAT" -H 'content-type: application/json' \
+  --data "$ENTRY_BODY" "http://127.0.0.1:$STUB_PORT/desktop/v1/devserver/entry")" \
+  || die "editor desktop entry response"
+printf '%s\n%s\n' "$OWNER_ENTRY_JSON" "$EDITOR_ENTRY_JSON" | python3 -c '
+import json, sys
+rows = [json.loads(line) for line in sys.stdin if line.strip()]
+assert len(rows) == 2
+for row in rows:
+    assert row["username"] == sys.argv[1]
+    assert row["devserver_id"] == sys.argv[2] and len(row["devserver_id"]) == 64
+    assert row["proxy_origin"] == sys.argv[3]
+    assert row["entry_url"].startswith(sys.argv[3] + sys.argv[4] + "/?t=")
+    assert row["expires_at"].endswith("Z")
+' "$TENANT_USER" "$DEVSERVER_ID" "$PROXY_ORIGIN" "$PREFIX" \
+  || die "desktop entry response identity/origin validation"
+info "entry response pins username + full id + exact origin for owner and editor"
+
+OWNER_ENTRY_URL="$(printf '%s' "$OWNER_ENTRY_JSON" | python3 -c 'import json,sys;print(json.load(sys.stdin)["entry_url"])')"
+EDITOR_ENTRY_URL="$(printf '%s' "$EDITOR_ENTRY_JSON" | python3 -c 'import json,sys;print(json.load(sys.stdin)["entry_url"])')"
+OWNER_ENTRY_H="$(mktemp)"; EDITOR_ENTRY_H="$(mktemp)"
+OWNER_ENTRY_CODE="$(curl --noproxy '*' --resolve "$HOST_NAME:$PROXY_PUB_PORT:$PROXY_IP" \
+  -sS -o /dev/null -D "$OWNER_ENTRY_H" -w '%{http_code}' "$OWNER_ENTRY_URL" || echo 000)"
+EDITOR_ENTRY_CODE="$(curl --noproxy '*' --resolve "$HOST_NAME:$PROXY_PUB_PORT:$PROXY_IP" \
+  -sS -o /dev/null -D "$EDITOR_ENTRY_H" -w '%{http_code}' "$EDITOR_ENTRY_URL" || echo 000)"
+[ "$OWNER_ENTRY_CODE" = "303" ] && [ "$EDITOR_ENTRY_CODE" = "303" ] \
+  || die "entry exchange did not mint sessions (owner=$OWNER_ENTRY_CODE editor=$EDITOR_ENTRY_CODE)"
+OWNER_GATE="$(sed -n 's/^set-cookie: devserver_gate=\([^;]*\).*/\1/ip' "$OWNER_ENTRY_H" | head -1 | tr -d '\r')"
+OWNER_CSRF="$(sed -n 's/^set-cookie: devserver_csrf=\([^;]*\).*/\1/ip' "$OWNER_ENTRY_H" | head -1 | tr -d '\r')"
+EDITOR_GATE="$(sed -n 's/^set-cookie: devserver_gate=\([^;]*\).*/\1/ip' "$EDITOR_ENTRY_H" | head -1 | tr -d '\r')"
+EDITOR_CSRF="$(sed -n 's/^set-cookie: devserver_csrf=\([^;]*\).*/\1/ip' "$EDITOR_ENTRY_H" | head -1 | tr -d '\r')"
+[ -n "$OWNER_GATE" ] && [ -n "$OWNER_CSRF" ] && [ -n "$EDITOR_GATE" ] && [ -n "$EDITOR_CSRF" ] \
+  || die "entry exchange omitted session/csrf cookies"
+
+say "drive authenticated owner request through the proxy"
 RESP_H="$(mktemp)"; RESP_B="$(mktemp)"
-CODE="$(curl -sS -o "$RESP_B" -D "$RESP_H" -w '%{http_code}' \
-  -H "Host: $HOSTHDR" -H "Cookie: devserver_gate=$COOKIE" \
-  "http://$PROXY_IP:$PROXY_PUB_PORT$PREFIX/" || echo 000)"
+CODE="$(curl --noproxy '*' --resolve "$HOST_NAME:$PROXY_PUB_PORT:$PROXY_IP" \
+  -sS -o "$RESP_B" -D "$RESP_H" -w '%{http_code}' \
+  -H "Cookie: devserver_gate=$OWNER_GATE; devserver_csrf=$OWNER_CSRF" \
+  "$PROXY_ORIGIN$PREFIX/" || echo 000)"
+
+say "prove native-trust routes and require_local_mutation"
+TRUST_PATH="/api/library/devservers/gw%3Afeedface%3A$TENANT_USER%3A$DEVSERVER_ID/native-trust"
+MUT_B="$(mktemp)"
+for METHOD in PUT DELETE; do
+  OWNER_MUT_CODE="$(curl --noproxy '*' --resolve "$HOST_NAME:$PROXY_PUB_PORT:$PROXY_IP" \
+    -sS -o "$MUT_B" -w '%{http_code}' -X "$METHOD" \
+    -H "Cookie: devserver_gate=$OWNER_GATE; devserver_csrf=$OWNER_CSRF" \
+    -H "x-chan-csrf: $OWNER_CSRF" "$PROXY_ORIGIN$TRUST_PATH" || echo 000)"
+  [ "$OWNER_MUT_CODE" = "409" ] && grep -qx 'window management requires the chan desktop app' "$MUT_B" \
+    || die "owner $METHOD native-trust did not reach desktop bridge guard ($OWNER_MUT_CODE)"
+
+  EDITOR_MUT_CODE="$(curl --noproxy '*' --resolve "$HOST_NAME:$PROXY_PUB_PORT:$PROXY_IP" \
+    -sS -o "$MUT_B" -w '%{http_code}' -X "$METHOD" \
+    -H "Cookie: devserver_gate=$EDITOR_GATE; devserver_csrf=$EDITOR_CSRF" \
+    -H "x-chan-csrf: $EDITOR_CSRF" "$PROXY_ORIGIN$TRUST_PATH" || echo 000)"
+  [ "$EDITOR_MUT_CODE" = "403" ] \
+    && grep -qx 'launcher mutation is not available for this gateway role' "$MUT_B" \
+    || die "editor $METHOD native-trust bypassed require_local_mutation ($EDITOR_MUT_CODE)"
+  info "$METHOD native-trust: owner reached route (409 no desktop); editor refused (403)"
+done
 
 say "RESULT"
-echo "REQUEST : GET $PREFIX/   Host: $HOSTHDR"
+echo "REQUEST : GET $PREFIX/   Host: $HOSTHDR (authenticated owner entry)"
 echo "          via proxy public $PROXY_IP:$PROXY_PUB_PORT  ->  tunnel $TUNNEL_URL  ->  $C_DS"
 echo "STATUS  : $CODE"
 echo "--- response headers ---"; sed -n '1,12p' "$RESP_H"
@@ -176,7 +260,7 @@ echo "--- body (head) ---"; head -c 600 "$RESP_B"; echo
 if [ "$CODE" = "200" ] && grep -q "chan-prefix" "$RESP_B"; then
   MARK="$(grep -o 'name="chan-prefix"[^>]*' "$RESP_B" | head -1)"
   printf '\n\033[1;32mPASS\033[0m: 200 through proxy+tunnel; body is the workspace SPA (%s)\n' "$MARK"
-  rm -f "$RESP_H" "$RESP_B"
+  rm -f "$RESP_H" "$RESP_B" "$OWNER_ENTRY_H" "$EDITOR_ENTRY_H" "$MUT_B"
   info "leaving containers up; re-run with --clean to remove"
   exit 0
 fi

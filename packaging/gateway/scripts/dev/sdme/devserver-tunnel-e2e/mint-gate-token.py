@@ -2,13 +2,13 @@
 """Mint a devserver-gate session JWT (HS256), matching
 gateway-common/src/devserver_gate.rs::encode_session.
 
-Claims envelope: {iss, sub, drv, aud, typ, iat, exp}. The proxy's
+Claims envelope: {iss, sub, role, drv, aud, typ, name, email, iat, exp}. The proxy's
 resolve_gate() decodes with TokenType::Session and checks aud==Host and
 drv==devserver_id. We control DEVSERVER_GATE_SECRET, so a self-minted
 session cookie yields Gate::Pass with no identity round trip.
 
 Usage:
-  mint_gate_token.py --secret S --sub UUID --drv DEVSERVER_ID --aud HOST [--ttl 86400]
+  mint_gate_token.py --secret S --sub UUID --role owner --drv DEVSERVER_ID --aud HOST
 Prints the compact JWT to stdout.
 """
 import argparse, base64, hashlib, hmac, json, time, sys
@@ -25,6 +25,9 @@ def main() -> int:
     ap.add_argument("--drv", required=True, help="devserver_id (== registry key)")
     ap.add_argument("--aud", required=True, help="wildcard host, e.g. alice.devserver.localtest.me")
     ap.add_argument("--typ", default="session", choices=["session", "entry"])
+    ap.add_argument("--role", default="viewer", choices=["owner", "editor", "viewer"])
+    ap.add_argument("--name")
+    ap.add_argument("--email")
     ap.add_argument("--ttl", type=int, default=86400)
     a = ap.parse_args()
 
@@ -34,12 +37,17 @@ def main() -> int:
     claims = {
         "iss": iss,
         "sub": a.sub,
+        "role": a.role,
         "drv": a.drv,
         "aud": a.aud,
         "typ": a.typ,
         "iat": now,
         "exp": now + a.ttl,
     }
+    if a.name:
+        claims["name"] = a.name
+    if a.email:
+        claims["email"] = a.email
     signing_input = (
         b64u(json.dumps(header, separators=(",", ":")).encode())
         + "."

@@ -1,10 +1,12 @@
 # devserver tunnel e2e (cross-container, sdme)
 
-An end-to-end test that drives a real HTTP request through a real `devserver-proxy-service` and a real `chan devserver --tunnel-url`, running in two separate sdme containers, over the gateway tunnel, into a mounted workspace. A `200` carrying the workspace SPA is the proof that the `--tunnel-url` path works against a real proxy. The production chan-gateway run (`--tunnel-url` against `devserver.chan.app`) is a separate follow-up.
+An end-to-end test that drives authenticated desktop entry URLs through a real `devserver-proxy-service` and a real `chan devserver --tunnel-url`, running in two separate sdme containers, over the gateway tunnel, into a mounted workspace. A `200` carrying the workspace SPA is the data-path proof. The same sessions exercise both native-trust mutation routes: an owner reaches the desktop-bridge guard, while an editor is rejected by `require_local_mutation`. The production chan-gateway run (`--tunnel-url` against `devserver.chan.app`) is a separate follow-up.
 
 ## What it proves
 
 ```
+stub identity ─▶ exact desktop entry response (owner + editor)
+                         │
 host  curl ─▶ devserver-proxy :7002  (public surface, Host-routed)
                   │  gate: devserver_gate session cookie (HS256, aud+drv)
                   ▼
@@ -14,12 +16,14 @@ host  curl ─▶ devserver-proxy :7002  (public surface, Host-routed)
               chan devserver  ─▶  workspace `notes` mounted at /notes-<hash8>
 ```
 
-The request `GET /notes-<hash8>/` with `Host: alice.devserver.localtest.me` returns `200` with the workspace SPA shell -- identifiable by the injected `<meta name="chan-prefix" content="/notes-<hash8>">`. That response only exists if the request reached the devserver's mounted tenant THROUGH the proxy and the tunnel. A `504`/`404` would mean it did not.
+The request `GET /notes-<hash8>/` at the exact `{owner}--{disc}` origin returns `200` with the workspace SPA shell, identifiable by the injected `<meta name="chan-prefix" content="/notes-<hash8>">`. The entry response is bearer-gated and pins `username`, the full 64-character devserver id, `proxy_origin`, and same-origin `entry_url`; the proxy exchanges its entry JWT for session + CSRF cookies. That response only exists if the request reached the mounted tenant through the proxy and tunnel.
 
-The two binaries under test -- `devserver-proxy-service` and `chan` (with the tunnel-client/-proto crates) -- are real release builds. Two pieces are shims, because auth is not what this test exercises:
+With those authenticated sessions, the harness sends both `PUT` and `DELETE` to `/api/library/devservers/{id}/native-trust`. The owner gets the expected `409` no-desktop result, proving the guarded route was reached on this headless devserver. The editor gets the exact `403` from `require_local_mutation`, proving a shared tunnel caller cannot cross the mutation gate.
 
-- **stub identity** (`stub-identity.py`): the proxy validates each tunnel dial's PAT against identity-service's `/internal/v1/tokens/validate`. The stub answers that one endpoint with a fixed `{user_id, username, devserver_id, scopes:["tunnel"]}`, so the proxy stays real without standing up postgres + profile + identity. It runs on the proxy container's loopback.
-- **gate cookie** (`mint-gate-token.py`): the proxy gates every tenant request with a `devserver_gate` HS256 cookie (`gateway-common::devserver_gate`). We hold `DEVSERVER_GATE_SECRET`, so the harness mints a `session` token directly (`sub`=user_id, `drv`=devserver_id, `aud`=Host) -- `Gate::Pass`, no redirect.
+The two binaries under test -- `devserver-proxy-service` and `chan` (with the tunnel-client/-proto crates) -- are real release builds. Two pieces are shims because the rig does not stand up postgres-backed identity/profile:
+
+- **stub identity** (`stub-identity.py`): the proxy validates each tunnel dial's PAT against `/internal/v1/tokens/validate`. The stub returns the fixed tunnel identity and exposes bearer-gated owner/editor `/desktop/v1/devserver/entry` responses. It runs on the proxy container's loopback.
+- **entry JWT mint** (`mint-gate-token.py`): the stub's entry responses carry HS256 tokens matching `gateway-common::devserver_gate`, including role and caller identity. The real proxy verifies them, issues its own session + CSRF cookies, and signs the per-request gateway assertion consumed by the real devserver.
 
 ## Topology: why one zone, two containers
 
@@ -63,8 +67,8 @@ packaging/gateway/scripts/dev/sdme/devserver-tunnel-e2e/zone-isolation-probe.sh
 | `build-bins.sh`           | container-build of the two release binaries      |
 | `chan-e2e-run.sdme`       | runtime rootfs (ubuntu, iproute2, curl, python3) |
 | `run.sh`                  | stand up containers, register, drive the request |
-| `stub-identity.py`        | identity `/internal/v1/tokens/validate` stub     |
-| `mint-gate-token.py`      | mint a `devserver_gate` HS256 session cookie     |
+| `stub-identity.py`        | tunnel validation + authenticated entry stub     |
+| `mint-gate-token.py`      | mint role/identity-bearing entry or session JWTs |
 | `zone-isolation-probe.sh` | demonstrate same-zone OK / cross-zone BLOCKED    |
 
 ## Config the harness sets
@@ -78,3 +82,4 @@ packaging/gateway/scripts/dev/sdme/devserver-tunnel-e2e/zone-isolation-probe.sh
 | `IDENTITY_URL`          | `http://127.0.0.1:7799` (loopback stub)            |
 | `CHAN_DEVSERVER_LISTEN` | `1` (bind mgmt API; host reads the mounted prefix) |
 | tenant                  | user `alice`, workspace `notes`                    |
+| desktop entry origins   | `alice--<id-prefix>.devserver.localtest.me:7002`   |
