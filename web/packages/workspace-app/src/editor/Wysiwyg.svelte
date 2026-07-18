@@ -914,8 +914,6 @@
     width: 100%;
     min-width: 0;
     font-size: var(--chan-editor-body-size, 16px);
-    max-width: var(--chan-page-max-width, none);
-    margin-inline: auto;
     box-sizing: border-box;
   }
   :global(.md-wysiwyg-cm6 .cm-content) {
@@ -925,7 +923,15 @@
        the wide table widget becomes the content flex item's intrinsic
        minimum and normal paragraph lines stop wrapping at the page cap. */
     min-width: 0;
-    max-width: 100%;
+    /* The page-width cap lives on the content, so the "page" is the
+       centered element while the scroller (.cm-editor / .cm-scroller)
+       stays full width. The vertical scrollbar then sits at the
+       viewport edge and the off-page shade fills the side margins.
+       `min-height: 100%` keeps the white page spanning the viewport
+       for a short document instead of stopping at the last line. */
+    max-width: var(--chan-page-max-width, none);
+    margin-inline: auto;
+    min-height: 100%;
     /* `--editor-top-pad` is set by the host (FileEditorTab on its
        .editor-host, InlineAssist on the prompt wrap) and consumed
        here so the first line of the editor clears the floating
@@ -956,18 +962,17 @@
      keeps the lift and removes the stall. */
   :global(.md-wysiwyg-cm6 .cm-editor),
   :global(.md-wysiwyg-cm6 .cm-editor .cm-scroller),
-  :global(.md-wysiwyg-cm6 .cm-editor .cm-content),
   :global(.md-wysiwyg-cm6 .cm-editor .cm-line),
   :global(.md-wysiwyg-cm6 .cm-editor .cm-activeLine) {
     background-color: transparent !important;
   }
-  /* When the page-width cap is active, paint the container with a
-     subtle off-page tint and give the centered .cm-editor its own
-     --bg so the "page" pops out of the surrounding shade. */
+  /* When the page-width cap is active, paint the full-width scroll area
+     with a subtle off-page tint and give the centered .cm-content its
+     own --bg so the "page" pops out of the surrounding shade. */
   :global(.chan-page-capped .md-wysiwyg-cm6) {
     background: var(--page-shade);
   }
-  :global(.chan-page-capped .md-wysiwyg-cm6 .cm-editor) {
+  :global(.chan-page-capped .md-wysiwyg-cm6 .cm-content) {
     background-color: var(--bg) !important;
   }
   /* CM6 paints `outline: 1px dotted` on .cm-editor.cm-focused as a
