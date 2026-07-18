@@ -203,13 +203,6 @@
 
   type CloseReason = "idle" | "workspace" | "shutdown" | "explicit" | "capped" | "error";
 
-  // Consecutive redials that died before their `session` frame before the
-  // stored session id is dropped. A resumable session must survive transient
-  // dial failures (the v0.69 behavior cleared it on the FIRST one, stranding
-  // the scrollback); a session the server genuinely no longer has keeps
-  // refusing the attach, and after this budget the next dial starts fresh.
-  const MAX_ATTACH_FAILURES = 5;
-
   let host: HTMLDivElement | undefined = $state();
   let searchInput: HTMLInputElement | undefined = $state();
   let term: Terminal | null = null;
@@ -232,7 +225,6 @@
   let deadlineTimer: ReturnType<typeof setTimeout> | null = null;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   let reconnectBackoffMs = WS_RECONNECT_BACKOFF_MIN_MS;
-  let attachFailures = 0;
   // Scrollback snapshot resume state. `pendingSnapshot` is a cache hit
   // loaded at connect time, primed into the xterm on the attach prelude only
   // when the server confirms the same generation + no missed bytes; otherwise
@@ -814,6 +806,9 @@
   // socket is alive. On expiry, force it closed so the onclose redial runs --
   // a half-open zombie never fires onclose on its own.
   function armDeadline(): void {
+    // The control terminal is a local loopback single-shot runner owned by the
+    // desktop exit watcher; it never heartbeats or read-deadline-force-closes.
+    if (ui.terminalControl) return;
     if (deadlineTimer !== null) clearTimeout(deadlineTimer);
     deadlineTimer = setTimeout(() => {
       deadlineTimer = null;
@@ -830,6 +825,10 @@
   // Writes the SAME deadlineTimer slot -- onopen's armDeadline supersedes it,
   // clearLiveness clears it with the rest.
   function armConnectDeadline(): void {
+    // The control terminal is a single-shot local runner with no deadline
+    // force-close: without this guard the no-op armDeadline in onopen would
+    // leave this connect-deadline armed and close the healthy control socket.
+    if (ui.terminalControl) return;
     if (deadlineTimer !== null) clearTimeout(deadlineTimer);
     deadlineTimer = setTimeout(() => {
       deadlineTimer = null;
@@ -927,7 +926,11 @@
       // vocabulary) plus the read-deadline it feeds. `send` carries the
       // OPEN-only guard.
       armDeadline();
-      pingTimer = setInterval(() => send({ type: "ping" }), WS_PING_MS);
+      // The control terminal is a single-shot local runner; it does not send
+      // the heartbeat ping.
+      if (!ui.terminalControl) {
+        pingTimer = setInterval(() => send({ type: "ping" }), WS_PING_MS);
+      }
       if (term) send({ type: "resize", cols: term.cols, rows: term.rows });
       sendFocusState();
     };
@@ -960,13 +963,16 @@
         terminalCwdVirtual = frame.cwd_rel ?? null;
         recoverTerminalRendererAfterHostResume();
       } else if (frame.type === "session") {
+        // The session id this tab held before adopting frame.id below. A
+        // frame.id that differs is a fresh shell replacing the reaped session,
+        // not a same-id live resume.
+        const priorId = tab.terminalSessionId;
         const duplicateReplay = reattaching && !sawSessionControl;
         attachReplayActive = true;
         suppressAttachReplayGeneratedReplies = duplicateReplay;
         sawSessionControl = true;
         // A successful attach proves the session + path healthy: reset the
-        // redial budget and the backoff ramp.
-        attachFailures = 0;
+        // backoff ramp.
         reconnectBackoffMs = WS_RECONNECT_BACKOFF_MIN_MS;
         // Adopt the server's byte cursor + epoch for this incarnation. Prime the
         // cached snapshot ONLY when the server confirms the SAME generation and
@@ -978,6 +984,16 @@
         // suppressed (see attachPtyWriteOrigin / connection.ts).
         serverGeneration = frame.generation;
         receivedSeq = frame.seq;
+        // A fresh shell replacing this tab's session (frame.id changed) starts
+        // with the xterm still holding a dead TUI's negotiated input modes.
+        // Reset mouse tracking (including the 1015 urxvt format) and exit the
+        // alt-screen before any replay so that leftover state does not leak
+        // into the new shell. A same-id live resume keeps the running
+        // program's modes untouched (mirrors the keyboard-protocol reset above,
+        // which fires only on a fresh spawn).
+        if (frame.id !== priorId) {
+          term?.write("\x1b[?1000;1002;1003;1004;1006;1015l\x1b[?1049l");
+        }
         if (
           pendingSnapshot &&
           frame.generation === pendingSnapshot.generation &&
@@ -1119,24 +1135,18 @@
       // re-syncs from the session frame on reconnect.
       failPendingPrompt(tab);
       setTerminalQueueDepth(tab, 0);
-      // A dial that died before its `session` frame counts against the attach
-      // budget; the session id survives until the budget is spent, so a
-      // transient failure never strands a resumable session (the server ends
-      // a session explicitly via the `closed` / `exit` frames instead).
-      if (tab.terminalSessionId && !sawSessionControl && status === "connecting") {
-        attachFailures += 1;
-        if (attachFailures >= MAX_ATTACH_FAILURES) {
-          attachFailures = 0;
-          clearTerminalSession(tab);
-          scheduleTerminalSessionSave();
-        }
-      }
+      // A transient dial failure never strands a resumable session: the id
+      // survives so an offline/sleep window can still reattach the persisted
+      // remote session on reconnect. Only the server's explicit `closed` /
+      // `exit` frames clear the session id.
       if (status !== "exited") status = "closed";
       // Heal: redial with capped backoff through the reattach path. An exited
       // session stays down (the server ended it; the tab shows its exit
-      // affordance); everything else -- the gateway idle cut, a tunnel bounce,
-      // the read-deadline forcing a zombie closed, a failed dial -- redials.
-      if (status === "exited") return;
+      // affordance) and the control terminal is a single-shot local runner that
+      // never redials; everything else -- the gateway idle cut, a tunnel
+      // bounce, the read-deadline forcing a zombie closed, a failed dial --
+      // redials.
+      if (status === "exited" || ui.terminalControl) return;
       statusDetail = "reconnecting";
       const delay = reconnectBackoffMs;
       reconnectBackoffMs = Math.min(reconnectBackoffMs * 2, WS_RECONNECT_BACKOFF_MAX_MS);

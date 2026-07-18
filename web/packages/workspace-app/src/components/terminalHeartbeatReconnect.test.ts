@@ -276,23 +276,28 @@ describe("terminal heartbeat", () => {
     }
   });
 
-  test("the session id survives failed redials until the attach budget spends", async () => {
+  test("a resumable session id survives every transport failure and clears only on an explicit close", async () => {
     const tab = terminalTab({ terminalSessionId: "sess-durable" });
     await renderTerminal(tab);
 
-    // The mount dial + 3 more failures = 4 consecutive attach failures:
-    // the resumable session must survive every one of them.
+    // An offline / sleep window: every dial dies on transport before its
+    // `session` frame. The resumable id must survive all of them so the
+    // persisted remote session can still be reattached on reconnect.
     lastSocket().failDial();
-    for (let i = 0; i < 3; i++) {
+    for (let i = 0; i < 8; i++) {
       await vi.advanceTimersByTimeAsync(WS_RECONNECT_BACKOFF_MAX_MS);
       lastSocket().failDial();
     }
     expect(tab.terminalSessionId).toBe("sess-durable");
 
-    // The 5th consecutive failure spends the budget: the id drops so the
-    // NEXT dial starts a fresh session instead of redialing a dead one.
+    // The server ending the session explicitly is the only thing that clears
+    // the id: reattach, then deliver a `closed` frame.
     await vi.advanceTimersByTimeAsync(WS_RECONNECT_BACKOFF_MAX_MS);
-    lastSocket().failDial();
+    await attach(lastSocket(), "sess-durable");
+    expect(tab.terminalSessionId).toBe("sess-durable");
+    await lastSocket().onmessage?.({
+      data: JSON.stringify({ type: "closed", reason: "idle" }),
+    });
     expect(tab.terminalSessionId).toBeUndefined();
   });
 
