@@ -29,4 +29,4 @@ This release shipped on the direct GA path, a deliberate one-time deviation from
 
 ## Carryover
 
-Documentation landed with this release: the git-first release cycle was promoted from `dev/draft-release-cycle.md` into `.agents/skills/release/SKILL.md` as the process source of truth, and this report plus `team/release-v0.61.0.md` backfill the two missing per-release records.
+Documentation landed with this release: the git-first release cycle was promoted from `dev/draft-release-cycle.md` into `.agents/skills/release/SKILL.md` as the process source of truth, and this report plus `team/release/release-v0.61.0.md` backfill the two missing per-release records.

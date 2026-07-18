@@ -30,4 +30,4 @@ Recorded in `dev/v0.61.0/host-smoke.md`: never-drawn `.excalidraw` auto-discards
 
 ## Carryover to v0.62.0
 
-The v0.62.0 "polish and cleanup" round picked up several of these threads: one alert surface and one connecting surface (both theme-aware), launcher parity on web and gateway, the launcher theme driving local standalone terminals, and the wysiwyg list-typing regression fix. See `team/release-v0.62.0.md`.
+The v0.62.0 "polish and cleanup" round picked up several of these threads: one alert surface and one connecting surface (both theme-aware), launcher parity on web and gateway, the launcher theme driving local standalone terminals, and the wysiwyg list-typing regression fix. See `team/release/release-v0.62.0.md`.

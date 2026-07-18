@@ -1,93 +1,91 @@
-# Release history
+# How chan is developed
 
-The development history of chan, one consolidated report per release era. Each `release-{NN}-{version}.md` is that era's front door: its roadmap (the asks), how the rounds and waves were structured, who worked it and how they coordinated, what shipped, and a retrospective with the lessons worth carrying forward. The `NN` prefix orders the reports chronologically; the version marks the release(s) the era shipped (`prerelease`/`unreleased` where no tag was cut). Going-forward reports drop the `NN` prefix and are named for their release (`release-v{version}.md`); a release cut through release candidates keeps its per-cycle rc reports (`release-v{version}-rc{N}.md`) as indented sub-entries under that release.
+This is the front door to how chan is built: the development process, who does what, and how a problem becomes a shipped release. If you landed here from a PR or are just browsing, it explains the multi-agent pattern behind the consolidated reports in [`release/`](release/README.md) and the active scope in [`roadmap/`](roadmap/README.md). It is not a user-facing document, and it is not the contributing guide (see [`../CONTRIBUTING.md`](../CONTRIBUTING.md)) or the code of conduct (see [`../CODE_OF_CONDUCT.md`](../CODE_OF_CONDUCT.md)).
 
-These reports are the project's second brain. The raw per-author journals and coordination buses that backed them were distilled into these files; the raw material is preserved in git history.
+## TL;DR
 
-New agents should also read [`.agents/playbook.md`](../.agents/playbook.md), the operational lessons distilled across the project.
+chan is built by small teams of AI coding assistants coordinated by the project owner, using chan's own Team Work tooling: each assistant runs in an embedded terminal tab, and the team coordinates through task files, append-only journals, and one-line pokes on disk. The owner sets scope, reviews, and is the source of strategic decisions. The work lands as real commits on `main`, behind the same gate a human contributor runs.
 
-## Index
+This is unusual enough that it can look confusing without context. Hence this doc.
 
-- [release-01-prerelease](release-01-prerelease.md) - first public release prep: filesystem graph, search status, CLI parity, hardening.
-- [release-02-prerelease](release-02-prerelease.md) - graph, editor, and search hardening, plus language elevated into the graph.
-- [release-03-prerelease](release-03-prerelease.md) - UI polish and the Assistant-to-Agent rename, URL state, and editor fixes.
-- [release-04-prerelease](release-04-prerelease.md) - sparse bug-bounty placeholder; effectively a numbering skip from 3 to 5 (see the report).
-- [release-05-prerelease](release-05-prerelease.md) - the MCP-only refactor, persistent terminals, and VCS-aware indexing.
-- [release-06-v0.10.0](release-06-v0.10.0.md) - the filesystem made the primary graph layer, plus the folder-to-directory terminology change.
-- [release-07-v0.10.1-v0.11.0](release-07-v0.10.1-v0.11.0.md) - project hygiene, Hybrid panes, and the agent-orchestration substrate.
-- [release-08-v0.11.0-v0.13.0](release-08-v0.11.0-v0.13.0.md) - bug sweep, the signed-DMG pipeline, and public-flip preparation.
-- [release-09-v0.14.0](release-09-v0.14.0.md) - the desktop-native vision, drive metadata isolation, and the Rich Prompt revamp.
-- [release-10-prerelease](release-10-prerelease.md) - the desktop embedded-server merge and the public site and manual.
-- [release-11-v0.15.5](release-11-v0.15.5.md) - the drive streaming spine, editor and graph fixes, and the release contract.
-- [release-12-v0.16.0](release-12-v0.16.0.md) - the drive-to-workspace rename and the graph and File Browser carryover.
-- [release-13-v0.17.0-v0.18.0](release-13-v0.17.0-v0.18.0.md) - the Graph and Dashboard rework, then the Team Work revamp.
-- [release-14-v0.17.0-v0.18.0](release-14-v0.17.0-v0.18.0.md) - Gateway monorepo migration into a nested workspace, then a frontend review and pristine cleanup, plus paced graph hot paths and the new-workspace pre-flight relocation.
-- [release-15-v0.20.0-v0.23.0](release-15-v0.20.0-v0.23.0.md) - Dashboard carousel, the cs CLI, Team Work plus the survey rebuild, and the indexing hardening thread.
-- [release-16-v0.24.0](release-16-v0.24.0.md) - cs lead-tooling, a long host-driven feature and polish stream, and the chan-desktop launcher redesign.
-- [release-17-v0.25.0](release-17-v0.25.0.md) - host bug sweep, survey v2, and the desktop connecting screen.
-- [release-18-v0.26.0](release-18-v0.26.0.md) - hybrid-surface bug sweep (editor lists, graph, File Browser, inspector pills, terminal), the repo/docs fold, and the v0.26.0 release wave.
-- [release-19-v0.26.1-v0.28.1](release-19-v0.26.1-v0.28.1.md) - Linux/WebKitGTK desktop parity, the in-tree Drafts model, the graph `@@mention` lens plus contact nodes and offline reconcile, and the .agents/ docs fold.
-- [release-20-v0.29.0](release-20-v0.29.0.md) - chan-desktop refinements (plain-text update prompt, unified About) and standalone terminal windows, run as an orchestrator plus subagents round.
-- [release-21-v0.29.0](release-21-v0.29.0.md) - terminal cross-window awareness: a cross-window broadcast roster (menu, indicators, toggle gate), per-tenant Terminal-N naming, group-wide cross-window Select All, and tenant-wide name uniqueness.
-- [release-22-v0.31.0](release-22-v0.31.0.md) - window management: bury-on-close with a dynamic Window menu, Cmd+Shift+N per-connection semantics, remote window reopening over GET /api/windows, cs window list, the standalone-terminal control socket, the split-pane replay fix, and quit confirmation.
-- [release-23-v0.31.1](release-23-v0.31.1.md) - the tidy-up: archaeology scrub, zero-warning hygiene, docs currency, the macOS file-drop takeover fix, and the chanwriter purge.
-- [release-24-unreleased](release-24-unreleased.md) - the visibility round: editor keep-alive on tab switch, prompt-queue depth, buried-window memory and survey-first host comms, plus the standalone graph-keepalive web feature.
-- [release-25-v0.35.0](release-25-v0.35.0.md) - chan-desktop acts as `chan` (one binary, no separate CLI download), the empty-pane window-save cleanup, and a folded-in rich-prompt enqueue/recall/reload round.
-- [release-26-v0.36.0](release-26-v0.36.0.md) - Windows-first chan-desktop: the named-pipe control socket, the Git BASH terminal with a missing-Git in-app gate, NSIS packaging plus the windows-latest CI arm, and markdown iframe embeds.
-- [release-27-v0.36.0](release-27-v0.36.0.md) - opt-in workspace lifecycle plus the v0.36.0 Windows smoke fixes.
-- [release-28-v0.39.0](release-28-v0.39.0.md) - the chan devserver, and killing the default workspace.
-- [release-29-v0.39.1](release-29-v0.39.1.md) - devserver and chan-desktop hardening.
-- [release-30-v0.40.0](release-30-v0.40.0.md) - making the devserver window lifecycle actually work: reattach, discard, and the FD leak.
-- [release-31-v0.41.0](release-31-v0.41.0.md) - one window registry: a watcher drives the local and devserver window lifecycle.
-- [release-32-v0.42.0](release-32-v0.42.0.md) - devserver = chan-library: per-devserver gateway proxy plus library-owned open.
-- [release-33-v0.43.0](release-33-v0.43.0.md) - web-launcher unification across all surfaces, embeddings honesty, and carryover.
-- [release-34-v0.44.0](release-34-v0.44.0.md) - launcher reflects reality (workspaces and devservers), `chan open`/`close`, and the transfer bubble.
-- [release-35-v0.45.0](release-35-v0.45.0.md) - the v0.45.0 desktop release: launcher, devserver-in-launcher, and lifecycle hardening.
-- [release-36-v0.46.0](release-36-v0.46.0.md) - launcher polish, editor and graph fixes, and desktop hardening.
-- [release-37-v0.47.0](release-37-v0.47.0.md) - devserver and launcher connect lifecycle.
-- [release-38-v0.48.0](release-38-v0.48.0.md) - devserver and launcher window lifecycle, identity, and presentation.
-- [release-39-v0.49.0](release-39-v0.49.0.md) - UI responsiveness, desktop cosmetics, tunnel e2e, and container packaging.
-- [release-40-v0.50.0](release-40-v0.50.0.md) - terminal interaction, reload-state, CLI ergonomics, and desktop geometry.
-- [release-41-v0.51.0](release-41-v0.51.0.md) - Windows desktop support, published (unsigned).
-- [release-42-v0.52.0](release-42-v0.52.0.md) - the unification sweep.
-- [release-43-v0.53.0](release-43-v0.53.0.md) - leader presence, the self-managed devserver daemon, and terminal scrollback resume.
-- [release-44-v0.53.1](release-44-v0.53.1.md) - a Windows, clipboard, and editor patch.
-- [release-45-v0.54.0](release-45-v0.54.0.md) - machine-first launcher, Docker publishing, editor polish, and chan open routing.
-- [release-pub-site](release-pub-site.md) - a standalone branding and positioning re-steer plus marketing site refresh (not a numbered release era).
-- [release-v0.55.0](release-v0.55.0.md) - editor polish, devserver hardening, docs consolidation, and the validation carryover into v0.56.0.
-- [release-v0.56.0](release-v0.56.0.md) - design-doc cleanup, the `DEVSERVER_*` gateway contract, v0.55 validation carryovers, and devserver lifecycle hardening.
-- [release-v0.56.1](release-v0.56.1.md) - control-terminal exit attention, launcher hover polish, and split desktop package targets.
-- [release-v0.56.2](release-v0.56.2.md) - markdown list rendering fixes (guide bars removed, prose-aligned markers) and owner-side, typed workspace lifecycle state.
-- [release-v0.56.3](release-v0.56.3.md) - markdown list alignment across marker types and platform-accurate pane shortcut hints.
-- [release-v0.56.4](release-v0.56.4.md) - wide markdown table containment.
-- [release-v0.57.0](release-v0.57.0.md) - systemd fdstore restarts and devserver close sync.
-- [release-v0.58.0](release-v0.58.0.md) - systemd PTY restore polish and the desktop reconnect follow-up.
-- [release-v0.59.0](release-v0.59.0.md) - the v0.59.0 feature wave: the mermaid-to-excalidraw diagram renderer, graph focus and lens fixes with an indexing placeholder, the actionable indexing dashboard, the `chan devserver --service` action-verb reshape, editor list and directory-link fixes, `cs copy`/`cs paste` clipboard bridging, a semantic-search opt-out, and chan-desktop geometry/glyph/clipboard fixes.
-- [release-v0.59.1](release-v0.59.1.md) - the v0.59.0 chan-desktop known-limitation fix (excalidraw subgraphs now render everywhere), the launcher left-icon-column revert, and the remote window-title arrow glyph.
-- [release-v0.60.0](release-v0.60.0.md) - the axum 0.7 to 0.8 migration across both Cargo workspaces, plus the `chan upgrade` prerelease-version fix found in the rc smoke.
-- [release-v0.61.0](release-v0.61.0.md) - interactive Excalidraw whiteboard tabs and markdown slide preview, plus desktop-PWA and leader/follower session integration.
-- [release-v0.62.0](release-v0.62.0.md) - the polish-and-cleanup round: no new surfaces, the existing ones done right.
-- [release-v0.63.0](release-v0.63.0.md) - the Rich Prompt composer onto chan's main WYSIWYG editor, and readable, reconnectable devserver control terminals after a control-script death.
-- [release-v0.64.0](release-v0.64.0.md) - the Cmd+K command launcher that lists, filters, and runs every UI action, plus trimmed tab menus and cross-machine workspace surfacing.
-- [release-v0.65.0](release-v0.65.0.md) - a configurable command launcher and Settings as the one place for interactive config (per-OS shortcuts, a conditional "This workspace" tab), plus late workspace polish.
-- [release-v0.66.0](release-v0.66.0.md) - the Settings overlay (focused, keyboard-navigable, focus-restoring) and consistent pane A/B side-flip rotation.
-  - [release-v0.66.0-rc1](release-v0.66.0-rc1.md) - the v0.66.0 UI round validated as a pin state (Settings overlay, pane A/B flip).
-- [release-v0.66.1](release-v0.66.1.md) - deterministic devserver control terminals (the daemonize handshake versus a later script exit) and unconditional Reconnect/Abandon.
-  - [release-v0.66.1-rc1](release-v0.66.1-rc1.md) - rc1 fixing six post-v0.66.0 bugs (rich-prompt persistence, excalidraw View/Edit) across three file-disjoint lanes.
-  - [release-v0.66.1-rc2](release-v0.66.1-rc2.md) - rc2 folding in the rc1 smoke findings: the post-connect control-terminal rule, a per-tab survey FIFO, and small fixes and UX additions.
-- [release-v0.67.0](release-v0.67.0.md) - the live co-editing round (per-document server authority, named peer cursors, bannerless external merges) plus the Fedora COPR and Ubuntu Launchpad distro source-packaging work.
-- [release-v0.67.1](release-v0.67.1.md) - the chan-desktop gateway OAuth handoff fix, the id.chan.app consent restyle, the `cs session self` whoami query, and a repo-wide writing-rules sweep.
-  - [release-v0.67.1-rc1-handoff-and-session-self](release-v0.67.1-rc1-handoff-and-session-self.md) - the single accepted candidate branch, the gateway handoff and `cs session self` work validated as a pin state.
-- [release-v0.67.2](release-v0.67.2.md) - a same-day focused patch on v0.67.1, cut straight to GA.
-- [release-v0.67.3](release-v0.67.3.md) - gateway devserver windows stop reload-looping so their shells attach, and two boot-time 404s on terminal windows quieted.
-- [release-v0.68.0](release-v0.68.0.md) - multiple devservers per gateway account with a sign-in picker, the one-time-code desktop sign-in handoff, Export to PDF, live-collaborative Excalidraw boards, an operator token mint, and retry-idempotent PPA publishing.
-- [release-v0.69.0](release-v0.69.0.md) - gateway devserver windows made first-class (upload/download/clipboard/chords, honest post-sleep reconnect), the `cs paste` unhang with an in-window paste card, a global Open command, collapsible machine cards, and gateway registry cleanup.
-- [release-v0.69.1](release-v0.69.1.md) - tunnel-mode `chan devserver --restart` under systemd (fd-preserving) and a rootless, PPA-free chan-devserver container image.
-- [release-v0.70.0](release-v0.70.0.md) - first-class gateways in chan-desktop: add by URL, one account sign-in, live rosters under Computers, launcher notification bubbles, and the terminal-socket heartbeat/reconnect that keeps gateway terminals alive after idle.
-- [release-v0.70.1](release-v0.70.1.md) - tunneled-devserver hardening: uploads and PDF export through the proxy, closed windows staying closed, OS logos and real names on rows, the port 8787 collision fix, and gateway rename.
-- [release-v0.70.2](release-v0.70.2.md) - the terminal-reconnect regression patch (the control terminal no longer loops its connect script, an idle remote terminal keeps its process and stops leaking mouse tracking) plus table-cell inline markdown, exported-Excalidraw sizing, the slide-deck zoom_factor seed, and the page-width scrollbar position.
-- [release-v0.70.3](release-v0.70.3.md) - the v0.70.2 regression patch: the editor's text-selection highlight restored under the default page-width cap, and a refused launcher Open turned into a dismissable pill instead of one stuck on the workspace forever.
+## Roles
 
-## Conventions
+A team has three role types:
 
-Agent references in prose use plain names for people and lanes; the `@@` sigil is reserved for the five reusable skill identities (`@@architect`, `@@fabler`, `@@rustacean`, `@@syseng`, `@@webdev`) plus the generic `@@agent` for an unidentifiable past skill. A historical lane named for a discipline (Architect, Syseng, Rustacean, Web/Frontend) is rendered as its skill sigil (`@@architect`, `@@syseng`, `@@rustacean`, `@@webdev`) even where it sits among plain lane names; reused or suffixed slots (FrontendB, WebMain, FullStackA) stay plain. The coordination scheme evolved over the project; each report records the scheme that era ran on, and the cross-project summary is in [`.agents/playbook.md`](../.agents/playbook.md). Reports are text only; a load-bearing screenshot is described in prose rather than embedded.
+* **Host**: the project owner. Sets scope, answers decision surveys, tests releases, and is the only one who acts outside the team.
+* **Lead**: plans the round, cuts tasks, sequences the work, runs the integration gate, and aggregates the workers' questions into focused surveys for the host.
+* **Workers**: each owns a code surface (for example the core workspace, the desktop shell, or the gateway). They pick up task files from the lead, implement, and report back the same way.
+
+Teams are provisioned by the `cs terminal team` tooling: a config declares the members, and a generated `bootstrap.md` carries the process so every member starts from the same page. Members are identified by `@@`-prefixed tab handles; the handles are per-team and carry no meaning outside it.
+
+## The development lifecycle
+
+Work moves from a single concrete problem to a shipped release along one path. The roadmap tree ([`roadmap/README.md`](roadmap/README.md)) holds accepted scope; the release tree ([`release/README.md`](release/README.md)) holds the history; the executable release procedure lives in the release skill ([`../.agents/skills/release/SKILL.md`](../.agents/skills/release/SKILL.md)). This guide does not restate the skill's command-level release steps, which change; it points at them.
+
+1. **Investigate and accept scope.** Start from one concrete problem and investigate it against the live tree, usually with one agent, until the result is either an analysis or an implementation-ready proposal (simple problems combine both). An accepted proposal becomes `roadmap/vX.Y.Z/{item}.md`. Moving a raw draft does not, by itself, make it accepted scope.
+2. **Prepare the delivery team.** Once a version has enough coherent scope, one lead uses `cs terminal team` to provision file-disjoint lanes and rounds: a team config, a branch and worktree map, lane ownership, a dependency graph, and a validation matrix. Each lane gets only the access it needs (headless browsers, macOS or Windows hosts, Lima or WSL Linux guests, sdme distro containers, the root and gateway Cargo workspaces, desktop packaging, COPR, Launchpad, local gateway services). Secret values never enter roadmap, task, journal, or release files.
+3. **Implement and validate in lanes.** Each lane owns a disjoint surface and reports a scoped-green commit. The lead resolves overlap before intake and gates the committed state from an isolated gate worktree. An existing implementation branch is a valid intake candidate; it receives the same review, tests, and smoke requirements as newly written work, not a reimplementation.
+4. **Open and iterate the RC.** The release owner opens the candidate by bumping every version pin in one commit and pushing a tag-free RC branch, then dispatches a `publish=false` dry-run build and validates its artifacts. Accepted candidates rebase onto that branch and merge provisionally. Fixes cut a new candidate and repeat the dry run. The release skill owns the exact pins, dispatch, and invariants.
+5. **Close roadmap and release in the GA commit.** The single GA commit adds the release report and its index entry, resolves every item under `roadmap/vX.Y.Z/` (each completed or withdrawn item moves to `roadmap/done/` with an honest status line linking back to the report), carries the CHANGELOG and every version pin, and is the commit that receives the `vX.Y.Z` tag. After it, no `roadmap/vX.Y.Z/` directory remains.
+
+One landing barrier governs the whole scheme: a process or contract change that reshapes these paths must reach `main` before the technical work that depends on it, and parallel branches rebase onto it before intake.
+
+## How a round works
+
+Within a round, work runs on a small set of on-disk artifacts in the team's working directory:
+
+1. **A scope** - the owner's high-level ask for the round.
+2. **Task files** (`tasks/task-{from}-{to}-{n}.md`) - what each member is asked to do. Owned by the recipient, append-only; once work starts, new asks become new tasks, not amendments.
+3. **Journals** (`journals/journal-{member}.md`) - each member's append-only running log.
+4. **Pokes** - one-line pointers typed into the recipient's terminal ("read this task file"). Context lives in the files, not the poke.
+5. **Surveys** - when a decision needs the owner, the lead raises a blocking survey in the owner's window (`cs terminal survey`); the answer routes back to the lead.
+
+```mermaid
+flowchart TD
+  Host["Host: owner sets round scope"]
+  Lead["Lead: plans round, sequences work"]
+  Tasks["task files: owned, append-only"]
+  Poke["lean poke: one-line pointer plus submit chord"]
+  Workers["Workers: implement in disjoint owned lanes"]
+  Journals["journals: append-only running log"]
+  Aggregate["Lead aggregates open questions"]
+  Survey["cs terminal survey: blocking overlay in Host window"]
+  Decide["Host decides: picks an option"]
+  Gate["pre-push gate: fmt, clippy, test, builds"]
+  Main["real commits land on main"]
+
+  Host -->|scope| Lead
+  Lead -->|"cut and sequence"| Tasks
+  Tasks --> Poke
+  Poke --> Workers
+  Workers --> Journals
+  Workers -->|"decisions route up"| Aggregate
+  Aggregate -->|"raise survey"| Survey
+  Survey --> Decide
+  Decide -->|"answer routes to Lead"| Lead
+  Workers -->|"scoped-green commits"| Gate
+  Lead -->|"owns full-tree gate"| Gate
+  Gate -->|green| Main
+```
+
+The round at a glance: the owner's scope flows down through the lead into owned task lanes, decisions route back up as surveys, and only gate-green work lands on `main`.
+
+## Why this pattern
+
+* **Append-only journals**: nothing gets rewritten under another member. If a decision changes, a new dated section appends; the prior section stays as the audit trail.
+* **Lane boundaries**: members own disjoint file surfaces. Cross-lane work routes through the lead, so two members never edit the same file in parallel without coordination.
+* **The owner decides**: scope calls and trade-offs route to the host as focused surveys with concrete options; workers don't improvise project decisions.
+* **Real commits, real CI**: every member's work lands in `main` with normal commit hygiene, behind the same pre-push gate a human contributor runs.
+
+The operational lessons behind these rules, each cited to the release that taught it, are in [`../.agents/playbook.md`](../.agents/playbook.md).
+
+## External contributors
+
+You do not need to join the agent team. Contributions follow the standard GitHub branch and PR flow documented in [`../CONTRIBUTING.md`](../CONTRIBUTING.md), and PRs are reviewed the same way regardless of whether they come from a human or an agent. If your change is substantial, the same shape helps it land: an investigation or proposal that states the problem and desired contract, validation evidence for the surfaces you touched, and a candidate report map cleanly onto the roadmap and RC intake described above. The multi-agent pattern is an internal coordination protocol, not a project requirement.
+
+## What you'll see in the repo
+
+* [`roadmap/`](roadmap/README.md) - active development scope by target version, plus a flat `done/` archive of closed items.
+* [`release/`](release/README.md) - one consolidated report per release era: its roadmap, rounds, and retrospective. The front door to the project history.
+* `../.agents/` - the operational playbook the assistants work from: coordination, gating, verification, commit discipline, and the executable release skill.
+* While a round is active, its working directory (config, bootstrap, tasks, journals) is the live coordination bus; it is distilled into the release report at close.

@@ -1,6 +1,6 @@
 # Agent playbook
 
-The operational lessons a new agent needs before joining a chan multi-agent phase. Distilled from the release retrospectives in [`../team/`](../team/); each lesson cites the phase that taught it so you can read the full story there. This is the "how we actually work and what went wrong when we did not" companion to the public process doc [`../docs/coordination.md`](../docs/coordination.md).
+The operational lessons a new agent needs before joining a chan multi-agent phase. Distilled from the release retrospectives in [`../team/release/`](../team/release/); each lesson cites the phase that taught it so you can read the full story there. This is the "how we actually work and what went wrong when we did not" companion to the public process doc [`../team/README.md`](../team/README.md).
 
 ## The coordination model (and how it evolved)
 

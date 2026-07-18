@@ -28,13 +28,18 @@ on:
         description: Existing vX.Y.Z tag to publish distro packages for
         required: true
 
-# Tag-triggered release runs carry the tag name in head_branch, so this
-# filters out branch-based dry runs and rc validation runs.
+# release.yml runs only on tag pushes and workflow_dispatch, so a
+# workflow_run whose triggering event is `push` is necessarily a
+# tag-triggered release. Gating on event == 'push' (not just a
+# v-prefixed head_branch) excludes publish=false dry runs and rc
+# validation, which arrive as workflow_dispatch and could otherwise
+# publish distro packages off a v-named branch.
 jobs:
   copr:
     if: >-
       github.event_name == 'workflow_dispatch' ||
       (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
        startsWith(github.event.workflow_run.head_branch, 'v'))
     runs-on: ubuntu-latest
     steps:
@@ -58,6 +63,7 @@ jobs:
     if: >-
       github.event_name == 'workflow_dispatch' ||
       (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
        startsWith(github.event.workflow_run.head_branch, 'v'))
     runs-on: ubuntu-latest
     env:

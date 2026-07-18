@@ -26,4 +26,4 @@ Patch release: the chan-desktop gateway OAuth handoff fix, the id.chan.app conse
 ## Known limitations / follow-ups
 
 - The handoff page keeps the chan:// URL (PAT secret) in the tab DOM until closed; bounded by no-store/no-referrer/nosniff and documented in the module doc. Follow-up: one-time redemption code handoff.
-- rc candidate report: `team/release-v0.67.1-rc1-handoff-and-session-self.md`.
+- rc candidate report: `team/release/release-v0.67.1-rc1-handoff-and-session-self.md`.
