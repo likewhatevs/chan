@@ -668,8 +668,10 @@ jobs:
           $ErrorActionPreference = "Stop"
           $archive = Join-Path $env:RUNNER_TEMP "codesigntool-for-windows.zip"
           $extractRoot = Join-Path $env:RUNNER_TEMP "codesigntool"
+          # CodeSignTool from SSL.com's official GitHub releases (pinned). The
+          # ssl.com/download page is not a reliable CI source (intermittent 500s).
           Invoke-WebRequest `
-            -Uri "https://ssl.com/download/codesigntool-for-windows/" `
+            -Uri "https://github.com/SSLcom/CodeSignTool/releases/download/v1.3.2/CodeSignTool-v1.3.2-windows.zip" `
             -OutFile $archive
           New-Item -ItemType Directory -Force -Path $extractRoot | Out-Null
           Expand-Archive -LiteralPath $archive -DestinationPath $extractRoot -Force
