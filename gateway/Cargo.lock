@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "admin"
-version = "0.70.1"
+version = "0.70.2"
 dependencies = [
  "anyhow",
  "chrono",
@@ -306,7 +306,7 @@ checksum = "613afe47fcd5fac7ccf1db93babcb082c5994d996f20b8b159f2ad1658eb5724"
 
 [[package]]
 name = "chan-tunnel-client"
-version = "0.70.1"
+version = "0.70.2"
 dependencies = [
  "axum",
  "base64 0.22.1",
@@ -331,7 +331,7 @@ dependencies = [
 
 [[package]]
 name = "chan-tunnel-proto"
-version = "0.70.1"
+version = "0.70.2"
 dependencies = [
  "base64 0.22.1",
  "bytes",
@@ -345,7 +345,7 @@ dependencies = [
 
 [[package]]
 name = "chan-tunnel-server"
-version = "0.70.1"
+version = "0.70.2"
 dependencies = [
  "async-trait",
  "bytes",
@@ -586,7 +586,7 @@ dependencies = [
 
 [[package]]
 name = "devserver-proxy"
-version = "0.70.1"
+version = "0.70.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -858,7 +858,7 @@ dependencies = [
 
 [[package]]
 name = "gateway-common"
-version = "0.70.1"
+version = "0.70.2"
 dependencies = [
  "anyhow",
  "axum",
@@ -1322,7 +1322,7 @@ checksum = "3d3067d79b975e8844ca9eb072e16b31c3c1c36928edf9c6789548c524d0d954"
 
 [[package]]
 name = "identity"
-version = "0.70.1"
+version = "0.70.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1861,7 +1861,7 @@ dependencies = [
 
 [[package]]
 name = "profile"
-version = "0.70.1"
+version = "0.70.2"
 dependencies = [
  "anyhow",
  "axum",

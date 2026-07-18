@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v0.70.2] - 2026-07-18
+
+v0.70.2 is a patch release. It stops the devserver control terminal from re-running its connect script in a loop, keeps a remote terminal's process alive across a long idle (and clears the mouse-tracking garbage a dead program left behind), renders inline markdown inside table cells, sizes exported Excalidraw diagrams to the slide, seeds the slide-deck zoom_factor, and moves the editor's page-width scrollbar to the window edge.
+
+### Fixed
+
+- **The devserver control terminal no longer loops its connect script.** The terminal-socket reconnect kit (heartbeat, read-deadline, auto-redial) was applied to every terminal, including the desktop's single-shot connect control terminal: after the connect script exited, the socket redialed and the server re-ran the script, and it kept doing so. The control terminal is a local, single-shot runner owned by the desktop exit watcher, so it is now excluded from the kit (no heartbeat, no read or connect deadline, no auto-redial) and runs its script exactly once.
+- **A remote terminal left idle keeps its running process, and a dead program no longer leaks mouse tracking.** After a long idle or laptop sleep the same reconnect kit discarded the resumable session id and attached a fresh shell, replacing whatever was running (an agent, an editor); the fresh shell then inherited the dead program's mouse-tracking mode, so moving the mouse printed escape sequences at the prompt until a reload. The resumable id now survives transport failures so the persisted session is reattached instead, and when a genuinely fresh shell does replace a session the terminal resets its input modes first.
+- **Bold and other inline markdown render inside table cells.** Table cells showed their literal markers (`**bold**`, inline code, links); each cell now goes through the same inline markdown pipeline the rest of the document uses.
+- **Exported slide decks size embedded Excalidraw diagrams to the slide.** An Excalidraw export carries fixed pixel dimensions that the PDF rasterization did not constrain, so diagrams overflowed the page; they now shrink to the slide, matching the on-screen preview, while mermaid diagrams are unaffected.
+- **New slide decks seed the default zoom_factor.** The New slide deck template now writes `zoom_factor: 2` alongside `aspect_ratio`, so the default zoom is explicit in the starter frontmatter.
+- **The editor's page-width scrollbar sits at the window edge.** With a reduced page width the vertical scrollbar sat at the narrowed page's right edge and the off-page margins were not scrollable; the scrollbar now sits at the window edge and the whole off-page area scrolls.
+
 ## [v0.70.1] - 2026-07-17
 
 v0.70.1 is a patch release focused on tunneled (gateway) devservers: uploads and PDF export work through the proxy, closed windows stay closed, rows show the machine's OS logo and a real name, tunnel-mode devservers stop colliding on port 8787, gateways can be renamed, and `cs` help no longer says `cs shell`.
