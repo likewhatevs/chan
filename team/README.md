@@ -75,6 +75,17 @@ New agents should also read [`.agents/playbook.md`](../.agents/playbook.md), the
 - [release-v0.66.1](release-v0.66.1.md) - deterministic devserver control terminals (the daemonize handshake versus a later script exit) and unconditional Reconnect/Abandon.
   - [release-v0.66.1-rc1](release-v0.66.1-rc1.md) - rc1 fixing six post-v0.66.0 bugs (rich-prompt persistence, excalidraw View/Edit) across three file-disjoint lanes.
   - [release-v0.66.1-rc2](release-v0.66.1-rc2.md) - rc2 folding in the rc1 smoke findings: the post-connect control-terminal rule, a per-tab survey FIFO, and small fixes and UX additions.
+- [release-v0.67.0](release-v0.67.0.md) - the live co-editing round (per-document server authority, named peer cursors, bannerless external merges) plus the Fedora COPR and Ubuntu Launchpad distro source-packaging work.
+- [release-v0.67.1](release-v0.67.1.md) - the chan-desktop gateway OAuth handoff fix, the id.chan.app consent restyle, the `cs session self` whoami query, and a repo-wide writing-rules sweep.
+  - [release-v0.67.1-rc1-handoff-and-session-self](release-v0.67.1-rc1-handoff-and-session-self.md) - the single accepted candidate branch, the gateway handoff and `cs session self` work validated as a pin state.
+- [release-v0.67.2](release-v0.67.2.md) - a same-day focused patch on v0.67.1, cut straight to GA.
+- [release-v0.67.3](release-v0.67.3.md) - gateway devserver windows stop reload-looping so their shells attach, and two boot-time 404s on terminal windows quieted.
+- [release-v0.68.0](release-v0.68.0.md) - multiple devservers per gateway account with a sign-in picker, the one-time-code desktop sign-in handoff, Export to PDF, live-collaborative Excalidraw boards, an operator token mint, and retry-idempotent PPA publishing.
+- [release-v0.69.0](release-v0.69.0.md) - gateway devserver windows made first-class (upload/download/clipboard/chords, honest post-sleep reconnect), the `cs paste` unhang with an in-window paste card, a global Open command, collapsible machine cards, and gateway registry cleanup.
+- [release-v0.69.1](release-v0.69.1.md) - tunnel-mode `chan devserver --restart` under systemd (fd-preserving) and a rootless, PPA-free chan-devserver container image.
+- [release-v0.70.0](release-v0.70.0.md) - first-class gateways in chan-desktop: add by URL, one account sign-in, live rosters under Computers, launcher notification bubbles, and the terminal-socket heartbeat/reconnect that keeps gateway terminals alive after idle.
+- [release-v0.70.1](release-v0.70.1.md) - tunneled-devserver hardening: uploads and PDF export through the proxy, closed windows staying closed, OS logos and real names on rows, the port 8787 collision fix, and gateway rename.
+- [release-v0.70.2](release-v0.70.2.md) - the terminal-reconnect regression patch (the control terminal no longer loops its connect script, an idle remote terminal keeps its process and stops leaking mouse tracking) plus table-cell inline markdown, exported-Excalidraw sizing, the slide-deck zoom_factor seed, and the page-width scrollbar position.
 
 ## Conventions
 
