@@ -37,27 +37,30 @@ use clap::ValueEnum;
 #[cfg_attr(feature = "client", derive(ValueEnum))]
 #[cfg_attr(feature = "client", value(rename_all = "lower"))]
 pub enum SubmitAgent {
-    /// Claude Code. Submits on the xterm modifyOtherKeys CSI for
-    /// Cmd+Enter (`\x1b[27;9;13~`), live-probed 2026-05-20.
+    // Submits on the xterm modifyOtherKeys CSI for Cmd+Enter
+    // (`\x1b[27;9;13~`), live-probed 2026-05-20.
+    /// Claude Code: the Cmd+Enter modifyOtherKeys CSI
     Claude,
-    /// OpenAI codex. Reads a plain CR as Enter, but ONLY as a distinct
-    /// keypress: codex coalesces a single `text + CR` write into a paste
-    /// burst and treats the trailing CR as a literal newline, so a bare-CR
-    /// suffix never submits. The default template wraps codex's text in
-    /// bracketed paste so the trailing CR lands as a real Enter. It ignores
-    /// both the Claude chord and the kitty CSI-u Enter (`\x1b[13u`) silently.
-    /// Live-probed 2026-06-02 against codex-cli 0.136.0.
+    // Reads a plain CR as Enter, but ONLY as a distinct keypress: codex
+    // coalesces a single `text + CR` write into a paste burst and treats the
+    // trailing CR as a literal newline, so a bare-CR suffix never submits. The
+    // default template wraps codex's text in bracketed paste so the trailing CR
+    // lands as a real Enter. It ignores both the Claude chord and the kitty
+    // CSI-u Enter (`\x1b[13u`) silently. Live-probed 2026-06-02 against
+    // codex-cli 0.136.0.
+    /// OpenAI codex: bracketed paste, then CR
     Codex,
-    /// Google gemini. Submits on a CR, but ONLY when the CR arrives as a
-    /// DISTINCT write: gemini 0.51 converts Return received within 30 ms of
-    /// inserted text into Shift+Return, including text delivered as bracketed
-    /// paste. So gemini's chord is delivered as a SEPARATE write from the text
-    /// - see `submit_writes`.
+    // Submits on a CR, but ONLY when the CR arrives as a DISTINCT write: gemini
+    // 0.51 converts Return received within 30 ms of inserted text into
+    // Shift+Return, including text delivered as bracketed paste. So gemini's
+    // chord is delivered as a SEPARATE write from the text -- see
+    // `submit_writes`.
+    /// Google gemini: a CR in its own separate write
     Gemini,
-    /// OpenCode. Its TUI accepts bracketed paste followed by CR in the same
-    /// PTY write. The bracketed form is the default because it is proven for
-    /// multiline and paste-sized input. Live-probed 2026-07-18 against
-    /// OpenCode 1.18.3.
+    // Its TUI accepts bracketed paste followed by CR in the same PTY write.
+    // The bracketed form is the default because it is proven for multiline
+    // and paste-sized input. Live-probed 2026-07-18 against OpenCode 1.18.3.
+    /// OpenCode: bracketed paste and CR in one write
     OpenCode,
 }
 

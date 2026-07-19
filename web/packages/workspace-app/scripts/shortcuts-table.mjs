@@ -2,9 +2,8 @@
 // Print the keyboard-shortcut table from web/packages/workspace-app/src/state/shortcuts.ts.
 // Two modes:
 //   default                   plain ASCII (what the empty pane renders)
-//   --serve-long-about        wrapped in the `chan open --help` framing
-//                             so the output drops straight into
-//                             crates/chan/src/main.rs.
+//   --serve-long-about        just the indented table, for the Rust const
+//                             KEYBINDINGS_TABLE in crates/chan/src/lib.rs.
 //
 // Usage:
 //   node web/packages/workspace-app/scripts/shortcuts-table.mjs
@@ -12,7 +11,7 @@
 //
 // Pick `--platform` (web | native) and `--os` (mac | linux | windows)
 // to render alternate variants; defaults to the web fallback set with
-// `Mod` rendered as `Cmd` (the same shape the existing SERVE_LONG_ABOUT
+// `Mod` rendered as `Cmd` (the same shape the embedded help table
 // uses).
 
 import { dirname, join } from "node:path";
@@ -55,21 +54,22 @@ try {
   const platform = flag("--platform", "web");
   const os = flag("--os", "mac");
 
-  const table = mod.renderTable(platform, os);
+  // The help framing indents the table by two, and chan's help text is
+  // hand-wrapped at 76 columns because clap prints it verbatim. Leave the
+  // plain mode uncapped: only the help output has a column budget.
+  const table = wrap
+    ? mod.renderTable(platform, os, 74)
+    : mod.renderTable(platform, os);
 
   if (!wrap) {
     process.stdout.write(table + "\n");
   } else {
-    // Frame matching the existing SERVE_LONG_ABOUT block in
-    // crates/chan/src/main.rs. Sync this prose if main.rs's framing
-    // ever changes.
-    const indented = table.replace(/^/gm, "  ");
-    process.stdout.write(`Run the HTTP server. Defaults to 127.0.0.1 (loopback only).
-
-In-app keybindings (Cmd = Ctrl on Linux / Windows):
-
-${indented}
-`);
+    // The body of KEYBINDINGS_TABLE in crates/chan/src/lib.rs: the table
+    // alone, indented, with no surrounding prose. The Rust side owns the
+    // framing, so a wording change there does not need a resync here.
+    // Indent only non-empty lines: indenting the group separators would
+    // bake trailing whitespace into the Rust const.
+    process.stdout.write(table.replace(/^(?=.)/gm, "  ") + "\n");
   }
 } finally {
   rmSync(work, { recursive: true, force: true });
