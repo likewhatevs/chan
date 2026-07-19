@@ -7,6 +7,7 @@ pkgname=chan
 pkgver=@PKGVER@
 pkgrel=@PKGREL@
 pkgdesc='AI-native IDE with an embedded web editor'
+# aarch64 builds from the same sources; upstream CI proves x86_64 only.
 arch=('x86_64' 'aarch64')
 url='https://chan.app'
 license=('Apache-2.0')
@@ -19,14 +20,19 @@ options=(!lto)
 source=('@SOURCE@')
 sha256sums=('@SHA256_SRC@')
 
+# RUSTUP_TOOLCHAIN keeps the tree's rust-toolchain.toml pin from making a
+# rustup-provided cargo download a second toolchain mid-build, per Arch's Rust
+# packaging guidelines. A plain rust package ignores it.
 prepare() {
     cd "chan-$pkgver"
+    export RUSTUP_TOOLCHAIN=stable
     npm --prefix web ci
     cargo fetch --locked --target "$CARCH-unknown-linux-gnu"
 }
 
 build() {
     cd "chan-$pkgver"
+    export RUSTUP_TOOLCHAIN=stable
     export CARGO_TARGET_DIR=target
     export CHAN_PACKAGED=aur
     make web WEB_SKIP_INSTALL=1
@@ -35,6 +41,7 @@ build() {
 
 check() {
     cd "chan-$pkgver"
+    export RUSTUP_TOOLCHAIN=stable
     export CARGO_TARGET_DIR=target
     export CHAN_PACKAGED=aur
     cargo test --frozen --release -p chan
