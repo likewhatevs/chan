@@ -177,6 +177,21 @@ except Exception: print("")')"
 [ -n "$PREFIX" ] || die "could not resolve mounted workspace prefix (token=${TOKEN:0:8}...)"
 info "mounted prefix = $PREFIX"
 
+# `chan open` registers through the live devserver handoff. Current lifecycle
+# semantics keep a newly registered workspace off until the management API
+# explicitly serves it, so activate it before asking the proxy for tenant HTML.
+ON_JSON="$(curl -fsS -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' \
+  --data '{"on":true}' "http://$DS_IP:$DS_PORT/api/devserver/workspaces$PREFIX/on")" \
+  || die "could not activate mounted workspace"
+printf '%s' "$ON_JSON" | python3 -c '
+import json, sys
+row = json.load(sys.stdin)
+assert row["on"] is True
+assert row["status"] == "running"
+assert row["token"]
+' || die "workspace activation did not reach running state"
+info "workspace active through management API"
+
 say "mint authenticated desktop entry responses"
 ENTRY_BODY="$(printf '{\"owner\":\"%s\",\"devserver_id\":\"%s\",\"path\":\"%s/\"}' \
   "$TENANT_USER" "$DEVSERVER_ID" "$PREFIX")"
