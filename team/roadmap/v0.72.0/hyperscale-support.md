@@ -75,7 +75,7 @@ The release path never runs that script: `distros-publish` POSTs the custom webh
 7. Store the RPM, upgrade output, guest exit status, and build log under `target/distros/copr-check/el<9|10>/<arch>/<package>/`.
 8. Remove each container as its target finishes, then report a per-target PASS/FAIL summary and exit non-zero if any target failed.
 
-Every target runs even after an earlier one fails, so one cycle reports the whole matrix. `KEEP_CONTAINER=1` keeps every container instead, including a failed target's: the guest command always exits 0 and reports its real status through a file on the writable `/out` bind, because `sdme new` deletes the container when its guest command fails.
+Every target runs even after an earlier one fails, so one cycle reports the whole matrix. A results directory the host cannot rewrite, which an older run owned by a container uid produces, fails its own target with the command that clears it and leaves the rest of the matrix running. `KEEP_CONTAINER=1` keeps every container instead, including a failed target's: the guest command always exits 0 and reports its real status through a file on the writable `/out` bind, because `sdme new` deletes the container when its guest command fails.
 
 The command accepts `PKG=all|chan|chan-desktop`, `COPR_RELEASE=all|9|10`, `KEEP_CONTAINER=0|1`, and `REUSE_SRPM=0|1`, each with a Makefile default. An explicit `PKG=chan-desktop COPR_RELEASE=9` is rejected as unsupported.
 
@@ -127,7 +127,7 @@ Local x86_64 acceptance requires all three supported builds to pass:
 - The standalone `chan` package's `chan upgrade` exits unsuccessfully and names `dnf upgrade`.
 - The desktop binary contains the packaged `sudo dnf upgrade` refusal marker. Its `chan upgrade` personality delegates to a running GUI, so that path is not a valid headless-container smoke.
 
-`packaging/distros/copr/test-build-with-sdme.sh` covers the check driver's own host-side control flow against a stub sdme (per-target status capture, re-run after a failed target, interrupt, knob and preflight validation). It is a driver regression check, not evidence about any package: only a full `make copr-check` run satisfies the acceptance list above.
+`packaging/distros/copr/test-build-with-sdme.sh` covers the check driver's own host-side control flow against a stub sdme (per-target status capture, the guest wrapper reaching its result handback, re-run after a failed target, an unusable results directory, interrupt, knob and preflight validation). Its stub guest runs as the host user, so the handback's uid change is covered by hand trace and by a real `make copr-check` run, not by the harness. It is a driver regression check, not evidence about any package: only a full `make copr-check` run satisfies the acceptance list above.
 
 After local x86_64 acceptance, COPR acceptance requires:
 
