@@ -756,12 +756,13 @@ pub enum TerminalAction {
     /// session's queue drains only when that agent has finished generating
     /// (its output has gone idle). Consecutive compatible submitted writes
     /// may arrive together as one chronological prompt; raw writes, gemini,
-    /// and Rich Prompt submissions remain boundaries. The command prints one
-    /// queue position per invocation. NOTE: "idle" is detected from output
-    /// quiescence, so a target sitting at its prompt with a PAUSED,
-    /// half-typed buffer reads as idle; that rare case is not detected.
-    /// Queue bound: 100 entries per target; dropped when the session is
-    /// recycled (restarted).
+    /// and Rich Prompt submissions remain boundaries. The command prints the
+    /// message's position among the target's pending messages. NOTE: "idle"
+    /// is detected from output quiescence, so a target sitting at its prompt
+    /// with a PAUSED, half-typed buffer reads as idle; that rare case is not
+    /// detected. Queue bound: 100 entries per target, where a gemini message
+    /// costs two entries and every other message costs one; dropped when the
+    /// session is recycled (restarted).
     Write {
         /// Literal bytes to write. Omit with --stdin to stream instead.
         cmd: Option<String>,

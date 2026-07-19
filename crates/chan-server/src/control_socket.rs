@@ -3271,7 +3271,7 @@ fn term_write(
     if outcome.queued == 0 {
         return if outcome.full > 0 {
             Err(format!(
-                "matched session(s) at the {WRITE_QUEUE_CAP_MSG}-write queue cap; nothing queued"
+                "matched session(s) at the {WRITE_QUEUE_CAP_MSG}-entry queue cap; nothing queued"
             ))
         } else {
             Err("no live terminal session matched".into())
@@ -4825,7 +4825,7 @@ mod tests {
         assert_eq!(
             term_write(&registry, Some("Solo"), None, "second", None),
             Ok("queued at position 2".to_string()),
-            "the position is the raw queue length, not the message depth"
+            "the position counts pending messages"
         );
     }
 

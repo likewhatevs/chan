@@ -475,8 +475,9 @@ pub struct RosterEntry {
 /// Result of enqueuing a `cs terminal write` onto the matched sessions'
 /// write queues. `queued` is how many sessions accepted it, `full` how many
 /// were already at `WRITE_QUEUE_CAP` (the write was dropped for those), and
-/// `position` the queue length after the push when EXACTLY one session
-/// matched (the caller's position; `None` for a broadcast or a full single).
+/// `position` the message depth after the push when EXACTLY one session
+/// matched (the caller's 1-based position among the pending messages; `None`
+/// for a broadcast or a full single).
 #[derive(Debug, Default, Clone, Copy)]
 pub struct EnqueueOutcome {
     pub queued: usize,
@@ -3007,24 +3008,25 @@ impl Session {
 
     /// Push one `cs terminal write` message, all-or-nothing at the entry cap
     /// (a partial push could deliver a body whose chord was silently dropped).
-    /// Returns the RAW queue length after the push (the caller's position),
-    /// which stays entry-based while the SPA's queue depth counts messages --
-    /// a deliberate divergence that keeps the CLI's stdout contract stable.
+    /// Returns the message depth after the push: the poke's 1-based position
+    /// among the PENDING MESSAGES, the same number the SPA badge and
+    /// `cs terminal list --json` show. A Gemini poke occupies two entries and
+    /// still reports position 1 on an empty queue.
     fn enqueue_cs_write(&self, data: String, submit: Option<ResolvedSubmit>) -> Option<usize> {
-        let (position, depth) = {
+        let depth = {
             let mut q = self
                 .write_queue
                 .lock()
                 .expect("terminal write queue poisoned");
             push_message(&mut q, data, submit, QueueSource::CsWrite, None)?;
-            (q.len(), msg_depth(&q))
+            msg_depth(&q)
         };
         // Outside the QUEUE guard. The enqueue_write_matching caller does
         // hold the REGISTRY guard here, which is fine: broadcast::send is
         // sync, takes only the channel's internal lock, and nothing it
         // wakes can re-enter the registry synchronously.
         self.broadcast(SessionEvent::QueueDepth(depth));
-        Some(position)
+        Some(depth)
     }
 
     /// Push a Rich Prompt as one logical message, all-or-nothing at the entry
@@ -4244,10 +4246,34 @@ mod tests {
             "a gemini message occupies two idle-gated entries"
         );
         assert_eq!(session.queue_depth(), 1, "but ONE message");
-        // A CLI poke behind it: raw position 3 (the frozen stdout contract),
-        // message depth 2 (what the SPA badge shows).
-        assert_eq!(session.enqueue_cs_write("poke".into(), None), Some(3));
+        // A CLI poke behind it reports position 2: the number the SPA badge
+        // shows, not the raw entry count (3).
+        assert_eq!(session.enqueue_cs_write("poke".into(), None), Some(2));
+        assert_eq!(session.write_queue.lock().expect("queue").len(), 3);
         assert_eq!(session.queue_depth(), 2);
+    }
+
+    #[test]
+    fn a_gemini_cs_write_is_one_position_even_though_it_takes_two_entries() {
+        // The position `cs terminal write` prints counts MESSAGES: a lone
+        // gemini poke on an empty queue is at position 1, not at the position
+        // its bare-CR entry would give it.
+        let session = test_session_with_ring(1024);
+        assert_eq!(
+            session.enqueue_cs_write("poke".into(), Some(built_in_submit(SubmitAgent::Gemini))),
+            Some(1),
+            "one message ahead of nothing is at position 1"
+        );
+        assert_eq!(
+            session.write_queue.lock().expect("queue").len(),
+            2,
+            "body + bare CR"
+        );
+        assert_eq!(
+            session.enqueue_cs_write("next".into(), Some(built_in_submit(SubmitAgent::Gemini))),
+            Some(2),
+            "the second message is at position 2, not 3"
+        );
     }
 
     #[test]
@@ -4316,10 +4342,12 @@ mod tests {
     }
 
     #[test]
-    fn fresh_and_restored_sessions_start_with_the_same_queue_state() {
-        // Both PTY constructors take these three fields from one helper, so a
-        // fdstore-restored session cannot come up awaiting a generation that
-        // its previous process already finished.
+    fn fresh_queue_state_is_empty_with_no_delivery_and_no_pending_generation() {
+        // This checks the helper and a fresh session only. The fresh and
+        // fdstore-restored PTY constructors both destructure `fresh_queue_state`
+        // for these three fields, so a restored session cannot come up
+        // awaiting a generation its previous process already finished, but
+        // that guarantee is structural: no restored session is built here.
         let (queue, last_deliver_at, awaiting_gen) = fresh_queue_state();
         assert!(queue.lock().expect("queue").is_empty());
         assert_eq!(last_deliver_at.load(Ordering::Relaxed), 0);
