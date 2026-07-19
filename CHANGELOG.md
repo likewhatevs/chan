@@ -6,6 +6,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **`cs terminal list --json` reports each session's queue depth.** Every entry carries `queue_depth`, the number of `cs terminal write` and Rich Prompt messages still pending for that session, so a script can tell a busy queue from a drained one without the SPA. The markdown table is unchanged.
+- **`CHAN_TERMINAL_INPUT_GAP_MS` tunes the batched Claude body/chord gap.** The server reads it once per process and uses it as the pause between the two PTY writes of a batched Claude delivery, so a new Claude Code release can be re-measured without a rebuild. Values outside 1..800 ms are ignored and the built-in 50 ms applies.
+
 ### Changed
 
 - **Queued terminal notifications reconcile in one agent turn.** At an idle opportunity, consecutive `cs terminal write --submit=codex|claude` messages arrive as one framed chronological prompt instead of consuming one full agent turn each. FIFO order, the busy-agent gate, the 100-entry bound, singleton bytes, Rich Prompt turns, raw input, OpenCode, and runtime submit overrides retain their existing boundaries; large Claude batches use a paste-safe body/chord split so the submit key cannot be swallowed. Gemini is unchanged: it is a batch boundary, and its body and Return remain two separately idle-gated queue entries.

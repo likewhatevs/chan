@@ -2,16 +2,23 @@
 
 > Carried forward from v0.71.0 and implemented for v0.72.0 on 2026-07-19.
 
-Status: implemented and locally validated against Codex 0.144.6 and Claude Code 2.1.215. The original plan was grounded against `a27007f5` (`v0.70.3`) on 2026-07-18.
+Status: implemented and unit-tested. The live acceptance matrix has NOT been run against the current harness, so batching is unproven live. The original plan was grounded against `a27007f5` (`v0.70.3`) on 2026-07-18.
 
 ## Implementation Evidence
 
-- The repeatable live harness is `scripts/e2e/terminal-queue-drain.sh`. Every run creates unique tab and group names, enqueues five separate notifications during a warmup turn, polls scrollback for the exact ordered tail tokens, records paste-placeholder behavior, and traps group cleanup.
-- Codex and Claude each passed 3/3 at 1 KiB, 16 KiB, and 64 KiB. Codex rendered ordinary input. Claude rendered both ordinary input and paste placeholders across the matrix; both forms submitted and preserved every tail token in order.
-- Claude passed 3/3 at 64 KiB with 50, 100, 200, and 400 ms body/chord gaps. The smallest passing gap, 50 ms, is frozen in `WRITE_QUEUE_INPUT_GAP`.
-- A scratch debug build temporarily raised the selector ceiling above the production 64 KiB limit. Codex and Claude each passed 3/3 at 256 KiB; Claude also passed 3/3 there with the chosen 50 ms gap. The scratch override was removed afterward.
-- Unit tests pin FIFO boundaries, no skipping, the 64 KiB ceiling, oversized-head progress, singleton bytes, one Codex input, one Claude input sequence, Rich Prompt event ordering, late-enqueue behavior, and shared fresh/restored PTY sequence writes.
+- The repeatable live harness is `scripts/e2e/terminal-queue-drain.sh`, with three cases: `batch`, `boundaries`, and `late`. Every run gets its own tab inside one probe group, and the group is closed on exit. Its load-bearing oracles are the queue depth polled from `cs terminal list --json` (server state) and sentinels the AGENT builds from the number of notification blocks it received, which no literal in its input can satisfy. Everything read out of the scrollback ring is ADVISORY and recorded in the result row: that ring holds PTY output only, so a framed envelope appears there only when the agent renders the pasted body verbatim, and Claude prints `[Pasted text #1 ...]` instead at these sizes.
+- No result from this harness exists yet. It replaced an earlier script whose only oracle was the ordered tail tokens in scrollback, which a serial five-turn delivery satisfies exactly as well as one batched turn. The earlier script's runs (Codex 0.144.6 and Claude Code 2.1.215, 3/3 at 1, 16, and 64 KiB, plus 3/3 for Claude at 64 KiB with 50, 100, 200, and 400 ms body/chord gaps, plus advisory 256 KiB runs on a scratch build with a raised ceiling) therefore establish delivery, submission, and FIFO order across payload sizes and gaps. They do not establish that a prefix was batched, that depth moved in one step, or that a boundary held.
+- `WRITE_QUEUE_INPUT_GAP` is 50 ms, the smallest gap that passed those earlier delivery runs. `CHAN_TERMINAL_INPUT_GAP_MS` (1..799 ms, mirroring `parse_input_gap`) re-runs a sweep without a rebuild.
+- Unit tests pin FIFO boundaries, no skipping, the 64 KiB ceiling, oversized-head progress, singleton bytes, one Codex input, one Claude input sequence, Rich Prompt event ordering, enqueue-after-selection behavior, and shared fresh/restored PTY sequence writes. The enqueue-after-selection property (Required Behavior item 4) is covered ONLY there: selection and pop happen under one queue lock inside a drainer tick, so no external process can enqueue between them.
 - Gemini was not installed on the validation host, so it was not promoted. Gemini, OpenCode, Rich Prompt, raw input, and runtime overrides remain single-message boundaries.
+
+### Live Matrix Results
+
+Fill this in from the harness result rows, one line per run. Until a row exists, the matrix has not been run.
+
+| agent | case | size | gap | runs | result | notes |
+| --- | --- | --- | --- | --- | --- | --- |
+| | | | | | | |
 
 ## Divergences From the Plan
 
