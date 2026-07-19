@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 # Rebuild, install, and smoke one RPM package in a CentOS sdme container.
+#
+# $OUT is a host bind and the only surface that outlives the container. Its
+# caller hands it back to the host user, on failure as well as on success.
 
 set -euo pipefail
 
@@ -7,8 +10,6 @@ PKG="${PKG:-}"
 EL_RELEASE="${EL_RELEASE:-}"
 OUT="${OUT:-/out}"
 SRPM_DIR="${SRPM_DIR:-/srpm}"
-HOST_UID="${HOST_UID:-0}"
-HOST_GID="${HOST_GID:-0}"
 
 case "$PKG" in
     chan|chan-desktop) ;;
@@ -54,7 +55,9 @@ dnf -y builddep "$srpm"
 
 id builder >/dev/null 2>&1 || useradd -m builder
 install -d -o builder -g builder /home/builder/rpmbuild
-install -d -o builder -g builder "$OUT"
+# Only root writes into $OUT, and it is a host bind: chowning it to the guest's
+# builder uid would lock the host user out of its own results directory.
+mkdir -p "$OUT"
 
 echo ">> rebuilding $(basename "$srpm") as builder with Cargo offline" >&2
 runuser -u builder -- env HOME=/home/builder CARGO_NET_OFFLINE=true \
@@ -116,5 +119,4 @@ else
     grep -q 'dnf upgrade' "$OUT/upgrade.out"
 fi
 
-chown -R "$HOST_UID:$HOST_GID" "$OUT"
 echo ">> validated $rpm_name-$rpm_release.$rpm_arch" >&2

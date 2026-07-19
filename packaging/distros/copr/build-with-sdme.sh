@@ -3,11 +3,21 @@
 #
 # Env: SDME (how sdme is reached), DOCKER, PKG, COPR_RELEASE, REUSE_SRPM,
 #      COPR_EL9_ROOTFS, COPR_EL10_ROOTFS, KEEP_CONTAINER, OUT.
+# KEEP_CONTAINER and REUSE_SRPM take 0 or 1 and reject anything else.
+#
+# Linux hosts only: the guest hands its results back through a writable host
+# bind, and the macOS lima path mounts the host home read-only over virtiofs.
 #
 # Every target runs even when an earlier one fails; the exit status is
-# non-zero if any target failed.
+# non-zero if any target failed. An interrupt aborts the whole matrix.
 
 set -euo pipefail
+
+if [ "$(uname -s)" != Linux ]; then
+    echo "error: the COPR container check runs on Linux hosts only" >&2
+    echo "hint: the guest writes its results to a writable host bind, which lima's read-only virtiofs home cannot provide" >&2
+    exit 1
+fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$SCRIPT_DIR/../../.." && pwd)"
@@ -27,17 +37,6 @@ CONTAINERS=()
 RESULTS=()
 FAILED=0
 
-read -r -a SDME_CMD <<<"$SDME"
-[ ${#SDME_CMD[@]} -gt 0 ] || {
-    echo "error: SDME must name the sdme command" >&2
-    exit 1
-}
-command -v "${SDME_CMD[0]}" >/dev/null || {
-    echo "error: '${SDME_CMD[0]}' not found on this host" >&2
-    echo "hint: SDME names how sdme is reached: SDME='sudo sdme' on a Linux host, SDME='limactl shell default sudo sdme' on macOS" >&2
-    exit 1
-}
-
 case "$COPR_RELEASE" in
     all) releases=(9 10) ;;
     9|10) releases=("$COPR_RELEASE") ;;
@@ -51,9 +50,32 @@ if [ "$COPR_RELEASE" = 9 ] && [ "$PKG" = chan-desktop ]; then
     echo "error: chan-desktop is unsupported on EPEL Next 9 (WebKitGTK 4.1 and libsoup3 are unavailable)" >&2
     exit 1
 fi
+case "$KEEP_CONTAINER" in
+    0|1) ;;
+    *) echo "error: KEEP_CONTAINER must be 0 or 1" >&2; exit 1 ;;
+esac
+case "$REUSE_SRPM" in
+    0|1) ;;
+    *) echo "error: REUSE_SRPM must be 0 or 1" >&2; exit 1 ;;
+esac
 
-# Bash before 4.4 treats an empty array expansion as unset under `set -u`, so
-# guard the length before expanding.
+read -r -a SDME_CMD <<<"$SDME"
+[ ${#SDME_CMD[@]} -gt 0 ] || {
+    echo "error: SDME must name the sdme command" >&2
+    exit 1
+}
+# `sudo sdme` puts sudo in word 0, so probing word 0 alone passes on a host with
+# no sdme at all. Probe the whole command form instead, through the rootfs
+# listing the matrix needs anyway.
+if ! FS_LIST="$("${SDME_CMD[@]}" fs ls 2>&1)"; then
+    echo "error: '${SDME_CMD[*]} fs ls' failed:" >&2
+    echo "$FS_LIST" >&2
+    echo "hint: SDME names how sdme is reached on this host, and defaults to 'sudo sdme'" >&2
+    exit 1
+fi
+
+# CONTAINERS is empty until the first target starts, and bash before 4.4 treats
+# an empty array expansion as unset under `set -u`.
 cleanup() {
     [ "$KEEP_CONTAINER" = 1 ] && return
     [ ${#CONTAINERS[@]} -gt 0 ] || return
@@ -61,7 +83,20 @@ cleanup() {
         "${SDME_CMD[@]}" rm -f "$container" >/dev/null 2>&1 || true
     done
 }
-trap cleanup EXIT INT TERM
+# Capturing each target's status keeps the matrix running past a failure, which
+# would also swallow an interrupt, so interrupts abort here instead.
+on_signal() {
+    trap - EXIT INT TERM
+    echo ">> $1 received, aborting the matrix" >&2
+    cleanup
+    case "$1" in
+        INT) exit 130 ;;
+        *) exit 143 ;;
+    esac
+}
+trap cleanup EXIT
+trap 'on_signal INT' INT
+trap 'on_signal TERM' TERM
 
 MATRIX=()
 need_desktop=0
@@ -83,8 +118,11 @@ for release in "${releases[@]}"; do
             ;;
     esac
 done
+[ ${#MATRIX[@]} -gt 0 ] || {
+    echo "error: no target matches PKG=$PKG COPR_RELEASE=$COPR_RELEASE" >&2
+    exit 1
+}
 
-FS_LIST="$("${SDME_CMD[@]}" fs ls)"
 require_rootfs() {
     local rootfs="$1"
     local release="$2"
@@ -132,11 +170,27 @@ fi
 # would destroy exactly the container an operator wants to inspect. The guest
 # wrapper always exits 0 and carries the real status out on the writable /out
 # bind, so a failed target leaves its container alive for KEEP_CONTAINER=1.
+#
+# The wrapper hands the whole result tree back to the host user on every path:
+# the container is gone once a target ends, so /out is the only diagnostic
+# surface that survives a failure, and the host has to be able to read it and
+# clear it on the next run.
 GUEST_RUN='status=0
 /bin/bash /src/packaging/distros/copr/build-in-container.sh || status=$?
 printf "%s\n" "$status" >/out/status
-chown "$HOST_UID:$HOST_GID" /out/status 2>/dev/null || true
+chown -R "$HOST_UID:$HOST_GID" /out ||
+    echo "error: could not hand /out back to uid $HOST_UID" >&2
 exit 0'
+
+prepare_result_dir() {
+    local dir="$1"
+    mkdir -p "$dir" 2>/dev/null &&
+        rm -f "$dir/status" 2>/dev/null &&
+        : >"$dir/build.log" 2>/dev/null && return 0
+    echo "error: cannot write results into $dir" >&2
+    echo "hint: an older run may have left it owned by a container uid; clear it with: sudo rm -rf $OUT" >&2
+    return 1
+}
 
 for target in "${MATRIX[@]}"; do
     release="${target%%:*}"
@@ -147,9 +201,8 @@ for target in "${MATRIX[@]}"; do
         rootfs="$COPR_EL10_ROOTFS"
     fi
     result_dir="$OUT/el${release}/${HOST_ARCH}/${package}"
-    mkdir -p "$result_dir"
+    prepare_result_dir "$result_dir"
     status_file="$result_dir/status"
-    rm -f "$status_file"
     container="chan-copr-el${release}-${package}-${CONTAINER_ARCH}-$$"
     CONTAINERS+=("$container")
 
@@ -165,12 +218,27 @@ for target in "${MATRIX[@]}"; do
         /bin/bash -c "$GUEST_RUN" \
         2>&1 | tee "$result_dir/build.log" || sdme_status=$?
 
+    case "$sdme_status" in
+        130|143)
+            echo "error: '${SDME_CMD[*]} new' was interrupted (status $sdme_status), aborting the matrix" >&2
+            exit "$sdme_status"
+            ;;
+    esac
+
+    # sdme propagates the guest status verbatim, and the wrapper always exits
+    # 0, so a non-zero status here means the wrapper never ran to its end.
     if [ "$sdme_status" -ne 0 ]; then
-        # The container never reached the guest wrapper.
         status="$sdme_status"
     elif [ -r "$status_file" ]; then
         status="$(cat "$status_file")"
+        case "$status" in
+            ''|*[!0-9]*)
+                echo "error: $status_file holds '$status' instead of an exit status" >&2
+                status=1
+                ;;
+        esac
     else
+        echo "error: sdme exited 0 but the guest wrapper wrote no $status_file" >&2
         status=1
     fi
 

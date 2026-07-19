@@ -25,7 +25,9 @@ SDME ?= $(if $(filter Darwin,$(UNAME_S)),limactl shell default sudo sdme,sudo sd
 
 # make copr-check knobs: the container command for the SRPM stage, the matrix
 # slice, the sdme rootfs names (imported names vary per host), and whether a
-# finished container survives for diagnosis.
+# finished container survives for diagnosis. The 0/1 knobs reject any other
+# value. copr-check itself is Linux-only; it needs a writable host bind to get
+# the guest's results back, which the macOS lima path cannot provide.
 DOCKER ?= docker
 COPR_RELEASE ?= all
 COPR_EL9_ROOTFS ?= centos-stream-9
@@ -126,7 +128,7 @@ copr-build: ## Build the SRPMs and submit them to COPR (needs copr-cli auth).
 	packaging/distros/copr/build-srpm.sh $(PKG) --submit
 
 .PHONY: copr-check
-copr-check: ## Build and smoke the supported CentOS COPR matrix via sdme.
+copr-check: ## Build and smoke the supported CentOS COPR matrix via sdme (Linux hosts).
 	SDME="$(SDME)" DOCKER="$(DOCKER)" PKG="$(or $(PKG),all)" \
 		COPR_RELEASE="$(COPR_RELEASE)" REUSE_SRPM="$(REUSE_SRPM)" \
 		KEEP_CONTAINER="$(KEEP_CONTAINER)" \
