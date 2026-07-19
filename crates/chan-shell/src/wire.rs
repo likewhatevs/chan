@@ -596,11 +596,11 @@ impl SurveyReply {
 }
 
 #[cfg(test)]
-mod survey_wire_tests {
-    //! These pin the EXACT on-wire JSON of the survey types. The serde
-    //! tags + camelCase are the contract between the CLI and the SPA's
-    //! reply route; a Rust rename that drifts them breaks at runtime
-    //! with a green build, so assert the bytes, not just round-trip.
+mod term_write_wire_tests {
+    //! These pin the EXACT on-wire JSON of the terminal write request. The
+    //! logical text plus the resolved submit spec are what the server retains
+    //! until drain time, so a serde rename that drifts them changes delivery
+    //! bytes with a green build.
     use super::*;
 
     #[test]
@@ -629,6 +629,15 @@ mod survey_wire_tests {
             other => panic!("expected term_write, got {other:?}"),
         }
     }
+}
+
+#[cfg(test)]
+mod survey_wire_tests {
+    //! These pin the EXACT on-wire JSON of the survey types. The serde
+    //! tags + camelCase are the contract between the CLI and the SPA's
+    //! reply route; a Rust rename that drifts them breaks at runtime
+    //! with a green build, so assert the bytes, not just round-trip.
+    use super::*;
 
     #[test]
     fn survey_spec_is_camel_case_with_explicit_nulls() {

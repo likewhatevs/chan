@@ -147,10 +147,12 @@ enum ClientFrame {
     /// straight to the PTY), this ENQUEUES `data` onto this session's write
     /// queue -- the SAME FIFO the control socket's `cs terminal write` feeds
     /// -- so bubble prompts and CLI pokes serialize through one drain and
-    /// submit one after another when the agent is idle. The server appends
-    /// the submit chord for `agent` (claude / codex / gemini / opencode); `agent` is
-    /// optional and DEFAULTS to claude when the SPA does not know the
-    /// terminal's launch command.
+    /// submit one after another when the agent is idle. The server resolves
+    /// the submit template for `agent` (claude / codex / gemini / opencode)
+    /// and the queue applies it at drain time; `agent` is optional and
+    /// DEFAULTS to claude when the SPA does not know the terminal's launch
+    /// command. A Rich Prompt is always its own agent turn: it is a boundary
+    /// the notification batcher never crosses.
     #[serde(rename = "prompt")]
     Prompt {
         data: String,
@@ -158,7 +160,7 @@ enum ClientFrame {
         agent: Option<String>,
         /// Client-generated message id. When present the server acks the
         /// enqueue (`prompt-ack`) and emits `prompt-delivered` when the
-        /// message's LAST write reaches the PTY, so the Rich Prompt can keep
+        /// message leaves the queue for the PTY, so the Rich Prompt can keep
         /// the text visible until the agent consumes it. Absent = legacy
         /// fire-and-forget (the team orchestrator's lead-identity prompt
         /// stays untagged).
@@ -166,7 +168,7 @@ enum ClientFrame {
         id: Option<String>,
     },
     /// Recall a still-queued Rich Prompt message by its `prompt_id` (the `id`
-    /// from a `prompt` frame). Removes every queued write of that message
+    /// from a `prompt` frame). Removes every queued entry of that message
     /// before it reaches the PTY; the server replies `prompt-cancelled`
     /// (removed=true) so the SPA can pop the draft back to the editor without
     /// double-delivery, or (removed=false) when it had already drained.
@@ -1158,6 +1160,12 @@ mod tests {
     }
 
     impl TestTerminal {
+        /// Run one drainer tick against this terminal's registry, the same
+        /// call `Registry::spawn_drainer` makes on its interval.
+        fn drain(&self) {
+            self._registry.drain_writes();
+        }
+
         fn spawn(
             cwd: std::path::PathBuf,
             size: PtySize,
@@ -1197,6 +1205,85 @@ mod tests {
                 handle,
             }
         }
+    }
+
+    // The Rich Prompt wire contract: an omitted agent means claude, a tagged
+    // enqueue acks immediately with its queue position, and `prompt-delivered`
+    // fires only once the drainer hands the message to the PTY.
+    #[tokio::test]
+    async fn prompt_frame_defaults_to_claude_and_delivers_only_on_drain() {
+        let frame: ClientFrame =
+            serde_json::from_str(r#"{"type":"prompt","data":"hi","id":"m1"}"#).expect("prompt");
+        let ClientFrame::Prompt { data, agent, id } = frame else {
+            panic!("expected a prompt frame");
+        };
+        assert_eq!(data, "hi");
+        assert_eq!(agent, None, "the SPA may omit the agent");
+        assert_eq!(id.as_deref(), Some("m1"));
+        // The route's default: an omitted agent resolves to claude.
+        let submit = SubmitAgent::from_agent_name(agent.as_deref().unwrap_or("claude"))
+            .map(ResolvedSubmit::resolve)
+            .expect("claude is a known agent");
+        assert_eq!(submit.agent, SubmitAgent::Claude);
+
+        let root = tempfile::TempDir::new().expect("temp workspace");
+        let mut terminal = TestTerminal::spawn(
+            root.path().to_path_buf(),
+            PtySize {
+                rows: 24,
+                cols: 80,
+                pixel_width: 0,
+                pixel_height: 0,
+            },
+            Some("prompt-drain".into()),
+            None,
+        );
+
+        assert_eq!(
+            terminal
+                .handle
+                .enqueue_prompt(data, Some(submit), Some("m1".into())),
+            Some(1),
+            "a tagged enqueue acks with its 1-based message position"
+        );
+        assert_eq!(terminal.handle.queued_prompt_ids(), vec!["m1".to_string()]);
+        assert_eq!(terminal.handle.queue_depth(), 1);
+        // The shell has just rendered its prompt, so the agent is not idle and
+        // a drain tick delivers nothing.
+        terminal.drain();
+        assert_eq!(
+            terminal.handle.queue_depth(),
+            1,
+            "a busy session holds the message"
+        );
+
+        // Tick until the output goes quiet and the drainer delivers.
+        let deadline = Instant::now() + PROBE_BUDGET;
+        let mut delivered = None;
+        while Instant::now() < deadline && delivered.is_none() {
+            terminal.drain();
+            while let Ok(event) = terminal.handle.rx.try_recv() {
+                if let SessionEvent::PromptDelivered { id, depth } = event {
+                    delivered = Some((id, depth));
+                    break;
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        assert_eq!(
+            delivered,
+            Some(("m1".to_string(), 0)),
+            "prompt-delivered fires on the drain, with the remaining depth"
+        );
+        assert_eq!(terminal.handle.queue_depth(), 0);
+        assert!(
+            terminal.handle.queued_prompt_ids().is_empty(),
+            "a delivered message is no longer cancellable"
+        );
+        assert!(
+            !terminal.handle.cancel_prompt("m1"),
+            "recall after delivery is honestly refused"
+        );
     }
 
     fn command_available(name: &str) -> bool {

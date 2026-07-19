@@ -271,9 +271,42 @@ fn template_without_text(template: &str) -> String {
     }
 }
 
+/// The body a submitted message delivers: the text with trailing newlines
+/// trimmed, which is what a `{}` template substitutes. A newline before the
+/// chord would land inside the agent's draft and split the buffer.
+pub fn submitted_body_bytes(text: &str) -> Vec<u8> {
+    text.trim_end_matches('\n').as_bytes().to_vec()
+}
+
+/// The resolved submit chord alone, the template with its text placeholder
+/// removed. This is what an agent that rejects a coalesced text+chord write
+/// receives as its own PTY write.
+pub fn submit_chord_bytes(submit: &ResolvedSubmit) -> Vec<u8> {
+    template_without_text(&submit.template).into_bytes()
+}
+
+/// Whether `text` submitted under `submit` needs its chord delivered as a
+/// SEPARATE PTY write. Gemini 0.51 converts a Return received within 30 ms of
+/// inserted text into Shift+Return, including text delivered as bracketed
+/// paste, so a Gemini body and its bare CR never share a write. A message
+/// missing either half has nothing to split. Cheap enough for the enqueue
+/// path: it never renders the template around the payload.
+pub fn splits_submit_chord(text: &str, submit: &ResolvedSubmit) -> bool {
+    submit.agent == SubmitAgent::Gemini
+        && !text.trim_end_matches('\n').is_empty()
+        && !chord_is_empty(&submit.template)
+}
+
+/// Whether a template's chord half (everything outside `{}`) is empty, the
+/// allocation-free form of `template_without_text(t).is_empty()`.
+fn chord_is_empty(template: &str) -> bool {
+    template == "{}" || template.is_empty()
+}
+
 /// Build the ordered PTY input for one logical message, encoding only after
-/// an optional batch body has been formed. `batched` changes only the proven
-/// Claude built-in: its body and submit CSI become separate controller writes.
+/// an optional batch body has been formed. A plan always has at least one
+/// part; two parts mean the chord must land as its own write, which happens
+/// for Gemini and for the proven batched Claude built-in.
 pub fn plan_submitted_input(
     text: String,
     submit: Option<&ResolvedSubmit>,
@@ -285,22 +318,13 @@ pub fn plan_submitted_input(
         };
     };
 
-    let body = text.trim_end_matches('\n');
-    let parts = match submit.agent {
-        SubmitAgent::Gemini => [
-            body.as_bytes().to_vec(),
-            template_without_text(&submit.template).into_bytes(),
-        ]
-        .into_iter()
-        .filter(|part| !part.is_empty())
-        .collect(),
-        SubmitAgent::Claude if batched && submit.source == SubmitTemplateSource::BuiltIn => {
-            vec![
-                body.as_bytes().to_vec(),
-                template_without_text(&submit.template).into_bytes(),
-            ]
-        }
-        _ => vec![apply_template(body, &submit.template).into_bytes()],
+    let claude_batch = submit.agent == SubmitAgent::Claude
+        && batched
+        && submit.source == SubmitTemplateSource::BuiltIn;
+    let parts = if claude_batch || splits_submit_chord(&text, submit) {
+        vec![submitted_body_bytes(&text), submit_chord_bytes(submit)]
+    } else {
+        vec![apply_template(text.trim_end_matches('\n'), &submit.template).into_bytes()]
     };
 
     PtyInputPlan { parts }
@@ -337,8 +361,9 @@ pub fn apply_submit_chord(data: String, submit: Option<SubmitAgent>) -> String {
 /// delivered as its OWN later write submits gemini, so for gemini this
 /// returns TWO writes (the text body, then the submit chord alone) which the
 /// caller MUST deliver as separate events: separate write-queue items, whose
-/// drainer idle-gates between them, or separate PTY writes with a gap. Empty
-/// parts are dropped.
+/// drainer idle-gates between them, or separate PTY writes with a gap. A
+/// message missing either half collapses to one write, so the list is never
+/// empty.
 pub fn submit_writes(data: String, submit: Option<SubmitAgent>) -> Vec<String> {
     let resolved = submit.map(ResolvedSubmit::resolve);
     plan_submitted_input(data, resolved.as_ref(), false)
@@ -502,6 +527,62 @@ mod tests {
         );
         assert_eq!(template, "\x1b[custom{}\r");
         assert_eq!(source, SubmitTemplateSource::Override);
+    }
+
+    #[test]
+    fn config_map_override_is_marked_override() {
+        // A `<config>/chan/submit.toml` value (the process-global map) is an
+        // override just like the env var: it disables batching for that agent
+        // and its exact unescaped bytes are what reaches the PTY.
+        let mut file = HashMap::new();
+        file.insert("codex".to_string(), r"\e[200~{}\e[201~\n".to_string());
+        let (template, source) =
+            resolve_template_with_source(SubmitAgent::Codex, |_| None, Some(&file));
+        assert_eq!(template, "\x1b[200~{}\x1b[201~\n");
+        assert_eq!(source, SubmitTemplateSource::Override);
+
+        let resolved = ResolvedSubmit {
+            agent: SubmitAgent::Codex,
+            template,
+            source,
+        };
+        assert!(!resolved.is_batchable(), "an override is never batchable");
+        assert_eq!(
+            plan_submitted_input("poke\n".into(), Some(&resolved), true).parts,
+            vec![b"\x1b[200~poke\x1b[201~\n".to_vec()],
+            "an override keeps its exact single-message expansion"
+        );
+    }
+
+    #[test]
+    fn an_input_plan_always_has_at_least_one_part() {
+        // A `{}`-only gemini override has no chord bytes; with empty data both
+        // halves are empty, and the message must still occupy one write rather
+        // than vanishing from the queue.
+        let mut file = HashMap::new();
+        file.insert("gemini".to_string(), "{}".to_string());
+        let (template, source) =
+            resolve_template_with_source(SubmitAgent::Gemini, |_| None, Some(&file));
+        let resolved = ResolvedSubmit {
+            agent: SubmitAgent::Gemini,
+            template,
+            source,
+        };
+        assert!(!splits_submit_chord("", &resolved));
+        assert_eq!(
+            plan_submitted_input(String::new(), Some(&resolved), false).parts,
+            vec![Vec::<u8>::new()]
+        );
+        // A chordless template with a body is one write, not a split pair.
+        assert!(!splits_submit_chord("body\n", &resolved));
+        assert_eq!(
+            plan_submitted_input("body\n".into(), Some(&resolved), false).parts,
+            vec![b"body".to_vec()]
+        );
+        // The built-in gemini template does split, on both halves being present.
+        let gemini = built_in(SubmitAgent::Gemini);
+        assert!(splits_submit_chord("body", &gemini));
+        assert!(!splits_submit_chord("\n\n", &gemini));
     }
 
     #[test]

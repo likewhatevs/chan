@@ -45,8 +45,9 @@ pub use control::{
     absolutize, control_socket_env, open_env, open_env_from, send_control_request, OpenEnv,
 };
 pub use submit::{
-    apply_submit_chord, plan_submitted_input, set_chord_overrides, submit_writes, PtyInputPlan,
-    ResolvedSubmit, SubmitAgent, SubmitTemplateSource,
+    apply_submit_chord, plan_submitted_input, set_chord_overrides, splits_submit_chord,
+    submit_chord_bytes, submit_writes, submitted_body_bytes, PtyInputPlan, ResolvedSubmit,
+    SubmitAgent, SubmitTemplateSource,
 };
 
 /// Whether this process was invoked through a `cs` name (a `cs -> chan`

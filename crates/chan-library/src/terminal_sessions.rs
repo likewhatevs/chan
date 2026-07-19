@@ -14,7 +14,7 @@ use std::io::{Read, Write};
 use std::os::fd::{AsFd, AsRawFd, OwnedFd, RawFd};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use portable_pty::{native_pty_system, PtySize};
@@ -25,7 +25,7 @@ use serde::Serialize;
 use tokio::sync::{broadcast, watch, Notify};
 use tokio::task::JoinHandle;
 
-use chan_shell::{plan_submitted_input, ResolvedSubmit};
+use chan_shell::{plan_submitted_input, PtyInputPlan, ResolvedSubmit};
 
 use crate::config::TerminalConfig;
 use crate::time::{now_unix_millis, now_unix_secs};
@@ -73,12 +73,37 @@ const WRITE_QUEUE_DRAIN_TICK: Duration = Duration::from_millis(150);
 /// Maximum UTF-8 byte size of one framed notification batch. An oversized
 /// head still drains as a singleton so it cannot wedge the FIFO.
 const WRITE_QUEUE_BATCH_MAX_BYTES: usize = 64 * 1024;
-/// Gap between parts of one atomic input plan. Claude Code 2.1.215 passed 3/3
-/// busy-queue runs at 64 KiB for 50, 100, 200, and 400 ms; the smallest
-/// passing value also passed 3/3 advisory runs at 256 KiB. Gemini's existing
-/// split body/CR plan requires more than 30 ms. This stays below the 800 ms
-/// queue-idle threshold.
+/// Gap between the two parts of a batched Claude delivery, its only user.
+/// Claude Code 2.1.215 passed 3/3 busy-queue runs at 64 KiB for 50, 100, 200,
+/// and 400 ms; the smallest passing value also passed 3/3 advisory runs at
+/// 256 KiB. No other agent is measured against it: an agent whose chord needs
+/// its own idle-gated turn (Gemini) takes a queue entry per part instead.
+/// This stays below the 800 ms queue-idle threshold.
 const WRITE_QUEUE_INPUT_GAP: Duration = Duration::from_millis(50);
+/// Live-probe override for `WRITE_QUEUE_INPUT_GAP`, read once per process.
+/// `scripts/e2e/terminal-queue-drain.sh --gap` re-runs the paste matrix
+/// against a new Claude Code release without a rebuild. A value outside
+/// 1..`WRITE_QUEUE_QUIET_MS` ms is ignored, because a gap at or above the idle
+/// threshold would let the drainer treat the split as two turns.
+const WRITE_QUEUE_INPUT_GAP_ENV: &str = "CHAN_TERMINAL_INPUT_GAP_MS";
+
+fn parse_input_gap(raw: &str) -> Option<Duration> {
+    raw.trim()
+        .parse::<u64>()
+        .ok()
+        .filter(|ms| *ms > 0 && i64::try_from(*ms).is_ok_and(|ms| ms < WRITE_QUEUE_QUIET_MS))
+        .map(Duration::from_millis)
+}
+
+fn write_queue_input_gap() -> Duration {
+    static GAP: OnceLock<Duration> = OnceLock::new();
+    *GAP.get_or_init(|| {
+        std::env::var(WRITE_QUEUE_INPUT_GAP_ENV)
+            .ok()
+            .and_then(|raw| parse_input_gap(&raw))
+            .unwrap_or(WRITE_QUEUE_INPUT_GAP)
+    })
+}
 
 const ALT_SCREEN_ENTER: &[u8] = b"\x1b[?1049h";
 const ALT_SCREEN_EXIT: &[u8] = b"\x1b[?1049l";
@@ -299,6 +324,10 @@ pub struct TerminalSessionSummary {
     pub pane_id: Option<String>,
     pub tab_id: Option<String>,
     pub cwd: Option<PathBuf>,
+    /// Logical messages still waiting in this session's write queue. The same
+    /// count the SPA badge shows, so `cs terminal list --json` can observe a
+    /// drain from outside a browser.
+    pub queue_depth: usize,
 }
 
 #[cfg(target_os = "linux")]
@@ -1315,6 +1344,7 @@ impl Registry {
                 pane_id: session.pane_id(),
                 tab_id: session.tab_id(),
                 cwd: session.cwd(),
+                queue_depth: session.queue_depth(),
             })
             .collect()
     }
@@ -1917,23 +1947,104 @@ impl QueueSource {
     }
 }
 
-/// One logical terminal message. Submit bytes stay unresolved until drain so
-/// consecutive compatible `cs terminal write` notifications can later be
+/// Which portion of a logical message a queue entry delivers. Gemini is the
+/// one agent whose submit chord must arrive as its OWN keypress (it converts a
+/// Return received within 30 ms of inserted text into Shift+Return), so a
+/// Gemini message takes a `Body` entry and a `Chord` entry that the drainer
+/// separates with a full idle gate rather than a fixed sub-second delay.
+/// Everything else is one `Whole` entry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MessagePart {
+    Whole,
+    Body,
+    Chord,
+}
+
+impl MessagePart {
+    /// Whether this entry COMPLETES its logical message. Depth counts tails,
+    /// and `PromptDelivered` fires on a tagged tail's drain, so a `Body` drain
+    /// leaves its message pending.
+    fn is_tail(self) -> bool {
+        !matches!(self, Self::Body)
+    }
+}
+
+/// One entry of the per-session FIFO. Submit bytes stay unresolved until
+/// drain so consecutive compatible `cs terminal write` notifications can be
 /// framed once without embedded submit chords.
 #[derive(Debug)]
 struct QueuedMessage {
+    /// Logical message text. Empty on a `Chord` entry, which carries no text.
+    data: String,
+    submit: Option<ResolvedSubmit>,
+    source: QueueSource,
+    /// Rich Prompt message id, on EVERY entry of the message so recall is a
+    /// pure retain-filter. `None` for `cs terminal write` pokes.
+    prompt_id: Option<String>,
+    part: MessagePart,
+}
+
+/// Message depth of a queue: the count of TAIL entries. A split Gemini message
+/// contributes exactly one tail, so this counts messages, not entries.
+fn msg_depth(queue: &VecDeque<QueuedMessage>) -> usize {
+    queue
+        .iter()
+        .filter(|message| message.part.is_tail())
+        .count()
+}
+
+/// The write-queue gate a session starts with: an empty FIFO, no recorded
+/// delivery, and no pending generation-start wait. The fresh and
+/// fdstore-restored constructors both take their fields from here, so a
+/// restored session cannot come up mid-delivery and stall its own drainer.
+fn fresh_queue_state() -> (Mutex<VecDeque<QueuedMessage>>, AtomicI64, AtomicBool) {
+    (
+        Mutex::new(VecDeque::new()),
+        AtomicI64::new(0),
+        AtomicBool::new(false),
+    )
+}
+
+/// The entries one logical message occupies, in order. A Gemini body and its
+/// bare CR are separate entries; everything else is one.
+fn message_parts(data: &str, submit: Option<&ResolvedSubmit>) -> &'static [MessagePart] {
+    match submit {
+        Some(submit) if chan_shell::splits_submit_chord(data, submit) => {
+            &[MessagePart::Body, MessagePart::Chord]
+        }
+        _ => &[MessagePart::Whole],
+    }
+}
+
+/// Append one logical message as its ordered entries, all-or-nothing at
+/// `WRITE_QUEUE_CAP`: a partial push could deliver a body whose submit chord
+/// was silently dropped. `None` leaves the queue untouched.
+fn push_message(
+    queue: &mut VecDeque<QueuedMessage>,
     data: String,
     submit: Option<ResolvedSubmit>,
     source: QueueSource,
     prompt_id: Option<String>,
-    /// Raw PTY-write capacity consumed by the singleton input plan.
-    write_cost: usize,
-}
-
-#[derive(Debug, Default)]
-struct WriteQueue {
-    messages: VecDeque<QueuedMessage>,
-    write_cost: usize,
+) -> Option<()> {
+    let parts = message_parts(&data, submit.as_ref());
+    if queue.len() + parts.len() > WRITE_QUEUE_CAP {
+        return None;
+    }
+    let mut text = Some(data);
+    for part in parts {
+        queue.push_back(QueuedMessage {
+            // A chord entry carries no text; the body entry owns it.
+            data: match part {
+                MessagePart::Chord => String::new(),
+                _ => text.take().unwrap_or_default(),
+            },
+            submit: submit.clone(),
+            source,
+            prompt_id: prompt_id.clone(),
+            part: *part,
+        });
+    }
+    Some(())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1941,6 +2052,7 @@ enum BatchStopReason {
     End,
     RichPrompt,
     NoSubmit,
+    SplitWrite,
     UnbatchableAgent,
     Override,
     DifferentSubmit,
@@ -1953,6 +2065,7 @@ impl BatchStopReason {
             Self::End => "end",
             Self::RichPrompt => "rich_prompt",
             Self::NoSubmit => "no_submit",
+            Self::SplitWrite => "split_write",
             Self::UnbatchableAgent => "unbatchable_agent",
             Self::Override => "override",
             Self::DifferentSubmit => "different_submit",
@@ -1971,6 +2084,9 @@ fn batch_boundary(message: &QueuedMessage) -> Option<BatchStopReason> {
     if message.source != QueueSource::CsWrite {
         return Some(BatchStopReason::RichPrompt);
     }
+    if message.part != MessagePart::Whole {
+        return Some(BatchStopReason::SplitWrite);
+    }
     let Some(submit) = message.submit.as_ref() else {
         return Some(BatchStopReason::NoSubmit);
     };
@@ -1985,6 +2101,11 @@ fn batch_boundary(message: &QueuedMessage) -> Option<BatchStopReason> {
 
 /// Select the largest compatible prefix without scanning past a boundary.
 /// The returned count is always at least one for a non-empty queue.
+///
+/// Runs under the queue mutex, so it measures a candidate batch from a running
+/// content total plus [`batch_framing_overhead`] instead of re-framing the
+/// payload on every step. The framing itself happens after the pop, outside
+/// the lock.
 fn select_batch_prefix(queue: &VecDeque<QueuedMessage>, max_bytes: usize) -> BatchSelection {
     let Some(head) = queue.front() else {
         return BatchSelection {
@@ -1997,7 +2118,8 @@ fn select_batch_prefix(queue: &VecDeque<QueuedMessage>, max_bytes: usize) -> Bat
     }
 
     let head_submit = head.submit.as_ref().expect("batchable head has submit");
-    let mut prefix = vec![head];
+    let mut content = framed_content_len(head);
+    let mut count = 1;
     let mut stop = BatchStopReason::End;
     for message in queue.iter().skip(1) {
         if let Some(reason) = batch_boundary(message) {
@@ -2008,18 +2130,54 @@ fn select_batch_prefix(queue: &VecDeque<QueuedMessage>, max_bytes: usize) -> Bat
             stop = BatchStopReason::DifferentSubmit;
             break;
         }
-        prefix.push(message);
-        if format_notification_batch(&prefix).len() > max_bytes {
-            prefix.pop();
+        let grown = content + framed_content_len(message);
+        if batch_framing_overhead(count + 1) + grown > max_bytes {
             stop = BatchStopReason::ByteCeiling;
             break;
         }
+        content = grown;
+        count += 1;
     }
 
-    BatchSelection {
-        count: prefix.len(),
-        stop,
+    BatchSelection { count, stop }
+}
+
+const BATCH_HEADING: &str = "# Queued terminal notifications\n\n";
+const BATCH_PREAMBLE: &str = " messages, oldest first. Read the entire batch before acting. Later\nmessages may update or supersede earlier messages.\n\n";
+
+/// Message bytes a framed batch carries verbatim: the same trailing-newline
+/// trim submit encoding applies to a singleton.
+fn framed_content_len(message: &QueuedMessage) -> usize {
+    message.data.trim_end_matches('\n').len()
+}
+
+/// Byte size of everything [`format_notification_batch`] adds around `count`
+/// messages, so prefix selection can size a candidate without building it.
+/// `batch_framing_overhead_matches_the_formatter` pins it against the formatter.
+fn batch_framing_overhead(count: usize) -> usize {
+    let total_digits = decimal_digits(count);
+    let mut overhead = BATCH_HEADING.len() + total_digits + BATCH_PREAMBLE.len();
+    for number in 1..=count {
+        // "--- notification N/C ---\n", the message, "\n",
+        // "--- end notification N/C ---\n", and a blank line between entries.
+        overhead += 23 + decimal_digits(number) + total_digits;
+        overhead += 1;
+        overhead += 27 + decimal_digits(number) + total_digits;
+        if number != count {
+            overhead += 1;
+        }
     }
+    overhead
+}
+
+fn decimal_digits(n: usize) -> usize {
+    let mut digits = 1;
+    let mut rest = n / 10;
+    while rest > 0 {
+        digits += 1;
+        rest /= 10;
+    }
+    digits
 }
 
 /// Frame logical notifications in chronological order. Content remains
@@ -2027,9 +2185,17 @@ fn select_batch_prefix(queue: &VecDeque<QueuedMessage>, max_bytes: usize) -> Bat
 /// to a singleton.
 fn format_notification_batch(messages: &[&QueuedMessage]) -> String {
     let count = messages.len();
-    let mut out = format!(
-        "# Queued terminal notifications\n\n{count} messages, oldest first. Read the entire batch before acting. Later\nmessages may update or supersede earlier messages.\n\n"
+    let mut out = String::with_capacity(
+        batch_framing_overhead(count)
+            + messages
+                .iter()
+                .copied()
+                .map(framed_content_len)
+                .sum::<usize>(),
     );
+    out.push_str(BATCH_HEADING);
+    out.push_str(&count.to_string());
+    out.push_str(BATCH_PREAMBLE);
     for (index, message) in messages.iter().enumerate() {
         let number = index + 1;
         out.push_str(&format!("--- notification {number}/{count} ---\n"));
@@ -2043,12 +2209,14 @@ fn format_notification_batch(messages: &[&QueuedMessage]) -> String {
     out
 }
 
-fn pop_batch(queue: &mut WriteQueue, max_bytes: usize) -> (Vec<QueuedMessage>, BatchStopReason) {
-    let selection = select_batch_prefix(&queue.messages, max_bytes);
+fn pop_batch(
+    queue: &mut VecDeque<QueuedMessage>,
+    max_bytes: usize,
+) -> (Vec<QueuedMessage>, BatchStopReason) {
+    let selection = select_batch_prefix(queue, max_bytes);
     let mut messages = Vec::with_capacity(selection.count);
     for _ in 0..selection.count {
-        if let Some(message) = queue.messages.pop_front() {
-            queue.write_cost = queue.write_cost.saturating_sub(message.write_cost);
+        if let Some(message) = queue.pop_front() {
             messages.push(message);
         }
     }
@@ -2094,11 +2262,11 @@ struct Session {
     last_output_at: AtomicI64,
     /// FIFO of pending logical messages for this session -- `cs terminal
     /// write` pokes and Rich Prompt messages share it -- drained when the
-    /// agent is idle. Bounded at `WRITE_QUEUE_CAP` raw-write cost units;
-    /// dropped on session recycle (the session, and this queue with
-    /// it, is replaced on restart/close -- attached clients get Closed/Exit
-    /// and re-sync their queue depth from the next attach's session frame).
-    write_queue: Mutex<WriteQueue>,
+    /// agent is idle. Bounded at `WRITE_QUEUE_CAP` entries; dropped on session
+    /// recycle (the session, and this queue with it, is replaced on
+    /// restart/close -- attached clients get Closed/Exit and re-sync their
+    /// queue depth from the next attach's session frame).
+    write_queue: Mutex<VecDeque<QueuedMessage>>,
     /// Millis of the drainer's last delivery (0 when nothing is pending), to
     /// time the await-generation-start window after a deliver.
     last_deliver_at: AtomicI64,
@@ -2274,6 +2442,7 @@ impl Session {
         let mut killer = child.clone_killer();
         let (command_tx, command_rx) = std::sync::mpsc::channel::<PtyCommand>();
         let (output_tx, _) = broadcast::channel::<SessionEvent>(BROADCAST_CAP);
+        let (write_queue, last_deliver_at, awaiting_gen) = fresh_queue_state();
         let session = Arc::new(Self {
             id,
             tab_name,
@@ -2304,9 +2473,9 @@ impl Session {
             // Seed output-idle at spawn time so a brand-new session is not
             // treated as instantly idle before it has rendered anything.
             last_output_at: AtomicI64::new(now_unix_millis()),
-            write_queue: Mutex::new(WriteQueue::default()),
-            last_deliver_at: AtomicI64::new(0),
-            awaiting_gen: AtomicBool::new(false),
+            write_queue,
+            last_deliver_at,
+            awaiting_gen,
             attach_count: AtomicUsize::new(0),
             detached_at: AtomicI64::new(now_unix_secs() as i64),
             winsize: Mutex::new(opts.size),
@@ -2514,6 +2683,7 @@ impl Session {
         let mut writer = File::from(writer_fd);
         let (command_tx, command_rx) = std::sync::mpsc::channel::<PtyCommand>();
         let (output_tx, _) = broadcast::channel::<SessionEvent>(BROADCAST_CAP);
+        let (write_queue, last_deliver_at, awaiting_gen) = fresh_queue_state();
         let session = Arc::new(Self {
             id: meta.session_id.clone(),
             tab_name: meta.tab_name.clone(),
@@ -2545,9 +2715,9 @@ impl Session {
             seq: AtomicU64::new(meta.seq),
             last_activity: AtomicI64::new(now_unix_secs() as i64),
             last_output_at: AtomicI64::new(now_unix_millis()),
-            write_queue: Mutex::new(WriteQueue::default()),
-            last_deliver_at: AtomicI64::new(0),
-            awaiting_gen: AtomicBool::new(false),
+            write_queue,
+            last_deliver_at,
+            awaiting_gen,
             attach_count: AtomicUsize::new(0),
             detached_at: AtomicI64::new(now_unix_secs() as i64),
             winsize: Mutex::new(size),
@@ -2721,7 +2891,7 @@ impl Session {
         } else {
             PtyCommand::InputSequence {
                 parts,
-                gap: WRITE_QUEUE_INPUT_GAP,
+                gap: write_queue_input_gap(),
             }
         };
         let _ = self.command_tx.send(command);
@@ -2737,7 +2907,6 @@ impl Session {
             .write_queue
             .lock()
             .expect("terminal write queue poisoned")
-            .messages
             .is_empty()
         {
             // Nothing pending: clear the post-deliver await state so the next
@@ -2766,13 +2935,14 @@ impl Session {
         if now_ms - last_output < WRITE_QUEUE_QUIET_MS {
             return;
         }
+        // Select and pop under the queue mutex; frame and encode outside it.
         let next = {
             let mut q = self
                 .write_queue
                 .lock()
                 .expect("terminal write queue poisoned");
             let (messages, stop) = pop_batch(&mut q, WRITE_QUEUE_BATCH_MAX_BYTES);
-            let depth = q.messages.len();
+            let depth = msg_depth(&q);
             (!messages.is_empty()).then_some((messages, depth, stop))
         };
         if let Some((mut messages, depth, stop)) = next {
@@ -2780,6 +2950,7 @@ impl Session {
             let batched = count > 1;
             let source = messages[0].source.as_str();
             let submit = messages[0].submit.clone();
+            let part = messages[0].part;
             let agent = submit
                 .as_ref()
                 .map(|resolved| resolved.agent.name())
@@ -2791,7 +2962,21 @@ impl Session {
             } else {
                 messages.pop().expect("non-empty selected batch").data
             };
-            let plan = plan_submitted_input(text, submit.as_ref(), batched);
+            let plan = match part {
+                // A batch is always whole `cs terminal write` messages: a split
+                // entry is a FIFO boundary, so `part` here is the singleton's.
+                MessagePart::Whole => plan_submitted_input(text, submit.as_ref(), batched),
+                MessagePart::Body => PtyInputPlan {
+                    parts: vec![chan_shell::submitted_body_bytes(&text)],
+                },
+                MessagePart::Chord => PtyInputPlan {
+                    parts: vec![chan_shell::submit_chord_bytes(
+                        submit
+                            .as_ref()
+                            .expect("a chord entry carries its submit spec"),
+                    )],
+                },
+            };
             let bytes = plan.parts.iter().map(Vec::len).sum::<usize>();
             tracing::trace!(
                 event = "terminal_write_drain",
@@ -2808,38 +2993,31 @@ impl Session {
             self.send_input_plan(plan.parts);
             self.last_deliver_at.store(now_ms, Ordering::Relaxed);
             self.awaiting_gen.store(true, Ordering::Relaxed);
-            if let Some(id) = prompt_id {
-                self.broadcast(SessionEvent::PromptDelivered { id, depth });
+            // Only a TAIL drain completes a message; a split body leaves its
+            // message pending until the chord lands one idle gate later, so it
+            // emits nothing (the message depth did not change).
+            if part.is_tail() {
+                if let Some(id) = prompt_id {
+                    self.broadcast(SessionEvent::PromptDelivered { id, depth });
+                }
+                self.broadcast(SessionEvent::QueueDepth(depth));
             }
-            self.broadcast(SessionEvent::QueueDepth(depth));
         }
     }
 
-    /// Push one logical `cs terminal write` message. The reported position is
-    /// cumulative raw-write cost, preserving the CLI's capacity/position
-    /// contract while queue depth becomes the logical message count.
+    /// Push one `cs terminal write` message, all-or-nothing at the entry cap
+    /// (a partial push could deliver a body whose chord was silently dropped).
+    /// Returns the RAW queue length after the push (the caller's position),
+    /// which stays entry-based while the SPA's queue depth counts messages --
+    /// a deliberate divergence that keeps the CLI's stdout contract stable.
     fn enqueue_cs_write(&self, data: String, submit: Option<ResolvedSubmit>) -> Option<usize> {
-        let write_cost = plan_submitted_input(data.clone(), submit.as_ref(), false)
-            .parts
-            .len()
-            .max(1);
         let (position, depth) = {
             let mut q = self
                 .write_queue
                 .lock()
                 .expect("terminal write queue poisoned");
-            if q.write_cost + write_cost > WRITE_QUEUE_CAP {
-                return None;
-            }
-            q.write_cost += write_cost;
-            q.messages.push_back(QueuedMessage {
-                data,
-                submit,
-                source: QueueSource::CsWrite,
-                prompt_id: None,
-                write_cost,
-            });
-            (q.write_cost, q.messages.len())
+            push_message(&mut q, data, submit, QueueSource::CsWrite, None)?;
+            (q.len(), msg_depth(&q))
         };
         // Outside the QUEUE guard. The enqueue_write_matching caller does
         // hold the REGISTRY guard here, which is fine: broadcast::send is
@@ -2849,46 +3027,34 @@ impl Session {
         Some(position)
     }
 
-    /// Push a Rich Prompt as one logical message, all-or-nothing at the raw
-    /// write-cost cap. Returns its logical queue position.
+    /// Push a Rich Prompt as one logical message, all-or-nothing at the entry
+    /// cap. Returns the message depth after the push, its 1-based queue
+    /// position.
     fn enqueue_prompt(
         &self,
         data: String,
         submit: Option<ResolvedSubmit>,
         prompt_id: Option<String>,
     ) -> Option<usize> {
-        let write_cost = plan_submitted_input(data.clone(), submit.as_ref(), false)
-            .parts
-            .len()
-            .max(1);
         let depth = {
             let mut q = self
                 .write_queue
                 .lock()
                 .expect("terminal write queue poisoned");
-            if q.write_cost + write_cost > WRITE_QUEUE_CAP {
-                return None;
-            }
-            q.write_cost += write_cost;
-            q.messages.push_back(QueuedMessage {
-                data,
-                submit,
-                source: QueueSource::RichPrompt,
-                prompt_id,
-                write_cost,
-            });
-            q.messages.len()
+            push_message(&mut q, data, submit, QueueSource::RichPrompt, prompt_id)?;
+            msg_depth(&q)
         };
         self.broadcast(SessionEvent::QueueDepth(depth));
         Some(depth)
     }
 
-    /// Recall a still-queued Rich Prompt message atomically under the queue
-    /// lock, including its full raw write cost. Returns whether anything was
-    /// removed; on a removal, re-emit `QueueDepth` so every attached socket
-    /// re-syncs its badge.
+    /// Recall a still-queued Rich Prompt message: drop EVERY entry sharing
+    /// `prompt_id` (a split body plus its chord) atomically under the queue
+    /// lock, so the all-or-nothing invariant and the tail count stay
+    /// consistent. Returns whether anything was removed; on a removal, re-emit
+    /// `QueueDepth` so every attached socket re-syncs its badge.
     ///
-    /// The in-flight message is `pop_front`'ed before delivery
+    /// The in-flight entry is `pop_front`'ed before delivery
     /// (`try_drain_batch`), so it is NOT in `write_queue`: the retain-filter can
     /// never touch or reorder the message currently being delivered. The
     /// cancel-vs-drain race is resolved here under the lock -- if the message
@@ -2900,14 +3066,9 @@ impl Session {
                 .write_queue
                 .lock()
                 .expect("terminal write queue poisoned");
-            let before = q.messages.len();
-            q.messages
-                .retain(|message| message.prompt_id.as_deref() != Some(prompt_id));
-            let removed = q.messages.len() != before;
-            if removed {
-                q.write_cost = q.messages.iter().map(|message| message.write_cost).sum();
-            }
-            (removed, q.messages.len())
+            let before = q.len();
+            q.retain(|message| message.prompt_id.as_deref() != Some(prompt_id));
+            (q.len() != before, msg_depth(&q))
         };
         if removed {
             self.broadcast(SessionEvent::QueueDepth(depth));
@@ -2915,27 +3076,28 @@ impl Session {
         removed
     }
 
-    /// The `prompt_id`s of tagged logical messages still queued, in FIFO order.
-    /// `cs terminal write` pokes carry no `prompt_id` and are skipped, so
-    /// membership is exact (a restored pending id is in the list iff still
-    /// queued).
+    /// The `prompt_id`s of the tail-bearing entries still queued, in FIFO
+    /// order -- one id per Rich Prompt message. `cs terminal write` pokes carry
+    /// no `prompt_id` and are skipped, so membership is exact (a restored
+    /// pending id is in the list iff still queued).
     fn queued_prompt_ids(&self) -> Vec<String> {
         self.write_queue
             .lock()
             .expect("terminal write queue poisoned")
-            .messages
             .iter()
+            .filter(|message| message.part.is_tail())
             .filter_map(|message| message.prompt_id.clone())
             .collect()
     }
 
-    /// Current logical MESSAGE depth of the write queue.
+    /// Current logical MESSAGE depth of the write queue (tail count).
     fn queue_depth(&self) -> usize {
-        self.write_queue
-            .lock()
-            .expect("terminal write queue poisoned")
-            .messages
-            .len()
+        msg_depth(
+            &self
+                .write_queue
+                .lock()
+                .expect("terminal write queue poisoned"),
+        )
     }
 
     /// The full replay ring, flattened, for `cs terminal scrollback`.
@@ -3355,6 +3517,16 @@ enum PtyCommand {
     Kill,
 }
 
+/// Write one input plan to the PTY, flushing each part and pausing `gap`
+/// between parts so a following part cannot be coalesced into its predecessor.
+/// Shared by the fresh and fdstore-restored controllers so their delivery
+/// cannot drift.
+///
+/// A flush error is as fatal as a write error: the PTY writer is unbuffered,
+/// so a failing flush means the fd is already broken and the bytes did not
+/// reach the child. Continuing would write a submit chord against a body the
+/// agent never received, and the caller's "delivered" acknowledgment would be
+/// a lie. Callers tear the session down on `Err`.
 fn write_input_parts(
     writer: &mut dyn Write,
     parts: &[Vec<u8>],
@@ -3405,16 +3577,12 @@ mod tests {
         submit: Option<ResolvedSubmit>,
         source: QueueSource,
     ) -> QueuedMessage {
-        let write_cost = plan_submitted_input(data.to_string(), submit.as_ref(), false)
-            .parts
-            .len()
-            .max(1);
         QueuedMessage {
             data: data.to_string(),
             submit,
             source,
             prompt_id: None,
-            write_cost,
+            part: MessagePart::Whole,
         }
     }
 
@@ -3485,6 +3653,7 @@ mod tests {
     ) -> (Arc<Session>, std::sync::mpsc::Receiver<PtyCommand>) {
         let (command_tx, command_rx) = std::sync::mpsc::channel();
         let (output_tx, _) = broadcast::channel(BROADCAST_CAP);
+        let (write_queue, last_deliver_at, awaiting_gen) = fresh_queue_state();
         let session = Arc::new(Session {
             id: "test-session".to_string(),
             tab_name: None,
@@ -3513,9 +3682,9 @@ mod tests {
             seq: AtomicU64::new(0),
             last_activity: AtomicI64::new(now_unix_secs() as i64),
             last_output_at: AtomicI64::new(now_unix_millis()),
-            write_queue: Mutex::new(WriteQueue::default()),
-            last_deliver_at: AtomicI64::new(0),
-            awaiting_gen: AtomicBool::new(false),
+            write_queue,
+            last_deliver_at,
+            awaiting_gen,
             attach_count: AtomicUsize::new(0),
             detached_at: AtomicI64::new(now_unix_secs() as i64),
             winsize: Mutex::new(test_size()),
@@ -3804,6 +3973,19 @@ mod tests {
                 BatchStopReason::DifferentSubmit,
             ),
         ];
+        let gemini = built_in_submit(SubmitAgent::Gemini);
+        for part in [MessagePart::Body, MessagePart::Chord] {
+            cases.push((
+                QueuedMessage {
+                    data: "gemini".to_string(),
+                    submit: Some(gemini.clone()),
+                    source: QueueSource::CsWrite,
+                    prompt_id: None,
+                    part,
+                },
+                BatchStopReason::SplitWrite,
+            ));
+        }
         let mut override_submit = codex.clone();
         override_submit.source = SubmitTemplateSource::Override;
         cases.push((
@@ -3951,7 +4133,6 @@ mod tests {
                 .write_queue
                 .lock()
                 .expect("queue")
-                .messages
                 .front()
                 .map(|message| message.data.as_str()),
             Some("late sixth")
@@ -3963,7 +4144,7 @@ mod tests {
         let session = test_session_with_ring(1024);
         session.enqueue_cs_write("one".into(), None);
         session.enqueue_cs_write("two".into(), None);
-        let qlen = |s: &Session| s.write_queue.lock().expect("queue").messages.len();
+        let qlen = |s: &Session| s.write_queue.lock().expect("queue").len();
         let base = now_unix_millis();
 
         // Agent busy (output just now): nothing delivered.
@@ -4007,7 +4188,7 @@ mod tests {
         // No output ever arrives; past the cap the await clears + the second
         // delivers (idle the whole time).
         session.try_drain_batch(t1 + WRITE_QUEUE_GEN_START_CAP_MS + 10);
-        assert_eq!(session.write_queue.lock().expect("queue").messages.len(), 0);
+        assert_eq!(session.write_queue.lock().expect("queue").len(), 0);
     }
 
     #[test]
@@ -4029,7 +4210,7 @@ mod tests {
             "2-write message must not split into the last slot"
         );
         assert_eq!(
-            session.write_queue.lock().expect("queue").write_cost,
+            session.write_queue.lock().expect("queue").len(),
             WRITE_QUEUE_CAP - 1,
             "rejected message leaves the queue unchanged"
         );
@@ -4058,9 +4239,9 @@ mod tests {
             "first message -> depth/position 1"
         );
         assert_eq!(
-            session.write_queue.lock().expect("queue").write_cost,
+            session.write_queue.lock().expect("queue").len(),
             2,
-            "a gemini message costs two raw writes"
+            "a gemini message occupies two idle-gated entries"
         );
         assert_eq!(session.queue_depth(), 1, "but ONE message");
         // A CLI poke behind it: raw position 3 (the frozen stdout contract),
@@ -4093,13 +4274,100 @@ mod tests {
         assert_eq!(session.queue_depth(), 2);
         // m2 is gone; m1 + the poke remain, ordering preserved.
         let q = session.write_queue.lock().expect("queue");
-        assert_eq!(q.messages.len(), 2, "m1 + poke remain");
-        assert_eq!(q.write_cost, 2, "Gemini's two cost units were removed");
-        assert_eq!(q.messages[0].prompt_id.as_deref(), Some("m1"));
-        assert_eq!(
-            q.messages[1].prompt_id, None,
-            "the CLI poke stays, in order"
+        assert_eq!(q.len(), 2, "m1 + poke remain, Gemini's two entries gone");
+        assert_eq!(q[0].prompt_id.as_deref(), Some("m1"));
+        assert_eq!(q[1].prompt_id, None, "the CLI poke stays, in order");
+    }
+
+    #[test]
+    fn cancel_cannot_recall_a_message_already_popped_for_delivery() {
+        // The drainer pops before it hands bytes to the controller, so a recall
+        // that arrives after the pop is honestly refused: delivery has begun.
+        let session = test_session_with_ring(1024);
+        session.enqueue_prompt(
+            "first".into(),
+            Some(built_in_submit(SubmitAgent::Claude)),
+            Some("m1".into()),
         );
+        session.enqueue_prompt(
+            "second".into(),
+            Some(built_in_submit(SubmitAgent::Claude)),
+            Some("m2".into()),
+        );
+        let base = now_unix_millis();
+        session.last_output_at.store(base, Ordering::Relaxed);
+        session.try_drain_batch(base + WRITE_QUEUE_QUIET_MS + 10);
+        assert_eq!(session.queued_prompt_ids(), vec!["m2".to_string()]);
+
+        let mut rx = session.output_tx.subscribe();
+        assert!(
+            !session.cancel_prompt("m1"),
+            "m1 was popped for delivery, so it cannot be recalled"
+        );
+        assert!(
+            matches!(rx.try_recv(), Err(broadcast::error::TryRecvError::Empty)),
+            "a refused recall must not perturb the badge"
+        );
+        assert_eq!(session.queue_depth(), 1, "m2 is untouched");
+        assert!(
+            session.cancel_prompt("m2"),
+            "the queued message still recalls"
+        );
+    }
+
+    #[test]
+    fn fresh_and_restored_sessions_start_with_the_same_queue_state() {
+        // Both PTY constructors take these three fields from one helper, so a
+        // fdstore-restored session cannot come up awaiting a generation that
+        // its previous process already finished.
+        let (queue, last_deliver_at, awaiting_gen) = fresh_queue_state();
+        assert!(queue.lock().expect("queue").is_empty());
+        assert_eq!(last_deliver_at.load(Ordering::Relaxed), 0);
+        assert!(!awaiting_gen.load(Ordering::Relaxed));
+
+        let session = test_session_with_ring(1024);
+        assert_eq!(session.queue_depth(), 0);
+        assert!(session.queued_prompt_ids().is_empty());
+        assert_eq!(session.last_deliver_at.load(Ordering::Relaxed), 0);
+        assert!(!session.awaiting_gen.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn input_gap_override_rejects_values_at_or_above_the_idle_threshold() {
+        // The split gap must stay inside one idle window: at or above it the
+        // drainer would read the pause as a finished turn.
+        assert_eq!(parse_input_gap("200"), Some(Duration::from_millis(200)));
+        assert_eq!(parse_input_gap(" 50 "), Some(Duration::from_millis(50)));
+        assert_eq!(parse_input_gap("0"), None);
+        assert_eq!(parse_input_gap(&WRITE_QUEUE_QUIET_MS.to_string()), None);
+        assert_eq!(parse_input_gap("400ms"), None);
+        assert_eq!(parse_input_gap(""), None);
+    }
+
+    #[test]
+    fn batch_framing_overhead_matches_the_formatter() {
+        // Prefix selection sizes a candidate batch from a running content total
+        // plus this overhead instead of re-framing the payload under the queue
+        // lock, so the two must agree exactly, including delimiter digit width.
+        let submit = built_in_submit(SubmitAgent::Codex);
+        for count in [1usize, 2, 5, 9, 10, 11, 99, 100] {
+            let messages: Vec<QueuedMessage> = (0..count)
+                .map(|index| {
+                    queued_message(
+                        &format!("body {index}\n"),
+                        Some(submit.clone()),
+                        QueueSource::CsWrite,
+                    )
+                })
+                .collect();
+            let refs: Vec<&QueuedMessage> = messages.iter().collect();
+            let content: usize = refs.iter().copied().map(framed_content_len).sum();
+            assert_eq!(
+                format_notification_batch(&refs).len(),
+                batch_framing_overhead(count) + content,
+                "count {count}"
+            );
+        }
     }
 
     #[test]
@@ -4143,7 +4411,7 @@ mod tests {
         let session = test_session_with_ring(1024);
         session.enqueue_prompt(
             "hi there".into(),
-            Some(built_in_submit(SubmitAgent::Gemini)),
+            Some(built_in_submit(SubmitAgent::Claude)),
             Some("msg-1".into()),
         );
         // Subscribe AFTER the enqueue so its QueueDepth stays out of frame.
@@ -4151,8 +4419,6 @@ mod tests {
         let base = now_unix_millis();
         session.last_output_at.store(base, Ordering::Relaxed);
 
-        // The controller owns both Gemini parts as one atomic sequence, so one
-        // logical drain completes the message and emits both events.
         let t1 = base + WRITE_QUEUE_QUIET_MS + 10;
         session.try_drain_batch(t1);
         assert_eq!(session.queue_depth(), 0);
@@ -4167,6 +4433,111 @@ mod tests {
             Ok(SessionEvent::QueueDepth(depth)) => assert_eq!(depth, 0),
             other => panic!("expected QueueDepth after PromptDelivered, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn gemini_drains_as_two_separately_gated_entries() {
+        // Gemini converts a Return received within 30 ms of inserted text into
+        // Shift+Return, so its body and CR must NOT share one controller
+        // sequence with a fixed sub-second gap. They are two queue entries the
+        // normal idle gate separates, and only the chord completes the message.
+        let (session, commands) = test_session_with_commands(1024);
+        session.enqueue_prompt(
+            "hi there".into(),
+            Some(built_in_submit(SubmitAgent::Gemini)),
+            Some("msg-1".into()),
+        );
+        assert_eq!(session.queue_depth(), 1, "two entries, ONE message");
+        assert_eq!(
+            session.write_queue.lock().expect("queue").len(),
+            2,
+            "body and chord occupy separate entries"
+        );
+
+        let mut rx = session.output_tx.subscribe();
+        let base = now_unix_millis();
+        session.last_output_at.store(base, Ordering::Relaxed);
+
+        // First idle opportunity: the body alone, no events (the message is
+        // still pending) and no multi-part sequence.
+        let t1 = base + WRITE_QUEUE_QUIET_MS + 10;
+        session.try_drain_batch(t1);
+        let PtyCommand::Input(data) = commands.try_recv().expect("the body write") else {
+            panic!("a split body must be one input, not a sequence");
+        };
+        assert_eq!(data, b"hi there");
+        assert!(
+            matches!(rx.try_recv(), Err(broadcast::error::TryRecvError::Empty)),
+            "a body drain completes no message"
+        );
+        assert_eq!(session.queue_depth(), 1, "the message is still pending");
+
+        // The CR waits for the next idle opportunity, a full generation-start
+        // wait and quiet window later, not a fixed inter-part gap.
+        session.try_drain_batch(t1 + 10);
+        assert!(
+            matches!(
+                commands.try_recv(),
+                Err(std::sync::mpsc::TryRecvError::Empty)
+            ),
+            "the chord holds until the next idle opportunity"
+        );
+        let echo_at = t1 + 20;
+        session.last_output_at.store(echo_at, Ordering::Relaxed);
+        session.try_drain_batch(echo_at + WRITE_QUEUE_QUIET_MS + 10);
+        let PtyCommand::Input(data) = commands.try_recv().expect("the chord write") else {
+            panic!("a split chord must be one input, not a sequence");
+        };
+        assert_eq!(data, b"\r");
+        assert_eq!(session.queue_depth(), 0);
+        match rx.try_recv() {
+            Ok(SessionEvent::PromptDelivered { id, depth }) => {
+                assert_eq!(id, "msg-1");
+                assert_eq!(depth, 0);
+            }
+            other => panic!("expected PromptDelivered on the chord drain, got {other:?}"),
+        }
+        match rx.try_recv() {
+            Ok(SessionEvent::QueueDepth(depth)) => assert_eq!(depth, 0),
+            other => panic!("expected QueueDepth after PromptDelivered, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn gemini_cs_writes_never_batch_and_keep_fifo_order() {
+        // Two consecutive Gemini pokes are four entries drained one at a time:
+        // the batcher must not fold a body, a chord, or a following poke into
+        // one framed prompt.
+        let (session, commands) = test_session_with_commands(1024);
+        let gemini = built_in_submit(SubmitAgent::Gemini);
+        session.enqueue_cs_write("first".into(), Some(gemini.clone()));
+        session.enqueue_cs_write("second".into(), Some(gemini));
+        assert_eq!(session.queue_depth(), 2);
+
+        let mut now = now_unix_millis();
+        let mut writes = Vec::new();
+        for _ in 0..4 {
+            // The agent echoes the previous entry, which clears the
+            // generation-start wait, then goes quiet again.
+            now += 1;
+            session.last_output_at.store(now, Ordering::Relaxed);
+            now += WRITE_QUEUE_QUIET_MS + 10;
+            session.try_drain_batch(now);
+            let PtyCommand::Input(data) = commands.try_recv().expect("one write per drain") else {
+                panic!("gemini entries must never batch into a sequence");
+            };
+            writes.push(data);
+        }
+        assert_eq!(
+            writes,
+            vec![
+                b"first".to_vec(),
+                b"\r".to_vec(),
+                b"second".to_vec(),
+                b"\r".to_vec()
+            ]
+        );
+        assert_eq!(session.queue_depth(), 0);
     }
 
     #[test]

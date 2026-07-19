@@ -3399,6 +3399,7 @@ fn term_list(registry: &TerminalRegistry, windows: &[WindowRecord]) -> Result<St
             "pane": summary.pane_id,
             "tab": summary.tab_id,
             "cwd": summary.cwd.map(|p| p.to_string_lossy().into_owned()),
+            "queue_depth": summary.queue_depth,
         });
         groups.entry(summary.tab_group).or_default().push(entry);
     }
@@ -4776,6 +4777,87 @@ mod tests {
         assert!(err.contains("no live terminal session"), "got: {err}");
     }
 
+    /// A registry holding one live PTY session per requested tab name, all in
+    /// `group`. The handles are returned so the sessions stay attached for the
+    /// life of the test.
+    fn registry_with_sessions(
+        names: &[&str],
+        group: &str,
+    ) -> (
+        tempfile::TempDir,
+        TerminalRegistry,
+        Vec<crate::terminal_sessions::AttachHandle>,
+    ) {
+        use crate::terminal_sessions::CreateOptions;
+        let (root, registry) = empty_registry();
+        let handles = names
+            .iter()
+            .map(|name| {
+                registry
+                    .create(CreateOptions {
+                        size: portable_pty::PtySize {
+                            rows: 24,
+                            cols: 80,
+                            pixel_width: 0,
+                            pixel_height: 0,
+                        },
+                        tab_name: Some((*name).to_string()),
+                        tab_group: Some(group.to_string()),
+                        window_id: Some("window-test".into()),
+                        mcp_env: false,
+                        cwd: None,
+                        command: None,
+                        env: Default::default(),
+                    })
+                    .expect("spawn pty")
+            })
+            .collect();
+        (root, registry, handles)
+    }
+
+    #[test]
+    fn term_write_reports_the_position_for_a_single_target() {
+        let (_root, registry, _handles) = registry_with_sessions(&["Solo"], "probe");
+        assert_eq!(
+            term_write(&registry, Some("Solo"), None, "first", None),
+            Ok("queued at position 1".to_string())
+        );
+        assert_eq!(
+            term_write(&registry, Some("Solo"), None, "second", None),
+            Ok("queued at position 2".to_string()),
+            "the position is the raw queue length, not the message depth"
+        );
+    }
+
+    #[test]
+    fn term_write_fans_out_to_a_group_without_a_position() {
+        let (_root, registry, _handles) = registry_with_sessions(&["A", "B"], "fanout");
+        assert_eq!(
+            term_write(&registry, None, Some("fanout"), "poke", None),
+            Ok("queued to 2 terminal session(s)".to_string()),
+            "a multi-target write has no single position to report"
+        );
+        // The name axis still narrows the group to one target.
+        assert_eq!(
+            term_write(&registry, Some("A"), Some("fanout"), "poke", None),
+            Ok("queued at position 2".to_string())
+        );
+    }
+
+    #[test]
+    fn term_write_reports_the_queue_cap_and_drops_nothing_silently() {
+        let (_root, registry, _handles) = registry_with_sessions(&["Full"], "cap");
+        for position in 1..=WRITE_QUEUE_CAP_MSG {
+            assert_eq!(
+                term_write(&registry, Some("Full"), None, "poke", None),
+                Ok(format!("queued at position {position}"))
+            );
+        }
+        let err = term_write(&registry, Some("Full"), None, "poke", None).expect_err("at cap");
+        assert!(err.contains("queue cap"), "got: {err}");
+        assert!(err.contains("nothing queued"), "got: {err}");
+    }
+
     #[test]
     fn term_scrollback_requires_a_tab_name() {
         let (_root, registry) = empty_registry();
@@ -4857,6 +4939,23 @@ mod tests {
             hidden: false,
             origin: crate::WindowOrigin::Native,
         }
+    }
+
+    #[test]
+    fn term_list_reports_the_pending_queue_depth() {
+        // The only way to watch a drain from outside a browser: the SPA badge
+        // reads the same logical message count off the WS `queue` frame.
+        let (_root, registry, _handles) = registry_with_sessions(&["Watched"], "depth");
+        let depth_of = |raw: &str| -> u64 {
+            let value: Value = serde_json::from_str(raw).expect("json");
+            value["groups"]["depth"][0]["queue_depth"]
+                .as_u64()
+                .expect("queue_depth")
+        };
+        assert_eq!(depth_of(&term_list(&registry, &[]).expect("term list")), 0);
+        term_write(&registry, Some("Watched"), None, "poke", None).expect("queued");
+        term_write(&registry, Some("Watched"), None, "poke", None).expect("queued");
+        assert_eq!(depth_of(&term_list(&registry, &[]).expect("term list")), 2);
     }
 
     #[test]

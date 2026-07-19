@@ -754,12 +754,13 @@ pub enum TerminalAction {
     ///
     /// The write is QUEUED per target, not delivered instantly: each
     /// session's queue drains only when that agent has finished generating
-    /// (its output has gone idle). Consecutive compatible submitted writes may
-    /// arrive together as one chronological prompt; raw writes and Rich Prompt
-    /// submissions remain boundaries. The command returns the queue position. NOTE: "idle" is
-    /// detected from output quiescence, so a target sitting at its prompt
-    /// with a PAUSED, half-typed buffer reads as idle; that rare case is not
-    /// detected. Queue bound: 100 per target; dropped when the session is
+    /// (its output has gone idle). Consecutive compatible submitted writes
+    /// may arrive together as one chronological prompt; raw writes, gemini,
+    /// and Rich Prompt submissions remain boundaries. The command prints one
+    /// queue position per invocation. NOTE: "idle" is detected from output
+    /// quiescence, so a target sitting at its prompt with a PAUSED,
+    /// half-typed buffer reads as idle; that rare case is not detected.
+    /// Queue bound: 100 entries per target; dropped when the session is
     /// recycled (restarted).
     Write {
         /// Literal bytes to write. Omit with --stdin to stream instead.
@@ -770,11 +771,11 @@ pub enum TerminalAction {
         /// After the bytes, encode them so the named agent submits the input
         /// hands-free (the completion-poke path). Trailing newlines are
         /// stripped first. Values: `claude` (Cmd+Enter chord),
-        /// `gemini` (plain CR in a later write), or `codex` / `opencode`
-        /// (bracketed-paste wrap + CR in one write). Omit it to write pure
-        /// bytes: the input parks in the
-        /// agent's compose box unsubmitted (a bare newline is a newline to an
-        /// agent, not a submit).
+        /// `gemini` (plain CR as its own later queue entry, one idle gate
+        /// after the body), or `codex` / `opencode` (bracketed-paste wrap +
+        /// CR in one write). Omit it to write pure bytes: the input parks in
+        /// the agent's compose box unsubmitted (a bare newline is a newline
+        /// to an agent, not a submit).
         #[arg(long, value_name = "AGENT")]
         submit: Option<SubmitAgent>,
         /// Target every session with this tab name.
@@ -786,7 +787,8 @@ pub enum TerminalAction {
     },
     /// List live terminal sessions, grouped by group. Markdown by
     /// default; `--json` for compact machine output, `--json --pretty`
-    /// for indented JSON.
+    /// for indented JSON. The JSON form also carries `queue_depth`, the
+    /// number of messages each session still has pending in its write queue.
     List {
         /// Emit machine-readable JSON instead of the markdown table.
         #[arg(long)]
