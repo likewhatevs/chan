@@ -62,7 +62,7 @@ fi
 # A waiver is one line here: an extended regex matched against a whole namcap
 # line, plus the reason the finding cannot be fixed in the recipe. Shape:
 #     'E: Dependency detected and not included .libfoo.' # dlopened at runtime
-# The `chan` build's measured findings are all warnings, so it needs none.
+# Both packages' measured findings are all warnings, so neither needs one.
 namcap_waivers=()
 
 # Print the namcap error lines that no waiver covers.
@@ -119,20 +119,32 @@ for pkgbase in "${packages[@]}"; do
     sudo pacman -U --noconfirm "$pkg"
     chan --version
     cs --help >/dev/null
-    if chan upgrade >"$pkgdir/upgrade.out" 2>&1; then
-        echo "error: packaged chan upgrade unexpectedly succeeded" >&2
-        exit 1
-    fi
-    grep -q 'AUR helper' "$pkgdir/upgrade.out"
     systemd-analyze verify /usr/lib/systemd/user/chan-devserver.service
 
     if [ "$pkgbase" = chan-desktop ]; then
+        # The desktop personality routes `chan upgrade` to a running GUI, so a
+        # headless container cannot exercise the packaged refusal. Prove the
+        # CHAN_PACKAGED=aur stamp reached the build instead, at both ends: the
+        # rendered recipe must export it, and the refusal hint must survive
+        # into the binary. The hint is only reachable through
+        # `option_env!("CHAN_PACKAGED")` being `Some`, so an unstamped release
+        # build drops the literal along with the dead branch. The `chan`
+        # package below covers the executable refusal path.
+        grep -q 'export CHAN_PACKAGED=aur' "$pkgdir/PKGBUILD"
+        grep -aFq 'your AUR helper (for example, paru -Syu or yay -Syu)' \
+            /usr/bin/chan-desktop
         desktop-file-validate /usr/share/applications/chan-desktop.desktop
         for size in 32x32 64x64 128x128 256x256 512x512; do
             test -f "/usr/share/icons/hicolor/$size/apps/chan-desktop.png"
         done
         ldd /usr/bin/chan-desktop > "$pkgdir/ldd.out"
         ! grep -q 'not found' "$pkgdir/ldd.out"
+    else
+        if chan upgrade >"$pkgdir/upgrade.out" 2>&1; then
+            echo "error: packaged chan upgrade unexpectedly succeeded" >&2
+            exit 1
+        fi
+        grep -q 'AUR helper' "$pkgdir/upgrade.out"
     fi
 
     sudo pacman -Rdd --noconfirm "$pkgbase"
