@@ -11,11 +11,15 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
+use axum::extract::rejection::JsonRejection;
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use chan_workspace::{classify, fs_ops, FileClass, NodeKind, SearchMode, SearchOpts, TreeEntry};
+use chan_workspace::{
+    classify, fs_ops, EffectiveSearchMode, FileClass, NodeKind, SearchMode, SearchOpts, TreeEntry,
+    WorkspaceSearchRequest,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{err_from, err_state};
@@ -167,43 +171,11 @@ struct ContentHit {
     score: f32,
 }
 
-/// Decide the content-search retrieval mode from the two gating inputs.
-/// Hybrid (BM25 + dense, RRF-fused) only when the workspace opted in via
-/// `semantic_enabled` AND the embedding model is on disk; otherwise
-/// BM25. A flipped-on flag with no model still serves BM25 - `enable`
-/// refuses that shape, but a model removed out from under us would
-/// otherwise mis-route. Pure so the truth table is unit-testable
-/// without a model on disk; the live probe lives in `resolve_search_mode`.
-#[cfg(feature = "embeddings")]
-fn select_search_mode(semantic_enabled: bool, model_present: bool) -> SearchMode {
-    if semantic_enabled && model_present {
-        SearchMode::Hybrid
-    } else {
-        SearchMode::Bm25
+fn legacy_search_mode(mode: EffectiveSearchMode) -> SearchMode {
+    match mode {
+        EffectiveSearchMode::Hybrid => SearchMode::Hybrid,
+        EffectiveSearchMode::NotRun | EffectiveSearchMode::Bm25 => SearchMode::Bm25,
     }
-}
-
-/// Probe the workspace's semantic opt-in + model presence and pick the
-/// query mode (see `select_search_mode`). Mirrors
-/// `routes/index::build_state` so the `/api/index/semantic/state`
-/// snapshot and the live query agree on the mode.
-#[cfg(feature = "embeddings")]
-fn resolve_search_mode(workspace: &chan_workspace::Workspace) -> SearchMode {
-    use chan_workspace::index::embeddings::resolve_model;
-    let enabled = workspace.semantic_enabled().unwrap_or(false);
-    let model_present = workspace
-        .semantic_model()
-        .map(|m| resolve_model(&m).is_ok())
-        .unwrap_or(false);
-    select_search_mode(enabled, model_present)
-}
-
-/// Without the `embeddings` feature the dense stack is compiled out, so
-/// the facade would collapse Hybrid to BM25 anyway; request BM25
-/// directly.
-#[cfg(not(feature = "embeddings"))]
-fn resolve_search_mode(_workspace: &chan_workspace::Workspace) -> SearchMode {
-    SearchMode::Bm25
 }
 
 pub async fn api_search_content(
@@ -215,7 +187,10 @@ pub async fn api_search_content(
     // via `semantic_enabled` and the model is on disk; otherwise BM25.
     // Resolve it once so the empty-query short-circuit and a real query
     // report the same mode.
-    let mode = resolve_search_mode(&workspace);
+    let mode = match workspace.effective_search_mode() {
+        Ok(mode) => legacy_search_mode(mode),
+        Err(error) => return err_from(&error),
+    };
     if p.q.trim().is_empty() {
         return Json(ContentSearchResponse {
             ready: true,
@@ -249,6 +224,30 @@ pub async fn api_search_content(
             .into_response()
         },
         "content search",
+    )
+    .await
+}
+
+/// Unified bounded retrieval and traversal. Syntactic JSON failures are HTTP
+/// 400; structured core request/selector failures remain HTTP 200 alongside
+/// successful partial fields.
+pub async fn api_search_workspace(
+    State(state): State<Arc<AppState>>,
+    payload: Result<Json<WorkspaceSearchRequest>, JsonRejection>,
+) -> Response {
+    let Json(request) = match payload {
+        Ok(payload) => payload,
+        Err(rejection) => {
+            return (StatusCode::BAD_REQUEST, rejection.body_text()).into_response();
+        }
+    };
+    let workspace = state.workspace();
+    blocking_response(
+        move || match workspace.workspace_search(&request) {
+            Ok(result) => Json(result).into_response(),
+            Err(error) => err_from(&error),
+        },
+        "workspace search",
     )
     .await
 }
@@ -1027,17 +1026,64 @@ mod tests {
         assert!(nodes.iter().all(|node| node["children_count"].is_u64()));
     }
 
-    /// The mode decision is Hybrid only when the workspace opted in AND
-    /// the model is on disk; every other combination is BM25. Pure truth
-    /// table so it holds whether or not a model is downloaded on the test
-    /// host.
-    #[cfg(feature = "embeddings")]
     #[test]
-    fn select_search_mode_requires_flag_and_model() {
-        assert_eq!(select_search_mode(true, true), SearchMode::Hybrid);
-        assert_eq!(select_search_mode(true, false), SearchMode::Bm25);
-        assert_eq!(select_search_mode(false, true), SearchMode::Bm25);
-        assert_eq!(select_search_mode(false, false), SearchMode::Bm25);
+    fn legacy_search_mode_projects_the_core_decision() {
+        assert_eq!(
+            legacy_search_mode(EffectiveSearchMode::Hybrid),
+            SearchMode::Hybrid
+        );
+        assert_eq!(
+            legacy_search_mode(EffectiveSearchMode::Bm25),
+            SearchMode::Bm25
+        );
+        assert_eq!(
+            legacy_search_mode(EffectiveSearchMode::NotRun),
+            SearchMode::Bm25
+        );
+    }
+
+    #[tokio::test]
+    async fn workspace_search_returns_the_core_result_shape() {
+        let app = route_test_app();
+        let router = crate::router(app.state);
+        let request = Request::builder()
+            .method("POST")
+            .uri("/api/search/workspace")
+            .header(header::AUTHORIZATION, "Bearer secret")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(r#"{"domains":["file"]}"#))
+            .unwrap();
+
+        let response = router.oneshot(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(json["workspace"]["root"].is_string());
+        assert!(json["content_hits"].is_array());
+        assert!(json["entity_matches"].is_array());
+        assert!(json["nodes"].is_array());
+        assert!(json["relationships"].is_array());
+        assert!(json["errors"].as_array().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn workspace_search_rejects_unknown_wire_enums_as_bad_request() {
+        let app = route_test_app();
+        let router = crate::router(app.state);
+        let request = Request::builder()
+            .method("POST")
+            .uri("/api/search/workspace")
+            .header(header::AUTHORIZATION, "Bearer secret")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(r#"{"domains":["bogus"]}"#))
+            .unwrap();
+
+        let response = router.oneshot(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 
     /// `route_test_app` builds a fresh workspace, so `semantic_enabled`

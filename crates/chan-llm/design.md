@@ -76,19 +76,23 @@ Text tools are defined as `StandardTool` and dispatched by name:
   - `write_file`
   - `list_files`
   - `resolve_path`
-  - `search_content`
+  - `workspace_search`
   - `repo_report`
-  - `graph_neighbors`
-  - `graph_tags`
-  - `graph_files_with_tag`
 
 `read_media` is exposed only by the MCP server because it returns MCP image content blocks or embedded PDF blob resources rather than a JSON text result. Supported media matches chan-workspace's Image and Pdf classes: `.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`, `.svg`, `.avif`, and `.pdf`.
 
 Writes are full-file replacements. `write_file` accepts `expected_mtime_ns` for compare-and-swap semantics and maps chan-workspace conflicts into `LlmError::WriteConflict`. `resolve_path` is metadata-only: it maps a chan public path to the physical host path (for shell tools that need a cwd) without reading or writing content.
 
-Responses are capped so a runaway call cannot bloat a model turn: `read_file` truncates past 256 KiB (with a `truncated` marker), `list_files` caps at 2,000 entries, `search_content` clamps `limit` to 100, `repo_report` returns at most 200 per-file rows, and `write_file` rejects content above the 2 MiB chan-workspace text-write limit before crossing the dispatch boundary.
+`workspace_search` is the one active-workspace retrieval surface. It accepts
+typed selector objects and mechanically converts `WorkspaceSearchParams` into
+the core request; it does not select or fan out across tenants. The same
+`JsonSchema` type generates the standard tool schema and rmcp input schema, and
+the parity test compares them exactly. Results are serialized from the core
+result unchanged.
 
-Tool descriptions live as constants in the shared prompt catalog and are duplicated as string literals inside the MCP `#[tool(description = ...)]` attributes (the rmcp macros only accept literals); the `mcp_descriptions_match_prompts` test pins the two copies together so drift breaks the build.
+Responses are capped so a runaway call cannot bloat a model turn: `read_file` truncates past 256 KiB (with a `truncated` marker), `list_files` caps at 2,000 entries, workspace search applies the core content/node/edge caps, `repo_report` returns at most 200 per-file rows, and `write_file` rejects content above the 2 MiB chan-workspace text-write limit before crossing the dispatch boundary.
+
+Tool descriptions live as constants in the shared prompt catalog and are duplicated as string literals inside the MCP `#[tool(description = ...)]` attributes (the rmcp macros only accept literals); the `mcp_descriptions_match_prompts` test pins the copies together and also pins the generated workspace-search schemas, so drift breaks the build.
 
 ## Configuration
 

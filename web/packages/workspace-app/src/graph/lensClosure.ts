@@ -8,6 +8,18 @@ export interface LensNode {
 export interface LensEdge {
   source: string;
   target: string;
+  kind?: string;
+}
+
+export type LensDirection = "out" | "both";
+
+export interface LensClosureOptions {
+  seedIds: readonly string[];
+  depth: number;
+  direction: LensDirection;
+  metaClosure?: boolean;
+  languageOneHop?: boolean;
+  containmentOnly?: boolean;
 }
 
 /// Semantic meta-node kinds: a `#tag`, an `@@mention` handle, or a
@@ -46,4 +58,65 @@ export function pullMetaNeighbours(
     const candidate = srcVisited ? e.target : e.source;
     if (metaIds.has(candidate)) visited.add(candidate);
   }
+}
+
+/// Pure projection of GraphPanel's semantic lens rules. It exists so the
+/// shared Rust/SPA golden fixture can exercise the same forward-vs-both BFS,
+/// bounded meta closure, language one-hop cap, and containment-spine rules
+/// without mounting the canvas or changing its production data path.
+export function lensClosure(
+  nodes: readonly LensNode[],
+  edges: readonly LensEdge[],
+  options: LensClosureOptions,
+): { nodeIds: string[]; relationshipKeys: string[] } {
+  const visited = new Set(options.seedIds);
+  let frontier = new Set(options.seedIds);
+  const depth = options.languageOneHop
+    ? Math.min(options.depth, 1)
+    : options.depth;
+  for (let hop = 0; hop < depth; hop++) {
+    const next = new Set<string>();
+    for (const edge of edges) {
+      if (options.containmentOnly && edge.kind !== "contains") continue;
+      if (frontier.has(edge.source) && !visited.has(edge.target)) {
+        visited.add(edge.target);
+        next.add(edge.target);
+      }
+      if (
+        options.direction === "both" &&
+        frontier.has(edge.target) &&
+        !visited.has(edge.source)
+      ) {
+        visited.add(edge.source);
+        next.add(edge.source);
+      }
+    }
+    if (next.size === 0) break;
+    frontier = next;
+  }
+
+  if (options.metaClosure) pullMetaNeighbours(visited, nodes, edges);
+
+  // `contains` runs parent -> child. Pull ancestors repeatedly, exactly like
+  // GraphPanel's pullContainsSpine, so every surfaced file stays anchored.
+  let pulled = true;
+  while (pulled) {
+    pulled = false;
+    for (const edge of edges) {
+      if (
+        edge.kind === "contains" &&
+        visited.has(edge.target) &&
+        !visited.has(edge.source)
+      ) {
+        visited.add(edge.source);
+        pulled = true;
+      }
+    }
+  }
+
+  const relationshipKeys = edges
+    .filter((edge) => visited.has(edge.source) && visited.has(edge.target))
+    .map((edge) => JSON.stringify([edge.source, edge.target, edge.kind]))
+    .sort();
+  return { nodeIds: [...visited].sort(), relationshipKeys };
 }

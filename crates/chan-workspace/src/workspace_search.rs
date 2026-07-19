@@ -453,6 +453,7 @@ impl Workspace {
         for seed in seeds {
             traverse_seed(&mut traversal, &normalized, seed)?;
         }
+        traversal.retain_induced_relationships(&normalized.relationship_kinds, normalized.depth)?;
         let (nodes, relationships, profiles, traversal_truncation, spine_forced) =
             traversal.finish();
         result.nodes = nodes;
@@ -1658,8 +1659,7 @@ impl<'a> TraversalBuilder<'a> {
             };
             if !(meta_id.starts_with('#')
                 || meta_id.starts_with("@@")
-                || meta_id.starts_with("language:")
-                || self.catalog.contact_by_path.contains_key(meta_id))
+                || meta_id.starts_with("language:"))
             {
                 continue;
             }
@@ -1670,12 +1670,14 @@ impl<'a> TraversalBuilder<'a> {
         Ok(())
     }
 
-    fn retain_links_between_files(&mut self, files: &[String], hop: u8) -> Result<()> {
-        let relationships = self.incident_relationships(
-            files,
-            WorkspaceTraversalDirection::Both,
-            &[WorkspaceRelationshipKind::Link],
-        )?;
+    fn retain_induced_relationships(
+        &mut self,
+        kinds: &[WorkspaceRelationshipKind],
+        hop: u8,
+    ) -> Result<()> {
+        let node_ids: Vec<String> = self.nodes.keys().cloned().collect();
+        let relationships =
+            self.incident_relationships(&node_ids, WorkspaceTraversalDirection::Both, kinds)?;
         for relationship in relationships {
             if self.nodes.contains_key(&relationship.source)
                 && self.nodes.contains_key(&relationship.target)
@@ -1746,7 +1748,17 @@ fn traverse_seed(
         depth,
         direction,
     });
-    if !builder.admit_node(&seed.node_id, 0) || depth == 0 {
+    if !builder.admit_node(&seed.node_id, 0) {
+        return Ok(());
+    }
+    if depth == 0 {
+        if seed.profile_kind == WorkspaceSelectorKind::Contact {
+            builder.closure_for_files(
+                std::slice::from_ref(&seed.node_id),
+                &request.relationship_kinds,
+                0,
+            )?;
+        }
         return Ok(());
     }
     if seed.profile_kind == WorkspaceSelectorKind::Directory {
@@ -1834,12 +1846,6 @@ fn traverse_directory(
         }
     }
     builder.closure_for_files(&surfaced_files, &request.relationship_kinds, depth)?;
-    if request
-        .relationship_kinds
-        .contains(&WorkspaceRelationshipKind::Link)
-    {
-        builder.retain_links_between_files(&surfaced_files, depth)?;
-    }
     Ok(())
 }
 
@@ -2231,7 +2237,7 @@ mod tests {
         assert!(ids.contains(""));
         assert!(ids.contains("directory:notes"));
         assert!(ids.contains("directory:notes/deep"));
-        assert!(ids.contains("contacts/alice.md"));
+        assert!(!ids.contains("contacts/alice.md"));
         assert!(result.relationships.iter().any(|relationship| {
             relationship.kind == WorkspaceRelationshipKind::Tag
                 && relationship.source == "notes/a.md"
@@ -2242,7 +2248,7 @@ mod tests {
                 && relationship.source == "directory:notes/deep"
                 && relationship.target == "notes/deep/b.md"
         }));
-        assert!(result.relationships.iter().any(|relationship| {
+        assert!(!result.relationships.iter().any(|relationship| {
             relationship.kind == WorkspaceRelationshipKind::Mention
                 && relationship.source == "notes/a.md"
                 && relationship.target == "contacts/alice.md"

@@ -36,7 +36,10 @@ mod exit_code;
 mod submit;
 
 #[cfg(feature = "client")]
-pub use cli::{dispatch, parse_cs, run_cs, CsCli, ShellAction, TerminalAction};
+pub use cli::{
+    dispatch, parse_cs, render_workspace_search_markdown, run_cs, CsCli, ShellAction,
+    TerminalAction, WorkspaceSearchArgs,
+};
 #[cfg(feature = "client")]
 pub use control::{
     absolutize, control_socket_env, open_env, open_env_from, send_control_request, OpenEnv,

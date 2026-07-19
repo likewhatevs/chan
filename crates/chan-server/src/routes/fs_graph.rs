@@ -1769,7 +1769,7 @@ mod tests {
     }
 
     /// Workspace-bootstrapped tests for the public `build_fs_graph` entry
-    /// point -- the CLI's `chan graph --scope file|directory` now calls
+    /// point -- the filesystem graph endpoint and its direct callers use
     /// this directly, so its rejection contract needs explicit
     /// coverage in addition to the walker-only tests above.
     fn open_workspace() -> (TempDir, TempDir, std::sync::Arc<chan_workspace::Workspace>) {

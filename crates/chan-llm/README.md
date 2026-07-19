@@ -42,9 +42,9 @@ chan-workspace maintains a sqlite link graph next to every workspace (nodes, edg
 
 From an agent's perspective:
 
-  - **"Find Alice"**: `search_content "Alice"` (BM25 over bodies and frontmatter).
+  - **"Find Alice"**: `workspace_search` with query `Alice` (content and entity results).
   - **"What contacts do I have?"**: `list_files` with a prefix that matches the contacts directory, then `read_file` on interesting hits.
-  - **"What links to this contact?"**: use `graph_neighbors` or search for the filename.
+  - **"What links to this contact?"**: `workspace_search` from a typed contact selector with bidirectional traversal.
 
 ## Build and test
 

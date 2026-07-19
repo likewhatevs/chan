@@ -112,11 +112,11 @@ use routes::{
     api_report_file, api_report_prefix, api_reports_disable, api_reports_enable, api_reports_state,
     api_resolve_link, api_restart_terminal, api_scene_ws, api_screensaver_clear_pin,
     api_screensaver_patch, api_screensaver_set_pin, api_screensaver_state, api_screensaver_verify,
-    api_search_content, api_search_files, api_session_handover_reply, api_set_terminal_broadcast,
-    api_storage_reset, api_survey_reply, api_team_config_read, api_team_config_write,
-    api_terminal_next_name, api_terminal_ws, api_terminals_roster, api_upload_file,
-    api_window_reply, api_workspace_bootstrap, api_write_file, spawn_roster_broadcaster,
-    ws_upgrade,
+    api_search_content, api_search_files, api_search_workspace, api_session_handover_reply,
+    api_set_terminal_broadcast, api_storage_reset, api_survey_reply, api_team_config_read,
+    api_team_config_write, api_terminal_next_name, api_terminal_ws, api_terminals_roster,
+    api_upload_file, api_window_reply, api_workspace_bootstrap, api_write_file,
+    spawn_roster_broadcaster, ws_upgrade,
 };
 #[cfg(feature = "embeddings")]
 use routes::{
@@ -1597,6 +1597,7 @@ fn router(state: Arc<AppState>) -> Router {
         .route("/api/fs/transfer", post(api_fs_transfer))
         .route("/api/search/files", get(api_search_files))
         .route("/api/search/content", get(api_search_content))
+        .route("/api/search/workspace", post(api_search_workspace))
         .route("/api/index/status", get(api_index_status))
         .route("/api/indexing/state", get(api_indexing_state))
         // Per-workspace directory blocklist (additions on top of the global

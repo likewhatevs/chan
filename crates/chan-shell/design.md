@@ -8,7 +8,7 @@ The second reason the crate exists is packaging: the `chan` binary and chan-desk
 
 In scope:
 
-  - The control-socket wire types: `ControlRequest` / `ControlResponse` and the payload types they carry (`PaneOp`, `SurveySpec`, `SurveyReply`, `SurveyFollowup`, `TeamOp`, `SplitDir`, `Identity`, `ServeKind`). serde-only, no transport, no clap, always compiled.
+  - The control-socket wire types: `ControlRequest` / `ControlResponse` and the payload types they carry (`PaneOp`, `SurveySpec`, `SurveyReply`, `SurveyFollowup`, `TeamOp`, `SplitDir`, `Identity`, `ServeKind`, and the shared workspace-search request). serde-only, no transport, no clap, always compiled.
   - The `cs` clap surface (`ShellAction` / `TerminalAction` and their subcommand trees) and the `dispatch` that turns each parsed action into one control-socket round-trip.
   - The control-socket transport: connect, write one JSON request line, read one JSON response line, over a per-user Unix-domain socket on unix and a named pipe on windows.
   - The agent submit-chord map: the per-agent PTY byte sequences that make a coding agent submit its compose buffer hands-free, plus the spawn-command -> agent derivation. Compiled even without the client feature, because chan-server's team spawner applies the chord server-side.
@@ -99,12 +99,17 @@ flowchart TD
 Each family resolves its target a different way -- window-id push, registry lookup, a parked SPA round-trip, the desktop bridge, or teardown -- and only the SPA-blocking family can answer `Timeout`. The breakdown:
 
   - Open a UI tab or action in the originating window. Window-id keyed, non-blocking: the server pushes a window command to exactly that window and returns. `cs open` / `cs graph` / `cs dashboard` / `cs terminal new` / `cs upload` / `cs download`.
-  - Act on or inspect live PTY sessions and tenant state through the server's registry. No window id; selected by tab name and/or group. `cs terminal write` / `list` / `restart` / `close` / `scrollback`, `cs search`, `cs window list`, `cs terminal team`, and `chan ps`'s `Identify`.
+  - Act on or inspect live PTY sessions and tenant state through the server's registry. No window id; selected by tab name and/or group. `cs terminal write` / `list` / `restart` / `close` / `scrollback`, `cs search`, `cs window list`, `cs terminal team`, and `chan ps`'s `Identify`. `cs search` sends `WorkspaceSearch { request }` and renders the typed core result as compact/pretty JSON or sectioned markdown; structured result errors make the command nonzero without changing the JSON payload.
   - Blocking round-trips to a SPA window's frontend. The layout lives only in the browser, so the server pushes a query / exec over the window bus, parks a oneshot, and holds the connection until the SPA replies. `cs pane` (the read-only layout report and the focus / split / resize / close mutations), and `cs terminal survey` (which blocks until the user answers, defers, or dismisses).
   - Desktop window lifecycle through the in-process Tauri bridge the embedded server installs. `cs window new` / `open` / `rm` / `hide`. A standalone `chan open` has no desktop attached and refuses them.
   - Process and tenant teardown. `chan close` sends `Close { path, remove }`; the server decides scope from the path (a standalone serve exits; a multi-tenant host unmounts just that tenant).
 
 The response side is intentionally narrow: `Ok { message }`, `Error { message }`, or `Timeout { message }`. Structured replies (the `Identity` JSON for `chan ps`, the window-list rows, the session roster rows and the `session self` whoami record, the search hits, the pane layout, the pane-exec result, the team bootstrap script) ride as JSON or raw text inside `Ok.message`, and the CLI formats them -- markdown by default, `--json [--pretty]` for machine output. `Timeout` is split out from `Error` so the client maps an elapsed reply window to its own exit code instead of inferring it from a generic failure or a dropped socket.
+
+`Identity` includes optional `workspace_root` and `metadata_key` fields. They are
+present for a mounted workspace tenant and omitted for terminal-only servers;
+old decoders tolerate their absence. The pair is the exact tenant identity used
+by `chan workspace search/graph` when a single process serves several roots.
 
 Two serde conventions recur because byte-compatibility with the SPA and the server matters. Optional request fields carry both `#[serde(default)]` (the server tolerates an omitted key) and `skip_serializing_if = "Option::is_none"` (the client omits `None`), keeping the emitted JSON minimal while staying loss-tolerant on decode. The SPA-facing payloads (`SurveySpec`, `SurveyReply`) use camelCase, but they differ on how they treat an absent nullable field. `SurveySpec` is the JSON the SPA renders, and its nullable fields (`title`, `followup`) carry `#[serde(default)]` with no `skip_serializing_if`, so they serialize as explicit `null` when unset, because the SPA's TypeScript type mirrors the struct field for field and expects a `string | null` shape. `SurveyReply` is camelCase too, but its one nullable field (`SurveyReply::Followup.followup_path`) keeps `skip_serializing_if = "Option::is_none"` and is omitted when absent: a follow-up with no file is a bare deferral whose `followupPath` key is simply not on the wire.
 

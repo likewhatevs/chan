@@ -175,7 +175,7 @@ Chunking is configurable per-index via `Chunking` (`Headings`, `WholeDoc`, `Fixe
 
 The query path performs one filtered metadata-only tree walk. It may read maintained graph rows, the ready search index, and a warm or valid persisted report snapshot, but it never reads source bodies, mutates registry/config state, starts a report scan, or initiates an index rebuild. `effective_search_mode` is the single BM25/hybrid policy: hybrid is effective only when semantic search is enabled and the configured model resolves; no-embeddings builds always report BM25.
 
-Traversal is breadth-first and queries semantic graph edges in SQLite bind-bounded frontier batches. File and contact nodes reserve their complete root containment spine before admission. Node and relationship limits can therefore omit a candidate, but never return it parentless; forced spine relationships are recorded in the effective traversal. Containment and maintained-report language relationships are joined in memory, and tag/mention/contact/directory profiles receive bounded metadata closure without traversing through closure nodes. Returned nodes and relationships have stable hop/kind/ID ordering.
+Traversal is breadth-first and queries semantic graph edges in SQLite bind-bounded frontier batches. File and contact nodes reserve their complete root containment spine before admission. Node and relationship limits can therefore omit a candidate, but never return it parentless; forced spine relationships are recorded in the effective traversal. Containment and maintained-report language relationships are joined in memory, and tag/mention/contact/directory profiles receive bounded metadata closure without traversing through closure nodes. A final batched incident-edge pass retains the relationship-induced subgraph among admitted nodes, matching the visualization lenses without per-node queries. Returned nodes and relationships have stable hop/kind/ID ordering.
 
 ```mermaid
 flowchart TB
@@ -357,7 +357,7 @@ The `emails` column is populated as contacts are parsed during a walk: the index
 
 Discovery is content-driven, not directory-driven. Any `.md` file whose frontmatter has nested `chan: { kind: contact }` is classified as `NodeKind::Contact` regardless of where it sits in the workspace. A user who hand-rolls a contact note in their own directory and drops it in is picked up by the next indexer pass; the `Contacts/` directory is just the importer's default destination, not a discovery requirement.
 
-The chan-llm tool sandbox (and the MCP server it backs) does not expose a contacts-aware tool, by design. Agents reach contacts through the existing `read_file` / `list_files` / `search_content` tools: contact files carry nested `chan: { kind: contact }` frontmatter plus the contact's data as readable bullets in the body, and any note that wiki-links to a contact creates a graph edge the agent can follow via `read_file` on the linked path. Adding a dedicated `list_contacts` / `find_contact` tool would just duplicate `Workspace::contacts_filtered` over a wire the model already has the primitives to traverse.
+The chan-llm tool sandbox (and the MCP server it backs) exposes contact lookup through the canonical `workspace_search` contract rather than a contacts-only tool. Typed contact and mention selectors share the graph normalizer and return the same structured ambiguity and traversal results as HTTP/control-socket consumers; `read_file` remains the path for reading the selected contact note.
 
 ### Metadata archive
 

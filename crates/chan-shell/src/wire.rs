@@ -259,14 +259,11 @@ pub enum ControlRequest {
     TermScrollback {
         tab_name: String,
     },
-    // Category 2: run the same content search the UI does and return the
-    // results on the connection (like `term list`). The CLI formats the
-    // JSON it gets back: markdown by default, compact `--json`, indented
-    // `--json --pretty`.
-    Search {
-        query: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        limit: Option<u32>,
+    // Category 2: run bounded retrieval and graph traversal against this
+    // tenant's live workspace. The core request type is shared directly so
+    // every transport uses the same normalization and serde vocabulary.
+    WorkspaceSearch {
+        request: chan_workspace::WorkspaceSearchRequest,
     },
     // Category 3 (blocking round-trip): query a SPA window's tab/pane
     // LAYOUT. The layout lives only in the frontend, so the server resolves
@@ -836,6 +833,33 @@ mod survey_wire_tests {
     }
 
     #[test]
+    fn open_graph_wire_shape_stays_unchanged() {
+        assert_eq!(
+            serde_json::to_value(ControlRequest::OpenGraph {
+                window_id: "workspace-aa-0".into(),
+                path: None,
+            })
+            .unwrap(),
+            serde_json::json!({
+                "type": "open_graph",
+                "window_id": "workspace-aa-0"
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(ControlRequest::OpenGraph {
+                window_id: "workspace-aa-0".into(),
+                path: Some("notes/a.md".into()),
+            })
+            .unwrap(),
+            serde_json::json!({
+                "type": "open_graph",
+                "window_id": "workspace-aa-0",
+                "path": "notes/a.md"
+            })
+        );
+    }
+
+    #[test]
     fn close_request_tag_path_and_remove() {
         // Pin the `chan close` transport wire: tag `close`, the canonical
         // workspace `path`, and the `--remove` flag a HOST reads to also
@@ -1291,6 +1315,25 @@ mod survey_wire_tests {
     }
 
     #[test]
+    fn workspace_search_request_uses_the_shared_core_shape() {
+        let request = ControlRequest::WorkspaceSearch {
+            request: chan_workspace::WorkspaceSearchRequest {
+                query: Some("needle".into()),
+                domains: vec![chan_workspace::WorkspaceSearchDomain::Content],
+                ..chan_workspace::WorkspaceSearchRequest::default()
+            },
+        };
+        let value = serde_json::to_value(&request).unwrap();
+        assert_eq!(value["type"], "workspace_search");
+        assert_eq!(value["request"]["query"], "needle");
+        assert_eq!(value["request"]["domains"], serde_json::json!(["content"]));
+        assert!(matches!(
+            serde_json::from_value::<ControlRequest>(value).unwrap(),
+            ControlRequest::WorkspaceSearch { .. }
+        ));
+    }
+
+    #[test]
     fn identify_request_and_identity_reply_wire() {
         // The request is a bare tagged unit; `chan ps` and the chan-server
         // handler must agree on the exact bytes.
@@ -1308,13 +1351,29 @@ mod survey_wire_tests {
             kind: ServeKind::Devserver,
             version: "0.40.0".into(),
             pid: 4242,
+            workspace_root: Some("/work/notes".into()),
+            metadata_key: Some("notes-00112233".into()),
         };
         let v = serde_json::to_value(&id).unwrap();
         assert_eq!(
             v,
-            serde_json::json!({ "kind": "devserver", "version": "0.40.0", "pid": 4242 })
+            serde_json::json!({
+                "kind": "devserver",
+                "version": "0.40.0",
+                "pid": 4242,
+                "workspace_root": "/work/notes",
+                "metadata_key": "notes-00112233"
+            })
         );
         assert_eq!(id, serde_json::from_value(v).unwrap());
+        let legacy: Identity = serde_json::from_value(serde_json::json!({
+            "kind": "standalone",
+            "version": "0.40.0",
+            "pid": 7
+        }))
+        .unwrap();
+        assert_eq!(legacy.workspace_root, None);
+        assert_eq!(legacy.metadata_key, None);
         assert_eq!(
             serde_json::to_value(ServeKind::Standalone).unwrap(),
             serde_json::json!("standalone")
@@ -1435,4 +1494,8 @@ pub struct Identity {
     pub kind: ServeKind,
     pub version: String,
     pub pid: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_root: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata_key: Option<String>,
 }

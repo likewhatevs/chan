@@ -103,6 +103,7 @@ pub use screensaver::{
 };
 pub use search::{
     api_index_rebuild, api_index_status, api_indexing_state, api_search_content, api_search_files,
+    api_search_workspace,
 };
 pub use session_handover::api_session_handover_reply;
 pub use sessions::{api_delete_session, api_get_session, api_list_sessions, api_put_session};

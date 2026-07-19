@@ -385,7 +385,7 @@ fn terminal_tenant_refusal(req: &ControlRequest, tenant: ControlTenant) -> Optio
             Some("Graph links need a workspace window."),
         )),
         ControlRequest::OpenGraph { .. } => Some(workspace_only_refusal("graph", None)),
-        ControlRequest::Search { .. } => Some(workspace_only_refusal("search", None)),
+        ControlRequest::WorkspaceSearch { .. } => Some(workspace_only_refusal("search", None)),
         ControlRequest::Export { .. } => Some(workspace_only_refusal(
             "export",
             Some("An open workspace window does the rendering; run cs export from a terminal in one."),
@@ -447,6 +447,15 @@ mod tenant_gate_tests {
             tab_group: None,
         }
     }
+    fn workspace_search() -> ControlRequest {
+        ControlRequest::WorkspaceSearch {
+            request: chan_workspace::WorkspaceSearchRequest {
+                query: Some("q".into()),
+                domains: vec![chan_workspace::WorkspaceSearchDomain::Content],
+                ..chan_workspace::WorkspaceSearchRequest::default()
+            },
+        }
+    }
     fn session_reqs() -> Vec<ControlRequest> {
         vec![
             ControlRequest::SessionList,
@@ -505,10 +514,7 @@ mod tenant_gate_tests {
                 window_id: "w".into(),
                 path: None,
             },
-            ControlRequest::Search {
-                query: "q".into(),
-                limit: None,
-            },
+            workspace_search(),
             term_new(Some("sub")),
             ControlRequest::Upload {
                 window_id: "w".into(),
@@ -550,10 +556,7 @@ mod tenant_gate_tests {
                 window_id: "w".into(),
                 path: None,
             },
-            ControlRequest::Search {
-                query: "q".into(),
-                limit: None,
-            },
+            workspace_search(),
             term_new(Some("sub")),
         ];
         reqs.extend(session_reqs());
@@ -1212,6 +1215,12 @@ async fn handle_request(req: ControlRequest, ctx: &ControlSocketCtx) -> ControlR
             } else {
                 ServeKind::Devserver
             };
+            let workspace_identity = workspace_from_cell(workspace_cell).ok().map(|workspace| {
+                (
+                    workspace.canonical_root().to_path_buf(),
+                    workspace.metadata_key().to_string(),
+                )
+            });
             let identity = Identity {
                 kind,
                 version: env!("CARGO_PKG_VERSION").to_string(),
@@ -1219,17 +1228,19 @@ async fn handle_request(req: ControlRequest, ctx: &ControlSocketCtx) -> ControlR
                 // (stable devserver sockets carry no pid in the filename)
                 // confirm which process it landed on.
                 pid: std::process::id(),
+                workspace_root: workspace_identity.as_ref().map(|(root, _)| root.clone()),
+                metadata_key: workspace_identity.map(|(_, key)| key),
             };
             into_response(
                 serde_json::to_string(&identity).map_err(|e| format!("encoding identity: {e}")),
             )
         }
-        ControlRequest::Search { query, limit } => {
+        ControlRequest::WorkspaceSearch { request } => {
             let workspace = match workspace_from_cell(workspace_cell) {
                 Ok(workspace) => workspace,
                 Err(message) => return ControlResponse::Error { message },
             };
-            into_response(search_workspace(&workspace, &query, limit))
+            into_response(workspace_search_json(&workspace, &request))
         }
         ControlRequest::Export { path, format, out } => {
             handle_export(path, format, out, session_registry, events_tx, window_bus).await
@@ -2908,50 +2919,16 @@ async fn handle_window_close(
     }
 }
 
-/// `cs search`: run the same content search the UI does (`Workspace::search`,
-/// the `/api/search/content` path) and return the results as JSON on the
-/// connection, like `term list`. One row per file (best-ranked hit),
-/// score-descending. The CLI side formats this JSON: markdown by default,
-/// compact `--json`, indented `--json --pretty`.
-fn search_workspace(
+/// Run the shared bounded retrieval contract against this tenant's live
+/// workspace and return the core result unchanged.
+fn workspace_search_json(
     workspace: &Workspace,
-    query: &str,
-    limit: Option<u32>,
+    request: &chan_workspace::WorkspaceSearchRequest,
 ) -> Result<String, String> {
-    let limit = limit.filter(|n| *n > 0).unwrap_or(20);
-    // Widen the candidate fetch like the route does so the per-file
-    // collapse still fills `limit` rows when a file owns several chunks.
-    let opts = chan_workspace::SearchOpts {
-        limit: limit.saturating_mul(8).min(limit.max(200)),
-        ..Default::default()
-    };
-    let results = workspace
-        .search(query, &opts)
-        .map_err(|e| format!("search: {e}"))?;
-    let mut hits: Vec<serde_json::Value> = Vec::new();
-    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
-    for hit in results.hits {
-        if !seen.insert(hit.path.clone()) {
-            continue;
-        }
-        hits.push(serde_json::json!({
-            "path": hit.path,
-            "heading": hit.heading,
-            "start_line": hit.start_line,
-            "snippet": hit.snippet,
-            "score": hit.score,
-        }));
-        if hits.len() >= limit as usize {
-            break;
-        }
-    }
-    let payload = serde_json::json!({
-        "ready": results.ready,
-        "mode": results.mode,
-        "query": query,
-        "hits": hits,
-    });
-    serde_json::to_string(&payload).map_err(|e| format!("serialize: {e}"))
+    let result = workspace
+        .workspace_search(request)
+        .map_err(|error| format!("workspace search: {error}"))?;
+    serde_json::to_string(&result).map_err(|error| format!("serialize workspace search: {error}"))
 }
 
 fn workspace_from_cell(
@@ -4263,9 +4240,12 @@ mod tests {
         let ctx = test_ctx(workspace_cell, ControlTenant::TerminalOnly);
 
         let response = handle_request(
-            ControlRequest::Search {
-                query: "anything".into(),
-                limit: None,
+            ControlRequest::WorkspaceSearch {
+                request: chan_workspace::WorkspaceSearchRequest {
+                    query: Some("anything".into()),
+                    domains: vec![chan_workspace::WorkspaceSearchDomain::Content],
+                    ..chan_workspace::WorkspaceSearchRequest::default()
+                },
             },
             &ctx,
         )

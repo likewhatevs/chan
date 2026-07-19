@@ -21,6 +21,7 @@ client = ["dep:clap", "dep:tokio", "dep:serde_json", "dep:anyhow", "dep:toml", "
 # The wire types are always available (serde only); everything else is
 # behind the `client` feature so chan-server stays clap-free.
 serde = { workspace = true }
+chan-workspace = { workspace = true }
 clap = { workspace = true, optional = true }
 tokio = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }

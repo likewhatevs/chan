@@ -1,5 +1,7 @@
 # Export smoke document
 
+#graph-smoke
+
 This document paginates across multiple A4 pages and carries every
 render surface the PDF engine must reproduce: styled text, a code
 block, a mermaid diagram, an image, and a forced page break.

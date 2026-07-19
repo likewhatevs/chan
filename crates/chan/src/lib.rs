@@ -54,16 +54,13 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
-use chan_server::{
-    build_fs_graph, EditorPrefs, EditorTheme, FsGraphResponse, FsGraphScope as ServerFsGraphScope,
-    LineSpacing, ServeConfig, ServerConfig, ThemeChoice,
-};
+use chan_server::{EditorPrefs, EditorTheme, LineSpacing, ServeConfig, ServerConfig, ThemeChoice};
 use chan_shell::ShellAction;
 use chan_workspace::{
-    EdgeKind, KnownWorkspace, Library, MetadataExportOptions, MetadataImportOptions,
-    SearchAggression, SearchMode, SearchOpts,
+    KnownWorkspace, Library, MetadataExportOptions, MetadataImportOptions, SearchAggression,
+    WorkspaceSearchRequest, WorkspaceSearchResult,
 };
-use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
+use clap::{Args, CommandFactory, Parser, Subcommand};
 use clap_complete::Shell;
 use serde::{Deserialize, Serialize};
 
@@ -498,6 +495,57 @@ enum Command {
 /// process-lifecycle and app-level commands (open, close, devserver,
 /// config, ...). Mirrors the `IndexAction` / `ReportsAction`
 /// sub-enum pattern.
+#[derive(Args, Debug, Clone, Default)]
+struct WorkspaceTargets {
+    /// Registered workspace selector: canonical path, metadata key, or unique
+    /// display name. Repeat to query several workspaces in order.
+    #[arg(
+        long = "workspace",
+        value_name = "SELECTOR",
+        conflicts_with = "all_workspaces"
+    )]
+    workspaces: Vec<String>,
+    /// Query every registered workspace in canonical-root order.
+    #[arg(long)]
+    all_workspaces: bool,
+}
+
+#[derive(Args, Debug, Clone)]
+struct WorkspaceGraphArgs {
+    /// Exact typed traversal seed. Repeat for multiple seeds.
+    #[arg(long = "from", value_name = "TYPE:VALUE", required = true)]
+    from: Vec<String>,
+    #[arg(long)]
+    depth: Option<u8>,
+    #[arg(long, value_name = "DIRECTION")]
+    direction: Option<String>,
+    #[arg(long = "edge-kind", value_name = "KIND")]
+    edge_kinds: Vec<String>,
+    #[arg(long)]
+    limit: Option<u32>,
+    #[arg(long)]
+    node_limit: Option<u32>,
+    #[arg(long)]
+    edge_limit: Option<u32>,
+}
+
+impl WorkspaceGraphArgs {
+    fn to_request(&self) -> Result<WorkspaceSearchRequest> {
+        chan_shell::WorkspaceSearchArgs {
+            query: Vec::new(),
+            from: self.from.clone(),
+            domains: Vec::new(),
+            depth: self.depth,
+            direction: self.direction.clone(),
+            edge_kinds: self.edge_kinds.clone(),
+            limit: self.limit,
+            node_limit: self.node_limit,
+            edge_limit: self.edge_limit,
+        }
+        .to_request()
+    }
+}
+
 #[derive(Subcommand, Debug)]
 enum WorkspaceAction {
     /// Register a directory as a chan workspace.
@@ -556,34 +604,27 @@ enum WorkspaceAction {
         #[command(subcommand)]
         action: ReportsAction,
     },
-    /// Query the BM25 search index.
+    /// Search and traverse one or more registered workspaces.
     Search {
-        path: PathBuf,
-        query: String,
-        #[arg(long, default_value_t = 20)]
-        limit: u32,
-    },
-    /// Query graph/index data for a workspace.
-    ///
-    /// --scope all reads the semantic markdown graph. --scope file/directory reads
-    /// the filesystem graph used by the File Browser's "Graph this" action.
-    Graph {
-        path: PathBuf,
-        /// Scope the graph query to the whole workspace, one file, or a directory subtree.
-        #[arg(long, value_enum, default_value_t = GraphScope::All)]
-        scope: GraphScope,
-        /// Workspace-relative file or directory path for --scope file/directory.
-        #[arg(long)]
-        target: Option<String>,
-        /// Directory depth for --scope directory. 1 means direct children only.
-        #[arg(long, default_value_t = 1)]
-        depth: usize,
-        /// Maximum number of edges printed in text mode.
-        #[arg(long, default_value_t = 50)]
-        limit: usize,
-        /// Emit machine-readable JSON.
+        #[command(flatten)]
+        search: chan_shell::WorkspaceSearchArgs,
+        #[command(flatten)]
+        targets: WorkspaceTargets,
         #[arg(long)]
         json: bool,
+        #[arg(long)]
+        pretty: bool,
+    },
+    /// Traverse workspace graph relationships from exact typed seeds.
+    Graph {
+        #[command(flatten)]
+        graph: WorkspaceGraphArgs,
+        #[command(flatten)]
+        targets: WorkspaceTargets,
+        #[arg(long)]
+        json: bool,
+        #[arg(long)]
+        pretty: bool,
     },
     /// Report workspace, index, graph, and code-report status.
     Status {
@@ -651,13 +692,6 @@ enum ImportSource {
         #[arg(long)]
         workspace: Option<PathBuf>,
     },
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-enum GraphScope {
-    All,
-    File,
-    Directory,
 }
 
 #[derive(Subcommand, Debug)]
@@ -1085,15 +1119,18 @@ where
             WorkspaceAction::Rm { path } => cmd_remove(path, personality).await,
             WorkspaceAction::Index { action } => cmd_index(action),
             WorkspaceAction::Reports { action } => cmd_reports(action),
-            WorkspaceAction::Search { path, query, limit } => cmd_search(path, query, limit),
-            WorkspaceAction::Graph {
-                path,
-                scope,
-                target,
-                depth,
-                limit,
+            WorkspaceAction::Search {
+                search,
+                targets,
                 json,
-            } => cmd_graph(path, scope, target, depth, limit, json),
+                pretty,
+            } => cmd_workspace_search(search.to_request()?, targets, json, pretty).await,
+            WorkspaceAction::Graph {
+                graph,
+                targets,
+                json,
+                pretty,
+            } => cmd_workspace_search(graph.to_request()?, targets, json, pretty).await,
             WorkspaceAction::Status { path, json } => cmd_status(path, json),
             WorkspaceAction::Metadata { action } => cmd_metadata(action),
             WorkspaceAction::Contacts { action } => match action {
@@ -1692,6 +1729,22 @@ async fn control_socket_for_pid(pid: u32) -> Option<PathBuf> {
 }
 
 #[cfg(unix)]
+async fn control_socket_for_workspace(
+    pid: u32,
+    workspace_root: &Path,
+    metadata_key: &str,
+) -> Option<PathBuf> {
+    control_socket_for_workspace_in_dirs(
+        unix_control_socket_dirs(),
+        pid,
+        workspace_root,
+        metadata_key,
+        true,
+    )
+    .await
+}
+
+#[cfg(unix)]
 fn unix_control_socket_dirs() -> Vec<PathBuf> {
     let mut dirs = Vec::new();
     if let Some(dir) = std::env::var_os("XDG_RUNTIME_DIR")
@@ -1710,6 +1763,22 @@ async fn control_socket_for_pid(pid: u32) -> Option<PathBuf> {
     // Windows control sockets are named pipes under the `\\.\pipe\`
     // namespace, which is directory-enumerable.
     control_socket_for_pid_in_dirs([std::path::Path::new(r"\\.\pipe\")], pid, false).await
+}
+
+#[cfg(windows)]
+async fn control_socket_for_workspace(
+    pid: u32,
+    workspace_root: &Path,
+    metadata_key: &str,
+) -> Option<PathBuf> {
+    control_socket_for_workspace_in_dirs(
+        [std::path::Path::new(r"\\.\pipe\")],
+        pid,
+        workspace_root,
+        metadata_key,
+        false,
+    )
+    .await
 }
 
 /// Overall bound on one stable-candidate `Identify` probe, so a wedged server
@@ -1747,6 +1816,41 @@ where
             if socket_identity_pid(&candidate).await == Some(pid) {
                 return Some(candidate);
             }
+        }
+    }
+    None
+}
+
+async fn control_socket_for_workspace_in_dirs<I, P>(
+    dirs: I,
+    pid: u32,
+    workspace_root: &Path,
+    metadata_key: &str,
+    require_sock_ext: bool,
+) -> Option<PathBuf>
+where
+    I: IntoIterator<Item = P>,
+    P: AsRef<Path>,
+{
+    let mut candidates = Vec::new();
+    for dir in dirs {
+        let dir = dir.as_ref();
+        for candidate in control_socket_candidates_for_pid_in(dir, pid, require_sock_ext) {
+            push_unique_path(&mut candidates, candidate);
+        }
+        for candidate in stable_control_socket_candidates(dir, require_sock_ext) {
+            push_unique_path(&mut candidates, candidate);
+        }
+    }
+    for candidate in candidates {
+        let Some(identity) = socket_identity(&candidate).await else {
+            continue;
+        };
+        if identity.pid == pid
+            && identity.workspace_root.as_deref() == Some(workspace_root)
+            && identity.metadata_key.as_deref() == Some(metadata_key)
+        {
+            return Some(candidate);
         }
     }
     None
@@ -1791,31 +1895,47 @@ fn stable_control_socket_name(name: &str, require_sock_ext: bool) -> bool {
 /// The pid serving `socket`, from a bounded `Identify` round-trip. `None` for
 /// a dead / unreachable / wedged socket or an unparseable reply.
 async fn socket_identity_pid(socket: &Path) -> Option<u32> {
+    Some(socket_identity(socket).await?.pid)
+}
+
+async fn socket_identity(socket: &Path) -> Option<chan_shell::Identity> {
     let identify = chan_shell::send_control_request(socket, chan_shell::ControlRequest::Identify);
     let message = tokio::time::timeout(STABLE_SOCKET_PROBE_TIMEOUT, identify)
         .await
         .ok()?
         .ok()?;
-    let identity: chan_shell::Identity = serde_json::from_str(&message).ok()?;
-    Some(identity.pid)
+    serde_json::from_str(&message).ok()
 }
 
-#[cfg(unix)]
 fn push_unique_path(paths: &mut Vec<PathBuf>, path: PathBuf) {
     if !paths.iter().any(|existing| existing == &path) {
         paths.push(path);
     }
 }
 
+fn control_socket_candidates_for_pid_in(
+    dir: &Path,
+    pid: u32,
+    require_sock_ext: bool,
+) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut candidates: Vec<PathBuf> = entries
+        .flatten()
+        .filter(|entry| {
+            control_socket_name_matches(&entry.file_name().to_string_lossy(), pid, require_sock_ext)
+        })
+        .map(|entry| entry.path())
+        .collect();
+    candidates.sort();
+    candidates
+}
+
 fn control_socket_for_pid_in(dir: &Path, pid: u32, require_sock_ext: bool) -> Option<PathBuf> {
-    for entry in std::fs::read_dir(dir).ok()?.flatten() {
-        let name = entry.file_name();
-        let name = name.to_string_lossy();
-        if control_socket_name_matches(&name, pid, require_sock_ext) {
-            return Some(entry.path());
-        }
-    }
-    None
+    control_socket_candidates_for_pid_in(dir, pid, require_sock_ext)
+        .into_iter()
+        .next()
 }
 
 /// True when `name` is a control socket for `pid`
@@ -4962,60 +5082,277 @@ async fn cmd_mcp_proxy(socket: PathBuf) -> Result<()> {
         .context("running MCP proxy")
 }
 
-/// Pick the CLI content-search mode, mirroring the `/api/search/content`
-/// route: Hybrid (BM25 + dense, RRF-fused) only when the workspace opted
-/// in via `semantic_enabled` AND the embedding model is on disk;
-/// otherwise BM25. Keeping the CLI and the route on the same rule means
-/// `chan workspace search` and the editor's search panel agree on what ran.
-#[cfg(feature = "embeddings")]
-fn resolve_search_mode(workspace: &chan_workspace::Workspace) -> SearchMode {
-    use chan_workspace::index::embeddings::resolve_model;
-    let enabled = workspace.semantic_enabled().unwrap_or(false);
-    let model_present = workspace
-        .semantic_model()
-        .map(|m| resolve_model(&m).is_ok())
-        .unwrap_or(false);
-    if enabled && model_present {
-        SearchMode::Hybrid
-    } else {
-        SearchMode::Bm25
-    }
+#[derive(Debug, Serialize)]
+pub struct MultiWorkspaceSearchOutput {
+    pub results: Vec<WorkspaceSearchResult>,
+    pub errors: Vec<WorkspaceExecutionError>,
 }
 
-/// Without the `embeddings` feature the dense stack is compiled out, so
-/// the facade collapses Hybrid to BM25 anyway; request BM25 directly.
-#[cfg(not(feature = "embeddings"))]
-fn resolve_search_mode(_workspace: &chan_workspace::Workspace) -> SearchMode {
-    SearchMode::Bm25
+#[derive(Debug, Serialize)]
+pub struct WorkspaceExecutionError {
+    pub workspace: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata_key: Option<String>,
+    pub code: &'static str,
+    pub message: String,
 }
 
-fn cmd_search(path: PathBuf, query: String, limit: u32) -> Result<()> {
+#[derive(Debug)]
+struct WorkspaceExecutionFailure {
+    code: &'static str,
+    message: String,
+}
+
+async fn cmd_workspace_search(
+    request: WorkspaceSearchRequest,
+    targets: WorkspaceTargets,
+    json: bool,
+    pretty: bool,
+) -> Result<()> {
     let lib = library()?;
-    ensure_workspace_registered(&lib, &path)?;
-    let workspace = lib.open_workspace(&path)?;
-    let opts = SearchOpts {
-        mode: resolve_search_mode(&workspace),
-        limit,
-        ..Default::default()
-    };
-    let res = workspace.search(&query, &opts).context("search")?;
-    if res.hits.is_empty() {
-        println!("(no hits)");
-        return Ok(());
-    }
-    for hit in res.hits {
-        let where_ = if hit.heading.is_empty() {
-            hit.path.clone()
-        } else {
-            format!("{}#{}", hit.path, hit.heading)
-        };
-        println!("{:<6.3}  {}", hit.score, where_);
-        let first = hit.snippet.lines().next().unwrap_or("");
-        if !first.is_empty() {
-            println!("        {first}");
+    let (selected, mut errors) = select_workspace_targets(&lib, &targets)?;
+    let mut results = Vec::new();
+    for workspace in selected {
+        match execute_workspace_search(&lib, &workspace, &request).await {
+            Ok(result) => results.push(result),
+            Err(error) => errors.push(WorkspaceExecutionError {
+                workspace: workspace.root_path.display().to_string(),
+                metadata_key: Some(workspace.metadata_key.clone()),
+                code: error.code,
+                message: error.message,
+            }),
         }
     }
+    let output = MultiWorkspaceSearchOutput { results, errors };
+    if json {
+        if pretty {
+            println!("{}", serde_json::to_string_pretty(&output)?);
+        } else {
+            println!("{}", serde_json::to_string(&output)?);
+        }
+    } else {
+        for result in &output.results {
+            println!(
+                "# {} ({})\n",
+                result.workspace.display_name, result.workspace.root
+            );
+            print!("{}", chan_shell::render_workspace_search_markdown(result));
+        }
+        if !output.errors.is_empty() {
+            println!("# Workspace errors\n");
+            for error in &output.errors {
+                println!("- {}: {}", error.workspace, error.message);
+            }
+        }
+    }
+    anyhow::ensure!(
+        output.errors.is_empty() && output.results.iter().all(|result| result.errors.is_empty()),
+        "workspace search completed with errors"
+    );
     Ok(())
+}
+
+fn select_workspace_targets(
+    lib: &Library,
+    targets: &WorkspaceTargets,
+) -> Result<(Vec<KnownWorkspace>, Vec<WorkspaceExecutionError>)> {
+    let mut known = lib.list_workspaces();
+    if targets.all_workspaces {
+        known.sort_by(|left, right| left.root_path.cmp(&right.root_path));
+        return Ok((known, Vec::new()));
+    }
+    if targets.workspaces.is_empty() {
+        let cwd = std::fs::canonicalize(std::env::current_dir()?)?;
+        let selected = known
+            .into_iter()
+            .filter(|workspace| cwd.starts_with(&workspace.root_path))
+            .max_by_key(|workspace| workspace.root_path.components().count());
+        return match selected {
+            Some(workspace) => Ok((vec![workspace], Vec::new())),
+            None => Ok((
+                Vec::new(),
+                vec![WorkspaceExecutionError {
+                    workspace: cwd.display().to_string(),
+                    metadata_key: None,
+                    code: "workspace_not_found",
+                    message: "current directory is not inside a registered workspace".into(),
+                }],
+            )),
+        };
+    }
+
+    let mut selected = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    let mut errors = Vec::new();
+    for selector in &targets.workspaces {
+        match resolve_workspace_selector(&known, selector) {
+            Ok(workspace) => {
+                if seen.insert(workspace.metadata_key.clone()) {
+                    selected.push(workspace.clone());
+                }
+            }
+            Err(error) => errors.push(error),
+        }
+    }
+    Ok((selected, errors))
+}
+
+fn resolve_workspace_selector<'a>(
+    known: &'a [KnownWorkspace],
+    selector: &str,
+) -> std::result::Result<&'a KnownWorkspace, WorkspaceExecutionError> {
+    let selector_path = PathBuf::from(selector);
+    let canonical = std::fs::canonicalize(&selector_path).ok();
+    if let Some(workspace) = known.iter().find(|workspace| {
+        workspace.root_path == selector_path
+            || canonical
+                .as_ref()
+                .is_some_and(|path| path == &workspace.root_path)
+            || workspace.root_path.to_string_lossy() == selector
+    }) {
+        return Ok(workspace);
+    }
+    if let Some(workspace) = known
+        .iter()
+        .find(|workspace| workspace.metadata_key == selector)
+    {
+        return Ok(workspace);
+    }
+    let display_matches: Vec<&KnownWorkspace> = known
+        .iter()
+        .filter(|workspace| known_workspace_display_name(workspace).eq_ignore_ascii_case(selector))
+        .collect();
+    match display_matches.as_slice() {
+        [workspace] => Ok(workspace),
+        [] => Err(WorkspaceExecutionError {
+            workspace: selector.to_string(),
+            metadata_key: None,
+            code: "workspace_not_found",
+            message: format!("no registered workspace matches {selector:?}"),
+        }),
+        matches => Err(WorkspaceExecutionError {
+            workspace: selector.to_string(),
+            metadata_key: None,
+            code: "ambiguous_workspace",
+            message: format!(
+                "workspace display name {selector:?} is ambiguous: {}",
+                matches
+                    .iter()
+                    .map(|workspace| format!(
+                        "{} ({})",
+                        workspace.root_path.display(),
+                        workspace.metadata_key
+                    ))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        }),
+    }
+}
+
+fn known_workspace_display_name(workspace: &KnownWorkspace) -> String {
+    workspace.display_name.clone().unwrap_or_else(|| {
+        workspace
+            .root_path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| workspace.root_path.display().to_string())
+    })
+}
+
+async fn execute_workspace_search(
+    lib: &Library,
+    known: &KnownWorkspace,
+    request: &WorkspaceSearchRequest,
+) -> std::result::Result<WorkspaceSearchResult, WorkspaceExecutionFailure> {
+    execute_workspace_search_with_dirs(lib, known, request, None).await
+}
+
+async fn execute_workspace_search_with_dirs(
+    lib: &Library,
+    known: &KnownWorkspace,
+    request: &WorkspaceSearchRequest,
+    socket_dirs: Option<&[PathBuf]>,
+) -> std::result::Result<WorkspaceSearchResult, WorkspaceExecutionFailure> {
+    let paths =
+        lib.workspace_paths_for(&known.root_path)
+            .ok_or_else(|| WorkspaceExecutionFailure {
+                code: "workspace_open_failed",
+                message: "registered workspace has no sidecar path".into(),
+            })?;
+    if chan_workspace::lock::is_locked_by_foreign_holder(&paths.lock, &known.root_path) {
+        return execute_live_workspace_search(known, &paths.lock, request, socket_dirs).await;
+    }
+    match lib.open_workspace(&known.root_path) {
+        Ok(workspace) => {
+            workspace
+                .workspace_search(request)
+                .map_err(|error| WorkspaceExecutionFailure {
+                    code: "workspace_search_failed",
+                    message: error.to_string(),
+                })
+        }
+        Err(
+            chan_workspace::ChanError::WorkspaceLocked
+            | chan_workspace::ChanError::WorkspaceAlreadyOpen,
+        ) => execute_live_workspace_search(known, &paths.lock, request, socket_dirs).await,
+        Err(error) => Err(WorkspaceExecutionFailure {
+            code: "workspace_open_failed",
+            message: error.to_string(),
+        }),
+    }
+}
+
+async fn execute_live_workspace_search(
+    known: &KnownWorkspace,
+    lock_dir: &Path,
+    request: &WorkspaceSearchRequest,
+    socket_dirs: Option<&[PathBuf]>,
+) -> std::result::Result<WorkspaceSearchResult, WorkspaceExecutionFailure> {
+    let record = chan_workspace::lock::read_lock_record(lock_dir).ok_or_else(|| {
+        WorkspaceExecutionFailure {
+            code: "served_workspace_unreachable",
+            message: "workspace lock is held but its holder record is unavailable".into(),
+        }
+    })?;
+    let socket = match socket_dirs {
+        Some(dirs) => {
+            control_socket_for_workspace_in_dirs(
+                dirs,
+                record.pid,
+                &known.root_path,
+                &known.metadata_key,
+                cfg!(unix),
+            )
+            .await
+        }
+        None => {
+            control_socket_for_workspace(record.pid, &known.root_path, &known.metadata_key).await
+        }
+    }
+    .ok_or_else(|| WorkspaceExecutionFailure {
+        code: "served_workspace_unreachable",
+        message: format!(
+            "no reachable control tenant exactly matches {} ({})",
+            known.root_path.display(),
+            known.metadata_key
+        ),
+    })?;
+    let raw = chan_shell::send_control_request(
+        &socket,
+        chan_shell::ControlRequest::WorkspaceSearch {
+            request: request.clone(),
+        },
+    )
+    .await
+    .map_err(|error| WorkspaceExecutionFailure {
+        code: "served_workspace_unreachable",
+        message: error.to_string(),
+    })?;
+    serde_json::from_str(&raw).map_err(|error| WorkspaceExecutionFailure {
+        code: "workspace_search_failed",
+        message: format!("decoding workspace search response: {error}"),
+    })
 }
 
 #[derive(Serialize)]
@@ -5040,23 +5377,6 @@ impl From<&KnownWorkspace> for WorkspaceListEntry {
             last_seen_at: d.last_seen_at.to_rfc3339(),
         }
     }
-}
-
-#[derive(Serialize)]
-struct GraphQueryOutput {
-    root: String,
-    scope: &'static str,
-    target: Option<String>,
-    nodes: Vec<String>,
-    edges: Vec<GraphEdgeOutput>,
-}
-
-#[derive(Serialize)]
-struct GraphEdgeOutput {
-    source: String,
-    target: String,
-    kind: &'static str,
-    anchor: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -5106,118 +5426,6 @@ struct StatusLanguage {
 struct ConfigOutput {
     editor: EditorPrefs,
     server: ServerConfig,
-}
-
-fn cmd_graph(
-    path: PathBuf,
-    scope: GraphScope,
-    target: Option<String>,
-    depth: usize,
-    limit: usize,
-    json: bool,
-) -> Result<()> {
-    let lib = library()?;
-    ensure_workspace_registered(&lib, &path)?;
-    let workspace = lib.open_workspace(&path)?;
-    if scope != GraphScope::All {
-        return cmd_filesystem_graph(&workspace, scope, target, depth, limit, json);
-    }
-    let graph = workspace.graph().context("opening graph")?;
-    let nodes = graph_scope_nodes(&workspace, graph, scope, target.as_deref(), depth)?;
-    let node_set: std::collections::BTreeSet<&str> = nodes.iter().map(String::as_str).collect();
-    let mut edges = Vec::new();
-    for src in &nodes {
-        for edge in graph
-            .neighbors(src)
-            .with_context(|| format!("querying graph neighbors for {src}"))?
-        {
-            if scope == GraphScope::All || node_set.contains(edge.dst.as_str()) {
-                edges.push(GraphEdgeOutput {
-                    source: edge.src,
-                    target: edge.dst,
-                    kind: edge_kind_label(edge.kind),
-                    anchor: edge.anchor,
-                });
-            }
-        }
-    }
-    let out = GraphQueryOutput {
-        root: workspace.root().display().to_string(),
-        scope: graph_scope_label(scope),
-        target,
-        nodes,
-        edges,
-    };
-    if json {
-        println!("{}", serde_json::to_string_pretty(&out)?);
-        return Ok(());
-    }
-    println!(
-        "{} graph: {} nodes, {} edges",
-        out.root,
-        out.nodes.len(),
-        out.edges.len()
-    );
-    for edge in out.edges.iter().take(limit) {
-        let anchor = edge
-            .anchor
-            .as_deref()
-            .map(|a| format!("#{a}"))
-            .unwrap_or_default();
-        println!(
-            "{:<8} {} -> {}{}",
-            edge.kind, edge.source, edge.target, anchor
-        );
-    }
-    if out.edges.len() > limit {
-        println!("... {} more edges", out.edges.len() - limit);
-    }
-    Ok(())
-}
-
-fn cmd_filesystem_graph(
-    workspace: &chan_workspace::Workspace,
-    scope: GraphScope,
-    target: Option<String>,
-    depth: usize,
-    limit: usize,
-    json: bool,
-) -> Result<()> {
-    let fs_scope = match scope {
-        GraphScope::All => unreachable!("all scope is handled by cmd_graph"),
-        GraphScope::File => ServerFsGraphScope::File,
-        GraphScope::Directory => ServerFsGraphScope::Directory,
-    };
-    if scope == GraphScope::File && target.as_deref().unwrap_or("").is_empty() {
-        anyhow::bail!("--target is required for --scope file");
-    }
-    let path = target.as_deref().unwrap_or("");
-    let out =
-        build_fs_graph(workspace, fs_scope, path, depth).context("building filesystem graph")?;
-    if json {
-        println!("{}", serde_json::to_string_pretty(&out)?);
-        return Ok(());
-    }
-    print_filesystem_graph(&out, limit);
-    Ok(())
-}
-
-fn print_filesystem_graph(out: &FsGraphResponse, limit: usize) {
-    println!(
-        "{} filesystem graph: {} nodes, {} edges, scope={}, depth={}, truncated={}",
-        out.root,
-        out.nodes.len(),
-        out.edges.len(),
-        out.scope,
-        out.depth,
-        out.truncated
-    );
-    for edge in out.edges.iter().take(limit) {
-        println!("{:<8} {} -> {}", edge.kind, edge.source, edge.target);
-    }
-    if out.edges.len() > limit {
-        println!("... {} more edges", out.edges.len() - limit);
-    }
 }
 
 fn cmd_status(path: Option<PathBuf>, json: bool) -> Result<()> {
@@ -5312,94 +5520,6 @@ fn cmd_status(path: Option<PathBuf>, json: bool) -> Result<()> {
         }
     }
     Ok(())
-}
-
-fn graph_scope_nodes(
-    workspace: &chan_workspace::Workspace,
-    graph: &chan_workspace::GraphView,
-    scope: GraphScope,
-    target: Option<&str>,
-    depth: usize,
-) -> Result<Vec<String>> {
-    match scope {
-        GraphScope::All => graph.files().context("reading graph files"),
-        GraphScope::File => {
-            let target = target.context("--target is required for --scope file")?;
-            let target = target.trim_matches('/').to_string();
-            let stat = workspace
-                .stat(&target)
-                .with_context(|| format!("stat graph file target `{target}`"))?;
-            if stat.is_dir {
-                anyhow::bail!("--scope file requires a file; `{target}` is a directory");
-            }
-            Ok(vec![target])
-        }
-        GraphScope::Directory => {
-            let target = target.unwrap_or("").trim_matches('/');
-            if !target.is_empty() {
-                let stat = workspace
-                    .stat(target)
-                    .with_context(|| format!("stat graph directory target `{target}`"))?;
-                if !stat.is_dir {
-                    anyhow::bail!("--scope directory requires a directory; `{target}` is not");
-                }
-            }
-            let entries = if target.is_empty() {
-                workspace.list_tree().context("listing workspace tree")?
-            } else {
-                workspace
-                    .list_tree_prefix(target)
-                    .context("listing directory tree")?
-            };
-            let files: std::collections::BTreeSet<String> = graph
-                .files()
-                .context("reading graph files")?
-                .into_iter()
-                .collect();
-            Ok(entries
-                .into_iter()
-                .filter(|e| !e.is_dir)
-                .filter(|e| directory_depth_in_scope(&e.path, target, depth))
-                .map(|e| e.path)
-                .filter(|p| files.contains(p))
-                .collect())
-        }
-    }
-}
-
-fn directory_depth_in_scope(path: &str, directory: &str, depth: usize) -> bool {
-    if depth == 0 {
-        return false;
-    }
-    let rel = if directory.is_empty() {
-        path
-    } else if path == directory {
-        ""
-    } else if let Some(rest) = path
-        .strip_prefix(directory)
-        .and_then(|s| s.strip_prefix('/'))
-    {
-        rest
-    } else {
-        return false;
-    };
-    !rel.is_empty() && rel.split('/').count() <= depth
-}
-
-fn graph_scope_label(scope: GraphScope) -> &'static str {
-    match scope {
-        GraphScope::All => "all",
-        GraphScope::File => "file",
-        GraphScope::Directory => "directory",
-    }
-}
-
-fn edge_kind_label(kind: EdgeKind) -> &'static str {
-    match kind {
-        EdgeKind::Link => "link",
-        EdgeKind::Mention => "mention",
-        EdgeKind::Tag => "tag",
-    }
 }
 
 fn cmd_config(action: ConfigAction) -> Result<()> {
@@ -6204,11 +6324,86 @@ mod tests {
                     kind: chan_shell::ServeKind::Devserver,
                     version: env!("CARGO_PKG_VERSION").to_string(),
                     pid,
+                    workspace_root: None,
+                    metadata_key: None,
                 };
                 let reply = chan_shell::ControlResponse::Ok {
                     message: serde_json::to_string(&identity).expect("identity json"),
                 };
                 let mut out = serde_json::to_vec(&reply).expect("response json");
+                out.push(b'\n');
+                let _ = write.write_all(&out).await;
+            }
+        })
+    }
+
+    #[cfg(unix)]
+    fn empty_workspace_search_result(root: &Path, key: &str) -> WorkspaceSearchResult {
+        WorkspaceSearchResult {
+            workspace: chan_workspace::WorkspaceSearchIdentity {
+                root: root.display().to_string(),
+                metadata_key: key.into(),
+                display_name: root
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .into_owned(),
+            },
+            search: chan_workspace::WorkspaceSearchStatus {
+                requested: false,
+                ready: true,
+                mode: chan_workspace::EffectiveSearchMode::NotRun,
+            },
+            content_hits: Vec::new(),
+            entity_matches: Vec::new(),
+            nodes: Vec::new(),
+            relationships: Vec::new(),
+            traversal: chan_workspace::EffectiveWorkspaceTraversal {
+                depth: 0,
+                direction: chan_workspace::WorkspaceTraversalDirection::Auto,
+                relationship_kinds: Vec::new(),
+                spine_forced: false,
+                profiles: Vec::new(),
+            },
+            truncation: chan_workspace::WorkspaceSearchTruncation::default(),
+            warnings: Vec::new(),
+            errors: Vec::new(),
+        }
+    }
+
+    #[cfg(unix)]
+    fn spawn_workspace_search_stub(
+        socket: &std::path::Path,
+        identity: chan_shell::Identity,
+        result: WorkspaceSearchResult,
+    ) -> tokio::task::JoinHandle<()> {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+        let listener = tokio::net::UnixListener::bind(socket).expect("bind workspace stub");
+        tokio::spawn(async move {
+            loop {
+                let Ok((stream, _)) = listener.accept().await else {
+                    return;
+                };
+                let (read, mut write) = stream.into_split();
+                let mut line = String::new();
+                if BufReader::new(read).read_line(&mut line).await.is_err() {
+                    continue;
+                }
+                let response = match serde_json::from_str::<chan_shell::ControlRequest>(&line) {
+                    Ok(chan_shell::ControlRequest::Identify) => chan_shell::ControlResponse::Ok {
+                        message: serde_json::to_string(&identity).expect("identity json"),
+                    },
+                    Ok(chan_shell::ControlRequest::WorkspaceSearch { .. }) => {
+                        chan_shell::ControlResponse::Ok {
+                            message: serde_json::to_string(&result).expect("search json"),
+                        }
+                    }
+                    _ => chan_shell::ControlResponse::Error {
+                        message: "unsupported request".into(),
+                    },
+                };
+                let mut out = serde_json::to_vec(&response).expect("response json");
                 out.push(b'\n');
                 let _ = write.write_all(&out).await;
             }
@@ -6233,6 +6428,162 @@ mod tests {
             None
         );
         stub.abort();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn workspace_socket_discovery_matches_root_and_metadata_key() {
+        let dir = tempfile::Builder::new()
+            .prefix("chan-ws-")
+            .tempdir_in("/tmp")
+            .unwrap();
+        let root_a = tempfile::TempDir::new().unwrap();
+        let root_b = tempfile::TempDir::new().unwrap();
+        let pid = std::process::id();
+        let result = empty_workspace_search_result(root_b.path(), "key-b");
+        let wrong = dir.path().join(format!("chan-control-{pid}-a.sock"));
+        let right = dir.path().join(format!("chan-control-{pid}-b.sock"));
+        let wrong_stub = spawn_workspace_search_stub(
+            &wrong,
+            chan_shell::Identity {
+                kind: chan_shell::ServeKind::Devserver,
+                version: env!("CARGO_PKG_VERSION").into(),
+                pid,
+                workspace_root: Some(root_a.path().to_path_buf()),
+                metadata_key: Some("key-a".into()),
+            },
+            result.clone(),
+        );
+        let right_stub = spawn_workspace_search_stub(
+            &right,
+            chan_shell::Identity {
+                kind: chan_shell::ServeKind::Devserver,
+                version: env!("CARGO_PKG_VERSION").into(),
+                pid,
+                workspace_root: Some(root_b.path().to_path_buf()),
+                metadata_key: Some("key-b".into()),
+            },
+            result,
+        );
+
+        let selected =
+            control_socket_for_workspace_in_dirs([dir.path()], pid, root_b.path(), "key-b", true)
+                .await;
+        assert_eq!(selected, Some(right));
+        wrong_stub.abort();
+        right_stub.abort();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn workspace_search_retries_over_the_exact_tenant_when_direct_open_loses_the_lock() {
+        let config = tempfile::TempDir::new().unwrap();
+        let root = tempfile::TempDir::new().unwrap();
+        let config_path = config.path().join("config.toml");
+        let holder_library = Library::open_at(config_path.clone()).unwrap();
+        let known = holder_library.register_workspace(root.path()).unwrap();
+        let held = holder_library.open_workspace(root.path()).unwrap();
+        held.write_text("note.md", "# Note\n").unwrap();
+        held.index_file("note.md").unwrap();
+
+        let request = WorkspaceSearchRequest {
+            domains: vec![chan_workspace::WorkspaceSearchDomain::File],
+            ..WorkspaceSearchRequest::default()
+        };
+        let expected = held.workspace_search(&request).unwrap();
+        let socket_dir = tempfile::Builder::new()
+            .prefix("chan-ws-")
+            .tempdir_in("/tmp")
+            .unwrap();
+        let socket = socket_dir.path().join(format!(
+            "chan-control-{}-workspace.sock",
+            std::process::id()
+        ));
+        let stub = spawn_workspace_search_stub(
+            &socket,
+            chan_shell::Identity {
+                kind: chan_shell::ServeKind::Devserver,
+                version: env!("CARGO_PKG_VERSION").into(),
+                pid: std::process::id(),
+                workspace_root: Some(known.root_path.clone()),
+                metadata_key: Some(known.metadata_key.clone()),
+            },
+            expected.clone(),
+        );
+
+        // A distinct Library observes the root as free-by-this-pid, then its
+        // direct open returns WorkspaceAlreadyOpen. The retry must identify
+        // and query the exact live tenant instead of opening sidecars.
+        let querying_library = Library::open_at(config_path).unwrap();
+        let dirs = [socket_dir.path().to_path_buf()];
+        let actual =
+            execute_workspace_search_with_dirs(&querying_library, &known, &request, Some(&dirs))
+                .await
+                .unwrap();
+        assert_eq!(actual, expected);
+        stub.abort();
+    }
+
+    #[test]
+    fn workspace_selection_preserves_explicit_order_and_deduplicates_by_key() {
+        let config = tempfile::TempDir::new().unwrap();
+        let roots = tempfile::TempDir::new().unwrap();
+        let alpha = roots.path().join("alpha");
+        let beta = roots.path().join("beta");
+        std::fs::create_dir_all(&alpha).unwrap();
+        std::fs::create_dir_all(&beta).unwrap();
+        let lib = Library::open_at(config.path().join("config.toml")).unwrap();
+        let alpha_known = lib.register_workspace(&alpha).unwrap();
+        let beta_known = lib.register_workspace(&beta).unwrap();
+        let targets = WorkspaceTargets {
+            workspaces: vec![
+                beta_known.metadata_key.clone(),
+                alpha.display().to_string(),
+                beta.display().to_string(),
+            ],
+            all_workspaces: false,
+        };
+
+        let (selected, errors) = select_workspace_targets(&lib, &targets).unwrap();
+
+        assert!(errors.is_empty());
+        assert_eq!(
+            selected
+                .iter()
+                .map(|workspace| workspace.metadata_key.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                beta_known.metadata_key.as_str(),
+                alpha_known.metadata_key.as_str()
+            ]
+        );
+    }
+
+    #[test]
+    fn workspace_selection_reports_ambiguous_display_names() {
+        let config = tempfile::TempDir::new().unwrap();
+        let roots = tempfile::TempDir::new().unwrap();
+        let alpha = roots.path().join("alpha");
+        let beta = roots.path().join("beta");
+        std::fs::create_dir_all(&alpha).unwrap();
+        std::fs::create_dir_all(&beta).unwrap();
+        let lib = Library::open_at(config.path().join("config.toml")).unwrap();
+        lib.register_workspace_with_name(&alpha, Some("Shared".into()))
+            .unwrap();
+        lib.register_workspace_with_name(&beta, Some("shared".into()))
+            .unwrap();
+        let targets = WorkspaceTargets {
+            workspaces: vec!["SHARED".into()],
+            all_workspaces: false,
+        };
+
+        let (selected, errors) = select_workspace_targets(&lib, &targets).unwrap();
+
+        assert!(selected.is_empty());
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].code, "ambiguous_workspace");
+        assert!(errors[0].message.contains(&alpha.display().to_string()));
+        assert!(errors[0].message.contains(&beta.display().to_string()));
     }
 
     #[test]
@@ -7009,22 +7360,6 @@ mod tests {
     }
 
     #[test]
-    fn directory_graph_scope_depth_matches_direct_children() {
-        assert!(directory_depth_in_scope("notes/a.md", "notes", 1));
-        assert!(!directory_depth_in_scope("notes/archive/a.md", "notes", 1));
-        assert!(directory_depth_in_scope("notes/archive/a.md", "notes", 2));
-        assert!(!directory_depth_in_scope("other/a.md", "notes", 2));
-    }
-
-    #[test]
-    fn root_graph_scope_depth_matches_top_level_files() {
-        assert!(directory_depth_in_scope("a.md", "", 1));
-        assert!(!directory_depth_in_scope("notes/a.md", "", 1));
-        assert!(directory_depth_in_scope("notes/a.md", "", 2));
-        assert!(!directory_depth_in_scope("a.md", "", 0));
-    }
-
-    #[test]
     fn config_split_assignment_accepts_equals_form() {
         let (k, v) = split_assignment("editor.theme=dark", None).unwrap();
         assert_eq!(k, "editor.theme");
@@ -7181,94 +7516,6 @@ mod tests {
         let mut server = ServerConfig::default();
         let err = write_server_config_key(&mut server, "server.nope", "x").unwrap_err();
         assert!(err.to_string().contains("unknown key"));
-    }
-
-    // --- graph_scope_nodes rejection coverage (syseng-1 residuals 1+2) ---
-    //
-    // syseng's hardening pass observed `chan workspace graph --target ../etc/hosts`
-    // and `chan workspace graph --target notes/no-such-file.md` returning
-    // `1 nodes, 0 edges` with exit 0 instead of a clear rejection.
-    // `graph_scope_nodes` now stats the target through chan-workspace and
-    // bails on escape / missing / wrong-type; these tests pin that.
-
-    fn open_graph_test_workspace() -> (
-        tempfile::TempDir,
-        tempfile::TempDir,
-        std::sync::Arc<chan_workspace::Workspace>,
-    ) {
-        let cfg = tempfile::TempDir::new().unwrap();
-        let workspace_root = tempfile::TempDir::new().unwrap();
-        let lib = chan_workspace::Library::open_at(cfg.path().join("config.toml")).unwrap();
-        lib.register_workspace(workspace_root.path()).unwrap();
-        let workspace = lib.open_workspace(workspace_root.path()).unwrap();
-        // Lay down a couple of files so the graph view has something
-        // to read.
-        workspace.write_text("notes/a.md", "# A\n").unwrap();
-        workspace.write_text("notes/sub/b.md", "# B\n").unwrap();
-        workspace.reindex(None).unwrap();
-        (cfg, workspace_root, workspace)
-    }
-
-    #[test]
-    fn graph_scope_file_rejects_escape_target() {
-        let (_cfg, _root, workspace) = open_graph_test_workspace();
-        let graph = workspace.graph().unwrap();
-        let err = graph_scope_nodes(&workspace, graph, GraphScope::File, Some("../etc/hosts"), 1)
-            .unwrap_err();
-        let msg = format!("{err:#}");
-        assert!(
-            msg.contains("escapes workspace root") || msg.contains("PathEscape"),
-            "expected escape rejection, got: {msg}"
-        );
-    }
-
-    #[test]
-    fn graph_scope_file_rejects_missing_target() {
-        let (_cfg, _root, workspace) = open_graph_test_workspace();
-        let graph = workspace.graph().unwrap();
-        let err = graph_scope_nodes(
-            &workspace,
-            graph,
-            GraphScope::File,
-            Some("notes/no-such-file.md"),
-            1,
-        )
-        .unwrap_err();
-        let msg = format!("{err:#}");
-        assert!(
-            msg.contains("No such file")
-                || msg.contains("not found")
-                || msg.contains("cannot find"),
-            "expected missing-file rejection, got: {msg}"
-        );
-    }
-
-    #[test]
-    fn graph_scope_file_rejects_directory_target() {
-        // --scope file with a directory must surface a clear error,
-        // not silently succeed with an empty graph.
-        let (_cfg, _root, workspace) = open_graph_test_workspace();
-        let graph = workspace.graph().unwrap();
-        let err =
-            graph_scope_nodes(&workspace, graph, GraphScope::File, Some("notes"), 1).unwrap_err();
-        let msg = format!("{err:#}");
-        assert!(
-            msg.contains("requires a file"),
-            "expected directory rejection, got: {msg}"
-        );
-    }
-
-    #[test]
-    fn graph_scope_directory_rejects_escape_target() {
-        let (_cfg, _root, workspace) = open_graph_test_workspace();
-        let graph = workspace.graph().unwrap();
-        let err = graph_scope_nodes(&workspace, graph, GraphScope::Directory, Some("../etc"), 1)
-            .unwrap_err();
-        let msg = format!("{err:#}");
-        assert!(
-            msg.contains("escapes workspace root") || msg.contains("PathEscape"),
-            "expected escape rejection, got: {msg}"
-        );
     }
 
     #[tokio::test]

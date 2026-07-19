@@ -13,7 +13,12 @@ use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Context, Result};
 use base64::Engine as _;
-use clap::{Parser, Subcommand};
+use chan_workspace::{
+    WorkspaceRelationshipKind, WorkspaceSearchDomain, WorkspaceSearchError, WorkspaceSearchRequest,
+    WorkspaceSearchResult, WorkspaceSearchWarning, WorkspaceSelector, WorkspaceSelectorKind,
+    WorkspaceTraversalDirection,
+};
+use clap::{Args, Parser, Subcommand};
 
 use crate::control::{absolutize, control_socket_env, open_env, send_control_request};
 use crate::submit::{submit_writes, SubmitAgent};
@@ -47,6 +52,145 @@ pub struct CsCli {
 
     #[command(subcommand)]
     pub action: ShellAction,
+}
+
+/// Search and traversal flags shared by `cs search` and `chan workspace`.
+#[derive(Args, Debug, Clone, Default)]
+pub struct WorkspaceSearchArgs {
+    /// Query text. Words are joined with spaces; omit for exact selectors or
+    /// query-free entity browsing.
+    #[arg(value_name = "QUERY", num_args = 0..)]
+    pub query: Vec<String>,
+    /// Exact typed traversal seed (`file:notes/a.md`, `tag:design`, ...).
+    #[arg(long = "from", value_name = "TYPE:VALUE")]
+    pub from: Vec<String>,
+    /// Lexical search or browse domain.
+    #[arg(long = "domain", value_name = "DOMAIN")]
+    pub domains: Vec<String>,
+    /// Traversal depth. Omitted means 1 for exact seeds and 0 otherwise.
+    #[arg(long)]
+    pub depth: Option<u8>,
+    /// Traversal direction: auto, out, in, or both.
+    #[arg(long, value_name = "DIRECTION")]
+    pub direction: Option<String>,
+    /// Relationship kind to retain: link, tag, mention, language, contains.
+    #[arg(long = "edge-kind", value_name = "KIND")]
+    pub edge_kinds: Vec<String>,
+    /// Independent content-hit and entity-match limit.
+    #[arg(long)]
+    pub limit: Option<u32>,
+    /// Graph node limit.
+    #[arg(long)]
+    pub node_limit: Option<u32>,
+    /// Graph relationship limit.
+    #[arg(long)]
+    pub edge_limit: Option<u32>,
+}
+
+impl WorkspaceSearchArgs {
+    pub fn to_request(&self) -> Result<WorkspaceSearchRequest> {
+        let query = self.query.join(" ").trim().to_string();
+        let query = (!query.is_empty()).then_some(query);
+        let from = self
+            .from
+            .iter()
+            .map(|value| parse_workspace_selector(value))
+            .collect::<Result<Vec<_>>>()?;
+        let domains = self
+            .domains
+            .iter()
+            .map(|value| parse_search_domain(value))
+            .collect::<Result<Vec<_>>>()?;
+        let direction = self
+            .direction
+            .as_deref()
+            .map(parse_traversal_direction)
+            .transpose()?
+            .unwrap_or_default();
+        let relationship_kinds = self
+            .edge_kinds
+            .iter()
+            .map(|value| parse_relationship_kind(value))
+            .collect::<Result<Vec<_>>>()?;
+        let browse = domains
+            .iter()
+            .any(|domain| *domain != WorkspaceSearchDomain::Content);
+        anyhow::ensure!(
+            query.is_some() || !from.is_empty() || browse,
+            "workspace search requires QUERY, --from, or a non-content --domain"
+        );
+        Ok(WorkspaceSearchRequest {
+            query,
+            from,
+            domains,
+            depth: self.depth,
+            direction,
+            relationship_kinds,
+            limit: self.limit,
+            node_limit: self.node_limit,
+            edge_limit: self.edge_limit,
+        })
+    }
+}
+
+fn parse_workspace_selector(value: &str) -> Result<WorkspaceSelector> {
+    let Some((kind, value)) = value.split_once(':') else {
+        anyhow::bail!("invalid --from {value:?}; expected TYPE:VALUE");
+    };
+    anyhow::ensure!(!value.is_empty(), "invalid --from {kind}:; value is empty");
+    let kind = match kind {
+        "file" => WorkspaceSelectorKind::File,
+        "directory" => WorkspaceSelectorKind::Directory,
+        "tag" => WorkspaceSelectorKind::Tag,
+        "mention" => WorkspaceSelectorKind::Mention,
+        "contact" => WorkspaceSelectorKind::Contact,
+        "language" => WorkspaceSelectorKind::Language,
+        _ => anyhow::bail!(
+            "invalid selector type {kind:?}; expected file, directory, tag, mention, contact, or language"
+        ),
+    };
+    Ok(WorkspaceSelector {
+        kind,
+        value: value.to_string(),
+    })
+}
+
+fn parse_search_domain(value: &str) -> Result<WorkspaceSearchDomain> {
+    match value {
+        "content" => Ok(WorkspaceSearchDomain::Content),
+        "file" => Ok(WorkspaceSearchDomain::File),
+        "directory" => Ok(WorkspaceSearchDomain::Directory),
+        "tag" => Ok(WorkspaceSearchDomain::Tag),
+        "mention" => Ok(WorkspaceSearchDomain::Mention),
+        "contact" => Ok(WorkspaceSearchDomain::Contact),
+        "language" => Ok(WorkspaceSearchDomain::Language),
+        _ => anyhow::bail!(
+            "invalid domain {value:?}; expected content, file, directory, tag, mention, contact, or language"
+        ),
+    }
+}
+
+fn parse_traversal_direction(value: &str) -> Result<WorkspaceTraversalDirection> {
+    match value {
+        "auto" => Ok(WorkspaceTraversalDirection::Auto),
+        "out" => Ok(WorkspaceTraversalDirection::Out),
+        "in" => Ok(WorkspaceTraversalDirection::In),
+        "both" => Ok(WorkspaceTraversalDirection::Both),
+        _ => anyhow::bail!("invalid direction {value:?}; expected auto, out, in, or both"),
+    }
+}
+
+fn parse_relationship_kind(value: &str) -> Result<WorkspaceRelationshipKind> {
+    match value {
+        "link" => Ok(WorkspaceRelationshipKind::Link),
+        "tag" => Ok(WorkspaceRelationshipKind::Tag),
+        "mention" => Ok(WorkspaceRelationshipKind::Mention),
+        "language" => Ok(WorkspaceRelationshipKind::Language),
+        "contains" => Ok(WorkspaceRelationshipKind::Contains),
+        _ => anyhow::bail!(
+            "invalid edge kind {value:?}; expected link, tag, mention, language, or contains"
+        ),
+    }
 }
 
 /// Parse a full `cs` argv (`argv[0]` included) into its [`CsCli`] shape
@@ -186,19 +330,13 @@ pub enum ShellAction {
         #[arg(long)]
         out: Option<String>,
     },
-    /// Run the same content search the UI does, against the running
-    /// window's workspace. Prints a markdown table by default; `--json`
-    /// emits compact machine output and `--json --pretty` indents it.
-    /// Workspace windows only: a standalone terminal has no workspace to
-    /// search.
+    /// Search and traverse the running window's workspace. A plain query is
+    /// depth 0; exact --from selectors default to one hop. Query-free entity
+    /// browsing such as `--domain tag` is supported.
     Search {
-        /// Query string. Multiple words are joined with spaces.
-        #[arg(required = true, num_args = 1..)]
-        query: Vec<String>,
-        /// Maximum number of result rows (one per file). Default 20.
-        #[arg(long)]
-        limit: Option<u32>,
-        /// Emit JSON instead of the markdown table. Compact by default.
+        #[command(flatten)]
+        search: WorkspaceSearchArgs,
+        /// Emit the unchanged core JSON result. Compact by default.
         #[arg(long)]
         json: bool,
         /// With --json, pretty-print (indent) the JSON. Ignored without
@@ -955,11 +1093,10 @@ pub async fn dispatch(action: ShellAction) -> Result<()> {
         },
         ShellAction::Export { path, format, out } => cmd_shell_export(path, format, out).await,
         ShellAction::Search {
-            query,
-            limit,
+            search,
             json,
             pretty,
-        } => cmd_shell_search(query.join(" "), limit, json, pretty).await,
+        } => cmd_shell_search(search.to_request()?, json, pretty).await,
         ShellAction::Pane {
             tab_name,
             json,
@@ -1183,84 +1320,159 @@ async fn cmd_shell_export(path: String, format: String, out: Option<String>) -> 
     Ok(())
 }
 
-/// `cs search <query>`: run the workspace content search on the running
-/// server (the same `Workspace::search` the UI's `/api/search/content`
-/// uses) and print the results. Markdown table by default; `--json`
-/// compact, `--json --pretty` indented. Mirrors the `cs terminal list`
-/// output convention.
-async fn cmd_shell_search(
-    query: String,
-    limit: Option<u32>,
-    json: bool,
-    pretty: bool,
-) -> Result<()> {
+/// Run the shared retrieval/traversal contract on the live workspace tenant.
+async fn cmd_shell_search(request: WorkspaceSearchRequest, json: bool, pretty: bool) -> Result<()> {
     let socket = control_socket_env()?;
-    let raw = send_control_request(&socket, ControlRequest::Search { query, limit }).await?;
+    let raw = send_control_request(&socket, ControlRequest::WorkspaceSearch { request }).await?;
+    let result: WorkspaceSearchResult =
+        serde_json::from_str(&raw).context("parsing workspace search JSON")?;
     if json {
-        // Compact by default; --pretty re-indents. Both go to stdout so
-        // the output pipes cleanly.
         if pretty {
-            let value: serde_json::Value =
-                serde_json::from_str(&raw).context("parsing search JSON")?;
             println!(
                 "{}",
-                serde_json::to_string_pretty(&value).context("formatting search JSON")?
+                serde_json::to_string_pretty(&result)
+                    .context("formatting workspace search JSON")?
             );
         } else {
             println!("{raw}");
         }
     } else {
-        print!("{}", render_search_markdown(&raw)?);
+        print!("{}", render_workspace_search_markdown(&result));
     }
+    anyhow::ensure!(
+        result.errors.is_empty(),
+        "workspace search completed with structured errors"
+    );
     Ok(())
 }
 
-/// Render the `cs search` result JSON
-/// (`{ready, mode, query, hits: [{path, heading, start_line, snippet,
-/// score}]}`) as a markdown list. This is the default human output;
-/// `--json` emits the raw payload instead. No hits yields a short line
-/// rather than an empty list.
-fn render_search_markdown(raw: &str) -> Result<String> {
-    let value: serde_json::Value = serde_json::from_str(raw).context("parsing search JSON")?;
-    let hits = value
-        .get("hits")
-        .and_then(|h| h.as_array())
-        .ok_or_else(|| anyhow::anyhow!("search JSON missing `hits`"))?;
-    if hits.is_empty() {
-        return Ok("No matches.\n".to_string());
-    }
-    let str_field = |h: &serde_json::Value, key: &str| {
-        h.get(key)
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string()
-    };
+pub fn render_workspace_search_markdown(result: &WorkspaceSearchResult) -> String {
     let mut out = String::new();
-    for h in hits {
-        let path = str_field(h, "path");
-        let heading = str_field(h, "heading");
-        let line = h.get("start_line").and_then(|v| v.as_u64()).unwrap_or(0);
-        // `path:line` locator, then the best heading, then the snippet on
-        // an indented continuation so the list stays scannable.
-        if heading.is_empty() {
-            out.push_str(&format!("- {path}:{line}\n"));
-        } else {
-            out.push_str(&format!("- {path}:{line} - {heading}\n"));
+    if !result.content_hits.is_empty() {
+        out.push_str("## Content\n\n");
+        for hit in &result.content_hits {
+            if hit.heading.is_empty() {
+                out.push_str(&format!("- {}:{}\n", hit.path, hit.start_line));
+            } else {
+                out.push_str(&format!(
+                    "- {}:{} - {}\n",
+                    hit.path, hit.start_line, hit.heading
+                ));
+            }
+            if !hit.snippet.is_empty() {
+                let flat = hit
+                    .snippet
+                    .replace('\n', " ")
+                    .replace("<b>", "**")
+                    .replace("</b>", "**");
+                out.push_str(&format!("  {}\n", flat.trim()));
+            }
         }
-        let snippet = str_field(h, "snippet");
-        if !snippet.is_empty() {
-            // The BM25 snippet highlights matches with `<b>...</b>` (the
-            // markup the frontend renders); convert to markdown `**bold**`
-            // for this markdown output. Collapse newlines so one hit stays
-            // on one logical block.
-            let flat = snippet
-                .replace('\n', " ")
-                .replace("<b>", "**")
-                .replace("</b>", "**");
-            out.push_str(&format!("  {}\n", flat.trim()));
-        }
+        out.push('\n');
     }
-    Ok(out)
+    if !result.entity_matches.is_empty() {
+        out.push_str("## Entities\n\n");
+        for entity in &result.entity_matches {
+            out.push_str(&format!(
+                "- {} `{}` ({})\n",
+                selector_kind_name(entity.kind),
+                entity.label,
+                selector_text(&entity.selector)
+            ));
+        }
+        out.push('\n');
+    }
+    if !result.nodes.is_empty() || !result.relationships.is_empty() {
+        out.push_str("## Graph\n\n");
+        for node in &result.nodes {
+            out.push_str(&format!("- node `{}`\n", graph_node_id(node)));
+        }
+        for relationship in &result.relationships {
+            out.push_str(&format!(
+                "- `{}` -{}-> `{}`\n",
+                relationship.source,
+                relationship_kind_name(relationship.kind),
+                relationship.target
+            ));
+        }
+        out.push('\n');
+    }
+    if !result.warnings.is_empty() {
+        out.push_str("## Warnings\n\n");
+        for warning in &result.warnings {
+            out.push_str(&format!("- {}\n", warning_message(warning)));
+        }
+        out.push('\n');
+    }
+    if !result.errors.is_empty() {
+        out.push_str("## Errors\n\n");
+        for error in &result.errors {
+            out.push_str(&format!("- {}\n", error_message(error)));
+        }
+        out.push('\n');
+    }
+    if out.is_empty() {
+        "No matches.\n".to_string()
+    } else {
+        out
+    }
+}
+
+fn selector_kind_name(kind: WorkspaceSelectorKind) -> &'static str {
+    match kind {
+        WorkspaceSelectorKind::File => "file",
+        WorkspaceSelectorKind::Directory => "directory",
+        WorkspaceSelectorKind::Tag => "tag",
+        WorkspaceSelectorKind::Mention => "mention",
+        WorkspaceSelectorKind::Contact => "contact",
+        WorkspaceSelectorKind::Language => "language",
+    }
+}
+
+fn relationship_kind_name(kind: WorkspaceRelationshipKind) -> &'static str {
+    match kind {
+        WorkspaceRelationshipKind::Link => "link",
+        WorkspaceRelationshipKind::Tag => "tag",
+        WorkspaceRelationshipKind::Mention => "mention",
+        WorkspaceRelationshipKind::Language => "language",
+        WorkspaceRelationshipKind::Contains => "contains",
+    }
+}
+
+fn selector_text(selector: &WorkspaceSelector) -> String {
+    format!("{}:{}", selector_kind_name(selector.kind), selector.value)
+}
+
+fn graph_node_id(node: &chan_workspace::WorkspaceGraphNode) -> &str {
+    match node {
+        chan_workspace::WorkspaceGraphNode::File { id, .. }
+        | chan_workspace::WorkspaceGraphNode::Directory { id, .. }
+        | chan_workspace::WorkspaceGraphNode::Tag { id, .. }
+        | chan_workspace::WorkspaceGraphNode::Mention { id, .. }
+        | chan_workspace::WorkspaceGraphNode::Contact { id, .. }
+        | chan_workspace::WorkspaceGraphNode::Language { id, .. } => id,
+    }
+}
+
+fn warning_message(warning: &WorkspaceSearchWarning) -> &str {
+    match warning {
+        WorkspaceSearchWarning::LimitClamped { message, .. }
+        | WorkspaceSearchWarning::ReportsDisabled { message }
+        | WorkspaceSearchWarning::ReportsUnavailable { message }
+        | WorkspaceSearchWarning::HybridUnavailable { message }
+        | WorkspaceSearchWarning::MissingLinkTarget { message, .. } => message,
+    }
+}
+
+fn error_message(error: &WorkspaceSearchError) -> &str {
+    match error {
+        WorkspaceSearchError::InvalidRequest { message }
+        | WorkspaceSearchError::InvalidSelector { message, .. }
+        | WorkspaceSearchError::SelectorNotFound { message, .. }
+        | WorkspaceSearchError::AmbiguousSelector { message, .. }
+        | WorkspaceSearchError::IndexNotReady { message }
+        | WorkspaceSearchError::DomainUnavailable { message, .. } => message,
+    }
 }
 
 /// The `(window_id, tab_name)` target a `cs pane` request carries. An
@@ -2243,9 +2455,106 @@ mod tests {
     }
 
     #[test]
+    fn search_args_build_the_shared_request() {
+        let cli = CsCli::try_parse_from([
+            "cs",
+            "search",
+            "two",
+            "words",
+            "--from",
+            "tag:#design",
+            "--domain",
+            "file",
+            "--depth",
+            "2",
+            "--direction",
+            "both",
+            "--edge-kind",
+            "link",
+            "--node-limit",
+            "50",
+        ])
+        .unwrap();
+        let ShellAction::Search { search, .. } = cli.action else {
+            panic!("expected search action");
+        };
+        let request = search.to_request().unwrap();
+        assert_eq!(request.query.as_deref(), Some("two words"));
+        assert_eq!(request.from[0].kind, WorkspaceSelectorKind::Tag);
+        assert_eq!(request.from[0].value, "#design");
+        assert_eq!(request.domains, vec![WorkspaceSearchDomain::File]);
+        assert_eq!(request.depth, Some(2));
+        assert_eq!(request.direction, WorkspaceTraversalDirection::Both);
+        assert_eq!(
+            request.relationship_kinds,
+            vec![WorkspaceRelationshipKind::Link]
+        );
+        assert_eq!(request.node_limit, Some(50));
+    }
+
+    #[test]
+    fn bare_search_has_one_precise_usage_error() {
+        let cli = CsCli::try_parse_from(["cs", "search"]).unwrap();
+        let ShellAction::Search { search, .. } = cli.action else {
+            panic!("expected search action");
+        };
+        assert_eq!(
+            search.to_request().unwrap_err().to_string(),
+            "workspace search requires QUERY, --from, or a non-content --domain"
+        );
+    }
+
+    #[test]
+    fn search_args_require_the_documented_enum_vocabulary() {
+        let cli = CsCli::try_parse_from(["cs", "search", "--from", "dir:notes"]).unwrap();
+        let ShellAction::Search { search, .. } = cli.action else {
+            panic!("expected search action");
+        };
+        assert!(search.to_request().is_err());
+
+        let cli = CsCli::try_parse_from(["cs", "search", "--domain", "dir"]).unwrap();
+        let ShellAction::Search { search, .. } = cli.action else {
+            panic!("expected search action");
+        };
+        assert!(search.to_request().is_err());
+    }
+
+    #[test]
     fn search_markdown_converts_bold_highlight_and_locator() {
-        let raw = r#"{"hits":[{"path":"a.md","start_line":3,"heading":"H","snippet":"the <b>fox</b> ran"}]}"#;
-        let out = render_search_markdown(raw).expect("render");
+        let result = WorkspaceSearchResult {
+            workspace: chan_workspace::WorkspaceSearchIdentity {
+                root: "/tmp/work".into(),
+                metadata_key: "work-00112233".into(),
+                display_name: "work".into(),
+            },
+            search: chan_workspace::WorkspaceSearchStatus {
+                requested: true,
+                ready: true,
+                mode: chan_workspace::EffectiveSearchMode::Bm25,
+            },
+            content_hits: vec![chan_workspace::WorkspaceContentHit {
+                path: "a.md".into(),
+                chunk_id: "a.md:H".into(),
+                heading: "H".into(),
+                start_line: 3,
+                snippet: "the <b>fox</b> ran".into(),
+                score: 1.0,
+            }],
+            entity_matches: Vec::new(),
+            nodes: Vec::new(),
+            relationships: Vec::new(),
+            traversal: chan_workspace::EffectiveWorkspaceTraversal {
+                depth: 0,
+                direction: WorkspaceTraversalDirection::Auto,
+                relationship_kinds: Vec::new(),
+                spine_forced: false,
+                profiles: Vec::new(),
+            },
+            truncation: chan_workspace::WorkspaceSearchTruncation::default(),
+            warnings: Vec::new(),
+            errors: Vec::new(),
+        };
+        let out = render_workspace_search_markdown(&result);
         assert!(out.contains("- a.md:3 - H"), "locator: {out}");
         // <b>...</b> highlight -> markdown **bold**.
         assert!(out.contains("the **fox** ran"), "bold: {out}");

@@ -13,7 +13,7 @@ default = []
 # Enables the MCP server module and the `chan-llm-mcp` binary. Off
 # by default so library consumers don't pull rmcp + its transitive
 # deps unless they want the MCP transport.
-mcp = ["dep:rmcp", "dep:schemars", "dep:base64"]
+mcp = ["dep:rmcp", "dep:base64"]
 
 [dependencies]
 chan-workspace = { workspace = true }
@@ -31,7 +31,7 @@ tokio = { workspace = true }
 # MCP image content and PDF blob resources.
 base64 = { workspace = true, optional = true }
 rmcp = { workspace = true, optional = true }
-schemars = { workspace = true, optional = true }
+schemars = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

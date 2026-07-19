@@ -6,7 +6,7 @@
 //   write_file(path, ...) -> { path, bytes_written }
 //   list_files()          -> tree
 //   resolve_path(path)    -> physical path metadata
-//   search_content(query) -> hits
+//   workspace_search(...) -> bounded search and graph traversal
 //
 // Content tools route through `chan_workspace::Workspace` so the filesystem
 // invariants (path sandbox, special-file refusal, atomic writes)
@@ -18,7 +18,11 @@
 
 use std::sync::Arc;
 
-use chan_workspace::Workspace;
+use chan_workspace::{
+    Workspace, WorkspaceRelationshipKind, WorkspaceSearchDomain, WorkspaceSearchRequest,
+    WorkspaceSelector, WorkspaceSelectorKind, WorkspaceTraversalDirection,
+};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as Json;
 
@@ -40,13 +44,6 @@ pub const READ_FILE_CAP_BYTES: usize = 256 * 1024;
 /// KB of JSON which is already pushing it; past this we truncate
 /// and tell the model to narrow with the `prefix` arg.
 pub const LIST_FILES_CAP_ENTRIES: usize = 2_000;
-
-/// Hard cap on `search_content` result count. The model can ask
-/// for any reasonable number; we clamp at 100 so a runaway
-/// `limit=1000000` doesn't pull back a million hits the assistant
-/// can't reason about anyway.
-pub const SEARCH_CONTENT_MAX_LIMIT: u32 = 100;
-pub const SEARCH_CONTENT_DEFAULT_LIMIT: u32 = 20;
 
 /// Cap on per-file rows returned by `repo_report` when
 /// `include_files = true`. The roll-ups and COCOMO summary stay
@@ -73,6 +70,132 @@ pub struct ToolContext {
     pub workspace: Arc<Workspace>,
 }
 
+/// Typed selector accepted by the LLM-facing workspace search tool.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct WorkspaceSearchSelector {
+    pub kind: WorkspaceSearchSelectorKind,
+    pub value: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspaceSearchSelectorKind {
+    File,
+    Directory,
+    Tag,
+    Mention,
+    Contact,
+    Language,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspaceSearchDomainParam {
+    Content,
+    File,
+    Directory,
+    Tag,
+    Mention,
+    Contact,
+    Language,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspaceSearchDirection {
+    #[default]
+    Auto,
+    Out,
+    In,
+    Both,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspaceSearchRelationshipKind {
+    Link,
+    Tag,
+    Mention,
+    Language,
+    Contains,
+}
+
+/// Canonical input for standard and MCP workspace-search dispatch.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(default)]
+pub struct WorkspaceSearchParams {
+    pub query: Option<String>,
+    pub from: Vec<WorkspaceSearchSelector>,
+    pub domains: Vec<WorkspaceSearchDomainParam>,
+    pub depth: Option<u8>,
+    pub direction: WorkspaceSearchDirection,
+    pub relationship_kinds: Vec<WorkspaceSearchRelationshipKind>,
+    pub limit: Option<u32>,
+    pub node_limit: Option<u32>,
+    pub edge_limit: Option<u32>,
+}
+
+impl From<WorkspaceSearchParams> for WorkspaceSearchRequest {
+    fn from(value: WorkspaceSearchParams) -> Self {
+        Self {
+            query: value.query,
+            from: value
+                .from
+                .into_iter()
+                .map(|selector| WorkspaceSelector {
+                    kind: match selector.kind {
+                        WorkspaceSearchSelectorKind::File => WorkspaceSelectorKind::File,
+                        WorkspaceSearchSelectorKind::Directory => WorkspaceSelectorKind::Directory,
+                        WorkspaceSearchSelectorKind::Tag => WorkspaceSelectorKind::Tag,
+                        WorkspaceSearchSelectorKind::Mention => WorkspaceSelectorKind::Mention,
+                        WorkspaceSearchSelectorKind::Contact => WorkspaceSelectorKind::Contact,
+                        WorkspaceSearchSelectorKind::Language => WorkspaceSelectorKind::Language,
+                    },
+                    value: selector.value,
+                })
+                .collect(),
+            domains: value
+                .domains
+                .into_iter()
+                .map(|domain| match domain {
+                    WorkspaceSearchDomainParam::Content => WorkspaceSearchDomain::Content,
+                    WorkspaceSearchDomainParam::File => WorkspaceSearchDomain::File,
+                    WorkspaceSearchDomainParam::Directory => WorkspaceSearchDomain::Directory,
+                    WorkspaceSearchDomainParam::Tag => WorkspaceSearchDomain::Tag,
+                    WorkspaceSearchDomainParam::Mention => WorkspaceSearchDomain::Mention,
+                    WorkspaceSearchDomainParam::Contact => WorkspaceSearchDomain::Contact,
+                    WorkspaceSearchDomainParam::Language => WorkspaceSearchDomain::Language,
+                })
+                .collect(),
+            depth: value.depth,
+            direction: match value.direction {
+                WorkspaceSearchDirection::Auto => WorkspaceTraversalDirection::Auto,
+                WorkspaceSearchDirection::Out => WorkspaceTraversalDirection::Out,
+                WorkspaceSearchDirection::In => WorkspaceTraversalDirection::In,
+                WorkspaceSearchDirection::Both => WorkspaceTraversalDirection::Both,
+            },
+            relationship_kinds: value
+                .relationship_kinds
+                .into_iter()
+                .map(|kind| match kind {
+                    WorkspaceSearchRelationshipKind::Link => WorkspaceRelationshipKind::Link,
+                    WorkspaceSearchRelationshipKind::Tag => WorkspaceRelationshipKind::Tag,
+                    WorkspaceSearchRelationshipKind::Mention => WorkspaceRelationshipKind::Mention,
+                    WorkspaceSearchRelationshipKind::Language => {
+                        WorkspaceRelationshipKind::Language
+                    }
+                    WorkspaceSearchRelationshipKind::Contains => {
+                        WorkspaceRelationshipKind::Contains
+                    }
+                })
+                .collect(),
+            limit: value.limit,
+            node_limit: value.node_limit,
+            edge_limit: value.edge_limit,
+        }
+    }
+}
+
 impl ToolContext {
     pub fn new(workspace: Arc<Workspace>) -> Self {
         Self { workspace }
@@ -90,20 +213,8 @@ pub enum StandardTool {
     WriteFile,
     ListFiles,
     ResolvePath,
-    SearchContent,
+    WorkspaceSearch,
     RepoReport,
-    /// Graph adjacency for a single file: outbound links / tags /
-    /// mentions, and inbound backlinks. Lets the assistant answer
-    /// "what links here?" and "what does this point at?" without
-    /// reading every file.
-    GraphNeighbors,
-    /// Global tag census: every `#tag` known to the workspace with the
-    /// number of files that carry it. Cheap; useful for the
-    /// assistant to plan a tag rename or pivot.
-    GraphTags,
-    /// All files carrying a given `#tag`. Pairs with GraphTags
-    /// when the assistant has a tag name and wants the files.
-    GraphFilesWithTag,
 }
 
 impl StandardTool {
@@ -113,11 +224,8 @@ impl StandardTool {
             StandardTool::WriteFile => "write_file",
             StandardTool::ListFiles => "list_files",
             StandardTool::ResolvePath => "resolve_path",
-            StandardTool::SearchContent => "search_content",
+            StandardTool::WorkspaceSearch => "workspace_search",
             StandardTool::RepoReport => "repo_report",
-            StandardTool::GraphNeighbors => "graph_neighbors",
-            StandardTool::GraphTags => "graph_tags",
-            StandardTool::GraphFilesWithTag => "graph_files_with_tag",
         }
     }
 
@@ -127,11 +235,8 @@ impl StandardTool {
             "write_file" => Some(StandardTool::WriteFile),
             "list_files" => Some(StandardTool::ListFiles),
             "resolve_path" => Some(StandardTool::ResolvePath),
-            "search_content" => Some(StandardTool::SearchContent),
+            "workspace_search" => Some(StandardTool::WorkspaceSearch),
             "repo_report" => Some(StandardTool::RepoReport),
-            "graph_neighbors" => Some(StandardTool::GraphNeighbors),
-            "graph_tags" => Some(StandardTool::GraphTags),
-            "graph_files_with_tag" => Some(StandardTool::GraphFilesWithTag),
             _ => None,
         }
     }
@@ -147,119 +252,10 @@ pub fn execute(name: &str, args: &Json, ctx: &ToolContext) -> Result<Json> {
         StandardTool::ReadFile => exec_read_file(args, ctx),
         StandardTool::ListFiles => exec_list_files(args, ctx),
         StandardTool::ResolvePath => exec_resolve_path(args, ctx),
-        StandardTool::SearchContent => exec_search_content(args, ctx),
+        StandardTool::WorkspaceSearch => exec_workspace_search(args, ctx),
         StandardTool::RepoReport => exec_repo_report(args, ctx),
-        StandardTool::GraphNeighbors => exec_graph_neighbors(args, ctx),
-        StandardTool::GraphTags => exec_graph_tags(args, ctx),
-        StandardTool::GraphFilesWithTag => exec_graph_files_with_tag(args, ctx),
         StandardTool::WriteFile => exec_write_file(args, ctx),
     }
-}
-
-/// `link` / `mention` / `tag` lowercase tag for one edge. The
-/// `EdgeKind::as_str` helper inside chan-workspace is private, so we
-/// mirror the mapping here to keep this crate from reaching into
-/// chan-workspace's internals.
-fn edge_kind_tag(k: chan_workspace::EdgeKind) -> &'static str {
-    match k {
-        chan_workspace::EdgeKind::Link => "link",
-        chan_workspace::EdgeKind::Mention => "mention",
-        chan_workspace::EdgeKind::Tag => "tag",
-    }
-}
-
-fn exec_graph_neighbors(args: &Json, ctx: &ToolContext) -> Result<Json> {
-    let path = arg_string(args, "path")?;
-    let direction = args
-        .get("direction")
-        .and_then(|v| v.as_str())
-        .unwrap_or("both");
-    // Optional filter. Compared by the lowercase tag the result
-    // shape uses ("link" / "tag" / "mention") so the model's filter
-    // matches its own output verbatim.
-    let kinds: Option<Vec<String>> = args.get("kinds").and_then(|v| v.as_array()).map(|arr| {
-        arr.iter()
-            .filter_map(|v| v.as_str().map(|s| s.to_string()))
-            .collect()
-    });
-    let kind_allowed = |kind: &str| -> bool {
-        match &kinds {
-            Some(k) => k.iter().any(|s| s == kind),
-            None => true,
-        }
-    };
-    let graph = ctx
-        .workspace
-        .graph()
-        .map_err(|e| LlmError::Tool(format!("graph: {e}")))?;
-    let want_out = matches!(direction, "out" | "both");
-    let want_in = matches!(direction, "in" | "both");
-    let mut out_edges: Vec<Json> = Vec::new();
-    let mut in_edges: Vec<Json> = Vec::new();
-    if want_out {
-        let edges = graph
-            .neighbors(path)
-            .map_err(|e| LlmError::Tool(format!("graph_neighbors: {e}")))?;
-        for e in edges {
-            let tag = edge_kind_tag(e.kind);
-            if !kind_allowed(tag) {
-                continue;
-            }
-            out_edges.push(serde_json::json!({
-                "kind": tag,
-                "target": e.dst,
-                "anchor": e.anchor,
-            }));
-        }
-    }
-    if want_in {
-        let edges = graph
-            .backlinks(path)
-            .map_err(|e| LlmError::Tool(format!("graph_backlinks: {e}")))?;
-        for e in edges {
-            let tag = edge_kind_tag(e.kind);
-            if !kind_allowed(tag) {
-                continue;
-            }
-            in_edges.push(serde_json::json!({
-                "kind": tag,
-                "source": e.src,
-                "anchor": e.anchor,
-            }));
-        }
-    }
-    Ok(serde_json::json!({
-        "path": path,
-        "out": out_edges,
-        "in": in_edges,
-    }))
-}
-
-fn exec_graph_tags(_args: &Json, ctx: &ToolContext) -> Result<Json> {
-    let graph = ctx
-        .workspace
-        .graph()
-        .map_err(|e| LlmError::Tool(format!("graph: {e}")))?;
-    let tags = graph
-        .tags()
-        .map_err(|e| LlmError::Tool(format!("graph_tags: {e}")))?;
-    let entries: Vec<Json> = tags
-        .into_iter()
-        .map(|t| serde_json::json!({"name": t.name, "count": t.count}))
-        .collect();
-    Ok(serde_json::json!({ "tags": entries }))
-}
-
-fn exec_graph_files_with_tag(args: &Json, ctx: &ToolContext) -> Result<Json> {
-    let tag = arg_string(args, "tag")?;
-    let graph = ctx
-        .workspace
-        .graph()
-        .map_err(|e| LlmError::Tool(format!("graph: {e}")))?;
-    let files = graph
-        .files_with_tag(tag)
-        .map_err(|e| LlmError::Tool(format!("graph_files_with_tag: {e}")))?;
-    Ok(serde_json::json!({ "tag": tag, "files": files }))
 }
 
 fn arg_string<'a>(args: &'a Json, key: &str) -> Result<&'a str> {
@@ -356,23 +352,12 @@ fn exec_resolve_path(args: &Json, ctx: &ToolContext) -> Result<Json> {
     Ok(out)
 }
 
-fn exec_search_content(args: &Json, ctx: &ToolContext) -> Result<Json> {
-    let query = arg_string(args, "query")?;
-    let raw_limit = args
-        .get("limit")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(SEARCH_CONTENT_DEFAULT_LIMIT as u64);
-    // Clamp to u32 max via the hard cap; saturating cast keeps us
-    // safe from a u64::MAX -> truncation surprise.
-    let limit = raw_limit.min(SEARCH_CONTENT_MAX_LIMIT as u64) as u32;
-    let res = ctx.workspace.search(
-        query,
-        &chan_workspace::SearchOpts {
-            limit,
-            ..Default::default()
-        },
-    )?;
-    serde_json::to_value(&res).map_err(|e| LlmError::Tool(format!("serialize hits: {e}")))
+fn exec_workspace_search(args: &Json, ctx: &ToolContext) -> Result<Json> {
+    let params: WorkspaceSearchParams = serde_json::from_value(args.clone())
+        .map_err(|error| LlmError::Tool(format!("invalid workspace_search args: {error}")))?;
+    let result = ctx.workspace.workspace_search(&params.into())?;
+    serde_json::to_value(result)
+        .map_err(|error| LlmError::Tool(format!("serialize workspace search: {error}")))
 }
 
 fn exec_repo_report(args: &Json, ctx: &ToolContext) -> Result<Json> {
@@ -559,19 +544,9 @@ pub fn standard_tool_schemas() -> Vec<ToolSchema> {
             }),
         },
         ToolSchema {
-            name: "search_content",
-            description: crate::prompts::SEARCH_CONTENT_DESC,
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "query": { "type": "string" },
-                    "limit": {
-                        "type": "integer",
-                        "description": "Hard cap on hits returned. Default 20."
-                    }
-                },
-                "required": ["query"],
-            }),
+            name: "workspace_search",
+            description: crate::prompts::WORKSPACE_SEARCH_DESC,
+            parameters: workspace_search_schema(),
         },
         ToolSchema {
             name: "repo_report",
@@ -595,53 +570,13 @@ pub fn standard_tool_schemas() -> Vec<ToolSchema> {
                 }
             }),
         },
-        ToolSchema {
-            name: "graph_neighbors",
-            description: crate::prompts::GRAPH_NEIGHBORS_DESC,
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "POSIX rel-path of the file whose graph adjacency you want."
-                    },
-                    "direction": {
-                        "type": "string",
-                        "enum": ["out", "in", "both"],
-                        "description": "`out` = edges this file points at (links/tags/mentions); `in` = backlinks (other files pointing here); `both` = both. Default `both`."
-                    },
-                    "kinds": {
-                        "type": "array",
-                        "items": { "type": "string", "enum": ["link", "tag", "mention"] },
-                        "description": "Optional filter; omit for all kinds. `link` = wiki/markdown links; `tag` = `#hashtags` on the file; `mention` = `@@person` references."
-                    }
-                },
-                "required": ["path"],
-            }),
-        },
-        ToolSchema {
-            name: "graph_tags",
-            description: crate::prompts::GRAPH_TAGS_DESC,
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {}
-            }),
-        },
-        ToolSchema {
-            name: "graph_files_with_tag",
-            description: crate::prompts::GRAPH_FILES_WITH_TAG_DESC,
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "tag": {
-                        "type": "string",
-                        "description": "Tag name with the leading `#`, e.g. `#design`."
-                    }
-                },
-                "required": ["tag"],
-            }),
-        },
     ]
+}
+
+fn workspace_search_schema() -> Json {
+    let generator = schemars::generate::SchemaSettings::draft2020_12().into_generator();
+    serde_json::to_value(generator.into_root_schema_for::<WorkspaceSearchParams>())
+        .expect("WorkspaceSearchParams schema serializes")
 }
 
 #[cfg(test)]
@@ -803,17 +738,23 @@ mod tests {
     }
 
     #[test]
-    fn search_content_clamps_limit() {
+    fn workspace_search_uses_typed_selectors_and_core_limits() {
         let (_cfg, _root, ctx) = fixture();
-        // Doesn't actually run a real search beyond the engine's
-        // empty-state response; we just verify the call goes through
-        // and the limit clamp doesn't panic.
-        let _ = execute(
-            "search_content",
-            &serde_json::json!({"query": "anything", "limit": 1_000_000}),
+        let result = execute(
+            "workspace_search",
+            &serde_json::json!({
+                "from": [{"kind": "tag", "value": "design"}],
+                "domains": ["tag", "file"],
+                "depth": 1,
+                "direction": "both",
+                "relationship_kinds": ["tag"],
+                "limit": 1_000_000,
+            }),
             &ctx,
         )
         .unwrap();
+        assert!(result["workspace"]["root"].is_string());
+        assert_eq!(result["traversal"]["direction"], "both");
     }
 
     #[test]
@@ -935,6 +876,9 @@ mod tests {
         let schemas = standard_tool_schemas();
         assert!(schemas.iter().any(|s| s.name == "repo_report"));
         assert!(schemas.iter().any(|s| s.name == "resolve_path"));
+        assert!(schemas.iter().any(|s| s.name == "workspace_search"));
+        assert!(!schemas.iter().any(|s| s.name == "search_content"));
+        assert!(!schemas.iter().any(|s| s.name.starts_with("graph_")));
     }
 
     #[test]

@@ -11,7 +11,7 @@
 //!     reopening the workspace.
 //!
 //! Tools exposed: `read_file`, `write_file`, `list_files`,
-//! `resolve_path`, `search_content`, graph/report tools, and
+//! `resolve_path`, `workspace_search`, report tools, and
 //! `read_media`. The JSON tools route through `tools::execute`;
 //! `read_media` is the binary media read path: it pulls bytes
 //! through `Workspace::read` (path sandbox, regular-file gate, lstat)
@@ -35,7 +35,7 @@ use serde::Deserialize;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 use crate::error::LlmError;
-use crate::tools::{self, ToolContext};
+use crate::tools::{self, ToolContext, WorkspaceSearchParams};
 
 const MCP_FRAME_HEADER_LIMIT: usize = 8192;
 const MCP_FRAME_BODY_LIMIT: usize = 16 * 1024 * 1024;
@@ -359,14 +359,6 @@ pub struct WriteFileParams {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub struct SearchContentParams {
-    pub query: String,
-    /// Hard cap on hits returned. Default 20.
-    #[serde(default)]
-    pub limit: Option<u32>,
-}
-
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct ListFilesParams {
     /// Optional POSIX rel-path prefix to scope the listing to a
     /// subdirectory. Empty / omitted lists the whole workspace (capped).
@@ -383,34 +375,10 @@ pub struct ResolvePathParams {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub struct EmptyParams {}
-
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct ReadMediaParams {
     /// POSIX-style path in chan's public namespace. Must be an image
     /// or PDF class path according to chan-workspace.
     pub path: String,
-}
-
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub struct GraphNeighborsParams {
-    /// POSIX-style relative path of the file whose graph adjacency
-    /// you want.
-    pub path: String,
-    /// `out` (this file's outbound edges), `in` (backlinks), or
-    /// `both`. Defaults to `both` when omitted.
-    #[serde(default)]
-    pub direction: Option<String>,
-    /// Subset of `link` / `tag` / `mention` to include. Omit for
-    /// every kind.
-    #[serde(default)]
-    pub kinds: Option<Vec<String>>,
-}
-
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub struct GraphFilesWithTagParams {
-    /// Tag name including the leading `#`, e.g. `#design`.
-    pub tag: String,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -491,7 +459,7 @@ Pass an optional `prefix` (POSIX rel-path) to scope the listing to \
 a subdirectory; omit it to list the whole workspace, including \
 drafts in the in-workspace `.Drafts/` directory. Listings are \
 capped at 2,000 entries; if `truncated` \
-is true, narrow with a prefix or call search_content instead.")]
+is true, narrow with a prefix or call workspace_search instead.")]
     async fn list_files(
         &self,
         Parameters(p): Parameters<ListFilesParams>,
@@ -523,20 +491,23 @@ including drafts in the in-workspace `.Drafts/` directory.")]
     }
 
     #[tool(description = "\
-Search the workspace's BM25 index for the given query. Returns hits \
-with relative paths, relevance scores, and short snippets around \
-the match. Useful for finding which file mentions a topic before \
-issuing read_file on it. `limit` defaults to 20 and is hard-capped \
-at 100.")]
-    async fn search_content(
+Search and traverse the active workspace with one bounded request. \
+Use `query` for content or entity search and typed `from` selectors \
+for exact file, directory, tag, mention, contact, or language starts. \
+`domains` chooses returned content/entities; `depth`, `direction`, and \
+`relationship_kinds` control traversal. The result includes content \
+hits, entity matches, normalized graph nodes and relationships, \
+effective limits, truncation, warnings, and structured errors. It \
+also covers query-free entity browsing, backlinks, tag membership, \
+contacts, language membership, linked media, and containment.")]
+    async fn workspace_search(
         &self,
-        Parameters(p): Parameters<SearchContentParams>,
+        Parameters(p): Parameters<WorkspaceSearchParams>,
     ) -> std::result::Result<String, ErrorData> {
-        let mut args = serde_json::json!({"query": p.query});
-        if let Some(limit) = p.limit {
-            args["limit"] = serde_json::json!(limit);
-        }
-        run_tool("search_content", args, self.ctx.clone()).await
+        let args = serde_json::to_value(p).map_err(|error| {
+            ErrorData::invalid_params(format!("invalid workspace_search args: {error}"), None)
+        })?;
+        run_tool("workspace_search", args, self.ctx.clone()).await
     }
 
     #[tool(description = "\
@@ -555,59 +526,6 @@ config).")]
         Parameters(p): Parameters<ReadMediaParams>,
     ) -> std::result::Result<Content, ErrorData> {
         read_media_content(self.ctx.clone(), p.path, self.max_media_bytes).await
-    }
-
-    #[tool(description = "\
-Read the workspace's link graph for a single file. Returns `out` (this \
-file's outbound edges: wiki/markdown `[[links]]`, `#tags`, and \
-`@@mentions`) and `in` (backlinks: every other file that points at \
-this one). Use it for backlink-aware questions ('what links here?'), \
-to discover a tag's neighbourhood without reading every file, or to \
-plan an edit that should also touch the files that reference this \
-one. Optional `direction` (`out` / `in` / `both`, default `both`) \
-and `kinds` (subset of `link`/`tag`/`mention`) narrow the response.")]
-    async fn graph_neighbors(
-        &self,
-        Parameters(p): Parameters<GraphNeighborsParams>,
-    ) -> std::result::Result<String, ErrorData> {
-        let mut args = serde_json::json!({"path": p.path});
-        if let Some(dir) = p.direction {
-            args["direction"] = serde_json::Value::String(dir);
-        }
-        if let Some(kinds) = p.kinds {
-            args["kinds"] = serde_json::json!(kinds);
-        }
-        run_tool("graph_neighbors", args, self.ctx.clone()).await
-    }
-
-    #[tool(description = "\
-List every `#tag` known to the workspace's graph index with the number \
-of files that carry it. No arguments. Use it when the user asks \
-about tag usage, before a rename / merge, or to discover the actual \
-taxonomy instead of guessing. Pair with `graph_files_with_tag` to \
-expand a tag into its file list.")]
-    async fn graph_tags(
-        &self,
-        Parameters(_): Parameters<EmptyParams>,
-    ) -> std::result::Result<String, ErrorData> {
-        run_tool("graph_tags", serde_json::json!({}), self.ctx.clone()).await
-    }
-
-    #[tool(description = "\
-Return every file that carries the given `#tag`. The argument \
-includes the leading `#`. Cheap: the graph index keeps this \
-membership as a direct lookup, so it's preferable to scanning every \
-file with search_content when the user has a specific tag in mind.")]
-    async fn graph_files_with_tag(
-        &self,
-        Parameters(p): Parameters<GraphFilesWithTagParams>,
-    ) -> std::result::Result<String, ErrorData> {
-        run_tool(
-            "graph_files_with_tag",
-            serde_json::json!({"tag": p.tag}),
-            self.ctx.clone(),
-        )
-        .await
     }
 
     #[tool(description = "\
@@ -808,30 +726,23 @@ mod tests {
             resolve.description.as_deref(),
             Some(crate::prompts::RESOLVE_PATH_DESC)
         );
-        let search = Server::search_content_tool_attr();
+        let search = Server::workspace_search_tool_attr();
         assert_eq!(
             search.description.as_deref(),
-            Some(crate::prompts::SEARCH_CONTENT_DESC)
+            Some(crate::prompts::WORKSPACE_SEARCH_DESC)
+        );
+        let standard = tools::standard_tool_schemas()
+            .into_iter()
+            .find(|schema| schema.name == "workspace_search")
+            .expect("workspace_search standard schema");
+        assert_eq!(
+            serde_json::Value::Object((*search.input_schema).clone()),
+            standard.parameters
         );
         let image = Server::read_media_tool_attr();
         assert_eq!(
             image.description.as_deref(),
             Some(crate::prompts::READ_MEDIA_DESC)
-        );
-        let neighbors = Server::graph_neighbors_tool_attr();
-        assert_eq!(
-            neighbors.description.as_deref(),
-            Some(crate::prompts::GRAPH_NEIGHBORS_DESC)
-        );
-        let tags = Server::graph_tags_tool_attr();
-        assert_eq!(
-            tags.description.as_deref(),
-            Some(crate::prompts::GRAPH_TAGS_DESC)
-        );
-        let files_with_tag = Server::graph_files_with_tag_tool_attr();
-        assert_eq!(
-            files_with_tag.description.as_deref(),
-            Some(crate::prompts::GRAPH_FILES_WITH_TAG_DESC)
         );
         let report = Server::repo_report_tool_attr();
         assert_eq!(

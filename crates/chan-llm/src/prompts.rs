@@ -11,7 +11,7 @@
 /// edit-control rules + the expected tool-call patterns.
 ///
 /// The prompt enumerates the standard tools inline (read /
-/// write / list / search plus repo_report and the graph_* tools,
+/// write / list / workspace_search plus repo_report,
 /// and read_media for MCP clients). Hosts can swap in
 /// `SYSTEM_PROMPT_NO_TOOLS` when chan's standard tool schemas are
 /// not advertised directly.
@@ -30,21 +30,12 @@ You can call tools to interact with the workspace:
   - list_files()             enumerate every file in the workspace
   - resolve_path(path)       translate a chan path to a host \
                               filesystem path for shell tools
-  - search_content(query)    BM25 search across the workspace
+  - workspace_search(...)   bounded content/entity search and graph \
+                              traversal across the workspace
   - repo_report(...)         per-file language / SLOC counts plus \
                               per-language roll-ups and a COCOMO \
                               cost estimate for the whole workspace \
                               (or a subdirectory or file list)
-  - graph_neighbors(path)    outbound links/tags/mentions for a \
-                              file plus its backlinks (other files \
-                              that point at it). Use this to answer \
-                              'what links here?' or to find related \
-                              notes without reading the whole workspace.
-  - graph_tags()             every `#tag` in the workspace with file \
-                              counts. Pair with graph_files_with_tag \
-                              to expand a tag to its files.
-  - graph_files_with_tag(t)  list every file carrying the given tag.
-
 Use the tools rather than guessing at content. When you propose \
 an edit, return the FULL new file content via write_file; partial \
 diffs are not supported. Editable text includes markdown, plain \
@@ -124,9 +115,8 @@ Confirm the proposal is in flight in ONE short sentence and \
 STOP. Do not retry the tool, rephrase the proposal, paste the \
 content as text, or propose alternatives.\n\
   - For investigation, prefer the MCP tools (`mcp__chan__read_file`, \
-`mcp__chan__list_files`, `mcp__chan__search_content`, \
-`mcp__chan__graph_neighbors`, `mcp__chan__graph_tags`, \
-`mcp__chan__graph_files_with_tag`, `mcp__chan__repo_report`, \
+`mcp__chan__list_files`, `mcp__chan__workspace_search`, \
+`mcp__chan__repo_report`, \
 `mcp__chan__read_media`) over \
 your own Read / Glob / Grep when the target is in the user's workspace; \
 they go through chan-workspace's sandbox and graph index, which match the \
@@ -179,7 +169,7 @@ Pass an optional `prefix` (POSIX rel-path) to scope the listing to \
 a subdirectory; omit it to list the whole workspace, including \
 drafts in the in-workspace `.Drafts/` directory. Listings are \
 capped at 2,000 entries; if `truncated` \
-is true, narrow with a prefix or call search_content instead.";
+is true, narrow with a prefix or call workspace_search instead.";
 
 /// Description of the resolve_path tool.
 pub const RESOLVE_PATH_DESC: &str = "\
@@ -190,13 +180,17 @@ list_files with chan paths. The path argument is POSIX-style in \
 chan's public namespace and resolves under the workspace root, \
 including drafts in the in-workspace `.Drafts/` directory.";
 
-/// Description of the search_content tool.
-pub const SEARCH_CONTENT_DESC: &str = "\
-Search the workspace's BM25 index for the given query. Returns hits \
-with relative paths, relevance scores, and short snippets around \
-the match. Useful for finding which file mentions a topic before \
-issuing read_file on it. `limit` defaults to 20 and is hard-capped \
-at 100.";
+/// Description shared by standard and MCP workspace-search tools.
+pub const WORKSPACE_SEARCH_DESC: &str = "\
+Search and traverse the active workspace with one bounded request. \
+Use `query` for content or entity search and typed `from` selectors \
+for exact file, directory, tag, mention, contact, or language starts. \
+`domains` chooses returned content/entities; `depth`, `direction`, and \
+`relationship_kinds` control traversal. The result includes content \
+hits, entity matches, normalized graph nodes and relationships, \
+effective limits, truncation, warnings, and structured errors. It \
+also covers query-free entity browsing, backlinks, tag membership, \
+contacts, language membership, linked media, and containment.";
 
 /// Description of the repo_report tool.
 pub const REPO_REPORT_DESC: &str = "\
@@ -213,32 +207,6 @@ explicit file list. When both are present, `paths` wins. \
 are returned; leave it off for an overview, set true when you \
 need to drill in. The per-file array is capped at 200 entries; if \
 `truncated` is true, scope further with `prefix` or `paths`.";
-
-/// Description of the graph_neighbors tool.
-pub const GRAPH_NEIGHBORS_DESC: &str = "\
-Read the workspace's link graph for a single file. Returns `out` (this \
-file's outbound edges: wiki/markdown `[[links]]`, `#tags`, and \
-`@@mentions`) and `in` (backlinks: every other file that points at \
-this one). Use it for backlink-aware questions ('what links here?'), \
-to discover a tag's neighbourhood without reading every file, or to \
-plan an edit that should also touch the files that reference this \
-one. Optional `direction` (`out` / `in` / `both`, default `both`) \
-and `kinds` (subset of `link`/`tag`/`mention`) narrow the response.";
-
-/// Description of the graph_tags tool.
-pub const GRAPH_TAGS_DESC: &str = "\
-List every `#tag` known to the workspace's graph index with the number \
-of files that carry it. No arguments. Use it when the user asks \
-about tag usage, before a rename / merge, or to discover the actual \
-taxonomy instead of guessing. Pair with `graph_files_with_tag` to \
-expand a tag into its file list.";
-
-/// Description of the graph_files_with_tag tool.
-pub const GRAPH_FILES_WITH_TAG_DESC: &str = "\
-Return every file that carries the given `#tag`. The argument \
-includes the leading `#`. Cheap: the graph index keeps this \
-membership as a direct lookup, so it's preferable to scanning every \
-file with search_content when the user has a specific tag in mind.";
 
 /// Description of the read_media tool. MCP-only: not surfaced
 /// through `tools::standard_tool_schemas()`. Pinned against the
