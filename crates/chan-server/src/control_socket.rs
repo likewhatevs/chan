@@ -41,8 +41,8 @@ pub use chan_shell::{ControlRequest, ControlResponse};
 // pushes a SurveySpec to the SPA and formats the SurveyReply for the CLI.
 // TeamOp tags the `cs terminal team` op (new | load).
 use chan_shell::{
-    submit_writes, Identity, PaneOp, PastePrefer, ServeKind, SubmitAgent, SurveyReply, SurveySpec,
-    TeamOp, MAX_CLIPBOARD_BYTES, MAX_CONTROL_REQUEST_BYTES,
+    submit_writes, Identity, PaneOp, PastePrefer, ResolvedSubmit, ServeKind, SubmitAgent,
+    SurveyReply, SurveySpec, TeamOp, MAX_CLIPBOARD_BYTES, MAX_CONTROL_REQUEST_BYTES,
 };
 
 #[derive(Debug, Serialize)]
@@ -1080,6 +1080,7 @@ async fn handle_request(req: ControlRequest, ctx: &ControlSocketCtx) -> ControlR
             tab_name,
             tab_group,
             data,
+            submit,
         } => {
             let Some(registry) = terminal_registry else {
                 return ControlResponse::Error {
@@ -1091,6 +1092,7 @@ async fn handle_request(req: ControlRequest, ctx: &ControlSocketCtx) -> ControlR
                 tab_name.as_deref(),
                 tab_group.as_deref(),
                 &data,
+                submit.as_ref(),
             ))
         }
         ControlRequest::TermList => {
@@ -3248,23 +3250,24 @@ fn strip_leading_slash(p: &Path) -> String {
     p.to_string_lossy().trim_start_matches('/').to_string()
 }
 
-/// Category 2: ENQUEUE bytes onto the matching live sessions' write queues.
+/// Category 2: ENQUEUE logical input onto matching live sessions' write queues.
 /// At least one selector is required so a missing filter cannot fan out to
 /// every terminal by accident. The bytes are not written to the PTY here:
 /// the per-session drainer delivers each queued write when its agent is idle
 /// (the serialization the Rich Prompt / poke-chain workflow needs), so
-/// chained `cs terminal write`s submit one after another. `data` already
-/// carries the caller's submit chord (the CLI's `--submit`).
+/// compatible submitted writes can be framed together at drain time. The
+/// caller already resolved `submit`, including an env-only template override.
 fn term_write(
     registry: &TerminalRegistry,
     tab_name: Option<&str>,
     tab_group: Option<&str>,
     data: &str,
+    submit: Option<&ResolvedSubmit>,
 ) -> Result<String, String> {
     if tab_name.is_none() && tab_group.is_none() {
         return Err("term write needs a tab name and/or group selector".into());
     }
-    let outcome = registry.enqueue_write_matching(tab_name, tab_group, data.as_bytes());
+    let outcome = registry.enqueue_write_matching(tab_name, tab_group, data, submit);
     if outcome.queued == 0 {
         return if outcome.full > 0 {
             Err(format!(
@@ -4762,14 +4765,14 @@ mod tests {
     #[test]
     fn term_write_requires_a_selector() {
         let (_root, registry) = empty_registry();
-        let err = term_write(&registry, None, None, "ls").expect_err("no selector");
+        let err = term_write(&registry, None, None, "ls", None).expect_err("no selector");
         assert!(err.contains("selector"), "got: {err}");
     }
 
     #[test]
     fn term_write_reports_no_match_on_an_empty_registry() {
         let (_root, registry) = empty_registry();
-        let err = term_write(&registry, Some("nope"), None, "ls").expect_err("no match");
+        let err = term_write(&registry, Some("nope"), None, "ls", None).expect_err("no match");
         assert!(err.contains("no live terminal session"), "got: {err}");
     }
 

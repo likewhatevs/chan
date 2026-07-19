@@ -14,6 +14,8 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+use crate::submit::ResolvedSubmit;
+
 /// Default `cs terminal survey` reply window, in seconds. The CLI flag
 /// `--timeout` defaults to the same value; this serde default only covers a
 /// caller that omits the field on the wire, so the server still bounds the
@@ -151,6 +153,8 @@ pub enum ControlRequest {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         tab_group: Option<String>,
         data: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        submit: Option<ResolvedSubmit>,
     },
     TermList,
     // Category 2: list the windows this tenant knows about -- the same
@@ -598,6 +602,33 @@ mod survey_wire_tests {
     //! reply route; a Rust rename that drifts them breaks at runtime
     //! with a green build, so assert the bytes, not just round-trip.
     use super::*;
+
+    #[test]
+    fn term_write_carries_logical_text_and_resolved_submit() {
+        let request = ControlRequest::TermWrite {
+            tab_name: Some("@@Worker".into()),
+            tab_group: None,
+            data: "poke\n".into(),
+            submit: Some(ResolvedSubmit {
+                agent: crate::SubmitAgent::Claude,
+                template: "{}\x1b[27;9;13~".into(),
+                source: crate::SubmitTemplateSource::BuiltIn,
+            }),
+        };
+        let raw = serde_json::to_string(&request).unwrap();
+        assert_eq!(
+            raw,
+            r#"{"type":"term_write","tab_name":"@@Worker","data":"poke\n","submit":{"agent":"claude","template":"{}\u001b[27;9;13~","source":"built_in"}}"#
+        );
+        let back: ControlRequest = serde_json::from_str(&raw).unwrap();
+        match back {
+            ControlRequest::TermWrite { data, submit, .. } => {
+                assert_eq!(data, "poke\n");
+                assert_eq!(submit.unwrap().agent, crate::SubmitAgent::Claude);
+            }
+            other => panic!("expected term_write, got {other:?}"),
+        }
+    }
 
     #[test]
     fn survey_spec_is_camel_case_with_explicit_nulls() {

@@ -10,7 +10,7 @@ use axum::extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Json, Path as AxumPath, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use chan_shell::{submit_writes, SubmitAgent};
+use chan_shell::{ResolvedSubmit, SubmitAgent};
 use portable_pty::PtySize;
 use serde::{Deserialize, Serialize};
 
@@ -720,28 +720,16 @@ async fn terminal_ws(mut socket: WebSocket, state: Arc<AppState>, opts: Terminal
                                 state.terminal_sessions.close(&id, CloseReason::Explicit);
                             }
                             Ok(ClientFrame::Prompt { data, agent, id }) => {
-                                // Rich Prompt bubble: append the target agent's
-                                // submit chord (default claude when omitted),
-                                // then ENQUEUE onto the shared write queue so it
+                                // Rich Prompt bubble: resolve the target agent's
+                                // submit spec (default claude when omitted),
+                                // then ENQUEUE logical text onto the shared write queue so it
                                 // serializes with `cs terminal write` pokes and
                                 // submits when the agent is idle.
                                 let submit = SubmitAgent::from_agent_name(
                                     agent.as_deref().unwrap_or("claude"),
-                                );
-                                // gemini needs its submit chord as a SEPARATE
-                                // queue item (an immediate Return becomes
-                                // Shift+Return); submit_writes returns two writes
-                                // for gemini, one for everyone else. Each
-                                // enqueued item drains idle-gated, so the CR
-                                // lands as a distinct keypress. The list goes
-                                // in as ONE all-or-nothing message: a partial
-                                // push at the cap would deliver a body whose
-                                // chord was silently dropped.
-                                let writes: Vec<Vec<u8>> = submit_writes(data, submit)
-                                    .into_iter()
-                                    .map(String::into_bytes)
-                                    .collect();
-                                let outcome = session.enqueue_prompt(&writes, id.clone());
+                                )
+                                .map(ResolvedSubmit::resolve);
+                                let outcome = session.enqueue_prompt(data, submit, id.clone());
                                 if let Some(id) = id {
                                     let frame = match outcome {
                                         Some(depth) => ServerFrame::PromptAck {

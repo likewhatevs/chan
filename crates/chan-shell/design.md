@@ -66,7 +66,7 @@ The split exists so chan-server can share the wire contract WITHOUT linking clap
   - chan-shell's own `default` feature is `client`, so a standalone `cargo build -p chan-shell` and the crate's own tests get the full surface.
   - The workspace dependency pin sets `default-features = false`. Every consumer therefore starts wire-only and opts the client layer back in explicitly. chan-server depends with the bare workspace pin (`chan-shell = { workspace = true }`) and gets just the serde types; `chan` and chan-desktop add `features = ["client"]`.
   - The `client` feature gates the only heavy deps: clap, tokio, serde_json, anyhow, and toml. Wire-only chan-server pulls serde and nothing else, which keeps clap and the tokio transport out of the server binary.
-  - The submit module is deliberately NOT behind `client`: `SubmitAgent`, `apply_submit_chord`, and `submit_writes` compile unconditionally, because chan-server's server-side team spawner applies the agent submit chord and must read the same map the `cs` client does. Only the `ValueEnum` parse impl for the `--submit` flag is `client`-gated, inside the module.
+  - The submit module is deliberately NOT behind `client`: `SubmitAgent`, `ResolvedSubmit`, the input-plan builder, `apply_submit_chord`, and `submit_writes` compile unconditionally, because the wire, terminal queue, and chan-server's direct team spawner share the same map. Only the `ValueEnum` parse impl for the `--submit` flag is `client`-gated, inside the module.
 
 ## 4. The wire model
 
@@ -135,13 +135,15 @@ The server gate reaches old `cs` binaries immediately (it lives server-side); on
 
 ## 6. The agent submit-chord map
 
-A coding agent running inside a chan terminal submits its compose buffer on a different byte sequence depending on which agent it is, so the hands-free completion poke (`cs terminal write --submit=<agent>`) has to append the right one. The submit-chord layer owns that map and the command -> agent derivation, and is the single source of truth mirrored by the SPA's TypeScript detection; the server applies the chord.
+A coding agent running inside a chan terminal submits its compose buffer on a different byte sequence depending on which agent it is, so the hands-free completion poke (`cs terminal write --submit=<agent>`) has to use the right one. The submit-chord layer owns that map and the command -> agent derivation, and is the single source of truth mirrored by the SPA's TypeScript detection.
 
 `SubmitAgent::derive` maps a spawn command, with an optional `CHAN_AGENT` env override, to the agent whose encoding it uses. The override wins when it names a known agent or an explicit shell (`none` / `shell`); otherwise a loose whole-word sniff of the command recognizes `claude` / `codex` / `gemini` / `opencode` anywhere as a word, so `claude --resume`, `/usr/local/bin/codex-cli`, and `opencode-ai` resolve while `claudette` and `myopencode` do not.
 
 Each agent has a `{}`-templated chord whose built-in default reproduces the live-probed submit bytes: claude appends the xterm modifyOtherKeys Cmd+Enter CSI (`\x1b[27;9;13~`); codex and opencode wrap the text in bracketed paste then a CR; gemini appends a plain CR. Codex needs the wrap because a bare trailing CR gets coalesced into its paste burst and lands as a literal newline. OpenCode uses the same one-write bytes because they are proven for multiline and paste-sized input. The template is overridable at runtime: env `CHAN_SUBMIT_<AGENT>` beats a process-global map loaded from `<config>/chan/submit.toml`, which beats the default. Override strings carry C-style escapes (`\e`, `\xHH`, `\r`, ...) so a config value can express control bytes as text.
 
-gemini is the one agent that needs the chord as a SEPARATE PTY write: gemini 0.51 converts Return received within 30 ms of inserted text into Shift+Return, including text delivered as bracketed paste. `submit_writes` returns one write for every other agent and two for gemini (the body, then the bare chord), which the caller must deliver as distinct, idle-gated events so the CR registers as its own keypress.
+`cs terminal write` resolves the effective template in the client process and carries logical text plus `ResolvedSubmit` over the control wire. The per-session queue retains those values until drain time, so an env-only client override is preserved and terminal control bytes are encoded in one place only when delivery begins. Rich Prompt resolves the same metadata server-side and enters the queue as one logical message. The queue tracks raw-write cost for its 100-unit capacity while reporting logical message depth to the SPA.
+
+`plan_submitted_input` is the drain-time byte source of truth. Gemini remains the split-write agent: Gemini 0.51 converts Return received within 30 ms of inserted text into Shift+Return, including text delivered as bracketed paste, so its body and bare CR are separate ordered parts of one atomic controller sequence. The compatibility helpers `apply_submit_chord` and `submit_writes` remain for direct team-spawn callers.
 
 ## 7. Interface contracts
 
