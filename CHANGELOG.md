@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Added
+
+- **`chan dump-skill` prints an agent-facing manual of chan's whole surface.** One command teaches an agent what chan is and how to drive it: the `cs` command surface, the command launcher and the built-in apps, authoring documents with diagrams and slide decks, the project graph, teams of agents, and devservers. `chan dump-skill > ~/.claude/skills/chan/SKILL.md` installs it, `--list` prints the topic index, and `--topic <slug>` prints one page. Every section is the live `--help` of a real command, so the manual cannot go stale against the binary printing it; `chan` and `cs` help text is expanded throughout to carry that detail.
+
 ## [v0.71.0] - 2026-07-19
 
 v0.71.0 makes OpenCode a first-class terminal agent, replaces the desktop's static wildcard gateway grants with authenticated exact-origin native trust, unifies workspace search and graph traversal behind one bounded contract and one agent tool, keeps the last five CLI and desktop versions resolvable for `chan upgrade --version`, and fixes two editor cosmetics.
