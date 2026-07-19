@@ -1,5 +1,7 @@
 # Cosmetic changes
 
+> Status: shipped in [v0.71.0](../../release/release-v0.71.0.md).
+
 ## Editor
 
 - The light mode is failing to render the codeblock's "grey" box, there's no difference with the background:![](./image.png#w=250)

@@ -1,5 +1,7 @@
 # Unify Workspace Search and Graph Traversal
 
+> Status: shipped in [v0.71.0](../../release/release-v0.71.0.md).
+
 ## Summary
 
 Add one bounded search and traversal contract to `chan-workspace` and use it from `cs`, `chan workspace`, chan-server, and `chan-llm`. The contract combines content retrieval, lexical entity lookup, exact typed seeds, and bounded graph traversal without transferring the whole visualization graph.

@@ -4,12 +4,25 @@ All notable changes to this project will be documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [v0.71.0] - 2026-07-19
+
+v0.71.0 makes OpenCode a first-class terminal agent, replaces the desktop's static wildcard gateway grants with authenticated exact-origin native trust, unifies workspace search and graph traversal behind one bounded contract and one agent tool, keeps the last five CLI and desktop versions resolvable for `chan upgrade --version`, and fixes two editor cosmetics.
 
 ### Added
 
 - **OpenCode is a first-class terminal agent.** `cs terminal write --submit=opencode`, `CHAN_AGENT=opencode`, `CHAN_SUBMIT_OPENCODE`, Team Work command derivation, and `[opencode]` in `submit.toml` use one bracketed-paste-plus-Return PTY write, including multiline and paste-sized prompts. Gemini keeps its body and Return as two ordered writes.
 - **Rich Prompt uses server-reported terminal identity.** Terminal session frames carry an optional spawn-derived submit agent for Claude, Codex, Gemini, and OpenCode; restart and reattach recompute it from the current command and `CHAN_AGENT`. Shells and unknown commands omit it, and the existing keyboard-protocol inference remains the fallback. No agent selector is added to the SPA.
+
+### Changed
+
+- **The desktop grants native access per authenticated exact origin, not a wildcard.** The old static `*.chan.app` / `*.devserver.chan.app` capability is gone; each gateway devserver is trusted only for its exact authenticated origin, derived from the gateway's entry response and persisted per gateway as a `(gateway id, owner, full devserver id)` trust tuple. A shared row warns and asks for consent before its first connect, trust survives a restart, revoke tears down the row's windows, and a sibling, apex, wrong-port, or unrelated origin is refused. The gateway wire and API version are unchanged.
+- **Workspace search and graph traversal share one bounded contract.** `cs search`, `chan workspace search`/`graph`, the new `POST /api/search/workspace` route, and the MCP tool surface now go through a single `workspace_search` (the four separate read tools collapse into one), with typed query, from, domain, depth, direction, edge-kind, and limit selectors; `--scope`, `--target`, and `GraphScope` are removed. `/api/graph` output is unchanged.
+- **`chan upgrade --version X.Y.Z` resolves older releases.** The `/dl` metadata generator now retains the last five GA versions as per-version CLI and desktop manifests plus a multi-entry `releases.json`, so pinning an older version resolves instead of only `latest`; rc and prerelease tags are filtered out.
+
+### Fixed
+
+- **Light-mode fenced code blocks are visible again.** The light code-block fill sat within a few RGB steps of the page background and read as no fill; it now uses GitHub's Primer gray so the slab is a distinct surface. The dark code block and the sibling editor themes are matched to the same intent.
+- **The dark-mode editor selection is readable.** The selection was rendering CodeMirror's hard-coded light-grey base-theme default (a near-white wash under near-white text); it now routes through the app's GitHub-blue selection token, keeping selected text legible.
 
 ## [v0.70.3] - 2026-07-18
 

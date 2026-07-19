@@ -1,5 +1,5 @@
 // v0.71.0 editor-cosmetics regression guard (Kimi-B lane). Covers the
-// two theme-token fixes from team/roadmap/v0.71.0/cosmetics.md:
+// two theme-token fixes from team/roadmap/done/cosmetics.md:
 //
 // 1. LIGHT: the fenced code-block slab must visibly separate from the
 //    page background (github theme --chan-editor-code-block-bg was

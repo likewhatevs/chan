@@ -1,5 +1,7 @@
 # Authenticated Exact-Origin Tauri Permissions
 
+> Status: shipped in [v0.71.0](../../release/release-v0.71.0.md).
+
 Status: analysis and implementation proposal. Grounded against `a27007f5` (`v0.70.3`) and checked against the `v0.70.1` tag on 2026-07-18.
 
 ## Summary

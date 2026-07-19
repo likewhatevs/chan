@@ -1,5 +1,7 @@
 # Gemini Verification and First-Class OpenCode Terminal Support
 
+> Status: shipped in [v0.71.0](../../release/release-v0.71.0.md).
+
 Status: implemented. Grounded against OpenCode 1.18.3 and Gemini CLI 0.51.0 on 2026-07-18.
 
 Implementation branch: `feature/opencode-terminal-support`.

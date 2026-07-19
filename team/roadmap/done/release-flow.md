@@ -1,5 +1,7 @@
 # Roadmap and Release Flow
 
+> Status: shipped in [v0.71.0](../../release/release-v0.71.0.md).
+
 Status: proposal and execution plan. This is the first v0.71.0 item to land before any technical v0.71.0 work. Grounded against `a27007f5` (`v0.70.3`) on 2026-07-18.
 
 ## Summary

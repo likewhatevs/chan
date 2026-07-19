@@ -1,5 +1,7 @@
 # Drain Queued Terminal Notifications in One Agent Turn
 
+> Carried forward from v0.71.0 (round 2 did not run); not yet scheduled.
+
 Status: investigation complete; implementation plan. Grounded against `a27007f5` (`v0.70.3`) on 2026-07-18.
 
 ## Summary

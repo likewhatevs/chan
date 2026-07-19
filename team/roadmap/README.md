@@ -19,30 +19,24 @@ Each item is one Markdown file that names an observed behavior or need, the evid
 
 ## Active
 
-### v0.71.0
-
-Scope descriptions are in each linked proposal. State and immediate action:
+### v0.72.0
 
 | item | state | what needs to happen |
 | --- | --- | --- |
-| [release-flow](v0.71.0/release-flow.md) | landed on `main` (39db4e6b) | move to `done/` at GA |
-| [terminal-gemini-opencode](v0.71.0/terminal-gemini-opencode.md) | implementation in flight | rebase `feature/opencode-terminal-support` onto `main`, gate, merge as the first intake |
-| [chan-workspace-graph-fix](v0.71.0/chan-workspace-graph-fix.md) | proposed | assign a lane, implement, validate |
-| [chan-upgrade-release-history-fix](v0.71.0/chan-upgrade-release-history-fix.md) | proposed | assign a lane, implement, validate |
-| [terminal-write-queue-drain](v0.71.0/terminal-write-queue-drain.md) | proposed | assign a lane, implement, validate |
-| [tauri-permission](v0.71.0/tauri-permission.md) | proposed | assign the desktop lane, implement, validate |
-| [cosmetics](v0.71.0/cosmetics.md) | proposed | assign the web/editor lane, implement, validate |
-
-**Next steps**
-
-1. Intake the opencode work first: rebase `feature/opencode-terminal-support` onto `main`, run the gate, and merge it as the first accepted candidate. It carries `terminal-gemini-opencode.md`, so drop that file's stale `dev/` copy at the rebase.
-2. Prepare the delivery team with `cs terminal team`: assign the remaining proposed items to file-disjoint lanes by surface, with a dependency graph and a per-item validation matrix.
-3. Open `0.71.0-rc1`: bump every version pin in one commit, dispatch the `publish=false` dry run, validate the artifacts, and iterate.
-4. GA close in one commit: write `team/release/release-v0.71.0.md`, index it, move every v0.71.0 item to `done/` with an honest status line, carry the CHANGELOG and pins, and tag `v0.71.0`.
+| [terminal-write-queue-drain](v0.72.0/terminal-write-queue-drain.md) | deferred from v0.71.0 (round 2 did not run) | assign a lane, implement, validate; rebases on the merged v0.71.0 control plane and adds only a `TermWrite.submit` field |
 
 ## Completed
 
-No version has closed under this tree yet; v0.71.0 is the first release to adopt it.
+### v0.71.0
+
+Shipped 2026-07-19; see [release-v0.71.0](../release/release-v0.71.0.md). Closed items in [`done/`](done/):
+
+- [terminal-gemini-opencode](done/terminal-gemini-opencode.md) - OpenCode as a first-class terminal agent.
+- [tauri-permission](done/tauri-permission.md) - authenticated exact-origin desktop native trust.
+- [chan-workspace-graph-fix](done/chan-workspace-graph-fix.md) - unified workspace search and graph traversal.
+- [chan-upgrade-release-history-fix](done/chan-upgrade-release-history-fix.md) - `chan upgrade --version` resolves the last five GA releases.
+- [cosmetics](done/cosmetics.md) - editor light-codeblock and dark-selection fixes.
+- [release-flow](done/release-flow.md) - the team/roadmap + team/release process migration.
 
 ## See also
 

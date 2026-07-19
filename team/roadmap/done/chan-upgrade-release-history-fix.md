@@ -1,5 +1,7 @@
 # Keep the Last 5 CLI Upgrade Versions Available
 
+> Status: shipped in [v0.71.0](../../release/release-v0.71.0.md).
+
 ## Summary
 
 `chan upgrade --version X.Y.Z` already resolves a concrete metadata URL:
