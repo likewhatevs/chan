@@ -23,7 +23,7 @@ Each item is one Markdown file that names an observed behavior or need, the evid
 
 | item | state | what needs to happen |
 | --- | --- | --- |
-| [aur-support](v0.72.0/aur-support.md) | implemented; release validation pending | validate both native architectures after the GA tag, hand-smoke CachyOS, and confirm both AUR repositories at `0.72.0-1` |
+| [aur-support](v0.72.0/aur-support.md) | implemented; release validation pending | dry-run the credential probe before the tag, hand-smoke CachyOS, confirm both AUR repositories at `0.72.0-1`, and prove the unverified aarch64 leg |
 | [terminal-write-queue-drain](v0.72.0/terminal-write-queue-drain.md) | deferred from v0.71.0 (round 2 did not run) | assign a lane, implement, validate; rebases on the merged v0.71.0 control plane and adds only a `TermWrite.submit` field |
 
 ## Completed

@@ -8,7 +8,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
-- **Arch and CachyOS users can install source-built chan packages from the AUR.** The `chan` and `chan-desktop` recipes build natively on x86_64 and Arch Linux ARM aarch64, disable self-upgrade in favor of the AUR helper, and publish only after clean Arch builds pass on both architectures. The desktop recipe links against the host WebKitGTK/Mesa stack instead of repackaging the Ubuntu-built AppImage.
+- **Arch and CachyOS users can install source-built chan packages from the AUR.** The `chan` and `chan-desktop` recipes disable self-upgrade in favor of the AUR helper and publish only after a clean Arch x86_64 container builds, installs, smokes, and namcap-checks both packages. The desktop recipe links against the host WebKitGTK/Mesa stack instead of repackaging the Ubuntu-built AppImage. The recipes also declare aarch64, which builds from the same sources but is not covered by the release gate yet.
 
 ## [v0.71.0] - 2026-07-19
 

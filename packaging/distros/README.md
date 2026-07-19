@@ -39,11 +39,13 @@ Launchpad (`ppa:fiorix/chan`, processors amd64 + arm64 -- Launchpad defaults to 
 
 ## Release automation
 
-`.github/workflows/distros-publish.yml` runs when the Release workflow completes for a `vX.Y.Z` tag (workflow_run; branch dry runs are filtered out) and is deliberately separate from release.yml: a distro failure can never block or fail the GitHub release. Retry with `workflow_dispatch` and the tag. Publication steps no-op when their secret is absent:
+`.github/workflows/distros-publish.yml` runs when the Release workflow completes for a `vX.Y.Z` tag (workflow_run; branch dry runs are filtered out) and is deliberately separate from release.yml: a distro failure can never block or fail the GitHub release. Publication steps no-op when their secret is absent:
 
 - `copr` curls the custom webhook for both packages.
 - `launchpad` rebuilds the vendored tarball at the released commit, imports `LAUNCHPAD_GPG_PRIVATE_KEY`/`LAUNCHPAD_GPG_PASSPHRASE` into an ephemeral loopback-pinentry keyring, and runs the same build-source.sh + upload.sh as the local flow.
-- `aur-validate` builds both source recipes natively on upstream Arch x86_64 and Arch Linux ARM aarch64. `aur-publish` pushes only the validated `PKGBUILD`/`.SRCINFO` metadata using `AUR_SSH_PRIVATE_KEY`, then verifies the version through the AUR RPC. See [`arch/README.md`](arch/README.md).
+- `aur-auth` proves the `AUR_SSH_PRIVATE_KEY` credential against `aur.archlinux.org` before anything is pushed, and `aur-validate` builds, installs, and smokes both source recipes on a clean upstream Arch x86_64 container. `aur-publish` pushes only the validated `PKGBUILD`/`.SRCINFO` metadata, then verifies the version through the AUR RPC. `aur-validate-arm` covers the unverified Arch Linux ARM aarch64 leg and never gates publication. See [`arch/README.md`](arch/README.md).
+
+Retry with `workflow_dispatch` and the tag. `targets` scopes the run to `copr`, `launchpad`, or `aur`, so retrying a transient Launchpad ftp 550 does not also rebuild the Arch packages and re-push the AUR. `publish` mirrors release.yml and defaults to false: a dispatch renders, signs, and probes credentials without uploading anything unless it is set to true.
 
 ## Toolchain note
 
