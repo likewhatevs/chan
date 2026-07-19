@@ -92,6 +92,8 @@ pub struct HelloAckErr {
 /// shapes; clients should fall back to a generic surface for codes
 /// they do not recognise so the protocol stays additive.
 pub mod error_code {
+    /// The authoritative fleet admission service is unavailable or warming.
+    pub const CONTROL_UNAVAILABLE: &str = "control_unavailable";
     /// Registering this workspace would exceed the per-user cap.
     pub const TOO_MANY_WORKSPACES: &str = "too_many_workspaces";
     /// `Hello.workspace` failed `is_valid_workspace_name`.

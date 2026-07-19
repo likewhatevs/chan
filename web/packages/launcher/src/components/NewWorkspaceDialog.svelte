@@ -210,7 +210,7 @@
       parsed = null;
     }
     if (!parsed || (parsed.protocol !== "https:" && parsed.protocol !== "http:")) {
-      error = "Enter the gateway URL, like https://id.chan.app";
+      error = "Enter the gateway URL, like https://gateway.example.com";
       return;
     }
     submitting = true;
@@ -310,7 +310,7 @@
         type="text"
         class="mono"
         bind:value={gatewayUrl}
-        placeholder="https://id.chan.app"
+        placeholder="https://gateway.example.com"
         autocomplete="off"
         spellcheck="false"
         disabled={editingGateway != null}

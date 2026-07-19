@@ -115,6 +115,8 @@ impl TestEnv {
         let cfg = Arc::new(Config {
             bind_addr: "127.0.0.1:0".parse().unwrap(),
             base_url: "http://localhost:7000/".parse().unwrap(),
+            devserver_proxy_origin: "https://proxy.example.test".parse().unwrap(),
+            devserver_tunnel_origin: "https://tunnel.example.test".parse().unwrap(),
             database_url: url.clone(),
             cookie_secure: false,
             profile_client,

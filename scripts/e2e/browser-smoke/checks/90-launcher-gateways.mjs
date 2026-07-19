@@ -123,8 +123,10 @@ export default {
 
       // Add a gateway through the URL-only form.
       await page.click("button[class*='add-gateway']");
-      await page.waitForSelector('input[placeholder="https://id.chan.app"]', { timeout: 10_000 });
-      await page.type('input[placeholder="https://id.chan.app"]', "https://gw.example");
+      await page.waitForSelector('input[placeholder="https://gateway.example.com"]', {
+        timeout: 10_000,
+      });
+      await page.type('input[placeholder="https://gateway.example.com"]', "https://gw.example");
       await page.type('input[placeholder="Defaults to the URL host"]', "smoke-gw");
       await page.click("[class*='dialog-footer'] button[class*='primary']");
       await page.waitForFunction(

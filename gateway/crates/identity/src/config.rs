@@ -15,6 +15,8 @@ use crate::workspace_admin_client::WorkspaceAdminClient;
 pub struct Config {
     pub bind_addr: SocketAddr,
     pub base_url: Url,
+    pub devserver_proxy_origin: Url,
+    pub devserver_tunnel_origin: Url,
     pub database_url: String,
     pub cookie_secure: bool,
     pub profile_client: ProfileClient,
@@ -61,27 +63,9 @@ impl Config {
             .parse()
             .context("BIND_ADDR must be host:port")?;
 
-        // Single-source domain config. CHAN_DOMAIN drives both the id
-        // and workspace hostnames; PUBLIC_SCHEME the URL scheme. Both
-        // default dev-shaped (localtest.me / http); production sets
-        // them once in the shared environment file. devserver-proxy
-        // derives the same hosts from the same vars, so the two cannot
-        // drift (the workspace-gate `aud` must match). See
-        // gateway_common::domain.
-        let domains = gateway_common::domain::Domains::from_env();
-        let public_scheme = read_public_scheme()?;
-
-        // identity-service's own public origin, used to build the
-        // OAuth callback redirect URIs registered with each provider.
-        // Defaults to the derived id host; override with BASE_URL when
-        // the origin differs (e.g. a dev port:
-        // http://id.localtest.me:7000).
-        let base_url: Url = match std::env::var("BASE_URL") {
-            Ok(v) if !v.trim().is_empty() => v.trim().parse().context("BASE_URL must be a URL")?,
-            _ => format!("{public_scheme}://{}", domains.id_host)
-                .parse()
-                .context("derived BASE_URL must be a URL")?,
-        };
+        let base_url = required_origin("BASE_URL")?;
+        let devserver_proxy_origin = required_origin("DEVSERVER_PROXY_ORIGIN")?;
+        let devserver_tunnel_origin = required_origin("DEVSERVER_TUNNEL_ORIGIN")?;
 
         let database_url = std::env::var("DATABASE_URL").context("DATABASE_URL is required")?;
 
@@ -109,57 +93,17 @@ impl Config {
         // disabled rather than guarded by an empty string.
         let identity_admin_token = std::env::var("IDENTITY_ADMIN_TOKEN").unwrap_or_default();
 
-        // Wildcard suffix used to stitch the entry-token's `aud`
-        // claim and the redirect Location. Defaults to the derived
-        // `.devserver.<base>`; override with DEVSERVER_WILDCARD_SUFFIX
-        // only for unusual layouts.
-        let devserver_wildcard_suffix = match std::env::var("DEVSERVER_WILDCARD_SUFFIX") {
-            Ok(v) if !v.trim().is_empty() => v.trim().to_string(),
-            _ => domains.devserver_wildcard_suffix.clone(),
-        };
-        if !devserver_wildcard_suffix.starts_with('.') {
-            anyhow::bail!(
-                "DEVSERVER_WILDCARD_SUFFIX must start with a dot (got \
-                 {devserver_wildcard_suffix:?}); e.g. .devserver.chan.app"
-            );
-        }
-
-        // Scheme of the workspace-gate redirect. Defaults to the
-        // shared PUBLIC_SCHEME; override with DEVSERVER_PUBLIC_SCHEME
-        // only when the workspace redirect scheme differs from the id
-        // origin's (rare).
-        let workspace_public_scheme = match std::env::var("DEVSERVER_PUBLIC_SCHEME") {
-            Ok(v) if !v.trim().is_empty() => v.trim().to_string(),
-            _ => public_scheme.clone(),
-        };
-        if workspace_public_scheme != "http" && workspace_public_scheme != "https" {
-            anyhow::bail!(
-                "DEVSERVER_PUBLIC_SCHEME must be \"http\" or \"https\"; got \
-                 {workspace_public_scheme:?}"
-            );
-        }
-        let workspace_public_port = match std::env::var("DEVSERVER_PUBLIC_PORT") {
-            Ok(p) => {
-                let p = p.trim();
-                if p.is_empty() {
-                    String::new()
-                } else if let Some(rest) = p.strip_prefix(':') {
-                    // Sanity-check the port shape; reject anything
-                    // that isn't a positive integer so we don't ship
-                    // a malformed URL.
-                    rest.parse::<u16>().with_context(|| {
-                        format!("DEVSERVER_PUBLIC_PORT (after `:`) must be a u16; got {rest:?}")
-                    })?;
-                    format!(":{rest}")
-                } else {
-                    p.parse::<u16>().with_context(|| {
-                        format!("DEVSERVER_PUBLIC_PORT must be a u16 or `:u16`; got {p:?}")
-                    })?;
-                    format!(":{p}")
-                }
-            }
-            Err(_) => String::new(),
-        };
+        let devserver_wildcard_suffix = format!(
+            ".{}",
+            devserver_proxy_origin
+                .host_str()
+                .context("DEVSERVER_PROXY_ORIGIN must contain a host")?
+        );
+        let workspace_public_scheme = devserver_proxy_origin.scheme().to_string();
+        let workspace_public_port = devserver_proxy_origin
+            .port()
+            .map(|port| format!(":{port}"))
+            .unwrap_or_default();
 
         // DEVSERVER_ADMIN_TOKEN enables the admin-side calls (revoke,
         // delete, /api/me workspaces merge); DEVSERVER_ADMIN_URL is
@@ -234,6 +178,8 @@ impl Config {
         Ok(Self {
             bind_addr,
             base_url,
+            devserver_proxy_origin,
+            devserver_tunnel_origin,
             database_url,
             cookie_secure,
             profile_client,
@@ -284,18 +230,25 @@ impl Config {
     }
 }
 
-/// Read the shared PUBLIC_SCHEME (http/https), defaulting to the
-/// dev-shaped `http`. Production sets `https` once in the shared
-/// environment file.
-fn read_public_scheme() -> anyhow::Result<String> {
-    let scheme = std::env::var("PUBLIC_SCHEME")
-        .unwrap_or_else(|_| gateway_common::domain::DEFAULT_PUBLIC_SCHEME.to_string())
+fn required_origin(name: &str) -> anyhow::Result<Url> {
+    let raw = std::env::var(name).with_context(|| format!("{name} is required"))?;
+    let url: Url = raw
         .trim()
-        .to_string();
-    if scheme != "http" && scheme != "https" {
-        anyhow::bail!("PUBLIC_SCHEME must be \"http\" or \"https\"; got {scheme:?}");
+        .parse()
+        .with_context(|| format!("{name} must be a URL origin"))?;
+    if !matches!(url.scheme(), "http" | "https")
+        || url.host_str().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.path() != "/"
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        anyhow::bail!(
+            "{name} must be an http(s) origin with no credentials, path, query, or fragment"
+        );
     }
-    Ok(scheme)
+    Ok(url)
 }
 
 fn parse_bool_env(name: &str, default: bool) -> anyhow::Result<bool> {
@@ -318,6 +271,8 @@ mod tests {
         let cfg = Config {
             bind_addr: "127.0.0.1:7000".parse().unwrap(),
             base_url: "http://localhost:7000".parse().unwrap(),
+            devserver_proxy_origin: "https://proxy.example.test".parse().unwrap(),
+            devserver_tunnel_origin: "https://tunnel.example.test".parse().unwrap(),
             database_url: "x".into(),
             cookie_secure: false,
             profile_client: ProfileClient::new("http://x/".parse().unwrap(), "x".into()).unwrap(),

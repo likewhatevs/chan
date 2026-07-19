@@ -1166,6 +1166,7 @@ mod tests {
             desktop_authorize_url: "https://id.chan.app/desktop/authorize".into(),
             desktop_entry_url: "https://id.chan.app/desktop/v1/devserver/entry".into(),
             devserver_proxy_origin: "https://x.devserver.chan.app".into(),
+            devserver_proxy_host_depth: 2,
             roster_url: Some("https://id.chan.app/desktop/v1/devservers".into()),
         });
         rt.roster = rows;
@@ -1292,6 +1293,7 @@ mod tests {
                 desktop_authorize_url: "https://id.example.test/desktop/authorize".into(),
                 desktop_entry_url: "https://id.example.test/desktop/v1/devserver/entry".into(),
                 devserver_proxy_origin: "https://devserver.example.test".into(),
+                devserver_proxy_host_depth: 2,
                 roster_url: Some("https://id.example.test/desktop/v1/devservers".into()),
             },
             vec![shared],
@@ -1544,6 +1546,7 @@ mod tests {
                             "desktop_authorize_url": format!("{o}/desktop/authorize"),
                             "desktop_entry_url": format!("{o}/desktop/v1/devserver/entry"),
                             "devserver_proxy_origin": "https://devserver.chan.app",
+                            "devserver_proxy_host_depth": 2,
                             "roster_url": format!("{o}/desktop/v1/devservers"),
                         }))
                     }
@@ -1605,6 +1608,7 @@ mod tests {
                 desktop_authorize_url: format!("{origin}/desktop/authorize"),
                 desktop_entry_url: format!("{origin}/desktop/v1/devserver/entry"),
                 devserver_proxy_origin: "https://devserver.chan.app".into(),
+                devserver_proxy_host_depth: 2,
                 roster_url: Some(format!("{origin}/desktop/v1/devservers")),
             });
             rt.pending_signin = true;

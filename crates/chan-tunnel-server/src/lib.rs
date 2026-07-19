@@ -84,6 +84,9 @@ pub enum ServerError {
 
     #[error("user {user} reached max concurrent workspaces ({max})")]
     TooManyWorkspaces { user: String, max: usize },
+
+    #[error("devserver control is unavailable")]
+    ControlUnavailable,
 }
 
 impl From<chan_tunnel_proto::FrameError> for ServerError {
@@ -154,6 +157,37 @@ pub trait Validator: Send + Sync + 'static {
     /// drop the name (stub validators, deployments without a roster).
     async fn announce_devserver_name(&self, token: &str, name: &str) {
         let _ = (token, name);
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct RegistrationPermit {
+    pub registration_id: uuid::Uuid,
+}
+
+#[async_trait]
+pub trait RegistrationAdmission: Send + Sync + 'static {
+    async fn admit(
+        &self,
+        hello: &Hello,
+        validated: &Validated,
+    ) -> Result<RegistrationPermit, ServerError>;
+
+    async fn cancel(&self, _permit: RegistrationPermit) {}
+}
+
+pub struct AllowAllAdmission;
+
+#[async_trait]
+impl RegistrationAdmission for AllowAllAdmission {
+    async fn admit(
+        &self,
+        _hello: &Hello,
+        _validated: &Validated,
+    ) -> Result<RegistrationPermit, ServerError> {
+        Ok(RegistrationPermit {
+            registration_id: uuid::Uuid::new_v4(),
+        })
     }
 }
 
@@ -269,12 +303,89 @@ where
     Ok((hello, validated, yamux))
 }
 
+async fn handshake_validated_with_admission<S>(
+    mut socket: S,
+    validated: Validated,
+    admission: &dyn RegistrationAdmission,
+) -> Result<
+    (
+        Hello,
+        Validated,
+        RegistrationPermit,
+        YamuxConnection<Compat<S>>,
+    ),
+    ServerError,
+>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
+    if !chan_tunnel_proto::is_valid_username(&validated.username) {
+        return Err(ServerError::Handshake(format!(
+            "validator returned an unsafe username for the public path: {:?}",
+            validated.username
+        )));
+    }
+    let hello: Hello = match tokio::time::timeout(HELLO_READ_TIMEOUT, read_frame(&mut socket)).await
+    {
+        Ok(result) => result?,
+        Err(_) => {
+            return Err(ServerError::Handshake(format!(
+                "timed out waiting for Hello after {HELLO_READ_TIMEOUT:?}"
+            )))
+        }
+    };
+    if hello.protocol != ProtocolVersion::V1 {
+        let message = format!("client requested unsupported protocol {:?}", hello.protocol);
+        write_refusal(&mut socket, error_code::UNSUPPORTED_PROTOCOL, &message).await;
+        return Err(ServerError::Handshake(message));
+    }
+    if !chan_tunnel_proto::is_valid_workspace_name(&hello.workspace) {
+        let message = format!("invalid workspace name {:?}", hello.workspace);
+        write_refusal(&mut socket, error_code::INVALID_WORKSPACE_NAME, &message).await;
+        return Err(ServerError::Handshake(message));
+    }
+
+    let permit =
+        match tokio::time::timeout(VALIDATE_TIMEOUT, admission.admit(&hello, &validated)).await {
+            Ok(Ok(permit)) => permit,
+            Ok(Err(error)) => {
+                let (code, message) = refusal_for(&error);
+                write_refusal(&mut socket, code, &message).await;
+                return Err(error);
+            }
+            Err(_) => {
+                let error = ServerError::ControlUnavailable;
+                let (code, message) = refusal_for(&error);
+                write_refusal(&mut socket, code, &message).await;
+                return Err(error);
+            }
+        };
+
+    let ack = HelloAck::Ok(chan_tunnel_proto::HelloAckOk {
+        protocol: ProtocolVersion::V1,
+        prefix: make_prefix(&validated.username, &validated.devserver_id),
+        user: validated.username.clone(),
+        workspace: validated.devserver_id.clone(),
+    });
+    if let Err(error) = write_frame(&mut socket, &ack).await {
+        admission.cancel(permit).await;
+        return Err(error.into());
+    }
+
+    let yamux = YamuxConnection::new(socket.compat(), tunnel_yamux_config(), Mode::Server);
+    Ok((hello, validated, permit, yamux))
+}
+
 /// Map a `ServerError` from the protocol-level pre_ack closure to a
 /// `(code, message)` pair the client can match on. Codes are stable
 /// strings defined in `chan_tunnel_proto::error_code`; messages are
 /// user-visible.
 fn refusal_for(e: &ServerError) -> (&'static str, String) {
     match e {
+        ServerError::ControlUnavailable => (
+            error_code::CONTROL_UNAVAILABLE,
+            "devserver control is unavailable".to_string(),
+        ),
         ServerError::TooManyWorkspaces { user, max } => (
             error_code::TOO_MANY_WORKSPACES,
             format!("user {user} reached max concurrent workspaces ({max})"),
@@ -324,5 +435,5 @@ mod driver;
 mod registry;
 mod tunnel;
 
-pub use registry::{OpenError, Registry, TunnelHandle, TunnelInfo, WorkspaceInfo};
-pub use tunnel::serve_tunnel_listener;
+pub use registry::{OpenError, Registry, RegistryEvent, TunnelHandle, TunnelInfo, WorkspaceInfo};
+pub use tunnel::{serve_tunnel_listener, serve_tunnel_listener_with_admission};

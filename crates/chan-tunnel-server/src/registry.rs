@@ -21,7 +21,8 @@ use std::sync::Arc;
 use chan_tunnel_proto::gateway_assertion::AssertionKey;
 use chrono::{DateTime, Utc};
 use parking_lot::Mutex;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{broadcast, mpsc, oneshot};
+use uuid::Uuid;
 
 #[derive(Debug, thiserror::Error)]
 pub enum OpenError {
@@ -54,10 +55,23 @@ pub struct WorkspaceInfo {
 /// `tunnel ps` view.
 #[derive(Debug, Clone)]
 pub struct TunnelInfo {
+    pub registration_id: Uuid,
     pub user: Arc<str>,
     pub workspace: Arc<str>,
     pub peer_addr: Option<SocketAddr>,
     pub connected_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone)]
+pub enum RegistryEvent {
+    TunnelUp {
+        generation: u64,
+        row: TunnelInfo,
+    },
+    TunnelDown {
+        generation: u64,
+        registration_id: Uuid,
+    },
 }
 
 pub(crate) type OpenReply = oneshot::Sender<Result<yamux::Stream, OpenError>>;
@@ -74,6 +88,7 @@ pub(crate) type OpenRequest = OpenReply;
 #[derive(Clone)]
 pub struct TunnelHandle {
     open_tx: mpsc::Sender<OpenRequest>,
+    pub registration_id: Uuid,
     pub user: Arc<str>,
     pub workspace: Arc<str>,
     /// Peer's TCP address as seen by the listener accept loop.
@@ -114,9 +129,27 @@ struct Entry {
 /// iteration instead of a full-table filter.
 type UserMap = HashMap<Arc<str>, HashMap<Arc<str>, Entry>>;
 
-#[derive(Default)]
+struct State {
+    users: UserMap,
+    generation: u64,
+    events: broadcast::Sender<RegistryEvent>,
+}
+
 pub struct Registry {
-    inner: Mutex<UserMap>,
+    inner: Mutex<State>,
+}
+
+impl Default for Registry {
+    fn default() -> Self {
+        let (events, _) = broadcast::channel(1024);
+        Self {
+            inner: Mutex::new(State {
+                users: HashMap::new(),
+                generation: 0,
+                events,
+            }),
+        }
+    }
 }
 
 impl Registry {
@@ -134,6 +167,7 @@ impl Registry {
     /// Reconnect of a workspace the user already holds is always
     /// allowed: the same-key entry is evicted and replaced, and the
     /// user's workspace count is unchanged.
+    #[cfg(test)]
     pub(crate) fn register_with_cap(
         self: &Arc<Self>,
         user: Arc<str>,
@@ -149,10 +183,37 @@ impl Registry {
         ),
         RegisterCapped,
     > {
+        self.register_with_id_and_cap(
+            user,
+            workspace,
+            peer_addr,
+            gateway_assertion_key,
+            Uuid::new_v4(),
+            max_workspaces_per_user,
+        )
+    }
+
+    pub(crate) fn register_with_id_and_cap(
+        self: &Arc<Self>,
+        user: Arc<str>,
+        workspace: Arc<str>,
+        peer_addr: Option<SocketAddr>,
+        gateway_assertion_key: Option<AssertionKey>,
+        registration_id: Uuid,
+        max_workspaces_per_user: usize,
+    ) -> Result<
+        (
+            TunnelHandle,
+            mpsc::Receiver<OpenRequest>,
+            oneshot::Receiver<()>,
+        ),
+        RegisterCapped,
+    > {
         let (open_tx, open_rx) = mpsc::channel::<OpenRequest>(64);
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
         let handle = TunnelHandle {
             open_tx,
+            registration_id,
             user: user.clone(),
             workspace: workspace.clone(),
             peer_addr,
@@ -165,7 +226,7 @@ impl Registry {
         };
         let evicted = {
             let mut g = self.inner.lock();
-            let workspaces = g.entry(user.clone()).or_default();
+            let workspaces = g.users.entry(user.clone()).or_default();
             if max_workspaces_per_user > 0
                 && !workspaces.contains_key(&workspace)
                 && workspaces.len() >= max_workspaces_per_user
@@ -174,14 +235,27 @@ impl Registry {
                 // via `or_default` so a capped attempt doesn't leave
                 // an empty user bucket behind.
                 if workspaces.is_empty() {
-                    g.remove(&user);
+                    g.users.remove(&user);
                 }
                 return Err(RegisterCapped {
                     user: user.to_string(),
                     max: max_workspaces_per_user,
                 });
             }
-            workspaces.insert(workspace.clone(), entry)
+            let evicted = workspaces.insert(workspace.clone(), entry);
+            if let Some(old) = &evicted {
+                g.generation += 1;
+                let _ = g.events.send(RegistryEvent::TunnelDown {
+                    generation: g.generation,
+                    registration_id: old.handle.registration_id,
+                });
+            }
+            g.generation += 1;
+            let _ = g.events.send(RegistryEvent::TunnelUp {
+                generation: g.generation,
+                row: tunnel_info(&handle),
+            });
+            evicted
         };
         if let Some(old) = evicted {
             // Log the eviction with the prior registration's age so
@@ -210,7 +284,8 @@ impl Registry {
     /// `Arc<str>` keys, so no per-call allocation.
     pub fn get(&self, user: &str, workspace: &str) -> Option<TunnelHandle> {
         let g = self.inner.lock();
-        g.get(user)
+        g.users
+            .get(user)
             .and_then(|workspaces| workspaces.get(workspace))
             .map(|e| e.handle.clone())
     }
@@ -220,7 +295,7 @@ impl Registry {
     /// without needing a separate metadata service.
     pub fn list_workspaces_for(&self, user: &str) -> Vec<WorkspaceInfo> {
         let g = self.inner.lock();
-        let Some(workspaces) = g.get(user) else {
+        let Some(workspaces) = g.users.get(user) else {
             return Vec::new();
         };
         let mut out: Vec<WorkspaceInfo> = workspaces
@@ -240,9 +315,11 @@ impl Registry {
     pub fn list_all(&self) -> Vec<TunnelInfo> {
         let g = self.inner.lock();
         let mut out: Vec<TunnelInfo> = g
+            .users
             .iter()
             .flat_map(|(u, workspaces)| {
                 workspaces.iter().map(move |(d, e)| TunnelInfo {
+                    registration_id: e.handle.registration_id,
                     user: u.clone(),
                     workspace: d.clone(),
                     peer_addr: e.handle.peer_addr,
@@ -264,14 +341,19 @@ impl Registry {
     /// removed, `false` if nothing was registered for the pair.
     pub fn evict(&self, user: &str, workspace: &str) -> bool {
         let mut g = self.inner.lock();
-        let Some(workspaces) = g.get_mut(user) else {
+        let Some(workspaces) = g.users.get_mut(user) else {
             return false;
         };
-        let removed = workspaces.remove(workspace).is_some();
+        let removed = workspaces.remove(workspace);
         if workspaces.is_empty() {
-            g.remove(user);
+            g.users.remove(user);
         }
-        removed
+        if let Some(removed) = removed {
+            emit_down(&mut g, removed.handle.registration_id);
+            true
+        } else {
+            false
+        }
     }
 
     /// Remove a registered tunnel only if `handle` is the one
@@ -280,22 +362,97 @@ impl Registry {
     /// took its slot.
     pub(crate) fn deregister_if_owner(&self, handle: &TunnelHandle) {
         let mut g = self.inner.lock();
-        let Some(workspaces) = g.get_mut(handle.user.as_ref()) else {
+        let Some(workspaces) = g.users.get_mut(handle.user.as_ref()) else {
             return;
         };
         let should_remove = workspaces
             .get(handle.workspace.as_ref())
-            // Channel identity is a sufficient proxy: only one
-            // mpsc::Sender per registration, cloned into the entry.
-            .map(|entry| entry.handle.open_tx.same_channel(&handle.open_tx))
+            .map(|entry| entry.handle.registration_id == handle.registration_id)
             .unwrap_or(false);
         if should_remove {
             workspaces.remove(handle.workspace.as_ref());
             if workspaces.is_empty() {
-                g.remove(handle.user.as_ref());
+                g.users.remove(handle.user.as_ref());
             }
+            emit_down(&mut g, handle.registration_id);
         }
     }
+
+    pub fn snapshot_and_subscribe(
+        &self,
+    ) -> (u64, Vec<TunnelInfo>, broadcast::Receiver<RegistryEvent>) {
+        let g = self.inner.lock();
+        let mut rows = snapshot(&g.users);
+        rows.sort_by(|a, b| {
+            a.user
+                .cmp(&b.user)
+                .then_with(|| a.workspace.cmp(&b.workspace))
+        });
+        (g.generation, rows, g.events.subscribe())
+    }
+
+    pub fn evict_registration(&self, registration_id: Uuid) -> bool {
+        let mut g = self.inner.lock();
+        let key = g.users.iter().find_map(|(user, workspaces)| {
+            workspaces.iter().find_map(|(workspace, entry)| {
+                (entry.handle.registration_id == registration_id)
+                    .then(|| (user.clone(), workspace.clone()))
+            })
+        });
+        let Some((user, workspace)) = key else {
+            return false;
+        };
+        let workspaces = g.users.get_mut(&user).expect("key came from registry");
+        workspaces.remove(&workspace);
+        if workspaces.is_empty() {
+            g.users.remove(&user);
+        }
+        emit_down(&mut g, registration_id);
+        true
+    }
+
+    pub fn evict_all(&self) -> usize {
+        let mut g = self.inner.lock();
+        let ids: Vec<Uuid> = g
+            .users
+            .values()
+            .flat_map(|workspaces| {
+                workspaces
+                    .values()
+                    .map(|entry| entry.handle.registration_id)
+            })
+            .collect();
+        g.users.clear();
+        for id in &ids {
+            emit_down(&mut g, *id);
+        }
+        ids.len()
+    }
+}
+
+fn tunnel_info(handle: &TunnelHandle) -> TunnelInfo {
+    TunnelInfo {
+        registration_id: handle.registration_id,
+        user: handle.user.clone(),
+        workspace: handle.workspace.clone(),
+        peer_addr: handle.peer_addr,
+        connected_at: handle.connected_at,
+    }
+}
+
+fn snapshot(users: &UserMap) -> Vec<TunnelInfo> {
+    users
+        .values()
+        .flat_map(|workspaces| workspaces.values().map(|entry| tunnel_info(&entry.handle)))
+        .collect()
+}
+
+fn emit_down(state: &mut State, registration_id: Uuid) {
+    state.generation += 1;
+    let _ = state.events.send(RegistryEvent::TunnelDown {
+        generation: state.generation,
+        registration_id,
+    });
 }
 
 #[cfg(test)]
@@ -426,5 +583,76 @@ mod tests {
         assert_eq!(bob, vec!["notes".to_string()]);
 
         assert!(reg.list_workspaces_for("nobody").is_empty());
+    }
+
+    #[tokio::test]
+    async fn snapshot_subscription_is_contiguous_and_precise() {
+        let reg = Registry::new();
+        let (generation, rows, mut events) = reg.snapshot_and_subscribe();
+        assert_eq!(generation, 0);
+        assert!(rows.is_empty());
+
+        let (handle, _rx, _shutdown) = reg
+            .register_with_cap(Arc::from("alice"), Arc::from("notes"), None, None, 0)
+            .unwrap();
+        let up = events.recv().await.unwrap();
+        match up {
+            RegistryEvent::TunnelUp { generation, row } => {
+                assert_eq!(generation, 1);
+                assert_eq!(row.registration_id, handle.registration_id);
+            }
+            other => panic!("expected TunnelUp, got {other:?}"),
+        }
+
+        assert!(reg.evict_registration(handle.registration_id));
+        let down = events.recv().await.unwrap();
+        assert!(matches!(
+            down,
+            RegistryEvent::TunnelDown {
+                generation: 2,
+                registration_id
+            } if registration_id == handle.registration_id
+        ));
+        assert!(!reg.evict_registration(handle.registration_id));
+    }
+
+    #[tokio::test]
+    async fn predecessor_teardown_cannot_remove_successor() {
+        let reg = Registry::new();
+        let (old, _rx, _shutdown) = reg
+            .register_with_cap(Arc::from("alice"), Arc::from("notes"), None, None, 0)
+            .unwrap();
+        let (new, _rx, _shutdown) = reg
+            .register_with_cap(Arc::from("alice"), Arc::from("notes"), None, None, 0)
+            .unwrap();
+
+        reg.deregister_if_owner(&old);
+        assert_eq!(
+            reg.get("alice", "notes").unwrap().registration_id,
+            new.registration_id
+        );
+    }
+
+    #[tokio::test]
+    async fn evict_all_reports_and_emits_every_registration() {
+        let reg = Registry::new();
+        let (_generation, _rows, mut events) = reg.snapshot_and_subscribe();
+        for workspace in ["one", "two"] {
+            reg.register_with_cap(Arc::from("alice"), Arc::from(workspace), None, None, 0)
+                .unwrap();
+            let _ = events.recv().await.unwrap();
+        }
+        assert_eq!(reg.evict_all(), 2);
+        assert!(reg.list_all().is_empty());
+        let first = events.recv().await.unwrap();
+        let second = events.recv().await.unwrap();
+        assert!(matches!(
+            first,
+            RegistryEvent::TunnelDown { generation: 3, .. }
+        ));
+        assert!(matches!(
+            second,
+            RegistryEvent::TunnelDown { generation: 4, .. }
+        ));
     }
 }

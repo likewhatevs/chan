@@ -2503,6 +2503,7 @@ mod tests {
             desktop_authorize_url: "https://id.chan.app/desktop/authorize".into(),
             desktop_entry_url: "https://id.chan.app/desktop/v1/devserver/entry".into(),
             devserver_proxy_origin: "https://x.devserver.chan.app".into(),
+            devserver_proxy_host_depth: 2,
             roster_url: Some("https://id.chan.app/desktop/v1/devservers".into()),
         }
     }

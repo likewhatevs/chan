@@ -8012,6 +8012,7 @@ mod tests {
             desktop_authorize_url: "https://id.example.test/desktop/authorize".into(),
             desktop_entry_url: "https://id.example.test/desktop/v1/devserver/entry".into(),
             devserver_proxy_origin: "https://devserver.example.test".into(),
+            devserver_proxy_host_depth: 2,
             roster_url: Some("https://id.example.test/desktop/v1/devservers".into()),
         };
         state.gateway_manager.seed_test_runtime(
@@ -8108,6 +8109,7 @@ mod tests {
                 desktop_authorize_url: format!("{origin}/desktop/authorize"),
                 desktop_entry_url: format!("{origin}/desktop/v1/devserver/entry"),
                 devserver_proxy_origin: "https://devserver.chan.app".into(),
+                devserver_proxy_host_depth: 2,
                 roster_url: Some(format!("{origin}/desktop/v1/devservers")),
             },
             vec![gateway::RosterDevserver {

@@ -221,22 +221,22 @@ struct GatewayDiscovery {
     /// authorize; a gateway without the key reads as connect-mode only.
     roster_url: String,
     devserver_proxy_origin: String,
+    devserver_proxy_host_depth: u8,
     tunnel_url: String,
 }
 
 async fn gateway_discovery(State(state): State<AppState>) -> Result<Json<GatewayDiscovery>> {
     let identity_origin = state.cfg.base_url.origin().ascii_serialization();
-    let devserver_apex = state
+    let devserver_proxy_origin = state
         .cfg
-        .devserver_wildcard_suffix
-        .strip_prefix('.')
-        .unwrap_or(&state.cfg.devserver_wildcard_suffix);
-    let devserver_proxy_origin = format!(
-        "{scheme}://{host}{port}",
-        scheme = state.cfg.workspace_public_scheme,
-        host = devserver_apex,
-        port = state.cfg.workspace_public_port,
-    );
+        .devserver_proxy_origin
+        .origin()
+        .ascii_serialization();
+    let tunnel_origin = state
+        .cfg
+        .devserver_tunnel_origin
+        .origin()
+        .ascii_serialization();
     Ok(Json(GatewayDiscovery {
         kind: "chan-gateway",
         api_version: 1,
@@ -260,7 +260,8 @@ async fn gateway_discovery(State(state): State<AppState>) -> Result<Json<Gateway
             .map_err(|e| Error::Anyhow(anyhow::anyhow!("discovery roster url: {e}")))?
             .to_string(),
         devserver_proxy_origin: devserver_proxy_origin.clone(),
-        tunnel_url: format!("{devserver_proxy_origin}{}", chan_tunnel_proto::TUNNEL_PATH),
+        devserver_proxy_host_depth: 2,
+        tunnel_url: format!("{tunnel_origin}{}", chan_tunnel_proto::TUNNEL_PATH),
     }))
 }
 

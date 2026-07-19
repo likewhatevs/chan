@@ -355,6 +355,7 @@ pub struct GatewayDiscovery {
     pub desktop_authorize_url: String,
     pub desktop_entry_url: String,
     pub devserver_proxy_origin: String,
+    pub devserver_proxy_host_depth: u8,
     /// Account-mode devserver roster endpoint. Presence means the gateway
     /// supports account-level desktop connections; a gateway without it is
     /// too old for account mode and the desktop says so instead of
@@ -403,6 +404,9 @@ fn validate_gateway_discovery(
 ) -> Result<GatewayDiscovery, String> {
     if d.kind != "chan-gateway" || d.api_version != 1 {
         return Err("server is not a supported chan-gateway".to_string());
+    }
+    if d.devserver_proxy_host_depth != 2 {
+        return Err("chan-gateway discovery has an unsupported proxy host depth".to_string());
     }
 
     let configured_origin = origin_of(configured_url)?;
@@ -542,9 +546,14 @@ fn validate_gateway_entry(
     let suffix = format!(".{apex_host}");
     let child = proxy_host
         .strip_suffix(&suffix)
-        .filter(|child| !child.is_empty() && !child.contains('.'))
+        .filter(|child| {
+            let mut labels = child.split('.');
+            labels.next().is_some_and(|label| !label.is_empty())
+                && labels.next().is_some_and(|label| !label.is_empty())
+                && labels.next().is_none()
+        })
         .ok_or_else(|| {
-            "gateway entry proxy_origin is not exactly one label below the discovery proxy apex"
+            "gateway entry proxy_origin is not exactly two labels below the discovery proxy apex"
                 .to_string()
         })?;
     if child.is_empty() {
@@ -1703,6 +1712,7 @@ mod tests {
             desktop_authorize_url: "https://id.chan.app/desktop/authorize".into(),
             desktop_entry_url: "https://id.chan.app/desktop/v1/devserver/entry".into(),
             devserver_proxy_origin: "https://devserver.chan.app".into(),
+            devserver_proxy_host_depth: 2,
             roster_url: Some("https://id.chan.app/desktop/v1/devservers".into()),
         }
     }
@@ -1751,6 +1761,7 @@ mod tests {
             desktop_authorize_url: "http://localhost:7000/desktop/authorize".into(),
             desktop_entry_url: "http://localhost:7000/desktop/v1/devserver/entry".into(),
             devserver_proxy_origin: "http://127.0.0.1:7002".into(),
+            devserver_proxy_host_depth: 2,
             roster_url: None,
         };
         validate_gateway_discovery("http://localhost:7000", d)
@@ -1771,7 +1782,7 @@ mod tests {
         entry_url: &str,
     ) -> Result<ValidatedGatewayEntry, String> {
         validate_gateway_entry(
-            "https://devserver.chan.app",
+            "https://proxy.example.test",
             Some(&("alice".into(), "a".repeat(64))),
             None,
             gateway_entry_response(proxy_origin, entry_url),
@@ -1779,35 +1790,31 @@ mod tests {
     }
 
     #[test]
-    fn gateway_entry_accepts_current_and_bare_user_exact_hosts() {
-        for origin in [
-            // The desktop validates the namespace boundary but does not
-            // reconstruct a gateway's routing label from owner/id. The exact
-            // authenticated response stays the source of truth.
-            "https://alice--0a1b2c3d4e5f.devserver.chan.app",
-            "https://alice.devserver.chan.app",
-        ] {
-            let entry = validate_test_entry(origin, &format!("{origin}/notes/index.html?t=entry"))
-                .expect("one-label entry origin validates");
-            assert_eq!(entry.proxy_origin, origin);
-        }
+    fn gateway_entry_accepts_exact_two_label_host() {
+        let origin = "https://alice--0a1b2c3d4e5f.p1.proxy.example.test";
+        let entry = validate_test_entry(origin, &format!("{origin}/notes/index.html?t=entry"))
+            .expect("two-label entry origin validates");
+        assert_eq!(entry.proxy_origin, origin);
         let canonical = validate_test_entry(
-            "https://alice.devserver.chan.app:443",
-            "https://alice.devserver.chan.app:443/?t=entry",
+            "https://alice.p1.proxy.example.test:443",
+            "https://alice.p1.proxy.example.test:443/?t=entry",
         )
         .unwrap();
-        assert_eq!(canonical.proxy_origin, "https://alice.devserver.chan.app");
+        assert_eq!(
+            canonical.proxy_origin,
+            "https://alice.p1.proxy.example.test"
+        );
     }
 
     #[test]
     fn gateway_entry_binds_full_requested_identity() {
         let mut response = gateway_entry_response(
-            "https://alice.devserver.chan.app",
-            "https://alice.devserver.chan.app/?t=entry",
+            "https://alice.p1.proxy.example.test",
+            "https://alice.p1.proxy.example.test/?t=entry",
         );
         response.username = "mallory".into();
         assert!(validate_gateway_entry(
-            "https://devserver.chan.app",
+            "https://proxy.example.test",
             Some(&("alice".into(), "a".repeat(64))),
             None,
             response,
@@ -1816,12 +1823,12 @@ mod tests {
         .contains("username mismatch"));
 
         let mut response = gateway_entry_response(
-            "https://alice.devserver.chan.app",
-            "https://alice.devserver.chan.app/?t=entry",
+            "https://alice.p1.proxy.example.test",
+            "https://alice.p1.proxy.example.test/?t=entry",
         );
         response.devserver_id = format!("{}b", "a".repeat(63));
         assert!(validate_gateway_entry(
-            "https://devserver.chan.app",
+            "https://proxy.example.test",
             Some(&("alice".into(), "a".repeat(64))),
             None,
             response,
@@ -1835,30 +1842,31 @@ mod tests {
         for proxy in [
             "",
             "not a url",
-            "ftp://alice.devserver.chan.app",
-            "http://alice.devserver.chan.app",
-            "https://user@alice.devserver.chan.app",
-            "https://alice.devserver.chan.app/path",
-            "https://alice.devserver.chan.app/?q=1",
-            "https://alice.devserver.chan.app/#frag",
-            "https://devserver.chan.app",
-            "https://nested.alice.devserver.chan.app",
-            "https://alice.devserver.chan.app.evil.example",
-            "https://alice.devserver.chan.app:444",
+            "ftp://alice.p1.proxy.example.test",
+            "http://alice.p1.proxy.example.test",
+            "https://user@alice.p1.proxy.example.test",
+            "https://alice.p1.proxy.example.test/path",
+            "https://alice.p1.proxy.example.test/?q=1",
+            "https://alice.p1.proxy.example.test/#frag",
+            "https://proxy.example.test",
+            "https://alice.proxy.example.test",
+            "https://nested.alice.p1.proxy.example.test",
+            "https://alice.p1.proxy.example.test.evil.example",
+            "https://alice.p1.proxy.example.test:444",
         ] {
             assert!(
-                validate_test_entry(proxy, "https://alice.devserver.chan.app/?t=entry").is_err(),
+                validate_test_entry(proxy, "https://alice.p1.proxy.example.test/?t=entry").is_err(),
                 "proxy escape accepted: {proxy}"
             );
         }
         for entry_url in [
-            "https://bob.devserver.chan.app/?t=entry",
-            "http://alice.devserver.chan.app/?t=entry",
-            "https://alice.devserver.chan.app:444/?t=entry",
-            "https://user@alice.devserver.chan.app/?t=entry",
+            "https://bob.p1.proxy.example.test/?t=entry",
+            "http://alice.p1.proxy.example.test/?t=entry",
+            "https://alice.p1.proxy.example.test:444/?t=entry",
+            "https://user@alice.p1.proxy.example.test/?t=entry",
         ] {
             assert!(
-                validate_test_entry("https://alice.devserver.chan.app", entry_url).is_err(),
+                validate_test_entry("https://alice.p1.proxy.example.test", entry_url).is_err(),
                 "entry URL escape accepted: {entry_url}"
             );
         }
@@ -1867,13 +1875,13 @@ mod tests {
     #[test]
     fn gateway_entry_refresh_cannot_change_the_pinned_origin() {
         let response = gateway_entry_response(
-            "https://bob.devserver.chan.app",
-            "https://bob.devserver.chan.app/?t=entry",
+            "https://bob.p2.proxy.example.test",
+            "https://bob.p2.proxy.example.test/?t=entry",
         );
         let err = validate_gateway_entry(
-            "https://devserver.chan.app",
+            "https://proxy.example.test",
             Some(&("alice".into(), "a".repeat(64))),
-            Some("https://alice.devserver.chan.app"),
+            Some("https://alice.p1.proxy.example.test"),
             response,
         )
         .unwrap_err();
@@ -1935,6 +1943,7 @@ mod tests {
             desktop_authorize_url: format!("{identity_origin}/desktop/authorize"),
             desktop_entry_url: format!("{identity_origin}/desktop/v1/devserver/entry"),
             devserver_proxy_origin: proxy_apex,
+            devserver_proxy_host_depth: 2,
             roster_url: None,
         };
         let err = gateway_conn(

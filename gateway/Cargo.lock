@@ -585,6 +585,35 @@ dependencies = [
 ]
 
 [[package]]
+name = "devserver-control"
+version = "0.71.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "devserver-control-proto",
+ "serde",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "devserver-control-proto"
+version = "0.71.0"
+dependencies = [
+ "bytes",
+ "chrono",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tokio",
+ "url",
+ "uuid",
+]
+
+[[package]]
 name = "devserver-proxy"
 version = "0.73.0"
 dependencies = [

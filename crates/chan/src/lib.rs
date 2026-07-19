@@ -608,16 +608,10 @@ enum Command {
         /// PTYs. Applies to `--service=chan` and `--restart`.
         #[arg(long, verbatim_doc_comment)]
         force: bool,
-        /// Tunnel endpoint URL. With --tunnel-token, the devserver also dials
-        /// this gateway and publishes its tenant content at
-        /// `{user}.devserver.chan.app/{workspace}/*`, alongside the local
-        /// management server.
-        #[arg(
-            long,
-            default_value = "https://devserver.chan.app/v1/tunnel",
-            verbatim_doc_comment
-        )]
-        tunnel_url: String,
+        /// Tunnel endpoint URL. Required with --tunnel-token. Prefer the
+        /// CHAN_TUNNEL_URL env var for supervised or scripted deployments.
+        #[arg(long, env = "CHAN_TUNNEL_URL", verbatim_doc_comment)]
+        tunnel_url: Option<String>,
         /// Personal access token (chan_pat_*) from id.chan.app. Setting this
         /// enables tunnel mode: the devserver dials the gateway and publishes
         /// every mounted workspace behind one registration. The devserver
@@ -647,12 +641,8 @@ enum Command {
         port: u16,
         /// Tunnel endpoint URL. The token, if any, is read only from
         /// CHAN_TUNNEL_TOKEN.
-        #[arg(
-            long,
-            default_value = "https://devserver.chan.app/v1/tunnel",
-            verbatim_doc_comment
-        )]
-        tunnel_url: String,
+        #[arg(long, env = "CHAN_TUNNEL_URL", verbatim_doc_comment)]
+        tunnel_url: Option<String>,
         /// Display name for the gateway roster; the parent passes the
         /// resolved value (explicit flag or hostname) through argv.
         #[arg(long, verbatim_doc_comment)]
@@ -1530,7 +1520,7 @@ where
             tunnel_devserver_name,
         } => {
             let addr = SocketAddr::new(bind, port);
-            let tunnel = build_devserver_tunnel_from_env(tunnel_url, tunnel_devserver_name);
+            let tunnel = build_devserver_tunnel_from_env(tunnel_url, tunnel_devserver_name)?;
             devserver_daemon::run_devserver_daemon_child(addr, tunnel).await
         }
         Command::Config { action } => cmd_config(action),
@@ -2929,11 +2919,18 @@ async fn cmd_devserver(
     status: bool,
     join: bool,
     force: bool,
-    tunnel_url: String,
+    tunnel_url: Option<String>,
     tunnel_token: Option<String>,
     tunnel_devserver_name: Option<String>,
     verbose: bool,
 ) -> Result<()> {
+    let tunnel_url = match tunnel_url {
+        Some(url) if !url.trim().is_empty() => url,
+        Some(_) | None if tunnel_token.is_some() => {
+            anyhow::bail!("chan devserver: tunnel mode requires --tunnel-url or CHAN_TUNNEL_URL")
+        }
+        Some(_) | None => String::new(),
+    };
     let action = selected_devserver_action(start, stop, restart, status, join);
     // Resolve `--service=auto` (the default) to a concrete backend from the
     // runtime OS, then validate it exactly like an explicit backend. After this
@@ -3092,17 +3089,23 @@ fn build_devserver_tunnel(
 /// field here; the parent passes it through CHAN_TUNNEL_TOKEN only. The name
 /// is not a secret and rides argv (`--tunnel-devserver-name`).
 fn build_devserver_tunnel_from_env(
-    tunnel_url: String,
+    tunnel_url: Option<String>,
     tunnel_devserver_name: Option<String>,
-) -> Option<chan_server::DevserverTunnel> {
-    let token = std::env::var("CHAN_TUNNEL_TOKEN")
+) -> Result<Option<chan_server::DevserverTunnel>> {
+    let Some(token) = std::env::var("CHAN_TUNNEL_TOKEN")
         .ok()
-        .filter(|token| !token.is_empty())?;
-    Some(chan_server::DevserverTunnel {
+        .filter(|token| !token.is_empty())
+    else {
+        return Ok(None);
+    };
+    let tunnel_url = tunnel_url
+        .filter(|url| !url.trim().is_empty())
+        .context("CHAN_TUNNEL_URL or --tunnel-url is required with CHAN_TUNNEL_TOKEN")?;
+    Ok(Some(chan_server::DevserverTunnel {
         tunnel_url,
         token,
         name: resolve_tunnel_devserver_name(tunnel_devserver_name.as_deref()),
-    })
+    }))
 }
 
 /// Gateway bound on a devserver's roster label
@@ -7095,12 +7098,8 @@ mod tests {
         assert_eq!(addr, SocketAddr::new(ipv6("::"), 8787));
     }
 
-    /// The baked prod tunnel endpoint is a wire string the gateway answers
-    /// to: `chan devserver --tunnel-token=…` must resolve prod with no
-    /// `--tunnel-url`. Pin it so the default can't silently drift off
-    /// `devserver.chan.app` (a green build wouldn't catch a typo).
     #[test]
-    fn devserver_tunnel_url_defaults_to_prod_endpoint() {
+    fn devserver_tunnel_url_has_no_domain_default() {
         let cli = Cli::parse_from(["chan", "devserver"]);
         match cli.command {
             Command::Devserver {
@@ -7108,7 +7107,7 @@ mod tests {
                 tunnel_token,
                 ..
             } => {
-                assert_eq!(tunnel_url, "https://devserver.chan.app/v1/tunnel");
+                assert_eq!(tunnel_url, None);
                 // No token by default → tunnel mode stays off until opted in.
                 assert_eq!(tunnel_token, None);
             }
@@ -7482,9 +7481,8 @@ mod tests {
         }
     }
 
-    /// An explicit `--tunnel-url` still overrides the baked default.
     #[test]
-    fn devserver_tunnel_url_override_wins() {
+    fn devserver_tunnel_url_accepts_explicit_endpoint() {
         let cli = Cli::parse_from([
             "chan",
             "devserver",
@@ -7493,7 +7491,10 @@ mod tests {
         ]);
         match cli.command {
             Command::Devserver { tunnel_url, .. } => {
-                assert_eq!(tunnel_url, "http://127.0.0.1:7777/v1/tunnel");
+                assert_eq!(
+                    tunnel_url.as_deref(),
+                    Some("http://127.0.0.1:7777/v1/tunnel")
+                );
             }
             other => panic!("expected Command::Devserver, got {other:?}"),
         }

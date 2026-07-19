@@ -44,9 +44,9 @@ use uuid::Uuid;
 /// One envelope for both shapes; `typ` discriminates.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Claims {
-    /// Token issuer. Always `id.chan.app` for entry tokens; always
-    /// `devserver.chan.app` for session tokens. Verified opportunistically
-    /// (we trust the signature; `iss` is a debug aid in logs).
+    /// Stable logical token issuer. Verified opportunistically (we trust the
+    /// signature; `iss` is a debug aid in logs), so it names the service role
+    /// instead of a deployment hostname.
     pub iss: String,
     /// `users.id` of the workspace owner.
     pub sub: Uuid,
@@ -56,7 +56,7 @@ pub struct Claims {
     pub role: String,
     /// Devserver id resolved from the live tunnel registration.
     pub drv: String,
-    /// Wildcard host the token is bound to (e.g. `alice.devserver.chan.app`).
+    /// Exact tenant host the token is bound to.
     pub aud: String,
     /// `"entry"` or `"session"`. See module doc.
     pub typ: String,
@@ -185,8 +185,8 @@ fn encode(
 ) -> DevserverGateResult<String> {
     let now = Utc::now();
     let (iss, lifetime) = match typ {
-        TokenType::Entry => ("id.chan.app", Duration::seconds(30)),
-        TokenType::Session => ("devserver.chan.app", Duration::hours(24)),
+        TokenType::Entry => ("chan-gateway-identity", Duration::seconds(30)),
+        TokenType::Session => ("chan-gateway-devserver-proxy", Duration::hours(24)),
     };
     let claims = Claims {
         iss: iss.to_string(),
@@ -294,7 +294,7 @@ mod tests {
         assert_eq!(c.drv, "blog");
         assert_eq!(c.aud, "alice.devserver.chan.app");
         assert_eq!(c.typ, "entry");
-        assert_eq!(c.iss, "id.chan.app");
+        assert_eq!(c.iss, "chan-gateway-identity");
         assert_eq!(c.role, "owner");
     }
 
@@ -317,7 +317,7 @@ mod tests {
             "blog",
         )
         .unwrap();
-        assert_eq!(c.iss, "devserver.chan.app");
+        assert_eq!(c.iss, "chan-gateway-devserver-proxy");
         assert_eq!(c.typ, "session");
         assert_eq!(c.role, "editor");
     }

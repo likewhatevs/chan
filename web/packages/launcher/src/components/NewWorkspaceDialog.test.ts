@@ -189,7 +189,7 @@ describe("New workspace dialog -- gateway", () => {
   });
 
   function urlInput(el: HTMLElement): HTMLInputElement {
-    return el.querySelector('input[placeholder="https://id.chan.app"]') as HTMLInputElement;
+    return el.querySelector('input[placeholder="https://gateway.example.com"]') as HTMLInputElement;
   }
 
   it("shows the URL-only form: URL + optional name, no devserver plumbing", () => {
@@ -208,19 +208,19 @@ describe("New workspace dialog -- gateway", () => {
   it("rejects a non-URL with one message and adds nothing", async () => {
     openNewDialog("gateway");
     const el = render();
-    setInput(urlInput(el), "id.chan.app");
+    setInput(urlInput(el), "gateway.example.com");
     btn(el, "Add gateway").click();
     await settle();
     flushSync();
     expect(el.querySelector('.error[role="alert"]')?.textContent).toContain("gateway URL");
     expect(dialog.open).toBe(true);
-    expect(library.gateways.some((g) => g.url.includes("id.chan.app"))).toBe(false);
+    expect(library.gateways.some((g) => g.url.includes("gateway.example.com"))).toBe(false);
   });
 
   it("adds the gateway with its optional name and closes", async () => {
     openNewDialog("gateway");
     const el = render();
-    setInput(urlInput(el), "https://id.chan.app");
+    setInput(urlInput(el), "https://gateway.example.com");
     setInput(
       el.querySelector('input[placeholder="Defaults to the URL host"]') as HTMLInputElement,
       "prod-gw",
@@ -230,7 +230,9 @@ describe("New workspace dialog -- gateway", () => {
     flushSync();
     expect(dialog.open).toBe(false);
     expect(
-      library.gateways.some((g) => g.url === "https://id.chan.app" && g.label === "prod-gw"),
+      library.gateways.some(
+        (g) => g.url === "https://gateway.example.com" && g.label === "prod-gw",
+      ),
     ).toBe(true);
   });
 

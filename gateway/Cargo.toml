@@ -35,6 +35,8 @@
 resolver = "2"
 members = [
     "crates/admin",
+    "crates/devserver-control",
+    "crates/devserver-control-proto",
     "crates/devserver-proxy",
     "crates/gateway-common",
     "crates/identity",
@@ -62,6 +64,7 @@ chan-tunnel-client = { path = "../crates/chan-tunnel-client" }
 chan-tunnel-proto = { path = "../crates/chan-tunnel-proto" }
 chan-tunnel-server = { path = "../crates/chan-tunnel-server" }
 gateway-common = { path = "crates/gateway-common" }
+devserver-control-proto = { path = "crates/devserver-control-proto" }
 
 anyhow = "1"
 async-trait = "0.1"

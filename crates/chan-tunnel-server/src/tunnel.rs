@@ -26,9 +26,40 @@ use tokio::sync::Semaphore;
 use crate::driver::workspace_tunnel;
 use crate::registry::Registry;
 use crate::{
-    handshake_validated, ServerError, Validator, FIRST_STREAM_TIMEOUT, H2_HANDSHAKE_TIMEOUT,
-    MAX_INFLIGHT_HANDSHAKES, TUNNEL_SCOPE, VALIDATE_TIMEOUT,
+    handshake_validated_with_admission, RegistrationAdmission, RegistrationPermit, ServerError,
+    Validated, Validator, FIRST_STREAM_TIMEOUT, H2_HANDSHAKE_TIMEOUT, MAX_INFLIGHT_HANDSHAKES,
+    TUNNEL_SCOPE, VALIDATE_TIMEOUT,
 };
+
+struct LocalAdmission {
+    registry: Arc<Registry>,
+    max_workspaces_per_user: usize,
+}
+
+#[async_trait::async_trait]
+impl RegistrationAdmission for LocalAdmission {
+    async fn admit(
+        &self,
+        _hello: &chan_tunnel_proto::Hello,
+        validated: &Validated,
+    ) -> Result<RegistrationPermit, ServerError> {
+        if self.max_workspaces_per_user > 0 {
+            let registered = self.registry.list_workspaces_for(&validated.username);
+            let already_present = registered
+                .iter()
+                .any(|row| row.workspace.as_ref() == validated.devserver_id.as_str());
+            if !already_present && registered.len() >= self.max_workspaces_per_user {
+                return Err(ServerError::TooManyWorkspaces {
+                    user: validated.username.clone(),
+                    max: self.max_workspaces_per_user,
+                });
+            }
+        }
+        Ok(RegistrationPermit {
+            registration_id: uuid::Uuid::new_v4(),
+        })
+    }
+}
 
 /// How many "stream beyond the first" rejections the drainer task
 /// will tolerate before tearing down the whole h2 connection with
@@ -49,6 +80,26 @@ const MAX_DRAINER_REJECTIONS: u32 = 16;
 pub async fn serve_tunnel_listener(
     listener: TcpListener,
     validator: Arc<dyn Validator>,
+    registry: Arc<Registry>,
+    max_workspaces_per_user: usize,
+) -> std::io::Result<()> {
+    serve_tunnel_listener_with_admission(
+        listener,
+        validator,
+        Arc::new(LocalAdmission {
+            registry: registry.clone(),
+            max_workspaces_per_user,
+        }),
+        registry,
+        max_workspaces_per_user,
+    )
+    .await
+}
+
+pub async fn serve_tunnel_listener_with_admission(
+    listener: TcpListener,
+    validator: Arc<dyn Validator>,
+    admission: Arc<dyn RegistrationAdmission>,
     registry: Arc<Registry>,
     max_workspaces_per_user: usize,
 ) -> std::io::Result<()> {
@@ -73,12 +124,14 @@ pub async fn serve_tunnel_listener(
             }
         };
         let validator = validator.clone();
+        let admission = admission.clone();
         let registry = registry.clone();
         tokio::spawn(async move {
             if let Err(e) = handle_tunnel_conn(
                 tcp,
                 peer,
                 validator,
+                admission,
                 registry,
                 max_workspaces_per_user,
                 permit,
@@ -99,6 +152,7 @@ async fn handle_tunnel_conn(
     tcp: TcpStream,
     peer: SocketAddr,
     validator: Arc<dyn Validator>,
+    admission: Arc<dyn RegistrationAdmission>,
     registry: Arc<Registry>,
     max_workspaces_per_user: usize,
     inflight_permit: tokio::sync::OwnedSemaphorePermit,
@@ -246,27 +300,8 @@ async fn handle_tunnel_conn(
         .map_err(|e| ServerError::Handshake(format!("send_response: {e}")))?;
 
     let duplex = H2Duplex::new(send, recv_body);
-    let registry_for_check = registry.clone();
-    let (hello, validated, yconn) = handshake_validated(duplex, validated, |_hello, validated| {
-        if max_workspaces_per_user == 0 {
-            return Ok(());
-        }
-        // The registry keys on the token-resolved `devserver_id`, NOT the
-        // client's `Hello.workspace` placeholder, so the cap counts distinct
-        // devservers per user and a reconnect of the same devserver is exempt.
-        let registered = registry_for_check.list_workspaces_for(&validated.username);
-        let already_present = registered
-            .iter()
-            .any(|d| d.workspace.as_ref() == validated.devserver_id.as_str());
-        if !already_present && registered.len() >= max_workspaces_per_user {
-            return Err(ServerError::TooManyWorkspaces {
-                user: validated.username.clone(),
-                max: max_workspaces_per_user,
-            });
-        }
-        Ok(())
-    })
-    .await?;
+    let (hello, validated, permit, yconn) =
+        handshake_validated_with_admission(duplex, validated, admission.as_ref()).await?;
 
     let user: Arc<str> = Arc::from(validated.username.as_str());
     // The second registry key is the token-resolved devserver id (the
@@ -280,15 +315,17 @@ async fn handle_tunnel_conn(
     // already received HelloAck; dropping `yconn` on the early
     // return closes the yamux connection so the client sees a
     // transport disconnect.
-    let (handle, open_rx, shutdown_rx) = match registry.register_with_cap(
+    let (handle, open_rx, shutdown_rx) = match registry.register_with_id_and_cap(
         user.clone(),
         devserver.clone(),
         Some(peer),
         validated.gateway_assertion_key,
+        permit.registration_id,
         max_workspaces_per_user,
     ) {
         Ok(triple) => triple,
         Err(capped) => {
+            admission.cancel(permit).await;
             tracing::warn!(
                 user = %capped.user,
                 max = capped.max,

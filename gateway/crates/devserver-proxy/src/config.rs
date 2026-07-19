@@ -100,36 +100,18 @@ impl Config {
             .parse()
             .context("TUNNEL_BIND_ADDR must be host:port")?;
 
-        // Single-source domain config. CHAN_DOMAIN drives both the
-        // devserver and id hostnames; PUBLIC_SCHEME the URL scheme.
-        // Both default dev-shaped (localtest.me / http); production
-        // sets them once in the shared environment file. identity
-        // derives the same hosts from the same vars, so the two cannot
-        // drift (the devserver-gate `aud` must match). See
-        // gateway_common::domain.
-        let domains = gateway_common::domain::Domains::from_env();
-        let public_scheme = read_public_scheme()?;
-
-        // Apex + wildcard default to the derived devserver hosts;
-        // override with APEX_HOST / WILDCARD_SUFFIX only for unusual
-        // layouts. The wildcard suffix follows the apex unless set.
-        let apex_host = match std::env::var("APEX_HOST") {
-            Ok(v) if !v.trim().is_empty() => v.trim().to_string(),
-            _ => domains.devserver_apex.clone(),
-        };
-        if apex_host.is_empty() {
-            anyhow::bail!("APEX_HOST must not be empty");
-        }
-        let wildcard_suffix = match std::env::var("WILDCARD_SUFFIX") {
-            Ok(v) if !v.trim().is_empty() => v.trim().to_string(),
-            _ => format!(".{apex_host}"),
-        };
-        if !wildcard_suffix.starts_with('.') {
-            anyhow::bail!(
-                "WILDCARD_SUFFIX must start with a dot (got {wildcard_suffix:?}); \
-                 e.g. .devserver.chan.app"
-            );
-        }
+        let tunnel_origin = required_origin("DEVSERVER_TUNNEL_ORIGIN")?;
+        let proxy_base_url = required_origin("DEVSERVER_PROXY_BASE_URL")?;
+        let apex_host = tunnel_origin
+            .host_str()
+            .context("DEVSERVER_TUNNEL_ORIGIN must contain a host")?
+            .to_string();
+        let wildcard_suffix = format!(
+            ".{}",
+            proxy_base_url
+                .host_str()
+                .context("DEVSERVER_PROXY_BASE_URL must contain a host")?
+        );
 
         let identity_url: Url = std::env::var("IDENTITY_URL")
             .unwrap_or_else(|_| "http://127.0.0.1:7000".to_string())
@@ -154,15 +136,13 @@ impl Config {
             anyhow::bail!("DEVSERVER_GATE_SECRET must not be empty");
         }
 
-        // Dashboard redirect target. Explicit env var wins; otherwise
-        // derive the id host from the same base domain
-        // (`{scheme}://id.<base>/workspaces`). The derived form carries
-        // no port, so a dev / lab setup on a non-default id port still
-        // needs DASHBOARD_URL set explicitly.
-        let dashboard_url = match std::env::var("DASHBOARD_URL") {
-            Ok(v) if !v.trim().is_empty() => v.trim().to_string(),
-            _ => format!("{public_scheme}://{}/workspaces", domains.id_host),
-        };
+        let dashboard_url = std::env::var("DASHBOARD_URL")
+            .context("DASHBOARD_URL is required")?
+            .trim()
+            .to_string();
+        if dashboard_url.is_empty() {
+            anyhow::bail!("DASHBOARD_URL must not be empty");
+        }
 
         let max_devservers_per_user = parse_devserver_cap(
             std::env::var("MAX_DEVSERVERS_PER_USER").ok(),
@@ -289,19 +269,25 @@ impl Config {
     }
 }
 
-/// Read the shared PUBLIC_SCHEME (http/https), defaulting to the
-/// dev-shaped `http`. Production sets `https` once in the shared
-/// environment file. Kept identical to identity-service's reader so
-/// the two derive matching public URLs.
-fn read_public_scheme() -> anyhow::Result<String> {
-    let scheme = std::env::var("PUBLIC_SCHEME")
-        .unwrap_or_else(|_| gateway_common::domain::DEFAULT_PUBLIC_SCHEME.to_string())
+fn required_origin(name: &str) -> anyhow::Result<Url> {
+    let raw = std::env::var(name).with_context(|| format!("{name} is required"))?;
+    let url: Url = raw
         .trim()
-        .to_string();
-    if scheme != "http" && scheme != "https" {
-        anyhow::bail!("PUBLIC_SCHEME must be \"http\" or \"https\"; got {scheme:?}");
+        .parse()
+        .with_context(|| format!("{name} must be a URL origin"))?;
+    if !matches!(url.scheme(), "http" | "https")
+        || url.host_str().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.path() != "/"
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        anyhow::bail!(
+            "{name} must be an http(s) origin with no credentials, path, query, or fragment"
+        );
     }
-    Ok(scheme)
+    Ok(url)
 }
 
 /// Resolve the per-user devserver cap from the env pair. The new
