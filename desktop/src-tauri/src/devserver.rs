@@ -1914,7 +1914,10 @@ mod tests {
         let entry_addr = entry_listener.local_addr().unwrap();
         let identity_origin = format!("http://{entry_addr}");
         let proxy_apex = format!("http://localtest.me:{}", entry_addr.port());
-        let proxy_origin = format!("http://alice.localtest.me:{}", entry_addr.port());
+        let proxy_origin = format!(
+            "http://alice--aaaaaaaaaaaa.p1.localtest.me:{}",
+            entry_addr.port()
+        );
         let response_proxy = proxy_origin.clone();
         let malicious_entry = format!("{sink_origin}/stolen?t=secret");
         let entry = axum::Router::new().route(
@@ -2366,13 +2369,13 @@ mod tests {
         let mut gateway = GatewayConn::new(
             "https://id.chan.app".into(),
             entry_url,
-            "https://alice.devserver.chan.app".into(),
+            "https://alice--aaaaaaaaaaaa.p1.devserver.chan.app".into(),
             "pat".into(),
         )
         .with_entry_target(Some(("alice".into(), "a".repeat(64))));
         gateway.proxy_apex_origin = "https://devserver.chan.app".into();
         DevserverConn {
-            host: "alice.devserver.chan.app".into(),
+            host: "alice--aaaaaaaaaaaa.p1.devserver.chan.app".into(),
             port: 443,
             token: String::new(),
             name: "alice".into(),
@@ -2409,7 +2412,7 @@ mod tests {
         let addr = listener.local_addr().unwrap();
         tokio::spawn(async move {
             let body = format!(
-                r#"{{"username":"alice","devserver_id":"{}","proxy_origin":"https://alice.devserver.chan.app","entry_url":"https://alice.devserver.chan.app/notes-1a2b3c/index.html?t=tok_entry_1"}}"#,
+                r#"{{"username":"alice","devserver_id":"{}","proxy_origin":"https://alice--aaaaaaaaaaaa.p1.devserver.chan.app","entry_url":"https://alice--aaaaaaaaaaaa.p1.devserver.chan.app/notes-1a2b3c/index.html?t=tok_entry_1"}}"#,
                 "a".repeat(64)
             );
             let response = format!(
@@ -2428,7 +2431,7 @@ mod tests {
             .expect("gateway navigation URL mints");
         assert_eq!(
             url,
-            "https://alice.devserver.chan.app/notes-1a2b3c/index.html?t=tok_entry_1"
+            "https://alice--aaaaaaaaaaaa.p1.devserver.chan.app/notes-1a2b3c/index.html?t=tok_entry_1"
         );
         assert_eq!(record.token, "tok_local_1", "the row's token is untouched");
     }
