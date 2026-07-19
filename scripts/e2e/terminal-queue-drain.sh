@@ -337,18 +337,25 @@ warmup_until_busy() {
   wait_for_flat "WARMUP_START_${run}_$$"
 }
 
+instruction=$(batch_instruction)
 agent_version=$("$agent" --version 2>&1)
 echo "starting $agent probe version=$agent_version group=$group case=$case_name size=${size_kib}KiB gap=${gap_ms}ms runs=$runs" >&2
 
+# Every byte of the framed batch is accounted for: the measured envelope, the
+# instruction the first message carries, one "token: <token>" line per message,
+# and a small rounding margin. Nothing here is a guessed headroom, so a wording
+# change moves the filler instead of silently pushing a notification out.
 target_bytes=$((size_kib * 1024))
 ((target_bytes <= max_batch_bytes)) || target_bytes=$max_batch_bytes
 overhead=$(envelope_overhead 5)
-instruction_reserve=512
-budget=$((target_bytes - overhead - instruction_reserve))
+instruction_bytes=$(( ${#instruction} + 1 ))
+token_line_bytes=$((5 * 48))
+margin=64
+budget=$((target_bytes - overhead - instruction_bytes - token_line_bytes - margin))
 ((budget > 0)) || fail "size ${size_kib}KiB leaves no room for five bodies (envelope ${overhead}B)"
 filler_bytes=$((budget / 5))
 ((filler_bytes > 0)) || filler_bytes=1
-echo "payload: ceiling=${max_batch_bytes}B target=${target_bytes}B envelope=${overhead}B filler=${filler_bytes}B/message" >&2
+echo "payload: ceiling=${max_batch_bytes}B target=${target_bytes}B envelope=${overhead}B instruction=${instruction_bytes}B filler=${filler_bytes}B/message" >&2
 
 run_batch_case() {
   local run=$1
@@ -361,7 +368,7 @@ run_batch_case() {
     token=${tokens[index - 1]}
     preamble=""
     if ((index == 1)); then
-      preamble=$(batch_instruction)
+      preamble=$instruction
     fi
     emit_message "$index" "$filler_bytes" "$token" "$preamble" \
       | "$cs_bin" terminal write --stdin --submit="$agent" --tab-name="$tab" >/dev/null
@@ -407,7 +414,7 @@ run_boundaries_case() {
 
   start_terminal "$run"
   warmup_until_busy "$run"
-  emit_message 1 32 "${tokens[0]}" "$(batch_instruction)" \
+  emit_message 1 32 "${tokens[0]}" "$instruction" \
     | "$cs_bin" terminal write --stdin --submit="$agent" --tab-name="$tab" >/dev/null
   # A no-submit write parks in the compose box: it is a boundary AND it must
   # not be reordered behind the submitted messages around it.
@@ -444,7 +451,7 @@ run_late_case() {
     token=${tokens[index - 1]}
     preamble=""
     if ((index == 1)); then
-      preamble=$(batch_instruction)
+      preamble=$instruction
     fi
     emit_message "$index" 32 "$token" "$preamble" \
       | "$cs_bin" terminal write --stdin --submit="$agent" --tab-name="$tab" >/dev/null
@@ -453,7 +460,7 @@ run_late_case() {
   # The prefix is selected and popped atomically, so the depth leaving 5 is the
   # first instant at which a new message is guaranteed to miss it.
   wait_for_depth 0
-  emit_message 6 32 "$late" "$(batch_instruction)" \
+  emit_message 6 32 "$late" "$instruction" \
     | "$cs_bin" terminal write --stdin --submit="$agent" --tab-name="$tab" >/dev/null
   wait_for_depth 0
   wait_for_tokens_in_order "${tokens[@]}" "$late"
