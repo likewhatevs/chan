@@ -75,10 +75,12 @@ if ! FS_LIST="$("${SDME_CMD[@]}" fs ls 2>&1)"; then
 fi
 
 # CONTAINERS is empty until the first target starts, and bash before 4.4 treats
-# an empty array expansion as unset under `set -u`.
+# an empty array expansion as unset under `set -u`. Both early returns are
+# explicit successes: `set -e` would otherwise abort the signal handler that
+# calls this, before it reaches its own exit status.
 cleanup() {
-    [ "$KEEP_CONTAINER" = 1 ] && return
-    [ ${#CONTAINERS[@]} -gt 0 ] || return
+    [ "$KEEP_CONTAINER" = 1 ] && return 0
+    [ ${#CONTAINERS[@]} -gt 0 ] || return 0
     for container in "${CONTAINERS[@]}"; do
         "${SDME_CMD[@]}" rm -f "$container" >/dev/null 2>&1 || true
     done
@@ -118,6 +120,9 @@ for release in "${releases[@]}"; do
             ;;
     esac
 done
+# Defensive: every PKG and COPR_RELEASE pair that survives the validations
+# above yields at least one target, so this guard has no reachable input today.
+# It keeps a future release or package from expanding into a silent no-op.
 [ ${#MATRIX[@]} -gt 0 ] || {
     echo "error: no target matches PKG=$PKG COPR_RELEASE=$COPR_RELEASE" >&2
     exit 1
@@ -171,10 +176,12 @@ fi
 # wrapper always exits 0 and carries the real status out on the writable /out
 # bind, so a failed target leaves its container alive for KEEP_CONTAINER=1.
 #
-# The wrapper hands the whole result tree back to the host user on every path:
-# the container is gone once a target ends, so /out is the only diagnostic
-# surface that survives a failure, and the host has to be able to read it and
-# clear it on the next run.
+# The wrapper hands the whole result tree back to the host user on every path
+# it reaches, failure included: the container is gone once a target ends, so
+# /out is the only diagnostic surface that survives a failure, and the host has
+# to be able to read it and clear it on the next run. A killed or timed-out
+# container never reaches the handback; that leaves root-owned 0644 files in a
+# host-owned directory, which the host can still read and delete.
 GUEST_RUN='status=0
 /bin/bash /src/packaging/distros/copr/build-in-container.sh || status=$?
 printf "%s\n" "$status" >/out/status
@@ -184,9 +191,11 @@ exit 0'
 
 prepare_result_dir() {
     local dir="$1"
+    # Redirections apply left to right, so the stderr redirect has to come
+    # first for it to cover the failing one.
     mkdir -p "$dir" 2>/dev/null &&
         rm -f "$dir/status" 2>/dev/null &&
-        : >"$dir/build.log" 2>/dev/null && return 0
+        : 2>/dev/null >"$dir/build.log" && return 0
     echo "error: cannot write results into $dir" >&2
     echo "hint: an older run may have left it owned by a container uid; clear it with: sudo rm -rf $OUT" >&2
     return 1
@@ -201,7 +210,11 @@ for target in "${MATRIX[@]}"; do
         rootfs="$COPR_EL10_ROOTFS"
     fi
     result_dir="$OUT/el${release}/${HOST_ARCH}/${package}"
-    prepare_result_dir "$result_dir"
+    if ! prepare_result_dir "$result_dir"; then
+        RESULTS+=("FAIL el${release} ${package} ${HOST_ARCH} (result directory unusable)")
+        FAILED=1
+        continue
+    fi
     status_file="$result_dir/status"
     container="chan-copr-el${release}-${package}-${CONTAINER_ARCH}-$$"
     CONTAINERS+=("$container")
@@ -258,6 +271,8 @@ for target in "${MATRIX[@]}"; do
     fi
 done
 
+# Every target appends exactly one result on every path that reaches here, and
+# the matrix always holds at least one target, so RESULTS needs no empty guard.
 echo ">> COPR sdme validation results:" >&2
 for result in "${RESULTS[@]}"; do
     echo "   $result" >&2

@@ -3,9 +3,10 @@
 #
 # The real matrix needs imported CentOS rootfs images and hours of offline RPM
 # rebuilds, so the parts that are easy to get wrong and expensive to reach
-# (per-target status capture, result ownership, a re-run after a failed target,
-# interrupt handling, knob and preflight validation) are exercised here. A stub
-# sdme reproduces the two container behaviours the driver is built around,
+# (per-target status capture, the guest wrapper reaching its result handback,
+# a re-run after a failed target, an unusable result directory, interrupt
+# handling, knob and preflight validation) are exercised here. A stub sdme
+# reproduces the two container behaviours the driver is built around,
 # confirmed by a live sdme probe on 2026-07-19:
 #
 #   - `sdme new` propagates the guest exit status and deletes the container
@@ -15,6 +16,13 @@
 #
 # The driver under test is symlinked into a throwaway repo skeleton, so it is
 # the real file; only its guest side and sdme are stubs.
+#
+# What this cannot cover: the stub guest runs as the host user, so every file
+# it writes is host-owned before the wrapper runs and no assertion here can see
+# a uid change. A chown shim on the guest's PATH records the handback instead,
+# which gates the wrapper reaching it on the failing path as well as the
+# passing one. That the chown crosses uids for real is a property of a root
+# guest against a host bind, and only a real container run shows it.
 #
 # Run: packaging/distros/copr/test-build-with-sdme.sh
 
@@ -34,8 +42,9 @@ cleanup() {
 }
 trap cleanup EXIT
 
-mkdir -p "$COPR_DIR" "$WORK/bin" "$STUB_STATE/containers"
+mkdir -p "$COPR_DIR" "$WORK/bin" "$STUB_STATE/containers" "$STUB_STATE/shim"
 ln -s "$DRIVER" "$COPR_DIR/build-with-sdme.sh"
+: >"$STUB_STATE/chown.log"
 printf '%s\n' centos-stream-9 centos-stream-10 >"$STUB_STATE/rootfs"
 
 cat >"$WORK/bin/sdme" <<'STUB'
@@ -109,7 +118,8 @@ case "$cmd" in
             rm -f "$state/containers/$name"
             exit "$STUB_EXIT"
         fi
-        env "${envs[@]}" STUB_OUT="$out" /bin/bash -c "$script"
+        env "${envs[@]}" STUB_OUT="$out" PATH="$state/shim:$PATH" \
+            /bin/bash -c "$script"
         status=$?
         if [ -n "${STUB_EAT_STATUS:-}" ]; then
             rm -f "$out/status"
@@ -132,6 +142,14 @@ cat >"$WORK/bin/sudo" <<'STUB'
 exec "$@"
 STUB
 
+cat >"$STUB_STATE/shim/chown" <<'STUB'
+#!/usr/bin/env bash
+# Stub chown on the guest's PATH: the stub guest already runs as the host user,
+# so a real chown would be an invisible no-op. Record the call so the harness
+# can see whether the wrapper reached its handback.
+printf '%s\n' "$*" >>"${STUB_STATE:?}/chown.log"
+STUB
+
 cat >"$COPR_DIR/build-srpm.sh" <<'STUB'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -140,6 +158,15 @@ mkdir -p "$dir"
 for pkg in "$@"; do
     : >"$dir/$pkg-0.0.0-1.src.rpm"
 done
+# Hold the driver here on request, so a signal can be delivered while it is
+# between phases instead of inside the sdme pipeline.
+if [ -n "${STUB_SRPM_HOLD:-}" ]; then
+    : >"${STUB_STATE:?}/srpm-holding"
+    for _ in $(seq 1 200); do
+        [ -e "$STUB_STATE/srpm-release" ] && break
+        sleep 0.05
+    done
+fi
 STUB
 
 cat >"$COPR_DIR/build-in-container.sh" <<'STUB'
@@ -156,8 +183,8 @@ status_file="$state/guest-status-$EL_RELEASE-$PKG"
 exit "${STUB_GUEST_STATUS:-0}"
 STUB
 
-chmod +x "$WORK/bin/sdme" "$WORK/bin/sudo" "$COPR_DIR/build-srpm.sh" \
-    "$COPR_DIR/build-in-container.sh"
+chmod +x "$WORK/bin/sdme" "$WORK/bin/sudo" "$STUB_STATE/shim/chown" \
+    "$COPR_DIR/build-srpm.sh" "$COPR_DIR/build-in-container.sh"
 
 ok() { echo "ok   $1"; }
 bad() {
@@ -191,6 +218,7 @@ run_driver() {
     local name="$1" out="$2"
     shift 2
     rm -f "$STUB_STATE/started"
+    : >"$STUB_STATE/chown.log"
     LOG="$WORK/$name.log"
     OUT_DIR="$WORK/out-$out"
     env SDME="$WORK/bin/sdme" OUT="$OUT_DIR" "$@" \
@@ -205,6 +233,7 @@ assert_grep "PASS el9 chan" "$LOG" "el9 chan reported PASS"
 assert_grep "PASS el10 chan-desktop" "$LOG" "el10 chan-desktop reported PASS"
 assert_status 3 "$(wc -l <"$STUB_STATE/started")" "three targets ran"
 assert_status 0 "$(ls "$STUB_STATE/containers" | wc -l)" "no container survives a clean run"
+assert_status 3 "$(wc -l <"$STUB_STATE/chown.log")" "every target's wrapper reaches the result handback"
 
 echo "== one target fails"
 printf '7\n' >"$STUB_STATE/guest-status-10-chan"
@@ -220,11 +249,8 @@ fi
 FAIL_DIR="$OUT_DIR/el10/$(uname -m)/chan"
 assert_present "$FAIL_DIR/build.log" "the failed target leaves a build log"
 assert_present "$FAIL_DIR/upgrade.out" "the failed target leaves its guest artifacts"
-if [ -O "$FAIL_DIR/upgrade.out" ] && [ -w "$FAIL_DIR" ]; then
-    ok "the failed target's results stay writable by the host user"
-else
-    bad "the failed target's results are not host-owned"
-fi
+assert_grep "-R $(id -u):$(id -g) $FAIL_DIR" "$STUB_STATE/chown.log" \
+    "the wrapper hands the failed target's whole result tree back"
 rm -f "$STUB_STATE/containers"/*
 
 echo "== re-run over a failed run's results"
@@ -267,6 +293,30 @@ assert_status 130 $? "an interrupted sdme aborts with 130"
 assert_status 1 "$(wc -l <"$STUB_STATE/started")" "no later target is started"
 assert_grep "was interrupted" "$LOG" "the interrupted sdme is named"
 
+# Both interrupts above reach sdme, where the loop's own 130/143 guard can act
+# on the pipeline status. Deliver one where only the signal handler can act:
+# to the driver alone, while it is held in the SRPM phase.
+rm -f "$STUB_STATE/started" "$STUB_STATE/srpm-holding" "$STUB_STATE/srpm-release"
+set -m
+env SDME="$WORK/bin/sdme" OUT="$WORK/out-int3" PKG=chan COPR_RELEASE=all \
+    STUB_SRPM_HOLD=1 "$COPR_DIR/build-with-sdme.sh" >"$WORK/int3.log" 2>&1 &
+int3_pid=$!
+set +m
+for _ in $(seq 1 100); do
+    [ -e "$STUB_STATE/srpm-holding" ] && break
+    sleep 0.1
+done
+kill -INT "$int3_pid"
+: >"$STUB_STATE/srpm-release"
+wait "$int3_pid"
+assert_status 130 $? "SIGINT outside the sdme pipeline aborts with 130"
+assert_grep "aborting the matrix" "$WORK/int3.log" "the abort is announced"
+if [ -s "$STUB_STATE/started" ]; then
+    bad "a target started after an interrupt outside the sdme pipeline"
+else
+    ok "no target starts after an interrupt outside the sdme pipeline"
+fi
+
 echo "== knob and preflight validation"
 run_driver knob1 knob1 KEEP_CONTAINER=yes
 assert_status 1 $? "KEEP_CONTAINER=yes is rejected"
@@ -288,12 +338,30 @@ STALE="$WORK/out-stale/el9/$(uname -m)/chan"
 mkdir -p "$STALE"
 : >"$STALE/status"
 chmod 500 "$STALE"
-env SDME="$WORK/bin/sdme" OUT="$WORK/out-stale" PKG=chan COPR_RELEASE=9 \
+env SDME="$WORK/bin/sdme" OUT="$WORK/out-stale" PKG=chan COPR_RELEASE=all \
     "$COPR_DIR/build-with-sdme.sh" >"$WORK/stale.log" 2>&1
-assert_status 1 $? "an unclearable result directory stops the run"
+assert_status 1 $? "an unclearable result directory fails its target"
 assert_grep "cannot write results into" "$WORK/stale.log" "the error names the directory"
 assert_grep "sudo rm -rf" "$WORK/stale.log" "the error says how to clear it"
+assert_grep "FAIL el9 chan" "$WORK/stale.log" "the unusable directory is reported as a target failure"
+assert_grep "PASS el10 chan" "$WORK/stale.log" "the rest of the matrix still runs"
 chmod 700 "$STALE"
+
+# A result directory the host can clear but not rewrite takes the same path,
+# and the probe's own redirection error must not precede the message.
+LOCKED="$WORK/out-locked/el9/$(uname -m)/chan"
+mkdir -p "$LOCKED"
+: >"$LOCKED/build.log"
+chmod 400 "$LOCKED/build.log"
+env SDME="$WORK/bin/sdme" OUT="$WORK/out-locked" PKG=chan COPR_RELEASE=9 \
+    "$COPR_DIR/build-with-sdme.sh" >"$WORK/locked.log" 2>&1
+assert_status 1 $? "an unwritable result log fails its target"
+if grep -q "Permission denied" "$WORK/locked.log"; then
+    bad "the probe leaks a raw redirection error before its own message"
+else
+    ok "the probe reports the directory without a raw redirection error"
+fi
+chmod 600 "$LOCKED/build.log"
 
 echo
 if [ "$FAILURES" -eq 0 ]; then
