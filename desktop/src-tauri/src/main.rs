@@ -2450,7 +2450,7 @@ async fn rostered_conn<R: tauri::Runtime>(
         port,
         token: String::new(),
         name,
-        gateway: Some(gateway),
+        gateway: Some(Box::new(gateway)),
     })
 }
 

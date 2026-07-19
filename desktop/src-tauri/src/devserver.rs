@@ -45,7 +45,10 @@ pub struct DevserverConn {
     /// dialed host). Resolved once at connect and carried on the conn so a
     /// reconnect (which clones the conn) reuses it without re-probing.
     pub name: String,
-    pub gateway: Option<GatewayConn>,
+    /// Gateway-only entry/session metadata is substantially larger than the
+    /// ordinary loopback connection. Keep it behind one pointer so connection
+    /// values remain cheap to move through the watcher operation enum.
+    pub gateway: Option<Box<GatewayConn>>,
 }
 
 #[derive(Debug, Clone)]
@@ -2311,12 +2314,12 @@ mod tests {
             port: 443,
             token: String::new(),
             name: "alice".into(),
-            gateway: Some(GatewayConn::new(
+            gateway: Some(Box::new(GatewayConn::new(
                 "https://id.chan.app".into(),
                 "http://127.0.0.1:9/desktop/v1/devserver/entry".into(),
                 "https://alice.devserver.chan.app".into(),
                 "pat".into(),
-            )),
+            ))),
         };
         let row = row_from_launcher(
             &conn,
@@ -2364,7 +2367,7 @@ mod tests {
             port: 443,
             token: String::new(),
             name: "alice".into(),
-            gateway: Some(gateway),
+            gateway: Some(Box::new(gateway)),
         }
     }
 
