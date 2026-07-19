@@ -54,13 +54,15 @@ Manual dispatch takes the existing GA tag plus:
 | `targets` | Runs one distro (`copr`, `launchpad`, `aur`) instead of all three, so a Launchpad retry costs one job. |
 | `publish` | Defaults to false: renders, validates, and probes the credentials, then pushes nothing. A retry that must actually publish needs `publish=true`. |
 | `aur_pkgrel` | Keep `1` for a normal release; raise it when repairing packaging for an already-published upstream version. |
-| `aur_validate_arm` | Runs the unverified aarch64 build. It never gates publication. |
+| `aur_validate_arm` | Runs the unverified aarch64 build. Opt-in here only: a GA run never schedules it, and it never gates publication. |
 
 An rc tag skips the AUR jobs entirely, the way COPR and Launchpad no-op on one.
 
 `aur-auth` is the only pre-release proof that the private key in the secret has its public half registered on the AUR account: it runs `ssh -T aur@aur.archlinux.org`, which a registered key answers with a greeting and a refused interactive shell. Without that probe a wrong key surfaces as a failed clone at publication time, after the release is already out.
 
-`aur-validate-arm` builds the same recipes on a native aarch64 runner against the imported Arch Linux ARM rootfs. It is not in `aur-publish`'s `needs`: an unproven ARM cell must not block shipping the validated x86_64 recipes, and a red cell there is the visible signal that the ARM path is still broken.
+`aur-validate-arm` builds the same recipes on a native aarch64 runner against the imported Arch Linux ARM rootfs. It runs only on a manual dispatch carrying `aur_validate_arm=true`, and it is not in `aur-publish`'s `needs`. A leg that has never completed anywhere would otherwise make two red jobs the normal end state of every GA run, which trains the operator to ignore red; instead a GA run is expected all-green and the ARM work happens in a dispatch that is watched. Once a dispatch passes, give the job the same `workflow_run` trigger the other AUR jobs carry and add it to `aur-publish`'s `needs`.
+
+`aur-validate` is a hard `needs` of `aur-publish`, so anything that fails inside it (the `makepkg` build, the package-scoped `cargo test`, a namcap error-class finding, the packaged-`chan upgrade` smoke, the systemd unit check, or the `chan-desktop` desktop-entry, icon, and `ldd` checks) blocks the AUR push. The matrix covers both packages and `aur-publish` waits on the whole job, so a `chan-desktop` failure also holds back `chan`. That is deliberate: the AUR push is immediate and public, and a recipe that fails its own clean-container gate should not reach users. The blast radius stops there. COPR, the PPA, and the GitHub release are separate jobs and a separate workflow, so none of them is affected; the fix is a recipe change plus a `targets=aur` dispatch, with `aur_pkgrel` raised if that version already published.
 
 Only `PKGBUILD` and `.SRCINFO` belong in the AUR repositories. The generated source archive and `.pkg.tar.zst` files under `target/aur-*` are local artifacts.
 
@@ -68,6 +70,7 @@ Only `PKGBUILD` and `.SRCINFO` belong in the AUR repositories. The generated sou
 
 - Both recipes build from the GA tag and use locked npm and Cargo dependencies. `RUSTUP_TOOLCHAIN=stable` keeps the tree's `rust-toolchain.toml` pin from making a rustup-provided cargo download a second toolchain mid-build.
 - `CHAN_PACKAGED=aur` disables `chan` self-upgrade so package ownership remains with the AUR helper. The local `make linux-archpkg` QA package is stamped `pacman` instead, because it never came from the AUR.
-- `namcap` gates the container build: its error class covers a library the binary needs and the recipe does not declare, which would otherwise ship silently to every AUR user. Warnings stay advisory and are printed. `build-in-container.sh` holds the waiver list.
+- `namcap` gates the container build: its error class covers a library the binary needs and the recipe does not declare, which would otherwise ship silently to every AUR user. Warnings stay advisory and are printed in full. Adding a waiver is one commented line in `build-in-container.sh`'s `namcap_waivers` array. The `chan` package needs none: its only findings are the dependency-declaration warnings below.
+- namcap reports `gcc-libs` and `systemd` as possibly unneeded, and reports `libgcc` as needed and implicitly satisfied. All three stay as they are. namcap derives dependencies from linked sonames alone: `systemd` is a runtime dependency for the packaged user unit and `chan devserver --service=systemd`, which no ELF header shows, and `gcc-libs` is the package that provides the `libgcc_s.so.1` the same output says the binary needs (there is no `libgcc` package to declare). Its remaining warning, an unused `ld-linux-x86-64.so.2`, is the dynamic loader itself.
 - `chan-desktop` links to the host WebKitGTK/Mesa stack. This is the correct Arch/CachyOS path and avoids the rolling-distro incompatibility of the Ubuntu-built AppImage.
 - The AUR Ed25519 host key is pinned to the fingerprint published by the AUR. Do not replace it with `ssh-keyscan`.

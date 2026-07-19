@@ -57,9 +57,12 @@ fi
 # namcap findings gate the build. The recipes carry a hand-written runtime
 # dependency set, so a library that namcap detects but the PKGBUILD does not
 # declare (namcap's `E:` class) would otherwise ship silently to every AUR
-# user. Warnings stay advisory and are printed in full. Waivers are extended
-# regexes matched against whole namcap lines, each with the reason it cannot
-# be fixed in the recipe; none are needed today.
+# user. Warnings stay advisory and are printed in full.
+#
+# A waiver is one line here: an extended regex matched against a whole namcap
+# line, plus the reason the finding cannot be fixed in the recipe. Shape:
+#     'E: Dependency detected and not included .libfoo.' # dlopened at runtime
+# No finding needs one today.
 namcap_waivers=()
 
 # Print the namcap error lines that no waiver covers.

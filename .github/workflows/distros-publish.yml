@@ -158,7 +158,9 @@ jobs:
 
       - name: Build and sign the source packages
         if: env.SKIP_PPA != '1'
-        run: packaging/distros/debian/build-source.sh
+        run: |
+          packaging/distros/debian/build-source.sh
+          echo "SIGNED=1" >> "$GITHUB_ENV"
 
       # Optional sftp transport: with an SSH key provisioned, dput's
       # [ppa] host flips from anonymous ftp (the transient-550 path
@@ -202,9 +204,20 @@ jobs:
         if: env.SKIP_PPA != '1' && env.PUBLISH == 'true'
         run: packaging/distros/debian/upload.sh
 
+      # Signing is skipped when the key is absent (a fork) and fails when it
+      # is expired, so the report reads the outcome instead of assuming it: a
+      # dry run that claims work it did not do is worse than no dry run.
       - name: Report the PPA dry run
-        if: env.PUBLISH != 'true'
-        run: echo "publish=false; the source packages were built and signed but not uploaded."
+        if: ${{ !cancelled() && env.PUBLISH != 'true' }}
+        run: |
+          if [ "${SIGNED:-}" = "1" ]; then
+            echo "publish=false; the source packages were built and signed but not uploaded."
+          elif [ "${SKIP_PPA:-}" = "1" ]; then
+            echo "publish=false and LAUNCHPAD_GPG_PRIVATE_KEY is absent; nothing was signed. Only the vendored source tarball was proven."
+          else
+            echo "::error::the source packages did not build and sign; the Launchpad credential is unproven."
+            exit 1
+          fi
 
   # The AUR is a git host for recipes: a push publishes immediately and is
   # only as good as the key behind it. Probe the credential in its own
@@ -307,21 +320,23 @@ jobs:
 
   # Arch Linux ARM aarch64 is declared by both recipes but has never been
   # built end to end: the rootfs import, pacman-key bootstrap, rolling
-  # -Syu, and native ARM Tauri build are all unproven. It therefore never
-  # appears in `needs` for aur-publish; a red cell here is a visible
-  # signal that the ARM path is broken, not a silent block on shipping
-  # the validated x86_64 recipes. Manual dispatch runs it only with
-  # aur_validate_arm=true so retrying another distro stays cheap.
+  # -Syu, and native ARM Tauri build are all unproven. So this job is
+  # opt-in on manual dispatch only, and never appears in `needs` for
+  # aur-publish. A GA run is therefore expected all-green with no ARM
+  # cell, instead of shipping two permanently red jobs the operator is
+  # told to treat as a failure. Dispatch it with aur_validate_arm=true to
+  # work the leg; once it passes, add the workflow_run trigger here and
+  # to `needs` so GA covers aarch64 too.
+  #
+  # `inputs` (not `github.event.inputs`) is what preserves a boolean
+  # input as a Boolean: the raw event payload carries the string "false",
+  # which is truthy and would run ARM on every dispatch.
   aur-validate-arm:
     if: >-
-      (github.event_name == 'workflow_dispatch' &&
-       (inputs.targets == 'all' || inputs.targets == 'aur') &&
-       inputs.aur_validate_arm &&
-       !contains(inputs.tag, '-')) ||
-      (github.event.workflow_run.conclusion == 'success' &&
-       github.event.workflow_run.event == 'push' &&
-       startsWith(github.event.workflow_run.head_branch, 'v') &&
-       !contains(github.event.workflow_run.head_branch, '-'))
+      github.event_name == 'workflow_dispatch' &&
+      (inputs.targets == 'all' || inputs.targets == 'aur') &&
+      inputs.aur_validate_arm &&
+      !contains(inputs.tag, '-')
     strategy:
       fail-fast: false
       matrix:
