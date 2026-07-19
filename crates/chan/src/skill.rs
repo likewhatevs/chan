@@ -392,10 +392,11 @@ fn for_each_help(mut check: impl FnMut(&str, &str)) {
                 cmd.get_about(),
                 cmd.get_long_about(),
                 cmd.get_after_long_help(),
-            ] {
-                if let Some(text) = text {
-                    check(&name, &text.to_string());
-                }
+            ]
+            .into_iter()
+            .flatten()
+            {
+                check(&name, &text.to_string());
             }
         });
     }

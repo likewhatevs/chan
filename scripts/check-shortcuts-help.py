@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Check that `chan open --help` still matches the chord table in shortcuts.ts.
 
-SERVE_LONG_ABOUT embeds a table generated from
+KEYBINDINGS_TABLE in crates/chan/src/lib.rs is generated from
 web/packages/workspace-app/src/state/shortcuts.ts and pasted into the Rust
 const by hand. Nothing else notices when a chord changes on the TS side, so
 `chan open --help` (and the skill that renders it) can go on advertising a
@@ -24,7 +24,7 @@ GENERATOR = ROOT / "web" / "packages" / "workspace-app" / "scripts" / "shortcuts
 # The const is a plain `\`-continued string literal, so the body runs from the
 # opening quote to the first unescaped closing quote.
 CONST = re.compile(
-    r'const SERVE_LONG_ABOUT: &str = "\\\n(?P<body>.*?)\n?";',
+    r'const KEYBINDINGS_TABLE: &str = "\\\n(?P<body>.*?)\n?";',
     re.DOTALL,
 )
 
@@ -32,7 +32,7 @@ CONST = re.compile(
 def embedded() -> str:
     match = CONST.search(LIB.read_text())
     if not match:
-        sys.exit(f"could not find SERVE_LONG_ABOUT in {LIB}")
+        sys.exit(f"could not find KEYBINDINGS_TABLE in {LIB}")
     # Undo the escaping a Rust string literal needs. The table itself is
     # plain ASCII, so these are the only sequences that appear.
     return match.group("body").replace('\\"', '"').replace("\\\\", "\\")
@@ -58,7 +58,7 @@ def main() -> int:
     diff = difflib.unified_diff(
         have.splitlines(),
         want.splitlines(),
-        fromfile="SERVE_LONG_ABOUT (crates/chan/src/lib.rs)",
+        fromfile="KEYBINDINGS_TABLE (crates/chan/src/lib.rs)",
         tofile="shortcuts-table.mjs --serve-long-about",
         lineterm="",
     )
@@ -67,7 +67,7 @@ def main() -> int:
     print("chan open --help advertises stale keybindings. Refresh with:")
     print("  node web/packages/workspace-app/scripts/shortcuts-table.mjs \\")
     print("    --serve-long-about")
-    print("and paste the output into SERVE_LONG_ABOUT in crates/chan/src/lib.rs.")
+    print("and paste the output into KEYBINDINGS_TABLE in crates/chan/src/lib.rs.")
     return 1
 
 

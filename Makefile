@@ -213,8 +213,8 @@ web-check: web-launcher ## Run frontend check, vitest, and production build.
 
 .PHONY: shortcuts-check
 shortcuts-check: ## Verify chan open's keybinding table matches shortcuts.ts.
-	# SERVE_LONG_ABOUT embeds a table generated from shortcuts.ts and pasted
-	# in by hand, so a chord change in the TS silently leaves `chan open
+	# KEYBINDINGS_TABLE is generated from shortcuts.ts and pasted into the
+	# Rust const by hand, so a chord change in the TS silently leaves `chan open
 	# --help` lying. Diff the generator's output against the const. Lives on
 	# the web side because the generator needs node, which the Rust jobs do
 	# not guarantee.
