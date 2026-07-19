@@ -87,8 +87,8 @@
 
 <section class="install-block">
   <div class="section-heading">
-    <h2>Ubuntu &amp; Fedora repositories</h2>
-    <p>Prefer distro packages? Chan ships from a Launchpad PPA and a Fedora COPR, so installs and updates ride <code>apt</code> and <code>dnf</code> instead of the AppImage or static binaries. <code>chan-desktop</code> is the app and also provides the <code>chan</code> and <code>cs</code> commands; install plain <code>chan</code> for headless machines: one or the other, not both.</p>
+    <h2>Ubuntu, Fedora &amp; Arch repositories</h2>
+    <p>Prefer distro packages? Chan ships from a Launchpad PPA, a Fedora COPR, and the Arch User Repository, so installs and updates ride <code>apt</code>, <code>dnf</code>, and your AUR helper instead of the AppImage or static binaries. <code>chan-desktop</code> is the app and also provides the <code>chan</code> and <code>cs</code> commands; install plain <code>chan</code> for headless machines: one or the other, not both.</p>
   </div>
 
   <div class="download-group">
@@ -117,6 +117,15 @@ sudo dnf install chan-desktop   # or: chan</b></code>
         </svg>
       </button>
     </div>
+  </div>
+
+  <div class="download-group">
+    <h3>Arch <span class="group-note">and CachyOS, x86_64, built from source</span></h3>
+    <div class="command-copy" data-copy-block>
+      <code><span>$</span><b data-copy-value>paru -S chan-desktop</b></code>
+      <button type="button">Copy</button>
+    </div>
+    <p class="minor">Or <code>chan</code> for headless machines. The AUR ships recipes, so your helper compiles Chan against the packages already on your system.</p>
   </div>
 </section>
 
