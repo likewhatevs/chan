@@ -75,13 +75,14 @@ if [ "$SUBMIT" = 1 ]; then
         srpm="$(ls -t "$OUTDIR/$pkg"-[0-9]*.src.rpm 2>/dev/null | head -1)"
         [ -n "$srpm" ] || { echo "error: no SRPM for $pkg" >&2; exit 1; }
         echo "==> submitting $srpm to $COPR_PROJECT"
-        exclude_chroots=()
+        # Spelled out per branch rather than through an array: bash before 4.4
+        # treats an empty array expansion as unset under `set -u`.
         if [ "$pkg" = chan-desktop ]; then
-            exclude_chroots+=(
-                --exclude-chroot centos-stream+epel-next-9-aarch64
+            copr-cli build "$COPR_PROJECT" "$srpm" \
+                --exclude-chroot centos-stream+epel-next-9-aarch64 \
                 --exclude-chroot centos-stream+epel-next-9-x86_64
-            )
+        else
+            copr-cli build "$COPR_PROJECT" "$srpm"
         fi
-        copr-cli build "$COPR_PROJECT" "$srpm" "${exclude_chroots[@]}"
     done
 fi
