@@ -13,6 +13,14 @@ Status: implemented and locally validated against Codex 0.144.6 and Claude Code 
 - Unit tests pin FIFO boundaries, no skipping, the 64 KiB ceiling, oversized-head progress, singleton bytes, one Codex input, one Claude input sequence, Rich Prompt event ordering, late-enqueue behavior, and shared fresh/restored PTY sequence writes.
 - Gemini was not installed on the validation host, so it was not promoted. Gemini, OpenCode, Rich Prompt, raw input, and runtime overrides remain single-message boundaries.
 
+## Divergences From the Plan
+
+Three things landed differently from the design above, and the code is the authority:
+
+- Gemini keeps TWO idle-gated queue entries, not one atomic `InputSequence`. Design section 5 reads as if a Gemini body and CR could share one controller sequence with `WRITE_QUEUE_INPUT_GAP` between them, but that gap is measured only against Claude Code; leaving ~20 ms of margin against Gemini's live-probed 30 ms Shift+Return window, on an agent nobody validated, is not a safe trade for an agent that gains nothing from batching. `WRITE_QUEUE_INPUT_GAP` has exactly one user: the batched Claude body/chord split.
+- The queue tracks ENTRIES, not `write_cost` units. With Gemini split back into two entries, every entry costs exactly one raw write, so a separate cost field would always equal the entry count. `WRITE_QUEUE_CAP` bounds entries, a message is still all-or-nothing at the cap, and depth still counts logical messages (tail entries).
+- `cs terminal list --json` gained `queue_depth`. Depth was previously observable only through the SPA's WebSocket `queue` frame, which left the live harness with no way to prove a batch drains in one step instead of five.
+
 ## Summary
 
 Keep the current correctness contract: `cs terminal write` remains a bounded per-session FIFO, never writes into a busy agent, and preserves arrival order. Change what happens at one safe drain opportunity: instead of submitting exactly one queued `cs terminal write` notification, take the largest eligible FIFO prefix, frame those notifications as one chronological prompt, and submit that prompt once.

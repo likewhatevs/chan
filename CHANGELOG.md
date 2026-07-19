@@ -8,7 +8,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
-- **Queued terminal notifications reconcile in one agent turn.** At an idle opportunity, consecutive compatible `cs terminal write --submit=codex|claude` messages arrive as one framed chronological prompt instead of consuming one full agent turn each. FIFO order, the busy-agent gate, the 100-write bound, singleton bytes, Rich Prompt turns, raw input, Gemini, OpenCode, and runtime submit overrides retain their existing boundaries; large Claude batches use a paste-safe body/chord split so the submit key cannot be swallowed.
+- **Queued terminal notifications reconcile in one agent turn.** At an idle opportunity, consecutive `cs terminal write --submit=codex|claude` messages arrive as one framed chronological prompt instead of consuming one full agent turn each. FIFO order, the busy-agent gate, the 100-entry bound, singleton bytes, Rich Prompt turns, raw input, OpenCode, and runtime submit overrides retain their existing boundaries; large Claude batches use a paste-safe body/chord split so the submit key cannot be swallowed. Gemini is unchanged: it is a batch boundary, and its body and Return remain two separately idle-gated queue entries.
 
 ## [v0.71.0] - 2026-07-19
 
