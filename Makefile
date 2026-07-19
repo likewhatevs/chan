@@ -113,6 +113,14 @@ copr-srpm: ## Build the chan + chan-desktop SRPMs locally (fedora container).
 copr-build: ## Build the SRPMs and submit them to COPR (needs copr-cli auth).
 	packaging/distros/copr/build-srpm.sh $(PKG) --submit
 
+.PHONY: copr-check
+copr-check: ## Build and smoke the supported CentOS COPR matrix via sdme.
+	SDME="$(SDME)" DOCKER="$(DOCKER)" PKG="$(PKG)" COPR_RELEASE="$(COPR_RELEASE)" \
+		REUSE_SRPM="$(REUSE_SRPM)" \
+		COPR_EL9_ROOTFS="$(COPR_EL9_ROOTFS)" \
+		COPR_EL10_ROOTFS="$(COPR_EL10_ROOTFS)" \
+		packaging/distros/copr/build-with-sdme.sh
+
 .PHONY: ppa-source
 ppa-source: ## Build signed per-series Launchpad source packages from the tarball.
 	packaging/distros/debian/build-source.sh $(PKG)

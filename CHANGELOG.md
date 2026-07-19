@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Added
+
+- **COPR packages target CentOS Stream 9 and 10 on x86_64 and aarch64.** The CLI builds for all four new chroots; the desktop package builds for Stream 10, while EPEL Next 9 is excluded because it does not provide the required WebKitGTK 4.1/libsoup3 development stack. A clean sdme path rebuilds, installs, and smokes the vendored RPMs before submission.
+
 ## [v0.71.0] - 2026-07-19
 
 v0.71.0 makes OpenCode a first-class terminal agent, replaces the desktop's static wildcard gateway grants with authenticated exact-origin native trust, unifies workspace search and graph traversal behind one bounded contract and one agent tool, keeps the last five CLI and desktop versions resolvable for `chan upgrade --version`, and fixes two editor cosmetics.
