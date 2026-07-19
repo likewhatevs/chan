@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Changed
+
+- **Queued terminal notifications reconcile in one agent turn.** At an idle opportunity, consecutive compatible `cs terminal write --submit=codex|claude` messages arrive as one framed chronological prompt instead of consuming one full agent turn each. FIFO order, the busy-agent gate, the 100-write bound, singleton bytes, Rich Prompt turns, raw input, Gemini, OpenCode, and runtime submit overrides retain their existing boundaries; large Claude batches use a paste-safe body/chord split so the submit key cannot be swallowed.
+
 ## [v0.71.0] - 2026-07-19
 
 v0.71.0 makes OpenCode a first-class terminal agent, replaces the desktop's static wildcard gateway grants with authenticated exact-origin native trust, unifies workspace search and graph traversal behind one bounded contract and one agent tool, keeps the last five CLI and desktop versions resolvable for `chan upgrade --version`, and fixes two editor cosmetics.

@@ -145,6 +145,8 @@ Each agent has a `{}`-templated chord whose built-in default reproduces the live
 
 `plan_submitted_input` is the drain-time byte source of truth. Gemini remains the split-write agent: Gemini 0.51 converts Return received within 30 ms of inserted text into Shift+Return, including text delivered as bracketed paste, so its body and bare CR are separate ordered parts of one atomic controller sequence. The compatibility helpers `apply_submit_chord` and `submit_writes` remain for direct team-spawn callers.
 
+At one safe idle opportunity, the terminal drainer selects the maximal consecutive prefix of submitted `cs terminal write` messages with one identical proven built-in submit spec. Two or more messages become one ASCII-framed chronological prompt capped at 64 KiB; one message keeps its exact singleton bytes. Rich Prompt, raw unsubmitted input, Gemini, OpenCode, runtime overrides, agent/spec changes, and the byte ceiling are FIFO boundaries, and the selector never skips them. Codex accepts the framed batch in its normal bracketed-paste-plus-CR write. Claude receives the batch body and submit CSI as two atomic controller parts so paste handling cannot swallow the submit chord.
+
 ## 7. Interface contracts
 
 The serde wire contract is always compiled and independent of the `client` feature: request tags use `type`, responses use `status`, and the response vocabulary is intentionally only `ok`, `error`, or `timeout`. SPA-facing payloads keep their camelCase/nullability rules from section 4.
