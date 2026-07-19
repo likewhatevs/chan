@@ -1067,9 +1067,9 @@ try { ws.terminate(); } catch {}
 process.exit(0);
 PROBE
 
-    local out
+    local out probe="$WORK/watchdog-probe.mjs"
     out="$(WORK="$WORK" PROXY_PORT="$PROXY_PORT" WD_HOST="$host" WD_COOKIE="$cookie" \
-        node "$WORK/watchdog-probe.mjs" 2>> "$LOGS/watchdog.log")"
+        node "$probe" 2>> "$LOGS/watchdog.log")"
     # Belt and braces: whatever the probe did, make sure the proxy is running
     # again so the stack stays usable for later scenarios / teardown.
     local ppid

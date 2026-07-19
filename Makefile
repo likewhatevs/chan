@@ -140,8 +140,21 @@ macos-chan-dmg-notarized: macos-chan-dmg-notarised
 windows-chan-installer: ## Build the Windows NSIS desktop installer.
 	$(MAKE) -C desktop windows-installer
 
+.PHONY: shell-check
+shell-check: ## Run shellcheck over the tracked shell scripts.
+	scripts/lint-static.sh shell
+
+.PHONY: workflow-check
+workflow-check: ## Run actionlint (and shellcheck on run: blocks) over the workflows.
+	scripts/lint-static.sh workflows
+
 .PHONY: pre-push
 pre-push: ## Run the local pre-push gate.
+	# The two static linters run first: they are seconds-long, they cover the
+	# packaging and CI surface no cargo/npm target reads, and a finding there
+	# is not worth a full compile to discover.
+	$(MAKE) shell-check
+	$(MAKE) workflow-check
 	$(CARGO) fmt --check
 	RUSTFLAGS="-D warnings" $(CARGO) clippy --all-targets -- -D warnings
 	RUSTFLAGS="-D warnings" $(CARGO) test --all-targets

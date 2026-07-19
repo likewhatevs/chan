@@ -25,9 +25,7 @@ async function main() {
     const linuxTar = await makeTarball(assets, "x86_64-unknown-linux-musl", "linux");
     const macTar = await makeTarball(assets, "aarch64-apple-darwin", "mac");
     const metadataPath = path.join(root, "latest.json");
-    await fs.writeFile(
-      metadataPath,
-      JSON.stringify(
+    const metadata = JSON.stringify(
         {
           version: "0.14.0",
           tag: "v0.14.0",
@@ -49,8 +47,11 @@ async function main() {
         },
         null,
         2,
-      ),
     );
+    await fs.writeFile(metadataPath, metadata);
+    // The pinned-version path derives `$BASE/v$VERSION.json`, so the same
+    // metadata is published under the version-pinned name too.
+    await fs.writeFile(path.join(root, "v0.14.0.json"), metadata);
 
     runInstall({
       fakeBin,
@@ -73,10 +74,11 @@ async function main() {
       metadataPath: path.join(root, "missing.json"),
       prefix: path.join(prefixes, "missing"),
     });
+    runVersionPinChecks({ fakeBin, base: root, prefixes });
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }
-  console.log("smoked install.sh metadata selection");
+  console.log("smoked install.sh metadata selection and VERSION pinning");
 }
 
 async function writeFakeUname(fakeBin) {
@@ -149,6 +151,89 @@ function runMetadataFailureFallback({ fakeBin, metadataPath, prefix }) {
   if (!result.stderr.includes("manual downloads: https://github.com/fiorix/chan/releases")) {
     throw new Error(`missing metadata fallback message not found: ${result.stderr}`);
   }
+}
+
+// `validate_version` is written for the `#!/bin/sh` shebang, so it has to hold
+// under whatever /bin/sh is. It once used the bash-only `[^...]` glob
+// negation, which dash (the /bin/sh of Debian and Ubuntu, and the shell the
+// documented `curl ... | sh` line runs) reads as a literal set: the test
+// inverted, refusing every real version and passing garbage. So the matrix
+// runs under every POSIX shell on this machine, not just the default one.
+const VALID_VERSIONS = ["0.14.0", "1.2.3", "10.20.30"];
+const INVALID_VERSIONS = ["abc", "v1.2.3", "1.2.3.4", "1.2", "1.2.x", "0.72.0-rc1"];
+const VERSION_REJECTED = "VERSION must be a bare X.Y.Z version.";
+
+function posixShells() {
+  const candidates = [
+    ["sh", ["sh"]],
+    ["dash", ["dash"]],
+    ["busybox ash", ["busybox", "sh"]],
+    ["bash", ["bash"]],
+  ];
+  return candidates.filter(([, argv]) => {
+    const probe = spawnSync(argv[0], [...argv.slice(1), "-c", "exit 0"], { encoding: "utf8" });
+    return probe.status === 0;
+  });
+}
+
+function runVersionPinChecks({ fakeBin, base, prefixes }) {
+  const shells = posixShells();
+  // `sh` is always present, so an empty list means the probe itself broke.
+  if (!shells.some(([name]) => name === "sh")) {
+    throw new Error("no working /bin/sh found to run the VERSION matrix under");
+  }
+  for (const [shellName, argv] of shells) {
+    const run = (version, prefix) =>
+      spawnSync(argv[0], [...argv.slice(1), installer], {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          BASE: base,
+          FAKE_UNAME_S: "Linux",
+          FAKE_UNAME_M: "x86_64",
+          PATH: `${fakeBin}${path.delimiter}${process.env.PATH ?? ""}`,
+          PREFIX: prefix,
+          VERSION: version,
+        },
+      });
+
+    // A pinned version that exists installs end to end. This is the case the
+    // `[^...]` glob broke: under dash it failed before any download.
+    const prefix = path.join(prefixes, `pin-${shellName.replace(/\W+/g, "-")}`);
+    const pinned = run("0.14.0", prefix);
+    if (pinned.status !== 0) {
+      throw new Error(
+        `VERSION=0.14.0 install failed under ${shellName}: ${pinned.stderr || pinned.stdout}`,
+      );
+    }
+    const output = execFileSync(path.join(prefix, "bin", "chan"), { encoding: "utf8" }).trim();
+    if (output !== "linux") {
+      throw new Error(
+        `VERSION=0.14.0 under ${shellName} installed a binary printing ${JSON.stringify(output)}`,
+      );
+    }
+
+    // The rest never reach a download, so they are judged on whether the
+    // version check is what stopped them.
+    for (const version of VALID_VERSIONS) {
+      const result = run(version, path.join(prefixes, "unused"));
+      if (result.stderr.includes(VERSION_REJECTED)) {
+        throw new Error(`${shellName} rejected valid VERSION=${version}`);
+      }
+    }
+    for (const version of INVALID_VERSIONS) {
+      const result = run(version, path.join(prefixes, "unused"));
+      if (result.status === 0) {
+        throw new Error(`${shellName} accepted invalid VERSION=${version}`);
+      }
+      if (!result.stderr.includes(VERSION_REJECTED)) {
+        throw new Error(
+          `${shellName} failed VERSION=${version} for the wrong reason: ${result.stderr}`,
+        );
+      }
+    }
+  }
+  console.log(`checked VERSION pinning under: ${shells.map(([name]) => name).join(", ")}`);
 }
 
 main().catch((err) => {

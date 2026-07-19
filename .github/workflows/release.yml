@@ -1138,6 +1138,9 @@ jobs:
           tags=$(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON")
           echo "manifest tags: $tags"
           echo "source refs:  $refs"
+          # Both hold whitespace-separated argument lists ("-t a -t b" and the
+          # per-arch refs), so the split is what turns them into arguments.
+          # shellcheck disable=SC2086
           docker buildx imagetools create $tags $refs
 
       - name: Inspect the manifest (assert both platforms)

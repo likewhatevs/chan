@@ -1,0 +1,33 @@
+# shellcheck rules for `make shell-check` and for the shellcheck pass
+# actionlint runs over workflow `run:` blocks. Editors with a shellcheck
+# integration read this file too, so what shows up while editing is what the
+# gate enforces.
+
+# `info` is where shellcheck stops reporting possible bugs and starts
+# reporting matters of taste. The level earns its keep on SC2086, an unquoted
+# expansion that word-splits, which shellcheck reports at info and not at
+# warning: it is what caught run.sh passing unquoted command-substitution
+# results as systemd-run arguments, and `warning` would have shipped that.
+# The `style` level above `info` adds only idiom preferences.
+severity=info
+
+# Only a repo-wide idiom belongs here: something used in several places that
+# would otherwise need the same annotation at every site. A rule with one or
+# two sites gets a directive at the site instead, where the reason can name
+# what is actually going on there.
+
+# `ls` is used to pick one entry out of a glob: `ls -t <glob> | head -1` for
+# the newest build artifact, `ls -d <glob> | head -1` for a versioned cache
+# directory. find expresses neither without extra sort or head plumbing, and
+# every such glob points at a directory this repo or its tooling owns.
+disable=SC2012
+
+# `cond && action || fallback` is a deliberate idiom here: an assertion that
+# reports pass or fail, or a probe followed by its diagnostic. It is written
+# knowing it is not an if-then-else.
+disable=SC2015
+
+# Single-quoted `$` is intentional wherever a script embeds a `node -e`
+# program, an awk program, or a shell snippet meant for a container or remote
+# shell, which is most of the packaging tree.
+disable=SC2016

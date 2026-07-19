@@ -54,6 +54,7 @@ echo
 echo "Configure at least one OAuth provider. Press Enter to skip any."
 echo
 
+# shellcheck disable=SC2034  # namerefs: the writes land in the caller's vars
 prompt_provider() {
     # bash 4.3+ namerefs; safer than `eval` because the value never
     # passes through the shell parser.

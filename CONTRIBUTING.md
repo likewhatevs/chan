@@ -40,7 +40,9 @@ To run these gates in a Linux container that mirrors CI (natively on Linux, or v
 
 ## Pre-push gate
 
-Installing the pre-push hook (`./scripts/install-hooks`) wires the same gate that CI enforces: fmt + clippy `-D warnings` + cargo test + `cargo build --no-default-features` + `npm run check` + `npm test` + `npm run build` against the pinned Rust toolchain. Run it locally before pushing; CI will fail fast otherwise.
+Installing the pre-push hook (`./scripts/install-hooks`) wires the same gate that CI enforces: shellcheck + actionlint + fmt + clippy `-D warnings` + cargo test + `cargo build --no-default-features` + `npm run check` + `npm test` + `npm run build` against the pinned Rust toolchain. Run it locally before pushing; CI will fail fast otherwise.
+
+The two static linters (`make shell-check`, `make workflow-check`) cover the shell scripts and GitHub workflows that no cargo or npm target reads. `scripts/lint-static.sh` downloads both at a pinned version, verified against a checksum, into `${XDG_CACHE_HOME:-~/.cache}/chan/lint-tools`, so no system package or root is needed. Only a cold cache needs network; the cache deliberately sits outside `target/` so wiping `target/` or adding a worktree does not force a re-download. Set `CHAN_LINT_TOOLS_DIR` to move it. Severity and the exclude list live in [`.shellcheckrc`](.shellcheckrc), each exclude with its reason.
 
 Do not bypass with `--no-verify` unless explicitly agreed. Hook failures get fixed in a NEW commit, not amended into the previous one.
 
