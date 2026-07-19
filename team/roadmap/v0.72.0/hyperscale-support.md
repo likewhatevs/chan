@@ -1,19 +1,21 @@
 # CentOS Stream COPR Support for Hyperscale Deployments
 
-Status: implemented and ready for COPR validation; live chroots and repositories are configured, with native aarch64 validation pending. Grounded against `59acd07a` (`v0.71.0`) on 2026-07-19.
+Status: implemented; validated locally on x86_64 only. The live chroots and repositories are configured, no COPR build has run, and nothing has exercised aarch64. Grounded against `59acd07a` (`v0.71.0`) on 2026-07-19.
 
 ## Summary
 
 Expand the `fiorix/chan` COPR project from Fedora-only buildroots to the CentOS Stream buildroots used by Hyperscale deployments. Hyperscale is the deployment context, not a distinct COPR buildroot or a new package dependency.
 
-The accepted matrix is:
+The intended matrix, and what has actually been built, are two different things. The `intent` columns are the configuration; the `proof` column is the evidence:
 
-| COPR chroot | `chan` | `chan-desktop` |
-| --- | --- | --- |
-| `centos-stream+epel-next-9-x86_64` | build | exclude |
-| `centos-stream+epel-next-9-aarch64` | build | exclude |
-| `centos-stream-10-x86_64` | build | build |
-| `centos-stream-10-aarch64` | build | build |
+| COPR chroot | `chan` | `chan-desktop` | proof |
+| --- | --- | --- | --- |
+| `centos-stream+epel-next-9-x86_64` | build | exclude | local sdme rebuild |
+| `centos-stream+epel-next-9-aarch64` | build | exclude | none |
+| `centos-stream-10-x86_64` | build | build | local sdme rebuild |
+| `centos-stream-10-aarch64` | build | build | none |
+
+Only the x86_64 rows have been built anywhere. The aarch64 rows are enabled configuration with no build behind them: the validation host is x86_64 with no aarch64 binfmt/QEMU registration, so this item claims aarch64 support nowhere until a native build proves it.
 
 Keep every currently enabled Fedora chroot. The package matrix, rather than a spec-level architecture exclusion, owns the EL9 desktop restriction.
 
@@ -106,7 +108,7 @@ The live `fiorix/chan` COPR configuration was applied by the project owner and v
 - Each CentOS chroot has the literal generic EPEL repository, while the rendered Fedora 44 and Rawhide build configurations do not.
 - The owner configured the `chan-desktop` EL9 denylist. COPR's public package endpoint does not expose this field, so the first submission must still confirm that no EL9 desktop job is scheduled.
 
-The project is ready for COPR validation builds. This x86_64 host lacks aarch64 emulation, so native COPR builds remain the aarch64 acceptance gate.
+The configuration is in place for COPR validation builds, none of which has run yet. This x86_64 host lacks aarch64 emulation, so native COPR builds remain the aarch64 acceptance gate.
 
 ## Acceptance
 

@@ -23,7 +23,7 @@ Each item is one Markdown file that names an observed behavior or need, the evid
 
 | item | state | what needs to happen |
 | --- | --- | --- |
-| [hyperscale-support](v0.72.0/hyperscale-support.md) | ready for COPR validation | submit the configured matrix, accept the native x86_64/aarch64 builds, and verify that no EL9 desktop job is scheduled |
+| [hyperscale-support](v0.72.0/hyperscale-support.md) | validated locally on x86_64; COPR builds pending | submit the configured matrix, accept the native x86_64 and aarch64 builds (aarch64 is unproven anywhere), and verify that no EL9 desktop job is scheduled |
 | [terminal-write-queue-drain](v0.72.0/terminal-write-queue-drain.md) | deferred from v0.71.0 (round 2 did not run) | assign a lane, implement, validate; rebases on the merged v0.71.0 control plane and adds only a `TermWrite.submit` field |
 
 ## Completed
