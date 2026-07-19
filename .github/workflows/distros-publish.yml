@@ -1,10 +1,10 @@
 # Publish the distro packages after a release lands: trigger the COPR
-# package builds and upload the signed Debian source packages to the
-# Launchpad PPA. Deliberately a separate workflow from release.yml, and
+# package builds, upload the signed Debian source packages to the Launchpad
+# PPA, and publish the Arch source recipes to the AUR. Deliberately a separate workflow from release.yml, and
 # triggered by its completion rather than by the tag push, so distro
 # publishing can never block or fail the GitHub release and only runs
 # once the release is actually out. Retry / manual path: dispatch with
-# the tag. Both jobs no-op gracefully when their secret is absent
+# the tag. Publication jobs no-op gracefully when their secret is absent
 # (e.g. on forks).
 #
 # Secrets:
@@ -15,6 +15,8 @@
 #                                 when present, dput switches from ftp
 #                                 to sftp (authenticated, no anonymous
 #                                 FTP flakiness); absent keeps ftp
+#   AUR_SSH_PRIVATE_KEY           private half of the key registered on
+#                                 the maintainer's AUR account
 
 name: distros-publish
 
@@ -27,6 +29,10 @@ on:
       tag:
         description: Existing vX.Y.Z tag to publish distro packages for
         required: true
+      aur_pkgrel:
+        description: AUR pkgrel (raise for a packaging-only repair)
+        required: false
+        default: "1"
 
 # release.yml runs only on tag pushes and workflow_dispatch, so a
 # workflow_run whose triggering event is `push` is necessarily a
@@ -156,3 +162,163 @@ jobs:
       - name: Upload to the PPA
         if: env.SKIP_PPA != '1'
         run: packaging/distros/debian/upload.sh
+
+  # The AUR hosts recipes, not builds. Prove each source package natively on
+  # both supported architectures before either repository is updated. x86_64
+  # uses upstream Arch; aarch64 imports Arch Linux ARM's signed rootfs on the
+  # native GitHub runner. The package build logic is the same script local
+  # sdme validation runs.
+  aur-validate:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       startsWith(github.event.workflow_run.head_branch, 'v'))
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            arch: x86_64
+            pkgbase: chan
+          - os: ubuntu-latest
+            arch: x86_64
+            pkgbase: chan-desktop
+          - os: ubuntu-24.04-arm
+            arch: aarch64
+            pkgbase: chan
+          - os: ubuntu-24.04-arm
+            arch: aarch64
+            pkgbase: chan-desktop
+    runs-on: ${{ matrix.os }}
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.event.workflow_run.head_branch }}
+      AUR_PKGREL: ${{ github.event_name == 'workflow_dispatch' && inputs.aur_pkgrel || '1' }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.event.workflow_run.head_sha }}
+
+      - name: Prepare Arch build image
+        env:
+          TARGET_ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          if [ "$TARGET_ARCH" = x86_64 ]; then
+            image=docker.io/archlinux/archlinux:base-devel
+            docker pull "$image"
+          else
+            base=https://os.archlinuxarm.org/os/ArchLinuxARM-aarch64-latest.tar.gz
+            curl -fsSL --retry 3 "$base" -o /tmp/archlinuxarm.tar.gz
+            curl -fsSL --retry 3 "$base.sig" -o /tmp/archlinuxarm.tar.gz.sig
+            gpg --batch --keyserver hkps://keyserver.ubuntu.com \
+              --recv-keys 68B3537F39A313B3E574D06777193F152BDBE6A6
+            fingerprint=$(gpg --batch --with-colons --fingerprint \
+              68B3537F39A313B3E574D06777193F152BDBE6A6 \
+              | awk -F: '$1 == "fpr" { print $10; exit }')
+            test "$fingerprint" = 68B3537F39A313B3E574D06777193F152BDBE6A6
+            gpg --batch --verify /tmp/archlinuxarm.tar.gz.sig /tmp/archlinuxarm.tar.gz
+            image=chan-archlinuxarm:aarch64
+            docker import /tmp/archlinuxarm.tar.gz "$image" >/dev/null
+          fi
+          echo "AUR_IMAGE=$image" >> "$GITHUB_ENV"
+
+      - name: Render, build, install, and smoke
+        env:
+          PKGBASE: ${{ matrix.pkgbase }}
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ "$AUR_PKGREL" =~ ^[1-9][0-9]*$ ]]
+          version=${RELEASE_TAG#v}
+          mkdir -p target/aur-ci-out
+          chmod 0777 target/aur-ci-out
+          docker run --rm \
+            -e SRC=/src -e OUT=/out -e VERSION="$version" \
+            -e PKGREL="$AUR_PKGREL" -e PKGBASE="$PKGBASE" \
+            -v "$GITHUB_WORKSPACE:/src:ro" \
+            -v "$GITHUB_WORKSPACE/target/aur-ci-out:/out" \
+            "$AUR_IMAGE" bash /src/packaging/distros/arch/build-in-container.sh
+
+      - name: Retain publishable AUR metadata
+        if: matrix.arch == 'x86_64'
+        uses: actions/upload-artifact@v7
+        with:
+          name: aur-metadata-${{ matrix.pkgbase }}
+          path: |
+            target/aur-ci-out/${{ matrix.pkgbase }}/PKGBUILD
+            target/aur-ci-out/${{ matrix.pkgbase }}/.SRCINFO
+          include-hidden-files: true
+          if-no-files-found: error
+
+  aur-publish:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       startsWith(github.event.workflow_run.head_branch, 'v'))
+    needs: aur-validate
+    strategy:
+      fail-fast: false
+      matrix:
+        pkgbase: [chan, chan-desktop]
+    runs-on: ubuntu-latest
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.event.workflow_run.head_branch }}
+      AUR_PKGREL: ${{ github.event_name == 'workflow_dispatch' && inputs.aur_pkgrel || '1' }}
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: aur-metadata-${{ matrix.pkgbase }}
+          path: /tmp/generated
+
+      - name: Push to the AUR
+        env:
+          AUR_SSH_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+          PKGBASE: ${{ matrix.pkgbase }}
+        run: |
+          set -euo pipefail
+          if [ -z "$AUR_SSH_KEY" ]; then
+            echo "AUR_SSH_PRIVATE_KEY not set; skipping the AUR push."
+            echo "SKIP_AUR=1" >> "$GITHUB_ENV"
+            exit 0
+          fi
+
+          printf '%s\n' "$AUR_SSH_KEY" > /tmp/aur-key
+          chmod 600 /tmp/aur-key
+          cat > /tmp/aur-known-hosts <<'EOF'
+          aur.archlinux.org ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEuBKrPzbawxA/k2g6NcyV5jmqwJ2s+zpgZGZ7tpLIcN
+          EOF
+          export GIT_SSH_COMMAND="ssh -i /tmp/aur-key -o IdentitiesOnly=yes -o UserKnownHostsFile=/tmp/aur-known-hosts -o StrictHostKeyChecking=yes"
+          version=${RELEASE_TAG#v}
+          git config --global user.name "Alexandre Fiori"
+          git config --global user.email "fiorix@gmail.com"
+          git clone "ssh://aur@aur.archlinux.org/$PKGBASE.git" /tmp/aur
+          cp /tmp/generated/{PKGBUILD,.SRCINFO} /tmp/aur/
+          cd /tmp/aur
+          git add PKGBUILD .SRCINFO
+          if git diff --cached --quiet; then
+            echo "$PKGBASE is already at $version-$AUR_PKGREL; nothing to push."
+            exit 0
+          fi
+          git commit -m "upgpkg: $PKGBASE $version-$AUR_PKGREL"
+          git push origin HEAD:master
+
+      - name: Verify AUR metadata
+        if: env.SKIP_AUR != '1'
+        env:
+          PKGBASE: ${{ matrix.pkgbase }}
+        run: |
+          set -euo pipefail
+          expected="${RELEASE_TAG#v}-$AUR_PKGREL"
+          for attempt in 1 2 3 4 5 6; do
+            if curl -fsSL --retry 3 "https://aur.archlinux.org/rpc/v5/info/$PKGBASE" \
+              | jq -e --arg expected "$expected" \
+                '.resultcount == 1 and .results[0].Version == $expected' >/dev/null; then
+              echo "$PKGBASE $expected is visible in the AUR."
+              exit 0
+            fi
+            [ "$attempt" -lt 6 ] && sleep 10
+          done
+          echo "error: AUR did not report $PKGBASE $expected" >&2
+          exit 1

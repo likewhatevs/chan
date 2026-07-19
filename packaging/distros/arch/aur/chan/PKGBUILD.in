@@ -1,0 +1,51 @@
+# Maintainer: Alexandre Fiori <fiorix@gmail.com>
+#
+# Versionless template. packaging/distros/arch/make-aur-package.sh renders the
+# release version, pkgrel, source location, and checksum into the AUR metadata.
+
+pkgname=chan
+pkgver=@PKGVER@
+pkgrel=@PKGREL@
+pkgdesc='AI-native IDE with an embedded web editor'
+arch=('x86_64' 'aarch64')
+url='https://chan.app'
+license=('Apache-2.0')
+depends=('gcc-libs' 'glibc' 'systemd')
+makedepends=('cargo' 'nodejs' 'npm')
+conflicts=('chan-desktop')
+# Cargo owns thin LTO. makepkg's additional -flto=auto reaches native C/C++
+# dependencies and can leave rustc unable to resolve their symbols at link time.
+options=(!lto)
+source=('@SOURCE@')
+sha256sums=('@SHA256_SRC@')
+
+prepare() {
+    cd "chan-$pkgver"
+    npm --prefix web ci
+    cargo fetch --locked --target "$CARCH-unknown-linux-gnu"
+}
+
+build() {
+    cd "chan-$pkgver"
+    export CARGO_TARGET_DIR=target
+    export CHAN_PACKAGED=aur
+    make web WEB_SKIP_INSTALL=1
+    cargo build --frozen --release -p chan
+}
+
+check() {
+    cd "chan-$pkgver"
+    export CARGO_TARGET_DIR=target
+    export CHAN_PACKAGED=aur
+    cargo test --frozen --release -p chan
+}
+
+package() {
+    cd "chan-$pkgver"
+    install -Dm755 target/release/chan "$pkgdir/usr/bin/chan"
+    ln -s chan "$pkgdir/usr/bin/cs"
+    install -Dm644 packaging/distros/shared/chan-devserver.service \
+        "$pkgdir/usr/lib/systemd/user/chan-devserver.service"
+    install -Dm644 LICENSE "$pkgdir/usr/share/licenses/chan/LICENSE"
+    install -Dm644 README.md CHANGELOG.md -t "$pkgdir/usr/share/doc/chan/"
+}

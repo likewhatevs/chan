@@ -1,6 +1,6 @@
 # distros
 
-Source packaging for Fedora COPR and Ubuntu Launchpad (PPA): standalone `chan` and `chan-desktop`, built by the services from a vendored source tarball so their offline builders need no network. The public command surface is the root Makefile (`make distros-tarball`, `make copr-srpm`, `make copr-build`, `make ppa-source`, `make ppa-upload`).
+Source packaging for Fedora COPR, Ubuntu Launchpad (PPA), and the Arch User Repository: standalone `chan` and `chan-desktop`. COPR and Launchpad build from a vendored source tarball because their builders are offline; AUR users build from the tagged source with locked npm and Cargo dependencies. The public command surface is the root Makefile (`make distros-tarball`, `make copr-srpm`, `make copr-build`, `make ppa-source`, `make ppa-upload`, `make aur-check`).
 
 | Path | Concern |
 |---|---|
@@ -9,14 +9,15 @@ Source packaging for Fedora COPR and Ubuntu Launchpad (PPA): standalone `chan` a
 | `fedora/` | `chan.spec`, `chan-desktop.spec`. The build tooling rewrites `%upstream_version` from the workspace Cargo.toml, so the committed value is a fallback. |
 | `copr/` | `make-srpm.sh` (tarball + spec sync + `rpmbuild -bs`; runs in the COPR SRPM chroot or a local Fedora container) and `build-srpm.sh` (local container driver, `--submit` for copr-cli). |
 | `debian/` | `chan/` + `chan-desktop/` debian source dirs, `build-source.sh` (per-series `debuild -S`), `upload.sh` (dput). |
+| `arch/` | Versionless AUR templates, renderer, and the shared clean-container/sdme validation path. |
 
 `.copr/Makefile` at the repo root is COPR's "make srpm" entry point and delegates to `copr/make-srpm.sh`.
 
 ## Package shape
 
 - `chan`: `/usr/bin/chan` + `/usr/bin/cs` symlink (argv0 dispatch) + the devserver user unit. Runtime deps: glibc and systemd (the unit and `chan devserver --service=systemd`); everything native is statically linked (ring, bundled SQLite, zstd; rustls, no OpenSSL).
-- `chan-desktop`: `/usr/bin/chan-desktop` + `chan`/`cs` symlinks to it (the desktop binary IS the CLI via argv0 dispatch), `.desktop` entry with the `chan://` scheme handler, hicolor icons, and the same devserver unit. Conflicts with/replaces/provides `chan`. Runtime deps add the WebKitGTK 4.1/GTK3/libsoup3 stack (auto-derived from sonames).
-- Both builds export `CHAN_PACKAGED=rpm|deb`, which bakes the self-update surface off (`crates/chan/src/update.rs`): the probe/banner stay silent and `chan upgrade` points at the package manager. The desktop app still writes its self-healing `~/.local/bin/{chan,cs}` shims on boot; they point at the packaged binary and coexist with the `/usr/bin` symlinks.
+- `chan-desktop`: `/usr/bin/chan-desktop` + `chan`/`cs` symlinks to it (the desktop binary IS the CLI via argv0 dispatch), `.desktop` entry with the `chan://` scheme handler, hicolor icons, and the same devserver unit. It conflicts with and provides `chan`; RPM/deb retain their existing replacement metadata, while AUR deliberately does not replace an installed package. Runtime deps add the WebKitGTK 4.1/GTK3/libsoup3 stack (auto-derived from sonames).
+- All distro source builds export `CHAN_PACKAGED=rpm|deb|aur`, which bakes the self-update surface off (`crates/chan/src/update.rs`): the probe/banner stay silent and `chan upgrade` points at the package manager. The desktop app still writes its self-healing `~/.local/bin/{chan,cs}` shims on boot; they point at the packaged binary and coexist with the `/usr/bin` symlinks.
 - The packaged user unit lives in `/usr/lib/systemd/user/`; a unit written by `chan devserver --service=systemd` into `~/.config/systemd/user/` overrides it per the systemd user search order, so both flows coexist.
 
 ## Service configuration
@@ -38,10 +39,11 @@ Launchpad (`ppa:fiorix/chan`, processors amd64 + arm64 -- Launchpad defaults to 
 
 ## Release automation
 
-`.github/workflows/distros-publish.yml` runs when the Release workflow completes for a `vX.Y.Z` tag (workflow_run; branch dry runs are filtered out) and is deliberately separate from release.yml: a COPR or Launchpad failure can never block or fail the GitHub release. Retry with `workflow_dispatch` and the tag. Two independent jobs, each a no-op when its secret is absent:
+`.github/workflows/distros-publish.yml` runs when the Release workflow completes for a `vX.Y.Z` tag (workflow_run; branch dry runs are filtered out) and is deliberately separate from release.yml: a distro failure can never block or fail the GitHub release. Retry with `workflow_dispatch` and the tag. Publication steps no-op when their secret is absent:
 
 - `copr` curls the custom webhook for both packages.
 - `launchpad` rebuilds the vendored tarball at the released commit, imports `LAUNCHPAD_GPG_PRIVATE_KEY`/`LAUNCHPAD_GPG_PASSPHRASE` into an ephemeral loopback-pinentry keyring, and runs the same build-source.sh + upload.sh as the local flow.
+- `aur-validate` builds both source recipes natively on upstream Arch x86_64 and Arch Linux ARM aarch64. `aur-publish` pushes only the validated `PKGBUILD`/`.SRCINFO` metadata using `AUR_SSH_PRIVATE_KEY`, then verifies the version through the AUR RPC. See [`arch/README.md`](arch/README.md).
 
 ## Toolchain note
 

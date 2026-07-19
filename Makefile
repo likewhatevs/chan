@@ -8,6 +8,9 @@
 PREFIX ?= $(if $(XDG_BIN_HOME),$(XDG_BIN_HOME:/bin=),$(HOME)/.local)
 CARGO ?= cargo
 NPM ?= npm
+WEB_SKIP_INSTALL ?= 0
+AUR_ROOTFS ?= archlinux
+AUR_REV ?= HEAD
 LINUX_TARGET ?= x86_64-unknown-linux-gnu
 DEB_TARGET ?= $(LINUX_TARGET)
 RPM_TARGET ?= $(LINUX_TARGET)
@@ -86,6 +89,11 @@ linux-packages: ## Build all Linux packages for the current target set.
 		CHAN_REPO="$(REPO_ROOT)" CARGO="$(CARGO)" NPM="$(NPM)" \
 		DEB_TARGET="$(DEB_TARGET)" RPM_TARGET="$(RPM_TARGET)" \
 		ARCHPKG_TARGET="$(ARCHPKG_TARGET)" packages
+
+.PHONY: aur-check
+aur-check: ## Build and smoke both AUR packages in a disposable sdme Arch container.
+	AUR_ROOTFS="$(AUR_ROOTFS)" REV="$(AUR_REV)" SDME="$(SDME)" \
+		packaging/distros/arch/build-with-sdme.sh
 
 .PHONY: linux-chan-desktop
 linux-chan-desktop: ## Build the chan-desktop AppImage/.deb for DISTRO via sdme.
@@ -185,12 +193,14 @@ web-launcher: ## Build the embedded launcher bundle (web-launcher/dist).
 	# this too -- wired as a prerequisite of `web`/`web-check` so the single
 	# `make web` funnel (root `chan`, desktop/Makefile, packaging/linux,
 	# release.yml) builds both with no per-consumer edit.
-	cd web && $(NPM) install && $(NPM) run build -w @chan/launcher
+	@if [ "$(WEB_SKIP_INSTALL)" != "1" ]; then cd web && $(NPM) install; fi
+	cd web && $(NPM) run build -w @chan/launcher
 	@date -u '+%Y-%m-%dT%H:%M:%SZ' > "$(LAUNCHER_BUILD_STAMP)"
 
 .PHONY: web
 web: web-launcher ## Build the embedded web bundle.
-	cd web && $(NPM) install && $(NPM) run build -w @chan/workspace-app
+	@if [ "$(WEB_SKIP_INSTALL)" != "1" ]; then cd web && $(NPM) install; fi
+	cd web && $(NPM) run build -w @chan/workspace-app
 	@date -u '+%Y-%m-%dT%H:%M:%SZ' > "$(WEB_BUILD_STAMP)"
 
 .PHONY: web-check

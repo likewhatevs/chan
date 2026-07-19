@@ -106,7 +106,7 @@ archpkg:
 		exit 1; \
 	}
 	$(MAKE) -C "$(CHAN_REPO)" web
-	cd "$(CHAN_REPO)" && $(CARGO) build --release --target "$(ARCHPKG_TARGET)" -p chan
+	cd "$(CHAN_REPO)" && CHAN_PACKAGED=aur $(CARGO) build --release --target "$(ARCHPKG_TARGET)" -p chan
 	rm -rf "$(ARCHPKG_DIR)"
 	mkdir -p "$(ARCHPKG_DIR)"
 	cp "$(CURDIR)/arch/PKGBUILD" "$(ARCHPKG_DIR)/PKGBUILD"
