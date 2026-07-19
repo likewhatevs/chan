@@ -8,7 +8,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
-- **COPR packages build for CentOS Stream 9 and 10 on x86_64.** The CLI builds for both releases; the desktop package builds for Stream 10, while EPEL Next 9 is excluded because it does not provide the required WebKitGTK 4.1/libsoup3 development stack. A clean sdme path rebuilds, installs, and smokes the vendored RPMs before submission. The aarch64 chroots are enabled but unverified: no aarch64 build has run.
+- **CentOS Stream 9 and 10 COPR packaging.** The COPR project carries CentOS Stream chroots for `chan` on both releases and for `chan-desktop` on Stream 10; EPEL Next 9 is excluded because it does not provide the required WebKitGTK 4.1/libsoup3 development stack. `make copr-check` rebuilds, installs, and smokes the vendored RPMs in clean CentOS containers on a Linux host. No COPR build has run against these chroots yet, on either architecture.
 
 ## [v0.71.0] - 2026-07-19
 

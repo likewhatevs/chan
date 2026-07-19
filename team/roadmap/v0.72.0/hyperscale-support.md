@@ -127,6 +127,8 @@ Local x86_64 acceptance requires all three supported builds to pass:
 - The standalone `chan` package's `chan upgrade` exits unsuccessfully and names `dnf upgrade`.
 - The desktop binary contains the packaged `sudo dnf upgrade` refusal marker. Its `chan upgrade` personality delegates to a running GUI, so that path is not a valid headless-container smoke.
 
+`packaging/distros/copr/test-build-with-sdme.sh` covers the check driver's own host-side control flow against a stub sdme (per-target status capture, re-run after a failed target, interrupt, knob and preflight validation). It is a driver regression check, not evidence about any package: only a full `make copr-check` run satisfies the acceptance list above.
+
 After local x86_64 acceptance, COPR acceptance requires:
 
 - `chan` succeeds on all enabled Fedora chroots and all four new CentOS chroots.
