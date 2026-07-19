@@ -67,14 +67,23 @@ on:
 # v-prefixed head_branch) excludes publish=false dry runs and rc
 # validation, which arrive as workflow_dispatch and could otherwise
 # publish distro packages off a v-named branch.
+#
+# Every job also filters a prerelease version (a `-` in the tag), on
+# both the dispatch and the workflow_run path. Release candidates are
+# validated on a branch and their tags are not pushed, so this is
+# defense in depth: it keeps an rc that did reach a tag out of COPR,
+# the PPA, and the AUR alike, none of which carries a prerelease
+# channel.
 jobs:
   copr:
     if: >-
       (github.event_name == 'workflow_dispatch' &&
-       (inputs.targets == 'all' || inputs.targets == 'copr')) ||
+       (inputs.targets == 'all' || inputs.targets == 'copr') &&
+       !contains(inputs.tag, '-')) ||
       (github.event.workflow_run.conclusion == 'success' &&
        github.event.workflow_run.event == 'push' &&
-       startsWith(github.event.workflow_run.head_branch, 'v'))
+       startsWith(github.event.workflow_run.head_branch, 'v') &&
+       !contains(github.event.workflow_run.head_branch, '-'))
     runs-on: ubuntu-latest
     env:
       PUBLISH: ${{ github.event_name != 'workflow_dispatch' || inputs.publish }}
@@ -102,10 +111,12 @@ jobs:
   launchpad:
     if: >-
       (github.event_name == 'workflow_dispatch' &&
-       (inputs.targets == 'all' || inputs.targets == 'launchpad')) ||
+       (inputs.targets == 'all' || inputs.targets == 'launchpad') &&
+       !contains(inputs.tag, '-')) ||
       (github.event.workflow_run.conclusion == 'success' &&
        github.event.workflow_run.event == 'push' &&
-       startsWith(github.event.workflow_run.head_branch, 'v'))
+       startsWith(github.event.workflow_run.head_branch, 'v') &&
+       !contains(github.event.workflow_run.head_branch, '-'))
     runs-on: ubuntu-latest
     env:
       PPA_SERIES: "noble resolute"
@@ -155,11 +166,33 @@ jobs:
               | awk -F: '/^grp:/{print $10}' \
               | while read -r grip; do "$preset" --preset "$grip" <<<"$LP_PASS"; done
           fi
+          # Marks the key as in place, so the dry-run report can tell a
+          # signing failure from a failure upstream of signing and name
+          # only what it observed.
+          echo "KEY_IMPORTED=1" >> "$GITHUB_ENV"
 
+      # build-source.sh signs with debsign, but it also honors PPA_NOSIGN and
+      # exits 0 on an unsigned build, so its exit status alone does not prove
+      # a signature. Verify every .dsc and .changes against the imported key:
+      # that signature is the entire product of a publish=false run, and it is
+      # what Launchpad rejects an upload for lacking.
       - name: Build and sign the source packages
         if: env.SKIP_PPA != '1'
         run: |
+          set -euo pipefail
           packaging/distros/debian/build-source.sh
+          shopt -s nullglob
+          verified=0
+          for f in target/distros/ppa/*/*/*_source.changes \
+                   target/distros/ppa/*/*/*.dsc; do
+            gpg --batch --verify "$f"
+            verified=$((verified + 1))
+          done
+          if [ "$verified" -eq 0 ]; then
+            echo "::error::build-source.sh produced no source package to verify"
+            exit 1
+          fi
+          echo "verified $verified signed source-package files."
           echo "SIGNED=1" >> "$GITHUB_ENV"
 
       # Optional sftp transport: with an SSH key provisioned, dput's
@@ -204,18 +237,35 @@ jobs:
         if: env.SKIP_PPA != '1' && env.PUBLISH == 'true'
         run: packaging/distros/debian/upload.sh
 
-      # Signing is skipped when the key is absent (a fork) and fails when it
-      # is expired, so the report reads the outcome instead of assuming it: a
-      # dry run that claims work it did not do is worse than no dry run.
+      # The report names only what the steps observed: a dry run that claims
+      # work it did not do is worse than no dry run, and so is one that blames
+      # a credential a failed earlier step never reached. The markers separate
+      # the four outcomes: signature verified, key deliberately absent, key
+      # imported but signing failed, and failed before the key.
+      #
+      # An absent key is the fork contract, where a dry run legitimately proves
+      # only the tarball. On the canonical repository it is instead a secret
+      # that was deleted, emptied, or scoped away, and the run whose only
+      # purpose is to prove the credential before the tag must not end green
+      # having proven nothing.
       - name: Report the PPA dry run
         if: ${{ !cancelled() && env.PUBLISH != 'true' }}
+        env:
+          CANONICAL: ${{ github.repository == 'fiorix/chan' }}
         run: |
           if [ "${SIGNED:-}" = "1" ]; then
             echo "publish=false; the source packages were built and signed but not uploaded."
           elif [ "${SKIP_PPA:-}" = "1" ]; then
+            if [ "$CANONICAL" = "true" ]; then
+              echo "::error::LAUNCHPAD_GPG_PRIVATE_KEY is absent on the canonical repository; only the vendored source tarball was proven and the PPA credential is unproven."
+              exit 1
+            fi
             echo "publish=false and LAUNCHPAD_GPG_PRIVATE_KEY is absent; nothing was signed. Only the vendored source tarball was proven."
+          elif [ "${KEY_IMPORTED:-}" = "1" ]; then
+            echo "::error::the signing key imported but the source packages did not build and sign; the Launchpad credential is unproven."
+            exit 1
           else
-            echo "::error::the source packages did not build and sign; the Launchpad credential is unproven."
+            echo "::error::the run failed before the signing key was in place, so the failure is upstream of signing (packaging tools, the vendored tarball, or the key import itself); the Launchpad credential is unproven."
             exit 1
           fi
 
@@ -343,12 +393,17 @@ jobs:
         pkgbase: [chan, chan-desktop]
     runs-on: ubuntu-24.04-arm
     env:
-      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.event.workflow_run.head_branch }}
-      AUR_PKGREL: ${{ github.event_name == 'workflow_dispatch' && inputs.aur_pkgrel || '1' }}
+      # Dispatch-only per the `if` above, so the workflow_run fallbacks the
+      # other AUR jobs carry would be unreachable here and would read as if
+      # this job had a GA path. Restoring them is part of the same edit that
+      # gives the job the workflow_run trigger. `aur_pkgrel` keeps its default
+      # because the input is optional and can arrive empty from the API.
+      RELEASE_TAG: ${{ inputs.tag }}
+      AUR_PKGREL: ${{ inputs.aur_pkgrel || '1' }}
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.event.workflow_run.head_sha }}
+          ref: ${{ inputs.tag }}
 
       # Upstream Arch publishes no aarch64 image, so import Arch Linux
       # ARM's signed rootfs on the native runner.
@@ -398,14 +453,25 @@ jobs:
           name: aur-metadata-${{ matrix.pkgbase }}
           path: /tmp/generated
 
+      # aur-auth fails the whole AUR chain on a rejected key, so an unusable
+      # credential here means the secret is absent. That is the fork contract,
+      # but on the canonical repository a publish=false dispatch exists to
+      # prove the credential before the tag, and one that proves nothing must
+      # not end green. A publish=true run keeps the documented no-op: it is
+      # reporting an outcome, not standing in for the proof.
       - name: Report the AUR dry run
         if: env.PUBLISH != 'true' || env.PUSHABLE != 'true'
         env:
           PKGBASE: ${{ matrix.pkgbase }}
+          CANONICAL: ${{ github.repository == 'fiorix/chan' }}
         run: |
           echo "Validated $PKGBASE metadata for ${RELEASE_TAG}-${AUR_PKGREL} and pushed nothing."
           echo "publish=$PUBLISH credential-usable=$PUSHABLE"
           cat /tmp/generated/.SRCINFO
+          if [ "$PUBLISH" != "true" ] && [ "$PUSHABLE" != "true" ] && [ "$CANONICAL" = "true" ]; then
+            echo "::error::AUR_SSH_PRIVATE_KEY is absent on the canonical repository; the metadata validated but the AUR credential is unproven."
+            exit 1
+          fi
 
       - name: Push to the AUR
         if: env.PUBLISH == 'true' && env.PUSHABLE == 'true'

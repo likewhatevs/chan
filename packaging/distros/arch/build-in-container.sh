@@ -62,7 +62,7 @@ fi
 # A waiver is one line here: an extended regex matched against a whole namcap
 # line, plus the reason the finding cannot be fixed in the recipe. Shape:
 #     'E: Dependency detected and not included .libfoo.' # dlopened at runtime
-# No finding needs one today.
+# The `chan` build's measured findings are all warnings, so it needs none.
 namcap_waivers=()
 
 # Print the namcap error lines that no waiver covers.

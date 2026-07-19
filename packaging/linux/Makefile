@@ -56,6 +56,12 @@ chan-tarball:
 	$(TAR) -czf "$(TARBALL_PATH)" -C "$(TARBALL_STAGE)" .
 	@echo "built $(TARBALL_PATH)"
 
+# The .deb/.rpm below are the release downloads: release.yml runs these targets
+# and stages their output as GitHub release assets. They deliberately carry no
+# CHAN_PACKAGED marker, unlike the distro source packages under
+# packaging/distros/: no apt or dnf repository serves a hand-installed asset, so
+# `sudo apt upgrade` would never update one and `chan upgrade` stays its update
+# path.
 .PHONY: deb
 deb:
 	@case "$(DEB_TARGET)" in *-unknown-linux-gnu) ;; \

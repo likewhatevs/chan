@@ -45,7 +45,7 @@ make aur-check SDME='sudo sdme' AUR_ROOTFS=archlinux
 
 The package architecture comes from the host and rootfs; the build never uses QEMU. An aarch64 host runs the same target against an Arch Linux ARM import under the same name, which is the unverified leg described above.
 
-The automatic path lives in `.github/workflows/distros-publish.yml`. After a successful GA Release run it builds, installs, and smokes `chan` and `chan-desktop` on a clean upstream Arch x86_64 container, probes the AUR credential, and pushes both AUR repositories. It needs `AUR_SSH_PRIVATE_KEY`, the same private key already registered with the maintainer's AUR account for `sdme`. Without the secret, validation still runs and publication is skipped.
+The automatic path lives in `.github/workflows/distros-publish.yml`. After a successful GA Release run it builds, installs, and smokes `chan` and `chan-desktop` on a clean upstream Arch x86_64 container, probes the AUR credential, and pushes both AUR repositories. It needs `AUR_SSH_PRIVATE_KEY`, the same private key already registered with the maintainer's AUR account for `sdme`. Without the secret, validation still runs and publication is skipped; a `publish=false` dispatch on this repository fails instead, because proving the credential is that run's only product.
 
 Manual dispatch takes the existing GA tag plus:
 
@@ -56,7 +56,7 @@ Manual dispatch takes the existing GA tag plus:
 | `aur_pkgrel` | Keep `1` for a normal release; raise it when repairing packaging for an already-published upstream version. |
 | `aur_validate_arm` | Runs the unverified aarch64 build. Opt-in here only: a GA run never schedules it, and it never gates publication. |
 
-An rc tag skips the AUR jobs entirely, the way COPR and Launchpad no-op on one.
+A prerelease version skips every job in the workflow: the AUR jobs, `copr`, and `launchpad` all filter a `-` out of the tag, on both the dispatch and the workflow_run path. Release candidates are validated on a branch and their tags are not pushed, so this is defense in depth rather than a path anything is expected to take.
 
 `aur-auth` is the only pre-release proof that the private key in the secret has its public half registered on the AUR account: it runs `ssh -T aur@aur.archlinux.org`, which a registered key answers with a greeting and a refused interactive shell. Without that probe a wrong key surfaces as a failed clone at publication time, after the release is already out.
 
@@ -70,7 +70,7 @@ Only `PKGBUILD` and `.SRCINFO` belong in the AUR repositories. The generated sou
 
 - Both recipes build from the GA tag and use locked npm and Cargo dependencies. `RUSTUP_TOOLCHAIN=stable` keeps the tree's `rust-toolchain.toml` pin from making a rustup-provided cargo download a second toolchain mid-build.
 - `CHAN_PACKAGED=aur` disables `chan` self-upgrade so package ownership remains with the AUR helper. The local `make linux-archpkg` QA package is stamped `pacman` instead, because it never came from the AUR.
-- `namcap` gates the container build: its error class covers a library the binary needs and the recipe does not declare, which would otherwise ship silently to every AUR user. Warnings stay advisory and are printed in full. Adding a waiver is one commented line in `build-in-container.sh`'s `namcap_waivers` array. The `chan` package needs none: its only findings are the dependency-declaration warnings below.
+- `namcap` gates the container build: its error class covers a library the binary needs and the recipe does not declare, which would otherwise ship silently to every AUR user. Warnings stay advisory and are printed in full. Adding a waiver is one commented line in `build-in-container.sh`'s `namcap_waivers` array. The array is empty: the `chan` findings measured so far are the dependency-declaration warnings below, all advisory.
 - namcap reports `gcc-libs` and `systemd` as possibly unneeded, and reports `libgcc` as needed and implicitly satisfied. All three stay as they are. namcap derives dependencies from linked sonames alone: `systemd` is a runtime dependency for the packaged user unit and `chan devserver --service=systemd`, which no ELF header shows, and `gcc-libs` is the package that provides the `libgcc_s.so.1` the same output says the binary needs (there is no `libgcc` package to declare). Its remaining warning, an unused `ld-linux-x86-64.so.2`, is the dynamic loader itself.
 - `chan-desktop` links to the host WebKitGTK/Mesa stack. This is the correct Arch/CachyOS path and avoids the rolling-distro incompatibility of the Ubuntu-built AppImage.
 - The AUR Ed25519 host key is pinned to the fingerprint published by the AUR. Do not replace it with `ssh-keyscan`.

@@ -17,7 +17,8 @@ Source packaging for Fedora COPR, Ubuntu Launchpad (PPA), and the Arch User Repo
 
 - `chan`: `/usr/bin/chan` + `/usr/bin/cs` symlink (argv0 dispatch) + the devserver user unit. Runtime deps: glibc and systemd (the unit and `chan devserver --service=systemd`); everything native is statically linked (ring, bundled SQLite, zstd; rustls, no OpenSSL).
 - `chan-desktop`: `/usr/bin/chan-desktop` + `chan`/`cs` symlinks to it (the desktop binary IS the CLI via argv0 dispatch), `.desktop` entry with the `chan://` scheme handler, hicolor icons, and the same devserver unit. It conflicts with and provides `chan`; RPM/deb retain their existing replacement metadata, while AUR deliberately does not replace an installed package. Runtime deps add the WebKitGTK 4.1/GTK3/libsoup3 stack (auto-derived from sonames).
-- Every packaging path exports a `CHAN_PACKAGED` marker: `rpm`, `deb`, and `aur` for the distro source builds, plus `pacman` for the local `make linux-archpkg` QA package. It bakes the self-update surface off (`crates/chan/src/update.rs`): the probe/banner stay silent and `chan upgrade` points at the package manager. The desktop app still writes its self-healing `~/.local/bin/{chan,cs}` shims on boot; they point at the packaged binary and coexist with the `/usr/bin` symlinks.
+- All distro source builds export `CHAN_PACKAGED=rpm|deb|aur`, and the local `make linux-archpkg` QA package exports `pacman`. The marker bakes the self-update surface off (`crates/chan/src/update.rs`): the probe/banner stay silent and `chan upgrade` points at the package manager. The desktop app still writes its self-healing `~/.local/bin/{chan,cs}` shims on boot; they point at the packaged binary and coexist with the `/usr/bin` symlinks.
+- The `.deb`/`.rpm` release assets built by `make linux-deb`/`make linux-rpm` carry no marker, by design. No repository serves them: they are downloaded and installed by hand, so `sudo apt upgrade` would never update them and `chan upgrade` is the correct update path. The marker belongs only where a package manager genuinely owns updates.
 - The packaged user unit lives in `/usr/lib/systemd/user/`; a unit written by `chan devserver --service=systemd` into `~/.config/systemd/user/` overrides it per the systemd user search order, so both flows coexist.
 
 ## Service configuration
@@ -39,13 +40,13 @@ Launchpad (`ppa:fiorix/chan`, processors amd64 + arm64 -- Launchpad defaults to 
 
 ## Release automation
 
-`.github/workflows/distros-publish.yml` runs when the Release workflow completes for a `vX.Y.Z` tag (workflow_run; branch dry runs are filtered out) and is deliberately separate from release.yml: a distro failure can never block or fail the GitHub release. Publication steps no-op when their secret is absent:
+`.github/workflows/distros-publish.yml` runs when the Release workflow completes for a `vX.Y.Z` tag (workflow_run; branch dry runs are filtered out, and every job filters a prerelease version, so no distro ever sees an rc) and is deliberately separate from release.yml: a distro failure can never block or fail the GitHub release. Publication steps no-op when their secret is absent:
 
 - `copr` curls the custom webhook for both packages.
 - `launchpad` rebuilds the vendored tarball at the released commit, imports `LAUNCHPAD_GPG_PRIVATE_KEY`/`LAUNCHPAD_GPG_PASSPHRASE` into an ephemeral loopback-pinentry keyring, and runs the same build-source.sh + upload.sh as the local flow.
 - `aur-auth` proves the `AUR_SSH_PRIVATE_KEY` credential against `aur.archlinux.org` before anything is pushed, and `aur-validate` builds, installs, and smokes both source recipes on a clean upstream Arch x86_64 container. `aur-publish` pushes only the validated `PKGBUILD`/`.SRCINFO` metadata, then verifies the version through the AUR RPC. A namcap error-class finding or a failed packaged-upgrade smoke in `aur-validate` blocks both AUR pushes and nothing else. `aur-validate-arm` covers the unverified Arch Linux ARM aarch64 leg: it is opt-in on manual dispatch and never gates publication, so a GA run carries no ARM cell. See [`arch/README.md`](arch/README.md).
 
-Retry with `workflow_dispatch` and the tag. `targets` scopes the run to `copr`, `launchpad`, or `aur`, so retrying a transient Launchpad ftp 550 does not also rebuild the Arch packages and re-push the AUR. `publish` mirrors release.yml and defaults to false: a dispatch renders, signs, and probes credentials without uploading anything unless it is set to true.
+Retry with `workflow_dispatch` and the tag. `targets` scopes the run to `copr`, `launchpad`, or `aur`, so retrying a transient Launchpad ftp 550 does not also rebuild the Arch packages and re-push the AUR. `publish` mirrors release.yml and defaults to false: a dispatch renders, signs, and probes credentials without uploading anything unless it is set to true. Such a dry run reports only what it observed, and on this repository it fails when a credential it exists to prove is absent; on a fork an absent secret is the expected no-op.
 
 ## Toolchain note
 
