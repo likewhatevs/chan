@@ -5,32 +5,62 @@ set -euo pipefail
 # chan terminal whose CHAN_CONTROL_SOCKET targets the server build under test.
 # Diagnostics go to stderr; one result row per run goes to stdout.
 #
-# Every run gets its OWN tab inside one probe group, so every scrollback
-# assertion below is scoped to the run that made it. The group is closed on
-# exit, including on failure.
+# Every run gets its OWN tab inside one probe group, so every scrollback read
+# below is scoped to the run that made it. The group is closed on exit,
+# including on failure.
 #
-# What each case proves, and how:
+# Two kinds of oracle appear below, and only one of them can fail a run:
+#
+#   LOAD-BEARING  The polled queue depth (`cs terminal list --json`, server
+#                 state, not the screen) and the agent's own OUTPUT. The agent
+#                 BUILDS each sentinel out of what it received
+#                 (`QUEUE_DRAIN_BATCH_<blocks>` from the number of notification
+#                 blocks it counted), so no literal in its input can satisfy
+#                 one and an echo cannot fake a batch.
+#   ADVISORY      Anything read out of the scrollback ring. That ring holds PTY
+#                 OUTPUT only, so a framed envelope shows up there only if the
+#                 agent renders the pasted body verbatim -- Claude prints
+#                 `[Pasted text #1 +16 lines]` instead at these payload sizes.
+#                 Advisory observations are recorded in the result row and
+#                 never fail a run.
+#
+# What each case proves:
 #
 #   batch       Five notifications enqueued while the agent is provably
-#               generating drain as ONE turn. Oracles: the server framed one
-#               5-message envelope (`--- notification 5/5 ---` present, no
-#               1/1..1/4 partial framing), the agent answered once for all five
-#               (it BUILDS the sentinel `QUEUE_DRAIN_BATCH_5`, which never
-#               appears in its input, so an echo cannot satisfy it), the five
-#               tail tokens arrived in order, and the polled queue depth went
-#               5 -> 0 without an intermediate 4/3/2/1.
+#               generating drain as ONE turn. Depth is 5 with nothing reaching
+#               the busy compose box, then reaches 0 without the poller ever
+#               seeing an intermediate 1..4, and the agent answers ONCE for all
+#               five: it emits `QUEUE_DRAIN_BATCH_5` followed by the five tail
+#               tokens in order, and never a `QUEUE_DRAIN_BATCH_0..4` (which is
+#               what a per-message drain would produce).
 #   boundaries  A no-submit write and an override-backed write each END the
 #               batch prefix. Five messages whose every neighbour is a boundary
-#               produce NO envelope at all, and the tail tokens still arrive in
+#               must drain ONE AT A TIME, so the poller has to observe an
+#               intermediate depth, the agent must never emit a
+#               `QUEUE_DRAIN_BATCH_2..5`, and the tail tokens still arrive in
 #               FIFO order, so nothing was skipped to batch a later message.
-#   late        A sixth notification enqueued once the batch has been selected
-#               lands in the NEXT turn: the 5/5 envelope exists and no 6/6 one
-#               does.
+#   late        A sixth notification enqueued once the batch has drained gets
+#               its OWN turn: the agent emits the batch sentinel and then a
+#               separate `QUEUE_DRAIN_LATE_<token>` it builds from that
+#               message alone, which proves the queue keeps draining after a
+#               batch delivery.
 #
-# NOT covered here: the Rich Prompt boundary. Rich Prompt enters the queue over
-# the terminal WebSocket, which `cs` does not speak, so no shell harness can
-# place one between notifications. That boundary is pinned by the chan-library
-# and chan-server unit tests and by a browser smoke.
+# NOT covered here:
+#
+#   The enqueue-after-selection race. Required Behavior item 4 (a message
+#   enqueued after the prefix is SELECTED waits for the next turn) is not
+#   reachable from outside the server: selection and pop happen under one
+#   queue lock inside a drainer tick, so an external enqueue lands either
+#   before selection, where joining the batch is correct, or after the pop,
+#   where a shell cannot tell the two apart. It is pinned by
+#   `enqueue_after_atomic_batch_selection_stays_for_the_next_turn` in
+#   crates/chan-library/src/terminal_sessions.rs, which drives the selector
+#   directly.
+#
+#   The Rich Prompt boundary. Rich Prompt enters the queue over the terminal
+#   WebSocket, which `cs` does not speak, so no shell harness can place one
+#   between notifications. That boundary is pinned by the chan-library and
+#   chan-server unit tests and by a browser smoke.
 
 agent=codex
 size_kib=64
@@ -40,10 +70,18 @@ case_name=batch
 gap_ms=50
 # Mirrors `WRITE_QUEUE_BATCH_MAX_BYTES` in
 # crates/chan-library/src/terminal_sessions.rs. The payload is sized against
-# THIS number rather than a hand-picked headroom, and the 5/5 envelope check
-# below fails loudly if a framing change pushes the last notification out.
+# THIS number rather than a hand-picked headroom, and a framing change that
+# pushes the last notification past the ceiling shows up as the agent counting
+# four blocks instead of five.
 max_batch_bytes=$((64 * 1024))
 cs_bin=${CS_BIN:-cs}
+# Mirrors `WRITE_QUEUE_QUIET_MS` and `WRITE_QUEUE_INPUT_GAP` in
+# crates/chan-library/src/terminal_sessions.rs: `parse_input_gap` accepts only
+# 1..WRITE_QUEUE_QUIET_MS ms and falls back to the built-in gap for anything
+# else, so a raw string comparison here would certify a gap the server never
+# used.
+write_queue_quiet_ms=800
+default_gap_ms=50
 
 usage() {
   cat >&2 <<'EOF'
@@ -59,7 +97,10 @@ Environment:
                               only asserts this matches; the value is read once
                               per server process, so sweeping it means
                               restarting the server under test with the new
-                              value exported.
+                              value exported. The server IGNORES a value
+                              outside 1..799 ms and runs its built-in 50 ms, so
+                              --gap takes the same range and the env value is
+                              put through the same clamp before it is compared.
 
 Payloads above the batch ceiling are advisory and require a scratch build with
 a temporarily raised selector ceiling; pass --max-batch-bytes to match it.
@@ -136,17 +177,35 @@ esac
 [[ $size_kib =~ ^[1-9][0-9]*$ ]] || { echo "--size-kib must be positive" >&2; exit 2; }
 [[ $runs =~ ^[1-9][0-9]*$ ]] || { echo "--runs must be positive" >&2; exit 2; }
 [[ $timeout_secs =~ ^[1-9][0-9]*$ ]] || { echo "--timeout-secs must be positive" >&2; exit 2; }
-[[ $gap_ms =~ ^[1-9][0-9]*$ ]] || { echo "--gap must be positive" >&2; exit 2; }
+[[ $gap_ms =~ ^[1-9][0-9]*$ ]] && ((gap_ms < write_queue_quiet_ms)) \
+  || { echo "--gap must be in 1..$((write_queue_quiet_ms - 1))ms; the server ignores anything else" >&2; exit 2; }
 [[ $max_batch_bytes =~ ^[1-9][0-9]*$ ]] || { echo "--max-batch-bytes must be positive" >&2; exit 2; }
 : "${CHAN_CONTROL_SOCKET:?run from a chan terminal or export the test server control socket}"
 : "${CHAN_WINDOW_ID:?run from a chan terminal or export the test browser window id}"
 
+# The gap `parse_input_gap` derives from this env value: trimmed digits inside
+# 1..WRITE_QUEUE_QUIET_MS, otherwise the built-in default.
+effective_gap_ms() {
+  local raw=$1
+  if [[ $raw =~ ^[[:space:]]*([0-9]+)[[:space:]]*$ ]]; then
+    local ms=$((10#${BASH_REMATCH[1]}))
+    if ((ms > 0 && ms < write_queue_quiet_ms)); then
+      printf '%s' "$ms"
+      return
+    fi
+  fi
+  printf '%s' "$default_gap_ms"
+}
+
 # A chan terminal inherits the server's environment, so this reads the gap the
 # server under test actually uses. Asserting it here is what makes a gap sweep
 # reproducible from committed code instead of a rebuild nobody can repeat.
-server_gap_ms=${CHAN_TERMINAL_INPUT_GAP_MS:-50}
+server_gap_ms=$(effective_gap_ms "${CHAN_TERMINAL_INPUT_GAP_MS:-}")
 if [[ $server_gap_ms != "$gap_ms" ]]; then
   echo "server split gap is ${server_gap_ms}ms, --gap asked for ${gap_ms}ms" >&2
+  if [[ -n ${CHAN_TERMINAL_INPUT_GAP_MS:-} && $server_gap_ms == "$default_gap_ms" ]]; then
+    echo "CHAN_TERMINAL_INPUT_GAP_MS=${CHAN_TERMINAL_INPUT_GAP_MS} is outside 1..$((write_queue_quiet_ms - 1))ms, so the server uses ${default_gap_ms}ms" >&2
+  fi
   echo "restart the server under test with CHAN_TERMINAL_INPUT_GAP_MS=$gap_ms" >&2
   exit 2
 fi
@@ -235,14 +294,17 @@ wait_for_depth() {
   done
 }
 
-# Sample the depth until it reaches 0 and print the observed sequence. A sample
-# can only FALSIFY the one-step contract: seeing 4/3/2/1 after a 5 proves
-# per-message drains, while never seeing them is consistent with one step.
+# Sample the depth until it reaches 0 and print the observed sequence, one
+# sample per line. Sampling can only FALSIFY a drain shape, never prove one:
+# every case below states which shape it falsifies, and every result row
+# carries the run-length-encoded trace so a sparse sample is visible instead of
+# implied.
 sample_depth_to_zero() {
   local deadline=$((SECONDS + timeout_secs))
   local depth
   while :; do
     depth=$(queue_depth)
+    ((depth >= 0)) || fail "queue depth lookup failed for $tab (got $depth)"
     printf '%s\n' "$depth"
     [[ $depth == 0 ]] && return 0
     if ((SECONDS >= deadline)); then
@@ -250,6 +312,27 @@ sample_depth_to_zero() {
     fi
     sleep 0.05
   done
+}
+
+# Run-length encode a trace for the result row: "5x87:0x1" is 87 samples at
+# depth 5 followed by one at 0.
+compact_trace() {
+  awk 'NR == 1 { prev = $1; n = 1; next }
+       $1 == prev { n++; next }
+       { printf "%s%sx%d", sep, prev, n; sep = ":"; prev = $1; n = 1 }
+       END { printf "%s%sx%d\n", sep, prev, n }'
+}
+
+# How many samples of the trace landed strictly between 0 and the enqueued
+# count, i.e. how often the queue was caught PART WAY through draining.
+intermediate_samples() {
+  local total=$1 trace=$2 depth count=0
+  for depth in $trace; do
+    if ((depth > 0 && depth < total)); then
+      count=$((count + 1))
+    fi
+  done
+  printf '%s' "$count"
 }
 
 paste_placeholder_count() {
@@ -281,8 +364,31 @@ print(len(out.encode()))
 ' "$1"
 }
 
+# The agent BUILDS this answer from the framing it actually received, so the
+# count is the load-bearing signal: 5 means the server framed one 5-message
+# batch, and 0 means the message arrived alone. Neither joined form appears in
+# the input, so an echo of the payload cannot satisfy the assertions.
 batch_instruction() {
-  printf '%s' "Read the entire queued-notification batch before acting. Reply with exactly one line. Start it by joining QUEUE, DRAIN, BATCH, and the NUMBER of notification blocks you received with underscores, then append the token values in order. Do not use tools."
+  printf '%s' "Read the entire message you just received before acting. Count its numbered notification blocks, using 0 if it has none. Reply with exactly one line: join QUEUE, DRAIN, BATCH, and that count with underscores, then append the token values in order, separated by spaces. Do not use tools."
+}
+
+# The late message's own sentinel, built from the token in that message alone.
+late_instruction() {
+  printf '%s' "Reply with exactly one line: join QUEUE, DRAIN, LATE, and the token value in this message with underscores. Do not use tools."
+}
+
+# ADVISORY. The scrollback ring holds PTY output, so the framed envelope is
+# visible only when the agent renders the pasted body verbatim. Useful data
+# about paste rendering; never an assertion.
+envelope_visibility() {
+  local count=$1
+  if flat_contains "--- notification ${count}/${count} ---"; then
+    echo visible
+  elif flat_contains "# Queued terminal notifications"; then
+    echo partial
+  else
+    echo hidden
+  fi
 }
 
 # One notification body: filler bytes, then a tail token on its own line. The
@@ -311,9 +417,23 @@ wait_for_tokens_in_order() {
   local deadline=$((SECONDS + timeout_secs))
   until tokens_in_order "$@"; do
     if ((SECONDS >= deadline)); then
-      fail "timed out waiting for the ordered tail tokens in $tab"
+      fail "timed out waiting for '$*' in order in $tab"
     fi
     sleep 0.1
+  done
+}
+
+# Fail on any forbidden agent-built block count. The sentinel is the agent's
+# OUTPUT, so this cannot be satisfied by an echo of the payload, and it CAN
+# fail: a regression that batches differently makes the agent count
+# differently.
+forbid_batch_counts() {
+  local why=$1 count
+  shift
+  for count in "$@"; do
+    if flat_contains "QUEUE_DRAIN_BATCH_${count}"; then
+      fail "the agent answered a ${count}-block turn: $why"
+    fi
   done
 }
 
@@ -360,7 +480,7 @@ echo "payload: ceiling=${max_batch_bytes}B target=${target_bytes}B envelope=${ov
 run_batch_case() {
   local run=$1
   local tokens=("a${run}x$$" "b${run}x$$" "c${run}x$$" "d${run}x$$" "e${run}x$$")
-  local index token preamble depths depth saw_five=0 placeholder=no
+  local index token preamble trace placeholder=no
 
   start_terminal "$run"
   warmup_until_busy "$run"
@@ -376,31 +496,23 @@ run_batch_case() {
   # Nothing may reach a busy compose box: all five must still be pending.
   require_depth 5
 
-  depths=$(sample_depth_to_zero)
-  for depth in $depths; do
-    if [[ $depth == 5 ]]; then
-      saw_five=1
-    elif ((saw_five == 1)) && [[ $depth != 0 ]]; then
-      fail "depth stepped through $depth after 5; the batch drained per message"
-    fi
-  done
+  # Depth was 5 one call ago, so ANY later sample in 1..4 proves the five
+  # drained per message rather than as one prefix.
+  trace=$(sample_depth_to_zero)
+  if (($(intermediate_samples 5 "$trace") > 0)); then
+    fail "depth stepped through 1..4 ($(printf '%s\n' "$trace" | compact_trace)); the batch drained per message"
+  fi
 
+  # The agent counted 5 notification blocks and answered all five in one line.
   wait_for_tokens_in_order 'QUEUE_DRAIN_BATCH_5' "${tokens[@]}"
-  flat_contains "--- notification 5/5 ---" || fail "no 5-message envelope was framed"
-  for index in 1 2 3 4; do
-    if flat_contains "--- notification 1/${index} ---"; then
-      fail "the prefix was framed as ${index} messages, not 5"
-    fi
-    if flat_contains "QUEUE_DRAIN_BATCH_${index}"; then
-      fail "the agent answered a ${index}-notification turn"
-    fi
-  done
+  forbid_batch_counts "the five notifications did not arrive as one batch" 0 1 2 3 4
 
   if (($(paste_placeholder_count) > 0)); then
     placeholder=yes
   fi
-  printf 'agent=%s case=batch run=%d size_kib=%d gap_ms=%d envelope=5/5 turns=1 tokens=ok paste_placeholder=%s\n' \
-    "$agent" "$run" "$size_kib" "$gap_ms" "$placeholder"
+  printf 'agent=%s case=batch run=%d size_kib=%d gap_ms=%d sentinel=QUEUE_DRAIN_BATCH_5 tokens=ok depth_trace=%s envelope=%s paste_placeholder=%s\n' \
+    "$agent" "$run" "$size_kib" "$gap_ms" \
+    "$(printf '%s\n' "$trace" | compact_trace)" "$(envelope_visibility 5)" "$placeholder"
 }
 
 run_boundaries_case() {
@@ -409,7 +521,7 @@ run_boundaries_case() {
   # submitted. Nothing may batch, and nothing may be skipped to reach a later
   # batchable message, so the tokens must still arrive in FIFO order.
   local tokens=("p${run}x$$" "q${run}x$$" "r${run}x$$" "s${run}x$$" "t${run}x$$")
-  local env_key
+  local env_key trace stepped
   env_key="CHAN_SUBMIT_$(printf '%s' "$agent" | tr '[:lower:]' '[:upper:]')"
 
   start_terminal "$run"
@@ -430,20 +542,31 @@ run_boundaries_case() {
     | "$cs_bin" terminal write --stdin --submit="$agent" --tab-name="$tab" >/dev/null
 
   require_depth 5
-  wait_for_depth 0
+  # Boundary-separated messages drain ONE AT A TIME, so the poller has to
+  # catch the queue part way down. Never catching it means the five left in a
+  # single step, which is exactly the regression this case exists to find.
+  trace=$(sample_depth_to_zero)
+  stepped=$(intermediate_samples 5 "$trace")
+  ((stepped > 0)) \
+    || fail "depth went 5 -> 0 in one step ($(printf '%s\n' "$trace" | compact_trace)); the boundaries were batched"
+  # These bodies are 32 bytes, small enough that both agents render them
+  # inline, so the ordered tokens read the echoed input: a delivery-order
+  # check, not a batching oracle. Waiting for it first also means every
+  # message has landed before the batch-count check below reads scrollback.
   wait_for_tokens_in_order "${tokens[@]}"
-  if flat_contains "# Queued terminal notifications"; then
-    fail "messages separated by boundaries were framed as a batch"
-  fi
+  # A wrongly batched prefix makes the agent count blocks and answer
+  # QUEUE_DRAIN_BATCH_2..5; correct behavior gives it one message at a time.
+  forbid_batch_counts "messages separated by boundaries were framed together" 2 3 4 5
 
-  printf 'agent=%s case=boundaries run=%d envelope=none order=ok\n' "$agent" "$run"
+  printf 'agent=%s case=boundaries run=%d order=ok depth_trace=%s envelope=%s\n' \
+    "$agent" "$run" "$(printf '%s\n' "$trace" | compact_trace)" "$(envelope_visibility 5)"
 }
 
 run_late_case() {
   local run=$1
   local tokens=("f${run}x$$" "g${run}x$$" "h${run}x$$" "i${run}x$$" "j${run}x$$")
   local late="k${run}x$$"
-  local index token preamble
+  local index token preamble trace
 
   start_terminal "$run"
   warmup_until_busy "$run"
@@ -457,20 +580,25 @@ run_late_case() {
       | "$cs_bin" terminal write --stdin --submit="$agent" --tab-name="$tab" >/dev/null
   done
   require_depth 5
-  # The prefix is selected and popped atomically, so the depth leaving 5 is the
-  # first instant at which a new message is guaranteed to miss it.
-  wait_for_depth 0
-  emit_message 6 32 "$late" "$instruction" \
-    | "$cs_bin" terminal write --stdin --submit="$agent" --tab-name="$tab" >/dev/null
-  wait_for_depth 0
-  wait_for_tokens_in_order "${tokens[@]}" "$late"
-
-  flat_contains "--- notification 5/5 ---" || fail "no 5-message envelope was framed"
-  if flat_contains "--- notification 6/6 ---"; then
-    fail "the late message joined the batch it was enqueued after"
+  trace=$(sample_depth_to_zero)
+  if (($(intermediate_samples 5 "$trace") > 0)); then
+    fail "depth stepped through 1..4 ($(printf '%s\n' "$trace" | compact_trace)); the batch drained per message"
   fi
 
-  printf 'agent=%s case=late run=%d envelope=5/5 late_turn=separate\n' "$agent" "$run"
+  # The batch has left the queue and the agent is answering it. The sixth
+  # message therefore CANNOT join it, which is why no `6/6` assertion appears
+  # here: it could not fail. What this proves instead is that the queue keeps
+  # draining after a batch delivery and hands the late message its own turn,
+  # with its own agent-built sentinel. The unreachable
+  # enqueued-after-selection race is pinned by the chan-library unit test named
+  # at the top of this file.
+  emit_message 6 32 "$late" "$(late_instruction)" \
+    | "$cs_bin" terminal write --stdin --submit="$agent" --tab-name="$tab" >/dev/null
+  wait_for_depth 0
+  wait_for_tokens_in_order 'QUEUE_DRAIN_BATCH_5' "${tokens[@]}" "QUEUE_DRAIN_LATE_${late}"
+
+  printf 'agent=%s case=late run=%d sentinel=QUEUE_DRAIN_BATCH_5 late_sentinel=QUEUE_DRAIN_LATE_%s depth_trace=%s envelope=%s\n' \
+    "$agent" "$run" "$late" "$(printf '%s\n' "$trace" | compact_trace)" "$(envelope_visibility 5)"
 }
 
 for ((run = 1; run <= runs; run++)); do

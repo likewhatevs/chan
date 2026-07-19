@@ -27,6 +27,11 @@ function terminalTab(partial: Partial<TerminalTab> = {}): TerminalTab {
 }
 
 describe("terminal queue depth", () => {
+  // The store setter takes whatever depth the server sent. What the depth
+  // MEANS (logical messages, one absolute step per drained batch) is the
+  // server's contract, pinned in chan-library; that the handler assigns it
+  // instead of adjusting the badge relatively is pinned in
+  // richPromptTerminalWiring.test.ts.
   test("positive depths stick; zero collapses to undefined (truthiness renders)", () => {
     const tab = terminalTab();
     setTerminalQueueDepth(tab, 3);
@@ -35,29 +40,6 @@ describe("terminal queue depth", () => {
     expect(tab.queueDepth).toBe(1);
     setTerminalQueueDepth(tab, 0);
     expect(tab.queueDepth).toBeUndefined();
-  });
-
-  test("depth counts logical messages, so a gemini poke is one, not two", () => {
-    // The server enqueues a gemini body and its bare CR as two idle-gated
-    // entries but reports ONE pending message; the badge shows what the user
-    // sent, not how many PTY writes it takes.
-    const tab = terminalTab();
-    setTerminalQueueDepth(tab, 1);
-    expect(tab.queueDepth).toBe(1);
-  });
-
-  test("a drained batch is one absolute step, with no intermediate badge churn", () => {
-    // Five `cs terminal write` notifications queue while the agent is busy,
-    // then the whole prefix drains as ONE agent turn: the server emits one
-    // `queue` frame carrying the remaining depth, never 4/3/2/1.
-    const tab = terminalTab();
-    const frames = [1, 2, 3, 4, 5, 0];
-    const seen: (number | undefined)[] = [];
-    for (const depth of frames) {
-      setTerminalQueueDepth(tab, depth);
-      seen.push(tab.queueDepth);
-    }
-    expect(seen).toEqual([1, 2, 3, 4, 5, undefined]);
   });
 });
 
