@@ -172,11 +172,15 @@
         submit_agent?: SubmitAgent;
       }
     | { type: "activity"; bytes_since_focus: number }
-    /// Queue-visibility frames (server: routes/terminal.rs). `queue` is the
-    /// absolute message depth on every change; `prompt-ack` answers THIS
-    /// socket's tagged `prompt` frame (queued=false: queue full, nothing
-    /// enqueued); `prompt-delivered` fires when a tagged message's LAST
-    /// write reaches the PTY. Non-owners ignore unknown ids, read depth.
+    /// Queue-visibility frames (server: routes/terminal.rs). `queue` carries
+    /// the absolute LOGICAL MESSAGE depth on every change, so a drained batch
+    /// of N `cs terminal write` notifications arrives as one N -> 0 step, not
+    /// N frames; `prompt-ack` answers THIS socket's tagged `prompt` frame
+    /// (queued=false: queue full, nothing enqueued); `prompt-delivered` fires
+    /// when a tagged message leaves the queue for the PTY. Only Rich Prompt
+    /// messages carry a tag, and a Rich Prompt is always its own turn, so a
+    /// batch emits no `prompt-delivered` at all. Non-owners ignore unknown
+    /// ids and read depth.
     | { type: "queue"; depth: number }
     | { type: "prompt-ack"; id: string; queued: boolean; depth: number }
     | { type: "prompt-delivered"; id: string; depth: number }
@@ -1296,12 +1300,13 @@
 
   /// Rich Prompt + team-lead-identity submit path: send `data` over the existing
   /// terminal WS as a `prompt` frame so the server ENQUEUES it into this
-  /// session's write queue (shared FIFO with `cs terminal write`) and appends
-  /// the submit chord when the agent is idle. Deliberately NOT `sendInput` (the
-  /// raw keystroke path bypasses the queue). Returns whether the WS was open so
-  /// the orchestrator can retry a freshly-spawned lead. `agent` picks the chord
-  /// (claude CSI, codex/opencode bracketed paste + CR, gemini split CR);
-  /// omitted defaults to claude server-side.
+  /// session's write queue (shared FIFO with `cs terminal write`) and applies
+  /// the submit encoding when the agent is idle. Deliberately NOT `sendInput`
+  /// (the raw keystroke path bypasses the queue). Returns whether the WS was
+  /// open so the orchestrator can retry a freshly-spawned lead. `agent` picks
+  /// the encoding (claude CSI, codex/opencode bracketed paste + CR, gemini
+  /// split CR); omitted defaults to claude server-side. A Rich Prompt is its
+  /// own agent turn: the notification batcher never folds it into a batch.
   /// `id` tags the message for prompt-ack / prompt-delivered tracking; omitted
   /// = fire-and-forget (the orchestrator's lead-identity prompt stays so).
   function sendPrompt(data: string, agent?: string, id?: string): boolean {

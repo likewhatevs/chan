@@ -36,6 +36,48 @@ describe("terminal queue depth", () => {
     setTerminalQueueDepth(tab, 0);
     expect(tab.queueDepth).toBeUndefined();
   });
+
+  test("depth counts logical messages, so a gemini poke is one, not two", () => {
+    // The server enqueues a gemini body and its bare CR as two idle-gated
+    // entries but reports ONE pending message; the badge shows what the user
+    // sent, not how many PTY writes it takes.
+    const tab = terminalTab();
+    setTerminalQueueDepth(tab, 1);
+    expect(tab.queueDepth).toBe(1);
+  });
+
+  test("a drained batch is one absolute step, with no intermediate badge churn", () => {
+    // Five `cs terminal write` notifications queue while the agent is busy,
+    // then the whole prefix drains as ONE agent turn: the server emits one
+    // `queue` frame carrying the remaining depth, never 4/3/2/1.
+    const tab = terminalTab();
+    const frames = [1, 2, 3, 4, 5, 0];
+    const seen: (number | undefined)[] = [];
+    for (const depth of frames) {
+      setTerminalQueueDepth(tab, depth);
+      seen.push(tab.queueDepth);
+    }
+    expect(seen).toEqual([1, 2, 3, 4, 5, undefined]);
+  });
+});
+
+describe("a batch does not disturb a pending Rich Prompt", () => {
+  test("no prompt-delivered rides a batch, so a queued bubble stays queued", () => {
+    // Rich Prompt is a queue boundary and the only tagged message kind, so a
+    // batch of untagged notifications emits depth alone. The bubble stays
+    // locked until its OWN prompt-delivered arrives.
+    const tab = terminalTab();
+    beginPendingPrompt(tab, "msg-1");
+    resolvePendingPrompt(tab, "msg-1", "queued", 6);
+    setTerminalQueueDepth(tab, 1);
+    expect(tab.pendingPrompt).toEqual({ id: "msg-1", phase: "queued", depth: 6 });
+    expect(tab.queueDepth).toBe(1);
+
+    resolvePendingPrompt(tab, "msg-1", "delivered", 0);
+    setTerminalQueueDepth(tab, 0);
+    expect(tab.pendingPrompt).toEqual({ id: "msg-1", phase: "delivered", depth: 0 });
+    expect(tab.queueDepth).toBeUndefined();
+  });
 });
 
 describe("pending prompt state machine", () => {
