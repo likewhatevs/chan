@@ -9,6 +9,8 @@ OUT="${OUT:-/out}"
 VERSION="${VERSION:-}"
 PKGREL="${PKGREL:-1}"
 PKGBASE="${PKGBASE:-all}"
+HOST_UID="${HOST_UID:-0}"
+HOST_GID="${HOST_GID:-0}"
 
 case "$PKGBASE" in
     all) packages=(chan chan-desktop) ;;
@@ -34,16 +36,47 @@ if [ "$(id -u)" -eq 0 ]; then
     mkdir -p "$OUT"
     chown -R builder:builder "$OUT"
 
-    exec runuser -u builder -- env -u SUDO_USER -u SUDO_UID -u SUDO_GID -u SUDO_COMMAND \
+    status=0
+    runuser -u builder -- env -u SUDO_USER -u SUDO_UID -u SUDO_GID -u SUDO_COMMAND \
         HOME=/home/builder USER=builder LOGNAME=builder SRC="$SRC" OUT="$OUT" \
         VERSION="$VERSION" PKGREL="$PKGREL" PKGBASE="$PKGBASE" \
-        AUR_LOCAL_SOURCE="${AUR_LOCAL_SOURCE:-}" bash "$0"
+        AUR_LOCAL_SOURCE="${AUR_LOCAL_SOURCE:-}" bash "$0" || status=$?
+
+    # $OUT is bind-mounted from the host, so hand the artifacts back to the
+    # invoking user, on failure too: left owned by the in-container builder
+    # they would block a later non-root `rm -rf target` or `cargo clean`.
+    chown -R "$HOST_UID:$HOST_GID" "$OUT"
+    exit "$status"
 fi
 
 export HOME="${HOME:-/home/builder}"
 if [ -z "$VERSION" ]; then
     VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' "$SRC/Cargo.toml" | head -1)"
 fi
+
+# namcap findings gate the build. The recipes carry a hand-written runtime
+# dependency set, so a library that namcap detects but the PKGBUILD does not
+# declare (namcap's `E:` class) would otherwise ship silently to every AUR
+# user. Warnings stay advisory and are printed in full. Waivers are extended
+# regexes matched against whole namcap lines, each with the reason it cannot
+# be fixed in the recipe; none are needed today.
+namcap_waivers=()
+
+# Print the namcap error lines that no waiver covers.
+unwaived_namcap_errors() {
+    local log="$1"
+    local line pattern waived
+    while IFS= read -r line; do
+        waived=0
+        for pattern in ${namcap_waivers[@]+"${namcap_waivers[@]}"}; do
+            if [[ "$line" =~ $pattern ]]; then
+                waived=1
+                break
+            fi
+        done
+        [ "$waived" -eq 1 ] || printf '%s\n' "$line"
+    done < <(grep -E ' E: ' "$log" || true)
+}
 
 echo ">> AUR validation: version=$VERSION pkgrel=$PKGREL arch=$(uname -m)" >&2
 for pkgbase in "${packages[@]}"; do
@@ -60,7 +93,26 @@ for pkgbase in "${packages[@]}"; do
         -name "$pkgbase-$VERSION-$PKGREL-*.pkg.tar.zst" -type f | head -1)"
     [ -n "$pkg" ] || { echo "error: $pkgbase produced no package" >&2; exit 1; }
 
-    namcap "$pkgdir/PKGBUILD" "$pkg" || true
+    namcap_log="$pkgdir/namcap.out"
+    set +e
+    namcap "$pkgdir/PKGBUILD" "$pkg" > "$namcap_log" 2>&1
+    namcap_status=$?
+    set -e
+    cat "$namcap_log"
+    # namcap reports findings on stdout and its exit status is not a
+    # documented contract, so a nonzero exit with nothing reported is namcap
+    # itself failing to run.
+    if [ "$namcap_status" -ne 0 ] && ! grep -qE ' (E|W): ' "$namcap_log"; then
+        echo "error: namcap failed to run for $pkgbase (exit $namcap_status)" >&2
+        exit 1
+    fi
+    namcap_errors="$(unwaived_namcap_errors "$namcap_log")"
+    if [ -n "$namcap_errors" ]; then
+        echo "error: namcap rejected $pkgbase:" >&2
+        printf '%s\n' "$namcap_errors" >&2
+        exit 1
+    fi
+
     sudo pacman -U --noconfirm "$pkg"
     chan --version
     cs --help >/dev/null
