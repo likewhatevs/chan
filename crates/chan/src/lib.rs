@@ -245,8 +245,9 @@ registry of known workspaces lives in `~/.chan/config.toml`, or under
 `CHAN_HOME` when that is set.
 
 Inside any chan terminal, `cs` drives the window that spawned it. It is
-this same binary under a `cs -> chan` symlink, so `cs open notes/plan.md`
-and `chan shell open notes/plan.md` are the same command.";
+this same binary under a second name, picked by argv[0], so `cs open
+notes/plan.md` and `chan shell open notes/plan.md` are the same
+command.";
 
 /// The rest of the orientation. Split from the long_about because clap
 /// prints `after_long_help` below OPTIONS, which is where the two-modes
@@ -289,7 +290,8 @@ See what is being served, then tear one down:
   chan ps
   chan close ~/src/my-project
 
-Put `cs` on your PATH (chan ships no symlink; this is the only setup):
+Add `cs` when your install did not ship it (a hand-unpacked tarball, a
+container image, `cargo install`):
   ln -s "$(command -v chan)" ~/.local/bin/cs
 
 Teach an agent the whole surface in one shot:
@@ -377,14 +379,15 @@ enum Command {
     },
     /// Drive the current chan window from its terminal (the `cs` alias).
     ///
-    /// Reached as `chan shell <action>` or, via a `cs -> chan` symlink
-    /// the user puts on PATH, as `cs <action>`. Every action targets the
-    /// chan window that spawned this terminal ($CHAN_WINDOW_ID +
-    /// $CHAN_CONTROL_SOCKET); outside a chan terminal they error clearly.
+    /// Reached as `chan shell <action>` or, under the `cs` name on PATH,
+    /// as `cs <action>`. Every action targets the chan window that
+    /// spawned this terminal ($CHAN_WINDOW_ID + $CHAN_CONTROL_SOCKET);
+    /// outside a chan terminal they error clearly.
     ///
-    /// To enable the short `cs` name, symlink it onto your PATH once:
+    /// install.sh, the distro packages, and chan-desktop all provide the
+    /// `cs` name. Add it yourself only when your install did not:
+    ///
     ///   ln -s "$(command -v chan)" ~/.local/bin/cs
-    /// chan ships no symlink; this is the only setup it needs.
     ///
     /// iproute2-style prefix matching: the cs actions disambiguate on
     /// their first letter, so `cs o` / `cs g` / `cs d` / `cs t` resolve

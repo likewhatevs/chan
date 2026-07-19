@@ -35,10 +35,11 @@ use crate::wire::{
 const CS_LONG_ABOUT: &str = "\
 Drive the current chan window from its terminal.
 
-`cs` is the chan binary under a `cs -> chan` symlink, so `cs open x.md`
-and `chan shell open x.md` are the same command. Every action targets the
-window that spawned this terminal, discovered from the environment; run
-outside a chan terminal, each one errors clearly instead of guessing.
+`cs` is the chan binary under a second name, picked by argv[0], so `cs
+open x.md` and `chan shell open x.md` are the same command. Every action
+targets the window that spawned this terminal, discovered from the
+environment; run outside a chan terminal, each one errors clearly instead
+of guessing.
 
 Actions disambiguate on their first letters, iproute2 style, so `cs o`,
 `cs t l`, and `cs sea` resolve to open, terminal list, and search. The

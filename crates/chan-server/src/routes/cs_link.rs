@@ -6,10 +6,11 @@
 //! basename is "cs". Both the `chan` CLI and the chan-desktop binary detect
 //! it (`chan_shell::invoked_as_cs`) and run the control client instead of the
 //! GUI / normal CLI, so a sibling symlink to `current_exe()` is a valid `cs`
-//! for either binary. The user normally creates it once by hand
-//! (`ln -s "$(command -v chan)" ~/.local/bin/cs`); this surfaces that same
-//! one-time setup on first boot so a fresh install can drive its window from
-//! the terminal without reading the docs.
+//! for either binary. install.sh, the distro packages, and chan-desktop all
+//! provide the name already; this covers the installs that do not (a
+//! hand-unpacked tarball, a container image, a `cargo install` build) by
+//! offering the same one-time link on first boot, so such a workspace can
+//! drive its window from the terminal without reading the docs.
 //!
 //! NON-BLOCKING by construction: the detection rides on the pre-flight
 //! snapshot (`cs_link`) but never feeds its `locked` / `phase` gate, and a
