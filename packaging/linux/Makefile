@@ -106,7 +106,10 @@ archpkg:
 		exit 1; \
 	}
 	$(MAKE) -C "$(CHAN_REPO)" web
-	cd "$(CHAN_REPO)" && CHAN_PACKAGED=aur $(CARGO) build --release --target "$(ARCHPKG_TARGET)" -p chan
+	# A hand-built pacman package from the working tree, not an AUR install:
+	# the marker hands update ownership to the package manager without naming
+	# an AUR helper the user never used.
+	cd "$(CHAN_REPO)" && CHAN_PACKAGED=pacman $(CARGO) build --release --target "$(ARCHPKG_TARGET)" -p chan
 	rm -rf "$(ARCHPKG_DIR)"
 	mkdir -p "$(ARCHPKG_DIR)"
 	cp "$(CURDIR)/arch/PKGBUILD" "$(ARCHPKG_DIR)/PKGBUILD"
