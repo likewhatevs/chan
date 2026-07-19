@@ -60,32 +60,38 @@ Keep `chan` unrestricted. The custom release webhooks continue to rebuild both S
 
 Raw SRPM submissions are independent of the SCM package settings. `packaging/distros/copr/build-srpm.sh --submit` therefore passes two explicit `--exclude-chroot` values for `chan-desktop`, one per EL9 architecture. It does not enumerate allowed chroots, so future Fedora and Stream 10 targets remain automatic.
 
+The release path never runs that script: `distros-publish` POSTs the custom webhook, which rebuilds the SCM packages from Git. At release time the console denylist is therefore the only thing that keeps the two EL9 desktop jobs from being scheduled, and no artifact in this repo can assert or verify it.
+
 ## Local Validation Contract
 
 `make copr-check` builds the supported matrix in disposable sdme containers before submission:
 
 1. Produce the selected self-contained SRPMs through the existing Fedora container path.
 2. Start one clean sdme container per release and package, avoiding the intentional `chan`/`chan-desktop` RPM conflict.
-3. Mirror the COPR repositories: CRB plus EPEL/EPEL Next on EL9, and CRB plus the generic external EPEL repository on EL10.
+3. Mirror the COPR repositories: CRB on both releases, `epel-release` plus `epel-next-release` on EL9, and the literal generic external EPEL repository on both releases, exactly as COPR renders a chroot additional repository.
 4. Resolve the SRPM `BuildRequires` with DNF.
 5. Rebuild as an unprivileged `builder` user with `CARGO_NET_OFFLINE=true`.
 6. Install the binary RPM and smoke its packaged behavior.
-7. Store the RPM, upgrade output, and build log under `target/distros/copr-check/<release>/<arch>/<package>/`.
-8. Remove the container on exit unless `KEEP_CONTAINER=1` is set for diagnosis.
+7. Store the RPM, upgrade output, guest exit status, and build log under `target/distros/copr-check/el<9|10>/<arch>/<package>/`.
+8. Remove each container as its target finishes, then report a per-target PASS/FAIL summary and exit non-zero if any target failed.
 
-The command accepts `PKG=all|chan|chan-desktop` and `COPR_RELEASE=all|9|10`. An explicit `PKG=chan-desktop COPR_RELEASE=9` is rejected as unsupported.
+Every target runs even after an earlier one fails, so one cycle reports the whole matrix. `KEEP_CONTAINER=1` keeps every container instead, including a failed target's: the guest command always exits 0 and reports its real status through a file on the writable `/out` bind, because `sdme new` deletes the container when its guest command fails.
 
-Portable rootfs defaults are `centos-stream-9` and `centos-stream-10`. Import them with:
+The command accepts `PKG=all|chan|chan-desktop`, `COPR_RELEASE=all|9|10`, `KEEP_CONTAINER=0|1`, and `REUSE_SRPM=0|1`, each with a Makefile default. An explicit `PKG=chan-desktop COPR_RELEASE=9` is rejected as unsupported.
+
+This is not a mock buildroot. `dnf builddep` installs the spec's declared `BuildRequires` into a full CentOS container rootfs, so anything the build needs that the rootfs already carries but the spec does not declare passes here and fails in COPR's minimal buildroot. The check catches missing repositories, unresolvable declared dependencies, offline-vendoring breaks, and packaging or install regressions; it does not prove the `BuildRequires` list is complete.
+
+Rootfs names are per host, not portable. The Makefile defaults are `centos-stream-9` and `centos-stream-10`, imported with:
 
 ```sh
 sudo sdme fs import centos-stream-9 quay.io/centos/centos:stream9 --install-packages=yes -v
 sudo sdme fs import centos-stream-10 quay.io/centos/centos:stream10 --install-packages=yes -v
 ```
 
-This host already has equivalent rootfs entries named `cs9` and `vfy-centos`, so its validation command is:
+A missing rootfs preflight prints the import command and the names this host does have. The validation host's entries are `cs9` (Stream 9) and `vfy-centos` (Stream 10), so its command is:
 
 ```sh
-make copr-check SDME='sudo sdme' DOCKER='sudo docker' \
+make copr-check DOCKER='sudo docker' \
   COPR_EL9_ROOTFS=cs9 \
   COPR_EL10_ROOTFS=vfy-centos
 ```
