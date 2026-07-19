@@ -13,7 +13,7 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: Existing vX.Y.Z or vX.Y.Z-rcN tag to preserve in /dl metadata
+        description: Existing GA vX.Y.Z tag to preserve in /dl metadata (rc/prerelease tags are refused; /dl is GA-only)
         required: false
         type: string
 

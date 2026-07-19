@@ -66,7 +66,7 @@ GA only (not rc pins), the distro source packages -- both publish after the tag 
 
 ## Self-upgrade is data-driven
 
-Self-upgrade reads the latest manifest from `/dl` on chan.app. Cutting a release auto-supersedes prior versions; there is no `update.rs` edit required. The desktop updater probes the static manifest at `https://chan.app/dl/desktop/latest.json`, generated at release time by `web/packages/marketing/scripts/generate-release-metadata.mjs`.
+Self-upgrade reads the latest manifest from `/dl` on chan.app. Cutting a release moves `latest` to the new version; the `/dl` generator also retains the last 5 GA versions as per-version manifests, so `chan upgrade --version X.Y.Z` resolves older releases. No `update.rs` edit is required. The desktop updater probes the static manifest at `https://chan.app/dl/desktop/latest.json`, generated at release time by `web/packages/marketing/scripts/generate-release-metadata.mjs`.
 
 ## Signing notes
 

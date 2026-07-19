@@ -19,8 +19,7 @@ chan-llm = { version = "0.33", features = ["mcp"] }
 
 ```text
 StandardTool         ReadFile | WriteFile | ListFiles | ResolvePath |
-                     SearchContent | RepoReport | GraphNeighbors |
-                     GraphTags | GraphFilesWithTag
+                     WorkspaceSearch | RepoReport
 ToolContext          { workspace: Arc<Workspace> }
 ToolOutcome          Ok(json)
 tools::execute(name, args, &ctx) -> Result<ToolOutcome>
@@ -38,7 +37,7 @@ feature "mcp":
 
 ## Contacts and the graph
 
-chan-workspace maintains a sqlite link graph next to every workspace (nodes, edges, headings, tags, contacts). The editor uses it for the `[[` link picker, the `@` contact picker, chip rendering, and the graph view. MCP exposes graph tools for note relationships and BM25 search for content discovery; typed contact APIs stay in chan-workspace.
+chan-workspace maintains a sqlite link graph next to every workspace (nodes, edges, headings, tags, contacts). The editor uses it for the `[[` link picker, the `@` contact picker, chip rendering, and the graph view. MCP exposes a single `workspace_search` tool unifying note-relationship (graph) traversal and BM25 content discovery; typed contact APIs stay in chan-workspace.
 
 From an agent's perspective:
 

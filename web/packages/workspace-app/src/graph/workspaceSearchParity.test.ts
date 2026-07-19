@@ -28,6 +28,9 @@ const expected = JSON.parse(
 ) as { cases: ExpectedCase[] };
 
 describe("workspace search lens parity golden", () => {
+  test("golden pins all 18 lens x depth cases", () => {
+    expect(expected.cases.length).toBe(18);
+  });
   for (const golden of expected.cases) {
     test(`${golden.lens} depth ${golden.depth}`, () => {
       const actual = lensClosure(graph.nodes, graph.edges, {

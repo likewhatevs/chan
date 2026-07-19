@@ -103,6 +103,7 @@ fn workspace_search_matches_shared_lens_golden() {
 
     let golden: Golden =
         serde_json::from_str(&fs::read_to_string(fixture.join("expected.json")).unwrap()).unwrap();
+    assert_eq!(golden.cases.len(), 18, "golden must pin all 18 lens x depth cases");
     for case in golden.cases {
         let value = case
             .seed
