@@ -1,11 +1,18 @@
 # Publish the distro packages after a release lands: trigger the COPR
-# package builds, upload the signed Debian source packages to the Launchpad
-# PPA, and publish the Arch source recipes to the AUR. Deliberately a separate workflow from release.yml, and
-# triggered by its completion rather than by the tag push, so distro
-# publishing can never block or fail the GitHub release and only runs
-# once the release is actually out. Retry / manual path: dispatch with
-# the tag. Publication jobs no-op gracefully when their secret is absent
-# (e.g. on forks).
+# package builds, upload the signed Debian source packages to the
+# Launchpad PPA, and publish the Arch source recipes to the AUR.
+# Deliberately a separate workflow from release.yml, and triggered by
+# its completion rather than by the tag push, so distro publishing can
+# never block or fail the GitHub release and only runs once the
+# release is actually out. Publication jobs no-op gracefully when
+# their secret is absent (e.g. on forks).
+#
+# Manual dispatch mirrors release.yml: `publish` defaults to false,
+# which renders, validates, and probes the credentials without pushing
+# anything, and `targets` scopes the run to one distro so retrying a
+# transient Launchpad ftp 550 costs one job instead of the Arch builds
+# and the AUR push too. The tag-triggered path always publishes all
+# three.
 #
 # Secrets:
 #   COPR_WEBHOOK                  custom-webhook base URL (trailing /)
@@ -15,8 +22,8 @@
 #                                 when present, dput switches from ftp
 #                                 to sftp (authenticated, no anonymous
 #                                 FTP flakiness); absent keeps ftp
-#   AUR_SSH_PRIVATE_KEY           private half of the key registered on
-#                                 the maintainer's AUR account
+#   AUR_SSH_PRIVATE_KEY           private half of the key registered
+#                                 on the maintainer's AUR account
 
 name: distros-publish
 
@@ -29,10 +36,30 @@ on:
       tag:
         description: Existing vX.Y.Z tag to publish distro packages for
         required: true
+      targets:
+        description: Which distro to run
+        required: true
+        default: all
+        type: choice
+        options:
+          - all
+          - copr
+          - launchpad
+          - aur
+      publish:
+        description: Push to COPR, the PPA, and the AUR
+        required: true
+        default: false
+        type: boolean
       aur_pkgrel:
         description: AUR pkgrel (raise for a packaging-only repair)
         required: false
         default: "1"
+      aur_validate_arm:
+        description: Also run the unverified aarch64 AUR build (never gates publication)
+        required: false
+        default: false
+        type: boolean
 
 # release.yml runs only on tag pushes and workflow_dispatch, so a
 # workflow_run whose triggering event is `push` is necessarily a
@@ -43,16 +70,23 @@ on:
 jobs:
   copr:
     if: >-
-      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_dispatch' &&
+       (inputs.targets == 'all' || inputs.targets == 'copr')) ||
       (github.event.workflow_run.conclusion == 'success' &&
        github.event.workflow_run.event == 'push' &&
        startsWith(github.event.workflow_run.head_branch, 'v'))
     runs-on: ubuntu-latest
+    env:
+      PUBLISH: ${{ github.event_name != 'workflow_dispatch' || inputs.publish }}
     steps:
       - name: Trigger COPR package builds
         env:
           WEBHOOK: ${{ secrets.COPR_WEBHOOK }}
         run: |
+          if [ "$PUBLISH" != "true" ]; then
+            echo "publish=false; skipping the COPR trigger."
+            exit 0
+          fi
           if [ -z "$WEBHOOK" ]; then
             echo "COPR_WEBHOOK not set; skipping COPR trigger."
             exit 0
@@ -67,13 +101,15 @@ jobs:
   # offline from it on its own builders.
   launchpad:
     if: >-
-      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_dispatch' &&
+       (inputs.targets == 'all' || inputs.targets == 'launchpad')) ||
       (github.event.workflow_run.conclusion == 'success' &&
        github.event.workflow_run.event == 'push' &&
        startsWith(github.event.workflow_run.head_branch, 'v'))
     runs-on: ubuntu-latest
     env:
       PPA_SERIES: "noble resolute"
+      PUBLISH: ${{ github.event_name != 'workflow_dispatch' || inputs.publish }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -92,6 +128,9 @@ jobs:
       - name: Build the vendored source tarball
         run: make distros-tarball
 
+      # A publish=false run still imports the key and signs the sources:
+      # that is the dry run's proof that the Launchpad credential works,
+      # and it is the same evidence a real upload depends on.
       - name: Import the signing key
         env:
           LP_KEY: ${{ secrets.LAUNCHPAD_GPG_PRIVATE_KEY }}
@@ -128,7 +167,7 @@ jobs:
       # ftp stanza stays in effect; upload.sh's skip/retry logic
       # covers both transports.
       - name: Configure dput sftp
-        if: env.SKIP_PPA != '1'
+        if: env.SKIP_PPA != '1' && env.PUBLISH == 'true'
         env:
           LP_SSH_KEY: ${{ secrets.LAUNCHPAD_SSH_PRIVATE_KEY }}
         run: |
@@ -160,104 +199,84 @@ jobs:
           echo "dput will use sftp for the [ppa] host."
 
       - name: Upload to the PPA
-        if: env.SKIP_PPA != '1'
+        if: env.SKIP_PPA != '1' && env.PUBLISH == 'true'
         run: packaging/distros/debian/upload.sh
 
-  # The AUR hosts recipes, not builds. Prove each source package natively on
-  # both supported architectures before either repository is updated. x86_64
-  # uses upstream Arch; aarch64 imports Arch Linux ARM's signed rootfs on the
-  # native GitHub runner. The package build logic is the same script local
-  # sdme validation runs.
+      - name: Report the PPA dry run
+        if: env.PUBLISH != 'true'
+        run: echo "publish=false; the source packages were built and signed but not uploaded."
+
+  # The AUR is a git host for recipes: a push publishes immediately and is
+  # only as good as the key behind it. Probe the credential in its own
+  # short job so a key whose public half is not registered on the AUR
+  # account fails here, in a dry run, instead of at publication time when
+  # the release is already out.
+  aur-auth:
+    if: >-
+      (github.event_name == 'workflow_dispatch' &&
+       (inputs.targets == 'all' || inputs.targets == 'aur') &&
+       !contains(inputs.tag, '-')) ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       startsWith(github.event.workflow_run.head_branch, 'v') &&
+       !contains(github.event.workflow_run.head_branch, '-'))
+    runs-on: ubuntu-latest
+    outputs:
+      credential: ${{ steps.probe.outputs.credential }}
+    steps:
+      - name: Probe the AUR SSH credential
+        id: probe
+        env:
+          AUR_SSH_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "$AUR_SSH_KEY" ]; then
+            echo "::warning::AUR_SSH_PRIVATE_KEY not set; the AUR push will be skipped."
+            echo "credential=absent" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$AUR_SSH_KEY" > ~/.ssh/aur
+          chmod 600 ~/.ssh/aur
+          printf '%s\n' 'aur.archlinux.org ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEuBKrPzbawxA/k2g6NcyV5jmqwJ2s+zpgZGZ7tpLIcN' > ~/.ssh/aur_known_hosts
+          # aur@ runs a restricted shell: a registered key is greeted and
+          # then refused an interactive shell (nonzero exit), an
+          # unregistered one gets `Permission denied (publickey)`. Match
+          # the greeting rather than the exit status. Nothing but the
+          # server's own message reaches the log; ssh never echoes key
+          # material and -v stays off so it cannot.
+          set +e
+          greeting="$(ssh -T -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o UserKnownHostsFile="$HOME/.ssh/aur_known_hosts" \
+            -o StrictHostKeyChecking=yes -i ~/.ssh/aur \
+            aur@aur.archlinux.org 2>&1)"
+          set -e
+          case "$greeting" in
+            *"Interactive shell is disabled"*|*"Welcome to AUR"*)
+              echo "AUR accepted the credential: $greeting"
+              echo "credential=ok" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "$greeting"
+              echo "::error::aur.archlinux.org did not accept AUR_SSH_PRIVATE_KEY; a publickey denial means its public half is not registered on the maintainer's AUR account"
+              exit 1
+              ;;
+          esac
+
+  # The AUR hosts recipes, not builds. Prove each source package on a
+  # clean upstream Arch container before either repository is updated.
+  # The package build logic is the same script local sdme validation
+  # runs. This leg is x86_64 only, which is what publication gates on;
+  # see aur-validate-arm.
   aur-validate:
     if: >-
-      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_dispatch' &&
+       (inputs.targets == 'all' || inputs.targets == 'aur') &&
+       !contains(inputs.tag, '-')) ||
       (github.event.workflow_run.conclusion == 'success' &&
        github.event.workflow_run.event == 'push' &&
-       startsWith(github.event.workflow_run.head_branch, 'v'))
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-latest
-            arch: x86_64
-            pkgbase: chan
-          - os: ubuntu-latest
-            arch: x86_64
-            pkgbase: chan-desktop
-          - os: ubuntu-24.04-arm
-            arch: aarch64
-            pkgbase: chan
-          - os: ubuntu-24.04-arm
-            arch: aarch64
-            pkgbase: chan-desktop
-    runs-on: ${{ matrix.os }}
-    env:
-      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.event.workflow_run.head_branch }}
-      AUR_PKGREL: ${{ github.event_name == 'workflow_dispatch' && inputs.aur_pkgrel || '1' }}
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.event.workflow_run.head_sha }}
-
-      - name: Prepare Arch build image
-        env:
-          TARGET_ARCH: ${{ matrix.arch }}
-        run: |
-          set -euo pipefail
-          if [ "$TARGET_ARCH" = x86_64 ]; then
-            image=docker.io/archlinux/archlinux:base-devel
-            docker pull "$image"
-          else
-            base=https://os.archlinuxarm.org/os/ArchLinuxARM-aarch64-latest.tar.gz
-            curl -fsSL --retry 3 "$base" -o /tmp/archlinuxarm.tar.gz
-            curl -fsSL --retry 3 "$base.sig" -o /tmp/archlinuxarm.tar.gz.sig
-            gpg --batch --keyserver hkps://keyserver.ubuntu.com \
-              --recv-keys 68B3537F39A313B3E574D06777193F152BDBE6A6
-            fingerprint=$(gpg --batch --with-colons --fingerprint \
-              68B3537F39A313B3E574D06777193F152BDBE6A6 \
-              | awk -F: '$1 == "fpr" { print $10; exit }')
-            test "$fingerprint" = 68B3537F39A313B3E574D06777193F152BDBE6A6
-            gpg --batch --verify /tmp/archlinuxarm.tar.gz.sig /tmp/archlinuxarm.tar.gz
-            image=chan-archlinuxarm:aarch64
-            docker import /tmp/archlinuxarm.tar.gz "$image" >/dev/null
-          fi
-          echo "AUR_IMAGE=$image" >> "$GITHUB_ENV"
-
-      - name: Render, build, install, and smoke
-        env:
-          PKGBASE: ${{ matrix.pkgbase }}
-        run: |
-          set -euo pipefail
-          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
-          [[ "$AUR_PKGREL" =~ ^[1-9][0-9]*$ ]]
-          version=${RELEASE_TAG#v}
-          mkdir -p target/aur-ci-out
-          chmod 0777 target/aur-ci-out
-          docker run --rm \
-            -e SRC=/src -e OUT=/out -e VERSION="$version" \
-            -e PKGREL="$AUR_PKGREL" -e PKGBASE="$PKGBASE" \
-            -v "$GITHUB_WORKSPACE:/src:ro" \
-            -v "$GITHUB_WORKSPACE/target/aur-ci-out:/out" \
-            "$AUR_IMAGE" bash /src/packaging/distros/arch/build-in-container.sh
-
-      - name: Retain publishable AUR metadata
-        if: matrix.arch == 'x86_64'
-        uses: actions/upload-artifact@v7
-        with:
-          name: aur-metadata-${{ matrix.pkgbase }}
-          path: |
-            target/aur-ci-out/${{ matrix.pkgbase }}/PKGBUILD
-            target/aur-ci-out/${{ matrix.pkgbase }}/.SRCINFO
-          include-hidden-files: true
-          if-no-files-found: error
-
-  aur-publish:
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event.workflow_run.conclusion == 'success' &&
-       github.event.workflow_run.event == 'push' &&
-       startsWith(github.event.workflow_run.head_branch, 'v'))
-    needs: aur-validate
+       startsWith(github.event.workflow_run.head_branch, 'v') &&
+       !contains(github.event.workflow_run.head_branch, '-'))
     strategy:
       fail-fast: false
       matrix:
@@ -267,23 +286,119 @@ jobs:
       RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.event.workflow_run.head_branch }}
       AUR_PKGREL: ${{ github.event_name == 'workflow_dispatch' && inputs.aur_pkgrel || '1' }}
     steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.event.workflow_run.head_sha }}
+
+      - name: Render, build, install, and smoke
+        env:
+          PKGBASE: ${{ matrix.pkgbase }}
+        run: packaging/distros/arch/build-in-ci.sh docker.io/archlinux/archlinux:base-devel
+
+      - name: Retain publishable AUR metadata
+        uses: actions/upload-artifact@v7
+        with:
+          name: aur-metadata-${{ matrix.pkgbase }}
+          path: |
+            target/aur-ci-out/${{ matrix.pkgbase }}/PKGBUILD
+            target/aur-ci-out/${{ matrix.pkgbase }}/.SRCINFO
+          include-hidden-files: true
+          if-no-files-found: error
+
+  # Arch Linux ARM aarch64 is declared by both recipes but has never been
+  # built end to end: the rootfs import, pacman-key bootstrap, rolling
+  # -Syu, and native ARM Tauri build are all unproven. It therefore never
+  # appears in `needs` for aur-publish; a red cell here is a visible
+  # signal that the ARM path is broken, not a silent block on shipping
+  # the validated x86_64 recipes. Manual dispatch runs it only with
+  # aur_validate_arm=true so retrying another distro stays cheap.
+  aur-validate-arm:
+    if: >-
+      (github.event_name == 'workflow_dispatch' &&
+       (inputs.targets == 'all' || inputs.targets == 'aur') &&
+       inputs.aur_validate_arm &&
+       !contains(inputs.tag, '-')) ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       startsWith(github.event.workflow_run.head_branch, 'v') &&
+       !contains(github.event.workflow_run.head_branch, '-'))
+    strategy:
+      fail-fast: false
+      matrix:
+        pkgbase: [chan, chan-desktop]
+    runs-on: ubuntu-24.04-arm
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.event.workflow_run.head_branch }}
+      AUR_PKGREL: ${{ github.event_name == 'workflow_dispatch' && inputs.aur_pkgrel || '1' }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.event.workflow_run.head_sha }}
+
+      # Upstream Arch publishes no aarch64 image, so import Arch Linux
+      # ARM's signed rootfs on the native runner.
+      - name: Import the Arch Linux ARM rootfs
+        run: |
+          set -euo pipefail
+          base=https://os.archlinuxarm.org/os/ArchLinuxARM-aarch64-latest.tar.gz
+          curl -fsSL --retry 3 "$base" -o /tmp/archlinuxarm.tar.gz
+          curl -fsSL --retry 3 "$base.sig" -o /tmp/archlinuxarm.tar.gz.sig
+          gpg --batch --keyserver hkps://keyserver.ubuntu.com \
+            --recv-keys 68B3537F39A313B3E574D06777193F152BDBE6A6
+          fingerprint=$(gpg --batch --with-colons --fingerprint \
+            68B3537F39A313B3E574D06777193F152BDBE6A6 \
+            | awk -F: '$1 == "fpr" { print $10; exit }')
+          test "$fingerprint" = 68B3537F39A313B3E574D06777193F152BDBE6A6
+          gpg --batch --verify /tmp/archlinuxarm.tar.gz.sig /tmp/archlinuxarm.tar.gz
+          docker import /tmp/archlinuxarm.tar.gz chan-archlinuxarm:aarch64 >/dev/null
+
+      - name: Render, build, install, and smoke
+        env:
+          PKGBASE: ${{ matrix.pkgbase }}
+        run: packaging/distros/arch/build-in-ci.sh chan-archlinuxarm:aarch64
+
+  aur-publish:
+    if: >-
+      (github.event_name == 'workflow_dispatch' &&
+       (inputs.targets == 'all' || inputs.targets == 'aur') &&
+       !contains(inputs.tag, '-')) ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       startsWith(github.event.workflow_run.head_branch, 'v') &&
+       !contains(github.event.workflow_run.head_branch, '-'))
+    needs: [aur-auth, aur-validate]
+    strategy:
+      fail-fast: false
+      matrix:
+        pkgbase: [chan, chan-desktop]
+    runs-on: ubuntu-latest
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.event.workflow_run.head_branch }}
+      AUR_PKGREL: ${{ github.event_name == 'workflow_dispatch' && inputs.aur_pkgrel || '1' }}
+      PUBLISH: ${{ github.event_name != 'workflow_dispatch' || inputs.publish }}
+      PUSHABLE: ${{ needs.aur-auth.outputs.credential == 'ok' }}
+    steps:
       - uses: actions/download-artifact@v8
         with:
           name: aur-metadata-${{ matrix.pkgbase }}
           path: /tmp/generated
 
+      - name: Report the AUR dry run
+        if: env.PUBLISH != 'true' || env.PUSHABLE != 'true'
+        env:
+          PKGBASE: ${{ matrix.pkgbase }}
+        run: |
+          echo "Validated $PKGBASE metadata for ${RELEASE_TAG}-${AUR_PKGREL} and pushed nothing."
+          echo "publish=$PUBLISH credential-usable=$PUSHABLE"
+          cat /tmp/generated/.SRCINFO
+
       - name: Push to the AUR
+        if: env.PUBLISH == 'true' && env.PUSHABLE == 'true'
         env:
           AUR_SSH_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
           PKGBASE: ${{ matrix.pkgbase }}
         run: |
           set -euo pipefail
-          if [ -z "$AUR_SSH_KEY" ]; then
-            echo "AUR_SSH_PRIVATE_KEY not set; skipping the AUR push."
-            echo "SKIP_AUR=1" >> "$GITHUB_ENV"
-            exit 0
-          fi
-
           printf '%s\n' "$AUR_SSH_KEY" > /tmp/aur-key
           chmod 600 /tmp/aur-key
           cat > /tmp/aur-known-hosts <<'EOF'
@@ -305,7 +420,7 @@ jobs:
           git push origin HEAD:master
 
       - name: Verify AUR metadata
-        if: env.SKIP_AUR != '1'
+        if: env.PUBLISH == 'true' && env.PUSHABLE == 'true'
         env:
           PKGBASE: ${{ matrix.pkgbase }}
         run: |
@@ -318,7 +433,11 @@ jobs:
               echo "$PKGBASE $expected is visible in the AUR."
               exit 0
             fi
-            [ "$attempt" -lt 6 ] && sleep 10
+            # Keep the loop's last command a success so `set -e` cannot
+            # exit the step before the diagnostic below runs.
+            if [ "$attempt" -lt 6 ]; then
+              sleep 10
+            fi
           done
-          echo "error: AUR did not report $PKGBASE $expected" >&2
+          echo "::error::the AUR did not report $PKGBASE $expected after the push"
           exit 1
