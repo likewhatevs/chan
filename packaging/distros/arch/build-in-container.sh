@@ -137,8 +137,12 @@ for pkgbase in "${packages[@]}"; do
         for size in 32x32 64x64 128x128 256x256 512x512; do
             test -f "/usr/share/icons/hicolor/$size/apps/chan-desktop.png"
         done
-        ldd /usr/bin/chan-desktop > "$pkgdir/ldd.out"
-        ! grep -q 'not found' "$pkgdir/ldd.out"
+        ldd_output="$(ldd /usr/bin/chan-desktop)"
+        if grep -q 'not found' <<<"$ldd_output"; then
+            echo "error: chan-desktop has unresolved shared libraries" >&2
+            echo "$ldd_output" >&2
+            exit 1
+        fi
     else
         if chan upgrade >"$pkgdir/upgrade.out" 2>&1; then
             echo "error: packaged chan upgrade unexpectedly succeeded" >&2
