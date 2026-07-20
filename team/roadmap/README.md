@@ -35,6 +35,7 @@ Each item is one Markdown file that names an observed behavior or need, the evid
 | [control-terminal-wake-rerun](v0.74.0/control-terminal-wake-rerun.md) | confirmed defect: a macOS wake re-dials the control terminal and the server mints a new session running the tenant default, which re-runs the devserver connect script | gate the wake recycle off control terminals, stop a re-dial carrying a session id from adopting the tenant default, and clear on a replaced session |
 | [devserver-token-rotation](v0.74.0/devserver-token-rotation.md) | the devserver bearer token is minted once and never rotates, and control-terminal scrollback carrying it is snapshotted into WebView storage | decide a rotation story and exclude control windows from the snapshot |
 | [release-asset-verification-coverage](v0.74.0/release-asset-verification-coverage.md) | the release asset verifier does not require the Windows zip or installer, and only ever runs on a real GA | cover every produced asset, ideally from one source, and give the verifier a mode that can be exercised before the tag |
+| [markdown-heading-detection-in-fences](v0.74.0/markdown-heading-detection-in-fences.md) | confirmed defect: the WYSIWYG fold gutter regexes raw lines, so a `#` comment inside a fenced code block gets a chevron that folds to end of document, and two formatting chords rewrite such a line and destroy code | detect headings from the syntax tree rather than raw lines, once, and apply it to the fold service, the gutter, the click handler and the two format commands |
 
 ## Completed
 
