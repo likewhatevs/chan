@@ -5,13 +5,16 @@ pkgdesc='AI-native IDE with embedded web editor'
 arch=("${CHAN_ARCH:?}")
 url='https://chan.app'
 license=('Apache-2.0')
-depends=('gcc-libs' 'glibc')
+depends=('gcc-libs' 'glibc' 'systemd')
 source=()
 sha256sums=()
 
 package() {
   install -Dm755 "${CHAN_REPO:?}/target/${ARCHPKG_TARGET:?}/release/chan" \
     "${pkgdir}/usr/bin/chan"
+  ln -s chan "${pkgdir}/usr/bin/cs"
+  install -Dm644 "${CHAN_REPO}/packaging/distros/shared/chan-devserver.service" \
+    "${pkgdir}/usr/lib/systemd/user/chan-devserver.service"
   install -Dm644 "${CHAN_REPO}/LICENSE" \
     "${pkgdir}/usr/share/licenses/chan/LICENSE"
   install -Dm644 "${CHAN_REPO}/README.md" \

@@ -94,10 +94,12 @@ fn env_disabled() -> bool {
     matches!(env::var(ENV_DISABLE), Ok(v) if v == "0")
 }
 
-/// Build-time marker for distro-packaged builds (rpm spec / debian rules
-/// export `CHAN_PACKAGED=rpm|deb` around `cargo build`). When set, the
-/// package manager owns updates: the probe and banner stay silent and
-/// `chan upgrade` refuses instead of renaming over a root-owned binary.
+/// Build-time marker for builds a package manager owns: the distro source
+/// packages export `CHAN_PACKAGED` around `cargo build` (`rpm`, `deb`, `aur`),
+/// as does the local Arch QA package (`pacman`). When set, the probe and
+/// banner stay silent and `chan upgrade` refuses instead of renaming over a
+/// root-owned binary. The `.deb`/`.rpm` release downloads are unstamped: no
+/// repository serves them, so self-upgrade stays their update path.
 pub fn packaged_via() -> Option<&'static str> {
     option_env!("CHAN_PACKAGED")
 }
@@ -106,6 +108,7 @@ fn upgrade_blocked_message(pm: &str) -> String {
     let hint = match pm {
         "rpm" => "sudo dnf upgrade",
         "deb" => "sudo apt upgrade",
+        "aur" => "your AUR helper (for example, paru -Syu or yay -Syu)",
         _ => "your system package manager",
     };
     format!(
@@ -1342,6 +1345,10 @@ mod tests {
         let deb = upgrade_blocked_message("deb");
         assert!(deb.contains("(deb)"));
         assert!(deb.contains("apt upgrade"));
+        let aur = upgrade_blocked_message("aur");
+        assert!(aur.contains("(aur)"));
+        assert!(aur.contains("AUR helper"));
+        assert!(aur.contains("paru -Syu"));
         let other = upgrade_blocked_message("nix");
         assert!(other.contains("(nix)"));
         assert!(other.contains("package manager"));

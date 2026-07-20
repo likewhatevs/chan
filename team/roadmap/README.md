@@ -24,6 +24,7 @@ Each item is one Markdown file that names an observed behavior or need, the evid
 | item | state | what needs to happen |
 | --- | --- | --- |
 | [hyperscale-support](v0.72.0/hyperscale-support.md) | validated locally on x86_64; COPR builds pending | submit the configured matrix, accept the native x86_64 and aarch64 builds (aarch64 is unproven anywhere), and verify that no EL9 desktop job is scheduled |
+| [aur-support](v0.72.0/aur-support.md) | implemented; release validation pending | dry-run the credential probe before the tag, hand-smoke CachyOS, confirm both AUR repositories at `0.72.0-1`, and prove the unverified aarch64 leg |
 | [terminal-write-queue-drain](v0.72.0/terminal-write-queue-drain.md) | implemented and unit-tested; batching proven live for Codex and Claude | every case of `scripts/e2e/terminal-queue-drain.sh` passed 3/3 for both agents and the rows are in the item's Live Matrix Results; Gemini and OpenCode stay single-message until a host with those CLIs runs the same cases |
 | [dump-skill](v0.72.0/dump-skill.md) | implemented | merged; the review findings in the item's Known Gaps are closed |
 

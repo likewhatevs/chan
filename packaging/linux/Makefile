@@ -56,6 +56,12 @@ chan-tarball:
 	$(TAR) -czf "$(TARBALL_PATH)" -C "$(TARBALL_STAGE)" .
 	@echo "built $(TARBALL_PATH)"
 
+# The .deb/.rpm below are the release downloads: release.yml runs these targets
+# and stages their output as GitHub release assets. They deliberately carry no
+# CHAN_PACKAGED marker, unlike the distro source packages under
+# packaging/distros/: no apt or dnf repository serves a hand-installed asset, so
+# `sudo apt upgrade` would never update one and `chan upgrade` stays its update
+# path.
 .PHONY: deb
 deb:
 	@case "$(DEB_TARGET)" in *-unknown-linux-gnu) ;; \
@@ -106,7 +112,10 @@ archpkg:
 		exit 1; \
 	}
 	$(MAKE) -C "$(CHAN_REPO)" web
-	cd "$(CHAN_REPO)" && $(CARGO) build --release --target "$(ARCHPKG_TARGET)" -p chan
+	# A hand-built pacman package from the working tree, not an AUR install:
+	# the marker hands update ownership to the package manager without naming
+	# an AUR helper the user never used.
+	cd "$(CHAN_REPO)" && CHAN_PACKAGED=pacman $(CARGO) build --release --target "$(ARCHPKG_TARGET)" -p chan
 	rm -rf "$(ARCHPKG_DIR)"
 	mkdir -p "$(ARCHPKG_DIR)"
 	cp "$(CURDIR)/arch/PKGBUILD" "$(ARCHPKG_DIR)/PKGBUILD"

@@ -8,6 +8,13 @@
 PREFIX ?= $(if $(XDG_BIN_HOME),$(XDG_BIN_HOME:/bin=),$(HOME)/.local)
 CARGO ?= cargo
 NPM ?= npm
+# The AUR recipes populate web/node_modules with `npm ci` in prepare() and then
+# build offline, so WEB_SKIP_INSTALL=1 drops the install step from `web` and
+# `web-launcher`. Every other consumer keeps the default install command.
+WEB_SKIP_INSTALL ?= 0
+NPM_INSTALL = $(if $(filter 1,$(WEB_SKIP_INSTALL)),true,$(NPM) install)
+AUR_ROOTFS ?= archlinux
+AUR_REV ?= HEAD
 LINUX_TARGET ?= x86_64-unknown-linux-gnu
 DEB_TARGET ?= $(LINUX_TARGET)
 RPM_TARGET ?= $(LINUX_TARGET)
@@ -144,6 +151,11 @@ ppa-source: ## Build signed per-series Launchpad source packages from the tarbal
 ppa-upload: ## dput the built source packages to the Launchpad PPA.
 	packaging/distros/debian/upload.sh
 
+.PHONY: aur-check
+aur-check: ## Build and smoke both AUR packages in a disposable sdme Arch container.
+	AUR_ROOTFS="$(AUR_ROOTFS)" REV="$(AUR_REV)" SDME="$(SDME)" \
+		packaging/distros/arch/build-with-sdme.sh
+
 .PHONY: macos-chan-app
 macos-chan-app: ## Build and sign the macOS .app bundle.
 	$(MAKE) -C desktop app-signed
@@ -222,12 +234,12 @@ web-launcher: ## Build the embedded launcher bundle (web-launcher/dist).
 	# this too -- wired as a prerequisite of `web`/`web-check` so the single
 	# `make web` funnel (root `chan`, desktop/Makefile, packaging/linux,
 	# release.yml) builds both with no per-consumer edit.
-	cd web && $(NPM) install && $(NPM) run build -w @chan/launcher
+	cd web && $(NPM_INSTALL) && $(NPM) run build -w @chan/launcher
 	@date -u '+%Y-%m-%dT%H:%M:%SZ' > "$(LAUNCHER_BUILD_STAMP)"
 
 .PHONY: web
 web: web-launcher ## Build the embedded web bundle.
-	cd web && $(NPM) install && $(NPM) run build -w @chan/workspace-app
+	cd web && $(NPM_INSTALL) && $(NPM) run build -w @chan/workspace-app
 	@date -u '+%Y-%m-%dT%H:%M:%SZ' > "$(WEB_BUILD_STAMP)"
 
 .PHONY: web-check
