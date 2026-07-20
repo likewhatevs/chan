@@ -1367,18 +1367,18 @@ only). At least one of --tab-name / --tab-group is required.
 The bytes are QUEUED, not written straight through. Each session
 has its own FIFO, and the drainer delivers only once that
 session's output has gone quiet. At one idle opportunity the
-longest run of consecutive --submit=claude / --submit=codex
-messages is framed as a single chronological prompt, so a burst
-of notifications costs one agent turn instead of one turn each
-and the agent can reconcile them before acting. A write with no
---submit, gemini, opencode, a Rich Prompt turn and a runtime
-submit override each end that run and are delivered on their
-own. The command prints the message's position among the
-target's pending messages and returns at once; it never waits
-for the agent's reply.
+longest run of consecutive --submit=claude / --submit=codex /
+--submit=opencode messages is framed as a single chronological
+prompt, so a burst of notifications costs one agent turn instead
+of one turn each and the agent can reconcile them before acting.
+A write with no --submit, gemini, a Rich Prompt turn and a runtime
+submit override each end that run and are delivered on their own.
+The command prints the message's position among the
+target's pending messages and returns at once; it never waits for
+the agent's reply.
 
 The queue holds 100 entries per target, where a gemini message
-costs two entries and every other message costs one, and it is
+costs two entries and every other message costs one. The queue is
 dropped when the session is recycled (restarted). "Idle" is
 detected from output quiescence, so a target sitting at its
 prompt with a PAUSED, half-typed buffer reads as idle; that rare
@@ -1387,8 +1387,8 @@ case is not detected.
 --submit encodes the bytes so the named agent submits them
 hands-free (trailing newlines are stripped first): claude appends a
 chord, codex and opencode wrap the text in bracketed paste plus a
-CR, gemini takes the CR as its own later queue entry, one idle
-gate after the body. Omit it and the text parks in the agent's
+CR, while gemini takes the CR as its own later queue entry, one
+idle gate after the body. Omit it and the text parks in the agent's
 compose box unsubmitted, since a bare newline is a newline to an
 agent, not a submit.
 "#;
@@ -1415,9 +1415,9 @@ SIDE EFFECTS:
   position N" for a single match, "queued to N terminal session(s)"
   for a fan-out) goes to stderr; stdout stays empty.
 
-  --submit gemini sends the text and the bare CR as TWO writes, so
-  two queue entries and two acks: gemini folds a Return that
-  arrives with the text into Shift+Return.
+  --submit gemini is one logical queued message and one ack, but it
+  occupies TWO entries: text, then a bare CR after a full idle gate.
+  A 0.51 live sweep found no fixed sub-idle gap safe at 64 KiB.
 
 CAUTIONS:
   Queue cap: 100 entries per target. A write to a full queue is

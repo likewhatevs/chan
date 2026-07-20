@@ -52,16 +52,17 @@ pub enum SubmitAgent {
     // codex-cli 0.136.0.
     /// OpenAI codex: bracketed paste, then CR
     Codex,
-    // Submits on a CR, but ONLY when the CR arrives as a DISTINCT write: gemini
-    // 0.51 converts Return received within 30 ms of inserted text into
-    // Shift+Return, including text delivered as bracketed paste. So gemini's
-    // chord is delivered as a SEPARATE write from the text -- see
-    // `submit_writes`.
+    // Submits on a CR, but ONLY when the CR arrives as a DISTINCT write.
+    // Gemini 0.51 converts a closely following Return into Shift+Return,
+    // including after bracketed paste. A 2026-07-20 live sweep on Gemini 0.51
+    // found no fixed sub-idle gap safe for 64 KiB input, so the terminal queue
+    // keeps the body and chord as separately idle-gated entries.
     /// Google gemini: a CR in its own separate write
     Gemini,
     // Its TUI accepts bracketed paste followed by CR in the same PTY write.
-    // The bracketed form is the default because it is proven for multiline
-    // and paste-sized input. Live-probed 2026-07-18 against OpenCode 1.18.3.
+    // The bracketed form is the default because it is proven for multiline,
+    // paste-sized input, and chronological notification batches. Live-probed
+    // 2026-07-20 against OpenCode 1.18.3.
     /// OpenCode: bracketed paste and CR in one write
     OpenCode,
 }
@@ -100,10 +101,13 @@ impl ResolvedSubmit {
     }
 
     /// Whether this resolved shape is proven for chronological notification
-    /// batching. OpenCode and Gemini remain singleton boundaries.
+    /// batching. Gemini remains a singleton boundary.
     pub fn is_batchable(&self) -> bool {
         self.source == SubmitTemplateSource::BuiltIn
-            && matches!(self.agent, SubmitAgent::Claude | SubmitAgent::Codex)
+            && matches!(
+                self.agent,
+                SubmitAgent::Claude | SubmitAgent::Codex | SubmitAgent::OpenCode
+            )
     }
 }
 
@@ -289,7 +293,7 @@ pub fn submit_chord_bytes(submit: &ResolvedSubmit) -> Vec<u8> {
 }
 
 /// Whether `text` submitted under `submit` needs its chord delivered as a
-/// SEPARATE PTY write. Gemini 0.51 converts a Return received within 30 ms of
+/// SEPARATE PTY write. Gemini 0.51 converts a Return received too soon after
 /// inserted text into Shift+Return, including text delivered as bracketed
 /// paste, so a Gemini body and its bare CR never share a write. A message
 /// missing either half has nothing to split. Cheap enough for the enqueue
@@ -359,12 +363,13 @@ pub fn apply_submit_chord(data: String, submit: Option<SubmitAgent>) -> String {
 /// agents need ONE write (the chord is part of it, via `apply_submit_chord`),
 /// so a caller can write/enqueue the single element verbatim.
 ///
-/// gemini is the exception. gemini 0.51 converts Return received within 30 ms
-/// of inserted text into Shift+Return, including bracketed paste. Only a CR
-/// delivered as its OWN later write submits gemini, so for gemini this
+/// gemini is the exception. gemini 0.51 converts a closely following Return
+/// into Shift+Return, including after bracketed paste. Only a CR delivered as
+/// its OWN later write submits gemini, so for gemini this
 /// returns TWO writes (the text body, then the submit chord alone) which the
 /// caller MUST deliver as separate events: separate write-queue items, whose
-/// drainer idle-gates between them, or separate PTY writes with a gap. A
+/// drainer idle-gates between them, or separate PTY writes with a caller-owned
+/// conservative gap. A
 /// message missing either half collapses to one write, so the list is never
 /// empty.
 pub fn submit_writes(data: String, submit: Option<SubmitAgent>) -> Vec<String> {
@@ -506,6 +511,12 @@ mod tests {
             vec![b"\x1b[200~batch\x1b[201~\r".to_vec()]
         );
 
+        let opencode = built_in(SubmitAgent::OpenCode);
+        assert_eq!(
+            plan_submitted_input("batch\n".into(), Some(&opencode), true).parts,
+            vec![b"\x1b[200~batch\x1b[201~\r".to_vec()]
+        );
+
         let gemini = built_in(SubmitAgent::Gemini);
         assert_eq!(
             plan_submitted_input("poke\n".into(), Some(&gemini), false).parts,
@@ -515,6 +526,18 @@ mod tests {
             plan_submitted_input("raw\n".into(), None, false).parts,
             vec![b"raw\n".to_vec()]
         );
+    }
+
+    #[test]
+    fn built_in_batchable_agents_are_pinned() {
+        for agent in [
+            SubmitAgent::Claude,
+            SubmitAgent::Codex,
+            SubmitAgent::OpenCode,
+        ] {
+            assert!(built_in(agent).is_batchable(), "{}", agent.name());
+        }
+        assert!(!built_in(SubmitAgent::Gemini).is_batchable());
     }
 
     #[test]

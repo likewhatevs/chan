@@ -76,9 +76,8 @@ const WRITE_QUEUE_BATCH_MAX_BYTES: usize = 64 * 1024;
 /// Gap between the two parts of a batched Claude delivery, its only user.
 /// Claude Code 2.1.215 passed 3/3 busy-queue runs at 64 KiB for 50, 100, 200,
 /// and 400 ms; the smallest passing value also passed 3/3 advisory runs at
-/// 256 KiB. No other agent is measured against it: an agent whose chord needs
-/// its own idle-gated turn (Gemini) takes a queue entry per part instead.
-/// This stays below the 800 ms queue-idle threshold.
+/// 256 KiB. Gemini did not preserve a 64 KiB batch under any tested fixed gap
+/// below the idle threshold, so it takes a queue entry per part instead.
 const WRITE_QUEUE_INPUT_GAP: Duration = Duration::from_millis(50);
 /// Live-probe override for `WRITE_QUEUE_INPUT_GAP`, read once per process.
 /// `scripts/e2e/terminal-queue-drain.sh --gap` re-runs the paste matrix
@@ -1949,11 +1948,10 @@ impl QueueSource {
 }
 
 /// Which portion of a logical message a queue entry delivers. Gemini is the
-/// one agent whose submit chord must arrive as its OWN keypress (it converts a
-/// Return received within 30 ms of inserted text into Shift+Return), so a
-/// Gemini message takes a `Body` entry and a `Chord` entry that the drainer
-/// separates with a full idle gate rather than a fixed sub-second delay.
-/// Everything else is one `Whole` entry.
+/// one agent whose submit chord must arrive as its OWN keypress, and live
+/// probing found no fixed sub-idle gap safe for a 64 KiB body. A Gemini message
+/// therefore takes a `Body` entry and a `Chord` entry that the drainer
+/// separates with a full idle gate. Everything else is one `Whole` entry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MessagePart {
     Whole,
@@ -3964,7 +3962,7 @@ mod tests {
                     Some(built_in_submit(SubmitAgent::OpenCode)),
                     QueueSource::CsWrite,
                 ),
-                BatchStopReason::UnbatchableAgent,
+                BatchStopReason::DifferentSubmit,
             ),
             (
                 queued_message(
@@ -4060,6 +4058,35 @@ mod tests {
 
         let PtyCommand::Input(data) = command_rx.try_recv().expect("one controller command") else {
             panic!("codex batch must be one input command");
+        };
+        let text = String::from_utf8(data).unwrap();
+        assert!(text.starts_with("\x1b[200~# Queued terminal notifications\n"));
+        for index in 1..=5 {
+            assert!(text.contains(&format!("message {index}")));
+        }
+        assert!(text.ends_with("\x1b[201~\r"));
+        assert!(command_rx.try_recv().is_err(), "one controller command");
+        assert_eq!(session.queue_depth(), 0);
+        assert!(session.awaiting_gen.load(Ordering::Relaxed));
+        assert!(matches!(events.try_recv(), Ok(SessionEvent::QueueDepth(0))));
+        assert!(events.try_recv().is_err(), "no intermediate badge churn");
+    }
+
+    #[test]
+    fn five_opencode_notifications_drain_as_one_framed_input_and_one_depth_event() {
+        let (session, command_rx) = test_session_with_commands(1024);
+        let submit = built_in_submit(SubmitAgent::OpenCode);
+        for index in 1..=5 {
+            session.enqueue_cs_write(format!("message {index}"), Some(submit.clone()));
+        }
+        let mut events = session.output_tx.subscribe();
+        let base = now_unix_millis();
+        session.last_output_at.store(base, Ordering::Relaxed);
+
+        session.try_drain_batch(base + WRITE_QUEUE_QUIET_MS + 10);
+
+        let PtyCommand::Input(data) = command_rx.try_recv().expect("one controller command") else {
+            panic!("opencode batch must be one input command");
         };
         let text = String::from_utf8(data).unwrap();
         assert!(text.starts_with("\x1b[200~# Queued terminal notifications\n"));
@@ -4465,10 +4492,9 @@ mod tests {
 
     #[test]
     fn gemini_drains_as_two_separately_gated_entries() {
-        // Gemini converts a Return received within 30 ms of inserted text into
-        // Shift+Return, so its body and CR must NOT share one controller
-        // sequence with a fixed sub-second gap. They are two queue entries the
-        // normal idle gate separates, and only the chord completes the message.
+        // No tested fixed gap below the idle threshold preserved a 64 KiB
+        // Gemini batch, so body and CR stay two queue entries separated by the
+        // normal idle gate. Only the chord completes the logical message.
         let (session, commands) = test_session_with_commands(1024);
         session.enqueue_prompt(
             "hi there".into(),

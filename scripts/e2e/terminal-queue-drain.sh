@@ -89,7 +89,7 @@ default_gap_ms=50
 
 usage() {
   cat >&2 <<'EOF'
-usage: terminal-queue-drain.sh [--agent codex|claude] [--case batch|boundaries|late|all]
+usage: terminal-queue-drain.sh [--agent codex|claude|gemini|opencode] [--case gap|batch|boundaries|late|all]
                                [--size-kib N] [--runs N] [--timeout-secs N]
                                [--gap MS] [--max-batch-bytes N]
 
@@ -97,7 +97,7 @@ Environment:
   CS_BIN                      cs-compatible binary (default: cs). A development
                               chan binary must be invoked through a symlink
                               named cs so it enters that command surface.
-  CHAN_TERMINAL_INPUT_GAP_MS  The SERVER's Claude body/chord split gap. --gap
+  CHAN_TERMINAL_INPUT_GAP_MS  The SERVER's multi-part input gap. --gap
                               only asserts this matches; the value is read once
                               per server process, so sweeping it means
                               restarting the server under test with the new
@@ -105,6 +105,11 @@ Environment:
                               outside 1..799 ms and runs its built-in 50 ms, so
                               --gap takes the same range and the env value is
                               put through the same clamp before it is compared.
+  CHAN_GEMINI_ATOMIC_PROBE    Must be 1 for --case gap. It acknowledges that
+                              the server is a scratch candidate where built-in
+                              Gemini bypasses message_parts' Body/Chord split
+                              and drains as one atomic InputSequence. The final
+                              boundary build deliberately does not do this.
 
 Payloads above the batch ceiling are advisory and require a scratch build with
 a temporarily raised selector ceiling; pass --max-batch-bytes to match it.
@@ -164,6 +169,16 @@ case "$agent" in
     ready_pattern='plan mode on'
     submit_override='{}\e[27;9;13~'
     ;;
+  gemini)
+    launch='gemini --approval-mode plan'
+    ready_pattern='Type your message'
+    submit_override='{}\r'
+    ;;
+  opencode)
+    launch='opencode --agent plan --model opencode/deepseek-v4-flash-free --mini --no-replay'
+    ready_pattern='Ask anything'
+    submit_override='\e[200~{}\e[201~\r'
+    ;;
   *)
     echo "unsupported agent: $agent" >&2
     exit 2
@@ -171,12 +186,17 @@ case "$agent" in
 esac
 
 case "$case_name" in
-  batch | boundaries | late | all) ;;
+  gap | batch | boundaries | late | all) ;;
   *)
     echo "unsupported case: $case_name" >&2
     exit 2
     ;;
 esac
+
+if [[ $case_name == gap && ${CHAN_GEMINI_ATOMIC_PROBE:-} != 1 ]]; then
+  echo "--case gap requires CHAN_GEMINI_ATOMIC_PROBE=1 and a scratch atomic-Gemini server build" >&2
+  exit 2
+fi
 
 [[ $size_kib =~ ^[1-9][0-9]*$ ]] || { echo "--size-kib must be positive" >&2; exit 2; }
 [[ $runs =~ ^[1-9][0-9]*$ ]] || { echo "--runs must be positive" >&2; exit 2; }
@@ -263,6 +283,15 @@ wait_for_flat() {
     if ((SECONDS >= deadline)); then
       fail "timed out waiting for '$needle' in $tab"
     fi
+    sleep 0.1
+  done
+}
+
+wait_for_flat_for() {
+  local needle=$1 seconds=$2
+  local deadline=$((SECONDS + seconds))
+  until flat_contains "$needle"; do
+    ((SECONDS < deadline)) || return 1
     sleep 0.1
   done
 }
@@ -412,7 +441,7 @@ print(len(out.encode()))
 # batch, and 0 means the message arrived alone. Neither joined form appears in
 # the input, so an echo of the payload cannot satisfy the assertions.
 batch_instruction() {
-  printf '%s' "Read the entire message you just received before acting. Count its numbered notification blocks, using 0 if it has none. Reply with exactly one line: join QUEUE, DRAIN, BATCH, and that count with underscores, then append the token values in order, separated by spaces. Do not use tools."
+  printf '%s' "Read only the entire current message before acting. Count its opening delimiter lines: three hyphens, a space, the word notification, a numeric N/N fraction, a space, then three hyphens. Do not count end delimiters or earlier turns; use 0 if the current message has no such line. Reply with exactly one line: join QUEUE, DRAIN, BATCH, and that count with underscores, then append the token values in order, separated by spaces. Do not reuse this instruction on later messages unless they repeat it. Do not use tools."
 }
 
 # The late message's own sentinel, built from the token in that message alone.
@@ -498,7 +527,7 @@ start_terminal() {
 warmup_until_busy() {
   local run=$1
   "$cs_bin" terminal write --submit="$agent" --tab-name="$tab" \
-    "Without using tools: first print one line joining WARMUP, START, $run, and $$ with underscores, then count from 1 to 400 with one number per line, then print one line joining WARMUP, DONE, $run, and $$ with underscores." >/dev/null
+    "Without using tools: first print one line joining WARMUP, START, $run, and $$ with underscores, then count from 1 to 400 with one number per line, then print one line joining WARMUP, DONE, $run, and $$ with underscores. Each joined line must contain exactly three underscores; do not omit the underscore immediately before $run." >/dev/null
   wait_for_flat "WARMUP_START_${run}_$$"
 }
 
@@ -558,6 +587,39 @@ run_batch_case() {
   printf 'agent=%s case=batch run=%d size_kib=%d gap_ms=%d sentinel=QUEUE_DRAIN_BATCH_5 tokens=ok depth_trace=%s envelope=%s paste_placeholder=%s\n' \
     "$agent" "$run" "$size_kib" "$gap_ms" \
     "$(printf '%s\n' "$trace" | compact_trace)" "$(envelope_visibility 5)" "$placeholder"
+}
+
+# Measure whether the first CR in a Gemini body/chord sequence submits or is
+# converted into Shift+Enter. On a miss, a later bare CR is the control: if it
+# produces the requested sentinel, the first CR retained the body as a draft
+# rather than submitting it. A fresh server process is required for each
+# --gap value because the controller reads the gap once at startup.
+run_gap_case() {
+  local run=$1
+  local sentinel="GAP_OK_${run}_$$"
+  local probe_instruction probe_bytes probe_filler
+  [[ $agent == gemini ]] || fail "the gap case is specific to gemini"
+
+  start_terminal "$run"
+  probe_instruction="Reply with exactly one line built by joining GAP, OK, $run, and $$ with underscores. Use exactly three underscores, including one immediately before $run. Do not use tools."
+  probe_bytes=${#probe_instruction}
+  probe_filler=$((target_bytes - probe_bytes - 1))
+  ((probe_filler >= 0)) || fail "size ${size_kib}KiB is too small for the gap instruction"
+  awk -v instruction="$probe_instruction" -v fill="$probe_filler" 'BEGIN {
+    print instruction
+    for (i = 0; i < fill; i++) printf "G"
+  }' | "$cs_bin" terminal write --stdin --submit="$agent" --tab-name="$tab" >/dev/null
+  if wait_for_flat_for "$sentinel" 15; then
+    printf 'agent=%s case=gap run=%d size_kib=%d gap_ms=%d first_cr=submitted recovery=not_needed\n' \
+      "$agent" "$run" "$size_kib" "$gap_ms"
+    return
+  fi
+
+  "$cs_bin" terminal write --tab-name="$tab" $'\r' >/dev/null
+  wait_for_flat "$sentinel" \
+    || fail "the delayed recovery CR did not submit the retained draft"
+  printf 'agent=%s case=gap run=%d size_kib=%d gap_ms=%d first_cr=shift_enter recovery=separate_cr\n' \
+    "$agent" "$run" "$size_kib" "$gap_ms"
 }
 
 run_boundaries_case() {
@@ -649,6 +711,7 @@ run_late_case() {
 
 for ((run = 1; run <= runs; run++)); do
   case "$case_name" in
+    gap) run_gap_case "$run" ;;
     batch) run_batch_case "$run" ;;
     boundaries) run_boundaries_case "$run" ;;
     late) run_late_case "$run" ;;
