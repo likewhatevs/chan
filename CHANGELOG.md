@@ -4,7 +4,9 @@ All notable changes to this project will be documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [v0.73.0] - 2026-07-20
+
+v0.73.0 decouples publishing from the release: the Docker images and every distro package now ship from their own workflow that fans out in parallel after a successful release, so a registry or a distribution can no longer hold up a release or block each other. chan also stops building the CLI `.deb` and `.rpm` that COPR, the Launchpad PPA and the AUR now build for it, batches OpenCode's queued terminal notifications into one turn, and fixes the Command Launcher's dead "Flip pane" row.
 
 ### Changed
 

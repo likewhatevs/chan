@@ -1,6 +1,12 @@
 # chan-gateway v0.72.0 distributed proxy control plane
 
-Status: implementation plan, accepted scope for v0.73.0. Deferred out of v0.72.0 with no code merged; see [release-v0.72.0](../../release/release-v0.72.0.md). The plan below is unchanged from its original v0.72.0 target, so the version it names throughout is the version it ships in, now v0.73.0. Grounded against `46722392` on 2026-07-19.
+Status: accepted scope for v0.74.0, deferred out of both v0.72.0 and v0.73.0. **Steps 1 to 4 are implemented, own-gated and reviewed on the unmerged branch `v073/ctl`; steps 5 to 9 are unstarted.** Steps 5 to 9 turned out to be comparable in size to 1 to 4, which is why v0.73.0 closed without this item rather than holding the release or merging a half-cut-over proxy. See [release-v0.73.0](../../release/release-v0.73.0.md).
+
+What is already done on that branch: the controller state machine with session incarnations, generation contiguity, pending-claim expiry, deterministic restart reconciliation and convergence; the runnable service with separately bound admin/health and raw h2c proxy listeners; the proxy-side cutover that deletes `admin.rs`; and a live three-proxy vertical slice proving each node serves only its own tunnel and returns 404 for the others. An integrator review found and the lane fixed four defects a green gate could not see: a cancellation-unsafe framed read inside a `select!`, a connection and semaphore-permit leak on heartbeat death, an unbounded command wedge, and a terminal convergence latch.
+
+One accepted ruling is recorded and **not yet implemented**: during routine joining the controller-authoritative live row wins any duplicate against a joining proxy's snapshot, and a joining row that would exceed current live per-user capacity loses. The lexicographic `(proxy_id, registration_id)` restart tie-break and sorted capacity reconstruction stay confined to initial controller reconstruction, where recency is genuinely unavailable. Without this, a proxy reconnecting inside its grace window can evict a live tunnel that the controller itself admitted on another node.
+
+The plan below is unchanged from its original v0.72.0 target, so the version it names throughout is the version it ships in, now v0.74.0. Grounded against `46722392` on 2026-07-19.
 
 The branch contains buildable candidate groundwork, not a runnable control plane. A completing implementation may revise or replace the candidate protocol and controller abstractions where the live transport, failure semantics, or tests require it. The behavior and acceptance criteria in this plan are authoritative.
 

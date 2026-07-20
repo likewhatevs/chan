@@ -19,16 +19,28 @@ Each item is one Markdown file that names an observed behavior or need, the evid
 
 ## Active
 
-### v0.73.0
+### v0.74.0
 
 | item | state | what needs to happen |
 | --- | --- | --- |
-| [distributed-proxy-control-plane](v0.73.0/distributed-proxy-control-plane.md) | implementation plan; deferred out of v0.72.0 with no code merged | implement the controller, the proxy control client, and the fleet-complete snapshot the identity and profile planes read, then validate the cutover end to end |
-| [launcher-flip-pane](v0.73.0/launcher-flip-pane.md) | implemented and merged to `main`; the overlay stack reconciles at close, covered by three behavioral tests captured red first | nothing further; it closes at GA with the release |
-| [packaging-aarch64-validation](v0.73.0/packaging-aarch64-validation.md) | COPR aarch64 evidence harvested and the item's "nothing has ever been built" premise corrected; the AUR aarch64 leg is wired to run at GA as observed evidence, not yet gating | read the first real AUR aarch64 result after the release, then make publication wait for it |
-| [terminal-queue-drain-gemini-opencode](v0.73.0/terminal-queue-drain-gemini-opencode.md) | delivered: OpenCode promoted on a full live matrix, Gemini measured and kept a boundary because no gap below the idle threshold has adequate margin | nothing further; it closes at GA with the release |
+| [distributed-proxy-control-plane](v0.74.0/distributed-proxy-control-plane.md) | steps 1 to 4 implemented, own-gated and reviewed on the unmerged branch `v073/ctl`; steps 5 to 9 unstarted | finish grace and restart reconciliation, fleet capacity, command routing, SSE watches, the client rename, the identity and profile consumption, the three-proxy e2e topology and the packaging wiring, then merge |
+| [loopback-redirect-desktop-signin](v0.74.0/loopback-redirect-desktop-signin.md) | **NOT READY TO IMPLEMENT**; designed and security-reviewed, and that review found three exploitable gaps in the naive shape | refine the design against the real call graph, settle the verifier-keyed variant, produce a file-level plan, and only then implement, after the control plane merges |
+| [drop-self-built-desktop-packages](v0.74.0/drop-self-built-desktop-packages.md) | blocked behind the loopback redirect; the CLI half already shipped in v0.73.0 | once loopback lands, drop the four Tauri desktop `.deb`/`.rpm` and fix every release-asset consumer in the same commit |
+| [aur-aarch64-publication-gate](v0.74.0/aur-aarch64-publication-gate.md) | `aur-validate-arm` runs at GA under `continue-on-error` and does not gate `aur-publish` | read the v0.73.0 GA run's ARM cells; if green, drop `continue-on-error` and add the job to `aur-publish`'s `needs` in the same edit |
+| [windows-deeplink-second-instance](v0.74.0/windows-deeplink-second-instance.md) | inferred from source, never reproduced; very likely subsumed by the loopback redirect | reproduce it on Windows first, then confirm loopback closes it and decide whether to keep `chan://` registered at all |
+| [copr-build-provenance](v0.74.0/copr-build-provenance.md) | COPR rebuilds `main`'s HEAD rather than the released tag, and nothing verifies it published | pin the SCM packages to the tag or forbid pushing to `main` in that window, and add a post-publication build-status probe proven able to go red |
 
 ## Completed
+
+### v0.73.0
+
+Shipped 2026-07-20; see [release-v0.73.0](../release/release-v0.73.0.md). Closed items in [`done/`](done/):
+
+- [launcher-flip-pane](done/launcher-flip-pane.md) - the Command Launcher's dead "Flip pane" row works; the overlay stack reconciles at close.
+- [terminal-queue-drain-gemini-opencode](done/terminal-queue-drain-gemini-opencode.md) - OpenCode batches its queued terminal notifications; Gemini measured and deliberately kept a boundary.
+- [packaging-aarch64-validation](done/packaging-aarch64-validation.md) - delivered in part: the COPR aarch64 evidence is harvested and the item's original premise retired; the AUR gating remainder carries forward.
+
+
 
 ### v0.72.0
 

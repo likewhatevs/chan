@@ -89,6 +89,7 @@ New agents should also read [`.agents/playbook.md`](../../.agents/playbook.md), 
 - [release-v0.70.3](release-v0.70.3.md) - the v0.70.2 regression patch: the editor's text-selection highlight restored under the default page-width cap, and a refused launcher Open turned into a dismissable pill instead of one stuck on the workspace forever.
 - [release-v0.71.0](release-v0.71.0.md) - OpenCode as a first-class terminal agent, authenticated exact-origin desktop trust replacing the static wildcard grant, workspace search and graph traversal unified behind one bounded contract and one agent tool, `chan upgrade --version` resolving the last five GA releases, and two editor cosmetics; the first release cut through the team/roadmap + team/release structure.
 - [release-v0.72.0](release-v0.72.0.md) - terminal write-queue batching into one agent turn, CentOS Stream COPR and Arch AUR packaging, `chan dump-skill` as an agent-facing manual of the whole surface, and a packaged self-upgrade refusal that covers every personality.
+- [release-v0.73.0](release-v0.73.0.md) - publication decoupled from the release: Docker and every distro package fan out in parallel from their own workflow and can no longer hold up a release or block each other; chan stops building the CLI `.deb` and `.rpm` the distributions now build; OpenCode batches its queued terminal notifications; the Command Launcher's dead "Flip pane" row works. The distributed proxy control plane was deferred again.
 
 ## Conventions
 
