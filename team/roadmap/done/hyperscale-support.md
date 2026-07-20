@@ -1,5 +1,7 @@
 # CentOS Stream COPR Support for Hyperscale Deployments
 
+> Status: shipped in [v0.72.0](../../release/release-v0.72.0.md).
+
 Status: implemented; validated locally on x86_64 only. The live chroots and repositories are configured, no COPR build has run, and nothing has exercised aarch64. Grounded against `59acd07a` (`v0.71.0`) on 2026-07-19.
 
 ## Summary

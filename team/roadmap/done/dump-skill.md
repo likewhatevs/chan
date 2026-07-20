@@ -1,5 +1,7 @@
 # Teach an Agent the chan Surface with One Command
 
+> Status: shipped in [v0.72.0](../../release/release-v0.72.0.md).
+
 > Status: implemented on `feat/dump-skill` (`81aca589`), pending merge. Grounded against `59acd07a` (main, immediately after the v0.71.0 GA close).
 
 ## Summary

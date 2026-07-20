@@ -1,5 +1,7 @@
 # Drain Queued Terminal Notifications in One Agent Turn
 
+> Status: shipped in [v0.72.0](../../release/release-v0.72.0.md).
+
 > Carried forward from v0.71.0 and implemented for v0.72.0 on 2026-07-19.
 
 Status: implemented, unit-tested, and run through the live acceptance matrix for Codex and Claude. Batching, boundary draining, and late delivery are proven live for those two agents at 64 KiB with the built-in 50 ms body/chord gap; see Live Matrix Results. Gemini and OpenCode are unproven live. The original plan was grounded against `a27007f5` (`v0.70.3`) on 2026-07-18.

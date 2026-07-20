@@ -19,17 +19,25 @@ Each item is one Markdown file that names an observed behavior or need, the evid
 
 ## Active
 
-### v0.72.0
+### v0.73.0
 
 | item | state | what needs to happen |
 | --- | --- | --- |
-| [hyperscale-support](v0.72.0/hyperscale-support.md) | validated locally on x86_64; COPR builds pending | submit the configured matrix, accept the native x86_64 and aarch64 builds (aarch64 is unproven anywhere), and verify that no EL9 desktop job is scheduled |
-| [aur-support](v0.72.0/aur-support.md) | implemented; release validation pending | dry-run the credential probe before the tag, hand-smoke CachyOS, confirm both AUR repositories at `0.72.0-1`, and prove the unverified aarch64 leg |
-| [terminal-write-queue-drain](v0.72.0/terminal-write-queue-drain.md) | implemented and unit-tested; batching proven live for Codex and Claude | every case of `scripts/e2e/terminal-queue-drain.sh` passed 3/3 for both agents and the rows are in the item's Live Matrix Results; Gemini and OpenCode stay single-message until a host with those CLIs runs the same cases |
-| [dump-skill](v0.72.0/dump-skill.md) | implemented | merged; the review findings in the item's Known Gaps are closed |
-| [packaged-desktop-upgrade-refusal](v0.72.0/packaged-desktop-upgrade-refusal.md) | implemented | merged; a packaged build refuses `chan upgrade` and `chan upgrade --check` in every personality |
+| [distributed-proxy-control-plane](v0.73.0/distributed-proxy-control-plane.md) | implementation plan; deferred out of v0.72.0 with no code merged | implement the controller, the proxy control client, and the fleet-complete snapshot the identity and profile planes read, then validate the cutover end to end |
+| [packaging-aarch64-validation](v0.73.0/packaging-aarch64-validation.md) | COPR chroots and AUR recipes declare aarch64; no aarch64 build has run anywhere | run a native aarch64 build for both ecosystems and record it, or remove the aarch64 declaration from the recipes and the chroot configuration |
+| [terminal-queue-drain-gemini-opencode](v0.73.0/terminal-queue-drain-gemini-opencode.md) | Gemini and OpenCode stay single-message; their batched submit timing is unmeasured | run the three queue-drain cases three times each for the agent on a host where it is installed and authenticated, then promote it or record why it stays a boundary |
 
 ## Completed
+
+### v0.72.0
+
+Shipped 2026-07-20; see [release-v0.72.0](../release/release-v0.72.0.md). Closed items in [`done/`](done/):
+
+- [terminal-write-queue-drain](done/terminal-write-queue-drain.md) - queued terminal notifications reconcile in one agent turn, with a reported queue depth.
+- [hyperscale-support](done/hyperscale-support.md) - CentOS Stream COPR packaging for `chan` and `chan-desktop`.
+- [aur-support](done/aur-support.md) - Arch AUR packaging for `chan` and `chan-desktop`.
+- [dump-skill](done/dump-skill.md) - `chan dump-skill` prints an agent-facing manual of chan's whole surface.
+- [packaged-desktop-upgrade-refusal](done/packaged-desktop-upgrade-refusal.md) - a distro-packaged build refuses self-upgrade in every personality.
 
 ### v0.71.0
 

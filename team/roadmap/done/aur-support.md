@@ -1,5 +1,7 @@
 # Arch Linux AUR Support
 
+> Status: shipped in [v0.72.0](../../release/release-v0.72.0.md).
+
 Status: implementation complete and validated on x86_64 at `41a87d8d`; release validation pending. Grounded against `525dfa75` (`v0.71.0`) and the `sdme` AUR implementation through `20f4296` on 2026-07-19.
 
 ## Summary

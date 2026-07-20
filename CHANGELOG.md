@@ -4,7 +4,9 @@ All notable changes to this project will be documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [v0.72.0] - 2026-07-20
+
+v0.72.0 adds `chan dump-skill` as an agent-facing manual of chan's whole surface, reconciles queued terminal notifications into one agent turn with a queue depth to observe it, packages chan for CentOS Stream through COPR and for Arch and CachyOS through the AUR, fixes `VERSION=X.Y.Z` installs on Debian and Ubuntu, and makes a distro-packaged chan-desktop refuse self-upgrade up front.
 
 ### Added
 
