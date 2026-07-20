@@ -24,6 +24,7 @@ Each item is one Markdown file that names an observed behavior or need, the evid
 | item | state | what needs to happen |
 | --- | --- | --- |
 | [distributed-proxy-control-plane](v0.73.0/distributed-proxy-control-plane.md) | implementation plan; deferred out of v0.72.0 with no code merged | implement the controller, the proxy control client, and the fleet-complete snapshot the identity and profile planes read, then validate the cutover end to end |
+| [launcher-flip-pane](v0.73.0/launcher-flip-pane.md) | the Command Launcher's flip row dispatches into a guard that swallows it; the chord and the A/B control work | make the overlay stack truthful when an overlay closes, and cover the launcher path with a behavioral test instead of a source regex |
 | [packaging-aarch64-validation](v0.73.0/packaging-aarch64-validation.md) | COPR chroots and AUR recipes declare aarch64; no aarch64 build has run anywhere | run a native aarch64 build for both ecosystems and record it, or remove the aarch64 declaration from the recipes and the chroot configuration |
 | [terminal-queue-drain-gemini-opencode](v0.73.0/terminal-queue-drain-gemini-opencode.md) | Gemini and OpenCode stay single-message; their batched submit timing is unmeasured | run the three queue-drain cases three times each for the agent on a host where it is installed and authenticated, then promote it or record why it stays a boundary |
 
