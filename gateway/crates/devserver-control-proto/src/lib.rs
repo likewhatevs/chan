@@ -298,13 +298,101 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn frames_round_trip_and_reject_bad_lengths() {
-        let frame = ServerFrame::Ping { nonce: 42 };
-        let (mut client, mut server) = tokio::io::duplex(4096);
-        write_frame(&mut client, &frame).await.unwrap();
-        let decoded: ServerFrame = read_frame(&mut server).await.unwrap();
-        assert_eq!(decoded, frame);
+    async fn every_frame_round_trips() {
+        let registration_id = Uuid::new_v4();
+        let request_id = Uuid::new_v4();
+        let command_id = Uuid::new_v4();
+        let boot_id = Uuid::new_v4();
+        let row = TunnelRow {
+            registration_id,
+            user: "alice".into(),
+            devserver_id: "devserver".into(),
+            peer_addr: Some("127.0.0.1:7001".parse().unwrap()),
+            connected_at: Utc::now(),
+        };
+        let clients = vec![
+            ClientFrame::ClientHello {
+                protocol_version: PROTOCOL_VERSION,
+                package_version: "0.73.0".into(),
+                proxy_id: ProxyId::parse("p1").unwrap(),
+                proxy_base_url: CanonicalOrigin::parse("https://p1.example.test").unwrap(),
+                boot_id,
+            },
+            ClientFrame::SnapshotStart { base_generation: 7 },
+            ClientFrame::SnapshotChunk {
+                rows: vec![row.clone()],
+            },
+            ClientFrame::SnapshotEnd { base_generation: 7 },
+            ClientFrame::TunnelUp {
+                generation: 8,
+                row: row.clone(),
+            },
+            ClientFrame::TunnelDown {
+                generation: 9,
+                registration_id,
+            },
+            ClientFrame::AdmissionRequest {
+                request_id,
+                registration_id,
+                user: "alice".into(),
+                devserver_id: "devserver".into(),
+            },
+            ClientFrame::AdmissionCancel {
+                request_id,
+                registration_id,
+            },
+            ClientFrame::CommandResult {
+                command_id,
+                killed: vec![registration_id],
+                missing: Vec::new(),
+                failed: Vec::new(),
+            },
+            ClientFrame::Pong { nonce: 42 },
+        ];
+        for frame in clients {
+            let (mut client, mut server) = tokio::io::duplex(4096);
+            write_frame(&mut client, &frame).await.unwrap();
+            let decoded: ClientFrame = read_frame(&mut server).await.unwrap();
+            assert_eq!(decoded, frame);
+        }
 
+        let servers = vec![
+            ServerFrame::ServerHello {
+                protocol_version: PROTOCOL_VERSION,
+                package_version: "0.73.0".into(),
+                heartbeat_seconds: 5,
+                dead_seconds: 15,
+                grace_seconds: 30,
+            },
+            ServerFrame::SnapshotAccepted { base_generation: 7 },
+            ServerFrame::FleetReady,
+            ServerFrame::AdmissionDecision {
+                request_id,
+                registration_id,
+                decision: AdmissionDecision::Admit,
+            },
+            ServerFrame::KillRegistrations {
+                command_id,
+                registration_ids: vec![registration_id],
+            },
+            ServerFrame::ResyncRequired {
+                expected_generation: 8,
+            },
+            ServerFrame::Ping { nonce: 42 },
+            ServerFrame::Shutdown {
+                reason: "test".into(),
+            },
+        ];
+        for frame in servers {
+            let (mut client, mut server) = tokio::io::duplex(4096);
+            write_frame(&mut client, &frame).await.unwrap();
+            let decoded: ServerFrame = read_frame(&mut server).await.unwrap();
+            assert_eq!(decoded, frame);
+        }
+    }
+
+    #[tokio::test]
+    async fn rejects_bad_lengths_truncation_and_malformed_json() {
         let (mut client, mut server) = tokio::io::duplex(16);
         client.write_u32(0).await.unwrap();
         assert!(matches!(
@@ -320,6 +408,23 @@ mod tests {
         assert!(matches!(
             read_frame::<_, ServerFrame>(&mut server).await,
             Err(FrameError::TooLarge(_))
+        ));
+
+        let (mut client, mut server) = tokio::io::duplex(16);
+        client.write_u32(4).await.unwrap();
+        client.write_all(b"{}").await.unwrap();
+        drop(client);
+        assert!(matches!(
+            read_frame::<_, ServerFrame>(&mut server).await,
+            Err(FrameError::Io(error)) if error.kind() == std::io::ErrorKind::UnexpectedEof
+        ));
+
+        let (mut client, mut server) = tokio::io::duplex(16);
+        client.write_u32(1).await.unwrap();
+        client.write_all(b"{").await.unwrap();
+        assert!(matches!(
+            read_frame::<_, ServerFrame>(&mut server).await,
+            Err(FrameError::Json(_))
         ));
     }
 
