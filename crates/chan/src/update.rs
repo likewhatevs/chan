@@ -104,6 +104,14 @@ pub fn packaged_via() -> Option<&'static str> {
     option_env!("CHAN_PACKAGED")
 }
 
+/// The refusal message for a distro-packaged build, or `None` when the
+/// build owns its own files and may self-upgrade. Takes the marker as
+/// an argument because [`packaged_via`] is a compile-time `option_env!`
+/// that a running test binary cannot flip.
+pub fn packaged_upgrade_refusal(packaged: Option<&str>) -> Option<String> {
+    packaged.map(upgrade_blocked_message)
+}
+
 fn upgrade_blocked_message(pm: &str) -> String {
     let hint = match pm {
         "rpm" => "sudo dnf upgrade",
@@ -702,8 +710,8 @@ pub struct UpgradeOptions {
 /// Execute `chan upgrade`. Async because we share the reqwest
 /// client wiring with the serve-time probe.
 pub async fn run_upgrade(opts: UpgradeOptions) -> Result<()> {
-    if let Some(pm) = packaged_via() {
-        bail!(upgrade_blocked_message(pm));
+    if let Some(message) = packaged_upgrade_refusal(packaged_via()) {
+        bail!(message);
     }
     let (target, ext, bin_name) = current_target()?;
     let current = env!("CARGO_PKG_VERSION").to_string();
@@ -1352,6 +1360,22 @@ mod tests {
         let other = upgrade_blocked_message("nix");
         assert!(other.contains("(nix)"));
         assert!(other.contains("package manager"));
+    }
+
+    #[test]
+    fn test_packaged_upgrade_refusal_only_fires_for_packaged_builds() {
+        // packaged_via() is a compile-time option_env!, so the decision
+        // takes the marker as an argument to cover both builds from one
+        // test binary.
+        assert!(packaged_upgrade_refusal(None).is_none());
+
+        let rpm = packaged_upgrade_refusal(Some("rpm")).expect("packaged build refuses");
+        assert!(rpm.contains("(rpm)"), "{rpm}");
+        assert!(rpm.contains("dnf upgrade"), "{rpm}");
+
+        let aur = packaged_upgrade_refusal(Some("aur")).expect("packaged build refuses");
+        assert!(aur.contains("(aur)"), "{aur}");
+        assert!(aur.contains("self-upgrade is disabled"), "{aur}");
     }
 
     #[test]

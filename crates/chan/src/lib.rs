@@ -1156,6 +1156,43 @@ pub enum Personality {
     Desktop,
 }
 
+/// What `chan upgrade` does for the running binary.
+#[derive(Debug, PartialEq, Eq)]
+enum UpgradeRoute {
+    /// A distro-packaged build: refuse with this message instead of
+    /// installing anything.
+    Refuse(String),
+    /// Replace the standalone CLI tarball in place.
+    Cli,
+    /// Drive the running desktop's `tauri-plugin-updater`.
+    Desktop,
+}
+
+/// Resolve what `chan upgrade` does, from the binary's personality and the
+/// build-time distro-package marker. PURE: the refusal and both install
+/// paths run in the caller.
+///
+/// The packaged refusal is decided before the personality, so every install
+/// path inherits it and a personality added later cannot skip it: on a build
+/// whose files the system package manager owns, neither the tarball replace
+/// nor the desktop updater may run. `--check` is refused with the same
+/// message rather than reporting an available update, because the update it
+/// would name is not one this build can install; the refusal names the
+/// package manager, which is the command that does work.
+///
+/// `packaged` is [`update::packaged_via`] threaded in as an argument because
+/// it is a compile-time `option_env!`: passing it is what keeps both the
+/// packaged and the unpackaged decision testable from one build.
+fn decide_upgrade_route(personality: Personality, packaged: Option<&str>) -> UpgradeRoute {
+    if let Some(message) = update::packaged_upgrade_refusal(packaged) {
+        return UpgradeRoute::Refuse(message);
+    }
+    match personality {
+        Personality::Standalone => UpgradeRoute::Cli,
+        Personality::Desktop => UpgradeRoute::Desktop,
+    }
+}
+
 /// Which backend backs `chan devserver --service`. `Auto` (the CLI value
 /// `auto`, the default) resolves per-OS at runtime: with an action verb it
 /// supervises under systemd (Linux), launchd (macOS), or the self-managed `chan`
@@ -1501,9 +1538,11 @@ where
             yes,
             check,
             version,
-        } => match personality {
+        } => match decide_upgrade_route(personality, update::packaged_via()) {
+            // A distro-packaged build: the package manager owns the files.
+            UpgradeRoute::Refuse(message) => anyhow::bail!(message),
             // Standalone (install.sh) replaces the CLI tarball in place.
-            Personality::Standalone => {
+            UpgradeRoute::Cli => {
                 update::run_upgrade(update::UpgradeOptions {
                     assume_yes: yes,
                     check_only: check,
@@ -1515,7 +1554,7 @@ where
             // Desktop drives the running desktop's tauri-plugin-updater
             // instead (no tarball). `yes` is moot -- the fire-and-return flow
             // has no prompt.
-            Personality::Desktop => cmd_upgrade_desktop(check, version).await,
+            UpgradeRoute::Desktop => cmd_upgrade_desktop(check, version).await,
         },
         Command::Mcp { path } => cmd_mcp(path).await,
         Command::McpProxy { socket } => cmd_mcp_proxy(socket).await,
@@ -6242,6 +6281,36 @@ mod tests {
         assert!(
             KEYBINDINGS_TABLE.lines().filter(|l| !l.is_empty()).count() > 10,
             "KEYBINDINGS_TABLE looks empty"
+        );
+    }
+
+    #[test]
+    fn upgrade_route_refuses_a_packaged_build_in_every_personality() {
+        // The marker is a build-time option_env!, so both cases are
+        // exercised by passing it in. The route is resolved before
+        // --check is read, so a packaged build refuses that too.
+        for personality in [Personality::Standalone, Personality::Desktop] {
+            let route = decide_upgrade_route(personality, Some("aur"));
+            let UpgradeRoute::Refuse(message) = route else {
+                panic!("{personality:?} must refuse on a packaged build, got {route:?}");
+            };
+            assert!(message.contains("(aur)"), "{message}");
+            assert!(message.contains("self-upgrade is disabled"), "{message}");
+            // The refusal points at the package manager, never back at a
+            // chan command that would fail the same way.
+            assert!(!message.contains("chan upgrade"), "{message}");
+        }
+    }
+
+    #[test]
+    fn upgrade_route_installs_on_an_unpackaged_build() {
+        assert_eq!(
+            decide_upgrade_route(Personality::Standalone, None),
+            UpgradeRoute::Cli
+        );
+        assert_eq!(
+            decide_upgrade_route(Personality::Desktop, None),
+            UpgradeRoute::Desktop
         );
     }
 
