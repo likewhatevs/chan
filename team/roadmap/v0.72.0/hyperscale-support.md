@@ -107,6 +107,24 @@ Local x86_64 validation completed on 2026-07-19 with the host's `cs9` and `vfy-c
 
 The first desktop post-install attempt exposed a validator error rather than a package error: desktop `chan upgrade` delegates to a running GUI and times out in a headless container. The corrected validator checks the embedded RPM package-manager marker directly, and a new end-to-end desktop rebuild passed.
 
+The same matrix was re-run end to end on 2026-07-20 on this x86_64 host, under the current check driver, and confirms that result. The command was:
+
+```sh
+make copr-check SDME='sudo -n sdme' DOCKER='sudo -n docker' \
+  COPR_EL9_ROOTFS=cs9 COPR_EL10_ROOTFS=vfy-centos
+```
+
+`make` exited 0 and reported:
+
+```text
+>> COPR sdme validation results:
+   PASS el9 chan x86_64
+   PASS el10 chan x86_64
+   PASS el10 chan-desktop x86_64
+```
+
+EL9 `chan-desktop` is excluded from the matrix and produced no target, as intended. The vendored SRPMs were again rebuilt as an unprivileged `builder` user with Cargo offline; `chan-desktop-0.71.0-1.el10.x86_64` installed through a real DNF transaction, the installed binary answered `chan 0.71.0`, and `desktop-file-validate` emitted only a hint that `Categories` could additionally carry `Utility` alongside `TextEditor`. A hint is not an error and the target passed. This run is evidence about the local x86_64 sdme matrix and those three targets only; it says nothing about a build on the COPR service, and nothing about aarch64.
+
 The live `fiorix/chan` COPR configuration was applied by the project owner and verified through COPR's public API on 2026-07-19:
 
 - All four CentOS chroots are enabled alongside the existing Fedora 44 and Rawhide chroots.
