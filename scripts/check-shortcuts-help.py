@@ -21,10 +21,10 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 LIB = ROOT / "crates" / "chan" / "src" / "lib.rs"
 GENERATOR = ROOT / "web" / "packages" / "workspace-app" / "scripts" / "shortcuts-table.mjs"
 
-# The const is a plain `\`-continued string literal, so the body runs from the
-# opening quote to the first unescaped closing quote.
+# The const is a plain multi-line string literal whose body starts right after
+# the opening quote, so it runs from there to the first unescaped closing quote.
 CONST = re.compile(
-    r'const KEYBINDINGS_TABLE: &str = "\\\n(?P<body>.*?)\n?";',
+    r'const KEYBINDINGS_TABLE: &str = "(?P<body>.*?)\n?";',
     re.DOTALL,
 )
 

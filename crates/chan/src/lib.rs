@@ -108,8 +108,11 @@ const DEFAULT_DEVSERVER_BIND: IpAddr = IpAddr::V4(Ipv4Addr::LOCALHOST);
 /// Paste that command's output here verbatim; `make shortcuts-check` fails
 /// when the two drift. The native shell layers VS Code-shaped chords on
 /// top of the browser set; those are documented in the same TS source.
-const KEYBINDINGS_TABLE: &str = "\
-  App
+///
+/// The body opens on the quote's own line rather than after a `\`
+/// continuation, because that escape eats the newline and every leading
+/// space after it, which would strip the first row's table indent.
+const KEYBINDINGS_TABLE: &str = "  App
   ---
   Command launcher                             Ctrl+Alt+K
   Settings                                     Cmd+,
@@ -6219,6 +6222,27 @@ fn print_import_summary(summary: &chan_workspace::ImportSummary) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `make shortcuts-check` diffs the SOURCE text of `KEYBINDINGS_TABLE`
+    /// against the generator, so it cannot see an escape that changes the
+    /// compiled value. This asserts on the value itself: every row of the
+    /// chord table carries the two-space indent the help framing expects.
+    #[test]
+    fn keybindings_table_rows_keep_the_help_indent() {
+        let unindented: Vec<&str> = KEYBINDINGS_TABLE
+            .lines()
+            .filter(|line| !line.is_empty() && !line.starts_with("  "))
+            .collect();
+        assert!(
+            unindented.is_empty(),
+            "KEYBINDINGS_TABLE rows lost the table indent:\n  {}",
+            unindented.join("\n  ")
+        );
+        assert!(
+            KEYBINDINGS_TABLE.lines().filter(|l| !l.is_empty()).count() > 10,
+            "KEYBINDINGS_TABLE looks empty"
+        );
+    }
 
     #[test]
     fn devserver_collision_hint_only_on_default_port_addr_in_use() {
