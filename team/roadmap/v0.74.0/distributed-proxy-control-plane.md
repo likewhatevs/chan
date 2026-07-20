@@ -12,6 +12,39 @@ The branch contains buildable candidate groundwork, not a runnable control plane
 
 This work depends on the v0.71.0 exact-origin Chan Desktop capability design. It is an exact-version v0.72.0 cutover. Supporting an old singleton proxy beside the distributed design is out of scope.
 
+## Step 4 barrier: met on 2026-07-20, evidence recorded here
+
+The vertical slice was proven live on `e6e866db`, the build carrying the four review fixes. This transcript is reproduced from the round's working notes because those are not tracked and will not survive; it is the acceptance evidence for step 4 and the next round should not have to re-run it to know where things stand.
+
+One controller plus p1, p2 and p3 on `127.0.0.2` through `127.0.0.4` with identical public port `17402` and tunnel port `17410`, and three real `chan devserver --service=none` clients with distinct ports, homes and runtime directories. The identity validator derived each `devserver_id` exactly as production does, `derivation=sha256-lowercase`.
+
+After client admission the controller reported all three proxies `active` at `package_version 0.73.0` with `tunnel_count: 1`, and exactly three tunnel rows for `alice`, one per proxy, each carrying its own `proxy_base_url`.
+
+The credentialed, host-bound 3x3 `/api/health` matrix:
+
+```text
+target=p1 node=p1 status=200  target=p1 node=p2 status=404  target=p1 node=p3 status=404
+target=p2 node=p1 status=404  target=p2 node=p2 status=200  target=p2 node=p3 status=404
+target=p3 node=p1 status=404  target=p3 node=p2 status=404  target=p3 node=p3 status=200
+```
+
+Each 200 returned a distinct workspace instance id. Post-matrix polls of all three client streams returned zero bytes, so no gateway assertion was rejected during the run. All three clients, all three proxies and the controller exited 0.
+
+Two earlier attempts were discarded rather than counted, and the reasons are worth keeping. The first used an identity stub returning synthetic devserver ids where production derives them as lowercase SHA-256 of the PAT; the real clients correctly rejected the resulting gateway assertion, which the matrix alone would not have revealed. The second was withdrawn by the lane itself when a review showed the four transport and liveness defects were still present in the build under test.
+
+**Barrier lessons that are not in the spec.** The identity stub must use the production derivation or a green matrix can hide `WrongDevserver` in the client logs, so always poll every client stream after the matrix. Controller readiness intentionally waits the full convergence window: wait for three active zero-row proxy snapshots, then start clients, then require three active proxy rows with `tunnel_count: 1` and exactly three tunnel rows before probing traffic. Proxy-first teardown produces controller peer-`BrokenPipe` warnings after active work is over; do not confuse those with active-session warnings.
+
+## Accepted ruling not yet implemented: joining must not evict a live row
+
+Reproduced here for the same reason as the barrier transcript. The integrator accepted this plan and the lane deliberately did not implement it, so it is the first code the next round writes.
+
+Today `reconcile_joining` merges the controller's own live rows with the joining session's snapshot into one candidate list and applies the **restart** tie-break, lexicographically smallest `(proxy_id, registration_id)`. The spec confines that rule to controller restart, where recency is genuinely unavailable. Applied to a live fleet it lets a stale snapshot win: a proxy whose stream flapped can rejoin inside its grace window, present the registration it still holds, sort lower, and have the controller kill the live tunnel it had itself admitted on another node. The per-user capacity trim has the same shape, choosing victims by `devserver_id` order rather than by liveness.
+
+1. Split the shared reconciliation plan in `gateway/crates/devserver-control/src/state.rs`. Keep the lexicographic duplicate and capacity logic for `begin_initial_reconciliation` only. Give `reconcile_joining` a live-first plan that starts from the current `self.tunnels` as immutable winners.
+2. Classify any joining key already present in the live map as a joining loser. Reserve each user's existing live count first and admit only novel joining keys that fit the remaining slots. If several novel rows compete, use a stable ordering local to that one snapshot, but never re-rank or evict an existing live row and never treat proxy id as recency on a routine join.
+3. Apply the same live-first recomputation in `finish_reconciliation_if_complete` for the joining kind. That second site matters: it recomputes from current actor state after command results so concurrent deltas are not overwritten. Keep joining rows invisible and the session `Joining` until every loser kill succeeds, and retain the fail-closed retirement of the joining session on failure.
+4. Prove red before green, at minimum: live p2 owns `alice/one`, a lower-sorting p0 rejoins with a stale duplicate, and only p0 is killed; a capacity-full live user rejects p0's joining row without moving the live owner; nonconflicting rows in one snapshot become visible atomically; concurrent live deltas survive completion; and initial restart reconciliation still uses the deterministic lexicographic rule. Preserve and extend the existing joining-atomicity, delta-during-joining and duplicate-restart-rows coverage.
+
 ## Problem
 
 `chan-tunnel-server::Registry` stores each live yamux `TunnelHandle` in the accepting proxy process. The current devserver-proxy admin tree reads and kills only that process's registrations. Identity uses that tree for live devserver selection, desktop roster liveness, PAT revocation, and account deletion. Profile uses it for block eviction and as the complete mark source for its stale-devserver sweeper.
