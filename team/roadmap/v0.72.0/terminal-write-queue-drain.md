@@ -2,31 +2,57 @@
 
 > Carried forward from v0.71.0 and implemented for v0.72.0 on 2026-07-19.
 
-Status: implemented and unit-tested. The live acceptance matrix has NOT been run against the current harness, so batching is unproven live. The original plan was grounded against `a27007f5` (`v0.70.3`) on 2026-07-18.
+Status: implemented, unit-tested, and run through the live acceptance matrix for Codex and Claude. Batching, boundary draining, and late delivery are proven live for those two agents at 64 KiB with the built-in 50 ms body/chord gap; see Live Matrix Results. Gemini and OpenCode are unproven live. The original plan was grounded against `a27007f5` (`v0.70.3`) on 2026-07-18.
 
 ## Implementation Evidence
 
 - The repeatable live harness is `scripts/e2e/terminal-queue-drain.sh`, with three cases: `batch`, `boundaries`, and `late`. Every run gets its own tab inside one probe group, and the group is closed on exit. Its load-bearing oracles are the queue depth polled from `cs terminal list --json` (server state) and sentinels the AGENT builds from the number of notification blocks it received, which no literal in its input can satisfy. Everything read out of the scrollback ring is ADVISORY and recorded in the result row: that ring holds PTY output only, so a framed envelope appears there only when the agent renders the pasted body verbatim, and Claude prints `[Pasted text #1 ...]` instead at these sizes.
-- No result from this harness exists yet. It replaced an earlier script whose only oracle was the ordered tail tokens in scrollback, which a serial five-turn delivery satisfies exactly as well as one batched turn. The earlier script's runs (Codex 0.144.6 and Claude Code 2.1.215, 3/3 at 1, 16, and 64 KiB, plus 3/3 for Claude at 64 KiB with 50, 100, 200, and 400 ms body/chord gaps, plus advisory 256 KiB runs on a scratch build with a raised ceiling) therefore establish delivery, submission, and FIFO order across payload sizes and gaps. They do not establish that a prefix was batched, that depth moved in one step, or that a boundary held.
+- This harness has been run for Codex and Claude: three runs of each of its three cases per agent, all passing, recorded row by row under Live Matrix Results. Those runs establish that five eligible notifications drain as ONE turn (the agent counted five notification blocks and the depth trace holds no sample between 5 and 0), that boundary-separated messages drain ONE AT A TIME (every boundaries trace passes through 4, 3, 2, and 1), and that a message enqueued after a batch drains gets its OWN turn (a batch sentinel followed by a separate late sentinel). Only the 64 KiB `batch` payload and the built-in 50 ms gap were exercised, so these runs are not a size sweep, not a gap sweep, and say nothing about any agent other than Codex and Claude.
+- The harness replaced an earlier script whose only oracle was the ordered tail tokens in scrollback, which a serial five-turn delivery satisfies exactly as well as one batched turn. The earlier script's runs (Codex 0.144.6 and Claude Code 2.1.215, 3/3 at 1, 16, and 64 KiB, plus 3/3 for Claude at 64 KiB with 50, 100, 200, and 400 ms body/chord gaps, plus advisory 256 KiB runs on a scratch build with a raised ceiling) therefore establish delivery, submission, and FIFO order across payload sizes and gaps. They do not establish that a prefix was batched, that depth moved in one step, or that a boundary held.
 - `WRITE_QUEUE_INPUT_GAP` is 50 ms, the smallest gap that passed those earlier delivery runs. `CHAN_TERMINAL_INPUT_GAP_MS` (1..799 ms, mirroring `parse_input_gap`) re-runs a sweep without a rebuild.
 - Unit tests pin FIFO boundaries, no skipping, the 64 KiB ceiling, oversized-head progress, singleton bytes, one Codex input, one Claude input sequence, Rich Prompt event ordering, enqueue-after-selection behavior, and shared fresh/restored PTY sequence writes. The enqueue-after-selection property (Required Behavior item 4) is covered ONLY there: selection and pop happen under one queue lock inside a drainer tick, so no external process can enqueue between them.
-- Gemini was not installed on the validation host, so it was not promoted. Gemini, OpenCode, Rich Prompt, raw input, and runtime overrides remain single-message boundaries.
+- Gemini and OpenCode are not installed on the validation host and both need interactive auth, so neither was exercised by any matrix run and neither was promoted. Gemini, OpenCode, Rich Prompt, raw input, and runtime overrides remain single-message boundaries.
 
 ### Live Matrix Results
 
-Fill this in from the harness result rows, one line per run. Until a row exists, the matrix has not been run.
+One line per harness result row. `result` holds the load-bearing signals: the sentinel the AGENT built from the notification blocks it counted, the FIFO token order, and the run-length-encoded queue-depth trace (`5x134:0x1` is 134 samples at depth 5 then one at 0). `notes` holds the advisory scrollback observations, which never fail a run. `runs` is the run number within its three-run set; every set passed 3/3. `size` is the framed batch target for `batch` and the per-message body size for the other cases, which do not size against the ceiling.
 
 | agent | case | size | gap | runs | result | notes |
 | --- | --- | --- | --- | --- | --- | --- |
-| | | | | | | |
+| codex | batch | 64 KiB | 50 ms | 1/3 | `QUEUE_DRAIN_BATCH_5`, tokens in order, depth `5x134:0x1` | envelope visible, no paste placeholder |
+| codex | batch | 64 KiB | 50 ms | 2/3 | `QUEUE_DRAIN_BATCH_5`, tokens in order, depth `5x133:0x1` | envelope visible, no paste placeholder |
+| codex | batch | 64 KiB | 50 ms | 3/3 | `QUEUE_DRAIN_BATCH_5`, tokens in order, depth `5x133:0x1` | envelope visible, no paste placeholder |
+| codex | boundaries | 32 B | 50 ms | 1/3 | tokens in FIFO order, no `QUEUE_DRAIN_BATCH_2..5`, depth `5x132:4x45:3x8:2x66:1x21:0x1` | envelope hidden |
+| codex | boundaries | 32 B | 50 ms | 2/3 | tokens in FIFO order, no `QUEUE_DRAIN_BATCH_2..5`, depth `5x136:4x33:3x8:2x57:1x42:0x1` | envelope hidden |
+| codex | boundaries | 32 B | 50 ms | 3/3 | tokens in FIFO order, no `QUEUE_DRAIN_BATCH_2..5`, depth `5x156:4x48:3x8:2x32:1x26:0x1` | envelope hidden |
+| codex | late | 32 B | 50 ms | 1/3 | `QUEUE_DRAIN_BATCH_5` then `QUEUE_DRAIN_LATE_k1x3422246`, depth `5x139:0x1` | envelope visible |
+| codex | late | 32 B | 50 ms | 2/3 | `QUEUE_DRAIN_BATCH_5` then `QUEUE_DRAIN_LATE_k2x3422246`, depth `5x131:0x1` | envelope visible |
+| codex | late | 32 B | 50 ms | 3/3 | `QUEUE_DRAIN_BATCH_5` then `QUEUE_DRAIN_LATE_k3x3422246`, depth `5x131:0x1` | envelope visible |
+| claude | batch | 64 KiB | 50 ms | 1/3 | `QUEUE_DRAIN_BATCH_5`, tokens in order, depth `5x59:0x1` | envelope hidden, no paste placeholder |
+| claude | batch | 64 KiB | 50 ms | 2/3 | `QUEUE_DRAIN_BATCH_5`, tokens in order, depth `5x61:0x1` | envelope hidden, no paste placeholder |
+| claude | batch | 64 KiB | 50 ms | 3/3 | `QUEUE_DRAIN_BATCH_5`, tokens in order, depth `5x61:0x1` | envelope hidden, paste placeholder seen |
+| claude | boundaries | 32 B | 50 ms | 1/3 | tokens in FIFO order, no `QUEUE_DRAIN_BATCH_2..5`, depth `5x64:4x8:3x27:2x33:1x23:0x1` | envelope hidden |
+| claude | boundaries | 32 B | 50 ms | 2/3 | tokens in FIFO order, no `QUEUE_DRAIN_BATCH_2..5`, depth `5x58:4x8:3x9:2x49:1x22:0x1` | envelope hidden |
+| claude | boundaries | 32 B | 50 ms | 3/3 | tokens in FIFO order, no `QUEUE_DRAIN_BATCH_2..5`, depth `5x60:4x9:3x10:2x52:1x30:0x1` | envelope hidden |
+| claude | late | 32 B | 50 ms | 1/3 | `QUEUE_DRAIN_BATCH_5` then `QUEUE_DRAIN_LATE_k1x3475380`, depth `5x59:0x1` | envelope visible |
+| claude | late | 32 B | 50 ms | 2/3 | `QUEUE_DRAIN_BATCH_5` then `QUEUE_DRAIN_LATE_k2x3475380`, depth `5x60:0x1` | envelope visible |
+| claude | late | 32 B | 50 ms | 3/3 | `QUEUE_DRAIN_BATCH_5` then `QUEUE_DRAIN_LATE_k3x3475380`, depth `5x58:0x1` | envelope visible |
+
+Every `batch` and `late` trace goes from 5 straight to 0 with no intermediate sample, and every `boundaries` trace passes through 4, 3, 2, and 1. That contrast is the batching evidence: the same poller at the same 50 ms interval catches the boundary-separated queue part way down every time, and never catches the batched queue there.
+
+Two harness observations from the same session, neither a product defect:
+
+- A 1 KiB `batch` payload is rejected before the run starts: `size 1KiB leaves no room for five bodies (envelope 433B)`. That is the harness precondition check working. Five framed bodies plus the instruction the first message carries do not fit under 1 KiB, so the sizes the earlier delivery script ran at are not all reachable here. The rows above were measured at 64 KiB.
+- Claude's first `batch` attempt timed out at the 180 s `--timeout-secs` default waiting for its warmup sentinel on a cold start. Re-run immediately afterwards it passed 3/3, and those are the Claude `batch` rows above. This is a cold-start property of the default timeout, not queue behavior.
 
 ## Divergences From the Plan
 
-Three things landed differently from the design above, and the code is the authority:
+Four things landed differently from the design above, and the code is the authority:
 
 - Gemini keeps TWO idle-gated queue entries, not one atomic `InputSequence`. Design section 5 reads as if a Gemini body and CR could share one controller sequence with `WRITE_QUEUE_INPUT_GAP` between them, but that gap is measured only against Claude Code; leaving ~20 ms of margin against Gemini's live-probed 30 ms Shift+Return window, on an agent nobody validated, is not a safe trade for an agent that gains nothing from batching. `WRITE_QUEUE_INPUT_GAP` has exactly one user: the batched Claude body/chord split.
 - The queue tracks ENTRIES, not `write_cost` units. With Gemini split back into two entries, every entry costs exactly one raw write, so a separate cost field would always equal the entry count. `WRITE_QUEUE_CAP` bounds entries, a message is still all-or-nothing at the cap, and depth still counts logical messages (tail entries).
 - `cs terminal list --json` gained `queue_depth`. Depth was previously observable only through the SPA's WebSocket `queue` frame, which left the live harness with no way to prove a batch drains in one step instead of five.
+- `cs terminal write` reports the pending MESSAGE count, not a cumulative write cost. Design section 2 says the CLI's reported position can stay the write cost, but `enqueue_cs_write` returns `msg_depth`, so a lone Gemini poke on an empty queue reports position 1 while occupying two entries. The position is the number the SPA badge, `cs terminal list --json`, and a Rich Prompt ack already report; the cap is what still counts entries, and `cs terminal write --help` says so.
 
 ## Summary
 
