@@ -330,10 +330,12 @@ pub(crate) fn generate_bootstrap_md(
     out.push_str("## Between tasks - drain your queue\n\n");
     out.push_str(
         "Pokes QUEUE in your terminal: `cs terminal write` feeds a per-tab FIFO\n\
-         (bound 100) that delivers one message at a time - the next only after\n\
-         you go idle (finish generating). So finishing a task surfaces any\n\
-         pending pokes as your next message(s); there is no poll command - the\n\
-         queue delivers to you.\n\n",
+         (bound 100). When you go idle (finish generating), consecutive\n\
+         submitted pokes are delivered together in one chronological batch.\n\
+         Read the entire batch before acting: later pokes may update or\n\
+         supersede earlier ones. Rich Prompt and unsubmitted input stay\n\
+         separate turns and form queue boundaries. There is no poll command -\n\
+         the queue delivers to you.\n\n",
     );
     out.push_str("BEFORE you start the next task:\n\n");
     out.push_str(
@@ -867,6 +869,14 @@ mod tests {
         assert!(
             bootstrap.contains("Drain your queue - process EVERY pending poke"),
             "queue-drain step 1 present"
+        );
+        assert!(
+            bootstrap.contains("submitted pokes are delivered together"),
+            "pending pokes are batched at idle"
+        );
+        assert!(
+            bootstrap.contains("Read the entire batch before acting"),
+            "batch reconciliation guidance present"
         );
         // No em dashes; ASCII only.
         assert!(!bootstrap.contains('\u{2014}'), "no em dashes");

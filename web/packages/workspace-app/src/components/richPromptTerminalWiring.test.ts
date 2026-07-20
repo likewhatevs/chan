@@ -19,10 +19,13 @@ describe("TerminalTab Rich Prompt wiring", () => {
   });
 
   test("queue-visibility frames: queue / prompt-ack / prompt-delivered drive tab state", () => {
-    // `queue` is the absolute message depth on every change.
+    // `queue` is the absolute LOGICAL MESSAGE depth on every change, so a
+    // drained batch of N notifications arrives as one N -> 0 step. The handler
+    // must assign it, never adjust the badge relative to its previous value.
     expect(terminal).toMatch(
       /frame\.type === "queue"\) \{\s*setTerminalQueueDepth\(tab, frame\.depth\);/,
     );
+    expect(terminal).not.toMatch(/setTerminalQueueDepth\(tab, \(tab\.queueDepth/);
     // prompt-ack resolves queued-or-rejected by id (stale/foreign ids no-op
     // in the store); prompt-delivered resolves delivered. Both carry depth.
     expect(terminal).toMatch(

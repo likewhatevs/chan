@@ -27,6 +27,11 @@ function terminalTab(partial: Partial<TerminalTab> = {}): TerminalTab {
 }
 
 describe("terminal queue depth", () => {
+  // The store setter takes whatever depth the server sent. What the depth
+  // MEANS (logical messages, one absolute step per drained batch) is the
+  // server's contract, pinned in chan-library; that the handler assigns it
+  // instead of adjusting the badge relatively is pinned in
+  // richPromptTerminalWiring.test.ts.
   test("positive depths stick; zero collapses to undefined (truthiness renders)", () => {
     const tab = terminalTab();
     setTerminalQueueDepth(tab, 3);
@@ -34,6 +39,25 @@ describe("terminal queue depth", () => {
     setTerminalQueueDepth(tab, 1);
     expect(tab.queueDepth).toBe(1);
     setTerminalQueueDepth(tab, 0);
+    expect(tab.queueDepth).toBeUndefined();
+  });
+});
+
+describe("a batch does not disturb a pending Rich Prompt", () => {
+  test("no prompt-delivered rides a batch, so a queued bubble stays queued", () => {
+    // Rich Prompt is a queue boundary and the only tagged message kind, so a
+    // batch of untagged notifications emits depth alone. The bubble stays
+    // locked until its OWN prompt-delivered arrives.
+    const tab = terminalTab();
+    beginPendingPrompt(tab, "msg-1");
+    resolvePendingPrompt(tab, "msg-1", "queued", 6);
+    setTerminalQueueDepth(tab, 1);
+    expect(tab.pendingPrompt).toEqual({ id: "msg-1", phase: "queued", depth: 6 });
+    expect(tab.queueDepth).toBe(1);
+
+    resolvePendingPrompt(tab, "msg-1", "delivered", 0);
+    setTerminalQueueDepth(tab, 0);
+    expect(tab.pendingPrompt).toEqual({ id: "msg-1", phase: "delivered", depth: 0 });
     expect(tab.queueDepth).toBeUndefined();
   });
 });

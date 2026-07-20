@@ -21,7 +21,7 @@ use chan_workspace::{
 use clap::{Args, Parser, Subcommand};
 
 use crate::control::{absolutize, control_socket_env, open_env, send_control_request};
-use crate::submit::{submit_writes, SubmitAgent};
+use crate::submit::{ResolvedSubmit, SubmitAgent};
 use crate::wire::{
     ControlRequest, PaneOp, PastePrefer, SplitDir, SurveyFollowup, SurveySpec, TeamOp,
     GRAPH_LINK_PREFIX, MAX_CLIPBOARD_BYTES,
@@ -753,14 +753,16 @@ pub enum TerminalAction {
     /// required.
     ///
     /// The write is QUEUED per target, not delivered instantly: each
-    /// session's queue drains one message at a time, delivering the next only
-    /// when that agent has finished generating (its output has gone idle), so
-    /// chained writes submit one after another instead of stacking into one
-    /// compose. The command returns the queue position. NOTE: "idle" is
-    /// detected from output quiescence, so a target sitting at its prompt
+    /// session's queue drains only when that agent has finished generating
+    /// (its output has gone idle). Consecutive compatible submitted writes
+    /// may arrive together as one chronological prompt; raw writes, gemini,
+    /// and Rich Prompt submissions remain boundaries. The command prints the
+    /// message's position among the target's pending messages. NOTE: "idle"
+    /// is detected from output quiescence, so a target sitting at its prompt
     /// with a PAUSED, half-typed buffer reads as idle; that rare case is not
-    /// detected. Queue bound: 100 per target; dropped when the session is
-    /// recycled (restarted).
+    /// detected. Queue bound: 100 entries per target, where a gemini message
+    /// costs two entries and every other message costs one; dropped when the
+    /// session is recycled (restarted).
     Write {
         /// Literal bytes to write. Omit with --stdin to stream instead.
         cmd: Option<String>,
@@ -770,11 +772,11 @@ pub enum TerminalAction {
         /// After the bytes, encode them so the named agent submits the input
         /// hands-free (the completion-poke path). Trailing newlines are
         /// stripped first. Values: `claude` (Cmd+Enter chord),
-        /// `gemini` (plain CR in a later write), or `codex` / `opencode`
-        /// (bracketed-paste wrap + CR in one write). Omit it to write pure
-        /// bytes: the input parks in the
-        /// agent's compose box unsubmitted (a bare newline is a newline to an
-        /// agent, not a submit).
+        /// `gemini` (plain CR as its own later queue entry, one idle gate
+        /// after the body), or `codex` / `opencode` (bracketed-paste wrap +
+        /// CR in one write). Omit it to write pure bytes: the input parks in
+        /// the agent's compose box unsubmitted (a bare newline is a newline
+        /// to an agent, not a submit).
         #[arg(long, value_name = "AGENT")]
         submit: Option<SubmitAgent>,
         /// Target every session with this tab name.
@@ -786,7 +788,8 @@ pub enum TerminalAction {
     },
     /// List live terminal sessions, grouped by group. Markdown by
     /// default; `--json` for compact machine output, `--json --pretty`
-    /// for indented JSON.
+    /// for indented JSON. The JSON form also carries `queue_depth`, the
+    /// number of messages each session still has pending in its write queue.
     List {
         /// Emit machine-readable JSON instead of the markdown table.
         #[arg(long)]
@@ -1837,27 +1840,21 @@ async fn cmd_shell_terminal(action: TerminalAction) -> Result<()> {
             } else {
                 cmd.ok_or_else(|| anyhow::anyhow!("cs terminal write needs a command or --stdin"))?
             };
-            // --submit=<agent>: strip trailing newlines then append that
-            // agent's submit chord so a running agent submits the input
-            // hands-free (the completion poke). Most agents take ONE write;
-            // gemini needs the chord as a SEPARATE write (an immediate Return
-            // is converted to Shift+Return), so submit_writes may return two. Each
-            // goes as its own TermWrite -> its own write-queue item, which the
-            // per-session drainer delivers idle-gated, so the CR lands as a
-            // distinct keypress. Mirrors submit_writes / encodeForAgentSubmit.
+            // Resolve the logical submit metadata in this process so an
+            // env-only template override survives the control-wire hop. The
+            // server retains the text + resolved spec until drain time.
             let socket = control_socket_env()?;
-            for write in submit_writes(data, submit) {
-                let message = send_control_request(
-                    &socket,
-                    ControlRequest::TermWrite {
-                        tab_name: tab_name.clone(),
-                        tab_group: tab_group.clone(),
-                        data: write,
-                    },
-                )
-                .await?;
-                eprintln!("{message}");
-            }
+            let message = send_control_request(
+                &socket,
+                ControlRequest::TermWrite {
+                    tab_name,
+                    tab_group,
+                    data,
+                    submit: submit.map(ResolvedSubmit::resolve),
+                },
+            )
+            .await?;
+            eprintln!("{message}");
             Ok(())
         }
         TerminalAction::List { json, pretty } => {

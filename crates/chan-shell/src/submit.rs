@@ -25,6 +25,7 @@ use std::sync::RwLock;
 
 #[cfg(feature = "client")]
 use clap::ValueEnum;
+use serde::{Deserialize, Serialize};
 
 /// A coding agent whose terminal submit encoding chan knows. Selected by
 /// `cs terminal write --submit=<agent>`; absent means write pure bytes
@@ -33,7 +34,8 @@ use clap::ValueEnum;
 /// The `ValueEnum` parse impl (for the client's `--submit` flag) is
 /// `client`-gated so chan-server can read the chord map without linking
 /// clap; the chord bytes themselves are clap-free.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 #[cfg_attr(feature = "client", derive(ValueEnum))]
 #[cfg_attr(feature = "client", value(rename_all = "lower"))]
 pub enum SubmitAgent {
@@ -59,6 +61,54 @@ pub enum SubmitAgent {
     /// multiline and paste-sized input. Live-probed 2026-07-18 against
     /// OpenCode 1.18.3.
     OpenCode,
+}
+
+/// Where a resolved submit template came from. Only built-in templates whose
+/// multi-message behavior has been live-probed are eligible for batching.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SubmitTemplateSource {
+    BuiltIn,
+    Override,
+}
+
+/// The submit metadata carried with logical terminal input until drain time.
+/// Resolving in the producer preserves env-only overrides from a short-lived
+/// `cs` process instead of asking the server to resolve them again.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResolvedSubmit {
+    pub agent: SubmitAgent,
+    pub template: String,
+    pub source: SubmitTemplateSource,
+}
+
+impl ResolvedSubmit {
+    /// Resolve the effective template using the normal env > config > built-in
+    /// precedence and retain whether the winning value is safe to batch.
+    pub fn resolve(agent: SubmitAgent) -> Self {
+        let guard = CHORD_OVERRIDES.read().expect("CHORD_OVERRIDES poisoned");
+        let (template, source) =
+            resolve_template_with_source(agent, |key| std::env::var(key).ok(), guard.as_ref());
+        Self {
+            agent,
+            template,
+            source,
+        }
+    }
+
+    /// Whether this resolved shape is proven for chronological notification
+    /// batching. OpenCode and Gemini remain singleton boundaries.
+    pub fn is_batchable(&self) -> bool {
+        self.source == SubmitTemplateSource::BuiltIn
+            && matches!(self.agent, SubmitAgent::Claude | SubmitAgent::Codex)
+    }
+}
+
+/// An atomic ordered plan for terminal input. Parts must be written and
+/// flushed in order without another controller command interleaving.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PtyInputPlan {
+    pub parts: Vec<Vec<u8>>,
 }
 
 impl SubmitAgent {
@@ -150,8 +200,7 @@ impl SubmitAgent {
     /// default. Override strings are unescaped (`\e`, `\xHH`, `\r`, `\n`,
     /// `\t`, `\\`) so a config/env value can carry control bytes as text.
     fn template(self) -> String {
-        let guard = CHORD_OVERRIDES.read().expect("CHORD_OVERRIDES poisoned");
-        resolve_template(self, |k| std::env::var(k).ok(), guard.as_ref())
+        ResolvedSubmit::resolve(self).template
     }
 }
 
@@ -175,23 +224,110 @@ pub fn set_chord_overrides(overrides: HashMap<String, String>) {
 /// process env or the global. env `CHAN_SUBMIT_<AGENT>` > override map >
 /// built-in default; an empty/whitespace override value is ignored (falls
 /// through), so a blank env var does not blank the chord.
+#[cfg(test)]
 fn resolve_template(
     agent: SubmitAgent,
     env: impl Fn(&str) -> Option<String>,
     overrides: Option<&HashMap<String, String>>,
 ) -> String {
+    resolve_template_with_source(agent, env, overrides).0
+}
+
+fn resolve_template_with_source(
+    agent: SubmitAgent,
+    env: impl Fn(&str) -> Option<String>,
+    overrides: Option<&HashMap<String, String>>,
+) -> (String, SubmitTemplateSource) {
     let name = agent.name();
     if let Some(v) = env(&format!("CHAN_SUBMIT_{}", name.to_ascii_uppercase())) {
         if !v.trim().is_empty() {
-            return unescape(&v);
+            return (unescape(&v), SubmitTemplateSource::Override);
         }
     }
     if let Some(v) = overrides.and_then(|m| m.get(name)) {
         if !v.trim().is_empty() {
-            return unescape(v);
+            return (unescape(v), SubmitTemplateSource::Override);
         }
     }
-    agent.default_template().to_string()
+    (
+        agent.default_template().to_string(),
+        SubmitTemplateSource::BuiltIn,
+    )
+}
+
+fn apply_template(text: &str, template: &str) -> String {
+    if template.contains("{}") {
+        template.replacen("{}", text, 1)
+    } else {
+        format!("{text}{template}")
+    }
+}
+
+fn template_without_text(template: &str) -> String {
+    if template.contains("{}") {
+        template.replacen("{}", "", 1)
+    } else {
+        template.to_string()
+    }
+}
+
+/// The body a submitted message delivers: the text with trailing newlines
+/// trimmed, which is what a `{}` template substitutes. A newline before the
+/// chord would land inside the agent's draft and split the buffer.
+pub fn submitted_body_bytes(text: &str) -> Vec<u8> {
+    text.trim_end_matches('\n').as_bytes().to_vec()
+}
+
+/// The resolved submit chord alone, the template with its text placeholder
+/// removed. This is what an agent that rejects a coalesced text+chord write
+/// receives as its own PTY write.
+pub fn submit_chord_bytes(submit: &ResolvedSubmit) -> Vec<u8> {
+    template_without_text(&submit.template).into_bytes()
+}
+
+/// Whether `text` submitted under `submit` needs its chord delivered as a
+/// SEPARATE PTY write. Gemini 0.51 converts a Return received within 30 ms of
+/// inserted text into Shift+Return, including text delivered as bracketed
+/// paste, so a Gemini body and its bare CR never share a write. A message
+/// missing either half has nothing to split. Cheap enough for the enqueue
+/// path: it never renders the template around the payload.
+pub fn splits_submit_chord(text: &str, submit: &ResolvedSubmit) -> bool {
+    submit.agent == SubmitAgent::Gemini
+        && !text.trim_end_matches('\n').is_empty()
+        && !chord_is_empty(&submit.template)
+}
+
+/// Whether a template's chord half (everything outside `{}`) is empty, the
+/// allocation-free form of `template_without_text(t).is_empty()`.
+fn chord_is_empty(template: &str) -> bool {
+    template == "{}" || template.is_empty()
+}
+
+/// Build the ordered PTY input for one logical message, encoding only after
+/// an optional batch body has been formed. A plan always has at least one
+/// part; two parts mean the chord must land as its own write, which happens
+/// for Gemini and for the proven batched Claude built-in.
+pub fn plan_submitted_input(
+    text: String,
+    submit: Option<&ResolvedSubmit>,
+    batched: bool,
+) -> PtyInputPlan {
+    let Some(submit) = submit else {
+        return PtyInputPlan {
+            parts: vec![text.into_bytes()],
+        };
+    };
+
+    let claude_batch = submit.agent == SubmitAgent::Claude
+        && batched
+        && submit.source == SubmitTemplateSource::BuiltIn;
+    let parts = if claude_batch || splits_submit_chord(&text, submit) {
+        vec![submitted_body_bytes(&text), submit_chord_bytes(submit)]
+    } else {
+        vec![apply_template(text.trim_end_matches('\n'), &submit.template).into_bytes()]
+    };
+
+    PtyInputPlan { parts }
 }
 
 /// `cs terminal write --submit=<agent>`: encode `data` into the PTY bytes
@@ -213,12 +349,7 @@ pub fn apply_submit_chord(data: String, submit: Option<SubmitAgent>) -> String {
         return data;
     };
     let text = data.trim_end_matches('\n');
-    let template = agent.template();
-    if template.contains("{}") {
-        template.replacen("{}", text, 1)
-    } else {
-        format!("{text}{template}")
-    }
+    apply_template(text, &agent.template())
 }
 
 /// The ordered PTY writes that deliver `data` to an agent and submit it. Most
@@ -230,30 +361,16 @@ pub fn apply_submit_chord(data: String, submit: Option<SubmitAgent>) -> String {
 /// delivered as its OWN later write submits gemini, so for gemini this
 /// returns TWO writes (the text body, then the submit chord alone) which the
 /// caller MUST deliver as separate events: separate write-queue items, whose
-/// drainer idle-gates between them, or separate PTY writes with a gap. Empty
-/// parts are dropped.
+/// drainer idle-gates between them, or separate PTY writes with a gap. A
+/// message missing either half collapses to one write, so the list is never
+/// empty.
 pub fn submit_writes(data: String, submit: Option<SubmitAgent>) -> Vec<String> {
-    if submit != Some(SubmitAgent::Gemini) {
-        return vec![apply_submit_chord(data, submit)];
-    }
-    let body = data.trim_end_matches('\n').to_string();
-    // The submit chord alone is gemini's resolved template with the text
-    // placeholder removed (default `\r`, or an override's trailing bytes).
-    let template = SubmitAgent::Gemini.template();
-    let chord = if template.contains("{}") {
-        template.replacen("{}", "", 1)
-    } else {
-        template
-    };
-    let writes: Vec<String> = [body, chord]
+    let resolved = submit.map(ResolvedSubmit::resolve);
+    plan_submitted_input(data, resolved.as_ref(), false)
+        .parts
         .into_iter()
-        .filter(|s| !s.is_empty())
-        .collect();
-    if writes.is_empty() {
-        vec![String::new()]
-    } else {
-        writes
-    }
+        .map(|part| String::from_utf8(part).expect("submit templates are UTF-8 strings"))
+        .collect()
 }
 
 /// Whether `word` (ASCII) occurs in `haystack` bounded by non-word chars on
@@ -342,6 +459,131 @@ fn unescape(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn built_in(agent: SubmitAgent) -> ResolvedSubmit {
+        let (template, source) = resolve_template_with_source(agent, |_| None, None);
+        ResolvedSubmit {
+            agent,
+            template,
+            source,
+        }
+    }
+
+    #[test]
+    fn submit_metadata_uses_pinned_wire_names() {
+        assert_eq!(
+            serde_json::to_string(&SubmitAgent::OpenCode).unwrap(),
+            r#""opencode""#
+        );
+        assert_eq!(
+            serde_json::to_string(&SubmitTemplateSource::BuiltIn).unwrap(),
+            r#""built_in""#
+        );
+        assert_eq!(
+            serde_json::from_str::<SubmitAgent>(r#""claude""#).unwrap(),
+            SubmitAgent::Claude
+        );
+    }
+
+    #[test]
+    fn input_plan_pins_singleton_and_batch_parts() {
+        let claude = built_in(SubmitAgent::Claude);
+        assert_eq!(
+            plan_submitted_input("poke\n".into(), Some(&claude), false).parts,
+            vec![b"poke\x1b[27;9;13~".to_vec()]
+        );
+        assert_eq!(
+            plan_submitted_input("batch\n".into(), Some(&claude), true).parts,
+            vec![b"batch".to_vec(), b"\x1b[27;9;13~".to_vec()]
+        );
+
+        let codex = built_in(SubmitAgent::Codex);
+        assert_eq!(
+            plan_submitted_input("batch\n".into(), Some(&codex), true).parts,
+            vec![b"\x1b[200~batch\x1b[201~\r".to_vec()]
+        );
+
+        let gemini = built_in(SubmitAgent::Gemini);
+        assert_eq!(
+            plan_submitted_input("poke\n".into(), Some(&gemini), false).parts,
+            vec![b"poke".to_vec(), b"\r".to_vec()]
+        );
+        assert_eq!(
+            plan_submitted_input("raw\n".into(), None, false).parts,
+            vec![b"raw\n".to_vec()]
+        );
+    }
+
+    #[test]
+    fn resolved_source_distinguishes_built_in_and_overrides() {
+        let (template, source) = resolve_template_with_source(SubmitAgent::Claude, |_| None, None);
+        assert_eq!(template, "{}\x1b[27;9;13~");
+        assert_eq!(source, SubmitTemplateSource::BuiltIn);
+
+        let (template, source) = resolve_template_with_source(
+            SubmitAgent::Claude,
+            |key| (key == "CHAN_SUBMIT_CLAUDE").then(|| r"\e[custom{}\r".to_string()),
+            None,
+        );
+        assert_eq!(template, "\x1b[custom{}\r");
+        assert_eq!(source, SubmitTemplateSource::Override);
+    }
+
+    #[test]
+    fn config_map_override_is_marked_override() {
+        // A `<config>/chan/submit.toml` value (the process-global map) is an
+        // override just like the env var: it disables batching for that agent
+        // and its exact unescaped bytes are what reaches the PTY.
+        let mut file = HashMap::new();
+        file.insert("codex".to_string(), r"\e[200~{}\e[201~\n".to_string());
+        let (template, source) =
+            resolve_template_with_source(SubmitAgent::Codex, |_| None, Some(&file));
+        assert_eq!(template, "\x1b[200~{}\x1b[201~\n");
+        assert_eq!(source, SubmitTemplateSource::Override);
+
+        let resolved = ResolvedSubmit {
+            agent: SubmitAgent::Codex,
+            template,
+            source,
+        };
+        assert!(!resolved.is_batchable(), "an override is never batchable");
+        assert_eq!(
+            plan_submitted_input("poke\n".into(), Some(&resolved), true).parts,
+            vec![b"\x1b[200~poke\x1b[201~\n".to_vec()],
+            "an override keeps its exact single-message expansion"
+        );
+    }
+
+    #[test]
+    fn an_input_plan_always_has_at_least_one_part() {
+        // A `{}`-only gemini override has no chord bytes; with empty data both
+        // halves are empty, and the message must still occupy one write rather
+        // than vanishing from the queue.
+        let mut file = HashMap::new();
+        file.insert("gemini".to_string(), "{}".to_string());
+        let (template, source) =
+            resolve_template_with_source(SubmitAgent::Gemini, |_| None, Some(&file));
+        let resolved = ResolvedSubmit {
+            agent: SubmitAgent::Gemini,
+            template,
+            source,
+        };
+        assert!(!splits_submit_chord("", &resolved));
+        assert_eq!(
+            plan_submitted_input(String::new(), Some(&resolved), false).parts,
+            vec![Vec::<u8>::new()]
+        );
+        // A chordless template with a body is one write, not a split pair.
+        assert!(!splits_submit_chord("body\n", &resolved));
+        assert_eq!(
+            plan_submitted_input("body\n".into(), Some(&resolved), false).parts,
+            vec![b"body".to_vec()]
+        );
+        // The built-in gemini template does split, on both halves being present.
+        let gemini = built_in(SubmitAgent::Gemini);
+        assert!(splits_submit_chord("body", &gemini));
+        assert!(!splits_submit_chord("\n\n", &gemini));
+    }
 
     #[test]
     fn submit_chord_strips_trailing_newlines_and_appends_per_agent() {

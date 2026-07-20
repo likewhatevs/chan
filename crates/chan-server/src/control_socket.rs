@@ -41,8 +41,8 @@ pub use chan_shell::{ControlRequest, ControlResponse};
 // pushes a SurveySpec to the SPA and formats the SurveyReply for the CLI.
 // TeamOp tags the `cs terminal team` op (new | load).
 use chan_shell::{
-    submit_writes, Identity, PaneOp, PastePrefer, ServeKind, SubmitAgent, SurveyReply, SurveySpec,
-    TeamOp, MAX_CLIPBOARD_BYTES, MAX_CONTROL_REQUEST_BYTES,
+    submit_writes, Identity, PaneOp, PastePrefer, ResolvedSubmit, ServeKind, SubmitAgent,
+    SurveyReply, SurveySpec, TeamOp, MAX_CLIPBOARD_BYTES, MAX_CONTROL_REQUEST_BYTES,
 };
 
 #[derive(Debug, Serialize)]
@@ -1080,6 +1080,7 @@ async fn handle_request(req: ControlRequest, ctx: &ControlSocketCtx) -> ControlR
             tab_name,
             tab_group,
             data,
+            submit,
         } => {
             let Some(registry) = terminal_registry else {
                 return ControlResponse::Error {
@@ -1091,6 +1092,7 @@ async fn handle_request(req: ControlRequest, ctx: &ControlSocketCtx) -> ControlR
                 tab_name.as_deref(),
                 tab_group.as_deref(),
                 &data,
+                submit.as_ref(),
             ))
         }
         ControlRequest::TermList => {
@@ -3248,27 +3250,28 @@ fn strip_leading_slash(p: &Path) -> String {
     p.to_string_lossy().trim_start_matches('/').to_string()
 }
 
-/// Category 2: ENQUEUE bytes onto the matching live sessions' write queues.
+/// Category 2: ENQUEUE logical input onto matching live sessions' write queues.
 /// At least one selector is required so a missing filter cannot fan out to
 /// every terminal by accident. The bytes are not written to the PTY here:
 /// the per-session drainer delivers each queued write when its agent is idle
 /// (the serialization the Rich Prompt / poke-chain workflow needs), so
-/// chained `cs terminal write`s submit one after another. `data` already
-/// carries the caller's submit chord (the CLI's `--submit`).
+/// compatible submitted writes can be framed together at drain time. The
+/// caller already resolved `submit`, including an env-only template override.
 fn term_write(
     registry: &TerminalRegistry,
     tab_name: Option<&str>,
     tab_group: Option<&str>,
     data: &str,
+    submit: Option<&ResolvedSubmit>,
 ) -> Result<String, String> {
     if tab_name.is_none() && tab_group.is_none() {
         return Err("term write needs a tab name and/or group selector".into());
     }
-    let outcome = registry.enqueue_write_matching(tab_name, tab_group, data.as_bytes());
+    let outcome = registry.enqueue_write_matching(tab_name, tab_group, data, submit);
     if outcome.queued == 0 {
         return if outcome.full > 0 {
             Err(format!(
-                "matched session(s) at the {WRITE_QUEUE_CAP_MSG}-write queue cap; nothing queued"
+                "matched session(s) at the {WRITE_QUEUE_CAP_MSG}-entry queue cap; nothing queued"
             ))
         } else {
             Err("no live terminal session matched".into())
@@ -3396,6 +3399,7 @@ fn term_list(registry: &TerminalRegistry, windows: &[WindowRecord]) -> Result<St
             "pane": summary.pane_id,
             "tab": summary.tab_id,
             "cwd": summary.cwd.map(|p| p.to_string_lossy().into_owned()),
+            "queue_depth": summary.queue_depth,
         });
         groups.entry(summary.tab_group).or_default().push(entry);
     }
@@ -4762,15 +4766,96 @@ mod tests {
     #[test]
     fn term_write_requires_a_selector() {
         let (_root, registry) = empty_registry();
-        let err = term_write(&registry, None, None, "ls").expect_err("no selector");
+        let err = term_write(&registry, None, None, "ls", None).expect_err("no selector");
         assert!(err.contains("selector"), "got: {err}");
     }
 
     #[test]
     fn term_write_reports_no_match_on_an_empty_registry() {
         let (_root, registry) = empty_registry();
-        let err = term_write(&registry, Some("nope"), None, "ls").expect_err("no match");
+        let err = term_write(&registry, Some("nope"), None, "ls", None).expect_err("no match");
         assert!(err.contains("no live terminal session"), "got: {err}");
+    }
+
+    /// A registry holding one live PTY session per requested tab name, all in
+    /// `group`. The handles are returned so the sessions stay attached for the
+    /// life of the test.
+    fn registry_with_sessions(
+        names: &[&str],
+        group: &str,
+    ) -> (
+        tempfile::TempDir,
+        TerminalRegistry,
+        Vec<crate::terminal_sessions::AttachHandle>,
+    ) {
+        use crate::terminal_sessions::CreateOptions;
+        let (root, registry) = empty_registry();
+        let handles = names
+            .iter()
+            .map(|name| {
+                registry
+                    .create(CreateOptions {
+                        size: portable_pty::PtySize {
+                            rows: 24,
+                            cols: 80,
+                            pixel_width: 0,
+                            pixel_height: 0,
+                        },
+                        tab_name: Some((*name).to_string()),
+                        tab_group: Some(group.to_string()),
+                        window_id: Some("window-test".into()),
+                        mcp_env: false,
+                        cwd: None,
+                        command: None,
+                        env: Default::default(),
+                    })
+                    .expect("spawn pty")
+            })
+            .collect();
+        (root, registry, handles)
+    }
+
+    #[test]
+    fn term_write_reports_the_position_for_a_single_target() {
+        let (_root, registry, _handles) = registry_with_sessions(&["Solo"], "probe");
+        assert_eq!(
+            term_write(&registry, Some("Solo"), None, "first", None),
+            Ok("queued at position 1".to_string())
+        );
+        assert_eq!(
+            term_write(&registry, Some("Solo"), None, "second", None),
+            Ok("queued at position 2".to_string()),
+            "the position counts pending messages"
+        );
+    }
+
+    #[test]
+    fn term_write_fans_out_to_a_group_without_a_position() {
+        let (_root, registry, _handles) = registry_with_sessions(&["A", "B"], "fanout");
+        assert_eq!(
+            term_write(&registry, None, Some("fanout"), "poke", None),
+            Ok("queued to 2 terminal session(s)".to_string()),
+            "a multi-target write has no single position to report"
+        );
+        // The name axis still narrows the group to one target.
+        assert_eq!(
+            term_write(&registry, Some("A"), Some("fanout"), "poke", None),
+            Ok("queued at position 2".to_string())
+        );
+    }
+
+    #[test]
+    fn term_write_reports_the_queue_cap_and_drops_nothing_silently() {
+        let (_root, registry, _handles) = registry_with_sessions(&["Full"], "cap");
+        for position in 1..=WRITE_QUEUE_CAP_MSG {
+            assert_eq!(
+                term_write(&registry, Some("Full"), None, "poke", None),
+                Ok(format!("queued at position {position}"))
+            );
+        }
+        let err = term_write(&registry, Some("Full"), None, "poke", None).expect_err("at cap");
+        assert!(err.contains("queue cap"), "got: {err}");
+        assert!(err.contains("nothing queued"), "got: {err}");
     }
 
     #[test]
@@ -4854,6 +4939,23 @@ mod tests {
             hidden: false,
             origin: crate::WindowOrigin::Native,
         }
+    }
+
+    #[test]
+    fn term_list_reports_the_pending_queue_depth() {
+        // The only way to watch a drain from outside a browser: the SPA badge
+        // reads the same logical message count off the WS `queue` frame.
+        let (_root, registry, _handles) = registry_with_sessions(&["Watched"], "depth");
+        let depth_of = |raw: &str| -> u64 {
+            let value: Value = serde_json::from_str(raw).expect("json");
+            value["groups"]["depth"][0]["queue_depth"]
+                .as_u64()
+                .expect("queue_depth")
+        };
+        assert_eq!(depth_of(&term_list(&registry, &[]).expect("term list")), 0);
+        term_write(&registry, Some("Watched"), None, "poke", None).expect("queued");
+        term_write(&registry, Some("Watched"), None, "poke", None).expect("queued");
+        assert_eq!(depth_of(&term_list(&registry, &[]).expect("term list")), 2);
     }
 
     #[test]
