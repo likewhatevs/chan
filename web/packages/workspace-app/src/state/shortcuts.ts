@@ -4,8 +4,10 @@
 //   1. App.svelte's `onWindowKey` (browser keymap).
 //   2. chan-desktop's KEY_BRIDGE_JS (native keymap; rebroadcasts as
 //      `chan:command` events that chan handles).
-//   3. crates/chan/src/lib.rs SERVE_LONG_ABOUT (the `chan open
-//      --help` text). Resync via `node web/packages/workspace-app/scripts/shortcuts-table.mjs`.
+//   3. crates/chan/src/lib.rs KEYBINDINGS_TABLE (the chord table in
+//      the `chan open --help` text). Resync via `node
+//      web/packages/workspace-app/scripts/shortcuts-table.mjs
+//      --serve-long-about`.
 //
 // Chord grammar: a `+`-separated list of modifier tokens followed by
 // a single key. Modifier tokens:
@@ -731,21 +733,21 @@ export function currentPlatform(): Platform {
   return "web";
 }
 
-/// Render a plain-ASCII table of shortcuts visible on `platform`,
-/// with `Mod` formatted for `os`. Layout: a centered title, then
-/// each group as an underlined subheader followed by `label  chord`
-/// rows. Column gap auto-derived from the longest label.
-///
-/// No box-drawing, no Unicode - matches the project's writing rules.
-/// Output is intended for the empty-pane background AND the
-/// `chan open --help` text; resync the latter via the
-/// `web/packages/workspace-app/scripts/shortcuts-table.mjs` helper.
 /// Continuation indent for a note that will not fit beside its chord.
 /// Small enough that even the longest note clears any sane column budget,
 /// and deep enough to read as a continuation rather than a new row.
 const NOTE_CONTINUATION_INDENT = "    ";
 
-/// Render the chord table as plain ASCII.
+/// Render the shortcuts visible on `platform` as a plain-ASCII table,
+/// with `Mod` formatted for `os`. Each group becomes an underlined
+/// subheader followed by `label  chord` rows, the column gap derived
+/// from the longest label. No box-drawing, no Unicode - matches the
+/// project's writing rules.
+///
+/// Output feeds the empty-pane background AND the `chan open --help`
+/// text; resync the latter via `node
+/// web/packages/workspace-app/scripts/shortcuts-table.mjs
+/// --serve-long-about`.
 ///
 /// `maxWidth` caps the column budget: a row whose trailing `(note)` would
 /// push it past the cap moves that note to its own indented line. The
