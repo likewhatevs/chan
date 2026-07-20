@@ -6,6 +6,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- **OpenCode reconciles queued terminal notifications into one turn.** When several notifications arrive while OpenCode is busy, they now drain as a single batched submit instead of one message per notification, matching what Claude and Codex already did. Gemini deliberately stays one message at a time: a live sweep on Gemini 0.51 found that a Return arriving close behind inserted text is still converted to Shift+Return, and no gap below the queue's idle threshold left a safe margin for a full-sized batch, so batching it would silently strand input in the compose box.
+
 ### Fixed
 
 - **The Command Launcher's "Flip pane" row works.** Choosing "Flip pane" in the Command Launcher, or "Flip" in the File Browser, did nothing at all: the launcher was still counted as the top overlay at the moment it ran the command, so a guard meant to stop pane flips from reordering panes behind an open overlay swallowed the flip instead. The overlay stack is now reconciled the moment an overlay closes rather than one frame later, so a command dispatched from the launcher sees the state the user sees. The ``Ctrl+` `` chord and the A/B pane control were never affected, and the guard still does its job: with Search or a modal open, a flip stays blocked.
