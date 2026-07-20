@@ -73,21 +73,23 @@ No matching package to install: 'webkit2gtk4.1-devel'
 
 The repository-side guard now in `packaging/distros/fedora/chan-desktop.spec` rejects EL9 during spec evaluation and names those packages. It does not prove or replace the console denylist. The public COPR API does not expose that setting, so only the next build's chroot count can prove whether the denylist is active.
 
-## AUR GA gate
+## AUR GA observation
 
 `aur-validate-arm` uses a native `ubuntu-24.04-arm` runner, verifies and imports the signed Arch Linux ARM rootfs, and invokes the same `build-in-ci.sh` path as x86_64 for both package bases. The workflow now:
 
 1. runs the ARM matrix after every successful GA Release workflow;
 2. retains `aur_validate_arm=true` as the manual-dispatch opt-in;
 3. selects the release tag and checkout SHA on both event paths; and
-4. makes `aur-publish` wait for `aur-auth`, `aur-validate`, and `aur-validate-arm`.
+4. keeps `aur-publish` waiting on `aur-auth` and x86_64 `aur-validate` only for v0.73.0.
+
+The ARM job is observed-but-not-gating for v0.73.0. It has never executed end to end and cannot be honestly proven before a tag carrying the `systemd-analyze` fix. v0.72.0 never published to the AUR, so making this unproven job a dependency would risk blocking the first AUR publication for a second consecutive release. v0.73.0 runs ARM at GA to produce the evidence while the established x86_64 job remains the publication gate; v0.74.0 adds `aur-validate-arm` to `aur-publish`'s `needs` after it has passed once.
 
 The x86_64 matrix remains the sole producer of `aur-metadata-*`; the ARM matrix uploads nothing. No workflow was dispatched while making this change. The first native ARM run must still prove the rootfs import and keyring bootstrap, rolling `-Syu`, `makepkg --syncdeps`, the native Tauri build, the namcap error gate, pacman install, `systemd-analyze` smoke, packaged-upgrade refusal, desktop stamp and refusal hint, desktop entry, and five icon sizes. There is no `ldd` gate.
 
 ## Remaining unproven acceptance
 
 - **Fresh aarch64 COPR install smoke:** not runnable on this host. It is x86_64, has no QEMU binary or QEMU binfmt registration, and all 15 sdme rootfs are x86_64. A native aarch64 sdme host with `COPR_EL9_ROOTFS` and `COPR_EL10_ROOTFS`, or a new native ARM Actions job, must install the published RPMs and repeat the package smokes.
-- **AUR native build:** not yet run. Only the owner dispatches Actions; the required run is `targets=aur aur_validate_arm=true` against an existing GA tag. Until both matrix cells pass, the AUR aarch64 declaration remains wired but unproven.
+- **AUR native build:** not yet run. The v0.73.0 GA workflow automatically runs both ARM matrix cells as observed evidence. Only the owner may additionally dispatch `targets=aur aur_validate_arm=true`. Until both cells pass, the AUR aarch64 declaration remains wired but unproven and does not gate publication.
 - **COPR console denylist:** not observable through the public API. The v0.72.0 evidence proves it was ineffective for that build; current console state remains unknown until inspected in the UI or inferred from a later build's absent EL9 desktop jobs.
 
 `packaging/distros/copr/build-in-container.sh` cannot substitute for the fresh-install acceptance: it rebuilds from an SRPM with `rpmbuild --rebuild` rather than installing from the published repository, and it deliberately refuses `chan-desktop` on EL9 before doing any work. Installing QEMU or changing system binfmt state is outside this item.

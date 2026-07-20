@@ -56,7 +56,7 @@ on:
         required: false
         default: "1"
       aur_validate_arm:
-        description: Run aarch64 AUR validation on dispatch (GA always runs it)
+        description: Run aarch64 AUR validation on dispatch (GA observes it)
         required: false
         default: false
         type: boolean
@@ -329,8 +329,7 @@ jobs:
   # The AUR hosts recipes, not builds. Prove each source package on a
   # clean upstream Arch container before either repository is updated.
   # The package build logic is the same script local sdme validation
-  # runs. This is the x86_64 half of the publication gate; the native
-  # aarch64 half lives in aur-validate-arm.
+  # runs. This x86_64 job is the v0.73.0 publication gate.
   aur-validate:
     if: >-
       (github.event_name == 'workflow_dispatch' &&
@@ -369,9 +368,14 @@ jobs:
           if-no-files-found: error
 
   # Arch Linux ARM aarch64 is declared by both recipes. Build it on every
-  # successful GA release and make publication wait for it, using the same
-  # package build path as x86_64. Manual dispatches opt in because an ARM
-  # run is expensive and a distro-specific diagnostic may not need it.
+  # successful GA release, using the same package path as x86_64, but observe
+  # rather than gate it for v0.73.0. This leg has never completed end to end
+  # and cannot be proven before a tag carrying the systemd-analyze fix;
+  # v0.72.0 also never reached the AUR. Do not let the unproven first ARM run
+  # block the first AUR publication for a second release. Once it passes,
+  # v0.74.0 adds aur-validate-arm to aur-publish's needs.
+  # Manual dispatches opt in because an ARM run is expensive and a
+  # distro-specific diagnostic may not need it.
   #
   # `inputs` (not `github.event.inputs`) is what preserves a boolean
   # input as a Boolean: the raw event payload carries the string "false",
@@ -430,7 +434,7 @@ jobs:
        github.event.workflow_run.event == 'push' &&
        startsWith(github.event.workflow_run.head_branch, 'v') &&
        !contains(github.event.workflow_run.head_branch, '-'))
-    needs: [aur-auth, aur-validate, aur-validate-arm]
+    needs: [aur-auth, aur-validate]
     strategy:
       fail-fast: false
       matrix:
