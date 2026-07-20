@@ -24,6 +24,10 @@ pub use wire::{
 mod cli;
 #[cfg(feature = "client")]
 mod control;
+// Long-form `cs` help, as consts. Client-gated with the clap surface it
+// feeds, so chan-server does not link a few hundred KB of manual text.
+#[cfg(feature = "client")]
+mod help;
 // Named exit codes for the client (the `cs terminal survey --timeout` 124
 // path) and the typed error that carries one. Client-only: the server links
 // the wire types without it.

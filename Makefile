@@ -162,6 +162,7 @@ pre-push: ## Run the local pre-push gate.
 	RUSTFLAGS="-D warnings" $(MAKE) gateway-build
 	$(MAKE) web-check
 	$(MAKE) web-marketing-check
+	$(MAKE) shortcuts-check
 
 .PHONY: ci-linux
 ci-linux: pre-push ## Run the Linux CI validation target.
@@ -222,6 +223,16 @@ web-check: web-launcher ## Run frontend check, vitest, and production build.
 		&& $(NPM) run check -w @chan/workspace-app && $(NPM) run test -w @chan/workspace-app \
 		&& $(NPM) run build -w @chan/workspace-app
 	@date -u '+%Y-%m-%dT%H:%M:%SZ' > "$(WEB_BUILD_STAMP)"
+
+.PHONY: shortcuts-check
+shortcuts-check: ## Verify chan open's keybinding table matches shortcuts.ts.
+	# KEYBINDINGS_TABLE is generated from shortcuts.ts and pasted into the
+	# Rust const by hand, so a chord change in the TS silently leaves `chan open
+	# --help` lying. Diff the generator's output against the const. Lives on
+	# the web side because the generator needs node, which the Rust jobs do
+	# not guarantee.
+	cd web && $(NPM) install >/dev/null
+	python3 scripts/check-shortcuts-help.py
 
 .PHONY: web-marketing-check
 web-marketing-check: ## Run marketing site checks.

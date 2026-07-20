@@ -66,6 +66,26 @@ use serde::{Deserialize, Serialize};
 
 mod update;
 
+/// `chan dump-skill`: the agent-facing skill document, rendered from the
+/// clap trees so it cannot drift from the help it documents.
+mod skill;
+
+/// Long-form help for the `chan` commands, as consts.
+mod help;
+
+/// `chan open --help`, assembled at first use: the launcher catalog, then
+/// the generated chord table, then the worked examples. Composed at
+/// runtime rather than with `concat!` because the pieces are consts, not
+/// literals, and the chord table has to stay a separate const for
+/// `make shortcuts-check` to diff it against the generator.
+static OPEN_AFTER_HELP: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    format!(
+        "{OPEN_LAUNCHER}\nIN-APP KEYBINDINGS (Cmd = Ctrl on Linux / Windows):\n\n\
+         {KEYBINDINGS_TABLE}\n{}",
+        help::CHAN_OPEN_AFTER
+    )
+});
+
 /// The `--service=chan` self-managed daemon: a cross-OS background devserver
 /// guarded by a single-instance pidfile + flock (the systemd/launchd analog
 /// where there is no OS supervisor, and the portable choice everywhere).
@@ -81,63 +101,259 @@ const DEFAULT_PORT: u16 = 8787;
 /// supplies one: loopback, matching the `--bind` help and the foreground default.
 const DEFAULT_DEVSERVER_BIND: IpAddr = IpAddr::V4(Ipv4Addr::LOCALHOST);
 
-/// Extended `long_about` for `chan open` (the workspace-serve form). The
-/// keybindings list is generated from `web/packages/workspace-app/src/state/shortcuts.ts` (the
-/// single source of truth for chan's chords). Resync after any change to that file
-/// with `node web/packages/workspace-app/scripts/shortcuts-table.mjs --serve-long-about`
-/// and paste the output between the BEGIN/END markers below. The
-/// native shell (chan-desktop) layers VS Code-shaped chords on top
-/// of the browser set; those are documented in the same TS source.
-const SERVE_LONG_ABOUT: &str = "\
-Run the HTTP server. Defaults to 127.0.0.1 (loopback only).
-
-In-app keybindings (Cmd = Ctrl on Linux / Windows):
-
-  App
+/// The in-app chord table, generated from
+/// `web/packages/workspace-app/src/state/shortcuts.ts` (the single source
+/// of truth for chan's chords) by
+/// `node web/packages/workspace-app/scripts/shortcuts-table.mjs --serve-long-about`.
+/// Paste that command's output here verbatim; `make shortcuts-check` fails
+/// when the two drift. The native shell layers VS Code-shaped chords on
+/// top of the browser set; those are documented in the same TS source.
+///
+/// The body opens on the quote's own line rather than after a `\`
+/// continuation, because that escape eats the newline and every leading
+/// space after it, which would strip the first row's table indent.
+const KEYBINDINGS_TABLE: &str = "  App
   ---
   Command launcher                             Ctrl+Alt+K
   Settings                                     Cmd+,
-  Search                                       Cmd+Shift+S   (Ctrl+Alt+S on Linux / Windows)
-  New terminal                                 Ctrl+Shift+T   (Cmd+T on macOS desktop; or Mod+. t (Hybrid Nav))
-  Reload window                                Cmd+R   (Ctrl+Shift+R on Linux / Windows)
+  Search                                       Cmd+Shift+S
+      (Ctrl+Alt+S on Linux / Windows)
+  New terminal                                 Ctrl+Shift+T
+      (Cmd+T on macOS desktop; or Mod+. t (Hybrid Nav))
+  Reload window                                Cmd+R
+      (Ctrl+Shift+R on Linux / Windows)
   Dismiss overlay                              Esc
-  
+
   File
   ----
   Delete file or directory                     Backspace
-  
+
   Panes
   -----
-  Enter Hybrid Nav                             Cmd+.
+  Hybrid Nav                                   Cmd+.
+  Flip pane side                               Ctrl+`
   Previous pane                                Alt+[
   Next pane                                    Alt+]
   Split right                                  Ctrl+Alt+/
   Split bottom                                 Ctrl+Alt+?
-  
+
   Tabs
   ----
   Close tab                                    Ctrl+D   (Cmd+W on macOS)
-  Reopen closed tab                            Ctrl+Alt+Shift+T   (Cmd+Shift+T on macOS desktop)
+  Reopen closed tab                            Ctrl+Alt+Shift+T
+      (Cmd+Shift+T on macOS desktop)
   Next tab                                     Alt+Shift+]
   Previous tab                                 Alt+Shift+[
   Jump to tab N                                Ctrl+Alt+1..9
-  
+
   Editor
   ------
   Show Source Code (toggle rendered/source)    Cmd+E
   Bold                                         Cmd+B
   Italic                                       Cmd+I
-  
+
   Terminal
   --------
-  Copy selection                               Cmd+C   (Ctrl+Shift+C on Linux / Windows)
-  Paste                                        Cmd+V   (Ctrl+Shift+V on Linux / Windows)
-  Show/Hide Rich Prompt                        Cmd+Shift+P   (Ctrl+Shift+P on Linux / Windows)
+  Copy selection                               Cmd+C
+      (Ctrl+Shift+C on Linux / Windows)
+  Paste                                        Cmd+V
+      (Ctrl+Shift+V on Linux / Windows)
+  Show/Hide Rich Prompt                        Cmd+Shift+P
+      (Ctrl+Shift+P on Linux / Windows)
   Find in terminal                             Cmd+F
 ";
 
+/// `chan open` long help: what serving a workspace actually does.
+const OPEN_LONG_ABOUT: &str = r#"Register a directory as a chan workspace and serve it.
+
+chan open PATH creates the directory if it does not exist, registers it
+in the workspace registry, and serves it. Serving is load-bearing: a
+bare `chan workspace add` only registers, while serving mounts the
+workspace so the editor, terminal, search, graph, and a devserver can
+reach it. The path is always explicit -- a bare `chan open` is an error.
+
+Where it serves follows the shell's parentage. From a chan-desktop
+terminal it hands the workspace to a native window and exits; from a
+`chan devserver` terminal it registers the workspace with that devserver
+and exits; from a plain shell it binds a local server and stays in the
+foreground until Ctrl-C. --standalone / --desktop / --devserver force
+one target. A handoff that cannot land (nothing running, version skew,
+mount error, CHAN_NO_DESKTOP_HANDOFF / CHAN_NO_DEVSERVER_HANDOFF) falls
+through to a standalone server, so the workspace is never left unserved.
+
+The standalone server binds 127.0.0.1:8787 by default (::1 with -6),
+prints "chan is ready:" and the tokened URL on stderr, and opens the
+system browser unless --no-browser. There is no TLS, only a per-launch
+bearer token, so a non-loopback --host serves your workspace in
+plaintext and prints a warning saying so.
+
+Without --here, chan open refuses a path inside a Git, Mercurial, or
+Subversion working tree: it exits 70 and prints a `chan-error:
+vcs-parent` marker on stderr, because the repository root is almost
+always the better workspace root. --here serves the subdirectory
+verbatim.
+
+chan open URL (any scheme://host[:port] value) does something else
+entirely: it registers a devserver with a running chan-desktop and
+returns, without serving or dialing it -- connecting is the launcher's
+Connect button. --name and --script apply only to that form.
+"#;
+
+/// The launcher catalog, which is the thing a user reaches for once the
+/// window is up. Kept next to the chord table it introduces.
+const OPEN_LAUNCHER: &str = r#"Inside the window, everything chan can do is one chord away. The command
+launcher is Cmd+K on the macOS desktop app and Ctrl+Alt+K everywhere
+else (web, Linux, Windows). Cmd+P is Team Work, not the launcher.
+
+The list is empty until you type, and a query never hides a command: it
+only reorders. Matches float into a "Results" group, and the rest of the
+catalog stays listed below, grouped by category with the active tab's
+category pinned first, so even a query that matches nothing still shows
+everything available here.
+
+Apps you can spawn from it:
+
+  New terminal        a shell tab
+  New team            a Team Work group of agent terminals
+  New draft           a markdown file in the editor
+  New file browser    the workspace file tree
+  New graph           the project link graph
+  New dashboard       workspace status, indexing status, about
+  New diagram         an Excalidraw canvas (workspace windows only)
+  New slide deck      a deck (workspace windows only)
+
+Command categories: Global, Workspace, Search, Apps, Tabs, Panes,
+Editor, File Browser, Terminal, Dashboard, Graph. The surface categories
+(Editor, File Browser, Terminal, Dashboard, Graph) list the commands of
+the focused tab's kind.
+"#;
+
+/// One line of `chan --help`. Kept separate from the Cargo description,
+/// which is package metadata and runs to 155 columns.
+const CHAN_ABOUT: &str = "An AI-native IDE: a CLI and a local server over a folder on disk";
+
+/// Orientation for anyone (or anything) meeting chan for the first time.
+/// This is the opening section of `chan dump-skill`, so it carries the one
+/// distinction everything else depends on: whether you are in a workspace
+/// window or a standalone terminal.
+const CHAN_LONG_ABOUT: &str = "\
+An AI-native IDE: a CLI and a local server over a folder on disk.
+
+`chan open PATH` registers a folder as a workspace and serves it. The
+workspace indexes its content for search, builds a graph from the links,
+tags, and mentions in your documents, and hosts the editor, terminals,
+file browser, graph, dashboard, and Team Work over that one tree.
+Everything runs locally; the server binds loopback by default. The
+registry of known workspaces lives in `~/.chan/config.toml`, or under
+`CHAN_HOME` when that is set.
+
+Inside any chan terminal, `cs` drives the window that spawned it. It is
+this same binary under a second name, picked by argv[0], so `cs open
+notes/plan.md` and `chan shell open notes/plan.md` are the same
+command.";
+
+/// The rest of the orientation. Split from the long_about because clap
+/// prints `after_long_help` below OPTIONS, which is where the two-modes
+/// table reads best.
+const CHAN_AFTER_HELP: &str = r#"THE TWO MODES:
+Where you are decides what you can do. There is no environment variable
+that tells them apart: workspace-only commands simply refuse in a
+standalone terminal, and say so.
+
+  A WORKSPACE WINDOW -- the one you want.
+    Unlocks the command launcher, the built-in apps, tabs and panes, and
+    the workspace-only `cs` commands: open, graph, search, export, and
+    terminal team. This is where work belongs.
+
+  A STANDALONE TERMINAL -- no workspace behind it. PTYs start in $HOME.
+    Fully automatable: every `cs terminal` and `cs pane` command works,
+    so scripting it is supported and expected. It is the right place to
+    manage the chan library -- `chan open`, `chan close`, `chan close
+    --remove`, `chan ps` -- and the wrong place for heavy work, because
+    none of the workspace surface exists there.
+
+Run a workspace-only command in a standalone terminal and it says so:
+  cs <cmd> is only available in a workspace window; this is a
+  standalone terminal.
+
+TELLING WHERE YOU ARE:
+  $CHAN                 set to 1 inside any chan-spawned terminal
+  $CHAN_CONTROL_SOCKET  required by every `cs` command
+  $CHAN_WINDOW_ID       also required by window-targeting commands
+  $CHAN_TAB_NAME        this tab's name, when it has one
+  $CHAN_TAB_GROUP       this tab's broadcast group, default "default"
+  $CHAN_WORKSPACE_PATH  the served root, or $HOME in a standalone
+                        terminal, so it does NOT identify the mode
+
+EXAMPLES:
+Serve a project and open it:
+  chan open ~/src/my-project
+
+See what is being served, then tear one down:
+  chan ps
+  chan close ~/src/my-project
+
+Most installs put `cs` on your PATH. If yours did not, link it once:
+  ln -s "$(command -v chan)" ~/.local/bin/cs
+
+Teach an agent the whole surface in one shot:
+  mkdir -p ~/.claude/skills/chan
+  chan dump-skill > ~/.claude/skills/chan/SKILL.md
+
+SEE ALSO:
+`chan dump-skill --list` for every topic, then `chan dump-skill --topic
+cs` for the environment contract and `--topic open` for the workspace and
+its apps.
+"#;
+
+/// `chan dump-skill` long help. A const rather than a doc comment because
+/// clap collapses a doc comment's paragraphs into one line, which would
+/// destroy the example block below.
+const DUMP_SKILL_LONG_ABOUT: &str = "\
+Print an agent-facing skill document, rendered from chan's own help text.
+
+The output teaches an agent what chan is and how to drive it: the `cs`
+command surface, the command launcher and built-in apps, authoring
+documents with diagrams and slide decks, the project graph, teams of
+agents, and devservers. Every section is the live `--help` of a real
+command, so the skill cannot go stale against the binary printing it.
+
+Writes nothing. The document goes to stdout; you decide where it lands.";
+
+/// `chan dump-skill` examples. The install one-liner points at the user's
+/// own agent directory on purpose: writing into a checkout's skills dir
+/// would commit a generated file back into the repo.
+const DUMP_SKILL_AFTER_HELP: &str = r#"EXAMPLES:
+Install the skill for a local agent (the usual first run):
+  mkdir -p ~/.claude/skills/chan
+  chan dump-skill > ~/.claude/skills/chan/SKILL.md
+
+See what topics exist, then read one:
+  chan dump-skill --list
+  chan dump-skill --topic teams
+
+Hand a topic to another agent, or drop it into a team brief:
+  chan dump-skill --topic graph | cs copy
+  chan dump-skill --topic cs-terminal-team >> brief.md
+
+SIDE EFFECTS:
+None. Every form writes to stdout only.
+
+CAVEATS:
+A `--topic` page is a fragment: it carries no skill frontmatter, so it is
+a manual page to read, not a file to install as a skill.
+
+SEE ALSO:
+`chan dump-skill --list` for every slug, and `chan --help` for the
+orientation the skill opens with.
+"#;
+
 #[derive(Parser, Debug)]
-#[command(version, about, long_about = None)]
+// `about` is set here rather than inherited from the Cargo description:
+// the description is package metadata and runs long, while this string is
+// one line of `chan --help`.
+#[command(version, about = CHAN_ABOUT, long_about = CHAN_LONG_ABOUT)]
+#[command(after_long_help = CHAN_AFTER_HELP)]
 struct Cli {
     /// Increase logging. -v = info, -vv = debug, -vvv = trace.
     #[arg(short, long, action = clap::ArgAction::Count, global = true)]
@@ -149,28 +365,32 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Command {
-    /// Manage a chan workspace: register, list, and forget
-    /// workspaces, and drive a workspace's content (index, reports,
-    /// search, graph, status, metadata, contacts).
+    /// Manage the workspace registry and a workspace's content
     ///
-    /// Every registry mutation and content operation routes through
-    /// `chan_workspace::Library` / `Workspace` so atomic writes, the
-    /// path sandbox, the special-file refusal, and the cross-process
-    /// writer lock apply uniformly.
+    /// Registers, lists, and forgets workspaces, and drives one
+    /// workspace's content: index, reports, search, graph, status,
+    /// metadata, and contacts.
+    ///
+    /// Every registry mutation and content operation routes through the
+    /// workspace library, so atomic writes, the path sandbox, the
+    /// special-file refusal, and the cross-process writer lock apply
+    /// uniformly.
+    #[command(verbatim_doc_comment)]
     Workspace {
         #[command(subcommand)]
         action: WorkspaceAction,
     },
     /// Drive the current chan window from its terminal (the `cs` alias).
     ///
-    /// Reached as `chan shell <action>` or, via a `cs -> chan` symlink
-    /// the user puts on PATH, as `cs <action>`. Every action targets the
-    /// chan window that spawned this terminal ($CHAN_WINDOW_ID +
-    /// $CHAN_CONTROL_SOCKET); outside a chan terminal they error clearly.
+    /// Reached as `chan shell <action>` or, under the `cs` name on PATH,
+    /// as `cs <action>`. Every action targets the chan window that
+    /// spawned this terminal ($CHAN_WINDOW_ID + $CHAN_CONTROL_SOCKET);
+    /// outside a chan terminal they error clearly.
     ///
-    /// To enable the short `cs` name, symlink it onto your PATH once:
+    /// Most installs put `cs` on your PATH. If `command -v cs` finds
+    /// nothing, link it once yourself:
+    ///
     ///   ln -s "$(command -v chan)" ~/.local/bin/cs
-    /// chan ships no symlink; this is the only setup it needs.
     ///
     /// iproute2-style prefix matching: the cs actions disambiguate on
     /// their first letter, so `cs o` / `cs g` / `cs d` / `cs t` resolve
@@ -185,49 +405,45 @@ enum Command {
         /// Shell to generate completions for.
         shell: Shell,
     },
-    /// Tear down a running server for a workspace, releasing its writer
-    /// lock -- the inverse of `chan open {path}`. "Not currently served" is
-    /// treated as success (close is idempotent). With `--remove` it then
-    /// also forgets the workspace from the registry, like `chan workspace
-    /// rm`, independent of whether anything was serving it.
+    /// Print an agent-facing manual, built from chan's own help
+    #[command(long_about = DUMP_SKILL_LONG_ABOUT)]
+    #[command(after_long_help = DUMP_SKILL_AFTER_HELP)]
+    DumpSkill {
+        /// Print the topic index instead of the skill.
+        #[arg(long, conflicts_with = "topic")]
+        list: bool,
+        /// Print one topic's manual page instead of the whole skill.
+        /// Takes a slug from `--list`.
+        #[arg(long, value_name = "SLUG", verbatim_doc_comment)]
+        topic: Option<String>,
+    },
+    /// Stop serving a workspace; --remove also forgets it
+    #[command(long_about = help::CHAN_CLOSE)]
+    #[command(after_long_help = help::CHAN_CLOSE_AFTER)]
     Close {
         #[arg(value_hint = clap::ValueHint::AnyPath)]
         path: PathBuf,
         /// After tearing down the server, also forget the workspace from the
         /// registry (filesystem contents untouched). Runs regardless of the
         /// teardown outcome.
-        #[arg(long)]
+        #[arg(long, verbatim_doc_comment)]
         remove: bool,
     },
-    /// Open a workspace, or register a devserver.
-    ///
-    /// `chan open {PATH}` registers the directory as a workspace (creating
-    /// it if needed) and serves it. Where it serves is the shell's parentage
-    /// by default: from a chan-desktop terminal it hands the workspace to a
-    /// native window and returns; from a `chan devserver` terminal it registers
-    /// the workspace with that devserver; from a plain shell it binds a local
-    /// loopback server and prints the URL. `--standalone` / `--desktop` /
-    /// `--devserver` force a specific target. Serving is load-bearing -- a bare
-    /// `chan workspace add` only registers; serving mounts the workspace so
-    /// the editor, terminal, and devserver can reach it.
-    ///
-    /// `chan open {URL}` (a `scheme://host[:port]` value) registers a
-    /// devserver with the desktop instead: the `{url, name, script}` entry
-    /// lands in the same config the launcher reads, and the desktop dials
-    /// it. Needs a running chan-desktop; `--name` / `--script` apply only to
-    /// this form.
-    #[command(long_about = SERVE_LONG_ABOUT)]
+    /// Serve a workspace by PATH, or register a devserver by URL
+    #[command(long_about = OPEN_LONG_ABOUT)]
+    #[command(after_long_help = &*OPEN_AFTER_HELP)]
     Open {
         /// A local workspace PATH, or a devserver URL (scheme://host[:port]).
         /// A value containing `://` is treated as a devserver URL; anything
         /// else is a path.
+        #[arg(verbatim_doc_comment)]
         target: Option<String>,
         /// (URL form) Optional label for the devserver's launcher section.
         #[arg(long)]
         name: Option<String>,
         /// (URL form) Optional connect script the desktop runs before it
         /// dials the devserver.
-        #[arg(long)]
+        #[arg(long, verbatim_doc_comment)]
         script: Option<String>,
         /// (PATH form) Serve the given path verbatim instead of suggesting
         /// the enclosing VCS repository root. Without this flag, `chan
@@ -238,21 +454,26 @@ enum Command {
         /// keeps cross-file links, the graph, and search aligned
         /// with the project boundary. Pass `--here` when you
         /// genuinely want to scope the workspace to a subdir.
-        #[arg(long)]
+        #[arg(long, verbatim_doc_comment)]
         here: bool,
         /// Host address to bind. Default 127.0.0.1 (or ::1 with -6).
         /// Use 0.0.0.0 / :: to listen on all interfaces. chan has no
         /// TLS and only a bearer-token gate, so any non-loopback host
         /// exposes your workspace in plaintext on that network.
-        #[arg(long)]
+        #[arg(long, verbatim_doc_comment)]
         host: Option<IpAddr>,
         /// Force IPv4-only listening. With no --host, binds 127.0.0.1.
         /// Mutually exclusive with -6.
-        #[arg(short = '4', long = "ipv4", conflicts_with = "ipv6")]
+        #[arg(
+            short = '4',
+            long = "ipv4",
+            conflicts_with = "ipv6",
+            verbatim_doc_comment
+        )]
         ipv4: bool,
         /// Force IPv6-only listening. With no --host, binds ::1.
         /// Mutually exclusive with -4.
-        #[arg(short = '6', long = "ipv6")]
+        #[arg(short = '6', long = "ipv6", verbatim_doc_comment)]
         ipv6: bool,
         #[arg(long, default_value_t = DEFAULT_PORT)]
         port: u16,
@@ -262,28 +483,28 @@ enum Command {
         /// `/seg[/seg...]` with `[A-Za-z0-9-]+` segments; trailing
         /// slashes and `//` runs are tolerated. Anything else is
         /// rejected.
-        #[arg(long)]
+        #[arg(long, verbatim_doc_comment)]
         prefix: Option<String>,
         /// Idle timeout before the server triggers a graceful
         /// shutdown. Accepts `30s`, `5m`, `1h`. Useful for systemd
         /// socket-activated deployments where many idle instances
         /// stack on one host. Without this flag the server stays
         /// resident indefinitely.
-        #[arg(long, value_parser = parse_idle_timeout)]
+        #[arg(long, value_parser = parse_idle_timeout, verbatim_doc_comment)]
         timeout: Option<Duration>,
         /// Skip the per-launch bearer-token gate. Local dev only;
         /// never expose a no-token server on a shared machine.
-        #[arg(long)]
+        #[arg(long, verbatim_doc_comment)]
         no_token: bool,
         /// Do not open the system default browser when the server is
         /// ready. The URL is still printed; useful for shells that
         /// host the UI in their own window (chan-desktop) or for
         /// headless / scripted invocations.
-        #[arg(long)]
+        #[arg(long, verbatim_doc_comment)]
         no_browser: bool,
         /// Search indexer resource profile. Overrides
         /// `server.search.aggression` for this run.
-        #[arg(long, value_parser = parse_search_aggression)]
+        #[arg(long, value_parser = parse_search_aggression, verbatim_doc_comment)]
         search_aggression: Option<SearchAggression>,
         /// Lock down the Settings panel: the SPA greys the cog and
         /// the server refuses every settings-write route with 403
@@ -291,7 +512,7 @@ enum Command {
         /// POST /api/storage/reset, POST /api/index/rebuild). For
         /// kiosk-style deployments (shared workstation, demo box) where
         /// the workspace owner is not the operator at the keyboard.
-        #[arg(long)]
+        #[arg(long, verbatim_doc_comment)]
         no_settings: bool,
         /// Force a standalone server: bind this workspace directly and skip
         /// both the chan-desktop handoff and the local devserver
@@ -299,7 +520,7 @@ enum Command {
         /// shell-parentage default. The escape hatch for automation and for
         /// serving a workspace the local devserver / desktop should not take
         /// over. Mutually exclusive with --desktop / --devserver.
-        #[arg(long, conflicts_with_all = ["desktop", "devserver"])]
+        #[arg(long, conflicts_with_all = ["desktop", "devserver"], verbatim_doc_comment)]
         standalone: bool,
         /// Force the chan-desktop handoff: hand this workspace to a running
         /// same-user desktop to open in a native window, then exit. Overrides
@@ -307,7 +528,7 @@ enum Command {
         /// when no desktop is reachable (skew, error, GUI absent, or
         /// CHAN_NO_DESKTOP_HANDOFF). Mutually exclusive with --standalone /
         /// --devserver.
-        #[arg(long, conflicts_with_all = ["standalone", "devserver"])]
+        #[arg(long, conflicts_with_all = ["standalone", "devserver"], verbatim_doc_comment)]
         desktop: bool,
         /// Force the local-devserver registration: register this workspace
         /// with a running same-user devserver, which mounts it and owns its
@@ -317,30 +538,20 @@ enum Command {
         /// devserver shell -- nesting a devserver in a devserver is
         /// unsupported; omit the flag to register with the current one.
         /// Mutually exclusive with --standalone / --desktop.
-        #[arg(long, conflicts_with_all = ["standalone", "desktop"])]
+        #[arg(long, conflicts_with_all = ["standalone", "desktop"], verbatim_doc_comment)]
         devserver: bool,
     },
-    /// Show which registered workspaces are currently being served, and
-    /// by what.
-    ///
-    /// A live writer-lock holder means the workspace is served; the
-    /// holder's pid and start time come from its `writer.lock` record.
-    /// The serving kind (standalone `serve` / chan-desktop / devserver)
-    /// is resolved from the holder's control socket when reachable, and
-    /// shown as `served` otherwise.
+    /// Show which registered workspaces are served, and by what
+    #[command(long_about = help::CHAN_PS)]
+    #[command(after_long_help = help::CHAN_PS_AFTER)]
     Ps {
         /// Emit machine-readable JSON.
         #[arg(long)]
         json: bool,
     },
-    /// Run a headless multi-workspace devserver on one address.
-    ///
-    /// Aggregates many workspaces behind one port: a `chan open <path>`
-    /// on this box registers its workspace with the running devserver and
-    /// exits instead of binding its own server, so the devserver owns each
-    /// workspace's single-writer flock. A desktop client lists, opens, and
-    /// forgets workspaces over the management API. What was mounted comes
-    /// back on the next start.
+    /// Run a headless multi-workspace devserver on one address
+    #[command(long_about = help::CHAN_DEVSERVER)]
+    #[command(after_long_help = help::CHAN_DEVSERVER_AFTER)]
     Devserver {
         /// Host address to bind. Default 127.0.0.1 (loopback). Use
         /// 0.0.0.0 / :: to listen on all interfaces; there is no TLS and
@@ -348,13 +559,13 @@ enum Command {
         /// `ssh -L` tunnel rather than binding it on a public interface.
         /// Omit on `--restart` to preserve the running service's bound
         /// address instead of reverting to the default.
-        #[arg(long)]
+        #[arg(long, verbatim_doc_comment)]
         bind: Option<IpAddr>,
         /// Port to bind. Default 8787, except a listening tunnel-mode
         /// devserver (systemd / CHAN_DEVSERVER_LISTEN=1) which defaults to an
         /// OS-assigned free port; preserved from the running service on
         /// `--restart` when omitted.
-        #[arg(long)]
+        #[arg(long, verbatim_doc_comment)]
         port: Option<u16>,
         /// Service backend. `auto` (the default, and what a bare `--service`
         /// resolves to) picks per-OS at runtime: with an action verb it
@@ -365,23 +576,23 @@ enum Command {
         /// daemon (pidfile + flock). `systemd` (Linux) and `launchd` (macOS) are
         /// OS-backed background services. `chan` may run bare or with an action
         /// verb; `systemd` / `launchd` need an explicit action verb.
-        #[arg(long, value_enum, num_args = 0..=1, default_value = "auto", default_missing_value = "auto")]
+        #[arg(long, value_enum, num_args = 0..=1, default_value = "auto", default_missing_value = "auto", verbatim_doc_comment)]
         service: ServiceKind,
         /// Start the background service (write/refresh its unit, enable it on
         /// boot where the backend supports that, and start it), then return.
         /// Idempotent when it is already running.
-        #[arg(long, group = "action")]
+        #[arg(long, group = "action", verbatim_doc_comment)]
         start: bool,
         /// Stop the service AND disable it, so it does not come back on the next
         /// login or boot, then return. Idempotent. A foreground devserver
         /// (`--service=none`) is stopped with Ctrl-C.
-        #[arg(long, group = "action")]
+        #[arg(long, group = "action", verbatim_doc_comment)]
         stop: bool,
         /// Restart the service, then return. Rewrites the unit / agent / pidfile
         /// first, so it picks up the current binary; an explicit --bind/--port
         /// rebinds, while omitting both preserves the running service's address.
         /// Starts the service if it is not already running.
-        #[arg(long, group = "action")]
+        #[arg(long, group = "action", verbatim_doc_comment)]
         restart: bool,
         /// Report whether the service is running, then exit.
         #[arg(long, group = "action")]
@@ -390,18 +601,22 @@ enum Command {
         /// stay attached, blocking on its health until Ctrl-C. This is the
         /// "bring it up and watch it" form connect scripts use; on Ctrl-C it
         /// detaches and the service keeps running.
-        #[arg(long, group = "action")]
+        #[arg(long, group = "action", verbatim_doc_comment)]
         join: bool,
         /// Take over a wedged `--service=chan` daemon, or make a
         /// `--service=systemd --restart` destructive instead of preserving live
         /// PTYs. Applies to `--service=chan` and `--restart`.
-        #[arg(long)]
+        #[arg(long, verbatim_doc_comment)]
         force: bool,
         /// Tunnel endpoint URL. With --tunnel-token, the devserver also dials
         /// this gateway and publishes its tenant content at
         /// `{user}.devserver.chan.app/{workspace}/*`, alongside the local
         /// management server.
-        #[arg(long, default_value = "https://devserver.chan.app/v1/tunnel")]
+        #[arg(
+            long,
+            default_value = "https://devserver.chan.app/v1/tunnel",
+            verbatim_doc_comment
+        )]
         tunnel_url: String,
         /// Personal access token (chan_pat_*) from id.chan.app. Setting this
         /// enables tunnel mode: the devserver dials the gateway and publishes
@@ -410,13 +625,13 @@ enum Command {
         /// name shown in the roster comes from --tunnel-devserver-name.
         /// Prefer the CHAN_TUNNEL_TOKEN env var so the secret does not
         /// appear in `ps`.
-        #[arg(long, env = "CHAN_TUNNEL_TOKEN")]
+        #[arg(long, env = "CHAN_TUNNEL_TOKEN", verbatim_doc_comment)]
         tunnel_token: Option<String>,
         /// Display name for this devserver in the gateway roster (tunnel
         /// mode only). Defaults to this machine's hostname. Trimmed and
         /// capped at 64 bytes; when another of your devservers already
         /// holds the name, the gateway suffixes `-2`, `-3`, ...
-        #[arg(long, env = "CHAN_TUNNEL_DEVSERVER_NAME")]
+        #[arg(long, env = "CHAN_TUNNEL_DEVSERVER_NAME", verbatim_doc_comment)]
         tunnel_devserver_name: Option<String>,
     },
     /// Internal: run the background `--service=chan` daemon child. The parent
@@ -432,35 +647,44 @@ enum Command {
         port: u16,
         /// Tunnel endpoint URL. The token, if any, is read only from
         /// CHAN_TUNNEL_TOKEN.
-        #[arg(long, default_value = "https://devserver.chan.app/v1/tunnel")]
+        #[arg(
+            long,
+            default_value = "https://devserver.chan.app/v1/tunnel",
+            verbatim_doc_comment
+        )]
         tunnel_url: String,
         /// Display name for the gateway roster; the parent passes the
         /// resolved value (explicit flag or hostname) through argv.
-        #[arg(long)]
+        #[arg(long, verbatim_doc_comment)]
         tunnel_devserver_name: Option<String>,
     },
-    /// Read or write settings persisted outside the workspace. Keys use
-    /// the same namespaces as the web Settings overlay where possible
-    /// (`editor.*`, `server.*`).
+    /// Read or write settings outside the workspace (editor.*, server.*)
+    #[command(long_about = help::CHAN_CONFIG)]
+    #[command(after_long_help = help::CHAN_CONFIG_AFTER)]
     Config {
         #[command(subcommand)]
         action: ConfigAction,
     },
-    /// Self-upgrade: read release metadata from chan.app, download
-    /// the selected CLI asset, verify SHA256, and atomically replace
-    /// the running binary. Set `CHAN_UPDATE_CHECK=0` to silence the
-    /// banner that fires on `chan open` startup.
+    /// Upgrade chan in place
+    ///
+    /// Reads release metadata from chan.app, downloads the selected CLI
+    /// asset, verifies its SHA256, and atomically replaces the running
+    /// binary.
+    ///
+    /// Set `CHAN_UPDATE_CHECK=0` to silence the banner that fires on
+    /// `chan open` startup.
+    #[command(verbatim_doc_comment)]
     Upgrade {
         /// Skip the confirmation prompt.
         #[arg(short = 'y', long)]
         yes: bool,
         /// Only check + report; do not download or replace the
         /// binary. Returns success in both directions.
-        #[arg(long)]
+        #[arg(long, verbatim_doc_comment)]
         check: bool,
         /// Pin a specific version instead of querying latest metadata.
         /// Pass a bare version, for example `0.14.0`.
-        #[arg(long)]
+        #[arg(long, verbatim_doc_comment)]
         version: Option<String>,
     },
     /// Internal: run the chan-llm MCP server on stdio against a
@@ -548,20 +772,24 @@ impl WorkspaceGraphArgs {
 
 #[derive(Subcommand, Debug)]
 enum WorkspaceAction {
-    /// Register a directory as a chan workspace.
+    /// Register a directory as a chan workspace
     ///
-    /// The baseline filesystem walk + markdown read + documentation
-    /// graph + BM25 always runs. Semantic search is an optional
-    /// layer, off by default to keep workspaces lean. chan-reports
-    /// is on by default for new workspaces (`chan workspace reports
-    /// disable` turns it off).
+    /// The baseline always runs: a filesystem walk, a markdown read, the
+    /// documentation graph, and the BM25 index. Semantic search is an
+    /// optional layer, off by default to keep workspaces lean. Code
+    /// reports are on by default for new workspaces; `chan workspace
+    /// reports disable` turns them off.
+    ///
+    /// Registering alone does not serve the workspace. `chan open PATH`
+    /// registers and serves in one step, which is the usual way in.
+    #[command(verbatim_doc_comment)]
     Add {
         path: PathBuf,
         /// Enable per-workspace semantic search (BGE-small
         /// dense vectors). Per-workspace footprint; needs the shared
         /// model (`chan workspace index download-model`). Off by
         /// default.
-        #[arg(long = "semantic-search")]
+        #[arg(long = "semantic-search", verbatim_doc_comment)]
         semantic_search: bool,
         /// Force-enable per-workspace chan-reports (language
         /// detection + SLOC + COCOMO). Per-workspace footprint;
@@ -569,7 +797,7 @@ enum WorkspaceAction {
         /// are already on by default for new workspaces; the flag
         /// persists the setting explicitly and runs the kickoff
         /// scan at add time.
-        #[arg(long = "reports")]
+        #[arg(long = "reports", verbatim_doc_comment)]
         reports: bool,
     },
     /// List registered workspaces, most-recent first.
@@ -578,28 +806,35 @@ enum WorkspaceAction {
         /// `{"workspaces":[{path,metadata_key,last_seen_at},...]}`.
         /// `last_seen_at` is RFC3339 UTC. The text format is
         /// unchanged when this flag is omitted.
-        #[arg(long)]
+        #[arg(long, verbatim_doc_comment)]
         json: bool,
     },
-    /// Drop a workspace from the registry. Does not delete the
-    /// directory or its content; only forgets it on this machine.
+    /// Drop a workspace from the registry
+    ///
+    /// Does not delete the directory or its content; only forgets it on
+    /// this machine, so the same path can be registered again later with
+    /// `chan workspace add` or `chan open`.
+    #[command(verbatim_doc_comment)]
     Rm {
         #[arg(value_hint = clap::ValueHint::AnyPath)]
         path: PathBuf,
     },
-    /// Rebuild the search index + graph; manage the embedding
-    /// model + per-workspace Hybrid-search opt-in. Subcommand-driven
-    /// (rather than a flat `chan workspace index <path>`)
-    /// so the model + semantic-toggle controls live alongside
-    /// the rebuild action; mirrors `chan config <action>`.
+    /// Rebuild the search index and graph, and manage semantic search
+    ///
+    /// Subcommand-driven rather than a flat `chan workspace index PATH`
+    /// so the embedding-model and semantic-toggle controls live next to
+    /// the rebuild action, mirroring `chan config`.
+    #[command(verbatim_doc_comment)]
     Index {
         #[command(subcommand)]
         action: IndexAction,
     },
-    /// Enable/disable per-workspace chan-reports
-    /// (language detection + SLOC + COCOMO). On by default for
-    /// new workspaces; toggle here or via the pre-flight UI /
-    /// Settings.
+    /// Enable or disable per-workspace code reports
+    ///
+    /// Reports cover language detection, SLOC, and COCOMO. They are on by
+    /// default for new workspaces; toggle them here, in the pre-flight
+    /// dialog, or in Settings.
+    #[command(verbatim_doc_comment)]
     Reports {
         #[command(subcommand)]
         action: ReportsAction,
@@ -639,10 +874,12 @@ enum WorkspaceAction {
         #[command(subcommand)]
         action: MetadataAction,
     },
-    /// Manage contacts inside a workspace. Today: import contacts from
-    /// an external source as one markdown note per contact, with
-    /// `chan.kind: contact` frontmatter so the editor and graph
-    /// classify them automatically.
+    /// Manage contacts inside a workspace
+    ///
+    /// Import contacts from an external source as one markdown note per
+    /// contact, carrying `chan.kind: contact` frontmatter so the editor
+    /// and the graph classify them automatically.
+    #[command(verbatim_doc_comment)]
     Contacts {
         #[command(subcommand)]
         action: ContactsAction,
@@ -651,8 +888,10 @@ enum WorkspaceAction {
 
 #[derive(Subcommand, Debug)]
 enum ContactsAction {
-    /// Import contacts from an external source as markdown notes.
+    /// Import contacts from an external source as markdown notes
+    ///
     /// Pick the source format with a sub-subcommand.
+    #[command(verbatim_doc_comment)]
     Import {
         #[command(subcommand)]
         source: ImportSource,
@@ -661,35 +900,34 @@ enum ContactsAction {
 
 #[derive(Subcommand, Debug)]
 enum ImportSource {
-    /// Import from a CSV file. Currently only Google Contacts
-    /// CSV is supported (export at contacts.google.com -> Export
-    /// -> "Google CSV"). Other CSV dialects can be added later
-    /// behind --provider.
+    /// Import a Google Contacts CSV as one markdown note per contact
+    #[command(long_about = help::CHAN_WORKSPACE_CONTACTS_IMPORT_CSV)]
+    #[command(after_long_help = help::CHAN_WORKSPACE_CONTACTS_IMPORT_CSV_AFTER)]
     Csv {
         /// Path to the CSV file.
         file: PathBuf,
         /// Workspace-relative directory where notes will land. Created
         /// if it does not exist. Use `""` to write at the workspace
         /// root.
-        #[arg(long)]
+        #[arg(long, verbatim_doc_comment)]
         into: String,
         /// Source provider's CSV format. Currently only "google".
         #[arg(long, default_value = "google")]
         provider: String,
         /// Parse and report what would be written; do not touch
         /// the workspace.
-        #[arg(long)]
+        #[arg(long, verbatim_doc_comment)]
         dry_run: bool,
         /// Replace existing files instead of skipping them. The
         /// per-contact line in the report changes from SKIPPED to
         /// OVERWROTE so it's clear which files moved.
-        #[arg(long)]
+        #[arg(long, verbatim_doc_comment)]
         overwrite: bool,
         /// Workspace root (required).
         /// Auto-registers the path if not already known, so
         /// `chan workspace contacts import csv ... --workspace /some/dir`
         /// works without a prior `chan workspace add`.
-        #[arg(long)]
+        #[arg(long, verbatim_doc_comment)]
         workspace: Option<PathBuf>,
     },
 }
@@ -758,13 +996,12 @@ enum MetadataAction {
 /// match `<feature> enable / disable` across the surface.
 #[derive(Subcommand, Debug)]
 enum IndexAction {
-    /// Rebuild the search index + graph for a workspace. Older
-    /// scripts used a flat `chan workspace index <path>`; the explicit verb keeps it
-    /// alongside the model/semantic actions. Accepts either the
-    /// positional `<PATH>` (backwards-compat) OR `--path <PATH>`
-    /// (uniform with the other four subcommands so wrappers can
-    /// pass `--path` to all of them). At least one
-    /// must be supplied.
+    /// Rebuild the search index and graph for a workspace
+    ///
+    /// Takes the workspace root either positionally or as `--path`, so a
+    /// wrapper can pass `--path` uniformly across every subcommand here.
+    /// At least one form must be supplied.
+    #[command(verbatim_doc_comment)]
     Rebuild {
         /// Workspace root, positional form.
         path: Option<PathBuf>,
@@ -772,12 +1009,12 @@ enum IndexAction {
         #[arg(long = "path", value_name = "PATH")]
         path_flag: Option<PathBuf>,
     },
-    /// Download the embedding model into
-    /// `<user-config>/chan/models/<model-name>/`. Idempotent: a
-    /// re-run with the model already present is a fast no-op.
-    /// Default model is `BAAI/bge-small-en-v1.5`; the
-    /// `--model` flag forward-compats a future multi-model
-    /// picker.
+    /// Download the embedding model semantic search needs
+    ///
+    /// Lands in `<user-config>/chan/models/<model-name>/` and is shared by
+    /// every workspace. Idempotent: a re-run with the model already
+    /// present is a fast no-op.
+    #[command(verbatim_doc_comment)]
     DownloadModel {
         /// HuggingFace model id, e.g. `BAAI/bge-small-en-v1.5`.
         #[arg(long, default_value = "BAAI/bge-small-en-v1.5")]
@@ -798,11 +1035,12 @@ enum IndexAction {
         #[arg(long)]
         model: String,
     },
-    /// Flip the workspace's Hybrid-search opt-in. Refuses if the model
-    /// isn't downloaded; the error points at `chan workspace index
-    /// download-model`. The flag persists in
-    /// `<index_dir>/config.toml` so it survives `chan open`
-    /// restarts.
+    /// Turn on hybrid (lexical plus semantic) search for a workspace
+    ///
+    /// Refuses when the embedding model is not downloaded, and points at
+    /// `chan workspace index download-model`. The opt-in persists in the
+    /// workspace's index config, so it survives a restart.
+    #[command(verbatim_doc_comment)]
     EnableSemantic {
         /// Workspace root (required).
         #[arg(long)]
@@ -814,8 +1052,11 @@ enum IndexAction {
         #[arg(long)]
         path: Option<PathBuf>,
     },
-    /// Print the semantic-search state: current mode, model
-    /// presence, model path + size, opt-in flag.
+    /// Print the semantic-search state for a workspace
+    ///
+    /// Reports the current mode, whether the model is present, its path
+    /// and size, and the workspace's opt-in flag.
+    #[command(verbatim_doc_comment)]
     Status {
         /// Workspace root (required).
         #[arg(long)]
@@ -837,18 +1078,22 @@ enum IndexAction {
 /// pre-flight UI / Settings flips them on.
 #[derive(Subcommand, Debug)]
 enum ReportsAction {
-    /// Enable per-workspace chan-report (language detection, SLOC
-    /// counts, COCOMO estimate) and trigger an initial scan if
-    /// no persisted report exists. Idempotent: re-enable is a
-    /// no-op.
+    /// Enable code reports for a workspace
+    ///
+    /// Covers language detection, SLOC counts, and a COCOMO estimate, and
+    /// triggers an initial scan when no persisted report exists.
+    /// Idempotent: re-enabling is a no-op.
+    #[command(verbatim_doc_comment)]
     Enable {
         /// Workspace root (required).
         #[arg(long, value_name = "PATH")]
         path: Option<PathBuf>,
     },
-    /// Disable per-workspace chan-report. Destructive: drops the
-    /// persisted `report.jsonl` so re-enabling later triggers a
-    /// fresh scan. Pass `-y` to skip the confirmation prompt.
+    /// Disable code reports for a workspace
+    ///
+    /// Destructive: drops the persisted report, so re-enabling later
+    /// triggers a fresh scan. Pass `-y` to skip the confirmation prompt.
+    #[command(verbatim_doc_comment)]
     Disable {
         /// Workspace root.
         #[arg(long, value_name = "PATH")]
@@ -867,11 +1112,12 @@ enum ReportsAction {
 /// rendering whose usage lines read `cs <cmd>` -- never `cs shell <cmd>`.
 /// The parsed action then dispatches through [`Command::Shell`] exactly as
 /// an explicit `chan shell <action>` does, so `cs terminal list` == `chan
-/// shell terminal list`. The symlink is the user's to create (documented
-/// in `chan shell --help`); the build never ships one. Invoked as `chan`
-/// (the standalone shim or chan-desktop's `chan` dispatch) there is no
-/// aliasing. Takes `args` rather than reading the environment so
-/// chan-desktop can hand us its own argv.
+/// shell terminal list`. How a `cs` name reaches PATH varies by install
+/// and does not matter here; `chan shell --help` covers adding one when
+/// an install did not provide it. Invoked as `chan` (the standalone shim
+/// or chan-desktop's `chan` dispatch) there is no aliasing. Takes `args`
+/// rather than reading the environment so chan-desktop can hand us its
+/// own argv.
 fn parse_cli<I, T>(args: I) -> Cli
 where
     I: IntoIterator<Item = T>,
@@ -918,15 +1164,17 @@ pub enum Personality {
 /// `Systemd` / `Launchd` each force a specific backend explicitly.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 pub enum ServiceKind {
-    /// Per-OS auto-pick (the default). With an action verb: systemd (Linux),
-    /// launchd (macOS), the self-managed `chan` daemon (Windows). With no action
-    /// verb it runs the plain foreground server (Ctrl-C stops).
+    // These doc comments are the possible-values list in `--help`, and clap
+    // renders each as ONE line however it is wrapped here. Keep them to a
+    // single short sentence; the per-OS resolution table is in the command's
+    // long help, where there is room for it.
+    /// Per-OS auto-pick, the default
     #[value(name = "auto")]
     Auto,
-    /// No supervision: run in the foreground on `--bind`/`--port` (Ctrl-C stops).
+    /// No supervision: run in the foreground, Ctrl-C stops
     #[value(name = "none")]
     None,
-    /// The cross-OS self-managed background daemon (pidfile + flock).
+    /// The cross-OS self-managed background daemon
     Chan,
     /// A systemd user service (Linux only).
     Systemd,
@@ -1150,6 +1398,7 @@ where
         },
         Command::Shell { action } => chan_shell::dispatch(action).await,
         Command::Completions { shell } => cmd_completions(shell),
+        Command::DumpSkill { list, topic } => cmd_dump_skill(list, topic.as_deref()),
         Command::Close { path, remove } => cmd_close(path, remove, personality).await,
         Command::Open {
             target,
@@ -1393,6 +1642,20 @@ fn cmd_list(json: bool) -> Result<()> {
             d.metadata_key,
         );
     }
+    Ok(())
+}
+
+/// Render the skill (or one topic, or the index) to stdout. Pure output,
+/// like `cmd_completions`: no workspace, no registry, no side effects.
+fn cmd_dump_skill(list: bool, topic: Option<&str>) -> Result<()> {
+    let out = if list {
+        skill::render_list()
+    } else if let Some(topic) = topic {
+        skill::render_topic(topic)?
+    } else {
+        skill::render_skill()?
+    };
+    print!("{out}");
     Ok(())
 }
 
@@ -5960,6 +6223,27 @@ fn print_import_summary(summary: &chan_workspace::ImportSummary) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `make shortcuts-check` diffs the SOURCE text of `KEYBINDINGS_TABLE`
+    /// against the generator, so it cannot see an escape that changes the
+    /// compiled value. This asserts on the value itself: every row of the
+    /// chord table carries the two-space indent the help framing expects.
+    #[test]
+    fn keybindings_table_rows_keep_the_help_indent() {
+        let unindented: Vec<&str> = KEYBINDINGS_TABLE
+            .lines()
+            .filter(|line| !line.is_empty() && !line.starts_with("  "))
+            .collect();
+        assert!(
+            unindented.is_empty(),
+            "KEYBINDINGS_TABLE rows lost the table indent:\n  {}",
+            unindented.join("\n  ")
+        );
+        assert!(
+            KEYBINDINGS_TABLE.lines().filter(|l| !l.is_empty()).count() > 10,
+            "KEYBINDINGS_TABLE looks empty"
+        );
+    }
 
     #[test]
     fn devserver_collision_hint_only_on_default_port_addr_in_use() {

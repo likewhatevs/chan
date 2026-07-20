@@ -152,4 +152,21 @@ describe("shortcut table", () => {
     expect(native).toMatch(/^Split bottom\s+Cmd\+Shift\+\//m);
   });
 
+  // `chan open --help` prints this table verbatim (the Rust workspace pins
+  // clap without `wrap_help`), so the capped form has a hard column budget.
+  test("maxWidth moves an oversized note onto its own line", () => {
+    const capped = renderTable("web", "mac", 74);
+    for (const line of capped.split("\n")) {
+      expect(line.length).toBeLessThanOrEqual(74);
+    }
+    // The note survives the move; it is not truncated away.
+    expect(capped).toMatch(/^Search\s+Cmd\+Shift\+S$/m);
+    expect(capped).toMatch(/^\s+\(Ctrl\+Alt\+S on Linux \/ Windows\)$/m);
+  });
+
+  test("without maxWidth every note stays inline", () => {
+    const plain = renderTable("web", "mac");
+    expect(plain).toMatch(/^Search\s+Cmd\+Shift\+S\s+\(Ctrl\+Alt\+S on Linux/m);
+  });
+
 });

@@ -20,12 +20,98 @@ use chan_workspace::{
 };
 use clap::{Args, Parser, Subcommand};
 
+use crate::help;
+
 use crate::control::{absolutize, control_socket_env, open_env, send_control_request};
 use crate::submit::{ResolvedSubmit, SubmitAgent};
 use crate::wire::{
     ControlRequest, PaneOp, PastePrefer, SplitDir, SurveyFollowup, SurveySpec, TeamOp,
     GRAPH_LINK_PREFIX, MAX_CLIPBOARD_BYTES,
 };
+
+/// What `cs` is and what it needs to work. Consts rather than doc
+/// comments because clap collapses a doc comment's paragraphs onto one
+/// line, which would flatten the tables below.
+const CS_LONG_ABOUT: &str = "\
+Drive the current chan window from its terminal.
+
+`cs` is the chan binary under a second name, picked by argv[0], so `cs
+open x.md` and `chan shell open x.md` are the same command. Every action
+targets the window that spawned this terminal, discovered from the
+environment; run outside a chan terminal, each one errors clearly instead
+of guessing.
+
+Actions disambiguate on their first letters, iproute2 style, so `cs o`,
+`cs t l`, and `cs sea` resolve to open, terminal list, and search. The
+prefix has to be unambiguous: `se` matches both search and session, so it
+is rejected rather than guessed.";
+
+/// The environment contract and the MCP bridge. This is the page an agent
+/// reads to work out where it is running and what it may call.
+const CS_AFTER_HELP: &str = r#"THE ENVIRONMENT CONTRACT:
+Every chan-spawned terminal carries these. Read them; do not set them.
+
+  CHAN                  1 inside any chan terminal. The detection flag.
+  CHAN_CONTROL_SOCKET   the serving chan-server's control socket. Every
+                        `cs` command needs it.
+  CHAN_WINDOW_ID        the window to act on. Window-targeting commands
+                        (open, graph, pane, survey, clipboard, upload,
+                        download) need it too.
+  CHAN_TAB_NAME         this tab's name, when it has one. A team member
+                        finds its own handle here.
+  CHAN_TAB_GROUP        this tab's broadcast group. Always set; the
+                        default group is literally "default".
+  CHAN_WORKSPACE_PATH   the served workspace root, or $HOME when there
+                        is no workspace.
+  CHAN_WORKSPACE_NAME   that path's basename.
+
+WORKSPACE ONLY:
+`open`, `graph`, `search`, `export`, every `session` action, `terminal
+team` (including `--script`), and `terminal new` with a path need a
+workspace behind the window. In a standalone terminal they refuse and say
+so. Nothing else here does: `terminal`, `pane`, `copy`, `paste`, `upload`,
+and `download` all work in a plain terminal window.
+
+No environment variable distinguishes the two. That refusal IS the check.
+`window new|open|rm|hide` additionally need the desktop app.
+
+EXAMPLES:
+Confirm you are in a chan terminal, and find out which one:
+  test -n "$CHAN" && echo "in chan: $CHAN_TAB_NAME @ $CHAN_WORKSPACE_NAME"
+
+Find out whether this window has a workspace:
+  cs search --limit 1 x >/dev/null 2>&1 \
+    && echo workspace || echo "standalone terminal"
+
+Open a file, then split the pane and put a named terminal beside it:
+  cs open notes/plan.md
+  cs pane split right
+  cs terminal new --tab-name @@Builder
+
+THE MCP BRIDGE:
+chan exposes an in-process MCP server so an external agent can edit
+through the workspace's gates instead of touching files directly. When it
+is enabled for a terminal, that terminal also carries:
+
+  CHAN_MCP_SERVER_JSON   the canonical descriptor, name plus argv
+  CHAN_MCP_COMMAND_JSON  the argv alone, as JSON
+  CHAN_MCP_COMMAND       the same argv as one shell string
+  CHAN_MCP_SOCKET        the bridge socket
+  CHAN_MCP_SERVER_NAME   always "chan"
+
+These are OFF by default, for every agent: a stray env descriptor stops
+codex from starting, because it wants a file-based config. Turn them on
+for a whole team with `cs terminal team new --mcp-env on`, or in the team
+setup dialog. Translate the descriptor into whatever shape your agent
+wants; chan does not write agent-owned config files.
+
+You do not need MCP to be useful here. `cs search`, `cs open`, and the
+rest of this surface work with the descriptor absent.
+
+SEE ALSO:
+`chan dump-skill --topic overview` for the two modes, `--topic teams` for
+running a team, and `--topic graph` for the project graph.
+"#;
 
 /// Top-level `cs` parser: the one argv shape behind every `cs` front end.
 /// `chan-desktop` parses `cs` argv directly through [`run_cs`]; the `chan`
@@ -36,10 +122,9 @@ use crate::wire::{
 /// `infer_subcommands` mirrors the `chan shell` command so `cs t l` /
 /// `cs o` resolve the same way everywhere.
 #[derive(Parser, Debug)]
-#[command(
-    name = "cs",
-    about = "Drive the current chan window from its terminal."
-)]
+#[command(name = "cs", about = "Drive the current chan window from its terminal")]
+#[command(long_about = CS_LONG_ABOUT)]
+#[command(after_long_help = CS_AFTER_HELP)]
 #[command(infer_subcommands = true)]
 pub struct CsCli {
     /// Increase logging. -v = info, -vv = debug, -vvv = trace.
@@ -59,7 +144,7 @@ pub struct CsCli {
 pub struct WorkspaceSearchArgs {
     /// Query text. Words are joined with spaces; omit for exact selectors or
     /// query-free entity browsing.
-    #[arg(value_name = "QUERY", num_args = 0..)]
+    #[arg(value_name = "QUERY", num_args = 0.., verbatim_doc_comment)]
     pub query: Vec<String>,
     /// Exact typed traversal seed (`file:notes/a.md`, `tag:design`, ...).
     #[arg(long = "from", value_name = "TYPE:VALUE")]
@@ -220,77 +305,64 @@ where
 
 #[derive(Subcommand, Debug)]
 pub enum ShellAction {
-    /// Open a path or chan://graph URL in the current window. Without a path,
-    /// opens the terminal's current directory in the browser.
+    /// Open a path, a directory, or a chan://graph link in this window
+    #[command(long_about = help::CS_OPEN)]
+    #[command(after_long_help = help::CS_OPEN_AFTER)]
     Open {
         #[arg(value_hint = clap::ValueHint::AnyPath)]
         path: Option<String>,
     },
-    /// Open the documentation graph in the current window. With a path,
-    /// focuses the graph on that file or directory. Workspace windows only:
-    /// a standalone terminal has no workspace to graph.
+    /// Open the workspace graph, focused on an optional path
+    #[command(long_about = help::CS_GRAPH)]
+    #[command(after_long_help = help::CS_GRAPH_AFTER)]
     Graph {
         #[arg(value_hint = clap::ValueHint::AnyPath)]
         path: Option<PathBuf>,
     },
-    /// Open a Dashboard tab in the current window.
+    /// Open a Dashboard tab in the current window
+    #[command(long_about = help::CS_DASHBOARD)]
+    #[command(after_long_help = help::CS_DASHBOARD_AFTER)]
     Dashboard {
         /// Initial carousel slide index (0-based). Out-of-range values
         /// land on the default slide.
-        #[arg(long = "carousel-index")]
+        #[arg(long = "carousel-index", verbatim_doc_comment)]
         carousel_index: Option<u32>,
         /// Open with carousel auto-rotation OFF (the new tab's
         /// `autoRotate` is false). Default leaves rotation on. Spelled
         /// one-r to match `--carousel-index`.
-        #[arg(long = "carousel-off")]
+        #[arg(long = "carousel-off", verbatim_doc_comment)]
         carousel_off: bool,
     },
-    /// Upload files into the current window, raising the SAME upload UI as the
-    /// Inspector pill (a file picker, then a progress indicator). PATH is
-    /// required and names the target directory (`.` = the current directory):
-    /// with a directory, files land there; with a file, they land in its
-    /// parent. In a workspace window the target is workspace-relative and must
-    /// stay within the workspace; in a standalone terminal it is the terminal's
-    /// cwd (the shell's own reach).
+    /// Raise this window's upload picker, targeting a directory
+    #[command(long_about = help::CS_UPLOAD)]
+    #[command(after_long_help = help::CS_UPLOAD_AFTER)]
     Upload {
         #[arg(value_hint = clap::ValueHint::AnyPath)]
         path: PathBuf,
     },
-    /// Download a file or directory through the current window, reusing the
-    /// Inspector's download-with-progress UI (a directory downloads as a tar,
-    /// streamed on the fly). PATH is required (`.` = the current directory). In
-    /// a workspace window the source is workspace-relative and must stay within
-    /// the workspace; in a standalone terminal it resolves against the
-    /// terminal's cwd (the shell's own reach).
+    /// Download a file or directory through this window
+    #[command(long_about = help::CS_DOWNLOAD)]
+    #[command(after_long_help = help::CS_DOWNLOAD_AFTER)]
     Download {
         #[arg(value_hint = clap::ValueHint::AnyPath)]
         path: PathBuf,
     },
-    /// Copy stdin onto the window's clipboard, so a `Cmd+V` in another app
-    /// pastes it. Reads all of stdin (text, HTML, or an image) and sends it to
-    /// the browser / desktop clipboard. The content type is sniffed (plain
-    /// text, an `<html>`/`<!doctype html>` document, or a PNG/JPEG/GIF/WebP
-    /// image); non-PNG images are re-encoded to PNG, which is the format the
-    /// clipboard reliably accepts. `--html` forces the input to be treated as
-    /// HTML (a fragment that would not sniff as a document); `--mime` forces
-    /// any type. Example: `cs copy < photo.png`, then paste into Gmail.
+    /// Copy stdin onto the clipboard of the machine viewing this window
+    #[command(long_about = help::CS_COPY)]
+    #[command(after_long_help = help::CS_COPY_AFTER)]
     Copy {
         /// Force the clipboard MIME instead of sniffing stdin
         /// (e.g. `text/html`, `image/png`).
-        #[arg(long)]
+        #[arg(long, verbatim_doc_comment)]
         mime: Option<String>,
         /// Treat stdin as HTML (shorthand for `--mime text/html`). Use for an
         /// HTML fragment that would not sniff as a full document.
-        #[arg(long, conflicts_with = "mime")]
+        #[arg(long, conflicts_with = "mime", verbatim_doc_comment)]
         html: bool,
     },
-    /// Paste the window's clipboard to stdout. Writes the raw bytes, so
-    /// `cs paste > file.png` yields a real PNG and a bare `cs paste` prints
-    /// clipboard text. When the clipboard holds several representations the
-    /// default is image-first, then text; `--text` / `--html` / `--image`
-    /// force one. The emitted MIME is reported on stderr. The bytes are raw:
-    /// clipboard text may carry control/escape sequences, so redirect to a
-    /// file (or pipe through a sanitizer) rather than dumping to a live TTY.
+    /// Write this window's clipboard to stdout as raw bytes
+    #[command(long_about = help::CS_PASTE)]
+    #[command(after_long_help = help::CS_PASTE_AFTER)]
     Paste {
         /// Emit the plain-text representation only.
         #[arg(long, conflicts_with_all = ["html", "image"])]
@@ -302,22 +374,17 @@ pub enum ShellAction {
         #[arg(long, conflicts_with_all = ["text", "html"])]
         image: bool,
     },
-    /// Terminal operations against the current window's live sessions.
-    ///
-    /// Prefix matching applies here too: `cs t n` / `cs t w` / `cs t l`
-    /// resolve to terminal new / write / list.
+    /// Drive live terminal tabs: new, write, list, restart, close, read
     #[command(infer_subcommands = true)]
+    #[command(long_about = help::CS_TERMINAL)]
+    #[command(after_long_help = help::CS_TERMINAL_AFTER)]
     Terminal {
         #[command(subcommand)]
         action: TerminalAction,
     },
-    /// Export a workspace file through a live renderer window (a connected
-    /// browser or chan-desktop) and write the result back into the
-    /// workspace. `cs export doc.md` renders doc.md to PDF and writes
-    /// doc.pdf next to it; the final workspace-relative output path prints
-    /// on stdout. Blocks until the renderer replies. Workspace windows
-    /// only, and a window must be open: the open window does the
-    /// rendering; the terminal running cs does not.
+    /// Render a workspace file to PDF through an open workspace window
+    #[command(long_about = help::CS_EXPORT)]
+    #[command(after_long_help = help::CS_EXPORT_AFTER)]
     Export {
         /// Workspace-relative source path (e.g. notes/doc.md).
         #[arg(value_hint = clap::ValueHint::AnyPath)]
@@ -327,12 +394,12 @@ pub enum ShellAction {
         format: String,
         /// Workspace-relative output path. Defaults to the source with its
         /// extension swapped for the format (notes/doc.md -> notes/doc.pdf).
-        #[arg(long)]
+        #[arg(long, verbatim_doc_comment)]
         out: Option<String>,
     },
-    /// Search and traverse the running window's workspace. A plain query is
-    /// depth 0; exact --from selectors default to one hop. Query-free entity
-    /// browsing such as `--domain tag` is supported.
+    /// Search, browse and traverse this terminal's workspace
+    #[command(long_about = help::CS_SEARCH)]
+    #[command(after_long_help = help::CS_SEARCH_AFTER)]
     Search {
         #[command(flatten)]
         search: WorkspaceSearchArgs,
@@ -341,45 +408,37 @@ pub enum ShellAction {
         json: bool,
         /// With --json, pretty-print (indent) the JSON. Ignored without
         /// --json.
-        #[arg(long)]
+        #[arg(long, verbatim_doc_comment)]
         pretty: bool,
     },
-    /// Window registry operations. `cs window list` (or `cs w l`) shows the
-    /// library's authoritative window set -- every window across every tenant,
-    /// with its `connected` flag (a live event socket is tagged with it right
-    /// now, including windows chan-desktop has hidden via the close button).
+    /// List chan's windows and open, hide or remove them
     #[command(infer_subcommands = true)]
+    #[command(long_about = help::CS_WINDOW)]
+    #[command(after_long_help = help::CS_WINDOW_AFTER)]
     Window {
         #[command(subcommand)]
         action: WindowAction,
     },
-    /// Manage this session's leader and followers. `cs session list` shows the
-    /// participants and the leader; bare `self` shows who you are and `self
-    /// --name=` renames you; `handover` requests (or, as leader, answers) a
-    /// handover; `takeover` claims leadership when the leader is gone
-    /// (`--force` seizes a live one). Workspace windows only: standalone
-    /// terminals have no shared session.
+    /// Manage the workspace session's leader and followers
     #[command(infer_subcommands = true)]
+    #[command(long_about = help::CS_SESSION)]
+    #[command(after_long_help = help::CS_SESSION_AFTER)]
     Session {
         #[command(subcommand)]
         action: SessionAction,
     },
-    /// Inspect or drive a window's tab/pane layout. Bare `cs pane` reports
-    /// the layout (every pane, its tabs and which is selected); the
-    /// subcommands focus a pane, split it right|bottom, resize it, or close a
-    /// tab / pane / everything. Targets the caller's own window
-    /// ($CHAN_WINDOW_ID) by default, or any window via `--tab-name` (a tab it
-    /// owns) so it works from a context with no window. Markdown by default;
-    /// `--json [--pretty]` for machine output.
+    /// Inspect or drive a window's tab/pane layout
     #[command(infer_subcommands = true)]
+    #[command(long_about = help::CS_PANE)]
+    #[command(after_long_help = help::CS_PANE_AFTER)]
     Pane {
         /// Target the window owning this tab, instead of the caller's own
         /// window. Lets `cs pane` run without a $CHAN_WINDOW_ID.
-        #[arg(long = "tab-name", global = true)]
+        #[arg(long = "tab-name", global = true, verbatim_doc_comment)]
         tab_name: Option<String>,
         /// Emit JSON instead of the markdown rendering (layout or exec
         /// result). Compact by default.
-        #[arg(long, global = true)]
+        #[arg(long, global = true, verbatim_doc_comment)]
         json: bool,
         /// Indent the JSON output. Only meaningful with `--json`.
         #[arg(long, global = true)]
@@ -398,33 +457,41 @@ pub enum ShellAction {
 /// auto-derived; there is no rename verb.
 #[derive(Subcommand, Debug)]
 pub enum WindowAction {
-    /// List the windows chan knows about (connected and/or with a
-    /// saved layout). Markdown by default; `--json [--pretty]` for
-    /// machine output.
+    /// List the windows chan knows about
+    ///
+    /// Covers connected windows and ones with only a saved layout.
+    /// Markdown by default; `--json [--pretty]` for machine output.
+    #[command(verbatim_doc_comment)]
     List {
         /// Emit the raw JSON rows instead of the markdown table.
         /// Compact by default.
-        #[arg(long)]
+        #[arg(long, verbatim_doc_comment)]
         json: bool,
         /// With --json, pretty-print (indent) the JSON. Ignored
         /// without --json.
-        #[arg(long)]
+        #[arg(long, verbatim_doc_comment)]
         pretty: bool,
     },
-    /// Open a new desktop window. From a standalone terminal this spawns
-    /// another terminal window; from a workspace it spawns another window
-    /// of that workspace. Prints the new window id.
+    /// Open a new window, and print its id
+    ///
+    /// From a standalone terminal this spawns another terminal window;
+    /// from a workspace it spawns another window of that workspace.
+    #[command(verbatim_doc_comment)]
     New,
-    /// Focus a window by id (un-hiding it if it was hidden). Best-effort
-    /// reopens a closed-but-saved workspace window when its workspace is
-    /// still running.
+    /// Focus a window by id, un-hiding it if hidden
+    ///
+    /// Best-effort reopens a closed-but-saved workspace window when its
+    /// workspace is still running.
+    #[command(verbatim_doc_comment)]
     Open {
         /// The window id (see `cs window list`).
         id: String,
     },
-    /// Remove a window by id: destroy it (unlike the close button, which
-    /// hides it) and delete its saved layout. Prompts before killing a
+    /// Destroy a window by id and delete its saved layout
+    ///
+    /// Unlike the close button, which only hides. Prompts before killing a
     /// window with live terminals; `--force` skips the prompt.
+    #[command(verbatim_doc_comment)]
     Rm {
         /// The window id (see `cs window list`).
         id: String,
@@ -432,8 +499,10 @@ pub enum WindowAction {
         #[arg(long)]
         force: bool,
     },
-    /// Hide a window by id (the OS close-button behavior): keep its
-    /// terminals and layout warm and reopenable.
+    /// Hide a window by id, keeping it reopenable
+    ///
+    /// The OS close-button behavior: terminals and layout stay warm.
+    #[command(verbatim_doc_comment)]
     Hide {
         /// The window id (see `cs window list`).
         id: String,
@@ -446,8 +515,10 @@ pub enum WindowAction {
 /// participant is acting.
 #[derive(Subcommand, Debug)]
 pub enum SessionAction {
-    /// List the session participants, the leader, and each one's status.
+    /// List session participants, the leader, and status
+    ///
     /// Markdown by default; `--json [--pretty]` for machine output.
+    #[command(verbatim_doc_comment)]
     List {
         /// Emit the raw JSON rows instead of the markdown table.
         #[arg(long)]
@@ -456,10 +527,13 @@ pub enum SessionAction {
         #[arg(long)]
         pretty: bool,
     },
-    /// Show who you are in this session (bare), rename yourself (`--name`),
-    /// or reset back to your default name (`--reset`). The bare query reports
-    /// your window, name, role, status, leadership, and gateway identity.
-    /// Markdown by default; `--json [--pretty]` for machine output.
+    /// Show, rename, or reset who you are in this session
+    ///
+    /// Bare, it reports your window, name, role, status, leadership, and
+    /// gateway identity. `--name` renames you; `--reset` returns you to
+    /// your default name. Markdown by default; `--json [--pretty]` for
+    /// machine output.
+    #[command(verbatim_doc_comment)]
     #[command(name = "self")]
     SelfCmd {
         /// The new display name for this client.
@@ -467,18 +541,20 @@ pub enum SessionAction {
         name: Option<String>,
         /// Clear your explicit name: fall back to your gateway identity or
         /// your generated default name.
-        #[arg(long)]
+        #[arg(long, verbatim_doc_comment)]
         reset: bool,
         /// Emit the raw JSON record instead of the markdown rendering.
         /// Query form only.
-        #[arg(long, conflicts_with_all = ["name", "reset"])]
+        #[arg(long, conflicts_with_all = ["name", "reset"], verbatim_doc_comment)]
         json: bool,
         /// With --json, pretty-print (indent) the JSON. Ignored without --json.
         #[arg(long)]
         pretty: bool,
     },
-    /// Request a leader handover (default), or accept/reject a pending request
-    /// when you are the leader.
+    /// Request a leader handover, or answer a pending one
+    ///
+    /// Accept or reject only when you are the leader.
+    #[command(verbatim_doc_comment)]
     Handover {
         /// Window id to hand leadership to (default: you).
         #[arg(long)]
@@ -519,8 +595,11 @@ pub enum PaneAction {
         #[arg(long = "pane")]
         pane: Option<String>,
     },
-    /// Resize a pane's enclosing split by a ratio delta (e.g. `0.1`,
-    /// `-0.1`); positive grows the pane. No-ops the sole pane.
+    /// Resize a pane's enclosing split by a ratio delta
+    ///
+    /// A positive delta grows the pane, so `0.1` and `-0.1` move the
+    /// split in opposite directions. No-ops on the sole pane.
+    #[command(verbatim_doc_comment)]
     // allow_negative_numbers so a bare `-0.1` is the delta value, not parsed
     // as an (unknown) `-0` flag.
     #[command(allow_negative_numbers = true)]
@@ -620,125 +699,16 @@ impl PaneAction {
     }
 }
 
-/// Worked examples appended to `cs terminal survey --help`. Each case
-/// pairs the invocation with the JSON survey the SPA actually receives, so
-/// an agent can see how the flags map onto the wire `SurveySpec`. Raw
-/// string: the literal `\n` inside a body stays literal (it is what an
-/// agent types), while the layout uses real line breaks.
-const SURVEY_AFTER_HELP: &str = r#"EXAMPLES:
-Each case shows the invocation and the JSON survey the SPA receives.
-`surveyId` is empty from the CLI; the server mints it before the SPA sees
-it. Every overlay shows the options PLUS [F] (follow up) and Dismiss, so
-the blocking call prints one of: the chosen option label; the new followup
-file path on [F] when `--followup-dir` context was passed (else a bare "host
-deferred" line); or "survey dismissed" when the host drops it.
-
-IMPORTANT: an [F] followup file is created EMPTY (the original question plus an
-empty comments section). It means "deferred, not ready" -- NOT an actionable
-answer. The host must WRITE their decision into the file's comments section
-before an agent acts on it. An agent that gets a followup path should re-read
-the file later and act ONLY once the host has populated it.
-
-Single question, two options:
-  cs terminal survey --tab-name @@Alice \
-    --title "Merge order" --option "A first" --option "B first" \
-    "Which patch lands first?"
-
-  {
-    "surveyId": "",
-    "title": "Merge order",
-    "bodyMarkdown": "Which patch lands first?",
-    "options": ["A first", "B first"],
-    "followup": null
-  }
-
-Four options, no title, multi-line body from stdin:
-  printf 'Pick a slot:\n\n- morning\n- evening' \
-    | cs terminal survey --tab-group leads --stdin \
-        --option Mon --option Tue --option Wed --option Thu
-
-  {
-    "surveyId": "",
-    "title": null,
-    "bodyMarkdown": "Pick a slot:\n\n- morning\n- evening",
-    "options": ["Mon", "Tue", "Wed", "Thu"],
-    "followup": null
-  }
-
-With an [F] follow-up paper-trail file (from <- $CHAN_TAB_NAME, to <- the
-survey target); passing --followup-dir is what makes [F] write the file:
-  cs terminal survey --tab-name @@Host \
-    --option "Ship it" --option "Hold" \
-    --followup-dir teams/alpha \
-    "Ready to cut v0.23.0?"
-
-  {
-    "surveyId": "",
-    "title": null,
-    "bodyMarkdown": "Ready to cut v0.23.0?",
-    "options": ["Ship it", "Hold"],
-    "followup": { "dir": "teams/alpha", "from": "@@Alice", "to": "@@Host" }
-  }
-"#;
-
-/// Worked examples appended to `cs terminal team --help`. Shows the input
-/// config.toml shape and the three flows (write, preview-as-script, load).
-/// Raw string so the literal escapes inside the sample stay literal.
-const TEAM_AFTER_HELP: &str = r#"EXAMPLES:
-A team is one config.toml (the on-disk `{dir}/config.toml` shape). Members
-are 1..=9, exactly one `is_lead = true`. The submit-encoding agent
-(claude / codex / gemini / opencode) is DERIVED from each member's `command`: a loose
-whole-word match, so `claude --resume` or `/usr/local/bin/codex-cli` resolve.
-A command that matches none is a plain shell member (no submit chord). To
-force the agent for an unorthodox launcher, set `CHAN_AGENT` in the member's
-env (claude/codex/gemini/opencode, or none/shell to force a shell). `created_at` is
-optional: the server stamps the current time when it is omitted.
-
-  # myteam.toml
-  team_name   = "alpha"
-  host_name   = "Neo"
-  host_handle = "@@Neo"
-  tab_group   = "alpha"
-
-  [[members]]
-  handle  = "@@Lead"
-  command = "claude"
-  is_lead = true
-
-  [[members]]
-  handle  = "@@Alice"
-  command = "codex"
-
-  # A custom launcher the command can't reveal: name the agent explicitly.
-  [[members]]
-  handle  = "@@Bob"
-  command = "./my-agent.sh"
-  env     = { CHAN_AGENT = "gemini" }
-
-Write the team (config.toml + the server-regenerated bootstrap.md + the
-tasks/journals/followups tree) inside the workspace at `alpha/`:
-  cs terminal team new alpha --config myteam.toml
-
-Preview the WHOLE bootstrap as a runnable shell script (mutates nothing;
-prints to stdout). Run it from a chan terminal at the workspace root to
-spawn the team:
-  cs terminal team new alpha --config myteam.toml --script
-
-Pipe the config in instead of a file:
-  cat myteam.toml | cs terminal team new alpha --stdin
-
-Emit the bootstrap script for an already-written team:
-  cs terminal team load alpha --script
-"#;
-
 #[derive(Subcommand, Debug)]
 pub enum TerminalAction {
-    /// Open a new terminal tab in the current window.
+    /// Open a new terminal tab in the calling window
+    #[command(long_about = help::CS_TERMINAL_NEW)]
+    #[command(after_long_help = help::CS_TERMINAL_NEW_AFTER)]
     New {
         /// Working directory for the new terminal (workspace-relative or
         /// absolute under the workspace root). Defaults to the workspace
         /// root.
-        #[arg(value_hint = clap::ValueHint::AnyPath)]
+        #[arg(value_hint = clap::ValueHint::AnyPath, verbatim_doc_comment)]
         path: Option<PathBuf>,
         /// Tab name ($CHAN_TAB_NAME inside the new terminal).
         #[arg(long = "tab-name")]
@@ -747,22 +717,9 @@ pub enum TerminalAction {
         #[arg(long = "tab-group")]
         tab_group: Option<String>,
     },
-    /// Write raw bytes to live terminal session(s), selected by name
-    /// and/or group. No newline is appended: `cs terminal write $'ls\n'`
-    /// runs; `cs terminal write ls` only types. At least one selector is
-    /// required.
-    ///
-    /// The write is QUEUED per target, not delivered instantly: each
-    /// session's queue drains only when that agent has finished generating
-    /// (its output has gone idle). Consecutive compatible submitted writes
-    /// may arrive together as one chronological prompt; raw writes, gemini,
-    /// and Rich Prompt submissions remain boundaries. The command prints the
-    /// message's position among the target's pending messages. NOTE: "idle"
-    /// is detected from output quiescence, so a target sitting at its prompt
-    /// with a PAUSED, half-typed buffer reads as idle; that rare case is not
-    /// detected. Queue bound: 100 entries per target, where a gemini message
-    /// costs two entries and every other message costs one; dropped when the
-    /// session is recycled (restarted).
+    /// Write bytes to live tabs: queued, idle-gated, no newline added
+    #[command(long_about = help::CS_TERMINAL_WRITE)]
+    #[command(after_long_help = help::CS_TERMINAL_WRITE_AFTER)]
     Write {
         /// Literal bytes to write. Omit with --stdin to stream instead.
         cmd: Option<String>,
@@ -777,7 +734,7 @@ pub enum TerminalAction {
         /// CR in one write). Omit it to write pure bytes: the input parks in
         /// the agent's compose box unsubmitted (a bare newline is a newline
         /// to an agent, not a submit).
-        #[arg(long, value_name = "AGENT")]
+        #[arg(long, value_name = "AGENT", verbatim_doc_comment)]
         submit: Option<SubmitAgent>,
         /// Target every session with this tab name.
         #[arg(long = "tab-name")]
@@ -786,10 +743,9 @@ pub enum TerminalAction {
         #[arg(long = "tab-group")]
         tab_group: Option<String>,
     },
-    /// List live terminal sessions, grouped by group. Markdown by
-    /// default; `--json` for compact machine output, `--json --pretty`
-    /// for indented JSON. The JSON form also carries `queue_depth`, the
-    /// number of messages each session still has pending in its write queue.
+    /// List live terminal sessions, grouped, as markdown or JSON
+    #[command(long_about = help::CS_TERMINAL_LIST)]
+    #[command(after_long_help = help::CS_TERMINAL_LIST_AFTER)]
     List {
         /// Emit machine-readable JSON instead of the markdown table.
         #[arg(long)]
@@ -798,11 +754,9 @@ pub enum TerminalAction {
         #[arg(long)]
         pretty: bool,
     },
-    /// Restart live terminal session(s) selected by name and/or group,
-    /// preserving each session's spawn command and env so an agent
-    /// relaunches. At least one selector is required. Used by the Team
-    /// Work bootstrap to restart its own terminal (a shell cannot restart
-    /// the shell running its own script; the server does it out of band).
+    /// Restart live terminal tabs, preserving command and environment
+    #[command(long_about = help::CS_TERMINAL_RESTART)]
+    #[command(after_long_help = help::CS_TERMINAL_RESTART_AFTER)]
     Restart {
         /// Restart every session with this tab name.
         #[arg(long = "tab-name")]
@@ -811,11 +765,9 @@ pub enum TerminalAction {
         #[arg(long = "tab-group")]
         tab_group: Option<String>,
     },
-    /// Close (tear down) live terminal session(s) selected by name and/or
-    /// group: kills the PTY and removes the session, so its tab name frees
-    /// for re-use. The teardown partner to `restart` / `new`; at least one
-    /// selector is required. `--tab-group` tears down a whole group (e.g. a
-    /// finished team) in one call.
+    /// Close live terminal tabs, freeing their tab names
+    #[command(long_about = help::CS_TERMINAL_CLOSE)]
+    #[command(after_long_help = help::CS_TERMINAL_CLOSE_AFTER)]
     Close {
         /// Close every session with this tab name.
         #[arg(long = "tab-name")]
@@ -824,23 +776,18 @@ pub enum TerminalAction {
         #[arg(long = "tab-group")]
         tab_group: Option<String>,
     },
-    /// Dump a live terminal session's scrollback (its replay ring) by tab
-    /// name, printing the raw bytes to stdout. Exactly one session must
-    /// match the name: zero is an error, and more than one is ambiguous
-    /// (there is no group axis, since scrollback reads one terminal's
-    /// history). Used by the lead process to read a worker's terminal.
+    /// Dump one terminal tab's scrollback to stdout
+    #[command(long_about = help::CS_TERMINAL_SCROLLBACK)]
+    #[command(after_long_help = help::CS_TERMINAL_SCROLLBACK_AFTER)]
     Scrollback {
         /// Tab name of the session to read. Required; must match exactly
         /// one live session.
-        #[arg(long = "tab-name")]
+        #[arg(long = "tab-name", verbatim_doc_comment)]
         tab_name: String,
     },
-    /// Raise a survey over the SPA window(s) that own the matching
-    /// terminal tab(s) and BLOCK until the user answers. Prints the chosen
-    /// option label to stdout, or (on `[F]`) the path of the followup file
-    /// the UI created. At least one selector is required. Used by an agent
-    /// to ask @@Host a question and wait for the decision.
-    #[command(after_long_help = SURVEY_AFTER_HELP)]
+    /// Ask the host a question and block until they answer
+    #[command(long_about = help::CS_TERMINAL_SURVEY)]
+    #[command(after_long_help = help::CS_TERMINAL_SURVEY_AFTER)]
     Survey {
         /// Raise the survey on the window owning this tab name.
         #[arg(long = "tab-name")]
@@ -853,7 +800,7 @@ pub enum TerminalAction {
         title: Option<String>,
         /// An answer option (1..=4). Repeat for each: `--option A
         /// --option B`. The UI numbers them `[1]`..`[4]`.
-        #[arg(long = "option", value_name = "LABEL")]
+        #[arg(long = "option", value_name = "LABEL", verbatim_doc_comment)]
         option: Vec<String>,
         /// Team directory (workspace-relative) for the `[F]` follow-up
         /// paper-trail file, created at
@@ -863,43 +810,37 @@ pub enum TerminalAction {
         /// The file is created EMPTY (question + empty comments): "deferred,
         /// not ready", NOT an answer -- the host must populate it before an
         /// agent acts on it.
-        #[arg(long = "followup-dir", value_name = "TEAM_DIR")]
+        #[arg(long = "followup-dir", value_name = "TEAM_DIR", verbatim_doc_comment)]
         followup_dir: Option<String>,
         /// Override the follow-up author (`from`). Defaults to
         /// `$CHAN_TAB_NAME` (the surveying agent's tab). Only used with
         /// `--followup-dir`.
-        #[arg(long)]
+        #[arg(long, verbatim_doc_comment)]
         from: Option<String>,
         /// Override the follow-up target (`to`). Defaults to the survey
         /// target (`--tab-name`, or `--tab-group` for a group). Only used
         /// with `--followup-dir`.
-        #[arg(long)]
+        #[arg(long, verbatim_doc_comment)]
         to: Option<String>,
         /// Seconds to wait for the host's reply before giving up. On elapse the
         /// survey returns no answer, prints `no reply within <secs>s` to
         /// stderr, and exits 124 (the GNU `timeout` convention), so a caller
         /// can tell a timed-out survey from an answered or dismissed one.
-        #[arg(long, value_name = "SECS", default_value_t = crate::wire::DEFAULT_SURVEY_TIMEOUT_SECS)]
+        #[arg(long, value_name = "SECS", default_value_t = crate::wire::DEFAULT_SURVEY_TIMEOUT_SECS, verbatim_doc_comment)]
         timeout: u64,
         /// Read the markdown problem body from this process's stdin
         /// instead of the positional `body` (handy for multi-line bodies).
-        #[arg(long)]
+        #[arg(long, verbatim_doc_comment)]
         stdin: bool,
         /// The markdown problem body. Multiple words join with spaces.
         /// Omit only with `--stdin`.
-        #[arg(num_args = 0..)]
+        #[arg(num_args = 0.., verbatim_doc_comment)]
         body: Vec<String>,
     },
-    /// Create or load a Team Work team (the CLI equivalent of the Cmd+P
-    /// team setup/load dialog). A team is one `{dir}/config.toml`; `new`
-    /// writes it (plus the server-regenerated `bootstrap.md` + the
-    /// tasks/journals/followups tree), `load` reads an existing one, and
-    /// `--script` on either emits the whole bootstrap as a runnable shell
-    /// script instead of mutating anything. Workspace windows only,
-    /// including `--script`: a standalone terminal has no workspace tree to
-    /// seed a team into.
+    /// Create, load and spawn a Team Work team of agent terminals
     #[command(infer_subcommands = true)]
-    #[command(after_long_help = TEAM_AFTER_HELP)]
+    #[command(long_about = help::CS_TERMINAL_TEAM)]
+    #[command(after_long_help = help::CS_TERMINAL_TEAM_AFTER)]
     Team {
         #[command(subcommand)]
         action: TeamAction,
@@ -912,9 +853,9 @@ pub enum TerminalAction {
 /// instead of running the operation.
 #[derive(Subcommand, Debug)]
 pub enum TeamAction {
-    /// Validate + write a team from a config, materializing the
-    /// `{dir}/config.toml`, the server-regenerated `bootstrap.md`, and the
-    /// `tasks/journals/followups` tree inside the workspace.
+    /// Write a team from a config.toml, then spawn and poke its members
+    #[command(long_about = help::CS_TERMINAL_TEAM_NEW)]
+    #[command(after_long_help = help::CS_TERMINAL_TEAM_NEW_AFTER)]
     New {
         /// Workspace-relative team directory (the team lives at
         /// `{dir}/config.toml`).
@@ -924,29 +865,30 @@ pub enum TeamAction {
         config: Option<PathBuf>,
         /// Read the team config.toml from this process's stdin instead of
         /// `--config`.
-        #[arg(long)]
+        #[arg(long, verbatim_doc_comment)]
         stdin: bool,
         /// Path to a brief Markdown file folded VERBATIM into the generated
         /// `bootstrap.md` (its own section after the Roster), so a round's
         /// custom operating instructions survive a normal `new`/regenerate.
         /// The CLI reads the file and sends its text; the server never sees the
         /// path. Omit for the generic bootstrap.
-        #[arg(long, value_name = "FILE")]
+        #[arg(long, value_name = "FILE", verbatim_doc_comment)]
         brief: Option<PathBuf>,
         /// Turn the chan MCP env vars ON or OFF for the team's terminals
         /// (sets `mcp_env` in the written config.toml). Default when omitted:
         /// OFF, matching the config default - agents still reach `cs search`
         /// and friends with MCP env off. `on` opts the whole team in; `off`
         /// writes it explicitly. Overrides any `mcp_env` in the input config.
-        #[arg(long = "mcp-env", value_name = "ON_OFF")]
+        #[arg(long = "mcp-env", value_name = "ON_OFF", verbatim_doc_comment)]
         mcp_env: Option<McpEnvToggle>,
         /// Emit the paste-and-run bootstrap shell script to stdout instead
         /// of writing the team. A pure preview: it mutates nothing.
-        #[arg(long)]
+        #[arg(long, verbatim_doc_comment)]
         script: bool,
     },
-    /// Read + validate an existing team's `{dir}/config.toml`. With
-    /// `--script`, emit its paste-and-run bootstrap shell script.
+    /// Re-read a saved team's config.toml and spawn the team again
+    #[command(long_about = help::CS_TERMINAL_TEAM_LOAD)]
+    #[command(after_long_help = help::CS_TERMINAL_TEAM_LOAD_AFTER)]
     Load {
         /// Workspace-relative team directory to load.
         dir: String,

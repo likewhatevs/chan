@@ -2,8 +2,8 @@
 //! argv through chan-shell's own `cs` parser (the same parse chan-desktop
 //! uses), then dispatches like `chan shell <action>`. One parse means one
 //! help rendering: usage lines read `cs <cmd>`, never `cs shell <cmd>`.
-//! The build never ships the symlink; the user creates it. These tests
-//! create the symlink in a tempdir and exercise dispatch and help.
+//! Installs provide that name in several shapes; these tests create a
+//! symlink in a tempdir and exercise dispatch and help.
 
 #![cfg(unix)]
 
