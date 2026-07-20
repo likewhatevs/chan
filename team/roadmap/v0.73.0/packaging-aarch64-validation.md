@@ -2,59 +2,99 @@
 
 Status: accepted scope for v0.73.0. Carried forward from v0.72.0, which shipped both distro packaging ecosystems validated on x86_64 only. Nothing about aarch64 is proven in either one.
 
-## Problem
+## Corrected baseline
 
-v0.72.0 shipped CentOS Stream COPR packaging ([hyperscale-support](../done/hyperscale-support.md)) and Arch Linux AUR packaging ([aur-support](../done/aur-support.md)). Both declare aarch64. Neither has ever built it.
+The original claim that neither ecosystem had ever built aarch64 was false for COPR. Fedora aarch64 builds existed for both packages from the project's first versioned build, v0.67.0, and remained green through v0.71.0. What v0.72.0 added, and what had never run before, was the CentOS matrix on either architecture. Arch Linux ARM remains unproven.
 
-- The AUR recipes `packaging/distros/arch/aur/chan/PKGBUILD.in` and `packaging/distros/arch/aur/chan-desktop/PKGBUILD.in` declare `arch=('x86_64' 'aarch64')`.
-- The `fiorix/chan` COPR project has `centos-stream+epel-next-9-aarch64` and `centos-stream-10-aarch64` enabled, with `chan-desktop` denied on both EL9 chroots. The intended aarch64 targets are therefore EL9 `chan`, EL10 `chan`, and EL10 `chan-desktop`.
-- No aarch64 build has run in either ecosystem, on any host or any runner. The declaration and the chroot configuration are the only things that exist.
-- The validation host is x86_64 with no binfmt or QEMU registration, so no local run can produce aarch64 evidence. `make copr-check` and `make aur-check` both build for the host architecture.
+The AUR recipes still declare `arch=('x86_64' 'aarch64')`. COPR build 10749265 proves the standalone package on both CentOS aarch64 targets, and build 10749266 proves the desktop package on EL10 aarch64. Withdrawal is therefore not the appropriate outcome.
 
-The gap this leaves is that two published packaging surfaces advertise an architecture whose build has never been observed to succeed or fail. A user on aarch64 is the first party to run it.
+## Fedora aarch64 history
 
-## Desired outcome
+The COPR build-list API reports these versioned builds with both `fedora-44-aarch64` and `fedora-rawhide-aarch64` in their chroot sets. Each listed build succeeded; duplicate retry builds for v0.67.1 and v0.67.3 are omitted here.
 
-Turn "declared but never built" into one of two settled states, per ecosystem:
+| Version | `chan` build | `chan-desktop` build | Fedora aarch64 |
+|---|---:|---:|---|
+| 0.67.0 | 10708248 | 10708249 | passed |
+| 0.67.1 | 10711275 | 10711276 | passed |
+| 0.67.2 | 10711451 | 10711452 | passed |
+| 0.67.3 | 10718699 | 10718700 | passed |
+| 0.68.0 | 10719634 | 10719635 | passed |
+| 0.69.0 | 10721657 | 10721658 | passed |
+| 0.70.0 | 10735575 | 10735576 | passed |
+| 0.70.1 | 10737654 | 10737655 | passed |
+| 0.70.2 | 10740599 | 10740600 | passed |
+| 0.70.3 | 10740906 | 10740907 | passed |
+| 0.71.0 | 10742767 | 10742768 | passed |
+| 0.72.0 | 10749265 | 10749266 | passed |
 
-- proven: a native aarch64 build ran, passed, and its evidence is recorded in this item, with the aarch64 leg wired into the path that runs at GA; or
-- withdrawn: the aarch64 declaration is removed from the recipes and the chroot configuration, so no packaging surface claims an architecture nothing builds.
+Source: the unauthenticated COPR [`build/list`](https://copr.fedorainfracloud.org/api_3/build/list?ownername=fiorix&projectname=chan&packagename=chan&limit=50) endpoint, cross-checked against the corresponding `chan-desktop` query and the per-chroot API.
 
-Either outcome closes this item. Leaving the declaration in place with no build behind it does not.
+## v0.72.0 CentOS results
 
-## What each ecosystem needs
+Both webhook builds finished on 2026-07-20. [`chan` build 10749265](https://copr.fedorainfracloud.org/coprs/fiorix/chan/build/10749265/) succeeded on all eight enabled chroots. [`chan-desktop` build 10749266](https://copr.fedorainfracloud.org/coprs/fiorix/chan/build/10749266/) succeeded on Fedora and EL10 for both architectures, but failed on both EL9 chroots.
 
-### COPR
+| Package | Chroot | Result |
+|---|---|---|
+| `chan` | `centos-stream+epel-next-9-aarch64` | passed |
+| `chan` | `centos-stream+epel-next-9-x86_64` | passed |
+| `chan` | `centos-stream-10-aarch64` | passed |
+| `chan` | `centos-stream-10-x86_64` | passed |
+| `chan-desktop` | `centos-stream+epel-next-9-aarch64` | failed |
+| `chan-desktop` | `centos-stream+epel-next-9-x86_64` | failed |
+| `chan-desktop` | `centos-stream-10-aarch64` | passed |
+| `chan-desktop` | `centos-stream-10-x86_64` | passed |
 
-Native COPR builds are the aarch64 acceptance gate. COPR builds each enabled chroot on its own architecture, so submitting the existing SRPMs to the enabled aarch64 chroots is the whole mechanism; no new tooling is required to get the first result. The same `make copr-check` matrix can also run on a native aarch64 sdme host, with that host's Stream 9 and Stream 10 rootfs names passed through `COPR_EL9_ROOTFS` and `COPR_EL10_ROOTFS`, as a faster local reproduction than a service round trip.
+The per-chroot API records are available from `/api_3/build-chroot` with the build id and chroot name. Direct builder logs: [`chan` EL9 aarch64](https://download.copr.fedorainfracloud.org/results/fiorix/chan/centos-stream+epel-next-9-aarch64/10749265-chan/builder-live.log.gz), [`chan` EL10 aarch64](https://download.copr.fedorainfracloud.org/results/fiorix/chan/centos-stream-10-aarch64/10749265-chan/builder-live.log.gz), and [`chan-desktop` EL10 aarch64](https://download.copr.fedorainfracloud.org/results/fiorix/chan/centos-stream-10-aarch64/10749266-chan-desktop/builder-live.log.gz).
 
-Both routes exercise the same spec files, the same vendored `packaging/distros/mkdist` source, and the same literal generic EPEL repository. What is unknown is whether every declared `BuildRequires` resolves on aarch64 buildroots and whether the `chan-desktop` GTK3, libsoup3, and WebKitGTK 4.1 closure is complete there.
+### External EPEL repository
 
-### AUR
+The EL9 aarch64 `chan` log proves that the literal generic repository selected EPEL 9 content:
 
-`.github/workflows/distros-publish.yml` already carries `aur-validate-arm`. It runs on a native `ubuntu-24.04-arm` runner, imports the signed Arch Linux ARM rootfs, and runs `packaging/distros/arch/build-in-ci.sh` for both package bases. It is opt-in on manual dispatch behind `aur_validate_arm`, and it is absent from `aur-publish`'s `needs`, so a GA run schedules no ARM cell and publication never waits on it.
+```text
+epel-rpm-macros  noarch  9-18.el9  https_dl_fedoraproject_org_pub_epel_releasever_Everything_basearch
+```
 
-Working the leg is a dispatch with `targets=aur` and `aur_validate_arm=true` against a GA tag. The unproven steps inside it are the rootfs import and keyring bootstrap, the rolling `-Syu`, dependency resolution through `makepkg --syncdeps` on ALARM, the native ARM Tauri build for `chan-desktop`, and namcap review of the resulting aarch64 packages.
+The EL10 aarch64 desktop log proves the same repository selected EPEL 10 content:
 
-## Acceptance
+```text
+webkit2gtk4.1-devel  aarch64  2.48.3-1.el10_1  https_dl_fedoraproject_org_pub_epel_releasever_Everything_basearch
+```
 
-Proving it requires, per ecosystem:
+The x86_64 logs carry the matching `9-18.el9` and `2.48.3-1.el10_1` rows. The standalone EL10 build consumed no package from the external repository; its builder config retains the literal `$releasever` URL and its root log invokes DNF with `--releasever 10`, while the desktop dependency row above proves an actual EPEL 10 package resolution.
 
-- COPR: `chan` succeeds on `centos-stream+epel-next-9-aarch64` and `centos-stream-10-aarch64`; `chan-desktop` succeeds on `centos-stream-10-aarch64`; no `chan-desktop` EL9 aarch64 job is scheduled; the EL9 log resolves the generic external repository as EPEL 9 and the EL10 logs resolve it as EPEL 10; and a fresh aarch64 container installs the published packages and repeats the existing package smokes, including `systemd-analyze verify` on the user unit and the packaged-upgrade refusal.
-- AUR: one `distros-publish` dispatch with `targets=aur` and `aur_validate_arm=true` is green for both `chan` and `chan-desktop`, including their in-container test suites, pacman install, post-install smokes, and namcap error-class review. After that run passes, `aur-validate-arm` gains the `workflow_run` trigger the other AUR jobs carry and a place in `aur-publish`'s `needs`, so GA covers aarch64 instead of skipping it.
+### EL9 desktop scheduling failure
 
-Withdrawing it requires:
+The acceptance requirement that no EL9 desktop aarch64 job be scheduled failed for v0.72.0: both EL9 jobs ran, so the COPR console denylist was not active for this build. Both logs fail dependency resolution with:
 
-- removing `aarch64` from the `arch=()` array in both `PKGBUILD.in` files;
-- disabling `centos-stream+epel-next-9-aarch64` and `centos-stream-10-aarch64` in the COPR project, and dropping the `--exclude-chroot centos-stream+epel-next-9-aarch64` argument in `packaging/distros/copr/build-srpm.sh`, which would then name a chroot that no longer exists;
-- removing the `aur_validate_arm` input and the `aur-validate-arm` job, since nothing would be left to validate;
-- updating [hyperscale-support](../done/hyperscale-support.md) and [aur-support](../done/aur-support.md) so no shipped item's text declares an architecture the packaging no longer offers.
+```text
+No matching package to install: 'libsoup3-devel'
+No matching package to install: 'webkit2gtk4.1-devel'
+```
 
-Whichever outcome lands, this item records the evidence for it: the commands run, the host or runner, and the per-target result.
+The repository-side guard now in `packaging/distros/fedora/chan-desktop.spec` rejects EL9 during spec evaluation and names those packages. It does not prove or replace the console denylist. The public COPR API does not expose that setting, so only the next build's chroot count can prove whether the denylist is active.
+
+## AUR GA gate
+
+`aur-validate-arm` uses a native `ubuntu-24.04-arm` runner, verifies and imports the signed Arch Linux ARM rootfs, and invokes the same `build-in-ci.sh` path as x86_64 for both package bases. The workflow now:
+
+1. runs the ARM matrix after every successful GA Release workflow;
+2. retains `aur_validate_arm=true` as the manual-dispatch opt-in;
+3. selects the release tag and checkout SHA on both event paths; and
+4. makes `aur-publish` wait for `aur-auth`, `aur-validate`, and `aur-validate-arm`.
+
+The x86_64 matrix remains the sole producer of `aur-metadata-*`; the ARM matrix uploads nothing. No workflow was dispatched while making this change. The first native ARM run must still prove the rootfs import and keyring bootstrap, rolling `-Syu`, `makepkg --syncdeps`, the native Tauri build, the namcap error gate, pacman install, `systemd-analyze` smoke, packaged-upgrade refusal, desktop stamp and refusal hint, desktop entry, and five icon sizes. There is no `ldd` gate.
+
+## Remaining unproven acceptance
+
+- **Fresh aarch64 COPR install smoke:** not runnable on this host. It is x86_64, has no QEMU binary or QEMU binfmt registration, and all 15 sdme rootfs are x86_64. A native aarch64 sdme host with `COPR_EL9_ROOTFS` and `COPR_EL10_ROOTFS`, or a new native ARM Actions job, must install the published RPMs and repeat the package smokes.
+- **AUR native build:** not yet run. Only the owner dispatches Actions; the required run is `targets=aur aur_validate_arm=true` against an existing GA tag. Until both matrix cells pass, the AUR aarch64 declaration remains wired but unproven.
+- **COPR console denylist:** not observable through the public API. The v0.72.0 evidence proves it was ineffective for that build; current console state remains unknown until inspected in the UI or inferred from a later build's absent EL9 desktop jobs.
+
+`packaging/distros/copr/build-in-container.sh` cannot substitute for the fresh-install acceptance: it rebuilds from an SRPM with `rpmbuild --rebuild` rather than installing from the published repository, and it deliberately refuses `chan-desktop` on EL9 before doing any work. Installing QEMU or changing system binfmt state is outside this item.
 
 ## Boundaries
 
-- A native aarch64 build is the evidence. A binfmt or QEMU build is acceptable for early diagnosis only, because COPR and Arch Linux ARM users both build natively and an emulated buildroot does not prove either environment.
-- Fix whatever the aarch64 build reveals in the recipes and the packaging scripts. Do not change application APIs, Rust types, or the package contract to manufacture a passing build.
-- Do not add `-bin` AUR variants, backport WebKitGTK 4.1 or libsoup3 to EL9, or change Tauri and Wry versions in this item.
-- The EL9 `chan-desktop` exclusion stays as it is on both architectures. It is a dependency-availability decision, not an architecture decision.
+- Native aarch64 execution is the evidence. Emulation is useful only for early diagnosis and does not prove either hosted environment.
+- Fix recipe defects in the recipes and packaging scripts. Do not change application APIs, Rust types, or the package contract to manufacture a passing build.
+- Do not add `-bin` AUR variants, backport WebKitGTK 4.1 or libsoup3 to EL9, or change Tauri and Wry versions.
+- The EL9 `chan-desktop` exclusion remains architecture-neutral. It is a dependency-availability decision for both architectures.

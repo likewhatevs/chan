@@ -7,7 +7,7 @@ pkgname=chan-desktop
 pkgver=@PKGVER@
 pkgrel=@PKGREL@
 pkgdesc='Desktop edition of the chan AI-native IDE'
-# aarch64 builds from the same sources; upstream CI proves x86_64 only.
+# Native CI gates both declared architectures from the same sources.
 arch=('x86_64' 'aarch64')
 url='https://chan.app'
 license=('Apache-2.0')

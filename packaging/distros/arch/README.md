@@ -20,7 +20,7 @@ cd chan
 makepkg -si
 ```
 
-The recipes declare x86_64 and aarch64. Only the x86_64 path is validated: it is what the container gate and the release workflow build, install, and smoke. The aarch64 leg (Arch Linux ARM rootfs import, keyring bootstrap, native ARM Tauri build) has never completed anywhere, so treat aarch64 as unverified until a green `aur-validate-arm` run says otherwise. CachyOS can consume the AUR recipes directly, but inclusion in CachyOS's precompiled package repositories is a separate request to that project.
+The recipes declare x86_64 and aarch64. The x86_64 path has green release history. The aarch64 leg (Arch Linux ARM rootfs import, keyring bootstrap, native ARM Tauri build) is wired into the GA publication gate but has not completed anywhere, so treat it as unverified until a green `aur-validate-arm` run says otherwise. CachyOS can consume the AUR recipes directly, but inclusion in CachyOS's precompiled package repositories is a separate request to that project.
 
 ## Maintainer flow
 
@@ -43,9 +43,9 @@ make aur-check SDME='sudo sdme' AUR_ROOTFS=archlinux
 
 `AUR_REV` defaults to `HEAD` and may name another committed revision. The wrapper archives that revision rather than the working tree, so commit the packaging changes in a worktree before using this as the final local gate.
 
-The package architecture comes from the host and rootfs; the build never uses QEMU. An aarch64 host runs the same target against an Arch Linux ARM import under the same name, which is the unverified leg described above.
+The package architecture comes from the host and rootfs; the build never uses QEMU. An aarch64 host runs the same target against an Arch Linux ARM import under the same name. CI supplies that host with `ubuntu-24.04-arm` and imports the signed Arch Linux ARM rootfs before invoking the shared build path.
 
-The automatic path lives in `.github/workflows/distros-publish.yml`. After a successful GA Release run it builds, installs, and smokes `chan` and `chan-desktop` on a clean upstream Arch x86_64 container, probes the AUR credential, and pushes both AUR repositories. It needs `AUR_SSH_PRIVATE_KEY`, the same private key already registered with the maintainer's AUR account for `sdme`. Without the secret, validation still runs and publication is skipped; a `publish=false` dispatch on this repository fails instead, because proving the credential is that run's only product.
+The automatic path lives in `.github/workflows/distros-publish.yml`. After a successful GA Release run it builds, installs, and smokes `chan` and `chan-desktop` on clean x86_64 and native aarch64 containers, probes the AUR credential, and pushes both AUR repositories only after both architecture jobs pass. It needs `AUR_SSH_PRIVATE_KEY`, the same private key already registered with the maintainer's AUR account for `sdme`. Without the secret, validation still runs and publication is skipped; a `publish=false` dispatch on this repository fails instead, because proving the credential is that run's only product.
 
 Manual dispatch takes the existing GA tag plus:
 
@@ -54,15 +54,15 @@ Manual dispatch takes the existing GA tag plus:
 | `targets` | Runs one distro (`copr`, `launchpad`, `aur`) instead of all three, so a Launchpad retry costs one job. |
 | `publish` | Defaults to false: renders, validates, and probes the credentials, then pushes nothing. A retry that must actually publish needs `publish=true`. |
 | `aur_pkgrel` | Keep `1` for a normal release; raise it when repairing packaging for an already-published upstream version. |
-| `aur_validate_arm` | Runs the unverified aarch64 build. Opt-in here only: a GA run never schedules it, and it never gates publication. |
+| `aur_validate_arm` | Runs native aarch64 validation on manual dispatch. GA always runs it; a manual AUR publication must opt in because `aur-publish` waits for this job. |
 
 A prerelease version skips every job in the workflow: the AUR jobs, `copr`, and `launchpad` all filter a `-` out of the tag, on both the dispatch and the workflow_run path. Release candidates are validated on a branch and their tags are not pushed, so this is defense in depth rather than a path anything is expected to take.
 
 `aur-auth` is the only pre-release proof that the private key in the secret has its public half registered on the AUR account: it runs `ssh -T aur@aur.archlinux.org`, which a registered key answers with a greeting and a refused interactive shell. Without that probe a wrong key surfaces as a failed clone at publication time, after the release is already out.
 
-`aur-validate-arm` builds the same recipes on a native aarch64 runner against the imported Arch Linux ARM rootfs. It runs only on a manual dispatch carrying `aur_validate_arm=true`, and it is not in `aur-publish`'s `needs`. A leg that has never completed anywhere would otherwise make two red jobs the normal end state of every GA run, which trains the operator to ignore red; instead a GA run is expected all-green and the ARM work happens in a dispatch that is watched. Once a dispatch passes, give the job the same `workflow_run` trigger the other AUR jobs carry and add it to `aur-publish`'s `needs`.
+`aur-validate-arm` builds the same recipes on a native aarch64 runner against an imported, signature-verified Arch Linux ARM rootfs. It runs automatically after a successful GA Release and is a hard dependency of `aur-publish`; a failed rootfs import, package build, namcap gate, install, or smoke blocks both AUR pushes. Manual dispatch keeps the `aur_validate_arm` switch so unrelated distro diagnostics do not spend an ARM runner, but an AUR dispatch intended to publish must set it to true.
 
-`aur-validate` is a hard `needs` of `aur-publish`, so anything that fails inside it (the `makepkg` build, the package-scoped `cargo test`, a namcap error-class finding, the packaged-update check, the systemd unit check, or the `chan-desktop` desktop-entry, icon, and `ldd` checks) blocks the AUR push. The matrix covers both packages and `aur-publish` waits on the whole job, so a `chan-desktop` failure also holds back `chan`. That is deliberate: the AUR push is immediate and public, and a recipe that fails its own clean-container gate should not reach users. The blast radius stops there. COPR, the PPA, and the GitHub release are separate jobs and a separate workflow, so none of them is affected; the fix is a recipe change plus a `targets=aur` dispatch, with `aur_pkgrel` raised if that version already published.
+`aur-validate` and `aur-validate-arm` are hard `needs` of `aur-publish`, so anything that fails inside either matrix (the `makepkg` build, package-scoped `cargo test`, namcap error gate, packaged-update check, systemd unit check, or the `chan-desktop` desktop-entry and icon checks) blocks the AUR push. Both matrices cover both packages, so a `chan-desktop` failure also holds back `chan`. That is deliberate: the AUR push is immediate and public, and a recipe that fails its own clean-container gate should not reach users. The blast radius stops there. COPR, the PPA, and the GitHub release are separate jobs and a separate workflow, so none of them is affected; the fix is a recipe change plus a `targets=aur aur_validate_arm=true` dispatch, with `aur_pkgrel` raised if that version already published.
 
 Only `PKGBUILD` and `.SRCINFO` belong in the AUR repositories. The generated source archive and `.pkg.tar.zst` files under `target/aur-*` are local artifacts.
 
