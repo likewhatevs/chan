@@ -4,6 +4,15 @@ All notable changes to this project will be documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v0.72.1] - 2026-07-20
+
+v0.72.1 is a patch release. It repairs the Arch AUR publication path, which could not run its post-install verification, and makes the chan-desktop RPM refuse EL9 with a clear reason.
+
+### Fixed
+
+- **The Arch AUR packages can publish again.** The post-install verification of the shipped systemd user unit ran without the privileges it needs and failed inside the build container, which blocked the AUR push for both `chan` and `chan-desktop`. The verification now runs with those privileges, so it stays enforced rather than skipped. AUR publication was the only thing affected: the GitHub release, COPR, the PPA, and the Docker images all shipped normally. v0.72.0 never reached the AUR at all, so no user has a stale or broken AUR package.
+- **The chan-desktop RPM refuses EL9 with a clear reason.** EPEL Next 9 provides neither `webkit2gtk4.1-devel` nor `libsoup3-devel`, so the desktop shell cannot build there. The spec now fails immediately naming both packages, instead of failing deep inside dependency resolution. Fedora, EL10, and the `chan` CLI package are unaffected.
+
 ## [v0.72.0] - 2026-07-20
 
 v0.72.0 adds `chan dump-skill` as an agent-facing manual of chan's whole surface, reconciles queued terminal notifications into one agent turn with a queue depth to observe it, packages chan for CentOS Stream through COPR and for Arch and CachyOS through the AUR, fixes `VERSION=X.Y.Z` installs on Debian and Ubuntu, and makes a distro-packaged chan-desktop refuse self-upgrade up front.
