@@ -4,9 +4,7 @@ All notable changes to this project will be documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [v0.72.1] - 2026-07-20
-
-v0.72.1 is a patch release. It repairs the Arch AUR publication path, which could not run its post-install verification, and makes the chan-desktop RPM refuse EL9 with a clear reason.
+## [Unreleased]
 
 ### Fixed
 
