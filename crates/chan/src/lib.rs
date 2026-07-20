@@ -297,6 +297,7 @@ Most installs put `cs` on your PATH. If yours did not, link it once:
   ln -s "$(command -v chan)" ~/.local/bin/cs
 
 Teach an agent the whole surface in one shot:
+  mkdir -p ~/.claude/skills/chan
   chan dump-skill > ~/.claude/skills/chan/SKILL.md
 
 SEE ALSO:
