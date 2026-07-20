@@ -589,13 +589,24 @@ name = "devserver-control"
 version = "0.73.0"
 dependencies = [
  "anyhow",
+ "axum",
+ "bytes",
+ "chan-tunnel-proto",
  "chrono",
  "devserver-control-proto",
+ "futures-util",
+ "gateway-common",
+ "h2 0.4.14",
+ "http 1.4.0",
+ "http-body-util",
  "serde",
+ "serde_json",
+ "subtle",
  "thiserror 1.0.69",
  "tokio",
+ "tower",
  "tracing",
- "url",
+ "tracing-subscriber",
  "uuid",
 ]
 

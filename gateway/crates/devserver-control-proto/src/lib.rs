@@ -3,18 +3,19 @@
 use std::net::SocketAddr;
 
 use chrono::{DateTime, Utc};
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Deserializer, Serialize};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use url::Url;
 use uuid::Uuid;
 
 pub const PROTOCOL_VERSION: u16 = 1;
+pub const CONNECT_PATH: &str = "/v1/proxies/connect";
 pub const CONTENT_TYPE: &str = "application/x-chan-devserver-control+json; version=1";
 pub const MAX_FRAME_BYTES: usize = 1024 * 1024;
 pub const MAX_SNAPSHOT_CHUNK_ROWS: usize = 128;
 pub const MAX_SNAPSHOT_ROWS: usize = 100_000;
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
 #[serde(transparent)]
 pub struct ProxyId(String);
 
@@ -39,7 +40,17 @@ impl ProxyId {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+impl<'de> Deserialize<'de> for ProxyId {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = String::deserialize(deserializer)?;
+        Self::parse(raw).map_err(serde::de::Error::custom)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
 #[serde(transparent)]
 pub struct CanonicalOrigin(String);
 
@@ -61,6 +72,16 @@ impl CanonicalOrigin {
 
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+}
+
+impl<'de> Deserialize<'de> for CanonicalOrigin {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = String::deserialize(deserializer)?;
+        Self::parse(&raw).map_err(serde::de::Error::custom)
     }
 }
 
@@ -295,6 +316,11 @@ mod tests {
         ] {
             assert!(ProxyOriginTemplate::parse(bad).is_err(), "accepted {bad:?}");
         }
+
+        let invalid_id = r#"{"type":"client_hello","protocol_version":1,"package_version":"0.73.0","proxy_id":"P1","proxy_base_url":"https://p1.example.test","boot_id":"00000000-0000-0000-0000-000000000000"}"#;
+        assert!(serde_json::from_str::<ClientFrame>(invalid_id).is_err());
+        let invalid_origin = r#"{"type":"client_hello","protocol_version":1,"package_version":"0.73.0","proxy_id":"p1","proxy_base_url":"ftp://p1.example.test","boot_id":"00000000-0000-0000-0000-000000000000"}"#;
+        assert!(serde_json::from_str::<ClientFrame>(invalid_origin).is_err());
     }
 
     #[tokio::test]

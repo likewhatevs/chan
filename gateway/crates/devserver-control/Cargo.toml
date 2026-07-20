@@ -8,16 +8,32 @@ repository.workspace = true
 description = "Authoritative in-memory control plane for chan gateway proxy nodes."
 publish = false
 
+[[bin]]
+name = "devserver-control-service"
+path = "src/main.rs"
+
 [dependencies]
+chan-tunnel-proto = { workspace = true }
+gateway-common = { workspace = true }
+
 anyhow = { workspace = true }
+axum = { workspace = true }
+bytes = { workspace = true }
 chrono = { workspace = true }
 devserver-control-proto = { workspace = true }
+futures-util = { workspace = true }
+h2 = { workspace = true }
+http = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
+subtle = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
-url = { workspace = true }
+tracing-subscriber = { workspace = true }
 uuid = { workspace = true }
 
 [dev-dependencies]
+http-body-util = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }
+tower = { version = "0.5", features = ["util"] }

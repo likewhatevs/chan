@@ -19,6 +19,7 @@ const TICK_INTERVAL: Duration = Duration::from_secs(1);
 #[derive(Clone)]
 pub struct ControllerHandle {
     tx: mpsc::Sender<Command>,
+    readiness_watch: watch::Receiver<bool>,
     tunnel_watch: watch::Receiver<Arc<Vec<TunnelView>>>,
     proxy_watch: watch::Receiver<Arc<Vec<ProxyView>>>,
 }
@@ -26,6 +27,12 @@ pub struct ControllerHandle {
 pub struct ProxyControlSession {
     pub incarnation: SessionIncarnation,
     pub commands: mpsc::Receiver<ServerFrame>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MutationStatus {
+    Applied,
+    Resyncing,
 }
 
 enum Command {
@@ -80,6 +87,11 @@ enum Command {
         nonce: u64,
         reply: StateReply,
     },
+    RecordActivity {
+        proxy_id: ProxyId,
+        incarnation: SessionIncarnation,
+        reply: StateReply,
+    },
     ReportResult {
         proxy_id: ProxyId,
         incarnation: SessionIncarnation,
@@ -90,6 +102,11 @@ enum Command {
         reply: StateReply,
     },
     Disconnect {
+        proxy_id: ProxyId,
+        incarnation: SessionIncarnation,
+        reply: StateReply,
+    },
+    RequireResync {
         proxy_id: ProxyId,
         incarnation: SessionIncarnation,
         reply: StateReply,
@@ -105,14 +122,21 @@ enum Command {
     },
 }
 
-type StateReply = oneshot::Sender<Result<(), StateError>>;
+type StateReply = oneshot::Sender<Result<MutationStatus, StateError>>;
 
 pub fn spawn_controller(max_devservers_per_user: usize) -> ControllerHandle {
+    spawn_controller_owned(max_devservers_per_user).0
+}
+
+pub fn spawn_controller_owned(
+    max_devservers_per_user: usize,
+) -> (ControllerHandle, tokio::task::JoinHandle<()>) {
     let (tx, mut rx) = mpsc::channel(ACTOR_QUEUE_CAPACITY);
+    let (readiness_watch_tx, readiness_watch) = watch::channel(false);
     let (tunnel_watch_tx, tunnel_watch) = watch::channel(Arc::new(Vec::new()));
     let (proxy_watch_tx, proxy_watch) = watch::channel(Arc::new(Vec::new()));
 
-    tokio::spawn(async move {
+    let task = tokio::spawn(async move {
         let mut state = ControllerState::new(max_devservers_per_user);
         let mut sessions = HashMap::new();
         let mut ticker = tokio::time::interval(TICK_INTERVAL);
@@ -129,15 +153,24 @@ pub fn spawn_controller(max_devservers_per_user: usize) -> ControllerHandle {
                 }
             };
             apply_effects(&mut state, &mut sessions, effects);
-            publish_watches(&state, &tunnel_watch_tx, &proxy_watch_tx);
+            publish_watches(
+                &state,
+                &readiness_watch_tx,
+                &tunnel_watch_tx,
+                &proxy_watch_tx,
+            );
         }
     });
 
-    ControllerHandle {
-        tx,
-        tunnel_watch,
-        proxy_watch,
-    }
+    (
+        ControllerHandle {
+            tx,
+            readiness_watch,
+            tunnel_watch,
+            proxy_watch,
+        },
+        task,
+    )
 }
 
 fn handle_command(
@@ -253,6 +286,14 @@ fn handle_command(
             reply,
             state.pong(&proxy_id, incarnation, nonce, now, wall_now),
         ),
+        Command::RecordActivity {
+            proxy_id,
+            incarnation,
+            reply,
+        } => finish_unit(
+            reply,
+            state.record_activity(&proxy_id, incarnation, now, wall_now),
+        ),
         Command::ReportResult {
             proxy_id,
             incarnation,
@@ -285,6 +326,11 @@ fn handle_command(
             });
             finish(reply, state.disconnect(&proxy_id, incarnation))
         }
+        Command::RequireResync {
+            proxy_id,
+            incarnation,
+            reply,
+        } => finish(reply, state.require_resync(&proxy_id, incarnation)),
         Command::Readiness { reply } => {
             let _ = reply.send(state.is_ready());
             Vec::new()
@@ -303,7 +349,20 @@ fn handle_command(
 fn finish(reply: StateReply, result: Result<Vec<Effect>, StateError>) -> Vec<Effect> {
     match result {
         Ok(effects) => {
-            let _ = reply.send(Ok(()));
+            let status = if effects.iter().any(|effect| {
+                matches!(
+                    effect,
+                    Effect::Send {
+                        frame: ServerFrame::ResyncRequired { .. },
+                        ..
+                    }
+                )
+            }) {
+                MutationStatus::Resyncing
+            } else {
+                MutationStatus::Applied
+            };
+            let _ = reply.send(Ok(status));
             effects
         }
         Err(error) => {
@@ -314,7 +373,7 @@ fn finish(reply: StateReply, result: Result<Vec<Effect>, StateError>) -> Vec<Eff
 }
 
 fn finish_unit(reply: StateReply, result: Result<(), StateError>) -> Vec<Effect> {
-    let _ = reply.send(result);
+    let _ = reply.send(result.map(|()| MutationStatus::Applied));
     Vec::new()
 }
 
@@ -358,9 +417,19 @@ fn apply_effects(
 
 fn publish_watches(
     state: &ControllerState,
+    readiness_watch: &watch::Sender<bool>,
     tunnel_watch: &watch::Sender<Arc<Vec<TunnelView>>>,
     proxy_watch: &watch::Sender<Arc<Vec<ProxyView>>>,
 ) {
+    readiness_watch.send_if_modified(|ready| {
+        let next = state.is_ready();
+        if *ready == next {
+            false
+        } else {
+            *ready = next;
+            true
+        }
+    });
     publish(tunnel_watch, Arc::new(state.tunnel_views()));
     publish(proxy_watch, Arc::new(state.proxy_views()));
 }
@@ -407,7 +476,7 @@ impl ControllerHandle {
         incarnation: SessionIncarnation,
         base_generation: u64,
         rows: Vec<TunnelRow>,
-    ) -> Result<(), ActorError> {
+    ) -> Result<MutationStatus, ActorError> {
         self.state_request(|reply| Command::AcceptSnapshot {
             proxy_id,
             incarnation,
@@ -424,7 +493,7 @@ impl ControllerHandle {
         incarnation: SessionIncarnation,
         generation: u64,
         row: TunnelRow,
-    ) -> Result<(), ActorError> {
+    ) -> Result<MutationStatus, ActorError> {
         self.state_request(|reply| Command::TunnelUp {
             proxy_id,
             incarnation,
@@ -441,7 +510,7 @@ impl ControllerHandle {
         incarnation: SessionIncarnation,
         generation: u64,
         registration_id: Uuid,
-    ) -> Result<(), ActorError> {
+    ) -> Result<MutationStatus, ActorError> {
         self.state_request(|reply| Command::TunnelDown {
             proxy_id,
             incarnation,
@@ -461,7 +530,7 @@ impl ControllerHandle {
         registration_id: Uuid,
         user: String,
         devserver_id: String,
-    ) -> Result<(), ActorError> {
+    ) -> Result<MutationStatus, ActorError> {
         self.state_request(|reply| Command::RequestAdmission {
             proxy_id,
             incarnation,
@@ -480,7 +549,7 @@ impl ControllerHandle {
         incarnation: SessionIncarnation,
         request_id: Uuid,
         registration_id: Uuid,
-    ) -> Result<(), ActorError> {
+    ) -> Result<MutationStatus, ActorError> {
         self.state_request(|reply| Command::CancelAdmission {
             proxy_id,
             incarnation,
@@ -496,11 +565,24 @@ impl ControllerHandle {
         proxy_id: ProxyId,
         incarnation: SessionIncarnation,
         nonce: u64,
-    ) -> Result<(), ActorError> {
+    ) -> Result<MutationStatus, ActorError> {
         self.state_request(|reply| Command::Pong {
             proxy_id,
             incarnation,
             nonce,
+            reply,
+        })
+        .await
+    }
+
+    pub async fn record_activity(
+        &self,
+        proxy_id: ProxyId,
+        incarnation: SessionIncarnation,
+    ) -> Result<MutationStatus, ActorError> {
+        self.state_request(|reply| Command::RecordActivity {
+            proxy_id,
+            incarnation,
             reply,
         })
         .await
@@ -515,7 +597,7 @@ impl ControllerHandle {
         killed: Vec<Uuid>,
         missing: Vec<Uuid>,
         failed: Vec<Uuid>,
-    ) -> Result<(), ActorError> {
+    ) -> Result<MutationStatus, ActorError> {
         self.state_request(|reply| Command::ReportResult {
             proxy_id,
             incarnation,
@@ -532,8 +614,21 @@ impl ControllerHandle {
         &self,
         proxy_id: ProxyId,
         incarnation: SessionIncarnation,
-    ) -> Result<(), ActorError> {
+    ) -> Result<MutationStatus, ActorError> {
         self.state_request(|reply| Command::Disconnect {
+            proxy_id,
+            incarnation,
+            reply,
+        })
+        .await
+    }
+
+    pub async fn require_resync(
+        &self,
+        proxy_id: ProxyId,
+        incarnation: SessionIncarnation,
+    ) -> Result<MutationStatus, ActorError> {
+        self.state_request(|reply| Command::RequireResync {
             proxy_id,
             incarnation,
             reply,
@@ -561,6 +656,10 @@ impl ControllerHandle {
         self.tunnel_watch.clone()
     }
 
+    pub fn watch_readiness(&self) -> watch::Receiver<bool> {
+        self.readiness_watch.clone()
+    }
+
     pub fn watch_proxies(&self) -> watch::Receiver<Arc<Vec<ProxyView>>> {
         self.proxy_watch.clone()
     }
@@ -568,7 +667,7 @@ impl ControllerHandle {
     async fn state_request(
         &self,
         build: impl FnOnce(StateReply) -> Command,
-    ) -> Result<(), ActorError> {
+    ) -> Result<MutationStatus, ActorError> {
         self.request(build).await?.map_err(ActorError::State)
     }
 

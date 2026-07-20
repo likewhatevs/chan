@@ -188,6 +188,16 @@ impl ControllerState {
     ) -> (SessionIncarnation, Vec<Effect>) {
         let mut effects = Vec::new();
         if let Some(old) = self.current_key(proxy_id.as_str()) {
+            if let Some(session) = self.proxies.get(proxy_id.as_str()) {
+                if session.boot_id != boot_id {
+                    tracing::error!(
+                        proxy_id = proxy_id.as_str(),
+                        old_boot_id = %session.boot_id,
+                        new_boot_id = %boot_id,
+                        "proxy id reconnected with a different boot id",
+                    );
+                }
+            }
             effects.extend(self.remove_session(&old));
             effects.push(Effect::Retire {
                 session: old,
@@ -454,8 +464,7 @@ impl ControllerState {
         Ok(())
     }
 
-    #[cfg(test)]
-    fn heartbeat(
+    pub fn record_activity(
         &mut self,
         proxy_id: &ProxyId,
         incarnation: SessionIncarnation,
@@ -550,6 +559,20 @@ impl ControllerState {
     ) -> Result<Vec<Effect>, StateError> {
         let key = self.require_key(proxy_id, incarnation)?;
         Ok(self.remove_session(&key))
+    }
+
+    pub fn require_resync(
+        &mut self,
+        proxy_id: &ProxyId,
+        incarnation: SessionIncarnation,
+    ) -> Result<Vec<Effect>, StateError> {
+        let key = self.require_key(proxy_id, incarnation)?;
+        let expected_generation = self
+            .proxies
+            .get(proxy_id.as_str())
+            .and_then(|session| session.generation)
+            .map_or(0, |generation| generation.saturating_add(1));
+        Ok(self.force_resync(&key, expected_generation))
     }
 
     pub fn tick(&mut self, now: Instant, wall_now: DateTime<Utc>) -> Vec<Effect> {
@@ -1156,7 +1179,7 @@ mod tests {
         let (id, incarnation) = begin(state, id, now);
         snapshot(state, &id, incarnation, rows, now);
         state
-            .heartbeat(&id, incarnation, now + CONVERGENCE_WINDOW, Utc::now())
+            .record_activity(&id, incarnation, now + CONVERGENCE_WINDOW, Utc::now())
             .unwrap();
         let effects = state.tick(now + CONVERGENCE_WINDOW, Utc::now());
         (id, incarnation, effects)
@@ -1196,7 +1219,7 @@ mod tests {
             Err(StateError::StaleSession)
         ));
         assert!(matches!(
-            state.heartbeat(&id, retired, now, Utc::now()),
+            state.record_activity(&id, retired, now, Utc::now()),
             Err(StateError::StaleSession)
         ));
         assert!(matches!(
@@ -1234,7 +1257,7 @@ mod tests {
         )));
         assert!(!state.is_ready());
         state
-            .heartbeat(
+            .record_activity(
                 &id,
                 incarnation,
                 now + CONVERGENCE_WINDOW - Duration::from_millis(1),
@@ -1247,7 +1270,7 @@ mod tests {
         );
         assert!(!state.is_ready());
         state
-            .heartbeat(&id, incarnation, now + CONVERGENCE_WINDOW, Utc::now())
+            .record_activity(&id, incarnation, now + CONVERGENCE_WINDOW, Utc::now())
             .unwrap();
         let effects = state.tick(now + CONVERGENCE_WINDOW, Utc::now());
         assert!(state.is_ready());
@@ -1389,7 +1412,7 @@ mod tests {
             .unwrap();
         assert!(has_decision(&first, AdmissionDecision::Admit));
         state
-            .heartbeat(
+            .record_activity(
                 &id,
                 incarnation,
                 now + CONVERGENCE_WINDOW + ADMISSION_CLAIM_TTL,
@@ -1546,13 +1569,13 @@ mod tests {
         snapshot(&mut state, &p2, p2_incarnation, Vec::new(), restart_at);
         let before = restart_at + CONVERGENCE_WINDOW - Duration::from_millis(1);
         state
-            .heartbeat(&p2, p2_incarnation, before, Utc::now())
+            .record_activity(&p2, p2_incarnation, before, Utc::now())
             .unwrap();
         state.tick(before, Utc::now());
         assert!(!state.is_ready());
         let deadline = restart_at + CONVERGENCE_WINDOW;
         state
-            .heartbeat(&p2, p2_incarnation, deadline, Utc::now())
+            .record_activity(&p2, p2_incarnation, deadline, Utc::now())
             .unwrap();
         state.tick(deadline, Utc::now());
         assert!(state.is_ready());
@@ -1689,7 +1712,7 @@ mod tests {
         );
         for (proxy, incarnation) in [(&p1, p1_incarnation), (&p2, p2_incarnation)] {
             state
-                .heartbeat(proxy, incarnation, now + CONVERGENCE_WINDOW, Utc::now())
+                .record_activity(proxy, incarnation, now + CONVERGENCE_WINDOW, Utc::now())
                 .unwrap();
         }
         let effects = state.tick(now + CONVERGENCE_WINDOW, Utc::now());
@@ -1756,7 +1779,7 @@ mod tests {
         );
         for (proxy, incarnation) in [(&p1, p1_incarnation), (&p2, p2_incarnation)] {
             state
-                .heartbeat(proxy, incarnation, now + CONVERGENCE_WINDOW, Utc::now())
+                .record_activity(proxy, incarnation, now + CONVERGENCE_WINDOW, Utc::now())
                 .unwrap();
         }
         let effects = state.tick(now + CONVERGENCE_WINDOW, Utc::now());
