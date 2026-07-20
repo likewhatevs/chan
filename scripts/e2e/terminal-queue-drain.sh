@@ -66,11 +66,11 @@ set -euo pipefail
 #   between notifications. That boundary is pinned by the chan-library and
 #   chan-server unit tests and by a browser smoke.
 
-agent=codex
+agent="codex"
 size_kib=64
 runs=3
 timeout_secs=180
-case_name=batch
+case_name="batch"
 gap_ms=50
 # Mirrors `WRITE_QUEUE_BATCH_MAX_BYTES` in
 # crates/chan-library/src/terminal_sessions.rs. The payload is sized against

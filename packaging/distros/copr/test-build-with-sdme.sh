@@ -36,6 +36,7 @@ COPR_DIR="$REPO/packaging/distros/copr"
 export STUB_STATE="$WORK/state"
 FAILURES=0
 
+# shellcheck disable=SC2329  # runs from the EXIT trap
 cleanup() {
     chmod -R u+rwX "$WORK" 2>/dev/null || true
     rm -rf "$WORK"
@@ -241,7 +242,16 @@ run_driver fail1 fail PKG=chan COPR_RELEASE=all KEEP_CONTAINER=1
 assert_status 1 $? "a failed target fails the matrix"
 assert_grep "PASS el9 chan" "$LOG" "the earlier target still passes"
 assert_grep "FAIL el10 chan $(uname -m) (status 7" "$LOG" "the failed target reports the guest status"
-if ls "$STUB_STATE/containers" | grep -q -- "-el10-chan-"; then
+# A container file is named after its target, so the glob answers whether the
+# el10 chan container is still there. An unmatched glob expands to itself,
+# which the -e test rejects.
+kept_container=0
+for container in "$STUB_STATE/containers"/*-el10-chan-*; do
+    [ -e "$container" ] || continue
+    kept_container=1
+    break
+done
+if [ "$kept_container" -eq 1 ]; then
     ok "the failed target's container survives KEEP_CONTAINER=1"
 else
     bad "the failed target's container was deleted under KEEP_CONTAINER=1"

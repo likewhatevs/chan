@@ -78,6 +78,7 @@ fi
 # an empty array expansion as unset under `set -u`. Both early returns are
 # explicit successes: `set -e` would otherwise abort the signal handler that
 # calls this, before it reaches its own exit status.
+# shellcheck disable=SC2329  # runs from the EXIT trap
 cleanup() {
     [ "$KEEP_CONTAINER" = 1 ] && return 0
     [ ${#CONTAINERS[@]} -gt 0 ] || return 0
@@ -87,6 +88,7 @@ cleanup() {
 }
 # Capturing each target's status keeps the matrix running past a failure, which
 # would also swallow an interrupt, so interrupts abort here instead.
+# shellcheck disable=SC2329  # runs from the INT and TERM traps
 on_signal() {
     trap - EXIT INT TERM
     echo ">> $1 received, aborting the matrix" >&2
