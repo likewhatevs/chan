@@ -4,6 +4,7 @@
 
 import { afterEach, describe, expect, test } from "vitest";
 import {
+  closeCommandLauncher,
   closeOverlay,
   closeSettings,
   launcherPanel,
@@ -45,8 +46,17 @@ describe("settings overlay state", () => {
 
     closeOverlay("settings");
     expect(settingsPanel.open).toBe(false);
-    syncOverlayStack();
     expect(overlayDepth("settings")).toBe(-1);
+    expect(topOverlay()).toBeNull();
+  });
+
+  test("closing the launcher updates the overlay stack synchronously", () => {
+    launcherPanel.open = true;
+    syncOverlayStack();
+    expect(topOverlay()).toBe("launcher");
+
+    closeCommandLauncher();
+
     expect(topOverlay()).toBeNull();
   });
 

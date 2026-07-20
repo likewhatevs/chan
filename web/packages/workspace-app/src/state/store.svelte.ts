@@ -2909,6 +2909,7 @@ export function openCommandLauncher(): void {
 /// direct close and the Escape/stack route agree.
 export function closeCommandLauncher(): void {
   launcherPanel.open = false;
+  syncOverlayStack();
 }
 
 /// Toggle the launcher. Bound to `app.launcher.toggle`; a second
@@ -3419,20 +3420,20 @@ export function topOverlay(): OverlayId | null {
 }
 
 /// Close one overlay by id. Mirrors the per-shell `close()` callbacks
-/// (each sets `<overlay>.open = false`); the sync effect in App.svelte
-/// drops it from the stack.
+/// and reconciles the stack before synchronous callers can observe it.
 export function closeOverlay(id: OverlayId): void {
   switch (id) {
     case "search":
       searchPanel.open = false;
-      return;
+      break;
     case "launcher":
       launcherPanel.open = false;
-      return;
+      break;
     case "settings":
       settingsPanel.open = false;
-      return;
+      break;
   }
+  syncOverlayStack();
 }
 
 /// Diff the overlay `.open` flags into `overlayStack.ids`:
@@ -3440,7 +3441,8 @@ export function closeOverlay(id: OverlayId): void {
 /// the last run. Append-only for newcomers means the most-recently
 /// opened overlay always lands on top, which matches user intent
 /// when they hit a chord to surface a new tool over the current one.
-/// Called from a single $effect in App.svelte.
+/// Called by close helpers at mutation time and from the App.svelte effect as
+/// a backstop for direct `.open` writes.
 export function syncOverlayStack(): void {
   const open = new Set<OverlayId>();
   if (searchPanel.open) open.add("search");
