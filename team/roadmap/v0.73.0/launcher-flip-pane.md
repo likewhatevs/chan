@@ -1,6 +1,6 @@
 # Command Launcher Flip Pane Is Dead
 
-Status: accepted scope for v0.73.0. Reported by the owner on 2026-07-20 and root-caused against `897f2bfc` the same day.
+Status: implemented and merged to `main` for v0.73.0 in `4e4dfeee`, merged as `5c748e8d`. Reported by the owner on 2026-07-20 and root-caused against `897f2bfc` the same day. The three behavioral tests were captured red against the unmodified tree before the fix landed; `make web-check` is green (svelte-check clean, launcher 294/294, workspace-app 2860/2860, both production builds). The end-to-end launcher-to-`flipHybrid` assertion was judged disproportionate and skipped, as the item permits: the production handler is private to `App.svelte` and reaching it needs an App mount harness.
 
 ## Problem
 
