@@ -15,7 +15,11 @@ SDME="${SDME:-sudo sdme}"
 AUR_ROOTFS="${AUR_ROOTFS:-archlinux}"
 OUT="${OUT:-$REPO/target/aur-out}"
 SOURCE_DIR="$REPO/target/aur-source"
-CONTAINER="chan-aur-build-$(uname -m)-$$"
+HOST_ARCH="$(uname -m)"
+# sdme container names take lowercase letters, digits, and hyphens only, so the
+# underscore in machine names like x86_64 has to go.
+CONTAINER_ARCH="${HOST_ARCH//_/-}"
+CONTAINER="chan-aur-build-${CONTAINER_ARCH}-$$"
 
 # SDME carries the transport too (a lima VM on macOS, sudo on a Linux host),
 # so parse it into an array once instead of relying on word splitting.
