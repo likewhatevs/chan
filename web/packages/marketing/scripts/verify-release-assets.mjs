@@ -24,10 +24,6 @@ async function main() {
     "chan-x86_64-unknown-linux-musl.tar.gz",
     "chan-aarch64-unknown-linux-musl.tar.gz",
     "chan-aarch64-apple-darwin.tar.gz",
-    "chan-amd64.deb",
-    "chan-arm64.deb",
-    "chan-amd64.rpm",
-    "chan-arm64.rpm",
     // chan-desktop
     `Chan_${version}.dmg`,
     `Chan_${version}_amd64.AppImage`,

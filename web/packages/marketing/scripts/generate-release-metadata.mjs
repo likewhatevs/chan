@@ -12,8 +12,7 @@ import {
 
 // The standalone Linux CLI tarball is musl (fully static): a too-new build
 // glibc must not gate older machines. install.sh maps Linux arch to these
-// musl targets. The .deb/.rpm packages stay gnu (the distro provides glibc)
-// and are not in this list. macOS is the native darwin target.
+// musl targets. macOS is the native darwin target.
 const cliTargets = [
   {
     target: "x86_64-unknown-linux-musl",
@@ -90,9 +89,8 @@ function desktopDownloads(version) {
   ];
 }
 
-// The standalone tarballs are the static musl/darwin self-upgrade targets;
-// the .deb/.rpm are the gnu distro packages release.yml renames to a
-// version-less chan-<arch>.<ext>. Both are direct downloads on the page.
+// The standalone tarballs are the static musl/darwin self-upgrade targets.
+// Distro-built CLI packages live in COPR, the PPA, and the AUR.
 function cliDownloads() {
   return [
     {
@@ -118,34 +116,6 @@ function cliDownloads() {
       target: "aarch64-apple-darwin",
       format: "tar.gz",
       asset: "chan-aarch64-apple-darwin.tar.gz",
-    },
-    {
-      id: "cli-linux-deb-amd64",
-      kind: "cli",
-      label: "Linux deb (amd64)",
-      format: "deb",
-      asset: "chan-amd64.deb",
-    },
-    {
-      id: "cli-linux-deb-arm64",
-      kind: "cli",
-      label: "Linux deb (arm64)",
-      format: "deb",
-      asset: "chan-arm64.deb",
-    },
-    {
-      id: "cli-linux-rpm-amd64",
-      kind: "cli",
-      label: "Linux rpm (amd64)",
-      format: "rpm",
-      asset: "chan-amd64.rpm",
-    },
-    {
-      id: "cli-linux-rpm-arm64",
-      kind: "cli",
-      label: "Linux rpm (arm64)",
-      format: "rpm",
-      asset: "chan-arm64.rpm",
     },
   ];
 }

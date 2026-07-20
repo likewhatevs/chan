@@ -20,26 +20,6 @@
       "sha256": "7fc83561ce5496d44d7f4fe2f82afffe939cd2bd7e740fb8647cd0534d6d8ce1"
     },
     {
-      "name": "chan-amd64.deb",
-      "url": "https://github.com/fiorix/chan/releases/download/v0.15.4/chan-amd64.deb",
-      "sha256": "c203d2460108e7426d8c872254d76047427fce5d370e8c30c45bcb0488e5b064"
-    },
-    {
-      "name": "chan-arm64.deb",
-      "url": "https://github.com/fiorix/chan/releases/download/v0.15.4/chan-arm64.deb",
-      "sha256": "bd2031ae08caf57c69ec843c891ceec67c23fe1b6ba2dc938d2f546ec626dfeb"
-    },
-    {
-      "name": "chan-amd64.rpm",
-      "url": "https://github.com/fiorix/chan/releases/download/v0.15.4/chan-amd64.rpm",
-      "sha256": "b1a08a7f73d728f6eae7622beb84f4b18e53db5f41472c0804da8de0d897a1eb"
-    },
-    {
-      "name": "chan-arm64.rpm",
-      "url": "https://github.com/fiorix/chan/releases/download/v0.15.4/chan-arm64.rpm",
-      "sha256": "0c70448ea7c0f1e7b794e64f683cb0b54260e682a78ae16f676c8acbbf4e0e98"
-    },
-    {
       "name": "Chan_0.15.4.dmg",
       "url": "https://github.com/fiorix/chan/releases/download/v0.15.4/Chan_0.15.4.dmg",
       "sha256": "91aa0c11b086dc58857db8456449b1b31c88f369147e975495a66dc044d36405"

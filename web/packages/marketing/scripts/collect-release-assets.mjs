@@ -18,17 +18,13 @@ const defaultRepo = "fiorix/chan";
 // Every public download the install page links to is collected here so it
 // gets a SHA256 + browser URL in the manifest. Must stay in sync with the
 // download lists in generate-release-metadata.mjs. The standalone tarballs are
-// the musl/darwin self-upgrade targets; the .deb/.rpm are the gnu distro
-// packages release.yml renames to a version-less chan-<arch>.<ext>.
+// the musl/darwin self-upgrade targets. Distro-built CLI packages are published
+// through COPR, the PPA, and the AUR rather than as GitHub Release assets.
 function cliAssets() {
   return [
     "chan-x86_64-unknown-linux-musl.tar.gz",
     "chan-aarch64-unknown-linux-musl.tar.gz",
     "chan-aarch64-apple-darwin.tar.gz",
-    "chan-amd64.deb",
-    "chan-arm64.deb",
-    "chan-amd64.rpm",
-    "chan-arm64.rpm",
   ];
 }
 

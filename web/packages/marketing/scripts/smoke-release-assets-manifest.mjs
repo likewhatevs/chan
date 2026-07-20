@@ -21,7 +21,7 @@ try {
   const base = runCollect("base", version, []);
   assertEqual(base.version, version, "version");
   assertEqual(base.tag, tag, "tag");
-  assertEqual(base.assets.length, 23, "asset count excludes detached sig");
+  assertEqual(base.assets.length, 19, "asset count excludes detached sig");
   assert(
     !base.assets.some((asset) => asset.name.endsWith("-setup.exe")),
     "windows installer absent when not in the release",
@@ -46,7 +46,7 @@ try {
   // Windows assets present: the optional entries are collected.
   const windowsNames = optionalNames(version);
   const win = runCollect("windows", version, windowsNames);
-  assertEqual(win.assets.length, 25, "windows assets collected when present");
+  assertEqual(win.assets.length, 21, "windows assets collected when present");
   assert(
     win.assets.some((asset) => asset.name === windowsNames[0]),
     "windows installer collected",
@@ -73,7 +73,10 @@ try {
 
   // Digest fast-path: an asset carrying a GitHub API "sha256:<hex>" digest
   // uses it verbatim; the on-disk bytes (which hash differently) are ignored.
-  const digestNames = new Set(["chan-amd64.deb", `Chan_${version}.dmg`]);
+  const digestNames = new Set([
+    "chan-aarch64-unknown-linux-musl.tar.gz",
+    `Chan_${version}.dmg`,
+  ]);
   const dig = runCollect("digest", version, [], digestNames);
   for (const name of digestNames) {
     const asset = dig.assets.find((entry) => entry.name === name);
@@ -226,10 +229,6 @@ function namesFor(releaseVersion) {
     firstCliAsset,
     "chan-aarch64-unknown-linux-musl.tar.gz",
     "chan-aarch64-apple-darwin.tar.gz",
-    "chan-amd64.deb",
-    "chan-arm64.deb",
-    "chan-amd64.rpm",
-    "chan-arm64.rpm",
     // chan-desktop
     `Chan_${releaseVersion}.dmg`,
     `Chan_${releaseVersion}_amd64.AppImage`,

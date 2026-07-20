@@ -138,7 +138,7 @@ jobs:
         working-directory: chan
 
   linux-cli-artifacts:
-    name: linux CLI packages (${{ matrix.target }})
+    name: linux CLI tarball (${{ matrix.musl_target }})
     needs: linux-validate
     strategy:
       fail-fast: false
@@ -147,11 +147,9 @@ jobs:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             musl_target: x86_64-unknown-linux-musl
-            package_arch: amd64
           - os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
             musl_target: aarch64-unknown-linux-musl
-            package_arch: arm64
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v6
@@ -169,8 +167,7 @@ jobs:
       # The standalone CLI tarball is musl (fully static) so a too-new build
       # glibc does not gate older machines. zig is the cross C/C++ compiler
       # cargo-zigbuild drives so the C/C++ deps (ring, bundled SQLite,
-      # tokenizers esaxx-rs/onig) link static. The .deb/.rpm packages stay gnu
-      # (the distro provides glibc) and use plain cargo build below.
+      # tokenizers esaxx-rs/onig) link static.
       - run: rustup target add ${{ matrix.musl_target }}
       - uses: mlugg/setup-zig@v2
         with:
@@ -184,39 +181,19 @@ jobs:
 
       - uses: taiki-e/install-action@v2
         with:
-          tool: cargo-deb,cargo-generate-rpm,cargo-zigbuild
+          tool: cargo-zigbuild
 
       - run: make linux-chan-tarball LINUX_TARGET=${{ matrix.musl_target }}
-        working-directory: chan
-      - run: make linux-deb DEB_TARGET=${{ matrix.target }}
-        working-directory: chan
-      - run: make linux-rpm RPM_TARGET=${{ matrix.target }}
         working-directory: chan
 
       - name: Stage Linux CLI artifacts
         working-directory: chan
         env:
-          PACKAGE_ARCH: ${{ matrix.package_arch }}
-          TARGET: ${{ matrix.target }}
           MUSL_TARGET: ${{ matrix.musl_target }}
         run: |
           set -e
           mkdir -p release-artifacts
-          # The standalone tarball is the musl (static) build; the .deb/.rpm
-          # are the gnu builds from this same job.
           cp "target/release/chan-${MUSL_TARGET}.tar.gz" release-artifacts/
-          deb=$(find "target/${TARGET}/debian" -name '*.deb' -type f | head -1)
-          rpm=$(find target -path '*/generate-rpm/*.rpm' -type f | head -1)
-          if [ -z "$deb" ]; then
-            echo "::error::missing .deb for ${TARGET}"
-            exit 1
-          fi
-          if [ -z "$rpm" ]; then
-            echo "::error::missing .rpm for ${TARGET}"
-            exit 1
-          fi
-          cp "$deb" "release-artifacts/chan-${PACKAGE_ARCH}.deb"
-          cp "$rpm" "release-artifacts/chan-${PACKAGE_ARCH}.rpm"
           ls -la release-artifacts
 
       - uses: actions/upload-artifact@v7
