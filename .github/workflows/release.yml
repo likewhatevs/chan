@@ -18,7 +18,7 @@ on:
         required: false
         type: string
       publish:
-        description: Upload release assets and publish /dl metadata
+        description: Upload release assets and /dl metadata; dispatch publishes no downstream targets
         required: true
         default: false
         type: boolean

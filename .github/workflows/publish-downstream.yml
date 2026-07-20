@@ -41,7 +41,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing or planned vX.Y.Z[-rcN] downstream tag
+        description: Existing vX.Y.Z[-rcN] tag; planned only for targets=docker with publish=false
         required: true
       targets:
         description: Which downstream target to run
@@ -68,6 +68,10 @@ on:
         required: false
         default: false
         type: boolean
+
+concurrency:
+  group: publish-downstream-${{ github.event.workflow_run.head_branch || inputs.tag }}
+  cancel-in-progress: false
 
 # release.yml runs only on tag pushes and workflow_dispatch, so a
 # workflow_run whose triggering event is `push` is necessarily a
@@ -445,6 +449,9 @@ jobs:
        github.event.workflow_run.event == 'push' &&
        startsWith(github.event.workflow_run.head_branch, 'v') &&
        !contains(github.event.workflow_run.head_branch, '-'))
+    # Keep evidence failures visible on this job without making a red workflow
+    # the expected outcome until ARM joins the AUR publication gate.
+    continue-on-error: true
     strategy:
       fail-fast: false
       matrix:
@@ -614,8 +621,9 @@ jobs:
       - uses: actions/checkout@v6
         with:
           # workflow_run otherwise checks out the default branch rather than
-          # the released commit; a dispatch keeps the selected branch commit.
-          ref: ${{ github.event_name == 'workflow_dispatch' && github.sha || github.event.workflow_run.head_sha }}
+          # the released commit. A publishing retry pins the requested tag;
+          # only a dry run builds the selected workflow ref before that tag exists.
+          ref: ${{ github.event_name != 'workflow_dispatch' && github.event.workflow_run.head_sha || (inputs.publish && inputs.tag || github.sha) }}
 
       # On a real publish the Docker Hub credentials + namespace must exist
       # before any login/push; fail fast with a pointer if not. The dry run
