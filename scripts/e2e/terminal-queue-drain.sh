@@ -3,6 +3,10 @@ set -euo pipefail
 
 # Live validation for chronological `cs terminal write` batching. Run from a
 # chan terminal whose CHAN_CONTROL_SOCKET targets the server build under test.
+# That server must serve a workspace the agent under test already trusts:
+# codex and claude both park on a first-run trust prompt in an unfamiliar
+# directory and never print their ready pattern, so a probe over a fresh
+# random path fails every run on the ready-pattern timeout instead.
 # Diagnostics go to stderr; one result row per run goes to stdout.
 #
 # Every run gets its OWN tab inside one probe group, so every scrollback read
