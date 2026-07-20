@@ -226,14 +226,30 @@ fail() {
 
 # Scrollback with ANSI escapes removed and newlines folded away, so an
 # assertion is not defeated by a TUI wrapping a line at the pane width.
+#
+# Every stage is checked, because a stage that dies leaves the empty string,
+# and empty text silently satisfies every negative assertion below.
+#
+# The C locale is not optional: the CSI pattern is written in ASCII byte
+# ranges, and a UTF-8 collation order rejects [0-?] as an invalid range. It is
+# scoped to sed alone so that rg, awk, sort and wc keep the caller's locale.
 flat_scrollback() {
-  "$cs_bin" terminal scrollback --tab-name="$tab" 2>/dev/null \
-    | sed -E $'s|\x1b\\[[0-?]*[ -/]*[@-~]||g' \
-    | tr -d '\r\n'
+  local raw flat
+  raw=$("$cs_bin" terminal scrollback --tab-name="$tab" 2>/dev/null) || {
+    echo "cs terminal scrollback failed for $tab (exit $?)" >&2
+    return 1
+  }
+  flat=$(LC_ALL=C sed -E $'s|\x1b\\[[0-?]*[ -/]*[@-~]||g' <<<"$raw" | tr -d '\r\n') || {
+    echo "stripping ANSI escapes from the $tab scrollback failed (exit $?)" >&2
+    return 1
+  }
+  printf '%s' "$flat"
 }
 
 flat_contains() {
-  flat_scrollback | rg -a -F -q -e "$1"
+  local flat
+  flat=$(flat_scrollback) || fail "cannot read the scrollback for $tab"
+  rg -a -F -q -e "$1" <<<"$flat"
 }
 
 wait_for_flat() {
@@ -410,7 +426,9 @@ tokens_in_order() {
   for token in "$@"; do
     pattern+="(?s:.)*$token"
   done
-  flat_scrollback | rg -a -q -e "$pattern"
+  local flat
+  flat=$(flat_scrollback) || fail "cannot read the scrollback for $tab"
+  rg -a -q -e "$pattern" <<<"$flat"
 }
 
 wait_for_tokens_in_order() {
