@@ -35,8 +35,8 @@ set -euo pipefail
 #               what a per-message drain would produce).
 #   boundaries  A no-submit write and an override-backed write each END the
 #               batch prefix. Five messages whose every neighbour is a boundary
-#               must drain ONE AT A TIME, so the poller has to observe an
-#               intermediate depth, the agent must never emit a
+#               must drain ONE AT A TIME, so the poller has to observe EVERY
+#               intermediate depth 4, 3, 2 and 1, the agent must never emit a
 #               `QUEUE_DRAIN_BATCH_2..5`, and the tail tokens still arrive in
 #               FIFO order, so nothing was skipped to batch a later message.
 #   late        A sixth notification enqueued once the batch has drained gets
@@ -339,6 +339,29 @@ compact_trace() {
        END { printf "%s%sx%d\n", sep, prev, n }'
 }
 
+# Which depths in 1..total-1 the trace never contains. Messages that each end
+# the batch prefix leave the queue one at a time, so every level between the
+# enqueued count and 0 has to be observed, and the 800 ms idle gate between
+# deliveries against the 50 ms poll interval is what makes each level
+# observable. Asking only whether SOME intermediate sample exists would also
+# accept a partial batch: an Override boundary that let messages 3, 4 and 5
+# batch traces 5 -> 4 -> 3 -> 0, which has intermediate samples and is still
+# the exact regression the boundaries case exists to catch.
+missing_depth_levels() {
+  local total=$1 trace=$2 level depth seen missing=""
+  for ((level = total - 1; level >= 1; level--)); do
+    seen=no
+    for depth in $trace; do
+      if ((depth == level)); then
+        seen=yes
+        break
+      fi
+    done
+    [[ $seen == yes ]] || missing+="${missing:+ }$level"
+  done
+  printf '%s' "$missing"
+}
+
 # How many samples of the trace landed strictly between 0 and the enqueued
 # count, i.e. how often the queue was caught PART WAY through draining.
 intermediate_samples() {
@@ -539,7 +562,7 @@ run_boundaries_case() {
   # submitted. Nothing may batch, and nothing may be skipped to reach a later
   # batchable message, so the tokens must still arrive in FIFO order.
   local tokens=("p${run}x$$" "q${run}x$$" "r${run}x$$" "s${run}x$$" "t${run}x$$")
-  local env_key trace stepped
+  local env_key trace missing
   env_key="CHAN_SUBMIT_$(printf '%s' "$agent" | tr '[:lower:]' '[:upper:]')"
 
   start_terminal "$run"
@@ -561,12 +584,13 @@ run_boundaries_case() {
 
   require_depth 5
   # Boundary-separated messages drain ONE AT A TIME, so the poller has to
-  # catch the queue part way down. Never catching it means the five left in a
-  # single step, which is exactly the regression this case exists to find.
+  # catch the queue at all four intermediate depths. A missing level is a
+  # prefix that spanned a boundary, whether it swallowed the whole queue in
+  # one step or only part of it.
   trace=$(sample_depth_to_zero)
-  stepped=$(intermediate_samples 5 "$trace")
-  ((stepped > 0)) \
-    || fail "depth went 5 -> 0 in one step ($(printf '%s\n' "$trace" | compact_trace)); the boundaries were batched"
+  missing=$(missing_depth_levels 5 "$trace")
+  [[ -z $missing ]] \
+    || fail "depth never reached $missing ($(printf '%s\n' "$trace" | compact_trace)); messages were batched across a boundary"
   # These bodies are 32 bytes, small enough that both agents render them
   # inline, so the ordered tokens read the echoed input: a delivery-order
   # check, not a batching oracle. Waiting for it first also means every
