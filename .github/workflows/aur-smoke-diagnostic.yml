@@ -28,10 +28,11 @@ jobs:
       - name: Probe the smoke commands in the CI Arch image
         run: |
           set -euo pipefail
-          docker run --rm \
+          docker run --rm -i \
             -v "$PWD/packaging/distros/shared:/u:ro" \
             docker.io/archlinux/archlinux:base-devel bash -s <<'PROBE'
           set +e
+          echo "PROBE-STARTED"
           pacman -Sy --noconfirm systemd >/dev/null 2>&1
           printf '#!/bin/sh\nexit 0\n' > /usr/bin/chan; chmod 755 /usr/bin/chan
           install -Dm644 /u/chan-devserver.service \
