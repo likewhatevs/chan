@@ -19,6 +19,16 @@ URL:            https://chan.app
 Source0:        chan-vendored-%{upstream_version}.tar.xz
 ExclusiveArch:  x86_64 aarch64
 
+# EL9 has no webkit2gtk4.1-devel and no libsoup3-devel (EPEL Next 9 does
+# not carry either), so the WebKitGTK shell cannot build there. The COPR
+# chroot exclusion for this package lives only in the web console: it has
+# no representation in this repository or in the COPR API, so it can lapse
+# unnoticed and schedule EL9 builds. Fail at spec evaluation instead of
+# minutes later inside dependency resolution.
+%if 0%{?rhel} && 0%{?rhel} < 10
+%{error:chan-desktop needs webkit2gtk4.1-devel and libsoup3-devel, which EL%{rhel} does not provide. Build on EL10 or newer, or on Fedora.}
+%endif
+
 BuildRequires:  rust >= 1.95
 BuildRequires:  cargo
 BuildRequires:  gcc
