@@ -290,8 +290,7 @@ See what is being served, then tear one down:
   chan ps
   chan close ~/src/my-project
 
-Add `cs` when your install did not ship it (a hand-unpacked tarball, a
-container image, `cargo install`):
+Most installs put `cs` on your PATH. If yours did not, link it once:
   ln -s "$(command -v chan)" ~/.local/bin/cs
 
 Teach an agent the whole surface in one shot:
@@ -384,8 +383,8 @@ enum Command {
     /// spawned this terminal ($CHAN_WINDOW_ID + $CHAN_CONTROL_SOCKET);
     /// outside a chan terminal they error clearly.
     ///
-    /// install.sh, the distro packages, and chan-desktop all provide the
-    /// `cs` name. Add it yourself only when your install did not:
+    /// Most installs put `cs` on your PATH. If `command -v cs` finds
+    /// nothing, link it once yourself:
     ///
     ///   ln -s "$(command -v chan)" ~/.local/bin/cs
     ///
@@ -1109,11 +1108,12 @@ enum ReportsAction {
 /// rendering whose usage lines read `cs <cmd>` -- never `cs shell <cmd>`.
 /// The parsed action then dispatches through [`Command::Shell`] exactly as
 /// an explicit `chan shell <action>` does, so `cs terminal list` == `chan
-/// shell terminal list`. The symlink is the user's to create (documented
-/// in `chan shell --help`); the build never ships one. Invoked as `chan`
-/// (the standalone shim or chan-desktop's `chan` dispatch) there is no
-/// aliasing. Takes `args` rather than reading the environment so
-/// chan-desktop can hand us its own argv.
+/// shell terminal list`. How a `cs` name reaches PATH varies by install
+/// and does not matter here; `chan shell --help` covers adding one when
+/// an install did not provide it. Invoked as `chan` (the standalone shim
+/// or chan-desktop's `chan` dispatch) there is no aliasing. Takes `args`
+/// rather than reading the environment so chan-desktop can hand us its
+/// own argv.
 fn parse_cli<I, T>(args: I) -> Cli
 where
     I: IntoIterator<Item = T>,
