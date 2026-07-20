@@ -1,6 +1,6 @@
 # Arch Linux AUR Support
 
-Status: implementation complete; release validation pending. Grounded against `525dfa75` (`v0.71.0`) and the `sdme` AUR implementation through `20f4296` on 2026-07-19.
+Status: implementation complete and validated on x86_64 at `41a87d8d`; release validation pending. Grounded against `525dfa75` (`v0.71.0`) and the `sdme` AUR implementation through `20f4296` on 2026-07-19.
 
 ## Summary
 
@@ -47,7 +47,7 @@ Keep `make linux-archpkg` as the existing working-tree binary QA path, distinct 
 ## Validation and Acceptance
 
 - Renderer failures cover unknown packages, invalid versions and releases, missing source archives, unresolved placeholders, and mismatched `.SRCINFO`.
-- `make aur-check` succeeds for both packages on a native x86_64 sdme host. The same command on a native aarch64 host is the open ARM item, not a shipped claim.
+- `make aur-check` succeeds for both packages on a native x86_64 sdme host; it exits `0` there as of 2026-07-20. The same command on a native aarch64 host is the open ARM item, not a shipped claim.
 - Each package builds through `makepkg`, passes its package-scoped Rust tests, installs with pacman, and passes `namcap` review. The container build enforces that review: namcap's error class fails the build, warnings are printed, and waivers live in `build-in-container.sh` with the reason each one cannot be fixed in the recipe. That gate runs inside `aur-validate`, a hard `needs` of `aur-publish`, so an error-class finding in either package holds back both AUR pushes and nothing else.
 - The installed `chan` and `cs` commands dispatch correctly and the systemd user unit verifies. The standalone `chan` package's `chan upgrade` exits unsuccessfully and names the AUR update path. The desktop personality routes `chan upgrade` to a running GUI, so that path is not a valid headless-container smoke; `chan-desktop` instead proves the `CHAN_PACKAGED=aur` stamp reached the build, through both the rendered recipe's export and the refusal hint in the installed binary.
 - `chan-desktop` has no unresolved shared libraries; its desktop entry and icons validate; and its package conflict/provide relationship with `chan` is correct.
@@ -63,28 +63,35 @@ Keep `make linux-archpkg` as the existing working-tree binary QA path, distinct 
 
 ## Implementation Evidence
 
-Implemented on 2026-07-19. The local pre-push gate passed, including formatting,
-clippy, all Rust targets, the no-default-features build, gateway builds, and all
-frontend and marketing checks. A clean x86_64 Arch sdme container rendered,
-built, tested, installed, smoked, and removed the local-source `chan` package;
-the installed binary reported the AUR-helper update path and the systemd unit
-verified. A second clean Arch pass rendered `chan-desktop` metadata with both
-architectures and `pkgrel=2`, and exercised the renderer's unknown-package,
-prerelease, and missing-source failures. The official AUR RPC returned no
-existing results for either `chan` or `chan-desktop`, so both package bases were
-available for their first push on the implementation date.
+Implemented on 2026-07-19. The acceptance run is dated 2026-07-20 and measures the merged tip, `41a87d8d`, which carries the packaging, terminal, dump-skill, and upgrade-refusal work together. It ran from a detached worktree on this x86_64 host against the local sdme rootfs `archlinux`:
 
-Both packages were built, packaged, and installed on a local x86_64 sdme Arch container on 2026-07-19, from a separate probe worktree pinned at `4a9199ad`. That revision predates this item's namcap-gate and validator fixes, so the run measures the recipes as authored: namcap ran advisory rather than enforcing, and the packaged-upgrade check was still the pre-fix one. A re-run against this branch's tip is still owed.
+```
+make aur-check SDME='sudo -n sdme' AUR_ROOTFS=archlinux
+```
 
-`chan` built in 23m47s, passed its release-mode test suite inside the container, packaged, installed, and smoked. Its packaged `chan upgrade` exited unsuccessfully with `this build of chan is managed by the system package manager (aur); self-upgrade is disabled. Update with your AUR helper (for example, paru -Syu or yay -Syu).` namcap reported four warnings and no error-class line: an unused `/usr/lib64/ld-linux-x86-64.so.2` (the dynamic loader), `libgcc` detected and implicitly satisfied, and `gcc-libs` and `systemd` flagged as possibly unneeded.
+`make` exited `0`. Both packages rendered, built, installed, smoked, and were removed in one disposable container:
 
-`chan-desktop` built, produced a 21 MB package, and installed cleanly. namcap reported eleven warnings and no error-class line: the same unused dynamic loader; `dbus`, `gdk-pixbuf2`, `libgcc`, `cairo`, and `glib2` detected and implicitly satisfied; and `gcc-libs`, `libayatana-appindicator`, `librsvg`, `systemd`, and `xdg-utils` included but possibly unneeded.
+```
+>> AUR validation: version=0.71.0 pkgrel=1 arch=x86_64
+>> building chan
+>> rendered chan 0.71.0-1 in /out/chan
+>> built and smoked chan-0.71.0-1-x86_64.pkg.tar.zst
+>> building chan-desktop
+>> rendered chan-desktop 0.71.0-1 in /out/chan-desktop
+>> built and smoked chan-desktop-0.71.0-1-x86_64.pkg.tar.zst
+```
 
-Every one of those fifteen findings is a dependency-declaration observation from namcap's soname-only analysis, and none is acted on: `gcc-libs` is the package that provides the `libgcc_s.so.1` the same output says the binary needs and there is no `libgcc` package to declare; `systemd` is a runtime dependency for the packaged user unit and `chan devserver --service=systemd`; and `xdg-utils` and `libayatana-appindicator` carry the `chan://` scheme handler and the tray. No ELF header shows any of those. So the error-class gate passes for both packages with an empty waiver list, on measured output rather than on expectation.
+Each recipe's `check()` ran the release-mode test suite in the container with `CHAN_PACKAGED=aur` exported by the recipe, and both passed. That includes the 258-test `chan` lib suite, `close_then_reopen_under_pressure`, and the packaged-upgrade refusals `upgrade_route_refuses_a_packaged_build_in_every_personality` and `test_packaged_upgrade_refusal_only_fires_for_packaged_builds`. The `chan` post-install smoke additionally required a failing `chan upgrade` naming the AUR helper path, and the `chan-desktop` smoke required both the `export CHAN_PACKAGED=aur` line in the rendered recipe and the AUR-helper refusal hint in the installed binary.
 
-The run also exposed a validator defect rather than a package defect. The post-install smoke ran `chan upgrade` for both packages and required the AUR-helper refusal in its output. That holds for `chan`, but the desktop personality routes `chan upgrade` to a running GUI: in a headless container it launched nothing, waited twenty seconds, and left `timed out waiting for chan-desktop to start` in `upgrade.out`, failing the run over a package that was otherwise good. The corrected validator forks by package. `chan` keeps the executable refusal. `chan-desktop` asserts the `CHAN_PACKAGED=aur` stamp directly, requiring both the export in the rendered recipe and the refusal hint in the installed binary; that hint is reachable only through `option_env!("CHAN_PACKAGED")` being `Some`, so an unstamped release build drops the literal along with the dead branch. Both assertions were checked against the artifacts this run left on disk and against negative controls.
+namcap emitted no error-class (`E:`) line for either package on the resulting artifacts, so the gate passed with its waiver list genuinely empty rather than by exemption. `chan` drew four warnings: an unused `/usr/lib64/ld-linux-x86-64.so.2` (the dynamic loader), `libgcc` detected and implicitly satisfied, and `gcc-libs` and `systemd` included but possibly unneeded. `chan-desktop` drew eleven: the same unused dynamic loader; `libgcc`, `cairo`, `gdk-pixbuf2`, `dbus`, and `glib2` detected and implicitly satisfied; and `gcc-libs`, `libayatana-appindicator`, `librsvg`, `systemd`, and `xdg-utils` included but possibly unneeded.
 
-That probe ran in the local sdme Arch rootfs, not in the `docker.io/archlinux/archlinux:base-devel` image `aur-validate` uses, so the gate's own rootfs is unmeasured. The findings still carry: namcap derives them from each recipe's `depends` and the built binary's sonames, and neither `depends` list has changed since the probe.
+Every one of those fifteen findings is a dependency-declaration observation from namcap's soname-only analysis, and none is acted on: `gcc-libs` is the package that provides the `libgcc_s.so.1` the same output says the binary needs and there is no `libgcc` package to declare; `systemd` is a runtime dependency for the packaged user unit and `chan devserver --service=systemd`; and `xdg-utils` and `libayatana-appindicator` carry the `chan://` scheme handler and the tray. No ELF header shows any of those.
+
+The renderer's unknown-package, prerelease, and missing-source failure paths, and a `chan-desktop` render carrying both architectures with `pkgrel=2`, were exercised by hand on 2026-07-19 against `4a9199ad`. `make-aur-package.sh` is byte-identical between that revision and `41a87d8d`, so those observations still describe the shipped renderer.
+
+Four things the run does not establish. It proves x86_64 only: this host has no binfmt or QEMU, so the declared aarch64 architecture has never been built anywhere. It proves nothing about AUR publication: nothing was pushed, and the AUR RPC returned no existing result for either `chan` or `chan-desktop` on 2026-07-19, so both package bases were unclaimed. It proves nothing about CachyOS: the rootfs was upstream `archlinux`. It proves no GUI behavior: the container is headless, so the `chan-desktop` leg checks the build stamp and the installed artifacts, not a window.
+
+The run also used the local sdme rootfs rather than the `docker.io/archlinux/archlinux:base-devel` image `aur-validate` builds in, so the CI job's own rootfs is unmeasured. The findings still carry across: both paths run the same `build-in-container.sh`, and namcap derives its output from each recipe's `depends` and the built binary's sonames.
 
 The remaining acceptance evidence is deliberately release-bound: the CachyOS desktop hand-smoke and AUR RPC confirmation of both `0.72.0-1` repositories.
 
