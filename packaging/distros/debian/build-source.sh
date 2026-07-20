@@ -27,6 +27,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 
+# /etc/os-release belongs to the build host, not to this repo, so shellcheck
+# has nothing to read; the `:-` below covers a host that does not set it.
+# shellcheck source=/dev/null
 HOST_SERIES="$(. /etc/os-release && echo "${VERSION_CODENAME:-}")"
 PPA_SERIES="${PPA_SERIES:-noble $HOST_SERIES}"
 SERIESREV="${SERIESREV:-1}"
@@ -53,7 +56,9 @@ for pkg in "${PKGS[@]}"; do
         echo "error: $ORIG not found; run 'make distros-tarball' first" >&2
         exit 1
     fi
-    # dedupe series (host series may already be noble)
+    # dedupe series (host series may already be noble); PPA_SERIES is a
+    # space-separated list, so the split is the point
+    # shellcheck disable=SC2086
     for series in $(printf '%s\n' $PPA_SERIES | awk '!seen[$0]++'); do
         work="$REPO/target/distros/ppa/$pkg/$series"
         echo "==> source package: $pkg $DEBVER $series"

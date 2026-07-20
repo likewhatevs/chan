@@ -117,12 +117,12 @@ EDITOR_ENTRY_TOKEN="$(python3 "$MINT_PY" --secret "$GATE_SECRET" --sub "$EDITOR_
   --aud "$HOSTHDR" --typ entry --ttl 300)"
 $SDME exec "$C_PROXY" -- /usr/bin/systemd-run --unit=stub --collect \
   --setenv=STUB_BIND=127.0.0.1:$STUB_PORT --setenv=STUB_USERNAME=$TENANT_USER \
-  --setenv=STUB_USER_ID=$USER_ID --setenv=STUB_DEVSERVER_ID=$DEVSERVER_ID \
-  --setenv=STUB_SCOPES=tunnel --setenv=STUB_PROXY_ORIGIN=$PROXY_ORIGIN \
+  --setenv=STUB_USER_ID=$USER_ID --setenv=STUB_DEVSERVER_ID="$DEVSERVER_ID" \
+  --setenv=STUB_SCOPES=tunnel --setenv=STUB_PROXY_ORIGIN="$PROXY_ORIGIN" \
   --setenv=STUB_DESKTOP_OWNER_PAT=$DESKTOP_OWNER_PAT \
   --setenv=STUB_DESKTOP_EDITOR_PAT=$DESKTOP_EDITOR_PAT \
-  --setenv=STUB_OWNER_ENTRY_TOKEN=$OWNER_ENTRY_TOKEN \
-  --setenv=STUB_EDITOR_ENTRY_TOKEN=$EDITOR_ENTRY_TOKEN \
+  --setenv=STUB_OWNER_ENTRY_TOKEN="$OWNER_ENTRY_TOKEN" \
+  --setenv=STUB_EDITOR_ENTRY_TOKEN="$EDITOR_ENTRY_TOKEN" \
   /usr/bin/python3 /root/stub-identity.py || die "systemd-run stub identity"
 sleep 1
 

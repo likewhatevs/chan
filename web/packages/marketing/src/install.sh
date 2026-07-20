@@ -20,10 +20,12 @@ err() { printf 'install: %s\n' "$1" >&2; exit 1; }
 validate_version() {
     version=$1
     case "$version" in
-        ""|v*|*[^0123456789.]*|*.*.*.*) err "VERSION must be a bare X.Y.Z version." ;;
+        ""|v*|*[!0123456789.]*|*.*.*.*) err "VERSION must be a bare X.Y.Z version." ;;
     esac
     old_ifs=$IFS
     IFS=.
+    # IFS is set to "." above precisely so the split happens here.
+    # shellcheck disable=SC2086
     set -- $version
     IFS=$old_ifs
     [ "$#" -eq 3 ] || err "VERSION must be a bare X.Y.Z version."
@@ -94,6 +96,9 @@ fetch_url() {
 json_field() {
     file=$1
     key=$2
+    # Each JSON punctuation character maps to its own newline; the repeated
+    # replacement is what makes set2 the same length as set1.
+    # shellcheck disable=SC2020
     tr '{}[],' '\n\n\n\n\n' < "$file" | awk -v key="$key" '
         function trim(s) {
             sub(/^[[:space:]]+/, "", s)
@@ -118,6 +123,9 @@ json_field() {
 target_metadata() {
     file=$1
     wanted=$2
+    # Each JSON punctuation character maps to its own newline; the repeated
+    # replacement is what makes set2 the same length as set1.
+    # shellcheck disable=SC2020
     tr '{}[],' '\n\n\n\n\n' < "$file" | awk -v wanted="$wanted" '
         function trim(s) {
             sub(/^[[:space:]]+/, "", s)

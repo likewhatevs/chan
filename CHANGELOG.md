@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Fixed
+
+- **`VERSION=X.Y.Z` installs work again on Debian and Ubuntu.** The installer's version check used a `[^...]` glob negation, which is a bash extension: under `dash`, which is `/bin/sh` on Debian and Ubuntu and is the shell the documented `curl -fsSL https://chan.app/install.sh | sh` line runs, the test was inverted, so every valid version was refused with "VERSION must be a bare X.Y.Z version." and a garbage value passed. It now uses the POSIX `[!...]` form, which behaves the same across dash, bash, and busybox ash. Installs without `VERSION` never reached the check and were unaffected.
+
 ## [v0.71.0] - 2026-07-19
 
 v0.71.0 makes OpenCode a first-class terminal agent, replaces the desktop's static wildcard gateway grants with authenticated exact-origin native trust, unifies workspace search and graph traversal behind one bounded contract and one agent tool, keeps the last five CLI and desktop versions resolvable for `chan upgrade --version`, and fixes two editor cosmetics.
