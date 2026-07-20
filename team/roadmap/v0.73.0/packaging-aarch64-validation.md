@@ -1,6 +1,6 @@
 # aarch64 Packaging Validation
 
-Status: accepted scope for v0.73.0. Carried forward from v0.72.0, which shipped both distro packaging ecosystems validated on x86_64 only. Nothing about aarch64 is proven in either one.
+Status: partially delivered in v0.73.0; the remainder carries forward. The COPR half is closed by evidence: aarch64 was already green there and the harvested per-chroot results are recorded below, which retires this item's original premise. The AUR half is wired but unproven. `aur-validate-arm` now runs on every GA release instead of only on manual dispatch, so v0.73.0 produces the first real Arch Linux ARM result; by owner ruling it is observed evidence and does **not** gate `aur-publish`, because an unproven job must not block a first AUR publication. Once one ARM cell has passed, adding it to `aur-publish`'s `needs` closes the item.
 
 ## Corrected baseline
 
