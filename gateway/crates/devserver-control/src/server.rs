@@ -14,7 +14,7 @@ use http::{header, Method, Request, Response, StatusCode};
 use subtle::ConstantTimeEq;
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpListener;
-use tokio::sync::{watch, Semaphore};
+use tokio::sync::{mpsc, watch, Semaphore};
 use tokio::task::JoinSet;
 use tokio::time::Instant;
 use uuid::Uuid;
@@ -27,6 +27,30 @@ const HELLO_TIMEOUT: Duration = Duration::from_secs(10);
 const SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_EXTRA_STREAMS: usize = 16;
 const MAX_INFLIGHT_CONNECTIONS: usize = 1024;
+const CLIENT_FRAME_QUEUE_CAPACITY: usize = 1024;
+
+struct AbortOnDropTask(Option<tokio::task::JoinHandle<()>>);
+
+impl AbortOnDropTask {
+    fn new(task: tokio::task::JoinHandle<()>) -> Self {
+        Self(Some(task))
+    }
+
+    async fn cancel(mut self) {
+        if let Some(task) = self.0.take() {
+            task.abort();
+            let _ = task.await;
+        }
+    }
+}
+
+impl Drop for AbortOnDropTask {
+    fn drop(&mut self) {
+        if let Some(task) = &self.0 {
+            task.abort();
+        }
+    }
+}
 
 pub async fn serve_control_listener(
     listener: TcpListener,
@@ -188,7 +212,7 @@ async fn run_session<S>(
     origin_template: ProxyOriginTemplate,
 ) -> Result<(), SessionError>
 where
-    S: AsyncRead + AsyncWrite + Unpin,
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
     let (mut reader, mut writer) = tokio::io::split(stream);
     let hello = tokio::time::timeout(HELLO_TIMEOUT, read_frame::<_, ClientFrame>(&mut reader))
@@ -240,14 +264,7 @@ where
     .await?;
 
     let incarnation = session.incarnation;
-    let result = run_established(
-        &mut reader,
-        &mut writer,
-        &controller,
-        &proxy_id,
-        &mut session,
-    )
-    .await;
+    let result = run_established(reader, &mut writer, &controller, &proxy_id, &mut session).await;
     if let Err(error) = controller.disconnect(proxy_id, incarnation).await {
         if !matches!(error, ActorError::State(crate::StateError::StaleSession)) {
             tracing::warn!(error = ?error, "failed to remove closed proxy control session");
@@ -272,58 +289,95 @@ fn validate_origin(
 }
 
 async fn run_established<R, W>(
-    reader: &mut R,
+    mut reader: R,
     writer: &mut W,
     controller: &ControllerHandle,
     proxy_id: &ProxyId,
     session: &mut ProxyControlSession,
 ) -> Result<(), SessionError>
 where
-    R: AsyncRead + Unpin,
+    R: AsyncRead + Unpin + Send + 'static,
     W: AsyncWrite + Unpin,
 {
+    // One task owns the framed reader for the entire established session.
+    // `read_frame` is not cancellation-safe after consuming a length prefix
+    // or payload fragment, so it must never be recreated by a `select!` arm.
+    let (incoming_tx, mut incoming_rx) = mpsc::channel(CLIENT_FRAME_QUEUE_CAPACITY);
+    let (overflow_tx, mut overflow_rx) = mpsc::channel(1);
+    let reader_task = AbortOnDropTask::new(tokio::spawn(async move {
+        loop {
+            let frame = read_frame::<_, ClientFrame>(&mut reader).await;
+            let terminal = frame.is_err();
+            match incoming_tx.try_send(frame) {
+                Ok(()) if !terminal => {}
+                Ok(()) => break,
+                Err(mpsc::error::TrySendError::Full(_)) => {
+                    let _ = overflow_tx.try_send(());
+                    break;
+                }
+                Err(mpsc::error::TrySendError::Closed(_)) => break,
+            }
+        }
+    }));
+
     let mut phase = Phase::awaiting_snapshot();
-    loop {
-        let deadline = phase.deadline();
-        tokio::select! {
-            biased;
-            _ = wait_deadline(deadline) => {
-                send_shutdown(writer, "snapshot deadline exceeded").await?;
-                return Err(SessionError::Timeout("initial snapshot"));
-            }
-            outgoing = session.commands.recv() => {
-                let Some(outgoing) = outgoing else {
-                    return Ok(());
-                };
-                let resync = matches!(outgoing, ServerFrame::ResyncRequired { .. });
-                let shutdown = matches!(outgoing, ServerFrame::Shutdown { .. });
-                tracing::debug!(frame = ?outgoing, "sending proxy control frame");
-                write_frame(writer, &outgoing).await?;
-                if resync {
-                    phase = Phase::awaiting_snapshot();
+    let mut overflow_open = true;
+    let result = async {
+        loop {
+            let deadline = phase.deadline();
+            tokio::select! {
+                biased;
+                _ = wait_deadline(deadline) => {
+                    send_shutdown(writer, "snapshot deadline exceeded").await?;
+                    return Err(SessionError::Timeout("initial snapshot"));
                 }
-                if shutdown {
-                    writer.shutdown().await.map_err(FrameError::Io)?;
-                    return Ok(());
+                overflowed = overflow_rx.recv(), if overflow_open => {
+                    match overflowed {
+                        Some(()) => {
+                            send_shutdown(writer, "client frame queue overflowed").await?;
+                            return Err(SessionError::Protocol("client frame queue overflowed".into()));
+                        }
+                        None => overflow_open = false,
+                    }
                 }
-            }
-            incoming = read_frame::<_, ClientFrame>(reader) => {
-                let incoming = incoming?;
-                if let Err(error) = incoming.validate() {
-                    send_shutdown(writer, "invalid control frame").await?;
-                    return Err(error.into());
+                outgoing = session.commands.recv() => {
+                    let Some(outgoing) = outgoing else {
+                        return Ok(());
+                    };
+                    let resync = matches!(outgoing, ServerFrame::ResyncRequired { .. });
+                    let shutdown = matches!(outgoing, ServerFrame::Shutdown { .. });
+                    tracing::debug!(frame = ?outgoing, "sending proxy control frame");
+                    write_frame(writer, &outgoing).await?;
+                    if resync {
+                        phase = Phase::awaiting_snapshot();
+                    }
+                    if shutdown {
+                        writer.shutdown().await.map_err(FrameError::Io)?;
+                        return Ok(());
+                    }
                 }
-                handle_client_frame(
-                    incoming,
-                    &mut phase,
-                    writer,
-                    controller,
-                    proxy_id,
-                    session.incarnation,
-                ).await?;
+                incoming = incoming_rx.recv() => {
+                    let incoming = incoming
+                        .ok_or_else(|| SessionError::Protocol("client frame reader stopped".into()))??;
+                    if let Err(error) = incoming.validate() {
+                        send_shutdown(writer, "invalid control frame").await?;
+                        return Err(error.into());
+                    }
+                    handle_client_frame(
+                        incoming,
+                        &mut phase,
+                        writer,
+                        controller,
+                        proxy_id,
+                        session.incarnation,
+                    ).await?;
+                }
             }
         }
     }
+    .await;
+    reader_task.cancel().await;
+    result
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -821,6 +875,59 @@ mod tests {
         ));
     }
 
+    #[tokio::test(start_paused = true)]
+    async fn split_client_frame_survives_an_interleaved_server_command() {
+        let mut opened = connected(crate::spawn_controller(100)).await;
+        let stream = opened.stream.as_mut().unwrap();
+        handshake(stream).await;
+        write_frame(stream, &ClientFrame::SnapshotStart { base_generation: 0 })
+            .await
+            .unwrap();
+
+        let chunk = ClientFrame::SnapshotChunk {
+            rows: vec![TunnelRow {
+                registration_id: Uuid::new_v4(),
+                user: "alice".repeat(256),
+                devserver_id: "one".repeat(256),
+                peer_addr: None,
+                connected_at: chrono::Utc::now(),
+            }],
+        };
+        let payload = serde_json::to_vec(&chunk).unwrap();
+        let split = payload.len() / 2;
+        stream
+            .write_all(&(payload.len() as u32).to_be_bytes())
+            .await
+            .unwrap();
+        stream.write_all(&payload[..split]).await.unwrap();
+        tokio::task::yield_now().await;
+
+        tokio::time::advance(crate::HEARTBEAT_INTERVAL).await;
+        let ping = read_frame::<_, ServerFrame>(stream).await.unwrap();
+        assert!(matches!(ping, ServerFrame::Ping { .. }));
+
+        stream.write_all(&payload[split..]).await.unwrap();
+        write_frame(stream, &ClientFrame::SnapshotEnd { base_generation: 0 })
+            .await
+            .unwrap();
+        let mut accepted = false;
+        for _ in 0..4 {
+            match read_frame::<_, ServerFrame>(stream).await.unwrap() {
+                ServerFrame::SnapshotAccepted { base_generation: 0 } => {
+                    accepted = true;
+                    break;
+                }
+                ServerFrame::Ping { nonce } => {
+                    write_frame(stream, &ClientFrame::Pong { nonce })
+                        .await
+                        .unwrap();
+                }
+                frame => panic!("unexpected server frame: {frame:?}"),
+            }
+        }
+        assert!(accepted, "split snapshot chunk was not accepted");
+    }
+
     #[tokio::test]
     async fn out_of_order_snapshot_frame_resyncs_and_duplicate_hello_closes() {
         let mut opened = connected(crate::spawn_controller(100)).await;
@@ -902,12 +1009,18 @@ mod tests {
                 .unwrap();
         }
         tokio::time::advance(crate::HEARTBEAT_INTERVAL).await;
-        loop {
+        let mut shutdown = false;
+        for _ in 0..8 {
             let frame = read_frame::<_, ServerFrame>(stream).await.unwrap();
             if matches!(frame, ServerFrame::Shutdown { .. }) {
+                shutdown = true;
                 break;
             }
         }
+        assert!(
+            shutdown,
+            "snapshot timeout did not close within eight frames"
+        );
     }
 
     #[test]

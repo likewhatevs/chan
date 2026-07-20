@@ -324,7 +324,7 @@ fn handle_command(
                 proxy_id: proxy_id.as_str().to_string(),
                 incarnation,
             });
-            finish(reply, state.disconnect(&proxy_id, incarnation))
+            finish(reply, state.disconnect(&proxy_id, incarnation, now))
         }
         Command::RequireResync {
             proxy_id,
@@ -408,7 +408,7 @@ fn apply_effects(
             sessions.remove(&session);
             let proxy_id =
                 ProxyId::parse(&session.proxy_id).expect("session proxy id was validated");
-            if let Ok(more) = state.disconnect(&proxy_id, session.incarnation) {
+            if let Ok(more) = state.disconnect(&proxy_id, session.incarnation, Instant::now()) {
                 effects.extend(more);
             }
         }
@@ -704,13 +704,24 @@ mod tests {
     async fn keep_alive_until_ready(actor: &ControllerHandle, session: &mut ProxyControlSession) {
         for _ in 0..6 {
             tokio::time::advance(crate::HEARTBEAT_INTERVAL).await;
-            let nonce = loop {
-                if let ServerFrame::Ping { nonce } = session.commands.recv().await.unwrap() {
-                    break nonce;
+            let mut nonce = None;
+            for _ in 0..8 {
+                let frame =
+                    tokio::time::timeout(crate::HEARTBEAT_INTERVAL, session.commands.recv())
+                        .await
+                        .expect("controller command wait timed out")
+                        .expect("controller command channel closed");
+                if let ServerFrame::Ping { nonce: ping_nonce } = frame {
+                    nonce = Some(ping_nonce);
+                    break;
                 }
-            };
+            }
             actor
-                .pong(proxy(), session.incarnation, nonce)
+                .pong(
+                    proxy(),
+                    session.incarnation,
+                    nonce.expect("controller did not send a Ping within eight frames"),
+                )
                 .await
                 .unwrap();
         }
@@ -757,6 +768,15 @@ mod tests {
         ));
         proxy_watch.changed().await.unwrap();
         assert!(proxy_watch.borrow().is_empty());
+        assert!(matches!(
+            session.commands.try_recv(),
+            Ok(ServerFrame::Shutdown { reason })
+                if reason == "proxy control heartbeat expired"
+        ));
+        assert!(matches!(
+            session.commands.try_recv(),
+            Err(mpsc::error::TryRecvError::Disconnected)
+        ));
     }
 
     #[tokio::test(start_paused = true)]

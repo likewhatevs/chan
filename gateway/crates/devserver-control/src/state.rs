@@ -13,6 +13,7 @@ pub const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
 pub const SESSION_DEAD_AFTER: Duration = Duration::from_secs(15);
 pub const CONVERGENCE_WINDOW: Duration = Duration::from_secs(30);
 pub const ADMISSION_CLAIM_TTL: Duration = Duration::from_secs(15);
+pub const COMMAND_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_OUTSTANDING_PINGS: usize = 8;
 
 type TunnelKey = (String, String);
@@ -91,6 +92,7 @@ struct PendingCommand {
     session: SessionKey,
     registration_ids: HashSet<Uuid>,
     purpose: CommandPurpose,
+    expires_at: Instant,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -153,7 +155,6 @@ pub(crate) struct ControllerState {
     commands: HashMap<Uuid, PendingCommand>,
     reconciliation: Option<Reconciliation>,
     convergence_deadline: Option<Instant>,
-    convergence_failed: bool,
 }
 
 impl ControllerState {
@@ -169,7 +170,6 @@ impl ControllerState {
             commands: HashMap::new(),
             reconciliation: None,
             convergence_deadline: None,
-            convergence_failed: false,
         }
     }
 
@@ -198,7 +198,7 @@ impl ControllerState {
                     );
                 }
             }
-            effects.extend(self.remove_session(&old));
+            effects.extend(self.remove_session(&old, now));
             effects.push(Effect::Retire {
                 session: old,
                 reason: "proxy session replaced".to_string(),
@@ -274,8 +274,8 @@ impl ControllerState {
             frame: ServerFrame::SnapshotAccepted { base_generation },
         }];
         if self.ready {
-            effects.extend(self.reconcile_joining(key)?);
-        } else if self.convergence_deadline.is_none() && !self.convergence_failed {
+            effects.extend(self.reconcile_joining(key, now)?);
+        } else if self.convergence_deadline.is_none() {
             self.convergence_deadline = Some(now + CONVERGENCE_WINDOW);
         }
         Ok(effects)
@@ -308,7 +308,12 @@ impl ControllerState {
             claim.session == key && claim.registration_id == row.registration_id
         });
         if !matching_claim {
-            return Ok(self.issue_kill(key, vec![row.registration_id], CommandPurpose::Runtime));
+            return Ok(self.issue_kill(
+                key,
+                vec![row.registration_id],
+                CommandPurpose::Runtime,
+                now,
+            ));
         }
         self.pending.remove(&tunnel_key);
 
@@ -332,6 +337,7 @@ impl ControllerState {
                     old.session,
                     vec![old.row.registration_id],
                     CommandPurpose::Runtime,
+                    now,
                 ));
             }
         }
@@ -547,7 +553,7 @@ impl ControllerState {
                 reconciliation.command_ids.remove(&command_id);
                 reconciliation.failed |= invalid || incomplete || !failed.is_empty();
             }
-            return Ok(self.finish_reconciliation_if_complete());
+            return Ok(self.finish_reconciliation_if_complete(now));
         }
         Ok(Vec::new())
     }
@@ -556,9 +562,10 @@ impl ControllerState {
         &mut self,
         proxy_id: &ProxyId,
         incarnation: SessionIncarnation,
+        now: Instant,
     ) -> Result<Vec<Effect>, StateError> {
         let key = self.require_key(proxy_id, incarnation)?;
-        Ok(self.remove_session(&key))
+        Ok(self.remove_session(&key, now))
     }
 
     pub fn require_resync(
@@ -579,6 +586,29 @@ impl ControllerState {
         self.pending.retain(|_, claim| claim.expires_at > now);
 
         let mut effects = Vec::new();
+        let expired_commands: Vec<Uuid> = self
+            .commands
+            .iter()
+            .filter_map(|(command_id, command)| (command.expires_at <= now).then_some(*command_id))
+            .collect();
+        let mut reconciliation_expired = false;
+        for command_id in expired_commands {
+            let Some(command) = self.commands.remove(&command_id) else {
+                continue;
+            };
+            tracing::warn!(%command_id, session = %command.session.proxy_id, "controller command timed out");
+            if command.purpose == CommandPurpose::Reconciliation {
+                if let Some(reconciliation) = self.reconciliation.as_mut() {
+                    reconciliation.command_ids.remove(&command_id);
+                    reconciliation.failed = true;
+                    reconciliation_expired = true;
+                }
+            }
+        }
+        if reconciliation_expired {
+            effects.extend(self.finish_reconciliation_if_complete(now));
+        }
+
         let mut dead = Vec::new();
         for (proxy_id, session) in &mut self.proxies {
             if now.duration_since(session.last_seen) >= SESSION_DEAD_AFTER {
@@ -608,17 +638,20 @@ impl ControllerState {
             }
         }
         for key in dead {
-            effects.extend(self.remove_session(&key));
+            effects.extend(self.remove_session(&key, now));
+            effects.push(Effect::Retire {
+                session: key,
+                reason: "proxy control heartbeat expired".to_string(),
+            });
         }
 
         if !self.ready
-            && !self.convergence_failed
             && self.reconciliation.is_none()
             && self
                 .convergence_deadline
                 .is_some_and(|deadline| deadline <= now)
         {
-            effects.extend(self.begin_initial_reconciliation());
+            effects.extend(self.begin_initial_reconciliation(now));
         }
 
         let _ = wall_now;
@@ -757,7 +790,7 @@ impl ControllerState {
         }]
     }
 
-    fn begin_initial_reconciliation(&mut self) -> Vec<Effect> {
+    fn begin_initial_reconciliation(&mut self, now: Instant) -> Vec<Effect> {
         if !self
             .proxies
             .values()
@@ -783,10 +816,14 @@ impl ControllerState {
             self.convergence_deadline = None;
             return self.mark_fleet_ready();
         }
-        self.start_reconciliation(ReconciliationKind::Initial, losers)
+        self.start_reconciliation(ReconciliationKind::Initial, losers, now)
     }
 
-    fn reconcile_joining(&mut self, joining: SessionKey) -> Result<Vec<Effect>, StateError> {
+    fn reconcile_joining(
+        &mut self,
+        joining: SessionKey,
+        now: Instant,
+    ) -> Result<Vec<Effect>, StateError> {
         if self.reconciliation.is_some() {
             return Err(StateError::ReconciliationInProgress);
         }
@@ -812,7 +849,7 @@ impl ControllerState {
                 frame: ServerFrame::FleetReady,
             }]);
         }
-        Ok(self.start_reconciliation(ReconciliationKind::Joining(joining), losers))
+        Ok(self.start_reconciliation(ReconciliationKind::Joining(joining), losers, now))
     }
 
     fn reconciliation_plan(
@@ -876,6 +913,7 @@ impl ControllerState {
         &mut self,
         kind: ReconciliationKind,
         losers: Vec<OwnedTunnel>,
+        now: Instant,
     ) -> Vec<Effect> {
         let mut grouped: BTreeMap<SessionKey, Vec<Uuid>> = BTreeMap::new();
         for loser in losers {
@@ -896,6 +934,7 @@ impl ControllerState {
                     session: session.clone(),
                     registration_ids: registration_ids.iter().copied().collect(),
                     purpose: CommandPurpose::Reconciliation,
+                    expires_at: now + COMMAND_TIMEOUT,
                 },
             );
             effects.push(Effect::Send {
@@ -914,7 +953,7 @@ impl ControllerState {
         effects
     }
 
-    fn finish_reconciliation_if_complete(&mut self) -> Vec<Effect> {
+    fn finish_reconciliation_if_complete(&mut self, now: Instant) -> Vec<Effect> {
         if self
             .reconciliation
             .as_ref()
@@ -926,11 +965,11 @@ impl ControllerState {
         if reconciliation.failed {
             return match reconciliation.kind {
                 ReconciliationKind::Initial => {
-                    self.convergence_failed = true;
+                    self.convergence_deadline = Some(now + CONVERGENCE_WINDOW);
                     Vec::new()
                 }
                 ReconciliationKind::Joining(session) => {
-                    let mut effects = self.remove_session(&session);
+                    let mut effects = self.remove_session(&session, now);
                     effects.push(Effect::Retire {
                         session,
                         reason: "joining snapshot reconciliation failed".to_string(),
@@ -973,7 +1012,7 @@ impl ControllerState {
         };
         let (desired, losers) = self.reconciliation_plan(candidates);
         if !losers.is_empty() {
-            return self.start_reconciliation(reconciliation.kind, losers);
+            return self.start_reconciliation(reconciliation.kind, losers, now);
         }
         self.tunnels = desired;
         match reconciliation.kind {
@@ -1027,6 +1066,7 @@ impl ControllerState {
         session: SessionKey,
         registration_ids: Vec<Uuid>,
         purpose: CommandPurpose,
+        now: Instant,
     ) -> Vec<Effect> {
         let command_id = Uuid::new_v4();
         self.commands.insert(
@@ -1035,6 +1075,7 @@ impl ControllerState {
                 session: session.clone(),
                 registration_ids: registration_ids.iter().copied().collect(),
                 purpose,
+                expires_at: now + COMMAND_TIMEOUT,
             },
         );
         vec![Effect::Send {
@@ -1046,7 +1087,7 @@ impl ControllerState {
         }]
     }
 
-    fn remove_session(&mut self, key: &SessionKey) -> Vec<Effect> {
+    fn remove_session(&mut self, key: &SessionKey, now: Instant) -> Vec<Effect> {
         let current = self
             .proxies
             .get(&key.proxy_id)
@@ -1069,7 +1110,7 @@ impl ControllerState {
                 reconciliation.command_ids.remove(&command_id);
             }
         }
-        let effects = self.finish_reconciliation_if_complete();
+        let effects = self.finish_reconciliation_if_complete(now);
         self.leave_readiness_if_no_active_sessions();
         effects
     }
@@ -1083,7 +1124,6 @@ impl ControllerState {
             self.ready = false;
             self.tunnels.clear();
             self.convergence_deadline = None;
-            self.convergence_failed = false;
         }
     }
 
@@ -1195,7 +1235,7 @@ mod tests {
         let (_, current) = begin(&mut state, "p1", now);
         assert_ne!(old, current);
         assert!(matches!(
-            state.disconnect(&id, old),
+            state.disconnect(&id, old, now),
             Err(StateError::StaleSession)
         ));
         assert_eq!(state.proxy_views().len(), 1);
@@ -1238,7 +1278,7 @@ mod tests {
             Err(StateError::StaleSession)
         ));
         assert!(matches!(
-            state.disconnect(&id, retired),
+            state.disconnect(&id, retired, now),
             Err(StateError::StaleSession)
         ));
         assert_eq!(state.current_key(id.as_str()).unwrap().incarnation, current);
@@ -1563,7 +1603,7 @@ mod tests {
         let now = Instant::now();
         let mut state = ControllerState::new(100);
         let (p1, p1_incarnation, _) = ready_one(&mut state, "p1", Vec::new(), now);
-        state.disconnect(&p1, p1_incarnation).unwrap();
+        state.disconnect(&p1, p1_incarnation, now).unwrap();
         assert!(!state.is_ready());
 
         let restart_at = now + CONVERGENCE_WINDOW;
@@ -1765,7 +1805,7 @@ mod tests {
     }
 
     #[test]
-    fn failed_restart_reconciliation_stays_unready() {
+    fn failed_restart_reconciliation_retries_after_a_new_window() {
         let now = Instant::now();
         let mut state = ControllerState::new(100);
         let duplicate = row("alice", "one", Uuid::from_u128(2));
@@ -1813,6 +1853,111 @@ mod tests {
             .unwrap();
         assert!(!state.is_ready());
         assert_eq!(state.read_tunnels(), Err(StateError::NotReady));
+
+        let retry_at = now + CONVERGENCE_WINDOW * 2;
+        for (proxy, incarnation) in [(&p1, p1_incarnation), (&p2, p2_incarnation)] {
+            state
+                .record_activity(proxy, incarnation, retry_at, Utc::now())
+                .unwrap();
+        }
+        let retry = state.tick(retry_at, Utc::now());
+        let retry_command = kill_command(&retry, "p2", loser);
+        state
+            .command_result(
+                &p2,
+                p2_incarnation,
+                retry_command,
+                vec![loser],
+                Vec::new(),
+                Vec::new(),
+                retry_at,
+                Utc::now(),
+            )
+            .unwrap();
+        assert!(state.is_ready());
+        assert_eq!(state.tunnel_views()[0].proxy_id, "p1");
+    }
+
+    #[test]
+    fn reconciliation_command_timeout_retries_instead_of_wedging() {
+        let now = Instant::now();
+        let mut state = ControllerState::new(100);
+        let loser = Uuid::from_u128(2);
+        let (p2, p2_incarnation) = begin(&mut state, "p2", now);
+        snapshot(
+            &mut state,
+            &p2,
+            p2_incarnation,
+            vec![row("alice", "one", loser)],
+            now,
+        );
+        let (p1, p1_incarnation) = begin(&mut state, "p1", now);
+        snapshot(
+            &mut state,
+            &p1,
+            p1_incarnation,
+            vec![row("alice", "one", Uuid::from_u128(1))],
+            now,
+        );
+        let convergence_at = now + CONVERGENCE_WINDOW;
+        for (proxy, incarnation) in [(&p1, p1_incarnation), (&p2, p2_incarnation)] {
+            state
+                .record_activity(proxy, incarnation, convergence_at, Utc::now())
+                .unwrap();
+        }
+        let first = state.tick(convergence_at, Utc::now());
+        let expired_command = kill_command(&first, "p2", loser);
+        assert!(state.commands.contains_key(&expired_command));
+
+        let timeout_at = convergence_at + COMMAND_TIMEOUT;
+        for (proxy, incarnation) in [(&p1, p1_incarnation), (&p2, p2_incarnation)] {
+            state
+                .record_activity(proxy, incarnation, timeout_at, Utc::now())
+                .unwrap();
+        }
+        state.tick(timeout_at, Utc::now());
+        assert!(!state.is_ready());
+        assert!(state.commands.is_empty());
+        assert!(state.reconciliation.is_none());
+
+        let retry_at = timeout_at + CONVERGENCE_WINDOW;
+        for (proxy, incarnation) in [(&p1, p1_incarnation), (&p2, p2_incarnation)] {
+            state
+                .record_activity(proxy, incarnation, retry_at, Utc::now())
+                .unwrap();
+        }
+        let retry = state.tick(retry_at, Utc::now());
+        let retry_command = kill_command(&retry, "p2", loser);
+        assert_ne!(retry_command, expired_command);
+    }
+
+    #[test]
+    fn runtime_command_timeout_releases_pending_state() {
+        let now = Instant::now();
+        let mut state = ControllerState::new(100);
+        let (proxy, incarnation, _) = ready_one(&mut state, "p1", Vec::new(), now);
+        let registration_id = Uuid::new_v4();
+        let active_at = now + CONVERGENCE_WINDOW;
+        let command = state
+            .tunnel_up(
+                &proxy,
+                incarnation,
+                1,
+                row("alice", "unclaimed", registration_id),
+                active_at,
+                Utc::now(),
+            )
+            .unwrap();
+        let command_id = kill_command(&command, "p1", registration_id);
+        assert!(state.commands.contains_key(&command_id));
+
+        let timeout_at = active_at + COMMAND_TIMEOUT;
+        state
+            .record_activity(&proxy, incarnation, timeout_at, Utc::now())
+            .unwrap();
+        state.tick(timeout_at, Utc::now());
+        assert!(state.commands.is_empty());
+        assert!(state.is_ready());
     }
 
     fn kill_command(effects: &[Effect], proxy_id: &str, registration_id: Uuid) -> Uuid {
