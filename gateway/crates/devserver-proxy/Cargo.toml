@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "devserver.chan.app: lists the signed-in user's live tunneld-registered workspaces."
+description = "Fleet data plane for controller-admitted devserver tunnels."
 
 [[bin]]
 name = "devserver-proxy-service"
@@ -18,6 +18,7 @@ path = "src/lib.rs"
 [dependencies]
 chan-tunnel-server = { workspace = true }
 chan-tunnel-proto = { workspace = true }
+devserver-control-proto = { workspace = true }
 gateway-common = { workspace = true }
 
 anyhow = { workspace = true }
@@ -30,6 +31,7 @@ http-body = { workspace = true }
 http-body-util = { workspace = true }
 hyper = { workspace = true }
 hyper-util = { workspace = true }
+h2 = { workspace = true }
 # devserver-gate HS256 verify (entry tokens from identity) and mint
 # (session cookies). Shared envelope lives in gateway_common::devserver_gate.
 jsonwebtoken = { workspace = true }
@@ -54,10 +56,11 @@ uuid = { workspace = true }
 [dev-dependencies]
 chan-tunnel-client = { workspace = true }
 chan-tunnel-proto = { workspace = true }
+devserver-control = { path = "../devserver-control" }
 async-trait = { workspace = true }
-h2 = { workspace = true }
 http = { workspace = true }
 serde_json = { workspace = true }
+tokio = { workspace = true, features = ["test-util"] }
 tower = { version = "0.5", features = ["util"] }
 
 [package.metadata.deb]
@@ -66,12 +69,12 @@ maintainer = "fiorix <fiorix@gmail.com>"
 copyright = "2026, fiorix <fiorix@gmail.com>"
 license-file = ["../../LICENSE", "0"]
 extended-description = """\
-Public-facing service for the chan-gateway suite. Apex
-devserver.chan.app carries the tunnel registration endpoint plus the
-admin tree; wildcard *.devserver.chan.app reverse-proxies tenant
-content into registered chan-serve peers, gated by a host-only,
-Path=/ JWT cookie minted by devserver-proxy on first entry. No
-SPA in this binary; the dashboard lives at id.chan.app."""
+Fleet data-plane service for the chan-gateway suite. The tunnel listener
+accepts controller-admitted registrations; wildcard
+*.devserver.chan.app hosts reverse-proxy tenant content into registered
+chan-serve peers. An authenticated controller session supplies fleet
+admission and liveness state. No SPA or local admin API lives in this
+binary; the dashboard lives at id.chan.app."""
 section = "net"
 priority = "optional"
 depends = "$auto, adduser"

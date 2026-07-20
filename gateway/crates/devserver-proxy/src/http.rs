@@ -1,10 +1,11 @@
 use std::sync::Arc;
 
 use axum::extract::{Request, State};
-use axum::http::{header, StatusCode};
+use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::get;
 use axum::Router;
+use tokio::sync::watch;
 use tower_http::trace::TraceLayer;
 
 use crate::config::Config;
@@ -17,27 +18,53 @@ use crate::registry::Registry;
 pub struct AppState {
     pub cfg: Arc<Config>,
     pub registry: Registry,
+    pub readiness: watch::Receiver<bool>,
 }
 
-pub fn router(cfg: Arc<Config>, registry: Registry) -> Router {
-    let state = AppState { cfg, registry };
-    let admin = crate::admin::router(state.clone());
+pub fn router(cfg: Arc<Config>, registry: Registry, readiness: watch::Receiver<bool>) -> Router {
+    let state = AppState {
+        cfg,
+        registry,
+        readiness,
+    };
     Router::new()
-        // /healthz answers on every Host; nginx hits it from the apex
-        // upstream during health checks.
+        // Liveness and control readiness exist only on the configured
+        // apex. The handlers enforce Host because axum routes are not
+        // host-specific and wildcard tenant traffic shares this listener.
         .route("/healthz", get(healthz))
+        .route("/readyz", get(readyz))
         // Single fallback that dispatches on the Host header. Apex
-        // (devserver.chan.app) only carries admin + healthz; everything
+        // (devserver.chan.app) only carries health/readiness; everything
         // else 404s. Wildcard ({user}.devserver.chan.app) hands off to
         // the proxy module.
         .fallback(dispatch)
-        .merge(admin)
         .with_state(state)
         .layer(TraceLayer::new_for_http())
 }
 
-async fn healthz() -> &'static str {
-    "ok"
+async fn healthz(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if request_is_apex(&state, &headers) {
+        (StatusCode::OK, "ok").into_response()
+    } else {
+        (StatusCode::NOT_FOUND, "not found").into_response()
+    }
+}
+
+async fn readyz(State(state): State<AppState>, headers: HeaderMap) -> StatusCode {
+    if !request_is_apex(&state, &headers) {
+        StatusCode::NOT_FOUND
+    } else if *state.readiness.borrow() {
+        StatusCode::OK
+    } else {
+        StatusCode::SERVICE_UNAVAILABLE
+    }
+}
+
+fn request_is_apex(state: &AppState, headers: &HeaderMap) -> bool {
+    headers
+        .get(header::HOST)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|host| state.cfg.is_apex(host))
 }
 
 /// Host-keyed dispatch. The router has no static routes for the
@@ -63,7 +90,7 @@ async fn dispatch(State(state): State<AppState>, req: Request) -> Response {
         Some(h) => h.to_string(),
         None => return (StatusCode::BAD_REQUEST, "missing host").into_response(),
     };
-    // Apex: only admin + healthz routes are wired explicitly; this
+    // Apex: only health/readiness routes are wired explicitly; this
     // fallback says everything else on the apex is 404.
     if cfg.is_apex(&host) {
         return (StatusCode::NOT_FOUND, "not found").into_response();

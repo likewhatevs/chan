@@ -297,6 +297,7 @@ where
                 };
                 let resync = matches!(outgoing, ServerFrame::ResyncRequired { .. });
                 let shutdown = matches!(outgoing, ServerFrame::Shutdown { .. });
+                tracing::debug!(frame = ?outgoing, "sending proxy control frame");
                 write_frame(writer, &outgoing).await?;
                 if resync {
                     phase = Phase::awaiting_snapshot();

@@ -1,6 +1,7 @@
 use std::net::SocketAddr;
 
 use anyhow::Context;
+use devserver_control_proto::{CanonicalOrigin, ProxyId};
 use url::Url;
 
 /// Both-directions idle window after which a bridged WebSocket is cut.
@@ -21,7 +22,7 @@ pub struct Config {
     /// nginx and forwarded here cleartext.
     pub tunnel_bind_addr: SocketAddr,
     /// Apex hostname (e.g. `devserver.chan.app`). Used to distinguish
-    /// the admin/healthz surface from the wildcard reverse-proxy
+    /// the health/readiness surface from the wildcard reverse-proxy
     /// surface in the Host-keyed router.
     pub apex_host: String,
     /// Wildcard suffix including the leading dot (e.g.
@@ -50,17 +51,14 @@ pub struct Config {
     /// secret), so the field tracks the var rather than the cookie.
     /// Required.
     pub workspace_gate_secret: String,
-    /// Maximum number of distinct devservers a single user can have
-    /// registered concurrently. `0` disables the cap. Reconnects of
-    /// an already-registered devserver are always allowed (last-writer-
-    /// wins eviction in the tunnel registry handles that). Sourced
-    /// from `MAX_DEVSERVERS_PER_USER` (legacy alias
-    /// `MAX_WORKSPACES_PER_USER` when unset); defaults to 100.
-    pub max_devservers_per_user: usize,
-    /// Bearer for the `/admin/v1/*` tree. `None` makes every admin
-    /// route 401, which is the safe default if the env var is
-    /// missing on a fresh deploy.
-    pub admin_token: Option<String>,
+    /// h2c origin of the singleton fleet controller proxy listener.
+    pub control_url: Url,
+    /// Bearer presented only to the controller proxy listener.
+    pub proxy_token: String,
+    /// Stable provisioned node id used for controller ownership.
+    pub proxy_id: ProxyId,
+    /// Exact public origin for this node's wildcard listener.
+    pub proxy_base_url: CanonicalOrigin,
     /// Cap on response bytes streamed back from an upstream `chan
     /// devserver` per request. `None` (env unset or `0`) disables the
     /// cap.
@@ -101,14 +99,21 @@ impl Config {
             .context("TUNNEL_BIND_ADDR must be host:port")?;
 
         let tunnel_origin = required_origin("DEVSERVER_TUNNEL_ORIGIN")?;
-        let proxy_base_url = required_origin("DEVSERVER_PROXY_BASE_URL")?;
+        let proxy_base_url_raw = std::env::var("DEVSERVER_PROXY_BASE_URL")
+            .context("DEVSERVER_PROXY_BASE_URL is required")?;
+        let proxy_base_url = CanonicalOrigin::parse(proxy_base_url_raw.trim())
+            .context("DEVSERVER_PROXY_BASE_URL must be a canonical http(s) origin")?;
+        let proxy_base_url_parsed: Url = proxy_base_url
+            .as_str()
+            .parse()
+            .context("DEVSERVER_PROXY_BASE_URL must be a URL origin")?;
         let apex_host = tunnel_origin
             .host_str()
             .context("DEVSERVER_TUNNEL_ORIGIN must contain a host")?
             .to_string();
         let wildcard_suffix = format!(
             ".{}",
-            proxy_base_url
+            proxy_base_url_parsed
                 .host_str()
                 .context("DEVSERVER_PROXY_BASE_URL must contain a host")?
         );
@@ -144,14 +149,15 @@ impl Config {
             anyhow::bail!("DASHBOARD_URL must not be empty");
         }
 
-        let max_devservers_per_user = parse_devserver_cap(
-            std::env::var("MAX_DEVSERVERS_PER_USER").ok(),
-            std::env::var("MAX_WORKSPACES_PER_USER").ok(),
-        )?;
-
-        let admin_token = std::env::var("DEVSERVER_ADMIN_TOKEN")
-            .ok()
-            .filter(|s| !s.is_empty());
+        let control_url = required_origin("DEVSERVER_CONTROL_URL")?;
+        if control_url.scheme() != "http" {
+            anyhow::bail!("DEVSERVER_CONTROL_URL must use http for the h2c proxy listener");
+        }
+        let proxy_token = required_secret("DEVSERVER_PROXY_TOKEN")?;
+        let proxy_id_raw =
+            std::env::var("DEVSERVER_PROXY_ID").context("DEVSERVER_PROXY_ID is required")?;
+        let proxy_id = ProxyId::parse(proxy_id_raw.trim())
+            .context("DEVSERVER_PROXY_ID must be one lowercase DNS label")?;
 
         let max_response_bytes = parse_byte_cap("MAX_RESPONSE_BYTES", Some(100 * 1024 * 1024))?;
         let max_request_bytes = parse_byte_cap("MAX_REQUEST_BYTES", Some(100 * 1024 * 1024))?;
@@ -189,8 +195,10 @@ impl Config {
             identity_auth_token,
             dashboard_url,
             workspace_gate_secret,
-            max_devservers_per_user,
-            admin_token,
+            control_url,
+            proxy_token,
+            proxy_id,
+            proxy_base_url,
             max_response_bytes,
             max_request_bytes,
             request_timeout,
@@ -290,27 +298,12 @@ fn required_origin(name: &str) -> anyhow::Result<Url> {
     Ok(url)
 }
 
-/// Resolve the per-user devserver cap from the env pair. The new
-/// `MAX_DEVSERVERS_PER_USER` name wins; the legacy
-/// `MAX_WORKSPACES_PER_USER` alias applies only when the new name is
-/// unset. Unset entirely defaults to 100; `0` disables the cap.
-fn parse_devserver_cap(
-    new_var: Option<String>,
-    legacy_var: Option<String>,
-) -> anyhow::Result<usize> {
-    if let Some(v) = new_var {
-        return v
-            .trim()
-            .parse()
-            .context("MAX_DEVSERVERS_PER_USER must be a non-negative integer");
+fn required_secret(name: &str) -> anyhow::Result<String> {
+    let value = std::env::var(name).with_context(|| format!("{name} is required"))?;
+    if value.is_empty() {
+        anyhow::bail!("{name} must not be empty");
     }
-    if let Some(v) = legacy_var {
-        return v
-            .trim()
-            .parse()
-            .context("MAX_WORKSPACES_PER_USER must be a non-negative integer");
-    }
-    Ok(100)
+    Ok(value)
 }
 
 fn parse_byte_cap(name: &str, default: Option<usize>) -> anyhow::Result<Option<usize>> {
@@ -340,27 +333,16 @@ mod tests {
             identity_auth_token: "x".into(),
             dashboard_url: "https://id.chan.app/workspaces".into(),
             workspace_gate_secret: "x".into(),
-            max_devservers_per_user: 0,
-            admin_token: None,
+            control_url: "http://127.0.0.1:7101/".parse().unwrap(),
+            proxy_token: "x".into(),
+            proxy_id: ProxyId::parse("p1").unwrap(),
+            proxy_base_url: CanonicalOrigin::parse("https://p1.devserver.chan.app").unwrap(),
             max_response_bytes: None,
             max_request_bytes: None,
             request_timeout: None,
             ws_idle_timeout: DEFAULT_WS_IDLE_TIMEOUT,
             forwarded_proto: "https".into(),
         }
-    }
-
-    #[test]
-    fn devserver_cap_new_var_wins_legacy_falls_back_default_100() {
-        assert_eq!(
-            parse_devserver_cap(Some("5".into()), Some("9".into())).unwrap(),
-            5
-        );
-        assert_eq!(parse_devserver_cap(None, Some("9".into())).unwrap(), 9);
-        assert_eq!(parse_devserver_cap(None, None).unwrap(), 100);
-        assert_eq!(parse_devserver_cap(Some("0".into()), None).unwrap(), 0);
-        assert!(parse_devserver_cap(Some("x".into()), None).is_err());
-        assert!(parse_devserver_cap(None, Some("x".into())).is_err());
     }
 
     #[test]

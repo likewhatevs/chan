@@ -6,7 +6,7 @@
 //!
 //!   * `bind_addr` (devserver.chan.app apex + *.devserver.chan.app wildcard):
 //!     axum HTTP. The wildcard host carries the tenant reverse-proxy
-//!     surface; the apex carries `/admin/v1/*` and `/healthz` only.
+//!     surface; the apex carries `/healthz` and `/readyz` only.
 //!     A single router dispatches on the `Host` header. devserver-proxy
 //!     reads no session cookie. The proxy gate uses a devserver-gate JWT
 //!     (HS256, secret shared with identity-service) carried in the
@@ -20,8 +20,8 @@
 //! No SPA ships in this binary. The dashboard, sign-in surface and
 //! workspace list live at id.chan.app.
 
-pub mod admin;
 pub mod config;
+pub mod control;
 pub mod error;
 pub mod http;
 pub mod identity_validator;

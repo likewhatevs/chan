@@ -11,32 +11,22 @@
 //!     extra round trip to profile-service;
 //!
 //!   * lookup helpers that bundle the tunnel handle with the cached
-//!     `owner_id` and the SPA-facing metadata (`label`). `label` isn't
-//!     carried by the wire; the workspace slug is applied as the default
-//!     here. Per-tunnel labels would require extending the Hello frame
-//!     in chan-tunnel-proto.
+//!     `owner_id` required by the reverse-proxy authorization gate.
 //!
-//! Cache invalidation: defensive. In normal flow the cache
-//! self-converges because `CapturingValidator::validate` runs
-//! `record_user` before the tunnel is inserted into the underlying
-//! registry, so a `Registry::get` that returns Some always sees a
-//! fresh `owner_id`. We still drop the entry explicitly on account
-//! delete (`evict_all_for_user` calls `forget_user`) so a future
-//! refactor that decouples validate-time recording from
-//! registration-time can't leak a stale uuid to the proxy auth gate
-//! during the window between account deletion and a same-username
-//! signup's first reconnect.
+//! Cache invalidation is fleet fail-closed: normal handshakes refresh the
+//! entry, and controller grace expiry clears the complete cache alongside
+//! every local tunnel.
 
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
-use chan_tunnel_server::{Registry as TunnelRegistry, TunnelHandle, TunnelInfo};
+use chan_tunnel_server::{Registry as TunnelRegistry, TunnelHandle};
 use uuid::Uuid;
 
 /// `RwLock` (not `Mutex`) because `Registry::get` is on the hot path:
 /// one read per inbound wildcard request, against an entry that is
-/// already cached by `record_user` on tunnel handshake. Writes
-/// (`record_user`, `forget_user`) are rare. `parking_lot` would buy a
+/// already cached by `record_user` on tunnel handshake. Writes are rare.
+/// `parking_lot` would buy a
 /// little extra throughput on contended reads but `std::sync::RwLock`
 /// keeps dependencies flat and is sufficient for the request rates we
 /// target.
@@ -52,15 +42,6 @@ pub struct Registry {
 pub struct Entry {
     pub handle: TunnelHandle,
     pub owner_id: Uuid,
-}
-
-/// Row shape for `/api/me`. `label` defaults to the workspace slug
-/// until the Hello frame carries a separate display label.
-#[derive(Debug, Clone)]
-pub struct WorkspaceView {
-    pub username: String,
-    pub workspace: String,
-    pub label: String,
 }
 
 impl Registry {
@@ -80,21 +61,6 @@ impl Registry {
 
     /// Record the user_id seen for a username on the latest token
     /// validate. Idempotent.
-    ///
-    /// Race notes: `record_user` and `forget_user` race on the same
-    /// map entry. The intended ordering inside `evict_all_for_user`
-    /// is list live tunnels, evict each, then call `forget_user`. A
-    /// reconnect from `chan devserver` between the list step and the
-    /// final `forget_user` step calls `record_user` and reseeds the
-    /// cache before the remove fires. That window leaks a stale
-    /// uuid only if the new validate observed a uuid different from
-    /// the one we forgot, which is impossible under the current
-    /// validate path (the underlying account is gone or blocked, so
-    /// validate fails outright before `record_user` runs). The
-    /// cache is therefore self-converging in practice; this comment
-    /// is here so a future validate-path refactor that admits the
-    /// post-delete reconnect case is forced to re-examine the
-    /// invariant.
     pub fn record_user(&self, username: &str, user_id: Uuid) {
         // The cache holds no integrity invariant; a poisoned lock
         // (some past handler panicked while holding it) is fine to
@@ -160,69 +126,17 @@ impl Registry {
             .collect()
     }
 
-    /// Snapshot every registered tunnel for the admin `tunnel ps`
-    /// view. Sorted by `(user, workspace)` so output is stable.
-    pub fn list_all_tunnels(&self) -> Vec<TunnelInfo> {
-        self.tunnels.list_all()
-    }
-
-    /// Force a tunnel offline. Returns `true` if a registration
-    /// was actually removed; `false` is the "nothing to kill"
-    /// case that the CLI surfaces as a 404.
-    pub fn evict(&self, user: &str, workspace: &str) -> bool {
-        self.tunnels.evict(user, workspace)
-    }
-
-    /// Evict every tunnel a user has live. Used on account-delete
-    /// to drop sessions whose backing PAT was just cascade-deleted;
-    /// without this the chan devserver substreams stay alive until the
-    /// remote process exits or the underlying TCP closes. Returns
-    /// the count actually evicted (0 is fine).
-    ///
-    /// Also clears the username -> user_id cache so a brand-new
-    /// signup that reuses the username doesn't get rejected by the
-    /// proxy auth gate against the old uuid until its first
-    /// reconnect. The cache will repopulate on the next successful
-    /// validate.
-    pub fn evict_all_for_user(&self, username: &str) -> usize {
-        let workspaces = self.tunnels.list_workspaces_for(username);
-        let mut killed = 0;
-        for d in workspaces {
-            if self.tunnels.evict(username, d.workspace.as_ref()) {
-                killed += 1;
-            }
-        }
-        self.forget_user(username);
-        killed
-    }
-
-    /// Drop the cached username -> user_id mapping. Idempotent;
-    /// missing entries are a no-op. Exposed for explicit
-    /// invalidation paths (account delete, future block-active
-    /// flow); routine tunnel reconnects should let the cache
-    /// converge instead of calling this.
-    pub fn forget_user(&self, username: &str) {
+    /// Fail closed after the controller reconnect grace expires.
+    /// Clears every local tunnel and all cached user identities in one
+    /// proxy-local operation; new registrations remain blocked by control
+    /// readiness until a fresh snapshot reaches `FleetReady`.
+    pub fn evict_all_for_control_loss(&self) -> usize {
+        let killed = self.tunnels.evict_all();
         self.user_ids
             .write()
-            .unwrap_or_else(|e| e.into_inner())
-            .remove(username);
-    }
-
-    /// Active workspaces for one user, sorted by workspace name for stable
-    /// SPA ordering. Empty when nothing is registered.
-    pub fn list_for(&self, username: &str) -> Vec<WorkspaceView> {
-        self.tunnels
-            .list_workspaces_for(username)
-            .into_iter()
-            .map(|info| {
-                let workspace = info.workspace.as_ref().to_string();
-                WorkspaceView {
-                    username: username.to_string(),
-                    label: workspace.clone(),
-                    workspace,
-                }
-            })
-            .collect()
+            .unwrap_or_else(|error| error.into_inner())
+            .clear();
+        killed
     }
 }
 
@@ -237,32 +151,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn forget_user_drops_cache() {
+    fn control_loss_clears_every_cached_user() {
         let r = Registry::new();
-        let a = Uuid::new_v4();
-        r.record_user("alice", a);
-        // Probe via the private map: forget_user is what we're
-        // testing, so reach in to confirm the entry actually went
-        // away rather than relying on an indirect side effect.
-        assert!(r.user_ids.read().unwrap().contains_key("alice"));
-        r.forget_user("alice");
-        assert!(!r.user_ids.read().unwrap().contains_key("alice"));
-        // Idempotent on missing entries.
-        r.forget_user("alice");
-        r.forget_user("ghost");
-    }
+        r.record_user("alice", Uuid::new_v4());
+        r.record_user("bob", Uuid::new_v4());
 
-    #[test]
-    fn evict_all_for_user_clears_cache() {
-        // Account-delete path: we expose evict_all_for_user without
-        // requiring a live tunnel; calling it on a username that was
-        // only ever cached (no tunnel) still clears the entry.
-        let r = Registry::new();
-        let a = Uuid::new_v4();
-        r.record_user("alice", a);
-        let killed = r.evict_all_for_user("alice");
-        assert_eq!(killed, 0, "no tunnels were registered");
-        assert!(!r.user_ids.read().unwrap().contains_key("alice"));
+        assert_eq!(r.evict_all_for_control_loss(), 0);
+        assert!(r.user_ids.read().unwrap().is_empty());
     }
 
     #[test]

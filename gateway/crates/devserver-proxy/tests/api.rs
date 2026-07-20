@@ -15,18 +15,22 @@ use std::sync::{Arc, Mutex as StdMutex};
 
 use async_trait::async_trait;
 use axum::body::{to_bytes, Body};
-use axum::extract::{ConnectInfo, Request as AxRequest};
+use axum::extract::Request as AxRequest;
 use axum::http::{header, HeaderMap, HeaderValue, Method, Request, StatusCode};
 use axum::response::IntoResponse;
 use axum::Router;
 use bytes::Bytes;
 use chan_tunnel_proto::{H2Duplex, TUNNEL_PATH};
-use chan_tunnel_server::{serve_tunnel_listener, ServerError, Validated, Validator};
+use chan_tunnel_server::{
+    serve_tunnel_listener_with_admission, AllowAllAdmission, ServerError, Validated, Validator,
+};
+use devserver_control_proto::{CanonicalOrigin, ProxyId};
 use futures_util::{SinkExt, StreamExt};
 use gateway_common::devserver_gate;
 use http::Method as HttpMethod;
 use serde_json::Value;
 use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::watch;
 use tower::ServiceExt;
 use uuid::Uuid;
 
@@ -35,7 +39,6 @@ use devserver_proxy::http as dp_http;
 use devserver_proxy::identity_validator::CapturingValidator;
 use devserver_proxy::registry::Registry;
 
-const ADMIN_TOKEN: &str = "test-admin-token";
 const DEVSERVER_GATE_SECRET: &[u8] = b"test-devserver-gate-secret-32-bytes-aa";
 const APEX_HOST: &str = "devserver.chan.app";
 const WILDCARD_SUFFIX: &str = ".devserver.chan.app";
@@ -100,27 +103,21 @@ struct TestApp {
     registry: Registry,
     tunnel_addr: SocketAddr,
     stub: StubValidator,
+    _readiness: watch::Sender<bool>,
 }
 
 impl TestApp {
     async fn new() -> Self {
-        Self::new_inner(0, DEFAULT_WS_IDLE_TIMEOUT).await
-    }
-
-    async fn new_with_max_devservers(max_devservers_per_user: usize) -> Self {
-        Self::new_inner(max_devservers_per_user, DEFAULT_WS_IDLE_TIMEOUT).await
+        Self::new_inner(DEFAULT_WS_IDLE_TIMEOUT).await
     }
 
     /// The WS-bridge tests inject a sub-second idle window so the cut
     /// is observable without waiting out the production default.
     async fn new_with_ws_idle_timeout(ws_idle_timeout: std::time::Duration) -> Self {
-        Self::new_inner(0, ws_idle_timeout).await
+        Self::new_inner(ws_idle_timeout).await
     }
 
-    async fn new_inner(
-        max_devservers_per_user: usize,
-        ws_idle_timeout: std::time::Duration,
-    ) -> Self {
+    async fn new_inner(ws_idle_timeout: std::time::Duration) -> Self {
         let registry = Registry::new();
 
         let cfg = Arc::new(Config {
@@ -132,8 +129,10 @@ impl TestApp {
             identity_auth_token: "unused-in-tests".into(),
             dashboard_url: "https://id.chan.app/workspaces".into(),
             workspace_gate_secret: std::str::from_utf8(DEVSERVER_GATE_SECRET).unwrap().into(),
-            max_devservers_per_user,
-            admin_token: Some(ADMIN_TOKEN.to_string()),
+            control_url: "http://127.0.0.1:7101/".parse().unwrap(),
+            proxy_token: "unused-control-token".into(),
+            proxy_id: ProxyId::parse("p1").unwrap(),
+            proxy_base_url: CanonicalOrigin::parse("https://p1.devserver.chan.app").unwrap(),
             max_response_bytes: None,
             max_request_bytes: None,
             request_timeout: None,
@@ -141,7 +140,8 @@ impl TestApp {
             forwarded_proto: "https".into(),
         });
 
-        let router = dp_http::router(cfg, registry.clone());
+        let (readiness, readiness_rx) = watch::channel(true);
+        let router = dp_http::router(cfg, registry.clone(), readiness_rx);
 
         // Real tunnel listener fed by a stub validator wrapped in
         // CapturingValidator (mirrors production wiring).
@@ -153,11 +153,12 @@ impl TestApp {
         {
             let tunnels = registry.tunnels();
             tokio::spawn(async move {
-                let _ = serve_tunnel_listener(
+                let _ = serve_tunnel_listener_with_admission(
                     tunnel_listener,
                     validator,
+                    Arc::new(AllowAllAdmission),
                     tunnels,
-                    max_devservers_per_user,
+                    0,
                 )
                 .await;
             });
@@ -168,6 +169,7 @@ impl TestApp {
             registry,
             tunnel_addr,
             stub,
+            _readiness: readiness,
         }
     }
 
@@ -306,36 +308,6 @@ async fn send_host(
     (status, hdrs, bytes)
 }
 
-async fn send_admin(
-    router: &Router,
-    method: Method,
-    uri: &str,
-    bearer: Option<&str>,
-) -> (StatusCode, Value) {
-    let mut builder = Request::builder().method(method).uri(uri);
-    builder = builder.header(header::HOST, APEX_HOST);
-    if let Some(b) = bearer {
-        builder = builder.header(header::AUTHORIZATION, format!("Bearer {b}"));
-    }
-    let mut req = builder.body(Body::empty()).unwrap();
-    // ConnectInfo is what `forwarded_headers` reads for the peer-IP
-    // tail on X-Forwarded-For. `oneshot` bypasses the axum service
-    // that normally populates it, so we seed a dummy value here.
-    req.extensions_mut()
-        .insert(ConnectInfo::<std::net::SocketAddr>(
-            "127.0.0.1:1".parse().unwrap(),
-        ));
-    let res = router.clone().oneshot(req).await.unwrap();
-    let status = res.status();
-    let bytes = to_bytes(res.into_body(), 1 << 20).await.unwrap();
-    let json = if bytes.is_empty() {
-        Value::Null
-    } else {
-        serde_json::from_slice(&bytes).unwrap_or(Value::Null)
-    };
-    (status, json)
-}
-
 /// Mint a devserver-gate token of the requested shape. Tests use this to
 /// build URLs and cookies the proxy gate will accept (or to forge
 /// near-misses for the negative cases).
@@ -424,6 +396,52 @@ async fn apex_healthz_ok() {
     let app = TestApp::new().await;
     let (s, _, _) = send_host(&app.router, Method::GET, APEX_HOST, "/healthz", &[]).await;
     assert_eq!(s, StatusCode::OK);
+    app.cleanup().await;
+}
+
+#[tokio::test]
+async fn health_and_readiness_are_not_exposed_on_tenant_or_unknown_hosts() {
+    let app = TestApp::new().await;
+    for host in [host_for("alice"), "evil.example.com".to_string()] {
+        for path in ["/healthz", "/readyz"] {
+            let (status, _, _) = send_host(&app.router, Method::GET, &host, path, &[]).await;
+            assert_eq!(status, StatusCode::NOT_FOUND, "{host}{path}");
+        }
+    }
+    app.cleanup().await;
+}
+
+#[tokio::test]
+async fn apex_readyz_reflects_control_readiness() {
+    let registry = Registry::new();
+    let app = TestApp::new().await;
+    let cfg = app.router.clone();
+    let (status, _, _) = send_host(&cfg, Method::GET, APEX_HOST, "/readyz", &[]).await;
+    assert_eq!(status, StatusCode::OK);
+
+    let test_cfg = Arc::new(Config {
+        bind_addr: "127.0.0.1:0".parse().unwrap(),
+        tunnel_bind_addr: "127.0.0.1:0".parse().unwrap(),
+        apex_host: APEX_HOST.into(),
+        wildcard_suffix: WILDCARD_SUFFIX.into(),
+        identity_url: "http://127.0.0.1:7000/".parse().unwrap(),
+        identity_auth_token: "unused-in-tests".into(),
+        dashboard_url: "https://id.chan.app/workspaces".into(),
+        workspace_gate_secret: std::str::from_utf8(DEVSERVER_GATE_SECRET).unwrap().into(),
+        control_url: "http://127.0.0.1:7101/".parse().unwrap(),
+        proxy_token: "unused-control-token".into(),
+        proxy_id: ProxyId::parse("p1").unwrap(),
+        proxy_base_url: CanonicalOrigin::parse("https://p1.devserver.chan.app").unwrap(),
+        max_response_bytes: None,
+        max_request_bytes: None,
+        request_timeout: None,
+        ws_idle_timeout: DEFAULT_WS_IDLE_TIMEOUT,
+        forwarded_proto: "https".into(),
+    });
+    let (_readiness, readiness_rx) = watch::channel(false);
+    let unready = dp_http::router(test_cfg, registry, readiness_rx);
+    let (status, _, _) = send_host(&unready, Method::GET, APEX_HOST, "/readyz", &[]).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
     app.cleanup().await;
 }
 
@@ -1360,96 +1378,6 @@ async fn websocket_upgrade_runs_auth_gate() {
 }
 
 // ---------------------------------------------------------------
-// Tunnel listener (max_workspaces)
-// ---------------------------------------------------------------
-
-async fn try_register_tunnel(
-    tunnel_addr: SocketAddr,
-    token: &str,
-    workspace: &str,
-    router: Router,
-) -> anyhow::Result<()> {
-    let token = token.to_string();
-    let workspace = workspace.to_string();
-    let task =
-        tokio::spawn(
-            async move { run_tunnel_client(tunnel_addr, &token, &workspace, router).await },
-        );
-    match tokio::time::timeout(std::time::Duration::from_millis(300), task).await {
-        Err(_) => Ok(()),
-        Ok(Ok(Ok(()))) => Ok(()),
-        Ok(Ok(Err(e))) => Err(e),
-        Ok(Err(e)) => Err(anyhow::anyhow!("tunnel client task: {e}")),
-    }
-}
-
-#[tokio::test]
-async fn tunnel_rejects_third_workspace_when_limit_is_two() {
-    let app = TestApp::new_with_max_devservers(2).await;
-    let uid = Uuid::new_v4();
-    app.register_tunnel("alice", "a", uid, Router::new()).await;
-    app.register_tunnel("alice", "b", uid, Router::new()).await;
-
-    let token = format!("tok-{}", Uuid::new_v4().simple());
-    app.stub.add(&token, uid, "alice", "c");
-    let result = try_register_tunnel(app.tunnel_addr, &token, "c", Router::new()).await;
-    assert!(
-        result.is_err(),
-        "third workspace should be rejected: {result:?}"
-    );
-
-    let workspaces: Vec<String> = app
-        .registry
-        .list_for("alice")
-        .into_iter()
-        .map(|d| d.workspace)
-        .collect();
-    assert_eq!(workspaces, vec!["a".to_string(), "b".to_string()]);
-    app.cleanup().await;
-}
-
-#[tokio::test]
-async fn tunnel_allows_reconnect_of_existing_workspace_at_limit() {
-    let app = TestApp::new_with_max_devservers(2).await;
-    let uid = Uuid::new_v4();
-    app.register_tunnel("alice", "a", uid, Router::new()).await;
-    app.register_tunnel("alice", "b", uid, Router::new()).await;
-    let token = format!("tok-{}", Uuid::new_v4().simple());
-    app.stub.add(&token, uid, "alice", "a");
-    try_register_tunnel(app.tunnel_addr, &token, "a", Router::new())
-        .await
-        .expect("reconnect at limit ok");
-    app.cleanup().await;
-}
-
-#[tokio::test]
-async fn tunnel_unlimited_when_max_is_zero() {
-    let app = TestApp::new_with_max_devservers(0).await;
-    let uid = Uuid::new_v4();
-    for d in ["a", "b", "c", "d"] {
-        app.register_tunnel("alice", d, uid, Router::new()).await;
-    }
-    assert_eq!(app.registry.list_for("alice").len(), 4);
-    app.cleanup().await;
-}
-
-#[tokio::test]
-async fn tunnel_rejects_second_devserver_when_limit_is_one() {
-    let app = TestApp::new_with_max_devservers(1).await;
-    let uid = Uuid::new_v4();
-    app.register_tunnel("alice", "a", uid, Router::new()).await;
-
-    let token = format!("tok-{}", Uuid::new_v4().simple());
-    app.stub.add(&token, uid, "alice", "b");
-    let result = try_register_tunnel(app.tunnel_addr, &token, "b", Router::new()).await;
-    assert!(
-        result.is_err(),
-        "second devserver should be rejected at limit 1: {result:?}"
-    );
-    app.cleanup().await;
-}
-
-// ---------------------------------------------------------------
 // Multi-devserver routing (disc hosts + bare-host compat)
 // ---------------------------------------------------------------
 
@@ -1658,171 +1586,6 @@ async fn disc_wildcard_root_redirects_to_dashboard() {
     assert!(s.is_redirection(), "got {s}");
     let loc = hdrs.get(header::LOCATION).unwrap().to_str().unwrap();
     assert_eq!(loc, "https://id.chan.app/workspaces");
-    app.cleanup().await;
-}
-
-// ---------------------------------------------------------------
-// Admin tree
-// ---------------------------------------------------------------
-
-#[tokio::test]
-async fn admin_requires_bearer() {
-    let app = TestApp::new().await;
-    let (s, _) = send_admin(&app.router, Method::GET, "/admin/v1/tunnels", None).await;
-    assert_eq!(s, StatusCode::UNAUTHORIZED);
-    let (s, _) = send_admin(&app.router, Method::GET, "/admin/v1/tunnels", Some("nope")).await;
-    assert_eq!(s, StatusCode::UNAUTHORIZED);
-    app.cleanup().await;
-}
-
-#[tokio::test]
-async fn admin_tunnels_list_and_kill() {
-    let app = TestApp::new().await;
-    let uid = Uuid::new_v4();
-
-    let (s, body) = send_admin(
-        &app.router,
-        Method::GET,
-        "/admin/v1/tunnels",
-        Some(ADMIN_TOKEN),
-    )
-    .await;
-    assert_eq!(s, StatusCode::OK);
-    assert_eq!(body.as_array().unwrap().len(), 0);
-
-    app.register_tunnel("alice", "home", uid, Router::new())
-        .await;
-    app.register_tunnel("alice", "open", uid, Router::new())
-        .await;
-
-    let (s, body) = send_admin(
-        &app.router,
-        Method::GET,
-        "/admin/v1/tunnels",
-        Some(ADMIN_TOKEN),
-    )
-    .await;
-    assert_eq!(s, StatusCode::OK);
-    let arr = body.as_array().unwrap();
-    assert_eq!(arr.len(), 2);
-
-    // Kill one.
-    let (s, _) = send_admin(
-        &app.router,
-        Method::POST,
-        "/admin/v1/tunnels/alice/home/kill",
-        Some(ADMIN_TOKEN),
-    )
-    .await;
-    assert_eq!(s, StatusCode::NO_CONTENT);
-
-    let (_, body) = send_admin(
-        &app.router,
-        Method::GET,
-        "/admin/v1/tunnels",
-        Some(ADMIN_TOKEN),
-    )
-    .await;
-    let arr = body.as_array().unwrap();
-    assert_eq!(arr.len(), 1);
-    assert_eq!(arr[0]["devserver_id"], "open");
-
-    // Unknown -> 404.
-    let (s, _) = send_admin(
-        &app.router,
-        Method::POST,
-        "/admin/v1/tunnels/alice/nope/kill",
-        Some(ADMIN_TOKEN),
-    )
-    .await;
-    assert_eq!(s, StatusCode::NOT_FOUND);
-    app.cleanup().await;
-}
-
-#[tokio::test]
-async fn admin_list_user_tunnels() {
-    let app = TestApp::new().await;
-    let alice = Uuid::new_v4();
-    let bob = Uuid::new_v4();
-    app.register_tunnel("alice", "home", alice, Router::new())
-        .await;
-    app.register_tunnel("alice", "blog", alice, Router::new())
-        .await;
-    app.register_tunnel("bob", "home", bob, Router::new()).await;
-
-    // alice has two; only alice's are returned.
-    let (s, body) = send_admin(
-        &app.router,
-        Method::GET,
-        "/admin/v1/users/alice/tunnels",
-        Some(ADMIN_TOKEN),
-    )
-    .await;
-    assert_eq!(s, StatusCode::OK);
-    let arr = body.as_array().unwrap();
-    assert_eq!(arr.len(), 2);
-    let devserver_ids: Vec<&str> = arr
-        .iter()
-        .map(|r| r["devserver_id"].as_str().unwrap())
-        .collect();
-    assert_eq!(devserver_ids, vec!["blog", "home"]);
-
-    // Unknown user -> empty, not 404.
-    let (s, body) = send_admin(
-        &app.router,
-        Method::GET,
-        "/admin/v1/users/ghost/tunnels",
-        Some(ADMIN_TOKEN),
-    )
-    .await;
-    assert_eq!(s, StatusCode::OK);
-    assert_eq!(body.as_array().unwrap().len(), 0);
-    app.cleanup().await;
-}
-
-#[tokio::test]
-async fn admin_kill_user_tunnels_evicts_all_for_user() {
-    let app = TestApp::new().await;
-    let alice = Uuid::new_v4();
-    let bob = Uuid::new_v4();
-    app.register_tunnel("alice", "home", alice, Router::new())
-        .await;
-    app.register_tunnel("alice", "blog", alice, Router::new())
-        .await;
-    app.register_tunnel("bob", "home", bob, Router::new()).await;
-
-    let (s, body) = send_admin(
-        &app.router,
-        Method::POST,
-        "/admin/v1/users/alice/tunnels/kill",
-        Some(ADMIN_TOKEN),
-    )
-    .await;
-    assert_eq!(s, StatusCode::OK);
-    assert_eq!(body["killed"], 2);
-
-    let workspaces: Vec<_> = app
-        .registry
-        .list_all_tunnels()
-        .into_iter()
-        .map(|t| {
-            (
-                t.user.as_ref().to_string(),
-                t.workspace.as_ref().to_string(),
-            )
-        })
-        .collect();
-    assert_eq!(workspaces, vec![("bob".to_string(), "home".to_string())]);
-
-    // Idempotent.
-    let (_, body) = send_admin(
-        &app.router,
-        Method::POST,
-        "/admin/v1/users/alice/tunnels/kill",
-        Some(ADMIN_TOKEN),
-    )
-    .await;
-    assert_eq!(body["killed"], 0);
     app.cleanup().await;
 }
 

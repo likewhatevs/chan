@@ -582,6 +582,7 @@ impl ControllerState {
         let mut dead = Vec::new();
         for (proxy_id, session) in &mut self.proxies {
             if now.duration_since(session.last_seen) >= SESSION_DEAD_AFTER {
+                tracing::warn!(proxy_id, "proxy control heartbeat expired");
                 dead.push(SessionKey {
                     proxy_id: proxy_id.clone(),
                     incarnation: session.incarnation,
@@ -596,6 +597,7 @@ impl ControllerState {
                 while session.outstanding_pings.len() > MAX_OUTSTANDING_PINGS {
                     session.outstanding_pings.pop_front();
                 }
+                tracing::debug!(proxy_id, nonce, "sending proxy control heartbeat");
                 effects.push(Effect::Send {
                     session: SessionKey {
                         proxy_id: proxy_id.clone(),

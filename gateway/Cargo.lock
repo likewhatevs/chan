@@ -636,6 +636,8 @@ dependencies = [
  "chan-tunnel-proto",
  "chan-tunnel-server",
  "chrono",
+ "devserver-control",
+ "devserver-control-proto",
  "futures-util",
  "gateway-common",
  "h2 0.4.14",

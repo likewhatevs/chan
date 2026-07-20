@@ -85,6 +85,9 @@ pub enum ServerError {
     #[error("user {user} reached max concurrent workspaces ({max})")]
     TooManyWorkspaces { user: String, max: usize },
 
+    #[error("user {user} reached the fleet-wide devserver limit")]
+    AdmissionAtCapacity { user: String },
+
     #[error("devserver control is unavailable")]
     ControlUnavailable,
 }
@@ -162,7 +165,9 @@ pub trait Validator: Send + Sync + 'static {
 
 #[derive(Debug, Clone, Copy)]
 pub struct RegistrationPermit {
+    pub request_id: uuid::Uuid,
     pub registration_id: uuid::Uuid,
+    pub admission_epoch: u64,
 }
 
 #[async_trait]
@@ -172,6 +177,14 @@ pub trait RegistrationAdmission: Send + Sync + 'static {
         hello: &Hello,
         validated: &Validated,
     ) -> Result<RegistrationPermit, ServerError>;
+
+    /// Synchronous fence checked immediately before and after the registry
+    /// insert. Controller-backed implementations invalidate an epoch when
+    /// control is lost so an already-admitted but stalled handshake cannot
+    /// register after fail-closed eviction has run.
+    fn permit_is_current(&self, _permit: RegistrationPermit) -> bool {
+        true
+    }
 
     async fn cancel(&self, _permit: RegistrationPermit) {}
 }
@@ -186,7 +199,9 @@ impl RegistrationAdmission for AllowAllAdmission {
         _validated: &Validated,
     ) -> Result<RegistrationPermit, ServerError> {
         Ok(RegistrationPermit {
+            request_id: uuid::Uuid::new_v4(),
             registration_id: uuid::Uuid::new_v4(),
+            admission_epoch: 0,
         })
     }
 }
@@ -361,6 +376,14 @@ where
             }
         };
 
+    if !admission.permit_is_current(permit) {
+        let error = ServerError::ControlUnavailable;
+        admission.cancel(permit).await;
+        let (code, message) = refusal_for(&error);
+        write_refusal(&mut socket, code, &message).await;
+        return Err(error);
+    }
+
     let ack = HelloAck::Ok(chan_tunnel_proto::HelloAckOk {
         protocol: ProtocolVersion::V1,
         prefix: make_prefix(&validated.username, &validated.devserver_id),
@@ -376,7 +399,7 @@ where
     Ok((hello, validated, permit, yamux))
 }
 
-/// Map a `ServerError` from the protocol-level pre_ack closure to a
+/// Map a protocol-level policy or admission error to a
 /// `(code, message)` pair the client can match on. Codes are stable
 /// strings defined in `chan_tunnel_proto::error_code`; messages are
 /// user-visible.
@@ -390,10 +413,14 @@ fn refusal_for(e: &ServerError) -> (&'static str, String) {
             error_code::TOO_MANY_WORKSPACES,
             format!("user {user} reached max concurrent workspaces ({max})"),
         ),
+        ServerError::AdmissionAtCapacity { user } => (
+            error_code::TOO_MANY_WORKSPACES,
+            format!("user {user} reached the fleet-wide devserver limit"),
+        ),
         // Other variants (InvalidToken, MissingScope, Identity, Io,
         // Handshake) are handled at the listener layer before
         // handshake_validated is called or do not normally flow into
-        // pre_ack; surface them as INTERNAL so the wire shape stays
+        // policy admission; surface them as INTERNAL so the wire shape stays
         // tight without silently swallowing the diagnostic.
         _ => (error_code::INTERNAL, e.to_string()),
     }
@@ -437,3 +464,17 @@ mod tunnel;
 
 pub use registry::{OpenError, Registry, RegistryEvent, TunnelHandle, TunnelInfo, WorkspaceInfo};
 pub use tunnel::{serve_tunnel_listener, serve_tunnel_listener_with_admission};
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fleet_capacity_uses_the_stable_workspace_limit_refusal() {
+        let (code, message) = refusal_for(&ServerError::AdmissionAtCapacity {
+            user: "alice".into(),
+        });
+        assert_eq!(code, chan_tunnel_proto::error_code::TOO_MANY_WORKSPACES);
+        assert_eq!(message, "user alice reached the fleet-wide devserver limit");
+    }
+}

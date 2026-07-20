@@ -14,7 +14,8 @@ use async_trait::async_trait;
 use chan_tunnel_client::{dial, ClientConfig, ClientError};
 use chan_tunnel_proto::error_code;
 use chan_tunnel_server::{
-    serve_tunnel_listener, Registry, ServerError, Validated, Validator, TUNNEL_SCOPE,
+    serve_tunnel_listener, serve_tunnel_listener_with_admission, RegistrationAdmission,
+    RegistrationPermit, Registry, ServerError, Validated, Validator, TUNNEL_SCOPE,
 };
 use tokio::net::TcpListener;
 use url::Url;
@@ -92,6 +93,46 @@ async fn spawn_listener(validator: Arc<dyn Validator>, max_workspaces_per_user: 
             validator,
             registry_for_task,
             max_workspaces_per_user,
+        )
+        .await;
+    });
+    Harness {
+        port,
+        registry,
+        _task,
+    }
+}
+
+struct CapacityAdmission;
+
+#[async_trait]
+impl RegistrationAdmission for CapacityAdmission {
+    async fn admit(
+        &self,
+        _hello: &chan_tunnel_proto::Hello,
+        validated: &Validated,
+    ) -> Result<RegistrationPermit, ServerError> {
+        Err(ServerError::AdmissionAtCapacity {
+            user: validated.username.clone(),
+        })
+    }
+}
+
+async fn spawn_controller_admitted_listener(
+    validator: Arc<dyn Validator>,
+    admission: Arc<dyn RegistrationAdmission>,
+) -> Harness {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind 0");
+    let port = listener.local_addr().unwrap().port();
+    let registry = Registry::new();
+    let registry_for_task = registry.clone();
+    let _task = tokio::spawn(async move {
+        let _ = serve_tunnel_listener_with_admission(
+            listener,
+            validator,
+            admission,
+            registry_for_task,
+            0,
         )
         .await;
     });
@@ -255,6 +296,25 @@ async fn per_user_cap_blocks_third_devserver() {
         .map(|d| d.workspace.as_ref().to_string())
         .collect();
     assert_eq!(registered, vec!["ds-1".to_string(), "ds-2".to_string()]);
+}
+
+#[tokio::test]
+async fn controller_capacity_denial_is_a_stable_pre_registration_refusal() {
+    let validator = StubValidator::new("alice", vec![TUNNEL_SCOPE.into()], &[("good", "ds-1")]);
+    let h = spawn_controller_admitted_listener(validator, Arc::new(CapacityAdmission)).await;
+
+    let error = dial(&cfg(h.port, "good", "devsrv"))
+        .await
+        .map(|_| ())
+        .expect_err("controller capacity denial should refuse the handshake");
+    match error {
+        ClientError::RemoteRefusal { code, message } => {
+            assert_eq!(code, error_code::TOO_MANY_WORKSPACES);
+            assert!(message.contains("fleet-wide"), "got: {message}");
+        }
+        other => panic!("expected RemoteRefusal, got {other:?}"),
+    }
+    assert!(h.registry.list_workspaces_for("alice").is_empty());
 }
 
 #[tokio::test]

@@ -56,7 +56,9 @@ impl RegistrationAdmission for LocalAdmission {
             }
         }
         Ok(RegistrationPermit {
+            request_id: uuid::Uuid::new_v4(),
             registration_id: uuid::Uuid::new_v4(),
+            admission_epoch: 0,
         })
     }
 }
@@ -303,18 +305,21 @@ async fn handle_tunnel_conn(
     let (hello, validated, permit, yconn) =
         handshake_validated_with_admission(duplex, validated, admission.as_ref()).await?;
 
+    if !admission.permit_is_current(permit) {
+        admission.cancel(permit).await;
+        drop(yconn);
+        return Err(ServerError::ControlUnavailable);
+    }
+
     let user: Arc<str> = Arc::from(validated.username.as_str());
     // The second registry key is the token-resolved devserver id (the
     // authoritative identity), not the ignored `Hello.workspace` label.
     let devserver: Arc<str> = Arc::from(validated.devserver_id.as_str());
-    // Authoritative cap enforcement: `pre_ack` above ran a
-    // best-effort check before HelloAck so a non-racing dial fails
-    // cleanly during handshake, but two parallel dials could both
-    // pass it. `register_with_cap` does the count + insert under a
-    // single lock acquisition, closing the race. A loser here has
-    // already received HelloAck; dropping `yconn` on the early
-    // return closes the yamux connection so the client sees a
-    // transport disconnect.
+    // Final local-cap race fence. `LocalAdmission` makes the friendly
+    // pre-ack check, then `register_with_cap` repeats the count and insert
+    // under one lock acquisition. Controller-backed callers disable this
+    // local authority with zero. A local-cap loser here has already
+    // received HelloAck, so dropping `yconn` closes the transport.
     let (handle, open_rx, shutdown_rx) = match registry.register_with_id_and_cap(
         user.clone(),
         devserver.clone(),
@@ -329,7 +334,7 @@ async fn handle_tunnel_conn(
             tracing::warn!(
                 user = %capped.user,
                 max = capped.max,
-                "tunnel registration raced past pre_ack and hit the cap",
+                "tunnel registration raced past admission and hit the local cap",
             );
             drop(yconn);
             return Err(ServerError::TooManyWorkspaces {
@@ -338,6 +343,12 @@ async fn handle_tunnel_conn(
             });
         }
     };
+    if !admission.permit_is_current(permit) {
+        registry.evict_registration(permit.registration_id);
+        admission.cancel(permit).await;
+        drop(yconn);
+        return Err(ServerError::ControlUnavailable);
+    }
     tracing::info!(%user, %devserver, "tunnel registered");
 
     // The Hello may carry a display name for the roster. Hand it to
