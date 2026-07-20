@@ -18,7 +18,7 @@ The harnesses caught three real bugs pre-ship (fresh-out upload rejection in the
 
 ## Release Workflow
 
-rc validation via `publish=false` dispatch (run 29363056622). GA is the standard tag-push publish. distros-publish runs the new skip/retry logic live for the first time at this GA (its pre-GA dispatch validation is structurally impossible: a tag dispatch builds the tag's tree); `LAUNCHPAD_SSH_PRIVATE_KEY` is provisioned, so PPA uploads ride sftp.
+rc validation via `publish=false` dispatch (run 29363056622). GA is the standard tag-push publish. The downstream publication workflow runs the new skip/retry logic live for the first time at this GA (its pre-GA dispatch validation is structurally impossible: a tag dispatch builds the tag's tree); `LAUNCHPAD_SSH_PRIVATE_KEY` is provisioned, so PPA uploads ride sftp.
 
 ## Operators
 

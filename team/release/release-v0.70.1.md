@@ -18,7 +18,7 @@ Verification: gateway-zone e2e all scenarios green, 72/72 assertions, including 
 
 ## Release Workflow
 
-No rc pin cycle for this patch. GA validation via a `release.yml publish=false` dispatch on the GA-pinned branch (the only macOS compile, sign, and notarize signal), artifacts checked before the tag; GA is the standard tag-push publish, distros-publish verified after.
+No rc pin cycle for this patch. GA validation via a `release.yml publish=false` dispatch on the GA-pinned branch (the only macOS compile, sign, and notarize signal), artifacts checked before the tag; GA is the standard tag-push publish, downstream publication verified after.
 
 ## Operators
 

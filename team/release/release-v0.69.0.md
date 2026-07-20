@@ -18,7 +18,7 @@ The sleep-wake mechanism was empirically reproduced before implementation (SIGST
 
 ## Release Workflow
 
-rc validation via `publish=false` dispatch (run 29420257505). GA is the standard tag-push publish; distros-publish fires on the release run's completion (COPR + PPA verified post-publish).
+rc validation via `publish=false` dispatch (run 29420257505). GA is the standard tag-push publish; downstream publication fires on the release run's completion (COPR + PPA verified post-publish).
 
 ## Operators
 

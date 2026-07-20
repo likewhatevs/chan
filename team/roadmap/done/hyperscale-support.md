@@ -62,7 +62,7 @@ Keep `chan` unrestricted. The custom release webhooks continue to rebuild both S
 
 Raw SRPM submissions are independent of the SCM package settings. `packaging/distros/copr/build-srpm.sh --submit` therefore passes two explicit `--exclude-chroot` values for `chan-desktop`, one per EL9 architecture. It does not enumerate allowed chroots, so future Fedora and Stream 10 targets remain automatic.
 
-The release path never runs that script: `distros-publish` POSTs the custom webhook, which rebuilds the SCM packages from Git. At release time the console denylist is therefore the only thing that keeps the two EL9 desktop jobs from being scheduled, and no artifact in this repo can assert or verify it.
+The release path never runs that script: `publish-downstream` POSTs the custom webhook, which rebuilds the SCM packages from Git. At release time the console denylist is therefore the only thing that keeps the two EL9 desktop jobs from being scheduled, and no artifact in this repo can assert or verify it.
 
 ## Local Validation Contract
 

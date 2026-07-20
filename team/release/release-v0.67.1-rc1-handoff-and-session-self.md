@@ -30,7 +30,7 @@ Patch release with three user-facing changes plus a repo-wide writing-rules swee
 ## Known risks
 
 - The handoff page keeps the chan:// URL (PAT secret) in the tab's DOM until closed; documented as a known limitation (no-store/no-referrer/nosniff bound it). Follow-up: one-time redemption code.
-- First-ever live run of `distros-publish` (landed after v0.67.0's release run): COPR + PPA need explicit verification after the GA tag.
+- First-ever live downstream publication run (landed after v0.67.0's release run): COPR + PPA need explicit verification after the GA tag.
 - The sweep touched 195 files; all mechanical (comments/docs/copy), gated green, but broad.
 
 ## Changelog-worthy user impact
