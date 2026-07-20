@@ -21,7 +21,7 @@ Patch release: the chan-desktop gateway OAuth handoff fix, the id.chan.app conse
 
 - Deploy the GA `chan-gateway-identity` deb to the id.chan.app host and restart the service (owner, interactive). The live Authorize bug persists until this lands.
 - Owner hand-smoke after deploy: chan-desktop -> Add dev server -> `https://id.chan.app` -> Authorize -> PAT stored and devserver connects; Cancel clears the awaiting row; consent and handoff pages render the SPA look.
-- Verify the first-ever live downstream publication run (landed after v0.67.0's release run): COPR `fiorix/chan` all chroots, `ppa:fiorix/chan` noble + resolute.
+- Verify the first-ever live `distros-publish` run (landed after v0.67.0's release run): COPR `fiorix/chan` all chroots, `ppa:fiorix/chan` noble + resolute.
 
 ## Known limitations / follow-ups
 

@@ -188,7 +188,7 @@ v0.68.0 brings multiple devservers per gateway account with a sign-in picker, a 
 ### Fixed
 
 - **Live sessions no longer trust a lying filesystem.** The doc and scene session reconcilers identified their own save echoes by mtime alone and trusted a single read enough to replace a live session wholesale; on filesystems that re-stamp mtime after an async upload or serve stale/empty read-after-write (Google Drive FUSE clients), a session's own save came back as an "external edit" that blanked every attached editor and could persist the blank to disk. Sessions now recognize their own recent content by hash, corroborate suspicious reads (empty, or divergent while edits are unflushed) with a second observation before folding them in, heal a refused lying read by re-flushing the live content, and serialize flush/reconcile IO per session (also fixing a filesystem-independent race that could revert mid-save typing).
-- **Downstream publication re-runs are safe after a transient Launchpad failure.** The PPA path skips series Launchpad already accepted (asked via the Launchpad API) and retries the rest with bounded backoff, so re-running the workflow after an FTP 550 no longer needs a manual local rebuild and never re-uploads a duplicate. An sftp upload method is plumbed behind an optional `LAUNCHPAD_SSH_PRIVATE_KEY` secret.
+- **distros-publish re-runs are safe after a transient Launchpad failure.** The PPA path skips series Launchpad already accepted (asked via the Launchpad API) and retries the rest with bounded backoff, so re-running the workflow after an FTP 550 no longer needs a manual local rebuild and never re-uploads a duplicate. An sftp upload method is plumbed behind an optional `LAUNCHPAD_SSH_PRIVATE_KEY` secret.
 
 ### Operators
 

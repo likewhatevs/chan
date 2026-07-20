@@ -38,7 +38,7 @@ Not proven, and not claimed:
 ### Highlights
 
 - The terminal batching claim is backed by a live oracle rather than a unit test alone: the agent reconstructs the batch size from what it actually received, so a regression that split a batch would change the reported number instead of passing silently.
-- Both packaging paths were validated in clean containers on the host before the tag, so the COPR and AUR downstream-publication legs go into GA with their recipes already known to build, install, and smoke.
+- Both packaging paths were validated in clean containers on the host before the tag, so the COPR and AUR legs of `distros-publish` go into GA with their recipes already known to build, install, and smoke.
 
 ### Lowlights
 
