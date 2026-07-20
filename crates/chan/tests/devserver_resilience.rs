@@ -194,10 +194,30 @@ async fn spawn_serve(sandbox: &Sandbox, root: &Path, no_token: bool) -> (Server,
     (server, parse_addr(&line))
 }
 
-/// Spawn `chan devserver` on a concrete port and return it with its bearer
-/// token. The devserver prints a `listening on http://<local_addr>` line and
-/// the `CHAN_DEVSERVER_TOKEN=<token>` marker to stdout.
-async fn spawn_devserver(sandbox: &Sandbox, port: u16) -> (Server, SocketAddr) {
+/// The devserver's own AddrInUse wording. Matching it is what separates "some
+/// other process took the port" from "this devserver is broken": only the
+/// former is safe to retry somewhere else.
+const PORT_IN_USE: &str = "the port is already in use";
+
+/// How many ports a helper draws before giving up. Only a lost bind race
+/// spends an attempt, so a genuinely broken devserver still fails on the first.
+const PORT_ATTEMPTS: usize = 5;
+
+/// The result of one devserver startup. `PortInUse` is the only failure a
+/// caller may retry elsewhere; `Failed` means the binary itself did not come
+/// up and retrying would just hide it.
+enum Startup {
+    Listening(Server, SocketAddr),
+    PortInUse(String),
+    Failed(String),
+}
+
+/// Spawn `chan devserver` on `port` and wait for it to serve. The devserver
+/// prints a `listening on http://<local_addr>` line and the
+/// `CHAN_DEVSERVER_TOKEN=<token>` marker to stdout. A child that dies is
+/// classified the moment it exits rather than at the ready deadline, so a
+/// broken devserver reports in startup time instead of 30 seconds.
+async fn start_devserver(sandbox: &Sandbox, port: u16) -> Startup {
     let mut child = sandbox
         .command()
         .arg("devserver")
@@ -206,15 +226,97 @@ async fn spawn_devserver(sandbox: &Sandbox, port: u16) -> (Server, SocketAddr) {
         .spawn()
         .expect("spawn chan devserver");
     let out = Transcript::capture(&mut child);
-    let server = Server { child, out };
-    let addr: SocketAddr = format!("127.0.0.1:{port}").parse().unwrap();
-    server
-        .out
-        .wait_for("listening on http://", Duration::from_secs(30))
-        .await
-        .unwrap_or_else(|| panic!("chan devserver never listened:\n{}", server.out.dump()));
-    wait_devserver_up(&http(), addr).await;
-    (server, addr)
+    let mut server = Server { child, out };
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        if server.out.find("listening on http://").is_some() {
+            let addr: SocketAddr = format!("127.0.0.1:{port}").parse().unwrap();
+            wait_devserver_up(&http(), addr).await;
+            return Startup::Listening(server, addr);
+        }
+        let exited = server.child.try_wait().expect("try_wait devserver");
+        if exited.is_some() {
+            // The drain threads publish asynchronously, so the child's last
+            // words can still be in flight when its exit is observed.
+            let port_taken = server
+                .out
+                .wait_for(PORT_IN_USE, Duration::from_secs(2))
+                .await
+                .is_some();
+            let dump = server.out.dump();
+            return if port_taken {
+                Startup::PortInUse(dump)
+            } else {
+                Startup::Failed(dump)
+            };
+        }
+        if Instant::now() >= deadline {
+            return Startup::Failed(server.out.dump());
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+}
+
+/// Spawn `chan devserver` on exactly `port`. The port is taken verbatim: a
+/// caller that passes one deliberately (a restart that has to land back on the
+/// address it already used) gets that port or a panic, never a substitute.
+async fn spawn_devserver(sandbox: &Sandbox, port: u16) -> (Server, SocketAddr) {
+    match start_devserver(sandbox, port).await {
+        Startup::Listening(server, addr) => (server, addr),
+        Startup::PortInUse(dump) => {
+            panic!("chan devserver could not take the requested port {port}:\n{dump}")
+        }
+        Startup::Failed(dump) => panic!("chan devserver never listened:\n{dump}"),
+    }
+}
+
+/// Spawn `chan devserver` on a port the test has no opinion about, redrawing
+/// the port when another process wins the bind race. Every other startup
+/// failure panics on the first attempt so it stays a fast, legible red.
+async fn spawn_devserver_on_free_port(sandbox: &Sandbox) -> (Server, SocketAddr) {
+    let mut lost = Vec::new();
+    for _ in 0..PORT_ATTEMPTS {
+        let port = free_port();
+        match start_devserver(sandbox, port).await {
+            Startup::Listening(server, addr) => return (server, addr),
+            Startup::PortInUse(_) => lost.push(port),
+            Startup::Failed(dump) => panic!("chan devserver never listened on {port}:\n{dump}"),
+        }
+    }
+    panic!(
+        "lost the bind race on {PORT_ATTEMPTS} ports ({lost:?}); the devserver \
+         started every time, another process just got there first"
+    );
+}
+
+/// Run a `chan devserver --service=chan` daemon action that has to bind, on a
+/// port drawn the same way and redrawn on the same lost race. Returns the port
+/// that stuck plus the command output for the caller to assert on; any failure
+/// that is not a bind collision comes back untouched.
+fn start_chan_service_on_free_port(
+    sandbox: &Sandbox,
+    verb: Option<&str>,
+    label: &str,
+) -> (u16, std::process::Output) {
+    let mut lost = Vec::new();
+    for _ in 0..PORT_ATTEMPTS {
+        let port = free_port();
+        let mut cmd = sandbox.command();
+        cmd.arg("devserver").arg("--service=chan");
+        if let Some(verb) = verb {
+            cmd.arg(verb);
+        }
+        let out = cmd
+            .args(["--bind", "127.0.0.1"])
+            .args(["--port", &port.to_string()])
+            .output()
+            .unwrap_or_else(|e| panic!("{label}: {e}"));
+        if out.status.success() || !String::from_utf8_lossy(&out.stderr).contains(PORT_IN_USE) {
+            return (port, out);
+        }
+        lost.push(port);
+    }
+    panic!("{label}: lost the bind race on {PORT_ATTEMPTS} ports ({lost:?})");
 }
 
 fn devserver_token(server: &Server) -> String {
@@ -242,8 +344,10 @@ fn parse_addr(line: &str) -> SocketAddr {
         .unwrap_or_else(|_| panic!("could not parse addr from: {line}"))
 }
 
-/// An unused loopback port, found by binding `:0` and releasing it. The brief
-/// gap before the server rebinds is an accepted TOCTOU for a local test.
+/// A loopback port that was free a moment ago, found by binding `:0` and
+/// releasing it. Any process can take it during the gap before the server
+/// rebinds, which under a loaded box happens often enough to red the suite, so
+/// this is only ever called from a helper that redraws on a lost race.
 fn free_port() -> u16 {
     TcpListener::bind("127.0.0.1:0")
         .expect("bind :0")
@@ -535,7 +639,7 @@ async fn serve_sigint_during_reindex_exits_and_frees_flock() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn devserver_sigint_exits_clean() {
     let sandbox = Sandbox::new();
-    let (mut server, _addr) = spawn_devserver(&sandbox, free_port()).await;
+    let (mut server, _addr) = spawn_devserver_on_free_port(&sandbox).await;
 
     send_signal(server.pid(), "INT");
 
@@ -556,7 +660,7 @@ async fn devserver_sigint_exits_clean() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn devserver_sigterm_exits_clean() {
     let sandbox = Sandbox::new();
-    let (mut server, _addr) = spawn_devserver(&sandbox, free_port()).await;
+    let (mut server, _addr) = spawn_devserver_on_free_port(&sandbox).await;
 
     send_signal(server.pid(), "TERM");
 
@@ -596,8 +700,8 @@ fn stable_control_sockets(dir: &Path) -> Vec<String> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn devserver_restart_rebinds_the_same_control_socket_paths() {
     let sandbox = Sandbox::new();
-    let port = free_port();
-    let (mut server, _addr) = spawn_devserver(&sandbox, port).await;
+    let (mut server, addr) = spawn_devserver_on_free_port(&sandbox).await;
+    let port = addr.port();
     let before = stable_control_sockets(sandbox.runtime.path());
     assert!(
         !before.is_empty(),
@@ -638,17 +742,9 @@ async fn devserver_restart_rebinds_the_same_control_socket_paths() {
 async fn chan_service_start_status_join_restart_stop() {
     let sandbox = Sandbox::new();
     let client = http();
-    let port = free_port();
-    let addr: SocketAddr = format!("127.0.0.1:{port}").parse().unwrap();
 
-    let out = sandbox
-        .command()
-        .arg("devserver")
-        .arg("--service=chan")
-        .args(["--bind", "127.0.0.1"])
-        .args(["--port", &port.to_string()])
-        .output()
-        .expect("start chan service");
+    let (port, out) = start_chan_service_on_free_port(&sandbox, None, "start chan service");
+    let addr: SocketAddr = format!("127.0.0.1:{port}").parse().unwrap();
     let (stdout, stderr) = assert_output_ok(out, "chan service start");
     assert!(
         stdout.contains("CHAN_DEVSERVER_TOKEN="),
@@ -704,17 +800,9 @@ async fn chan_service_start_status_join_restart_stop() {
         "daemon pid {first_pid} should survive join detach"
     );
 
-    let restart_port = free_port();
+    let (restart_port, out) =
+        start_chan_service_on_free_port(&sandbox, Some("--restart"), "restart chan service");
     let restart_addr: SocketAddr = format!("127.0.0.1:{restart_port}").parse().unwrap();
-    let out = sandbox
-        .command()
-        .arg("devserver")
-        .arg("--service=chan")
-        .arg("--restart")
-        .args(["--bind", "127.0.0.1"])
-        .args(["--port", &restart_port.to_string()])
-        .output()
-        .expect("restart chan service");
     let (_stdout, _stderr) = assert_output_ok(out, "chan service restart");
     assert!(
         wait_devserver_down(&client, addr).await,
@@ -756,19 +844,13 @@ async fn chan_service_start_status_join_restart_stop() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn chan_service_start_is_idempotent() {
     let sandbox = Sandbox::new();
-    let port = free_port();
 
-    let out = sandbox
-        .command()
-        .arg("devserver")
-        .arg("--service=chan")
-        .args(["--bind", "127.0.0.1"])
-        .args(["--port", &port.to_string()])
-        .output()
-        .expect("first chan service start");
+    let (port, out) = start_chan_service_on_free_port(&sandbox, None, "first chan service start");
     let (_stdout, _stderr) = assert_output_ok(out, "first chan service start");
     let first_pid = daemon_pid(&sandbox);
 
+    // The second start deliberately reuses the exact same port: that is the
+    // bind it must recognize as already served.
     let out = sandbox
         .command()
         .arg("devserver")
@@ -842,7 +924,7 @@ async fn chan_service_status_clears_stale_pidfile() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn devserver_shutdown_reaps_tenant_pty() {
     let sandbox = Sandbox::new();
-    let (mut server, addr) = spawn_devserver(&sandbox, free_port()).await;
+    let (mut server, addr) = spawn_devserver_on_free_port(&sandbox).await;
     let token = devserver_token(&server);
     let client = http();
 
@@ -894,10 +976,10 @@ async fn devserver_shutdown_reaps_tenant_pty() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn devserver_sigkill_releases_flock_and_survives_config() {
     let sandbox = Sandbox::new();
-    let port = free_port();
     let root = sandbox.workspace("survivor");
 
-    let (mut first, addr) = spawn_devserver(&sandbox, port).await;
+    let (mut first, addr) = spawn_devserver_on_free_port(&sandbox).await;
+    let port = addr.port();
     let token1 = devserver_token(&first);
     let client = http();
     let prefix = mount_workspace(&client, addr, &token1, &root).await;
@@ -939,11 +1021,11 @@ async fn devserver_sigkill_releases_flock_and_survives_config() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn devserver_first_open_mints_one_terminal_then_honors_the_marker() {
     let sandbox = Sandbox::new();
-    let port = free_port();
     let client = http();
 
     // Fresh devserver: exactly one terminal window in the library feed.
-    let (mut first, addr) = spawn_devserver(&sandbox, port).await;
+    let (mut first, addr) = spawn_devserver_on_free_port(&sandbox).await;
+    let port = addr.port();
     let token = devserver_token(&first);
     let windows = list_library_windows(&client, addr, &token).await;
     assert_eq!(
@@ -994,7 +1076,7 @@ async fn devserver_first_open_mints_one_terminal_then_honors_the_marker() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn close_then_reopen_under_pressure() {
     let sandbox = Sandbox::new();
-    let (server, addr) = spawn_devserver(&sandbox, free_port()).await;
+    let (server, addr) = spawn_devserver_on_free_port(&sandbox).await;
     let token = devserver_token(&server);
     let client = http();
     let root = sandbox.workspace("churn");
@@ -1018,7 +1100,7 @@ async fn close_then_reopen_under_pressure() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn chan_close_marks_devserver_workspace_off() {
     let sandbox = Sandbox::new();
-    let (server, addr) = spawn_devserver(&sandbox, free_port()).await;
+    let (server, addr) = spawn_devserver_on_free_port(&sandbox).await;
     let token = devserver_token(&server);
     let client = http();
     let root = sandbox.workspace("close-state");
@@ -1071,7 +1153,7 @@ async fn chan_close_marks_devserver_workspace_off() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn chan_close_remove_drops_devserver_workspace() {
     let sandbox = Sandbox::new();
-    let (server, addr) = spawn_devserver(&sandbox, free_port()).await;
+    let (server, addr) = spawn_devserver_on_free_port(&sandbox).await;
     let token = devserver_token(&server);
     let client = http();
     let root = sandbox.workspace("close-remove-state");
