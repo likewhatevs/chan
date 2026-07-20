@@ -26,7 +26,7 @@ Each item is one Markdown file that names an observed behavior or need, the evid
 | [distributed-proxy-control-plane](v0.73.0/distributed-proxy-control-plane.md) | implementation plan; deferred out of v0.72.0 with no code merged | implement the controller, the proxy control client, and the fleet-complete snapshot the identity and profile planes read, then validate the cutover end to end |
 | [launcher-flip-pane](v0.73.0/launcher-flip-pane.md) | implemented and merged to `main`; the overlay stack reconciles at close, covered by three behavioral tests captured red first | nothing further; it closes at GA with the release |
 | [packaging-aarch64-validation](v0.73.0/packaging-aarch64-validation.md) | COPR aarch64 evidence harvested and the item's "nothing has ever been built" premise corrected; the AUR aarch64 leg is wired to run at GA as observed evidence, not yet gating | read the first real AUR aarch64 result after the release, then make publication wait for it |
-| [terminal-queue-drain-gemini-opencode](v0.73.0/terminal-queue-drain-gemini-opencode.md) | Gemini and OpenCode stay single-message; their batched submit timing is unmeasured | run the three queue-drain cases three times each for the agent on a host where it is installed and authenticated, then promote it or record why it stays a boundary |
+| [terminal-queue-drain-gemini-opencode](v0.73.0/terminal-queue-drain-gemini-opencode.md) | delivered: OpenCode promoted on a full live matrix, Gemini measured and kept a boundary because no gap below the idle threshold has adequate margin | nothing further; it closes at GA with the release |
 
 ## Completed
 

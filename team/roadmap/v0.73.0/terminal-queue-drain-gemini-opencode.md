@@ -1,6 +1,6 @@
 # Queue-Drain Batching for Gemini and OpenCode
 
-Status: accepted scope for v0.73.0. Carried forward from v0.72.0, which shipped chronological batching for Codex and Claude only. Gemini and OpenCode remain single-message boundaries and their submit timing under a batch is unproven.
+Status: delivered in v0.73.0 and closed, with a split outcome, both halves measured rather than assumed. **OpenCode is promoted**: it passed the required live matrix, three runs of each of `batch`, `boundaries` and `late`, at 64 KiB with the server's explicit 50 ms gap, with no intermediate depth in any batch or late trace. **Gemini stays a boundary**, which the item names as an explicitly valid outcome. The live sweep found short-input behavior changing across 60-75 ms rather than the inherited and never-measured 30 ms, and a full 64 KiB body still stranded in compose at 400 ms and failing the content oracle at 700 ms. 700 ms leaves only 100 ms below the queue's 800 ms idle threshold, so no fixed gap gives adequate margin and batching Gemini would silently strand input. The unverified 30 ms provenance is removed from the source comments and replaced with what was actually measured. A positive per-agent `is_batchable()` assertion now exists, closing the gap where no test pinned any agent's eligibility directly.
 
 ## Problem
 
