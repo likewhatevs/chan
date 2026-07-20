@@ -16,10 +16,24 @@ CHAN_TARGET ?=
 
 # Linux chan-desktop build (AppImage/.deb) runs inside an sdme container so a
 # macOS workstation can produce Linux bundles. DISTRO selects the rootfs +
-# .sdme template; SDME is how sdme is reached (a lima VM on macOS, directly on
-# a Linux host). See packaging/sdme/build-chan-desktop.sh.
+# .sdme template; SDME is how sdme is reached, which differs per workstation:
+# a lima VM on macOS, sdme itself on a Linux host. See
+# packaging/sdme/build-chan-desktop.sh.
 DISTRO ?= ubuntu
-SDME ?= limactl shell default sudo sdme
+UNAME_S := $(shell uname -s)
+SDME ?= $(if $(filter Darwin,$(UNAME_S)),limactl shell default sudo sdme,sudo sdme)
+
+# make copr-check knobs: the container command for the SRPM stage, the matrix
+# slice, the sdme rootfs names (imported names vary per host), and whether a
+# finished container survives for diagnosis. The 0/1 knobs reject any other
+# value. copr-check itself is Linux-only; it needs a writable host bind to get
+# the guest's results back, which the macOS lima path cannot provide.
+DOCKER ?= docker
+COPR_RELEASE ?= all
+COPR_EL9_ROOTFS ?= centos-stream-9
+COPR_EL10_ROOTFS ?= centos-stream-10
+KEEP_CONTAINER ?= 0
+REUSE_SRPM ?= 0
 
 BIN := target/release/chan
 WEB_BUILD_STAMP := web/.chan-build-stamp
@@ -112,6 +126,15 @@ copr-srpm: ## Build the chan + chan-desktop SRPMs locally (fedora container).
 .PHONY: copr-build
 copr-build: ## Build the SRPMs and submit them to COPR (needs copr-cli auth).
 	packaging/distros/copr/build-srpm.sh $(PKG) --submit
+
+.PHONY: copr-check
+copr-check: ## Build and smoke the supported CentOS COPR matrix via sdme (Linux hosts).
+	SDME="$(SDME)" DOCKER="$(DOCKER)" PKG="$(or $(PKG),all)" \
+		COPR_RELEASE="$(COPR_RELEASE)" REUSE_SRPM="$(REUSE_SRPM)" \
+		KEEP_CONTAINER="$(KEEP_CONTAINER)" \
+		COPR_EL9_ROOTFS="$(COPR_EL9_ROOTFS)" \
+		COPR_EL10_ROOTFS="$(COPR_EL10_ROOTFS)" \
+		packaging/distros/copr/build-with-sdme.sh
 
 .PHONY: ppa-source
 ppa-source: ## Build signed per-series Launchpad source packages from the tarball.

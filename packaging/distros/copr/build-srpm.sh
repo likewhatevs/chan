@@ -10,9 +10,10 @@
 #
 #   no package args   build both packages
 #   --submit          after building, `copr-cli build <project> <srpm>`
-#                     (needs ~/.config/copr; see packaging/distros/README.md)
+#                     (needs ~/.config/copr; see packaging/distros/README.md).
+#                     chan-desktop excludes the unsupported EL9 chroots.
 #
-# Env: COPR_PROJECT (default fiorix/chan), FEDORA_IMAGE
+# Env: COPR_PROJECT (default fiorix/chan), FEDORA_IMAGE, DOCKER
 #      (default registry.fedoraproject.org/fedora:latest).
 
 set -euo pipefail
@@ -21,6 +22,13 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 COPR_PROJECT="${COPR_PROJECT:-fiorix/chan}"
 FEDORA_IMAGE="${FEDORA_IMAGE:-registry.fedoraproject.org/fedora:latest}"
+DOCKER="${DOCKER:-docker}"
+
+read -r -a DOCKER_CMD <<<"$DOCKER"
+[ ${#DOCKER_CMD[@]} -gt 0 ] || {
+    echo "error: DOCKER must name the container command" >&2
+    exit 1
+}
 
 PKGS=()
 SUBMIT=0
@@ -46,7 +54,7 @@ for pkg in "${PKGS[@]}"; do
     echo "==> building SRPM: $pkg"
     # The container runs as root; chown the outputs back to the invoking
     # user at the end.
-    docker run --rm -v "$REPO:/src" "$FEDORA_IMAGE" bash -ec "
+    "${DOCKER_CMD[@]}" run --rm -v "$REPO:/src" "$FEDORA_IMAGE" bash -ec "
         dnf -y -q install rpm-build
         /src/packaging/distros/copr/make-srpm.sh --repo /src \
             --spec /src/packaging/distros/fedora/$pkg.spec \
@@ -67,6 +75,14 @@ if [ "$SUBMIT" = 1 ]; then
         srpm="$(ls -t "$OUTDIR/$pkg"-[0-9]*.src.rpm 2>/dev/null | head -1)"
         [ -n "$srpm" ] || { echo "error: no SRPM for $pkg" >&2; exit 1; }
         echo "==> submitting $srpm to $COPR_PROJECT"
-        copr-cli build "$COPR_PROJECT" "$srpm"
+        # Spelled out per branch rather than through an array: bash before 4.4
+        # treats an empty array expansion as unset under `set -u`.
+        if [ "$pkg" = chan-desktop ]; then
+            copr-cli build "$COPR_PROJECT" "$srpm" \
+                --exclude-chroot centos-stream+epel-next-9-aarch64 \
+                --exclude-chroot centos-stream+epel-next-9-x86_64
+        else
+            copr-cli build "$COPR_PROJECT" "$srpm"
+        fi
     done
 fi
