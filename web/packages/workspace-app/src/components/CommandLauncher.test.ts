@@ -11,7 +11,13 @@ import CommandLauncher from "./CommandLauncher.svelte";
 import appRaw from "../App.svelte?raw";
 import launcherRaw from "./CommandLauncher.svelte?raw";
 import overlayShellRaw from "./OverlayShell.svelte?raw";
-import { launcherPanel } from "../state/store.svelte";
+import {
+  launcherPanel,
+  overlayStack,
+  searchPanel,
+  syncOverlayStack,
+  topOverlay,
+} from "../state/store.svelte";
 import { registerCommands } from "../state/commands";
 import { layout, type BrowserTab, type LeafNode } from "../state/tabs.svelte";
 
@@ -25,7 +31,14 @@ const runBrowserAlpha = vi.fn();
 const runBrowserZoom = vi.fn();
 const runLate = vi.fn();
 const runHidden = vi.fn();
+const runFlip = vi.fn();
+let overlayAtFlipRun: ReturnType<typeof topOverlay> = null;
+const runGuardedFlip = vi.fn(() => {
+  overlayAtFlipRun = topOverlay();
+  if (overlayAtFlipRun === null) runFlip();
+});
 let showLate = false;
+let showFlip = false;
 
 // Register once. allCommands de-dups by (id, category, title), so a
 // re-register under a re-run collapses rather than stacking.
@@ -80,6 +93,13 @@ registerCommands([
     category: "Global",
     available: () => false,
     run: runHidden,
+  },
+  {
+    id: "app.pane.flip",
+    title: "Flip pane",
+    category: "Global",
+    available: () => showFlip,
+    run: runGuardedFlip,
   },
 ]);
 
@@ -149,7 +169,11 @@ beforeEach(() => {
   resetLayout();
   launcherPanel.open = false;
   launcherPanel.query = "";
+  searchPanel.open = false;
+  overlayStack.ids = [];
+  overlayAtFlipRun = null;
   showLate = false;
+  showFlip = false;
 });
 
 afterEach(() => {
@@ -157,8 +181,12 @@ afterEach(() => {
   document.body.innerHTML = "";
   launcherPanel.open = false;
   launcherPanel.query = "";
+  searchPanel.open = false;
+  overlayStack.ids = [];
+  overlayAtFlipRun = null;
   vi.clearAllMocks();
   showLate = false;
+  showFlip = false;
 });
 
 describe("command launcher overlay", () => {
@@ -435,5 +463,43 @@ describe("command launcher overlay", () => {
     await tick();
     expect(runNewFile).toHaveBeenCalledTimes(1);
     expect(launcherPanel.open).toBe(false);
+  });
+
+  test("removes the launcher from the overlay stack before running a command", async () => {
+    showFlip = true;
+    const target = openLauncher();
+    await flush();
+    syncOverlayStack();
+    expect(topOverlay()).toBe("launcher");
+    await typeLauncherQuery("flip");
+    const flipRow = [...target.querySelectorAll(".row")].find(
+      (r) => r.querySelector(".title")?.textContent === "Flip pane",
+    ) as HTMLElement;
+
+    flipRow.click();
+
+    expect(runGuardedFlip).toHaveBeenCalledTimes(1);
+    expect(overlayAtFlipRun).toBeNull();
+    expect(runFlip).toHaveBeenCalledTimes(1);
+  });
+
+  test("keeps a launcher-dispatched flip blocked by an underlying search overlay", async () => {
+    showFlip = true;
+    searchPanel.open = true;
+    syncOverlayStack();
+    const target = openLauncher();
+    await flush();
+    syncOverlayStack();
+    expect(overlayStack.ids).toEqual(["search", "launcher"]);
+    await typeLauncherQuery("flip");
+    const flipRow = [...target.querySelectorAll(".row")].find(
+      (r) => r.querySelector(".title")?.textContent === "Flip pane",
+    ) as HTMLElement;
+
+    flipRow.click();
+
+    expect(runGuardedFlip).toHaveBeenCalledTimes(1);
+    expect(overlayAtFlipRun).toBe("search");
+    expect(runFlip).not.toHaveBeenCalled();
   });
 });
