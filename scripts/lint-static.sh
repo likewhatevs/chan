@@ -195,8 +195,8 @@ run_shell() {
 
 # actionlint invokes shellcheck with --norc, so .shellcheckrc has to be
 # replayed as flags through SHELLCHECK_OPTS or a workflow `run:` block would
-# be held to different rules than a .sh file. Every directive shellcheck
-# accepts in an rc file has a mapping here, and an unmapped one is fatal: a
+# be held to different rules than a .sh file. Every rc directive that has a
+# command-line equivalent is mapped here, and anything else is fatal: a
 # directive dropped silently makes the workflow pass quietly weaker than the
 # .sh pass, which is the failure this target exists to prevent.
 shellcheck_opts_from_rc() {
@@ -229,6 +229,14 @@ shellcheck_opts_from_rc() {
             extended-analysis) opts="$opts --extended-analysis=$value" ;;
             external-sources)
                 [ "$value" != "true" ] || opts="$opts --external-sources"
+                ;;
+            source)
+                # An rc file may set `source=`, but no flag carries it, so it
+                # cannot reach actionlint's --norc pass.
+                die ".shellcheckrc sets source=$value, which has no" \
+                    "command-line form and so cannot be replayed into" \
+                    "actionlint's --norc shellcheck; put a" \
+                    "\`# shellcheck source=\` comment at the dot site instead"
                 ;;
             *)
                 die ".shellcheckrc directive '$key' has no flag mapping in" \
