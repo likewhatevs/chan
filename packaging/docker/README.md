@@ -63,6 +63,12 @@ The gateway services publish the same way and share the tag policy: `fiorix/chan
 docker run --rm -p 8787:8787 -v "$PWD:/workspace" fiorix/chan:0.55.0
 ```
 
+### Release automation
+
+`.github/workflows/publish-downstream.yml` runs after a successful core Release workflow. Native amd64 and arm64 jobs push each image by digest, then an independent manifest job publishes the immutable version tag and, for GA only, `latest`. Docker is secondary: a failure is red in the downstream workflow but cannot fail the GitHub Release, `/dl` metadata, Pages, COPR, the PPA, or the AUR.
+
+For pre-tag validation, dispatch `publish-downstream` on the candidate branch with `targets=docker`, the planned `vX.Y.Z` tag, and `publish=false`. It builds every image with cache-only output and pushes nothing. This preserves the existing dry-run contract: Docker Hub configuration and login are deliberately skipped, so the run proves the builds but not the registry credentials.
+
 ### chan: serve one workspace
 
 ```sh

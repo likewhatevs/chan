@@ -1,18 +1,18 @@
-# Publish the distro packages after a release lands: trigger the COPR
-# package builds, upload the signed Debian source packages to the
-# Launchpad PPA, and publish the Arch source recipes to the AUR.
-# Deliberately a separate workflow from release.yml, and triggered by
-# its completion rather than by the tag push, so distro publishing can
-# never block or fail the GitHub release and only runs once the
-# release is actually out. Publication jobs no-op gracefully when
-# their secret is absent (e.g. on forks).
+# Publish every secondary release target after the core release lands:
+# Docker Hub images, COPR packages, the Launchpad PPA, and AUR recipes.
+# This workflow is deliberately separate from release.yml and triggered
+# by its completion, so an external publisher can fail plainly without
+# failing the GitHub Release, /dl metadata, or Pages deploy. Each target
+# has its own job chain, so one publisher's failure cannot suppress the
+# others. Publication jobs no-op gracefully when their secret is absent
+# (e.g. on forks).
 #
 # Manual dispatch mirrors release.yml: `publish` defaults to false,
-# which renders, validates, and probes the credentials without pushing
-# anything, and `targets` scopes the run to one distro so retrying a
-# transient Launchpad ftp 550 costs one job instead of the Arch builds
-# and the AUR push too. The tag-triggered path always publishes all
-# three.
+# which builds and validates without pushing (and probes the PPA/AUR
+# credentials; Docker intentionally skips registry auth), while `targets`
+# scopes the run to one publisher so retrying a
+# transient Launchpad ftp 550 costs one job instead of Docker and the
+# Arch builds too. The tag-triggered path runs every secondary target.
 #
 # Secrets:
 #   COPR_WEBHOOK                  custom-webhook base URL (trailing /)
@@ -24,8 +24,15 @@
 #                                 FTP flakiness); absent keeps ftp
 #   AUR_SSH_PRIVATE_KEY           private half of the key registered
 #                                 on the maintainer's AUR account
+#   DOCKERHUB_USERNAME            Docker Hub account name
+#   DOCKERHUB_TOKEN               scoped Docker Hub access token
+# Variable:
+#   DOCKERHUB_NAMESPACE           Docker Hub organization/user namespace
 
-name: distros-publish
+name: publish-downstream
+
+permissions:
+  contents: read
 
 on:
   workflow_run:
@@ -34,20 +41,21 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing vX.Y.Z tag to publish distro packages for
+        description: Existing or planned vX.Y.Z[-rcN] downstream tag
         required: true
       targets:
-        description: Which distro to run
+        description: Which downstream target to run
         required: true
         default: all
         type: choice
         options:
           - all
+          - docker
           - copr
           - launchpad
           - aur
       publish:
-        description: Push to COPR, the PPA, and the AUR
+        description: Push to Docker Hub, COPR, the PPA, and the AUR
         required: true
         default: false
         type: boolean
@@ -56,7 +64,7 @@ on:
         required: false
         default: "1"
       aur_validate_arm:
-        description: Also run the unverified aarch64 AUR build (never gates publication)
+        description: Run aarch64 AUR validation on dispatch (GA observes it)
         required: false
         default: false
         type: boolean
@@ -68,14 +76,55 @@ on:
 # validation, which arrive as workflow_dispatch and could otherwise
 # publish distro packages off a v-named branch.
 #
-# Every job also filters a prerelease version (a `-` in the tag), on
-# both the dispatch and the workflow_run path. Release candidates are
-# validated on a branch and their tags are not pushed, so this is
-# defense in depth: it keeps an rc that did reach a tag out of COPR,
-# the PPA, and the AUR alike, none of which carries a prerelease
-# channel.
+# Every distro job also filters a prerelease version (a `-` in the tag),
+# on both the dispatch and workflow_run paths. Release candidates are
+# validated on a branch and their tags are not pushed, so this is defense
+# in depth: it keeps an rc that did reach a tag out of COPR, the PPA, and
+# the AUR, none of which carries a prerelease channel. Docker preserves
+# its existing immutable prerelease tag support but never moves `latest`.
 jobs:
+  # Docker used release.yml's context outputs for these four values. Derive
+  # the same contract from this workflow's two event shapes. This job is a
+  # Docker prerequisite only: a Docker context/build failure cannot suppress
+  # any distro job.
+  context:
+    name: docker publication context
+    if: >-
+      (github.event_name == 'workflow_dispatch' &&
+       (inputs.targets == 'all' || inputs.targets == 'docker')) ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       startsWith(github.event.workflow_run.head_branch, 'v'))
+    runs-on: ubuntu-latest
+    outputs:
+      publish: ${{ steps.context.outputs.publish }}
+      tag: ${{ steps.context.outputs.tag }}
+      version: ${{ steps.context.outputs.version }}
+      prerelease: ${{ steps.context.outputs.prerelease }}
+    steps:
+      - id: context
+        name: Resolve downstream tag
+        env:
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.event.workflow_run.head_branch }}
+          PUBLISH: ${{ github.event_name != 'workflow_dispatch' || inputs.publish }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]; then
+            echo "::error::release tag must use vX.Y.Z or vX.Y.Z-rcN, got $RELEASE_TAG"
+            exit 1
+          fi
+          version=${RELEASE_TAG#v}
+          prerelease=false
+          if [[ "$version" == *-* ]]; then
+            prerelease=true
+          fi
+          echo "publish=$PUBLISH" >> "$GITHUB_OUTPUT"
+          echo "tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
+
   copr:
+    name: COPR ${{ matrix.package }}
     if: >-
       (github.event_name == 'workflow_dispatch' &&
        (inputs.targets == 'all' || inputs.targets == 'copr') &&
@@ -84,12 +133,19 @@ jobs:
        github.event.workflow_run.event == 'push' &&
        startsWith(github.event.workflow_run.head_branch, 'v') &&
        !contains(github.event.workflow_run.head_branch, '-'))
+    strategy:
+      fail-fast: false
+      matrix:
+        package: [chan, chan-desktop]
     runs-on: ubuntu-latest
     env:
       PUBLISH: ${{ github.event_name != 'workflow_dispatch' || inputs.publish }}
     steps:
-      - name: Trigger COPR package builds
+      # Keep the packages in separate matrix cells: one webhook failure stays
+      # red and attributable without suppressing the other package's trigger.
+      - name: Trigger COPR ${{ matrix.package }} build
         env:
+          PACKAGE: ${{ matrix.package }}
           WEBHOOK: ${{ secrets.COPR_WEBHOOK }}
         run: |
           if [ "$PUBLISH" != "true" ]; then
@@ -102,8 +158,7 @@ jobs:
           fi
           # COPR rebuilds the SCM packages from main's HEAD, which equals
           # the tag once the release has landed.
-          curl -sf -X POST "${WEBHOOK}chan/"
-          curl -sf -X POST "${WEBHOOK}chan-desktop/"
+          curl -sf -X POST "${WEBHOOK}${PACKAGE}/"
 
   # Source-package assembly compiles nothing (the vendored tarball is a
   # git archive + prebuilt web bundles + cargo vendor); Launchpad builds
@@ -329,8 +384,7 @@ jobs:
   # The AUR hosts recipes, not builds. Prove each source package on a
   # clean upstream Arch container before either repository is updated.
   # The package build logic is the same script local sdme validation
-  # runs. This leg is x86_64 only, which is what publication gates on;
-  # see aur-validate-arm.
+  # runs. This x86_64 job is the v0.73.0 publication gate.
   aur-validate:
     if: >-
       (github.event_name == 'workflow_dispatch' &&
@@ -368,42 +422,41 @@ jobs:
           include-hidden-files: true
           if-no-files-found: error
 
-  # Arch Linux ARM aarch64 is declared by both recipes but has never been
-  # built end to end: the rootfs import, pacman-key bootstrap, rolling
-  # -Syu, and native ARM Tauri build are all unproven. So this job is
-  # opt-in on manual dispatch only, and never appears in `needs` for
-  # aur-publish. A GA run is therefore expected all-green with no ARM
-  # cell, instead of shipping two permanently red jobs the operator is
-  # told to treat as a failure. Dispatch it with aur_validate_arm=true to
-  # work the leg; once it passes, add the workflow_run trigger here and
-  # to `needs` so GA covers aarch64 too.
+  # Arch Linux ARM aarch64 is declared by both recipes. Build it on every
+  # successful GA release, using the same package path as x86_64, but observe
+  # rather than gate it for v0.73.0. This leg has never completed end to end
+  # and cannot be proven before a tag carrying the systemd-analyze fix;
+  # v0.72.0 also never reached the AUR. Do not let the unproven first ARM run
+  # block the first AUR publication for a second release. Once it passes,
+  # v0.74.0 adds aur-validate-arm to aur-publish's needs.
+  # Manual dispatches opt in because an ARM run is expensive and a
+  # distro-specific diagnostic may not need it.
   #
   # `inputs` (not `github.event.inputs`) is what preserves a boolean
   # input as a Boolean: the raw event payload carries the string "false",
   # which is truthy and would run ARM on every dispatch.
   aur-validate-arm:
     if: >-
-      github.event_name == 'workflow_dispatch' &&
-      (inputs.targets == 'all' || inputs.targets == 'aur') &&
-      inputs.aur_validate_arm &&
-      !contains(inputs.tag, '-')
+      (github.event_name == 'workflow_dispatch' &&
+       (inputs.targets == 'all' || inputs.targets == 'aur') &&
+       inputs.aur_validate_arm &&
+       !contains(inputs.tag, '-')) ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       startsWith(github.event.workflow_run.head_branch, 'v') &&
+       !contains(github.event.workflow_run.head_branch, '-'))
     strategy:
       fail-fast: false
       matrix:
         pkgbase: [chan, chan-desktop]
     runs-on: ubuntu-24.04-arm
     env:
-      # Dispatch-only per the `if` above, so the workflow_run fallbacks the
-      # other AUR jobs carry would be unreachable here and would read as if
-      # this job had a GA path. Restoring them is part of the same edit that
-      # gives the job the workflow_run trigger. `aur_pkgrel` keeps its default
-      # because the input is optional and can arrive empty from the API.
-      RELEASE_TAG: ${{ inputs.tag }}
-      AUR_PKGREL: ${{ inputs.aur_pkgrel || '1' }}
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.event.workflow_run.head_branch }}
+      AUR_PKGREL: ${{ github.event_name == 'workflow_dispatch' && inputs.aur_pkgrel || '1' }}
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: ${{ inputs.tag }}
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.event.workflow_run.head_sha }}
 
       # Upstream Arch publishes no aarch64 image, so import Arch Linux
       # ARM's signed rootfs on the native runner.
@@ -522,3 +575,243 @@ jobs:
           done
           echo "::error::the AUR did not report $PKGBASE $expected after the push"
           exit 1
+
+  # ---- container images (Docker Hub) ----------------------------------------
+  # Publishes chan + the three chan-gateway service images to Docker Hub under
+  # ${{ vars.DOCKERHUB_NAMESPACE }}. Multi-arch is built on NATIVE runners
+  # (amd64 on ubuntu-latest, arm64 on ubuntu-24.04-arm, matching the CLI and
+  # gateway package jobs): each image runs a full from-scratch cargo build
+  # inside its Dockerfile, so emulating aarch64 under QEMU would be far slower.
+  # Each arch is pushed BY DIGEST, then docker-manifest assembles the multi-arch
+  # manifest list and asserts both platforms. A publish=false dry run BUILDS
+  # every image (outputs type=cacheonly) WITHOUT a registry, so it needs no
+  # Docker Hub secrets and never moves `latest`. The gateway Dockerfile's single
+  # builder stage compiles all three crates once; the three runtime --targets
+  # share one gha cache scope per arch. Auth is docker/login-action (no GitHub
+  # token scope), so these jobs keep the top-level contents: read. Tag map:
+  # immutable X.Y.Z always; `latest` only on a GA tag (prerelease == 'false').
+  docker-build:
+    name: docker ${{ matrix.component }} (${{ matrix.arch }})
+    needs: context
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            arch: amd64
+            component: chan
+          - os: ubuntu-24.04-arm
+            arch: arm64
+            component: chan
+          - os: ubuntu-latest
+            arch: amd64
+            component: gateway
+          - os: ubuntu-24.04-arm
+            arch: arm64
+            component: gateway
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # workflow_run otherwise checks out the default branch rather than
+          # the released commit; a dispatch keeps the selected branch commit.
+          ref: ${{ github.event_name == 'workflow_dispatch' && github.sha || github.event.workflow_run.head_sha }}
+
+      # On a real publish the Docker Hub credentials + namespace must exist
+      # before any login/push; fail fast with a pointer if not. The dry run
+      # (publish=false) skips this and builds without a registry, so secret-less
+      # dry runs and forks stay green.
+      - name: Verify Docker Hub config present
+        if: needs.context.outputs.publish == 'true'
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+          DOCKERHUB_NAMESPACE: ${{ vars.DOCKERHUB_NAMESPACE }}
+        run: |
+          set -e
+          missing=()
+          [ -n "$DOCKERHUB_USERNAME" ] || missing+=("DOCKERHUB_USERNAME (secret)")
+          [ -n "$DOCKERHUB_TOKEN" ] || missing+=("DOCKERHUB_TOKEN (secret)")
+          [ -n "$DOCKERHUB_NAMESPACE" ] || missing+=("DOCKERHUB_NAMESPACE (variable)")
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::error::Missing Docker Hub config: ${missing[*]}"
+            echo "::error::Create the Docker Hub org + a scoped access token, then add the DOCKERHUB_USERNAME and DOCKERHUB_TOKEN secrets and the DOCKERHUB_NAMESPACE variable."
+            exit 1
+          fi
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Log in to Docker Hub
+        if: needs.context.outputs.publish == 'true'
+        uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # chan: default target. EMBED_MODEL stays off (the model is fetched at
+      # runtime), so no separate model image is published.
+      - name: Build chan
+        if: matrix.component == 'chan'
+        id: build_chan
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: packaging/docker/chan.Dockerfile
+          platforms: linux/${{ matrix.arch }}
+          provenance: false
+          outputs: ${{ needs.context.outputs.publish == 'true' && format('type=image,name={0}/chan,push-by-digest=true,name-canonical=true,push=true,oci-mediatypes=true', vars.DOCKERHUB_NAMESPACE) || 'type=cacheonly' }}
+          cache-from: type=gha,scope=chan-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=chan-${{ matrix.arch }}
+
+      # gateway: one builder stage compiles all three crates; each runtime
+      # --target copies one binary. The three steps share one gha cache scope
+      # per arch so the builder compiles once.
+      - name: Build chan-gateway-identity
+        if: matrix.component == 'gateway'
+        id: build_identity
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: packaging/docker/gateway.Dockerfile
+          target: identity
+          platforms: linux/${{ matrix.arch }}
+          provenance: false
+          outputs: ${{ needs.context.outputs.publish == 'true' && format('type=image,name={0}/chan-gateway-identity,push-by-digest=true,name-canonical=true,push=true,oci-mediatypes=true', vars.DOCKERHUB_NAMESPACE) || 'type=cacheonly' }}
+          cache-from: type=gha,scope=gateway-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=gateway-${{ matrix.arch }}
+
+      - name: Build chan-gateway-profile
+        if: matrix.component == 'gateway'
+        id: build_profile
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: packaging/docker/gateway.Dockerfile
+          target: profile
+          platforms: linux/${{ matrix.arch }}
+          provenance: false
+          outputs: ${{ needs.context.outputs.publish == 'true' && format('type=image,name={0}/chan-gateway-profile,push-by-digest=true,name-canonical=true,push=true,oci-mediatypes=true', vars.DOCKERHUB_NAMESPACE) || 'type=cacheonly' }}
+          cache-from: type=gha,scope=gateway-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=gateway-${{ matrix.arch }}
+
+      - name: Build chan-gateway-devserver-proxy
+        if: matrix.component == 'gateway'
+        id: build_devserver_proxy
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: packaging/docker/gateway.Dockerfile
+          target: devserver-proxy
+          platforms: linux/${{ matrix.arch }}
+          provenance: false
+          outputs: ${{ needs.context.outputs.publish == 'true' && format('type=image,name={0}/chan-gateway-devserver-proxy,push-by-digest=true,name-canonical=true,push=true,oci-mediatypes=true', vars.DOCKERHUB_NAMESPACE) || 'type=cacheonly' }}
+          cache-from: type=gha,scope=gateway-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=gateway-${{ matrix.arch }}
+
+      # Persist each pushed digest (filename = image.arch, content = digest) so
+      # the manifest job can group per image. Skipped on the dry run (no push,
+      # no digests).
+      - name: Export digests
+        if: needs.context.outputs.publish == 'true'
+        env:
+          ARCH: ${{ matrix.arch }}
+          COMPONENT: ${{ matrix.component }}
+          CHAN_DIGEST: ${{ steps.build_chan.outputs.digest }}
+          IDENTITY_DIGEST: ${{ steps.build_identity.outputs.digest }}
+          PROFILE_DIGEST: ${{ steps.build_profile.outputs.digest }}
+          DEVSERVER_PROXY_DIGEST: ${{ steps.build_devserver_proxy.outputs.digest }}
+        run: |
+          set -e
+          mkdir -p /tmp/digests
+          if [ "$COMPONENT" = "chan" ]; then
+            printf '%s' "$CHAN_DIGEST" > "/tmp/digests/chan.${ARCH}"
+          else
+            printf '%s' "$IDENTITY_DIGEST" > "/tmp/digests/chan-gateway-identity.${ARCH}"
+            printf '%s' "$PROFILE_DIGEST" > "/tmp/digests/chan-gateway-profile.${ARCH}"
+            printf '%s' "$DEVSERVER_PROXY_DIGEST" > "/tmp/digests/chan-gateway-devserver-proxy.${ARCH}"
+          fi
+          ls -la /tmp/digests
+
+      - name: Upload digests
+        if: needs.context.outputs.publish == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: docker-digests-${{ matrix.component }}-${{ matrix.arch }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  docker-manifest:
+    name: docker manifest ${{ matrix.image }}
+    if: needs.context.outputs.publish == 'true'
+    needs:
+      - context
+      - docker-build
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        image:
+          - chan
+          - chan-gateway-identity
+          - chan-gateway-profile
+          - chan-gateway-devserver-proxy
+    steps:
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Download digests
+        uses: actions/download-artifact@v8
+        with:
+          path: /tmp/digests
+          pattern: docker-digests-*
+          merge-multiple: true
+
+      # Tag map: immutable X.Y.Z always; latest only on a GA release.
+      - id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ vars.DOCKERHUB_NAMESPACE }}/${{ matrix.image }}
+          tags: |
+            type=raw,value=${{ needs.context.outputs.version }}
+            type=raw,value=latest,enable=${{ needs.context.outputs.prerelease == 'false' }}
+
+      - name: Create the multi-arch manifest
+        env:
+          IMG: ${{ matrix.image }}
+          IMAGE: ${{ vars.DOCKERHUB_NAMESPACE }}/${{ matrix.image }}
+        run: |
+          set -e
+          refs=""
+          for f in /tmp/digests/"${IMG}".*; do
+            [ -e "$f" ] || continue
+            d=$(cat "$f")
+            [ -n "$d" ] || { echo "::error::empty digest in $f"; exit 1; }
+            refs="$refs ${IMAGE}@${d}"
+          done
+          if [ -z "$refs" ]; then
+            echo "::error::no per-arch digests found for $IMG"
+            exit 1
+          fi
+          tags=$(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON")
+          echo "manifest tags: $tags"
+          echo "source refs:  $refs"
+          # Both hold whitespace-separated argument lists ("-t a -t b" and the
+          # per-arch refs), so the split is what turns them into arguments.
+          # shellcheck disable=SC2086
+          docker buildx imagetools create $tags $refs
+
+      - name: Inspect the manifest (assert both platforms)
+        env:
+          REF: ${{ vars.DOCKERHUB_NAMESPACE }}/${{ matrix.image }}:${{ needs.context.outputs.version }}
+        run: |
+          set -e
+          out=$(docker buildx imagetools inspect "$REF")
+          printf '%s\n' "$out"
+          echo "$out" | grep -q 'linux/amd64' || { echo "::error::$REF missing linux/amd64"; exit 1; }
+          echo "$out" | grep -q 'linux/arm64' || { echo "::error::$REF missing linux/arm64"; exit 1; }
