@@ -788,6 +788,10 @@ mod tests {
     fn help_cross_references_resolve() {
         let mut bad = Vec::new();
         for_each_help(|name, text| {
+            // Collapse the hand-wrapping first: a reference broken across a
+            // line ends up as `--topic\ncs`, which no scan for `--topic `
+            // followed by a slug would ever see.
+            let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
             for (index, _) in text.match_indices("--topic ") {
                 let rest = &text[index + "--topic ".len()..];
                 let topic: String = rest
@@ -795,8 +799,9 @@ mod tests {
                     .take_while(|c| c.is_ascii_alphanumeric() || *c == '-')
                     .collect();
                 // `--topic <SLUG>` in a usage line is a placeholder, not a
-                // reference.
-                if topic.is_empty() || topic.starts_with('<') {
+                // reference: the slug scan stops on the angle bracket and
+                // collects nothing.
+                if topic.is_empty() {
                     continue;
                 }
                 if find_section(&topic).is_none() {
