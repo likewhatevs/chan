@@ -31,7 +31,11 @@ if [ "$(id -u)" -eq 0 ]; then
 
     id builder >/dev/null 2>&1 || useradd -m builder
     install -d -m 0755 /etc/sudoers.d
-    printf 'builder ALL=(ALL:ALL) NOPASSWD: /usr/bin/pacman\n' > /etc/sudoers.d/aur-builder
+    # systemd-analyze is here because it creates /run/systemd/ when that
+    # directory is missing, which an unprivileged user cannot do in a
+    # container where /run is root-owned and not a separate mount.
+    printf 'builder ALL=(ALL:ALL) NOPASSWD: /usr/bin/pacman, /usr/bin/systemd-analyze\n' \
+        > /etc/sudoers.d/aur-builder
     chmod 0440 /etc/sudoers.d/aur-builder
     mkdir -p "$OUT"
     chown -R builder:builder "$OUT"
@@ -116,10 +120,18 @@ for pkgbase in "${packages[@]}"; do
         exit 1
     fi
 
+    # Each smoke step announces itself: several of them write to stderr, so
+    # without a label a failure here cannot be attributed to a command.
+    echo ">> smoke: pacman -U $(basename "$pkg")" >&2
     sudo pacman -U --noconfirm "$pkg"
+    echo ">> smoke: chan --version" >&2
     chan --version
+    echo ">> smoke: cs --help" >&2
     cs --help >/dev/null
-    systemd-analyze verify /usr/lib/systemd/user/chan-devserver.service
+    # Runs through sudo so it holds wherever /run/systemd/ is absent; see the
+    # sudoers rule above.
+    echo ">> smoke: systemd-analyze verify chan-devserver.service" >&2
+    sudo systemd-analyze verify /usr/lib/systemd/user/chan-devserver.service
 
     if [ "$pkgbase" = chan-desktop ]; then
         # The desktop personality routes `chan upgrade` to a running GUI, so a
