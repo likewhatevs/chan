@@ -75,7 +75,7 @@ TUNNEL_PORT="${E2E_TUNNEL_PORT:-17810}"
 OAUTH_PORT="${E2E_OAUTH_PORT:-17830}"
 CTL_ADMIN_PORT="${E2E_CTL_ADMIN_PORT:-17840}"
 CTL_PROXY_PORT="${E2E_CTL_PROXY_PORT:-17841}"
-DS_PORTS=(17821 17822 17823 17824 17825 17826 17827)
+DS_PORTS=(17821 17822 17823 17824 17825 17826 17827 17828)
 
 # Fleet shape: three proxy nodes on their own loopback aliases.
 PROXY_IDS=(p1 p2 p3)
@@ -124,7 +124,7 @@ MAX_DEVSERVERS=2
 # Scenario dispatch: "all" (default) = core suite + every registered
 # scenario; "core" = the inline suite only; a registered name = stack
 # bring-up + that scenario only. Lanes append their scenario name here.
-SCENARIOS="sweeper watchdog roster upload windowclose matrix sharedingress ctlrestart proxydown ctloutage"
+SCENARIOS="sweeper watchdog roster upload windowclose matrix sharedingress movenode ctlrestart proxydown ctloutage"
 SCENARIO="${1:-all}"
 RUN_CORE=1
 case "$SCENARIO" in all | core) ;; *) RUN_CORE=0 ;; esac
@@ -146,6 +146,10 @@ cleanup() {
         return
     }
     for pid in "${PIDS[@]:-}"; do
+        # A SIGSTOPped process (the movenode scenario freezes one
+        # devserver on purpose) ignores SIGTERM until it is continued;
+        # without the CONT it would survive teardown holding its port.
+        [ -n "$pid" ] && kill -CONT "$pid" 2>/dev/null
         [ -n "$pid" ] && kill "$pid" 2>/dev/null
     done
     wait 2>/dev/null
@@ -1929,6 +1933,186 @@ scenario_sharedingress() {
         assert_pass "sharedingress: only the killed rows left the aggregate"
     else
         assert_fail "sharedingress: aggregate did not return to 3 rows: $(admin_read /admin/v1/tunnels)"
+    fi
+}
+
+# Scenario: a devserver moves between nodes. Dave's G first registers
+# through p1, then a second instance of the SAME PAT dials p2 while
+# the p1 instance is frozen (a half-open old connection, the worst
+# case for a move: the old side is neither live nor cleanly gone).
+# The controller admits the redial, replaces the live row, and
+# commands the old registration down; ownership, the entry origin,
+# the roster proxy_origin, and the data path must all move to p2
+# together. Killing the frozen p1 instance afterwards is the retired
+# side's late disconnect: it must not touch the replacement.
+scenario_movenode() {
+    # The roster read needs a desktop.account PAT (tunnel-scope PATs
+    # are 401 there), so mint one for dave first.
+    local out move_pat
+    out="$("$GW_BIN/chan-gateway-admin" \
+        --identity-url "http://127.0.0.1:$ID_PORT" --token "$TOK_ADMIN" --json \
+        token create "$DAVE_EMAIL" \
+        --scope desktop.account --label movenode-e2e \
+        2>> "$LOGS/admin-mint.log")" || out=""
+    move_pat="$(printf %s "$out" | json_get secret)"
+    case "$move_pat" in
+    chan_pat_*) assert_pass "movenode: admin mint of dave's account PAT" ;;
+    *) assert_fail "movenode: account PAT mint failed (logs/admin-mint.log)" ;;
+    esac
+    move_origin() { # move_origin <roster-json> -> "online proxy_origin" for DS_G
+        printf %s "$1" | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{
+            const id=process.argv[1];
+            try{const r=JSON.parse(d).devservers.find(x=>x.devserver_id===id);
+                console.log(r?`${r.online} ${r.proxy_origin}`:"")}catch{console.log("")}})' \
+            "$DS_G"
+    }
+    move_roster() {
+        curl -sS -H "Authorization: Bearer $move_pat" \
+            "http://127.0.0.1:$ID_PORT/desktop/v1/devservers"
+    }
+    local want_p1 want_p2
+    want_p1="true http://$DAVE_USER--$(disc "$DS_G").p1.$APEX:$PROXY_PORT"
+    want_p2="true http://$DAVE_USER--$(disc "$DS_G").p2.$APEX:$PROXY_PORT"
+
+    # Phase 1: G registers through p1 and everything names p1.
+    spawn_devserver g "${DS_PORTS[6]}" "$PAT_G" "$(node_tunnel_url p1)"
+    local node="" code fp
+    for _ in $(seq 150); do
+        node="$(tunnel_field "$DS_G" proxy_id)"
+        [ "$node" = "p1" ] && break
+        sleep 0.4
+    done
+    if [ "$node" = "p1" ] &&
+        [ "$(tunnel_field "$DS_G" proxy_base_url)" = "http://p1.$APEX:$PROXY_PORT" ]; then
+        assert_pass "movenode: G registered through p1 with p1's base URL"
+    else
+        assert_fail "movenode: G did not register on p1 (node='$node')"
+    fi
+    if [ "$(move_origin "$(move_roster)")" = "$want_p1" ]; then
+        assert_pass "movenode: roster proxy_origin names p1's node origin"
+    else
+        assert_fail "movenode: roster proxy_origin wrong on p1: $(move_origin "$(move_roster)")"
+    fi
+    mint_gate_cookie "$PAT_G" "$DAVE_USER" "$DS_G" ||
+        assert_fail "movenode: no entry mint for G on p1"
+    if [ "$MC_NODE" = "p1" ]; then
+        assert_pass "movenode: entry mints on p1's node host"
+    else
+        assert_fail "movenode: entry minted on '$MC_NODE', expected p1"
+    fi
+    code="$(curl_node p1 "$MC_HOST" -o /dev/null -w '%{http_code}' \
+        -H "Cookie: $MC_COOKIE" "http://$MC_HOST:$PROXY_PORT/api/health")"
+    if [ "$code" = "200" ]; then
+        assert_pass "movenode: G answers 200 on p1"
+    else
+        assert_fail "movenode: G on p1 expected 200, got $code"
+    fi
+    local host_p1="$MC_HOST" cookie_p1="$MC_COOKIE"
+
+    # Phase 2: freeze the p1 instance, then the same PAT dials p2.
+    # Freezing instead of killing keeps the old connection half-open,
+    # so the controller sees a genuinely live duplicate and has to
+    # command the old registration down; a frozen client also cannot
+    # redial and flap ownership back while the move is asserted.
+    local gpid
+    gpid="$(cat "$WORK/pids/ds-g.pid")"
+    kill -STOP "$gpid" 2>/dev/null
+    spawn_devserver g2 "${DS_PORTS[7]}" "$PAT_G" "$(node_tunnel_url p2)"
+    local flipped=0
+    for _ in $(seq 150); do
+        [ "$(tunnel_field "$DS_G" proxy_id)" = "p2" ] && {
+            flipped=1
+            break
+        }
+        sleep 0.4
+    done
+    if [ "$flipped" = 1 ] &&
+        [ "$(tunnel_field "$DS_G" proxy_base_url)" = "http://p2.$APEX:$PROXY_PORT" ]; then
+        assert_pass "movenode: ownership moved to p2 on the redial"
+    else
+        assert_fail "movenode: ownership never moved to p2"
+    fi
+    local rows_for_g
+    rows_for_g="$(admin_read /admin/v1/tunnels | grep -o "$DS_G" | wc -l)"
+    if [ "$rows_for_g" = "1" ]; then
+        assert_pass "movenode: exactly one aggregate row exists for the moved devserver"
+    else
+        assert_fail "movenode: expected 1 row for G, found $rows_for_g"
+    fi
+    mint_gate_cookie "$PAT_G" "$DAVE_USER" "$DS_G" ||
+        assert_fail "movenode: no entry mint for G after the move"
+    if [ "$MC_NODE" = "p2" ]; then
+        assert_pass "movenode: entry mints on p2's node host after the move"
+    else
+        assert_fail "movenode: post-move entry minted on '$MC_NODE', expected p2"
+    fi
+    code="$(curl_node p2 "$MC_HOST" -o /dev/null -w '%{http_code}' \
+        -H "Cookie: $MC_COOKIE" "http://$MC_HOST:$PROXY_PORT/api/health")"
+    if [ "$code" = "200" ]; then
+        assert_pass "movenode: the data path moved to p2 (200)"
+    else
+        assert_fail "movenode: G on p2 expected 200, got $code"
+    fi
+    code="$(curl_node p1 "$MC_HOST" -o /dev/null -w '%{http_code}' \
+        -H "Cookie: $MC_COOKIE" "http://$MC_HOST:$PROXY_PORT/api/health")"
+    if [ "$code" = "404" ]; then
+        assert_pass "movenode: p2's node host is 404 on p1"
+    else
+        assert_fail "movenode: G's new host on p1 expected 404, got $code"
+    fi
+    code="$(curl_node p1 "$host_p1" -o /dev/null -w '%{http_code}' \
+        -H "Cookie: $cookie_p1" "http://$host_p1:$PROXY_PORT/api/health")"
+    if [ "$code" = "404" ]; then
+        assert_pass "movenode: p1 no longer serves the moved devserver (404)"
+    else
+        assert_fail "movenode: G's old host on p1 expected 404, got $code"
+    fi
+    if [ "$(move_origin "$(move_roster)")" = "$want_p2" ]; then
+        assert_pass "movenode: roster proxy_origin flipped to p2's node origin"
+    else
+        assert_fail "movenode: roster proxy_origin wrong after the move: $(move_origin "$(move_roster)")"
+    fi
+
+    # Phase 3: the retired side's late disconnect. The frozen p1
+    # instance dies now, after the replacement owns the key; whatever
+    # teardown its half-open connection produces must not remove the
+    # p2 registration (downs are targeted by registration UUID).
+    fp="$(tunnel_fingerprint "$DS_G")"
+    kill -KILL "$gpid" 2>/dev/null
+    rm -f "$WORK/pids/ds-g.pid"
+    sleep 3
+    if [ "$(tunnel_fingerprint "$DS_G")" = "$fp" ] &&
+        [ "$(tunnel_field "$DS_G" proxy_id)" = "p2" ]; then
+        assert_pass "movenode: late teardown from the retired side cannot remove the replacement"
+    else
+        assert_fail "movenode: the p2 registration did not survive the retired side's teardown"
+    fi
+    code="$(curl_node p2 "$MC_HOST" -o /dev/null -w '%{http_code}' \
+        -H "Cookie: $MC_COOKIE" "http://$MC_HOST:$PROXY_PORT/api/health")"
+    if [ "$code" = "200" ]; then
+        assert_pass "movenode: the replacement still routes after the late disconnect"
+    else
+        assert_fail "movenode: G on p2 after the late disconnect expected 200, got $code"
+    fi
+
+    # Leave the stack as found: stop the moved instance and let its
+    # row drain so the fleet returns to the steady three.
+    if [ -f "$WORK/pids/ds-g2.pid" ]; then
+        kill "$(cat "$WORK/pids/ds-g2.pid")" 2>/dev/null || true
+        rm -f "$WORK/pids/ds-g2.pid"
+    fi
+    local drained=0
+    for _ in $(seq 75); do
+        [ -z "$(tunnel_field "$DS_G" proxy_id)" ] && {
+            drained=1
+            break
+        }
+        sleep 0.4
+    done
+    if [ "$drained" = 1 ] && [ "$(fleet_count)" = "3" ]; then
+        assert_pass "movenode: G's row drained; the fleet is back to the steady three"
+    else
+        assert_fail "movenode: G's row did not drain after stopping the client"
     fi
 }
 
