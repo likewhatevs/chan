@@ -68,6 +68,12 @@ pub struct RosterDevserver {
     pub online: bool,
     pub role: String,
     pub shared: bool,
+    /// The controller-derived exact origin of the proxy node serving this
+    /// devserver; `None` while offline. The desktop reads it ONLY to detect
+    /// an online registration moving nodes (the roster diff classifies the
+    /// move): origin authority comes from entry-response validation, never
+    /// from roster state.
+    pub proxy_origin: Option<String>,
 }
 
 /// The roster endpoint's 200 body.
@@ -86,6 +92,9 @@ struct RosterRow {
     online: bool,
     #[serde(default)]
     role: String,
+    /// Null while the devserver is offline, the exact node origin while
+    /// online. A lifecycle signal only: it never authorizes the origin.
+    proxy_origin: Option<String>,
 }
 
 /// What one roster round trip amounted to.
@@ -143,8 +152,9 @@ pub struct FetchEffect {
     pub cascade: bool,
     /// This fetch crossed the unreachable threshold: emit the notice once.
     pub became_unreachable: bool,
-    /// Actionable membership/policy changes from a fresh roster. The caller
-    /// applies teardown and trust pruning after releasing the runtime-map lock.
+    /// Actionable membership/policy/node-move changes from a fresh roster.
+    /// The caller applies teardown and trust pruning after releasing the
+    /// runtime-map lock.
     pub diff: RosterDiff,
 }
 
@@ -285,6 +295,11 @@ pub struct RosterDiff {
     /// Rows whose label or role changed (a devserver rename must reach
     /// the launcher without waiting for a membership or online change).
     pub updated: Vec<(String, String)>,
+    /// Rows online on both sides whose proxy_origin names a DIFFERENT
+    /// node: the registration moved proxies, so the managed connection
+    /// pinned to the old node must be torn down and re-entered. A null on
+    /// either side is an ordinary online/offline transition, not a move.
+    pub moved: Vec<(String, String)>,
 }
 
 impl RosterDiff {
@@ -293,13 +308,14 @@ impl RosterDiff {
             && self.removed.is_empty()
             && self.flipped_online.is_empty()
             && self.updated.is_empty()
+            && self.moved.is_empty()
     }
 }
 
 /// Pure roster diff: which rows appeared, disappeared, flipped their
-/// online bit, or changed label/role. The fresh snapshot replaces the
-/// cache either way; the diff only decides whether the launcher gets a
-/// push.
+/// online bit, changed label/role, or moved proxy nodes. The fresh
+/// snapshot replaces the cache either way; the diff only decides whether
+/// the launcher gets a push and which lifecycle actions run.
 pub fn diff_rosters(old: &[RosterDevserver], new: &[RosterDevserver]) -> RosterDiff {
     let key = |r: &RosterDevserver| (r.owner.clone(), r.devserver_id.clone());
     let old_map: HashMap<_, _> = old.iter().map(|r| (key(r), r)).collect();
@@ -309,6 +325,18 @@ pub fn diff_rosters(old: &[RosterDevserver], new: &[RosterDevserver]) -> RosterD
         match old_map.get(k) {
             None => diff.added.push(k.clone()),
             Some(was) if was.online != row.online => diff.flipped_online.push(k.clone()),
+            // Online under one exact origin, still online under another:
+            // the registration moved proxy nodes. The online-flip arm above
+            // already claimed every transition through offline, so both
+            // rows are online here; the is_some guards keep skew (an online
+            // row reporting a null origin) out of the move path.
+            Some(was)
+                if was.proxy_origin.is_some()
+                    && row.proxy_origin.is_some()
+                    && was.proxy_origin != row.proxy_origin =>
+            {
+                diff.moved.push(k.clone())
+            }
             Some(was)
                 if was.label != row.label || was.role != row.role || was.shared != row.shared =>
             {
@@ -384,6 +412,28 @@ async fn apply_roster_policy_diff(state: &Arc<AppState>, gateway_id: &str, diff:
         }
         if let Some(teardown) = state.devserver_remove_hook.get() {
             teardown(&id);
+        }
+    }
+
+    // A moved row is a node migration, not a revocation: the exact-origin
+    // pin lives on the in-memory managed connection, so tearing the
+    // connection down IS the pin clearing, and the persisted owner/devserver
+    // trust binding stays. A previously connected row reconnects through
+    // the normal connect path, whose fresh entry flow validates and pins
+    // the new node origin (the roster value is never fed to validation).
+    for (owner, devserver_id) in &diff.moved {
+        let id = synthesized_row_id(gateway_id, owner, devserver_id);
+        let policy_lock = state.native_policy_lock(&id);
+        let _policy_guard = policy_lock.lock().await;
+        state.bump_native_policy_generation(&id);
+        let was_connected = state.devservers.is_connected(&id);
+        if let Some(teardown) = state.devserver_remove_hook.get() {
+            teardown(&id);
+        }
+        if was_connected {
+            if let Some(reconnect) = state.devserver_reconnect_hook.get() {
+                reconnect(&id);
+            }
         }
     }
 
@@ -465,6 +515,7 @@ pub async fn fetch_roster(roster_url: &str, pat_secret: &str, etag: Option<&str>
                             label: r.label,
                             online: r.online,
                             role: r.role,
+                            proxy_origin: r.proxy_origin,
                         })
                         .collect();
                     RosterFetch::Fresh {
@@ -1155,6 +1206,16 @@ mod tests {
             online,
             role: "owner".to_string(),
             shared: false,
+            proxy_origin: None,
+        }
+    }
+
+    /// An online row served by a node: `proxy_origin` carries the exact
+    /// origin the identity side derived for that node.
+    fn node_row(owner: &str, id: &str, proxy_origin: &str) -> RosterDevserver {
+        RosterDevserver {
+            proxy_origin: Some(proxy_origin.to_string()),
+            ..row(owner, id, true)
         }
     }
 
@@ -1244,6 +1305,158 @@ mod tests {
         assert!(diff.added.is_empty());
         assert!(diff.removed.is_empty());
         assert!(diff.flipped_online.is_empty());
+    }
+
+    #[test]
+    fn diff_classifies_a_node_move_apart_from_online_flips() {
+        let p1 = "https://alice--a.p1.usr.chan.app";
+        let p2 = "https://alice--a.p2.usr.chan.app";
+        let moved = vec![("alice".to_string(), "a".to_string())];
+
+        // Online under one node, still online under another: a move, and
+        // nothing else.
+        let diff = diff_rosters(&[node_row("alice", "a", p1)], &[node_row("alice", "a", p2)]);
+        assert_eq!(diff.moved, moved);
+        assert!(diff.flipped_online.is_empty());
+        assert!(diff.updated.is_empty());
+        assert!(diff.added.is_empty() && diff.removed.is_empty());
+
+        // Same node, still online: unchanged.
+        assert!(
+            diff_rosters(&[node_row("alice", "a", p1)], &[node_row("alice", "a", p1)]).is_empty()
+        );
+
+        // value -> null (offline) and null -> value (back online) are
+        // ordinary transitions, never moves, even when the origin differs.
+        let diff = diff_rosters(&[node_row("alice", "a", p1)], &[row("alice", "a", false)]);
+        assert_eq!(diff.flipped_online, moved);
+        assert!(diff.moved.is_empty());
+        let diff = diff_rosters(&[row("alice", "a", false)], &[node_row("alice", "a", p2)]);
+        assert_eq!(diff.flipped_online, moved);
+        assert!(diff.moved.is_empty());
+
+        // A label change on an unmoved node stays an update.
+        let mut renamed = node_row("alice", "a", p1);
+        renamed.label = "new-name".to_string();
+        let diff = diff_rosters(&[node_row("alice", "a", p1)], &[renamed]);
+        assert_eq!(diff.updated, moved);
+        assert!(diff.moved.is_empty());
+
+        // Skew (online but null origin on one side) is not a move.
+        let diff = diff_rosters(&[row("alice", "a", true)], &[node_row("alice", "a", p1)]);
+        assert!(diff.moved.is_empty());
+        assert!(diff.is_empty(), "origin arrival alone is not actionable");
+    }
+
+    #[tokio::test]
+    async fn moved_row_tears_down_drops_the_pin_and_reconnects() {
+        let owner = "bob";
+        let devserver_id = "d".repeat(64);
+        // Shared AND trusted: a move must preserve the persisted
+        // owner/devserver trust binding while the connection goes away.
+        let state = policy_state(vec![config::NativeDevserverTrust {
+            owner: owner.into(),
+            devserver_id: devserver_id.clone(),
+        }]);
+        let id = synthesized_row_id("gw-feedface", owner, &devserver_id);
+        // A live managed connection pinned to the OLD node origin.
+        state.devservers.set(
+            id.clone(),
+            devserver::DevserverConn {
+                host: "bob--d.p1.usr.chan.app".into(),
+                port: 443,
+                token: String::new(),
+                name: "old-node".into(),
+                gateway: Some(Box::new(devserver::GatewayConn::new(
+                    "https://id.example.test".into(),
+                    "https://id.example.test/desktop/v1/devserver/entry".into(),
+                    "https://bob--d.p1.usr.chan.app".into(),
+                    "pat".into(),
+                ))),
+            },
+        );
+        let torn_down = Arc::new(Mutex::new(Vec::new()));
+        let seen = Arc::clone(&torn_down);
+        let conns = Arc::clone(&state.devservers);
+        assert!(state
+            .devserver_remove_hook
+            .set(Arc::new(move |id| {
+                seen.lock().unwrap().push(id.to_string());
+                // The production hook (teardown_devserver_connection) drops
+                // the conn; the stub mirrors that one effect so the test
+                // observes the pin going away.
+                conns.remove(id);
+            }))
+            .is_ok());
+        let reconnected = Arc::new(Mutex::new(Vec::new()));
+        let seen = Arc::clone(&reconnected);
+        assert!(state
+            .devserver_reconnect_hook
+            .set(Arc::new(move |id| seen
+                .lock()
+                .unwrap()
+                .push(id.to_string())))
+            .is_ok());
+        let diff = RosterDiff {
+            moved: vec![(owner.into(), devserver_id.clone())],
+            ..Default::default()
+        };
+
+        apply_roster_policy_diff(&state, "gw-feedface", &diff).await;
+
+        assert_eq!(
+            state.native_policy_generation(&id),
+            1,
+            "an in-flight connect of the old origin aborts"
+        );
+        assert!(
+            !state.devservers.is_connected(&id),
+            "tearing the connection down drops the old node pin"
+        );
+        assert_eq!(*torn_down.lock().unwrap(), vec![id.clone()]);
+        assert_eq!(
+            *reconnected.lock().unwrap(),
+            vec![id],
+            "a connected row re-enters the normal connect flow"
+        );
+        assert!(
+            config::native_trust(&state.store, "gw-feedface", owner, &devserver_id).unwrap(),
+            "a move is not a revocation: the trust binding survives"
+        );
+        // The new roster origin never reached the capability mint: the
+        // entry flow is the only mint path.
+        assert!(!crate::runtime_capability::is_minted(
+            "https://bob--d.p1.usr.chan.app"
+        ));
+    }
+
+    #[tokio::test]
+    async fn moved_row_without_a_connection_does_not_reconnect() {
+        let owner = "bob";
+        let devserver_id = "d".repeat(64);
+        let state = policy_state(Vec::new());
+        let reconnected = Arc::new(Mutex::new(Vec::new()));
+        let seen = Arc::clone(&reconnected);
+        assert!(state
+            .devserver_reconnect_hook
+            .set(Arc::new(move |id| seen
+                .lock()
+                .unwrap()
+                .push(id.to_string())))
+            .is_ok());
+        let diff = RosterDiff {
+            moved: vec![(owner.into(), devserver_id.clone())],
+            ..Default::default()
+        };
+
+        apply_roster_policy_diff(&state, "gw-feedface", &diff).await;
+
+        let id = synthesized_row_id("gw-feedface", owner, &devserver_id);
+        assert_eq!(state.native_policy_generation(&id), 1);
+        assert!(
+            reconnected.lock().unwrap().is_empty(),
+            "a row nobody connected stays disconnected; its next connect enters fresh"
+        );
     }
 
     #[tokio::test]
@@ -1476,8 +1689,8 @@ mod tests {
     #[tokio::test]
     async fn fetch_parses_a_fresh_roster_and_derives_shared() {
         let body = r#"{"username":"alice","devservers":[
-            {"owner":"alice","devserver_id":"a1","label":"laptop","online":true,"role":"owner"},
-            {"owner":"bob","devserver_id":"b1","label":"","online":false,"role":"viewer"}]}"#;
+            {"owner":"alice","devserver_id":"a1","label":"laptop","online":true,"role":"owner","proxy_origin":"https://alice--a1.p1.usr.chan.app"},
+            {"owner":"bob","devserver_id":"b1","label":"","online":false,"role":"viewer","proxy_origin":null}]}"#;
         let (url, server) = spawn_roster_stub(resp(200, Some("\"e1\""), body)).await;
         match fetch_roster(&url, "pat-secret", None).await {
             RosterFetch::Fresh {
@@ -1490,10 +1703,35 @@ mod tests {
                 assert_eq!(rows.len(), 2);
                 assert!(!rows[0].shared, "own row");
                 assert!(rows[1].shared, "foreign owner derives shared");
+                assert_eq!(
+                    rows[0].proxy_origin.as_deref(),
+                    Some("https://alice--a1.p1.usr.chan.app"),
+                    "the online row carries its node origin"
+                );
+                assert_eq!(rows[1].proxy_origin, None, "the offline row is null");
             }
             other => panic!("expected Fresh, got {other:?}"),
         }
         server.abort();
+    }
+
+    /// The roster field is data, not authority: parsing a row's
+    /// proxy_origin never mints a Tauri grant. Only the entry flow's
+    /// validated response reaches `mint_exact_origin_grant`.
+    #[tokio::test]
+    async fn roster_parsing_mints_no_origin_authority() {
+        const ROSTER_ORIGIN: &str = "https://carol--c9.p9.usr.chan.app";
+        let body = r#"{"username":"carol","devservers":[
+            {"owner":"carol","devserver_id":"c9","label":"","online":true,"role":"owner","proxy_origin":"https://carol--c9.p9.usr.chan.app"}]}"#;
+        let (url, server) = spawn_roster_stub(resp(200, None, body)).await;
+        match fetch_roster(&url, "s", None).await {
+            RosterFetch::Fresh { rows, .. } => {
+                assert_eq!(rows[0].proxy_origin.as_deref(), Some(ROSTER_ORIGIN));
+            }
+            other => panic!("expected Fresh, got {other:?}"),
+        }
+        server.abort();
+        assert!(!crate::runtime_capability::is_minted(ROSTER_ORIGIN));
     }
 
     #[tokio::test]
@@ -1562,7 +1800,8 @@ mod tests {
                             "devserver_id": "a1",
                             "label": "laptop",
                             "online": true,
-                            "role": "owner"
+                            "role": "owner",
+                            "proxy_origin": "https://alice--a1.p1.devserver.chan.app"
                         }]
                     }))
                 }),

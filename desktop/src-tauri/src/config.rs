@@ -2521,6 +2521,7 @@ mod tests {
             online: true,
             role: if shared { "viewer" } else { "owner" }.to_string(),
             shared,
+            proxy_origin: Some("https://node.p1.devserver.chan.app".to_string()),
         }
     }
 

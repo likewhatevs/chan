@@ -52,6 +52,13 @@ struct DesktopUpdateReadyPayload {
     version: String,
 }
 
+/// Reconnect hook for a rostered row whose registration moved proxy nodes:
+/// fires the normal connect flow ([`connect_devserver_impl`]) for one
+/// synthesized row id. Mirror of [`config::DevserverRemoveHook`], filled
+/// once Tauri setup runs because gateway.rs cannot see the concrete
+/// `AppHandle`.
+pub type DevserverReconnectHook = Arc<dyn Fn(&str) + Send + Sync>;
+
 /// Process-wide state. Shared via `Arc` because Tauri commands and
 /// background runtime owners need the same state handle.
 pub struct AppState {
@@ -193,6 +200,12 @@ pub struct AppState {
     /// so it's installed with this shared cell and the desktop fills it (with a
     /// closure over the `AppHandle`) once Tauri setup runs.
     pub devserver_remove_hook: Arc<OnceLock<config::DevserverRemoveHook>>,
+    /// The reconnect analogue of [`devserver_remove_hook`](Self::devserver_remove_hook):
+    /// the roster poll (gateway.rs) detects a rostered row's registration
+    /// moving proxy nodes but cannot see the concrete `AppHandle` the
+    /// connect path needs, so it fires this cell after tearing the old
+    /// connection down. Filled once Tauri setup runs.
+    pub devserver_reconnect_hook: Arc<OnceLock<DevserverReconnectHook>>,
     /// The gateway analogue of [`devserver_remove_hook`](Self::devserver_remove_hook):
     /// HTTP `DELETE /api/library/gateways/{id}` drops a row, so that path runs
     /// the same cascade teardown the Tauri command does. Filled once Tauri
@@ -250,6 +263,7 @@ impl AppState {
             native_policy_locks: Mutex::new(HashMap::new()),
             native_policy_generations: Mutex::new(HashMap::new()),
             devserver_remove_hook: Arc::new(OnceLock::new()),
+            devserver_reconnect_hook: Arc::new(OnceLock::new()),
             gateway_remove_hook: Arc::new(OnceLock::new()),
             gateway_manager: Arc::new(gateway::GatewayManager::default()),
             gateway_backstop_probed: Mutex::new(std::collections::HashSet::new()),
@@ -4719,6 +4733,25 @@ fn main() {
                             teardown_devserver_connection(&app_for_teardown, &state, id);
                         },
                     ));
+                    // The roster poll's node-move handling fires this after
+                    // tearing the old managed connection down: the row
+                    // re-enters the normal connect flow, which runs a fresh
+                    // authenticated entry and pins the new node origin.
+                    let app_for_reconnect = app.handle().clone();
+                    let _ = state_for_setup
+                        .devserver_reconnect_hook
+                        .set(Arc::new(move |id: &str| {
+                            let app = app_for_reconnect.clone();
+                            let id = id.to_string();
+                            tauri::async_runtime::spawn(async move {
+                                let state = Arc::clone(&app.state::<Arc<AppState>>());
+                                if let Err(e) =
+                                    connect_devserver_impl(app, state, id.clone()).await
+                                {
+                                    tracing::warn!(devserver = %id, error = %e, "reconnect after a proxy node move failed");
+                                }
+                            });
+                        }));
                     // The gateway analogue: the launcher's HTTP DELETE runs
                     // the full cascade (poll stop, rostered-connection
                     // teardown, roster drop). The registry's remove already
@@ -8025,6 +8058,7 @@ mod tests {
                 online: true,
                 role: "editor".into(),
                 shared: true,
+                proxy_origin: Some("https://bob--d.p1.devserver.example.test".into()),
             }],
         );
 
@@ -8119,6 +8153,7 @@ mod tests {
                 online: false,
                 role: "owner".into(),
                 shared: false,
+                proxy_origin: None,
             }],
         );
         crate::auth::test_gateway_pats().lock().unwrap().insert(

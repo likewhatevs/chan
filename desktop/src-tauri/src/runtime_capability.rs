@@ -125,6 +125,17 @@ pub fn mint_exact_origin_grant<R: tauri::Runtime>(
     Ok(true)
 }
 
+/// Test-only read on the process-global mint set: roster-side tests prove
+/// a parsed roster origin never reaches the mint (the entry flow is the
+/// only mint path).
+#[cfg(test)]
+pub(crate) fn is_minted(exact_origin: &str) -> bool {
+    minted_origins()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .contains(exact_origin)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
