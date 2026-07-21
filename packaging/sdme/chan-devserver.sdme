@@ -10,7 +10,8 @@
 #   sudo sdme fs build chan-devserver chan-devserver.sdme   (-f to rebuild)
 #
 # Provision + run, once the container is up:
-#   sudo sdme new chan-ds -r chan-devserver && sudo sdme start chan-ds
+#   sudo sdme create --name chan-ds -r chan-devserver
+#   sudo sdme start chan-ds
 #   sudo sdme join chan-ds            # interactive: dialog prompts for the token
 #   # or non-interactively:
 #   sudo sdme exec chan-ds -- chan-devserver-provision \

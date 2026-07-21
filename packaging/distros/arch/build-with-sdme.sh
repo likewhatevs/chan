@@ -39,7 +39,7 @@ version="$(git -C "$REPO" show "$REV:Cargo.toml" | sed -n 's/^version = "\(.*\)"
 if ! "${SDME_CMD[@]}" fs ls | awk -v name="$AUR_ROOTFS" \
     '$1 == name { found = 1 } END { exit !found }'; then
     echo "error: sdme rootfs '$AUR_ROOTFS' is not imported" >&2
-    echo "hint: sudo sdme fs import $AUR_ROOTFS docker.io/archlinux/archlinux:base" >&2
+    echo "hint: sudo sdme fs import docker.io/archlinux/archlinux:base --name $AUR_ROOTFS" >&2
     exit 1
 fi
 
@@ -56,7 +56,7 @@ echo ">> running AUR checks in sdme rootfs '$AUR_ROOTFS'" >&2
 # Pass the build environment to the joined command itself. sdme's `--env`
 # configures the container service, but the auto-join command does not inherit
 # those values.
-"${SDME_CMD[@]}" new "$CONTAINER" -r "$AUR_ROOTFS" -t 120 \
+"${SDME_CMD[@]}" new --name "$CONTAINER" -r "$AUR_ROOTFS" -t 120 \
     -b "$REPO:/src:ro" -b "$SOURCE_DIR:/local:ro" -b "$OUT:/out" \
     -- env SRC=/src OUT=/out VERSION="$version" \
     HOST_UID="$(id -u)" HOST_GID="$(id -g)" \

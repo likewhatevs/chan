@@ -38,7 +38,7 @@ On Apple Silicon the containers are aarch64 Linux. That is sufficient for distro
 ## One-time: import a base image
 
 ```sh
-limactl shell default sudo sdme fs import ubuntu docker.io/ubuntu
+limactl shell default sudo sdme fs import docker.io/ubuntu --name ubuntu
 ```
 
 ## Core: run the CI gate in a Linux container
@@ -47,7 +47,7 @@ CI runs `make ci-linux` on `ubuntu-latest` after installing the Tauri build depe
 
 ```sh
 # create + start a build container from the ubuntu base
-limactl shell default sudo sdme create chan-build -r ubuntu
+limactl shell default sudo sdme create --name chan-build -r ubuntu
 limactl shell default sudo sdme start  chan-build
 
 # seed the repo (tracked files only) into the container
@@ -78,7 +78,7 @@ limactl shell default sudo sdme exec chan-build /bin/sh -c '
 
 ```sh
 # one-time: import the ubuntu base (shared with the core gate above)
-limactl shell default sudo sdme fs import ubuntu docker.io/ubuntu
+limactl shell default sudo sdme fs import docker.io/ubuntu --name ubuntu
 
 # build the bundles for one distro (default ubuntu)
 make linux-chan-desktop DISTRO=ubuntu
@@ -150,7 +150,7 @@ CI builds these in `release.yml`'s `linux-cli-artifacts` job (zig via `mlugg/set
 The one thing this needs beyond the core gate's container is a **systemd user manager**: `--service=systemd` drives `loginctl enable-linger` and `systemctl --user`, which require a regular (non-root), lingering user with a live user session -- not the root shell `sdme join` drops you into. Stand one up once:
 
 ```sh
-limactl shell default sudo sdme create chan-devserver-dev -r ubuntu
+limactl shell default sudo sdme create --name chan-devserver-dev -r ubuntu
 limactl shell default sudo sdme start  chan-devserver-dev
 
 # a lingering dev user whose `systemctl --user` manager is running
@@ -243,7 +243,7 @@ The gateway ships four `.deb` packages run under systemd. To verify the prod pat
 
 ```sh
 # create a build container and seed the repo (tracked files only)
-limactl shell default sudo sdme create chan-gw-build -r ubuntu
+limactl shell default sudo sdme create --name chan-gw-build -r ubuntu
 limactl shell default sudo sdme start  chan-gw-build
 git archive HEAD -o ~/chan-src.tar
 limactl shell default sudo sdme cp ~/chan-src.tar chan-gw-build:/root/chan.tar

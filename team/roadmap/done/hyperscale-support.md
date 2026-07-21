@@ -86,8 +86,8 @@ This is not a mock buildroot. `dnf builddep` installs the spec's declared `Build
 Rootfs names are per host, not portable. The Makefile defaults are `centos-stream-9` and `centos-stream-10`, imported with:
 
 ```sh
-sudo sdme fs import centos-stream-9 quay.io/centos/centos:stream9 --install-packages=yes -v
-sudo sdme fs import centos-stream-10 quay.io/centos/centos:stream10 --install-packages=yes -v
+sudo sdme fs import quay.io/centos/centos:stream9 --name centos-stream-9 --install-packages=yes -v
+sudo sdme fs import quay.io/centos/centos:stream10 --name centos-stream-10 --install-packages=yes -v
 ```
 
 A missing rootfs preflight prints the import command and the names this host does have. The validation host's entries are `cs9` (Stream 9) and `vfy-centos` (Stream 10), so its command is:

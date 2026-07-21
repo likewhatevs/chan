@@ -6,7 +6,7 @@
 # Prerequisite: the base `fedora` rootfs must be imported once (the driver
 # only builds chan-desktop-fedora from this template, it does not import the
 # base):
-#   limactl shell default sudo sdme fs import fedora docker.io/fedora
+#   limactl shell default sudo sdme fs import docker.io/fedora --name fedora
 #
 # Build: limactl shell default sudo sdme fs build chan-desktop-fedora \
 #          chan-desktop-fedora.sdme    (-f to rebuild over an existing one)

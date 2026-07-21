@@ -69,7 +69,7 @@ Build and start the Postgres container on the `chan-svc` zone. The build file is
 ```sh
 cd packaging/gateway/scripts/dev/sdme
 limactl shell default sudo sdme fs build chan-psql-dev chan-psql.sdme
-limactl shell default sudo sdme create chan-psql -r chan-psql-dev \
+limactl shell default sudo sdme create --name chan-psql -r chan-psql-dev \
     --network-zone chan-svc -p 5432:5432
 limactl shell default sudo sdme start chan-psql
 ```
@@ -109,7 +109,7 @@ Build, create on the zone, start:
 
 ```sh
 limactl shell default sudo sdme fs build chan-id-dev chan-id-dev.sdme
-limactl shell default sudo sdme create chan-id -r chan-id-dev --network-zone chan-svc
+limactl shell default sudo sdme create --name chan-id -r chan-id-dev --network-zone chan-svc
 limactl shell default sudo sdme start chan-id
 ```
 
@@ -129,7 +129,7 @@ mkcert "*.localtest.me" "*.devserver.localtest.me" localtest.me
 Create chan-nginx on the zone, publishing `:443`, with the mkcert cert and your `:443` vhosts bind-mounted in:
 
 ```sh
-limactl shell default sudo sdme create chan-nginx -r chan-nginx-dev \
+limactl shell default sudo sdme create --name chan-nginx -r chan-nginx-dev \
     --network-zone chan-svc -p 443:443 \
     --bind <mkcert-dir>:/etc/nginx/certs:ro
 limactl shell default sudo sdme start chan-nginx

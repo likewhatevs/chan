@@ -11,7 +11,7 @@
 #   packaging/docker/build.sh -v              # verbose (set -x)
 #
 # Output OCI archives (with --save) land in packaging/docker/_out/<image>.oci.tar, ready
-# for: sudo sdme fs import <name> packaging/docker/_out/<image>.oci.tar --oci-mode app \
+# for: sudo sdme fs import packaging/docker/_out/<image>.oci.tar --name <name> --oci-mode app \
 #        --base-fs <base>
 set -euo pipefail
 

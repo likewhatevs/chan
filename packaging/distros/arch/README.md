@@ -35,7 +35,7 @@ The AUR is a collection of git repositories containing build recipes; it does no
 Import an Arch rootfs once, then run the local gate:
 
 ```bash
-sudo sdme fs import archlinux docker.io/archlinux/archlinux:base
+sudo sdme fs import docker.io/archlinux/archlinux:base --name archlinux
 make aur-check SDME='sudo sdme' AUR_ROOTFS=archlinux
 ```
 

@@ -39,7 +39,7 @@ packaging/docker/build.sh -t dev
 
 ## D3: bring the stack up under sdme and prove it healthy
 
-All `sdme` commands need root; `<base>` is a systemd-capable base rootfs (`sudo sdme fs import ubuntu docker.io/ubuntu --install-packages=yes`, or set `default_base_fs`).
+All `sdme` commands need root; `<base>` is a systemd-capable base rootfs (`sudo sdme fs import docker.io/ubuntu --name ubuntu --install-packages=yes`, or set `default_base_fs`).
 
 ```sh
 # Secrets as an sdme kube secret (loopback DATABASE_URL for the single pod):

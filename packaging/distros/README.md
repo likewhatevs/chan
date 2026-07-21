@@ -45,8 +45,8 @@ The release path never touches `build-srpm.sh`: `publish-downstream` POSTs the c
 **Local matrix (`make copr-check`).** Import native-architecture rootfs images once, then point the Make target at their sdme names:
 
 ```sh
-sudo sdme fs import centos-stream-9 quay.io/centos/centos:stream9 --install-packages=yes -v
-sudo sdme fs import centos-stream-10 quay.io/centos/centos:stream10 --install-packages=yes -v
+sudo sdme fs import quay.io/centos/centos:stream9 --name centos-stream-9 --install-packages=yes -v
+sudo sdme fs import quay.io/centos/centos:stream10 --name centos-stream-10 --install-packages=yes -v
 make copr-check DOCKER='sudo docker'
 ```
 

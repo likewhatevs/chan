@@ -8,9 +8,9 @@
 # builds chan-desktop-arch from this template, it does not import the base).
 # On an aarch64 host (Apple Silicon via lima) upstream Arch has no arm64
 # image, so use Arch Linux ARM, which is the same pacman userland:
-#   limactl shell default sudo sdme fs import arch docker.io/menci/archlinuxarm
+#   limactl shell default sudo sdme fs import docker.io/menci/archlinuxarm --name arch
 # On an x86_64 Linux host import the upstream image instead:
-#   sudo sdme fs import arch docker.io/archlinux
+#   sudo sdme fs import docker.io/archlinux --name arch
 #
 # Build: limactl shell default sudo sdme fs build chan-desktop-arch \
 #          chan-desktop-arch.sdme    (-f to rebuild over an existing one)

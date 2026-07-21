@@ -70,8 +70,9 @@ case "$cmd" in
         rm -f "$state/containers/$2"
         ;;
     new)
-        name="${1:?stub sdme: no container name}"
-        shift
+        [ "${1:-}" = --name ] || fail "new requires --name"
+        name="${2:?stub sdme: no container name}"
+        shift 2
         binds=()
         while [ $# -gt 0 ]; do
             case "$1" in

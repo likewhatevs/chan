@@ -135,7 +135,7 @@ require_rootfs() {
     local release="$2"
     if ! awk -v name="$rootfs" '$1 == name { found = 1 } END { exit !found }' <<<"$FS_LIST"; then
         echo "error: sdme rootfs '$rootfs' is not imported" >&2
-        echo "hint: import it as ${SDME_CMD[*]} fs import $rootfs quay.io/centos/centos:stream${release} --install-packages=yes -v" >&2
+        echo "hint: import it as ${SDME_CMD[*]} fs import quay.io/centos/centos:stream${release} --name $rootfs --install-packages=yes -v" >&2
         echo "hint: or set COPR_EL${release}_ROOTFS to one of the entries this host already has:" >&2
         echo "$FS_LIST" >&2
         exit 1
@@ -224,7 +224,7 @@ for target in "${MATRIX[@]}"; do
     echo ">> COPR validation: el${release} package=${package} rootfs=${rootfs} arch=${HOST_ARCH}" >&2
     "${SDME_CMD[@]}" rm -f "$container" >/dev/null 2>&1 || true
     sdme_status=0
-    "${SDME_CMD[@]}" new "$container" -r "$rootfs" -t 180 \
+    "${SDME_CMD[@]}" new --name "$container" -r "$rootfs" -t 180 \
         -b "$REPO:/src:ro" \
         -b "$REPO/target/distros/srpm:/srpm:ro" \
         -b "$result_dir:/out" \

@@ -25,7 +25,7 @@ mkdir -p "$OUT_DIR" "$SEED"
 
 echo "==> [1/6] ensure ubuntu base rootfs"
 $SDME fs ls 2>/dev/null | grep -qE "^ubuntu[[:space:]]" \
-  || $SDME fs import ubuntu docker.io/ubuntu --install-packages=yes -v
+  || $SDME fs import docker.io/ubuntu --name ubuntu --install-packages=yes -v
 
 echo "==> [2/6] ensure ${ROOTFS} rootfs (rust+node+cargo-deb)"
 $SDME fs ls 2>/dev/null | grep -qE "^${ROOTFS}[[:space:]]" \
@@ -34,7 +34,7 @@ $SDME fs ls 2>/dev/null | grep -qE "^${ROOTFS}[[:space:]]" \
 echo "==> [3/6] ensure build container ${CONTAINER}"
 if ! $SDME ps 2>/dev/null | grep -qE "^${CONTAINER}[[:space:]].*running"; then
   $SDME rm -f "$CONTAINER" >/dev/null 2>&1 || true
-  $SDME create "$CONTAINER" -r "$ROOTFS" --started -t 120
+  $SDME create --name "$CONTAINER" -r "$ROOTFS" --started -t 120
 fi
 
 echo "==> [4/6] seed committed tree (git archive HEAD)"

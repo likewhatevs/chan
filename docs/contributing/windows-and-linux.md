@@ -50,7 +50,7 @@ With a working WSL2 (or Hyper-V) Linux environment, the same targets the macOS d
 
 ```sh
 # one-time: import the base image (inside WSL, sdme runs natively)
-sudo sdme fs import ubuntu docker.io/ubuntu
+sudo sdme fs import docker.io/ubuntu --name ubuntu
 
 # the Linux chan-desktop bundles (AppImage / .deb / .rpm)
 make linux-chan-desktop DISTRO=ubuntu SDME='sudo sdme'
