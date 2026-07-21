@@ -1075,9 +1075,15 @@ impl ControllerState {
         rows: Vec<TunnelRow>,
     ) -> (HashMap<TunnelKey, OwnedTunnel>, Vec<OwnedTunnel>) {
         let mut desired = self.tunnels.clone();
-        let mut live_per_user: HashMap<String, usize> = HashMap::new();
-        for (user, _) in self.tunnels.keys() {
-            *live_per_user.entry(user.clone()).or_default() += 1;
+        // Pending claims reserve their key and their capacity slot the
+        // same way live rows do: the claim is strictly earlier than the
+        // joining snapshot, so recency favors it.
+        let mut ids_per_user: HashMap<String, HashSet<String>> = HashMap::new();
+        for (user, devserver_id) in self.tunnels.keys().chain(self.pending.keys()) {
+            ids_per_user
+                .entry(user.clone())
+                .or_default()
+                .insert(devserver_id.clone());
         }
 
         let mut grouped: BTreeMap<TunnelKey, Vec<TunnelRow>> = BTreeMap::new();
@@ -1095,17 +1101,20 @@ impl ControllerState {
                 session: joining.clone(),
                 row,
             });
-            let live = live_per_user.get(&key.0).copied().unwrap_or(0);
-            let duplicates_live = desired.contains_key(&key);
+            let live = ids_per_user.get(&key.0).map_or(0, |ids| ids.len());
+            let occupied = desired.contains_key(&key) || self.pending.contains_key(&key);
             let over_capacity =
                 self.max_devservers_per_user > 0 && live >= self.max_devservers_per_user;
-            if duplicates_live || over_capacity {
+            if occupied || over_capacity {
                 losers.extend(rows);
                 continue;
             }
             let winner = rows.next().expect("grouped rows are non-empty");
             desired.insert(key.clone(), winner);
-            live_per_user.insert(key.0, live + 1);
+            ids_per_user
+                .entry(key.0.clone())
+                .or_default()
+                .insert(key.1.clone());
             losers.extend(rows);
         }
         (desired, losers)
@@ -1221,12 +1230,17 @@ impl ControllerState {
                 else {
                     return Vec::new();
                 };
-                proxy.status = ProxyStatus::Active;
-                if proxy.generation.is_some() {
-                    proxy.fleet_ready = true;
-                } else {
+                // A force-resync can clear the generation while kill
+                // commands are outstanding; flipping Active here would
+                // strand the incarnation, because a fresh snapshot
+                // requires Joining and a delta requires a generation.
+                // Leave the session Joining so its resync snapshot
+                // re-drives the join.
+                if proxy.generation.is_none() {
                     return Vec::new();
                 }
+                proxy.status = ProxyStatus::Active;
+                proxy.fleet_ready = true;
                 vec![Effect::Send {
                     session,
                     frame: ServerFrame::FleetReady,
@@ -2836,6 +2850,189 @@ mod tests {
         assert_eq!(state.proxy_views()[0].status, ProxyStatus::Active);
         assert_eq!(state.tunnel_views().len(), 1);
         assert_eq!(state.tunnel_views()[0].devserver_id, "two");
+    }
+
+    #[test]
+    fn joining_row_that_duplicates_a_pending_claim_loses() {
+        let now = Instant::now();
+        let mut state = ControllerState::new(100);
+        let (p1, p1_incarnation, _) = ready_one(&mut state, "p1", Vec::new(), now);
+        let active_at = now + CONVERGENCE_WINDOW;
+        let claim_registration = Uuid::new_v4();
+        state
+            .request_admission(
+                &p1,
+                p1_incarnation,
+                Uuid::new_v4(),
+                claim_registration,
+                "alice".into(),
+                "one".into(),
+                active_at,
+                Utc::now(),
+            )
+            .unwrap();
+        // The pending claim is strictly earlier than the joining snapshot,
+        // so p0's copy of the claimed key loses even though no live row
+        // exists yet.
+        let (p0, p0_incarnation) = begin(&mut state, "p0", active_at);
+        let joining_id = Uuid::from_u128(2);
+        let effects = snapshot(
+            &mut state,
+            &p0,
+            p0_incarnation,
+            vec![row("alice", "one", joining_id)],
+            active_at,
+        );
+        let command_id = kill_command(&effects, "p0", joining_id);
+        state
+            .command_result(
+                &p0,
+                p0_incarnation,
+                command_id,
+                vec![joining_id],
+                Vec::new(),
+                Vec::new(),
+                active_at,
+                Utc::now(),
+            )
+            .unwrap();
+        // The claimed TunnelUp then lands without a replacement battle.
+        state
+            .tunnel_up(
+                &p1,
+                p1_incarnation,
+                1,
+                row("alice", "one", claim_registration),
+                active_at,
+                Utc::now(),
+            )
+            .unwrap();
+        assert_eq!(state.tunnel_views().len(), 1);
+        assert_eq!(state.tunnel_views()[0].proxy_id, "p1");
+    }
+
+    #[test]
+    fn pending_claim_consumes_joining_capacity() {
+        let now = Instant::now();
+        let mut state = ControllerState::new(1);
+        let (p1, p1_incarnation, _) = ready_one(&mut state, "p1", Vec::new(), now);
+        let active_at = now + CONVERGENCE_WINDOW;
+        state
+            .request_admission(
+                &p1,
+                p1_incarnation,
+                Uuid::new_v4(),
+                Uuid::new_v4(),
+                "alice".into(),
+                "one".into(),
+                active_at,
+                Utc::now(),
+            )
+            .unwrap();
+        // Cap 1 is fully consumed by the pending claim, so p0's novel key
+        // loses even though alice has no live row.
+        let (p0, p0_incarnation) = begin(&mut state, "p0", active_at);
+        let joining_id = Uuid::from_u128(2);
+        let effects = snapshot(
+            &mut state,
+            &p0,
+            p0_incarnation,
+            vec![row("alice", "two", joining_id)],
+            active_at,
+        );
+        let command_id = kill_command(&effects, "p0", joining_id);
+        state
+            .command_result(
+                &p0,
+                p0_incarnation,
+                command_id,
+                vec![joining_id],
+                Vec::new(),
+                Vec::new(),
+                active_at,
+                Utc::now(),
+            )
+            .unwrap();
+        assert!(state.tunnel_views().is_empty());
+    }
+
+    #[test]
+    fn force_resync_during_joining_reconciliation_keeps_the_session_joining() {
+        let now = Instant::now();
+        let mut state = ControllerState::new(100);
+        let (_p2, _p2_incarnation, _) = ready_one(
+            &mut state,
+            "p2",
+            vec![row("alice", "one", Uuid::from_u128(1))],
+            now,
+        );
+        let (p0, p0_incarnation) = begin(&mut state, "p0", now + CONVERGENCE_WINDOW);
+        let dup = Uuid::from_u128(2);
+        let effects = snapshot(
+            &mut state,
+            &p0,
+            p0_incarnation,
+            vec![row("alice", "one", dup)],
+            now + CONVERGENCE_WINDOW,
+        );
+        let command_id = kill_command(&effects, "p0", dup);
+
+        // A corrupt delta mid-reconciliation force-resyncs the session;
+        // the outstanding kill result must not flip it Active with no
+        // generation, a state a fresh snapshot could never recover from.
+        let resync = state
+            .tunnel_up(
+                &p0,
+                p0_incarnation,
+                5,
+                row("alice", "nine", Uuid::new_v4()),
+                now + CONVERGENCE_WINDOW,
+                Utc::now(),
+            )
+            .unwrap();
+        assert!(has_resync(&resync, 1));
+        state
+            .command_result(
+                &p0,
+                p0_incarnation,
+                command_id,
+                vec![dup],
+                Vec::new(),
+                Vec::new(),
+                now + CONVERGENCE_WINDOW,
+                Utc::now(),
+            )
+            .unwrap();
+        let p0_view = state
+            .proxy_views()
+            .into_iter()
+            .find(|view| view.proxy_id == "p0")
+            .unwrap();
+        assert_eq!(p0_view.status, ProxyStatus::Joining);
+
+        let effects = state
+            .accept_snapshot(
+                &p0,
+                p0_incarnation,
+                0,
+                Vec::new(),
+                now + CONVERGENCE_WINDOW,
+                Utc::now(),
+            )
+            .unwrap();
+        assert!(effects.iter().any(|effect| matches!(
+            effect,
+            Effect::Send {
+                session,
+                frame: ServerFrame::FleetReady,
+            } if session.proxy_id == "p0"
+        )));
+        let p0_view = state
+            .proxy_views()
+            .into_iter()
+            .find(|view| view.proxy_id == "p0")
+            .unwrap();
+        assert_eq!(p0_view.status, ProxyStatus::Active);
     }
 
     fn kill_command(effects: &[Effect], proxy_id: &str, registration_id: Uuid) -> Uuid {
