@@ -1,9 +1,15 @@
 #!/usr/bin/env node
 
 import { execFileSync } from "node:child_process";
+import { readFile } from "node:fs/promises";
 
-import { gatewayServices } from "./gateway-services.mjs";
-import { gatewayPackageVersion, versionFromTag } from "./release-version.mjs";
+import {
+  cliAssets,
+  publicAssets,
+  requiredAssets,
+  updaterAssets,
+} from "./release-assets.mjs";
+import { versionFromTag } from "./release-version.mjs";
 
 const repo = "fiorix/chan";
 const apiBase = `https://api.github.com/repos/${repo}`;
@@ -11,84 +17,63 @@ const githubToken = readGithubToken();
 
 async function main() {
   const options = parseArgs(process.argv.slice(2));
-  const release = options.tag
-    ? await fetchJson(`${apiBase}/releases/tags/${encodeURIComponent(options.tag)}`)
-    : await fetchJson(`${apiBase}/releases/latest`);
+  const release = await loadRelease(options);
   const tag = release.tag_name;
   const version = versionFromTag(tag);
-  const gatewayVersion = gatewayPackageVersion(version);
   const assets = new Map((release.assets ?? []).map((asset) => [asset.name, asset]));
 
-  const publicAssets = [
-    // chan CLI
-    "chan-x86_64-unknown-linux-musl.tar.gz",
-    "chan-aarch64-unknown-linux-musl.tar.gz",
-    "chan-aarch64-apple-darwin.tar.gz",
-    // chan-desktop
-    `Chan_${version}.dmg`,
-    `Chan_${version}_amd64.AppImage`,
-    `Chan_${version}_aarch64.AppImage`,
-    `Chan_${version}_amd64.deb`,
-    `Chan_${version}_arm64.deb`,
-    `Chan-${version}-1.x86_64.rpm`,
-    `Chan-${version}-1.aarch64.rpm`,
-    // chan-gateway: one .deb per service per arch, single-sourced from the
-    // Makefile's GATEWAY_RELEASE_CRATES (see ./gateway-services.mjs).
-    ...gatewayServices.flatMap((service) =>
-      ["amd64", "arm64"].map(
-        (arch) => `chan-gateway-${service}_${gatewayVersion}-1_${arch}.deb`,
-      ),
-    ),
-  ];
-  const updaterAssets = [
-    `Chan_${version}_aarch64.app.tar.gz`,
-    `Chan_${version}_aarch64.app.tar.gz.sig`,
-  ];
-  const cliAssets = publicAssets.filter((name) => name.startsWith("chan-") && name.endsWith(".tar.gz"));
-  const requiredAssets = [...publicAssets, ...updaterAssets];
+  const publics = publicAssets(version);
+  const updater = updaterAssets(version);
+  const clis = cliAssets();
+  const required = requiredAssets(version);
 
   const errors = [];
   const warnings = [];
 
-  for (const name of requiredAssets) {
+  for (const name of required) {
     if (!assets.has(name)) {
       errors.push(`missing release asset: ${name}`);
     }
   }
 
-  if (assets.has("VERSION")) {
-    const body = (await fetchAssetText(assets.get("VERSION"))).trim();
-    if (body !== version) {
-      errors.push(`VERSION contains ${JSON.stringify(body)}, expected ${JSON.stringify(version)}`);
+  // The VERSION / SHA256SUMS / signature checks read published asset bytes over
+  // the network, so they only run against a real release. A --release-json
+  // fixture verifies the required-name manifest offline (its whole purpose).
+  if (!options.releaseJson) {
+    if (assets.has("VERSION")) {
+      const body = (await fetchAssetText(assets.get("VERSION"))).trim();
+      if (body !== version) {
+        errors.push(`VERSION contains ${JSON.stringify(body)}, expected ${JSON.stringify(version)}`);
+      }
+    } else {
+      warnings.push("VERSION asset absent; release metadata is authoritative");
     }
-  } else {
-    warnings.push("VERSION asset absent; release metadata is authoritative");
-  }
 
-  if (assets.has("SHA256SUMS")) {
-    const body = await fetchAssetText(assets.get("SHA256SUMS"));
-    for (const name of cliAssets) {
-      if (!checksumContains(body, name)) {
-        errors.push(`SHA256SUMS is missing ${name}`);
+    if (assets.has("SHA256SUMS")) {
+      const body = await fetchAssetText(assets.get("SHA256SUMS"));
+      for (const name of clis) {
+        if (!checksumContains(body, name)) {
+          errors.push(`SHA256SUMS is missing ${name}`);
+        }
+      }
+    } else {
+      warnings.push("SHA256SUMS asset absent; /dl metadata carries SHA256 values");
+    }
+
+    if (assets.has(updater[1])) {
+      const signature = (await fetchAssetText(assets.get(updater[1]))).trim();
+      if (!signature) {
+        errors.push(`${updater[1]} is empty`);
       }
     }
+  }
+
+  if (options.skipAssetUrlHeads) {
+    warnings.push("asset URL HEAD checks skipped");
   } else {
-    warnings.push("SHA256SUMS asset absent; /dl metadata carries SHA256 values");
-  }
-
-  if (assets.has(updaterAssets[1])) {
-    const signature = (await fetchAssetText(assets.get(updaterAssets[1]))).trim();
-    if (!signature) {
-      errors.push(`${updaterAssets[1]} is empty`);
-    }
-  }
-
-  if (!options.skipAssetUrlHeads) {
-    for (const name of [...publicAssets, ...updaterAssets]) {
+    for (const name of [...publics, ...updater]) {
       await verifyAssetUrl(name, assets.get(name), errors);
     }
-  } else {
-    warnings.push("asset URL HEAD checks skipped");
   }
 
   for (const warning of warnings) {
@@ -106,12 +91,27 @@ async function main() {
   console.log(`verified release assets for ${mode}`);
 }
 
+// A --release-json fixture stands in for the GitHub API release object, so the
+// required-name check runs offline in the marketing smoke; otherwise the tag
+// (or the latest release) is fetched from the API.
+async function loadRelease(options) {
+  if (options.releaseJson) {
+    return JSON.parse(await readFile(options.releaseJson, "utf8"));
+  }
+  return options.tag
+    ? fetchJson(`${apiBase}/releases/tags/${encodeURIComponent(options.tag)}`)
+    : fetchJson(`${apiBase}/releases/latest`);
+}
+
 function parseArgs(args) {
-  const options = { tag: null, skipAssetUrlHeads: false };
+  const options = { tag: null, skipAssetUrlHeads: false, releaseJson: null };
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i];
     if (arg === "--tag") {
       options.tag = args[i + 1] ?? "";
+      i += 1;
+    } else if (arg === "--release-json") {
+      options.releaseJson = args[i + 1] ?? "";
       i += 1;
     } else if (arg === "--skip-asset-url-heads" || arg === "--skip-latest-download-heads") {
       options.skipAssetUrlHeads = true;
@@ -123,16 +123,20 @@ function parseArgs(args) {
     }
   }
   if (options.tag === "") throw new Error("--tag requires a value");
+  if (options.releaseJson === "") throw new Error("--release-json requires a value");
   return options;
 }
 
 function printHelp() {
-  console.log(`usage: node scripts/verify-release-assets.mjs [--tag vX.Y.Z[-rcN]] [--skip-asset-url-heads]
+  console.log(`usage: node scripts/verify-release-assets.mjs [--tag vX.Y.Z[-rcN]] [--release-json FILE] [--skip-asset-url-heads]
 
 Without --tag, verifies the GitHub latest release and each asset URL exposed by
 the GitHub API. Desktop updater payloads must include detached signature
 assets. VERSION and SHA256SUMS are checked when present, but /dl metadata is
-the release source of truth.
+the release source of truth. --release-json reads the release object from a
+file instead of the API and checks only the required-name manifest offline
+(the VERSION/SHA256SUMS/signature byte checks are skipped); pair it with
+--skip-asset-url-heads to make no network calls.
 `);
 }
 

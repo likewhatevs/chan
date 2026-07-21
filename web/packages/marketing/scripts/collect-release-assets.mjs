@@ -5,73 +5,31 @@ import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 
-import { gatewayServices } from "./gateway-services.mjs";
+import {
+  cliAssets,
+  desktopAssets,
+  gatewayDebAssets,
+  updaterAssets as updaterAssetNames,
+  windowsAssets,
+} from "./release-assets.mjs";
 import {
   compareVersions,
-  gatewayPackageVersion,
   validateReleaseTag,
   versionFromTag,
 } from "./release-version.mjs";
 
 const defaultRepo = "fiorix/chan";
 
-// Every public download the install page links to is collected here so it
-// gets a SHA256 + browser URL in the manifest. Must stay in sync with the
-// download lists in generate-release-metadata.mjs. The standalone tarballs are
-// the musl/darwin self-upgrade targets. Distro-built CLI packages are published
-// through COPR, the PPA, and the AUR rather than as GitHub Release assets.
-function cliAssets() {
-  return [
-    "chan-x86_64-unknown-linux-musl.tar.gz",
-    "chan-aarch64-unknown-linux-musl.tar.gz",
-    "chan-aarch64-apple-darwin.tar.gz",
-  ];
-}
+// The asset name lists (CLI, desktop, gateway .debs, Windows, updater) are
+// single-sourced in release-assets.mjs and must stay in sync with the download
+// lists in generate-release-metadata.mjs. Here they get a SHA256 + browser URL
+// in the manifest.
 
-function desktopAssets(version) {
-  return [
-    `Chan_${version}.dmg`,
-    `Chan_${version}_amd64.AppImage`,
-    `Chan_${version}_aarch64.AppImage`,
-    `Chan_${version}_amd64.deb`,
-    `Chan_${version}_arm64.deb`,
-    `Chan-${version}-1.x86_64.rpm`,
-    `Chan-${version}-1.aarch64.rpm`,
-  ];
-}
-
-// gatewayServices is single-sourced from the Makefile's GATEWAY_RELEASE_CRATES
-// (see ./gateway-services.mjs), the same source release.yml builds from.
-
-function gatewayAssets(version) {
-  const assets = [];
-  for (const service of gatewayServices) {
-    for (const arch of ["amd64", "arm64"]) {
-      assets.push(`chan-gateway-${service}_${version}-1_${arch}.deb`);
-    }
-  }
-  return assets;
-}
-
-// Optional assets are collected only when the release actually shipped them, so
-// a release without them does not fail metadata generation. Windows is the
-// first: the desktop NSIS installer and the standalone Windows CLI zip are not
-// published yet, so they light up on the install page the moment release.yml
-// starts uploading them.
-function optionalAssets(version) {
-  return [
-    `Chan_${version}_x64-setup.exe`,
-    "chan-x86_64-pc-windows-msvc.zip",
-  ];
-}
-
-function updaterAssets(version) {
-  return [
-    {
-      name: `Chan_${version}_aarch64.app.tar.gz`,
-      platform: "darwin-aarch64",
-    },
-  ];
+// The macOS updater payload's platform mapping; the payload name and its
+// detached signature name are single-sourced in release-assets.mjs.
+function updaterEntries(version) {
+  const [payload] = updaterAssetNames(version);
+  return [{ name: payload, platform: "darwin-aarch64" }];
 }
 
 async function main() {
@@ -303,7 +261,6 @@ function isGaRelease(release) {
 async function collectManifest(release, options) {
   const tag = requireString(release.tag_name, "release.tag_name");
   const version = versionFromTag(tag);
-  const gatewayVersion = gatewayPackageVersion(version);
   const publishedAt = requireString(
     release.published_at ?? release.created_at,
     "release.published_at",
@@ -316,14 +273,19 @@ async function collectManifest(release, options) {
   }
 
   const assets = [];
-  for (const name of [...cliAssets(), ...desktopAssets(version), ...gatewayAssets(gatewayVersion)]) {
+  for (const name of [...cliAssets(), ...desktopAssets(version), ...gatewayDebAssets(version)]) {
     assets.push(await collectAsset(name, releaseAssets, options));
   }
-  for (const name of optionalAssets(version)) {
+  // Windows is required by the verifier (release.yml gates publish on the
+  // windows-artifacts job), but the collector keeps it OPTIONAL on purpose: it
+  // also walks archived releases via --latest-count, and older releases predate
+  // the Windows artifacts, so a missing Windows asset must not fail their
+  // metadata. Collect it only when the release actually shipped it.
+  for (const name of windowsAssets(version)) {
     if (!releaseAssets.has(name)) continue;
     assets.push(await collectAsset(name, releaseAssets, options));
   }
-  for (const updater of updaterAssets(version)) {
+  for (const updater of updaterEntries(version)) {
     const payload = await collectAsset(updater.name, releaseAssets, options);
     const signature = await collectSignature(`${updater.name}.sig`, releaseAssets, options);
     assets.push({

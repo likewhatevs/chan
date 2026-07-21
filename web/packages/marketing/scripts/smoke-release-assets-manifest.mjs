@@ -7,13 +7,24 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { gatewayServices } from "./gateway-services.mjs";
-import { gatewayPackageVersion } from "./release-version.mjs";
+import {
+  cliAssets,
+  desktopAssets,
+  gatewayDebAssets,
+  updaterAssets,
+  windowsAssets,
+} from "./release-assets.mjs";
 
 const siteRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const version = "0.15.4";
 const tag = `v${version}`;
-const firstCliAsset = "chan-x86_64-unknown-linux-musl.tar.gz";
+const firstCliAsset = cliAssets()[0];
+// The manifest holds one entry per required asset except the updater's detached
+// .sig, which is folded into its payload entry: cli + desktop + gateway debs +
+// one updater entry. Derived so a gateway-service change can't drift the count.
+const baseAssetCount =
+  cliAssets().length + desktopAssets(version).length + gatewayDebAssets(version).length + 1;
+const windowsAssetCount = baseAssetCount + windowsAssets(version).length;
 
 const root = mkdtempSync(path.join(tmpdir(), "chan-release-assets-"));
 try {
@@ -21,7 +32,7 @@ try {
   const base = runCollect("base", version, []);
   assertEqual(base.version, version, "version");
   assertEqual(base.tag, tag, "tag");
-  assertEqual(base.assets.length, 21, "asset count excludes detached sig");
+  assertEqual(base.assets.length, baseAssetCount, "asset count excludes detached sig");
   assert(
     !base.assets.some((asset) => asset.name.endsWith("-setup.exe")),
     "windows installer absent when not in the release",
@@ -46,7 +57,7 @@ try {
   // Windows assets present: the optional entries are collected.
   const windowsNames = optionalNames(version);
   const win = runCollect("windows", version, windowsNames);
-  assertEqual(win.assets.length, 23, "windows assets collected when present");
+  assertEqual(win.assets.length, windowsAssetCount, "windows assets collected when present");
   assert(
     win.assets.some((asset) => asset.name === windowsNames[0]),
     "windows installer collected",
@@ -222,38 +233,20 @@ try {
   rmSync(root, { force: true, recursive: true });
 }
 
+// The required names (including the updater payload and its detached .sig, both
+// written to the fixture asset dir) and the optional Windows names, both
+// single-sourced from release-assets.mjs.
 function namesFor(releaseVersion) {
-  const gatewayVersion = gatewayPackageVersion(releaseVersion);
   return [
-    // chan CLI
-    firstCliAsset,
-    "chan-aarch64-unknown-linux-musl.tar.gz",
-    "chan-aarch64-apple-darwin.tar.gz",
-    // chan-desktop
-    `Chan_${releaseVersion}.dmg`,
-    `Chan_${releaseVersion}_amd64.AppImage`,
-    `Chan_${releaseVersion}_aarch64.AppImage`,
-    `Chan_${releaseVersion}_amd64.deb`,
-    `Chan_${releaseVersion}_arm64.deb`,
-    `Chan-${releaseVersion}-1.x86_64.rpm`,
-    `Chan-${releaseVersion}-1.aarch64.rpm`,
-    // chan-gateway
-    ...gatewayServices.flatMap((service) =>
-      ["amd64", "arm64"].map(
-        (arch) => `chan-gateway-${service}_${gatewayVersion}-1_${arch}.deb`,
-      ),
-    ),
-    // signed desktop updater payload + detached signature
-    `Chan_${releaseVersion}_aarch64.app.tar.gz`,
-    `Chan_${releaseVersion}_aarch64.app.tar.gz.sig`,
+    ...cliAssets(),
+    ...desktopAssets(releaseVersion),
+    ...gatewayDebAssets(releaseVersion),
+    ...updaterAssets(releaseVersion),
   ];
 }
 
 function optionalNames(releaseVersion) {
-  return [
-    `Chan_${releaseVersion}_x64-setup.exe`,
-    "chan-x86_64-pc-windows-msvc.zip",
-  ];
+  return windowsAssets(releaseVersion);
 }
 
 function runCollect(label, releaseVersion, extraNames, digestNames = new Set()) {
