@@ -451,7 +451,7 @@ async function req<T>(method: string, path: string, body?: unknown): Promise<T> 
   const headers: Record<string, string> = {};
   const token = authToken();
   if (token) headers.authorization = `Bearer ${token}`;
-  const csrf = isUnsafeMethod(method) ? cookieValue("devserver_csrf") : "";
+  const csrf = isUnsafeMethod(method) ? cookieValue("__Host-devserver_csrf") : "";
   if (csrf) headers["x-chan-csrf"] = csrf;
   if (body !== undefined) headers["content-type"] = "application/json";
   const res = await fetch(path, {

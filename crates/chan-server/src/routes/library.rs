@@ -48,7 +48,7 @@ use crate::{
 ///     which the embedder fills into the `OnceLock` after it binds (the install
 ///     happens before the bind, so the cell is read at request time).
 ///   - `None` -- the tunnel-trust devserver/gateway surface. Workspaces are
-///     READ-ONLY: a grantee holding a `devserver_gate` cookie must not mutate the
+///     READ-ONLY: a grantee holding a `__Host-devserver_gate` cookie must not mutate the
 ///     owner's library, and `bearer=None` can't enforce role. The mutation
 ///     handlers answer 403 there.
 struct LauncherState {
@@ -329,7 +329,7 @@ pub fn launcher_router(
 }
 
 /// Gate `/api/library/*` on the surface's launcher token. Tunnel-origin
-/// requests already passed the gateway's `devserver_gate` check and arrive with
+/// requests already passed the gateway's `__Host-devserver_gate` check and arrive with
 /// client credentials stripped, so they bypass this local bearer; owner vs
 /// non-owner mutation is enforced separately by [`require_local_mutation`].
 /// Other requests accept the token in the `Authorization: Bearer` header on

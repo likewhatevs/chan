@@ -3,7 +3,7 @@
 // The multipart upload helpers ride XHR (for upload progress), which the
 // chanFetch seam does not cover, so the gateway CSRF mirror must be applied
 // on the XHR itself: through a gateway-proxied devserver a POST without the
-// `devserver_csrf` cookie mirrored into `x-chan-csrf` is 403'd before the
+// `__Host-devserver_csrf` cookie mirrored into `x-chan-csrf` is 403'd before the
 // tunnel. These tests pin that both helpers mirror the cookie when it is
 // present and stay header-free on loopback (no cookie).
 
@@ -54,12 +54,14 @@ function installFakeXhr(): FakeXhr[] {
 
 afterEach(() => {
   setXhrFactory(null);
-  document.cookie = "devserver_csrf=; Max-Age=0; path=/";
+  // `Secure` is required: the `__Host-` prefix mandates it, and jsdom's cookie
+  // jar rejects a `__Host-` cookie set without it, so the read would see nothing.
+  document.cookie = "__Host-devserver_csrf=; Max-Age=0; path=/; Secure";
 });
 
 describe("XHR multipart gateway CSRF mirror", () => {
-  test("uploadFile mirrors the devserver_csrf cookie into x-chan-csrf", async () => {
-    document.cookie = "devserver_csrf=csrf-token; path=/";
+  test("uploadFile mirrors the __Host-devserver_csrf cookie into x-chan-csrf", async () => {
+    document.cookie = "__Host-devserver_csrf=csrf-token; path=/; Secure";
     const created = installFakeXhr();
 
     await api.uploadFile(new File(["x"], "a.txt"), "inbox");
@@ -68,8 +70,8 @@ describe("XHR multipart gateway CSRF mirror", () => {
     expect(created[0].headers["x-chan-csrf"]).toBe("csrf-token");
   });
 
-  test("replaceFile mirrors the devserver_csrf cookie into x-chan-csrf", async () => {
-    document.cookie = "devserver_csrf=csrf-token; path=/";
+  test("replaceFile mirrors the __Host-devserver_csrf cookie into x-chan-csrf", async () => {
+    document.cookie = "__Host-devserver_csrf=csrf-token; path=/; Secure";
     const created = installFakeXhr();
 
     await api.replaceFile(new File(["x"], "a.txt"), "inbox/a.txt");

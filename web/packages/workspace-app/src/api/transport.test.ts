@@ -5,12 +5,14 @@ import { chanFetch, gatewayCsrfHeaderPairs, setFetchImpl } from "./transport";
 
 afterEach(() => {
   setFetchImpl(null);
-  document.cookie = "devserver_csrf=; Max-Age=0; path=/";
+  // `Secure` is required: the `__Host-` prefix mandates it, and jsdom's cookie
+  // jar rejects a `__Host-` cookie set without it, so the read would see nothing.
+  document.cookie = "__Host-devserver_csrf=; Max-Age=0; path=/; Secure";
 });
 
 describe("gateway CSRF", () => {
   test("chanFetch mirrors the readable gateway csrf cookie on unsafe requests", async () => {
-    document.cookie = "devserver_csrf=csrf-token; path=/";
+    document.cookie = "__Host-devserver_csrf=csrf-token; path=/; Secure";
     let seen: RequestInit | undefined;
     setFetchImpl(async (_input, init) => {
       seen = init;
@@ -29,7 +31,7 @@ describe("gateway CSRF", () => {
   });
 
   test("chanFetch leaves safe requests without the csrf mirror", async () => {
-    document.cookie = "devserver_csrf=csrf-token; path=/";
+    document.cookie = "__Host-devserver_csrf=csrf-token; path=/; Secure";
     let seen: RequestInit | undefined;
     setFetchImpl(async (_input, init) => {
       seen = init;
@@ -49,7 +51,7 @@ describe("gateway CSRF", () => {
 
 describe("gatewayCsrfHeaderPairs", () => {
   test("carries the cookie mirror for unsafe methods only", () => {
-    document.cookie = "devserver_csrf=csrf-token; path=/";
+    document.cookie = "__Host-devserver_csrf=csrf-token; path=/; Secure";
 
     expect(gatewayCsrfHeaderPairs("POST")).toEqual([
       ["x-chan-csrf", "csrf-token"],

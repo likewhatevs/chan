@@ -183,13 +183,13 @@ function headersWithValue(
 
 /// Header pairs mirroring the gateway's double-submit CSRF cookie into
 /// `x-chan-csrf` for a request that can mutate state. Empty for safe methods
-/// and when the `devserver_csrf` cookie is absent (loopback), so consumers can
+/// and when the `__Host-devserver_csrf` cookie is absent (loopback), so consumers can
 /// apply the pairs unconditionally. The single source of the mirror logic:
 /// `withGatewayCsrf` covers the fetch path, and the XHR multipart helpers in
 /// client.ts (which the fetch seam does not cover) consume the pairs directly.
 export function gatewayCsrfHeaderPairs(method: string): [string, string][] {
   if (!isUnsafeMethod(method)) return [];
-  const csrf = cookieValue("devserver_csrf");
+  const csrf = cookieValue("__Host-devserver_csrf");
   if (!csrf) return [];
   return [["x-chan-csrf", csrf]];
 }

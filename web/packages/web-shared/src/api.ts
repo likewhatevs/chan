@@ -1,5 +1,5 @@
 // Shared fetch wrapper for the SPA embedded by identity-service.
-// credentials: include so the id_session cookie set by identity-service
+// credentials: include so the __Host-id_session cookie set by identity-service
 // is sent on every /api call.
 
 export class HttpError extends Error {
