@@ -15,6 +15,10 @@ pub const CONVERGENCE_WINDOW: Duration = Duration::from_secs(30);
 pub const ADMISSION_CLAIM_TTL: Duration = Duration::from_secs(15);
 pub const COMMAND_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_OUTSTANDING_PINGS: usize = 8;
+/// Per-session bound on remembered command-confirmed removals. An
+/// authenticated proxy must not grow controller memory without bound;
+/// past the bound the eventual down simply costs one resync.
+const MAX_CONFIRMED_DOWNS: usize = 4096;
 
 type TunnelKey = (String, String);
 
@@ -64,6 +68,12 @@ struct ProxySession {
     boot_id: Uuid,
     generation: Option<u64>,
     rows: HashMap<Uuid, TunnelRow>,
+    /// Registration ids whose removal the controller already applied from
+    /// a confirmed kill command. The proxy still publishes its own
+    /// contiguous `TunnelDown` for each confirmed eviction, and without
+    /// this memory that expected down looks like corruption and forces a
+    /// full resync that retracts every other row of the session.
+    confirmed_downs: HashSet<Uuid>,
     status: ProxyStatus,
     fleet_ready: bool,
     connected_at: DateTime<Utc>,
@@ -239,6 +249,7 @@ impl ControllerState {
                 boot_id,
                 generation: None,
                 rows: HashMap::new(),
+                confirmed_downs: HashSet::new(),
                 status: ProxyStatus::Joining,
                 fleet_ready: false,
                 connected_at: wall_now,
@@ -384,6 +395,15 @@ impl ControllerState {
             .get(proxy_id.as_str())
             .is_some_and(|session| session.rows.contains_key(&registration_id));
         if !known {
+            let expected = self
+                .proxies
+                .get_mut(proxy_id.as_str())
+                .expect("key was validated")
+                .confirmed_downs
+                .remove(&registration_id);
+            if expected {
+                return Ok(Vec::new());
+            }
             return Ok(self.force_resync(&key, generation.saturating_add(1)));
         }
         self.remove_registration(&key, registration_id);
@@ -566,6 +586,20 @@ impl ControllerState {
         for registration_id in killed.iter().chain(&missing).copied() {
             if command.registration_ids.contains(&registration_id) {
                 self.remove_registration(&key, registration_id);
+            }
+        }
+        // The proxy publishes its own contiguous TunnelDown for every
+        // eviction it confirms; remember the confirmed ids so that
+        // expected down is accepted instead of forcing a resync that
+        // would retract the session's other rows. `missing` rows never
+        // produce a down, so they are not remembered.
+        if let Some(session) = self.proxies.get_mut(&key.proxy_id) {
+            for registration_id in &killed {
+                if command.registration_ids.contains(registration_id)
+                    && session.confirmed_downs.len() < MAX_CONFIRMED_DOWNS
+                {
+                    session.confirmed_downs.insert(*registration_id);
+                }
             }
         }
 
@@ -892,6 +926,7 @@ impl ControllerState {
             session.fleet_ready = false;
             session.generation = None;
             session.rows.clear();
+            session.confirmed_downs.clear();
         }
         self.tunnels.retain(|_, owned| owned.session != *key);
         self.pending.retain(|_, claim| claim.session != *key);
@@ -2761,6 +2796,46 @@ mod tests {
         let targeted: HashSet<Uuid> = per_session.values().flatten().copied().collect();
         assert!(!targeted.contains(&bob_registration));
         assert_eq!(state.tunnel_views().len(), 4);
+    }
+
+    #[test]
+    fn command_confirmed_down_is_not_treated_as_corruption() {
+        let now = Instant::now();
+        let mut state = ControllerState::new(100);
+        let first = Uuid::from_u128(1);
+        let second = Uuid::from_u128(2);
+        let (p1, p1_incarnation, _) = ready_one(
+            &mut state,
+            "p1",
+            vec![row("alice", "one", first), row("alice", "two", second)],
+            now,
+        );
+        let active_at = now + CONVERGENCE_WINDOW;
+        let (command_id, _) = state.begin_exact_kill("alice", "one", active_at).unwrap();
+        let command_id = command_id.expect("the aggregate row exists");
+        state
+            .command_result(
+                &p1,
+                p1_incarnation,
+                command_id,
+                vec![first],
+                Vec::new(),
+                Vec::new(),
+                active_at,
+                Utc::now(),
+            )
+            .unwrap();
+        assert_eq!(state.tunnel_views().len(), 1);
+
+        // The proxy publishes its own contiguous TunnelDown for the same
+        // eviction; it must not retract the proxy's other rows.
+        let effects = state
+            .tunnel_down(&p1, p1_incarnation, 1, first, active_at, Utc::now())
+            .unwrap();
+        assert!(effects.is_empty());
+        assert_eq!(state.proxy_views()[0].status, ProxyStatus::Active);
+        assert_eq!(state.tunnel_views().len(), 1);
+        assert_eq!(state.tunnel_views()[0].devserver_id, "two");
     }
 
     fn kill_command(effects: &[Effect], proxy_id: &str, registration_id: Uuid) -> Uuid {
