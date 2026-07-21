@@ -165,11 +165,17 @@ or beside your desktop.
 Install chan on the target machine, then `chan devserver --start`.
 A bare `chan devserver` (no action verb) runs in the FOREGROUND on
 127.0.0.1:8787 until Ctrl-C. The action verbs -- --start, --stop,
---restart, --status, --join -- drive a background service instead.
+--restart, --status, --join, --rotate-token -- drive a background
+service instead.
 --join brings the service up (or re-attaches to a running one) and
 stays attached, blocking on its health until Ctrl-C, at which point
 it detaches and the service keeps running; that is the form connect
 scripts use.
+--rotate-token re-mints the bearer token (the response to a
+suspected leak) and prints the new CHAN_DEVSERVER_TOKEN= marker and
+/?t= URL. A running devserver drops the old token immediately;
+reopen any browser tab that used the old URL. Tokens also rotate on
+their own at the first cold start after they turn 30 days old.
 
 --service picks the backend. `auto` (the default) resolves per-OS
 at runtime: with an action verb it is systemd on Linux, launchd on
@@ -235,7 +241,9 @@ PER PLATFORM:
   Keep connect scripts in the foreground (e.g. `ssh -N`).
 
 SIDE EFFECTS:
-  Writes ~/.chan/devserver/config.json (0600, bearer token),
+  Writes ~/.chan/devserver/config.json (0600, bearer token +
+  its mint time; --rotate-token and the 30-day age check on a
+  cold start replace the token in place),
   workspaces.json (the mount list) and terminals/; --service=chan
   and launchd also write devserver.log (systemd logs to the
   journal instead). Under CHAN_HOME all of these move with it.

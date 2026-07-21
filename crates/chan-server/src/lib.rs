@@ -81,8 +81,9 @@ pub use chan_library::{
     WorkspaceLifecycleOutcome, WorkspaceOverlay, WorkspaceStatus,
 };
 pub use devserver::{
-    persisted_devserver_port, persisted_devserver_token, run_devserver, DevserverConfig,
-    DevserverTunnel, DEVSERVER_TOKEN_MARKER,
+    persisted_devserver_port, persisted_devserver_token, rotate_persisted_devserver_token,
+    run_devserver, DevserverConfig, DevserverTunnel, DEVSERVER_TOKEN_MARKER,
+    DEVSERVER_TOKEN_MAX_AGE_SECS,
 };
 pub use error::Error;
 pub use mcp_bridge::run_stdio_proxy as run_mcp_stdio_proxy;
@@ -1184,7 +1185,7 @@ pub fn install_local_workspace_overlay(host: &WorkspaceHost) {
 ///     a read-only hint so it hides those controls).
 pub fn install_launcher_root_fallback(
     host: &Arc<WorkspaceHost>,
-    bearer: Option<&str>,
+    bearer: Option<routes::LauncherBearer>,
     serve_addr: Option<Arc<std::sync::OnceLock<std::net::SocketAddr>>>,
 ) {
     host.install_root_fallback(routes::launcher_router(host.clone(), bearer, serve_addr));

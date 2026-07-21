@@ -31,7 +31,7 @@ use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU16, Ordering};
+use std::sync::atomic::{AtomicU16, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
@@ -49,7 +49,7 @@ use serde::{Deserialize, Serialize};
 use crate::auth::random_token;
 use crate::devserver_api::{
     ActiveTerminalsRejection, DevserverInfo, DevserverWindow, MountedPrefix, OpenWorkspaceRequest,
-    SetWorkspaceOnRequest, WorkspaceEntry, DEVSERVER_API_PROTOCOL,
+    RotatedToken, SetWorkspaceOnRequest, WorkspaceEntry, DEVSERVER_API_PROTOCOL,
 };
 use crate::{Error, ServeConfig, WorkspaceHost, WorkspaceLifecycleOutcome, WorkspaceStatus};
 // Prefix allocation lives in chan-library (the window-record assembly needs the
@@ -118,14 +118,20 @@ fn tunnel_url_without_userinfo(raw: &str) -> String {
     url.to_string()
 }
 
-/// On-disk devserver state: the bearer token (minted once and reused so a
-/// reconnecting client keeps working across restarts) and the stable library
-/// identity. Workspace on/off lives in the library-owned [`WorkspaceOverlay`]
-/// store (`~/.chan/devserver/workspaces.json`), not here.
+/// On-disk devserver state: the bearer token (reused across restarts so a
+/// reconnecting client keeps working, but rotated by the operator verb and
+/// on a cold start once it outlives [`DEVSERVER_TOKEN_MAX_AGE_SECS`]) and
+/// the stable library identity. Workspace on/off lives in the library-owned
+/// [`WorkspaceOverlay`] store (`~/.chan/devserver/workspaces.json`), not here.
 #[derive(Default, Serialize, Deserialize)]
 struct PersistedConfig {
     #[serde(default)]
     devserver_token: String,
+    /// Unix seconds when `devserver_token` was minted. `0` (the default,
+    /// and every pre-rotation config) reads as "unknown age" and rotates
+    /// on the next cold start, deliberately retiring pre-fix tokens.
+    #[serde(default)]
+    token_minted_at: u64,
     /// This library's stable identity, minted once (`lib-<16hex>`) and persisted
     /// so it survives restart. Stamped on every window record; a client
     /// merging several libraries' feeds partitions by it.
@@ -237,6 +243,21 @@ fn devserver_config_path() -> std::io::Result<PathBuf> {
 /// foreground emit and the `--service=systemd --join` re-attach emit build to it.
 pub const DEVSERVER_TOKEN_MARKER: &str = "CHAN_DEVSERVER_TOKEN=";
 
+/// Maximum age of the persisted bearer token: 30 days. A cold start whose
+/// token is older (or whose mint time is unrecorded) re-mints instead of
+/// reusing it, so a token that leaked through a scrollback snapshot, a
+/// backup, or a pasted log stops working at the next start after the
+/// window instead of forever. Within the window restarts keep the token,
+/// preserving the reconnecting-client property.
+pub const DEVSERVER_TOKEN_MAX_AGE_SECS: u64 = 30 * 24 * 60 * 60;
+
+fn unix_now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
 /// Read the persisted devserver bearer token from
 /// `~/.chan/devserver/config.json`, or `None` when it is absent, unreadable,
 /// or tokenless. The `--service=systemd --join` re-attach path prints the
@@ -246,6 +267,24 @@ pub fn persisted_devserver_token() -> Option<String> {
     let store = DevserverStore::at(devserver_config_path().ok()?);
     let token = store.load().devserver_token;
     (!token.is_empty()).then_some(token)
+}
+
+/// Rotate the persisted devserver bearer token WITHOUT a running server:
+/// re-mint, stamp the mint time, and save through the same atomic 0600
+/// store. Returns the new token, or `None` when no config with a token
+/// exists (nothing to rotate). The CLI verb uses this as its no-server
+/// fallback; a devserver somehow still running elsewhere keeps accepting
+/// its in-memory token until it restarts, which the caller must say.
+pub fn rotate_persisted_devserver_token() -> std::io::Result<Option<String>> {
+    let store = DevserverStore::at(devserver_config_path()?);
+    let mut cfg = store.load();
+    if cfg.devserver_token.is_empty() {
+        return Ok(None);
+    }
+    cfg.devserver_token = random_token();
+    cfg.token_minted_at = unix_now_secs();
+    store.save(&cfg)?;
+    Ok(Some(cfg.devserver_token))
 }
 
 /// Read the last bound TCP port the devserver recorded in
@@ -292,7 +331,13 @@ struct DevserverState {
     host: Arc<WorkspaceHost>,
     addr: SocketAddr,
     /// Devserver-level bearer token, distinct from per-workspace tokens.
-    token: String,
+    /// A shared cell (not a plain `String`) because the launcher bundle's
+    /// gates read the same value: one [`rotate_token`](Self::rotate_token)
+    /// write retires the old bearer on every surface at once.
+    token: crate::routes::LauncherBearer,
+    /// Unix seconds when the current token was minted; persisted so the
+    /// cold-start age check ([`resolve_boot_token`]) has ground truth.
+    token_minted_at: AtomicU64,
     /// This library's stable identity (`lib-<16hex>`), persisted with the token.
     library_id: String,
     host_label: String,
@@ -538,13 +583,27 @@ impl DevserverState {
         }
         // Bearer token + library identity → the devserver config.
         let cfg = PersistedConfig {
-            devserver_token: self.token.clone(),
+            devserver_token: self.token.read().unwrap_or_else(|e| e.into_inner()).clone(),
+            token_minted_at: self.token_minted_at.load(Ordering::Relaxed),
             library_id: self.library_id.clone(),
             port: self.bound_port.load(Ordering::Relaxed),
         };
         if let Err(e) = self.store.save(&cfg) {
             tracing::warn!("persisting devserver config: {e}");
         }
+    }
+
+    /// Re-mint the bearer token: swap the value in the shared cell (the
+    /// management gate and the launcher bundle's gates all read it), stamp
+    /// the mint time, and persist through the 0600 store. The old bearer
+    /// stops authorizing on the next request.
+    fn rotate_token(&self) -> String {
+        let token = random_token();
+        *self.token.write().unwrap_or_else(|e| e.into_inner()) = token.clone();
+        self.token_minted_at
+            .store(unix_now_secs(), Ordering::Relaxed);
+        self.persist_state();
+        token
     }
 
     /// The box's workspace list for `GET /api/devserver/workspaces`: ONE row
@@ -668,6 +727,44 @@ impl DevserverState {
     }
 }
 
+/// What the cold-start token resolution decided, so the boot path can
+/// explain a rotation to the operator.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BootToken {
+    /// A persisted token within its age window: reused as-is.
+    Kept,
+    /// No token on disk (first boot): minted fresh.
+    Minted,
+    /// The persisted token outlived [`DEVSERVER_TOKEN_MAX_AGE_SECS`] (or
+    /// its mint time was unrecorded): re-minted, old bearer retired.
+    RotatedByAge,
+}
+
+/// Resolve the boot token in `persisted`, minting or rotating in place.
+/// Pure over (`persisted`, `now`) so the age rule is testable without a
+/// boot: empty mints, an unknown or over-age mint time rotates, and a
+/// future mint time (clock stepped back) is re-stamped to `now` without
+/// rotating so the age check stays meaningful.
+fn resolve_boot_token(persisted: &mut PersistedConfig, now: u64) -> BootToken {
+    if persisted.devserver_token.is_empty() {
+        persisted.devserver_token = random_token();
+        persisted.token_minted_at = now;
+        return BootToken::Minted;
+    }
+    if persisted.token_minted_at > now {
+        persisted.token_minted_at = now;
+        return BootToken::Kept;
+    }
+    if persisted.token_minted_at == 0
+        || now - persisted.token_minted_at > DEVSERVER_TOKEN_MAX_AGE_SECS
+    {
+        persisted.devserver_token = random_token();
+        persisted.token_minted_at = now;
+        return BootToken::RotatedByAge;
+    }
+    BootToken::Kept
+}
+
 /// Run the devserver in the foreground until the process is interrupted.
 /// Loads (or mints) the persisted token, re-mounts the enabled workspaces,
 /// echoes the bind+token line, binds the management + discovery surfaces,
@@ -678,8 +775,12 @@ pub async fn run_devserver(library: Library, config: DevserverConfig) -> anyhow:
     let store =
         DevserverStore::at(devserver_config_path().context("resolving devserver config path")?);
     let mut persisted = store.load();
-    if persisted.devserver_token.is_empty() {
-        persisted.devserver_token = random_token();
+    if resolve_boot_token(&mut persisted, unix_now_secs()) == BootToken::RotatedByAge {
+        eprintln!(
+            "chan devserver: NOTE: bearer token was older than {} days; rotated -- \
+             reopen any browser tab that used the old ?t= URL",
+            DEVSERVER_TOKEN_MAX_AGE_SECS / 86_400
+        );
     }
     let token = persisted.devserver_token.clone();
     // Mint a stable per-library id once (`lib-<16hex>`), persisted alongside the
@@ -737,7 +838,8 @@ pub async fn run_devserver(library: Library, config: DevserverConfig) -> anyhow:
     let state = Arc::new(DevserverState {
         host: host.clone(),
         addr: config.addr,
-        token: token.clone(),
+        token: Arc::new(std::sync::RwLock::new(token.clone())),
+        token_minted_at: AtomicU64::new(persisted.token_minted_at),
         library_id,
         host_label: config.host_label,
         workspaces: Mutex::new(HashMap::new()),
@@ -1085,6 +1187,7 @@ fn build_devserver_app(
             delete(handle_forget).post(handle_set_workspace_on),
         )
         .route("/api/devserver/windows", get(handle_list_windows))
+        .route("/api/devserver/rotate-token", post(handle_rotate_token))
         .route(
             "/api/devserver/systemd-fdstore/prepare",
             post(handle_fdstore_prepare),
@@ -1116,7 +1219,11 @@ fn build_devserver_app(
     // address after the listener binds (unfilled on a tunnel-only devserver,
     // where there is no local bind to mutate from anyway).
     let serve_addr: Arc<OnceLock<SocketAddr>> = Arc::new(OnceLock::new());
-    crate::install_launcher_root_fallback(&host, Some(&state.token), Some(serve_addr.clone()));
+    crate::install_launcher_root_fallback(
+        &host,
+        Some(state.token.clone()),
+        Some(serve_addr.clone()),
+    );
     let app = public.merge(authed).merge(host.router());
     (app, serve_addr)
 }
@@ -1335,6 +1442,16 @@ async fn handle_health(State(state): State<Arc<DevserverState>>) -> Json<Devserv
     })
 }
 
+/// `POST /api/devserver/rotate-token`: re-mint the devserver bearer under
+/// the CURRENT bearer (the suspected-leak response). The old token stops
+/// authorizing on the next request; the caller owns re-emitting the
+/// `CHAN_DEVSERVER_TOKEN=` marker and the `/?t=` URL.
+async fn handle_rotate_token(State(state): State<Arc<DevserverState>>) -> Json<RotatedToken> {
+    Json(RotatedToken {
+        token: state.rotate_token(),
+    })
+}
+
 async fn handle_list(State(state): State<Arc<DevserverState>>) -> Json<Vec<WorkspaceEntry>> {
     Json(state.workspace_entries())
 }
@@ -1461,8 +1578,12 @@ async fn require_bearer(
         .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix("Bearer "));
-    let token = state.token.as_bytes();
-    if header_token.is_some_and(|t| bytes_eq(t.as_bytes(), token)) {
+    // Read the shared cell in a block so the guard drops before the await.
+    let authorized = {
+        let token = state.token.read().unwrap_or_else(|e| e.into_inner());
+        header_token.is_some_and(|t| bytes_eq(t.as_bytes(), token.as_bytes()))
+    };
+    if authorized {
         next.run(req).await
     } else {
         (
@@ -1710,18 +1831,22 @@ mod tests {
     fn persisted_config_round_trips() {
         let cfg = PersistedConfig {
             devserver_token: "tok".into(),
+            token_minted_at: 1_753_000_000,
             library_id: "lib-abc".into(),
             port: 9605,
         };
         let json = serde_json::to_string(&cfg).unwrap();
         let back: PersistedConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(back.devserver_token, "tok");
+        assert_eq!(back.token_minted_at, 1_753_000_000);
         assert_eq!(back.library_id, "lib-abc");
         assert_eq!(back.port, 9605);
-        // Tolerant of a missing/empty file shape; an absent port reads 0.
+        // Tolerant of a missing/empty file shape; an absent port reads 0,
+        // an absent mint time reads 0 (= unknown age, rotates on boot).
         let empty: PersistedConfig = serde_json::from_str("{}").unwrap();
         assert_eq!(empty.devserver_token, "");
         assert_eq!(empty.port, 0);
+        assert_eq!(empty.token_minted_at, 0);
         // Old-format keys (`enabled_workspaces`, `workspaces`, `terminals`)
         // degrade cleanly: workspace on/off lives in the overlay store now and
         // the per-label terminal subsystem is gone, so unknown keys are ignored
@@ -1750,12 +1875,142 @@ mod tests {
 
         let persisted = PersistedConfig {
             devserver_token: sentinel.into(),
+            token_minted_at: 0,
             library_id: "lib-test".into(),
             port: 9605,
         };
         let persisted_debug = format!("{persisted:?}");
         assert!(persisted_debug.contains("[REDACTED]"));
         assert!(!persisted_debug.contains(sentinel));
+    }
+
+    #[test]
+    fn resolve_boot_token_age_rules() {
+        let day = 86_400u64;
+        let now = 100 * day;
+        // First boot: no token -> minted and stamped.
+        let mut fresh = PersistedConfig::default();
+        assert_eq!(resolve_boot_token(&mut fresh, now), BootToken::Minted);
+        assert!(!fresh.devserver_token.is_empty());
+        assert_eq!(fresh.token_minted_at, now);
+        // Within the window: kept verbatim.
+        let mut recent = PersistedConfig {
+            devserver_token: "keep".into(),
+            token_minted_at: now - 10 * day,
+            ..Default::default()
+        };
+        assert_eq!(resolve_boot_token(&mut recent, now), BootToken::Kept);
+        assert_eq!(recent.devserver_token, "keep");
+        assert_eq!(recent.token_minted_at, now - 10 * day);
+        // Over the window: rotated and re-stamped.
+        let mut old = PersistedConfig {
+            devserver_token: "stale".into(),
+            token_minted_at: now - 31 * day,
+            ..Default::default()
+        };
+        assert_eq!(resolve_boot_token(&mut old, now), BootToken::RotatedByAge);
+        assert_ne!(old.devserver_token, "stale");
+        assert_eq!(old.token_minted_at, now);
+        // Unknown mint time (every pre-rotation config): rotated once.
+        let mut unknown = PersistedConfig {
+            devserver_token: "pre-fix".into(),
+            token_minted_at: 0,
+            ..Default::default()
+        };
+        assert_eq!(
+            resolve_boot_token(&mut unknown, now),
+            BootToken::RotatedByAge
+        );
+        assert_ne!(unknown.devserver_token, "pre-fix");
+        // Clock stepped back (future stamp): kept, re-stamped to now so the
+        // age check stays meaningful instead of never expiring.
+        let mut future = PersistedConfig {
+            devserver_token: "keep-too".into(),
+            token_minted_at: now + day,
+            ..Default::default()
+        };
+        assert_eq!(resolve_boot_token(&mut future, now), BootToken::Kept);
+        assert_eq!(future.devserver_token, "keep-too");
+        assert_eq!(future.token_minted_at, now);
+    }
+
+    #[test]
+    fn rotate_token_replaces_persisted_and_preserves_identity() {
+        let home = tempfile::tempdir().expect("home");
+        let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let state = test_state(home.path(), addr);
+        state.bound_port.store(9605, Ordering::Relaxed);
+        state.persist_state();
+        let before = state.store.load();
+        assert_eq!(before.devserver_token, "test-token");
+
+        let rotated = state.rotate_token();
+        assert_ne!(rotated, "test-token", "rotation must mint a new value");
+        let after = state.store.load();
+        assert_eq!(after.devserver_token, rotated, "new token is persisted");
+        assert!(after.token_minted_at > 0, "mint time is stamped");
+        assert_eq!(after.library_id, before.library_id);
+        assert_eq!(after.port, 9605);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(home.path().join("devserver").join("config.json"))
+                .expect("config metadata")
+                .permissions()
+                .mode()
+                & 0o777;
+            assert_eq!(mode, 0o600, "config must stay 0600 across rotation");
+        }
+    }
+
+    #[tokio::test]
+    async fn rotate_token_route_swaps_the_live_bearer() {
+        use tower::ServiceExt;
+
+        let home = tempfile::tempdir().expect("home");
+        let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let state = test_state(home.path(), addr);
+        let host = state.host.clone();
+        let (app, _serve_addr) = build_devserver_app(state, host);
+        let list = |bearer: &str| {
+            HttpRequest::builder()
+                .uri("/api/devserver/workspaces")
+                .header(header::AUTHORIZATION, format!("Bearer {bearer}"))
+                .body(Body::empty())
+                .unwrap()
+        };
+        let rotate = |bearer: &str| {
+            HttpRequest::builder()
+                .method("POST")
+                .uri("/api/devserver/rotate-token")
+                .header(header::AUTHORIZATION, format!("Bearer {bearer}"))
+                .body(Body::empty())
+                .unwrap()
+        };
+
+        // A wrong bearer cannot rotate (the rotate route sits behind the
+        // same gate it swaps).
+        let res = app.clone().oneshot(rotate("wrong")).await.unwrap();
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+
+        // Rotate under the current bearer.
+        let res = app.clone().oneshot(rotate("test-token")).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(res.into_body(), 64 * 1024)
+            .await
+            .unwrap();
+        let rotated: RotatedToken = serde_json::from_slice(&body).unwrap();
+        assert_ne!(rotated.token, "test-token");
+
+        // The old bearer dies on the next request; the new one authorizes.
+        let res = app.clone().oneshot(list("test-token")).await.unwrap();
+        assert_eq!(
+            res.status(),
+            StatusCode::UNAUTHORIZED,
+            "pre-rotation bearer must stop authorizing immediately"
+        );
+        let res = app.clone().oneshot(list(&rotated.token)).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
     }
 
     #[tokio::test]
@@ -1829,6 +2084,7 @@ mod tests {
         assert_eq!(store.load().devserver_token, "");
         let cfg = PersistedConfig {
             devserver_token: "abc".into(),
+            token_minted_at: 42,
             library_id: "lib-xyz".into(),
             port: 9605,
         };
@@ -1866,7 +2122,8 @@ mod tests {
         Arc::new(DevserverState {
             host,
             addr,
-            token: "test-token".into(),
+            token: Arc::new(std::sync::RwLock::new("test-token".to_string())),
+            token_minted_at: AtomicU64::new(0),
             library_id: "lib-test".into(),
             host_label: "test".into(),
             workspaces: Mutex::new(HashMap::new()),
@@ -3114,7 +3371,11 @@ mod tests {
         let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
         let state = test_state(home.path(), addr);
         let host = state.host.clone();
-        let app = crate::routes::launcher_router(host, Some("test-token"), None);
+        let app = crate::routes::launcher_router(
+            host,
+            Some(Arc::new(std::sync::RwLock::new("test-token".to_string()))),
+            None,
+        );
 
         // No credential: rejected.
         let unauth = app
@@ -3236,7 +3497,13 @@ mod tests {
             .clone();
         assert!(!tenant_token.is_empty(), "the tenant minted a token");
 
-        let app = crate::routes::launcher_router(state.host.clone(), Some("launcher-token"), None);
+        let app = crate::routes::launcher_router(
+            state.host.clone(),
+            Some(Arc::new(std::sync::RwLock::new(
+                "launcher-token".to_string(),
+            ))),
+            None,
+        );
         let bearer = |uri: &str, token: &str| {
             HttpRequest::builder()
                 .uri(uri)

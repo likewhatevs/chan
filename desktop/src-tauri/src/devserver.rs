@@ -3214,6 +3214,20 @@ mod tests {
     }
 
     #[test]
+    fn scrape_token_takes_the_rotated_marker_over_the_pre_rotation_one() {
+        // A `chan devserver --rotate-token` re-emits the marker into the
+        // same control-terminal scrollback the pre-rotation start wrote:
+        // the scrape must hand every later connect the NEW bearer. Red
+        // mutation: `rmatch_indices` -> `match_indices` in `scrape_token`.
+        let out = "chan devserver: listening on http://127.0.0.1:8787/?t=tok_before\n\
+                   CHAN_DEVSERVER_TOKEN=tok_before\n\
+                   chan devserver: token rotated; the old bearer no longer authorizes\n\
+                   chan devserver: listening on http://127.0.0.1:8787/?t=tok_after\n\
+                   CHAN_DEVSERVER_TOKEN=tok_after\n";
+        assert_eq!(scrape_token(out).as_deref(), Some("tok_after"));
+    }
+
+    #[test]
     fn scrape_token_stops_at_ansi_or_whitespace() {
         // Raw PTY bytes carry ANSI; the token run stops at the escape byte.
         let out = "CHAN_DEVSERVER_TOKEN=tok_xyz\x1b[0m extra";

@@ -71,6 +71,14 @@ const LOCAL_COLOR_WATCH_WS_PATH: &str = "/api/library/local-color/watch";
 /// reason as [`LOCAL_COLOR_WATCH_WS_PATH`].
 const LOCAL_THEME_WATCH_WS_PATH: &str = "/api/library/local-theme/watch";
 
+/// The launcher bearer, shared as a cell rather than a `String`: the
+/// devserver's rotate verb swaps the value in place, and every gate that
+/// holds a clone of the `Arc` (the launcher-management gate, the surface
+/// gate, and the management router's own `require_bearer`) reads the
+/// current value per request, so one write retires the old bearer on
+/// every surface at once.
+pub type LauncherBearer = Arc<std::sync::RwLock<String>>;
+
 /// Build the launcher router installed as the [`WorkspaceHost`] root fallback:
 /// the static launcher SPA ([`serve_launcher`]) plus the host-backed
 /// `/api/library/*` data surface (windows today; workspaces next). One bundle,
@@ -84,7 +92,7 @@ const LOCAL_THEME_WATCH_WS_PATH: &str = "/api/library/local-theme/watch";
 /// presents it on every data call.
 pub fn launcher_router(
     host: Arc<WorkspaceHost>,
-    bearer: Option<&str>,
+    bearer: Option<LauncherBearer>,
     serve_addr: Option<Arc<OnceLock<SocketAddr>>>,
 ) -> Router {
     // The launcher surface descriptor the injected meta advertises: no serve
@@ -284,8 +292,8 @@ pub fn launcher_router(
     let launcher_api = windows.merge(workspaces).merge(gateways).merge(devservers);
     let (launcher_api, config) = match bearer {
         Some(token) => {
-            let launcher_token = token.to_string();
-            let surface_token = token.to_string();
+            let launcher_token = token.clone();
+            let surface_token = token;
             let launcher_api = launcher_api.route_layer(middleware::from_fn(move |req, next| {
                 let token = launcher_token.clone();
                 async move { require_launcher_bearer(token, req, next).await }
@@ -328,7 +336,11 @@ pub fn launcher_router(
 /// every route, and additionally as the `?t=` query param on watch WebSockets
 /// (a browser WS can't header). The comparison is constant-time so a wrong token
 /// leaks no position info.
-async fn require_launcher_bearer(token: String, req: Request<Body>, next: Next) -> Response {
+async fn require_launcher_bearer(
+    token: LauncherBearer,
+    req: Request<Body>,
+    next: Next,
+) -> Response {
     if req.extensions().get::<crate::TunnelOrigin>().is_some() {
         return next.run(req).await;
     }
@@ -343,9 +355,13 @@ async fn require_launcher_bearer(token: String, req: Request<Body>, next: Next) 
         || path == LOCAL_THEME_WATCH_WS_PATH)
         .then(|| req.uri().query().and_then(query_bearer))
         .flatten();
-    let expected = token.as_bytes();
-    let authorized = header_token.is_some_and(|t| bytes_eq(t.as_bytes(), expected))
-        || query_token.is_some_and(|t| bytes_eq(t.as_bytes(), expected));
+    // Read the shared cell in a block so the guard drops before the await.
+    let authorized = {
+        let expected = token.read().unwrap_or_else(|e| e.into_inner());
+        let expected = expected.as_bytes();
+        header_token.is_some_and(|t| bytes_eq(t.as_bytes(), expected))
+            || query_token.is_some_and(|t| bytes_eq(t.as_bytes(), expected))
+    };
     if authorized {
         next.run(req).await
     } else {
@@ -370,7 +386,7 @@ async fn require_launcher_bearer(token: String, req: Request<Body>, next: Next) 
 /// comparisons are constant-time. A shared chan-server route, so this admits
 /// BOTH local and devserver windows in one place.
 async fn require_surface_bearer(
-    launcher_token: String,
+    launcher_token: LauncherBearer,
     host: Arc<WorkspaceHost>,
     req: Request<Body>,
     next: Next,
@@ -391,11 +407,15 @@ async fn require_surface_bearer(
         .flatten();
     // A token is valid for this surface if it is the launcher token OR any live
     // tenant token this host serves (the window's own `?t=`/Bearer token).
-    let valid = |t: &str| {
-        bytes_eq(t.as_bytes(), launcher_token.as_bytes())
-            || host.any_tenant_token(|tok| bytes_eq(tok.as_bytes(), t.as_bytes()))
+    // The launcher cell is read in a block so the guard drops before the await.
+    let authorized = {
+        let launcher = launcher_token.read().unwrap_or_else(|e| e.into_inner());
+        let valid = |t: &str| {
+            bytes_eq(t.as_bytes(), launcher.as_bytes())
+                || host.any_tenant_token(|tok| bytes_eq(tok.as_bytes(), t.as_bytes()))
+        };
+        header_token.is_some_and(valid) || query_token.is_some_and(valid)
     };
-    let authorized = header_token.is_some_and(&valid) || query_token.is_some_and(&valid);
     if authorized {
         next.run(req).await
     } else {

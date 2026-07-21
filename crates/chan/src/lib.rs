@@ -614,6 +614,16 @@ enum Command {
         /// detaches and the service keeps running.
         #[arg(long, group = "action", verbatim_doc_comment)]
         join: bool,
+        /// Rotate the devserver bearer token and print the new
+        /// CHAN_DEVSERVER_TOKEN= marker plus /?t= URL, then return. Reaches
+        /// the running devserver's management API so the old token stops
+        /// authorizing immediately; with no running server it rewrites the
+        /// persisted config instead (a devserver still running elsewhere
+        /// keeps its old token until restarted). The response to a
+        /// suspected token leak. Browser tabs on the old ?t= URL must be
+        /// reopened at the new one; every other client re-derives it.
+        #[arg(long, group = "action", verbatim_doc_comment)]
+        rotate_token: bool,
         /// Take over a wedged `--service=chan` daemon, or make a
         /// `--service=systemd --restart` destructive instead of preserving live
         /// PTYs. Applies to `--service=chan` and `--restart`.
@@ -1504,6 +1514,7 @@ where
             restart,
             status,
             join,
+            rotate_token,
             force,
             tunnel_url,
             tunnel_token,
@@ -1518,6 +1529,7 @@ where
                 restart,
                 status,
                 join,
+                rotate_token,
                 force,
                 tunnel_url,
                 tunnel_token,
@@ -3229,12 +3241,19 @@ async fn cmd_devserver(
     restart: bool,
     status: bool,
     join: bool,
+    rotate_token: bool,
     force: bool,
     tunnel_url: Option<String>,
     tunnel_token: Option<String>,
     tunnel_devserver_name: Option<String>,
     verbose: bool,
 ) -> Result<()> {
+    // Backend-agnostic: rotation dials whatever devserver persisted its
+    // port, or falls back to the config file, so it never needs the
+    // service plan below.
+    if rotate_token {
+        return cmd_rotate_devserver_token().await;
+    }
     let tunnel_url = match tunnel_url {
         Some(url) if !url.trim().is_empty() => url,
         Some(_) | None if tunnel_token.is_some() => {
@@ -4200,6 +4219,90 @@ async fn stop_devserver_under_systemd() -> Result<()> {
         );
     }
     Ok(())
+}
+
+/// `chan devserver --rotate-token`: re-mint the devserver bearer. Prefer
+/// rotating THROUGH the running server's management API so the old bearer
+/// stops authorizing immediately (the suspected-leak response); fall back
+/// to rewriting the persisted config when nothing answers, which a
+/// devserver still running elsewhere only picks up at its next restart.
+/// Either way the new `CHAN_DEVSERVER_TOKEN=` marker and `/?t=` URL are
+/// printed: the marker is the scrapers' distribution channel, and a
+/// rotation that does not re-emit it strands them on a dead token.
+async fn cmd_rotate_devserver_token() -> Result<()> {
+    let Some(current) = chan_server::persisted_devserver_token() else {
+        anyhow::bail!(
+            "chan devserver --rotate-token: no devserver config with a token \
+             found (~/.chan/devserver/config.json); start a devserver first"
+        );
+    };
+    let dial = running_systemd_devserver_addr().or_else(|| {
+        chan_server::persisted_devserver_port()
+            .map(|port| SocketAddr::new(DEFAULT_DEVSERVER_BIND, port))
+    });
+    if let Some(addr) = dial {
+        let url = format!("http://{addr}/api/devserver/rotate-token");
+        let client = reqwest::Client::new();
+        let request = client.post(&url).bearer_auth(&current).send();
+        match tokio::time::timeout(Duration::from_secs(5), request).await {
+            Ok(Ok(response)) if response.status().is_success() => {
+                let rotated: chan_server::devserver_api::RotatedToken = response
+                    .json()
+                    .await
+                    .context("parsing the rotate-token response")?;
+                eprintln!("chan devserver: token rotated; the old bearer no longer authorizes");
+                print!("{}", rotated_token_output(Some(addr), &rotated.token));
+                return Ok(());
+            }
+            Ok(Ok(response)) if response.status() == reqwest::StatusCode::UNAUTHORIZED => {
+                anyhow::bail!(
+                    "chan devserver --rotate-token: the running devserver rejected the \
+                     persisted token (401): its in-memory token and \
+                     ~/.chan/devserver/config.json disagree. Restart the devserver, \
+                     then rotate again."
+                );
+            }
+            Ok(Ok(response)) => {
+                anyhow::bail!(
+                    "chan devserver --rotate-token: the running devserver answered HTTP {}",
+                    response.status()
+                );
+            }
+            // Nothing listening (or too slow): rotate the file instead.
+            Ok(Err(_)) | Err(_) => {}
+        }
+    }
+    match chan_server::rotate_persisted_devserver_token()
+        .context("rewriting ~/.chan/devserver/config.json")?
+    {
+        Some(token) => {
+            eprintln!(
+                "chan devserver: NOTE: no running devserver answered; rotated the \
+                 persisted token only -- a devserver still running elsewhere keeps \
+                 accepting its old token until it restarts"
+            );
+            print!("{}", rotated_token_output(dial, &token));
+            Ok(())
+        }
+        None => anyhow::bail!(
+            "chan devserver --rotate-token: no devserver config with a token \
+             found (~/.chan/devserver/config.json); start a devserver first"
+        ),
+    }
+}
+
+/// The stdout block a rotation prints: the `/?t=` URL (when the serve
+/// address is known) and the LOCKED `CHAN_DEVSERVER_TOKEN=` marker line
+/// the desktop control terminal re-scrapes on every connect.
+fn rotated_token_output(addr: Option<SocketAddr>, token: &str) -> String {
+    let mut out = String::new();
+    if let Some(addr) = addr {
+        out.push_str(&format!(
+            "chan devserver: listening on http://{addr}/?t={token}\n"
+        ));
+    }
+    out.push_str(&format!("{}{token}\n", chan_server::DEVSERVER_TOKEN_MARKER));
+    out
 }
 
 /// How long the supervisor waits for the service's bearer token to land in the
@@ -7738,6 +7841,36 @@ mod tests {
         // Non-tunnel keeps the shared default the `chan open` handoff and the
         // serve-path collision hint rely on.
         assert_eq!(resolve_devserver_port(None, false, true), DEFAULT_PORT);
+    }
+
+    /// A rotation MUST re-emit the locked marker line -- it is the desktop
+    /// control terminal's only distribution channel -- and the `/?t=` URL
+    /// when the serve address is known. Red mutation: drop either line
+    /// from `rotated_token_output`.
+    #[test]
+    fn rotated_token_output_reemits_marker_and_url() {
+        let addr: SocketAddr = "127.0.0.1:8787".parse().unwrap();
+        let out = rotated_token_output(Some(addr), "tok-new");
+        assert!(out.contains("http://127.0.0.1:8787/?t=tok-new"), "{out}");
+        assert!(out.contains("CHAN_DEVSERVER_TOKEN=tok-new"), "{out}");
+        // Address unknown: the marker line still goes out.
+        let out = rotated_token_output(None, "tok-2");
+        assert!(!out.contains("listening"), "{out}");
+        assert!(out.contains("CHAN_DEVSERVER_TOKEN=tok-2"), "{out}");
+    }
+
+    /// `--rotate-token` parses and sits in the exclusive action group.
+    #[test]
+    fn devserver_rotate_token_flag_parses() {
+        let cli = Cli::parse_from(["chan", "devserver", "--rotate-token"]);
+        match cli.command {
+            Command::Devserver { rotate_token, .. } => assert!(rotate_token),
+            other => panic!("expected Command::Devserver, got {other:?}"),
+        }
+        assert!(
+            Cli::try_parse_from(["chan", "devserver", "--rotate-token", "--stop"]).is_err(),
+            "action verbs are mutually exclusive"
+        );
     }
 
     /// The action verbs parse onto their flags, and clap's `action` group makes

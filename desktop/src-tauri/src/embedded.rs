@@ -156,9 +156,12 @@ impl EmbeddedServer {
         // the address is delivered through a cell filled right after `local_addr()`.
         let launcher_token = uuid::Uuid::new_v4().to_string();
         let addr_cell: Arc<OnceLock<SocketAddr>> = Arc::new(OnceLock::new());
+        // The bearer parameter is a shared cell (the devserver rotates its
+        // token live through it); this per-launch token never rotates, so
+        // the cell is written once here.
         chan_server::install_launcher_root_fallback(
             &host,
-            Some(&launcher_token),
+            Some(Arc::new(std::sync::RwLock::new(launcher_token.clone()))),
             Some(addr_cell.clone()),
         );
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))

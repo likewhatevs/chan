@@ -104,6 +104,24 @@ impl std::fmt::Debug for WorkspaceEntry {
     }
 }
 
+/// Response of `POST /api/devserver/rotate-token`: the freshly minted
+/// devserver bearer. The old token stops authorizing as soon as this
+/// returns; the caller distributes the new one (the
+/// `CHAN_DEVSERVER_TOKEN=` marker plus the `/?t=` URL).
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RotatedToken {
+    pub token: String,
+}
+
+impl std::fmt::Debug for RotatedToken {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("RotatedToken")
+            .field("token", &"[REDACTED]")
+            .finish()
+    }
+}
+
 /// One element of `GET /api/devserver/windows`: a persisted window on the box,
 /// aggregated across ALL tenants (workspace + standalone-terminal) for the
 /// desktop's Window menu (menu-reopen of closed devserver windows). A row
@@ -245,6 +263,17 @@ mod tests {
         .unwrap();
         assert_eq!(old.os, "");
         assert_eq!(old.pretty_name, None);
+    }
+
+    #[test]
+    fn rotated_token_wire() {
+        let rotated = RotatedToken {
+            token: "tok-new".into(),
+        };
+        let v = serde_json::to_value(&rotated).unwrap();
+        assert_eq!(v, json!({ "token": "tok-new" }));
+        // Debug never prints the secret.
+        assert!(!format!("{rotated:?}").contains("tok-new"));
     }
 
     #[test]
