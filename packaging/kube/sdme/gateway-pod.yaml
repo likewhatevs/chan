@@ -114,7 +114,13 @@ spec:
         - { name: DEVSERVER_CONTROL_URL, value: "http://127.0.0.1:7101" }
         - { name: DEVSERVER_PROXY_ID, value: "p1" }
       readinessProbe:
-        httpGet: { path: /readyz, port: 7002 }
+        # The proxy gates health on the apex Host (the
+        # DEVSERVER_TUNNEL_ORIGIN host), so the probe must send it.
+        httpGet:
+          path: /readyz
+          port: 7002
+          httpHeaders:
+            - { name: Host, value: "usr.localtest.me" }
         initialDelaySeconds: 5
         periodSeconds: 5
   volumes:

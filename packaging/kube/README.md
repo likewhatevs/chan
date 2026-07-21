@@ -59,10 +59,13 @@ sudo sdme kube secret create gateway-secrets \
 sudo sdme kube apply -f packaging/kube/sdme/gateway-pod.yaml --base-fs <base>
 
 # Health: /healthz on each service, from inside the pod's shared netns.
+# devserver-proxy (7002) gates health on the apex Host, so its probe
+# sends the DEVSERVER_TUNNEL_ORIGIN host explicitly.
 sudo sdme exec chan-gateway --oci -- sh -c '
-  for p in 7000 7001 7002 7003; do
+  for p in 7000 7001 7003; do
     printf "port %s: " "$p"; curl -fsS "http://127.0.0.1:$p/healthz" && echo;
-  done'
+  done
+  printf "port 7002: "; curl -fsS -H "Host: usr.localtest.me" "http://127.0.0.1:7002/healthz" && echo;'
 
 # Service-to-service proof: identity reaching profile is exercised by a sign-in;
 # for a non-interactive check, confirm devserver-proxy validates against identity

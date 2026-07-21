@@ -39,12 +39,22 @@ spec:
             - { name: http, containerPort: 7002 }
             - { name: tunnel, containerPort: 7100 }
           readinessProbe:
-            # /readyz reports no admission while the control session is down.
-            httpGet: { path: /readyz, port: 7002 }
+            # /readyz reports no admission while the control session is
+            # down. The proxy gates health on the apex Host (the
+            # DEVSERVER_TUNNEL_ORIGIN host), so the probe must send it.
+            httpGet:
+              path: /readyz
+              port: 7002
+              httpHeaders:
+                - { name: Host, value: "usr.localtest.me" }
             initialDelaySeconds: 3
             periodSeconds: 5
           livenessProbe:
-            httpGet: { path: /healthz, port: 7002 }
+            httpGet:
+              path: /healthz
+              port: 7002
+              httpHeaders:
+                - { name: Host, value: "usr.localtest.me" }
             initialDelaySeconds: 10
             periodSeconds: 10
 ---

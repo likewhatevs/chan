@@ -17,6 +17,8 @@ Dev port layout (offset by `+10000` from the prod-shaped ports so the runner can
 
 Every proxy node binds the same two ports on its own loopback alias (p1 on `127.0.0.1`, p2 on `127.0.0.2`, p3 on `127.0.0.3`) because the controller's origin template pins one shared port for the whole fleet. A `chan devserver` client dials one node's tunnel listener directly, e.g. `http://127.0.0.2:17100/v1/tunnel` for p2.
 
+Browsing a p1 tenant works out of the box because `*.localtest.me` resolves to `127.0.0.1`. Browsing a p2 or p3 tenant origin needs one `/etc/hosts` line per extra node (`127.0.0.2 p2.devserver.localtest.me` plus one line per tenant host you open, or a local wildcard DNS such as dnsmasq), because public DNS resolves those hosts to `127.0.0.1`, where p1 answers and 404s them.
+
 ## One-time setup
 
 1. Postgres reachable at `postgres://chan:chan@127.0.0.1/chan_gateway`. The dev runner uses the same database the integration tests expect (`chan_gateway`); if you do not have that DB yet, `createdb -U chan chan_gateway` against your local pg.
