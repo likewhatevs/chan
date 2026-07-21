@@ -174,7 +174,7 @@ The lease expires independently of TCP/yamux liveness. Before expiry, the client
 
 ### Gateway forwarding path
 
-Public-side forwarding lives in the gateway; this crate exposes only `TunnelHandle::open`. The proxy parses `{user}` from the wildcard host (`{user}.devserver.chan.app`), gates the viewer with a per-devserver cookie/JWT `devserver_gate`, and forwards the full segment-preserving `/{workspace}/...` path over the substream. The forwarding contract it meets:
+Public-side forwarding lives in the gateway; this crate exposes only `TunnelHandle::open`. The proxy parses `{user}` from the wildcard host (`{user}.devserver.chan.app`), gates the viewer with a per-devserver cookie/JWT `__Host-devserver_gate`, and forwards the full segment-preserving `/{workspace}/...` path over the substream. The forwarding contract it meets:
 
 - One outbound substream per public request, driven by `hyper::client::conn::http1` with `with_upgrades()`. h1 maps cleanly because the substream is already muxed (see "Why h1 over yamux").
 - A single deadline covers `handle.open()` (502 on `Disconnected`, 504 on timeout), the h1 handshake, and `send_request` up to response headers.

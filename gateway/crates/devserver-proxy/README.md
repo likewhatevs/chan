@@ -4,7 +4,7 @@ Public-facing service at devserver.chan.app (apex) and `*.devserver.chan.app` (w
 
 ## Role in the system
 
-devserver-proxy is the surface where a devserver is served in the browser. It does NOT read identity's `id_session` cookie. Identity mints a short-lived Ed25519 entry credential and hands it to `POST /_chan/entry` in a request body. The proxy verifies it (signature + issuer + exact audience + proxy id + devserver id + signed clean path), consumes its replay id, and mints a bounded opaque host-only `Path=/` `devserver_gate` cookie. Authenticated traffic then reaches the exact `chan devserver` peer through its live yamux tunnel. No entry credential appears in a navigation URL.
+devserver-proxy is the surface where a devserver is served in the browser. It does NOT read identity's `id_session` cookie. Identity mints a short-lived Ed25519 entry credential and hands it to `POST /_chan/entry` in a request body. The proxy verifies it (signature + issuer + exact audience + proxy id + devserver id + signed clean path), consumes its replay id, and mints a bounded opaque host-only `Path=/` `__Host-devserver_gate` cookie. Authenticated traffic then reaches the exact `chan devserver` peer through its live yamux tunnel. No entry credential appears in a navigation URL.
 
 ## Build
 
@@ -71,7 +71,7 @@ Optional:
 ## Routes
 
 - Apex (`devserver.<domain>`): `POST /v1/tunnel` (raw h2c, on the tunnel listener), `/healthz`, and `/readyz`. `/readyz` is 200 only once the controller session reaches `FleetReady`; until then new tunnel admissions are refused with the `control_unavailable` code. Per-user devserver capacity is a fleet-wide decision made by the controller at admission and surfaces as `too_many_workspaces`. The aggregate `/admin/v1/*` tree lives on devserver-control, not on the proxy.
-- Wildcard (`{user}--{disc}.devserver.<domain>` addressing one devserver by the first 12 hex chars of its id): the per-devserver reverse proxy. `POST /_chan/entry` exchanges a body credential; ordinary paths require the opaque `devserver_gate` cookie. On pass the full `/{workspace}/...` path is forwarded into the tunnel (segment-preserving) and the devserver routes the tenant. `/api/devserver/*` (the local-only management API) is 404'd here.
+- Wildcard (`{user}--{disc}.devserver.<domain>` addressing one devserver by the first 12 hex chars of its id): the per-devserver reverse proxy. `POST /_chan/entry` exchanges a body credential; ordinary paths require the opaque `__Host-devserver_gate` cookie. On pass the full `/{workspace}/...` path is forwarded into the tunnel (segment-preserving) and the devserver routes the tenant. `/api/devserver/*` (the local-only management API) is 404'd here.
 
 See [`design.md`](design.md) for the authoritative route list, the auth-gate order, and the reverse-proxy hygiene rules.
 

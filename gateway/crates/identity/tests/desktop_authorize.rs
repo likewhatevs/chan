@@ -125,7 +125,7 @@ impl TestApp {
             devserver_proxy_origin: "https://proxy.example.test".parse().unwrap(),
             devserver_tunnel_origin: "https://tunnel.example.test".parse().unwrap(),
             database_url: url.clone(),
-            cookie_secure: false,
+            cookie_secure: true,
             profile_client,
             internal_auth_token: "test-internal".to_string(),
             identity_admin_token: String::new(),

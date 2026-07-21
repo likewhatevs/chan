@@ -10,7 +10,7 @@
 //!     A single router dispatches on the `Host` header. devserver-proxy
 //!     reads no identity-service session cookie. Identity-signed entry
 //!     credentials are exchanged through a fixed body-only POST, then the
-//!     browser uses a host-only opaque `devserver_gate` cookie.
+//!     browser uses a host-only opaque `__Host-devserver_gate` cookie.
 //!
 //!   * `tunnel_bind_addr` (devserver.chan.app apex, behind nginx
 //!     `grpc_pass` on `/v1/tunnel`): h2c handshake for chan-tunnel

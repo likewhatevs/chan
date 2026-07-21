@@ -41,7 +41,7 @@ Public wildcard routing is deliberately small:
 
 - `POST /_chan/entry` exchanges a body-only entry credential;
 - `/api/devserver/*` is always 404 because that management API is local-only;
-- an ordinary path requires a valid opaque `devserver_gate` cookie;
+- an ordinary path requires a valid opaque `__Host-devserver_gate` cookie;
 - unauthenticated bare `/` redirects to the identity dashboard; and
 - every other unauthenticated or mismatched request returns the same 404 shape.
 
@@ -116,8 +116,8 @@ maximum acceptance window remains 40 seconds.
 
 Successful exchange returns 303 to the signed relative path and sets:
 
-- `devserver_gate=<random 256-bit id>; Path=/; HttpOnly; Secure; SameSite=Lax`
-- `devserver_csrf=<random 256-bit value>; Path=/; Secure; SameSite=Lax`
+- `__Host-devserver_gate=<random 256-bit id>; Path=/; HttpOnly; Secure; SameSite=Lax`
+- `__Host-devserver_csrf=<random 256-bit value>; Path=/; Secure; SameSite=Lax`
 
 Both cookies are host-only. The entry credential never appears in browser
 history, a redirect, or the clean URL.

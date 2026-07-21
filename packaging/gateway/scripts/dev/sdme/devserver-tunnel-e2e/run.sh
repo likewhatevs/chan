@@ -342,10 +342,10 @@ GRANTEE_ENTRY_CODE="$(proxy_curl -sS -o /dev/null -D "$GRANTEE_ENTRY_H" -w '%{ht
   --data-urlencode "credential=$GRANTEE_ENTRY_CREDENTIAL" "$GRANTEE_ENTRY_URL" || echo 000)"
 [ "$OWNER_ENTRY_CODE" = "303" ] && [ "$GRANTEE_ENTRY_CODE" = "303" ] \
   || die "entry exchange did not mint sessions (owner=$OWNER_ENTRY_CODE grantee=$GRANTEE_ENTRY_CODE)"
-OWNER_GATE="$(sed -n 's/^set-cookie: devserver_gate=\([^;]*\).*/\1/ip' "$OWNER_ENTRY_H" | head -1 | tr -d '\r')"
-OWNER_CSRF="$(sed -n 's/^set-cookie: devserver_csrf=\([^;]*\).*/\1/ip' "$OWNER_ENTRY_H" | head -1 | tr -d '\r')"
-GRANTEE_GATE="$(sed -n 's/^set-cookie: devserver_gate=\([^;]*\).*/\1/ip' "$GRANTEE_ENTRY_H" | head -1 | tr -d '\r')"
-GRANTEE_CSRF="$(sed -n 's/^set-cookie: devserver_csrf=\([^;]*\).*/\1/ip' "$GRANTEE_ENTRY_H" | head -1 | tr -d '\r')"
+OWNER_GATE="$(sed -n 's/^set-cookie: __Host-devserver_gate=\([^;]*\).*/\1/ip' "$OWNER_ENTRY_H" | head -1 | tr -d '\r')"
+OWNER_CSRF="$(sed -n 's/^set-cookie: __Host-devserver_csrf=\([^;]*\).*/\1/ip' "$OWNER_ENTRY_H" | head -1 | tr -d '\r')"
+GRANTEE_GATE="$(sed -n 's/^set-cookie: __Host-devserver_gate=\([^;]*\).*/\1/ip' "$GRANTEE_ENTRY_H" | head -1 | tr -d '\r')"
+GRANTEE_CSRF="$(sed -n 's/^set-cookie: __Host-devserver_csrf=\([^;]*\).*/\1/ip' "$GRANTEE_ENTRY_H" | head -1 | tr -d '\r')"
 [ -n "$OWNER_GATE" ] && [ -n "$OWNER_CSRF" ] && [ -n "$GRANTEE_GATE" ] && [ -n "$GRANTEE_CSRF" ] \
   || die "entry exchange omitted session/csrf cookies"
 [[ "$OWNER_GATE$OWNER_CSRF$GRANTEE_GATE$GRANTEE_CSRF" != *.* ]] \
@@ -363,7 +363,7 @@ info "POST exchange minted opaque owner/grantee sessions and rejected replay"
 say "drive authenticated owner request through the proxy"
 RESP_H="$(mktemp)"; RESP_B="$(mktemp)"
 CODE="$(proxy_curl -sS -o "$RESP_B" -D "$RESP_H" -w '%{http_code}' \
-  -H "Cookie: devserver_gate=$OWNER_GATE; devserver_csrf=$OWNER_CSRF" \
+  -H "Cookie: __Host-devserver_gate=$OWNER_GATE; __Host-devserver_csrf=$OWNER_CSRF" \
   "$PROXY_ORIGIN$PREFIX/api/health" || echo 000)"
 
 say "prove native-trust routes and require_local_mutation"
@@ -371,13 +371,13 @@ TRUST_PATH="/api/library/devservers/gw%3Afeedface%3A$TENANT_USER%3A$DEVSERVER_ID
 MUT_B="$(mktemp)"
 for METHOD in PUT DELETE; do
   OWNER_MUT_CODE="$(proxy_curl -sS -o "$MUT_B" -w '%{http_code}' -X "$METHOD" \
-    -H "Cookie: devserver_gate=$OWNER_GATE; devserver_csrf=$OWNER_CSRF" \
+    -H "Cookie: __Host-devserver_gate=$OWNER_GATE; __Host-devserver_csrf=$OWNER_CSRF" \
     -H "x-chan-csrf: $OWNER_CSRF" "$PROXY_ORIGIN$TRUST_PATH" || echo 000)"
   [ "$OWNER_MUT_CODE" = "409" ] && grep -qx 'window management requires the chan desktop app' "$MUT_B" \
     || die "owner $METHOD native-trust did not reach desktop bridge guard ($OWNER_MUT_CODE)"
 
   GRANTEE_MUT_CODE="$(proxy_curl -sS -o "$MUT_B" -w '%{http_code}' -X "$METHOD" \
-    -H "Cookie: devserver_gate=$GRANTEE_GATE; devserver_csrf=$GRANTEE_CSRF" \
+    -H "Cookie: __Host-devserver_gate=$GRANTEE_GATE; __Host-devserver_csrf=$GRANTEE_CSRF" \
     -H "x-chan-csrf: $GRANTEE_CSRF" "$PROXY_ORIGIN$TRUST_PATH" || echo 000)"
   [ "$GRANTEE_MUT_CODE" = "403" ] \
     && grep -qx 'launcher mutation is not available for this gateway role' "$MUT_B" \

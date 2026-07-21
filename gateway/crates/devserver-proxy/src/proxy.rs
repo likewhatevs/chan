@@ -21,7 +21,7 @@
 //!     Ed25519 credential and exact bindings, atomically consume its `jti`,
 //!     mint an opaque proxy-local session, set host-only gate/CSRF cookies,
 //!     and 303 to the signed clean path
-//!   * request has a valid opaque `devserver_gate` cookie (aud + drv bound)
+//!   * request has a valid opaque `__Host-devserver_gate` cookie (aud + drv bound)
 //!     -> pass through
 //!   * anything else (no cookie, expired, wrong aud, wrong devserver)
 //!     -> 404
@@ -167,9 +167,16 @@ impl http_body::Body for DeadlineBody {
 
 /// Cookie name for the session-shape devserver-gate token. Host-only on
 /// `{user}.devserver.chan.app`; `Path=/`; HttpOnly; Secure; SameSite=Lax;
-/// Absolute proxy-local session lifetime.
-const COOKIE_NAME: &str = "devserver_gate";
-const CSRF_COOKIE_NAME: &str = "devserver_csrf";
+/// Absolute proxy-local session lifetime. The `__Host-` prefix makes the
+/// browser enforce exactly that shape (Secure, no `Domain`, `Path=/`), so
+/// a parent-domain cookie of the same name can never shadow it (A11).
+const COOKIE_NAME: &str = "__Host-devserver_gate";
+const CSRF_COOKIE_NAME: &str = "__Host-devserver_csrf";
+/// Pre-A11 cookie names. The proxy never reads them, but upstream
+/// `Set-Cookie` on these names stays stripped: allowing a devserver to
+/// mint look-alike session cookies would only invite confusion.
+const LEGACY_COOKIE_NAME: &str = "devserver_gate";
+const LEGACY_CSRF_COOKIE_NAME: &str = "devserver_csrf";
 const CSRF_HEADER_NAME: &str = "x-chan-csrf";
 const ENTRY_FORM_CONTENT_TYPE: &str = "application/x-www-form-urlencoded";
 const MAX_ENTRY_FORM_BYTES: usize = 8192;
@@ -525,7 +532,7 @@ fn resolve_gate(
     aud: &str,
 ) -> Gate {
     // No entry token: any one valid session cookie admits. A browser
-    // may send several `devserver_gate` cookies under unusual conditions
+    // may send several `__Host-devserver_gate` cookies under unusual conditions
     // (stale cookie at a different path that got attached to this
     // request); accept the first that verifies under this aud + drv so
     // a stale duplicate doesn't 404 a legitimate session.
@@ -542,7 +549,7 @@ fn resolve_gate(
     Gate::Reject
 }
 
-/// True when a request carries a `devserver_gate` session cookie. The
+/// True when a request carries a `__Host-devserver_gate` session cookie. The
 /// dispatcher uses this to
 /// decide what a bare wildcard `/` means: a credential-bearing root is an
 /// authenticated open that falls through to the gate and is forwarded to
@@ -575,11 +582,11 @@ fn forward_path(uri: &Uri) -> String {
         .unwrap_or_else(|| "/".to_string())
 }
 
-/// Read the `devserver_gate` cookie value from the Cookie header(s).
+/// Read the `__Host-devserver_gate` cookie value from the Cookie header(s).
 /// Manual parse: this crate deliberately carries no cookie / session
 /// dependency. RFC 6265 cookie-pair: `name=value; name=value; ...`.
 /// Returns every match in order so the caller can fall through stale
-/// duplicates (e.g. a browser sending an old + a fresh `devserver_gate`
+/// duplicates (e.g. a browser sending an old + a fresh `__Host-devserver_gate`
 /// under different paths that both got attached to the same request).
 /// Quoted values (`name="value"`) get the quotes stripped per RFC.
 fn cookie_values(headers: &HeaderMap, cookie_name: &str) -> Vec<String> {
@@ -700,8 +707,9 @@ fn apply_credentialed_response_policy(response: &mut Response) {
     );
 }
 
-/// Mint an opaque proxy-local session for `sub`, set it as a host-only
-/// `Path=/` cookie, and 303 to the signed clean path. Browsers
+/// Mint an opaque proxy-local session for `sub`, set it as a `__Host-`
+/// (Secure, host-only, `Path=/`) cookie, and 303 to the signed clean
+/// path. Browsers
 /// follow the 303 with the new cookie attached. `sub` comes from the
 /// entry token we just verified, owner or accepted grantee, so the
 /// session cookie identifies the right user for upstream attribution.
@@ -894,10 +902,10 @@ async fn proxy_http(
         .map_err(|e| Error::Anyhow(anyhow::anyhow!("response: {e}")))
 }
 
-/// Drop hop-by-hop headers, Host, Cookie (the devserver_gate cookie has
+/// Drop hop-by-hop headers, Host, Cookie (the __Host-devserver_gate cookie has
 /// no business at the upstream), Authorization (a user-presented PAT
 /// or bearer has no business at the tenant's `chan devserver` either;
-/// auth on this leg is the devserver_gate handshake plus the tunnel
+/// auth on this leg is the __Host-devserver_gate handshake plus the tunnel
 /// trust boundary), and existing X-Forwarded-*. Honors the
 /// connection-token list per RFC 7230 6.1.
 fn strip_inbound_headers(headers: &mut HeaderMap) {
@@ -947,7 +955,11 @@ fn safe_upstream_set_cookie(value: &HeaderValue) -> bool {
         return false;
     };
     let name = name.trim();
-    if name.eq_ignore_ascii_case(COOKIE_NAME) || name.eq_ignore_ascii_case(CSRF_COOKIE_NAME) {
+    if name.eq_ignore_ascii_case(COOKIE_NAME)
+        || name.eq_ignore_ascii_case(CSRF_COOKIE_NAME)
+        || name.eq_ignore_ascii_case(LEGACY_COOKIE_NAME)
+        || name.eq_ignore_ascii_case(LEGACY_CSRF_COOKIE_NAME)
+    {
         return false;
     }
     !segments.any(|attribute| {
@@ -1385,6 +1397,9 @@ mod tests {
             "wide=attacker; Domain=p1.usr.chan.app; Path=/",
             "wide=attacker; dOmAiN = p1.usr.chan.app; Path=/",
             "wide=attacker;  DOMAIN=p1.usr.chan.app",
+            "__Host-devserver_gate=attacker; Path=/; Secure",
+            "__Host-devserver_csrf=attacker; Path=/; Secure",
+            "__host-DevServer_Gate=attacker; Path=/; Secure",
             "devserver_gate=attacker; Path=/",
             "devserver_csrf=attacker; Path=/",
             "DevServer_Gate=attacker; Path=/",
@@ -1438,7 +1453,7 @@ mod tests {
         let mut h = HeaderMap::new();
         h.insert(
             header::COOKIE,
-            HeaderValue::from_static("foo=bar; devserver_gate=abc.def.ghi; baz=qux"),
+            HeaderValue::from_static("foo=bar; __Host-devserver_gate=abc.def.ghi; baz=qux"),
         );
         assert_eq!(
             cookie_values(&h, COOKIE_NAME),
@@ -1450,11 +1465,11 @@ mod tests {
         let mut h = HeaderMap::new();
         h.append(
             header::COOKIE,
-            HeaderValue::from_static("devserver_gate=stale.1.x"),
+            HeaderValue::from_static("__Host-devserver_gate=stale.1.x"),
         );
         h.append(
             header::COOKIE,
-            HeaderValue::from_static("devserver_gate=fresh.2.y"),
+            HeaderValue::from_static("__Host-devserver_gate=fresh.2.y"),
         );
         assert_eq!(
             cookie_values(&h, COOKIE_NAME),
@@ -1465,7 +1480,7 @@ mod tests {
         let mut h = HeaderMap::new();
         h.insert(
             header::COOKIE,
-            HeaderValue::from_static("devserver_gate=\"abc.def.ghi\""),
+            HeaderValue::from_static("__Host-devserver_gate=\"abc.def.ghi\""),
         );
         assert_eq!(
             cookie_values(&h, COOKIE_NAME),
@@ -1488,11 +1503,11 @@ mod tests {
         // URL query bearers never count as gateway credentials.
         assert!(!has_gate_credential(&u("/?t=abc.def.ghi"), &empty));
         assert!(!has_gate_credential(&u("/?t="), &empty));
-        // A `devserver_gate` session cookie -> authenticated open.
+        // A `__Host-devserver_gate` session cookie -> authenticated open.
         let mut h = HeaderMap::new();
         h.insert(
             header::COOKIE,
-            HeaderValue::from_static("devserver_gate=abc.def.ghi"),
+            HeaderValue::from_static("__Host-devserver_gate=abc.def.ghi"),
         );
         assert!(has_gate_credential(&u("/"), &h));
         // An unrelated cookie is not a credential.

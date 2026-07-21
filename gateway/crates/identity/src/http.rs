@@ -27,7 +27,24 @@ use crate::profile_client::{DevserverGrant, IncomingShare, OwnedDevserverSummary
 use crate::static_files;
 use crate::token_throttle::TokenThrottle;
 
-const SESSION_COOKIE: &str = "id_session";
+/// Production session cookie. `__Host-` requires Secure, `Path=/`, and
+/// no `Domain`; tower-sessions defaults to `Path=/` with no `Domain`,
+/// and `COOKIE_SECURE` supplies Secure (A11).
+const SESSION_COOKIE: &str = "__Host-id_session";
+/// Session cookie for `COOKIE_SECURE=false` runs. Browsers reject
+/// `__Host-` names without Secure, so an insecure dev session must use
+/// a visibly test-only name instead of squatting the production one.
+const SESSION_COOKIE_INSECURE_DEV: &str = "id_session_insecure_dev";
+
+/// The `__Host-` production name is only legal on Secure cookies; an
+/// insecure run gets the visibly test-only name instead (A11).
+fn session_cookie_name(cookie_secure: bool) -> &'static str {
+    if cookie_secure {
+        SESSION_COOKIE
+    } else {
+        SESSION_COOKIE_INSECURE_DEV
+    }
+}
 const KEY_USER: &str = "user_id";
 const KEY_PENDING: &str = "pending_oauth";
 /// Optional post-login redirect target. Set by the share landing
@@ -127,9 +144,11 @@ pub fn routers(
     // Host-only on id.chan.app: no Domain attribute, so the cookie
     // does not propagate to the proxy fleet's tenant origins. The
     // devserver-gate handoff covers the cross-service auth need; see
-    // crates/identity/design.md.
+    // crates/identity/design.md. The `__Host-` name additionally makes
+    // the browser reject any Domain-carrying shadow of it (A11), which
+    // is why the insecure dev fallback must use a different name.
     let session_layer = SessionManagerLayer::new(store)
-        .with_name(SESSION_COOKIE)
+        .with_name(session_cookie_name(cfg.cookie_secure))
         .with_secure(cfg.cookie_secure)
         .with_http_only(true)
         .with_same_site(tower_sessions::cookie::SameSite::Lax)
@@ -499,7 +518,7 @@ async fn auth_callback_inner(
     // CSRF nonces, a cookie an attacker planted on the victim's
     // browser pre-login) keeps the old id, the freshly authenticated
     // state lives under a new one. Prevents session fixation: a
-    // pre-set `id_session` cannot survive the authentication step.
+    // pre-set `__Host-id_session` cannot survive the authentication step.
     session
         .cycle_id()
         .await
@@ -2286,5 +2305,13 @@ mod tests {
             sanitize_devserver_display_name("café 東京 🚀").as_deref(),
             Some("café 東京 🚀")
         );
+    }
+
+    #[test]
+    fn session_cookie_name_is_host_prefixed_only_when_secure() {
+        assert_eq!(session_cookie_name(true), "__Host-id_session");
+        // Browsers reject `__Host-` without Secure; the insecure dev
+        // name must be visibly distinct from the production one.
+        assert_eq!(session_cookie_name(false), "id_session_insecure_dev");
     }
 }

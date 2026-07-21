@@ -82,7 +82,7 @@ the internal listener for validation. Import
 The setup script is idempotent; pass `--force` only when every generated
 credential and the local CA should rotate.
 
-devserver-proxy holds no database and reads no identity session, and admits no tunnel until its control session to devserver-control reaches `FleetReady`. Opening a workspace submits a separate, short-lived Ed25519 entry credential to the fixed `/_chan/entry` endpoint in a bounded form POST from identity's exact origin. The credential never appears in a URL and succeeds once; the proxy exchanges it for opaque `devserver_gate` plus `devserver_csrf` host-only cookies. For the full local stack use `../packaging/gateway/scripts/dev/setup.sh` + `../packaging/gateway/scripts/dev/run.sh`.
+devserver-proxy holds no database and reads no identity session, and admits no tunnel until its control session to devserver-control reaches `FleetReady`. Opening a workspace submits a separate, short-lived Ed25519 entry credential to the fixed `/_chan/entry` endpoint in a bounded form POST from identity's exact origin. The credential never appears in a URL and succeeds once; the proxy exchanges it for opaque `__Host-devserver_gate` plus `__Host-devserver_csrf` host-only cookies. For the full local stack use `../packaging/gateway/scripts/dev/setup.sh` + `../packaging/gateway/scripts/dev/run.sh`.
 
 For frontend iteration without re-embedding:
 

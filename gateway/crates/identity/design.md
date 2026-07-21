@@ -136,8 +136,8 @@ sequenceDiagram
         ID-->>Browser: no-store form handoff with entry credential
         Browser->>Proxy: POST /_chan/entry (credential body)
         Note over Proxy: verify Ed25519 exact bindings and consume replay id
-        Proxy-->>Browser: 303 clean URL, Set-Cookie opaque devserver_gate + devserver_csrf
-        Browser->>Proxy: GET /workspace/ with devserver_gate cookie
+        Proxy-->>Browser: 303 clean URL, Set-Cookie opaque __Host-devserver_gate + __Host-devserver_csrf
+        Browser->>Proxy: GET /workspace/ with __Host-devserver_gate cookie
         Proxy-->>Browser: cookie verified, proxied to live devserver
     end
 ```
@@ -242,7 +242,7 @@ Additional username guards:
 
 ### Session contract
 
-- Cookie name `id_session`. **Host-only on `id.chan.app`.** No `Domain` attribute.
+- Cookie name `__Host-id_session` (`id_session_insecure_dev` when `COOKIE_SECURE=false`: browsers reject `__Host-` names without Secure). **Host-only on `id.chan.app`.** No `Domain` attribute.
 - `HttpOnly`, `SameSite=Lax`, 30-day inactivity expiry.
 - `Secure` follows the `COOKIE_SECURE` env var.
 - devserver-proxy does **not** read this cookie. Cross-service auth uses a

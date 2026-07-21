@@ -20,7 +20,7 @@ It mirrors the production definitions in the sibling `chan-prod-setup` repo. Per
 
 ## Why the all-container, prod-like stack
 
-The gateway's cross-tenant isolation is carried by two host-scoped cookies: `id_session` (host-only on `id.<domain>`) and `devserver_gate` (host-only on `{user}.devserver.<domain>`, scoped `Path=/` for the whole devserver). No `.<domain>`-wide cookie exists, so a browser never auto-attaches an identity session to a fetch on another tenant's subdomain. The whole-host devserver cookie is safe because the grant is whole-devserver; user-to-user isolation rides the host-only cookie plus the `aud` claim. That design, plus the reverse-proxy header hygiene (hop-by-hop stripping, dropped inbound Host/Cookie/Authorization, recomputed `X-Forwarded-*`), only fully exercises behind a real TLS terminator with real subdomains. Running the same containers and the same nginx as prod is how you exercise it.
+The gateway's cross-tenant isolation is carried by two host-scoped cookies: `__Host-id_session` (host-only on `id.<domain>`) and `__Host-devserver_gate` (host-only on `{user}.devserver.<domain>`, scoped `Path=/` for the whole devserver). No `.<domain>`-wide cookie exists, so a browser never auto-attaches an identity session to a fetch on another tenant's subdomain. The whole-host devserver cookie is safe because the grant is whole-devserver; user-to-user isolation rides the host-only cookie plus the `aud` claim. That design, plus the reverse-proxy header hygiene (hop-by-hop stripping, dropped inbound Host/Cookie/Authorization, recomputed `X-Forwarded-*`), only fully exercises behind a real TLS terminator with real subdomains. Running the same containers and the same nginx as prod is how you exercise it.
 
 ## Topology
 
@@ -219,5 +219,5 @@ Safe whenever no live stack is connected to `chan_gateway`.
 - **`connection refused on localhost:5432`** -- `sdme ps` should list chan-psql Running; if stopped, `sdme start chan-psql`; if wedged under load, `sdme exec chan-psql -- /usr/bin/systemctl restart postgresql`.
 - **A service can't reach another** -- they resolve by container hostname ON the `chan-svc` zone, so every service container (and chan-psql) must be created with `--network-zone chan-svc`; check `sdme ps` and the hostname-based URLs in each unit's env.
 - **Browser rejects the local cert** -- run `mkcert -install` so the local CA is trusted, and reissue the wildcard if you changed the domain.
-- **Signed-in but the workspace 404s** -- confirm nginx serves https and `FORWARDED_PROTO=https` is set on devserver-proxy; a scheme mismatch makes the `devserver_gate` cookie fail to attach.
+- **Signed-in but the workspace 404s** -- confirm nginx serves https and `FORWARDED_PROTO=https` is set on devserver-proxy; a scheme mismatch makes the `__Host-devserver_gate` cookie fail to attach.
 - **Tests pass locally but break on CI** -- same migration set must run (`migrations/0001..N` in order); a forgotten file shows up as missing-column errors on first use.

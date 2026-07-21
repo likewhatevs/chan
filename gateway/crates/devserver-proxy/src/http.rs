@@ -15,7 +15,7 @@ use crate::session_store::SessionStore;
 
 /// Application state passed to every handler. Holds no cookie or
 /// session machinery; devserver-proxy reads no cookie other than the
-/// `devserver_gate` issued by the proxy gate itself.
+/// `__Host-devserver_gate` issued by the proxy gate itself.
 #[derive(Clone)]
 pub struct AppState {
     pub cfg: Arc<Config>,
@@ -120,7 +120,7 @@ async fn dispatch(State(state): State<AppState>, req: Request) -> Response {
     // unauthenticated launcher can't call `/api/library/*` (it needs the
     // session cookie), so the dashboard is where you sign in and Open.
     //
-    // A root request that DOES carry a `devserver_gate` session cookie is a
+    // A root request that DOES carry a `__Host-devserver_gate` session cookie is a
     // whole-devserver open: fall
     // through to the gate, which forwards `/` to the devserver root where
     // the launcher SPA is served. `proxy::handle` is segment-preserving, so

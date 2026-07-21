@@ -453,11 +453,14 @@ fn is_loopback_gateway_host(host: &str) -> bool {
     let h = host
         .trim_matches(|c| c == '[' || c == ']')
         .to_ascii_lowercase();
-    h == "localhost"
-        || h == "::1"
-        || h.starts_with("127.")
-        || h == "localtest.me"
-        || h.ends_with(".localtest.me")
+    if h == "localhost" || h == "localtest.me" || h.ends_with(".localtest.me") {
+        return true;
+    }
+    // An IP counts only when the whole host PARSES as one and it is
+    // loopback: a prefix test like starts_with("127.") also accepts
+    // public DNS names such as `127.example.com` over cleartext.
+    h.parse::<std::net::IpAddr>()
+        .is_ok_and(|ip| ip.is_loopback())
 }
 
 fn require_https_unless_loopback(raw: &str) -> Result<(), String> {
@@ -983,15 +986,17 @@ async fn establish_gateway_session_from_entry(
         .and_then(|value| value.to_str().ok())
         .ok_or_else(|| "gateway entry exchange did not return a navigation target".to_string())?;
     validate_gateway_navigation_location(location, &entry.requested_path)?;
-    let gate = extract_cookie_value(resp.headers(), "devserver_gate")
+    let gate = extract_cookie_value(resp.headers(), "__Host-devserver_gate")
         .ok_or_else(|| "gateway did not return a devserver session cookie".to_string())?;
-    let csrf = extract_cookie_value(resp.headers(), "devserver_csrf")
+    let csrf = extract_cookie_value(resp.headers(), "__Host-devserver_csrf")
         .ok_or_else(|| "gateway did not return a CSRF cookie".to_string())?;
-    let expires_at =
-        gateway_session_expiry(extract_cookie_max_age(resp.headers(), "devserver_gate"));
+    let expires_at = gateway_session_expiry(extract_cookie_max_age(
+        resp.headers(),
+        "__Host-devserver_gate",
+    ));
     let session = GatewaySession {
         gate: gate.clone(),
-        cookie_header: format!("devserver_gate={gate}; devserver_csrf={csrf}"),
+        cookie_header: format!("__Host-devserver_gate={gate}; __Host-devserver_csrf={csrf}"),
         csrf,
         expires_at,
     };
@@ -1098,14 +1103,18 @@ pub(crate) fn install_gateway_webview_session(
         .ok_or_else(|| "pinned gateway origin has no host".to_string())?
         .to_string();
     let secure = origin.scheme() == "https";
-    let gate = tauri::webview::Cookie::build(("devserver_gate", session.gate))
+    // Injection through the platform cookie store (WKHTTPCookieStore /
+    // SoupCookieJar) bypasses Set-Cookie prefix parsing, and a domain
+    // with no leading dot stays host-only, so the `__Host-` names are
+    // accepted here even though a `.domain()` attribute is present.
+    let gate = tauri::webview::Cookie::build(("__Host-devserver_gate", session.gate))
         .domain(domain.clone())
         .path("/")
         .secure(secure)
         .http_only(true)
         .same_site(tauri::webview::cookie::SameSite::Lax)
         .build();
-    let csrf = tauri::webview::Cookie::build(("devserver_csrf", session.csrf))
+    let csrf = tauri::webview::Cookie::build(("__Host-devserver_csrf", session.csrf))
         .domain(domain)
         .path("/")
         .secure(secure)
@@ -2100,6 +2109,26 @@ mod tests {
             .expect("loopback http is explicit dev use");
     }
 
+    #[test]
+    fn https_waiver_requires_a_parsed_loopback_ip_not_a_name_prefix() {
+        // A public DNS name that merely LOOKS like a loopback literal
+        // must not unlock the cleartext waiver.
+        for raw in [
+            "http://127.example.com",
+            "http://127.0.0.1.example.com",
+            "http://1270.0.0.1",
+        ] {
+            require_https_unless_loopback(raw).unwrap_err();
+        }
+        for raw in [
+            "http://127.0.0.1:7000",
+            "http://127.1.2.3",
+            "http://[::1]:7000",
+        ] {
+            require_https_unless_loopback(raw).unwrap_or_else(|e| panic!("{raw}: {e}"));
+        }
+    }
+
     fn gateway_entry_response(proxy_origin: &str, exchange_url: &str) -> GatewayEntryResponse {
         GatewayEntryResponse {
             owner_user_id: test_owner_id(),
@@ -2411,8 +2440,11 @@ mod tests {
                         axum::response::Response::builder()
                             .status(StatusCode::SEE_OTHER)
                             .header("location", "/")
-                            .header("set-cookie", "devserver_gate=opaque; Path=/; HttpOnly")
-                            .header("set-cookie", "devserver_csrf=csrf; Path=/")
+                            .header(
+                                "set-cookie",
+                                "__Host-devserver_gate=opaque; Path=/; HttpOnly",
+                            )
+                            .header("set-cookie", "__Host-devserver_csrf=csrf; Path=/")
                             .body(axum::body::Body::empty())
                             .unwrap()
                     }
@@ -2949,8 +2981,11 @@ mod tests {
                     axum::response::Response::builder()
                         .status(axum::http::StatusCode::SEE_OTHER)
                         .header("location", "/notes-1a2b3c/index.html")
-                        .header("set-cookie", "devserver_gate=opaque; Path=/; HttpOnly")
-                        .header("set-cookie", "devserver_csrf=csrf; Path=/")
+                        .header(
+                            "set-cookie",
+                            "__Host-devserver_gate=opaque; Path=/; HttpOnly",
+                        )
+                        .header("set-cookie", "__Host-devserver_csrf=csrf; Path=/")
                         .body(axum::body::Body::empty())
                         .unwrap()
                 }),
@@ -2981,7 +3016,8 @@ mod tests {
         let gw = conn.gateway.as_ref().unwrap();
         *gw.session.lock().unwrap() = Some(GatewaySession {
             gate: "opaque-once".into(),
-            cookie_header: "devserver_gate=opaque-once; devserver_csrf=csrf-once".into(),
+            cookie_header: "__Host-devserver_gate=opaque-once; __Host-devserver_csrf=csrf-once"
+                .into(),
             csrf: "csrf-once".into(),
             expires_at: Instant::now() + Duration::from_secs(60),
         });
@@ -3022,12 +3058,12 @@ mod tests {
         );
         headers.append(
             reqwest::header::SET_COOKIE,
-            "devserver_gate=opaque; Path=/; HttpOnly; max-age=3600"
+            "__Host-devserver_gate=opaque; Path=/; HttpOnly; max-age=3600"
                 .parse()
                 .unwrap(),
         );
         assert_eq!(
-            extract_cookie_max_age(&headers, "devserver_gate"),
+            extract_cookie_max_age(&headers, "__Host-devserver_gate"),
             Some(3600)
         );
     }
@@ -3075,12 +3111,12 @@ mod tests {
                             .header(
                                 "set-cookie",
                                 format!(
-                                    "devserver_gate=opaque-{generation}; Path=/; HttpOnly; Max-Age=120"
+                                    "__Host-devserver_gate=opaque-{generation}; Path=/; HttpOnly; Max-Age=120"
                                 ),
                             )
                             .header(
                                 "set-cookie",
-                                format!("devserver_csrf=csrf-{generation}; Path=/; Max-Age=120"),
+                                format!("__Host-devserver_csrf=csrf-{generation}; Path=/; Max-Age=120"),
                             )
                             .body(axum::body::Body::empty())
                             .unwrap()
@@ -3135,7 +3171,7 @@ mod tests {
         let gw = conn.gateway.as_ref().unwrap();
         *gw.session.lock().unwrap() = Some(GatewaySession {
             gate: "expired".into(),
-            cookie_header: "devserver_gate=expired; devserver_csrf=expired".into(),
+            cookie_header: "__Host-devserver_gate=expired; __Host-devserver_csrf=expired".into(),
             csrf: "expired".into(),
             expires_at: Instant::now(),
         });

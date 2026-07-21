@@ -419,7 +419,7 @@ fn session_cookie_for_owner(
     host: &str,
 ) -> String {
     format!(
-        "devserver_gate={}",
+        "__Host-devserver_gate={}",
         opaque_session(app, sub, owner_user_id, workspace, host)
     )
 }
@@ -451,7 +451,7 @@ fn session_and_csrf_cookie(
     csrf: &str,
 ) -> String {
     format!(
-        "{}; devserver_csrf={csrf}",
+        "{}; __Host-devserver_csrf={csrf}",
         session_cookie(app, sub, workspace, host)
     )
 }
@@ -595,7 +595,7 @@ async fn unregistered_workspace_html_browser_gets_dead_end_page() {
 }
 
 // ---------------------------------------------------------------
-// Proxy gate (private + devserver_gate JWT)
+// Proxy gate (private + __Host-devserver_gate JWT)
 // ---------------------------------------------------------------
 
 #[tokio::test]
@@ -624,7 +624,7 @@ async fn entry_token_mints_session_cookie() {
     let loc = hdrs.get(header::LOCATION).unwrap().to_str().unwrap();
     assert_eq!(loc, "/blog/");
     let set = hdrs.get(header::SET_COOKIE).unwrap().to_str().unwrap();
-    assert!(set.starts_with("devserver_gate="), "got {set}");
+    assert!(set.starts_with("__Host-devserver_gate="), "got {set}");
     // Whole-host cookie: the grant is the whole devserver, so the cookie
     // is no longer scoped to a per-workspace path.
     assert!(
@@ -640,9 +640,11 @@ async fn entry_token_mints_session_cookie() {
         .map(|v| v.to_str().unwrap())
         .collect();
     assert!(
-        set_cookies.iter().any(|v| v.starts_with("devserver_csrf=")
-            && v.contains("Path=/")
-            && !v.contains("HttpOnly")),
+        set_cookies
+            .iter()
+            .any(|v| v.starts_with("__Host-devserver_csrf=")
+                && v.contains("Path=/")
+                && !v.contains("HttpOnly")),
         "csrf cookie missing from {set_cookies:?}",
     );
     app.cleanup().await;
@@ -847,7 +849,7 @@ async fn session_cookie_admits() {
     let res = reqwest::Client::new()
         .get(format!("http://{proxy_addr}/blog/"))
         .header(header::HOST, &host)
-        .header(header::COOKIE, format!("devserver_gate={session}"))
+        .header(header::COOKIE, format!("__Host-devserver_gate={session}"))
         .send()
         .await
         .unwrap();
@@ -905,7 +907,7 @@ async fn session_cookie_for_wrong_devserver_is_404() {
         Method::GET,
         &host,
         "/blog/",
-        &[("cookie", &format!("devserver_gate={session}"))],
+        &[("cookie", &format!("__Host-devserver_gate={session}"))],
     )
     .await;
     assert_eq!(s, StatusCode::NOT_FOUND);
@@ -931,12 +933,12 @@ async fn entry_token_for_grantee_mints_session_carrying_grantee_sub() {
     let (s, hdrs, _) = exchange_entry(&app.router, &host, &entry).await;
     assert_eq!(s, StatusCode::SEE_OTHER);
     let set = hdrs.get(header::SET_COOKIE).unwrap().to_str().unwrap();
-    assert!(set.starts_with("devserver_gate="), "got {set}");
+    assert!(set.starts_with("__Host-devserver_gate="), "got {set}");
 
     // The minted session cookie must carry sub = bob (the grantee),
     // not sub = alice (the owner), so upstream attribution is correct.
     let cookie = set
-        .strip_prefix("devserver_gate=")
+        .strip_prefix("__Host-devserver_gate=")
         .and_then(|s| s.split(';').next())
         .unwrap();
     let claims = app
@@ -971,7 +973,7 @@ async fn session_cookie_with_grantee_sub_admits() {
     let res = reqwest::Client::new()
         .get(format!("http://{proxy_addr}/blog/"))
         .header(header::HOST, &host)
-        .header(header::COOKIE, format!("devserver_gate={session}"))
+        .header(header::COOKIE, format!("__Host-devserver_gate={session}"))
         .send()
         .await
         .unwrap();
@@ -1262,7 +1264,7 @@ async fn client_supplied_forwarded_headers_are_discarded() {
 
 #[tokio::test]
 async fn cookie_header_stripped_from_upstream() {
-    // devserver-proxy must never forward the devserver_gate cookie to the
+    // devserver-proxy must never forward the __Host-devserver_gate cookie to the
     // tenant's chan-serve peer (the cookie is for the gate, not for
     // the tenant). The very cookie that admits the request is stripped
     // before the upstream sees it. Other inbound cookies the tenant
@@ -1405,7 +1407,7 @@ async fn gateway_assertion_omits_display_identity() {
         .get_all(header::SET_COOKIE)
         .iter()
         .map(|v| v.to_str().unwrap())
-        .find(|v| v.starts_with("devserver_gate="))
+        .find(|v| v.starts_with("__Host-devserver_gate="))
         .expect("session cookie")
         .split(';')
         .next()
@@ -1641,7 +1643,7 @@ async fn disc_hosts_route_to_their_devservers() {
         let res = reqwest::Client::new()
             .get(format!("http://{proxy_addr}/blog/"))
             .header(header::HOST, &host)
-            .header(header::COOKIE, format!("devserver_gate={session}"))
+            .header(header::COOKIE, format!("__Host-devserver_gate={session}"))
             .send()
             .await
             .unwrap();
@@ -1671,7 +1673,7 @@ async fn bare_host_with_two_live_routes_by_credential() {
         let res = reqwest::Client::new()
             .get(format!("http://{proxy_addr}/blog/"))
             .header(header::HOST, &host)
-            .header(header::COOKIE, format!("devserver_gate={session}"))
+            .header(header::COOKIE, format!("__Host-devserver_gate={session}"))
             .send()
             .await
             .unwrap();
@@ -1730,7 +1732,7 @@ async fn ambiguous_disc_is_404() {
         Method::GET,
         &host,
         "/blog/",
-        &[("cookie", &format!("devserver_gate={session}"))],
+        &[("cookie", &format!("__Host-devserver_gate={session}"))],
     )
     .await;
     assert_eq!(s, StatusCode::NOT_FOUND);
@@ -1752,7 +1754,7 @@ async fn unknown_disc_is_404() {
         Method::GET,
         &host,
         "/blog/",
-        &[("cookie", &format!("devserver_gate={session}"))],
+        &[("cookie", &format!("__Host-devserver_gate={session}"))],
     )
     .await;
     assert_eq!(s, StatusCode::NOT_FOUND);
@@ -1780,7 +1782,7 @@ async fn credential_for_other_users_devserver_never_routes() {
             Method::GET,
             &host,
             "/blog/",
-            &[("cookie", &format!("devserver_gate={session}"))],
+            &[("cookie", &format!("__Host-devserver_gate={session}"))],
         )
         .await;
         assert_eq!(s, StatusCode::NOT_FOUND, "host {host}");

@@ -394,7 +394,7 @@ mod tests {
             devserver_proxy_origin: apex.parse().unwrap(),
             devserver_tunnel_origin: "https://tunnel.example.test".parse().unwrap(),
             database_url: "x".into(),
-            cookie_secure: false,
+            cookie_secure: true,
             profile_client: ProfileClient::new("http://x/".parse().unwrap(), "x".into()).unwrap(),
             internal_auth_token: "x".into(),
             identity_admin_token: String::new(),

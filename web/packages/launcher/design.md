@@ -108,7 +108,7 @@ browser `Cookie` and `Authorization` credentials and is the sole gate, so
 `bearer=None` cannot distinguish a grantee from the owner. Query parameters are
 ordinary tenant application data; proxy entry credentials are accepted only at
 the fixed body-only exchange endpoint. A collaborator holding a
-`devserver_gate` cookie must not unmount or remove the owner's workspaces.
+`__Host-devserver_gate` cookie must not unmount or remove the owner's workspaces.
 Window mint/discard stay on both surfaces (per-view state, low-risk). Owners
 manage a headless devserver's workspaces over the bearer-gated
 `/api/devserver/*` management API and `cs`/CLI.
