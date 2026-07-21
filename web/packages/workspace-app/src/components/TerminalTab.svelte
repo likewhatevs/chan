@@ -83,6 +83,7 @@
     ui,
   } from "../state/store.svelte";
   import { terminalWsPath } from "../terminal/session";
+  import { windowModeAllowsSnapshot } from "../state/windowMode";
   import {
     readTerminalSnapshot,
     writeTerminalSnapshot,
@@ -1266,6 +1267,10 @@
   /// budget is dropped (the reattach falls back to a full replay) rather than
   /// evicting other terminals. Synchronous, for the pagehide/unload path.
   function captureSnapshot(): void {
+    // A control terminal never persists scrollback: it carries the
+    // CHAN_DEVSERVER_TOKEN= marker the desktop re-scrapes. The rule lives
+    // in windowModeAllowsSnapshot so it is unit-testable without a mount.
+    if (!windowModeAllowsSnapshot({ terminalControl: ui.terminalControl })) return;
     const sessionId = tab.terminalSessionId;
     if (!term || !serialize || !sessionId || serverGeneration === null) return;
     // Never throw out of a pagehide/beforeunload handler: this fires globally
@@ -1300,6 +1305,17 @@
       window.removeEventListener("pagehide", onHide);
       window.removeEventListener("beforeunload", onHide);
     };
+  });
+
+  // A control terminal never snapshots (guard above); also remove anything a
+  // pre-guard build persisted for this session, on attach and on teardown.
+  // Sessions a control window never reopens are covered by the load-time
+  // sweep in pruneTerminalSnapshots.
+  $effect(() => {
+    const sessionId = tab.terminalSessionId;
+    if (!ui.terminalControl || !sessionId) return;
+    clearTerminalSnapshot(sessionId);
+    return () => clearTerminalSnapshot(sessionId);
   });
 
   /// Rich Prompt + team-lead-identity submit path: send `data` over the existing

@@ -64,6 +64,16 @@ export interface TerminalSnapshot {
   updatedAt: number;
 }
 
+/// chan-server's locked DEVSERVER_TOKEN_MARKER wire string. A snapshot
+/// carrying it is a devserver credential at rest, not a cache entry: the
+/// control terminal's scrollback always contains this line (the desktop
+/// re-scrapes it on every connect), and pre-guard builds snapshotted that
+/// scrollback like any other terminal's. The envelopes carry no control
+/// flag, so the marker is what identifies them; the sweep drops any such
+/// entry unconditionally, which also covers a connect script run by hand
+/// in a regular terminal.
+const DEVSERVER_TOKEN_MARKER = "CHAN_DEVSERVER_TOKEN=";
+
 function snapshotKey(sessionId: string): string {
   return `${SNAPSHOT_KEY_PREFIX}${sessionId}`;
 }
@@ -141,39 +151,55 @@ export function clearTerminalSnapshot(sessionId: string): void {
   localStorage.removeItem(snapshotKey(sessionId));
 }
 
-/// Eviction sweep, run at app load and on a quota-exceeded write retry. Two
+/// Eviction sweep, run at app load and on a quota-exceeded write retry. Three
 /// passes, touching ONLY `chan:term-snapshot:` keys (never the editor stores):
 ///
-///   1. TTL: drop entries older than MAX_SNAPSHOT_AGE_MS.
-///   2. Size cap: if the rest exceed MAX_SNAPSHOT_TOTAL_BYTES, drop oldest-first
+///   1. Credential: drop any entry containing the devserver token marker,
+///      regardless of age (pre-guard control-terminal snapshots; see
+///      DEVSERVER_TOKEN_MARKER above).
+///   2. TTL: drop entries older than MAX_SNAPSHOT_AGE_MS.
+///   3. Size cap: if the rest exceed MAX_SNAPSHOT_TOTAL_BYTES, drop oldest-first
 ///      until under the cap.
 ///
 /// Returns the number of evicted entries.
 export function pruneTerminalSnapshots(): number {
   if (!isStorageAvailable()) return 0;
   const now = Date.now();
-  const entries: Array<{ key: string; updatedAt: number; bytes: number }> = [];
+  const entries: Array<{
+    key: string;
+    updatedAt: number;
+    bytes: number;
+    carriesToken: boolean;
+  }> = [];
   for (let i = 0; i < localStorage.length; i++) {
     const key = localStorage.key(i);
     if (!key || !key.startsWith(SNAPSHOT_KEY_PREFIX)) continue;
     const raw = localStorage.getItem(key);
     if (!raw) continue;
+    const carriesToken = raw.includes(DEVSERVER_TOKEN_MARKER);
     try {
       const parsed = JSON.parse(raw) as Partial<TerminalSnapshot>;
-      if (typeof parsed?.updatedAt !== "number") continue;
-      entries.push({ key, updatedAt: parsed.updatedAt, bytes: raw.length });
+      if (typeof parsed?.updatedAt !== "number" && !carriesToken) continue;
+      entries.push({
+        key,
+        updatedAt: typeof parsed?.updatedAt === "number" ? parsed.updatedAt : 0,
+        bytes: raw.length,
+        carriesToken,
+      });
     } catch {
-      entries.push({ key, updatedAt: 0, bytes: raw.length });
+      entries.push({ key, updatedAt: 0, bytes: raw.length, carriesToken });
     }
   }
   let evicted = 0;
   for (const e of entries) {
-    if (now - e.updatedAt > MAX_SNAPSHOT_AGE_MS) {
+    if (e.carriesToken || now - e.updatedAt > MAX_SNAPSHOT_AGE_MS) {
       localStorage.removeItem(e.key);
       evicted += 1;
     }
   }
-  const remaining = entries.filter((e) => now - e.updatedAt <= MAX_SNAPSHOT_AGE_MS);
+  const remaining = entries.filter(
+    (e) => !e.carriesToken && now - e.updatedAt <= MAX_SNAPSHOT_AGE_MS,
+  );
   let totalBytes = remaining.reduce((sum, e) => sum + e.bytes, 0);
   if (totalBytes <= MAX_SNAPSHOT_TOTAL_BYTES) return evicted;
   remaining.sort((a, b) => a.updatedAt - b.updatedAt);

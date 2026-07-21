@@ -1,5 +1,9 @@
 import { describe, expect, test } from "vitest";
-import { TERMINAL_ONLY_COMMANDS, windowModeAllowsCommand } from "./windowMode";
+import {
+  TERMINAL_ONLY_COMMANDS,
+  windowModeAllowsCommand,
+  windowModeAllowsSnapshot,
+} from "./windowMode";
 
 describe("terminal-only command gate", () => {
   test("allows the command launcher in standalone and control terminal windows", () => {
@@ -51,5 +55,19 @@ describe("terminal-only command gate", () => {
         terminalControl: false,
       }),
     ).toBe(false);
+  });
+});
+
+// The control terminal's scrollback carries the CHAN_DEVSERVER_TOKEN= marker
+// the desktop re-scrapes; persisting it to localStorage would keep a live
+// credential on disk for days. Red mutation: have the predicate return true
+// for `terminalControl: true`.
+describe("terminal snapshot gate", () => {
+  test("a control terminal may never persist a scrollback snapshot", () => {
+    expect(windowModeAllowsSnapshot({ terminalControl: true })).toBe(false);
+  });
+
+  test("ordinary terminal windows still snapshot", () => {
+    expect(windowModeAllowsSnapshot({ terminalControl: false })).toBe(true);
   });
 });

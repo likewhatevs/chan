@@ -118,3 +118,54 @@ describe("snapshotCache", () => {
     expect(localStorage.getItem("chan:caret-index:keepme")).toBe("caret");
   });
 });
+
+// Pre-guard builds snapshotted the control terminal's scrollback, which always
+// contains the CHAN_DEVSERVER_TOKEN= marker: a devserver credential at rest.
+// The load-time sweep drops any such entry unconditionally. Red mutation: make
+// the credential branch of pruneTerminalSnapshots a no-op.
+describe("credential sweep", () => {
+  test("the load-time sweep drops a snapshot carrying the token marker", () => {
+    writeTerminalSnapshot(
+      "ctl_session",
+      snap({ ansi: "connect...\r\nCHAN_DEVSERVER_TOKEN=tok_leaked\r\n$ " }),
+    );
+    writeTerminalSnapshot("plain_session", snap());
+    expect(readTerminalSnapshot("ctl_session")).not.toBeNull();
+    expect(pruneTerminalSnapshots()).toBeGreaterThanOrEqual(1);
+    expect(readTerminalSnapshot("ctl_session")).toBeNull();
+    expect(readTerminalSnapshot("plain_session")).not.toBeNull();
+  });
+
+  test("a fresh, in-TTL entry carrying the marker is dropped too (age is no defense)", () => {
+    writeTerminalSnapshot(
+      "ctl_fresh",
+      snap({
+        ansi: "CHAN_DEVSERVER_TOKEN=tok_now",
+        updatedAt: Date.now(),
+      }),
+    );
+    pruneTerminalSnapshots();
+    expect(readTerminalSnapshot("ctl_fresh")).toBeNull();
+  });
+
+  test("after the sweep, no snapshot on disk contains the token marker", () => {
+    // The at-rest security property itself, not a proxy for it.
+    writeTerminalSnapshot(
+      "ctl_a",
+      snap({ ansi: "x CHAN_DEVSERVER_TOKEN=tok_a" }),
+    );
+    writeTerminalSnapshot(
+      "ctl_b",
+      snap({ ansi: "CHAN_DEVSERVER_TOKEN=tok_b trailing" }),
+    );
+    writeTerminalSnapshot("plain", snap());
+    pruneTerminalSnapshots();
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (!key || !key.startsWith("chan:term-snapshot:")) continue;
+      expect(localStorage.getItem(key) ?? "").not.toContain(
+        "CHAN_DEVSERVER_TOKEN=",
+      );
+    }
+  });
+});
